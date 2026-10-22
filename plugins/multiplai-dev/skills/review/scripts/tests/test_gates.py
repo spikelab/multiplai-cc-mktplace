@@ -5,7 +5,6 @@ from conftest import DEF_CITATION, KEYWORD_CITATION, cite, high_finding
 from review_pipeline import gates
 from review_pipeline.models import Citation, Verdict
 
-
 # --- the DB2038 regression test (plan item 9) -----------------------------------
 
 

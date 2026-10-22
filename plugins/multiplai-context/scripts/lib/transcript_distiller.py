@@ -15,9 +15,9 @@ No LLM calls — pure Python transformation pipeline:
 
 import json
 import re
-from datetime import datetime, timezone
+from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Iterator
 
 # Approximate token budget per chunk (1 token ≈ 4 chars)
 DEFAULT_TOKEN_BUDGET = 32_000
@@ -101,7 +101,7 @@ def _parse_timestamp(record: dict) -> datetime | None:
     try:
         dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
+            dt = dt.replace(tzinfo=UTC)
         return dt
     except (ValueError, TypeError):
         return None

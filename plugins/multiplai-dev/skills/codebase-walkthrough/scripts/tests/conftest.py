@@ -11,9 +11,8 @@ import pytest
 TESTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TESTS))
 
-import fixture_repo  # noqa: E402
-
-from walkthrough_pipeline import budget, fetcher  # noqa: E402
+import fixture_repo
+from walkthrough_pipeline import budget, fetcher
 
 
 @pytest.fixture(autouse=True)

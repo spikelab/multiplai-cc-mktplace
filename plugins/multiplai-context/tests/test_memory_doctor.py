@@ -15,7 +15,7 @@ and the stubs below are that object.
 
 import subprocess
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -684,7 +684,7 @@ def _clean_env():
 # --- 9. the weekly gate ----------------------------------------------------
 
 
-NOW = datetime(2026, 8, 9, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 8, 9, 12, 0, tzinfo=UTC)
 
 
 class TestWeeklyGate:

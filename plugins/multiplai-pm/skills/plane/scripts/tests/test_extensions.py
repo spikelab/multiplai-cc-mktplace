@@ -16,9 +16,8 @@ from contextlib import redirect_stdout
 from datetime import datetime, timezone
 from pathlib import Path
 
-import pytest
-
 import plane
+import pytest
 from conftest import ALLOWED, BAD, CFG, OK
 
 ISSUE = "792a89b1-37db-47e1-a947-6fb1b79198d6"
@@ -154,7 +153,7 @@ def test_search_asks_for_a_limit_and_says_when_it_hits_it(monkeypatch, capsys):
 def test_search_limit_is_actually_sent(monkeypatch):
     seen = {}
 
-    def fake(method, path, cfg, *, params=None, **kw):  # noqa: ARG001
+    def fake(method, path, cfg, *, params=None, **kw):
         seen.update(params or {})
         return {"issues": []}
 
@@ -292,7 +291,7 @@ def test_estimate_value_resolves_on_the_string_not_the_number(monkeypatch):
 
 
 def test_a_project_without_an_estimate_set_says_so(monkeypatch):
-    def fake(method, path, cfg, **kw):  # noqa: ARG001
+    def fake(method, path, cfg, **kw):
         raise plane.PlaneError("GET https://x -> 404 {\"error\":\"Estimate not found\"}")
 
     monkeypatch.setattr(plane, "_request", fake)
@@ -411,7 +410,7 @@ def test_fetch_asset_sends_no_credentials_and_does_not_follow_redirects(monkeypa
             return False
 
     class FakeOpener:
-        def open(self, req, timeout=None):  # noqa: ARG002
+        def open(self, req, timeout=None):
             captured["headers"] = dict(req.headers)
             captured["url"] = req.full_url
             return FakeResponse()

@@ -19,15 +19,15 @@ import time
 from pathlib import Path
 
 import pytest
-
 from build_pipeline.config import EpicSettings
 from build_pipeline.epic import coordinator, records
 from build_pipeline.epic import lock as epic_lock
-from .epic_row_helpers import EpicSplitAnswer
 
 from .epic_row_helpers import (
     CallLog,
+    EpicSplitAnswer,
     Fakes,
+    alive,
     approve,
     child,
     commit_names,
@@ -36,10 +36,9 @@ from .epic_row_helpers import (
     last_summary,
     make_build,
     make_project,
+    merge_waiting,
     move_origin,
     name_commits,
-    alive,
-    merge_waiting,
     pr_url,
     records_snapshot,
     run_coordinator,

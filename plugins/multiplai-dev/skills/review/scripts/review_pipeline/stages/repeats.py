@@ -26,7 +26,14 @@ from __future__ import annotations
 import logging
 
 from .. import checks, rounds, sdk
-from ..models import AgentCheck, Finding, Repeat, RepeatMatch, RepeatsOutput, ReviewState
+from ..models import (
+    AgentCheck,
+    Finding,
+    Repeat,
+    RepeatMatch,
+    RepeatsOutput,
+    ReviewState,
+)
 from ..prompts import repeats as prompt
 from . import RunContext
 

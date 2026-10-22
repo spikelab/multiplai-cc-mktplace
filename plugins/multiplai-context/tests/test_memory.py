@@ -16,13 +16,12 @@ Covers all scenarios from requirements/memory-catalog-generator.md:
 - discover_sources(), hash_source(), build_prompt(), parse_response(), merge_entry()
 """
 
-import asyncio
 import hashlib
 import json
 import os
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -144,8 +143,8 @@ class TestMemoryGeneratorIdentity:
         """Generator name must be 'memory' for state namespacing."""
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(tmp_path / "mem"))
-        from generators.memory import MemoryGenerator
         from generators.config import CatalogConfig
+        from generators.memory import MemoryGenerator
 
         gen = MemoryGenerator(config=CatalogConfig(), model_client=_make_mock_client())
         assert gen.name == "memory"
@@ -154,8 +153,8 @@ class TestMemoryGeneratorIdentity:
         """Catalog output must be named memory.json."""
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(tmp_path / "mem"))
-        from generators.memory import MemoryGenerator
         from generators.config import CatalogConfig
+        from generators.memory import MemoryGenerator
 
         gen = MemoryGenerator(config=CatalogConfig(), model_client=_make_mock_client())
         assert gen.catalog_filename == "memory.json"
@@ -997,7 +996,6 @@ class TestLLMFailureHandling:
     @pytest.mark.asyncio
     async def test_all_llm_failures_preserves_prior_entries(self, tmp_path, monkeypatch):
         """When all LLM calls fail, prior catalog entries are preserved."""
-        from multiplai_core.model_client import ModelResponse
 
         # First run succeeds
         success_client = _make_mock_client()

@@ -24,7 +24,12 @@ from pydantic import BaseModel, Field
 
 from . import intake, sdk
 from .prompts import UNTRUSTED_NOTICE
-from .prompts.interview import ANSWERER_PRD_PROMPT, ANSWERER_PROMPT, QUESTIONER_PRD_RULE, QUESTIONER_PROMPT
+from .prompts.interview import (
+    ANSWERER_PRD_PROMPT,
+    ANSWERER_PROMPT,
+    QUESTIONER_PRD_RULE,
+    QUESTIONER_PROMPT,
+)
 from .run import EXIT_WAITING, MARKER_INTERVIEW_WAITING, Run, Stop
 
 log = logging.getLogger(__name__)

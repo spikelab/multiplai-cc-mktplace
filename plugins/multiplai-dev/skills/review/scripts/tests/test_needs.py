@@ -8,13 +8,25 @@ from pathlib import Path
 
 import jsonschema
 import pytest
-from conftest import KEYWORD_CITATION, REAL_BRANCH_RULES, SCHEMA, high_finding, medium_finding
-
+from conftest import (
+    KEYWORD_CITATION,
+    REAL_BRANCH_RULES,
+    SCHEMA,
+    high_finding,
+    medium_finding,
+)
 from review_pipeline import orchestrator, sdk, target
 from review_pipeline.config import ReviewConfig
 from review_pipeline.export import to_findings_file
 from review_pipeline.gates import gated_need, need_gate
-from review_pipeline.models import FinderOutput, Merged, Need, NeedAsk, ReviewState, Verdict
+from review_pipeline.models import (
+    FinderOutput,
+    Merged,
+    Need,
+    NeedAsk,
+    ReviewState,
+    Verdict,
+)
 from review_pipeline.render import render_review, render_summary
 from review_pipeline.stages import RunContext
 from review_pipeline.stages.find import run_find
@@ -122,7 +134,6 @@ def test_prepare_puts_the_pipelines_failed_lookups_into_the_state(fixture_repo, 
                           command=" gh api repos/{owner}/{repo}/rules/branches/main "))
         needs.append(Need(what="A lookup with a bad command.", cause="lookup-failed", source="pipeline",
                           command="gh api repos/o/r -X PATCH"))
-        return None
 
     monkeypatch.setattr(target, "branch_rules", failing_rules)
     state, _ = orchestrator.prepare(orchestrator.TargetSpec(repo=str(repo), pr=7), tmp_path / "out")

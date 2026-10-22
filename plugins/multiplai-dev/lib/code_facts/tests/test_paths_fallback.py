@@ -6,8 +6,15 @@ import asyncio
 import json
 
 import pytest
-
-from trace_fixtures import CLI, FakeCall, chain_hops, cli_source, commit_snapshot, lib, run_map
+from trace_fixtures import (
+    CLI,
+    FakeCall,
+    chain_hops,
+    cli_source,
+    commit_snapshot,
+    lib,
+    run_map,
+)
 
 READ_ONLY = ["Read", "Grep", "Glob"]
 HIDDEN = "pkg/hidden.py"

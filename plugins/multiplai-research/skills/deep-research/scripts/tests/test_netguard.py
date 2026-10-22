@@ -11,7 +11,6 @@ import ipaddress
 import socket
 
 import pytest
-
 from research_pipeline.models import FetchErrorType
 from research_pipeline.netguard import (
     UnsafeURLError,

@@ -21,10 +21,9 @@ from inside a session container — there is no Docker daemon here and no
 
 import io
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
-
 from conftest import import_script
 from lib import checkpoint as cp
 from lib import checkpoint_drain as cpd
@@ -60,7 +59,7 @@ class _SpawnRecorder:
 def _transcript(tmp_path, tokens=120_000):
     rec = {
         "type": "assistant",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "cwd": "/work/proj",
         "message": {
             "role": "assistant",
@@ -253,7 +252,6 @@ class TestTheDrain:
     def test_the_writer_drops_its_own_marker(self, tmp_path, data_env, monkeypatch):
         """End to end for the part that IS testable here: a marker in, a
         checkpoint file out, the marker gone."""
-        import asyncio
         from types import SimpleNamespace
 
         checkpoint_writer = import_script(

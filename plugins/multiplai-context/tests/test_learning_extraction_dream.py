@@ -18,14 +18,7 @@ These tests MUST FAIL against the current stub implementations.
 """
 
 import ast
-import asyncio
-import inspect
-import os
-import re
-import sys
-import textwrap
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 

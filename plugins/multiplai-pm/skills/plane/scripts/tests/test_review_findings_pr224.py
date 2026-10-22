@@ -7,13 +7,10 @@ Naming: test_g<N>_* maps to finding N of that review, most severe first.
 
 from __future__ import annotations
 
-import pytest
-
 import plane
-from conftest import BAD, CFG, OK
+import pytest
+from conftest import BAD, CFG, OK, guard
 from conftest import Args as _Args
-from conftest import guard
-
 
 # --- G1: the project object must stay read-only through slash games ----------
 

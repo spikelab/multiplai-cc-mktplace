@@ -11,13 +11,12 @@ import time
 from pathlib import Path
 from unittest.mock import patch
 
-
 PLUGIN_DIR = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = PLUGIN_DIR / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from lib import hook_watchdog as hw  # noqa: E402
+from lib import hook_watchdog as hw
 
 
 class TestApiHost:
@@ -162,7 +161,7 @@ class TestContextManagerArmsIt:
         ]
         assert timeouts, "context_manager hook not found in hooks.json"
         src = (SCRIPTS_DIR / "context_manager.py").read_text()
-        watchdog_s = float(re.search(r"^_WATCHDOG_S = ([\d.]+)", src, re.M).group(1))
+        watchdog_s = float(re.search(r"^_WATCHDOG_S = ([\d.]+)", src, re.MULTILINE).group(1))
         worst_probe_s = 2 * hw.PROBE_TIMEOUT_S
         for timeout in timeouts:
             assert watchdog_s + worst_probe_s + 1.0 <= timeout, (

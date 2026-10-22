@@ -27,8 +27,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from multiplai_core.log_utils import setup_logging
-from multiplai_core.costing import costs_dir
 from lib.costing_collector import (
     default_config_dir,
     pricing_age_days,
@@ -36,6 +34,8 @@ from lib.costing_collector import (
     run_collect,
 )
 from lib.runtime import lock_path
+from multiplai_core.costing import costs_dir
+from multiplai_core.log_utils import setup_logging
 
 logger = setup_logging("costs", packages=("lib", "generators"))
 

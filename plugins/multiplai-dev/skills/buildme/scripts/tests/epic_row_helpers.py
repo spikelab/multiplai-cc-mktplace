@@ -27,15 +27,13 @@ import os
 import re
 import subprocess
 from collections.abc import Callable
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-
-from multiplai_core.specs import mark_ready, write_change_meta
-
 from build_pipeline.config import BuildConfig, GitToggles
+from multiplai_core.specs import mark_ready, write_change_meta
 
 DROP_KEYS = {"at", "since", "pid", "host"}          # and every key ending in "_at"
 NOT_COMPARED = {".lock", "progress.log"}            # the lock and the log: never compared
@@ -158,7 +156,7 @@ def child(cid: str, deps: tuple[str, ...] = (), title: str | None = None) -> Epi
 THREE = EpicSplitAnswer(single=False, reason="Three parts.",
                         children=[child("api"), child("ui"), child("docs", ("api", "ui"))])
 
-READY_AT = datetime(2026, 10, 13, 12, 0, tzinfo=timezone.utc)    # same in every root, so the commits match
+READY_AT = datetime(2026, 10, 13, 12, 0, tzinfo=UTC)    # same in every root, so the commits match
 REQUIREMENT = """## ADDED Requirements
 
 ### Requirement: {title}
@@ -183,7 +181,7 @@ def write_ready_specs(change_dir: Path, cid: str) -> None:
     mark_ready(change_dir, now=READY_AT)
 
 
-def approve(config: BuildConfig, answer: EpicSplitAnswer, log: "CallLog | None" = None) -> str:
+def approve(config: BuildConfig, answer: EpicSplitAnswer, log: CallLog | None = None) -> str:
     """Write the split pm-spec makes of *config*'s change as *answer* gives
     it: each child's change dir with ready specs, `parent` and `depends_on`
     (change names), and the parent's `children` (in the answer's order); then

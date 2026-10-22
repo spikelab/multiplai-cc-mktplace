@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import hashlib
 import json
 import os
@@ -10,7 +11,8 @@ import subprocess
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from stages import clips, retakes, transcript as tx
+from stages import clips, retakes
+from stages import transcript as tx
 
 
 def _cache_root() -> Path:

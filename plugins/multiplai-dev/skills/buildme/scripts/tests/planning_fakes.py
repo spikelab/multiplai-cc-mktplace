@@ -5,10 +5,12 @@ Completion-contract tests use the public entry points without these fixtures.
 from build_pipeline import git_ops
 from build_pipeline.orchestrator import _run_publish
 
+
 def _plan_fixture(config, state):
     """Coherent planning output for phase-wiring tests (planner tested separately)."""
-    from build_pipeline.spec_generator import reconcile_plan
     from build_pipeline.change_manager import ARTIFACT_DAG
+    from build_pipeline.spec_generator import reconcile_plan
+
     from tests.spec_fixtures import write_specs
     root = config.change_dir
     write_specs(root)
@@ -25,8 +27,9 @@ def _plan_fixture(config, state):
 def _prepare_and_publish(config, state, progress, **kwargs):
     """Publication-only tests start after the real preparation/verification boundary."""
     import os
-    from build_pipeline.orchestrator import _pre_publish_sections, _worktree_section
+
     from build_pipeline.gates import final_verification
+    from build_pipeline.orchestrator import _pre_publish_sections, _worktree_section
     os.environ["BUILDME_TRUST_REPO"] = "1"
     config.test_command = config.test_command or "true"
     docs = kwargs.get("docs_dir", config.change_dir)
@@ -41,15 +44,17 @@ def _prepare_and_publish(config, state, progress, **kwargs):
 
 
 
-import pytest
 from unittest.mock import AsyncMock
+
+import pytest
+
 
 @pytest.fixture(autouse=True)
 def accepted_planning(monkeypatch, request):
     """Supply complete plans to tests of intake, boards and extraction routing."""
     from build_pipeline import orchestrator, spec_generator
+    from build_pipeline.llm_steps import plan_review_steps, spec_steps
     from build_pipeline.models import GateResult, PlanReviewResult
-    from build_pipeline.llm_steps import spec_steps, plan_review_steps
 
     async def generated(cm, change_dir, config, state):
         _plan_fixture(config, state)

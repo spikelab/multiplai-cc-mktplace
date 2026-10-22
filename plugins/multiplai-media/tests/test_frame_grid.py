@@ -7,7 +7,7 @@ from pathlib import Path
 _SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "video-edit" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 
-import pipeline  # noqa: E402
+import pipeline
 
 
 def test_grid_labels_every_100px(monkeypatch) -> None:

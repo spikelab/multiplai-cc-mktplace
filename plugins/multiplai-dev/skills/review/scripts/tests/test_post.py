@@ -6,7 +6,6 @@ import json
 import subprocess
 
 import pytest
-
 from conftest import CLAIM_HIGH, CLAIM_MEDIUM
 from review_pipeline import post as post_mod
 from review_pipeline.__main__ import main

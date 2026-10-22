@@ -44,8 +44,20 @@ from fnmatch import fnmatchcase
 
 from .. import checks, sdk
 from ..gates import gated_need, reason_kind, verdict_gate
-from ..models import (CRITICAL_IMPACTS, SEVERITIES, AgentCheck, Assessment, Finding, GateCheck, Need, ReviewState,
-                      Verdict, VerifierAnswer, is_trim, lower_severity)
+from ..models import (
+    CRITICAL_IMPACTS,
+    SEVERITIES,
+    AgentCheck,
+    Assessment,
+    Finding,
+    GateCheck,
+    Need,
+    ReviewState,
+    Verdict,
+    VerifierAnswer,
+    is_trim,
+    lower_severity,
+)
 from ..prompts import verify as prompt
 from . import RunContext, bounded, fix_citation
 from .find import critical_paths

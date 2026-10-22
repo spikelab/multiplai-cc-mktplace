@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from typing import TypeVar
 
 from multiplai_core import budget as core_budget
-from multiplai_core.agent_runner import AgentRunError, AgentRunTimeout, run_agent  # noqa: F401
+from multiplai_core.agent_runner import AgentRunError, AgentRunTimeout, run_agent
 from multiplai_core.budget import BudgetExceededError, SpendLedger
 from multiplai_core.structured import parse_answer, reformat_prompt
 from pydantic import BaseModel, ValidationError
@@ -55,8 +55,19 @@ TRUST_MESSAGE = (
     f"the model acts on. If you trust the repository, re-run with --trust-repo (or set {TRUST_ENV}=1)."
 )
 
-__all__ = ["BudgetExceededError", "CallFailed", "RepoTrustError", "READ_ONLY_TOOLS", "agent_structured",
-           "agent_text", "repo_is_trusted", "spend_marker", "start_budget", "text_call", "text_structured"]
+__all__ = [
+    "READ_ONLY_TOOLS",
+    "BudgetExceededError",
+    "CallFailed",
+    "RepoTrustError",
+    "agent_structured",
+    "agent_text",
+    "repo_is_trusted",
+    "spend_marker",
+    "start_budget",
+    "text_call",
+    "text_structured",
+]
 
 
 class CallFailed(Exception):

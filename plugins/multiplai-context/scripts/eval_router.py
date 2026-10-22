@@ -34,9 +34,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from multiplai_core.paths import get_paths  # noqa: E402
-from multiplai_core.plugin_options import option, option_var  # noqa: E402
-
+from multiplai_core.paths import get_paths
+from multiplai_core.plugin_options import option, option_var
 
 # ---------------------------------------------------------------------------
 # Case loading + catalog

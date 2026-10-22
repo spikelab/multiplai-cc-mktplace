@@ -16,7 +16,6 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-
 SYSTEM_PROMPT = """\
 You are a CONTEXT ROUTER for a Claude Code session. Given the user's prompt, \
 optionally the most recent assistant response, and catalogs of memory files, \

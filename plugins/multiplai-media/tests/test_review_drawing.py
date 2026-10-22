@@ -18,8 +18,8 @@ _SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "video-edit" / "s
 sys.path.insert(0, str(_SCRIPTS))
 sys.path.insert(0, str(Path(__file__).resolve().parent / "fixtures"))
 
-import make_job  # noqa: E402
-from stages import review_server as rs  # noqa: E402
+import make_job
+from stages import review_server as rs
 
 JPEG = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00" + b"\x00" * 64 + b"\xff\xd9"
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64

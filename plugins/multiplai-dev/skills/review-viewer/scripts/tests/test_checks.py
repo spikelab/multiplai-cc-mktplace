@@ -6,9 +6,13 @@ import json
 import logging
 
 import jsonschema
-
-from review_viewer.models import (CHECKS_SCHEMA_PATH, ChecksFile, FindingsFile, checks_schema_text,
-                                  load_findings)
+from review_viewer.models import (
+    CHECKS_SCHEMA_PATH,
+    ChecksFile,
+    FindingsFile,
+    checks_schema_text,
+    load_findings,
+)
 
 HIGH = "b561bd34ce"
 

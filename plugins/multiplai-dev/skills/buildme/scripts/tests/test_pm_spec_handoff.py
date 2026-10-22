@@ -17,9 +17,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from build_pipeline.orchestrator import run_orchestrator
 from multiplai_core.specs import is_ready
 
-from build_pipeline.orchestrator import run_orchestrator
 from tests.test_git_ops import make_repo
 from tests.test_ready_specs import CHANGE, Models, _args, _config
 

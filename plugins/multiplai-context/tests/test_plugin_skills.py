@@ -18,7 +18,7 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
-from lib.plugin_skills import (  # noqa: E402
+from lib.plugin_skills import (
     plugin_skill_owners,
     plugin_skills,
     qualify,

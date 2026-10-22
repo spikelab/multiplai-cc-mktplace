@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import pytest
-
 from fixture_repo import SERVICE_HEAD
 from review_viewer.gitdata import (
-    DELETED_PREVIEW_LINES, PathNotInReview, allowed_paths, diff_target, file_view,
+    DELETED_PREVIEW_LINES,
+    PathNotInReview,
+    allowed_paths,
+    diff_target,
+    file_view,
     parse_unified,
 )
 from review_viewer.models import load_findings
@@ -107,10 +110,10 @@ def test_missing_git_names_git(monkeypatch, fixture_repo):
 
 # --- regressions from the PR 243 review --------------------------------------------
 
-import subprocess  # noqa: E402
+import subprocess
 
-from review_viewer.gitdata import split_lines  # noqa: E402
-from review_viewer.models import Target  # noqa: E402
+from review_viewer.gitdata import split_lines
+from review_viewer.models import Target
 
 
 def _repo(path, base_files: dict, head_files: dict, config: dict | None = None):
@@ -182,13 +185,12 @@ def test_non_ascii_path_is_listed_unquoted(tmp_path):
 
 # --- target resolution --------------------------------------------------------------
 
-import json  # noqa: E402
-import os  # noqa: E402
-import stat  # noqa: E402
+import json
+import os
+import stat
 
-from fixture_repo import build_remote  # noqa: E402
-from review_viewer.gitdata import (  # noqa: E402
-    TargetError, parse_target, resolve_target)
+from fixture_repo import build_remote
+from review_viewer.gitdata import TargetError, parse_target, resolve_target
 
 
 @pytest.fixture(scope="module")
@@ -349,8 +351,8 @@ def test_pr_status_reads_only_the_changing_fields(tmp_path, monkeypatch):
 
 # --- every file at head: the page's "Show all files in the repo" ---------------------
 
-from fixture_repo import build_wide  # noqa: E402
-from review_viewer.gitdata import repo_files  # noqa: E402
+from fixture_repo import build_wide
+from review_viewer.gitdata import repo_files
 
 
 @pytest.fixture

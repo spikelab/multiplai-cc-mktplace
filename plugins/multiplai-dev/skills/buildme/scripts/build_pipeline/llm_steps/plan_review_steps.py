@@ -7,10 +7,10 @@ reviewed input revision, so an unchanged resume needs no model call.
 
 from __future__ import annotations
 
-from build_pipeline.budget import BudgetExceededError
-
 import logging
 from pathlib import Path
+
+from build_pipeline.budget import BudgetExceededError
 
 from ..models import PlanReviewFinding, PlanReviewResult
 from ..prompts.design_audit import prior_findings_section
@@ -470,9 +470,24 @@ async def run_plan_review_stage(
     review calls record a blocked outcome and raise; they cannot authorize TDD.
     """
     from ..spec_generator import (
-        PlanBlocked, PlanRepairRejected, assess_listed, block_on_findings, from_scans, log_findings,
-        model_listed, number_findings, open_findings, reconcile_plan, record_advisory, record_blocked_review,
-        recheck_verdict, refuse_if_blocked, reopen_if_edited, rewrite_plan, rewrite_published, saved_findings,
+        PlanBlocked,
+        PlanRepairRejected,
+        assess_listed,
+        block_on_findings,
+        from_scans,
+        log_findings,
+        model_listed,
+        number_findings,
+        open_findings,
+        recheck_verdict,
+        reconcile_plan,
+        record_advisory,
+        record_blocked_review,
+        refuse_if_blocked,
+        reopen_if_edited,
+        rewrite_plan,
+        rewrite_published,
+        saved_findings,
         scan_assessments,
     )
     name = "plan_review"

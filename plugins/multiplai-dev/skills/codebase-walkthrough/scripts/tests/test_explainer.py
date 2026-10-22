@@ -13,7 +13,12 @@ from fakes import FakeAgents
 from test_pipeline import run_args
 from walkthrough_pipeline import sdk
 from walkthrough_pipeline.__main__ import main
-from walkthrough_pipeline.gates import Corpus, example_words, explainer_text_gate, payload_gate
+from walkthrough_pipeline.gates import (
+    Corpus,
+    example_words,
+    explainer_text_gate,
+    payload_gate,
+)
 from walkthrough_pipeline.models import Citation, Payload
 from walkthrough_pipeline.render import markdown_headings, section_texts
 from walkthrough_pipeline.state import STATE_FILE
@@ -55,7 +60,7 @@ def test_the_top_has_the_tagline_and_one_run_line(done_run):
     top = md_path.read_text().split("\n## ", 1)[0]
     assert top.splitlines()[0] == "# bookings — codebase walkthrough"
     assert "Bookings takes reservations from Acme." in top
-    assert len(re.findall(r"^> Generated ", top, re.M)) == 1
+    assert len(re.findall(r"^> Generated ", top, re.MULTILINE)) == 1
     assert "## Commits read" not in top and "Module directory" not in top
 
 
@@ -80,7 +85,7 @@ def test_a_use_case_example_is_in_a_fenced_block(done_run):
 def test_a_flow_box_with_an_unknown_cite_is_dropped(ws, tmp_path, monkeypatch, fake_fetch):
     md, _, _ = _run(ws, tmp_path, monkeypatch, plant={"flow_node"})
     flow = section_texts(md, "How it works")[0]
-    diagram = re.search(r"```mermaid\n(.*?)```", flow, re.S).group(1)
+    diagram = re.search(r"```mermaid\n(.*?)```", flow, re.DOTALL).group(1)
     assert diagram.startswith("flowchart TD") and "Acme sends a booking" in diagram
     assert "A box with no source" not in diagram
     assert "[[c999]] is not a gated citation" in _cut(md)
@@ -120,7 +125,7 @@ def test_a_json_example_whose_keys_are_in_the_code_is_kept(done_run):
 def test_the_configuration_table_lists_a_setting_the_code_reads(done_run):
     md_path, _, _ = done_run
     config = section_texts(md_path.read_text(), "Configuration")[0]
-    assert re.search(r"^\| `ACME_ENV` \| Picks the staging or production key\. \[`engine/", config, re.M)
+    assert re.search(r"^\| `ACME_ENV` \| Picks the staging or production key\. \[`engine/", config, re.MULTILINE)
     assert "| `production` |" in config
 
 
@@ -132,7 +137,7 @@ def test_commits_read_lists_only_repositories_with_references(fresh_ws, tmp_path
     fixture_repo.commit(fresh_ws["engine"], "a dotted string")
     md, _, _ = _run(fresh_ws, tmp_path, monkeypatch)
     commits = section_texts(md, "Commits read")[0]
-    assert re.findall(r"^\| (\w+) \| .* \| `[0-9a-f]{40}` \|$", commits, re.M) == ["engine", "front", "warehouse"]
+    assert re.findall(r"^\| (\w+) \| .* \| `[0-9a-f]{40}` \|$", commits, re.MULTILINE) == ["engine", "front", "warehouse"]
     assert "Searched 4 repositories under `" in commits and "; 3 had references." in commits
     who = section_texts(md, "Who calls it and what it calls")[0]
     calls, _, strings = who.partition("#### Mentions in strings (not calls)")

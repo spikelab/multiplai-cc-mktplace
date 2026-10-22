@@ -10,7 +10,6 @@ useless to a caller reading a half-parsed tasks.md.
 """
 
 import pytest
-
 from build_pipeline.models import BlockInfo
 from build_pipeline.plan_split import (
     HIGH_RISK_KEYWORDS,

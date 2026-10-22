@@ -5,18 +5,16 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
+from build_pipeline.change_manager import ChangeManager
+from build_pipeline.config import BuildConfig, GitToggles
+from build_pipeline.models import BuildPhase
 from build_pipeline.orchestrator import (
     _rebind_to_existing_worktree,
     _run_bootstrap,
-    _run_publish,
     run_orchestrator,
 )
-from build_pipeline.config import BuildConfig, GitToggles
 from build_pipeline.progress import ProgressWriter
 from build_pipeline.state import BuildState
-from build_pipeline.models import BuildPhase
-from build_pipeline.change_manager import ChangeManager
 
 
 @pytest.fixture(autouse=True)
@@ -38,9 +36,10 @@ def _phase_wiring_prerequisites(monkeypatch):
     is tested through unwrapped public entry points in test_completion_contract.
     """
     from unittest.mock import AsyncMock
+
     from build_pipeline import orchestrator, spec_generator
-    from build_pipeline.models import PlanReviewResult, GateResult
-    from build_pipeline.llm_steps import spec_steps, plan_review_steps
+    from build_pipeline.llm_steps import plan_review_steps, spec_steps
+    from build_pipeline.models import GateResult, PlanReviewResult
     real = orchestrator.run_orchestrator
 
     async def generated(cm, change_dir, config, state):
@@ -126,6 +125,7 @@ class TestArchivePhase:
     async def test_auto_mode_archives_change(self, tmp_path):
         """With --auto, the change directory is moved to archive/ at the end."""
         import argparse
+
         from build_pipeline.orchestrator import run_orchestrator
 
         # Pre-build a minimal completed state so the orchestrator skips straight to archive
@@ -178,6 +178,7 @@ class TestArchivePhase:
     async def test_non_auto_mode_leaves_change_in_place(self, tmp_path):
         """Without --auto, the change stays in changes/ for manual archive."""
         import argparse
+
         from build_pipeline.orchestrator import run_orchestrator
 
         config = BuildConfig(
@@ -451,8 +452,8 @@ class TestSpecGenerationReloadOnlyMovesForward:
     @pytest.mark.asyncio
     async def test_phase_is_not_rewound_and_the_audit_is_not_re_run(self, tmp_path):
         from unittest.mock import AsyncMock, patch
+
         from build_pipeline.orchestrator import run_orchestrator
-        from build_pipeline.state import SpecGenState
 
         config = self._config(tmp_path)
         state_path = config.state_file_path()
@@ -508,8 +509,9 @@ class TestRespecPhaseWiring:
 
     @pytest.mark.asyncio
     async def test_orchestrator_runs_respec_before_archiving(self, tmp_path):
-        from unittest.mock import AsyncMock, patch
         from argparse import Namespace
+        from unittest.mock import AsyncMock, patch
+
         from build_pipeline.orchestrator import run_orchestrator
 
         project_dir = tmp_path / "project"
@@ -535,8 +537,9 @@ class TestRespecPhaseWiring:
 
     @pytest.mark.asyncio
     async def test_respec_failure_does_not_fail_the_build(self, tmp_path):
-        from unittest.mock import AsyncMock, patch
         from argparse import Namespace
+        from unittest.mock import AsyncMock, patch
+
         from build_pipeline.orchestrator import run_orchestrator
 
         project_dir = tmp_path / "project"
@@ -566,8 +569,9 @@ class TestTDDSubPhaseWiring:
 
     @pytest.mark.asyncio
     async def test_engine_is_invoked_as_a_sub_phase(self, tmp_path):
-        from unittest.mock import AsyncMock, patch
         from argparse import Namespace
+        from unittest.mock import AsyncMock, patch
+
         from build_pipeline.models import GateResult
         from build_pipeline.orchestrator import run_orchestrator
 
@@ -617,8 +621,9 @@ class TestDocsUpdatePhaseWiring:
 
     @pytest.mark.asyncio
     async def test_orchestrator_runs_docs_update_before_respec(self, tmp_path, capsys):
-        from unittest.mock import AsyncMock, patch
         from argparse import Namespace
+        from unittest.mock import AsyncMock, patch
+
         from build_pipeline.models import GateResult
         from build_pipeline.orchestrator import run_orchestrator
 
@@ -650,8 +655,9 @@ class TestDocsUpdatePhaseWiring:
 
     @pytest.mark.asyncio
     async def test_docs_failure_does_not_fail_the_build(self, tmp_path):
-        from unittest.mock import AsyncMock, patch
         from argparse import Namespace
+        from unittest.mock import AsyncMock, patch
+
         from build_pipeline.orchestrator import run_orchestrator
 
         config = self._config(tmp_path)
@@ -670,8 +676,9 @@ class TestDocsUpdatePhaseWiring:
 
     @pytest.mark.asyncio
     async def test_warning_reaches_stdout(self, tmp_path, capsys):
-        from unittest.mock import AsyncMock, patch
         from argparse import Namespace
+        from unittest.mock import AsyncMock, patch
+
         from build_pipeline.models import GateResult
         from build_pipeline.orchestrator import run_orchestrator
 
@@ -700,6 +707,7 @@ class TestDocsUpdatePhaseWiring:
         """A successful publish deletes the progress file, so the warning is
         asserted against the phase helper rather than a whole run."""
         from unittest.mock import AsyncMock, patch
+
         from build_pipeline.models import GateResult
         from build_pipeline.orchestrator import _run_docs_update_phase
 
@@ -721,6 +729,7 @@ class TestDocsUpdatePhaseWiring:
     @pytest.mark.asyncio
     async def test_phase_records_what_it_updated_on_the_state(self, tmp_path):
         from unittest.mock import AsyncMock, patch
+
         from build_pipeline.models import GateResult
         from build_pipeline.orchestrator import _run_docs_update_phase
 
@@ -746,6 +755,7 @@ class TestDocsUpdatePhaseWiring:
         It is dropped from state (and so from the PR body) and named back to
         the user as a DOCS_WARNING, on stdout and in the progress file."""
         from unittest.mock import AsyncMock, patch
+
         from build_pipeline.models import GateResult
         from build_pipeline.orchestrator import _run_docs_update_phase
 
@@ -776,6 +786,7 @@ class TestDocsUpdatePhaseWiring:
         warning path either: nothing survives validation, docs_impact stays
         empty, and the gate's own warning still reaches stdout."""
         from unittest.mock import AsyncMock, patch
+
         from build_pipeline.models import GateResult
         from build_pipeline.orchestrator import _run_docs_update_phase
 
@@ -894,7 +905,10 @@ class TestDocsAgentWritesItDidNotReport:
     def test_a_git_failure_is_not_reported_as_the_agent_wrote_nothing(
         self, tmp_path, capsys,
     ):
-        from build_pipeline.orchestrator import _uncommitted_paths, _warn_on_unreported_writes
+        from build_pipeline.orchestrator import (
+            _uncommitted_paths,
+            _warn_on_unreported_writes,
+        )
 
         config = BuildConfig(project_dir=tmp_path / "not-a-repo", change_name="c")
         progress = ProgressWriter(tmp_path / "progress.md")
@@ -912,6 +926,7 @@ class TestDocsAgentWritesItDidNotReport:
 
 from build_pipeline import git_ops
 from build_pipeline.git_ops import GitLifecycleError, GitResult
+
 from tests.test_git_ops import _git, make_bare_origin, make_repo
 
 
@@ -1738,6 +1753,7 @@ class TestPlanReviewPhase:
     @pytest.mark.asyncio
     async def test_phase_runs_and_emits_its_stdout_line(self, tmp_path, capsys):
         from unittest.mock import AsyncMock, patch
+
         from build_pipeline.models import PlanReviewResult
 
         config = self._config(tmp_path, "review-plan")
@@ -1761,7 +1777,7 @@ class TestPlanReviewPhase:
         """`plan_review_done` is checked BEFORE the model call, so a resume
         costs nothing at all."""
         from unittest.mock import AsyncMock, patch
-        from build_pipeline.state import SpecGenState
+
 
         config = self._config(tmp_path, "resume-plan")
         state = BuildState.load(config.state_file_path())

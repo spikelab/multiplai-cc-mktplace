@@ -35,23 +35,23 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
+from lib.bank_collisions import find_collisions, render_report, to_json
+from lib.banks import CATALOG_FRAGMENT, MemoryBank, shared_banks
+from lib.fsio import atomic_write_json
+from lib.section_loader import h2_names
 from multiplai_core.log_utils import log_event
 from multiplai_core.paths import Paths
 
 from generators.base import CATALOG_SCHEMA_VERSION, GenerationResult
-from lib.fsio import atomic_write_json
 from generators.memory import MemoryGenerator
-from lib.bank_collisions import find_collisions, render_report, to_json
-from lib.banks import CATALOG_FRAGMENT, MemoryBank, shared_banks
-from lib.section_loader import h2_names
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["BANKS_CATALOG", "BanksGenerator", "COLLISION_REPORT", "derive_entry"]
+__all__ = ["BANKS_CATALOG", "COLLISION_REPORT", "BanksGenerator", "derive_entry"]
 
 #: The catalog this generator writes.
 BANKS_CATALOG = "banks.json"
@@ -128,7 +128,7 @@ def _bank_files(bank: MemoryBank) -> list[Path]:
     ]
 
 
-def _read_fragment(bank: MemoryBank) -> Optional[list[dict]]:
+def _read_fragment(bank: MemoryBank) -> list[dict] | None:
     """The bank's committed entries, or ``None`` when there is no usable fragment."""
     fragment = bank.path / CATALOG_FRAGMENT
     if not fragment.exists():
@@ -147,7 +147,7 @@ def _read_fragment(bank: MemoryBank) -> Optional[list[dict]]:
     return [e for e in entries if isinstance(e, dict)]
 
 
-def _adopt_fragment_entry(bank: MemoryBank, entry: dict, present: set[str]) -> Optional[dict]:
+def _adopt_fragment_entry(bank: MemoryBank, entry: dict, present: set[str]) -> dict | None:
     """Re-key one committed entry onto this consumer's bank namespace.
 
     The bank authored ``"source": "dev.md"``; every consumer needs
@@ -316,7 +316,7 @@ class BanksGenerator:
         self._catalogs_dir.mkdir(parents=True, exist_ok=True)
         catalog = {
             "schema_version": CATALOG_SCHEMA_VERSION,
-            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "generated_at": datetime.now(UTC).isoformat(),
             "entries": entries,
             "collisions": to_json(collisions),
         }

@@ -10,12 +10,20 @@ import re
 from pathlib import Path
 from typing import get_args
 
-import pytest
-from pydantic import ValidationError
-
 import fixture_repo
-from code_facts import E2EListing, E2ETest, Location, MockedE2ETest, PathEntry, PathHop, PathsResult, TracedPath
+import pytest
+from code_facts import (
+    E2EListing,
+    E2ETest,
+    Location,
+    MockedE2ETest,
+    PathEntry,
+    PathHop,
+    PathsResult,
+    TracedPath,
+)
 from code_facts.paths import EntryKind, FallbackStatus
+from pydantic import ValidationError
 from walkthrough_pipeline.__main__ import main
 from walkthrough_pipeline.models import RepoInfo, TargetInfo, WalkState
 
@@ -193,8 +201,8 @@ def test_no_entries_and_no_drops_says_none_were_found(tmp_path):
 def test_coverage_counts_paths_traced_and_cut_short(tmp_path):
     from walkthrough_pipeline.render import coverage_lines
     table = "\n".join(coverage_lines(_state(tmp_path, _result())))
-    assert re.search(r"^\| Paths traced \| 3\b", table, re.M)
-    assert re.search(r"^\| Paths cut short \| 1\b", table, re.M)
+    assert re.search(r"^\| Paths traced \| 3\b", table, re.MULTILINE)
+    assert re.search(r"^\| Paths cut short \| 1\b", table, re.MULTILINE)
     assert "Scenarios cut short" not in table
 
 

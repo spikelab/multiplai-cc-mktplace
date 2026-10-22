@@ -6,9 +6,8 @@ import re
 import subprocess
 from pathlib import Path
 
-import pytest
-
 import fixture_repo
+import pytest
 from code_facts import E2EListing, PathsResult, TracedPath
 from fakes import FakeAgents
 from test_paths_render import CHARGE, COVERED, _entry, _hop, _render, _result, _state
@@ -54,7 +53,7 @@ def _check(md: Path, capsys, *args: str) -> tuple[int, list[str], str, str]:
 
 
 def _repo(md: Path) -> Path:
-    return Path(re.search(r"^\| shop \| (\S+) \|", md.read_text(), re.M).group(1))
+    return Path(re.search(r"^\| shop \| (\S+) \|", md.read_text(), re.MULTILINE).group(1))
 
 
 def _three_hop_doc(tmp_path: Path) -> Path:
@@ -68,7 +67,7 @@ def test_an_unchanged_paths_section_passes_and_counts_its_hops_on_stderr(tmp_pat
     md = _doc(tmp_path, _paths(_path(1, [SYNC, CHARGE]), _path(2, [LATER], "later")))
     code, fails, out, err = _check(md, capsys)
     assert code == 0 and fails == []
-    assert re.search(r"^check: \d+ checked, 0 failed$", out, re.M)
+    assert re.search(r"^check: \d+ checked, 0 failed$", out, re.MULTILINE)
     assert "check: 3 hops checked" in err
     code, fails, _, err = _check(md, capsys, "--at-head")
     assert code == 0 and "check: 3 hops checked" in err
@@ -93,7 +92,7 @@ def test_an_edited_line_fails_its_hop_by_id(tmp_path, capsys):
     code, fails, out, _ = _check(md, capsys, "--at-head")
     assert code == 1
     assert fails == ["FAIL p2h2 shop/cli/later.py:1-2: quote not at cited lines"]
-    assert re.search(r"^check: \d+ checked, 1 failed$", out, re.M)
+    assert re.search(r"^check: \d+ checked, 1 failed$", out, re.MULTILINE)
 
 
 def test_a_moved_hop_three_is_named(tmp_path, capsys):
@@ -143,7 +142,7 @@ def test_an_unresolved_hop_citation_fails_alongside_a_resolved_one(tmp_path, cap
     assert check.unresolved_hop_citations(md.read_text()) == ["p4h1"]
     code, fails, out, _ = _check(md, capsys)
     assert code == 1 and fails == ["FAIL unresolved hop citation p4h1"]
-    assert re.search(r"^check: \d+ checked, 1 failed$", out, re.M)
+    assert re.search(r"^check: \d+ checked, 1 failed$", out, re.MULTILINE)
 
 
 def test_a_dangling_backticked_hop_id_outside_the_paths_section_fails(tmp_path, capsys):
@@ -234,7 +233,7 @@ def test_an_agent_mode_walkthrough_has_no_hop_line(ws, tmp_path, monkeypatch, ca
                  "--output", str(tmp_path / "out"), "--mode", "agent", "--lsp-timeout", "0"]) == 0
     code, fails, out, err = _check(tmp_path / "out" / "bookings-walkthrough.md", capsys)
     assert code == 0 and fails == [] and "hops checked" not in err
-    assert re.search(r"^check: \d+ checked, 0 failed$", out, re.M)
+    assert re.search(r"^check: \d+ checked, 0 failed$", out, re.MULTILINE)
 
 
 # --- the suite catches a regression ------------------------------------------------------------------------

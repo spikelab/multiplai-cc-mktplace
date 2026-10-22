@@ -16,17 +16,17 @@ import json
 import os
 import re
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from multiplai_core.paths import get_paths
-from multiplai_core.model_client import create_client
-from multiplai_core.log_utils import setup_logging
-from lib.project_identity import load_project_map, resolve_project
 from lib.job_effort import NOW_EFFORT_OPTION, effort_kwargs
+from lib.project_identity import load_project_map, resolve_project
 from lib.thinking import NOW_THINKING_OPTION, thinking_kwargs
+from multiplai_core.log_utils import setup_logging
+from multiplai_core.model_client import create_client
+from multiplai_core.paths import get_paths
 
 logger = setup_logging("synthesize_now", packages=("lib", "generators"))
 
@@ -78,10 +78,10 @@ def _iter_diary_session_blocks(filepath: Path):
         except (ValueError, TypeError):
             try:
                 timestamp = datetime.fromtimestamp(
-                    filepath.stat().st_mtime, tz=timezone.utc,
+                    filepath.stat().st_mtime, tz=UTC,
                 )
             except OSError:
-                timestamp = datetime.now(timezone.utc)
+                timestamp = datetime.now(UTC)
 
         yield {
             "working_dir": m.group("cwd").strip(),
@@ -111,14 +111,14 @@ def _scan_diary(
     if config is None:
         config = load_project_map()
 
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
+    cutoff = datetime.now(UTC) - timedelta(hours=lookback_hours)
     entries_by_project: dict[str, list[dict]] = {}
 
     for md_file in sorted(diary_dir.glob("*.md")):
         for entry in _iter_diary_session_blocks(md_file):
             entry_time = entry["timestamp"]
             if entry_time.tzinfo is None:
-                entry_time = entry_time.replace(tzinfo=timezone.utc)
+                entry_time = entry_time.replace(tzinfo=UTC)
             if entry_time < cutoff:
                 continue
 
@@ -250,7 +250,7 @@ def _write_summary(
     windows; it makes the contamination visible, which is what was missing.
     """
     now_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     header_lines = [f"Generated: {timestamp}"]
     if session_id:

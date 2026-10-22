@@ -29,8 +29,9 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
-
-from conftest import hook_context, run_context_hook as _run_hook, write_catalog as _write_catalog
+from conftest import hook_context
+from conftest import run_context_hook as _run_hook
+from conftest import write_catalog as _write_catalog
 
 PLUGIN_ROOT = Path(__file__).parent.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
@@ -421,7 +422,9 @@ class TestTheFallbackIsKeyedSoCooldownCanFindIt:
         keyed on the real heading, so only the alias can match it.
         """
         from context_manager import (
-            MemoryLoadReport, _cooldown_keys, _filter_cooldown,
+            MemoryLoadReport,
+            _cooldown_keys,
+            _filter_cooldown,
             _load_memory_content,
         )
 
@@ -1169,7 +1172,9 @@ class TestRouterTimeoutIsConfigurable:
 
     def test_the_default_is_unchanged(self, monkeypatch):
         from lib.memory_router import (
-            DEFAULT_ROUTER_TIMEOUT_SECONDS, LLMRouter, resolve_router_timeout,
+            DEFAULT_ROUTER_TIMEOUT_SECONDS,
+            LLMRouter,
+            resolve_router_timeout,
         )
 
         monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_ROUTER_TIMEOUT_SECONDS", raising=False)

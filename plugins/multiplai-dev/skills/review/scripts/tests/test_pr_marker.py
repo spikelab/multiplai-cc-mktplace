@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from review_pipeline.pr_marker import MARKER_RE, MARKER_VERSION, format_marker, parse_markers
+from review_pipeline.pr_marker import (
+    MARKER_RE,
+    MARKER_VERSION,
+    format_marker,
+    parse_markers,
+)
 
 
 def test_the_marker_format_is_pinned():

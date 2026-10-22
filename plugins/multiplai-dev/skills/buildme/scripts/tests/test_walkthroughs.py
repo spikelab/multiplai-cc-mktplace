@@ -10,15 +10,15 @@ import shutil
 from pathlib import Path
 
 import pytest
-
 from build_pipeline import git_ops, walkthroughs
 from build_pipeline.change_manager import ChangeManager
 from build_pipeline.config import BuildConfig
 from build_pipeline.git_ops import GitResult
 from build_pipeline.orchestrator import _run_bootstrap
-from tests.planning_fakes import _prepare_and_publish as _run_publish
 from build_pipeline.progress import ProgressWriter
 from build_pipeline.state import BuildState
+
+from tests.planning_fakes import _prepare_and_publish as _run_publish
 from tests.test_git_ops import _git, make_bare_origin, make_repo
 
 CALC = "def add(a, b):\n    return a + b\n"

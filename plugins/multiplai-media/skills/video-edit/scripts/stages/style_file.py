@@ -20,7 +20,7 @@ from typing import Any
 
 STYLES_DIR = Path(__file__).resolve().parents[2] / "references" / "styles"
 
-_FENCE = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.S)
+_FENCE = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.DOTALL)
 _KEY = re.compile(r"^(?P<indent> *)(?P<key>[A-Za-z_][\w-]*)\s*:(?:\s+(?P<value>.*?))?\s*$")
 _NUMBER = re.compile(r"^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$")
 # The keys the style panel shows and edits; palette keys are whatever the file names.

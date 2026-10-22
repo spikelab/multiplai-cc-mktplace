@@ -6,7 +6,8 @@ import re
 
 import path_fixtures
 from fakes import FakeAgents
-from test_paths_render import _result, _state as _render_state
+from test_paths_render import _result
+from test_paths_render import _state as _render_state
 from test_paths_stage import _click_run, _paths_body
 from walkthrough_pipeline.__main__ import main
 from walkthrough_pipeline.models import Citation, SectionOutput

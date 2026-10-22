@@ -104,7 +104,7 @@ def remote_url(repo: str | Path) -> str | None:
         text = cfg.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
-    m = re.search(r'\[remote "origin"\][^\[]*?url\s*=\s*(\S+)', text, re.S)
+    m = re.search(r'\[remote "origin"\][^\[]*?url\s*=\s*(\S+)', text, re.DOTALL)
     return m.group(1) if m else None
 
 

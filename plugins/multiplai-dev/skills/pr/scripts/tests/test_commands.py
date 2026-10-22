@@ -7,7 +7,6 @@ import subprocess
 
 import pytest
 from conftest import git, make_bare_origin, make_change, make_repo
-
 from pr_pipeline import commands, github, markers
 from pr_pipeline.__main__ import build_parser
 from pr_pipeline.template import STANDARD_TEMPLATE
@@ -580,7 +579,6 @@ def test_an_unexpected_error_exits_2_not_1(tmp_path, monkeypatch, capsys, logged
 
 def test_an_error_while_starting_up_exits_2_not_1(tmp_path, monkeypatch, capsys):
     import multiplai_core.env
-
     from pr_pipeline import __main__ as cli
 
     def boom(*a, **k):
@@ -594,7 +592,6 @@ def test_an_error_while_starting_up_exits_2_not_1(tmp_path, monkeypatch, capsys)
 
 def test_a_multi_line_error_while_starting_up_is_one_diagnosis_line(tmp_path, monkeypatch, capsys):
     import multiplai_core.env
-
     from pr_pipeline import __main__ as cli
 
     def boom(*a, **k):

@@ -16,7 +16,7 @@ import pytest
 _SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "video-edit" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 
-from stages import review_server as rs  # noqa: E402
+from stages import review_server as rs
 
 PAYLOAD = bytes(range(256)) * 40          # 10240 bytes
 

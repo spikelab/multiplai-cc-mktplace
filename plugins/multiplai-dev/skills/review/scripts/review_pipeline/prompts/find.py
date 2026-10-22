@@ -18,8 +18,18 @@ from __future__ import annotations
 from code_facts import Fact
 
 from ..models import TargetInfo
-from . import (CITATION_RULES, JSON_ONLY, commits_block, deps_block, description_block, diff_block, fence,
-               files_block, settings_block, workspace_block)
+from . import (
+    CITATION_RULES,
+    JSON_ONLY,
+    commits_block,
+    deps_block,
+    description_block,
+    diff_block,
+    fence,
+    files_block,
+    settings_block,
+    workspace_block,
+)
 
 # The same share of the prompt the repository's rules get (stages/find.py CONVENTIONS_MAX_CHARS).
 FACTS_MAX_CHARS = 40_000

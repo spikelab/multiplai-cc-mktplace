@@ -34,7 +34,11 @@ import logging
 import re
 from pathlib import Path
 
-from multiplai_core.specs import expected_capabilities, valid_requirement, valid_requirement_text
+from multiplai_core.specs import (
+    expected_capabilities,
+    valid_requirement,
+    valid_requirement_text,
+)
 
 from . import intake, sdk
 from .prompts import UNTRUSTED_NOTICE
@@ -135,10 +139,10 @@ def _decide(run: Run, key: str) -> str:
 
 # --- the PRD citations and the ticket refs in `## Sources` ---------------------
 
-_SOURCES_RE = re.compile(r"^##\s+Sources\s*$(.*?)(?=^##\s|\Z)", re.M | re.S)
-_SOURCE_LINE_RE = re.compile(r"^-\s+`([a-z0-9]+(?:-[a-z0-9]+)*)`\s*:\s*(.+?)\s*$", re.M)
-_PRD_RE = re.compile(r"^PRD\s*(?:§\s*)?[\"“']?(.+?)[\"”']?$", re.I)
-_TICKET_RE = re.compile(r"^ticket\s+(\S+)$", re.I)
+_SOURCES_RE = re.compile(r"^##\s+Sources\s*$(.*?)(?=^##\s|\Z)", re.MULTILINE | re.DOTALL)
+_SOURCE_LINE_RE = re.compile(r"^-\s+`([a-z0-9]+(?:-[a-z0-9]+)*)`\s*:\s*(.+?)\s*$", re.MULTILINE)
+_PRD_RE = re.compile(r"^PRD\s*(?:§\s*)?[\"“']?(.+?)[\"”']?$", re.IGNORECASE)
+_TICKET_RE = re.compile(r"^ticket\s+(\S+)$", re.IGNORECASE)
 
 
 def sources(proposal: str) -> dict[str, dict[str, list[str]]]:

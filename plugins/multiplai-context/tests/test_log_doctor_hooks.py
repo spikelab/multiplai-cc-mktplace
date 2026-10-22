@@ -18,18 +18,20 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from log_doctor import (  # noqa: E402
+from datetime import UTC
+
+from log_doctor import (
     SCENARIOS,
     _pct,
+    first_watchdog_seen,
     hook_component_names,
     hook_health_notes,
     hook_stats,
     hook_timeouts,
-    first_watchdog_seen,
     hook_watchdog_hooks,
     hooks_json_payload,
-    main,
     load_hook_runs,
+    main,
     render_hooks_markdown,
 )
 
@@ -612,8 +614,8 @@ def test_first_watchdog_seen_ignores_the_scan_window(logs):
 
 
 def _today_line(hms, msg, level="INFO"):
-    from datetime import datetime, timezone
-    day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    from datetime import datetime
+    day = datetime.now(UTC).strftime("%Y-%m-%d")
     return f"[{day}T{hms}Z] [context_manager] [session:aaaaaaaa] {level}: {msg}\n"
 
 

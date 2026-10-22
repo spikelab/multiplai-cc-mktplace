@@ -3,12 +3,12 @@
 import ast
 import json
 import os
-import pytest
 from pathlib import Path
 
+import pytest
 from build_pipeline import budget
-from build_pipeline.state import BuildState, TDDState, SpecGenState
-from build_pipeline.models import BuildPhase, BlockInfo, BlockStatus, ImplementationNote
+from build_pipeline.models import BlockInfo, BlockStatus, BuildPhase, ImplementationNote
+from build_pipeline.state import BuildState, SpecGenState, TDDState
 
 
 class TestBuildState:
@@ -605,6 +605,7 @@ class TestGitLifecycleState:
         """A .build-state.json written before BuildPhase.PUBLISH existed (and
         before the git fields) must load and resume at the right phase."""
         import json
+
         from build_pipeline.models import BuildPhase
         from build_pipeline.state import BuildState
 
@@ -772,9 +773,7 @@ def _failed_writes(source: str) -> list[tuple[str, int]]:
     hits = []
     for node in ast.walk(tree):
         if (isinstance(node, ast.Attribute) and node.attr == "FAILED"
-                and _is_build_phase(node.value) and not only_read(node)):
-            hits.append(node)
-        elif (isinstance(node, ast.Call) and _is_build_phase(node.func)
+                and _is_build_phase(node.value) and not only_read(node)) or (isinstance(node, ast.Call) and _is_build_phase(node.func)
                 and any(is_failed_text(a) for a in node.args)):
             hits.append(node)
         elif isinstance(node, ast.keyword) and node.arg == "phase" and is_failed_text(node.value):
@@ -862,7 +861,6 @@ class TestFailRecordsTheTree:
 
 
 def test_skipped_or_advisory_required_reviews_never_authorize_building():
-    from build_pipeline.state import SpecGenState
     state = SpecGenState(revision="current")
     for name in ("design_audit", "plan_review", "tasks_audit"):
         for outcome in ("skipped", "advisory", "blocked"):

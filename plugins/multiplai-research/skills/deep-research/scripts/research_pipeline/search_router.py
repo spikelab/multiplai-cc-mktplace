@@ -16,7 +16,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Protocol
 from urllib.parse import urlparse
@@ -105,7 +105,7 @@ class RouterConfig:
         cls,
         quota_file: Path | None = None,
         prefer_claude_tools: bool = True,
-    ) -> "RouterConfig":
+    ) -> RouterConfig:
         if prefer_claude_tools:
             keyword = ["claude_agent", "brave", "tavily", "serper", "you"]
             semantic = ["claude_agent", "exa", "brave", "tavily"]
@@ -166,7 +166,7 @@ class QuotaStore:
         """Write pending state to disk if dirty. Safe to call any time."""
         if not self._dirty:
             return
-        self._state.updated_at = datetime.now(timezone.utc).isoformat()
+        self._state.updated_at = datetime.now(UTC).isoformat()
         # Atomic: this is rewritten throughout a run, and `_load` treats a
         # truncated file as "no quota history", which silently re-grants a
         # month's worth of paid API calls.
@@ -204,7 +204,7 @@ class QuotaStore:
     def available(self, provider: SearchProvider) -> bool:
         """Does this provider have remaining quota and no open circuit?"""
         quota = self.get_or_create(provider)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         self._apply_resets(quota, now)
 
         # Circuit breaker check
@@ -240,7 +240,7 @@ class QuotaStore:
 
     def record_success(self, provider: SearchProvider) -> None:
         quota = self.get_or_create(provider)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         self._apply_resets(quota, now)
         quota.daily_count += 1
         quota.monthly_count += 1
@@ -265,7 +265,7 @@ class QuotaStore:
         quota = self.get_or_create(provider)
         quota.consecutive_failures += 1
         if quota.consecutive_failures >= threshold:
-            cooldown_until = datetime.now(timezone.utc) + timedelta(minutes=cooldown_minutes)
+            cooldown_until = datetime.now(UTC) + timedelta(minutes=cooldown_minutes)
             quota.circuit_open_until = cooldown_until.isoformat()
             log.warning(
                 "Circuit breaker opened for %s until %s (%d consecutive failures)",
@@ -374,7 +374,7 @@ class SearchRouter:
                 # this clean empty below (a genuine "no results" answer).
                 got_empty_success = True
                 attempted[name] = "empty result"
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 log.warning("Provider %s timed out for query: %s", name, query[:60])
                 self.quotas.record_failure(
                     provider,
@@ -390,7 +390,7 @@ class SearchRouter:
                         self.config.circuit_cooldown_minutes,
                     )
                 attempted[name] = str(e)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 log.exception("Unexpected error from provider %s", name)
                 self.quotas.record_failure(
                     provider,
@@ -522,7 +522,7 @@ class SearchRouter:
                 MAX_TAVILY_FALLBACKS,
             )
             return results if results else None
-        except asyncio.TimeoutError:
+        except TimeoutError:
             log.warning("Tavily fallback timed out for %s", url[:60])
             self._tavily_fallback_count += 1
             return None
@@ -606,7 +606,7 @@ Return up to {max_results} results. Return ONLY the JSON array in a fenced code 
                 max_attempts=1,
                 label=f"search:{query[:50]}",
             )
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             raise ProviderError(self.name, str(e), transient=True) from e
 
         try:
@@ -658,7 +658,7 @@ class TavilyProvider:
             response = await self._client.search(
                 query=query, max_results=max_results, search_depth="basic"
             )
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             raise ProviderError(self.name, str(e), transient=True) from e
 
         results = []
@@ -711,7 +711,7 @@ class ExaProvider:
                 type="auto",
                 highlights={"num_sentences": 3, "highlights_per_url": 1},
             )
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             raise ProviderError(self.name, str(e), transient=True) from e
 
         results = []
@@ -762,7 +762,7 @@ class BraveProvider:
                 params={"q": query, "count": min(max_results, 20)},
             )
             response.raise_for_status()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             raise ProviderError(self.name, str(e), transient=True) from e
 
         data = response.json()
@@ -807,7 +807,7 @@ class SerperProvider:
                 "/search", json={"q": query, "num": max_results}
             )
             response.raise_for_status()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             raise ProviderError(self.name, str(e), transient=True) from e
 
         data = response.json()
@@ -853,7 +853,7 @@ class YouProvider:
                 "/search", params={"query": query, "num_web_results": max_results}
             )
             response.raise_for_status()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             raise ProviderError(self.name, str(e), transient=True) from e
 
         data = response.json()

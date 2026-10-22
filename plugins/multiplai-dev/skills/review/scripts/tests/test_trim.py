@@ -8,14 +8,24 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
 from conftest import SCHEMA, high_finding, medium_finding
 from review_pipeline import budget, post, sdk
+from review_pipeline import target as target_mod
 from review_pipeline.__main__ import main
 from review_pipeline.config import DIMENSIONS, TRIM_DIMENSION, ReviewConfig, load_config
 from review_pipeline.export import to_findings_file
-from review_pipeline.models import (AssessOutput, Citation, DuplicateSet, Finding, FinderOutput, MergeOutput,
-                                    RepeatsOutput, ReviewState, Verdict, section_of)
+from review_pipeline.models import (
+    AssessOutput,
+    Citation,
+    DuplicateSet,
+    FinderOutput,
+    Finding,
+    MergeOutput,
+    RepeatsOutput,
+    ReviewState,
+    Verdict,
+    section_of,
+)
 from review_pipeline.prompts import find as find_prompt
 from review_pipeline.prompts import verify as verify_prompt
 from review_pipeline.render import render_review, render_rollup, section
@@ -24,7 +34,6 @@ from review_pipeline.stages.assess import run_assess
 from review_pipeline.stages.find import critical_paths, finder_dimensions, run_find
 from review_pipeline.stages.merge import linked, run_merge
 from review_pipeline.stages.verify import important_assessments, run_verify
-from review_pipeline import target as target_mod
 
 ENV = dict(os.environ, GIT_AUTHOR_NAME="Fixture", GIT_AUTHOR_EMAIL="fixture@example.com",
            GIT_COMMITTER_NAME="Fixture", GIT_COMMITTER_EMAIL="fixture@example.com",

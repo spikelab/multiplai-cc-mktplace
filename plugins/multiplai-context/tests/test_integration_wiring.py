@@ -17,22 +17,15 @@ plugin. They are meant to FAIL until the implementation is complete.
 
 import ast
 import asyncio
-import hashlib
-import importlib
-import importlib.util
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
-import time
-from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 import pytest
-
-from conftest import PLUGIN_ROOT, SCRIPTS_DIR, HOOKS_JSON, parse_hooks
+from conftest import HOOKS_JSON, PLUGIN_ROOT, SCRIPTS_DIR, parse_hooks
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -664,7 +657,7 @@ class TestGrepAuditHardcodedPaths:
                     violations.append(f"  {rel}: {desc}")
 
         assert len(violations) == 0, \
-            f"G2 violation — hardcoded paths found:\n" + "\n".join(violations)
+            "G2 violation — hardcoded paths found:\n" + "\n".join(violations)
 
     def test_no_absolute_home_paths_in_python_scripts(self):
         """WHEN all .py files in scripts/ are scanned for /home/ or /Users/
@@ -682,7 +675,7 @@ class TestGrepAuditHardcodedPaths:
                     violations.append(f"  {rel}:{line_no}: {stripped[:80]}")
 
         assert len(violations) == 0, \
-            f"Absolute home paths in scripts:\n" + "\n".join(violations)
+            "Absolute home paths in scripts:\n" + "\n".join(violations)
 
     def test_user_config_defaults_use_tilde_not_absolute(self):
         """WHEN userConfig defaults are inspected in plugin.json
@@ -942,9 +935,10 @@ class TestModelClientFactoryWiring:
     def test_create_client_raises_without_sdk_or_key(self):
         """WHEN create_client() is called with no SDK and no API key
         THEN it raises RuntimeError."""
-        from multiplai_core.model_client import create_client
-        from unittest.mock import patch
         import builtins
+        from unittest.mock import patch
+
+        from multiplai_core.model_client import create_client
 
         # Ensure no API key env var is set
         env_key = "CLAUDE_PLUGIN_OPTION_ANTHROPIC_API_KEY"
@@ -971,9 +965,10 @@ class TestModelClientFactoryWiring:
     def test_create_client_returns_anthropic_with_key(self):
         """WHEN create_client() is called with an API key and no SDK
         THEN it returns AnthropicAPIClient."""
-        from multiplai_core.model_client import create_client, AnthropicAPIClient
-        from unittest.mock import patch
         import builtins
+        from unittest.mock import patch
+
+        from multiplai_core.model_client import AnthropicAPIClient, create_client
 
         # Block claude_agent_sdk import to force fallback
         real_import = builtins.__import__
@@ -1155,7 +1150,7 @@ class TestPathResolverIntegration:
         monkeypatch.delenv("CLAUDE_PLUGIN_DATA", raising=False)
         monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_DIARY_DIR", raising=False)
 
-        from multiplai_core.paths import get_paths, _reset_cache
+        from multiplai_core.paths import _reset_cache, get_paths
         _reset_cache()
         p1 = get_paths()
 
@@ -1228,7 +1223,7 @@ class TestPluginValidationReadiness:
             missing.append(f"hooks entrypoint: {hooks_ref}")
 
         assert len(missing) == 0, \
-            f"Missing referenced files:\n" + "\n".join(f"  - {m}" for m in missing)
+            "Missing referenced files:\n" + "\n".join(f"  - {m}" for m in missing)
 
     def test_no_json_trailing_commas(self):
         """WHEN JSON manifest files are checked for trailing commas

@@ -1,11 +1,11 @@
 """Planning revision publication, input invalidation and budget admission regressions."""
 import json
 from types import SimpleNamespace
-from unittest.mock import Mock, AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
-
-from build_pipeline import budget, sdk, spec_generator as owner
+from build_pipeline import budget, sdk
+from build_pipeline import spec_generator as owner
 from build_pipeline.change_manager import ChangeManager
 from build_pipeline.config import BuildConfig
 from build_pipeline.state import BuildState, SpecGenState
@@ -139,6 +139,7 @@ async def test_spec_generation_and_resume_admit_no_call_after_cap(plan, monkeypa
 @pytest.mark.asyncio
 async def test_cancelled_standalone_planning_persists_partial_usage(plan, monkeypatch):
     import asyncio
+
     from tests.spec_fixtures import ready_specs
     config, _, _ = plan
     ready_specs(config.change_dir)
@@ -293,7 +294,11 @@ async def test_repaired_unknowns_keep_their_accepted_evidence_on_resume(plan, mo
 async def test_interrupted_post_repair_audit_resumes_on_the_new_revision(plan, monkeypatch, stage, failure):
     from build_pipeline.llm_steps import plan_review_steps
     from build_pipeline.llm_steps.spec_steps import AuditFindings
-    from build_pipeline.models import PlanReviewFinding, PlanReviewResult, PriorAssessment
+    from build_pipeline.models import (
+        PlanReviewFinding,
+        PlanReviewResult,
+        PriorAssessment,
+    )
     config, _, state = plan
     (config.change_dir / 'requirements').mkdir(exist_ok=True)
     for cap in ('one', 'two'):

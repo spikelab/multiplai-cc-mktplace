@@ -16,7 +16,7 @@ import asyncio
 import json
 import logging
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -25,10 +25,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
-from lib import utilisation as util  # noqa: E402
-from lib import utilisation_judge as judge  # noqa: E402
+from lib import utilisation as util
+from lib import utilisation_judge as judge
 
-NOW = datetime(2026, 8, 8, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 8, 8, 12, 0, tzinfo=UTC)
 
 
 def _ts(days_ago: int = 0) -> str:
@@ -972,7 +972,7 @@ class TestConcurrentWritersDoNotLoseRecords:
 
         original = util._write_all
 
-        def boom(p, records):  # noqa: ANN001
+        def boom(p, records):
             raise OSError("disk full")
 
         monkeypatch.setattr(util, "_write_all", boom)
@@ -1303,9 +1303,8 @@ class TestMaintainerPasses:
 
     def test_judge_pass_degrades_when_no_client_can_be_made(self, tmp_path, monkeypatch):
         """Contract C3 — records nothing, never guesses, never crashes."""
-        import multiplai_core.model_client as mc
-
         import memory_maintainer as mm
+        import multiplai_core.model_client as mc
 
         _write(util.utilisation_path(tmp_path),
                [_session("s1", [_inject("dev.md", "Testing", 100)])])
@@ -1321,9 +1320,8 @@ class TestMaintainerPasses:
                    for r in util.read_records(util.utilisation_path(tmp_path)))
 
     def test_judge_pass_can_be_turned_off(self, tmp_path, monkeypatch):
-        from multiplai_core.plugin_options import option_var
-
         import memory_maintainer as mm
+        from multiplai_core.plugin_options import option_var
 
         monkeypatch.setenv(option_var("utilisation_judge_sample"), "0")
         result = mm.run_utilisation_judge(tmp_path)

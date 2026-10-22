@@ -5,7 +5,6 @@ import subprocess
 from sys import executable as PYTHON
 
 import pytest
-
 from review_viewer.mailbox import Mailbox, MailboxError, new_question_id, utc_now
 from review_viewer.models import InboxRow, OutboxRow
 

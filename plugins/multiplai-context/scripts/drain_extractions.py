@@ -65,8 +65,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from multiplai_core.paths import get_paths
-from multiplai_core.log_utils import setup_logging, log_event
 from lib.checkpoint_drain import (
     pending_checkpoint_count,
     process_pending_checkpoints,
@@ -77,6 +75,8 @@ from lib.extraction_drain import (
     processing_count,
 )
 from lib.fleet import write_fleet_view
+from multiplai_core.log_utils import log_event, setup_logging
+from multiplai_core.paths import get_paths
 
 logger = setup_logging("drain_extractions", packages=("lib", "generators"))
 

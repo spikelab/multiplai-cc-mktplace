@@ -35,11 +35,11 @@ import json
 import logging
 import os
 import shlex
-import signal
 import shutil
+import signal
 import subprocess
-import threading
 import tempfile
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 

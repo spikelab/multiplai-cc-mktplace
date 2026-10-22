@@ -29,23 +29,21 @@ import io
 import json
 import os
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Callable
 
 import pytest
-
 from conftest import SCRIPTS_DIR, import_script
 
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from multiplai_core.env import CURRENT_MODEL
-from multiplai_core.plugin_options import option_var
-from multiplai_core.model_client import DEFAULT_MODEL as CLIENT_DEFAULT_MODEL
-
 from lib.job_effort import EFFORT_OPTIONS
+from multiplai_core.env import CURRENT_MODEL
+from multiplai_core.model_client import DEFAULT_MODEL as CLIENT_DEFAULT_MODEL
+from multiplai_core.plugin_options import option_var
 
 SESSION_MODEL = "claude-test-session"
 SESSION_EFFORT = "low"
@@ -106,7 +104,7 @@ class SdkRecorder:
 
 @pytest.fixture
 def sdk(monkeypatch):
-    import multiplai_core.agent_runner as agent_runner
+    from multiplai_core import agent_runner
 
     recorder = SdkRecorder()
     monkeypatch.setattr(agent_runner, "_safe_query", recorder.fake_safe_query)
@@ -130,7 +128,7 @@ def _use_workspace(root: Path, monkeypatch):
 
 def _transcript(path: Path, cwd: str = "/work/proj") -> Path:
     """A two-turn Claude Code transcript, timestamped just now."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     def turn(role, text, ts):
         rec = {"type": role, "timestamp": ts.isoformat(), "cwd": cwd,
@@ -149,7 +147,7 @@ def _transcript(path: Path, cwd: str = "/work/proj") -> Path:
 
 
 def _diary(paths, cwd: str = "/work/proj") -> None:
-    ts = datetime.now(timezone.utc).isoformat()
+    ts = datetime.now(UTC).isoformat()
     (paths.diary_dir() / "today.md").write_text(
         f"# Diary — test\n\n## Session: s1 — {ts} — {cwd}\n\n[{ts}]\n\n"
         "Fixed the auth bug.\n", encoding="utf-8")
@@ -309,7 +307,7 @@ def _extract_learnings(root, monkeypatch, sdk):
 
     _use_workspace(root, monkeypatch)
     sdk.reply = lambda _system: UNIT_REPLY.format(
-        ts=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+        ts=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"))
     monkeypatch.setattr(el.sys, "stdin", io.StringIO(json.dumps({
         "session_id": "s1", "cwd": "/work/proj",
         "transcript_path": str(_transcript(root / "t.jsonl")),
@@ -326,9 +324,9 @@ def _backfill(root, monkeypatch, sdk):
     _transcript(config_dir / "projects" / "proj" / "session-b1.jsonl")
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
     sdk.reply = lambda _system: UNIT_REPLY.format(
-        ts=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+        ts=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"))
     summary = asyncio.run(backfill(
-        datetime.now(timezone.utc) - timedelta(days=1),
+        datetime.now(UTC) - timedelta(days=1),
         run_catalogs=True, run_now=True,
     ))
     assert summary["scanned"] == 1, summary

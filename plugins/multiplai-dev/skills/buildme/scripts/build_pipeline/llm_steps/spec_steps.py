@@ -14,11 +14,21 @@ from pathlib import Path
 
 from code_facts import CallFn
 
-from ..prompts.spec_generation import DESIGN_PROMPT, TASKS_PROMPT
 from ..models import PriorAssessment
-from ..prompts.design_audit import DESIGN_AUDIT_PROMPT, TASKS_AUDIT_PROMPT, prior_findings_section
+from ..prompts.design_audit import (
+    DESIGN_AUDIT_PROMPT,
+    TASKS_AUDIT_PROMPT,
+    prior_findings_section,
+)
 from ..prompts.explainer import EXPLAINER_PROMPT, UNKNOWNS_REGEN_PROMPT
-from ..sdk import agent_call, agent_call_structured, llm_call, extract_json, LLMCallError
+from ..prompts.spec_generation import DESIGN_PROMPT, TASKS_PROMPT
+from ..sdk import (
+    LLMCallError,
+    agent_call,
+    agent_call_structured,
+    extract_json,
+    llm_call,
+)
 
 log = logging.getLogger(__name__)
 

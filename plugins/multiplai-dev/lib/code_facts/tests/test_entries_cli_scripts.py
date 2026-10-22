@@ -8,10 +8,8 @@ from __future__ import annotations
 import asyncio
 import importlib
 import json
-from pathlib import Path
 
 import pytest
-
 from conftest import line_of, make_tree, sentinel_prelude
 from trace_fixtures import FakeCall, commit_snapshot, lib
 
@@ -514,7 +512,7 @@ def test_script_and_package_main_produce_one_main_path(tmp_path):
 
 def test_seed_on_a_click_handler_is_listed_as_an_invoker(tmp_path):
     snap = commit_snapshot(tmp_path / "repo", {"cli.py": CLICK})
-    answer = lambda _: {"hops": [snap.hop("cli.py", "build_all")]}  # noqa: E731
+    answer = lambda _: {"hops": [snap.hop("cli.py", "build_all")]}
     call = FakeCall(trace=answer, reask=answer)
     result = asyncio.run(lib("map_paths")(
         root=snap.root, commit=snap.head, resolve=snap.resolve, call=call, fallback=False,

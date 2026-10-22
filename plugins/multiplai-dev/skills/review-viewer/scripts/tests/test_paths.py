@@ -11,7 +11,6 @@ import typing
 from pathlib import Path
 
 import pytest
-
 from conftest import FIXTURE
 
 TESTS = Path(__file__).resolve().parent
@@ -325,7 +324,7 @@ def test_the_paths_fixture_is_valid_paths_v1_and_matches_the_findings_fixture():
         ids = f.get("paths", [])
         assert all(i in by_id for i in ids), f"{f['id']} names a path the fixture lacks"
         assert ids == sorted(ids, key=list(by_id).index) and len(set(ids)) == len(ids)
-    label = lambda f: (f.get("assessment") or {}).get("label")  # noqa: E731
+    label = lambda f: (f.get("assessment") or {}).get("label")
     on = {(f["status"], label(f)): f["paths"] for f in findings if "paths" in f}
     assert on == {("confirmed", None): ["p1", "p4"], ("unverifiable", None): ["p1"],
                   ("refuted", None): ["p6"], ("confirmed", "low-value"): ["p2"]}

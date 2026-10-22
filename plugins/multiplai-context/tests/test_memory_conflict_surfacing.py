@@ -28,10 +28,11 @@ import shutil
 import subprocess
 from datetime import datetime
 
-import pytest
-
 import context_manager
-from conftest import hook_context, run_context_hook as _run_hook, write_catalog as _write_catalog
+import pytest
+from conftest import hook_context
+from conftest import run_context_hook as _run_hook
+from conftest import write_catalog as _write_catalog
 
 # Stable fragments of the preamble asserted below — if the wording is
 # rephrased, update these sentinels together with the constant.

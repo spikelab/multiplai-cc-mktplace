@@ -16,9 +16,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import promote_skill  # noqa: E402
-from promote_skill import (_bundled_scripts, parse_contract,  # noqa: E402
-                           promote, python_command)
+import promote_skill
+from promote_skill import _bundled_scripts, parse_contract, promote, python_command
 
 VALID_FRONTMATTER = textwrap.dedent("""\
     ---

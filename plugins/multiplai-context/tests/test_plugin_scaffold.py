@@ -2,19 +2,16 @@
 
 import json
 import re
-from pathlib import Path
 
 import pytest
-
 from conftest import (
-    PLUGIN_ROOT,
-    REPO_ROOT,
+    EXPECTED_HOOK_SCRIPTS,
     HOOKS_JSON,
     MARKETPLACE_JSON,
-    EXPECTED_HOOK_SCRIPTS,
+    PLUGIN_ROOT,
+    REPO_ROOT,
     parse_hooks,
 )
-
 
 # ---------------------------------------------------------------------------
 # Directory structure

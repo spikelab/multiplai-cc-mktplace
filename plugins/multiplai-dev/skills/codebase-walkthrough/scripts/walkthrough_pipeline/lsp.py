@@ -154,7 +154,7 @@ async def find_references(target: TargetInfo, snapshot: Path, symbols: list[Symb
     try:
         await asyncio.wait_for(run(), timeout=timeout_s)
         report["status"] = "ok"
-    except asyncio.TimeoutError:
+    except TimeoutError:
         report["status"] = f"timed out after {timeout_s:g}s"
     except (ConnectionError, OSError, json.JSONDecodeError) as e:
         report["status"] = f"failed ({type(e).__name__}: {str(e)[:120]})"

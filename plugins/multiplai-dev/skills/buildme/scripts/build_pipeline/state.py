@@ -6,20 +6,21 @@ Serialized to JSON after every significant transition.
 
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import logging
 import os
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
+
 from pydantic import BaseModel, Field, model_validator
 
 from . import budget
 from .findings.models import PRComment, SpecIssue, Triage
 from .models import BlockInfo, BlockStatus, BuildPhase
-from .stop_record import StepStop  # noqa: F401  (moved; `from .state import StepStop` keeps working)
+from .stop_record import StepStop  # moved; `from .state import StepStop` keeps working
 from .stop_record import record as record_stop
 
 log = logging.getLogger(__name__)
@@ -217,7 +218,7 @@ COMPLETED_SUFFIX = ".complete.json"
 def completed_state_path(state_path: Path) -> Path:
     """Where a succeeded run keeps *state_path*: ``.build-state.json`` →
     ``.build-state.complete.json``."""
-    stem = state_path.name[:-len(".json")] if state_path.name.endswith(".json") else state_path.name
+    stem = state_path.name.removesuffix(".json")
     return state_path.with_name(stem + COMPLETED_SUFFIX)
 
 
@@ -311,8 +312,8 @@ class BuildState(BaseModel):
 
     # Checkpointing
     state_file: str = ""
-    started_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-    updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    started_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
+    updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
     def checkpoint(self, path: Path | None = None, *, keep_budget: bool = False) -> None:
         """Serialize state to disk, atomically.
@@ -336,7 +337,7 @@ class BuildState(BaseModel):
             return
         if not keep_budget:
             self.budget = budget.get_budget().to_state()
-        self.updated_at = datetime.now(timezone.utc).isoformat()
+        self.updated_at = datetime.now(UTC).isoformat()
         target.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp_name = tempfile.mkstemp(
             dir=target.parent, prefix=f".{target.name}.", suffix=".tmp",

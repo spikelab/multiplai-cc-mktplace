@@ -18,14 +18,18 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 from build_pipeline import mutation
 from build_pipeline.config import BuildConfig, MutationSettings, _load_mutation_settings
-from build_pipeline.models import AgentResult, BlockInfo, BlockStatus, MutationResult, SurvivingMutant
+from build_pipeline.models import (
+    AgentResult,
+    BlockInfo,
+    BlockStatus,
+    MutationResult,
+    SurvivingMutant,
+)
 from build_pipeline.progress import ProgressWriter
 from build_pipeline.state import BuildState, TDDState
 from build_pipeline.tdd_engine import _run_mutation
-
 
 # --- helpers ---------------------------------------------------------------
 
@@ -1478,10 +1482,10 @@ def test_real_cosmic_ray_scores_only_the_changed_lines(tmp_path):
 
 
 def test_cosmic_test_command_honors_cd_and_literal_arguments(tmp_path):
-    import tomllib
+    import shlex
     import subprocess
     import sys
-    import shlex
+    import tomllib
     (tmp_path / 'api').mkdir()
     command = f'cd api && {sys.executable} -c "from pathlib import Path; import sys; assert Path.cwd().name == chr(97)+chr(112)+chr(105); assert sys.argv[1] == chr(35)" #'
     text = mutation.cosmic_ray_config(['app.py'], command, 30, 'abc123', project_dir=tmp_path)

@@ -35,11 +35,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from multiplai_core.paths import get_paths
-from multiplai_core.log_utils import hook_run, setup_logging, log_event
 from lib import checkpoint as cp
 from lib.fsio import atomic_write_json
 from lib.hook_input import read_hook_input
+from multiplai_core.log_utils import hook_run, log_event, setup_logging
+from multiplai_core.paths import get_paths
 
 logger = setup_logging("checkpoint_nudge", packages=("lib", "generators"))
 

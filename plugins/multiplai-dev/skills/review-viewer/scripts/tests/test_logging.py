@@ -16,10 +16,9 @@ import urllib.request
 from sys import executable as PYTHON
 
 import pytest
+from conftest import free_port
 from multiplai_core import paths
 from multiplai_core.log_utils import _get_logs_dir
-
-from conftest import free_port
 
 
 def _read_logs(logs, stem, ext):

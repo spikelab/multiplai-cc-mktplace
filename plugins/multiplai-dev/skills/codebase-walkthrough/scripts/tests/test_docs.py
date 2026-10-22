@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
+import fixture_repo
 import httpx
 import pytest
-
-import fixture_repo
 from walkthrough_pipeline import docs, fetcher
 
 

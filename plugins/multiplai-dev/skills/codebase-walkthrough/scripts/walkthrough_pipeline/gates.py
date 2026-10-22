@@ -18,7 +18,16 @@ from pathlib import Path, PurePosixPath
 from multiplai_core.citations import check_quote, file_at, lines_at
 from multiplai_core.citations import normalise_ws as normalise
 
-from .models import (Citation, Fact, GateResult, Reference, RepoInfo, SymbolEntry, TargetInfo, Unit)
+from .models import (
+    Citation,
+    Fact,
+    GateResult,
+    Reference,
+    RepoInfo,
+    SymbolEntry,
+    TargetInfo,
+    Unit,
+)
 from .target import require_rg
 
 SMALL_FILE_LINES = 30
@@ -161,9 +170,9 @@ def doc_quote_gate(doc_texts: dict[str, str], url: str, doc_quote: str) -> GateR
 CITE_ID = re.compile(r"\[\[(?:snippet:)?([a-z0-9]+)\]\]")
 PATH_LINE = re.compile(r"([A-Za-z0-9_.\-]+(?:/[A-Za-z0-9_.\-]+)+):(\d+)(?:-(\d+))?")
 BACKTICK = re.compile(r"(?<!`)`([^`\n]+)`(?!`)")
-MERMAID = re.compile(r"```mermaid\n(.*?)```", re.S)
+MERMAID = re.compile(r"```mermaid\n(.*?)```", re.DOTALL)
 MERMAID_LABEL = re.compile(r"\[\"?([^\]\"]+)\"?\]|\(\"?([^)\"]+)\"?\)|participant\s+\S+\s+as\s+(.+)$|participant\s+(\S+)$",
-                           re.M)
+                           re.MULTILINE)
 
 
 class Corpus:
@@ -244,7 +253,7 @@ def glossary_gate(term: str, corpus: Corpus) -> GateResult:
 
 def sections_gate(markdown: str, required: list[str]) -> GateResult:
     headings = {re.sub(r"\s+\(\d+\)$", "", m.group(1).strip())
-                for m in re.finditer(r"^##\s+(?:\d+\.\s+)?(.+)$", markdown, re.M)}
+                for m in re.finditer(r"^##\s+(?:\d+\.\s+)?(.+)$", markdown, re.MULTILINE)}
     missing = [r for r in required if r not in headings]
     if missing:
         return GateResult(passed=False, reason="missing sections: " + ", ".join(missing))
@@ -269,10 +278,10 @@ FLAG = re.compile(r"-{1,2}[A-Za-z][\w-]*")
 COMMAND_WORD = re.compile(r"/?[A-Za-z][\w.:-]*")
 ENV_ASSIGN = re.compile(r"([A-Z_][A-Z0-9_]*)=.*")
 # A word ending in one of these is a file the user names, not a subcommand; it is not checked.
-FILE_SUFFIX = re.compile(r"\.(md|json|ya?ml|txt|toml|html|csv|log|py|sh|js|ts|cfg|ini|lock)$", re.I)
+FILE_SUFFIX = re.compile(r"\.(md|json|ya?ml|txt|toml|html|csv|log|py|sh|js|ts|cfg|ini|lock)$", re.IGNORECASE)
 CALLED = re.compile(r"([A-Za-z_][\w.]*)\s*\(")
 KEYWORD_ARG = re.compile(r"[(,]\s*([A-Za-z_]\w*)\s*=")
-LINE_KEY = re.compile(r"^\s*-?\s*([A-Za-z_][\w.-]*)\s*:", re.M)
+LINE_KEY = re.compile(r"^\s*-?\s*([A-Za-z_][\w.-]*)\s*:", re.MULTILINE)
 
 
 def cite_id(raw: str) -> str:

@@ -1,10 +1,9 @@
 """The digest: ranking, the cap, honest gaps, and the AGENTS.md/JSON contract."""
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
-
 from lib.fleet import Agent, Collision, Fleet, fleet_json, render_agents_md
 from lib.fleet_digest import MAX_ITEMS, WAITING_STALE_HOURS, rank, render_digest
 from lib.fleet_sources.backlog import Backlog
@@ -12,7 +11,7 @@ from lib.fleet_sources.git_repos import RepoState
 from lib.fleet_sources.jobs import BackgroundJob
 from lib.fleet_sources.prs import PRScan, PullRequest
 
-NOW = datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
 
 
 def agent(status="waiting_input", minutes=5, **kw):

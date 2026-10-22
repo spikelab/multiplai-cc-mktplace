@@ -9,7 +9,6 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
 import review_metrics
 from build_pipeline import review_rounds
 from build_pipeline.models import BlockInfo, ReviewFinding, ReviewResult

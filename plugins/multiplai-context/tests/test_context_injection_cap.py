@@ -29,7 +29,6 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
-
 from conftest import write_catalog
 
 PLUGIN_ROOT = Path(__file__).parent.parent
@@ -213,7 +212,11 @@ class TestAnchorMissIsNeverTheWholeFile:
 
     def test_a_resolved_alias_is_stamped_for_cooldown(self, tmp_path):
         """The router will emit the same misspelt pick next turn; it must match."""
-        from context_manager import MemoryLoadReport, _cooldown_keys, _load_memory_content
+        from context_manager import (
+            MemoryLoadReport,
+            _cooldown_keys,
+            _load_memory_content,
+        )
 
         (tmp_path / "big.md").write_text(_doc("Alpha", "Beta Release", "Gamma"))
         picks = ["big.md#beta release — gloss"]
@@ -315,7 +318,11 @@ class TestLargeFilesLoadOnlyBySection:
         assert "Section 0 content." not in loaded["huge.md"]
 
     def test_a_bare_pick_answered_by_sections_is_stamped_for_cooldown(self, tmp_path):
-        from context_manager import MemoryLoadReport, _cooldown_keys, _load_memory_content
+        from context_manager import (
+            MemoryLoadReport,
+            _cooldown_keys,
+            _load_memory_content,
+        )
 
         (tmp_path / "big.md").write_text(_doc("Alpha", "Beta", "Gamma"))
         picks = ["big.md", "big.md#Beta"]
@@ -340,7 +347,9 @@ class TestLargeFilesLoadOnlyBySection:
     def test_a_pointer_is_not_attributed_as_a_whole_file_load(self, tmp_path):
         """Utilisation reads ``sections_by_file == []`` as "the whole file"."""
         from context_manager import (
-            MemoryLoadReport, _load_memory_content, _section_attribution,
+            MemoryLoadReport,
+            _load_memory_content,
+            _section_attribution,
         )
 
         (tmp_path / "big.md").write_text(_doc("Alpha", "Beta", "Gamma"))
@@ -698,7 +707,6 @@ def data_env(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(data_dir))
     _reset_cache()
     import context_manager
-
     from conftest import real_warn_state_path
 
     # The autouse conftest fixture points the state file at a per-test temp

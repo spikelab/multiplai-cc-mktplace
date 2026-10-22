@@ -31,7 +31,7 @@ from .untrusted import defang_untrusted, is_fetchable_url
 
 log = logging.getLogger(__name__)
 
-LLMS_LINK = re.compile(r"^\s*[-*]\s*\[([^\]]+)\]\((\S+?)\)(?::\s*(.*))?$", re.M)
+LLMS_LINK = re.compile(r"^\s*[-*]\s*\[([^\]]+)\]\((\S+?)\)(?::\s*(.*))?$", re.MULTILINE)
 DOC_SUFFIXES = (".md", ".mdx", ".txt", ".rst")
 COLLECTION_MARKERS = ("opencollection.yml", "bruno.json")
 
@@ -111,13 +111,13 @@ def _norm(text: str) -> str:
     return " " + re.sub(r"[^a-z0-9]+", " ", text.lower()) + " "
 
 
-GENERIC_WORDS = {"options", "option", "list", "feed", "items", "values", "data", "info", "info"}
+GENERIC_WORDS = {"options", "option", "list", "feed", "items", "values", "data", "info"}
 
 
 def _words(resource: str) -> set[str]:
     out = set()
     for w in resource.lower().replace("-", "_").split("_"):
-        w = w[:-1] if w.endswith("s") else w
+        w = w.removesuffix("s")
         if len(w) >= 4 and w not in GENERIC_WORDS:
             out.add(w)
     return out

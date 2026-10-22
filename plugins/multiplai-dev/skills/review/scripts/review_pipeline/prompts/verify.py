@@ -5,7 +5,14 @@ from __future__ import annotations
 import json
 
 from ..models import Finding, TargetInfo, is_trim
-from . import CITATION_RULES, JSON_ONLY, deps_block, description_block, settings_block, workspace_block
+from . import (
+    CITATION_RULES,
+    JSON_ONLY,
+    deps_block,
+    description_block,
+    settings_block,
+    workspace_block,
+)
 
 SCHEMA = """\
 {"status": "confirmed" | "refuted" | "unverifiable",

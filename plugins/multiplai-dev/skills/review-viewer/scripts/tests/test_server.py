@@ -5,10 +5,10 @@ import json
 import os
 import stat
 import subprocess
-from sys import executable as PYTHON
 import time
 from contextlib import redirect_stdout
 from pathlib import Path
+from sys import executable as PYTHON
 
 from review_viewer.__main__ import main
 from review_viewer.mailbox import read_rows
@@ -337,6 +337,7 @@ def test_changed_findings_restart_the_viewer(start_live):
 
 def test_monitor_command_survives_spaces_and_quotes(tmp_path):
     import shlex
+
     from review_viewer.__main__ import _monitor_command
     box = tmp_path / "My Reviews" / "pr 12" / "viewer"
     text = _monitor_command([box], 'label with "quotes"')
@@ -626,9 +627,10 @@ def test_definitions_refuses_anything_but_an_identifier(start_live, tmp_path):
 
 
 def test_definitions_stop_at_the_cap(start_live, tmp_path, monkeypatch):
-    from review_viewer import gitdata
     import subprocess
+
     from fixture_repo import build_wide
+    from review_viewer import gitdata
     repo = tmp_path / "wide"
     build_wide(repo)
     many = "".join(f"def dup():\n    return {i}\n\n" for i in range(60))
@@ -675,7 +677,7 @@ def test_share_validation(start_live):
     live = start_live()
     live.viewer.share_slack = True
     live.viewer.targets[live.slug].pr_number = 7
-    post = lambda **kw: live.request("POST", "/api/share", _share_body(live, **kw))[0]  # noqa: E731
+    post = lambda **kw: live.request("POST", "/api/share", _share_body(live, **kw))[0]
     assert post(to="email") == 400
     assert post(finding_id="0000000000") == 404
     assert post(finding_id=None) == 404

@@ -6,13 +6,13 @@ real wall clock so they always fall inside the 48h lookback window.
 """
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
 
 def _now_iso():
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _write_diary(ws, sessions):
@@ -96,7 +96,6 @@ class TestScanDiaryGrouping:
             "umbrella_roots": ["/work"],
         }
         import synthesize_now
-
         from multiplai_core.paths import get_paths
 
         grouped = synthesize_now._scan_diary(get_paths().diary_dir(), config=cfg)
@@ -117,7 +116,6 @@ class TestScopedSynthesize:
             "project_roots:\n  - /work/PROJECTS\n"
         )
         import synthesize_now
-
         from multiplai_core.paths import get_paths
 
         asyncio.run(synthesize_now.synthesize())
@@ -137,7 +135,6 @@ class TestScopedSynthesize:
             "project_roots:\n  - /work/PROJECTS\n"
         )
         import synthesize_now
-
         from multiplai_core.paths import get_paths
 
         asyncio.run(synthesize_now.synthesize(project_filter="foo"))
@@ -183,8 +180,8 @@ class TestWindowAttribution:
     ):
         import asyncio
 
-        from multiplai_core.paths import get_paths
         import synthesize_now
+        from multiplai_core.paths import get_paths
 
         _write_diary(workspace, [("sess-writer", "/work/PROJECTS/foo", "Did a thing.")])
         (workspace / ".multiplai" / "project-map.yaml").write_text(
@@ -207,8 +204,8 @@ class TestWindowAttribution:
         once and belong to no single session — no fabricated id."""
         import asyncio
 
-        from multiplai_core.paths import get_paths
         import synthesize_now
+        from multiplai_core.paths import get_paths
 
         _write_diary(workspace, [("sess-a", "/work/PROJECTS/foo", "Did a thing.")])
         (workspace / ".multiplai" / "project-map.yaml").write_text(
@@ -228,8 +225,8 @@ class TestWindowAttribution:
         not content for a status summary."""
         import asyncio
 
-        from multiplai_core.paths import get_paths
         import synthesize_now
+        from multiplai_core.paths import get_paths
 
         _write_diary(
             workspace,
@@ -252,8 +249,8 @@ class TestSummaryThinking:
     resolved from ``now_thinking`` (default: disabled — see lib/thinking.py)."""
 
     def _run(self, monkeypatch, *, supported):
-        import synthesize_now
         import lib.thinking as th
+        import synthesize_now
         from multiplai_core.plugin_options import option_var
 
         monkeypatch.setattr(

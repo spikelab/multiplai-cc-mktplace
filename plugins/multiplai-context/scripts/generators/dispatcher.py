@@ -14,14 +14,15 @@ qmd at prompt time, not summarised into a catalog — see the note in
 import logging
 from dataclasses import dataclass
 
+from lib.banks import shared_banks
 from multiplai_core.paths import Paths
+
 from generators.banks import BanksGenerator
 from generators.base import GenerationResult
 from generators.config import CatalogConfig
 from generators.diary import DiaryGenerator
 from generators.memory import MemoryGenerator
 from generators.skills import SkillsGenerator
-from lib.banks import shared_banks
 
 logger = logging.getLogger(__name__)
 

@@ -8,15 +8,20 @@ import re
 from importlib.resources import files
 from pathlib import Path
 
-import jsonschema
-import pytest
-
 import code_facts
 import fixture_repo
+import jsonschema
 import path_fixtures
+import pytest
 from code_facts import Seed
 from fakes import FakeAgents
-from test_paths_stage import VIEWER_SCHEMA, _click_run, _paths_body, _state, _trace_calls
+from test_paths_stage import (
+    VIEWER_SCHEMA,
+    _click_run,
+    _paths_body,
+    _state,
+    _trace_calls,
+)
 from walkthrough_pipeline import sdk
 from walkthrough_pipeline.__main__ import main
 from walkthrough_pipeline.state import STATE_FILE

@@ -5,17 +5,10 @@ Covers: D6 skill definition, dream.md prompt, dream pipeline invocation,
 model client usage, error handling, and --plugin-dir execution.
 """
 
-import json
 import re
-import subprocess
-import sys
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 from conftest import PLUGIN_ROOT, SCRIPTS_DIR
-
 
 # ---------------------------------------------------------------------------
 # Skill definition in plugin.json
@@ -462,7 +455,7 @@ class TestDreamTimeoutDefault:
 
     def test_dream_does_not_define_its_own_ceiling(self):
         """A local definition here is what a supervisor cannot reach."""
-        assert not re.search(r"^CHUNK_TIMEOUT_S\s*=", self.source, re.M)
+        assert not re.search(r"^CHUNK_TIMEOUT_S\s*=", self.source, re.MULTILINE)
         assert "from lib.dream_chunking import CHUNK_TIMEOUT_S" in self.source
 
     def test_set_before_model_client_import(self):

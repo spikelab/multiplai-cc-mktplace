@@ -54,9 +54,9 @@ import difflib
 import logging
 import re
 from collections import Counter
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Mapping, Sequence
 
 from multiplai_core.untrusted import defang, fence, markdown_notice
 
@@ -66,18 +66,18 @@ from lib.thinking import DUPLICATION_THINKING_OPTION, thinking_kwargs
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "Block",
-    "Pair",
-    "Confirmation",
     "DEFAULT_RATIO",
-    "MIN_BLOCK_CHARS",
     "MAX_LENGTH_RATIO",
-    "split_blocks",
-    "normalize",
-    "shortlist",
-    "render_batch",
-    "parse_confirmations",
+    "MIN_BLOCK_CHARS",
+    "Block",
+    "Confirmation",
+    "Pair",
     "confirm_pairs",
+    "normalize",
+    "parse_confirmations",
+    "render_batch",
+    "shortlist",
+    "split_blocks",
 ]
 
 #: Similarity at or above which a pair is worth a model call. Tuned against the
@@ -488,7 +488,7 @@ class BatchResult:
     a clean "ten of these are not duplicates".
     """
 
-    confirmations: list["Confirmation"]
+    confirmations: list[Confirmation]
     answered: set[int]
 
 

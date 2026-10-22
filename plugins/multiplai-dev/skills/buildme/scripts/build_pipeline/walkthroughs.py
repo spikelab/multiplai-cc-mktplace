@@ -55,8 +55,8 @@ SECTION_FILE = "walkthroughs.md"
 MAX_FAILURES_SHOWN = 20
 
 # The header lines codebase-walkthrough writes (render.render_markdown).
-_FIELD = re.compile(r"^- (Module directory|Depth|Mode): `([^`]*)`\s*$", re.M)
-_ROW = re.compile(r"^\|\s*([^|\s]+)\s*\|\s*([^|]+?)\s*\|\s*`([0-9a-f]{40})`\s*\|\s*$", re.M)
+_FIELD = re.compile(r"^- (Module directory|Depth|Mode): `([^`]*)`\s*$", re.MULTILINE)
+_ROW = re.compile(r"^\|\s*([^|\s]+)\s*\|\s*([^|]+?)\s*\|\s*`([0-9a-f]{40})`\s*\|\s*$", re.MULTILINE)
 
 
 @dataclass

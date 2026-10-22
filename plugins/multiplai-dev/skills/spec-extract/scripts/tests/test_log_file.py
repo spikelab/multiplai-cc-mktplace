@@ -8,7 +8,7 @@ per process."""
 import os
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
@@ -41,7 +41,7 @@ sys.exit(cli.main(["run", "--tree"]))
 def test_package_lines_reach_the_spec_extract_log(tmp_path):
     proc = _run_probe(_PROBE, tmp_path / "data")
     assert proc.returncode == 0, proc.stderr
-    day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    day = datetime.now(UTC).strftime("%Y-%m-%d")
     text = (tmp_path / "data" / "logs" / f"spec-extract-pipeline-{day}.log").read_text()
     assert "[spec_extract_pipeline.explore]" in text and "INFO: pipeline probe" in text
     assert "[code_facts.explore]" in text and "INFO: code_facts probe" in text

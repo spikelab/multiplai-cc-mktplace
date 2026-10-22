@@ -17,9 +17,10 @@ import asyncio
 import hashlib
 import json
 import logging
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Iterable, Mapping, TypeVar
+from typing import Any, TypeVar
 
 from multiplai_core.citations import check_quote, normalise_ws
 from pydantic import BaseModel

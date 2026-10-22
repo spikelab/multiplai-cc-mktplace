@@ -14,13 +14,11 @@ from __future__ import annotations
 import types
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
-
-import pytest
+from datetime import datetime
 
 import plane
+import pytest
 from conftest import ALLOWED, BAD, OK, guard
-
 
 # --- the guardrail after the dot-segment fix ---------------------------------
 
@@ -118,7 +116,7 @@ class _Opener:
     def __init__(self, log, blob=b""):
         self.log, self.blob = log, blob
 
-    def open(self, req, timeout=None):  # noqa: ARG002
+    def open(self, req, timeout=None):
         self.log.append(dict(req.header_items()))
         raise urllib.error.URLError("stopped before the socket")
 
@@ -265,7 +263,7 @@ def test_already_in_cycle_is_read_from_a_field_the_list_endpoint_really_sends():
 def _search(monkeypatch, hits, **kw):
     seen = {}
 
-    def fake_request(method, path, cfg, *, params=None, **_):  # noqa: ARG001
+    def fake_request(method, path, cfg, *, params=None, **_):
         seen["params"] = dict(params or {})
         return {"issues": hits}
 

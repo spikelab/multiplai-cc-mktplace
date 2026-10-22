@@ -9,12 +9,19 @@ from pathlib import Path
 
 import jsonschema
 import pytest
-
 from code_facts import Citation, ExploreOutput, Fact, FilePurpose
 from review_pipeline import sdk, target
 from review_pipeline.config import ReviewConfig, load_config
-from review_pipeline.facts import (CONTEXT_LINES, SCHEMA_PATH, FactsFile, diff_ranges, diff_scope, resolver,
-                                   schema_text, tree_scope)
+from review_pipeline.facts import (
+    CONTEXT_LINES,
+    SCHEMA_PATH,
+    FactsFile,
+    diff_ranges,
+    diff_scope,
+    resolver,
+    schema_text,
+    tree_scope,
+)
 from review_pipeline.models import ReviewState
 from review_pipeline.stages import RunContext
 from review_pipeline.stages.explain import BASE_DIR, run_explain
@@ -382,9 +389,8 @@ def test_find_with_facts_needs_explain(tmp_path):
 
 def test_a_review_with_explain_on_runs_it_before_find_and_writes_facts_json(fixture_repo, tmp_path, monkeypatch,
                                                                             capsys):
-    from test_orchestrator import FakeAgents, _review_args
-
     from review_pipeline.__main__ import main
+    from test_orchestrator import FakeAgents, _review_args
 
     fake = FakeAgents()
 
@@ -413,9 +419,8 @@ def test_a_review_with_explain_on_runs_it_before_find_and_writes_facts_json(fixt
 
 
 def test_a_review_with_explain_off_writes_no_facts_json(fixture_repo, tmp_path, monkeypatch):
-    from test_orchestrator import FakeAgents, _review_args
-
     from review_pipeline.__main__ import main
+    from test_orchestrator import FakeAgents, _review_args
 
     fake = FakeAgents()
     monkeypatch.setattr(sdk, "agent_call_structured", fake)
@@ -428,9 +433,8 @@ def test_a_review_with_explain_off_writes_no_facts_json(fixture_repo, tmp_path, 
 
 def test_a_rerun_with_explain_off_leaves_no_facts_json_from_the_earlier_round(fixture_repo, tmp_path, monkeypatch):
     """A rerun on the same head with explain off: the earlier round's facts.json is kept in rounds/, not left on top."""
-    from test_orchestrator import FakeAgents, _review_args
-
     from review_pipeline.__main__ import main
+    from test_orchestrator import FakeAgents, _review_args
 
     fake = FakeAgents()
 

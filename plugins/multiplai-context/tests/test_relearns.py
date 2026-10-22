@@ -8,8 +8,6 @@ can carry.
 
 import json
 
-import pytest
-
 from lib import relearns
 
 

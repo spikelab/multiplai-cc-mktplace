@@ -335,7 +335,6 @@ def test_conflict_decision_round_trips_through_a_file(tmp_path):
 
 def test_conflict_decision_from_dict_requires_a_file():
     import pytest
-
     from lib.dream_processed import Decision
 
     with pytest.raises(ValueError, match="kind 'conflict' needs a 'file'"):

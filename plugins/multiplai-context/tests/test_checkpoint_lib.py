@@ -2,12 +2,10 @@
 
 import json
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
-
 from lib import checkpoint as cp
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -18,7 +16,7 @@ def _assistant_record(
 ):
     rec = {
         "type": "assistant",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "message": {
             "role": "assistant",
             "content": [{"type": "text", "text": text}],
@@ -134,12 +132,12 @@ class TestReadContextTokens:
         t = tmp_path / "t.jsonl"
         _write_transcript(t, [_assistant_record(input_tokens=1_500, cache_read=42_500)])
         assert cp.read_context_tokens(t) == 44_000
-        future = (datetime.now(timezone.utc) + timedelta(seconds=60)).isoformat()
+        future = (datetime.now(UTC) + timedelta(seconds=60)).isoformat()
         assert cp.read_context_tokens(t, after_ts=future) == 0
 
     def test_after_ts_accepts_fresh_usage(self, tmp_path):
         t = tmp_path / "t.jsonl"
-        past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        past = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
         _write_transcript(t, [_assistant_record(input_tokens=9_000)])
         assert cp.read_context_tokens(t, after_ts=past) == 9_000
 
@@ -275,7 +273,7 @@ class TestPendingMarker:
         marker = cp.write_pending_marker(tmp_path, cwd, "old-sess", 210_000)
         payload = json.loads(marker.read_text())
         payload["created_at"] = (
-            datetime.now(timezone.utc) - timedelta(hours=48)
+            datetime.now(UTC) - timedelta(hours=48)
         ).isoformat()
         marker.write_text(json.dumps(payload))
         assert cp.consume_pending_marker(tmp_path, cwd, "new-sess", self.CFG) is None

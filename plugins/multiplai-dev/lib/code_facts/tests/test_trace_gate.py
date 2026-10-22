@@ -4,8 +4,15 @@ from __future__ import annotations
 
 import pytest
 from pydantic import ValidationError
-
-from trace_fixtures import CHAIN_LEN, CLI, chain_hops, chain_source, cli_source, commit_snapshot, lib
+from trace_fixtures import (
+    CHAIN_LEN,
+    CLI,
+    chain_hops,
+    chain_source,
+    cli_source,
+    commit_snapshot,
+    lib,
+)
 
 DOC = "docs/run.md"
 DOC_TEXT = "# Run\n\nRun python -m pkg opal --remain now.\n\nThen main takes over.\n"

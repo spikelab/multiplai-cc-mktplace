@@ -58,7 +58,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -234,7 +234,7 @@ def _record(config, state, col: BoardColumn, note: str, progress) -> BoardColumn
         )
         return None
 
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     card = read_card(path)
     moved = card is None or card.column != col
 

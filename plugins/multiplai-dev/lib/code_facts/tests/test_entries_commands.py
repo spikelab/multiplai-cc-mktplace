@@ -13,7 +13,6 @@ import shlex
 from pathlib import Path
 
 import pytest
-
 from code_facts import Seed
 from conftest import line_of, make_tree
 from trace_fixtures import lib

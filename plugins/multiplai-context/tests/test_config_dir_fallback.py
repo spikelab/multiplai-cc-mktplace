@@ -8,10 +8,7 @@ call sites that used to hand-roll (or skip) the fallback.
 """
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
-
 from lib.fsio import claude_config_dir
 
 

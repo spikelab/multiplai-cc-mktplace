@@ -6,7 +6,7 @@ pointed at a temp dir: logging is configured once per process."""
 import os
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
@@ -33,7 +33,7 @@ logging.getLogger("multiplai_core.agent_runner").info("core probe")
 def test_package_lines_reach_the_deep_research_log(tmp_path):
     proc = _run_probe(_PROBE, tmp_path / "data")
     assert proc.returncode == 0, proc.stderr
-    day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    day = datetime.now(UTC).strftime("%Y-%m-%d")
     text = (tmp_path / "data" / "logs" / f"deep-research-{day}.log").read_text()
     assert "[research_pipeline.sdk]" in text and "INFO: pipeline probe" in text
     assert "[multiplai_core.agent_runner]" in text and "INFO: core probe" in text

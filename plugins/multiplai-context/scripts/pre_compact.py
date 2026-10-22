@@ -44,18 +44,18 @@ import json
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from multiplai_core.config import read_session_state, write_session_state
-from multiplai_core.paths import get_paths
-from multiplai_core.log_utils import hook_run, setup_logging, log_event
 from lib import checkpoint as cp
 from lib.fsio import atomic_write_json
 from lib.hook_input import read_hook_input
 from lib.runtime import run_supervised, uv_run_argv
+from multiplai_core.config import read_session_state, write_session_state
+from multiplai_core.log_utils import hook_run, log_event, setup_logging
+from multiplai_core.paths import get_paths
 
 logger = setup_logging("pre_compact", packages=("lib", "generators"))
 
@@ -342,7 +342,7 @@ def _compact_pass(
         "session_id": session_id,
         "transcript_path": transcript_path,
         "cwd": hook_input.get("cwd", session_state.get("cwd", "")),
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "trigger": "pre_compact",
     }
 
@@ -350,7 +350,7 @@ def _compact_pass(
     pending_dir.mkdir(parents=True, exist_ok=True)
     # Distinct name so a PreCompact marker never overwrites the SessionEnd
     # marker for the same session (and vice versa).
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
     marker_path = pending_dir / f"precompact-{session_id}-{stamp}.json"
     try:
         atomic_write_json(marker_path, marker)

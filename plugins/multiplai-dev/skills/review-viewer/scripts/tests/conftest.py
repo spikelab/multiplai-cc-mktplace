@@ -9,7 +9,7 @@ import pytest
 TESTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TESTS))
 
-from fixture_repo import build  # noqa: E402
+from fixture_repo import build
 
 FIXTURE = TESTS / "fixtures" / "findings.example.json"
 
@@ -51,11 +51,11 @@ def findings_path(tmp_path, fixture_repo) -> Path:
 
 # --- a live server in a thread --------------------------------------------------
 
-import socket  # noqa: E402
-import threading  # noqa: E402
-import urllib.error  # noqa: E402
-import urllib.request  # noqa: E402
-from dataclasses import dataclass  # noqa: E402
+import socket
+import threading
+import urllib.error
+import urllib.request
+from dataclasses import dataclass
 
 
 def free_port() -> int:

@@ -1,21 +1,21 @@
 """Tests for quality gates — pure code assertions."""
 
-import pytest
 from pathlib import Path
 
+import pytest
 from build_pipeline.gates import (
     agent_status_gate,
-    parse_agent_status,
-    parse_implementation_note,
-    red_gate,
-    review_score_gate,
-    review_iteration_gate,
-    run_test_suite,
-    wiring_task_gate,
     baseline_test_gate,
     integration_gate,
+    parse_agent_status,
+    parse_implementation_note,
     parse_test_change_claims,
+    red_gate,
+    review_iteration_gate,
+    review_score_gate,
+    run_test_suite,
     unchanged_tests_gate,
+    wiring_task_gate,
 )
 from build_pipeline.models import ReviewGatePolicy, ReviewResult, ReviewScore
 
@@ -259,6 +259,7 @@ class TestTestGatesShareOneRunner:
 
     def test_neither_gate_runs_the_suite_itself(self):
         import inspect
+
         from build_pipeline import gates as gates_mod
 
         for gate in (gates_mod.baseline_test_gate, gates_mod.integration_gate):
@@ -600,9 +601,10 @@ class TestUnknownsGate:
 # Named test_unknowns_gate_* per the plan's acceptance criteria.
 
 def _audit_setup(tmp_path, unknowns_text):
+    from unittest.mock import MagicMock
+
     from build_pipeline.change_manager import ChangeManager
     from build_pipeline.dependencies import NewDependency
-    from unittest.mock import MagicMock
 
     specs_dir = tmp_path / "specs"
     specs_dir.mkdir()
@@ -626,6 +628,7 @@ def _audit_setup(tmp_path, unknowns_text):
 @pytest.mark.asyncio
 async def test_unknowns_gate_empty_edge_cases_triggers_exactly_one_regeneration(tmp_path):
     from unittest.mock import AsyncMock, patch
+
     from build_pipeline.spec_generator import _audit_unknowns
 
     change_dir, context, config, output_path, deps = _audit_setup(
@@ -651,6 +654,7 @@ async def test_unknowns_gate_second_failure_does_not_loop(tmp_path):
     """A regenerated document that STILL fails the gate is accepted and logged.
     One pass, never a retry loop — the cost of a stubborn explainer is bounded."""
     from unittest.mock import AsyncMock, patch
+
     from build_pipeline.spec_generator import _audit_unknowns
 
     change_dir, context, config, output_path, deps = _audit_setup(
@@ -670,6 +674,7 @@ async def test_unknowns_gate_second_failure_does_not_loop(tmp_path):
 @pytest.mark.asyncio
 async def test_unknowns_gate_passing_document_triggers_no_regeneration(tmp_path):
     from unittest.mock import AsyncMock, patch
+
     from build_pipeline.spec_generator import _audit_unknowns
 
     change_dir, context, config, output_path, deps = _audit_setup(
@@ -687,6 +692,7 @@ async def test_unknowns_gate_passing_document_triggers_no_regeneration(tmp_path)
 @pytest.mark.asyncio
 async def test_unknowns_gate_regeneration_failure_leaves_first_pass_standing(tmp_path):
     from unittest.mock import AsyncMock, patch
+
     from build_pipeline.spec_generator import _audit_unknowns
 
     change_dir, context, config, output_path, deps = _audit_setup(
@@ -847,7 +853,7 @@ SPEC_IMPACT: contradicts
 
 # --- Documentation phase (DOCS_IMPACT: slot + freshness warning) ----------
 
-from build_pipeline.gates import (  # noqa: E402
+from build_pipeline.gates import (
     docs_freshness_gate,
     is_doc_path,
     parse_diff_paths,
@@ -1150,11 +1156,13 @@ class TestParallelFullSuite:
     ])
     def test_the_probe_runs_in_the_environment_pytest_runs_in(self, tmp_path, command, probe):
         import shlex
+
         from build_pipeline.gates import _xdist_probe
         assert _xdist_probe(shlex.split(command), tmp_path) == probe
 
     def test_a_bare_pytest_probes_the_python_beside_it_on_path(self, tmp_path, monkeypatch):
         import shlex
+
         from build_pipeline.gates import _xdist_probe
         p = self._venv(tmp_path, xdist=True)
         monkeypatch.setenv("PATH", f"{p / '.venv' / 'bin'}:/usr/bin:/bin")
@@ -1173,6 +1181,7 @@ class TestParallelFullSuite:
         """`tdd.parallel` reaches every integration and baseline gate call."""
         import inspect
         import re
+
         from build_pipeline import tdd_engine
         src = inspect.getsource(tdd_engine)
         calls = re.findall(r"(?:integration_gate|baseline_test_gate)\(([^()]*)\)", src)
@@ -1188,6 +1197,7 @@ class TestFinalVerification:
     def test_rejects_test_command_that_rewrites_tracked_input(self, tmp_path, monkeypatch):
         import subprocess
         import sys
+
         from build_pipeline.gates import final_verification
         monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
         subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
@@ -1202,6 +1212,7 @@ class TestFinalVerification:
     def test_pass_records_command_and_revision(self, tmp_path, monkeypatch):
         import subprocess
         import sys
+
         from build_pipeline.gates import final_verification, verification_inputs
         monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
         subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
@@ -1382,8 +1393,9 @@ class TestFinalVerificationSubmodules:
         assert "Is a directory" not in result.reason
 
     def test_a_file_where_the_submodule_was_is_read_as_a_file(self, with_submodule):
-        from build_pipeline.gates import verification_inputs
         import shutil
+
+        from build_pipeline.gates import verification_inputs
         project, _ = with_submodule
         shutil.rmtree(project / "vendor")
         (project / "vendor").write_text("now a file\n")

@@ -20,7 +20,7 @@ page text.
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .chunks import header_path
@@ -35,7 +35,7 @@ _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 
 def now() -> str:
     """The pipeline's clock, as an ISO UTC timestamp."""
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 def _rel(path, target: TargetInfo, snapshot: Path) -> str:
@@ -68,7 +68,7 @@ def summarise_call(call, target: TargetInfo, snapshot: Path) -> dict:
     """One tool call as `{tool, target, detail}`, with repo-relative paths. Inputs only."""
     name = getattr(call, "name", "") or "?"
     data = _input(call)
-    rel = lambda p: _rel(p, target, snapshot)  # noqa: E731
+    rel = lambda p: _rel(p, target, snapshot)
     if name == "Read":
         rng = _line_range(data)
         if rng is None:
@@ -99,7 +99,7 @@ def diff_hunks(diff: str) -> dict[str, list[tuple[int, int]]]:
     for line in diff.splitlines():
         if line.startswith("+++ "):
             name = header_path(line[4:])
-            path = "" if name == "/dev/null" else (name[2:] if name.startswith("b/") else name)
+            path = "" if name == "/dev/null" else (name.removeprefix("b/"))
             continue
         m = _HUNK.match(line)
         if m and path:

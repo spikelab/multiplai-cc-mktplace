@@ -10,7 +10,7 @@ import pytest
 _SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "video-edit" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 
-from stages import brand  # noqa: E402
+from stages import brand
 
 _FIX = Path(__file__).resolve().parent / "fixtures" / "brand"
 SERIF = "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf"

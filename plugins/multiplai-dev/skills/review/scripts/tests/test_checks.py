@@ -8,14 +8,28 @@ from types import SimpleNamespace
 
 import jsonschema
 import pytest
-
-from conftest import KEYWORD_CITATION, KEYWORD_USE_CITATION, SCHEMA, high_finding, medium_finding, rejected_finding
+from conftest import (
+    KEYWORD_CITATION,
+    KEYWORD_USE_CITATION,
+    SCHEMA,
+    high_finding,
+    medium_finding,
+    rejected_finding,
+)
 from multiplai_core.agent_runner import ToolCall
 from review_pipeline import checks, sdk
 from review_pipeline.config import ReviewConfig
 from review_pipeline.export import to_checks_file, to_findings_file, write_checks_file
-from review_pipeline.models import (AgentCheck, Citation, DuplicateSet, FinderOutput, GateCheck, MergeOutput,
-                                    ReviewState, Verdict)
+from review_pipeline.models import (
+    AgentCheck,
+    Citation,
+    DuplicateSet,
+    FinderOutput,
+    GateCheck,
+    MergeOutput,
+    ReviewState,
+    Verdict,
+)
 from review_pipeline.render import render_checks
 from review_pipeline.stages import RunContext
 from review_pipeline.stages.find import run_find
@@ -82,9 +96,8 @@ async def test_a_reask_concatenates_both_attempts(fake_run):
 
 
 async def test_a_failed_run_still_records_its_partial_calls_turns_and_cost(fake_run):
-    from pydantic import BaseModel
-
     from multiplai_core.agent_runner import AgentRunTimeout
+    from pydantic import BaseModel
 
     class Value(BaseModel):
         value: int
@@ -92,9 +105,8 @@ async def test_a_failed_run_still_records_its_partial_calls_turns_and_cost(fake_
     partial = _result("", ToolCall("Read", {"file_path": "a.py"}), turns=7, cost=0.9)
     fake_run += [AgentRunTimeout("timed out", reason="timed out after 600s", partial=partial),
                  AgentRunTimeout("timed out", reason="timed out after 600s", partial=partial)]
-    with sdk.recording() as rec:
-        with pytest.raises(sdk.AgentCallError):
-            await sdk.agent_call_structured("p", Value, allowed_tools=sdk.FINDER_TOOLS)
+    with sdk.recording() as rec, pytest.raises(sdk.AgentCallError):
+        await sdk.agent_call_structured("p", Value, allowed_tools=sdk.FINDER_TOOLS)
     # Both attempts timed out, and each one's partial result is recorded.
     assert [c.name for c in rec.tool_calls] == ["Read", "Read"]
     assert rec.turns == 14 and rec.cost_usd == pytest.approx(1.8)
@@ -115,7 +127,7 @@ async def test_without_a_recording_block_nothing_is_kept(fake_run):
 
 def test_summarise_call_makes_paths_repo_relative_and_keeps_inputs_only(target_info, tmp_path):
     snap = tmp_path / "tree"
-    s = lambda name, **data: checks.summarise_call(ToolCall(name, data), target_info, snap)  # noqa: E731
+    s = lambda name, **data: checks.summarise_call(ToolCall(name, data), target_info, snap)
     assert s("Read", file_path=str(snap / "pkg/a.py")) == {"tool": "Read", "target": "pkg/a.py", "detail": "whole file"}
     assert s("Read", file_path="a.py", offset=10, limit=5)["detail"] == "lines 10-14"
     assert s("Read", file_path="a.py", offset=10)["detail"] == "lines 10-end"

@@ -15,7 +15,7 @@ np = pytest.importorskip("numpy")
 _SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "video-edit" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 
-from stages import cursor  # noqa: E402
+from stages import cursor
 
 W, H, FPS = 1280, 720, 10   # proxy size: the pointer must be a small part of the frame
 ARROW = np.array([[0, 0], [0, 14], [4, 10], [7, 16], [9, 15], [6, 9], [11, 9]], np.int32)

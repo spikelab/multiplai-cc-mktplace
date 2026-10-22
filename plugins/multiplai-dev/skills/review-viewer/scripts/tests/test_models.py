@@ -6,10 +6,15 @@ from sys import executable as PYTHON
 
 import jsonschema
 import pytest
-from pydantic import ValidationError
-
 from conftest import FIXTURE
-from review_viewer.models import SCHEMA_PATH, FindingsFile, finding_id, load_findings, schema_text
+from pydantic import ValidationError
+from review_viewer.models import (
+    SCHEMA_PATH,
+    FindingsFile,
+    finding_id,
+    load_findings,
+    schema_text,
+)
 
 
 def fixture_data() -> dict:
@@ -112,8 +117,12 @@ def test_validate_cli_ok_and_broken(tmp_path):
 
 # --- walkthrough.json v1 -------------------------------------------------------------
 
-from review_viewer.models import (  # noqa: E402
-    WALKTHROUGH_SCHEMA_PATH, InboxRow, Walkthrough, walkthrough_schema_text)
+from review_viewer.models import (
+    WALKTHROUGH_SCHEMA_PATH,
+    InboxRow,
+    Walkthrough,
+    walkthrough_schema_text,
+)
 
 SHA = "a" * 40
 

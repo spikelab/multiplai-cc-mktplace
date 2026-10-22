@@ -13,15 +13,15 @@ import json
 import os
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
-from lib import skill_precision as sp  # noqa: E402
-import skill_routing_precision as cli  # noqa: E402
+import skill_routing_precision as cli
+from lib import skill_precision as sp
 
 SESS_A = "aaaaaaaa-1111-2222-3333-444444444444"
 SESS_B = "bbbbbbbb-1111-2222-3333-444444444444"
@@ -172,7 +172,7 @@ def test_iter_main_transcripts_excludes_subagents_and_honours_mtime(world):
     stale = time.time() - 40 * 86400
     os.utime(old, (stale, stale))
     recent = sorted(p.name for p in sp.iter_main_transcripts(
-        world["config"], modified_since=datetime.now(timezone.utc) - timedelta(days=30)))
+        world["config"], modified_since=datetime.now(UTC) - timedelta(days=30)))
     assert recent == [f"{SESS_A}.jsonl"]
 
 
@@ -186,7 +186,7 @@ def test_iter_main_transcripts_missing_dir_is_empty(tmp_path):
 def test_measure_transcript_windows_by_order_not_timestamp(world):
     prompts, suggestions, earliest = sp.measure_transcript(world["projects"] / f"{SESS_A}.jsonl")
     assert prompts == 3  # tool_result and meta entries are not prompts
-    assert earliest == datetime(2026, 9, 14, 10, 0, tzinfo=timezone.utc)
+    assert earliest == datetime(2026, 9, 14, 10, 0, tzinfo=UTC)
     by_skills = {tuple(s.skills): s.invoked for s in suggestions}
     assert by_skills == {("costs", "fleet-status"): ["costs"], ("gmail",): []}
 
@@ -214,16 +214,16 @@ def test_run_ignores_subagent_transcripts_and_reports_totals(world):
 
 
 def test_run_window_drops_old_prompts(world):
-    now = datetime(2026, 9, 14, 10, 15, tzinfo=timezone.utc)
+    now = datetime(2026, 9, 14, 10, 15, tzinfo=UTC)
     report = sp.run(world["config"], days=1, now=now)
     # since = 09-13T10:15 → everything is inside; shrink to 5 minutes via now.
     assert report.prompts_total == 5
     later = sp.run(world["config"], days=None, now=now)
     assert later.prompts_total == 5
     cut = sp.measure_transcript(world["projects"] / f"{SESS_A}.jsonl",
-                                since=datetime(2026, 9, 14, 10, 5, tzinfo=timezone.utc))
+                                since=datetime(2026, 9, 14, 10, 5, tzinfo=UTC))
     assert cut[0] == 2 and [s.skills for s in cut[1]] == [["gmail"]]
-    assert cut[2] == datetime(2026, 9, 14, 10, 10, tzinfo=timezone.utc)
+    assert cut[2] == datetime(2026, 9, 14, 10, 10, tzinfo=UTC)
 
 
 def test_run_days_zero_means_all_and_negative_rejected(world):

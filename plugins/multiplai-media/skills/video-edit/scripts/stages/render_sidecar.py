@@ -25,10 +25,11 @@ import copy
 import json
 import os
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
-from stages import brand as brand_mod, composite, timeline
+from stages import brand as brand_mod
+from stages import composite, timeline
 from stages.edl import EDL
 
 SUFFIX = ".edl.json"
@@ -86,7 +87,7 @@ def build(edl: EDL, edl_file: Path, video_name: str) -> dict:
     return {
         "format": FORMAT,
         "video": video_name,
-        "rendered_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "rendered_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "edl_file": str(Path(edl_file).resolve()),
         "edl": snapshot(edl),
         "duration": round(edl.total_duration(), 3),

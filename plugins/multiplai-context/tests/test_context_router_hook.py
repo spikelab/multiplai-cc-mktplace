@@ -12,22 +12,14 @@ Tests are written against behavioral contracts from the spec.  All tests
 should FAIL until the implementation is complete.
 """
 
-import asyncio
 import importlib
-import json
 import os
-import re
-import subprocess
 import sys
-import tempfile
-import textwrap
 import time
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-from conftest import PLUGIN_ROOT, SCRIPTS_DIR, HOOKS_JSON, parse_hooks
+from conftest import HOOKS_JSON, PLUGIN_ROOT, SCRIPTS_DIR, parse_hooks
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -88,7 +80,7 @@ class TestContextRouterPathResolution:
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path / "data"))
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(mem_dir))
 
-        from multiplai_core.paths import _reset_cache, Paths
+        from multiplai_core.paths import Paths, _reset_cache
         _reset_cache()
         paths = Paths.resolve()
 
@@ -235,7 +227,7 @@ class TestMetadataFirstRanking:
 
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(mem_dir))
 
-        from multiplai_core.paths import _reset_cache, Paths
+        from multiplai_core.paths import Paths, _reset_cache
         _reset_cache()
         paths = Paths.resolve()
 

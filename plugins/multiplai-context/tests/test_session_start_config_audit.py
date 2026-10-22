@@ -17,7 +17,7 @@ the data dir with the same ``get_paths()`` cascade the gate uses.
 """
 
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -62,7 +62,7 @@ class TestConfigAuditGate:
 
         state = yaml.safe_load(missing.read_text())
         seeded = datetime.fromisoformat(state["last_run"])
-        assert datetime.now(timezone.utc) - seeded < timedelta(minutes=1)
+        assert datetime.now(UTC) - seeded < timedelta(minutes=1)
 
     def test_seeded_state_keeps_gate_closed_on_next_check(self, tmp_path):
         """The seed written on first run parses and closes the gate after."""
@@ -99,7 +99,7 @@ class TestConfigAuditGate:
         import session_start
 
         f = tmp_path / "config_audit_state.yaml"
-        stale = (datetime.now(timezone.utc) - timedelta(days=91)).isoformat()
+        stale = (datetime.now(UTC) - timedelta(days=91)).isoformat()
         _write_state(f, stale)
         assert session_start._config_audit_gate_open(f) is True
 
@@ -112,7 +112,7 @@ class TestConfigAuditGate:
         """
         import session_start
 
-        frozen = datetime.now(timezone.utc)
+        frozen = datetime.now(UTC)
 
         class _FrozenDatetime(datetime):
             @classmethod
@@ -133,7 +133,7 @@ class TestConfigAuditGate:
         """
         import session_start
 
-        frozen = datetime.now(timezone.utc)
+        frozen = datetime.now(UTC)
 
         class _FrozenDatetime(datetime):
             @classmethod
@@ -151,7 +151,7 @@ class TestConfigAuditGate:
         import session_start
 
         f = tmp_path / "config_audit_state.yaml"
-        recent = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        recent = (datetime.now(UTC) - timedelta(days=1)).isoformat()
         _write_state(f, recent)
         assert session_start._config_audit_gate_open(f) is False
 
@@ -161,7 +161,7 @@ class TestConfigAuditGate:
 
         f = tmp_path / "config_audit_state.yaml"
         days = session_start._CONFIG_AUDIT_GATE_DAYS - 1
-        inside = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        inside = (datetime.now(UTC) - timedelta(days=days)).isoformat()
         _write_state(f, inside)
         assert session_start._config_audit_gate_open(f) is False
 
@@ -171,7 +171,7 @@ class TestConfigAuditGate:
 
         f = tmp_path / "config_audit_state.yaml"
         naive = (
-            datetime.now(timezone.utc) - timedelta(days=1)
+            datetime.now(UTC) - timedelta(days=1)
         ).replace(tzinfo=None).isoformat()
         _write_state(f, naive)
         assert session_start._config_audit_gate_open(f) is False
@@ -244,22 +244,20 @@ class TestConfigAuditStamp:
         assert session_start._config_audit_gate_open(path) is False
 
     def test_stamp_records_proposal_and_last_run(self):
-        import yaml
-
         import config_audit
+        import yaml
 
         proposal = ".multiplai/dreams/config-audit-2026-07-14.md"
         path = config_audit.stamp(proposal)
         state = yaml.safe_load(path.read_text())
         assert state["proposal"] == proposal
         last_dt = datetime.fromisoformat(state["last_run"])
-        assert datetime.now(timezone.utc) - last_dt < timedelta(minutes=1)
+        assert datetime.now(UTC) - last_dt < timedelta(minutes=1)
 
     def test_stamp_overwrites_fresh_not_merge(self):
         """Only the latest run matters — a stale proposal key must not survive."""
-        import yaml
-
         import config_audit
+        import yaml
 
         config_audit.stamp("old-proposal.md")
         path = config_audit.stamp()  # clean audit, no proposal

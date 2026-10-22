@@ -9,7 +9,6 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-
 # Inline fallback — concise type guidance used if references/research-types.md is missing
 INLINE_GUIDANCE = {
     "general": {

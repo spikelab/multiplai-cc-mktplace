@@ -17,7 +17,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
@@ -55,7 +55,7 @@ def render(payload: dict, repo: str | None = None) -> str:
     return template.render(
         repo=repo or payload.get("repo") or "(unknown repo)",
         generated_at=payload.get("generated_at")
-        or datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        or datetime.now(UTC).isoformat(timespec="seconds"),
         candidates=candidates,
         top_recommendation=payload.get("top_recommendation"),
     )

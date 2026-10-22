@@ -8,16 +8,35 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
-from conftest import KEYWORD_CITATION, KEYWORD_USE_CITATION, cite, high_finding, medium_finding
+from conftest import (
+    KEYWORD_CITATION,
+    KEYWORD_USE_CITATION,
+    cite,
+    high_finding,
+    medium_finding,
+)
 from review_pipeline import sdk, target
 from review_pipeline.config import ReviewConfig
-from review_pipeline.models import (Citation, DuplicateSet, Finding, FinderOutput, FinderResult, MergeOutput, ReviewState,
-                                    Verdict, VerifierAnswer)
+from review_pipeline.models import (
+    Citation,
+    DuplicateSet,
+    FinderOutput,
+    FinderResult,
+    Finding,
+    MergeOutput,
+    ReviewState,
+    Verdict,
+    VerifierAnswer,
+)
 from review_pipeline.stages import RunContext
 from review_pipeline.stages import find as find_stage
 from review_pipeline.stages.find import conventions_chain, run_find
-from review_pipeline.stages.merge import MERGE_LINE_GAP, group_key, overlap_groups, run_merge
+from review_pipeline.stages.merge import (
+    MERGE_LINE_GAP,
+    group_key,
+    overlap_groups,
+    run_merge,
+)
 from review_pipeline.stages.verify import VerifyIncomplete, run_verify
 
 

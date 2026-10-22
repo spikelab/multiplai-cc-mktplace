@@ -61,9 +61,9 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Mapping, Optional
 
 from lib import utilisation as util
 from lib.section_loader import extract_section
@@ -71,16 +71,16 @@ from lib.section_loader import extract_section
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "Candidate",
-    "DeadWeight",
+    "EXPENSIVE_LIMIT",
     "MIN_COVERAGE_SESSIONS",
     "UNUSED_RATE_THRESHOLD",
-    "EXPENSIVE_LIMIT",
-    "looks_normative",
-    "section_text",
+    "Candidate",
+    "DeadWeight",
     "find_dead_weight",
-    "run_pass",
+    "looks_normative",
     "render_section",
+    "run_pass",
+    "section_text",
 ]
 
 #: Sessions of coverage below which the whole pass reports nothing. Ranking a
@@ -168,10 +168,10 @@ class Candidate:
     finding: str            # "never-retrieved" | "retrieved-unused" | "expensive"
     retrieved: int = 0
     bytes: int = 0
-    self_report: Optional[dict] = None
-    judge: Optional[dict] = None
-    rank_basis: Optional[str] = None
-    cost_per_use: Optional[float] = None
+    self_report: dict | None = None
+    judge: dict | None = None
+    rank_basis: str | None = None
+    cost_per_use: float | None = None
     zero_use: bool = False
     disagreement: bool = False
     protected: bool = False
@@ -258,7 +258,7 @@ def _is_unused(row: Mapping, *, min_observations: int, threshold: float) -> bool
 def find_dead_weight(
     table: Mapping,
     *,
-    memory_dir: Optional[Path] = None,
+    memory_dir: Path | None = None,
     min_coverage_sessions: int = MIN_COVERAGE_SESSIONS,
     threshold: float = UNUSED_RATE_THRESHOLD,
     expensive_limit: int = EXPENSIVE_LIMIT,
@@ -394,7 +394,7 @@ def run_pass(
     memory_dir: Path,
     data_dir: Path,
     *,
-    catalog: Optional[dict] = None,
+    catalog: dict | None = None,
     min_coverage_sessions: int = MIN_COVERAGE_SESSIONS,
 ) -> dict:
     """Load the utilisation table and produce the findings. Read-only throughout."""
@@ -412,7 +412,7 @@ def run_pass(
 
 # --- rendering --------------------------------------------------------------
 
-def _fmt_rate(block: Optional[Mapping]) -> str:
+def _fmt_rate(block: Mapping | None) -> str:
     if not block or not block.get("observed"):
         return "not estimated (n=0)"
     rate = block.get("rate")
@@ -421,7 +421,7 @@ def _fmt_rate(block: Optional[Mapping]) -> str:
     return f"{rate:.0%} estimated used ({block['used']}/{block['observed']})"
 
 
-def _fmt_cost(value: Optional[float]) -> str:
+def _fmt_cost(value: float | None) -> str:
     if not isinstance(value, (int, float)):
         return "—"
     if value >= 1000:

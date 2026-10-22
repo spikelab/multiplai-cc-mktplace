@@ -10,12 +10,10 @@ reply cannot become an `apply` on the way out.
 from dataclasses import dataclass
 
 import pytest
-
 from lib.memory_judge import (
     CITATIONS,
     SYSTEM,
     VERDICTS,
-    Verdict,
     cached_verdicts,
     item_key,
     load_cache,

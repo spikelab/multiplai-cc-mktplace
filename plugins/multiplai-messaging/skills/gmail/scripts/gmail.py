@@ -144,8 +144,8 @@ def _creds_from_file() -> dict | None:
 def _load_credentials():
     """Build refreshed OAuth credentials from env vars (preferred) or a file."""
     try:
-        from google.oauth2.credentials import Credentials
         from google.auth.transport.requests import Request
+        from google.oauth2.credentials import Credentials
     except ImportError as e:  # pragma: no cover - env guard
         _die(
             "google client libraries missing. Run this script with uv so the "
@@ -178,12 +178,12 @@ def _load_credentials():
     return creds
 
 
-def _assert_scopes(creds) -> "None":
+def _assert_scopes(creds) -> None:
     """Fetch the token's *granted* scopes from Google; abort on any extra."""
     try:
         url = f"{TOKENINFO_URL}?" + urllib.parse.urlencode(
             {"access_token": creds.token})
-        with urllib.request.urlopen(url, timeout=15) as resp:  # noqa: S310
+        with urllib.request.urlopen(url, timeout=15) as resp:
             info = json.load(resp)
     except Exception as e:  # noqa: BLE001
         _die(f"could not verify granted scopes via tokeninfo: {e}")
@@ -251,7 +251,7 @@ def _header(headers: list, name: str) -> str:
 # --------------------------------------------------------------------------- #
 # search
 # --------------------------------------------------------------------------- #
-def cmd_search(svc, query: str, limit: int) -> "None":
+def cmd_search(svc, query: str, limit: int) -> None:
     # labelIds=['INBOX'] is the structural inbox boundary; the free-text query is
     # AND-ed with it, so archived/sent/spam/trash/all-mail are never reachable.
     resp = svc.users().messages().list(
@@ -334,7 +334,7 @@ def _extract_body(payload: dict) -> str:
     return plain if plain is not None else fallback
 
 
-def cmd_read(svc, message_id: str) -> "None":
+def cmd_read(svc, message_id: str) -> None:
     msg = svc.users().messages().get(
         userId="me", id=message_id, format="full").execute()
     # Structural inbox gate: refuse to surface anything not currently in INBOX.
@@ -393,7 +393,7 @@ def _body_html(body: str) -> str:
         for p in paras if p.strip())
 
 
-def cmd_draft(svc, reply_to: str, input_file: str | None) -> "None":
+def cmd_draft(svc, reply_to: str, input_file: str | None) -> None:
     payload = _read_payload(input_file)
     to = (payload.get("to") or "").strip()
     subject = (payload.get("subject") or "").strip()
@@ -489,7 +489,7 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main(argv: list) -> "None":
+def main(argv: list) -> None:
     setup_logging("gmail")
     args = build_parser().parse_args(argv)
     creds = _load_credentials()

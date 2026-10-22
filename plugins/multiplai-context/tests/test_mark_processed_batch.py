@@ -28,7 +28,6 @@ import sys
 from pathlib import Path
 
 import pytest
-
 from conftest import SCRIPTS_DIR
 from lib.dream_processed import (
     Decision,
@@ -449,7 +448,6 @@ class _StubPaths:
 def gc_env(tmp_path, monkeypatch):
     """dream.py wired to a scratch workspace, with a real ledger file."""
     from lib import learnings_ledger
-
     from test_dream_skill import _load_dream_module
 
     dream = _load_dream_module()

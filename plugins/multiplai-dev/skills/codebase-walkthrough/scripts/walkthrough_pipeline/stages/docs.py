@@ -17,7 +17,7 @@ from pathlib import Path
 from .. import docs as docs_mod
 from .. import sdk
 from ..gates import citation_gate, doc_quote_gate
-from ..models import Dropped, DocsOutput, WalkState
+from ..models import DocsOutput, Dropped, WalkState
 from ..prompts import docs_resource
 from ..symbols import normalise_api_path, outbound_api_paths
 from . import RunContext, bounded, fix_citation

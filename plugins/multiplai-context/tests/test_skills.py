@@ -21,7 +21,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -96,7 +96,7 @@ def _write_skill_file(skills_dir, filename="dream.md", content="# Dream Skill\nT
     path points at the SKILL.md, and the source key used by
     ``discover_sources`` is the parent directory name (``"dream"``).
     """
-    skill_name = filename[:-3] if filename.endswith(".md") else filename
+    skill_name = filename.removesuffix(".md")
     skill_dir = skills_dir / skill_name
     skill_dir.mkdir(parents=True, exist_ok=True)
     path = skill_dir / "SKILL.md"
@@ -178,8 +178,8 @@ class TestSkillsGeneratorIdentity:
     def test_generator_name_is_skills(self, tmp_path, monkeypatch):
         """Generator name must be 'skills' for state namespacing."""
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        from generators.skills import SkillsGenerator
         from generators.config import CatalogConfig
+        from generators.skills import SkillsGenerator
 
         config = CatalogConfig(enable_skills=True, skills_dir=str(tmp_path / "s"))
         gen = SkillsGenerator(config=config, model_client=_make_mock_client())
@@ -188,8 +188,8 @@ class TestSkillsGeneratorIdentity:
     def test_catalog_filename_is_skills_json(self, tmp_path, monkeypatch):
         """Catalog output must be skills.json."""
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        from generators.skills import SkillsGenerator
         from generators.config import CatalogConfig
+        from generators.skills import SkillsGenerator
 
         config = CatalogConfig(enable_skills=True, skills_dir=str(tmp_path / "s"))
         gen = SkillsGenerator(config=config, model_client=_make_mock_client())
@@ -825,7 +825,7 @@ class TestSkillsModelConfig:
 
     def test_default_model_and_effort(self, tmp_path, monkeypatch):
         """With no override, the call carries generators.config.DEFAULT_MODEL."""
-        from generators.config import DEFAULT_MODEL, CatalogConfig
+        from generators.config import DEFAULT_MODEL
 
         gen, catalogs_dir, skills_dir = _make_skills_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
@@ -1145,7 +1145,6 @@ class TestSkillsBaseClassIntegration:
         gen, catalogs_dir, skills_dir = _make_skills_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
 
-        from generators.base import GeneratorBase
 
         # Skills generator should not override hash_source (uses base default)
         # If it does override, it should still produce the same result

@@ -8,9 +8,8 @@ import importlib
 import pkgutil
 
 import pm_spec_pipeline.prompts as prompts_pkg
-from pm_spec_pipeline.prompts import UNTRUSTED_NOTICE
-
 from conftest import change_dir, run, write
+from pm_spec_pipeline.prompts import UNTRUSTED_NOTICE
 from test_prototype import NOTES_FINDINGS, agent, ui_proposal
 
 

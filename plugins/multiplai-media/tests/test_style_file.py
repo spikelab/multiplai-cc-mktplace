@@ -9,7 +9,7 @@ import pytest
 _SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "video-edit" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 
-from stages import style_file as sf  # noqa: E402
+from stages import style_file as sf
 
 STYLES = _SCRIPTS.parent / "references" / "styles"
 

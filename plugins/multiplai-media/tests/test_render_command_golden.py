@@ -18,8 +18,8 @@ import pytest
 _SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "video-edit" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 
-from stages import composite  # noqa: E402
-from stages.edl import EDL  # noqa: E402
+from stages import composite
+from stages.edl import EDL
 
 _GOLDEN = Path(__file__).resolve().parent / "fixtures" / "demo-narrated.ffmpeg.json"
 

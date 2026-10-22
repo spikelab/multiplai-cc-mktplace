@@ -57,7 +57,7 @@ import socket
 import subprocess
 import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -788,7 +788,7 @@ def validate_comment(c: Any, known: set[tuple[str, int]],
         row.update(_style(c, (records or {}).get((row["video"], row["version"]))))
     elif kind == "restyle":
         row.update(_restyle(c, (records or {}).get((row["video"], row["version"]))))
-    row.update(text=text.strip(), created_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    row.update(text=text.strip(), created_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"))
     return row
 
 
@@ -859,7 +859,7 @@ def make_handler(video_dir: Path, mailbox: Mailbox, token: str):
         protocol_version = "HTTP/1.1"   # keep-alive: the browser seeks with many small Range requests
         sys_version = ""
 
-        def log_message(self, format, *args):   # noqa: A002 — keep the token out of any log
+        def log_message(self, format, *args):  # keep the token out of any log
             pass
 
         def _headers(self, status: int, ctype: str, length: int, extra: dict | None = None,

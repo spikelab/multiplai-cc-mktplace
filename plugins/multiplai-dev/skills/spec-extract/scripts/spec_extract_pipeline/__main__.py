@@ -24,17 +24,16 @@ import logging
 import os
 import sys
 from collections.abc import Callable, Coroutine, Sequence
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from . import apply as apply_mod
-from . import explore, gate, group, runlock, sdk, write
+from . import explore, gate, group, runlock, sdk, target, write
 from . import render as render_mod
 from . import report as report_mod
 from . import scope as scope_mod
 from . import state as state_mod
-from . import target
 
 log = logging.getLogger("spec_extract_pipeline")
 
@@ -208,7 +207,7 @@ def _group_write_render(state: state_mod.State, run_dir: Path, git_target: targe
 
 def main(argv: Sequence[str] | None = None, *, now: Callable[[], datetime] | None = None) -> int:
     """Run the command line; return the exit code. *now* is the run's one clock."""
-    clock = now or (lambda: datetime.now(timezone.utc))
+    clock = now or (lambda: datetime.now(UTC))
     try:
         args = build_parser().parse_args(argv)
     except SystemExit as e:  # --help, or a usage error argparse already printed
@@ -251,7 +250,7 @@ def main(argv: Sequence[str] | None = None, *, now: Callable[[], datetime] | Non
     except (state_mod.Unreadable, target.ImportLost) as e:
         print(f"spec-extract: {e}", file=sys.stderr)
         return EXIT_FAILED
-    except Exception as e:  # noqa: BLE001 — every other failure is exit 1 with its message
+    except Exception as e:  # every other failure is exit 1 with its message
         log.debug("spec-extract failed", exc_info=True)
         print(f"spec-extract: failed: {e}", file=sys.stderr)
         return EXIT_FAILED

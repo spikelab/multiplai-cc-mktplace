@@ -19,8 +19,8 @@ from pathlib import Path
 from typing import Any
 
 from multiplai_core.paths import Paths
-from generators.base import GeneratorBase
 
+from generators.base import GeneratorBase
 
 # Regex for valid YYYY-MM-DD file stems
 _DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")

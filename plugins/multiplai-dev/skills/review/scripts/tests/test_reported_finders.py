@@ -21,8 +21,18 @@ import code_facts
 import code_facts.paths as code_facts_paths
 import paths_stub
 import pytest
-from code_facts.paths import (E2EListing, E2ETest, FallbackStatus, Handler, Location, MockedE2ETest, PathEntry,
-                              PathHop, PathsResult, TracedPath)
+from code_facts.paths import (
+    E2EListing,
+    E2ETest,
+    FallbackStatus,
+    Handler,
+    Location,
+    MockedE2ETest,
+    PathEntry,
+    PathHop,
+    PathsResult,
+    TracedPath,
+)
 from review_pipeline import budget, sdk
 from review_pipeline.__main__ import main
 from review_pipeline.models import (

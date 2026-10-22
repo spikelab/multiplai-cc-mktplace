@@ -8,10 +8,9 @@ Goal-safety is asserted throughout: the Stop hook must never emit a
 
 import io
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
-
 from conftest import import_script
 from lib import checkpoint as cp
 
@@ -39,7 +38,7 @@ def _transcript(tmp_path, tokens, name="t.jsonl"):
     """Write a transcript whose last assistant record reports *tokens*."""
     rec = {
         "type": "assistant",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "message": {
             "role": "assistant",
             "content": [{"type": "text", "text": "working"}],

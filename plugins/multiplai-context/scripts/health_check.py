@@ -10,14 +10,14 @@ import json
 import re
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from multiplai_core.paths import get_paths
-from multiplai_core.model_client import detect_client_type
 from lib.memory_router import resolve_strategy
+from multiplai_core.model_client import detect_client_type
+from multiplai_core.paths import get_paths
 
 # Machine-readable routing line emitted by context_manager:
 #   ... INFO: ROUTING_SCORES memory={"picked": [...], "capped": ..., ...}
@@ -80,8 +80,8 @@ def _check_memory_file(memory_dir: Path, filename: str) -> dict:
     stat = filepath.stat()
     st_size = stat.st_size
     st_mtime = stat.st_mtime
-    modified_dt = datetime.fromtimestamp(st_mtime, tz=timezone.utc)
-    age_days = (datetime.now(timezone.utc) - modified_dt).days
+    modified_dt = datetime.fromtimestamp(st_mtime, tz=UTC)
+    age_days = (datetime.now(UTC) - modified_dt).days
     stale = age_days > STALENESS_THRESHOLD_DAYS
 
     return {
@@ -242,7 +242,7 @@ def _routing_status(paths) -> dict:
             if gen:
                 try:
                     dt = datetime.fromisoformat(gen.replace("Z", "+00:00"))
-                    age_days = (datetime.now(timezone.utc) - dt).days
+                    age_days = (datetime.now(UTC) - dt).days
                 except ValueError:
                     pass
             status["last_eval"] = {

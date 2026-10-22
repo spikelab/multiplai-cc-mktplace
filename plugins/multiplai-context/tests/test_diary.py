@@ -19,14 +19,12 @@ Covers all scenarios from requirements/diary-catalog-generator.md:
 - Catalog file structure (schema_version, generated_at, entries)
 """
 
-import asyncio
-import hashlib
 import json
 import os
 import sys
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -107,7 +105,7 @@ def _make_day_dir(diary_dir, date_str, files=None):
 
     parts = [f"# Diary — {date_str}\n"]
     for fname, content in files.items():
-        sid = fname[:-3] if fname.endswith(".md") else fname
+        sid = fname.removesuffix(".md")
         ts = f"{date_str}T00:00:00+00:00"
         parts.append(
             f"\n## Session: {sid} — {ts} — /test/cwd\n\n{content}\n"
@@ -124,7 +122,7 @@ def _rewrite_day_file(day_file, files):
     date_str = day_file.stem
     parts = [f"# Diary — {date_str}\n"]
     for fname, content in files.items():
-        sid = fname[:-3] if fname.endswith(".md") else fname
+        sid = fname.removesuffix(".md")
         ts = f"{date_str}T00:00:00+00:00"
         parts.append(
             f"\n## Session: {sid} — {ts} — /test/cwd\n\n{content}\n"
@@ -330,7 +328,7 @@ class TestLookbackWindow:
         """WHEN no lookback window is configured
         THEN a default lookback window is applied (not unlimited).
         """
-        from generators.config import CatalogConfig, DEFAULT_DIARY_CATALOG_DAYS
+        from generators.config import DEFAULT_DIARY_CATALOG_DAYS, CatalogConfig
 
         config = CatalogConfig()  # uses default
         gen, _, diary_dir = _make_diary_generator(tmp_path, config=config)

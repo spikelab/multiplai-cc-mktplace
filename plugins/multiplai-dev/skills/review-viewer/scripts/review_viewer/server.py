@@ -32,13 +32,32 @@ from code_facts.paths import PathsResult
 from multiplai_core.log_utils import log_event
 from pydantic import ValidationError
 
-from . import netinfo, registry
-from .gitdata import (DEFINITION_NAME_RE, REPO_FILES_MAX, GitError, PathNotInReview, TargetError,
-                      allowed_paths, definitions, file_view, pr_status, repo_files)
-from .stats import PR_BADGE_IDS, pr_badges
+from . import registry
+from .gitdata import (
+    DEFINITION_NAME_RE,
+    REPO_FILES_MAX,
+    GitError,
+    PathNotInReview,
+    TargetError,
+    allowed_paths,
+    definitions,
+    file_view,
+    pr_status,
+    repo_files,
+)
 from .mailbox import Mailbox, MailboxError, new_question_id, utc_now, write_private
-from .models import (SHARE_RECIPIENT_RE, SHARE_TEXT_MAX, Anchor, ChecksFile, FindingsFile, InboxRow,
-                     Walkthrough, findings_digest, load_checks)
+from .models import (
+    SHARE_RECIPIENT_RE,
+    SHARE_TEXT_MAX,
+    Anchor,
+    ChecksFile,
+    FindingsFile,
+    InboxRow,
+    Walkthrough,
+    findings_digest,
+    load_checks,
+)
+from .stats import PR_BADGE_IDS, pr_badges
 from .walkthrough import Served, served_path, walkthrough_path
 
 log = logging.getLogger(__name__)

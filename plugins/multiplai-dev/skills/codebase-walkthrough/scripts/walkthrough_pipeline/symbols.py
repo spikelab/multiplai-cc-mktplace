@@ -79,7 +79,7 @@ def static_string(node: ast.AST, *, strip_base: bool = False) -> str | None:
     values = list(node.values)
     if strip_base:
         while values and isinstance(values[0], ast.FormattedValue) and re.search(
-                r"url|base|host|api|endpoint|root", ast.unparse(values[0].value), re.I):
+                r"url|base|host|api|endpoint|root", ast.unparse(values[0].value), re.IGNORECASE):
             values.pop(0)
     for v in values:
         if isinstance(v, ast.Constant):
@@ -101,7 +101,7 @@ def normalise_api_path(path: str) -> str:
 def _app_label(snapshot_root: Path, target: TargetInfo) -> str:
     apps = snapshot_root / target.subpath / "apps.py" if target.subpath else snapshot_root / "apps.py"
     if apps.is_file():
-        m = re.search(r"^\s*label\s*=\s*['\"]([^'\"]+)['\"]", apps.read_text(encoding="utf-8", errors="replace"), re.M)
+        m = re.search(r"^\s*label\s*=\s*['\"]([^'\"]+)['\"]", apps.read_text(encoding="utf-8", errors="replace"), re.MULTILINE)
         if m:
             return m.group(1)
     return target.package.split(".")[-1]

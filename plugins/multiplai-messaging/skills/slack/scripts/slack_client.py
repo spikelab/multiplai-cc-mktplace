@@ -40,9 +40,13 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from multiplai_core.log_utils import log_event, setup_logging
+from multiplai_core.paths import get_paths
+from multiplai_core.untrusted import bracket_notice
+from multiplai_core.untrusted import defang as _core_defang
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 from slack_sdk.http_retry.builtin_handlers import (
@@ -50,11 +54,6 @@ from slack_sdk.http_retry.builtin_handlers import (
     RateLimitErrorRetryHandler,
     ServerErrorRetryHandler,
 )
-
-from multiplai_core.log_utils import log_event, setup_logging
-from multiplai_core.paths import get_paths
-from multiplai_core.untrusted import bracket_notice
-from multiplai_core.untrusted import defang as _core_defang
 
 # Configured in main() via setup_logging("slack"); until then this is an
 # unconfigured logger, so module-import-time use is a no-op (never crashes).
@@ -362,7 +361,7 @@ class SlackReader:
         """
         if not force:
             last = self.store.users_last_updated()
-            if last is not None and datetime.now(timezone.utc) - last < self.USER_CACHE_TTL:
+            if last is not None and datetime.now(UTC) - last < self.USER_CACHE_TTL:
                 return 0
         count = 0
         cursor = None
@@ -416,7 +415,7 @@ class SlackReader:
                 sys.exit(f"error: could not resolve channel {t!r}")
             return ids[0]
         # treat as a person's name → look up in the cached directory
-        name_q = t[1:] if t.startswith("@") else t
+        name_q = t.removeprefix("@")
         rows = self.store.find_users(name_q)
         if not rows:
             sys.exit(f"error: no user matches {name_q!r} (try: users --refresh)")
@@ -667,7 +666,7 @@ class SlackReader:
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _safe(s: str) -> str:
@@ -695,7 +694,7 @@ def _fmt_ts(ts: str | None) -> str:
     if not ts:
         return "-"
     try:
-        return datetime.fromtimestamp(float(ts), tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
+        return datetime.fromtimestamp(float(ts), tz=UTC).strftime("%Y-%m-%d %H:%M")
     except (ValueError, TypeError):
         return ts
 
@@ -917,7 +916,7 @@ def cmd_search(args, reader: SlackReader, store: Store) -> None:
                 sys.exit(f"error: could not resolve channel {args.channel!r}")
             cid = ids[0]
         uid = None
-        if getattr(args, "from_"):
+        if args.from_:
             rows = store.find_users(args.from_)
             if not rows:
                 sys.exit(f"error: no cached user matches {args.from_!r} (try: users --refresh)")

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import pytest
 from conftest import make_change, make_repo
-
 from pr_pipeline import commands, fill, gates, markers
 from pr_pipeline.template import parse
 

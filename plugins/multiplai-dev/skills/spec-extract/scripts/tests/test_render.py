@@ -12,7 +12,6 @@ import os
 from pathlib import Path
 
 import pytest
-
 from conftest import read_state
 from spec_extract_pipeline import target
 from test_write_gate import CALC_ANSWER, folder, go, make_calc_repo

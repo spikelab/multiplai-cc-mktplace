@@ -22,11 +22,11 @@ import importlib.util
 import json
 import logging
 import os
+from datetime import UTC
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 from conftest import PLUGIN_ROOT, SCRIPTS_DIR
 
 
@@ -657,10 +657,10 @@ class TestReportRunEndToEnd:
 
     def test_a_hand_edited_proposal_survives_the_next_run(self, seeded, dream_env):
         """Done-means 14: curation is preserved and this run gets a -2 suffix."""
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         mod, _ = seeded
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
         curated_path = _write_generated(
             mod, dream_env["dreams_dir"], f"processed-learnings-{today}.md",
         )

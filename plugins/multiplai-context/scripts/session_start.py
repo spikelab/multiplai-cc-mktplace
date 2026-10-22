@@ -29,14 +29,10 @@ the 60-day clock starts at install.
 import subprocess
 import sys
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-
-from multiplai_core.paths import get_paths
-from multiplai_core.config import load_yaml, save_yaml, read_session_state, write_session_state
-from multiplai_core.log_utils import hook_run, setup_logging, log_event
 
 # The drain itself lives in lib/ so the host-side ``drain_extractions.py``
 # entry point — which runs after the container has exited, when a marker was
@@ -44,9 +40,17 @@ from multiplai_core.log_utils import hook_run, setup_logging, log_event
 # the same code. Two copies of a marker-move loop is how one of them quietly
 # stops matching the other.
 from lib.extraction_drain import process_deferred_extractions
+from lib.fleet import roster_dead_sids, write_fleet_view
 from lib.hook_input import read_hook_input
 from lib.runtime import uv_run_argv
-from lib.fleet import roster_dead_sids, write_fleet_view
+from multiplai_core.config import (
+    load_yaml,
+    read_session_state,
+    save_yaml,
+    write_session_state,
+)
+from multiplai_core.log_utils import hook_run, log_event, setup_logging
+from multiplai_core.paths import get_paths
 
 logger = setup_logging("session_start", packages=("lib", "generators"))
 
@@ -105,7 +109,7 @@ def _last_run_from(state_file: Path) -> datetime | None:
         last_dt = datetime.fromisoformat(str(last_run))
     except (ValueError, TypeError):
         return None
-    return last_dt if last_dt.tzinfo else last_dt.replace(tzinfo=timezone.utc)
+    return last_dt if last_dt.tzinfo else last_dt.replace(tzinfo=UTC)
 
 
 def _gate_open(state_file: Path, delta: timedelta) -> bool:
@@ -114,7 +118,7 @@ def _gate_open(state_file: Path, delta: timedelta) -> bool:
     last_dt = _last_run_from(state_file)
     if last_dt is None:
         return True
-    return datetime.now(timezone.utc) - last_dt >= delta
+    return datetime.now(UTC) - last_dt >= delta
 
 
 def _dream_gate_open(dream_state_file: Path) -> bool:
@@ -151,7 +155,7 @@ def _config_audit_gate_open(config_audit_state_file: Path) -> bool:
         try:
             save_yaml(
                 config_audit_state_file,
-                {"last_run": datetime.now(timezone.utc).isoformat()},
+                {"last_run": datetime.now(UTC).isoformat()},
             )
             logger.info(
                 "Seeded config-audit state %s (first run — 60-day clock starts now)",
@@ -196,7 +200,7 @@ def _learnings_pending(learnings_dir: Path, dream_state_file: Path) -> bool:
     if last_dt is None:
         return True
 
-    newest = datetime.fromtimestamp(max(mtimes), tz=timezone.utc)
+    newest = datetime.fromtimestamp(max(mtimes), tz=UTC)
     return newest > last_dt
 
 
@@ -447,8 +451,13 @@ def _emit_prospective_nudge(memory_dir: Path, data_dir: Path) -> int:
     """
     try:
         from lib.prospective import (
-            SWEEP_STATE_FILENAME, actionable, load, load_sweep_state,
-            render_nudge, save_sweep_state, sweep_key,
+            SWEEP_STATE_FILENAME,
+            actionable,
+            load,
+            load_sweep_state,
+            render_nudge,
+            save_sweep_state,
+            sweep_key,
         )
 
         today = date.today()
@@ -644,7 +653,7 @@ def _start_pass(hook_input: dict, cwd: str, run) -> None:
     session_id = hook_input.get("session_id") or str(uuid.uuid4())[:8]
     session_identity = {
         "session_id": session_id,
-        "start_time": datetime.now(timezone.utc).isoformat(),
+        "start_time": datetime.now(UTC).isoformat(),
         "plugin_mode": paths.is_plugin_mode(),
         "client_type": client_type,
         "memory_files_available": memory_files,

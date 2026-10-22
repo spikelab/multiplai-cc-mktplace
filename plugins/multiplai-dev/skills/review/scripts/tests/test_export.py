@@ -4,8 +4,15 @@ import json
 
 import jsonschema
 import pytest
-
-from conftest import CLAIM_HIGH, CLAIM_MEDIUM, CLAIM_REFUTED, CLAIM_REJECTED, EXPECTED_HIGH, EXPECTED_MEDIUM, SCHEMA
+from conftest import (
+    CLAIM_HIGH,
+    CLAIM_MEDIUM,
+    CLAIM_REFUTED,
+    CLAIM_REJECTED,
+    EXPECTED_HIGH,
+    EXPECTED_MEDIUM,
+    SCHEMA,
+)
 from review_pipeline.export import plugin_version, to_findings_file, write_findings_file
 
 
@@ -178,7 +185,6 @@ def test_run_counts_repeats_and_low_value_from_the_assessments(canned_state):
 
 def test_impact_is_exported_for_shown_findings_and_mode_defaults_to_full(canned_state):
     import jsonschema
-
     from conftest import SCHEMA
     for v in canned_state.verdicts.values():
         v.impact = "breaks-users"

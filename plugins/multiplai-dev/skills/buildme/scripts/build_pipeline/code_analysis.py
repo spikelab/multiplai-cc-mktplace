@@ -32,11 +32,26 @@ import os
 import re
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 
-from code_facts import (CallFn, Citation, ExploreOutput, Fact, Gated, Resolve, Scope, Span, Unit, citation_keeper,
-                        explore_unit, gate_answers, partition, run_tasks, unit_key)
+from code_facts import (
+    CallFn,
+    Citation,
+    ExploreOutput,
+    Fact,
+    Gated,
+    Resolve,
+    Scope,
+    Span,
+    Unit,
+    citation_keeper,
+    explore_unit,
+    gate_answers,
+    partition,
+    run_tasks,
+    unit_key,
+)
 from multiplai_core.citations import check_quote, file_at
 
 from . import git_ops
@@ -259,7 +274,7 @@ def _named_in(text: str, paths: list[str]) -> set[str]:
 
 
 _IMPORT_LINE = re.compile(r"^\s*(?:from|import|require|use|using|include|#include|@import)\b.*$|require\(.*\)",
-                          re.M)
+                          re.MULTILINE)
 
 
 def _module_word(path: str) -> str:
@@ -524,7 +539,7 @@ def facts_document(a: Analysis) -> dict:
         files.append({"path": path, "purpose": purpose, "citation": cite.model_dump() if cite else None})
     return {
         "schema_version": 1,
-        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+        "generated_at": datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
         "base_sha": EMPTY_TREE,
         "head_sha": a.git.sha,
         "kind": "tree",

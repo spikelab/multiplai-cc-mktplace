@@ -18,10 +18,10 @@ import json
 import re
 
 from fakes import FakeAgents
+from test_pipeline import run_args
 from walkthrough_pipeline import sdk
 from walkthrough_pipeline.__main__ import main
 from walkthrough_pipeline.state import STATE_FILE
-from test_pipeline import run_args
 
 
 def test_resume_after_a_budget_stop(ws, tmp_path, monkeypatch, fake_fetch, capsys):

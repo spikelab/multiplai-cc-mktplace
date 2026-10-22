@@ -14,14 +14,13 @@ these are not:
 import random
 
 import pytest
-
 from lib.dream_chunking import (
     BUDGET_FRACTION,
-    Chunk,
     DEFAULT_THROUGHPUT_BYTES_PER_S,
     MAX_CHUNK_BYTES,
     MAX_ESCALATED_TIMEOUT_S,
     MIN_CHUNK_BYTES,
+    Chunk,
     chunk_budget_bytes,
     estimate_seconds,
     estimate_wall_clock,

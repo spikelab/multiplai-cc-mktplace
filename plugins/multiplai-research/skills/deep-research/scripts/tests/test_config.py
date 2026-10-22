@@ -8,20 +8,19 @@ import types
 from pathlib import Path
 
 import pytest
-
 from research_pipeline import config as config_module
 from research_pipeline.__main__ import build_parser
 from research_pipeline.config import (
     DEFAULT_MODEL,
+    PARSE_MODEL,
+    PRESETS,
+    THINKING_DISABLED,
+    ResearchConfig,
     _conf_model,
     _node_effort,
     _node_thinking,
     conf_effort,
     conf_thinking,
-    PARSE_MODEL,
-    PRESETS,
-    ResearchConfig,
-    THINKING_DISABLED,
 )
 
 

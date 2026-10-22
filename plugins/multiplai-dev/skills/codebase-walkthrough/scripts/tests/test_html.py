@@ -8,7 +8,6 @@ import re
 import subprocess
 
 import pytest
-
 from fakes import FakeAgents
 from test_pipeline import run_args
 from walkthrough_pipeline import sdk
@@ -74,7 +73,7 @@ def test_agent_mode_writes_no_html(ws, tmp_path, monkeypatch, fake_fetch):
 def visible_text(page: str) -> str:
     """What a reader sees: the body without scripts, styles and tags, entities decoded."""
     body = page[page.index("<body>"):]
-    body = re.sub(r"<(script|style)\b.*?</\1>", " ", body, flags=re.S)
+    body = re.sub(r"<(script|style)\b.*?</\1>", " ", body, flags=re.DOTALL)
     return html.unescape(re.sub(r"<[^>]+>", " ", body))
 
 
@@ -92,7 +91,7 @@ def test_a_citation_is_a_numbered_superscript_numbered_per_section(github_run):
     md, page = _md_and_page(github_run)
     sups = re.findall(r'<sup><a class="cite" href="([^"]+)" title="[^"]+">(\d+)</a></sup>', page)
     assert sups
-    for section in re.findall(r'<section id="[a-z]+">(.*?)</section>', page, re.S):
+    for section in re.findall(r'<section id="[a-z]+">(.*?)</section>', page, re.DOTALL):
         numbers = [int(n) for n in re.findall(r'<a class="cite"[^>]*>(\d+)</a>', section)]
         if numbers and "<details class=\"sub\"" not in section:
             assert min(numbers) == 1 and sorted(set(numbers)) == list(range(1, max(numbers) + 1))
@@ -110,7 +109,7 @@ def test_reference_and_how_this_was_made_are_closed_details(done_run):
     for key, titles in (("reference", ["Paths", "Module tour", "Who calls it and what it calls", "Data stores",
                                        "Vendor docs", "Glossary", "Questions for the owner"]),
                         ("made", ["Commits read", "Coverage", "Cut by the checks"])):
-        section = re.search(rf'<section id="{key}">(.*?)</section>', page, re.S).group(1)
+        section = re.search(rf'<section id="{key}">(.*?)</section>', page, re.DOTALL).group(1)
         found = re.findall(r'<details class="sub" id="[^"]+"><summary><h3>(.*?)</h3></summary>', section)
         assert found == titles
         assert "<details open" not in section
@@ -119,14 +118,14 @@ def test_reference_and_how_this_was_made_are_closed_details(done_run):
 
 def test_hop_anchors_are_inside_the_paths_details(done_run):
     _, page = _md_and_page(done_run)
-    paths = re.search(r'<details class="sub" id="reference-paths">(.*?)</details>', page, re.S).group(1)
+    paths = re.search(r'<details class="sub" id="reference-paths">(.*?)</details>', page, re.DOTALL).group(1)
     assert '<a id="p1h1"></a>' in paths
     assert 'href="#p1h1"' in page
 
 
 def test_payload_examples_are_closed_details(done_run):
     _, page = _md_and_page(done_run)
-    outputs = re.search(r'<section id="outputs">(.*?)</section>', page, re.S).group(1)
+    outputs = re.search(r'<section id="outputs">(.*?)</section>', page, re.DOTALL).group(1)
     assert re.search(r'<details class="more"><summary>Example payload \(json\)</summary><pre><code '
                      r'class="language-json">', outputs)
 

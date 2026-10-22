@@ -50,7 +50,7 @@ def _setup_logging(session_id: str) -> None:
 
 _CONTROL_RE = re.compile(
     "[\x00-\x08\x0b-\x1f\x7f-\x9f"      # C0/C1 controls (tab and newline kept)
-    "​-‏"                      # zero-width chars + LTR/RTL marks
+    "\u200b-‏"                      # zero-width chars + LTR/RTL marks
     "‪-‮"                      # bidi embedding / override
     "⁦-⁩"                      # bidi isolates
     "  "                       # line / paragraph separators

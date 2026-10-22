@@ -1,8 +1,8 @@
 """Tests for the documentation phase step — prompt inputs, tools, failed-writer handling."""
 
-import pytest
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from build_pipeline.change_manager import ChangeManager
 from build_pipeline.config import BuildConfig
 from build_pipeline.llm_steps.docs_steps import DOCS_TOOLS, run_docs_update

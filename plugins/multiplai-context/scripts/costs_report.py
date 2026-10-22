@@ -33,7 +33,7 @@ import subprocess
 import sys
 import time
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -67,7 +67,7 @@ def _load(args) -> tuple[list[dict], str]:
     if args.month:
         months = [args.month]
     elif not args.since and not args.session and not args.branch and not args.all:
-        months = [datetime.now(timezone.utc).strftime("%Y-%m")]
+        months = [datetime.now(UTC).strftime("%Y-%m")]
     window = f"since {args.since}" if args.since else (months[0] if months else "all months")
     records = list(iter_ledger(months))
     if args.since:

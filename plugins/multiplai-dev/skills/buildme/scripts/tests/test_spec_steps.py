@@ -6,10 +6,10 @@ change_dir/requirements/<capability>.md. Design/tasks/audit must read from
 there — not the empty legacy change_dir/specs/*/spec.md layout.
 """
 
-import pytest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from build_pipeline.config import BuildConfig
 from build_pipeline.llm_steps.spec_steps import (
     _build_prompt,
@@ -137,6 +137,7 @@ class TestReferenceDocsInThePrompts:
     def test_generate_artifact_passes_the_docs_through(self, tmp_path):
         """The parameter has to reach _build_prompt, not stop at the door."""
         import asyncio
+
         from build_pipeline.llm_steps.spec_steps import generate_artifact
 
         config = _make_config(tmp_path, {"auth": "SCENARIO: x"})
@@ -413,7 +414,10 @@ class TestRegistryInThePrompts:
         assert _build_prompt(artifact, ctx, config) == today
 
     def test_the_cap_drops_whole_files_from_the_end_and_names_them(self, tmp_path):
-        from build_pipeline.llm_steps.spec_steps import REGISTRY_TEXT_LIMIT, _read_registry
+        from build_pipeline.llm_steps.spec_steps import (
+            REGISTRY_TEXT_LIMIT,
+            _read_registry,
+        )
 
         assert REGISTRY_TEXT_LIMIT == 60_000
         big = {name: f"### Requirement: {name.upper()}-START\n" + "x" * 25_000 + f"\n{name.upper()}-END\n"

@@ -17,8 +17,16 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from walkthrough_pipeline import budget
-from walkthrough_pipeline.models import (ConfigOutput, DocsOutput, ExploreOutput, FlowOutput, OutputsOutput,
-                                        SectionOutput, SummaryOutput, UseCasesOutput)
+from walkthrough_pipeline.models import (
+    ConfigOutput,
+    DocsOutput,
+    ExploreOutput,
+    FlowOutput,
+    OutputsOutput,
+    SectionOutput,
+    SummaryOutput,
+    UseCasesOutput,
+)
 
 
 def _line(cwd: str, path: str, n: int) -> str:
@@ -103,7 +111,7 @@ class FakeAgents:
     def explore(self, prompt: str, cwd: str) -> ExploreOutput:
         facts, files, terms, gotchas = [], [], [], []
         if "Files in your part of the module:" in prompt:
-            for path in re.findall(r"^- (\S+) \(\d+ lines\)$", prompt, re.M):
+            for path in re.findall(r"^- (\S+) \(\d+ lines\)$", prompt, re.MULTILINE):
                 n = _first_code_line(cwd, path)
                 cit = {"path": path, "line_start": n, "line_end": n, "quote": _line(cwd, path, n)}
                 facts.append({"claim": f"{path} starts here", "citations": [cit]})
@@ -118,7 +126,7 @@ class FakeAgents:
             facts.append({"claim": "an invented claim", "citations": [
                 {"path": "engine/bookings/nowhere.py", "line_start": 1, "line_end": 1, "quote": "nothing"}]})
         else:
-            for path, line in re.findall(r"^\[(\S+?):(\d+)\] ", prompt, re.M):
+            for path, line in re.findall(r"^\[(\S+?):(\d+)\] ", prompt, re.MULTILINE):
                 n = int(line)
                 facts.append({"claim": f"{path} uses bookings",
                               "citations": [{"path": path, "line_start": n, "line_end": n,
@@ -126,8 +134,8 @@ class FakeAgents:
         return ExploreOutput.model_validate({"facts": facts, "files": files, "terms": terms, "gotchas": gotchas})
 
     def docs(self, prompt: str, cwd: str) -> DocsOutput:
-        pages = re.findall(r"^- (https://\S+) -> file `(\S+)`", prompt, re.M)
-        paths = re.search(r"The code calls these API paths: (.*)\.$", prompt, re.M).group(1).split(", ")
+        pages = re.findall(r"^- (https://\S+) -> file `(\S+)`", prompt, re.MULTILINE)
+        paths = re.search(r"The code calls these API paths: (.*)\.$", prompt, re.MULTILINE).group(1).split(", ")
         claims, mappings = [], []
         for url, name in pages:
             text = (Path(cwd) / name).read_text(encoding="utf-8").split("\n")
@@ -142,9 +150,9 @@ class FakeAgents:
 
     def trace(self, prompt: str, cwd: str) -> dict:
         """A `TraceAnswer`: hop 1 at the entry, then the hops `trace_plan` gives for its name."""
-        name = re.search(r"^- name: (.+)$", prompt, re.M).group(1).strip()
-        decl_path, decl_line = re.search(r"^- declared at: (\S+):(\d+)$", prompt, re.M).groups()
-        handler = re.search(r"^- handler: (\S+) at (\S+):(\d+)$", prompt, re.M)
+        name = re.search(r"^- name: (.+)$", prompt, re.MULTILINE).group(1).strip()
+        decl_path, decl_line = re.search(r"^- declared at: (\S+):(\d+)$", prompt, re.MULTILINE).groups()
+        handler = re.search(r"^- handler: (\S+) at (\S+):(\d+)$", prompt, re.MULTILINE)
         if handler:
             path, line = handler.group(2), int(handler.group(3))
             start = int(decl_line) if self.span_declaration and decl_path == path else line
@@ -170,7 +178,7 @@ class FakeAgents:
         return {"entries": []}
 
     def write(self, prompt: str) -> SectionOutput:
-        ids = re.findall(r"^- \[([a-z0-9]+)\]", prompt, re.M)
+        ids = re.findall(r"^- \[([a-z0-9]+)\]", prompt, re.MULTILINE)
         paragraphs = [{"text": f"This part is explained by [[{ids[0]}]] and `Reservation`." if ids
                        else "Nothing passed the checks here."}]
         if self.invent_path:
@@ -180,7 +188,7 @@ class FakeAgents:
 
     def explain(self, schema, prompt: str) -> dict:
         """An answer for one of the explainer's structured sections, citing the first ids of its material."""
-        ids = re.findall(r"^- \[([a-z0-9]+)\]", prompt, re.M) or ["c1"]
+        ids = re.findall(r"^- \[([a-z0-9]+)\]", prompt, re.MULTILINE) or ["c1"]
         a, b, c = (ids + ids + ids)[:3]
         if schema is SummaryOutput:
             return {"tagline": f"Bookings takes reservations from Acme. [[{a}]]",

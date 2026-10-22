@@ -379,7 +379,7 @@ def main(argv: list[str] | None = None) -> int:
                 except orchestrator.ReviewError as e:
                     skipped.append(f"{target_dir.name}: {e}")
                     continue
-                except Exception as e:  # noqa: BLE001 — one failed review must not lose the report
+                except Exception as e:  # one failed review must not lose the report
                     log.error("assess-only failed for %s", target_dir, exc_info=True)
                     first = (str(e).splitlines() or [""])[0][:200]
                     skipped.append(f"{target_dir.name}: failed ({type(e).__name__}: {first})")

@@ -20,11 +20,10 @@ Three defects this pins, all from the 2026-08-08 incident:
 import asyncio
 import io
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
-
 from conftest import import_script
 from lib import checkpoint as cp
 
@@ -49,7 +48,7 @@ def data_env(tmp_path, monkeypatch):
 
 def _write_transcript(path, *, tokens=110_000, text="working on the widget"):
     """A transcript with one user turn, one tool call and a usage record."""
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     records = [
         {"type": "user", "timestamp": now, "cwd": "/work/proj",
          "message": {"role": "user", "content": [{"type": "text", "text": text}]}},
@@ -427,7 +426,7 @@ class TestPointer:
             "cwd": "/work/DolceBot",
             "tokens": 210_000,
             "checkpoint_path": str(cp.checkpoint_file(data_env, "old")),
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
         }))
         monkeypatch.setenv("HOSTNAME", "claude-work-04221854")
 

@@ -8,7 +8,6 @@ import shutil
 import subprocess
 
 import pytest
-
 from lib.project_identity import (
     WORKSPACE_PROJECT,
     resolve_project,

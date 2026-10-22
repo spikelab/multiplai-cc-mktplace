@@ -6,9 +6,8 @@ import json
 
 import pytest
 from code_facts import UNTRUSTED_RULES
-from pydantic import ValidationError
-
 from conftest import Killed, make_repo, read_state, run
+from pydantic import ValidationError
 from spec_extract_pipeline import group, sdk, write
 from spec_extract_pipeline.scope import Symbol
 

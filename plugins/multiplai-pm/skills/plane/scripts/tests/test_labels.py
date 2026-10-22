@@ -16,9 +16,8 @@ import io
 import json
 from contextlib import redirect_stdout
 
-import pytest
-
 import plane
+import pytest
 from conftest import BAD, CFG, OK, Args, guard
 
 L1 = "aaaa1111-2222-3333-4444-555566667777"

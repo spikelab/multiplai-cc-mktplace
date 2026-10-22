@@ -18,7 +18,7 @@ HERE = Path(__file__).resolve().parent
 SCRIPTS = HERE.parent / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from render_report import render, strength_class  # type: ignore[import-not-found]  # noqa: E402
+from render_report import render, strength_class  # type: ignore[import-not-found]
 
 
 @pytest.fixture

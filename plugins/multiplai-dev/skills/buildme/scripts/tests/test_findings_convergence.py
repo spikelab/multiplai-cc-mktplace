@@ -20,7 +20,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-
 from build_pipeline.config import BuildConfig
 from build_pipeline.findings import code, history, loop, triage
 from build_pipeline.findings.models import PRComment, Triage, TriageRecord, Verdict
@@ -28,7 +27,16 @@ from build_pipeline.models import AgentResult, BlockInfo, BlockStatus
 from build_pipeline.prompts.implementation import REVIEW_FIX_LOCATIONS
 from build_pipeline.state import BuildState, FindingsRound, FindingsState, TDDState
 from build_pipeline.tdd_engine import parse_blocks
-from tests.test_findings_round import FIX, FakeTriage, _fix_record, _install_pr, _make_built, _run, _Stubs
+
+from tests.test_findings_round import (
+    FIX,
+    FakeTriage,
+    _fix_record,
+    _install_pr,
+    _make_built,
+    _run,
+    _Stubs,
+)
 from tests.test_findings_self_check import _log, block_stubs, calls
 
 F0, F1, G1, F2 = "a0a0a0a0a0", "b1b1b1b1b1", "c2c2c2c2c2", "d3d3d3d3d3"

@@ -9,7 +9,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from build_pipeline.dependencies import (
     NewDependency,
     declared_dependencies,

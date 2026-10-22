@@ -12,7 +12,6 @@ because a wrong citation looks wrong and a wrong repair looks right.
 """
 
 import pytest
-
 from lib.citation_repair import render_findings, repair_citations
 from lib.learnings_ledger import parse_blocks
 

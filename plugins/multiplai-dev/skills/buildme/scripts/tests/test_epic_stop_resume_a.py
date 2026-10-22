@@ -10,7 +10,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from build_pipeline.epic import lock as epic_lock
 
 from .epic_row_helpers import (

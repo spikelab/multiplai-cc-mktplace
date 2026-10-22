@@ -287,9 +287,10 @@ def _main(args: argparse.Namespace) -> int:
     if getattr(args, "trust_repo", False):
         os.environ["BUILDME_TRUST_REPO"] = "1"
 
+    from multiplai_core.log_utils import setup_logging
+
     from .config import BuildConfig
     from .env import load_env
-    from multiplai_core.log_utils import setup_logging
 
     load_env()
     session_id = getattr(args, "session_id", "") or ""

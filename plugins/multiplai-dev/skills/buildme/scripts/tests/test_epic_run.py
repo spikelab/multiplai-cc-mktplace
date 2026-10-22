@@ -18,23 +18,22 @@ import time
 from pathlib import Path
 
 import pytest
-from tests.planning_fakes import _prepare_and_publish
-
 from build_pipeline import git_ops, intake, orchestrator
 from build_pipeline.change_manager import ChangeManager
 from build_pipeline.config import BuildConfig, EpicSettings
 from build_pipeline.epic import coordinator, records, store
 from build_pipeline.epic import lock as epic_lock
-from .epic_row_helpers import EpicSplitAnswer
 from build_pipeline.git_ops import GitResult
 from build_pipeline.progress import ProgressWriter
 from build_pipeline.state import BuildState
 
+from tests.planning_fakes import _prepare_and_publish
+
 from .epic_row_helpers import (
     THREE,
     CallLog,
+    EpicSplitAnswer,
     Fakes,
-    FakeClock,
     alive,
     approve,
     child,

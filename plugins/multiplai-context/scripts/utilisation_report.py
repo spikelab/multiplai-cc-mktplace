@@ -35,8 +35,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from multiplai_core.paths import get_paths
-
 from lib.utilisation import (
     DISAGREEMENT_MARGIN,
     MIN_OBSERVATIONS,
@@ -46,6 +44,7 @@ from lib.utilisation import (
     render_table,
     utilisation_path,
 )
+from multiplai_core.paths import get_paths
 
 
 def _load_catalog(catalogs_dir: Path) -> dict:

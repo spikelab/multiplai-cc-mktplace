@@ -23,7 +23,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .models import BlockInfo, PriorAssessment, ReviewFinding, ReviewResult, class_line
@@ -135,7 +135,7 @@ def record_round(
     taken = round_numbers(change_dir, block.number)
     k = (taken[-1] if taken else 0) + 1
     record = {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "kind": kind,
         "block": {"number": block.number, "name": block.name},
         "round": k,

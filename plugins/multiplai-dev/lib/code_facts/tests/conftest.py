@@ -52,8 +52,8 @@ def resolve(repo):
 
 # --- paths.v1 fixtures ----------------------------------------------------------------
 
-import copy  # noqa: E402
-import importlib  # noqa: E402
+import copy
+import importlib
 
 
 def paths_name(name: str):

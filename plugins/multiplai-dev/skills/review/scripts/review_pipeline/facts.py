@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
@@ -194,7 +194,7 @@ def schema_text() -> str:
 def write_facts_file(target: TargetInfo, facts: ExplainedFacts, target_dir: Path) -> Path:
     data = FactsFile(
         schema_version=1,
-        generated_at=datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+        generated_at=datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
         base_sha=target.base_sha, head_sha=target.head_sha, kind="tree" if target.is_tree else "change",
         **facts.model_dump(),
     )

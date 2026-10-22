@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from research_pipeline.config import PRESETS, ResearchConfig
 from research_pipeline.models import ClaimVerdict, Confidence, Finding, ReassessResult
 from research_pipeline.nodes import verify as verify_node

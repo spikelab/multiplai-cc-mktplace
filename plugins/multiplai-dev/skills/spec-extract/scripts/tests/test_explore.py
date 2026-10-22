@@ -8,7 +8,6 @@ from datetime import timedelta
 
 import pytest
 from code_facts import UNTRUSTED_RULES
-
 from conftest import FIXED, git, make_repo, make_units_repo, read_state, run
 from spec_extract_pipeline import explore
 from spec_extract_pipeline.scope import TargetScope

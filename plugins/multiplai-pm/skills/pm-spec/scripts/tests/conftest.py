@@ -13,7 +13,6 @@ from types import SimpleNamespace
 
 import pytest
 import yaml
-
 from pm_spec_pipeline import __main__ as cli
 from pm_spec_pipeline import sdk
 

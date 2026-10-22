@@ -25,8 +25,8 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 from multiplai_core.untrusted import defang, fence
 

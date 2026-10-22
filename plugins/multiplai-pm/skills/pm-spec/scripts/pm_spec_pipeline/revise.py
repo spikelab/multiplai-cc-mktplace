@@ -36,7 +36,12 @@ import os
 import re
 from pathlib import Path
 
-from multiplai_core.specs import clear_spec_issues, mark_draft, parse_requirements, spec_revision
+from multiplai_core.specs import (
+    clear_spec_issues,
+    mark_draft,
+    parse_requirements,
+    spec_revision,
+)
 
 from . import consistency, handoff
 from . import findings as F
@@ -52,7 +57,7 @@ ISSUES_FILE = "spec-issues.md"
 RESPEC_FILE = "respec.md"
 BLOCK_REASON = "The requirements issues are not all resolved after their one rewrite"
 
-_H2_RE = re.compile(r"^##\s+(.+?)\s*$", re.M)
+_H2_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
 _CAP_PATH_RE = re.compile(r"requirements/([a-z0-9]+(?:-[a-z0-9]+)*)\.md")
 
 
@@ -78,7 +83,7 @@ def _sections(text: str) -> list[tuple[str, str]]:
 def parse_spec_issues(text: str) -> list[str]:
     sections = _sections(text)
     if not sections:
-        body = re.sub(r"^#\s+.*$", "", text, count=1, flags=re.M).strip()
+        body = re.sub(r"^#\s+.*$", "", text, count=1, flags=re.MULTILINE).strip()
         return [body] if body else []
     return [f"{title}\n{body}".strip() for title, body in sections if body or title]
 
@@ -86,10 +91,10 @@ def parse_spec_issues(text: str) -> list[str]:
 def parse_respec(text: str) -> list[str]:
     issues = []
     for title, body in _sections(text):
-        m = re.match(r"(ADDED|MODIFIED|REMOVED)\s+Requirements", title, re.I)
+        m = re.match(r"(ADDED|MODIFIED|REMOVED)\s+Requirements", title, re.IGNORECASE)
         if not m:
             continue
-        blocks = re.split(r"(?=^###\s+Requirement:)", body, flags=re.M)
+        blocks = re.split(r"(?=^###\s+Requirement:)", body, flags=re.MULTILINE)
         for block in blocks:
             if block.strip().startswith("### Requirement:"):
                 issues.append(f"{m.group(1).upper()} requirement (proposed by the build):\n{block.strip()}")

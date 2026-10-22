@@ -33,8 +33,8 @@ sys.path.insert(0, str(_SCRIPTS))
 sys.path.insert(0, str(Path(__file__).resolve().parent / "fixtures"))
 
 sync_api = pytest.importorskip("playwright.sync_api")
-import make_job  # noqa: E402
-from stages import review_server as rs  # noqa: E402
+import make_job
+from stages import review_server as rs
 
 PAGE = """<!doctype html><html><head><meta charset="utf-8"><style>
 html,body{margin:0;width:640px;height:200px;overflow:hidden;background:#00FF00;font-family:sans-serif}

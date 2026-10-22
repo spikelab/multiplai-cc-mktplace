@@ -1,13 +1,12 @@
 """Tests for review_steps — evidence-based code review (diff + standards + model split)."""
 
-import pytest
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from build_pipeline.config import BuildConfig
 from build_pipeline.llm_steps.review_steps import merge_panel_results, run_code_review
 from build_pipeline.models import ReviewFinding, ReviewResult, ReviewScore
 from build_pipeline.prompts.review import CODE_REVIEW_PROMPT
-
 
 REVIEW_OK = ReviewResult(
     scores=[ReviewScore(dimension="Quality", weight=2, score=4, evidence="fine")]
@@ -366,7 +365,10 @@ class TestReviewersAreReadOnlySubagents:
         """The design and tasks audits get tools too, and keep their labels."""
         from unittest.mock import MagicMock
 
-        from build_pipeline.llm_steps.spec_steps import run_design_audit, run_tasks_audit
+        from build_pipeline.llm_steps.spec_steps import (
+            run_design_audit,
+            run_tasks_audit,
+        )
         from build_pipeline.models import AgentResult
 
         change_dir = tmp_path / "changes" / "feat"
@@ -390,7 +392,7 @@ class TestReviewersAreReadOnlySubagents:
 
 # --- PR B: prior assessments and defect locations across a panel ------------
 
-from build_pipeline.models import PriorAssessment  # noqa: E402
+from build_pipeline.models import PriorAssessment
 
 
 def _assessed(*pairs) -> ReviewResult:

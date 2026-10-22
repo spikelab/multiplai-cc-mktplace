@@ -14,8 +14,8 @@ with `fetch.REPLY_MARKER`, so the next fetch skips it.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from multiplai_core.untrusted import defang
 

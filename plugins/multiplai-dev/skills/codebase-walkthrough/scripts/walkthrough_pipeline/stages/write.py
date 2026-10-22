@@ -28,10 +28,30 @@ from dataclasses import dataclass
 from multiplai_core.untrusted import fence, markdown_notice
 
 from .. import sdk
-from ..gates import (Corpus, cite_id, config_gate, explainer_text_gate, flow_gate, glossary_gate, output_gate,
-                     usecase_gate, write_gate)
-from ..models import (ConfigOutput, Fact, FlowOutput, OutputsOutput, PathsResult, Section, SectionOutput,
-                      SummaryOutput, UseCasesOutput, WalkState, hop_id)
+from ..gates import (
+    Corpus,
+    cite_id,
+    config_gate,
+    explainer_text_gate,
+    flow_gate,
+    glossary_gate,
+    output_gate,
+    usecase_gate,
+    write_gate,
+)
+from ..models import (
+    ConfigOutput,
+    Fact,
+    FlowOutput,
+    OutputsOutput,
+    PathsResult,
+    Section,
+    SectionOutput,
+    SummaryOutput,
+    UseCasesOutput,
+    WalkState,
+    hop_id,
+)
 from ..prompts import EXPLAINER_RULES, WRITE_RULES, write_section, write_structured
 from . import RunContext, bounded
 
@@ -143,8 +163,8 @@ def write_specs(state: WalkState) -> list[Spec]:
 
 DOC_NAMES = ("SKILL.md", "README.md")
 CLI_QUOTE = re.compile(r"add_argument|add_parser|add_subparsers|@click\.|@app\.command|typer\.|argparse|sys\.argv")
-WRITES = re.compile(r"\b(writ|sav|creat|checkpoint|state|logs?\b|output|emit|record|append|commit|report)", re.I)
-CONFIG = re.compile(r"\b(config|setting|flag|env\b|environment|option|default|yaml|toml)|--[a-z]", re.I)
+WRITES = re.compile(r"\b(writ|sav|creat|checkpoint|state|logs?\b|output|emit|record|append|commit|report)", re.IGNORECASE)
+CONFIG = re.compile(r"\b(config|setting|flag|env\b|environment|option|default|yaml|toml)|--[a-z]", re.IGNORECASE)
 
 
 def _lines(facts: list[Fact]) -> list[str]:

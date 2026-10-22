@@ -17,7 +17,14 @@ from pathlib import Path
 from typing import NamedTuple
 
 from .models import GateResult, ImplementationNote, ReviewGatePolicy, ReviewResult
-from .narrow_tests import PYTEST, _pytest_config, _UnreadableConfig, _words, _runner_of_tokens, runner_of
+from .narrow_tests import (
+    PYTEST,
+    _pytest_config,
+    _runner_of_tokens,
+    _UnreadableConfig,
+    _words,
+    runner_of,
+)
 
 log = logging.getLogger(__name__)
 
@@ -299,8 +306,8 @@ class _RedFacts(NamedTuple):
     tail: str                    # the output's last 1000 characters
 
 
-_FAILED_LINE_RE = re.compile(r"^FAILED\s+(.+?)::", re.M)
-_FAILED_ID_RE = re.compile(r"^FAILED\s+(.+?::.+?)(?:\s+-\s|\s*$)", re.M)
+_FAILED_LINE_RE = re.compile(r"^FAILED\s+(.+?)::", re.MULTILINE)
+_FAILED_ID_RE = re.compile(r"^FAILED\s+(.+?::.+?)(?:\s+-\s|\s*$)", re.MULTILINE)
 
 
 def _red_facts(test_output: str, exit_code: int | None, runner: str | None,
@@ -320,8 +327,8 @@ def _red_facts(test_output: str, exit_code: int | None, runner: str | None,
         except ValueError:
             pass
     pytest_output = direct_pytest or bool(re.search(
-        r"^FAILED\s+.+?::|ERROR collecting|ERROR at (?:setup|teardown)|errors? during collection", test_output, re.M))
-    jest_output = runner == "jest" or bool(re.search(r"^Test Suites:|Test suite failed to run", test_output, re.M))
+        r"^FAILED\s+.+?::|ERROR collecting|ERROR at (?:setup|teardown)|errors? during collection", test_output, re.MULTILINE))
+    jest_output = runner == "jest" or bool(re.search(r"^Test Suites:|Test suite failed to run", test_output, re.MULTILINE))
     kind = ("direct_pytest" if direct_pytest else "pytest_output" if pytest_output
             else "jest" if jest_output else "other")
     failed_paths = set(_FAILED_LINE_RE.findall(test_output))
@@ -347,8 +354,8 @@ def _red_facts(test_output: str, exit_code: int | None, runner: str | None,
         failed_ids=tuple(_FAILED_ID_RE.findall(test_output)),
         attribution=attribution,
         right_reason=bool(_RED_RIGHT_REASON.search(test_output)),
-        jest_failed=bool(re.search(r"^FAIL\s+\S", test_output, re.M)
-                         and re.search(r"^Tests:\s+[^\n]*\b[1-9]\d* failed\b", test_output, re.M)),
+        jest_failed=bool(re.search(r"^FAIL\s+\S", test_output, re.MULTILINE)
+                         and re.search(r"^Tests:\s+[^\n]*\b[1-9]\d* failed\b", test_output, re.MULTILINE)),
         tail=test_output[-1000:],
     )
 
@@ -1311,6 +1318,7 @@ def verification_inputs(test_command: str, project_dir: Path, *, parallel: str =
     """
     import hashlib
     import json
+
     from . import git_ops
 
     head = git_ops.rev_parse_head(project_dir)
@@ -1362,6 +1370,7 @@ def _checkout_input(path: Path, name: str, index_entry: str) -> str:
     raises: its content cannot be told apart from a checkout's."""
     import hashlib
     import json
+
     from . import git_ops
 
     def read(*args: str) -> str:

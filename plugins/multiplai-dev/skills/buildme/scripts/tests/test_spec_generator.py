@@ -1,11 +1,12 @@
 """Tests for spec_generator — artifact pipeline orchestration."""
 
-import pytest
-import json
 from pathlib import Path
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+from build_pipeline.change_manager import ARTIFACT_DAG, INPUTS, ChangeManager
 from build_pipeline.change_manager import expected_capabilities as _extract_capabilities
+from build_pipeline.models import ArtifactStatus, BuildPhase
 from build_pipeline.spec_generator import (
     _generate_all_artifacts,
     _generate_single_artifact,
@@ -15,8 +16,6 @@ from build_pipeline.spec_generator import (
     run_spec_generator,
     scan_placeholders,
 )
-from build_pipeline.change_manager import ChangeManager, ARTIFACT_DAG, INPUTS
-from build_pipeline.models import ArtifactStatus, BuildPhase
 from build_pipeline.state import BuildState, SpecGenState
 
 
@@ -1223,7 +1222,8 @@ class TestGenerateUnknowns:
     @pytest.mark.asyncio
     async def test_no_new_dependencies_records_the_absence(self, tmp_path):
         from build_pipeline.spec_generator import (
-            NO_NEW_DEPENDENCIES_LINE, _generate_unknowns,
+            NO_NEW_DEPENDENCIES_LINE,
+            _generate_unknowns,
         )
 
         cm, change_dir, config, state = self._setup(
@@ -1241,7 +1241,8 @@ class TestGenerateUnknowns:
     @pytest.mark.asyncio
     async def test_skip_explainers_still_writes_the_artifact(self, tmp_path):
         from build_pipeline.spec_generator import (
-            EXPLAINERS_SKIPPED_LINE, _generate_unknowns,
+            EXPLAINERS_SKIPPED_LINE,
+            _generate_unknowns,
         )
 
         cm, change_dir, config, state = self._setup(
@@ -1541,7 +1542,7 @@ class TestCodebaseAnalysisReachesTheDesign:
 # test, so their tests passed before any implementation and the RED gate failed
 # the whole build. The fixture is that tasks.md, verbatim.
 
-from build_pipeline.spec_generator import scan_no_behaviour_blocks  # noqa: E402
+from build_pipeline.spec_generator import scan_no_behaviour_blocks
 
 _E2E_TASKS = Path(__file__).parent / "fixtures" / "tasks-no-behaviour-blocks.md"
 
@@ -2037,9 +2038,9 @@ class TestTasksShapeAuditRejectsNoBehaviourBlocks:
 
 
 def test_plan_rewrite_invalidates_review_and_rubric(tmp_path):
+    from build_pipeline.config import BuildConfig
     from build_pipeline.spec_generator import reconcile_plan
     from build_pipeline.state import BuildState, SpecGenState, StepOutcome
-    from build_pipeline.config import BuildConfig
     config = BuildConfig(project_dir=tmp_path, change_name="revision")
     config.specs_dir = tmp_path / "specs"
     config.change_dir.mkdir(parents=True)

@@ -20,20 +20,19 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from lib.routing_validation import (  # noqa: E402
+from lib.routing_validation import (
     NEAR_DUPLICATE_QUOTES,
     _owners,
     append_routing_warnings,
     build_section_registry,
-    index_sections,
     find_batch_near_duplicate_groups,
     find_duplicate_content,
     find_near_duplicate_line,
+    index_sections,
     parse_proposal_entries,
     render_warnings_section,
     validate_proposal,
 )
-
 
 # A paragraph long enough to form many 8-grams, reused as the planted duplicate.
 _DUP_TEXT = (

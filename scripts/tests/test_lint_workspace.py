@@ -17,7 +17,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import lint_workspace  # noqa: E402
+import lint_workspace
 
 
 @pytest.fixture

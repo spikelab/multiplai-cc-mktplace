@@ -5,8 +5,15 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from deps_fixtures import commit_files, dependency, git_lock_entry, init, lock_entry, push, reviewed_repo
-
+from deps_fixtures import (
+    commit_files,
+    dependency,
+    git_lock_entry,
+    init,
+    lock_entry,
+    push,
+    reviewed_repo,
+)
 from review_pipeline import deps, sdk
 from review_pipeline.__main__ import main
 from review_pipeline.config import ReviewConfig, load_config

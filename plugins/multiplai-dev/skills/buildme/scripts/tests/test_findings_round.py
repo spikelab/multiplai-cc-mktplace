@@ -9,13 +9,11 @@ holding a finished, archived build.
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
 from build_pipeline import git_ops
 from build_pipeline.config import BuildConfig
 from build_pipeline.findings import code, spec
@@ -26,7 +24,9 @@ from build_pipeline.models import (
     ReviewResult,
     ReviewScore,
 )
-from build_pipeline.models import TestQualityAudit as QualityAudit  # Test* name breaks collection
+from build_pipeline.models import (
+    TestQualityAudit as QualityAudit,  # Test* name breaks collection
+)
 
 ARCHIVED = "archive/2026-10-11-calc"
 
@@ -227,10 +227,10 @@ class TestCodeStep:
 
 # --- items 7 and 8: publish, reply, and the round loop -----------------------
 
-from build_pipeline.findings import loop, publish  # noqa: E402
-from build_pipeline.findings.fetch import REPLY_MARKER  # noqa: E402
-from build_pipeline.state import BuildState  # noqa: E402
-from multiplai_core.specs import read_change_meta  # noqa: E402
+from build_pipeline.findings import loop
+from build_pipeline.findings.fetch import REPLY_MARKER
+from build_pipeline.state import BuildState
+from multiplai_core.specs import read_change_meta
 
 REPO = "acme/widgets"
 PR = 7
@@ -299,7 +299,7 @@ class FakePR:
         return [e for e in self.events if e[0] == "reply"]
 
     def gh(self, argv, cwd=None, timeout=None):
-        ok = lambda out="": git_ops.GitResult(argv, 0, out, "")  # noqa: E731
+        ok = lambda out="": git_ops.GitResult(argv, 0, out, "")
         if argv[:3] == ["gh", "api", "graphql"]:
             data = {"data": {"repository": {"pullRequest": {"reviewThreads": {
                 "pageInfo": {"hasNextPage": False, "endCursor": None},
@@ -497,7 +497,7 @@ class SpecStepFault:
             raise exc
         return _REAL_APPEND_ISSUES(change_dir, records)
 
-    def install(self, monkeypatch) -> "SpecStepFault":
+    def install(self, monkeypatch) -> SpecStepFault:
         monkeypatch.setattr(spec, "append_issues", self)
         return self
 
@@ -1595,10 +1595,10 @@ class TestResumedStepRefusesOthersWork:
 # scenario that never stopped (`assert_same_as_unstopped`); a refusal must
 # leave the repo exactly as it was (`repo_state`).
 
-import asyncio  # noqa: E402
-import re  # noqa: E402
+import asyncio
+import re
 
-from tests.row_helpers import assert_same_as_unstopped, repo_state, run_killed_at  # noqa: E402
+from tests.row_helpers import assert_same_as_unstopped, repo_state, run_killed_at
 
 OUTSIDE = "other/notes.txt"
 NONE_REFUSED = Triage(verdict=Verdict.SPEC_CHANGE, reason="unspecified")
@@ -1774,7 +1774,7 @@ class _Rows:
         return code_, repo
 
     @staticmethod
-    def stop(s: "_Scenario", how: str, git_command: str, stubs=None) -> None:
+    def stop(s: _Scenario, how: str, git_command: str, stubs=None) -> None:
         """Run the round so it stops at the first *git_command*: `kill`
         (SIGKILL in a child) or `ctrl_c` (KeyboardInterrupt in this process)."""
         if how == "kill":
@@ -1786,7 +1786,7 @@ class _Rows:
         assert fired, f"the round never reached git {git_command}"
 
     @staticmethod
-    def _assert_refused(s: "_Scenario", step: str, needle: str, stubs=None) -> None:
+    def _assert_refused(s: _Scenario, step: str, needle: str, stubs=None) -> None:
         """Resume; the step refuses and the repo is exactly as it was."""
         before = repo_state(s.repo)
         assert asyncio.run(s.run(stubs)) == 1, s.lines
@@ -1903,13 +1903,13 @@ STEP_REF = {"triage": "refs/buildme/wip/calc/r1-triage", "spec": "refs/buildme/w
             "code": "refs/buildme/wip/calc/r1-code-block1-stopped"}
 
 
-def _scenario_for(repo, change, config, monkeypatch, step) -> "_Scenario":
+def _scenario_for(repo, change, config, monkeypatch, step) -> _Scenario:
     """Triage and spec run the spec-change round; code runs the code-fix one."""
     return _Scenario(repo, change, config, _install_pr(monkeypatch),
                      "code" if step == "code" else "spec")
 
 
-async def _stop_step(s: "_Scenario", step: str) -> None:
+async def _stop_step(s: _Scenario, step: str) -> None:
     """Stop *step* with its edit to calc.py left in the tree and a stop
     record written: triage and spec by Ctrl-C, code by an agent timeout."""
     if step == "code":
@@ -1923,7 +1923,7 @@ async def _stop_step(s: "_Scenario", step: str) -> None:
     assert STEP_EDIT[step] in (s.repo / "calc.py").read_text()
 
 
-async def _assert_refused(s: "_Scenario", step: str, needle: str) -> None:
+async def _assert_refused(s: _Scenario, step: str, needle: str) -> None:
     before = repo_state(s.repo)
     assert await s.run() == 1, s.lines
     assert s.lines[-1].startswith(f"FINDINGS:FAILED:{step}:") and needle in s.lines[-1], s.lines
@@ -2161,8 +2161,8 @@ def test_no_code_path_resolves_a_review_thread():
 
 # --- item 9: the CLI ----------------------------------------------------------
 
-from build_pipeline.__main__ import build_parser, main  # noqa: E402
-from build_pipeline.findings import cli  # noqa: E402
+from build_pipeline.__main__ import build_parser, main
+from build_pipeline.findings import cli
 
 
 class TestCli:

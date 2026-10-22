@@ -14,14 +14,30 @@ from pathlib import Path
 
 import jsonschema
 import pytest
-from code_facts.paths import (E2EListing, FallbackStatus, Handler, Location, PathDrop, PathEntry, PathHop,
-                              PathsResult, TracedPath)
+from code_facts.paths import (
+    E2EListing,
+    FallbackStatus,
+    Handler,
+    Location,
+    PathDrop,
+    PathEntry,
+    PathHop,
+    PathsResult,
+    TracedPath,
+)
 from conftest import SCHEMA
-from test_reported_finders import (make_repo, mapped, model, path_item, resume, review, saved,  # noqa: F401
-                                   traced_path)
-
 from review_pipeline.__main__ import main
 from review_pipeline.models import Citation, Finding
+from test_reported_finders import (  # noqa: F401
+    make_repo,
+    mapped,
+    model,
+    path_item,
+    resume,
+    review,
+    saved,
+    traced_path,
+)
 
 VIEWER_EXAMPLE = SCHEMA.parents[1] / "scripts" / "tests" / "fixtures" / "findings.example.json"
 

@@ -28,6 +28,6 @@ def test_no_module_imports_buildme_or_another_plugin():
 
 
 def test_no_ticket_system_is_named():
-    pattern = re.compile(r"plane|github|jira|linear", re.I)
+    pattern = re.compile(r"plane|github|jira|linear", re.IGNORECASE)
     for path in [*PACKAGE.rglob("*.py"), SKILL]:
         assert not pattern.search(path.read_text()), path

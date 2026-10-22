@@ -2,20 +2,19 @@
 
 import argparse
 import os
-import pytest
 from pathlib import Path
 from unittest.mock import patch
 
-from multiplai_core.env import CURRENT_MODEL
-
+import pytest
 from build_pipeline.config import (
     KNOWN_EFFORTS,
+    BuildConfig,
+    GateToggles,
     conf_effort,
     conf_model,
     detect_tier,
-    BuildConfig,
-    GateToggles,
 )
+from multiplai_core.env import CURRENT_MODEL
 
 
 def _tier_with(model: str | None, **env):
@@ -568,7 +567,10 @@ class TestReferenceDocs:
         """The reduction must never hand the generator half a rule, and must
         always say which sections it dropped — the doc is 60k chars and the
         generator has no tools to go read the rest."""
-        from build_pipeline.config import REFERENCE_DOC_CHAR_LIMIT, summarize_reference_doc
+        from build_pipeline.config import (
+            REFERENCE_DOC_CHAR_LIMIT,
+            summarize_reference_doc,
+        )
 
         body = "\n\n".join(
             f"## Section {i}\n" + f"rule text for section {i}. " * 400 for i in range(1, 8)
@@ -1014,6 +1016,7 @@ class TestGitToggles:
 
     def test_cli_flags_beat_config_yaml(self, tmp_path):
         import argparse
+
         from build_pipeline.config import BuildConfig
 
         config = BuildConfig(project_dir=tmp_path)
@@ -1026,6 +1029,7 @@ class TestGitToggles:
 
     def test_pr_ready_flag(self, tmp_path):
         import argparse
+
         from build_pipeline.config import BuildConfig
 
         config = BuildConfig(project_dir=tmp_path)
@@ -1036,6 +1040,7 @@ class TestGitToggles:
 
     def test_absent_flags_leave_defaults(self, tmp_path):
         import argparse
+
         from build_pipeline.config import BuildConfig
 
         config = BuildConfig(project_dir=tmp_path)

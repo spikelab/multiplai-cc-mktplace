@@ -10,7 +10,6 @@ ones (dream's `**Source:**` provenance cites them).
 import json
 
 import pytest
-
 from lib.learnings_ledger import (
     LEDGER_VERSION,
     Block,

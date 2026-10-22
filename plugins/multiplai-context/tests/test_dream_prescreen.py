@@ -10,13 +10,11 @@ import os
 from pathlib import Path
 
 import pytest
-
+from conftest import import_script
 from lib import memory_corpus
 from lib.conflict_edits import overlap
 from lib.dream_processed import latest_pending_proposal
 from lib.routing_validation import validate_proposal
-
-from conftest import import_script
 
 prescreen = import_script("dream_prescreen", "dream_prescreen.py")
 

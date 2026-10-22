@@ -365,11 +365,11 @@ def checks_schema_text() -> str:
 
 def finding_id(file: str, line_start: int, claim: str) -> str:
     """Stable id for a finding: survives re-renders of the same review."""
-    raw = f"{file}\0{line_start}\0{claim}".encode("utf-8")
+    raw = f"{file}\0{line_start}\0{claim}".encode()
     return hashlib.sha1(raw).hexdigest()[:10]
 
 
-def findings_digest(ff: "FindingsFile") -> str:
+def findings_digest(ff: FindingsFile) -> str:
     """Identifies one version of a findings file's content."""
     return hashlib.sha256(ff.model_dump_json().encode("utf-8")).hexdigest()
 

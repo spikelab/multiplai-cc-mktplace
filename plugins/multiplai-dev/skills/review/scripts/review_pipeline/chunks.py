@@ -48,7 +48,7 @@ def _section_path(header: str, lines: list[str]) -> str:
             new = header_path(line[4:].rstrip("\n"))
     for name, prefix in ((new, "b/"), (old, "a/")):
         if name and name != "/dev/null":
-            return name[len(prefix):] if name.startswith(prefix) else name
+            return name.removeprefix(prefix)
     rest = header[len("diff --git "):]
     return rest.rsplit(" b/", 1)[-1] if " b/" in rest else rest
 
@@ -63,8 +63,7 @@ def header_path(name: str) -> str:
     part of the name: a name git leaves unquoted never holds a tab. A space at
     either end belongs to the name.
     """
-    if name.endswith("\t"):
-        name = name[:-1]
+    name = name.removesuffix("\t")
     if not (len(name) >= 2 and name[0] == name[-1] == '"'):
         return name
     body, out, i = name[1:-1], bytearray(), 0
@@ -112,7 +111,7 @@ def _sides(header: str, lines: list[str]) -> tuple[str | None, str | None, str]:
     def strip(name: str | None, prefix: str) -> str | None:
         if name is None or name == "/dev/null":
             return None
-        return name[len(prefix):] if name.startswith(prefix) else name
+        return name.removeprefix(prefix)
 
     base, head = strip(old, "a/") or rename_from, strip(new, "b/") or rename_to
     if base is None and head is None:  # a mode change or a binary file: only the `diff --git` line names it
@@ -193,7 +192,7 @@ def head_changed_lines(diff: str) -> dict[str, list[int]]:
             path = None
         elif line.startswith("+++ ") and path is None:
             name = header_path(line[4:].rstrip("\r"))
-            path = "" if name == "/dev/null" else name[2:] if name.startswith("b/") else name
+            path = "" if name == "/dev/null" else name.removeprefix("b/")
         elif (m := _HUNK.match(line)) and path is not None:
             old_left = int(m.group(1)) if m.group(1) is not None else 1
             number = int(m.group(2))

@@ -6,12 +6,12 @@ import asyncio
 import json
 import os
 import signal
-from pathlib import Path
 import statistics
 import subprocess
 import sys
 import tempfile
 import time
+from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 FIXTURES = HERE / "fixtures" / "tasks.json"

@@ -5,9 +5,8 @@ from __future__ import annotations
 import json
 import re
 
-import pytest
-
 import path_fixtures
+import pytest
 from code_facts import PathDrop
 from code_facts.paths import ListingSkip, PathDiagnostic
 from fakes import FakeAgents
@@ -79,7 +78,7 @@ def test_25_commands_with_the_default_cap_trace_21_and_list_4_over_cap(tmp_path,
     assert body.strip().splitlines()[0] == ("21 paths reach this module. 4 entries were left out; "
                                     "see **Left out** under Coverage.")
     coverage = section_texts(md, "Coverage")[0]
-    assert re.search(r"^\| Entries left out \| 4 \|", coverage, re.M)
+    assert re.search(r"^\| Entries left out \| 4 \|", coverage, re.MULTILINE)
     rows = _left_out_rows(coverage)
     assert len(rows) == 4
     for row, drop in zip(rows, result.dropped):
@@ -164,7 +163,7 @@ def test_lead_sentences_count_entries_left_out(tmp_path):
 
 def test_coverage_has_the_entries_left_out_row_and_the_table(tmp_path):
     table = "\n".join(coverage_lines(_state(tmp_path, _with_left_out())))
-    assert re.search(r"^\| Entries left out \| 3 \|", table, re.M)
+    assert re.search(r"^\| Entries left out \| 3 \|", table, re.MULTILINE)
     assert "### Left out" in table and LEFT_OUT_HEAD in table
 
 

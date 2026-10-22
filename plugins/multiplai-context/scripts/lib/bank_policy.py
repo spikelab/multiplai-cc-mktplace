@@ -31,12 +31,12 @@ from __future__ import annotations
 
 import dataclasses
 import re
+from collections.abc import Iterable, Sequence
 from pathlib import Path
-from typing import Iterable, Optional, Sequence
 
 __all__ = [
-    "BankPolicy",
     "DEFAULT_NO_GO",
+    "BankPolicy",
     "check_item",
     "check_text",
     "find_secrets",
@@ -135,7 +135,7 @@ def _bullets(lines: Sequence[str]) -> list[str]:
 def _sections(text: str) -> dict[str, list[str]]:
     """Heading (lowercased) → its lines, for every ATX heading in *text*."""
     out: dict[str, list[str]] = {}
-    current: Optional[str] = None
+    current: str | None = None
     for raw in text.splitlines():
         m = re.match(r"^#{1,6}\s+(.*)$", raw)
         if m:

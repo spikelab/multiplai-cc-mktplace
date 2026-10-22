@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 from conftest import REAL_BRANCH_RULES
-
 from review_pipeline import target
 from review_pipeline.target import TargetError
 

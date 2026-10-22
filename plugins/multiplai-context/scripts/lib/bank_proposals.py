@@ -44,8 +44,8 @@ from __future__ import annotations
 import dataclasses
 import logging
 import re
-from datetime import datetime, timezone
-from typing import Iterable, Optional, Sequence
+from collections.abc import Iterable, Sequence
+from datetime import UTC, datetime
 
 from lib.bank_git import (
     current_branch,
@@ -73,7 +73,7 @@ __all__ = [
 
 
 def _today() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return datetime.now(UTC).strftime("%Y-%m-%d")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -166,7 +166,7 @@ def append_under_section(text: str, section: str, block: str) -> str:
 
 
 def plan_contributions(
-    items: Iterable, banks: Optional[Sequence[MemoryBank]] = None
+    items: Iterable, banks: Sequence[MemoryBank] | None = None
 ) -> list[ContributionPlan]:
     """Group shared-bound *items* by bank, applying each bank's own policy.
 
@@ -317,7 +317,7 @@ def render_contribution_file(plan: ContributionPlan) -> str:
 
 
 def submit(
-    plan: ContributionPlan, *, dry_run: bool = True, branch: Optional[str] = None
+    plan: ContributionPlan, *, dry_run: bool = True, branch: str | None = None
 ) -> dict:
     """Write the files, commit, push and open the pull request.
 

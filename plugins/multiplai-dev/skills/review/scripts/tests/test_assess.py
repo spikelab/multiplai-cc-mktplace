@@ -6,17 +6,31 @@ Every agent call is replaced. All data is made up.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-
-from conftest import KEYWORD_CITATION, KEYWORD_USE_CITATION, SCHEMA, cite, high_finding, medium_finding
+from conftest import (
+    KEYWORD_CITATION,
+    KEYWORD_USE_CITATION,
+    SCHEMA,
+    cite,
+    high_finding,
+    medium_finding,
+)
 from review_pipeline import rounds, sdk
 from review_pipeline.config import ReviewConfig
 from review_pipeline.export import _finding, to_findings_file
-from review_pipeline.models import (AssessItem, AssessOutput, DuplicateSet, Finding, RepeatMatch, RepeatsOutput,
-                                    ReviewState, Verdict)
+from review_pipeline.models import (
+    AssessItem,
+    AssessOutput,
+    DuplicateSet,
+    Finding,
+    RepeatMatch,
+    RepeatsOutput,
+    ReviewState,
+    Verdict,
+)
 from review_pipeline.render import render_review, render_summary
 from review_pipeline.stages import RunContext
 from review_pipeline.stages.assess import gate_assessments, run_assess
@@ -460,7 +474,6 @@ async def test_assess_drops_only_the_set_members_anchored_away_from_the_others(t
 
 def test_findings_json_lists_the_findings_merged_into_each_survivor(target_info):
     import jsonschema
-
     from review_pipeline.models import Merged
 
     a, b, c, d = at("a", line=1), at("b", line=2), at("c", line=3), at("d", file="settings.py", line=9)
@@ -534,7 +547,7 @@ async def test_assess_resume_s2_keeps_merges_made_before_the_link_check(target_i
     resumed = await run_assess(load_state(path), ctx)
     assert calls.calls == []
     assert resumed.model_dump() == state.model_dump()
-    when = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    when = datetime(2026, 1, 1, tzinfo=UTC)
     assert to_findings_file(resumed, generated_at=when) == to_findings_file(state, generated_at=when)
     row, = to_findings_file(resumed)["findings"]
     assert row["id"] == a.id and row["absorbed"] == [{"id": b.id, "claim": "b"}, {"id": c.id, "claim": "c"}]
@@ -1070,7 +1083,7 @@ def test_assess_only_keeps_the_report_when_one_review_goes_over_budget_or_fails(
     dirs = {}
     for name in ("done", "costly", "broken"):
         d = tmp_path / "out" / name
-        decide(d, **{"aaaaaaaaaa": ("accept", "")})
+        decide(d, aaaaaaaaaa=("accept", ""))
         dirs[name] = d
 
     async def assess_only(target_dir, config):
@@ -1100,7 +1113,7 @@ def test_assess_only_stops_at_a_usage_limit_and_keeps_the_report_so_far(tmp_path
     dirs = {}
     for name in ("done", "limited", "later"):
         d = tmp_path / "out" / name
-        decide(d, **{"aaaaaaaaaa": ("accept", "")})
+        decide(d, aaaaaaaaaa=("accept", ""))
         dirs[name] = d
     asked = []
 
@@ -1194,7 +1207,6 @@ async def test_a_failed_assess_call_is_recorded_with_its_error(target_info, ctx,
 
 async def test_checks_json_with_repeats_and_assess_entries_validates(target_info, ctx, fake):
     import jsonschema
-
     from review_pipeline.export import to_checks_file
 
     state, a, b, c = three(target_info)

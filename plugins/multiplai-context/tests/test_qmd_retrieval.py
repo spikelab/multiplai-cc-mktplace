@@ -17,7 +17,6 @@ if str(SCRIPTS_DIR) not in sys.path:
 import qmd_retrieval as qr
 from generators.config import CatalogConfig, load_catalog_config
 
-
 TARGET = qr.QmdTarget(
     workspace="/ws",
     resources_dir="/ws/RESOURCES",

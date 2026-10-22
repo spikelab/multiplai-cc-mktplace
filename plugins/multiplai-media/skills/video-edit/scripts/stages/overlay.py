@@ -48,8 +48,9 @@ import os
 import subprocess
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Protocol
 
 # The estimate printed before a render. Measured for a 1080x1920 alpha stat
 # card on 10 cores: 0.044 s/frame with one page, 0.025 s with four. Pages do

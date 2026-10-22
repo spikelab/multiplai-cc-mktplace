@@ -1,9 +1,9 @@
 from __future__ import annotations
+
 import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Union
 
 _HEX = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
@@ -61,14 +61,14 @@ class Segment:
     src_start: float
     src_end: float
     speed: float = 1.0          # >1 = faster, <1 = slower
-    zoom: Optional[Zoom] = None
+    zoom: Zoom | None = None
     mute: bool = False          # replace audio with silence (auto-on for speed>4)
     # crop centre for fit "crop" (in the frame) or a panel frame (in the panel);
     # a list of FocusKey follows a subject that moves
-    focus: Optional[Union[Focus, list[FocusKey]]] = None
-    frame: Optional[str] = None     # "stack" | a panel name ("A", "B") | "speaker"
-    fit: Optional[str] = None       # "pad" | "blur" | "crop": overrides output.fit for this segment
-    follow: Optional[Follow] = None  # push in on clicks; see stages/follow.py
+    focus: Focus | list[FocusKey] | None = None
+    frame: str | None = None     # "stack" | a panel name ("A", "B") | "speaker"
+    fit: str | None = None       # "pad" | "blur" | "crop": overrides output.fit for this segment
+    follow: Follow | None = None  # push in on clicks; see stages/follow.py
 
     @property
     def src_duration(self) -> float:
@@ -91,16 +91,16 @@ class Logo:
     path: str
     position: str = "br"           # br | bl | tr | tl
     scale: float = 0.06            # fraction of frame width
-    start_at: Optional[float] = None  # default: end of title card
+    start_at: float | None = None  # default: end of title card
 
 
 @dataclass
 class Music:
-    file: Optional[str] = None
-    url: Optional[str] = None
-    synth: Optional[str] = None    # "calm" | "warm" | "bright" (ffmpeg pink-noise bed)
-    prompt: Optional[str] = None   # future: ACE-Step (MPS/CUDA only)
-    duration: Optional[float] = None
+    file: str | None = None
+    url: str | None = None
+    synth: str | None = None    # "calm" | "warm" | "bright" (ffmpeg pink-noise bed)
+    prompt: str | None = None   # future: ACE-Step (MPS/CUDA only)
+    duration: float | None = None
     volume_db: float = -10.0       # bed attenuation under narration (after loudnorm to -16 LUFS)
 
 
@@ -112,7 +112,7 @@ class Output:
     crf: int = 18
     audio_bitrate: str = "192k"
     fit: str = "pad"            # "pad" | "blur" | "crop" — how a segment without a frame fills the output
-    audio_rate: Optional[int] = None    # resample the final audio (reels: 48000)
+    audio_rate: int | None = None    # resample the final audio (reels: 48000)
 
 
 FITS = ("pad", "blur", "crop")
@@ -138,7 +138,7 @@ class Captions:
     max_chars: int = 22
     position_y: float = 0.68    # vertical centre of the caption line, fraction of output height
     highlight: bool = True      # colour the word being spoken
-    size: Optional[int] = None  # font size in output pixels; default scales with output height
+    size: int | None = None  # font size in output pixels; default scales with output height
 
 
 @dataclass
@@ -167,9 +167,9 @@ class Overlay:
     start: float                # output time
     end: float
     mode: str = "keyed"
-    region: Optional[Region] = None
+    region: Region | None = None
     key_color: str = "#00FF00"
-    style: Optional[str] = None  # the style file the page follows (references/styles/)
+    style: str | None = None  # the style file the page follows (references/styles/)
 
     def rect(self, width: int, height: int) -> Region:
         return self.region or Region(0, 0, width, height)
@@ -198,26 +198,26 @@ class Sfx:
 class EDL:
     source: str
     segments: list[Segment]
-    title: Optional[Title] = None
+    title: Title | None = None
     transitions: list[Transition] = field(default_factory=list)
-    logo: Optional[Logo] = None
-    music: Optional[Music] = None
+    logo: Logo | None = None
+    music: Music | None = None
     output: Output = field(default_factory=Output)
-    transcript: Optional[str] = None    # transcript.json; default: the prep cache for `source`
-    layout: Optional[Layout] = None
-    captions: Optional[Captions] = None
-    headline: Optional[Headline] = None
-    brand: Optional[str] = None         # path to a brand.json (stages/brand.py)
+    transcript: str | None = None    # transcript.json; default: the prep cache for `source`
+    layout: Layout | None = None
+    captions: Captions | None = None
+    headline: Headline | None = None
+    brand: str | None = None         # path to a brand.json (stages/brand.py)
     overlays: list[Overlay] = field(default_factory=list)
     sfx: list[Sfx] = field(default_factory=list)
 
     @classmethod
-    def load(cls, path: str | Path) -> "EDL":
+    def load(cls, path: str | Path) -> EDL:
         data = json.loads(Path(path).read_text())
         return cls.from_dict(data)
 
     @classmethod
-    def from_dict(cls, d: dict) -> "EDL":
+    def from_dict(cls, d: dict) -> EDL:
         def mk_segment(s: dict) -> Segment:
             z = s.pop("zoom", None)
             f = s.pop("focus", None)
@@ -283,8 +283,8 @@ class EDL:
             end = start + seg.duration
         return end
 
-    def validate(self, source_size: Optional[tuple[int, int]] = None,
-                 words: Optional[list[dict]] = None) -> list[str]:
+    def validate(self, source_size: tuple[int, int] | None = None,
+                 words: list[dict] | None = None) -> list[str]:
         """Sanity-check the cut plan before rendering.
 
         Raises ValueError on plan-breaking mistakes; returns a list of warning
@@ -334,7 +334,7 @@ class EDL:
         return warnings
 
     def output_duration(self) -> float:
-        from stages.timeline import place_segments   # timeline imports this module
+        from stages.timeline import place_segments  # timeline imports this module
         placed = place_segments(self)
         return placed[-1].out_end if placed else (self.title.duration if self.title else 0.0)
 
@@ -374,7 +374,7 @@ class EDL:
         average: a first version with sounds everywhere is the usual mistake."""
         if not self.sfx:
             return []
-        from stages import sfx as sfx_mod   # sfx imports this module
+        from stages import sfx as sfx_mod  # sfx imports this module
         total = self.output_duration()
         for i, s in enumerate(self.sfx):
             if not 0 <= s.at < total:
@@ -440,8 +440,8 @@ class EDL:
         if times != sorted(times):
             raise ValueError(f"segment {i}: follow target times must go up: {times}.")
 
-    def _validate_framing(self, source_size: Optional[tuple[int, int]],
-                          words: Optional[list[dict]]) -> list[str]:
+    def _validate_framing(self, source_size: tuple[int, int] | None,
+                          words: list[dict] | None) -> list[str]:
         warnings: list[str] = []
         if self.output.fit not in FITS:
             raise ValueError(f"output.fit {self.output.fit!r} is not one of {', '.join(FITS)}.")

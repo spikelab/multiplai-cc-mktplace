@@ -7,7 +7,6 @@ import stat
 from pathlib import Path
 
 import pytest
-
 from research_pipeline.models import (
     Finding,
     PlanResult,

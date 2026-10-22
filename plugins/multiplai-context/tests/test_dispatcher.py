@@ -20,11 +20,9 @@ Covers all scenarios from requirements/catalog-dispatcher.md:
 """
 
 import asyncio
-import json
-import os
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -101,6 +99,7 @@ class TestDispatcherSignature:
         replaces the prior trio of introspection tests (one of which had a
         tautological ``default is None or ... or default is None`` guard)."""
         import inspect
+
         from generators.dispatcher import generate_catalogs
 
         params = inspect.signature(generate_catalogs).parameters
@@ -511,9 +510,9 @@ class TestDryRunMode:
         """
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
 
-        from generators.config import CatalogConfig
         from generators import dispatcher
-        from generators.dispatcher import generate_catalogs, _StubModelClient
+        from generators.config import CatalogConfig
+        from generators.dispatcher import _StubModelClient, generate_catalogs
 
         config = CatalogConfig()
         created = {"real": False}
@@ -993,8 +992,8 @@ class TestAsyncInterface:
 
     def test_generate_catalogs_is_async(self):
         """generate_catalogs must be an async function or coroutine function."""
-        import asyncio
         import inspect
+
         from generators.dispatcher import generate_catalogs
 
         assert inspect.iscoroutinefunction(generate_catalogs), (

@@ -4,9 +4,8 @@ the handoff only, no other model call, no new spec or interview file."""
 
 from __future__ import annotations
 
-from multiplai_core.specs import is_ready
-
 from conftest import CAPS, change_dir, meta, proposal, requirements, run, write
+from multiplai_core.specs import is_ready
 from test_epic_split import PLAIN_SPLIT
 
 

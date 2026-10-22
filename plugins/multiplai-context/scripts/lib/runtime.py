@@ -41,8 +41,8 @@ import logging
 import os
 import signal
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 from multiplai_core.paths import get_paths
 

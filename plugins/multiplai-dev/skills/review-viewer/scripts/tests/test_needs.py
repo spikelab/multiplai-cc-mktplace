@@ -6,9 +6,8 @@ import json
 
 import jsonschema
 import pytest
-from pydantic import ValidationError
-
 from conftest import FIXTURE
+from pydantic import ValidationError
 from review_viewer.models import SCHEMA_PATH, FindingsFile
 
 NEED = {"what": "GitHub's rules on main.", "blocks": "review", "cause": "lookup-failed",

@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import subprocess
-from pathlib import Path
 
 import yaml
-
 from build_pipeline.__main__ import build_parser, main
 from build_pipeline.setup import apply_setup
 

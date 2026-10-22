@@ -13,12 +13,10 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
-from multiplai_core.specs import mark_ready, write_change_meta
-
 from build_pipeline.config import EpicSettings
 from build_pipeline.epic import lock as epic_lock
 from build_pipeline.epic import phase, records, store
+from multiplai_core.specs import mark_ready, write_change_meta
 
 from .epic_row_helpers import (
     READY_AT,

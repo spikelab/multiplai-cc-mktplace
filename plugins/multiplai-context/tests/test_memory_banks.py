@@ -18,13 +18,11 @@ import sys
 from pathlib import Path
 
 import pytest
-
 from conftest import SCRIPTS_DIR
 
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-from multiplai_core.banks import MemoryBank, personal_bank  # noqa: E402
-
+from multiplai_core.banks import MemoryBank, personal_bank
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -1105,7 +1103,6 @@ class TestTheFloorAndTheApplierAgree:
         item = _Item("personal/dev.md")
         assert floor_check(item) is None
 
-        from dataclasses import replace as _replace
 
         from lib.dream_triage import Item
 
@@ -1141,9 +1138,8 @@ class TestTheFloorAndTheApplierAgree:
 
     def test_the_bank_name_predicate_comes_from_core(self):
         """A re-declared copy of core's regex is a copy that can drift."""
-        from multiplai_core.banks import is_bank_name
-
         from lib.memory_write_floor import _is_bank_name
+        from multiplai_core.banks import is_bank_name
 
         for name in ["team", "a", "a-b_c.d", "Team", "", "-x", "../x", "a" * 65]:
             assert _is_bank_name(name) == is_bank_name(name), name
@@ -1176,8 +1172,11 @@ class TestBlockedItemsAreNotTranscribed:
         credential can be — and it was printed to stdout *and* written into
         ``dreams/banks/…-contribution.md``: blocked and transcribed."""
         from lib.bank_policy import BankPolicy
-        from lib.bank_proposals import (Contribution, ContributionPlan,
-                                        render_contribution_file)
+        from lib.bank_proposals import (
+            Contribution,
+            ContributionPlan,
+            render_contribution_file,
+        )
 
         secret = "AKIAIOSFODNN7EXAMPLE"
         blocked = Contribution(

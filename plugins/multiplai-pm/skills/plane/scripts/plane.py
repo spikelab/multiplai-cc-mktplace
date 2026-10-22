@@ -413,7 +413,7 @@ def _esc(s: str) -> str:
 
 # Anything else (javascript:, data:, vbscript:) is rendered as text, never as a
 # link target.
-_SAFE_URL = re.compile(r"^(?:https?://|mailto:|/|#)", re.I)
+_SAFE_URL = re.compile(r"^(?:https?://|mailto:|/|#)", re.IGNORECASE)
 
 # Up to three leading spaces is still the same list level (CommonMark). Deeper
 # indentation is a nested item, which this converter does not build: it lets it
@@ -855,7 +855,7 @@ def normalize_color(value: str) -> str:
     # set, so it turns "##ff8800" into a colour this function is supposed to
     # reject.
     raw = (value or "").strip()
-    raw = raw[1:] if raw.startswith("#") else raw
+    raw = raw.removeprefix("#")
     if not re.fullmatch(r"[0-9a-fA-F]{3}|[0-9a-fA-F]{6}", raw):
         raise PlaneError(
             f"{value!r} is not a hex colour — give #rrggbb (e.g. #ff8800), "
@@ -1067,7 +1067,7 @@ def label_usage(cfg: dict, project_id: str, label_id: str) -> int:
 # Plane Cloud stores a pasted image as an inline node in description_html with
 # the asset UUID in src, and leaves issue-attachments/ empty. <img> is matched
 # too because self-hosted editors have used it.
-_ASSET_SRC = re.compile(r"<(?:image-component|img)\b[^>]*\bsrc=\"([^\"]+)\"", re.I)
+_ASSET_SRC = re.compile(r"<(?:image-component|img)\b[^>]*\bsrc=\"([^\"]+)\"", re.IGNORECASE)
 
 
 def inline_asset_ids(issue: dict) -> list[str]:

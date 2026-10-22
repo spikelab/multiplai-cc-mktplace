@@ -19,8 +19,8 @@ import pytest
 _SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "video-edit" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 
-import pipeline  # noqa: E402
-from stages import capture  # noqa: E402
+import pipeline
+from stages import capture
 
 
 def png(w: int, h: int) -> bytes:
@@ -38,11 +38,11 @@ class FakeResponse:
 
 
 class FakeLocator:
-    def __init__(self, page: "FakePage", text: str):
+    def __init__(self, page: FakePage, text: str):
         self.page, self.text = page, text
         self.visible_only = False
 
-    def filter(self, visible: bool | None = None) -> "FakeLocator":
+    def filter(self, visible: bool | None = None) -> FakeLocator:
         self.visible_only = bool(visible)
         return self
 
@@ -50,7 +50,7 @@ class FakeLocator:
         return 1 if self.page.match and self.text in self.page.match[0] else 0
 
     @property
-    def first(self) -> "FakeLocator":
+    def first(self) -> FakeLocator:
         return self
 
     def bounding_box(self) -> dict:
@@ -61,7 +61,7 @@ class FakeLocator:
 
 
 class FakePage:
-    def __init__(self, world: "World"):
+    def __init__(self, world: World):
         self.world = world
         self.url = world.final_url
         self.match = world.match
@@ -124,7 +124,7 @@ class World:
 
 
 URL = "https://news.example.org/post"
-NOW = lambda: "2026-10-11T09:00:00Z"  # noqa: E731
+NOW = lambda: "2026-10-11T09:00:00Z"
 
 
 def run(world: World, out: Path, **kw) -> capture.Shot:

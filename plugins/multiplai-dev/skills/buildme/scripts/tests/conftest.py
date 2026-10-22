@@ -1,7 +1,6 @@
 """Shared test guards."""
 
 import pytest
-
 from build_pipeline import git_ops
 
 

@@ -3,9 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from pr_pipeline.template import (
-    STANDARD_TEMPLATE, PrConfig, discover, load, load_config, parse, set_tick,
+    STANDARD_TEMPLATE,
+    PrConfig,
+    discover,
+    load,
+    load_config,
+    parse,
+    set_tick,
 )
 
 

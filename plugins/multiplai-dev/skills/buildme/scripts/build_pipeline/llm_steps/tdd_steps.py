@@ -9,7 +9,6 @@ from __future__ import annotations
 import logging
 
 from ..models import AgentResult
-from ..prompts.test_writing import MUTATION_TEST_WRITER_PROMPT, TEST_WRITER_PROMPT
 from ..prompts.implementation import (
     IMPLEMENTER_PROMPT_CLEAN,
     IMPLEMENTER_PROMPT_MINIMUM,
@@ -17,6 +16,7 @@ from ..prompts.implementation import (
     REFACTOR_PROMPT,
     TEST_CHANGE_DECLARATION,
 )
+from ..prompts.test_writing import MUTATION_TEST_WRITER_PROMPT, TEST_WRITER_PROMPT
 from ..sdk import agent_call
 
 log = logging.getLogger(__name__)

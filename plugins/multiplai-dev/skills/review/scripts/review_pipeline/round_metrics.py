@@ -33,7 +33,8 @@ from pathlib import Path
 
 from . import rounds, target
 from .models import DEPS_DIR
-from .render import assess_label, listed as listed_findings
+from .render import assess_label
+from .render import listed as listed_findings
 
 PRESENT = "present at first review"
 WRITTEN = "written since"

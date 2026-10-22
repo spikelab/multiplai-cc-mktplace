@@ -4,19 +4,19 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import logging
+import os
 import re
 import tomllib
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Literal
+from typing import Literal
 
 import yaml
-
 from multiplai_core import resolve_model_spec
-from multiplai_core.session import default_effort, default_model
 from multiplai_core.env import CURRENT_MODEL, parse_model_spec, pick_model_spec
+from multiplai_core.session import default_effort, default_model
 
 from .env import KNOWN_EFFORTS, load_multiplai_conf, pick_effort, resolve_model
 from .models import ReviewGatePolicy

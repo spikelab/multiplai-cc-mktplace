@@ -16,6 +16,7 @@ from pathlib import Path
 
 import yaml
 
+
 def validate_skill(skill_path):
     """Basic validation of a skill"""
     skill_path = Path(skill_path)

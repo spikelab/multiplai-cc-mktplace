@@ -18,8 +18,8 @@ import pytest
 _SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "video-edit" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 
-from stages import captions, composite  # noqa: E402
-from stages.edl import EDL  # noqa: E402
+from stages import captions, composite
+from stages.edl import EDL
 
 _LOGO = Path(__file__).resolve().parent / "fixtures" / "brand" / "logo.png"
 _FONT = "/fonts/Caption-Bold.ttf"

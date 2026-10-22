@@ -17,10 +17,9 @@ import ast
 import json
 import os
 import sys
-import textwrap
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 from pathlib import Path
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import patch
 
 import pytest
 
@@ -408,7 +407,7 @@ class TestSessionStartMemoryLoading:
 
     def test_session_start_reads_memory_files(self, tmp_path):
         """Session start must read memory files from paths.memory_dir()."""
-        from multiplai_core.paths import Paths, _callable, _reset_cache
+        from multiplai_core.paths import _reset_cache
 
         # Set up mock memory directory with files
         memory_dir = tmp_path / "memory"
@@ -428,6 +427,7 @@ class TestSessionStartMemoryLoading:
             try:
                 # Import after env setup
                 import importlib
+
                 import session_start
                 importlib.reload(session_start)
 
@@ -455,6 +455,7 @@ class TestSessionStartMemoryLoading:
             _reset_cache()
             try:
                 import importlib
+
                 import session_start
                 importlib.reload(session_start)
                 session_start.main()
@@ -477,6 +478,7 @@ class TestSessionStartMemoryLoading:
             _reset_cache()
             try:
                 import importlib
+
                 import session_start
                 importlib.reload(session_start)
 
@@ -508,6 +510,7 @@ class TestSessionStartMemoryLoading:
             _reset_cache()
             try:
                 import importlib
+
                 import session_start
                 importlib.reload(session_start)
                 session_start.main()
@@ -528,6 +531,7 @@ class TestSessionStartMemoryLoading:
             _reset_cache()
             try:
                 import importlib
+
                 import session_start
                 importlib.reload(session_start)
                 session_start.main()
@@ -550,6 +554,7 @@ class TestSessionStartMemoryLoading:
             _reset_cache()
             try:
                 import importlib
+
                 import session_start
                 importlib.reload(session_start)
                 session_start.main()
@@ -586,6 +591,7 @@ class TestSessionStartMemoryLoading:
             _reset_cache()
             try:
                 import importlib
+
                 import session_start
                 importlib.reload(session_start)
 
@@ -746,6 +752,7 @@ class TestSessionEndDiaryEntry:
             _reset_cache()
             try:
                 import importlib
+
                 import session_end
                 importlib.reload(session_end)
                 session_end.main()
@@ -776,6 +783,7 @@ class TestSessionEndDiaryEntry:
             _reset_cache()
             try:
                 import importlib
+
                 import session_end
                 importlib.reload(session_end)
                 session_end.main()
@@ -810,6 +818,7 @@ class TestSessionEndDiaryEntry:
             _reset_cache()
             try:
                 import importlib
+
                 import session_end
                 importlib.reload(session_end)
                 session_end.main()
@@ -841,6 +850,7 @@ class TestSessionEndDiaryEntry:
             _reset_cache()
             try:
                 import importlib
+
                 import session_end
                 importlib.reload(session_end)
                 session_end.main()
@@ -867,6 +877,7 @@ class TestSessionEndDiaryEntry:
             _reset_cache()
             try:
                 import importlib
+
                 import session_end
                 importlib.reload(session_end)
 
@@ -1028,8 +1039,9 @@ class TestSessionLifecycleFlow:
             _reset_cache()
             try:
                 import importlib
-                import session_start
+
                 import session_end
+                import session_start
                 importlib.reload(session_start)
                 importlib.reload(session_end)
 
@@ -1067,8 +1079,9 @@ class TestSessionLifecycleFlow:
             _reset_cache()
             try:
                 import importlib
-                import session_start
+
                 import session_end
+                import session_start
                 importlib.reload(session_start)
                 importlib.reload(session_end)
 

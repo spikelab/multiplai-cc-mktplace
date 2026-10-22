@@ -3,26 +3,25 @@ failure-path budget accounting."""
 
 from dataclasses import dataclass
 from types import SimpleNamespace
-
-import pytest
-from pydantic import BaseModel
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from build_pipeline import budget as budget_mod
 from build_pipeline.sdk import (
+    LLMCallError,
+    LLMCallTimeoutError,
     RepoTrustError,
     agent_call,
     agent_call_structured,
     llm_call,
     llm_call_structured,
-    LLMCallError,
-    LLMCallTimeoutError,
 )
 from multiplai_core import deny_list
 from multiplai_core.agent_runner import (
     AgentRunError,
     AgentRunTimeout,
 )
+from pydantic import BaseModel
 
 
 def _mock_run_agent():
@@ -374,6 +373,7 @@ class TestAgentCallStructured:
 @pytest.mark.asyncio
 async def test_queued_calls_and_parse_retries_obey_budget(monkeypatch):
     import asyncio
+
     from build_pipeline import sdk
     budget_mod.reset()
     budget_mod.configure(max_usd=1)
@@ -397,6 +397,7 @@ async def test_queued_calls_and_parse_retries_obey_budget(monkeypatch):
 @pytest.mark.asyncio
 async def test_real_core_cancellation_without_usage_stays_unknown_on_resume(monkeypatch):
     import asyncio
+
     import claude_agent_sdk as provider
     from build_pipeline import sdk
     from multiplai_core import agent_runner
@@ -430,7 +431,8 @@ async def test_real_core_cancellation_without_usage_stays_unknown_on_resume(monk
 async def test_evidence_write_failure_cannot_hide_provider_spend(tmp_path, monkeypatch, result_kind):
     import asyncio
     import subprocess
-    from build_pipeline import sdk, io_utils
+
+    from build_pipeline import io_utils, sdk
     def git(*args):
         subprocess.run(['git', *args], cwd=tmp_path, check=True, capture_output=True)
     git('init', '-q')

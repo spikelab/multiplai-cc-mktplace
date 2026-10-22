@@ -16,11 +16,9 @@ import types
 from contextlib import redirect_stdout
 from pathlib import Path
 
-import pytest
-
 import plane
+import pytest
 from conftest import ALLOWED, BAD, OK, guard
-
 
 # --- D1: dot-segment traversal walks out of an allowlisted project ------------
 
@@ -151,7 +149,7 @@ def test_check_selftest_covers_the_query_parameter_rule():
 def _capture_search(monkeypatch, hits):
     seen = {}
 
-    def fake_request(method, path, cfg, *, params=None, **kw):  # noqa: ARG001
+    def fake_request(method, path, cfg, *, params=None, **kw):
         seen["path"] = path
         seen["params"] = dict(params or {})
         return {"issues": hits}
@@ -302,7 +300,7 @@ def test_resolve_issue_scans_every_page_before_saying_not_found(monkeypatch):
     ]
     calls = []
 
-    def fake_request(method, path, cfg, *, params=None, **kw):  # noqa: ARG001
+    def fake_request(method, path, cfg, *, params=None, **kw):
         calls.append(params.get("cursor"))
         return pages[len(calls) - 1]
 

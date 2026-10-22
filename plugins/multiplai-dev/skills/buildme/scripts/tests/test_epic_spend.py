@@ -13,16 +13,15 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
 from build_pipeline import __main__ as cli
 from build_pipeline import budget, git_ops
 from build_pipeline.config import EpicSettings
 from build_pipeline.epic import coordinator, records, spend
 from build_pipeline.epic import lock as epic_lock
-from .epic_row_helpers import EpicSplitAnswer
 
 from .epic_row_helpers import (
     CallLog,
+    EpicSplitAnswer,
     Fakes,
     approve,
     child,

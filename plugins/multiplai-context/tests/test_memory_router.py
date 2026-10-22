@@ -2,7 +2,6 @@
 
 import asyncio
 import contextlib
-import json
 import os
 import sys
 from pathlib import Path
@@ -610,7 +609,7 @@ class TestRoutingPolicy:
         assert strict["memory"][0] == loose["memory"][0]
 
     def test_create_router_threads_keep_ratio(self):
-        from lib.memory_router import create_router, DEFAULT_KEEP_RATIO
+        from lib.memory_router import DEFAULT_KEEP_RATIO, create_router
         assert create_router("token_overlap").keep_ratio == DEFAULT_KEEP_RATIO
         assert create_router("token_overlap", keep_ratio=0.5).keep_ratio == 0.5
 
@@ -1007,6 +1006,7 @@ class TestRouterThinking:
         by-name monkeypatches above are patching.
         """
         import inspect
+
         import lib.memory_router as mr
         import lib.thinking as th
         from multiplai_core.model_client import ModelClient

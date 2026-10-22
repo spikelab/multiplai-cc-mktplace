@@ -278,7 +278,7 @@ def fetch_comments(repo: str, pr: int, since: str | None, *,
 def _bare(login: str) -> str:
     """GraphQL names an app `dependabot`, REST `dependabot[bot]`."""
     login = login.strip().lower()
-    return login[:-5] if login.endswith("[bot]") else login
+    return login.removesuffix("[bot]")
 
 
 def _role_name(repo: str, login: str, cwd: Path | None) -> str:

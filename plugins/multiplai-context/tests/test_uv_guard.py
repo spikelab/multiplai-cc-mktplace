@@ -26,7 +26,6 @@ import time
 from pathlib import Path
 
 import pytest
-
 from conftest import HOOKS_JSON, parse_hooks, script_hooks
 
 RUN_SH = HOOKS_JSON.parent / "run.sh"

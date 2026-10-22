@@ -85,7 +85,7 @@ def _new_path(line: str) -> str | None:
     name = _unquote(name)
     if name == "/dev/null":
         return None
-    return name[2:] if name.startswith("b/") else name
+    return name.removeprefix("b/")
 
 
 # GitHub's PR diff, whatever the user's diff.* settings say: 3 lines of context,

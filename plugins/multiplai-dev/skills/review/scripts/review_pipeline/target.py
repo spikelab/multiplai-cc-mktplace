@@ -111,8 +111,7 @@ def origin_owner_repo(url: str | None) -> tuple[str, str] | None:
     if not url:
         return None
     path = url.strip().rstrip("/")
-    if path.endswith(".git"):
-        path = path[:-len(".git")]
+    path = path.removesuffix(".git")
     parts = [p for p in re.split(r"[/:]", path) if p]
     if len(parts) < 2:
         return None

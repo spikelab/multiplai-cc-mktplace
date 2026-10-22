@@ -15,10 +15,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from tests.planning_fakes import accepted_planning
 import pytest
-from tests.planning_fakes import _prepare_and_publish
-
 from build_pipeline import git_ops, orchestrator
 from build_pipeline.change_manager import ChangeManager
 from build_pipeline.config import BuildConfig, GitToggles
@@ -26,6 +23,11 @@ from build_pipeline.models import BuildPhase
 from build_pipeline.orchestrator import _run_spec_extract_step, run_orchestrator
 from build_pipeline.progress import ProgressWriter
 from build_pipeline.state import BuildState, SpecGenState
+
+from tests.planning_fakes import (
+    _prepare_and_publish,
+    accepted_planning,  # noqa: F401
+)
 
 CAPABILITY = "## ADDED Requirements\n\n### Requirement: Billing totals\n\n#### Scenario: sum\n" \
              "- **WHEN** two lines are billed\n- **THEN** the total is their sum\n" \

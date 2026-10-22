@@ -14,15 +14,14 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-
-from multiplai_core.paths import Paths
 
 from lib.fsio import atomic_write_json
 from lib.job_effort import CATALOG_EFFORT_OPTION, effort_kwargs
 from lib.thinking import CATALOG_THINKING_OPTION, thinking_kwargs
+from multiplai_core.paths import Paths
 
 logger = logging.getLogger(__name__)
 
@@ -517,13 +516,13 @@ class GeneratorBase:
         """Write catalog and update generation state."""
         catalog = {
             "schema_version": CATALOG_SCHEMA_VERSION,
-            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "generated_at": datetime.now(UTC).isoformat(),
             "entries": list(new_entries.values()),
         }
         self._write_catalog(catalog)
 
         state.generators[self.name] = {
-            "last_run": datetime.now(timezone.utc).isoformat(),
+            "last_run": datetime.now(UTC).isoformat(),
             "source_hashes": new_hashes,
             "entry_count": len(new_entries),
         }

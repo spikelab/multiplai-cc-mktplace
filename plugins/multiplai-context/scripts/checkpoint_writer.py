@@ -34,20 +34,20 @@ MCP servers.
 import asyncio
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from multiplai_core.agent_runner import run_agent
-from multiplai_core.log_utils import setup_logging, log_event
-from multiplai_core.model_client import DEFAULT_MODEL
-from multiplai_core.paths import get_paths
 from lib import checkpoint as cp
 from lib.hook_input import read_hook_input
 from lib.job_effort import CHECKPOINT_EFFORT_OPTION, effort_kwargs
 from lib.thinking import CHECKPOINT_THINKING_OPTION, RUN_AGENT, thinking_kwargs
 from lib.transcript_distiller import distill
+from multiplai_core.agent_runner import run_agent
+from multiplai_core.log_utils import log_event, setup_logging
+from multiplai_core.model_client import DEFAULT_MODEL
+from multiplai_core.paths import get_paths
 
 logger = setup_logging("checkpoint_writer", packages=("lib", "generators"))
 
@@ -135,7 +135,7 @@ def _distill_segment(transcript_path: str, since_iso: str | None) -> str:
         try:
             since = datetime.fromisoformat(since_iso)
             if since.tzinfo is None:
-                since = since.replace(tzinfo=timezone.utc)
+                since = since.replace(tzinfo=UTC)
         except (ValueError, TypeError):
             since = None
     chunks = distill(Path(transcript_path), since=since)
@@ -283,7 +283,7 @@ def _record_failure(data_dir: Path, session_id: str, state: dict, why: str) -> N
     state[cp.CONSECUTIVE_FAILURE_KEY] = cp.consecutive_failures(state) + 1
     state["session_id"] = session_id
     state["last_failure"] = why
-    state["last_failure_ts"] = datetime.now(timezone.utc).isoformat()
+    state["last_failure_ts"] = datetime.now(UTC).isoformat()
     try:
         cp.save_state(data_dir, session_id, state)
     except OSError:
@@ -392,7 +392,7 @@ async def write_checkpoint(payload: dict) -> bool:
         text = _trim_degraded_sections(text)
 
     cp.write_checkpoint_file(data_dir, session_id, text)
-    now_iso = datetime.now(timezone.utc).isoformat()
+    now_iso = datetime.now(UTC).isoformat()
     state.update(
         {
             "session_id": session_id,

@@ -14,8 +14,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-from conftest import SCRIPTS_DIR, PLUGIN_ROOT
+from conftest import PLUGIN_ROOT, SCRIPTS_DIR
 
 
 def _init_git(dir_path: Path) -> None:

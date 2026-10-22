@@ -10,7 +10,6 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
 from build_pipeline.narrow_tests import (
     agent_test_command,
     narrow_command,
@@ -18,7 +17,6 @@ from build_pipeline.narrow_tests import (
     runner_of,
     select_test_paths,
 )
-
 
 # --- which runner a test command uses -------------------------------------
 
@@ -162,7 +160,7 @@ class TestSelectTestPaths:
     def test_only_paths_the_whole_run_collects_are_selected(self):
         changed = ["pkg/db.py", "tests/unit/test_new.py", "tests/integration/test_api.py"]
         files = ["pkg/db.py", "tests/integration/test_db.py", "tests/unit/test_db.py"]
-        collected = lambda p: p.startswith("tests/unit/")  # noqa: E731
+        collected = lambda p: p.startswith("tests/unit/")
         assert select_test_paths(changed, files, "pytest", collected) == [
             "tests/unit/test_db.py", "tests/unit/test_new.py"]
 

@@ -40,7 +40,12 @@ from pathlib import Path
 from typing import Literal
 
 from multiplai_core.env import load_multiplai_conf
-from multiplai_core.stage_config import check_effort, coerce_int, conf_value, read_yaml_mapping
+from multiplai_core.stage_config import (
+    check_effort,
+    coerce_int,
+    conf_value,
+    read_yaml_mapping,
+)
 
 from . import ledger
 from .budget import DEFAULT_MAX_USD

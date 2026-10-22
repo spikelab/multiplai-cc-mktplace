@@ -14,7 +14,7 @@ import pytest
 _SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "video-edit" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 
-from stages.composite import _find_font  # noqa: E402
+from stages.composite import _find_font
 
 
 @pytest.fixture(autouse=True)

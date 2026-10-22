@@ -5,18 +5,12 @@ Covers: D6 skill definition, health.md prompt, health_check.py script,
 ModelClient reporting (R1), Paths validation, --plugin-dir execution.
 """
 
-import json
 import os
 import re
-import subprocess
-import sys
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
-
 from conftest import PLUGIN_ROOT, SCRIPTS_DIR
-
 
 # ---------------------------------------------------------------------------
 # Skill definition in plugin.json
@@ -187,6 +181,7 @@ class TestDetectClientTypeFunction:
             # Remove API key if present
             os.environ.pop("CLAUDE_PLUGIN_OPTION_ANTHROPIC_API_KEY", None)
             import importlib
+
             import multiplai_core.model_client as mc
             # Mock claude_agent_sdk import to fail
             with patch.dict("sys.modules", {"claude_agent_sdk": None}):
@@ -199,6 +194,7 @@ class TestDetectClientTypeFunction:
         """When API key is set, reports AnthropicAPIClient."""
         with patch.dict(os.environ, {"CLAUDE_PLUGIN_OPTION_ANTHROPIC_API_KEY": "sk-test"}):
             import importlib
+
             import multiplai_core.model_client as mc
             # Mock claude_agent_sdk import to fail so API key fallback is tested
             with patch.dict("sys.modules", {"claude_agent_sdk": None}):

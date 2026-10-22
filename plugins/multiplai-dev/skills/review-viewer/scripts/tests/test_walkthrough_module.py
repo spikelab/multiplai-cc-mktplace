@@ -15,7 +15,6 @@ from pathlib import Path
 
 import jsonschema
 import pytest
-
 from review_viewer import gitdata, walkthrough
 from review_viewer.models import WALKTHROUGH_SCHEMA_PATH, Walkthrough
 

@@ -11,7 +11,6 @@ from __future__ import annotations
 import re
 
 import pytest
-
 from build_pipeline.prompts.implementation import (
     IMPLEMENTER_PROMPT_CLEAN,
     IMPLEMENTER_PROMPT_MINIMUM,

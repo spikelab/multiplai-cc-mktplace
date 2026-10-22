@@ -5,10 +5,9 @@ import sys
 from types import ModuleType, SimpleNamespace
 
 import pytest
-from pydantic import BaseModel
-
 from multiplai_core import deny_list
 from multiplai_core.agent_runner import AgentRunError, UsageLimitError
+from pydantic import BaseModel
 from review_pipeline import budget, sdk
 from review_pipeline.config import STAGE_MODELS, load_config
 from review_pipeline.models import VerifierAnswer

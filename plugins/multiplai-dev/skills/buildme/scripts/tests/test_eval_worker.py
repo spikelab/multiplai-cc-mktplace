@@ -6,8 +6,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
-
-from build_pipeline import git_ops, sdk, orchestrator
+from build_pipeline import git_ops, orchestrator, sdk
 from multiplai_core.agent_runner import AgentRunError
 
 MODULE = Path(__file__).parents[1] / 'evals/pipeline_compare.py'

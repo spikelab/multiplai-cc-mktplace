@@ -6,7 +6,6 @@ delegations so a broken import is caught."""
 from pathlib import Path
 
 import pytest
-
 from research_pipeline import env as rp_env
 from research_pipeline.env import (
     find_project_root,

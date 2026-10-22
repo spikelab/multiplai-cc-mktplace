@@ -15,10 +15,8 @@ Covers:
 
 import json
 import sys
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-
-import pytest
 
 PLUGIN_ROOT = Path(__file__).parent.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
@@ -31,7 +29,7 @@ def _write_jsonl(path: Path, records: list[dict]) -> None:
 
 
 def _ts(offset_minutes: int = 0) -> str:
-    dt = datetime(2026, 5, 16, 14, 0, 0, tzinfo=timezone.utc) + timedelta(minutes=offset_minutes)
+    dt = datetime(2026, 5, 16, 14, 0, 0, tzinfo=UTC) + timedelta(minutes=offset_minutes)
     return dt.isoformat()
 
 
@@ -126,7 +124,7 @@ class TestIterDistilledTurns:
             _user_record("old", offset=-60),
             _user_record("new", offset=10),
         ])
-        since = datetime(2026, 5, 16, 14, 5, tzinfo=timezone.utc)
+        since = datetime(2026, 5, 16, 14, 5, tzinfo=UTC)
         turns = list(iter_distilled_turns(f, since=since))
         assert len(turns) == 1
         assert turns[0]["text"] == "new"
@@ -138,7 +136,7 @@ class TestIterDistilledTurns:
             _user_record("early", offset=0),
             _user_record("late", offset=60),
         ])
-        until = datetime(2026, 5, 16, 14, 30, tzinfo=timezone.utc)
+        until = datetime(2026, 5, 16, 14, 30, tzinfo=UTC)
         turns = list(iter_distilled_turns(f, until=until))
         assert len(turns) == 1
         assert turns[0]["text"] == "early"

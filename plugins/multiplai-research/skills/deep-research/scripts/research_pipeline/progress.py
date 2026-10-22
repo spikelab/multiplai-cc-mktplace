@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -19,7 +19,7 @@ class ProgressWriter:
 
     def initialize(self, query: str, preset: str, fetch_budget: int) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._started = datetime.now(timezone.utc)
+        self._started = datetime.now(UTC)
         header = (
             f"# Research Progress\n"
             f"Query: {query}\n"
@@ -51,4 +51,4 @@ class ProgressWriter:
             self.path.unlink()
 
     def _now(self) -> str:
-        return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")

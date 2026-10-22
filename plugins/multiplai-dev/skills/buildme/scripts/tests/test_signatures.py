@@ -5,7 +5,6 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
 from build_pipeline import signatures
 from build_pipeline.config import BuildConfig
 from build_pipeline.models import BlockInfo

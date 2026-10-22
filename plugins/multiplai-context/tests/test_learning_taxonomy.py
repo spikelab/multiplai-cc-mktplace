@@ -12,7 +12,6 @@ a classifier downstream cannot read a field that stopped at the learnings file.
 """
 
 import pytest
-
 from lib import taxonomy
 from lib.extraction import _format_learning_entry, _parse_learning
 from lib.learnings_ledger import (
@@ -25,7 +24,6 @@ from lib.learnings_ledger import (
 )
 from lib.learnings_ledger import migrate as taxonomy_migrate
 from lib.routing_validation import parse_proposal_entries
-
 
 # ---------------------------------------------------------------------------
 # The vocabulary itself

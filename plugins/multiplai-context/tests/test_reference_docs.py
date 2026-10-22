@@ -15,7 +15,7 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from lib import reference_docs  # noqa: E402
+from lib import reference_docs
 
 
 @pytest.fixture

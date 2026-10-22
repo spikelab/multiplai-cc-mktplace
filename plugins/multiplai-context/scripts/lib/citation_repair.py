@@ -34,8 +34,8 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Iterable, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +60,7 @@ _CITATION_RE = re.compile(
 
 # The record's own header, whose date is what the model substitutes for the
 # filename. Only the date part matters — the time is what makes the two differ.
-_STAMP_RE = re.compile(r"^##\s+Session Learnings\s*[—-]\s*(\d{4}-\d{2}-\d{2})", re.M)
+_STAMP_RE = re.compile(r"^##\s+Session Learnings\s*[—-]\s*(\d{4}-\d{2}-\d{2})", re.MULTILINE)
 
 # A learnings filename is its date. Anything else (a renamed or hand-made file)
 # simply never matches a stamp, so it is reported rather than repaired.

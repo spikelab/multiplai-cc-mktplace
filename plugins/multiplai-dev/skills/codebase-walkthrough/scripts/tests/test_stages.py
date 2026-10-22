@@ -5,13 +5,11 @@ from __future__ import annotations
 import json
 import re
 
-import pytest
-
 from fakes import FakeAgents
+from test_pipeline import run_args
 from walkthrough_pipeline import sdk
 from walkthrough_pipeline.__main__ import main
 from walkthrough_pipeline.state import STATE_FILE
-from test_pipeline import run_args
 
 
 def _run(ws, tmp_path, monkeypatch, agents):

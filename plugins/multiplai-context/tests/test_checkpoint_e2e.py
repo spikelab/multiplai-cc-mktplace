@@ -20,11 +20,10 @@ The goal condition it demonstrates:
 import asyncio
 import io
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
-
 from conftest import import_script
 from lib import checkpoint as cp
 
@@ -89,7 +88,7 @@ class LongChatHarness:
         self.monkeypatch = monkeypatch
         self.capsys = capsys
         self.cwd = str(tmp_path / "bigproject")
-        self.clock = datetime.now(timezone.utc)
+        self.clock = datetime.now(UTC)
         self.total_context_tokens = 0
         self.handoffs = 0
         self.rebuild_seeds: list[str] = []

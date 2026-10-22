@@ -15,13 +15,13 @@ import asyncio
 import logging
 import re
 import time
-from typing import Iterable
+from collections.abc import Iterable
 from urllib.parse import urljoin
 
 import httpx
 
 from .models import FetchError, FetchErrorType, FetchResult
-from .netguard import UnsafeURLError, _assert_safe_url  # noqa: F401 — re-exported
+from .netguard import UnsafeURLError, _assert_safe_url  # re-exported
 
 log = logging.getLogger(__name__)
 
@@ -141,7 +141,7 @@ async def fetch_url(
                 ),
                 elapsed_seconds=elapsed,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             elapsed = time.monotonic() - start
             last_error = FetchError(
                 url=url,
@@ -437,7 +437,7 @@ async def fetch_batch(
                 asyncio.gather(*tasks, return_exceptions=True),
                 timeout=batch_timeout,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             # Batch exceeded overall timeout — gather what completed, cancel rest
             log.warning("Batch timeout at %.1fs — cancelling remaining", batch_timeout)
             raw_results = []

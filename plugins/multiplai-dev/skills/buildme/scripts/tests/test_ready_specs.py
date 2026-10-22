@@ -16,14 +16,19 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from multiplai_core.specs import clear_spec_issues, mark_ready, read_change_meta
-
 from build_pipeline import readiness
 from build_pipeline.config import BuildConfig, GitToggles
 from build_pipeline.llm_steps.spec_steps import AuditFindings
-from build_pipeline.models import BlockInfo, BuildPhase, PlanReviewResult, PriorAssessment
+from build_pipeline.models import (
+    BlockInfo,
+    BuildPhase,
+    PlanReviewResult,
+    PriorAssessment,
+)
 from build_pipeline.orchestrator import run_orchestrator
 from build_pipeline.state import BuildState, TDDState
+from multiplai_core.specs import clear_spec_issues, mark_ready, read_change_meta
+
 from tests.spec_fixtures import REQUIREMENT, commit_specs, ready_specs, write_specs
 from tests.test_git_ops import make_repo
 
@@ -357,7 +362,10 @@ class TestTddContradiction:
         """The TDD phase: one block whose implementer reports a contradiction,
         recorded by the real `_record_implementation_note`."""
         from build_pipeline.progress import ProgressWriter
-        from build_pipeline.tdd_engine import EXIT_BUILD_FAILURE, _record_implementation_note
+        from build_pipeline.tdd_engine import (
+            EXIT_BUILD_FAILURE,
+            _record_implementation_note,
+        )
 
         async def engine(config, args, standalone=True):
             path = config.state_file_path()
@@ -651,7 +659,10 @@ class TestSpecIssuesFile:
         assert audit_spec_issues([{**gap, "needs_requirements_change": "yes"}]) == []
 
     def test_the_design_prompt_asks_for_spec_issue_lines(self):
-        from build_pipeline.prompts.spec_generation import DESIGN_PROMPT, SPEC_ISSUE_PREFIX
+        from build_pipeline.prompts.spec_generation import (
+            DESIGN_PROMPT,
+            SPEC_ISSUE_PREFIX,
+        )
         assert f"`{SPEC_ISSUE_PREFIX} requirements/<capability>.md: <requirement name>:" in DESIGN_PROMPT
         assert "Flag any spec requirements that seem infeasible" not in DESIGN_PROMPT
 

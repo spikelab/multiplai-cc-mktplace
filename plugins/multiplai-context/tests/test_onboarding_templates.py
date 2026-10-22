@@ -9,19 +9,13 @@ This file covers the DYNAMIC behavior: copying, populating, and the
 onboarding pipeline that ties templates + skills + scripts together.
 """
 
-import json
 import os
 import re
 import shutil
-import sys
-import textwrap
 from pathlib import Path
-from unittest import mock
 
 import pytest
-
 from conftest import PLUGIN_ROOT, SCRIPTS_DIR
-
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -275,7 +269,7 @@ class TestTemplatePathResolution:
 
     def test_plugin_mode_templates_dir(self, monkeypatch, reset_paths_cache):
         """In plugin mode, templates resolve to $CLAUDE_PLUGIN_ROOT/templates."""
-        from multiplai_core.paths import _reset_cache, Paths
+        from multiplai_core.paths import Paths, _reset_cache
 
         _reset_cache()
         monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(PLUGIN_ROOT))
@@ -286,7 +280,7 @@ class TestTemplatePathResolution:
 
     def test_standalone_mode_templates_dir(self, monkeypatch, reset_paths_cache):
         """In standalone mode, templates resolve to ~/.multiplai/templates."""
-        from multiplai_core.paths import _reset_cache, Paths
+        from multiplai_core.paths import Paths, _reset_cache
 
         _reset_cache()
         # Clear all plugin env vars
@@ -300,7 +294,7 @@ class TestTemplatePathResolution:
 
     def test_templates_dir_is_path_instance(self, monkeypatch, reset_paths_cache):
         """templates_dir must return a Path instance."""
-        from multiplai_core.paths import _reset_cache, Paths
+        from multiplai_core.paths import Paths, _reset_cache
 
         _reset_cache()
         monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(PLUGIN_ROOT))
@@ -310,7 +304,7 @@ class TestTemplatePathResolution:
 
     def test_template_files_accessible_via_resolved_path(self, monkeypatch, reset_paths_cache):
         """All three templates must exist at the path-resolved templates dir."""
-        from multiplai_core.paths import _reset_cache, Paths
+        from multiplai_core.paths import Paths, _reset_cache
 
         _reset_cache()
         monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(PLUGIN_ROOT))
@@ -471,7 +465,7 @@ class TestSetupRespectsconfiguredDir:
 
     def test_custom_memory_dir_via_env(self, tmp_path, monkeypatch, reset_paths_cache):
         """WHEN CLAUDE_PLUGIN_OPTION_MEMORY_DIR is set, setup should use it."""
-        from multiplai_core.paths import _reset_cache, Paths
+        from multiplai_core.paths import Paths, _reset_cache
 
         _reset_cache()
         custom_mem = tmp_path / "custom-memory"
@@ -491,7 +485,7 @@ class TestSetupRespectsconfiguredDir:
 
     def test_default_memory_dir_when_unconfigured(self, monkeypatch, reset_paths_cache):
         """WHEN no custom memory_dir and no workspace, should use ~/.multiplai/memory."""
-        from multiplai_core.paths import _reset_cache, Paths
+        from multiplai_core.paths import Paths, _reset_cache
 
         _reset_cache()
         for key in list(os.environ):
@@ -514,7 +508,7 @@ class TestTemplateSourceResolution:
 
     def test_templates_dir_in_plugin_mode(self, monkeypatch, reset_paths_cache):
         """In plugin mode, templates_dir = $CLAUDE_PLUGIN_ROOT/templates."""
-        from multiplai_core.paths import _reset_cache, Paths
+        from multiplai_core.paths import Paths, _reset_cache
 
         _reset_cache()
         fake_root = "/fake/plugin/root"
@@ -624,7 +618,6 @@ class TestTemplateIntegration:
 
     def test_plugin_root_templates_dir_matches_reality(self):
         """The templates_dir derivation must point to where templates actually live."""
-        from multiplai_core.paths import Paths
 
         # In actual plugin layout, templates are at PLUGIN_ROOT/templates/
         expected = PLUGIN_ROOT / "templates"

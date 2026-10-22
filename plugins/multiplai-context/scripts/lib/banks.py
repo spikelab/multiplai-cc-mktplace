@@ -32,10 +32,10 @@ anything in the text.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable, Optional
 
-from multiplai_core.banks import (  # noqa: F401  (re-exported for callers)
+from multiplai_core.banks import (  # re-exported for callers
     BANK_MODES,
     DEFAULT_SHARED_MODE,
     PERSONAL_BANK,
@@ -56,13 +56,13 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "BANK_MODES",
     "DEFAULT_SHARED_MODE",
+    "DEFAULT_SYNC_TTL_HOURS",
     "PERSONAL_BANK",
-    "MemoryBank",
     "SHARED_BANK_NOTICE",
+    "MemoryBank",
     "bank_ref",
     "banks_by_name",
     "catalog_fragment_path",
-    "DEFAULT_SYNC_TTL_HOURS",
     "configured_banks",
     "parse_bank_ref",
     "personal_bank",
@@ -136,16 +136,16 @@ def sync_ttl_hours() -> float:
     return value if value > 0 else DEFAULT_SYNC_TTL_HOURS
 
 
-def shared_banks(banks: Optional[Iterable[MemoryBank]] = None) -> tuple[MemoryBank, ...]:
+def shared_banks(banks: Iterable[MemoryBank] | None = None) -> tuple[MemoryBank, ...]:
     """Just the banks somebody else may also write to."""
     return tuple(b for b in (banks if banks is not None else configured_banks()) if b.is_shared)
 
 
-def banks_by_name(banks: Optional[Iterable[MemoryBank]] = None) -> dict[str, MemoryBank]:
+def banks_by_name(banks: Iterable[MemoryBank] | None = None) -> dict[str, MemoryBank]:
     return {b.name: b for b in (banks if banks is not None else configured_banks())}
 
 
-def split_ref(ref: str) -> tuple[str, str, Optional[str]]:
+def split_ref(ref: str) -> tuple[str, str, str | None]:
     """``"team/dev.md#Testing"`` → ``("team", "dev.md", "Testing")``.
 
     Order matters: the bank prefix is split *before* the section fragment,
@@ -158,8 +158,8 @@ def split_ref(ref: str) -> tuple[str, str, Optional[str]]:
 
 
 def resolve_ref(
-    ref: str, banks: Optional[Iterable[MemoryBank]] = None
-) -> Optional[tuple[MemoryBank, str, Path]]:
+    ref: str, banks: Iterable[MemoryBank] | None = None
+) -> tuple[MemoryBank, str, Path] | None:
     """``(bank, filename, path)`` for *ref*, or ``None`` when it resolves nowhere.
 
     ``None`` covers both "no bank by that name" and "the filename is not a
@@ -188,7 +188,7 @@ def policy_path(bank: MemoryBank) -> Path:
 
 
 def render_shared_block(
-    ref: str, bank: MemoryBank, content: str, *, date: Optional[str] = None
+    ref: str, bank: MemoryBank, content: str, *, date: str | None = None
 ) -> str:
     """One shared-bank memory block, fenced and attributed.
 

@@ -6,7 +6,6 @@ import json
 import random
 
 import pytest
-
 from conftest import make_tree
 from trace_fixtures import FakeCall, commit_snapshot, lib, run_map
 

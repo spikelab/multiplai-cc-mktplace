@@ -66,14 +66,7 @@ LEARNING_LINE_RE = re.compile(
 
 # Words that carry no discriminating signal. Overlap computed on these produces
 # confident matches between sentences that share nothing but grammar.
-STOPWORDS = frozenset("""
-a an the and or but if then than that this these those is are was were be been
-being do does did done have has had having will would shall should can could
-may might must to of in on at by for with from as it its into about over under
-not no nor so such own same too very just when where which who whom what why
-how all any both each few more most other some only own s t don now use used
-using via per within without across
-""".split())
+STOPWORDS = frozenset(["a", "an", "the", "and", "or", "but", "if", "then", "than", "that", "this", "these", "those", "is", "are", "was", "were", "be", "been", "being", "do", "does", "did", "done", "have", "has", "had", "having", "will", "would", "shall", "should", "can", "could", "may", "might", "must", "to", "of", "in", "on", "at", "by", "for", "with", "from", "as", "it", "its", "into", "about", "over", "under", "not", "no", "nor", "so", "such", "own", "same", "too", "very", "just", "when", "where", "which", "who", "whom", "what", "why", "how", "all", "any", "both", "each", "few", "more", "most", "other", "some", "only", "own", "s", "t", "don", "now", "use", "used", "using", "via", "per", "within", "without", "across"])
 
 # Jaccard overlap on content words. Calibrated by hand against real learnings
 # and memory lines: 0.35 admits genuine restatements ("Opus is the default

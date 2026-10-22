@@ -12,12 +12,10 @@ import contextlib
 import io
 from html.parser import HTMLParser
 
-import pytest
-
 import plane
+import pytest
 from conftest import BAD, CFG, OK
 from conftest import Args as _Args
-
 
 # --- F1: search must fail closed, not open ----------------------------------
 

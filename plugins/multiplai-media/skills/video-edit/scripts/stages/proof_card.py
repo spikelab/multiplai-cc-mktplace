@@ -71,7 +71,7 @@ def _frontmatter(text: str) -> dict[str, dict[str, str]]:
     """The two-level `section: {key: value}` mappings of a style file's
     frontmatter, values as strings. Enough for styles/README.md's format;
     flow mappings (`weights: {…}`) and lists are skipped."""
-    m = re.match(r"---\s*\n(.*?)\n---", text, re.S)
+    m = re.match(r"---\s*\n(.*?)\n---", text, re.DOTALL)
     out: dict[str, dict[str, str]] = {}
     section = None
     for line in (m.group(1).splitlines() if m else []):

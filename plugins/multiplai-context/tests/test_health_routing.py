@@ -13,9 +13,8 @@ configured one.
 import json
 from types import SimpleNamespace
 
-import pytest
-
 import health_check
+import pytest
 
 
 def _ln(ts, msg, level="INFO"):

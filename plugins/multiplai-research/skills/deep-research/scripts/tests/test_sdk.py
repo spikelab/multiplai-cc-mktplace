@@ -6,9 +6,8 @@ import asyncio
 import logging
 
 import pytest
-from pydantic import BaseModel
-
 from multiplai_core import deny_list
+from pydantic import BaseModel
 from research_pipeline import sdk as sdk_module
 from research_pipeline.sdk import (
     LLMCallTimeoutError,

@@ -11,9 +11,8 @@ from pathlib import Path
 
 import jsonschema
 import pytest
-from pydantic import BaseModel, ValidationError
-
 from conftest import paths_name, unscoped_variant
+from pydantic import BaseModel, ValidationError
 
 FACTS_SCHEMA = Path(__file__).resolve().parents[3] / "skills/review/schema/facts.v1.schema.json"
 TOP_LEVEL = ["schema_version", "commit", "scoped", "cap", "fallback", "paths", "dropped", "diagnostics",

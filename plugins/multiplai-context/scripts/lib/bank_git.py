@@ -25,8 +25,8 @@ import dataclasses
 import logging
 import shutil
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Optional, Sequence
 
 __all__ = [
     "DEFAULT_TIMEOUT",
@@ -61,7 +61,7 @@ class GitResult:
         return self.ok
 
 
-def _run(argv: Sequence[str], *, cwd: Optional[Path] = None, timeout: int = DEFAULT_TIMEOUT) -> GitResult:
+def _run(argv: Sequence[str], *, cwd: Path | None = None, timeout: int = DEFAULT_TIMEOUT) -> GitResult:
     exe = shutil.which(argv[0])
     if exe is None:
         return GitResult(False, "", f"{argv[0]} is not installed")

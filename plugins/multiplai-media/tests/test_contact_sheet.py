@@ -7,7 +7,7 @@ from pathlib import Path
 _SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "video-edit" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 
-from stages import contact_sheet as cs  # noqa: E402
+from stages import contact_sheet as cs
 
 
 def test_is_url() -> None:

@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import json
 
-from multiplai_core.specs import is_ready, spec_revision
-
 from conftest import CAPS, change_dir, committed, git, meta, ready_line, run, state
+from multiplai_core.specs import is_ready, spec_revision
 
 
 def test_new_runs_to_ready_and_commits_only_the_change_dir(repo, model, capsys):

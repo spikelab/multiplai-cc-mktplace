@@ -21,10 +21,9 @@ degrade to live file scanning rather than breaking context assembly.
 
 import json
 import logging
-import os
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -34,8 +33,9 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from generators.base import CATALOG_SCHEMA_VERSION
+from datetime import UTC
 
+from generators.base import CATALOG_SCHEMA_VERSION
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -972,11 +972,12 @@ class TestCatalogStalenessWarning:
 
     def test_fresh_catalog_does_not_warn(self, plugin_data_env, caplog):
         """Scenario: generated_at within the TTL → no staleness warning."""
+        from datetime import datetime
+
         import context_manager
-        from datetime import datetime, timezone
 
         catalog = _valid_memory_catalog()
-        catalog["generated_at"] = datetime.now(timezone.utc).isoformat()
+        catalog["generated_at"] = datetime.now(UTC).isoformat()
         _write_catalog(plugin_data_env, "memory.json", catalog)
 
         with caplog.at_level(logging.WARNING):

@@ -60,24 +60,24 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Mapping, Optional, Sequence
 
 from lib.conflict_edits import MIN_OVERLAP, overlap
 
 __all__ = [
-    "NOT_ROUTED",
-    "ROUTED_IGNORED",
     "INCONCLUSIVE",
-    "SAME_DAY",
+    "NOT_ROUTED",
     "NO_TELEMETRY",
+    "ROUTED_IGNORED",
+    "SAME_DAY",
     "Relearn",
     "RelearnGroup",
-    "redundant_records",
-    "injection_index",
-    "group_relearns",
     "analyse",
+    "group_relearns",
+    "injection_index",
+    "redundant_records",
     "render_section",
 ]
 
@@ -149,7 +149,7 @@ class RelearnGroup:
 
 
 def redundant_records(
-    records: Iterable[Mapping], *, kinds: Optional[Sequence[str]] = (_RULE,)
+    records: Iterable[Mapping], *, kinds: Sequence[str] | None = (_RULE,)
 ) -> list[Relearn]:
     """The redundant drops, as :class:`Relearn`, newest last.
 
@@ -293,7 +293,7 @@ def analyse(
     records: Iterable[Mapping],
     utilisation_rows: Iterable[Mapping] = (),
     *,
-    kinds: Optional[Sequence[str]] = (_RULE,),
+    kinds: Sequence[str] | None = (_RULE,),
 ) -> list[RelearnGroup]:
     """Group the redundant drops and diagnose each group."""
     index = injection_index(utilisation_rows)

@@ -59,23 +59,23 @@ class Finding:
 def _blocks(html: str, tag: str) -> list[tuple[int, str]]:
     """(offset, text) of each <tag>…</tag> body, except inlined libraries."""
     return [(m.start(2), m.group(2)) for m in
-            re.finditer(rf"<{tag}\b([^>]*)>(.*?)</{tag}\s*>", html, re.S | re.I)
+            re.finditer(rf"<{tag}\b([^>]*)>(.*?)</{tag}\s*>", html, re.DOTALL | re.IGNORECASE)
             if "data-library" not in m.group(1).lower()]
 
 
 def _library_spans(html: str) -> list[tuple[int, int]]:
     return [m.span() for m in re.finditer(r"<script\b[^>]*data-library[^>]*>.*?</script\s*>",
-                                          html, re.S | re.I)]
+                                          html, re.DOTALL | re.IGNORECASE)]
 
 
 def _style_attrs(html: str) -> list[tuple[int, str]]:
     return [(m.start(2), m.group(2)) for m in
-            re.finditer(r"""\sstyle\s*=\s*(["'])(.*?)\1""", html, re.S | re.I)]
+            re.finditer(r"""\sstyle\s*=\s*(["'])(.*?)\1""", html, re.DOTALL | re.IGNORECASE)]
 
 
 def _blank_comments(text: str, js: bool) -> str:
     """Comments replaced by spaces, so offsets still match the page."""
-    text = re.sub(r"/\*.*?\*/", lambda m: re.sub(r"[^\n]", " ", m.group()), text, flags=re.S)
+    text = re.sub(r"/\*.*?\*/", lambda m: re.sub(r"[^\n]", " ", m.group()), text, flags=re.DOTALL)
     if js:
         text = re.sub(r"(?m)^(\s*)//.*$", lambda m: m.group(1) + " " * (len(m.group()) - len(m.group(1))), text)
     return text
@@ -119,13 +119,13 @@ def installed(family: str) -> bool | None:
 def _check_fonts(html: str, css: list[tuple[int, str]], out: list[Finding]) -> None:
     declared = set()
     for _, text in css:
-        for m in re.finditer(r"@font-face\s*\{([^}]*)\}", text, re.I):
-            fam = re.search(r"font-family\s*:\s*([^;]+)", m.group(1), re.I)
+        for m in re.finditer(r"@font-face\s*\{([^}]*)\}", text, re.IGNORECASE):
+            fam = re.search(r"font-family\s*:\s*([^;]+)", m.group(1), re.IGNORECASE)
             if fam:
                 declared.update(f.lower() for f in _families(fam.group(1)))
     unchecked = False
     for off, text in css:
-        for m in re.finditer(r"(@font-face\s*\{[^}]*\})|font-family\s*:\s*([^;}]+)", text, re.I):
+        for m in re.finditer(r"(@font-face\s*\{[^}]*\})|font-family\s*:\s*([^;}]+)", text, re.IGNORECASE):
             if m.group(1):
                 continue
             stack = _families(m.group(2))
@@ -170,9 +170,9 @@ def _colours(text: str) -> list[tuple[int, tuple[int, int, int]]]:
     found = []
     for d in re.finditer(r":([^;{}]+)", text):
         v, base = d.group(1), d.start(1)
-        for m in re.finditer(r"#([0-9a-f]{8}|[0-9a-f]{6}|[0-9a-f]{3,4})\b", v, re.I):
+        for m in re.finditer(r"#([0-9a-f]{8}|[0-9a-f]{6}|[0-9a-f]{3,4})\b", v, re.IGNORECASE):
             found.append((base + m.start(), _hex_rgb(m.group())))
-        for m in re.finditer(r"rgba?\(\s*(\d+)\s*,?\s*(\d+)\s*,?\s*(\d+)", v, re.I):
+        for m in re.finditer(r"rgba?\(\s*(\d+)\s*,?\s*(\d+)\s*,?\s*(\d+)", v, re.IGNORECASE):
             found.append((base + m.start(), (int(m.group(1)), int(m.group(2)), int(m.group(3)))))
     return found
 
@@ -212,19 +212,19 @@ def lint(html: str, mode: str = "keyed", key_color: str = "#00FF00",
                                    "stutters; animate transform or opacity instead"))
 
     for off, text in css:
-        for m in re.finditer(r"\btransition(-duration)?\s*:\s*([^;}]+)", text, re.I):
+        for m in re.finditer(r"\btransition(-duration)?\s*:\s*([^;}]+)", text, re.IGNORECASE):
             value = m.group(2).strip().lower()
             if value in ("none", "0", "0s", "0ms", "all 0s") or re.fullmatch(r"(\w+\s+)?0m?s(\s.*)?", value):
                 continue
             out.append(Finding("error", _line(html, off + m.start()),
                                f"`{m.group().strip()}`: a CSS transition runs on the browser's clock and ignores "
                                "seeking; use a CSS animation with a delay instead"))
-        for m in re.finditer(r"\banimation(-iteration-count)?\s*:[^;}]*\binfinite\b", text, re.I):
+        for m in re.finditer(r"\banimation(-iteration-count)?\s*:[^;}]*\binfinite\b", text, re.IGNORECASE):
             out.append(Finding("error", _line(html, off + m.start()),
                                "an infinite CSS animation: give it a finite iteration count that covers the overlay"))
-        for kf in re.finditer(r"@keyframes\s+([\w-]+)\s*\{((?:[^{}]*\{[^}]*\})*)\s*\}", text, re.I):
+        for kf in re.finditer(r"@keyframes\s+([\w-]+)\s*\{((?:[^{}]*\{[^}]*\})*)\s*\}", text, re.IGNORECASE):
             seen = set()
-            for p in re.finditer(rf"(?<![\w-])({'|'.join(LAYOUT_PROPS_CSS)})\s*:", kf.group(2), re.I):
+            for p in re.finditer(rf"(?<![\w-])({'|'.join(LAYOUT_PROPS_CSS)})\s*:", kf.group(2), re.IGNORECASE):
                 if p.group(1).lower() in seen:
                     continue
                 seen.add(p.group(1).lower())
@@ -235,7 +235,7 @@ def lint(html: str, mode: str = "keyed", key_color: str = "#00FF00",
     _check_fonts(html, css, out)
 
     libraries = _library_spans(html)
-    for m in re.finditer(r"""(?<![\w:-])(https?://[^\s"'()<>]+)""", html, re.I):
+    for m in re.finditer(r"""(?<![\w:-])(https?://[^\s"'()<>]+)""", html, re.IGNORECASE):
         if any(a <= m.start() < b for a, b in libraries):
             continue
         before = html[max(0, m.start() - 40):m.start()]

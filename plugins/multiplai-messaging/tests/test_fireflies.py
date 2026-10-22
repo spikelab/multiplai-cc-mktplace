@@ -33,7 +33,7 @@ def test_defang_neutralizes_fence_markers(fireflies):
 
 
 def test_defang_strips_control_bidi_ansi(fireflies):
-    poisoned = "a​b‮c\x1b[2Kd\x00e"
+    poisoned = "a\u200bb‮c\x1b[2Kd\x00e"
     out = fireflies.defang(poisoned)
     assert out == "abcde"
 

@@ -133,7 +133,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"pm-spec: {e}. Everything paid for is saved; run `resume` with a higher --max-usd "
               "to continue.", flush=True)
         return EXIT_FAILED
-    except Exception as e:  # noqa: BLE001 — every other failure is exit 1 with its message
+    except Exception as e:  # every other failure is exit 1 with its message
         log.debug("pm-spec failed", exc_info=True)
         print(f"pm-spec: failed: {e}", flush=True)
         return EXIT_FAILED

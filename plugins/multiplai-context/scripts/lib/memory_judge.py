@@ -50,9 +50,9 @@ import logging
 import os
 import re
 import tempfile
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Mapping, Optional, Sequence
 
 from multiplai_core.untrusted import fence, markdown_notice
 
@@ -62,17 +62,17 @@ from lib.section_loader import extract_section
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "SYSTEM",
-    "ROUTING_FLAG_EVIDENCE",
     "CITATIONS",
+    "ROUTING_FLAG_EVIDENCE",
+    "SYSTEM",
     "VERDICTS",
     "Verdict",
     "batch_labels",
-    "item_key",
-    "render_batch",
-    "parse_verdicts",
     "default_cache_path",
+    "item_key",
     "load_cache",
+    "parse_verdicts",
+    "render_batch",
     "save_cache",
 ]
 
@@ -249,7 +249,7 @@ class Verdict:
         }
 
     @classmethod
-    def from_dict(cls, data: Mapping) -> Optional["Verdict"]:
+    def from_dict(cls, data: Mapping) -> Verdict | None:
         """Rebuild a verdict from cache, or ``None`` if the record is not one.
 
         Strict on the way *in* as well as on the way out: a hand-edited or
@@ -409,7 +409,7 @@ def batch_labels(items: Sequence) -> list[tuple[str, int]]:
 
 
 def parse_verdicts(
-    raw: str, expected: Optional[Iterable[tuple[str, int]]] = None
+    raw: str, expected: Iterable[tuple[str, int]] | None = None
 ) -> dict[tuple[str, int], Verdict]:
     """Parse a judge reply into ``(target, number) -> Verdict``.
 

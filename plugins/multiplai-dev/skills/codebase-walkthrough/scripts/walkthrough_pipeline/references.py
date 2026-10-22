@@ -87,7 +87,7 @@ def rg_candidates(repo: RepoInfo, patterns: list[str], globs: list[str], *, igno
     argv.append(".")
     proc = subprocess.run(argv, cwd=repo.path, capture_output=True, text=True, stdin=subprocess.DEVNULL,
                           shell=False, check=False)
-    hits = {line[2:] if line.startswith("./") else line for line in proc.stdout.splitlines() if line}
+    hits = {line.removeprefix("./") for line in proc.stdout.splitlines() if line}
     return sorted(h for h in hits & tracked(repo) if not is_secret_path(h))
 
 
@@ -232,9 +232,7 @@ class _PyScan:
                 v = node.value
                 if v in self.tasks:
                     self.add("celery-name", v, rel, node.lineno, lines)
-                elif re.fullmatch(r"[\w.]+", v) and self._ours(v) and "." in v:
-                    self.add("dotted-string", v, rel, node.lineno, lines)
-                elif v == self.pkg:
+                elif re.fullmatch(r"[\w.]+", v) and self._ours(v) and "." in v or v == self.pkg:
                     self.add("dotted-string", v, rel, node.lineno, lines)
 
     @staticmethod

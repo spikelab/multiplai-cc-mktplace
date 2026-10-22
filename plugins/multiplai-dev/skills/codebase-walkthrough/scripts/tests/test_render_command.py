@@ -10,7 +10,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from walkthrough_pipeline import budget, sdk
 from walkthrough_pipeline.__main__ import main
 from walkthrough_pipeline.state import STATE_FILE

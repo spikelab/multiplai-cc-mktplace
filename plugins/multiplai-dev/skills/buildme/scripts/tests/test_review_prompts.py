@@ -16,7 +16,6 @@ import string
 from pathlib import Path
 
 import pytest
-
 from build_pipeline.prompts import review
 from build_pipeline.prompts.vendored import reviewer_blocks
 

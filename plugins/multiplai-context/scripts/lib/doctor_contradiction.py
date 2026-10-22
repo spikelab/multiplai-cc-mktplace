@@ -59,9 +59,9 @@ import logging
 import os
 import re
 import tempfile
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, Optional, Sequence
 
 from multiplai_core.untrusted import defang, fence, markdown_notice
 
@@ -70,19 +70,19 @@ from lib.job_effort import MEMORY_DOCTOR_EFFORT_OPTION, effort_kwargs
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "Finding",
     "STATE_FILENAME",
     "STATE_VERSION",
-    "file_digest",
-    "state_path",
-    "load_state",
-    "save_state",
-    "needs_check",
+    "Finding",
     "build_prompt",
-    "parse_findings",
     "check_file",
-    "run_pass",
+    "file_digest",
+    "load_state",
+    "needs_check",
+    "parse_findings",
     "render_section",
+    "run_pass",
+    "save_state",
+    "state_path",
 ]
 
 STATE_FILENAME = "doctor_state.json"
@@ -269,7 +269,7 @@ class Finding:
         }
 
     @classmethod
-    def from_dict(cls, data: Mapping) -> Optional["Finding"]:
+    def from_dict(cls, data: Mapping) -> Finding | None:
         try:
             a, b = data["a"], data["b"]
             return cls(
@@ -312,7 +312,7 @@ _WHY_RE = re.compile(r"<why>(.*?)</why>", re.DOTALL)
 _WS_RE = re.compile(r"\s+")
 
 
-def _locate(quote: str, lines: Sequence[str]) -> Optional[int]:
+def _locate(quote: str, lines: Sequence[str]) -> int | None:
     """1-based line number of *quote* in *lines*, or ``None`` if not present.
 
     Matched on whitespace-collapsed content so that re-wrapping or an extra
@@ -390,7 +390,7 @@ async def check_file(
     *,
     model: str,
     timeout_s: float = CHECK_TIMEOUT_S,
-) -> Optional[list[Finding]]:
+) -> list[Finding] | None:
     """Findings for one file, or ``None`` when the call could not be trusted.
 
     ``None`` is every failure mode — model error, timeout, unparseable answer.

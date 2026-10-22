@@ -20,7 +20,6 @@ import subprocess
 import sys
 
 import pytest
-
 from conftest import SCRIPTS_DIR
 
 # Modules the session hooks import directly, which must stay pure file reads.

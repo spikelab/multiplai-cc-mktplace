@@ -19,7 +19,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
 from conftest import REAL_DATA_DIR, REAL_LEGACY_REVIEWS_ROOT, TESTS
 from fixture_repo import _git as fixture_git
 from review_pipeline import ledger, render, rounds, sdk, target

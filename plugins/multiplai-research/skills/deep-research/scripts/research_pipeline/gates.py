@@ -10,7 +10,14 @@ from __future__ import annotations
 import logging
 import re
 
-from .models import Finding, GateResult, ReassessResult, ReputationTier, Source, SourceStatus
+from .models import (
+    Finding,
+    GateResult,
+    ReassessResult,
+    ReputationTier,
+    Source,
+    SourceStatus,
+)
 
 log = logging.getLogger(__name__)
 

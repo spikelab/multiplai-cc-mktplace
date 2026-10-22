@@ -34,7 +34,7 @@ from . import intake
 
 FILE = "tickets.json"
 PRIORITIES = ("none", "low", "medium", "high", "urgent")
-_PRIORITY_RE = re.compile(r"^[\s>*_#-]*priority[*_\s]*[:=][\s*_`]*([A-Za-z0-9-]+)", re.I | re.M)
+_PRIORITY_RE = re.compile(r"^[\s>*_#-]*priority[*_\s]*[:=][\s*_`]*([A-Za-z0-9-]+)", re.IGNORECASE | re.MULTILINE)
 _PRIORITY_WORDS = {
     "none": "none", "low": "low", "lowest": "low", "minor": "low", "p3": "low", "p4": "low",
     "medium": "medium", "normal": "medium", "moderate": "medium", "p2": "medium",
@@ -61,14 +61,14 @@ def change_priority(change_dir: Path) -> str:
 
 
 def _title(proposal: str, fallback: str) -> str:
-    m = re.search(r"^#\s+(.+?)\s*$", proposal, re.M)
+    m = re.search(r"^#\s+(.+?)\s*$", proposal, re.MULTILINE)
     title = m.group(1).strip() if m else ""
     return title if title and not title.startswith("<!--") else fallback
 
 
 def _section(text: str, heading: str) -> str:
-    m = re.search(rf"^##\s+{re.escape(heading)}\s*$(.*?)(?=^##\s|\Z)", text, re.M | re.S)
-    body = re.sub(r"<!--.*?-->", "", m.group(1), flags=re.S).strip() if m else ""
+    m = re.search(rf"^##\s+{re.escape(heading)}\s*$(.*?)(?=^##\s|\Z)", text, re.MULTILINE | re.DOTALL)
+    body = re.sub(r"<!--.*?-->", "", m.group(1), flags=re.DOTALL).strip() if m else ""
     return body
 
 

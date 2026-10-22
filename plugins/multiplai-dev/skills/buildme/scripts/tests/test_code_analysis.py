@@ -12,13 +12,12 @@ from unittest.mock import AsyncMock, patch
 
 import jsonschema
 import pytest
-from code_facts import ExploreOutput
-
 from build_pipeline import code_analysis
 from build_pipeline.config import BuildConfig
 from build_pipeline.llm_steps.spec_steps import run_codebase_analysis
 from build_pipeline.models import BlockInfo
 from build_pipeline.tdd_engine import assemble_context
+from code_facts import ExploreOutput
 
 SCHEMA = Path(__file__).resolve().parents[3] / "review" / "schema" / "facts.v1.schema.json"
 
@@ -141,7 +140,7 @@ class TestRunCodebaseAnalysis:
         config.codebase_analysis_path.write_text(md)
 
         text = config.codebase_analysis_path.read_text()
-        sections = re.split(r"^## ", text, flags=re.M)
+        sections = re.split(r"^## ", text, flags=re.MULTILINE)
         by_heading = {s.split("\n", 1)[0]: s for s in sections[1:]}
         for heading in ("Architecture", "Patterns", "Dependencies", "Conventions"):
             assert re.search(r"\[`src/(calc|cli)\.py:\d+(-\d+)?`\]\([^)]*src/(calc|cli)\.py#L\d+\)",
@@ -410,7 +409,7 @@ class TestNamedIn:
 
 
 def _section(md: str, heading: str) -> str:
-    for s in re.split(r"^## ", md, flags=re.M)[1:]:
+    for s in re.split(r"^## ", md, flags=re.MULTILINE)[1:]:
         if s.split("\n", 1)[0] == heading:
             return s
     raise AssertionError(f"no ## {heading} in the report")

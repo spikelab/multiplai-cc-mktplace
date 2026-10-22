@@ -17,7 +17,7 @@ import pytest
 _SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "video-edit" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 
-import pipeline  # noqa: E402
+import pipeline
 
 
 def _args(tmp_path: Path) -> argparse.Namespace:

@@ -9,7 +9,7 @@ Exit codes: 0=success, 1=build failure, 4=agent timeout.
 
 from __future__ import annotations
 
-import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -20,22 +20,17 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import NamedTuple
 
-import hashlib
-
+from . import board, git_ops, review_rounds, stop_record
 from . import budget as budget_mod
 from .budget import BudgetExceededError
-from . import board
-from . import git_ops
-from . import stop_record
-from . import review_rounds
 from .change_manager import extract_global_constraints
 from .config import BuildConfig
 from .gates import (
     _repo_trusted,
     agent_status_gate,
     baseline_test_gate,
-    integration_gate,
     final_verification,
+    integration_gate,
     parse_diff_paths,
     parse_implementation_note,
     parse_recurring,
@@ -70,10 +65,20 @@ from .models import (
     ReviewResult,
     TestQualityAudit,
 )
-from .mutation import changed_source_files, mutation_applies, render_report, run_mutation, score_text
+from .mutation import (
+    changed_source_files,
+    mutation_applies,
+    render_report,
+    run_mutation,
+    score_text,
+)
 from .narrow_tests import agent_test_command, narrow_test_command
 from .progress import ProgressWriter
-from .prompts.implementation import REVIEW_FIX_ESCALATION, REVIEW_FIX_LOCATIONS, REVIEW_FIX_SELF_CHECK
+from .prompts.implementation import (
+    REVIEW_FIX_ESCALATION,
+    REVIEW_FIX_LOCATIONS,
+    REVIEW_FIX_SELF_CHECK,
+)
 from .prompts.review import (
     ADJUDICATION_ROUND_MEMORY,
     ADJUDICATION_SCOPE_FIELD,

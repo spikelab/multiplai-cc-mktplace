@@ -13,12 +13,22 @@ import os
 from pathlib import Path
 
 import pytest
+from conftest import (
+    FakeModel,
+    Killed,
+    change_dir,
+    committed,
+    git,
+    meta,
+    ready_line,
+    requirements,
+    run,
+    snapshot,
+    state,
+    write,
+)
 from multiplai_core.specs import is_ready, set_spec_issues, spec_revision
-
 from pm_spec_pipeline import git_ops, handoff, intake, prototype, publish, runlock, sdk
-
-from conftest import (FakeModel, Killed, change_dir, committed, git, meta, ready_line,
-                      requirements, run, snapshot, state, write)
 from test_prototype import NOTES_FINDINGS, agent, ui_proposal
 
 TICKET = "# Throttle the API\n\nClients flood the server.\n"
@@ -99,7 +109,7 @@ def test_S1_ticket_interview_waits_then_continues_with_the_replies(repo, model, 
 
 def test_S2_artifacts_killed_part_way_keep_what_is_finished(repo, model, tmp_path, monkeypatch):
     from conftest import default_requirements
-    regen = lambda prompt, label, kw: default_requirements(prompt, label)  # noqa: E731
+    regen = lambda prompt, label, kw: default_requirements(prompt, label)
     model["spec:requirements:retry-policy"] = killer(regen)
     with pytest.raises(Killed):
         run(repo, "new", "throttle", "--auto")

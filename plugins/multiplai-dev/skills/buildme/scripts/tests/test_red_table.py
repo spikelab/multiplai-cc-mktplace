@@ -13,7 +13,6 @@ from __future__ import annotations
 from typing import NamedTuple
 
 import pytest
-
 from build_pipeline.gates import red_gate
 
 

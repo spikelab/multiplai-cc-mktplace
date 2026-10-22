@@ -25,17 +25,17 @@ import os
 import time
 from typing import TypeVar
 
-from pydantic import BaseModel, ValidationError
-
 from multiplai_core.agent_runner import (
     MAX_PROMPT_BYTES,  # noqa: F401 — re-exported (E2BIG threshold lives in core now)
     AgentRunError,
     AgentRunTimeout,
     run_agent,
 )
-from multiplai_core.aio import hard_timeout, swallow_task_result as _swallow_task_result  # noqa: F401
+from multiplai_core.aio import hard_timeout  # noqa: F401
+from multiplai_core.aio import swallow_task_result as _swallow_task_result  # noqa: F401
 from multiplai_core.structured import parse_answer
 from multiplai_core.text import extract_json  # noqa: F401 — re-exported for llm_steps.spec_steps
+from pydantic import BaseModel, ValidationError
 
 from . import budget
 from .models import AgentResult
@@ -229,8 +229,9 @@ async def agent_call(
 
     async with _get_semaphore():
         budget.check(phase=budget_label or "sdk")
-        from . import git_ops
         from contextlib import nullcontext
+
+        from . import git_ops
         writable = bool(set(allowed_tools) & {"Write", "Edit", "Bash", "NotebookEdit"})
         window = git_ops.agent_write_window(cwd) if writable else nullcontext()
         with window:

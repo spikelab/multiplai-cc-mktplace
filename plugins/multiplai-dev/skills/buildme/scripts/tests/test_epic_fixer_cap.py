@@ -28,11 +28,11 @@ import time
 from pathlib import Path
 
 import pytest
-
 from build_pipeline import budget, git_ops
 from build_pipeline.__main__ import build_parser
 from build_pipeline.config import EpicSettings
 from build_pipeline.findings import cli, decisions, loop
+
 from tests.test_findings_round import (  # noqa: F401  (fixtures)
     PR,
     REPO,
@@ -43,8 +43,15 @@ from tests.test_findings_round import (  # noqa: F401  (fixtures)
     fake_pr,
 )
 
-from .epic_row_helpers import CallLog, child, merge_waiting, pr_number, pr_url, use_workspace
-from .test_epic_fix import CHAIN, TWO, N, Epic, high
+from .epic_row_helpers import (
+    CallLog,
+    child,
+    merge_waiting,
+    pr_number,
+    pr_url,
+    use_workspace,
+)
+from .test_epic_fix import CHAIN, TWO, Epic, N, high
 
 # --- findings: --max-usd ------------------------------------------------------------------
 
@@ -414,6 +421,7 @@ def test_nothing_new_launches_while_running_fixers_hold_what_is_left(tmp_path, m
     ready once b's review ends, is not built until a's fixer has ended, as
     its build would spend what a's fixer was given."""
     from build_pipeline.epic import coordinator
+
     from .epic_row_helpers import EpicSplitAnswer
 
     answer = EpicSplitAnswer(single=False, reason="Three parts.", children=[child("a"), child("b"), child("c")])

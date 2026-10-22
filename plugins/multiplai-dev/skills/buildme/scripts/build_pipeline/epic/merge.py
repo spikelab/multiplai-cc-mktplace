@@ -255,9 +255,7 @@ def not_resolutions(w: Path, first: str, second: str, result: str) -> list[str] 
             allowed[p] = (s, _blob(w, result, p))
     written = set().union(*_renames("", wrote).values())
     for p, (s, new) in allowed.items():
-        if is_lockfile(p) and not (s and new is not None and _lockfile(p, s[1], s[2], new, written)):
-            bad.append(p)
-        elif _is_changelog(p) and not (s and new is not None and _entries(*s, new, _renames(p, wrote))):
+        if is_lockfile(p) and not (s and new is not None and _lockfile(p, s[1], s[2], new, written)) or _is_changelog(p) and not (s and new is not None and _entries(*s, new, _renames(p, wrote))):
             bad.append(p)
     return [p for p in check if p in bad]
 

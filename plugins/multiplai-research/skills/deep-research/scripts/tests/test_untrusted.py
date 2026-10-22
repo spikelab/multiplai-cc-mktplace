@@ -5,12 +5,11 @@ puts it inside a fence and tells the model it is data — which only holds as
 long as the page cannot close the fence itself.
 """
 
-from research_pipeline.prompts.extract import EXTRACT_PROMPT
 import pytest
-
 from research_pipeline import sdk as sdk_module
 from research_pipeline.claude_agent_fetcher import ClaudeAgentFetcher
 from research_pipeline.models import Finding, SearchResult, Source
+from research_pipeline.prompts.extract import EXTRACT_PROMPT
 from research_pipeline.untrusted import MAX_URL_LEN, defang_untrusted, is_fetchable_url
 
 
@@ -26,7 +25,7 @@ class TestDefangUntrusted:
         assert "<untrusted-content" not in out
 
     def test_strips_control_and_bidi_characters(self):
-        out = defang_untrusted("a\x1b[2Kb‮c​d﻿")
+        out = defang_untrusted("a\x1b[2Kb‮c\u200bd﻿")
         assert out == "abcd"
 
     def test_leaves_ordinary_prose_untouched(self):

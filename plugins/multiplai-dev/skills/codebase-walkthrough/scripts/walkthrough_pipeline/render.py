@@ -15,7 +15,7 @@ import html
 import json
 import os
 import re
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote as url_quote
 
@@ -670,7 +670,7 @@ def human_markdown(state: WalkState, lk: Linker, out_dir: Path) -> str:
 # git's empty tree (`git hash-object -t tree /dev/null`). A walkthrough.json whose base is this
 # opens in the review-viewer as a tree target: every file under the module directory is "changed".
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
-MERMAID = re.compile(r"```mermaid\n(.*?)```", re.S)
+MERMAID = re.compile(r"```mermaid\n(.*?)```", re.DOTALL)
 # walkthrough.v1.schema.json: Diagram.source maxLength.
 DIAGRAM_MAX_CHARS = 20000
 # Sections that go in overview_md, not in a step: the commits table and the coverage table (agent mode),
@@ -819,7 +819,7 @@ def render_walkthrough_json(state: WalkState, md: str) -> dict:
     anchored = {a["path"] for s in steps for a in s["anchors"]}
     return {
         "schema_version": 1,
-        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "base_sha": EMPTY_TREE,
         "head_sha": t.head_sha,
         "overview_md": "\n\n".join(p for p in overview if p) + "\n",
@@ -833,7 +833,7 @@ def render_walkthrough_json(state: WalkState, md: str) -> dict:
 
 
 def markdown_headings(md: str, level: int = 2) -> list[str]:
-    return [m.group(1).strip() for m in re.finditer(rf"^{'#' * level} (.+)$", md, re.M)]
+    return [m.group(1).strip() for m in re.finditer(rf"^{'#' * level} (.+)$", md, re.MULTILINE)]
 
 
 # Characters Python-Markdown's inline patterns act on before it stashes a raw HTML tag, plus the

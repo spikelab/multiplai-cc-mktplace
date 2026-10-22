@@ -20,13 +20,11 @@ Covers all scenarios from requirements/catalog-generation-base.md:
 
 import asyncio
 import dataclasses
-import hashlib
 import json
 import os
 import sys
-import tempfile
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -225,7 +223,7 @@ class TestGeneratorBaseInterface:
         from generators.base import GeneratorBase
 
         assert hasattr(GeneratorBase, "run")
-        assert callable(getattr(GeneratorBase, "run"))
+        assert callable(GeneratorBase.run)
 
     def test_generator_base_has_discover_sources(self):
         """GeneratorBase must define discover_sources() for subclass override."""
@@ -418,7 +416,6 @@ class TestContentHashing:
 
     def test_identical_content_produces_identical_hash(self, tmp_path):
         """Scenario: Same content hashed twice produces same hash."""
-        from generators.base import GeneratorBase
 
         f1 = tmp_path / "file1.txt"
         f2 = tmp_path / "file2.txt"
@@ -432,7 +429,6 @@ class TestContentHashing:
 
     def test_modified_content_produces_different_hash(self, tmp_path):
         """Scenario: Modified content (even one character) produces different hash."""
-        from generators.base import GeneratorBase
 
         f = tmp_path / "file.txt"
         f.write_text("hello world")

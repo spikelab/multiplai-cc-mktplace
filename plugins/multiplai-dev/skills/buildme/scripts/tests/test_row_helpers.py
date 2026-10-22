@@ -7,8 +7,8 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
 from build_pipeline import git_ops
+
 from tests.row_helpers import assert_same_as_unstopped, run_killed_at
 
 

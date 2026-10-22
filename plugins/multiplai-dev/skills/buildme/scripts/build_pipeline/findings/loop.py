@@ -45,16 +45,16 @@ runs no review and posts nothing: it is recorded finished, with no
 
 from __future__ import annotations
 
-from build_pipeline.budget import BudgetExceededError
-
 import asyncio
 import functools
 import logging
 import re
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Awaitable, Callable
+
+from build_pipeline.budget import BudgetExceededError
 
 from .. import budget, git_ops, stop_record
 from ..change_manager import normalize_change_name
@@ -117,7 +117,7 @@ class Seams:
     decisions: Callable[[str], Path] | None = None
     # The review target directories the ledger holds for this PR
     # (`history.ledger_dirs`).
-    review_dirs: Callable[["FindingsRun"], list[str]] | None = None
+    review_dirs: Callable[[FindingsRun], list[str]] | None = None
 
 
 @dataclass
@@ -147,7 +147,7 @@ class FindingsRun:
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def load_state(run: FindingsRun) -> BuildState:
@@ -250,7 +250,7 @@ async def _step(run: FindingsRun, st: BuildState, rnd: FindingsRound, name: str,
                 body: Callable[[], Awaitable[None]]) -> None:
     if name in rnd.finished:
         return
-    save = lambda: st.checkpoint(run.state_path)  # noqa: E731
+    save = lambda: st.checkpoint(run.state_path)
     if name in rnd.started and name in REWIND_STEPS:
         keep_and_rewind(run, rnd, name)
     if name not in rnd.started:
@@ -439,7 +439,7 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
     fs = st.findings
     assert fs is not None
     seams = run.seams
-    save = lambda: st.checkpoint(run.state_path)  # noqa: E731
+    save = lambda: st.checkpoint(run.state_path)
     n = rnd.number
 
     async def do_triage() -> None:

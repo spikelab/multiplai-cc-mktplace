@@ -13,7 +13,6 @@ from pathlib import Path
 
 import pytest
 from fixture_repo import _ENV
-
 from review_pipeline import round_metrics
 from review_pipeline.round_metrics import NO_LINE, PRESENT, UNKNOWN, WRITTEN
 

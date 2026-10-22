@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from multiplai_core.env import (  # noqa: F401
     env_candidates as _env_candidates,
+)
+from multiplai_core.env import (  # noqa: F401
     find_project_root,
     load_env,
     load_multiplai_conf,

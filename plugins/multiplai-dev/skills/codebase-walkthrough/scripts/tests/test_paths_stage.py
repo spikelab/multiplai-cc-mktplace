@@ -12,11 +12,10 @@ import re
 import subprocess
 from pathlib import Path
 
-import jsonschema
-import pytest
-
 import code_facts
+import jsonschema
 import path_fixtures
+import pytest
 from fakes import FakeAgents
 from walkthrough_pipeline import sdk
 from walkthrough_pipeline.__main__ import main
@@ -154,8 +153,8 @@ def test_click_cli_run_renders_the_paths_section(tmp_path, monkeypatch, spy):
     assert "- Ends at `p1h2` (trace complete)." in lines
     assert "no e2e test" in body
     coverage = section_texts(md, "Coverage")[0]
-    assert re.search(r"^\| Paths traced \| 1\b", coverage, re.M)
-    assert re.search(r"^\| Paths cut short \| 0\b", coverage, re.M)
+    assert re.search(r"^\| Paths traced \| 1\b", coverage, re.MULTILINE)
+    assert re.search(r"^\| Paths cut short \| 0\b", coverage, re.MULTILINE)
     assert "Scenarios cut short" not in md
     assert main(["check", str(md_path)]) == 0           # every hop link re-reads at the commit
 

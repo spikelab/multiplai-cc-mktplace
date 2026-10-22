@@ -27,7 +27,13 @@ from __future__ import annotations
 
 import logging
 
-from multiplai_core.specs import is_ready, mark_draft, mark_ready, read_change_meta, spec_revision
+from multiplai_core.specs import (
+    is_ready,
+    mark_draft,
+    mark_ready,
+    read_change_meta,
+    spec_revision,
+)
 
 from . import consistency, tickets
 from .git_ops import GitError, commit_change_dir

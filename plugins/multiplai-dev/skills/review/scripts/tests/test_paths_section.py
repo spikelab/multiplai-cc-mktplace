@@ -15,15 +15,25 @@ import subprocess
 import code_facts
 import code_facts.paths as code_facts_paths
 import pytest
-from code_facts.paths import (E2EListing, E2ETest, FallbackStatus, Handler, Location, MockedE2ETest, PathEntry,
-                              PathHop, PathsResult, TracedPath, write_paths_file)
-from test_reported_finders import make_repo, mapped, model, resume, review, saved  # noqa: F401
-
+from code_facts.paths import (
+    E2EListing,
+    E2ETest,
+    FallbackStatus,
+    Handler,
+    Location,
+    MockedE2ETest,
+    PathEntry,
+    PathHop,
+    PathsResult,
+    TracedPath,
+    write_paths_file,
+)
 from review_pipeline import sdk
 from review_pipeline.__main__ import main
 from review_pipeline.export import to_findings_file
 from review_pipeline.models import CoverageRecord
 from review_pipeline.render import render_review, write_review
+from test_reported_finders import make_repo, mapped, model, resume, review, saved  # noqa: F401
 
 
 def new(name: str):

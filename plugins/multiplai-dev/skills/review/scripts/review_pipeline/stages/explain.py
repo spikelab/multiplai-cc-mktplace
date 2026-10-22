@@ -25,10 +25,24 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from code_facts import (Citation, ExploreOutput, Fact, FilePurpose, Scope, citation_keeper, explore_unit, gate_answers,
-                        partition, reask_units, run_tasks, unit_key, ws_path)
+from code_facts import (
+    Citation,
+    ExploreOutput,
+    Fact,
+    FilePurpose,
+    Scope,
+    citation_keeper,
+    explore_unit,
+    gate_answers,
+    partition,
+    reask_units,
+    run_tasks,
+    unit_key,
+    ws_path,
+)
 
-from .. import sdk, target as target_mod
+from .. import sdk
+from .. import target as target_mod
 from ..facts import resolver, scope_for, write_facts_file
 from ..models import ExplainedFacts, ReviewState, TargetInfo
 from . import RunContext

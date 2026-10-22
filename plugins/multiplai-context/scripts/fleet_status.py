@@ -31,13 +31,10 @@ files remain pure caches: delete them and the next run rebuilds them.
 
 import argparse
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-
-from multiplai_core.log_utils import setup_logging
-from multiplai_core.paths import get_paths
 
 from lib.fleet import (
     AGENTS_FILENAME,
@@ -55,6 +52,8 @@ from lib.fleet_sources.git_repos import collect_repos
 from lib.fleet_sources.jobs import collect_jobs
 from lib.fleet_sources.prs import collect_prs, scan_from_dict, scan_to_dict
 from lib.fsio import atomic_write
+from multiplai_core.log_utils import setup_logging
+from multiplai_core.paths import get_paths
 
 logger = setup_logging("fleet_status", packages=("lib", "generators"))
 
@@ -131,7 +130,7 @@ def main() -> int:
         args.workspace.expanduser().resolve() if args.workspace
         else data_dir.parent.parent
     )
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     fleet = collect_full(
         data_dir, workspace, now,

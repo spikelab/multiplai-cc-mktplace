@@ -1,10 +1,8 @@
 """Tests for memory templates (templates/*.md)."""
 
 import re
-from pathlib import Path
 
 import pytest
-
 from conftest import PLUGIN_ROOT
 
 TEMPLATES_DIR = PLUGIN_ROOT / "templates"

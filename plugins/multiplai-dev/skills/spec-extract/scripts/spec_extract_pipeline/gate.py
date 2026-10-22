@@ -99,7 +99,9 @@ def symbol_spans(target: Target, symbols: list[Symbol]) -> dict[str, list[tuple[
 
 def _as_written(cap: Capability, name: str, scenario: Scenario) -> str:
     """Requirement *name* with only *scenario*, as render writes it into a registry file."""
-    from .render import capability_md  # here, not at the top: render imports this module
+    from .render import (
+        capability_md,  # here, not at the top: render imports this module
+    )
     return capability_md("", "", Spec(cap.name, cap.summary, [Requirement(name, "", [scenario])]))
 
 

@@ -7,29 +7,24 @@ All tests use stubs — no real SDK or API calls.
 from __future__ import annotations
 
 import asyncio
-import os
+from datetime import UTC
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
-
 from research_pipeline.claude_agent_fetcher import (
     ClaudeAgentFetcher,
-    FetcherProtocol,
     HttpxFetcher,
 )
 from research_pipeline.config import ResearchConfig
 from research_pipeline.models import FetchErrorType, SearchResult
 from research_pipeline.search_router import (
     ClaudeAgentSearchProvider,
-    PaidFallbackError,
     ProviderError,
     QuotaExhaustedError,
     RouterConfig,
     SearchRouter,
     build_default_router,
 )
-
 
 # ---------------------------------------------------------------------------
 # SDK allowed_tools
@@ -48,8 +43,8 @@ class TestSDKAllowedTools:
         import research_pipeline.sdk as sdk_mod
         monkeypatch.setattr(sdk_mod, "llm_call", fake_llm_call)
 
-        from research_pipeline.sdk import llm_call_structured
         from research_pipeline.nodes.plan import PlanResponse
+        from research_pipeline.sdk import llm_call_structured
 
         await llm_call_structured("test", PlanResponse)
         # default: no tools
@@ -273,9 +268,9 @@ class TestPaidFallbackEnforcement:
         # Pre-exhaust the free tier
         quota = router.quotas.get_or_create(tavily)
         quota.monthly_count = 1000  # at limit
-        from datetime import datetime, timezone
-        quota.last_reset_month = datetime.now(timezone.utc).strftime("%Y-%m")
-        quota.last_reset_day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        from datetime import datetime
+        quota.last_reset_month = datetime.now(UTC).strftime("%Y-%m")
+        quota.last_reset_day = datetime.now(UTC).strftime("%Y-%m-%d")
         router.quotas._save()
 
         with pytest.raises(QuotaExhaustedError):

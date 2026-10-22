@@ -17,7 +17,6 @@ import re
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
 from build_pipeline.config import BuildConfig
 from build_pipeline.gates import (
     _EMPTY_SLOT_VALUES,
@@ -28,10 +27,6 @@ from build_pipeline.gates import (
     unchanged_tests_gate,
 )
 from build_pipeline.llm_steps.tdd_steps import run_implementer, run_integration_fix
-from build_pipeline.prompts.implementation import (
-    REVIEW_FIX_SELF_CHECK,
-    TEST_CHANGE_DECLARATION,
-)
 from build_pipeline.models import (
     AgentResult,
     BlockInfo,
@@ -41,8 +36,15 @@ from build_pipeline.models import (
     ReviewScore,
 )
 from build_pipeline.progress import ProgressWriter
+from build_pipeline.prompts.implementation import (
+    REVIEW_FIX_SELF_CHECK,
+    TEST_CHANGE_DECLARATION,
+)
 from build_pipeline.state import BuildState, TDDState
-from build_pipeline.tdd_engine import _review_fix_description, _run_integration_and_review
+from build_pipeline.tdd_engine import (
+    _review_fix_description,
+    _run_integration_and_review,
+)
 
 
 async def _rendered(step, *args, **kwargs) -> str:

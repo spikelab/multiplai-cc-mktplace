@@ -22,7 +22,7 @@ _SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "video-edit" / "s
 sys.path.insert(0, str(_SCRIPTS))
 
 pytest.importorskip("playwright.sync_api")
-from stages import capture, overlay  # noqa: E402
+from stages import capture, overlay
 
 
 @pytest.fixture(scope="module")

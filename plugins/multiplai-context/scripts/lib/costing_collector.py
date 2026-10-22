@@ -37,9 +37,9 @@ import logging
 import os
 import re
 import shutil
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator
 
 from multiplai_core import costing
 from multiplai_core.costing import (

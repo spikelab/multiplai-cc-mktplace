@@ -28,7 +28,7 @@ pipeline whose real job is the diary; it may never cost a session its entry.
 import asyncio
 import json
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -39,8 +39,7 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from lib import extraction
-from lib import fleet
+from lib import extraction, fleet
 from lib import session_registry as sr
 from test_fleet import NOW, make_checkpoint, make_session
 
@@ -210,7 +209,7 @@ class TestExtractionPath:
 def _entry(data_dir, sid, kind="end", ago=timedelta(days=1), **extra):
     rdir = data_dir / "sessions"
     rdir.mkdir(parents=True, exist_ok=True)
-    ts = (datetime.now(timezone.utc) - ago).isoformat()
+    ts = (datetime.now(UTC) - ago).isoformat()
     path = rdir / f"{sid}.json"
     path.write_text(json.dumps({
         "session_id": sid,
@@ -377,7 +376,7 @@ class TestResumeClearsDisposition:
             assert json.loads(path.read_text())["disposition"]["state"] == "parked"
 
     def test_a_resumed_parked_session_groups_by_live_status(self, tmp_path):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         make_session(tmp_path, "p", kind="end", now=now)
         _add_disposition(tmp_path, "p", "parked", "tomorrow")
 
@@ -391,7 +390,7 @@ class TestResumeClearsDisposition:
         assert "## Parked" not in fleet.render_agents_md(f, now)
 
     def test_a_resumed_done_session_is_visible_again(self, tmp_path):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         make_session(tmp_path, "d", kind="end", now=now)
         _add_disposition(tmp_path, "d", "done", "shipped")
 
@@ -448,7 +447,7 @@ class TestGcExemption:
         (tmp_path / "sessions").mkdir()
         path = tmp_path / "sessions" / "junk.json"
         path.write_text("{not json")
-        old = (datetime.now(timezone.utc) - timedelta(days=30)).timestamp()
+        old = (datetime.now(UTC) - timedelta(days=30)).timestamp()
         import os
         os.utime(path, (old, old))
 

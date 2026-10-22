@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
-
 from code_facts import Citation, Scope, Span, partition
+from pydantic import ValidationError
 
 
 def test_citation_defaults_to_head_and_orders_lines():

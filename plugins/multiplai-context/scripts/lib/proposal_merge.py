@@ -26,7 +26,7 @@ the ``## Updates for`` header line as part of each section body.
 from __future__ import annotations
 
 import re
-from typing import Iterable, Sequence
+from collections.abc import Iterable, Sequence
 
 # `## Updates for `file`` — the group heading. Length 16 is the offset dream.py
 # uses to look past the opening backtick; keep the two in step.

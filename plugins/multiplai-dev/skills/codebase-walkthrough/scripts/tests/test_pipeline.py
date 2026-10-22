@@ -8,10 +8,9 @@ import re
 import subprocess
 from pathlib import Path
 
+import fixture_repo
 import jsonschema
 import pytest
-
-import fixture_repo
 from fakes import FakeAgents
 from walkthrough_pipeline import sdk
 from walkthrough_pipeline.__main__ import main
@@ -158,9 +157,9 @@ def test_the_viewer_fixture_is_what_run_writes(done_run):
 def test_header_names_the_module_directory_depth_and_mode(done_run, ws):
     md_path, _, _ = done_run
     md = md_path.read_text()
-    where = re.search(r"^- Module directory: `([^`]+)`$", md, re.M).group(1)
+    where = re.search(r"^- Module directory: `([^`]+)`$", md, re.MULTILINE).group(1)
     assert (md_path.parent / where).resolve() == (ws["engine"] / "bookings").resolve()
-    assert re.search(r"^- Depth: `standard`$", md, re.M) and re.search(r"^- Mode: `human`$", md, re.M)
+    assert re.search(r"^- Depth: `standard`$", md, re.MULTILINE) and re.search(r"^- Mode: `human`$", md, re.MULTILINE)
 
 
 def test_split_sections_ignores_headings_inside_code_blocks():
@@ -183,7 +182,7 @@ def test_repo_key_names_a_worktree_by_its_project_not_its_directory(fresh_ws, tm
                  "--repo-key", "engine"]) == 0
     md = (out / "bookings-walkthrough.md").read_text()
     sha = _git_out(worktree, "rev-parse", "HEAD").strip()
-    assert re.search(rf"^\| engine \| \.\./\.\. \| `{sha}` \|$", md, re.M), md
+    assert re.search(rf"^\| engine \| \.\./\.\. \| `{sha}` \|$", md, re.MULTILINE), md
     assert "[`engine/bookings/" in md
     assert "buildme-c" not in md + (out / "bookings-walkthrough.json").read_text()
     assert main(["check", str(out / "bookings-walkthrough.md")]) == 0

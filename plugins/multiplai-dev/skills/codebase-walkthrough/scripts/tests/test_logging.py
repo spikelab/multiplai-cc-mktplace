@@ -10,9 +10,9 @@ import json
 
 from fakes import FakeAgents
 from multiplai_core.log_utils import _get_logs_dir
+from test_pipeline import run_args
 from walkthrough_pipeline import sdk
 from walkthrough_pipeline.__main__ import main
-from test_pipeline import run_args
 
 
 def _read_logs(logs, stem, ext):

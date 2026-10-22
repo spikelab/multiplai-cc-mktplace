@@ -49,7 +49,7 @@ import logging
 import os
 import shutil
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from multiplai_core.plugin_options import option, option_float, option_int
@@ -370,7 +370,7 @@ def read_context_tokens(
         try:
             cutoff = datetime.fromisoformat(str(after_ts))
             if cutoff.tzinfo is None:
-                cutoff = cutoff.replace(tzinfo=timezone.utc)
+                cutoff = cutoff.replace(tzinfo=UTC)
         except (ValueError, TypeError):
             cutoff = None
 
@@ -424,7 +424,7 @@ def _scan_usage_tail(
                     str(record.get("timestamp")).replace("Z", "+00:00")
                 )
                 if ts.tzinfo is None:
-                    ts = ts.replace(tzinfo=timezone.utc)
+                    ts = ts.replace(tzinfo=UTC)
             except (ValueError, TypeError):
                 continue  # freshness unverifiable — don't act on it
             if ts <= cutoff:
@@ -536,7 +536,7 @@ def _session_started_at(data_dir: Path, session_id: str) -> datetime | None:
         raw = (registry_dir(data_dir) / f"{session_id}.json").read_text(encoding="utf-8")
         started = json.loads(raw).get("started_at")
         ts = datetime.fromisoformat(str(started))
-        return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+        return ts if ts.tzinfo else ts.replace(tzinfo=UTC)
     except Exception:
         return None
 
@@ -576,7 +576,7 @@ def staleness_trigger(
     started = _session_started_at(data_dir, session_id)
     if started is None:
         return None
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     if (now - started).total_seconds() < cfg.min_session_minutes * 60:
         return None
 
@@ -592,7 +592,7 @@ def staleness_trigger(
         # treat it as stale rather than never refreshing this session again.
         return "stale"
     if last.tzinfo is None:
-        last = last.replace(tzinfo=timezone.utc)
+        last = last.replace(tzinfo=UTC)
     if (now - last).total_seconds() >= cfg.stale_hours * 3600:
         return "stale"
     return None
@@ -612,7 +612,7 @@ def claim_writer(data_dir: Path, session_id: str) -> Path:
     sdir = session_dir(data_dir, session_id)
     sdir.mkdir(parents=True, exist_ok=True)
     marker = sdir / "writing.marker"
-    marker.write_text(datetime.now(timezone.utc).isoformat())
+    marker.write_text(datetime.now(UTC).isoformat())
     return marker
 
 
@@ -847,7 +847,7 @@ def write_pending_marker(
         "project": project,
         "hostname": host,
         "checkpoint_path": str(checkpoint_file(data_dir, session_id)),
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
     }
     atomic_write(marker, json.dumps(payload, indent=2))
     return marker
@@ -907,8 +907,8 @@ def consume_pending_marker(
             return None
         created = datetime.fromisoformat(str(payload.get("created_at")))
         if created.tzinfo is None:
-            created = created.replace(tzinfo=timezone.utc)
-        age_h = (datetime.now(timezone.utc) - created).total_seconds() / 3600
+            created = created.replace(tzinfo=UTC)
+        age_h = (datetime.now(UTC) - created).total_seconds() / 3600
         if age_h > cfg.ttl_hours:
             logger.info("Pending checkpoint marker expired (%.1fh old); discarding", age_h)
             return None
@@ -933,7 +933,7 @@ def reset_session_counters(data_dir: Path, session_id: str) -> None:
     # Stale-usage guard: token reads ignore transcript records older than
     # this, so the pre-compact usage still sitting at the transcript tail
     # can't re-trigger bands right after the rebuild.
-    state["rebuild_ts"] = datetime.now(timezone.utc).isoformat()
+    state["rebuild_ts"] = datetime.now(UTC).isoformat()
     try:
         save_state(data_dir, session_id, state)
     except OSError:
@@ -1089,13 +1089,13 @@ def _marker_age_hours(marker: Path) -> float:
         payload = json.loads(marker.read_text(encoding="utf-8"))
         created = datetime.fromisoformat(str(payload["created_at"]))
         if created.tzinfo is None:
-            created = created.replace(tzinfo=timezone.utc)
+            created = created.replace(tzinfo=UTC)
     except Exception:
         try:
-            created = datetime.fromtimestamp(marker.stat().st_mtime, tz=timezone.utc)
+            created = datetime.fromtimestamp(marker.stat().st_mtime, tz=UTC)
         except OSError:
             return 0.0
-    return (datetime.now(timezone.utc) - created).total_seconds() / 3600
+    return (datetime.now(UTC) - created).total_seconds() / 3600
 
 
 def _last_activity(data_dir: Path, session_id: str, sdir: Path) -> datetime | None:
@@ -1116,7 +1116,7 @@ def _last_activity(data_dir: Path, session_id: str, sdir: Path) -> datetime | No
     except OSError:
         pass
     latest = (
-        datetime.fromtimestamp(newest, tz=timezone.utc) if newest else None
+        datetime.fromtimestamp(newest, tz=UTC) if newest else None
     )
 
     entry = _registry_identity(data_dir, session_id)
@@ -1125,7 +1125,7 @@ def _last_activity(data_dir: Path, session_id: str, sdir: Path) -> datetime | No
         try:
             ts = datetime.fromisoformat(str(raw))
             if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=timezone.utc)
+                ts = ts.replace(tzinfo=UTC)
             latest = ts if latest is None else max(latest, ts)
         except (ValueError, TypeError):
             pass
@@ -1171,7 +1171,7 @@ def sweep_checkpoints(data_dir: Path, cfg: CheckpointConfig) -> tuple[int, int]:
     if cfg.gc_days <= 0:
         return expired, 0
 
-    cutoff = datetime.now(timezone.utc) - timedelta(days=cfg.gc_days)
+    cutoff = datetime.now(UTC) - timedelta(days=cfg.gc_days)
     try:
         candidates = sorted(
             d for d in checkpoints_root(data_dir).iterdir()

@@ -19,20 +19,20 @@ orchestrator writes them to spec-issues.md for `pm-spec revise` and stops
 
 from __future__ import annotations
 
-from build_pipeline.budget import BudgetExceededError
-
 import asyncio
+import copy
 import hashlib
 import json
-import copy
-import shutil
-import tempfile
 import logging
 import re
+import shutil
+import tempfile
 from pathlib import Path
 
+from build_pipeline.budget import BudgetExceededError
+
 from . import budget
-from .change_manager import ChangeManager, ARTIFACT_DAG
+from .change_manager import ARTIFACT_DAG, ChangeManager
 from .dependencies import NewDependency, design_decisions_text, detect_new_dependencies
 from .gates import unknowns_gate
 from .io_utils import atomic_write
@@ -605,11 +605,7 @@ _ADD_FILE_START_RE = re.compile(
 # A backticked file path: no spaces or brackets, and a directory or a known
 # file extension (so `textkit.summary.summarize` and `str.split` are not paths).
 _PATH_TOKEN_RE = re.compile(r"`([\w./-]+)`")
-_PATH_EXTENSIONS = frozenset((
-    "py pyi js jsx ts tsx mjs cjs go rs rb java kt kts swift c h cc cpp hpp cs "
-    "php scala sh bash sql html htm css scss vue svelte toml json yaml yml cfg "
-    "ini md txt lock xml gradle"
-).split())
+_PATH_EXTENSIONS = frozenset(["py", "pyi", "js", "jsx", "ts", "tsx", "mjs", "cjs", "go", "rs", "rb", "java", "kt", "kts", "swift", "c", "h", "cc", "cpp", "hpp", "cs", "php", "scala", "sh", "bash", "sql", "html", "htm", "css", "scss", "vue", "svelte", "toml", "json", "yaml", "yml", "cfg", "ini", "md", "txt", "lock", "xml", "gradle"])
 _TEST_PATH_RE = re.compile(
     r"(?:^|/)(?:tests?|spec|__tests__)/"
     r"|(?:^|/)(?:test_[^/]*|[^/]*_test\.[^/]+|[^/]*\.(?:test|spec)\.[^/]+|conftest\.py)$"
@@ -811,9 +807,7 @@ def scan_no_behaviour_blocks(tasks_path: Path) -> list[dict]:
             why = "it says an earlier block already satisfies it"
         elif _NO_CODE_RE.search(text):
             why = "it says it needs no code"
-        elif not paths or any(not _TEST_PATH_RE.search(p) for p in changed):
-            continue
-        elif _has_code_step(body):
+        elif not paths or any(not _TEST_PATH_RE.search(p) for p in changed) or _has_code_step(body):
             continue
         elif changed and _is_test_work(heading, body):
             why = (

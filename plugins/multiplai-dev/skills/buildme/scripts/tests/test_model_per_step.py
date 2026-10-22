@@ -18,14 +18,13 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from multiplai_core.env import CURRENT_MODEL
-
 from build_pipeline.config import (
     MODEL_STAGES,
     STEP_STAGES,
     BuildConfig,
     detect_tier,
 )
+from multiplai_core.env import CURRENT_MODEL
 
 PIPELINE = Path(__file__).resolve().parent.parent / "build_pipeline"
 PI_SPEC = "pi:deepseek/deepseek-v4-flash@fireworks"

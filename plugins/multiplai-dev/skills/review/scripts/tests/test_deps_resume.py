@@ -17,8 +17,14 @@ import time
 from pathlib import Path
 
 import pytest
-from deps_fixtures import commit_files, dependency, git, git_lock_entry, push, reviewed_repo
-
+from deps_fixtures import (
+    commit_files,
+    dependency,
+    git,
+    git_lock_entry,
+    push,
+    reviewed_repo,
+)
 from review_pipeline import deps, gates
 from review_pipeline import target as target_mod
 from review_pipeline.config import ReviewConfig

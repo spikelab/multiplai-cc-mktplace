@@ -17,10 +17,9 @@ check whether changes to `preferences.md` trace back to verdicts.
 """
 
 import sys
+from datetime import UTC
 from pathlib import Path
 from unittest.mock import AsyncMock
-
-import pytest
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
@@ -95,7 +94,7 @@ class TestIntentionPrompt:
 
     def test_todays_date_is_substituted_before_the_call(self, tmp_path):
         import asyncio
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         from lib.extraction import extract_units
 
@@ -103,7 +102,7 @@ class TestIntentionPrompt:
         asyncio.run(extract_units("some transcript", valid_targets=[], client=client))
         sent = client.query.call_args.kwargs.get("system", "") + \
             str(client.query.call_args.kwargs.get("messages", ""))
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
         assert today in sent
         assert "{today}" not in sent
 
@@ -111,6 +110,7 @@ class TestIntentionPrompt:
 class TestVerdictsSurviveThePipeline:
     def test_a_verdict_learning_round_trips(self):
         import asyncio
+
         from lib.extraction import extract_units
 
         response = _unit([{
@@ -153,6 +153,7 @@ class TestVerdictsSurviveThePipeline:
 class TestIntentionsSurviveThePipeline:
     def test_an_intention_learning_round_trips(self):
         import asyncio
+
         from lib.extraction import extract_units
 
         response = _unit([{

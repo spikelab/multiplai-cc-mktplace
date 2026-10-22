@@ -12,7 +12,6 @@ import asyncio
 import time
 
 import pytest
-
 from research_pipeline import sdk
 
 

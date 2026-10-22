@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 
 import pytest
-
 from build_pipeline.config import BuildConfig, EpicSettings
 from build_pipeline.epic import review
 
@@ -77,13 +76,13 @@ def test_blocking_findings_are_the_listed_code_highs_and_mediums(tmp_path):
 # pushed, as `findings` publishes it). Under `auto` a clean or final-fixed PR
 # is merged by the fake `gh pr merge`.
 
-import os  # noqa: E402
+import os
 
-from build_pipeline.epic import coordinator, records  # noqa: E402
-from build_pipeline.epic import lock as epic_lock  # noqa: E402
+from build_pipeline.epic import coordinator, records
+from build_pipeline.epic import lock as epic_lock
 
-from .epic_row_helpers import merge_waiting, pr_number, pr_url, run_killed  # noqa: E402
-from .test_epic_merge import MergeRoot  # noqa: E402
+from .epic_row_helpers import merge_waiting, pr_number, pr_url, run_killed
+from .test_epic_merge import MergeRoot
 
 N = pr_number("e-a")
 FINAL = {"rounds": [{}], "max_rounds": True, "push": True}       # the final fix: one round, no review

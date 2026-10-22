@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from . import state as state_mod
 from .config import SpecConfig
@@ -42,7 +42,7 @@ class Run:
         try:
             state_mod.ensure_run_dir(self.config.run_dir)
             path = self.config.run_dir / state_mod.PROGRESS_FILE
-            stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            stamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
             with path.open("a", encoding="utf-8") as fh:
                 fh.write(f"\n## {phase} ({stamp})\n\n{text.rstrip()}\n")
         except OSError as e:

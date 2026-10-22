@@ -29,10 +29,24 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from conftest import (
+    FIXED,
+    SCRIPTS_DIR,
+    Killed,
+    commit_file,
+    everything,
+    fake_state,
+    git,
+    make_repo,
+    make_units_repo,
+    outputs,
+    read_state,
+    run,
+    source_head,
+    unit_file,
+    write,
+)
 from multiplai_core.citations import file_at
-
-from conftest import (FIXED, SCRIPTS_DIR, Killed, commit_file, everything, fake_state, git, make_repo,
-                      make_units_repo, outputs, read_state, run, source_head, unit_file, write)
 from spec_extract_pipeline import report as report_mod
 from spec_extract_pipeline import sdk
 from spec_extract_pipeline import state as state_mod

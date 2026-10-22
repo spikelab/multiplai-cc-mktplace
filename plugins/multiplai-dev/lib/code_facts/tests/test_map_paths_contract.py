@@ -11,10 +11,9 @@ import json
 import tomllib
 from pathlib import Path
 
+import code_facts
 import jsonschema
 import pytest
-
-import code_facts
 from conftest import paths_name
 
 LIB = Path(__file__).resolve().parents[1]

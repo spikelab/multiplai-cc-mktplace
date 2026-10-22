@@ -27,8 +27,8 @@ from ..claude_agent_fetcher import ClaudeAgentFetcher, FetcherProtocol, HttpxFet
 from ..config import ResearchConfig
 from ..models import FetchResult, Finding, ReputationTier, Source, SourceStatus
 from ..prompts.extract import EXTRACT_PROMPT
-from ..search_router import SearchRouter
 from ..sdk import llm_call_structured
+from ..search_router import SearchRouter
 from ..state import ResearchState
 from ..untrusted import defang_untrusted, is_fetchable_url
 
@@ -234,7 +234,7 @@ async def _retry_with_fallback(
 
 
 def _store_pre_extracted(
-    config: ResearchConfig,  # noqa: ARG001 — kept for signature consistency
+    config: ResearchConfig,  # kept for signature consistency
     source: Source,
     fetch_result: FetchResult,
     findings_raw: list[dict],
@@ -272,7 +272,7 @@ def _store_pre_extracted(
 
     # Store follow links on the source for _follow_links
     extracted_links = fetch_result.extracted_links or []
-    setattr(source, "_follow_links", extracted_links[:3])
+    source._follow_links = extracted_links[:3]
 
     content = fetch_result.content or ""
     state.mark_source_extracted(source.url, content=content, findings=findings)
@@ -335,7 +335,7 @@ async def _extract_findings(
 
     # Store follow links on the source for _follow_links to pick up
     # (a private attr via model_extra — Pydantic allows this)
-    setattr(source, "_follow_links", [fl.url for fl in extracted.follow_links[:3]])
+    source._follow_links = [fl.url for fl in extracted.follow_links[:3]]
 
     state.mark_source_extracted(source.url, content=content, findings=findings)
     log.info("READ: %s → %d findings", source.title[:50], len(findings))

@@ -15,7 +15,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from lint_skills import lint, parse_frontmatter  # noqa: E402
+from lint_skills import lint, parse_frontmatter
 
 
 def make_repo(tmp_path: Path, *, skills=None, plugins=("myplug",)) -> Path:

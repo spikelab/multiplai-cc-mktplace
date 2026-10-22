@@ -334,7 +334,7 @@ def _history_roots(target_dir: Path, slug: str) -> list[Path]:
     for root in (lambda: ledger.reviews_root() / ledger.LEGACY_DIR, ledger.legacy_reviews_root):
         try:
             roots.append(root())
-        except Exception:  # noqa: BLE001 — no data directory or workspace: nothing there to read
+        except Exception:  # no data directory or workspace: nothing there to read
             log.debug("cannot resolve a review history root", exc_info=True)
     seen, out = set(), []
     for r in roots:

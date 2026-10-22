@@ -18,10 +18,8 @@ import json
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from tests.planning_fakes import accepted_planning
 import pytest
-
-from build_pipeline import board, git_ops
+from build_pipeline import git_ops
 from build_pipeline.board import (
     BoardCard,
     board_path,
@@ -37,6 +35,8 @@ from build_pipeline.git_ops import GitResult
 from build_pipeline.models import BlockStatus, BoardColumn, BuildPhase
 from build_pipeline.progress import ProgressWriter
 from build_pipeline.state import BuildState
+
+from tests.planning_fakes import accepted_planning  # noqa: F401
 from tests.test_git_ops import make_bare_origin, make_repo
 
 

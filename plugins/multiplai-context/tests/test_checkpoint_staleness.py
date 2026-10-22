@@ -26,7 +26,7 @@ that arithmetic rather than leaving it in a comment.
 
 import json
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 PLUGIN_ROOT = Path(__file__).parent.parent
@@ -49,7 +49,7 @@ def make_registry_entry(data_dir, sid="s1", *, age=timedelta(hours=2)):
     sessions this trigger targets it does not exist."""
     rdir = data_dir / "sessions"
     rdir.mkdir(parents=True, exist_ok=True)
-    started = (datetime.now(timezone.utc) - age).isoformat()
+    started = (datetime.now(UTC) - age).isoformat()
     (rdir / f"{sid}.json").write_text(json.dumps({
         "session_id": sid,
         "cwd": "/work",
@@ -59,7 +59,7 @@ def make_registry_entry(data_dir, sid="s1", *, age=timedelta(hours=2)):
 
 
 def state_with_checkpoint(age=timedelta(hours=1)):
-    return {"last_checkpoint_ts": (datetime.now(timezone.utc) - age).isoformat()}
+    return {"last_checkpoint_ts": (datetime.now(UTC) - age).isoformat()}
 
 
 def _write_marker(data_dir, *, cwd="/work", sid="s1", age=timedelta(hours=1)):
@@ -73,7 +73,7 @@ def _write_marker(data_dir, *, cwd="/work", sid="s1", age=timedelta(hours=1)):
         "cwd": cwd,
         "tokens": 210_000,
         "checkpoint_path": str(cp.checkpoint_file(data_dir, sid)),
-        "created_at": (datetime.now(timezone.utc) - age).isoformat(),
+        "created_at": (datetime.now(UTC) - age).isoformat(),
     }))
     return marker
 
@@ -142,7 +142,7 @@ class TestStalenessTrigger:
         hand-edited or older state file may not be — and comparing an aware
         `now` to a naive `last` raises."""
         make_registry_entry(tmp_path, age=timedelta(hours=6))
-        naive = (datetime.now(timezone.utc) - timedelta(hours=4)).replace(tzinfo=None)
+        naive = (datetime.now(UTC) - timedelta(hours=4)).replace(tzinfo=None)
 
         assert cp.staleness_trigger(
             tmp_path, "s1", {"last_checkpoint_ts": naive.isoformat()}, CFG
@@ -179,7 +179,7 @@ class TestUnknownSessionAge:
 
     def test_a_naive_started_at_is_read_as_utc(self, tmp_path):
         (tmp_path / "sessions").mkdir()
-        naive = (datetime.now(timezone.utc) - timedelta(hours=2)).replace(tzinfo=None)
+        naive = (datetime.now(UTC) - timedelta(hours=2)).replace(tzinfo=None)
         (tmp_path / "sessions" / "s1.json").write_text(
             json.dumps({"started_at": naive.isoformat()})
         )
@@ -324,7 +324,7 @@ class TestCheckpointPassExecuted:
         t = tmp_path / "transcript.jsonl"
         t.write_text(json.dumps({
             "type": "assistant",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "message": {
                 "role": "assistant",
                 "content": [{"type": "text", "text": "ok"}],
@@ -456,7 +456,7 @@ class TestWriteVolume:
         must be updated with it.
         """
         make_registry_entry(tmp_path, age=timedelta(hours=hours))
-        started = datetime.now(timezone.utc) - timedelta(hours=hours)
+        started = datetime.now(UTC) - timedelta(hours=hours)
         state: dict = {}
         writes = 0
         for minute in range(0, int(hours * 60) + 1, step_minutes):
@@ -464,14 +464,14 @@ class TestWriteVolume:
             # Re-anchor the registry so "now" is the simulated moment.
             (tmp_path / "sessions" / "s1.json").write_text(json.dumps({
                 "started_at": (
-                    datetime.now(timezone.utc) - (at - started)
+                    datetime.now(UTC) - (at - started)
                 ).isoformat(),
             }))
             shifted = {}
             if state.get("last_checkpoint_ts"):
                 elapsed = at - datetime.fromisoformat(state["last_checkpoint_ts"])
                 shifted["last_checkpoint_ts"] = (
-                    datetime.now(timezone.utc) - elapsed
+                    datetime.now(UTC) - elapsed
                 ).isoformat()
             if cp.staleness_trigger(tmp_path, "s1", shifted, cfg) == "stale":
                 writes += 1

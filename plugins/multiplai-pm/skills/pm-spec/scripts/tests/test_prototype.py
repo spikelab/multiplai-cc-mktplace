@@ -8,10 +8,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
-from pm_spec_pipeline import prototype as P
-
 from conftest import CAPS, change_dir, proposal, run, state, write
+from pm_spec_pipeline import prototype as P
 
 NOTES_CLEAN = "PROVES: the layout\nDISPROVES: none\nOPEN_QUESTIONS: none\nSTATUS: DONE\n"
 NOTES_FINDINGS = ("PROVES: the layout\nDISPROVES: a per-minute counter does not fit the header\n"

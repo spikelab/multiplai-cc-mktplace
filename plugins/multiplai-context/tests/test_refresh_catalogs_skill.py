@@ -17,17 +17,10 @@ Covers all scenarios from requirements/refresh-catalogs-skill.md:
 """
 
 import asyncio
-import json
-import os
 import re
-import sys
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 from conftest import PLUGIN_ROOT, SCRIPTS_DIR
-
 
 # ---------------------------------------------------------------------------
 # Skill registration

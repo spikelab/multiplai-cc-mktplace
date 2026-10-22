@@ -10,12 +10,11 @@ ran and a full auto-apply except the `has_routing_section` refusal.
 import asyncio
 import importlib.util
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
 from conftest import PLUGIN_ROOT, SCRIPTS_DIR
 
 
@@ -368,9 +367,8 @@ class TestVerdictCache:
         second run's call count, because two runs in one process share the dream
         run lock and the second would be skipped for an unrelated reason.
         """
-        from multiplai_core.paths import get_paths
-
         from lib import memory_judge
+        from multiplai_core.paths import get_paths
 
         mod, memory_dir = dream
         (memory_dir / "dolcebot.md").write_text(MEMORY)
@@ -389,9 +387,8 @@ class TestVerdictCache:
 
     def test_a_real_run_does_write_the_cache(self, dream):
         """The other half: caching is the point, on a run that is not a preview."""
-        from multiplai_core.paths import get_paths
-
         from lib import memory_judge
+        from multiplai_core.paths import get_paths
 
         mod, memory_dir = dream
         (memory_dir / "dolcebot.md").write_text(MEMORY)
@@ -531,12 +528,12 @@ class TestLastUpdatedStamp:
         # Both sides of the UTC-midnight boundary. dream_triage stamps with its
         # own `datetime.now(timezone.utc)`, so a date read *after* the run can be
         # the day after the one written, and the run would fail for no reason.
-        before = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        before = datetime.now(UTC).strftime("%Y-%m-%d")
         with patch.object(mod, "create_client",
                           new=AsyncMock(return_value=_client_returning(GOOD_VERDICTS))), \
                 patch.object(mod, "_apply_proposal_to_file", new=_apply):
             asyncio.run(mod.dream_triage(str(proposal), dry_run=False))
-        after = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        after = datetime.now(UTC).strftime("%Y-%m-%d")
 
         written = (memory_dir / "dolcebot.md").read_text()
         assert "VM logs are specified" in written

@@ -26,22 +26,22 @@ import asyncio
 import fcntl
 import json
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from multiplai_core.paths import get_paths
-from multiplai_core.model_client import create_client
-from multiplai_core.log_utils import setup_logging
 from lib.extraction import (
+    append_learnings,
     extract_units,
     load_target_charters,
     write_diary_entries,
-    append_learnings,
 )
 from lib.fsio import claude_config_dir
 from lib.transcript_distiller import distill, estimate_tokens
+from multiplai_core.log_utils import setup_logging
+from multiplai_core.model_client import create_client
+from multiplai_core.paths import get_paths
 
 logger = setup_logging("backfill", packages=("lib", "generators"))
 
@@ -65,7 +65,7 @@ def _parse_ts(record: dict) -> datetime | None:
         dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
     except (ValueError, TypeError):
         return None
-    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+    return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt
 
 
 def _transcript_time_bounds(jsonl_path: Path) -> tuple[datetime | None, datetime | None]:
@@ -100,7 +100,7 @@ def _transcript_time_bounds(jsonl_path: Path) -> tuple[datetime | None, datetime
 
     if first is None or last is None:
         try:
-            mtime = datetime.fromtimestamp(jsonl_path.stat().st_mtime, tz=timezone.utc)
+            mtime = datetime.fromtimestamp(jsonl_path.stat().st_mtime, tz=UTC)
         except OSError:
             mtime = None
         first = first or mtime
@@ -266,7 +266,7 @@ async def _process_session(
         return stats
 
     cwd = _session_cwd(jsonl_path)
-    timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    timestamp = datetime.now(UTC).isoformat(timespec="seconds")
 
     if dry_run:
         stats["status"] = "dry-run"
@@ -459,15 +459,15 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.all:
-        since = datetime(2000, 1, 1, tzinfo=timezone.utc)
+        since = datetime(2000, 1, 1, tzinfo=UTC)
     elif args.since:
         try:
-            since = datetime.fromisoformat(args.since).replace(tzinfo=timezone.utc)
+            since = datetime.fromisoformat(args.since).replace(tzinfo=UTC)
         except ValueError:
             print(f"Invalid date: {args.since!r} — expected YYYY-MM-DD")
             sys.exit(1)
     else:
-        since = datetime.now(timezone.utc) - timedelta(days=args.days)
+        since = datetime.now(UTC) - timedelta(days=args.days)
 
     project_slugs = [s.strip() for s in args.projects.split(",")] if args.projects else None
 

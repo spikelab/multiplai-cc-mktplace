@@ -15,7 +15,7 @@ and never reaches for `--auto`.
 
 import subprocess
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 import memory_maintainer as mm
 
-NOW = datetime(2026, 7, 26, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 7, 26, 12, 0, tzinfo=UTC)
 
 
 @pytest.fixture
@@ -126,7 +126,7 @@ class TestDreamPass:
         calls = self._spy(monkeypatch)
         dream_state = tmp_path / "dream_state.yaml"
         dream_state.write_text(
-            f"last_run: '{datetime.now(timezone.utc).isoformat()}'\n", encoding="utf-8")
+            f"last_run: '{datetime.now(UTC).isoformat()}'\n", encoding="utf-8")
         learnings = tmp_path / "learnings"
         learnings.mkdir()
         (learnings / "2026-07-26.md").write_text("- something\n", encoding="utf-8")
@@ -284,7 +284,7 @@ class TestSkillsCatalogPass:
         now = time.time()
         os.utime(manifest, (now - 7200, now - 7200))
         if catalog:
-            gen = datetime.now(timezone.utc) - timedelta(hours=generated_hours_ago)
+            gen = datetime.now(UTC) - timedelta(hours=generated_hours_ago)
             path = catalogs / "skills.json"
             path.write_text(json.dumps({"generated_at": gen.isoformat(),
                                         "entries": []}), encoding="utf-8")
@@ -560,7 +560,7 @@ class TestSessionStartWiring:
 
         (tmp_path / "memory_maintainer.py").write_text("", encoding="utf-8")
         (tmp_path / mm.STATE_FILENAME).write_text(
-            f"last_run: '{datetime.now(timezone.utc).isoformat()}'\n", encoding="utf-8")
+            f"last_run: '{datetime.now(UTC).isoformat()}'\n", encoding="utf-8")
 
         def explode(*a, **k):
             raise AssertionError("spawned a child with the gate closed")
@@ -573,7 +573,7 @@ class TestSessionStartWiring:
 
         (tmp_path / "memory_maintainer.py").write_text("", encoding="utf-8")
         (tmp_path / mm.STATE_FILENAME).write_text(
-            f"last_run: '{(datetime.now(timezone.utc) - timedelta(hours=30)).isoformat()}'\n",
+            f"last_run: '{(datetime.now(UTC) - timedelta(hours=30)).isoformat()}'\n",
             encoding="utf-8")
         monkeypatch.setattr(session_start.subprocess, "Popen",
                             lambda *a, **k: type("P", (), {"stdin": None})())
@@ -607,6 +607,7 @@ class TestCheapTierIsRealNotJustDocumented:
         """The docstring claims pass 4 runs on a cheap tier. Before this,
         `synthesize()` took no model at all and the claim was decoration."""
         import inspect
+
         import synthesize_now
 
         assert "model" in inspect.signature(synthesize_now.synthesize).parameters
@@ -616,6 +617,7 @@ class TestCheapTierIsRealNotJustDocumented:
     def test_no_model_means_the_client_default(self):
         """Interactive callers (`/now`, backfill) must keep their old behavior."""
         import inspect
+
         import synthesize_now
         assert (inspect.signature(synthesize_now.synthesize)
                 .parameters["model"].default is None)

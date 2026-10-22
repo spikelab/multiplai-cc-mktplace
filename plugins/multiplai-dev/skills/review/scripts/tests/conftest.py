@@ -10,15 +10,15 @@ import pytest
 TESTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TESTS))
 
-from fixture_repo import build as build_repo  # noqa: E402
-from fixture_repo import (  # noqa: E402
-    KEYWORD_LINE, KEYWORD_USE_LINE, SETTINGS_DEF_LINE,
+import paths_stub
+from fixture_repo import (
+    KEYWORD_LINE,
+    KEYWORD_USE_LINE,
+    SETTINGS_DEF_LINE,
 )
-
-import paths_stub  # noqa: E402
-
-from review_pipeline import budget, deps, ledger, target  # noqa: E402
-from review_pipeline.models import Citation, Finding, Rejected, ReviewState, Verdict  # noqa: E402
+from fixture_repo import build as build_repo
+from review_pipeline import budget, deps, ledger, target
+from review_pipeline.models import Citation, Finding, Rejected, ReviewState, Verdict
 
 SCHEMA = TESTS.parents[2] / "review-viewer" / "schema" / "findings.v1.schema.json"
 

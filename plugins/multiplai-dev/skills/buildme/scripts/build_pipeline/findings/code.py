@@ -24,10 +24,10 @@ from __future__ import annotations
 import copy
 import logging
 import re
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Awaitable, Callable
 
 from multiplai_core.untrusted import defang, fence
 

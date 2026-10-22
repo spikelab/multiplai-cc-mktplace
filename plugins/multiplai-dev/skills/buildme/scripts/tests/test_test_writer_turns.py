@@ -11,7 +11,6 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
 from build_pipeline.config import BuildConfig
 from build_pipeline.models import BlockInfo, BlockStatus
 from build_pipeline.progress import ProgressWriter
@@ -34,7 +33,7 @@ def _git(repo: Path, *args: str) -> str:
 @pytest.fixture(autouse=True)
 def _agents():
     """No real refactorer, and the test-quality auditor accepts the tests."""
-    from build_pipeline.models import TestQualityAudit, GateResult
+    from build_pipeline.models import GateResult, TestQualityAudit
     with patch("build_pipeline.tdd_engine.integration_gate", return_value=GateResult(passed=True, reason="fixture checks pass")), \
          patch("build_pipeline.tdd_engine.run_refactorer", new_callable=AsyncMock, return_value=OK), \
          patch("build_pipeline.tdd_engine._audit_test_quality", new_callable=AsyncMock,

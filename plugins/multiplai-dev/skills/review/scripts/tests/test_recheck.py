@@ -16,15 +16,24 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
 from conftest import high_finding
 from review_pipeline import budget, rounds, runlock, sdk
 from review_pipeline import target as target_mod
 from review_pipeline.config import ReviewConfig
 from review_pipeline.export import _finding
 from review_pipeline.gates import earlier_status_gate
-from review_pipeline.models import (EARLIER_STATUSES, AssessOutput, Citation, EarlierStatus, Finding, MergeOutput,
-                                    RecheckOutput, RepeatsOutput, ReviewState, Verdict)
+from review_pipeline.models import (
+    EARLIER_STATUSES,
+    AssessOutput,
+    Citation,
+    EarlierStatus,
+    Finding,
+    MergeOutput,
+    RecheckOutput,
+    RepeatsOutput,
+    ReviewState,
+    Verdict,
+)
 from review_pipeline.orchestrator import RunInProgress, resume
 from review_pipeline.stages import RunContext
 from review_pipeline.stages.recheck import run_recheck
@@ -279,7 +288,6 @@ async def test_one_agent_per_open_finding_sees_the_earlier_finding_and_the_diff_
         (E1.id, "earlier_status_gate", True), (E2.id, "earlier_status_gate", True),
         (E3.id, "earlier_status_gate", True)]
     import jsonschema
-
     from conftest import SCHEMA
     from review_pipeline.export import to_checks_file
 
@@ -487,9 +495,8 @@ async def test_earlier_status_resume_s12_a_running_review_refuses_a_resume(tmp_p
     _, target_dir = await stopped_at_s1(tmp_path, agents)
     before = (target_dir / "review-state.json").read_bytes()
     fake = agents()
-    with runlock.hold(target_dir):
-        with pytest.raises(RunInProgress):
-            await resume(target_dir, CONFIG)
+    with runlock.hold(target_dir), pytest.raises(RunInProgress):
+        await resume(target_dir, CONFIG)
     assert fake.calls == [] and (target_dir / "review-state.json").read_bytes() == before
 
 
@@ -499,9 +506,8 @@ async def test_earlier_status_resume_s12_a_running_review_refuses_a_resume(tmp_p
 def test_find_prompt_ignores_rounds(tmp_path, monkeypatch, capsys):
     """The finder prompts are byte-identical with and without earlier rounds of the same change."""
     import paths_stub
-    from test_orchestrator import FakeAgents, _review_args
-
     from review_pipeline.__main__ import main
+    from test_orchestrator import FakeAgents, _review_args
 
     repo, base, mid, head = build_repo(tmp_path / "src")
     out = tmp_path / "out"

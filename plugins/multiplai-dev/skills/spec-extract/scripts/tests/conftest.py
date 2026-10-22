@@ -8,7 +8,7 @@ import os
 import re
 import subprocess
 from collections import Counter, defaultdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,12 +16,11 @@ import pytest
 from code_facts import ExploreOutput
 from multiplai_core import budget as core_budget
 from multiplai_core.budget import BudgetExceededError
-
 from spec_extract_pipeline import __main__ as cli
 from spec_extract_pipeline import sdk
 from spec_extract_pipeline import target as target_mod
 
-FIXED = datetime(2026, 10, 13, 12, 0, 0, tzinfo=timezone.utc)
+FIXED = datetime(2026, 10, 13, 12, 0, 0, tzinfo=UTC)
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 
 _GIT_ENV = {
@@ -144,7 +143,7 @@ def pr_view(monkeypatch):
 
 # --- the fake model call --------------------------------------------------------------
 
-_LISTED = re.compile(r"^- (\S.*) \((\d+) lines\)$", re.M)
+_LISTED = re.compile(r"^- (\S.*) \((\d+) lines\)$", re.MULTILINE)
 
 
 class FakeCall:
@@ -204,7 +203,7 @@ class FakeCall:
         return schema.model_validate(write_answer_for(symbols, Path(cwd)))
 
 
-_SYMBOL = re.compile(r"^- (\S+)::(\S+) \(\w+, line (\d+)\)$", re.M)
+_SYMBOL = re.compile(r"^- (\S+)::(\S+) \(\w+, line (\d+)\)$", re.MULTILINE)
 
 
 def group_answer_for(symbols: list[tuple[str, str, str]]) -> dict:

@@ -16,7 +16,7 @@ import pytest
 _SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "video-edit" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 
-from stages.edl import EDL, Segment, Zoom  # noqa: E402
+from stages.edl import EDL, Segment, Zoom
 
 
 def _edl(source: str = "/rec/original.mov", segments: list[Segment] | None = None) -> EDL:

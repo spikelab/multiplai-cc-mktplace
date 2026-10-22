@@ -39,8 +39,18 @@ from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
-from code_facts import (CallFn, ExploreOutput, Gated, Unit, ask, bounded, citation_keeper, explore_unit,
-                        gate_answers, unit_key)
+from code_facts import (
+    CallFn,
+    ExploreOutput,
+    Gated,
+    Unit,
+    ask,
+    bounded,
+    citation_keeper,
+    explore_unit,
+    gate_answers,
+    unit_key,
+)
 from multiplai_core.budget import BudgetExceededError, SpendLedger
 
 from . import report as report_mod

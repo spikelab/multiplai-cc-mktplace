@@ -10,10 +10,17 @@ Misses get one re-ask naming them; whatever is still missing goes into the cover
 
 from __future__ import annotations
 
-from code_facts import Span, citation_keeper, gate_answers as gate_explore_answers, reask_units, run_tasks
+from code_facts import Span, citation_keeper, reask_units, run_tasks
+from code_facts import gate_answers as gate_explore_answers
 
 from .. import sdk
-from ..gates import boundary_coverage_gate, entry_key, file_coverage_gate, repo_resolver, target_files_ws
+from ..gates import (
+    boundary_coverage_gate,
+    entry_key,
+    file_coverage_gate,
+    repo_resolver,
+    target_files_ws,
+)
 from ..models import ExploreOutput, Reference, SymbolEntry, WalkState
 from ..partition import ws_lines
 from ..prompts import WS_PATH_RULE, explore_boundary, explore_unit

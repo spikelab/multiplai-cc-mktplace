@@ -11,7 +11,6 @@ from research_pipeline.eval import (
     score_report,
 )
 
-
 SAMPLE_REPORT = """# Test Research
 
 **Date:** 2026-04-05 | **Confidence:** high | **Sources used:** 3

@@ -19,7 +19,6 @@ import textwrap
 from pathlib import Path
 
 import pytest
-
 from conftest import corpus_files, hook_context, run_context_hook
 
 # The sandbox layout (env_setup fixture) and subprocess runner live in

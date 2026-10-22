@@ -11,9 +11,9 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from lib.plugin_skills import plugin_skills
 
 from generators.base import GenerationResult, GeneratorBase
-from lib.plugin_skills import plugin_skills
 
 # Hand-authored intent fields preserved across regeneration. Skills use
 # the same intent_domains / anti_domains schema as memory and resources

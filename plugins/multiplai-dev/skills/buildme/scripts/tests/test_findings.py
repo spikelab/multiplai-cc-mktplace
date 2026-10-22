@@ -9,7 +9,6 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
 from build_pipeline import git_ops
 from build_pipeline.config import BuildConfig, FindingsSettings
 from build_pipeline.findings import fetch, spec, triage

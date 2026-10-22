@@ -36,8 +36,8 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Sequence
 
 logger = logging.getLogger(__name__)
 

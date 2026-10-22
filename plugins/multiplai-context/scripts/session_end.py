@@ -29,16 +29,16 @@ because a queued marker survives either way and a killed spawn does not.
 """
 
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from multiplai_core.config import read_session_state
-from multiplai_core.paths import get_paths
-from multiplai_core.log_utils import hook_run, setup_logging, log_event
 from lib.fsio import atomic_write_json
 from lib.hook_input import read_hook_input
+from multiplai_core.config import read_session_state
+from multiplai_core.log_utils import hook_run, log_event, setup_logging
+from multiplai_core.paths import get_paths
 
 logger = setup_logging("session_end", packages=("lib", "generators"))
 
@@ -74,7 +74,7 @@ def _save_deferred_marker(
         "session_id": session_id,
         "transcript_path": hook_input.get("transcript_path", ""),
         "cwd": hook_input.get("cwd", session_state.get("cwd", "")),
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
     }
 
     marker_path = pending_dir / f"{session_id}.json"

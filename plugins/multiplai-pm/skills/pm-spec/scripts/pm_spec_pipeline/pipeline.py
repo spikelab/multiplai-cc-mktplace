@@ -29,11 +29,30 @@ from pathlib import Path
 
 from multiplai_core.specs import is_ready, mark_draft, write_change_meta
 
-from . import artifacts, epic, handoff, intake, interview, prototype, publish, revise, runlock, sdk
+from . import (
+    artifacts,
+    epic,
+    handoff,
+    intake,
+    interview,
+    prototype,
+    publish,
+    revise,
+    runlock,
+    sdk,
+)
 from . import findings as F
 from . import state as state_mod
 from .config import SpecConfig
-from .run import EXIT_BLOCKED, EXIT_DONE, EXIT_REFUSED, MARKER_BLOCKED, MARKER_READY, Run, Stop
+from .run import (
+    EXIT_BLOCKED,
+    EXIT_DONE,
+    EXIT_REFUSED,
+    MARKER_BLOCKED,
+    MARKER_READY,
+    Run,
+    Stop,
+)
 from .state import ContextFile, Options, RunState
 
 log = logging.getLogger(__name__)

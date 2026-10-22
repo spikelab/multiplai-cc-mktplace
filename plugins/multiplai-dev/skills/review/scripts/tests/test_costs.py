@@ -14,11 +14,10 @@ from types import SimpleNamespace
 
 import code_facts
 import pytest
-from test_reported_finders import git, mapped, model, review, saved  # noqa: F401
-
 from review_pipeline import budget, sdk
 from review_pipeline.__main__ import main
 from review_pipeline.models import FinderReport, Piece, ReviewState
+from test_reported_finders import git, mapped, model, review, saved  # noqa: F401
 
 SKILL_MD = Path(__file__).resolve().parents[2] / "SKILL.md"
 COST_LINE = re.compile(r"cost \(approximate\): (?:pieces \$(\d+) \+ )?paths \$(\d+) \(up to (\d+) paths\) = \$(\d+); "

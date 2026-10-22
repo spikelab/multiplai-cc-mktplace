@@ -7,7 +7,6 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
 from build_pipeline import git_ops, stop_record
 from build_pipeline.stop_record import StepStop
 

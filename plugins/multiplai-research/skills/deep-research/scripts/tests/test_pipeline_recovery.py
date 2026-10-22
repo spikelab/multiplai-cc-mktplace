@@ -12,9 +12,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-
 from research_pipeline import pipeline
-from research_pipeline.search_router import SearchRouter
 from research_pipeline.config import PRESETS, ResearchConfig
 from research_pipeline.models import (
     GateResult,
@@ -26,15 +24,15 @@ from research_pipeline.models import (
     SourceStatus,
 )
 from research_pipeline.progress import ProgressWriter
+from research_pipeline.search_router import SearchRouter
 from research_pipeline.state import ResearchState, Stage
-
 
 # ---------------------------------------------------------------------------
 # Stubs / helpers
 # ---------------------------------------------------------------------------
 
 
-def _as_router(r: "StubRouter") -> SearchRouter:
+def _as_router(r: StubRouter) -> SearchRouter:
     """Duck-typed stub → SearchRouter for the type checker."""
     return cast(SearchRouter, r)
 

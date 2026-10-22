@@ -1,11 +1,14 @@
 from __future__ import annotations
+
 import json
 import os
 import shlex
 import subprocess
 import tempfile
 from pathlib import Path
-from stages import brand as brand_mod, follow, layouts
+
+from stages import brand as brand_mod
+from stages import follow, layouts
 from stages.edl import EDL, Logo, Overlay
 
 
@@ -237,7 +240,7 @@ def _render_title(edl: EDL, work: Path) -> Path | None:
     cmd = [
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
         "-f", "lavfi", "-i", f"color=c=#0a0a0a:s={w}x{h}:r={fps}:d={edl.title.duration}",
-        "-f", "lavfi", "-i", f"anullsrc=channel_layout=stereo:sample_rate=48000",
+        "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
         "-t", str(edl.title.duration),
         "-vf", vf,
         "-c:v", "libx264", "-preset", "veryfast", "-crf", str(INTERMEDIATE_CRF),
@@ -553,8 +556,8 @@ def render(edl: EDL, out_path: Path, work_dir: Path | None = None) -> Path:
             f"threshold=0.04:ratio=8:attack=8:release=400:makeup=4[bed_ducked]"
         )
         mix = (
-            f"[narr_mix][bed_ducked]amix=inputs=2:duration=first:"
-            f"dropout_transition=0:normalize=0[amix]"
+            "[narr_mix][bed_ducked]amix=inputs=2:duration=first:"
+            "dropout_transition=0:normalize=0[amix]"
         )
         filter_complex = filter_complex + "; " + bed + "; " + sidechain + "; " + mix
         alabel = "amix"

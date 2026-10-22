@@ -11,8 +11,6 @@ from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
 import pytest
-from multiplai_core.specs import mark_ready
-
 from build_pipeline import git_ops, orchestrator
 from build_pipeline.config import BuildConfig, GitToggles
 from build_pipeline.gates import final_verification
@@ -21,6 +19,7 @@ from build_pipeline.progress import ProgressWriter
 from build_pipeline.spec_generator import reconcile_plan
 from build_pipeline.state import BuildState, TDDState
 from build_pipeline.tdd_engine import run_tdd_engine
+from multiplai_core.specs import mark_ready
 
 
 def git(root, *args):
@@ -175,6 +174,7 @@ async def test_historical_complete_never_republishes_or_rewrites(accepted_build)
 async def test_cancelled_standalone_tdd_persists_current_spend(accepted_build, monkeypatch):
     import asyncio
     from types import SimpleNamespace
+
     from build_pipeline import budget
     config, state, args, _ = accepted_build
     state.phase = BuildPhase.TDD_BUILD
@@ -192,7 +192,11 @@ async def test_cancelled_standalone_tdd_persists_current_spend(accepted_build, m
 
 @pytest.mark.asyncio
 async def test_plan_review_repair_revalidates_design_before_spec_only_success(accepted_build, monkeypatch):
-    from build_pipeline.models import PlanReviewFinding, PlanReviewResult, PriorAssessment
+    from build_pipeline.models import (
+        PlanReviewFinding,
+        PlanReviewResult,
+        PriorAssessment,
+    )
     from build_pipeline.state import completed_state_path
     config, state, args, _ = accepted_build
     config.spec_only = True
@@ -228,6 +232,7 @@ async def test_plan_review_repair_revalidates_design_before_spec_only_success(ac
 ])
 async def test_legacy_implementation_resume_refuses_without_rewriting_code(accepted_build, monkeypatch, fixture):
     import json
+
     from build_pipeline import sdk
     config, _, args, push = accepted_build
     raw = json.loads((Path(__file__).parent / 'fixtures' / fixture).read_text())
@@ -251,6 +256,7 @@ async def test_legacy_implementation_resume_refuses_without_rewriting_code(accep
 async def test_mid_block_budget_stop_resumes_at_implementer_with_original_red_tests(accepted_build, monkeypatch, interruption):
     import asyncio
     from types import SimpleNamespace
+
     from build_pipeline import budget, sdk, tdd_engine
     from build_pipeline.models import AgentResult
     config, state, args, _ = accepted_build
@@ -376,6 +382,7 @@ def test_agent_pytest_reports_are_ignored_through_block_commit(accepted_build):
 
 def test_committed_junit_report_can_be_recovered_using_verification_remedy(accepted_build):
     import shlex
+
     from build_pipeline.gates import run_test_suite
 
     config, _, _, _ = accepted_build

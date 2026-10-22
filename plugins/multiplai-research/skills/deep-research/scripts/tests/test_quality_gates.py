@@ -6,7 +6,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from research_pipeline.gates import critical_source_gate
 from research_pipeline.models import (
     Finding,
@@ -16,7 +15,6 @@ from research_pipeline.models import (
     SourceStatus,
 )
 from research_pipeline.state import ResearchState, Stage
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -282,8 +280,8 @@ class TestNewStages:
 
 class TestWriteIncompleteReport:
     def test_basic_output(self, tmp_path: Path) -> None:
-        from research_pipeline.nodes.synthesize import write_incomplete_report
         from research_pipeline.config import PRESETS, ResearchConfig
+        from research_pipeline.nodes.synthesize import write_incomplete_report
 
         config = ResearchConfig(
             query="Test query",
@@ -393,6 +391,7 @@ class TestQualityCheckDefaultedGoVisibility:
         """When the quality check errors and fail-opens to GO, the progress
         file says so explicitly instead of looking like a real GO."""
         from research_pipeline import pipeline
+
         from tests.test_pipeline_recovery import (
             StubRouter,
             _as_router,
@@ -431,6 +430,7 @@ class TestQualityCheckDefaultedGoVisibility:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from research_pipeline import pipeline
+
         from tests.test_pipeline_recovery import (
             StubRouter,
             _as_router,

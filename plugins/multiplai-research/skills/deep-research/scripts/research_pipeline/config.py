@@ -376,7 +376,7 @@ class ResearchConfig:
     thinkings: dict[str, dict | None] = field(default_factory=_default_thinkings)
 
     @classmethod
-    def from_cli_args(cls, args: argparse.Namespace) -> "ResearchConfig":
+    def from_cli_args(cls, args: argparse.Namespace) -> ResearchConfig:
         """Build ResearchConfig from parsed CLI arguments."""
         preset = PRESETS[args.preset]
         config = cls(

@@ -14,14 +14,13 @@ import json
 from pathlib import Path
 
 import pytest
-
 from build_pipeline import budget
 from build_pipeline.config import EpicSettings
 from build_pipeline.epic import lock as epic_lock
-from .epic_row_helpers import EpicSplitAnswer
 
 from .epic_row_helpers import (
     CallLog,
+    EpicSplitAnswer,
     Fakes,
     approve,
     child,

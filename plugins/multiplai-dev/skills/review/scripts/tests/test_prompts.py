@@ -2,8 +2,14 @@
 from __future__ import annotations
 
 from conftest import high_finding
-from review_pipeline.prompts import find, merge, verify
-from review_pipeline.prompts import description_block, settings_block, workspace_block
+from review_pipeline.prompts import (
+    description_block,
+    find,
+    merge,
+    settings_block,
+    verify,
+    workspace_block,
+)
 
 RULES_NO_CHECKS = [{"type": "pull_request", "parameters": {"required_approving_review_count": 1}}]
 RULES_WITH_CHECKS = [{"type": "required_status_checks",

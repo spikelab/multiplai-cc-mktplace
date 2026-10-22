@@ -6,7 +6,6 @@ import subprocess
 from sys import executable as PYTHON
 
 import pytest
-
 from review_viewer import walkthrough
 from review_viewer.mailbox import read_rows
 from review_viewer.models import Walkthrough, load_findings

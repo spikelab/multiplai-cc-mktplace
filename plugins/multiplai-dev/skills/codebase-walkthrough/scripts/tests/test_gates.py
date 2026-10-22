@@ -6,9 +6,15 @@ import re
 from pathlib import Path
 
 import pytest
-
 from walkthrough_pipeline import gates, target
-from walkthrough_pipeline.models import Citation, Fact, Reference, RepoInfo, SymbolEntry, Unit
+from walkthrough_pipeline.models import (
+    Citation,
+    Fact,
+    Reference,
+    RepoInfo,
+    SymbolEntry,
+    Unit,
+)
 
 GATES_SRC = Path(gates.__file__).read_text()
 

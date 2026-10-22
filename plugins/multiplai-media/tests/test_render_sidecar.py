@@ -19,10 +19,12 @@ _SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "video-edit" / "s
 sys.path.insert(0, str(_SCRIPTS))
 sys.path.insert(0, str(Path(__file__).resolve().parent / "fixtures"))
 
-import make_job  # noqa: E402
-import pipeline  # noqa: E402
-from stages import brand as brand_mod, captions as cap, render_sidecar, review_server, timeline  # noqa: E402
-from stages.edl import EDL  # noqa: E402
+import make_job
+import pipeline
+from stages import brand as brand_mod
+from stages import captions as cap
+from stages import render_sidecar, review_server, timeline
+from stages.edl import EDL
 
 
 def _edl(tmp_path: Path, **extra) -> Path:
@@ -194,7 +196,7 @@ def test_segments_are_placed_as_the_render_places_them(job) -> None:
 
 
 def _dialogues(ass: str) -> list[tuple[str, str, str]]:
-    return re.findall(r"^Dialogue: 0,([^,]+),([^,]+),Caption,,0,0,0,,\{[^}]*\}(.*)$", ass, re.M)
+    return re.findall(r"^Dialogue: 0,([^,]+),([^,]+),Caption,,0,0,0,,\{[^}]*\}(.*)$", ass, re.MULTILINE)
 
 
 @pytest.mark.parametrize("highlight", [False, True])

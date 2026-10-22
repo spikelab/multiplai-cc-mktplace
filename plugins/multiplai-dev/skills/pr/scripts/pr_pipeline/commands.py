@@ -17,8 +17,18 @@ from pathlib import Path
 from multiplai_core.log_utils import log_event
 
 from . import fill, gates, github, markers
-from .template import (PrConfig, Section, TemplateError, discover, is_checkbox, load, load_config, normalize_title,
-                       parse, set_tick)
+from .template import (
+    PrConfig,
+    Section,
+    TemplateError,
+    discover,
+    is_checkbox,
+    load,
+    load_config,
+    normalize_title,
+    parse,
+    set_tick,
+)
 
 log = logging.getLogger(__name__)
 
@@ -55,7 +65,11 @@ def render_body(repo: Path, change_dir: Path, *, base: str | None, head: str, ti
 
     A failed gate, or an answer that does not parse, is re-asked once with
     the reason; a second failure raises GateFailed."""
-    from multiplai_core.structured import StructuredAnswerError, parse_answer, reformat_prompt
+    from multiplai_core.structured import (
+        StructuredAnswerError,
+        parse_answer,
+        reformat_prompt,
+    )
 
     try:
         found = discover(repo, config)

@@ -25,10 +25,9 @@ import logging
 import os
 from typing import TypeVar
 
-from pydantic import BaseModel, ValidationError
-
 from multiplai_core.agent_runner import AgentRunError, AgentRunTimeout, run_agent
 from multiplai_core.structured import parse_answer, reformat_prompt
+from pydantic import BaseModel, ValidationError
 
 from . import budget
 

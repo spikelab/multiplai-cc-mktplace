@@ -29,8 +29,8 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from lib import runtime  # noqa: E402
-from lib.runtime import run_supervised, scripts_dir, uv_run_argv  # noqa: E402
+from lib import runtime
+from lib.runtime import run_supervised, scripts_dir, uv_run_argv
 
 # Assembled rather than written out, so a repo-wide grep for the retired flag
 # stays clean and can itself serve as the coarse check.

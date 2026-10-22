@@ -18,7 +18,8 @@ import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 
-from stages import captions as cap, layouts, timeline
+from stages import captions as cap
+from stages import layouts, timeline
 from stages.edl import EDL
 
 SAMPLE_EVERY_S = 3.0

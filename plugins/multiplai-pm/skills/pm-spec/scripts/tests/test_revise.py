@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
+from conftest import (
+    CAPS,
+    change_dir,
+    git,
+    meta,
+    ready_line,
+    requirements,
+    run,
+    state,
+    write,
+)
 from multiplai_core.specs import is_ready, set_spec_issues
-
 from pm_spec_pipeline import revise as R
-
-from conftest import CAPS, change_dir, git, meta, ready_line, requirements, run, state, write
 
 ISSUES = """\
 # Spec issues

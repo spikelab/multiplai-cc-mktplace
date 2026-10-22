@@ -7,7 +7,7 @@ fine-grained resume (per-source, not per-phase).
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
 
@@ -107,8 +107,8 @@ class ResearchState(BaseModel):
     # ------------------------------------------------------------------
 
     @classmethod
-    def new(cls, query: str, output_file: Path, state_file: Path) -> "ResearchState":
-        now = datetime.now(timezone.utc).isoformat()
+    def new(cls, query: str, output_file: Path, state_file: Path) -> ResearchState:
+        now = datetime.now(UTC).isoformat()
         return cls(
             query=query,
             output_file=str(output_file),
@@ -127,11 +127,11 @@ class ResearchState(BaseModel):
         on resume, i.e. the checkpoint destroys the very thing it exists to
         protect. See `atomic.atomic_write_text` for the mechanics.
         """
-        self.updated_at = datetime.now(timezone.utc).isoformat()
+        self.updated_at = datetime.now(UTC).isoformat()
         atomic_write_text(Path(self.state_file), self.model_dump_json(indent=2))
 
     @classmethod
-    def load(cls, state_file: Path) -> "ResearchState":
+    def load(cls, state_file: Path) -> ResearchState:
         """Load state from JSON file."""
         return cls.model_validate_json(state_file.read_text())
 

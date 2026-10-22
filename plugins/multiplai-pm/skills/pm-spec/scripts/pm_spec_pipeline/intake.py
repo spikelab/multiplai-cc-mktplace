@@ -106,7 +106,7 @@ def prd_text(change_dir: Path) -> str:
 
 def prd_headings(text: str) -> list[str]:
     """The text of every markdown heading in a PRD, in order."""
-    return [m.group(1).strip() for m in re.finditer(r"^#{1,6}\s+(.+?)\s*#*\s*$", text, re.M)]
+    return [m.group(1).strip() for m in re.finditer(r"^#{1,6}\s+(.+?)\s*#*\s*$", text, re.MULTILINE)]
 
 
 def interview_inputs(change_dir: Path, summary: str, contexts: list[tuple[str, str]]) -> str:
@@ -178,7 +178,7 @@ def read_questions(path: Path) -> list[str]:
     """Questions back out of `interview-questions.md` (numbered lines)."""
     if not path.is_file():
         return []
-    return [m.group(1).strip() for m in re.finditer(r"^\d+\.\s+(.+)$", path.read_text(), re.M)]
+    return [m.group(1).strip() for m in re.finditer(r"^\d+\.\s+(.+)$", path.read_text(), re.MULTILINE)]
 
 
 def write_questions(path: Path, questions: list[str], ref: str = "") -> None:

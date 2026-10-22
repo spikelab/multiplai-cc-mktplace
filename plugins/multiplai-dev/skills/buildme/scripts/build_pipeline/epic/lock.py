@@ -20,7 +20,7 @@ import json
 import logging
 import os
 import socket
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -75,7 +75,7 @@ def hold(epic_dir: Path, name: str) -> None:
         log.warning("cannot lock %s, running unlocked: %s", epic_dir / LOCK_FILE, e)
     else:
         info = {"pid": os.getpid(), "host": socket.gethostname(),
-                "since": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+                "since": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")}
         try:
             os.ftruncate(fd, 0)
             os.pwrite(fd, json.dumps(info).encode("utf-8"), 0)

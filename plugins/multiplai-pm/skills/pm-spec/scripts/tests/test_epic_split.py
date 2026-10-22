@@ -5,13 +5,11 @@ errors, `--no-epic-split` making no call)."""
 from __future__ import annotations
 
 import pytest
+from conftest import change_dir, committed, git, meta, run, state, write
 from multiplai_core.specs import is_ready
-
 from pm_spec_pipeline import git_ops
 from pm_spec_pipeline.epic import SplitAnswer, check_answer, waves
 from pm_spec_pipeline.state import EpicChild
-
-from conftest import change_dir, committed, git, meta, run, state, write
 
 PLAN = "# Plan: {t}\n\n> File: {i}.md\n\n**Objective:** {t}.\n\n## Context\n\n## Outcome\n\n## Done means\n1. it works\n"
 

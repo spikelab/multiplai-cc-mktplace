@@ -7,8 +7,7 @@ Validates the official Claude Code nested hooks schema at
 import json
 
 import pytest
-
-from conftest import PLUGIN_ROOT, HOOKS_JSON, EXPECTED_HOOK_SCRIPTS, parse_hooks
+from conftest import EXPECTED_HOOK_SCRIPTS, HOOKS_JSON, PLUGIN_ROOT, parse_hooks
 
 
 def _python_hook_scripts():

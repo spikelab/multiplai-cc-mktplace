@@ -6,7 +6,6 @@ import asyncio
 
 import httpx
 import pytest
-
 from research_pipeline import fetcher
 from research_pipeline.fetcher import (
     basic_tag_strip,
@@ -16,7 +15,6 @@ from research_pipeline.fetcher import (
     fetch_url,
 )
 from research_pipeline.models import FetchErrorType
-
 
 # ---------------------------------------------------------------------------
 # Test HTML fixtures

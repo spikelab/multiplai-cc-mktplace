@@ -24,9 +24,8 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-import pytest  # noqa: E402
-
-import dream  # noqa: E402
+import dream
+import pytest
 
 DECIDED = """# Processed Learnings — 2026-08-10
 

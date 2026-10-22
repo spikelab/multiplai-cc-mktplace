@@ -8,12 +8,18 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
 from conftest import SCHEMA
 from review_pipeline import gates, orchestrator, sdk, target
 from review_pipeline.__main__ import main
 from review_pipeline.config import DIMENSIONS, TRIM_DIMENSION, ReviewConfig
-from review_pipeline.models import Citation, Finding, FinderOutput, MergeOutput, ReviewState, Verdict
+from review_pipeline.models import (
+    Citation,
+    FinderOutput,
+    Finding,
+    MergeOutput,
+    ReviewState,
+    Verdict,
+)
 from review_pipeline.prompts import find as find_prompt
 from review_pipeline.prompts import merge as merge_prompt
 from review_pipeline.stages import RunContext

@@ -25,8 +25,15 @@ import importlib
 
 import code_facts
 import code_facts.paths as code_facts_paths
-from code_facts.paths import (E2EListing, FallbackStatus, Location, PathEntry, PathHop, PathsResult,
-                              TracedPath)
+from code_facts.paths import (
+    E2EListing,
+    FallbackStatus,
+    Location,
+    PathEntry,
+    PathHop,
+    PathsResult,
+    TracedPath,
+)
 from review_pipeline import sdk
 
 ANSWERS_DIR = "paths-answers"

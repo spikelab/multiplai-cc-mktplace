@@ -7,7 +7,8 @@ every file is in exactly one unit. The split itself is `code_facts.partition`.
 
 from __future__ import annotations
 
-from code_facts import Scope, partition as partition_scope
+from code_facts import Scope
+from code_facts import partition as partition_scope
 
 from .models import TargetInfo, Unit
 

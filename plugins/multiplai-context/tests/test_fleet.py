@@ -19,19 +19,16 @@ The properties worth breaking a build over:
 """
 
 import json
-import os
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-
 from conftest import SCRIPTS_DIR
 from lib import checkpoint as cp
 from lib import fleet
 
-
-NOW = datetime(2026, 8, 1, 12, 0, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 8, 1, 12, 0, 0, tzinfo=UTC)
 
 
 # ---------------------------------------------------------------------------
@@ -1392,7 +1389,7 @@ class TestCarryForward:
         # `main()` takes its own `datetime.now`, so the stamp has to be recent
         # in real time or the one-hour expiry drops it before carry-forward
         # ever gets a say — and the test would pass for the wrong reason.
-        stamp = (datetime.now(timezone.utc) - timedelta(minutes=14)).isoformat()
+        stamp = (datetime.now(UTC) - timedelta(minutes=14)).isoformat()
         self._existing(tmp_path, prs={"open": 3, "red": 1}, stamp=stamp)
 
         spec = importlib.util.spec_from_file_location(
@@ -1961,7 +1958,7 @@ class TestSeenRendering:
 # Vanilla degradation — no kit, no tmux, no map
 # ---------------------------------------------------------------------------
 
-VANILLA_NOW = datetime(2026, 8, 1, 12, 0, 0, tzinfo=timezone.utc)
+VANILLA_NOW = datetime(2026, 8, 1, 12, 0, 0, tzinfo=UTC)
 VANILLA_STAMP = "2026-08-01T12:00:00+00:00"
 VANILLA_DIR = Path(__file__).resolve().parent / "fixtures" / "fleet_vanilla"
 

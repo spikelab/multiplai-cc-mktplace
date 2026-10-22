@@ -78,12 +78,42 @@ from functools import partial
 from pathlib import Path
 from typing import get_args
 
-from .commands import (first_positional, hook_commands, parse_command_line, python_module, python_script,
-                       shell_commands)
-from .e2e_patches import FUNCTION_DEFS, FunctionNode, Patch, PatchScan, Symbol, body_nodes, call_argument
-from .entries import ConsoleScript, Entry, cli_routes, console_scripts, main_module_handler
-from .paths import (E2EListing, E2ETest, Handler, ListingSkip, Location, MatchKind, MockedE2ETest, PathHop,
-                    SkipReason, TracedPath)
+from .commands import (
+    first_positional,
+    hook_commands,
+    parse_command_line,
+    python_module,
+    python_script,
+    shell_commands,
+)
+from .e2e_patches import (
+    FUNCTION_DEFS,
+    FunctionNode,
+    Patch,
+    PatchScan,
+    Symbol,
+    body_nodes,
+    call_argument,
+)
+from .entries import (
+    ConsoleScript,
+    Entry,
+    cli_routes,
+    console_scripts,
+    main_module_handler,
+)
+from .paths import (
+    E2EListing,
+    E2ETest,
+    Handler,
+    ListingSkip,
+    Location,
+    MatchKind,
+    MockedE2ETest,
+    PathHop,
+    SkipReason,
+    TracedPath,
+)
 from .pyindex import Def, PyIndex, dotted_reference, snapshot_files
 
 log = logging.getLogger(__name__)

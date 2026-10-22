@@ -11,8 +11,16 @@ import sys
 from types import SimpleNamespace
 
 import pytest
-
-from trace_fixtures import CLI, NAMES, FakeCall, chain_hops, cli_source, commit_snapshot, lib, run_map
+from trace_fixtures import (
+    CLI,
+    NAMES,
+    FakeCall,
+    chain_hops,
+    cli_source,
+    commit_snapshot,
+    lib,
+    run_map,
+)
 
 HEX_FILE = re.compile(r"^[0-9a-f]{64}\.json$")
 ANSWERS_DIR = "paths-answers"

@@ -17,8 +17,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scan_skills import scan_skill  # noqa: E402
-
+from scan_skills import scan_skill
 
 SKILL_MD = """---
 name: demo

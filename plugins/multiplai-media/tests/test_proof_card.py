@@ -17,9 +17,9 @@ import pytest
 _SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "video-edit" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 
-import pipeline  # noqa: E402
-from stages import overlay_lint, proof_card  # noqa: E402
-from test_capture import png  # noqa: E402
+import pipeline
+from stages import overlay_lint, proof_card
+from test_capture import png
 
 BOX = {"text": "rise 4%", "x": 180, "y": 1900, "w": 520, "h": 44}
 

@@ -5,7 +5,6 @@ from __future__ import annotations
 import importlib
 
 import pytest
-
 from code_facts import Seed
 from conftest import line_of, make_tree
 

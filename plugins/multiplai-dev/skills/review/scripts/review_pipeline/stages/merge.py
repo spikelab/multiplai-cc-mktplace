@@ -26,7 +26,16 @@ from __future__ import annotations
 import logging
 
 from .. import checks, sdk
-from ..models import SEVERITIES, AgentCheck, DuplicateSet, Finding, Merged, MergeOutput, ReviewState, is_trim
+from ..models import (
+    SEVERITIES,
+    AgentCheck,
+    DuplicateSet,
+    Finding,
+    Merged,
+    MergeOutput,
+    ReviewState,
+    is_trim,
+)
 from ..paths_io import assign_paths, load_paths
 from ..prompts import merge as prompt
 from . import RunContext, bounded

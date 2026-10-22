@@ -20,10 +20,9 @@ happened to be writing it, and for two callers that process is not the session.
 import json
 import os
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
-
 from lib import checkpoint as cp
 from lib import session_registry
 
@@ -218,7 +217,7 @@ class TestSweep:
         _checkpoint(data_env, "s1")
         payload = json.loads(marker.read_text())
         payload["created_at"] = (
-            datetime.now(timezone.utc) - timedelta(hours=48)
+            datetime.now(UTC) - timedelta(hours=48)
         ).isoformat()
         marker.write_text(json.dumps(payload))
         _age(cp.session_dir(data_env, "s1"), 30)

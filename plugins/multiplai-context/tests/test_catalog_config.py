@@ -68,7 +68,7 @@ class TestPluginJsonUserConfigSchema:
     def test_catalog_model_has_description(self):
         """Scenario: catalog_model has a description field."""
         entry = self.user_config.get("catalog_model", {})
-        assert "description" in entry and entry["description"], (
+        assert entry.get("description"), (
             "catalog_model must have a non-empty description"
         )
 
@@ -95,7 +95,7 @@ class TestPluginJsonUserConfigSchema:
     def test_catalog_ttl_hours_has_description(self):
         """Scenario: catalog_ttl_hours has a description field."""
         entry = self.user_config.get("catalog_ttl_hours", {})
-        assert "description" in entry and entry["description"], (
+        assert entry.get("description"), (
             "catalog_ttl_hours must have a non-empty description"
         )
 
@@ -122,7 +122,7 @@ class TestPluginJsonUserConfigSchema:
     def test_diary_catalog_days_has_description(self):
         """Scenario: diary_catalog_days has a description field."""
         entry = self.user_config.get("diary_catalog_days", {})
-        assert "description" in entry and entry["description"], (
+        assert entry.get("description"), (
             "diary_catalog_days must have a non-empty description"
         )
 
@@ -149,7 +149,7 @@ class TestPluginJsonUserConfigSchema:
     def test_enable_skills_has_description(self):
         """Scenario: enable_skills has a description field."""
         entry = self.user_config.get("enable_skills", {})
-        assert "description" in entry and entry["description"], (
+        assert entry.get("description"), (
             "enable_skills must have a non-empty description"
         )
 
@@ -176,7 +176,7 @@ class TestPluginJsonUserConfigSchema:
     def test_enable_resources_has_description(self):
         """Scenario: enable_resources has a description field."""
         entry = self.user_config.get("enable_resources", {})
-        assert "description" in entry and entry["description"], (
+        assert entry.get("description"), (
             "enable_resources must have a non-empty description"
         )
 
@@ -203,7 +203,7 @@ class TestPluginJsonUserConfigSchema:
     def test_enable_costs_has_description(self):
         """Scenario: enable_costs has a description field."""
         entry = self.user_config.get("enable_costs", {})
-        assert "description" in entry and entry["description"], (
+        assert entry.get("description"), (
             "enable_costs must have a non-empty description"
         )
 
@@ -408,7 +408,7 @@ class TestCatalogConfigDefaults:
 
     def test_default_keep_ratio(self):
         """Scenario: keep_ratio defaults to 0.30 (the new tighter cutoff)."""
-        from generators.config import CatalogConfig, DEFAULT_KEEP_RATIO
+        from generators.config import DEFAULT_KEEP_RATIO, CatalogConfig
 
         assert DEFAULT_KEEP_RATIO == 0.30
         assert CatalogConfig().keep_ratio == 0.30
@@ -603,9 +603,7 @@ class TestConfigLoadingFromPluginSettings:
             if "catalog" in key.lower() or key.startswith("CLAUDE_PLUGIN_OPTION_"):
                 monkeypatch.delenv(key, raising=False)
 
-        from generators.config import load_catalog_config
-
-        from generators.config import DEFAULT_MODEL
+        from generators.config import DEFAULT_MODEL, load_catalog_config
         config = load_catalog_config()
         assert config.model == DEFAULT_MODEL
         assert config.ttl_hours == 168
@@ -867,7 +865,7 @@ class TestConfigModulePath:
         )
         init_file = generators_dir / "__init__.py"
         assert init_file.exists(), (
-            f"scripts/generators/__init__.py must exist for package import"
+            "scripts/generators/__init__.py must exist for package import"
         )
 
     def test_generators_config_module_exists(self):

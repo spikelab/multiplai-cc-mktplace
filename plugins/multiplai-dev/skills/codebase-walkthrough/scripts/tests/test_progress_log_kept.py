@@ -5,9 +5,9 @@ from __future__ import annotations
 import os
 
 from fakes import FakeAgents
+from test_pipeline import run_args
 from walkthrough_pipeline import orchestrator, sdk
 from walkthrough_pipeline.__main__ import main
-from test_pipeline import run_args
 
 
 def test_a_new_run_keeps_the_previous_progress_log(ws, tmp_path, monkeypatch, fake_fetch):

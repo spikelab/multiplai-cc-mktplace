@@ -20,7 +20,7 @@ import logging
 import os
 import re
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from multiplai_core import checkpoint
@@ -70,7 +70,7 @@ class ChildStatus(BaseModel):
 class Epic(BaseModel):
     name: str
     children: list[EpicChild] = Field(default_factory=list)
-    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     child_status: dict[str, ChildStatus] = Field(default_factory=dict)
     # PR B2: what the epic has spent, rebuilt from the records and the review
     # ledger at each save; incomplete when a spend could not be read.
@@ -85,8 +85,7 @@ def origin_owner_repo(url: str | None) -> tuple[str, str] | None:
     if not url:
         return None
     path = url.strip().rstrip("/")
-    if path.endswith(".git"):
-        path = path[:-len(".git")]
+    path = path.removesuffix(".git")
     parts = [p for p in re.split(r"[/:]", path) if p]
     if len(parts) < 2:
         return None

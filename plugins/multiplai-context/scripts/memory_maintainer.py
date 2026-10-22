@@ -96,16 +96,16 @@ import json
 import subprocess
 import sys
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+from lib.dream_chunking import CHUNK_TIMEOUT_S
+from lib.runtime import run_supervised, uv_run_argv
 from multiplai_core.config import load_yaml, save_yaml
 from multiplai_core.log_utils import setup_logging
 from multiplai_core.paths import get_paths
-from lib.dream_chunking import CHUNK_TIMEOUT_S
-from lib.runtime import run_supervised, uv_run_argv
 
 logger = setup_logging("memory_maintainer", packages=("lib", "generators"))
 
@@ -206,7 +206,7 @@ def gate_open(
     state file wedging the gate shut forever is maintenance that silently
     never runs again.
     """
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     state = _load_state(state_file)
 
     last_run = state.get(key)
@@ -218,7 +218,7 @@ def gate_open(
         logger.warning("Unparseable %s %r; gate open", key, last_run)
         return True
     if last_dt.tzinfo is None:
-        last_dt = last_dt.replace(tzinfo=timezone.utc)
+        last_dt = last_dt.replace(tzinfo=UTC)
     return now - last_dt >= timedelta(hours=hours)
 
 
@@ -236,7 +236,7 @@ def stamp(state_file: Path, *, now: datetime | None = None,
     gates, and writing only the key being stamped would silently reset the other
     one — which for the weekly doctor would mean it fired every single day.
     """
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     try:
         state = _load_state(state_file)
         state[key] = now.isoformat()
@@ -398,12 +398,12 @@ def skills_catalog_is_stale(
         if isinstance(raw, str):
             generated = datetime.fromisoformat(raw)
             if generated.tzinfo is None:
-                generated = generated.replace(tzinfo=timezone.utc)
+                generated = generated.replace(tzinfo=UTC)
     except (OSError, ValueError, AttributeError):
         generated = None
     if generated is None:
-        generated = datetime.fromtimestamp(cat_mtime, timezone.utc)
-    if datetime.now(timezone.utc) - generated > timedelta(hours=max(0.0, ttl_hours)):
+        generated = datetime.fromtimestamp(cat_mtime, UTC)
+    if datetime.now(UTC) - generated > timedelta(hours=max(0.0, ttl_hours)):
         return True
     try:
         return plugins_manifest.stat().st_mtime > cat_mtime
@@ -563,7 +563,11 @@ def run_utilisation_judge(data_dir: Path, *, dry_run: bool = False) -> PassResul
       eligible, so the sampling rate is visible rather than assumed.
     """
     try:
-        from lib.utilisation import read_records, sessions_awaiting_judge, utilisation_path
+        from lib.utilisation import (
+            read_records,
+            sessions_awaiting_judge,
+            utilisation_path,
+        )
         from lib.utilisation_judge import configured_sample_size, judge_sessions
 
         sample_size = configured_sample_size()
@@ -681,8 +685,12 @@ def run_doctor(memory_dir: Path, data_dir: Path, dreams_dir: Path,
       so a doctor run neither delays nor is delayed by the daily passes.
     """
     try:
-        from lib import doctor_contradiction, doctor_deadweight, doctor_duplication
-        from lib import doctor_report
+        from lib import (
+            doctor_contradiction,
+            doctor_deadweight,
+            doctor_duplication,
+            doctor_report,
+        )
 
         if not memory_dir.is_dir():
             return PassResult("doctor", False, f"no memory directory at {memory_dir}")

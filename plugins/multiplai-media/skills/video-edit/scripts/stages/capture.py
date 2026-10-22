@@ -34,10 +34,11 @@ from __future__ import annotations
 import json
 import re
 import struct
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 from urllib.parse import urlparse
 
 DEFAULT_WIDTH = 1280                 # viewport, CSS pixels (= image pixels at scale 1)
@@ -53,7 +54,7 @@ FROM_FILE_FIX = ("save a screenshot of the page yourself and pass it with "
                  "in the screenshot's pixels)")
 # A final URL path that is a sign-in page: /login, /signin, /i/flow/login, …
 LOGIN_PATH_RE = re.compile(r"(?:^|/)(?:log-?in|sign-?in|sign_in|signup|sign-up|"
-                           r"auth|i/flow/login|accounts/login)(?:/|$)", re.I)
+                           r"auth|i/flow/login|accounts/login)(?:/|$)", re.IGNORECASE)
 
 # Read-only look at the loaded page for the walls a screenshot would show
 # instead of the content: a visible password field, or a captcha widget or
@@ -118,11 +119,11 @@ def png_size(data: bytes) -> tuple[int, int]:
 
 def domain(url: str) -> str:
     host = urlparse(url).hostname or ""
-    return host[4:] if host.startswith("www.") else host
+    return host.removeprefix("www.")
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _first_line(e: BaseException) -> str:
@@ -248,7 +249,7 @@ def from_file(url: str, png_path: Path, out_dir: Path, box: Box | None = None,
     if box is not None and not box.inside(w, h):
         raise CaptureError(f"--box {box.x},{box.y},{box.w},{box.h} is not inside the {w}x{h} "
                            f"screenshot {png_path}")
-    taken = datetime.fromtimestamp(Path(png_path).stat().st_mtime, timezone.utc)
+    taken = datetime.fromtimestamp(Path(png_path).stat().st_mtime, UTC)
     hl = {"text": label, **asdict(box)} if box else None
     meta = _write(out_dir, png, url, taken.strftime("%Y-%m-%dT%H:%M:%SZ"), "file", hl)
     return Shot(out_dir, meta, None, [])

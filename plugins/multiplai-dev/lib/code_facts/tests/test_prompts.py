@@ -9,7 +9,7 @@ def test_whole_files_prompt_explains_a_module():
     p = explore_unit("bookings", [Span.whole("e/a.py", 12)], ExploreOutput, "standard")
     assert "explaining the module `bookings`" in p
     assert "Files in your part of the module:" in p
-    assert re.search(r"^- e/a\.py \(12 lines\)$", p, re.M)
+    assert re.search(r"^- e/a\.py \(12 lines\)$", p, re.MULTILINE)
     assert "`conventions`:" not in p.split("Schema:")[0]
 
 

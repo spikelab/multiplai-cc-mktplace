@@ -77,10 +77,10 @@ import json
 import logging
 import os
 import tempfile
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Iterable, Iterator, Optional, Sequence
 
 from lib.runtime import lock_path
 
@@ -170,12 +170,12 @@ DISCLAIMER = (
 
 # --- keys -------------------------------------------------------------------
 
-def section_key(file: str, section: Optional[str]) -> str:
+def section_key(file: str, section: str | None) -> str:
     """``file.md#Section``, or bare ``file.md`` for a whole-file injection."""
     return f"{file}#{section}" if section else file
 
 
-def split_key(key: str) -> tuple[str, Optional[str]]:
+def split_key(key: str) -> tuple[str, str | None]:
     """Inverse of :func:`section_key`. ``None`` section means the whole file."""
     file, sep, section = key.partition("#")
     return (file, section if sep and section else None)
@@ -186,17 +186,17 @@ def utilisation_path(data_dir: Path) -> Path:
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _parse_ts(value: object) -> Optional[datetime]:
+def _parse_ts(value: object) -> datetime | None:
     if not isinstance(value, str) or not value:
         return None
     try:
         dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
-    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
 
 
 # --- io ---------------------------------------------------------------------
@@ -308,7 +308,7 @@ def is_session_record(record: dict) -> bool:
     return record.get("kind", "session") == "session"
 
 
-def new_session_record(session: str, *, ts: Optional[str] = None) -> dict:
+def new_session_record(session: str, *, ts: str | None = None) -> dict:
     return {
         "v": SCHEMA_VERSION,
         "kind": "session",
@@ -321,7 +321,7 @@ def new_session_record(session: str, *, ts: Optional[str] = None) -> dict:
 
 
 def upsert_session(
-    path: Path, session: str, updates: dict, *, ts: Optional[str] = None
+    path: Path, session: str, updates: dict, *, ts: str | None = None
 ) -> dict:
     """Merge *updates* into *session*'s record, creating it if absent.
 
@@ -332,7 +332,7 @@ def upsert_session(
     path = Path(path)
     with _exclusive(path):
         records = read_records(path)
-        target: Optional[dict] = None
+        target: dict | None = None
         for record in records:
             if is_session_record(record) and record.get("session") == session:
                 target = record
@@ -404,7 +404,7 @@ def _activity_files_oldest_first(logs_dir: Path) -> list[Path]:
     legacy = logs_dir / "activity.jsonl"
     if legacy.exists():
         try:
-            day = datetime.fromtimestamp(legacy.stat().st_mtime, timezone.utc).strftime("%Y-%m-%d")
+            day = datetime.fromtimestamp(legacy.stat().st_mtime, UTC).strftime("%Y-%m-%d")
         except OSError:
             day = ""
         keyed.append((day, 0, legacy))
@@ -460,7 +460,7 @@ def record_injections(
     *,
     session_id: str = "",
     transcript: str = "",
-    ts: Optional[str] = None,
+    ts: str | None = None,
 ) -> dict:
     """Write (or replace) the ``injected`` half of *session*'s record.
 
@@ -491,7 +491,7 @@ def record_judge(
     entries: Sequence[dict],
     *,
     status: str = "ok",
-    instrument: Optional[dict] = None,
+    instrument: dict | None = None,
 ) -> dict:
     """Store estimator B's answer, with the instrument that produced it.
 
@@ -552,11 +552,11 @@ class SectionStat:
         return split_key(self.key)[0]
 
     @property
-    def section(self) -> Optional[str]:
+    def section(self) -> str | None:
         return split_key(self.key)[1]
 
     @property
-    def bytes_per_injection(self) -> Optional[float]:
+    def bytes_per_injection(self) -> float | None:
         return self.bytes / self.retrieved if self.retrieved else None
 
     def observed(self, estimator: str) -> int:
@@ -565,7 +565,7 @@ class SectionStat:
     def used(self, estimator: str) -> int:
         return getattr(self, f"{estimator}_used")
 
-    def rate(self, estimator: str) -> Optional[float]:
+    def rate(self, estimator: str) -> float | None:
         """Estimated fraction of **sessions** that relied on this, or ``None``.
 
         ``None`` means *not estimated* — never *not used*. The distinction is
@@ -586,11 +586,11 @@ class SectionStat:
         n = self.observed(estimator)
         return (self.used(estimator) / n) if n else None
 
-    def estimated_uses(self, estimator: str) -> Optional[float]:
+    def estimated_uses(self, estimator: str) -> float | None:
         rate = self.rate(estimator)
         return None if rate is None else self.retrieved * rate
 
-    def bytes_per_estimated_use(self, estimator: str) -> Optional[float]:
+    def bytes_per_estimated_use(self, estimator: str) -> float | None:
         """Cost per estimated use. ``None`` when unestimated **or zero-use**.
 
         A zero use rate makes cost-per-use unbounded, which JSON cannot carry
@@ -605,7 +605,7 @@ class SectionStat:
     def zero_estimated_use(self, estimator: str) -> bool:
         return self.rate(estimator) == 0.0
 
-    def rank_basis(self, min_observations: int = MIN_OBSERVATIONS) -> Optional[str]:
+    def rank_basis(self, min_observations: int = MIN_OBSERVATIONS) -> str | None:
         """Which estimator orders this row — the judge when it has enough
         observations, else self-report, else nothing.
 
@@ -689,7 +689,7 @@ class Aggregate:
         return self.sections.setdefault(key, SectionStat(key=key))
 
 
-def _entry_key(entry: object) -> Optional[str]:
+def _entry_key(entry: object) -> str | None:
     if not isinstance(entry, dict):
         return None
     file = entry.get("file")
@@ -928,7 +928,7 @@ def catalog_keys(catalog: dict) -> list[str]:
 def build_table(
     records: Iterable[dict],
     *,
-    known_keys: Optional[Iterable[str]] = None,
+    known_keys: Iterable[str] | None = None,
     min_observations: int = MIN_OBSERVATIONS,
     margin: float = DISAGREEMENT_MARGIN,
 ) -> dict:
@@ -1004,7 +1004,7 @@ def build_table(
 def load_table(
     data_dir: Path,
     *,
-    catalog: Optional[dict] = None,
+    catalog: dict | None = None,
     min_observations: int = MIN_OBSERVATIONS,
     margin: float = DISAGREEMENT_MARGIN,
 ) -> dict:
@@ -1018,7 +1018,7 @@ def load_table(
     )
 
 
-def _fmt_bytes(value: Optional[float]) -> str:
+def _fmt_bytes(value: float | None) -> str:
     if value is None:
         return "—"
     if value >= 1_000_000:
@@ -1184,7 +1184,7 @@ def compact(
     path: Path,
     *,
     older_than_days: int = RETENTION_DAYS,
-    now: Optional[datetime] = None,
+    now: datetime | None = None,
     dry_run: bool = False,
 ) -> dict:
     """Collapse session records older than *older_than_days* into totals.
@@ -1216,7 +1216,7 @@ def _compact_locked(
     path: Path,
     *,
     older_than_days: int,
-    now: Optional[datetime],
+    now: datetime | None,
     dry_run: bool,
 ) -> dict:
     """:func:`compact`'s body, with the lock already held."""
@@ -1224,7 +1224,7 @@ def _compact_locked(
     if not records:
         return {"collapsed": 0, "kept": 0, "sections": 0}
 
-    cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=older_than_days)
+    cutoff = (now or datetime.now(UTC)) - timedelta(days=older_than_days)
 
     stale: list[dict] = []
     kept: list[dict] = []

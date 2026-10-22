@@ -23,6 +23,7 @@ from pathlib import Path
 
 import pytest
 
+
 # --- Import-time workspace isolation ---------------------------------------
 # Plugin scripts configure logging at MODULE IMPORT time (e.g.
 # ``logger = setup_logging("backfill")`` at top level), and pytest imports

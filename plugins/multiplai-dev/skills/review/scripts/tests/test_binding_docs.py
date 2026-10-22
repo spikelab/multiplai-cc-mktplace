@@ -13,14 +13,13 @@ import os
 from pathlib import Path
 
 import pytest
-from test_reported_finders import git, mapped, model, review, saved  # noqa: F401
-
 from review_pipeline import checks
 from review_pipeline import target as target_mod
 from review_pipeline.models import CoverageRecord
 from review_pipeline.prompts import find as find_prompt
 from review_pipeline.prompts.untrusted import fenced
 from review_pipeline.stages import find as find_stage
+from test_reported_finders import git, mapped, model, review, saved  # noqa: F401
 
 INSTRUCTION = ("The documents below are rules of this repository. Report a finding for any changed line that "
                "breaks a rule in one of them. Cite the changed line, and name the document whose rule it breaks "

@@ -12,9 +12,7 @@ import subprocess
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from tests.planning_fakes import accepted_planning
 import pytest
-
 from build_pipeline.change_manager import ChangeManager
 from build_pipeline.config import BuildConfig
 from build_pipeline.intake import (
@@ -22,10 +20,11 @@ from build_pipeline.intake import (
     config_commit_state,
 )
 from build_pipeline.llm_steps.research_steps import ResearchDecision
-from build_pipeline.models import BuildPhase, PlanReviewResult, GateResult
+from build_pipeline.models import BuildPhase, GateResult, PlanReviewResult
 from build_pipeline.orchestrator import run_orchestrator
 from build_pipeline.state import BuildState
 
+from tests.planning_fakes import accepted_planning  # noqa: F401
 from tests.spec_fixtures import ready_specs
 from tests.test_git_ops import make_repo
 
@@ -1063,7 +1062,9 @@ class TestExitCodes:
         the two apart."""
         from build_pipeline.readiness import EXIT_NOT_READY, EXIT_SPEC_ISSUES
         from build_pipeline.tdd_engine import (
-            EXIT_AGENT_TIMEOUT, EXIT_BUILD_FAILURE, EXIT_SUCCESS,
+            EXIT_AGENT_TIMEOUT,
+            EXIT_BUILD_FAILURE,
+            EXIT_SUCCESS,
         )
 
         assert WAITING_EXIT == 3

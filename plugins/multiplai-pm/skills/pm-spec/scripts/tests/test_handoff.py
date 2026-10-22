@@ -7,10 +7,8 @@ import json
 
 import jsonschema
 import pytest
-
-from pm_spec_pipeline import git_ops, tickets
-
 from conftest import CAPS, PRD, SCHEMA, change_dir, git, run, write
+from pm_spec_pipeline import git_ops, tickets
 
 
 def load(cdir):
@@ -138,9 +136,8 @@ class TestCommit:
 # --- the ready record covers only files the check read --------------------------
 
 def test_an_edit_while_the_check_runs_is_checked_before_ready(repo, model, capsys):
-    from multiplai_core.specs import is_ready, spec_revision
-
     from conftest import meta, requirements, state
+    from multiplai_core.specs import is_ready, spec_revision
     cdir = change_dir(repo)
     read = []
 
@@ -162,9 +159,8 @@ def test_an_edit_while_the_check_runs_is_checked_before_ready(repo, model, capsy
 
 
 def test_the_recheck_passes_at_the_revision_it_read(repo, model):
-    from multiplai_core.specs import spec_revision
-
     from conftest import meta, requirements, state
+    from multiplai_core.specs import spec_revision
     from test_consistency import finding, recheck
     cdir = change_dir(repo)
     read = []
@@ -182,9 +178,8 @@ def test_the_recheck_passes_at_the_revision_it_read(repo, model):
 
 
 def test_a_change_between_the_compare_and_the_ready_record_is_checked_again(repo, model, monkeypatch):
-    from multiplai_core.specs import is_ready, spec_revision
-
     from conftest import meta, requirements
+    from multiplai_core.specs import is_ready, spec_revision
     real = tickets.write
     cdir = change_dir(repo)
     done = []
@@ -208,9 +203,8 @@ ISSUES = "# Spec issues\n\n## Retry header\n\nrequirements/retry-policy.md lacks
 
 
 def test_resume_after_a_blocked_revise_refuses_and_never_hands_off(repo, model, capsys):
-    from multiplai_core.specs import is_ready, set_spec_issues
-
     from conftest import meta
+    from multiplai_core.specs import is_ready, set_spec_issues
     model["consistency"] = [{"findings": []},
                             {"findings": [], "prior_assessments": [{"finding_id": "RV-F1",
                                                                     "status": "still_present"}]},

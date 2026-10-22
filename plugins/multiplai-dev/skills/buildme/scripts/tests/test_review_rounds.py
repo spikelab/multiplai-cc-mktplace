@@ -17,10 +17,9 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
 from build_pipeline import orchestrator, review_rounds
-from build_pipeline.gates import parse_searched
 from build_pipeline.config import BuildConfig
+from build_pipeline.gates import parse_searched
 from build_pipeline.models import (
     AgentResult,
     BlockInfo,
@@ -707,9 +706,9 @@ class TestFixOnPass:
 # block run in a second project that never stopped (`assert_same_as_unstopped`);
 # a refusal must leave the repo exactly as it was (`repo_state`).
 
-import asyncio  # noqa: E402
+import asyncio
 
-from tests.row_helpers import assert_same_as_unstopped, repo_state, run_killed_at  # noqa: E402
+from tests.row_helpers import assert_same_as_unstopped, repo_state, run_killed_at
 
 OUTSIDE = "other/notes.txt"
 
@@ -1023,7 +1022,7 @@ async def test_fix_on_pass_budget_denial_remains_a_stop(project):
 # B1: every accepted finding gets a stable id in its round record, and the
 # loop reads the open findings of the last round back from disk.
 
-from build_pipeline.models import PriorAssessment  # noqa: E402
+from build_pipeline.models import PriorAssessment
 
 
 def _record(change_dir: Path, block: BlockInfo, review: ReviewResult, **memory) -> Path:
@@ -1420,8 +1419,8 @@ class TestDefectClass:
 # B3: the last fix questions the approach, and an exhausted loop says which
 # findings kept coming back.
 
-from build_pipeline.gates import parse_recurring  # noqa: E402
-from build_pipeline.prompts.implementation import REVIEW_FIX_ESCALATION  # noqa: E402
+from build_pipeline.gates import parse_recurring
+from build_pipeline.prompts.implementation import REVIEW_FIX_ESCALATION
 
 ESCALATION_HEAD = REVIEW_FIX_ESCALATION.split("\n", 1)[0]
 RECURRING_REPORT = ("fixed\nRECURRING: B01-R1-F1, B01-R2-F1 — add() never checks its inputs\n"
@@ -1520,7 +1519,7 @@ class TestEscalation:
 # iteration 0). Each row is compared with the same block run in a second
 # project that never stopped.
 
-from contextlib import contextmanager  # noqa: E402
+from contextlib import contextmanager
 
 MEMORY_FIELDS = ("accepted", "rejected", "open_findings", "prior_assessments",
                  "outside_fix_scope", "gate")
@@ -1716,7 +1715,7 @@ class TestReviewMemoryRows:
     @pytest.mark.parametrize("point", ["while_running", "before_amend_fix"])
     async def test_review_memory_resume_S8_stop_in_the_escalated_fix(
             self, project, tmp_path, point):
-        still = lambda r: _assess(r, ("B01-R1-F1", "still_present"))  # noqa: E731
+        still = lambda r: _assess(r, ("B01-R1-F1", "still_present"))
         unstopped_reviews = [_round_one(), still(_failing()), _passing()]
         clean = await _unstopped(tmp_path / "unstopped", unstopped_reviews,
                                  review_model="claude-haiku-4-5")

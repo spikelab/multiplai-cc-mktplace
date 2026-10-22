@@ -11,7 +11,8 @@ code in the order they pass.
 
 from __future__ import annotations
 
-from typing import Iterable, Literal, Mapping
+from collections.abc import Iterable, Mapping
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -37,7 +38,7 @@ class Citation(_Model):
     side: Side = "head"
 
     @model_validator(mode="after")
-    def _ordered(self) -> "Citation":
+    def _ordered(self) -> Citation:
         if self.line_end < self.line_start:
             raise ValueError(f"line_end {self.line_end} is before line_start {self.line_start}")
         return self
@@ -89,7 +90,7 @@ class Span(BaseModel):
         return max(0, self.end - self.start + 1)
 
     @classmethod
-    def whole(cls, path: str, lines: int, side: Side = "head") -> "Span":
+    def whole(cls, path: str, lines: int, side: Side = "head") -> Span:
         return cls(path=path, start=1, end=lines, side=side, whole_file=True)
 
 
@@ -98,7 +99,7 @@ class Scope(BaseModel):
     spans: list[Span] = Field(default_factory=list)
 
     @classmethod
-    def whole_files(cls, files: Mapping[str, int] | Iterable[tuple[str, int]]) -> "Scope":
+    def whole_files(cls, files: Mapping[str, int] | Iterable[tuple[str, int]]) -> Scope:
         items = files.items() if isinstance(files, Mapping) else files
         return cls(spans=[Span.whole(p, n) for p, n in items])
 

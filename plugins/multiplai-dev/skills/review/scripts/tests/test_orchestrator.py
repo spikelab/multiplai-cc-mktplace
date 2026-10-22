@@ -7,13 +7,20 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
 from conftest import DEF_CITATION, KEYWORD_CITATION, SCHEMA, high_finding
 from review_pipeline import budget, orchestrator, sdk
 from review_pipeline.__main__ import main
 from review_pipeline.config import DIMENSIONS
-from review_pipeline.models import (AssessOutput, DuplicateSet, FinderOutput, MergeOutput, RecheckOutput,
-                                    RepeatsOutput, ReviewState, Verdict)
+from review_pipeline.models import (
+    AssessOutput,
+    DuplicateSet,
+    FinderOutput,
+    MergeOutput,
+    RecheckOutput,
+    RepeatsOutput,
+    ReviewState,
+    Verdict,
+)
 
 
 def reworded_finding():

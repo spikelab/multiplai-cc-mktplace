@@ -13,15 +13,28 @@ from pathlib import Path
 
 import jsonschema
 import pytest
-
-from conftest import KEYWORD_CITATION, KEYWORD_USE_CITATION, SCHEMA, high_finding, medium_finding
+from conftest import (
+    KEYWORD_CITATION,
+    KEYWORD_USE_CITATION,
+    SCHEMA,
+    high_finding,
+    medium_finding,
+)
 from fixture_repo import KEYWORD_USE_LINE
 from review_pipeline import sdk
 from review_pipeline.config import ReviewConfig
 from review_pipeline.export import to_findings_file, write_findings_file
 from review_pipeline.gates import gated_locations, locations_gate
-from review_pipeline.models import (ConvertOutput, Finding, FinderOutput, FinderReport, FinderResult, Piece,
-                                    ReviewState, Verdict)
+from review_pipeline.models import (
+    ConvertOutput,
+    FinderOutput,
+    FinderReport,
+    FinderResult,
+    Finding,
+    Piece,
+    ReviewState,
+    Verdict,
+)
 from review_pipeline.paths_io import PathView
 from review_pipeline.post import inline_comment, review_body
 from review_pipeline.prompts import convert as convert_prompt

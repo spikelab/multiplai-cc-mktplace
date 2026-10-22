@@ -33,10 +33,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from multiplai_core.log_utils import setup_logging
 from generators.config import load_catalog_config
-from qmd_retrieval import QmdTarget, target_from_config
 from lib.runtime import lock_path
+from multiplai_core.log_utils import setup_logging
+from qmd_retrieval import QmdTarget, target_from_config
 
 logger = setup_logging("qmd_refresh", packages=("lib", "generators"))
 

@@ -10,9 +10,9 @@ import pytest
 _SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "video-edit" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 
-import pipeline  # noqa: E402
-from stages import composite, follow  # noqa: E402
-from stages.edl import EDL  # noqa: E402
+import pipeline
+from stages import composite, follow
+from stages.edl import EDL
 
 TV = "(on/30)"
 

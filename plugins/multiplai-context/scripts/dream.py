@@ -30,7 +30,7 @@ import tempfile
 import time
 import uuid
 from collections.abc import Sequence
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -48,24 +48,26 @@ from lib.dream_chunking import CHUNK_TIMEOUT_S
 
 os.environ.setdefault("MULTIPLAI_SDK_CALL_TIMEOUT_S", str(int(CHUNK_TIMEOUT_S)))
 
-from multiplai_core.paths import get_paths
-from multiplai_core.model_client import create_client
-from multiplai_core.config import load_yaml, save_yaml
-from multiplai_core.log_utils import setup_logging
 from generators.config import load_catalog_config
 from generators.dispatcher import generate_catalogs
 from lib import citation_repair, learnings_ledger, taxonomy
-from lib.job_effort import DREAM_EFFORT_OPTION, effort_kwargs
 from lib.dream_processed import (
     PROCESSED_HEADING,
     Decision,
     archive_disposition,
     has_pending_conflicts,
     has_pending_items,
-    latest_pending_proposal as _latest_pending_proposal,
     mark_many_processed,
     mark_processed,
 )
+from lib.dream_processed import (
+    latest_pending_proposal as _latest_pending_proposal,
+)
+from lib.job_effort import DREAM_EFFORT_OPTION, effort_kwargs
+from multiplai_core.config import load_yaml, save_yaml
+from multiplai_core.log_utils import setup_logging
+from multiplai_core.model_client import create_client
+from multiplai_core.paths import get_paths
 
 logger = setup_logging("dream", packages=("lib", "generators"))
 
@@ -199,7 +201,7 @@ def acquire_run_lock() -> bool:
 
     try:
         os.ftruncate(fd, 0)
-        os.write(fd, (datetime.now(timezone.utc).isoformat() + "\n").encode("utf-8"))
+        os.write(fd, (datetime.now(UTC).isoformat() + "\n").encode("utf-8"))
         os.fsync(fd)
     except OSError:
         logger.warning("Could not stamp the run lock with a start time", exc_info=True)
@@ -259,7 +261,7 @@ def _runs_dir() -> Path:
 
 
 def _new_run_id() -> str:
-    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:6]
+    return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:6]
 
 
 def _stage_draft(run_dir: Path, index: int, text: str, keys: list[str], kind: str = "chunk") -> Path:
@@ -916,9 +918,8 @@ def _bank_memory_context() -> str:
     target regardless of what the drafter decides — the fence is the first of
     those three layers, not the only one.
     """
-    from multiplai_core.untrusted import fence, markdown_notice
-
     from lib.banks import shared_banks
+    from multiplai_core.untrusted import fence, markdown_notice
 
     banks = shared_banks()
     if not banks:
@@ -1019,7 +1020,7 @@ def _draft_prompt_prefix(memory_context: str, source_names: str) -> str:
     run's files rather than the chunk's) so that only the tail of the prompt
     differs between chunks.
     """
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
     return (
         f"Today's date: {today}\n"
         f"Source files: {source_names}\n\n"
@@ -1332,7 +1333,7 @@ def _with_routing_warnings(proposal: str, memory_contents: dict[str, str]) -> st
     files are evidence only and never join the section registry.
     """
     try:
-        from lib.routing_validation import validate_proposal, render_warnings_section
+        from lib.routing_validation import render_warnings_section, validate_proposal
 
         try:
             from lib import memory_corpus
@@ -1532,7 +1533,7 @@ def _batch_proposal_for_critic(proposal: str) -> list[str]:
     # Keep each "## " heading with its body; the split loses the delimiter, so
     # re-attach it. Anything before the first heading is the proposal preamble
     # and rides along with the first batch.
-    parts = re.split(r"^(?=## )", proposal, flags=re.M)
+    parts = re.split(r"^(?=## )", proposal, flags=re.MULTILINE)
     sections = [p for p in parts if p.strip()]
 
     batches: list[str] = []
@@ -1807,7 +1808,7 @@ async def dream_report() -> None:
             logger.warning("Could not stage folded proposal %d", i, exc_info=True)
 
     dreams_dir.mkdir(parents=True, exist_ok=True)
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
     output_file = _proposal_output_path(dreams_dir, today)
 
     # Mirror dream_auto(): a crash inside the SDK call — including an
@@ -1979,7 +1980,7 @@ def _commit_memory_changes(
             logger.info("Memory auto-commit skipped — no changes to record")
             return False
 
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
         # Restrict the snapshot to the *.md pathspec: passing the pathspec
         # records just those paths and leaves any other staged files untouched.
         subprocess.run(
@@ -2265,7 +2266,7 @@ async def dream_auto() -> None:
             # without clobbering a prior same-day artifact.
             dreams_dir = paths.dreams_dir()
             dreams_dir.mkdir(parents=True, exist_ok=True)
-            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            today = datetime.now(UTC).strftime("%Y-%m-%d")
             proposal_file = _proposal_output_path(dreams_dir, today)
             proposal_file.write_text(proposal)
 
@@ -2348,7 +2349,7 @@ async def dream_auto() -> None:
                 )
 
             state = load_yaml(dream_state_file)
-            state["last_run"] = datetime.now(timezone.utc).isoformat()
+            state["last_run"] = datetime.now(UTC).isoformat()
             state["learnings_processed"] = sum(1 for _ in all_learnings.splitlines())
             state["files_updated"] = updated_count
             save_yaml(dream_state_file, state)
@@ -2817,7 +2818,7 @@ async def dream_triage(proposal_arg: str | None, *, dry_run: bool) -> int:
             _atomic_write(
                 memory_file,
                 _refresh_last_updated(
-                    updated_content, datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                    updated_content, datetime.now(UTC).strftime("%Y-%m-%d")
                 ),
             )
         except OSError as exc:
@@ -2848,7 +2849,7 @@ async def dream_triage(proposal_arg: str | None, *, dry_run: bool) -> int:
         for item in triage.dropped
     ]
 
-    generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    generated = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
     receipt = triage_lib.render_receipt(
         triage, proposal_name=proposal_path.name, applied=applied,
         failed=failed, generated=generated, mode=mode,
@@ -2856,7 +2857,7 @@ async def dream_triage(proposal_arg: str | None, *, dry_run: bool) -> int:
     )
     receipts_dir = dreams_dir / "applied"
     receipts_dir.mkdir(parents=True, exist_ok=True)
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
     receipt_path = receipts_dir / f"{today}-auto-apply-receipt.md"
     n = 2
     while receipt_path.exists():
@@ -2883,7 +2884,7 @@ async def dream_triage(proposal_arg: str | None, *, dry_run: bool) -> int:
         mode=mode,
     ))
     if failed:
-        print("")
+        print()
         print(f"NOT APPLIED ({len(failed)} file(s)) — items left pending:")
         for name, reason in sorted(failed.items()):
             print(f"    {name} — {reason}")
@@ -3042,7 +3043,7 @@ def _reconcile(*, dry_run: bool = False) -> int:
     if failures < len(finished):
         dream_state_file = paths.dream_state_file()
         state = load_yaml(dream_state_file) or {}
-        state["last_run"] = datetime.now(timezone.utc).isoformat()
+        state["last_run"] = datetime.now(UTC).isoformat()
         save_yaml(dream_state_file, state)
         print(f"stamped:  dream_state last_run={state['last_run']}")
 
@@ -3411,7 +3412,7 @@ def main() -> None:
         paths = get_paths()
         dream_state_file = paths.dream_state_file()
         state = load_yaml(dream_state_file) or {}
-        state["last_run"] = datetime.now(timezone.utc).isoformat()
+        state["last_run"] = datetime.now(UTC).isoformat()
         state["files_updated"] = args.files_updated
         state["learnings_processed"] = args.learnings_processed
         save_yaml(dream_state_file, state)

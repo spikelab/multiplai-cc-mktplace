@@ -27,9 +27,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from multiplai_core.paths import get_paths  # noqa: E402
-
-from lib import rejections, relearns  # noqa: E402
+from lib import rejections, relearns
+from multiplai_core.paths import get_paths
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:

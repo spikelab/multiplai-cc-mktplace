@@ -16,7 +16,15 @@ from __future__ import annotations
 from typing import Literal
 
 # The explore answers and units live in code_facts, shared with review and buildme.
-from code_facts.models import Citation, Dropped, ExploreOutput, Fact, FilePurpose, Term, Unit  # noqa: F401
+from code_facts.models import (  # noqa: F401
+    Citation,
+    Dropped,
+    ExploreOutput,
+    Fact,
+    FilePurpose,
+    Term,
+    Unit,
+)
 from code_facts.paths import PathsResult
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 

@@ -7,11 +7,10 @@ router logic deterministically without network calls.
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-
 from research_pipeline import sdk
 from research_pipeline.models import SearchResult
 from research_pipeline.search_router import (
@@ -21,7 +20,6 @@ from research_pipeline.search_router import (
     RouterConfig,
     SearchRouter,
 )
-
 
 # ---------------------------------------------------------------------------
 # Stub providers
@@ -239,7 +237,7 @@ class TestCircuitBreaker:
 
         # Manually rewind circuit_open_until to the past
         router.quotas._state.quotas["primary"].circuit_open_until = (
-            datetime.now(timezone.utc) - timedelta(minutes=1)
+            datetime.now(UTC) - timedelta(minutes=1)
         ).isoformat()
         router.quotas._save()
 

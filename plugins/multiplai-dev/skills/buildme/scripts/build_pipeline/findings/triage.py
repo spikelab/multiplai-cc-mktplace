@@ -9,8 +9,8 @@ injection pattern, is listed in `findings-r<N>.md` and never reaches a model.
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Awaitable, Callable
 
 from multiplai_core.untrusted import defang, markdown_notice
 

@@ -10,12 +10,16 @@ from datetime import date
 from pathlib import Path
 
 import pytest
-
-from scripts.lib.conflict_edits import (CONFLICT_PROVENANCES, Learning,
-                                        conflict_section_for,
-                                        detect_conflicts,
-                                        find_contradicted_line, overlap,
-                                        parse_learnings, render_section)
+from scripts.lib.conflict_edits import (
+    CONFLICT_PROVENANCES,
+    Learning,
+    conflict_section_for,
+    detect_conflicts,
+    find_contradicted_line,
+    overlap,
+    parse_learnings,
+    render_section,
+)
 
 TODAY = date(2026, 7, 26)
 
@@ -305,8 +309,8 @@ class TestDreamIntegration:
         patch never applied and the test passed on the no-conflicts path
         instead of the failure path it claimed to cover.
         """
-        import lib.conflict_edits as conflict_edits
         import dream
+        from lib import conflict_edits
 
         def boom(*_args, **_kwargs):
             raise RuntimeError("boom")

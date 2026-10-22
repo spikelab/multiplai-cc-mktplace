@@ -2,42 +2,13 @@
 
 import os
 import re
-import sys
 import shlex
-import pytest
+import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import subprocess
-
-from build_pipeline.tdd_engine import (
-    parse_blocks,
-    assemble_context,
-    run_block_tdd,
-    run_test_quality_check,
-    run_tdd_engine,
-    _capture_block_diff,
-    capture_build_diff,
-    _detect_entry_point,
-    _read_block_test_files,
-    _git_commit_block_phase,
-    _run_integration_and_review,
-    _run_refactor_all,
-    _snapshot_all_test_files,
-    _run_quality_review,
-    _adjudicate_review_findings,
-    _enforce_test_integrity,
-    _snapshot_test_files,
-    _TEST_FILE_RE,
-    _TEST_PATH_RE,
-    _verify_entry_point,
-    EMPTY_TREE_SHA,
-    WEAK_TEST_PATTERNS,
-    MAX_REVIEW_ITERATIONS,
-    EXIT_SUCCESS,
-    EXIT_BUILD_FAILURE,
-    EXIT_AGENT_TIMEOUT,
-)
+import pytest
 from build_pipeline import budget as budget_mod
 from build_pipeline import git_ops
 from build_pipeline.config import BuildConfig
@@ -54,9 +25,39 @@ from build_pipeline.models import (
     ReviewScore,
     WeakTestFinding,
 )
-from build_pipeline.models import TestQualityAudit as QualityAudit  # Test* name breaks pytest collection
-from build_pipeline.state import BuildState, TDDState
+from build_pipeline.models import (
+    TestQualityAudit as QualityAudit,  # Test* name breaks pytest collection
+)
 from build_pipeline.progress import ProgressWriter
+from build_pipeline.state import BuildState, TDDState
+from build_pipeline.tdd_engine import (
+    _TEST_FILE_RE,
+    _TEST_PATH_RE,
+    EMPTY_TREE_SHA,
+    EXIT_AGENT_TIMEOUT,
+    EXIT_BUILD_FAILURE,
+    EXIT_SUCCESS,
+    MAX_REVIEW_ITERATIONS,
+    WEAK_TEST_PATTERNS,
+    _adjudicate_review_findings,
+    _capture_block_diff,
+    _detect_entry_point,
+    _enforce_test_integrity,
+    _git_commit_block_phase,
+    _read_block_test_files,
+    _run_integration_and_review,
+    _run_quality_review,
+    _run_refactor_all,
+    _snapshot_all_test_files,
+    _snapshot_test_files,
+    _verify_entry_point,
+    assemble_context,
+    capture_build_diff,
+    parse_blocks,
+    run_block_tdd,
+    run_tdd_engine,
+    run_test_quality_check,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -814,7 +815,8 @@ class TestPromptTemplates:
         """The gate is the enforcement, but the prompt must not leave the agent
         guessing — and neither prompt offers the TEST CHANGE REQUIRED hatch."""
         from build_pipeline.prompts.implementation import (
-            REFACTOR_ALL_PROMPT, REFACTOR_PROMPT,
+            REFACTOR_ALL_PROMPT,
+            REFACTOR_PROMPT,
         )
         for prompt in (REFACTOR_PROMPT, REFACTOR_ALL_PROMPT):
             assert "test file" in prompt.lower()
@@ -822,12 +824,12 @@ class TestPromptTemplates:
 
     def test_prompts_can_be_formatted(self):
         """All prompts format without error when given the right kwargs."""
-        from build_pipeline.prompts.test_writing import TEST_WRITER_PROMPT
         from build_pipeline.prompts.implementation import (
             IMPLEMENTER_PROMPT_CLEAN,
             IMPLEMENTER_PROMPT_MINIMUM,
             REFACTOR_PROMPT,
         )
+        from build_pipeline.prompts.test_writing import TEST_WRITER_PROMPT
         result = TEST_WRITER_PROMPT.format(
             block_name="Test", block_description="desc",
             specs="specs", context_bundle="ctx", test_command="pytest",
@@ -882,7 +884,11 @@ class TestTDDStepToolAllowlists:
     """Verify tool allowlists and timeouts for each agent type."""
 
     def test_test_writer_tools(self):
-        from build_pipeline.llm_steps.tdd_steps import TEST_WRITER_TOOLS, TEST_WRITER_MAX_TURNS, TEST_WRITER_TIMEOUT
+        from build_pipeline.llm_steps.tdd_steps import (
+            TEST_WRITER_MAX_TURNS,
+            TEST_WRITER_TIMEOUT,
+            TEST_WRITER_TOOLS,
+        )
         assert "Read" in TEST_WRITER_TOOLS
         assert "Write" in TEST_WRITER_TOOLS
         assert "Bash" in TEST_WRITER_TOOLS
@@ -893,7 +899,11 @@ class TestTDDStepToolAllowlists:
         assert TEST_WRITER_TIMEOUT == 20 * 60
 
     def test_implementer_tools(self):
-        from build_pipeline.llm_steps.tdd_steps import IMPLEMENTER_TOOLS, IMPLEMENTER_MAX_TURNS, IMPLEMENTER_TIMEOUT
+        from build_pipeline.llm_steps.tdd_steps import (
+            IMPLEMENTER_MAX_TURNS,
+            IMPLEMENTER_TIMEOUT,
+            IMPLEMENTER_TOOLS,
+        )
         assert "Read" in IMPLEMENTER_TOOLS
         assert "Write" in IMPLEMENTER_TOOLS
         assert "Edit" in IMPLEMENTER_TOOLS  # implementers CAN edit
@@ -902,7 +912,11 @@ class TestTDDStepToolAllowlists:
         assert IMPLEMENTER_TIMEOUT == 30 * 60
 
     def test_refactorer_tools(self):
-        from build_pipeline.llm_steps.tdd_steps import REFACTORER_TOOLS, REFACTORER_MAX_TURNS, REFACTORER_TIMEOUT
+        from build_pipeline.llm_steps.tdd_steps import (
+            REFACTORER_MAX_TURNS,
+            REFACTORER_TIMEOUT,
+            REFACTORER_TOOLS,
+        )
         assert "Read" in REFACTORER_TOOLS
         assert "Edit" in REFACTORER_TOOLS
         assert REFACTORER_MAX_TURNS == 30
@@ -912,6 +926,7 @@ class TestTDDStepToolAllowlists:
         """Same work, more room: the whole-change pass reads a build-sized diff
         but must not gain any capability the per-block refactorer lacks."""
         import inspect
+
         from build_pipeline.llm_steps import tdd_steps
 
         assert tdd_steps.REFACTOR_ALL_MAX_TURNS > tdd_steps.REFACTORER_MAX_TURNS
@@ -3736,7 +3751,8 @@ class TestReportContractSlots:
 
     def test_implementer_prompts_declare_both_slots(self):
         from build_pipeline.prompts.implementation import (
-            IMPLEMENTER_PROMPT_CLEAN, IMPLEMENTER_PROMPT_MINIMUM,
+            IMPLEMENTER_PROMPT_CLEAN,
+            IMPLEMENTER_PROMPT_MINIMUM,
         )
         for prompt in (IMPLEMENTER_PROMPT_CLEAN, IMPLEMENTER_PROMPT_MINIMUM):
             assert "SURPRISES:" in prompt

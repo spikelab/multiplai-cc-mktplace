@@ -22,7 +22,7 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from log_doctor import (  # noqa: E402
+from log_doctor import (
     UNTRUSTED_NOTICE,
     contains_injection,
     defang,
@@ -83,11 +83,11 @@ class TestDefang:
     def test_strips_control_and_bidi_characters(self):
         """ANSI escapes and bidi overrides let a payload render as something
         else entirely in a terminal or a reviewer's editor."""
-        hidden = "safe\x1b[2Ktext‮reversed​﻿"
+        hidden = "safe\x1b[2Ktext‮reversed\u200b﻿"
         out = defang(hidden)
         assert "\x1b" not in out
         assert "‮" not in out
-        assert "​" not in out
+        assert "\u200b" not in out
         assert "﻿" not in out
         assert "safe" in out and "text" in out
 

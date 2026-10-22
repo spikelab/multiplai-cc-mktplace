@@ -116,7 +116,7 @@ async def run_paths(state: ReviewState, ctx: RunContext) -> ReviewState:
             write_paths_file(result, ctx.target_dir / PATHS_FILE)
     except (sdk.RepoTrustError, sdk.UsageLimitError, budget.BudgetExceededError):
         raise
-    except Exception as e:  # noqa: BLE001 — a failed mapping must not stop the review; find runs without paths
+    except Exception as e:  # a failed mapping must not stop the review; find runs without paths
         log.exception("paths: mapping failed")
         message = (str(e).splitlines() or [type(e).__name__])[0][:300]
         state.paths_status, state.paths_failure, state.path_ids = "failed", message, []

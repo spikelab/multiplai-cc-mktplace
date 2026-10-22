@@ -9,7 +9,6 @@ import sys
 from pathlib import Path
 
 import pytest
-
 from build_pipeline.epic import lock as epic_lock
 from build_pipeline.epic import store
 

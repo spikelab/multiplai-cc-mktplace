@@ -4,10 +4,15 @@ import hashlib
 import json
 
 import pytest
-from pydantic import ValidationError
-
 from conftest import TESTS
-from review_pipeline.models import Citation, Finding, ReviewState, finding_id, lower_severity
+from pydantic import ValidationError
+from review_pipeline.models import (
+    Citation,
+    Finding,
+    ReviewState,
+    finding_id,
+    lower_severity,
+)
 
 VIEWER_FIXTURE = TESTS.parents[2] / "review-viewer" / "scripts" / "tests" / "fixtures" / "findings.example.json"
 

@@ -56,7 +56,7 @@ class _Drafts:
     def __init__(self, sink):
         self._sink = sink
 
-    def create(self, userId, body):  # noqa: N803 - matches google client kwarg
+    def create(self, userId, body):  # matches google client kwarg
         self._sink["body"] = body
         return _Exec({"id": "draft-xyz"})
 
@@ -320,7 +320,7 @@ def _patch_tokeninfo(monkeypatch, gmail, *, scope=None, raw=None, raise_exc=None
     if raw is None and scope is not None:
         raw = json.dumps({"scope": scope}).encode("utf-8")
 
-    def fake_urlopen(url, timeout=None):  # noqa: ARG001
+    def fake_urlopen(url, timeout=None):
         if raise_exc is not None:
             raise raise_exc
         return _FakeResp(raw if raw is not None else b"{}")

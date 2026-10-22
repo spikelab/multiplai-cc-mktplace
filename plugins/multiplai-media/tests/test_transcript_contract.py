@@ -18,8 +18,8 @@ import pytest
 _SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "video-edit" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 
-from stages import prep  # noqa: E402
-from stages import transcript as tx  # noqa: E402
+from stages import prep
+from stages import transcript as tx
 
 _FIX = Path(__file__).resolve().parent / "fixtures"
 

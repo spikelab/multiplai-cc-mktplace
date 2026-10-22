@@ -22,7 +22,7 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from log_doctor import (  # noqa: E402
+from log_doctor import (
     SCENARIOS,
     cluster,
     discover,

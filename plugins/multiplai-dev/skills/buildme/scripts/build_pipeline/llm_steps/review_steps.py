@@ -20,7 +20,7 @@ from ..models import (
     ReviewScore,
 )
 from ..prompts.review import CODE_REVIEW_PROMPT
-from ..sdk import agent_call, agent_call_structured, LLMCallError
+from ..sdk import LLMCallError, agent_call, agent_call_structured
 
 log = logging.getLogger(__name__)
 
@@ -140,9 +140,7 @@ def _merge_prior_assessments(results: list[ReviewResult]) -> list[PriorAssessmen
     for result in results:
         for a in result.prior_assessments:
             existing = merged.get(a.finding_id)
-            if existing is None:
-                merged[a.finding_id] = a.model_copy()
-            elif PRIOR_STATUSES.index(a.status) > PRIOR_STATUSES.index(existing.status):
+            if existing is None or PRIOR_STATUSES.index(a.status) > PRIOR_STATUSES.index(existing.status):
                 merged[a.finding_id] = a.model_copy()
     return list(merged.values())
 

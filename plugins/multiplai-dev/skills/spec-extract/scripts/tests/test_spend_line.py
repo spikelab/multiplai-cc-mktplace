@@ -12,7 +12,6 @@ import pytest
 from multiplai_core import budget as core_budget
 from multiplai_core.agent_runner import AgentRunError
 from pydantic import BaseModel
-
 from spec_extract_pipeline import __main__ as cli
 from spec_extract_pipeline import sdk
 

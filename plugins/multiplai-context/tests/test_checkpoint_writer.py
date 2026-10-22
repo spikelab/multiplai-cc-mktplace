@@ -2,11 +2,10 @@
 
 import asyncio
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
-
 from conftest import import_script
 from lib import checkpoint as cp
 
@@ -67,7 +66,7 @@ def _payload(session_id, transcript, tokens=110_000, reason="band"):
 
 class TestWriteCheckpoint:
     def test_writes_valid_checkpoint(self, tmp_path, data_env, monkeypatch):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         transcript = tmp_path / "t.jsonl"
         _write_transcript(
             transcript,
@@ -97,7 +96,7 @@ class TestWriteCheckpoint:
         assert state["last_checkpoint_tokens"] == 110_000
 
     def test_incremental_second_write(self, tmp_path, data_env, monkeypatch):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         transcript = tmp_path / "t.jsonl"
         _write_transcript(
             transcript, [_turn("user", "old work item alpha", now - timedelta(hours=2))]
@@ -120,7 +119,7 @@ class TestWriteCheckpoint:
         assert "old work item alpha" not in second_prompt
 
     def test_handoff_writes_pending_marker(self, tmp_path, data_env, monkeypatch):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         transcript = tmp_path / "t.jsonl"
         _write_transcript(transcript, [_turn("user", "work", now)])
         monkeypatch.setattr(checkpoint_writer, "run_agent", _fake_run_agent([]))
@@ -141,7 +140,7 @@ class TestWriteCheckpoint:
         checkpoint can be found again. Gating the marker on it meant a clean
         143K-token session left a perfectly good checkpoint that nothing could
         ever restore from."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         transcript = tmp_path / "t.jsonl"
         _write_transcript(transcript, [_turn("user", "work", now)])
         monkeypatch.setattr(checkpoint_writer, "run_agent", _fake_run_agent([]))
@@ -163,7 +162,7 @@ class TestWriteCheckpoint:
         checkpoint survives verbatim as the prefix, and the window the model
         could not summarise is appended raw rather than dropped."""
         cp.write_checkpoint_file(data_env, "s1", VALID_CHECKPOINT)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         transcript = tmp_path / "t.jsonl"
         _write_transcript(transcript, [_turn("user", "work", now)])
 
@@ -179,7 +178,7 @@ class TestWriteCheckpoint:
         assert cp.validate_checkpoint(written)
 
     def test_invalid_output_rejected(self, tmp_path, data_env, monkeypatch):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         transcript = tmp_path / "t.jsonl"
         _write_transcript(transcript, [_turn("user", "work", now)])
         monkeypatch.setattr(
@@ -192,7 +191,7 @@ class TestWriteCheckpoint:
     def test_child_session_skipped(self, tmp_path, data_env, monkeypatch):
         transcript = tmp_path / "subagents" / "t.jsonl"
         _write_transcript(
-            transcript, [_turn("user", "work", datetime.now(timezone.utc))]
+            transcript, [_turn("user", "work", datetime.now(UTC))]
         )
         called = []
         monkeypatch.setattr(checkpoint_writer, "run_agent", _fake_run_agent(called))
@@ -250,7 +249,7 @@ class TestCheckpointThinking:
         )
         monkeypatch.delenv(option_var(th.CHECKPOINT_THINKING_OPTION), raising=False)
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         transcript = tmp_path / "t.jsonl"
         _write_transcript(
             transcript, [_turn("user", "please build the widget", now)]

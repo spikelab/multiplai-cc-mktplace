@@ -1,11 +1,21 @@
 """Tests for Pydantic models — validation, scoring, state transitions."""
 
-import pytest
 from build_pipeline.models import (
-    ReviewScore, ReviewResult, ReviewIssue, GateResult,
-    BlockInfo, BlockStatus, ArtifactInfo, ArtifactStatus, ChangeStatus,
-    FindingAdjudication, FindingVerdict, ReviewFinding, ReviewGatePolicy,
-    ImplementationNote, SPEC_IMPACT_LEVELS,
+    SPEC_IMPACT_LEVELS,
+    ArtifactInfo,
+    ArtifactStatus,
+    BlockInfo,
+    BlockStatus,
+    ChangeStatus,
+    FindingAdjudication,
+    FindingVerdict,
+    GateResult,
+    ImplementationNote,
+    ReviewFinding,
+    ReviewGatePolicy,
+    ReviewIssue,
+    ReviewResult,
+    ReviewScore,
 )
 
 

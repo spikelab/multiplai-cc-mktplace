@@ -13,7 +13,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .untrusted import defang_untrusted, safe_url_text
 
-
 # ---------------------------------------------------------------------------
 # Search & Sources
 # ---------------------------------------------------------------------------

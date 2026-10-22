@@ -45,7 +45,12 @@ from typing import TypeVar
 
 from multiplai_core import budget as core_budget
 from multiplai_core import resolve_model_spec
-from multiplai_core.agent_runner import AgentRunError, AgentRunTimeout, UnknownAgentBackendError, run_agent
+from multiplai_core.agent_runner import (
+    AgentRunError,
+    AgentRunTimeout,
+    UnknownAgentBackendError,
+    run_agent,
+)
 from multiplai_core.budget import BudgetExceededError, SpendLedger
 from multiplai_core.env import load_multiplai_conf
 from multiplai_core.stage_config import conf_value
@@ -68,9 +73,21 @@ TRUST_MESSAGE = (
     f"tree. If you trust the repository, re-run with --trust-repo (or set {TRUST_ENV}=1)."
 )
 
-__all__ = ["BackendUnavailable", "BudgetExceededError", "CallFailed", "DEFAULT_MAX_USD", "RepoTrustError",
-           "SpecExtractBudget", "TRUST_MESSAGE", "agent_call_structured", "model_for", "repo_is_trusted", "require_trusted_repo",
-           "spend_marker", "start_budget"]
+__all__ = [
+    "DEFAULT_MAX_USD",
+    "TRUST_MESSAGE",
+    "BackendUnavailable",
+    "BudgetExceededError",
+    "CallFailed",
+    "RepoTrustError",
+    "SpecExtractBudget",
+    "agent_call_structured",
+    "model_for",
+    "repo_is_trusted",
+    "require_trusted_repo",
+    "spend_marker",
+    "start_budget",
+]
 
 
 class CallFailed(Exception):

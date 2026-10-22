@@ -13,7 +13,6 @@ import sys
 from pathlib import Path
 
 import pytest
-
 from conftest import commit_file, everything, git, make_repo, read_state, run, write
 from spec_extract_pipeline import apply as apply_mod
 

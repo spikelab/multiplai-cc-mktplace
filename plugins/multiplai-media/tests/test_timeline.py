@@ -10,8 +10,8 @@ import pytest
 _SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "video-edit" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 
-from stages import composite, timeline  # noqa: E402
-from stages.edl import EDL, Segment, Title, Transition  # noqa: E402
+from stages import composite, timeline
+from stages.edl import EDL, Segment, Title, Transition
 
 
 def _edl(segments, title=None, transitions=()):

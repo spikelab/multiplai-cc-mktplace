@@ -5,9 +5,8 @@ from __future__ import annotations
 import copy
 
 import pytest
-from pydantic import ValidationError
-
 from conftest import paths_name, unscoped_variant
+from pydantic import ValidationError
 
 NEW_MODELS = ["Location", "Handler", "Invoker", "PathEntry", "PathHop", "E2ETest", "MockedE2ETest",
               "E2EListing", "TracedPath", "PathDrop", "PathDiagnostic", "ListingSkip", "FallbackStatus",

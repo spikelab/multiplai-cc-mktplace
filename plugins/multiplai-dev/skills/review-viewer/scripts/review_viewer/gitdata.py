@@ -20,7 +20,7 @@ import shutil
 import subprocess
 from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
@@ -119,7 +119,7 @@ def split_lines(text: str) -> list[str]:
     lines = text.split("\n")
     if lines and lines[-1] == "":
         lines.pop()
-    return [line[:-1] if line.endswith("\r") else line for line in lines]
+    return [line.removesuffix("\r") for line in lines]
 
 
 _HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
@@ -314,8 +314,7 @@ def definitions(target: Target, name: str, allowed: set[str],
     for line in split_lines(out):
         path, _, rest = line.partition("\0")
         number, _, text = rest.partition("\0")
-        if path.startswith(prefix):
-            path = path[len(prefix):]
+        path = path.removeprefix(prefix)
         if path not in allowed or not number.isdigit():
             continue
         text = text.strip()
@@ -576,8 +575,7 @@ def origin_name(url: str | None) -> str | None:
     if not url:
         return None
     path = url.strip().rstrip("/")
-    if path.endswith(".git"):
-        path = path[:-len(".git")]
+    path = path.removesuffix(".git")
     parts = [p for p in re.split(r"[/:]", path) if p]
     if len(parts) < 2:
         return None
@@ -979,5 +977,5 @@ def tree_target(repo: Path, commit: str = "HEAD", path: str | None = None) -> Ta
 def diff_findings(target: Target) -> FindingsFile:
     """The in-memory FindingsFile for plain-diff mode: a target and no findings."""
     return FindingsFile(
-        schema_version=1, generated_at=datetime.now(timezone.utc),
+        schema_version=1, generated_at=datetime.now(UTC),
         producer="review-viewer:diff", target=target, findings=[])

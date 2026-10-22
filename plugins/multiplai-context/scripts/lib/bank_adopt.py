@@ -44,9 +44,9 @@ from __future__ import annotations
 import dataclasses
 import logging
 import re
-from datetime import datetime, timezone
+from collections.abc import Sequence
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Optional, Sequence
 
 from lib.bank_collisions import find_collisions
 from lib.bank_git import dirty_paths, head_sha, is_git_repo, stage_commit
@@ -56,9 +56,9 @@ from lib.memory_write_floor import is_safe_target
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "CONVERSATION_THRESHOLD",
     "AdoptionCandidate",
     "AdoptionPlan",
-    "CONVERSATION_THRESHOLD",
     "content_present",
     "finalize",
     "plan_adoption",
@@ -91,7 +91,7 @@ _LIST_MARKER_RE = re.compile(r"^(?:[-*+>]|\d+[.)])\s+")
 
 
 def _today() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return datetime.now(UTC).strftime("%Y-%m-%d")
 
 
 def _significant_lines(text: str) -> list[str]:
@@ -166,7 +166,7 @@ class AdoptionPlan:
         return len(self.candidates) > CONVERSATION_THRESHOLD
 
 
-def _read(path: Path) -> Optional[str]:
+def _read(path: Path) -> str | None:
     try:
         return path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
@@ -357,7 +357,7 @@ def finalize(
     return report
 
 
-def render_receipt(bank: MemoryBank, report: dict, plan: Optional[AdoptionPlan] = None) -> str:
+def render_receipt(bank: MemoryBank, report: dict, plan: AdoptionPlan | None = None) -> str:
     """The audit record of an adoption. Written whether or not anything moved."""
     lines = [
         f"# Bank adoption receipt — `{bank.name}`",
@@ -415,7 +415,7 @@ def render_receipt(bank: MemoryBank, report: dict, plan: Optional[AdoptionPlan] 
     return "\n".join(lines).rstrip() + "\n"
 
 
-def resolve_bank(name: str) -> Optional[MemoryBank]:
+def resolve_bank(name: str) -> MemoryBank | None:
     """The subscribed shared bank called *name*, or ``None``."""
     for bank in configured_banks():
         if bank.name == name and bank.is_shared:

@@ -21,10 +21,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-
 from build_pipeline.findings import code, loop
 from build_pipeline.models import AgentResult
 from build_pipeline.state import BuildState
+
 from tests.row_helpers import assert_same_as_unstopped, repo_state
 from tests.test_findings_round import (
     FIX,
@@ -264,7 +264,7 @@ class TestD1Rows:
             assert refs[first] == refs_after[1][first]
             assert [ln.split(":")[2] for ln in _wip_lines(s)] == [f"{first}-2"]
             test = f"tests/test_{_slug(CHECK_BLOCK)}.py"
-            show = lambda ref: subprocess.run(  # noqa: E731
+            show = lambda ref: subprocess.run(
                 ["git", "show", f"{ref}:{test}"], cwd=s.repo, check=True, capture_output=True,
                 text=True).stdout
             assert "# the second attempt" in show(f"{first}-2")

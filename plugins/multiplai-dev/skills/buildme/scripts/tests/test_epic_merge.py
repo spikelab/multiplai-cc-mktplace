@@ -16,17 +16,16 @@ from pathlib import Path
 
 import pytest
 import yaml
-
 from build_pipeline import budget, git_ops, stop_record
 from build_pipeline.config import EpicSettings, discover_test_command
 from build_pipeline.epic import coordinator, merge, records
 from build_pipeline.epic import lock as epic_lock
-from .epic_row_helpers import EpicSplitAnswer
 from build_pipeline.models import AgentResult
 
 from .epic_row_helpers import (
     GIT_ENV,
     CallLog,
+    EpicSplitAnswer,
     Fakes,
     approve,
     child,
@@ -1499,10 +1498,23 @@ async def test_a_child_that_had_a_fix_round_passes_40_1_and_an_extra_file_parks_
     """One round of D1's real `findings` loop on the PR's worktree (fakes only
     at its seams) leaves only bookkeeping, so 40.1 passes; an untracked file
     anyone else leaves makes it refuse, naming the file."""
-    from tests.test_findings_round import FIX, FakePR, FakeReview, FakeTriage, _make_built, _run, _Stubs
-    from tests.test_findings_self_check import FakeCheck, _findings_json, _with_bare_origin, block_stubs
-
     from build_pipeline.findings import loop
+
+    from tests.test_findings_round import (
+        FIX,
+        FakePR,
+        FakeReview,
+        FakeTriage,
+        _make_built,
+        _run,
+        _Stubs,
+    )
+    from tests.test_findings_self_check import (
+        FakeCheck,
+        _findings_json,
+        _with_bare_origin,
+        block_stubs,
+    )
 
     monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
     repo, change, config = _make_built(tmp_path)
@@ -1535,7 +1547,7 @@ def test_a_fixer_that_cannot_start_ends_the_run_and_the_next_run_relaunches_it(t
     """PR D2 as it was: only the merge tests read a spawn failure as a failed
     run (above). A fixer that cannot start (EAGAIN) raises, ending the run
     and parking nothing, and the next run launches it."""
-    from .test_epic_fix import N, Epic
+    from .test_epic_fix import Epic, N
 
     e = Epic(tmp_path, monkeypatch, fixes={str(N): [{"rounds": [{}]}]})
     real = coordinator._spawn_review
@@ -1896,8 +1908,8 @@ def test_behind_with_nothing_new_to_merge_parks_with_the_refusal(tmp_path, monke
 
 
 def test_epic_merge_tests_honor_cd_command(tmp_path, monkeypatch):
-    import sys
     import shlex
+    import sys
     r = MergeRoot(tmp_path, monkeypatch)
     # Create an api directory in the actual merge worktree immediately before the suite.
     def command(project):

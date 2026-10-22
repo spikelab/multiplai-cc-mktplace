@@ -20,14 +20,14 @@ Mirrors ``dream.py --stamp`` for the dream gate.
 """
 
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from multiplai_core.paths import get_paths
 from multiplai_core.config import save_yaml
 from multiplai_core.log_utils import setup_logging
+from multiplai_core.paths import get_paths
 
 logger = setup_logging("config_audit", packages=("lib", "generators"))
 
@@ -53,7 +53,7 @@ def stamp(proposal: str | None = None) -> Path:
     ``os.replace``) and creates parent directories.
     """
     path = state_file()
-    state: dict = {"last_run": datetime.now(timezone.utc).isoformat()}
+    state: dict = {"last_run": datetime.now(UTC).isoformat()}
     if proposal:
         state["proposal"] = proposal
     save_yaml(path, state)

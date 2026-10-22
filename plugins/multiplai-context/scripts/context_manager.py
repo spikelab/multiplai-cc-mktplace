@@ -38,14 +38,17 @@ import sys
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from multiplai_core.paths import get_paths
-from multiplai_core.config import read_session_state, write_session_state
-from multiplai_core.log_utils import HookRun, hook_run, setup_logging, log_event
+from generators.base import CATALOG_SCHEMA_VERSION
+from generators.config import (
+    DEFAULT_WHOLE_FILE_MAX_BYTES,
+    load_catalog_config,
+)
+from lib import reference_docs
 from lib.banks import (
     SHARED_BANK_NOTICE,
     bank_ref,
@@ -59,21 +62,20 @@ from lib.hook_input import read_hook_input
 from lib.hook_watchdog import make_on_watchdog
 from lib.memory_router import create_router
 from lib.plugin_skills import plugin_skill_owners, qualify
-from lib import reference_docs
 from lib.routing_logic import expand_picks
 from lib.section_loader import (
     h2_names,
     load_picked_content,
     parse_section_ref,
-    preamble as section_preamble,
     resolve_section_name,
 )
-from lib.transcript_helper import read_last_assistant_response
-from generators.base import CATALOG_SCHEMA_VERSION
-from generators.config import (
-    DEFAULT_WHOLE_FILE_MAX_BYTES,
-    load_catalog_config,
+from lib.section_loader import (
+    preamble as section_preamble,
 )
+from lib.transcript_helper import read_last_assistant_response
+from multiplai_core.config import read_session_state, write_session_state
+from multiplai_core.log_utils import HookRun, hook_run, log_event, setup_logging
+from multiplai_core.paths import get_paths
 
 # Forward the router's (lib.*) and generators.* loggers into the
 # context_manager log; multiplai_core is always included. Without this, every
@@ -352,8 +354,8 @@ def _warn_if_stale(
     except ValueError:
         return
     if gen.tzinfo is None:
-        gen = gen.replace(tzinfo=timezone.utc)
-    age_hours = (datetime.now(timezone.utc) - gen).total_seconds() / 3600.0
+        gen = gen.replace(tzinfo=UTC)
+    age_hours = (datetime.now(UTC) - gen).total_seconds() / 3600.0
     if age_hours > ttl_hours:
         # `--only <type>` and not the bare skill: an explicit --only runs the
         # generator even when its enable_* option is missing from the shell

@@ -10,10 +10,8 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
 from build_pipeline import git_ops
 from build_pipeline.git_ops import GitLifecycleError, GitResult
-
 
 # --- helpers --------------------------------------------------------------
 
@@ -612,7 +610,7 @@ class TestPush:
 # --- PR (gh mocked) -------------------------------------------------------
 
 
-from build_pipeline.orchestrator import _pr_open_argv  # noqa: E402
+from build_pipeline.orchestrator import _pr_open_argv
 
 
 class TestOpenPRWithSkill:

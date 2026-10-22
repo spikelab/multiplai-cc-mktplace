@@ -22,7 +22,6 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 _HEX = re.compile(r"^#[0-9A-Fa-f]{6}$")
 POSITIONS = ("tl", "tr", "bl", "br")
@@ -37,15 +36,15 @@ class BrandLogo:
 
 @dataclass
 class Brand:
-    font_file: Optional[str] = None
-    font_bold_file: Optional[str] = None
+    font_file: str | None = None
+    font_bold_file: str | None = None
     primary: str = "#FFFFFF"
     accent: str = "#FFD400"
     background: str = "#0a0a0a"
     caption_outline: str = "#000000"
-    logo: Optional[BrandLogo] = None
+    logo: BrandLogo | None = None
 
-    def caption_font(self) -> Optional[str]:
+    def caption_font(self) -> str | None:
         """The font captions and the headline use, when the brand names one."""
         return self.font_bold_file or self.font_file
 

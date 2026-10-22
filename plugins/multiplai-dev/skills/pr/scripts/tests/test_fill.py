@@ -9,11 +9,9 @@ from pathlib import Path
 
 import multiplai_core
 from conftest import git, make_bare_origin, make_change, make_repo
-from test_spend import _fake_sdk
-
 from pr_pipeline import commands, fill, github
 from pr_pipeline.template import STANDARD_TEMPLATE, load, parse
-
+from test_spend import _fake_sdk
 
 # The real call, kept before conftest's guard replaces it.
 _RUN_MODEL = fill._run_model

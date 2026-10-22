@@ -19,7 +19,6 @@ import sys
 from pathlib import Path
 
 import pytest
-
 from multiplai_core.plugin_options import option_var
 
 PLUGIN_ROOT = Path(__file__).parent.parent
@@ -182,6 +181,7 @@ class TestCoreProbe:
         wrong attribute, exception swallowed into a wrong default).
         """
         import inspect
+
         from multiplai_core.agent_runner import run_agent
         from multiplai_core.model_client import ModelClient
 

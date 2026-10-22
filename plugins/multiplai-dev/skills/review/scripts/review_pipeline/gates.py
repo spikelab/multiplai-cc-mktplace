@@ -14,7 +14,17 @@ import re
 
 from multiplai_core.citations import check_quote, file_at, lines_at
 
-from .models import DEPS_DIR, SEVERITIES, Citation, EarlierStatus, Finding, GateResult, Need, TargetInfo, Verdict
+from .models import (
+    DEPS_DIR,
+    SEVERITIES,
+    Citation,
+    EarlierStatus,
+    Finding,
+    GateResult,
+    Need,
+    TargetInfo,
+    Verdict,
+)
 
 log = logging.getLogger(__name__)
 

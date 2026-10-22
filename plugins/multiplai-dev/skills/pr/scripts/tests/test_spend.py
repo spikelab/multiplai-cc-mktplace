@@ -11,7 +11,6 @@ from types import ModuleType, SimpleNamespace
 import multiplai_core
 import pytest
 from multiplai_core.agent_runner import AgentRunError, AgentRunResult, AgentUsage
-
 from pr_pipeline import __main__ as cli
 from pr_pipeline import commands, fill
 

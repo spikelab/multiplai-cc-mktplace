@@ -51,7 +51,7 @@ def signatures_section(block, project_dir: Path) -> str:
     Never raises: a failure leaves the section out."""
     try:
         return _section(block, Path(project_dir))
-    except Exception:  # noqa: BLE001 — context is best-effort; the block must still run
+    except Exception:  # context is best-effort; the block must still run
         log.warning("signatures: section left out for block %s", block.name, exc_info=True)
         return ""
 

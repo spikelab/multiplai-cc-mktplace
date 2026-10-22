@@ -18,10 +18,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from multiplai_core.paths import get_paths
-from multiplai_core.log_utils import setup_logging, log_event
 from generators.config import load_catalog_config
 from generators.dispatcher import generate_catalogs
+from multiplai_core.log_utils import log_event, setup_logging
+from multiplai_core.paths import get_paths
 
 logger = setup_logging("generate_catalog", packages=("lib", "generators"))
 

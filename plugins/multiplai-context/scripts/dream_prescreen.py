@@ -48,19 +48,19 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from lib import memory_corpus  # noqa: E402
-from lib.conflict_edits import (  # noqa: E402
+from lib import memory_corpus
+from lib.conflict_edits import (
     MIN_OVERLAP,
     content_words,
     overlap_sets,
     screenable_lines,
 )
-from lib.dream_processed import latest_pending_proposal  # noqa: E402
-from lib.routing_validation import (  # noqa: E402
+from lib.dream_processed import latest_pending_proposal
+from lib.routing_validation import (
     find_batch_near_duplicate_groups,
     parse_proposal_entries,
 )
-from multiplai_core.paths import get_paths  # noqa: E402
+from multiplai_core.paths import get_paths
 
 # Why symmetric Jaccard and not a containment measure, measured rather than
 # assumed. The real 602-item backlog was scored twice: against memory *after*

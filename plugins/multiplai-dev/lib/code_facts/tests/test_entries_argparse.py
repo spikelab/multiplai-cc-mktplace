@@ -9,9 +9,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 import code_facts
+import pytest
 from conftest import line_of, make_tree, sentinel_prelude
 
 REPO_ROOT = Path(__file__).resolve().parents[5]

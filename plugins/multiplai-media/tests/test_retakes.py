@@ -7,7 +7,7 @@ from pathlib import Path
 _SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "video-edit" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 
-from stages.retakes import find_retakes  # noqa: E402
+from stages.retakes import find_retakes
 
 
 def seg(start: float, end: float, text: str) -> dict:

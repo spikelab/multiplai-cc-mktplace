@@ -23,11 +23,9 @@ import re
 import sys
 import time
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
-
-from conftest import PLUGIN_ROOT, SCRIPTS_DIR, HOOKS_JSON, parse_hooks
+from conftest import HOOKS_JSON, PLUGIN_ROOT, SCRIPTS_DIR, parse_hooks
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -103,7 +101,7 @@ class TestFileRename:
         """WHEN the plugin repository is checked after the rename
         THEN scripts/context_router.py does NOT exist."""
         assert not CONTEXT_ROUTER_PATH.is_file(), \
-            f"scripts/context_router.py must be removed after rename"
+            "scripts/context_router.py must be removed after rename"
 
     def test_context_manager_is_python(self):
         """WHEN scripts/context_manager.py is checked
@@ -201,7 +199,7 @@ class TestZeroContextRouterReferences:
                     if "context_router" in line:
                         violations.append(f"  {rel}:{line_no}: {line.strip()[:80]}")
         assert len(violations) == 0, \
-            f"'context_router' found in Python files:\n" + "\n".join(violations)
+            "'context_router' found in Python files:\n" + "\n".join(violations)
 
     def test_no_context_router_in_hooks_json(self):
         """WHEN hooks/hooks.json is searched for 'context_router'
@@ -265,7 +263,7 @@ class TestZeroContextRouterReferences:
                         rel = test_file.relative_to(PLUGIN_ROOT)
                         violations.append(f"  {rel}:{line_no}: {stripped[:80]}")
         assert len(violations) == 0, \
-            f"'context_router' found in test files:\n" + "\n".join(violations)
+            "'context_router' found in test files:\n" + "\n".join(violations)
 
 
 # ===========================================================================
@@ -590,7 +588,7 @@ class TestTestFileReferencesUpdated:
                 if "context_router" in line and "context_manager" not in line:
                     non_comment_refs.append(f"  line {line_no}: {stripped[:80]}")
             assert len(non_comment_refs) == 0, \
-                f"test_context_router_hook.py has active context_router references:\n" + \
+                "test_context_router_hook.py has active context_router references:\n" + \
                 "\n".join(non_comment_refs)
 
     def test_test_script_port_updated(self):

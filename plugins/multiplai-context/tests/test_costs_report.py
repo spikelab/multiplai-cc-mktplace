@@ -10,8 +10,8 @@ PLUGIN_ROOT = Path(__file__).parent.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-import costs_report  # noqa: E402
-from multiplai_core.costing import append_records  # noqa: E402
+import costs_report
+from multiplai_core.costing import append_records
 
 
 @pytest.fixture(autouse=True)

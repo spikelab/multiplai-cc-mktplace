@@ -27,17 +27,17 @@ entirely.
 
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from multiplai_core.config import read_session_state, write_session_state
-from multiplai_core.paths import get_paths
-from multiplai_core.log_utils import hook_run, setup_logging, log_event
 from lib import checkpoint as cp
 from lib.fsio import atomic_write_json
 from lib.hook_input import read_hook_input
+from multiplai_core.config import read_session_state, write_session_state
+from multiplai_core.log_utils import hook_run, log_event, setup_logging
+from multiplai_core.paths import get_paths
 
 logger = setup_logging("session_stop", packages=("lib", "generators"))
 
@@ -273,7 +273,7 @@ def main() -> None:
         session_id=hook_input.get("session_id") or session_id,
     ) as run:
         if session_state:
-            session_state["last_stop"] = datetime.now(timezone.utc).isoformat()
+            session_state["last_stop"] = datetime.now(UTC).isoformat()
             # Atomic temp+rename (shared with context_manager / session_start) so
             # a crash mid-write never leaves a half-written state file.
             # session_state was read-merged above, so turn_index /

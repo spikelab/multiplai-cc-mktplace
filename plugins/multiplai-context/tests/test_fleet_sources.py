@@ -7,14 +7,13 @@ real `.multiplai/` — an agent contaminated the live workspace that way on
 
 import json
 import subprocess
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
-
 from lib.fleet_sources import backlog as backlog_mod
 from lib.fleet_sources import git_repos, jobs, prs
 
-NOW = datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
 
 
 # ---------------------------------------------------------------------------

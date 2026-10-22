@@ -55,11 +55,27 @@ import logging
 import re
 
 from .. import checks, rounds, sdk
-from ..models import (AgentCheck, AssessItem, AssessOutput, Assessment, DuplicateSet, EarlierStatus, Finding,
-                      ReviewState, is_trim, worst_status)
+from ..models import (
+    AgentCheck,
+    AssessItem,
+    Assessment,
+    AssessOutput,
+    DuplicateSet,
+    EarlierStatus,
+    Finding,
+    ReviewState,
+    is_trim,
+    worst_status,
+)
 from ..prompts import assess as prompt
 from . import RunContext
-from .merge import MERGE_LINE_GAP, anchors_near, apply_duplicate_sets, link_groups, mark_merged
+from .merge import (
+    MERGE_LINE_GAP,
+    anchors_near,
+    apply_duplicate_sets,
+    link_groups,
+    mark_merged,
+)
 from .recheck import open_set
 from .repeats import earlier_findings, shown_findings
 from .verify import important_assessments

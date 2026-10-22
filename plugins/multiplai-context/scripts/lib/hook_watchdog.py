@@ -84,7 +84,7 @@ def probe_network(
             sock.settimeout(timeout_s)
             sock.connect(result["addr"])
         tcp = f"tcp={(time.monotonic() - started) * 1000:.0f}ms"
-    except socket.timeout:
+    except TimeoutError:
         tcp = f"tcp=timeout>{timeout_s:.1f}s"
     except Exception as exc:  # noqa: BLE001
         tcp = f"tcp=error:{_error_name(exc)}"

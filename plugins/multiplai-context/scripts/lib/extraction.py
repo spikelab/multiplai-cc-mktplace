@@ -10,13 +10,13 @@ import hashlib
 import json
 import logging
 import re
-from datetime import datetime, timezone
+from collections.abc import Sequence
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Optional, Sequence, Union
 
 from lib import taxonomy
-from lib.runtime import lock_path
 from lib.job_effort import EXTRACTION_EFFORT_OPTION, effort_kwargs
+from lib.runtime import lock_path
 from lib.thinking import EXTRACTION_THINKING_OPTION, thinking_kwargs
 
 logger = logging.getLogger(__name__)
@@ -53,7 +53,7 @@ def bookmark_file(data_dir: Path, session_id: str) -> Path:
     return extraction_state_dir(data_dir) / f"{session_id}.json"
 
 
-def load_diary_bookmark(data_dir: Path, session_id: str) -> Optional[datetime]:
+def load_diary_bookmark(data_dir: Path, session_id: str) -> datetime | None:
     """The timestamp the last successful extraction of *session_id* reached.
 
     None when there is none, when it is unreadable, or when it is corrupt —
@@ -68,7 +68,7 @@ def load_diary_bookmark(data_dir: Path, session_id: str) -> Optional[datetime]:
         if not value:
             return None
         ts = datetime.fromisoformat(str(value))
-        return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+        return ts if ts.tzinfo else ts.replace(tzinfo=UTC)
     except (OSError, json.JSONDecodeError, ValueError, TypeError, AttributeError):
         return None
 
@@ -108,7 +108,7 @@ def clear_diary_bookmark(data_dir: Path, session_id: str) -> None:
         pass
 
 
-def slice_key(session_id: str, through: Optional[datetime]) -> str:
+def slice_key(session_id: str, through: datetime | None) -> str:
     """Identity of one extraction slice, for append-idempotency.
 
     ``session_id`` alone was the dedup key, which is correct while a session
@@ -132,7 +132,7 @@ def slice_key(session_id: str, through: Optional[datetime]) -> str:
     return f"{session_id}:{through.isoformat() if through else 'start'}"
 
 
-def load_target_charters(memory_dir: Path, catalogs_dir: Optional[Path] = None) -> list[dict]:
+def load_target_charters(memory_dir: Path, catalogs_dir: Path | None = None) -> list[dict]:
     """Return the valid extraction targets with their routing charters.
 
     Each entry is ``{"name", "purpose", "not_here"}`` where ``purpose`` is the
@@ -173,7 +173,7 @@ def load_target_charters(memory_dir: Path, catalogs_dir: Optional[Path] = None) 
     return charters
 
 
-def render_target_line(target: Union[str, dict]) -> str:
+def render_target_line(target: str | dict) -> str:
     """Render one valid-target line for the extraction prompt.
 
     Accepts a bare filename (back-compat / catalog-less fallback) or a
@@ -577,7 +577,7 @@ def render_injected_sections(keys: Sequence[str]) -> str:
     return "\n".join(lines) if lines else NO_INJECTED_SECTIONS
 
 
-def parse_utilisation(raw: str) -> Optional[list[dict]]:
+def parse_utilisation(raw: str) -> list[dict] | None:
     """Read the ``<utilisation>`` block into self-report entries.
 
     Returns ``[{"file", "section", "evidence", "supported"}]``, or **``None``
@@ -608,7 +608,7 @@ def parse_utilisation(raw: str) -> Optional[list[dict]]:
     if not blocks:
         return None
     out: list[dict] = []
-    seen: set[tuple[str, Optional[str]]] = set()
+    seen: set[tuple[str, str | None]] = set()
     for attrs, body in _USED_RE.findall(blocks[-1]):
         parsed = dict(_ATTR_RE.findall(attrs))
         file = (parsed.get("file") or "").strip()
@@ -628,7 +628,7 @@ def parse_utilisation(raw: str) -> Optional[list[dict]]:
     return out
 
 
-def _parse_learning(block: str) -> Optional[dict]:
+def _parse_learning(block: str) -> dict | None:
     """Parse one <learning> body of ``key: value`` lines.
 
     Unknown keys and lines without a colon are ignored (values are
@@ -730,7 +730,7 @@ def _parse_units(raw: str) -> list[dict]:
 async def extract_units(
     text: str,
     *,
-    valid_targets: Sequence[Union[str, dict]],
+    valid_targets: Sequence[str | dict],
     client,
 ) -> list[dict]:
     """Call LLM to extract diary units + learnings from transcript text.
@@ -753,10 +753,10 @@ async def extract_units(
 async def extract_session_signals(
     text: str,
     *,
-    valid_targets: Sequence[Union[str, dict]],
+    valid_targets: Sequence[str | dict],
     client,
-    injected_sections: Optional[Sequence[str]] = None,
-) -> tuple[list[dict], dict, Optional[list[dict]]]:
+    injected_sections: Sequence[str] | None = None,
+) -> tuple[list[dict], dict, list[dict] | None]:
     """Units, disposition, and self-reported memory utilisation, in one call.
 
     ``injected_sections`` is the list of ``file.md#Section`` keys this session
@@ -792,7 +792,7 @@ async def extract_session_signals(
     # wrong day — worse than no reminder.
     prompt = (
         EXTRACTION_USER
-        .replace("{today}", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+        .replace("{today}", datetime.now(UTC).strftime("%Y-%m-%d"))
         .replace("{injected_sections}",
                  render_injected_sections(injected_sections or []))
         .replace("{transcript}", text)
@@ -807,7 +807,7 @@ async def extract_session_signals(
     # attempt: a client that appended to it would otherwise corrupt the retry.
     thinking = thinking_kwargs(EXTRACTION_THINKING_OPTION)
     effort = effort_kwargs(EXTRACTION_EFFORT_OPTION)
-    last_error: Optional[ExtractionParseError] = None
+    last_error: ExtractionParseError | None = None
     for attempt in range(2):
         response = await client.query(
             system=system,
@@ -846,7 +846,7 @@ def write_diary_entries(
     cwd: str,
     timestamp: str,
     slice_id: str = "",
-) -> Optional[Path]:
+) -> Path | None:
     """Atomic append diary entries to per-day file ``diary/YYYY-MM-DD.md``.
 
     Layout aligned with ``append_learnings``:
@@ -875,7 +875,7 @@ def write_diary_entries(
         dt = datetime.fromisoformat(first_ts.replace("Z", "+00:00"))
         date_str = dt.strftime("%Y-%m-%d")
     except (ValueError, TypeError):
-        date_str = timestamp[:10] if len(timestamp) >= 10 else datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        date_str = timestamp[:10] if len(timestamp) >= 10 else datetime.now(UTC).strftime("%Y-%m-%d")
 
     diary_dir.mkdir(parents=True, exist_ok=True)
     diary_file = diary_dir / f"{date_str}.md"

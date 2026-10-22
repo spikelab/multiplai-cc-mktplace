@@ -13,6 +13,7 @@ Subcommands (see --help for all):
   make <source> --prompt TEXT   Natural-language → EDL → render (not yet implemented).
 """
 from __future__ import annotations
+
 import argparse
 import copy
 import signal
@@ -22,8 +23,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from stages.edl import EDL, Music  # noqa: E402
-from stages import composite, prep as prep_stage, music as music_stage, render_sidecar  # noqa: E402
+from stages import composite, render_sidecar
+from stages import music as music_stage
+from stages import prep as prep_stage
+from stages.edl import EDL, Music
 
 
 def _resolve_music_arg(file: str | None, url: str | None, synth: str | None,
@@ -107,6 +110,7 @@ def cmd_sfx_suggest(args: argparse.Namespace) -> int:
     each overlay's start, in output time. Nothing is written; the list goes
     to stdout as JSON, and what was skipped or dropped goes to stderr."""
     import json
+
     from stages import sfx
     try:
         clicks, overlays = str(sfx.resolve(args.clicks)), str(sfx.resolve(args.overlays))
@@ -214,7 +218,9 @@ def cmd_correct(args: argparse.Namespace) -> int:
 def cmd_proof(args: argparse.Namespace) -> int:
     """Tile a rendered reel's frames, labelled with time, framing, caption and speaker."""
     import subprocess
-    from stages import proof, transcript as tx
+
+    from stages import proof
+    from stages import transcript as tx
     edl = EDL.load(args.edl)
     tpath = composite.transcript_path(edl)
     words = tx.load(tpath)["words"] if tpath.exists() else None
@@ -254,7 +260,8 @@ def cmd_shots(args: argparse.Namespace) -> int:
 def cmd_timeline(args: argparse.Namespace) -> int:
     """Print each segment's place in the output and its join, then the
     transcript in output time: what the render will say, and when."""
-    from stages import timeline, transcript as tx
+    from stages import timeline
+    from stages import transcript as tx
     edl = EDL.load(args.edl)
     path = Path(args.transcript) if args.transcript else composite.transcript_path(edl)
     placed = timeline.place_segments(edl)
@@ -308,6 +315,7 @@ def cmd_frame(args: argparse.Namespace) -> int:
 def cmd_snap(args: argparse.Namespace) -> int:
     """Snap a proposed clip to whole sentences, then to the nearest pause."""
     import json
+
     from stages import clips
     cache = prep_stage.cache_dir_for(args.source)
     sent_path, sil_path = cache / "sentences.json", cache / "silences.json"
@@ -336,6 +344,7 @@ def _mark(text: str) -> tuple[float, float, float]:
 def cmd_cursor(args: argparse.Namespace) -> int:
     """Write the clicks found in a screen recording, for segment `follow` targets."""
     import json
+
     from stages import cursor
     proxy = prep_stage.cache_dir_for(args.source) / "proxy_720p.mp4"
     if not proxy.exists():
@@ -476,10 +485,10 @@ def cmd_make(args: argparse.Namespace) -> int:
     print()
     print("Steps:")
     print(f"  1. python scripts/pipeline.py prep {args.source}")
-    print(f"     → writes ~/.cache/video-edit/<key>/context.md")
+    print("     → writes ~/.cache/video-edit/<key>/context.md")
     print(f"  2. (orchestrator) read context.md, author edl.json per user prompt: {args.prompt!r}")
     print(f"  3. python scripts/pipeline.py render edl.json --out {args.out}",
-          f"--music-file FILE" if args.music_file else "--music-url URL" if args.music_url else "")
+          "--music-file FILE" if args.music_file else "--music-url URL" if args.music_url else "")
     print()
     print("See SKILL.md → 'make workflow' for the orchestrator's playbook.")
     return 0

@@ -18,8 +18,8 @@ import pytest
 _SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "video-edit" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 
-from stages import composite, overlay  # noqa: E402
-from stages.edl import EDL, Overlay, Region  # noqa: E402
+from stages import composite, overlay
+from stages.edl import EDL, Overlay, Region
 
 PAGE = "<!doctype html><style>div{animation:a 1s forwards}@keyframes a{to{opacity:1}}</style><div>Prezzo €</div>"
 
@@ -37,7 +37,7 @@ class FakeRoute:
 
 
 class FakeCDP:
-    def __init__(self, world: "World"):
+    def __init__(self, world: World):
         self.world = world
         self.t: float | None = None
 
@@ -60,7 +60,7 @@ class FakeCDP:
 
 
 class FakePage:
-    def __init__(self, world: "World", width: int, height: int):
+    def __init__(self, world: World, width: int, height: int):
         self.world, self.size = world, (width, height)
         self.routes: list = []
         self.context = self
@@ -96,7 +96,7 @@ class FakePage:
 
 
 class FakeBrowser:
-    def __init__(self, world: "World"):
+    def __init__(self, world: World):
         self.world = world
 
     def new_page(self, width: int, height: int) -> FakePage:
@@ -111,7 +111,7 @@ class FakeBrowser:
 
 
 class FakeStdin:
-    def __init__(self, proc: "FakeFfmpeg"):
+    def __init__(self, proc: FakeFfmpeg):
         self.proc = proc
 
     def write(self, data: bytes) -> None:
@@ -124,7 +124,7 @@ class FakeStdin:
 class FakeFfmpeg:
     """subprocess.Popen stand-in: records stdin, writes its output file on wait()."""
 
-    def __init__(self, world: "World", cmd: list[str], **kw):
+    def __init__(self, world: World, cmd: list[str], **kw):
         self.cmd, self.kw, self.world = cmd, kw, world
         self.written: list[bytes] = []
         self.stdin = FakeStdin(self)

@@ -31,7 +31,7 @@ Nothing here edits anything. It reports.
 from __future__ import annotations
 
 import dataclasses
-from typing import Iterable, Mapping, Optional, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 
 from lib.banks import PERSONAL_BANK, split_ref
 from lib.section_loader import h2_names
@@ -109,7 +109,7 @@ def _pairs(items: Sequence[tuple[str, str, Mapping]]):
 def find_collisions(
     entries: Iterable[Mapping],
     *,
-    texts: Optional[Mapping[str, str]] = None,
+    texts: Mapping[str, str] | None = None,
     min_shared_domains: int = MIN_SHARED_DOMAINS,
 ) -> list[Collision]:
     """Every cross-bank overlap in *entries*, in a stable order.

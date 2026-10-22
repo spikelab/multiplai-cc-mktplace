@@ -1,9 +1,8 @@
 """Tests for rubric — change type detection and rubric generation."""
 
-import pytest
-from pathlib import Path
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from build_pipeline.rubric import detect_change_type, generate_rubric
 
 

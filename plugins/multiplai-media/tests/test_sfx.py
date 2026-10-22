@@ -15,9 +15,9 @@ import pytest
 _SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "video-edit" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 
-import pipeline  # noqa: E402
-from stages import composite, sfx  # noqa: E402
-from stages.edl import EDL, SFX_MIN_GAP_S  # noqa: E402
+import pipeline
+from stages import composite, sfx
+from stages.edl import EDL, SFX_MIN_GAP_S
 
 
 class _Done:

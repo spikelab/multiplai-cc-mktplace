@@ -7,9 +7,19 @@ import random
 
 import pytest
 from pydantic import BaseModel, field_serializer
-
-from trace_fixtures import (CLI, NAMES, FakeCall, as_json, chain_hops, chain_source, cli_snapshot, cli_source,
-                            commit_snapshot, lib, run_map)
+from trace_fixtures import (
+    CLI,
+    NAMES,
+    FakeCall,
+    as_json,
+    chain_hops,
+    chain_source,
+    cli_snapshot,
+    cli_source,
+    commit_snapshot,
+    lib,
+    run_map,
+)
 
 READ_ONLY = ["Read", "Grep", "Glob"]
 

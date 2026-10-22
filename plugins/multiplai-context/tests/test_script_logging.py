@@ -12,7 +12,7 @@ the check is about what a fresh script process does.
 import os
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -50,7 +50,7 @@ def test_lib_and_core_lines_reach_the_script_log(tmp_path, script):
     )
     assert proc.returncode == 0, proc.stderr
 
-    day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    day = datetime.now(UTC).strftime("%Y-%m-%d")
     log = data_dir / "logs" / f"{script}-{day}.log"
     text = log.read_text()
     assert "[lib.checkpoint]" in text and "INFO: lib probe line" in text

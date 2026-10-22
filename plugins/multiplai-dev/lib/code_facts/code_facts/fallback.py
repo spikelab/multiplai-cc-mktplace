@@ -37,7 +37,15 @@ from .cache import cache_key
 from .entries import Entry, EntryKind, to_path_entry
 from .explore import CALL_ERROR
 from .models import Citation, _Model
-from .paths import DropReason, DropStage, FallbackStatus, Handler, Location, PathDrop, normalise_rel_path
+from .paths import (
+    DropReason,
+    DropStage,
+    FallbackStatus,
+    Handler,
+    Location,
+    PathDrop,
+    normalise_rel_path,
+)
 from .prompts import PATHS_FALLBACK_PROMPT_VERSION, paths_fallback
 from .pyindex import PyIndex
 from .trace_gate import Break, check_head_citation

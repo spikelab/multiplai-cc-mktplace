@@ -7,7 +7,6 @@ import re
 from pathlib import Path
 
 from code_facts import UNTRUSTED_RULES
-
 from conftest import git, read_state, run, write
 
 CALC = "def add(a, b):\n    return a + b\n\n\ndef sub(a, b):\n    return a - b\n\n\ndef mul(a, b):\n    return a * b\n"
@@ -180,7 +179,7 @@ def test_a_requirement_whose_name_starts_or_extends_a_kept_name_is_dropped(tmp_p
     names = re.findall(r"### Requirement:\s*(.+)", spec)
     assert names == ["Adds", "Subtracts two", "Multiplies \\"]
     for name in names:  # change_manager.py's REMOVED pattern takes exactly one requirement
-        assert len(re.findall(rf"### Requirement:\s*{re.escape(name)}.*?(?=### Requirement:|\Z)", spec, re.S)) == 1
+        assert len(re.findall(rf"### Requirement:\s*{re.escape(name)}.*?(?=### Requirement:|\Z)", spec, re.DOTALL)) == 1
     assert ("- calc / Multiplies #2: the kept requirement `Multiplies \\` is a prefix of its name as written, or "
             "the other way round; buildme matches requirement names by prefix") in (run_dir / "report.md").read_text()
 
@@ -201,7 +200,7 @@ def test_a_scenario_buildmes_requirement_check_would_reject_is_dropped(tmp_path,
     run_dir = folder(tmp_path / "out")
     spec = (run_dir / "registry" / "calc.md").read_text()
     assert valid_requirement_text(spec)
-    assert re.findall(r"^#### Scenario: (.*)$", spec, re.M) == ["ok"]
+    assert re.findall(r"^#### Scenario: (.*)$", spec, re.MULTILINE) == ["ok"]
     assert "Only empty" not in spec
     report = (run_dir / "report.md").read_text()
     why = "a scenario needs a name, a WHEN and a THEN, each with text"

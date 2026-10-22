@@ -84,10 +84,30 @@ from typing import Literal
 
 from pydantic import ConfigDict, Field
 
-from .commands import (CommandLine, first_positional, hook_commands, is_hooks_file, looks_like_python_m,
-                       module_search_roots, parse_command_line, python_module, resolve_python_m, shell_commands)
-from .paths import (KIND_RANK, DiscoveredKind, Handler, Invoker, Location, PathDiagnostic, PathEntry, Seed,
-                    _Strict, normalise_rel_path)
+from .commands import (
+    CommandLine,
+    first_positional,
+    hook_commands,
+    is_hooks_file,
+    looks_like_python_m,
+    module_search_roots,
+    parse_command_line,
+    python_module,
+    resolve_python_m,
+    shell_commands,
+)
+from .paths import (
+    KIND_RANK,
+    DiscoveredKind,
+    Handler,
+    Invoker,
+    Location,
+    PathDiagnostic,
+    PathEntry,
+    Seed,
+    _Strict,
+    normalise_rel_path,
+)
 from .paths import EntryKind as OutputKind
 from .pyindex import PyIndex, dotted_reference
 

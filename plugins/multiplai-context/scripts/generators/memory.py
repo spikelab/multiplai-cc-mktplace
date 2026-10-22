@@ -14,9 +14,10 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from multiplai_core.paths import Paths
-from generators.base import GeneratorBase
 from lib.section_loader import h2_names
+from multiplai_core.paths import Paths
+
+from generators.base import GeneratorBase
 
 logger = logging.getLogger(__name__)
 

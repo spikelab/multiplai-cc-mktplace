@@ -144,7 +144,11 @@ async def run_pipeline(config: ResearchConfig, *, reset_usage: bool = True) -> i
     counters are shared, so each sub-pipeline resetting them would clobber the
     others' accounting. The parallel orchestrator resets once up front instead.
     """
-    from .sdk import get_accumulated_usage, reset_accumulated_usage, reset_sdk_concurrency_stats
+    from .sdk import (
+        get_accumulated_usage,
+        reset_accumulated_usage,
+        reset_sdk_concurrency_stats,
+    )
 
     _setup_logging(session_id=config.session_id)
     if reset_usage:
@@ -299,7 +303,7 @@ async def run_pipeline(config: ResearchConfig, *, reset_usage: bool = True) -> i
             print(f"SUMMARY: Research INCOMPLETE. {len(state.findings)} findings from "
                   f"{len(state.completed_sources())} sources. "
                   f"State preserved at: {state.state_file}")
-            print(f"STATUS: INCOMPLETE")
+            print("STATUS: INCOMPLETE")
         else:
             print(f"SUMMARY: Research complete. {len(state.findings)} findings from "
                   f"{len(state.completed_sources())} sources.")
@@ -319,7 +323,7 @@ async def run_pipeline(config: ResearchConfig, *, reset_usage: bool = True) -> i
         )
         return 0
 
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         log.exception("Pipeline failed at stage %s", state.stage)
         progress.log_stage(f"ERROR at {state.stage.value}", str(e))
         print(f"Pipeline failed: {e}", file=sys.stderr)
@@ -623,7 +627,7 @@ async def _run_reassess_cycle(
     if state.reassessment.refinement_needed and state.reassessment.refinement_queries:
         try:
             await _run_refinement(config, state, router, progress)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             log.exception("REFINEMENT cycle failed")
             state.refinement_error = str(e)
             state.checkpoint()
@@ -635,7 +639,7 @@ async def _run_reassess_cycle(
     if state.reassessment.verify_queries or state.reassessment.flagged_claims:
         try:
             await _run_verification(config, state, router, progress)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             log.exception("VERIFICATION cycle failed")
             state.verification_error = str(e)
             state.checkpoint()

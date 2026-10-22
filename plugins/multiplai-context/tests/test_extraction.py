@@ -13,7 +13,6 @@ Covers:
 
 import asyncio
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -209,7 +208,7 @@ class TestExtractUnits:
         # An unparseable response must NOT be silently treated as "empty" —
         # that would drop the session's extraction marker as if nothing
         # happened. It raises so the caller retains the marker for retry.
-        from lib.extraction import extract_units, ExtractionParseError
+        from lib.extraction import ExtractionParseError, extract_units
         client = _make_mock_client("no tags at all")
         with pytest.raises(ExtractionParseError):
             asyncio.run(extract_units("t", valid_targets=[], client=client))
@@ -217,15 +216,15 @@ class TestExtractUnits:
     def test_retries_once_then_raises(self):
         # Parse failures are stochastic — one in-place retry with the same
         # prompt. Both attempts failing surfaces the error to the caller.
-        from lib.extraction import extract_units, ExtractionParseError
+        from lib.extraction import ExtractionParseError, extract_units
         client = _make_mock_client("no tags at all")
         with pytest.raises(ExtractionParseError):
             asyncio.run(extract_units("t", valid_targets=[], client=client))
         assert client.query.await_count == 2
 
     def test_retry_recovers_on_second_attempt(self):
-        from multiplai_core.model_client import ModelResponse
         from lib.extraction import extract_units
+        from multiplai_core.model_client import ModelResponse
         client = AsyncMock()
         good = _tag_response([{"timestamp": "", "diary_entry": "Recovered.", "learnings": []}])
         client.query = AsyncMock(side_effect=[

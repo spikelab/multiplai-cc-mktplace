@@ -3,7 +3,6 @@
 from dataclasses import dataclass
 
 import pytest
-
 from build_pipeline import budget as budget_mod
 from build_pipeline.budget import BudgetExceededError, BuildBudget
 
@@ -171,9 +170,9 @@ class TestModuleSingleton:
 
 
 def test_resume_flag_accepts_only_existing_unknown_calls(tmp_path):
+    from build_pipeline import budget
     from build_pipeline.__main__ import build_parser
     from build_pipeline.config import BuildConfig
-    from build_pipeline import budget
     args = build_parser().parse_args(['build', '--change', 'x', '--project-dir', str(tmp_path), '--accept-unknown-spend'])
     config = BuildConfig.from_cli_args(args)
     assert config.accept_unknown_spend

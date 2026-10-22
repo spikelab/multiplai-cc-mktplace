@@ -22,7 +22,7 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from lib import extraction_drain  # noqa: E402
+from lib import extraction_drain
 
 
 class _PopenSpy:

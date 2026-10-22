@@ -21,11 +21,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import shlex
 import signal
 import sys
-import logging
 import time
 from pathlib import Path
 
@@ -33,12 +33,30 @@ from multiplai_core.log_utils import log_event, setup_logging
 from pydantic import ValidationError
 
 from . import gitdata, netinfo, registry, server, stats, walkthrough
-from .gitdata import (EMPTY_TREE, GitError, Resolved, TargetError, TargetSpec, diff_findings, legacy_slug,
-                      parse_target, resolve_target)
+from .gitdata import (
+    EMPTY_TREE,
+    GitError,
+    Resolved,
+    TargetError,
+    TargetSpec,
+    diff_findings,
+    legacy_slug,
+    parse_target,
+    resolve_target,
+)
 from .mailbox import MAX_ROW_BYTES, Mailbox, MailboxError, utc_now
-from .models import (CHECKS_SCHEMA_PATH, SCHEMA_PATH, WALKTHROUGH_SCHEMA_PATH, FindingsFile, OutboxRow,
-                     checks_schema_text, findings_digest, load_findings, schema_text,
-                     walkthrough_schema_text)
+from .models import (
+    CHECKS_SCHEMA_PATH,
+    SCHEMA_PATH,
+    WALKTHROUGH_SCHEMA_PATH,
+    FindingsFile,
+    OutboxRow,
+    checks_schema_text,
+    findings_digest,
+    load_findings,
+    schema_text,
+    walkthrough_schema_text,
+)
 
 COMPONENT = "review-viewer"
 log = logging.getLogger(__name__)

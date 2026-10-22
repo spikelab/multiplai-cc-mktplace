@@ -13,14 +13,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-
 from research_pipeline.config import PRESETS, ResearchConfig
 from research_pipeline.models import (
+    Finding,
     PlanResult,
+    ReputationTier,
     SearchResult,
     Source,
-    ReputationTier,
-    Finding,
 )
 from research_pipeline.state import ResearchState, Stage
 

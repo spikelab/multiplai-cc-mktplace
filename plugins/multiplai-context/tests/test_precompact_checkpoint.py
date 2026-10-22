@@ -3,10 +3,9 @@
 import json
 import os
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
-
 from conftest import PLUGIN_ROOT, import_script
 from lib import checkpoint as cp
 
@@ -30,7 +29,7 @@ def data_env(tmp_path, monkeypatch):
 def _transcript(tmp_path, tokens, name="t.jsonl"):
     rec = {
         "type": "assistant",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "message": {
             "role": "assistant",
             "content": [{"type": "text", "text": "working"}],

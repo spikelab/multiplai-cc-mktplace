@@ -14,7 +14,7 @@ from pathlib import Path
 _SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "video-edit" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 
-from stages.prep import DeadSpan, _dead_spans  # noqa: E402
+from stages.prep import DeadSpan, _dead_spans
 
 ACTIVE = 8.0    # scroll/navigation-level motion
 TYPING = 0.4    # cursor blink / characters landing

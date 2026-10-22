@@ -6,7 +6,7 @@ Ported from deep-research pipeline with build-specific additions.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 # A session-derived source is shown as "session": which of the session's own
@@ -137,4 +137,4 @@ class ProgressWriter:
                 f.write(f"{note}\n")
 
     def _now(self) -> str:
-        return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")

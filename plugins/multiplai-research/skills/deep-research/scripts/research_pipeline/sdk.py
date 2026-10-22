@@ -23,8 +23,6 @@ import time
 from dataclasses import dataclass
 from typing import TypeVar
 
-from pydantic import BaseModel, ValidationError
-
 from multiplai_core.agent_runner import (
     MAX_PROMPT_BYTES,  # noqa: F401 — re-exported (E2BIG threshold lives in core now)
     AgentRunError,
@@ -32,9 +30,11 @@ from multiplai_core.agent_runner import (
     AgentRunTimeout,
     run_agent,
 )
-from multiplai_core.aio import hard_timeout, swallow_task_result as _swallow_task_result  # noqa: F401
+from multiplai_core.aio import hard_timeout  # noqa: F401
+from multiplai_core.aio import swallow_task_result as _swallow_task_result  # noqa: F401
 from multiplai_core.structured import parse_answer
 from multiplai_core.text import extract_json  # noqa: F401 — re-exported: sdk.extract_json is used by the fetcher and router
+from pydantic import BaseModel, ValidationError
 
 log = logging.getLogger(__name__)
 
@@ -70,7 +70,7 @@ class LLMCallUsage:
     cost_usd: float = 0.0
     num_calls: int = 0
 
-    def accumulate(self, other: "LLMCallUsage") -> None:
+    def accumulate(self, other: LLMCallUsage) -> None:
         self.input_tokens += other.input_tokens
         self.output_tokens += other.output_tokens
         self.cache_creation_tokens += other.cache_creation_tokens
@@ -136,8 +136,7 @@ def _track_call_start(label: str) -> None:
     global _sdk_active_calls, _sdk_peak_calls
     with _sdk_active_lock:
         _sdk_active_calls += 1
-        if _sdk_active_calls > _sdk_peak_calls:
-            _sdk_peak_calls = _sdk_active_calls
+        _sdk_peak_calls = max(_sdk_peak_calls, _sdk_active_calls)
         active = _sdk_active_calls
         peak = _sdk_peak_calls
     log.debug("SDK call START [%s] active=%d peak=%d", label, active, peak)

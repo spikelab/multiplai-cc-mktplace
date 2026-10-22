@@ -50,8 +50,8 @@ from multiplai_core.specs import CHANGE_META_FILE, read_change_meta, write_chang
 from pydantic import BaseModel, Field
 
 from . import git_ops, intake, sdk
-from .artifacts import sha
 from . import state as state_mod
+from .artifacts import sha
 from .prompts import UNTRUSTED_NOTICE
 from .prompts.epic_split import CHILDREN_RULE, EPIC_SPLIT_PROMPT, EPIC_SPLIT_RETRY
 from .run import MARKER_CHILD, MARKER_SPLIT, Run

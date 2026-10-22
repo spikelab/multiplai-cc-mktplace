@@ -18,7 +18,15 @@ from typing import TYPE_CHECKING
 
 from . import rounds
 from .export import to_checks_file, to_findings_file
-from .models import CRITICAL_IMPACTS, DEPS_DIR, SECTIONS, SEVERITIES, CoverageRecord, ReviewState, section_of
+from .models import (
+    CRITICAL_IMPACTS,
+    DEPS_DIR,
+    SECTIONS,
+    SEVERITIES,
+    CoverageRecord,
+    ReviewState,
+    section_of,
+)
 from .paths_io import load_paths, views
 from .target import github_web_base, object_folders, review_children
 

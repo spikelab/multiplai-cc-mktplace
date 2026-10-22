@@ -10,8 +10,8 @@ PLUGIN_ROOT = Path(__file__).parent.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-from lib import costing_collector as cc  # noqa: E402
-from multiplai_core.costing import iter_ledger  # noqa: E402
+from lib import costing_collector as cc
+from multiplai_core.costing import iter_ledger
 
 
 @pytest.fixture(autouse=True)

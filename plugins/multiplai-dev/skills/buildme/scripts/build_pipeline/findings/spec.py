@@ -29,7 +29,11 @@ import logging
 import re
 from pathlib import Path
 
-from multiplai_core.specs import CHANGE_META_FILE, normalize_change_name, set_spec_issues
+from multiplai_core.specs import (
+    CHANGE_META_FILE,
+    normalize_change_name,
+    set_spec_issues,
+)
 from multiplai_core.untrusted import defang
 
 from .. import git_ops

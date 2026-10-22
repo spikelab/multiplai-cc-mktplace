@@ -1,12 +1,10 @@
 """Real runner failures and command-relative pytest evidence."""
 import os
-from pathlib import Path
 import shlex
 import shutil
 import sys
 
 import pytest
-
 from build_pipeline.gates import red_gate, run_test_suite
 
 
@@ -71,9 +69,10 @@ def test_unparsed_runners_remain_explicitly_unverified(runner, output):
 @pytest.mark.parametrize('module_name', ['new_pkg.feature', 'new_pkg.middle.feature'])
 def test_prompt_recipe_reaches_red_then_green_for_new_python_apis(tmp_path, monkeypatch, existing, module_name):
     import re
+
     from build_pipeline.prompts.test_writing import TEST_WRITER_PROMPT
     monkeypatch.setenv('BUILDME_TRUST_REPO', '1')
-    example = re.search(r"```python\n(.*?)```", TEST_WRITER_PROMPT, re.S)
+    example = re.search(r"```python\n(.*?)```", TEST_WRITER_PROMPT, re.DOTALL)
     assert example is not None, 'test-writing advice needs an executable import recipe'
     (tmp_path / 'test_api.py').write_text(example.group(1).replace('new_pkg.feature', module_name))
     package = tmp_path / 'new_pkg'
@@ -131,8 +130,8 @@ def test_unparsed_runner_nonzero_is_unverified_even_for_setup_diagnostics(runner
 def test_direct_pytest_rejects_runs_without_changed_test_failures(tmp_path, monkeypatch, prefix, case):
     from build_pipeline.config import BuildConfig
     from build_pipeline.models import BlockInfo
-    from build_pipeline.tdd_engine import _block_test_command
     from build_pipeline.narrow_tests import runner_of
+    from build_pipeline.tdd_engine import _block_test_command
     monkeypatch.setenv('BUILDME_TRUST_REPO', '1')
     directory = tmp_path / 'api' if prefix else tmp_path
     directory.mkdir(exist_ok=True)

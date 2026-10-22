@@ -10,7 +10,7 @@ import pytest
 _SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "video-edit" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 
-from stages import shots  # noqa: E402
+from stages import shots
 
 # The first rows of the Rails World 2026 keynote's scenes.csv, as PySceneDetect writes it.
 CSV = """Scene Number,Start Frame,Start Timecode,Start Time (seconds),End Frame,End Timecode,End Time (seconds),Length (frames),Length (timecode),Length (seconds)

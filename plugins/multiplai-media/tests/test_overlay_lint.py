@@ -14,9 +14,9 @@ import pytest
 _SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "video-edit" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 
-import pipeline  # noqa: E402
-from stages import composite, overlay, overlay_lint  # noqa: E402
-from stages.edl import EDL  # noqa: E402
+import pipeline
+from stages import composite, overlay, overlay_lint
+from stages.edl import EDL
 
 FIX = Path(__file__).parent / "fixtures" / "overlay-lint"
 INSTALLED = {"arial", "liberation sans"}

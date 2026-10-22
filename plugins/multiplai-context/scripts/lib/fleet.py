@@ -42,17 +42,18 @@ import json
 import logging
 import re
 from dataclasses import asdict, dataclass, field, is_dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+from lib.fsio import atomic_write
+from lib.session_registry import entry_disposition_block
 
 # From the leaf module, NOT from `lib.fleet_sources.common`: importing any
 # name out of that package runs its __init__ and loads all four collectors
 # (and `subprocess`) onto the hook path this module sits on. The
 # TYPE_CHECKING block below exists for exactly that reason.
 from lib.timeparse import parse_ts as _parse_ts
-from lib.fsio import atomic_write
-from lib.session_registry import entry_disposition_block
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     # Type-only so the expensive collectors cannot reach the hook path by
@@ -558,7 +559,7 @@ def roster_dead_sids(
     roster = load_roster(data_dir)
     if roster is None:
         return set()
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     cutoff = now - (grace if grace is not None else timedelta(hours=ROSTER_DEAD_GRACE_HOURS))
 
     dead: set[str] = set()
@@ -1046,7 +1047,7 @@ def find_collisions(agents: list[Agent], now: datetime | None = None) -> list[Co
     signal in the checkpoint, which is a checkpoint-writer change, not this
     function's.
     """
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     max_age = timedelta(hours=COLLISION_MAX_AGE_HOURS)
     holders: dict[tuple[str, str], list[Agent]] = {}
     display: dict[tuple[str, str], str] = {}
@@ -1081,7 +1082,7 @@ def find_collisions(agents: list[Agent], now: datetime | None = None) -> list[Co
 
 def collect(data_dir: Path, now: datetime | None = None) -> Fleet:
     """Read both stores and join them. Never raises on bad input."""
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     sessions_dir = data_dir / "sessions"
     # One read for the whole pass: every entry is judged against the same
     # observation, so the reading cannot shift underneath a single render.
@@ -1111,7 +1112,7 @@ def collect(data_dir: Path, now: datetime | None = None) -> Fleet:
     # the same timestamp always render in the same order (the cache property
     # depends on this).
     agents.sort(key=lambda a: (-(a.last_ts or datetime.min.replace(
-        tzinfo=timezone.utc)).timestamp(), a.session_id))
+        tzinfo=UTC)).timestamp(), a.session_id))
     return Fleet(
         agents=agents,
         collisions=find_collisions(agents, now),
@@ -1639,7 +1640,7 @@ def write_fleet_view(data_dir: Path, now: datetime | None = None) -> Path:
 
     Both remain pure caches: delete them, run this, get them back.
     """
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     fleet = collect(data_dir, now)
 
     agents_path = data_dir / AGENTS_FILENAME

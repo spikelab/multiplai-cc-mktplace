@@ -13,13 +13,10 @@ Covers:
 
 import asyncio
 import json
-import os
 import sys
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from unittest.mock import AsyncMock, patch, MagicMock
-
-import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
 
 PLUGIN_ROOT = Path(__file__).parent.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
@@ -28,7 +25,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 
 def _ts(offset_minutes: int = 0) -> str:
-    dt = datetime(2026, 5, 16, 14, 0, 0, tzinfo=timezone.utc) + timedelta(minutes=offset_minutes)
+    dt = datetime(2026, 5, 16, 14, 0, 0, tzinfo=UTC) + timedelta(minutes=offset_minutes)
     return dt.isoformat()
 
 
@@ -202,7 +199,7 @@ class TestBackfillDryRun:
         from multiplai_core.paths import _reset_cache
         _reset_cache()
 
-        since = datetime(2026, 5, 16, 0, 0, tzinfo=timezone.utc)
+        since = datetime(2026, 5, 16, 0, 0, tzinfo=UTC)
         summary = asyncio.run(backfill(since, dry_run=True))
 
         assert summary["dry_run"] is True
@@ -224,7 +221,7 @@ class TestBackfillDryRun:
         from multiplai_core.paths import _reset_cache
         _reset_cache()
 
-        since = datetime(2026, 5, 16, 0, 0, tzinfo=timezone.utc)
+        since = datetime(2026, 5, 16, 0, 0, tzinfo=UTC)
         summary = asyncio.run(backfill(since, dry_run=True))
         assert "sessions" in summary
         assert summary["scanned"] >= 1
@@ -256,7 +253,7 @@ class TestBackfillRealRun:
         self._setup_env(tmp_path, monkeypatch)
 
         client = _mock_client("Fixed a bug in auth module.")
-        since = datetime(2026, 5, 16, 0, 0, tzinfo=timezone.utc)
+        since = datetime(2026, 5, 16, 0, 0, tzinfo=UTC)
 
         with patch("backfill.create_client", new_callable=AsyncMock, return_value=client):
             summary = asyncio.run(backfill(
@@ -270,7 +267,7 @@ class TestBackfillRealRun:
         _reset_cache()
 
     def test_skips_already_processed(self, tmp_path, monkeypatch):
-        from backfill import backfill, _session_id_from_path
+        from backfill import _session_id_from_path, backfill
         t = self._setup_env(tmp_path, monkeypatch)
 
         sid = _session_id_from_path(t)
@@ -285,7 +282,7 @@ class TestBackfillRealRun:
         )
 
         client = _mock_client()
-        since = datetime(2026, 5, 16, 0, 0, tzinfo=timezone.utc)
+        since = datetime(2026, 5, 16, 0, 0, tzinfo=UTC)
         with patch("backfill.create_client", new_callable=AsyncMock, return_value=client):
             summary = asyncio.run(backfill(since, run_catalogs=False, run_now=False))
 
@@ -302,7 +299,7 @@ class TestBackfillRealRun:
         """
         from backfill import backfill
         self._setup_env(tmp_path, monkeypatch)
-        since = datetime(2026, 5, 16, 0, 0, tzinfo=timezone.utc)
+        since = datetime(2026, 5, 16, 0, 0, tzinfo=UTC)
 
         first = _mock_client("Fixed a bug in auth module.")
         with patch("backfill.create_client", new_callable=AsyncMock, return_value=first):
@@ -324,9 +321,9 @@ class TestBackfillRealRun:
         Recording it as processed would lose the session permanently, which is
         strictly worse than the re-extraction this ledger exists to prevent.
         """
-        from backfill import backfill, _read_ledger, _ledger_path
+        from backfill import _ledger_path, _read_ledger, backfill
         self._setup_env(tmp_path, monkeypatch)
-        since = datetime(2026, 5, 16, 0, 0, tzinfo=timezone.utc)
+        since = datetime(2026, 5, 16, 0, 0, tzinfo=UTC)
 
         client = AsyncMock()
         client.query = AsyncMock(side_effect=RuntimeError("429 rate limited"))
@@ -342,7 +339,7 @@ class TestBackfillRealRun:
         self._setup_env(tmp_path, monkeypatch)
 
         client = _mock_client()
-        since = datetime(2026, 5, 16, 0, 0, tzinfo=timezone.utc)
+        since = datetime(2026, 5, 16, 0, 0, tzinfo=UTC)
         with patch("backfill.create_client", new_callable=AsyncMock, return_value=client):
             with patch("backfill.distill", return_value=["some text"]):
                 # Make post-passes raise — should not propagate
@@ -368,7 +365,7 @@ class TestBackfillRealRun:
         self._setup_env(tmp_path, monkeypatch)
 
         client = _mock_client()
-        since = datetime(2026, 5, 16, 0, 0, tzinfo=timezone.utc)
+        since = datetime(2026, 5, 16, 0, 0, tzinfo=UTC)
         gen_mock = AsyncMock(return_value=[])
         with patch("backfill.create_client", new_callable=AsyncMock, return_value=client), \
              patch("generators.config.load_catalog_config", return_value=MagicMock()), \

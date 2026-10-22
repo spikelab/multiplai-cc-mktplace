@@ -13,12 +13,20 @@ from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
-
-from scripts.lib.prospective import (CONDITION_SWEEP_DAYS, LEAD_DAYS,
-                                     PROSPECTIVE_FILENAME, SWEEP_STATE_FILENAME,
-                                     actionable, format_line, load,
-                                     load_sweep_state, parse, render_nudge,
-                                     save_sweep_state, sweep_key)
+from scripts.lib.prospective import (
+    CONDITION_SWEEP_DAYS,
+    LEAD_DAYS,
+    PROSPECTIVE_FILENAME,
+    SWEEP_STATE_FILENAME,
+    actionable,
+    format_line,
+    load,
+    load_sweep_state,
+    parse,
+    render_nudge,
+    save_sweep_state,
+    sweep_key,
+)
 
 TODAY = date(2026, 7, 26)
 
@@ -165,7 +173,7 @@ class TestActionable:
         """Keyed on content, not line number: removing a line above, or
         re-wrapping the line, must not reset the clock."""
         [a] = parse("- [on: X happens] Do it (captured 2026-01-01)")
-        [b] = parse("junk\n- [on:  X   happens] Do  it (captured 2026-01-01)".split("\n")[1])
+        [b] = parse(["junk", "- [on:  X   happens] Do  it (captured 2026-01-01)"][1])
         assert sweep_key(a) == sweep_key(b)
 
     def test_sweep_state_round_trips(self, tmp_path):

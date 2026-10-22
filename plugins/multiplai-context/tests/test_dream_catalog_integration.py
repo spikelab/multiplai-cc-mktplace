@@ -14,18 +14,11 @@ Covers all scenarios from requirements/catalog-dream-integration.md:
 """
 
 import asyncio
-import json
-import os
 import re
-import sys
-from datetime import datetime, timezone
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 from conftest import PLUGIN_ROOT, SCRIPTS_DIR
-
 
 # ---------------------------------------------------------------------------
 # dream.md contains catalog regeneration instructions

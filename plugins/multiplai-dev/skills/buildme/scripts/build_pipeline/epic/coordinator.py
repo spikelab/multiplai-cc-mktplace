@@ -60,8 +60,6 @@ again with its share recomputed once the others end.
 
 from __future__ import annotations
 
-from build_pipeline.budget import BudgetExceededError
-
 import asyncio
 import contextlib
 import io
@@ -79,6 +77,8 @@ from pathlib import Path
 
 import yaml
 from multiplai_core.specs import CHANGE_META_FILE
+
+from build_pipeline.budget import BudgetExceededError
 
 from .. import budget, git_ops, intake, stop_record
 from ..config import git_toggles
@@ -137,11 +137,11 @@ class Clock:
 CLOCK = Clock()
 
 
-def _tick(coord: "Coordinator") -> None:
+def _tick(coord: Coordinator) -> None:
     """Called on every look at the running children. A seam for the row tests."""
 
 
-def _merge_point(coord: "Coordinator", c: "Child", point: str) -> None:
+def _merge_point(coord: Coordinator, c: Child, point: str) -> None:
     """Called at each named point of the merge step (`start`, `merged`,
     `push`, `checks`). A seam for the row tests."""
 

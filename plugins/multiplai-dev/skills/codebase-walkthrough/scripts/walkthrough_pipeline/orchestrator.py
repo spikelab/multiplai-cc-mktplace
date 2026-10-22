@@ -14,16 +14,20 @@ import logging
 import os
 import shutil
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from multiplai_core.log_utils import log_event
 
-from . import budget, docs as docs_mod, lsp, references, repos as repos_mod, symbols as symbols_mod
+from . import budget, lsp, references
+from . import docs as docs_mod
+from . import repos as repos_mod
+from . import symbols as symbols_mod
 from . import target as target_mod
 from .config import WalkConfig
 from .gates import boundary_gate, partition_gate, target_files_ws
-from .models import STAGES as STAGES_ORDER, Dropped, WalkState
+from .models import STAGES as STAGES_ORDER
+from .models import Dropped, WalkState
 from .partition import partition, ws_lines
 from .progress import ProgressWriter
 from .render import write_outputs
@@ -82,7 +86,7 @@ def _keep_previous_progress(run_dir: Path) -> None:
     """
     log = run_dir / "progress.log"
     try:
-        stamp = datetime.fromtimestamp(log.stat().st_mtime, timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        stamp = datetime.fromtimestamp(log.stat().st_mtime, UTC).strftime("%Y%m%dT%H%M%SZ")
         os.link(log, run_dir / f"progress-{stamp}.log")
         log.unlink()
     except OSError:

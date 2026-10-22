@@ -2,10 +2,8 @@
 
 import py_compile
 import re
-from pathlib import Path
 
 import pytest
-
 from conftest import PLUGIN_ROOT
 
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"

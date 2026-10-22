@@ -65,7 +65,7 @@ signal this taxonomy exists to make trustworthy.
 
 from __future__ import annotations
 
-from typing import Mapping, Optional
+from collections.abc import Mapping
 
 # --- The closed value sets --------------------------------------------------
 # Declaration order here is documentation, not policy. The *rankings* are
@@ -106,7 +106,7 @@ PROVENANCE_STRENGTH: tuple[str, ...] = (
 KIND_BREADTH: tuple[str, ...] = ("RULE", "INTENTION", "DECISION", "FACT")
 
 
-def _first_listed(values, order: tuple[str, ...]) -> Optional[str]:
+def _first_listed(values, order: tuple[str, ...]) -> str | None:
     """The earliest member of *order* present in *values*, or ``None``."""
     present = {v for v in values if v}
     for candidate in order:
@@ -115,12 +115,12 @@ def _first_listed(values, order: tuple[str, ...]) -> Optional[str]:
     return None
 
 
-def weakest_provenance(values) -> Optional[str]:
+def weakest_provenance(values) -> str | None:
     """The softest provenance among *values* — what a merged entry inherits."""
     return _first_listed(values, PROVENANCE_STRENGTH)
 
 
-def broadest_kind(values) -> Optional[str]:
+def broadest_kind(values) -> str | None:
     """The widest-blast-radius kind among *values*."""
     return _first_listed(values, KIND_BREADTH)
 
@@ -165,7 +165,7 @@ LEGACY_TYPES: tuple[str, ...] = (
 # ``None`` says so honestly. A consumer that needs a value should treat a
 # missing provenance as ``INFERENCE`` — but that substitution is the
 # consumer's to make, not this table's.
-LEGACY_TYPE_MAP: dict[str, tuple[Optional[str], Optional[str]]] = {
+LEGACY_TYPE_MAP: dict[str, tuple[str | None, str | None]] = {
     "CORRECTION": ("CORRECTION", "FACT"),
     "PREFERENCE": ("DECLARATION", "FACT"),
     "RULE-PROPOSAL": (None, "RULE"),
@@ -180,7 +180,7 @@ LEGACY_TYPE_MAP: dict[str, tuple[Optional[str], Optional[str]]] = {
 UNKNOWN_MARKER = "?"
 
 
-def normalize_provenance(value: Optional[str]) -> Optional[str]:
+def normalize_provenance(value: str | None) -> str | None:
     """Return *value* as a canonical provenance, or ``None`` if it is not one.
 
     Case and surrounding whitespace are forgiven — those are transcription
@@ -194,7 +194,7 @@ def normalize_provenance(value: Optional[str]) -> Optional[str]:
     return candidate if candidate in PROVENANCES else None
 
 
-def normalize_kind(value: Optional[str]) -> Optional[str]:
+def normalize_kind(value: str | None) -> str | None:
     """Return *value* as a canonical kind, or ``None`` if it is not one."""
     if not value:
         return None
@@ -202,7 +202,7 @@ def normalize_kind(value: Optional[str]) -> Optional[str]:
     return candidate if candidate in KINDS else None
 
 
-def normalize_legacy(record: Mapping) -> tuple[Optional[str], Optional[str]]:
+def normalize_legacy(record: Mapping) -> tuple[str | None, str | None]:
     """Map a pre-taxonomy record's ``type`` to ``(provenance, kind)``.
 
     Pure: reads one key, touches nothing, and is never used to rewrite a file
@@ -217,7 +217,7 @@ def normalize_legacy(record: Mapping) -> tuple[Optional[str], Optional[str]]:
     return LEGACY_TYPE_MAP.get(ltype, (None, None))
 
 
-def pair(record: Mapping) -> tuple[Optional[str], Optional[str]]:
+def pair(record: Mapping) -> tuple[str | None, str | None]:
     """The ``(provenance, kind)`` of *record*, explicit fields first.
 
     A record written under the taxonomy carries the two fields directly. One
@@ -251,12 +251,12 @@ def has_taxonomy(record: Mapping) -> bool:
     )
 
 
-def format_pair(provenance: Optional[str], kind: Optional[str]) -> str:
+def format_pair(provenance: str | None, kind: str | None) -> str:
     """Render the pair as ``PROVENANCE/KIND``, with ``?`` for either unknown."""
     return f"{provenance or UNKNOWN_MARKER}/{kind or UNKNOWN_MARKER}"
 
 
-def parse_pair(text: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+def parse_pair(text: str | None) -> tuple[str | None, str | None]:
     """Read a ``PROVENANCE/KIND`` string back into a validated pair.
 
     The inverse of :func:`format_pair`, and equally strict: an unrecognised

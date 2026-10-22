@@ -2,10 +2,10 @@
 end-of-build proposal that never edits the specs it comments on."""
 
 import hashlib
-import pytest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from build_pipeline.change_manager import ChangeManager
 from build_pipeline.config import BuildConfig
 from build_pipeline.llm_steps.respec_steps import (

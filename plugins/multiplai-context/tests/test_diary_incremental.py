@@ -19,15 +19,13 @@ the entry is on disk, and it points at the last turn READ rather than at
 
 import asyncio
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
 from lib import extraction as ex
 
-
-BASE = datetime(2026, 8, 9, 12, 0, tzinfo=timezone.utc)
+BASE = datetime(2026, 8, 9, 12, 0, tzinfo=UTC)
 
 
 def _turn(text, minutes, role="user"):

@@ -34,12 +34,14 @@ import yaml
 # names from this module.
 from multiplai_core.specs import (
     archive_change as _archive_change,
-    archived_change_dirs,
+)
+from multiplai_core.specs import (
+    archived_change_dirs,  # noqa: F401
     expected_capabilities,
     merge_delta_requirements,
     normalize_change_name,
     valid_requirement,
-    valid_requirement_text,
+    valid_requirement_text,  # noqa: F401
 )
 
 from .models import ArtifactInfo, ArtifactStatus, ChangeStatus

@@ -10,9 +10,19 @@ import sys
 from pathlib import Path
 
 import pytest
-
-from conftest import (FIXED, Killed, commit_file, everything, fake_state, git, make_repo, read_state, run,
-                      source_head, write)
+from conftest import (
+    FIXED,
+    Killed,
+    commit_file,
+    everything,
+    fake_state,
+    git,
+    make_repo,
+    read_state,
+    run,
+    source_head,
+    write,
+)
 from spec_extract_pipeline import target as target_mod
 
 # These tests are about resolve, scope and explore: the run ends after explore, as it did

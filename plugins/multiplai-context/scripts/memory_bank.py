@@ -24,20 +24,19 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-
-from multiplai_core.config import load_yaml, save_yaml
-from multiplai_core.log_utils import log_event, setup_logging
-from multiplai_core.paths import get_paths
 
 from lib import bank_adopt, bank_proposals
 from lib.bank_collisions import find_collisions, render_report
 from lib.bank_git import head_sha, is_git_repo, pull_ff_only
 from lib.bank_policy import load_policy
 from lib.banks import configured_banks, shared_banks, sync_ttl_hours
+from multiplai_core.config import load_yaml, save_yaml
+from multiplai_core.log_utils import log_event, setup_logging
+from multiplai_core.paths import get_paths
 
 logger = setup_logging("memory_bank", packages=("lib", "generators"))
 
@@ -45,7 +44,7 @@ _STATE_FILE = "bank_sync_state.yaml"
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _state_path() -> Path:
@@ -77,7 +76,7 @@ def _due(state: dict, name: str, ttl_hours: float) -> bool:
     except ValueError:
         return True
     if last.tzinfo is None:
-        last = last.replace(tzinfo=timezone.utc)
+        last = last.replace(tzinfo=UTC)
     return _now() - last >= timedelta(hours=ttl_hours)
 
 
@@ -222,7 +221,7 @@ def cmd_contribute(args) -> int:
         body = bank_proposals.render_contribution_file(plan)
         if not args.dry_run_only:
             out_dir.mkdir(parents=True, exist_ok=True)
-            stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            stamp = datetime.now(UTC).strftime("%Y-%m-%d")
             (out_dir / f"{stamp}-{plan.bank.name}-contribution.md").write_text(
                 body, encoding="utf-8"
             )
@@ -283,7 +282,7 @@ def cmd_adopt(args) -> int:
     if args.apply:
         receipts = get_paths().dreams_dir() / "applied"
         receipts.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        stamp = datetime.now(UTC).strftime("%Y-%m-%d")
         path = receipts / f"{stamp}-bank-adopt-{bank.name}-receipt.md"
         n = 2
         while path.exists():

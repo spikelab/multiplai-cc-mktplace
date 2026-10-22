@@ -13,7 +13,6 @@ Tuesday.
 """
 
 import pytest
-
 from lib.dream_triage import (
     ADDITIVE_CHANGES,
     DEFAULT_WRITE_MODE,

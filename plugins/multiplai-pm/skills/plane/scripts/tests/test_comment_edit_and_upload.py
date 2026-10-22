@@ -19,9 +19,8 @@ import io
 import urllib.error
 from contextlib import redirect_stdout
 
-import pytest
-
 import plane
+import pytest
 from conftest import ALLOWED, CFG, OK, Args
 
 ISSUE = "792a89b1-37db-47e1-a947-6fb1b79198d6"
@@ -185,7 +184,7 @@ class _Opener:
     def __init__(self, log, fail=True):
         self.log, self.fail = log, fail
 
-    def open(self, req, timeout=None):  # noqa: ARG002
+    def open(self, req, timeout=None):
         self.log.append(req)
         if self.fail:
             raise urllib.error.URLError("stopped before the socket")

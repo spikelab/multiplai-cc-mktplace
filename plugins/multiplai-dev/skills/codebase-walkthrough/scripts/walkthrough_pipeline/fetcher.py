@@ -75,7 +75,7 @@ async def fetch_url(url: str, client: httpx.AsyncClient, *, allowed_host: str | 
             resp = await asyncio.wait_for(_get_validated(client, url, allowed_host), timeout=request_timeout)
         except UnsafeURLError as e:
             return Fetched(url=url, error=f"blocked: {e}")
-        except (asyncio.TimeoutError, httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadError) as e:
+        except (TimeoutError, httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadError) as e:
             last = Fetched(url=url, error=f"{type(e).__name__}")
             if attempt < max_retries:
                 await asyncio.sleep(RETRY_DELAYS[min(attempt, len(RETRY_DELAYS) - 1)])

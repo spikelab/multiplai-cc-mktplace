@@ -22,7 +22,7 @@ _SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "video-edit" / "s
 sys.path.insert(0, str(_SCRIPTS))
 
 pytest.importorskip("playwright.sync_api")
-from stages import overlay  # noqa: E402
+from stages import overlay
 
 pytestmark = pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg is not on PATH")
 

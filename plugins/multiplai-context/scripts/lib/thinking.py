@@ -58,7 +58,8 @@ from __future__ import annotations
 
 import inspect
 import logging
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from multiplai_core.plugin_options import option_bool
 

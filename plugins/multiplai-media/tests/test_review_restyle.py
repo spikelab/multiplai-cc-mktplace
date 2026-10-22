@@ -14,8 +14,8 @@ _SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "video-edit" / "s
 sys.path.insert(0, str(_SCRIPTS))
 sys.path.insert(0, str(Path(__file__).resolve().parent / "fixtures"))
 
-import make_job  # noqa: E402
-from stages import review_server as rs  # noqa: E402
+import make_job
+from stages import review_server as rs
 
 KNOWN = {("clip-01", 1)}
 

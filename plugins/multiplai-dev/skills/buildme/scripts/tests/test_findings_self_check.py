@@ -16,14 +16,22 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
 from build_pipeline import git_ops, stop_record
 from build_pipeline.__main__ import build_parser
 from build_pipeline.findings import cli, code, decisions, loop, publish
 from build_pipeline.findings.models import PRComment, Triage, TriageRecord, Verdict
-from build_pipeline.models import AgentResult, BlockInfo, BlockStatus, ReviewResult, ReviewScore
-from build_pipeline.models import TestQualityAudit as QualityAudit  # Test* name breaks collection
+from build_pipeline.models import (
+    AgentResult,
+    BlockInfo,
+    BlockStatus,
+    ReviewResult,
+    ReviewScore,
+)
+from build_pipeline.models import (
+    TestQualityAudit as QualityAudit,  # Test* name breaks collection
+)
 from build_pipeline.state import BuildState, FindingsRound, TDDState
+
 from tests.test_findings_round import (  # noqa: F401  (fixtures)
     FIX,
     PR,
@@ -378,7 +386,7 @@ class TestSelfCheck:
         assert PROBLEM in report.read_text()
         assert "## 2. " in tasks.read_text() and PROBLEM in tasks.read_text()
         # Both records in one commit, made before block 2's commits.
-        rel = lambda p: p.relative_to(repo).as_posix()  # noqa: E731
+        rel = lambda p: p.relative_to(repo).as_posix()
         sha = _git(repo, "log", "--format=%H", "-1", "--", rel(report)).strip()
         assert sorted(_git(repo, "show", "--name-only", "--format=", sha).split()) == \
             sorted([rel(report), rel(tasks)])

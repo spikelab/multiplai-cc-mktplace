@@ -12,9 +12,16 @@ from datetime import date
 from pathlib import Path
 
 import pytest
-
-from scripts.lib.memory_lint import (AS_OF_RE, Finding, _parse_stamp, classify,
-                                     lint_dir, lint_text, main, summarize)
+from scripts.lib.memory_lint import (
+    AS_OF_RE,
+    Finding,
+    _parse_stamp,
+    classify,
+    lint_dir,
+    lint_text,
+    main,
+    summarize,
+)
 
 TODAY = date(2026, 7, 26)
 

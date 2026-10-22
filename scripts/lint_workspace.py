@@ -48,7 +48,7 @@ ROOT_PYPROJECT = REPO_ROOT / "pyproject.toml"
 # key, and a closing `# ///`. Deliberately stricter than a substring search.
 _PEP723_BLOCK = re.compile(
     r"^# /// script\s*$\n(?:#.*\n)*?^#\s*dependencies\s*=(?:#.*\n|.*\n)*?^# ///\s*$",
-    re.M,
+    re.MULTILINE,
 )
 
 

@@ -3,10 +3,9 @@
 from pathlib import Path
 
 import pytest
-
 from build_pipeline.change_manager import (
-    ChangeManager,
     ARTIFACT_DAG,
+    ChangeManager,
     extract_global_constraints,
 )
 from build_pipeline.models import ArtifactStatus

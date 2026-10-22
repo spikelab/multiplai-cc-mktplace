@@ -41,8 +41,8 @@ from typing import Protocol, runtime_checkable
 
 from multiplai_core.plugin_options import option, option_var
 
-from lib.router_prompt import SYSTEM_PROMPT, FEW_SHOT_EXAMPLES, build_user_message
 from lib.job_effort import ROUTER_EFFORT_OPTION, effort_kwargs
+from lib.router_prompt import FEW_SHOT_EXAMPLES, SYSTEM_PROMPT, build_user_message
 from lib.thinking import (
     core_supports_thinking,
     resolve_thinking_option,
@@ -805,7 +805,7 @@ class LLMRouter:
         *,
         timeout_seconds: float | None = None,
         model: str | None = None,
-        fallback: "TokenOverlapRouter | None" = None,
+        fallback: TokenOverlapRouter | None = None,
         thinking: dict | None = None,
         thinking_set: bool = False,
     ) -> None:
@@ -955,7 +955,7 @@ class LLMRouter:
                 ),
                 self._timeout_seconds,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise RouterCallFailed(
                 f"timed out after {self._timeout_seconds:.1f}s"
             ) from None
@@ -1029,8 +1029,8 @@ class HybridRouter:
     def __init__(
         self,
         *,
-        llm: "LLMRouter | None" = None,
-        gate: "TokenOverlapRouter | None" = None,
+        llm: LLMRouter | None = None,
+        gate: TokenOverlapRouter | None = None,
     ) -> None:
         self._gate = gate if gate is not None else TokenOverlapRouter()
         # The LLM router's own degrade path lands on the same gate instance, so a

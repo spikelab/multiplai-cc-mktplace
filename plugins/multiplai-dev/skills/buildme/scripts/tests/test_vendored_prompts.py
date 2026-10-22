@@ -10,12 +10,11 @@ import json
 import subprocess
 
 import pytest
-
 from check_vendored_prompts import (
     FetchError,
-    build_parser,
     ManifestError,
     VendoredSource,
+    build_parser,
     check_sources,
     exit_code_for,
     fetch_blob_sha,

@@ -28,7 +28,7 @@ import os
 import re
 import tempfile
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 _GROUP_RE = re.compile(r"^## Updates for `(?P<file>[^`]+)`(?:\s.*)?$")
@@ -62,7 +62,7 @@ _PROCESSED_NOTE = (
 
 
 def _now_iso() -> str:
-    return datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _find_block(lines: list[str], ref: tuple):
@@ -242,7 +242,7 @@ class Decision:
         return f"action A{self.index}"
 
     @classmethod
-    def from_dict(cls, raw: object) -> "Decision":
+    def from_dict(cls, raw: object) -> Decision:
         """Build from one JSON object, raising ``ValueError`` on anything the
         writer would otherwise silently skip."""
         if not isinstance(raw, dict):

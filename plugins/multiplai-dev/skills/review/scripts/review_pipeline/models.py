@@ -41,7 +41,7 @@ def finding_id(file: str, line_start: int, claim: str) -> str:
     Reimplemented rather than imported from the viewer skill; `test_models.py`
     pins both to the same value for a fixed input.
     """
-    return hashlib.sha1(f"{file}\0{line_start}\0{claim}".encode("utf-8")).hexdigest()[:10]
+    return hashlib.sha1(f"{file}\0{line_start}\0{claim}".encode()).hexdigest()[:10]
 
 
 def lower_severity(severity: str) -> str:
@@ -93,7 +93,7 @@ class Citation(_Model):
         return self.path.startswith(DEPS_DIR + "/")
 
     @model_validator(mode="after")
-    def _ordered(self) -> "Citation":
+    def _ordered(self) -> Citation:
         if self.line_end < self.line_start:
             raise ValueError(f"line_end {self.line_end} is before line_start {self.line_start}")
         return self
@@ -135,11 +135,11 @@ class Finding(_Model):
         return locations_list(value)
 
     @model_validator(mode="after")
-    def _compute_id(self) -> "Finding":
+    def _compute_id(self) -> Finding:
         self.id = finding_id(self.file, self.line_start, self.claim)
         return self
 
-    def with_location(self, **changes) -> "Finding":
+    def with_location(self, **changes) -> Finding:
         """A copy with changed fields and the id recomputed from them."""
         return Finding.model_validate({**self.model_dump(), **changes})
 
@@ -269,7 +269,7 @@ class VerifierAnswer(Verdict):
     """
 
     @model_validator(mode="after")
-    def _impact_required(self) -> "VerifierAnswer":
+    def _impact_required(self) -> VerifierAnswer:
         if self.status != "refuted" and not self.impact:
             raise ValueError(f"impact is required unless status is refuted: one of {', '.join(IMPACTS)}")
         if self.status != "refuted" and not self.topic:
@@ -548,7 +548,7 @@ class ReviewState(BaseModel):
     # agent's answer, stored as it arrives (empty when the call failed), so a
     # resume does not ask twice.
     assessments: dict[str, Assessment] = Field(default_factory=dict)
-    assess_answer: "AssessOutput | None" = None
+    assess_answer: AssessOutput | None = None
     # The recheck stage's status per open earlier finding, by earlier id, stored as
     # each answer arrives (the first one per id stands), so a resume asks only for
     # the rest. `earlier_status` is the final list the assess stage's reconcile

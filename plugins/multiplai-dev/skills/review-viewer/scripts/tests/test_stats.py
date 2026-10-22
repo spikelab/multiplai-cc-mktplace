@@ -4,7 +4,6 @@ import re
 import subprocess
 
 import pytest
-
 from review_viewer import stats
 from review_viewer.gitdata import summarize_checks
 from review_viewer.models import Target, load_findings

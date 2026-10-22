@@ -31,8 +31,8 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Optional, Sequence
 
 from multiplai_core.untrusted import fence
 
@@ -402,7 +402,7 @@ async def judge_one_detailed(
     *,
     model: str,
     timeout_s: float = JUDGE_TIMEOUT_S,
-) -> tuple[Optional[list[dict]], str]:
+) -> tuple[list[dict] | None, str]:
     """``(verdicts, reason)`` for one session. ``reason`` is ``""`` on success.
 
     Split from :func:`judge_one` so the caller can tell a **model outage** from
@@ -451,7 +451,7 @@ async def judge_one(
     *,
     model: str,
     timeout_s: float = JUDGE_TIMEOUT_S,
-) -> Optional[list[dict]]:
+) -> list[dict] | None:
     """Verdicts for one session, or ``None`` when the call could not be trusted.
 
     ``None`` covers every failure mode — no transcript, model error, timeout,

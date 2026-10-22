@@ -13,7 +13,7 @@ _SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "video-edit" / "s
 PIPELINE = _SCRIPTS / "pipeline.py"
 sys.path.insert(0, str(_SCRIPTS))
 
-from stages import music  # noqa: E402
+from stages import music
 
 
 def _fake_ffmpeg(bin_dir: Path, log: Path) -> None:

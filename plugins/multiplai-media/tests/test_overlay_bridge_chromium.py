@@ -21,7 +21,7 @@ _SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "video-edit" / "s
 sys.path.insert(0, str(_SCRIPTS))
 
 sync_api = pytest.importorskip("playwright.sync_api")
-from stages import review_server as rs  # noqa: E402
+from stages import review_server as rs
 
 PAGE = """<!doctype html><html><head><meta charset="utf-8"><style>
 html,body{margin:0;width:400px;height:200px;overflow:hidden;background:#00FF00;font-family:sans-serif}

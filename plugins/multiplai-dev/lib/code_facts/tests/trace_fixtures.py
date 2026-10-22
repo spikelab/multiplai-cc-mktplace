@@ -9,10 +9,10 @@ from __future__ import annotations
 import asyncio
 import importlib
 import json
-import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from conftest import _git, line_of, make_tree
 

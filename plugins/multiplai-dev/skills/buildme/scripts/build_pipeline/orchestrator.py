@@ -14,14 +14,14 @@ This module handles the non-interactive pipeline sequencing.
 
 from __future__ import annotations
 
-from build_pipeline.budget import BudgetExceededError
-
 import asyncio
 import logging
 import os
 import sys
 from collections.abc import Callable
 from pathlib import Path
+
+from build_pipeline.budget import BudgetExceededError
 
 from . import board, git_ops, readiness, review_rounds, walkthroughs
 from . import budget as budget_mod
@@ -241,7 +241,7 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
 
         # Reconcile edited plans before required validation. Completed
         # implementation is kept only while its recorded planning inputs agree.
-        from .spec_generator import reconcile_plan, _generate_all_artifacts
+        from .spec_generator import _generate_all_artifacts, reconcile_plan
         if state.phase != BuildPhase.PUBLISH:
             old_revision = state.spec_gen.revision if state.spec_gen else ""
             reconcile_plan(config, state)

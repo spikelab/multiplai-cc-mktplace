@@ -35,7 +35,7 @@ import json
 import logging
 import os
 import socket
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from lib.fsio import atomic_write_json
@@ -72,7 +72,7 @@ def registry_dir(data_dir: Path) -> Path:
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _hostname() -> str:
@@ -385,7 +385,7 @@ def _entry_is_stale(
         last = entry.get("last_event") or {}
         ts = datetime.fromisoformat(str(last.get("ts") or ""))
         if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=timezone.utc)
+            ts = ts.replace(tzinfo=UTC)
         # Observation beats both clocks. *dead_sids* are entries whose container
         # the host looked for and did not find (`lib.fleet.roster_dead_sids`);
         # the two windows below exist only because nothing used to be able to
@@ -408,7 +408,7 @@ def _entry_is_stale(
     except FileNotFoundError:
         return False
     except (json.JSONDecodeError, ValueError, TypeError, AttributeError):
-        mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+        mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
         return mtime < cutoff_ended
 
 
@@ -472,7 +472,7 @@ def _sweep_orphans(rdir: Path, cutoff: datetime) -> int:
             is_tmp = orphan.name.startswith(".tmp-")
             if not is_tmp and orphan.with_suffix(".json").exists():
                 continue
-            mtime = datetime.fromtimestamp(orphan.stat().st_mtime, tz=timezone.utc)
+            mtime = datetime.fromtimestamp(orphan.stat().st_mtime, tz=UTC)
             if mtime >= cutoff:
                 continue
             if orphan.suffix == ".lock":
@@ -546,7 +546,7 @@ def gc_stale(
         rdir = registry_dir(data_dir)
         if not rdir.is_dir():
             return 0
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         cutoff_ended = now - timedelta(days=days)
         cutoff_live = now - timedelta(days=live_days)
         protected = _pending_extraction_sids(data_dir)

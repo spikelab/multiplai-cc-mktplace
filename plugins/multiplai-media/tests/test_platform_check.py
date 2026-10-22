@@ -7,8 +7,8 @@ from pathlib import Path
 _SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "video-edit" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 
-from stages import platform as pf  # noqa: E402
-from stages.edl import EDL, Captions, Headline, Output, Segment  # noqa: E402
+from stages import platform as pf
+from stages.edl import EDL, Captions, Headline, Output, Segment
 
 
 def info(w=1080, h=1920, vcodec="h264", fps="30/1", acodec="aac", rate="48000",

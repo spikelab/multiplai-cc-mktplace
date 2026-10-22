@@ -15,10 +15,10 @@ import logging
 import time
 from typing import Protocol
 
+from . import sdk
 from .models import FetchError, FetchErrorType, FetchResult
 from .netguard import UnsafeURLError, _assert_safe_url
 from .untrusted import is_fetchable_url
-from . import sdk
 
 log = logging.getLogger(__name__)
 
@@ -334,8 +334,9 @@ class HttpxFetcher:
         query: str = "",
         sub_questions: list[str] | None = None,
     ) -> FetchResult:
-        from . import fetcher
         import httpx
+
+        from . import fetcher
 
         async with httpx.AsyncClient(
             headers={"User-Agent": fetcher.USER_AGENT},

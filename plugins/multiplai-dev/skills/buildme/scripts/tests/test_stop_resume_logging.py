@@ -20,9 +20,9 @@ import time
 from pathlib import Path
 
 import pytest
-
 from build_pipeline.models import BlockStatus, BuildPhase
 from build_pipeline.state import BuildState
+
 from tests.spec_fixtures import ready_specs
 from tests.stop_resume_driver import AUDIT_USD, BLOCK_USD, BLOCKS, SPEC_USD
 from tests.test_git_ops import make_bare_origin, make_repo

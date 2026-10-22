@@ -6,7 +6,6 @@ import subprocess
 from sys import executable as PYTHON
 
 import pytest
-
 from review_viewer.__main__ import _load_targets, build_parser, find_review
 from review_viewer.gitdata import EMPTY_TREE
 

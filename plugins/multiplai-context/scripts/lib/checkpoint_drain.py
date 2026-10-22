@@ -19,7 +19,7 @@ never producing a file costs a rebuild; an exception escaping into
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from lib import checkpoint as cp
@@ -58,7 +58,7 @@ def queue_pending_checkpoint(data_dir: Path, payload: dict) -> Path | None:
     pdir = pending_dir(data_dir)
     marker = pdir / f"{session_id}.json"
     record = dict(payload)
-    record["queued_at"] = datetime.now(timezone.utc).isoformat()
+    record["queued_at"] = datetime.now(UTC).isoformat()
     try:
         pdir.mkdir(parents=True, exist_ok=True)
         atomic_write_json(marker, record)

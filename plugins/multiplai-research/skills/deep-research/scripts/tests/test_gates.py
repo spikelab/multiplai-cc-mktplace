@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from research_pipeline.gates import (
     cluster_queries,
     coverage_gate,

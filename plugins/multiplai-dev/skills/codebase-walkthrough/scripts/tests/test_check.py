@@ -5,8 +5,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from fakes import FakeAgents
 import fixture_repo
+from fakes import FakeAgents
 from walkthrough_pipeline import sdk
 from walkthrough_pipeline.__main__ import main
 

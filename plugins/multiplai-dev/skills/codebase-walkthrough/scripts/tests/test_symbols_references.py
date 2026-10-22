@@ -5,8 +5,8 @@ from __future__ import annotations
 import shutil
 
 import pytest
-
-from walkthrough_pipeline import lsp, references, repos as repos_mod, symbols, target
+from walkthrough_pipeline import lsp, references, symbols, target
+from walkthrough_pipeline import repos as repos_mod
 from walkthrough_pipeline.partition import partition
 
 

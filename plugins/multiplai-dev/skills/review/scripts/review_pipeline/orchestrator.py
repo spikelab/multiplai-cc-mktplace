@@ -15,29 +15,43 @@ import shutil
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import yaml
-
 from multiplai_core.log_utils import log_event
 
-from . import budget, deps, ledger as review_ledger, rounds, runlock, sdk, target as target_mod, timings
+from . import budget, deps, rounds, runlock, sdk, timings
+from . import ledger as review_ledger
+from . import target as target_mod
 from .chunks import split_pieces
 from .config import ReviewConfig, run_config
 from .costs import cost_lines, kept_line
-from .export import producer, run_record, to_findings_file, write_checks_file, write_findings_file
+from .export import (
+    producer,
+    run_record,
+    to_findings_file,
+    write_checks_file,
+    write_findings_file,
+)
 from .facts import FACTS_FILE
 from .gates import gated_need, reason_kind
 from .models import MODES, SEVERITIES, ReviewState
 from .progress import ProgressWriter
-from .render import count_line, listed, summary_path, write_review, write_rollups, write_runs
+from .render import (
+    count_line,
+    listed,
+    summary_path,
+    write_review,
+    write_rollups,
+    write_runs,
+)
 from .stages import RunContext
 from .stages.assess import reconcile_earlier, run_assess
 from .stages.explain import run_explain
-from .stages.paths import PATH_CAP, run_paths
 from .stages.find import file_chars, file_groups, finder_dimensions, run_find
 from .stages.merge import run_merge
+from .stages.paths import PATH_CAP, run_paths
 from .stages.recheck import run_recheck
 from .stages.repeats import run_repeats
 from .stages.verify import VerifyIncomplete, run_verify
@@ -174,7 +188,7 @@ def _finish(state: ReviewState, target_dir: Path, *, session_id: str, number: st
     t = state.target
     try:
         run = run_record(state)
-    except Exception:  # noqa: BLE001 — the ledger line must not hide the run's own error
+    except Exception:  # the ledger line must not hide the run's own error
         log.warning("cannot build the run record for the ledger", exc_info=True)
         run = None
     review_ledger.finished(producer=producer(), session_id=session_id, slug=t.slug, target_dir=target_dir,
@@ -581,7 +595,7 @@ def _set_aside_progress(target_dir: Path) -> None:
         log.unlink(missing_ok=True)
         return
     try:
-        stamp = datetime.fromtimestamp(log.stat().st_mtime, timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        stamp = datetime.fromtimestamp(log.stat().st_mtime, UTC).strftime("%Y%m%dT%H%M%SZ")
         os.link(log, target_dir / f"progress-{stamp}.log")
         log.unlink()
     except OSError:

@@ -23,10 +23,10 @@ the build still completes.
 
 from __future__ import annotations
 
-from build_pipeline.budget import BudgetExceededError
-
 import logging
 from pathlib import Path
+
+from build_pipeline.budget import BudgetExceededError
 
 from ..models import ImplementationNote
 from ..prompts.respec import RESPEC_PROMPT

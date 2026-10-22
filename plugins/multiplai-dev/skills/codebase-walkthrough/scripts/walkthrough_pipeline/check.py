@@ -28,7 +28,7 @@ from .gates import citation_gate, lines_at_commit
 from .models import Citation, RepoInfo
 from .target import head_sha
 
-ROW = re.compile(r"^\|\s*([^|\s]+)\s*\|\s*([^|]+?)\s*\|\s*`([0-9a-f]{40})`\s*\|\s*$", re.M)
+ROW = re.compile(r"^\|\s*([^|\s]+)\s*\|\s*([^|]+?)\s*\|\s*`([0-9a-f]{40})`\s*\|\s*$", re.MULTILINE)
 LINK = re.compile(r'\[`([^`\n]+?):(\d+)(?:-(\d+))?`\]\(([^)\s]*)\s+"((?:[^"\\]|\\.)*)"\)')
 # Anything that starts like a link. One that LINK cannot parse is reported as a failure, never skipped.
 LINK_START = re.compile(r"\[`[^`\n]+?:\d+(?:-\d+)?`\]\(")
@@ -36,7 +36,7 @@ HOP_ANCHOR = re.compile(r'<a id="(p\d+h\d+)"></a>')
 HOP_REF = re.compile(r"\[(p\d+h\d+)\]\(#(p\d+h\d+)\)")
 # A hop cited as a link, or named in backticks as the Paths section and a writer's prose name one.
 HOP_CITED = re.compile(HOP_REF.pattern + r"|`(p\d+h\d+)`")
-SNIPPET = re.compile(r"<!-- snippet (\S+?):(\d+)-(\d+) -->\n.*?\n\n(`{3,})[^\n]*\n(.*?)\n\4", re.S)
+SNIPPET = re.compile(r"<!-- snippet (\S+?):(\d+)-(\d+) -->\n.*?\n\n(`{3,})[^\n]*\n(.*?)\n\4", re.DOTALL)
 
 
 def unresolved_hop_citations(markdown: str) -> list[str]:

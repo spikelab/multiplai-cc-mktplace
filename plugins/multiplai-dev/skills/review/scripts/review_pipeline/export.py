@@ -53,14 +53,24 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from . import timings
 from .budget import TOKEN_FIELDS, empty_stage
 from .config import DIMENSIONS
-from .models import (SEVERITIES, STAGES, AgentCheck, Assessment, Citation, EarlierStatus, Finding, Need,
-                     ReviewState, section_of)
+from .models import (
+    SEVERITIES,
+    STAGES,
+    AgentCheck,
+    Assessment,
+    Citation,
+    EarlierStatus,
+    Finding,
+    Need,
+    ReviewState,
+    section_of,
+)
 
 log = logging.getLogger(__name__)
 
@@ -242,7 +252,7 @@ def _target(state: ReviewState) -> dict:
 
 
 def _timestamp(generated_at: datetime | None) -> str:
-    when = (generated_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    when = (generated_at or datetime.now(UTC)).astimezone(UTC)
     return when.isoformat(timespec="seconds").replace("+00:00", "Z")
 
 

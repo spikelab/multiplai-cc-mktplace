@@ -12,17 +12,15 @@ import asyncio
 import json
 import sys
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from multiplai_core.paths import get_paths
-from multiplai_core.model_client import create_client
-from multiplai_core.log_utils import setup_logging, log_event
 from lib import utilisation
 from lib.extraction import (
     DEFAULT_DISPOSITION,
+    append_learnings,
     clear_diary_bookmark,
     extract_session_signals,
     load_diary_bookmark,
@@ -30,10 +28,12 @@ from lib.extraction import (
     save_diary_bookmark,
     slice_key,
     write_diary_entries,
-    append_learnings,
 )
 from lib.session_registry import record_disposition
 from lib.transcript_distiller import distill_slice
+from multiplai_core.log_utils import log_event, setup_logging
+from multiplai_core.model_client import create_client
+from multiplai_core.paths import get_paths
 
 logger = setup_logging("extract_learnings", packages=("lib", "generators"))
 
@@ -485,7 +485,7 @@ async def extract() -> bool:
         _drop_marker(marker_path)
         return True
 
-    timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    timestamp = datetime.now(UTC).isoformat(timespec="seconds")
 
     if units:
         diary_path = write_diary_entries(

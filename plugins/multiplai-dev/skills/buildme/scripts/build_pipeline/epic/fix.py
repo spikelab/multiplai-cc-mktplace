@@ -62,8 +62,8 @@ import re
 import signal
 from pathlib import Path
 
-from ..findings.cli import ResolveError, change_dir_for, change_name_for
 from ..findings import decisions
+from ..findings.cli import ResolveError, change_dir_for, change_name_for
 from ..findings.decisions import DECISIONS_FILE
 from ..findings.loop import STATE_FILE
 from . import review

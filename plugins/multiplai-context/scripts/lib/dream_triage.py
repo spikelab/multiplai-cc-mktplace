@@ -66,8 +66,8 @@ agreed to. Every ambiguity below resolves toward the human.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from typing import Mapping, Optional
 
 from multiplai_core.plugin_options import option
 
@@ -84,18 +84,18 @@ from lib.routing_validation import parse_proposal_entries
 __all__ = [
     "ADDITIVE_CHANGES",
     "DEFAULT_WRITE_MODE",
-    "Item",
     "REASON_LABELS",
     "REJECTION_DETAIL_LIMIT",
-    "Triage",
     "WRITE_MODES",
+    "Item",
+    "Triage",
     "apply_verdicts",
     "auto_slice",
     "classify",
+    "duplicate_labels",
     "flagged_by_routing",
     "floor_check",
     "has_routing_section",
-    "duplicate_labels",
     "is_reserved_target",
     "is_safe_target",
     "reconciled_pair",
@@ -190,7 +190,7 @@ UNLABELLED_PROVENANCE = "INFERENCE"
 UNLABELLED_KIND = taxonomy.UNCLEAR_KIND
 
 
-def rubric_verdict(provenance: Optional[str], kind: Optional[str]) -> str:
+def rubric_verdict(provenance: str | None, kind: str | None) -> str:
     """``"apply"`` or ``"review"`` for a ``(provenance, kind)`` pair.
 
     Nine cells, no model. ``apply`` here is **permission**, not a decision: the
@@ -207,7 +207,7 @@ def rubric_verdict(provenance: Optional[str], kind: Optional[str]) -> str:
     return "review"  # INFERENCE, or anything unrecognised
 
 
-def rubric_reason(provenance: Optional[str], kind: Optional[str]) -> str:
+def rubric_reason(provenance: str | None, kind: str | None) -> str:
     """The reason code explaining a ``review`` from :func:`rubric_verdict`."""
     k = (kind or UNLABELLED_KIND).upper()
     p = (provenance or UNLABELLED_PROVENANCE).upper()

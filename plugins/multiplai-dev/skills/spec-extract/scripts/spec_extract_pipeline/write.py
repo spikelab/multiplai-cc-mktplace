@@ -11,7 +11,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from code_facts import UNTRUSTED_RULES, CallFn, Citation, Fact, Gated, citation_rules, schema_json
+from code_facts import (
+    UNTRUSTED_RULES,
+    CallFn,
+    Citation,
+    Fact,
+    Gated,
+    citation_rules,
+    schema_json,
+)
 from multiplai_core.budget import SpendLedger
 from pydantic import BaseModel, ConfigDict
 

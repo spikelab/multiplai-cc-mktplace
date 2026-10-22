@@ -31,13 +31,18 @@ import contextvars
 import json
 import logging
 import os
+from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Iterator, TypeVar
+from typing import TypeVar
 
-from pydantic import BaseModel, ValidationError
-
-from multiplai_core.agent_runner import AgentRunError, AgentRunTimeout, is_usage_limit, run_agent
+from multiplai_core.agent_runner import (
+    AgentRunError,
+    AgentRunTimeout,
+    is_usage_limit,
+    run_agent,
+)
 from multiplai_core.structured import parse_answer, reformat_prompt
+from pydantic import BaseModel, ValidationError
 
 from . import budget
 

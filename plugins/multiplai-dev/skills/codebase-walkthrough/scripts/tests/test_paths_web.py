@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import logging
 
-import pytest
-
 import path_fixtures
+import pytest
 from code_facts import Location, Seed
 from fakes import FakeAgents
 from test_paths_stage import _paths_body

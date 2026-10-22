@@ -36,10 +36,30 @@ from ..chunks import piece_diff_text
 from ..config import TRIM_DIMENSION, ReviewConfig
 from ..gates import file_at_head, finding_gate, gated_locations, gated_need, reason_kind
 from ..linked_docs import LinkSource, linked_docs, not_included_line
-from ..models import (AgentCheck, ConvertedItem, ConvertOutput, CoverageRecord, Finding, FinderOutput,
-                      FinderReport, FinderResult, GateCheck, Need, Rejected, ReviewState, TargetInfo)
+from ..models import (
+    AgentCheck,
+    ConvertedItem,
+    ConvertOutput,
+    CoverageRecord,
+    FinderOutput,
+    FinderReport,
+    FinderResult,
+    Finding,
+    GateCheck,
+    Need,
+    Rejected,
+    ReviewState,
+    TargetInfo,
+)
 from ..paths_io import load_paths, views
-from ..prompts import DIFF_PROMPT_CHARS, commits_block, deps_block, description_block, settings_block, workspace_block
+from ..prompts import (
+    DIFF_PROMPT_CHARS,
+    commits_block,
+    deps_block,
+    description_block,
+    settings_block,
+    workspace_block,
+)
 from ..prompts import find as prompt
 from ..prompts.convert import build_convert
 from ..prompts.path import build_path
@@ -341,7 +361,7 @@ async def run_reported(key: str, prompt_text: str, state: ReviewState, ctx: RunC
                                                  call_timeout=sdk.DEFAULT_CALL_TIMEOUT_S, **common)
             except (sdk.RepoTrustError, sdk.UsageLimitError, budget.BudgetExceededError):
                 raise
-            except Exception as e:  # noqa: BLE001 — one failed finder must not stop the others
+            except Exception as e:  # one failed finder must not stop the others
                 log.error("finder %s failed for %s", key, target.slug, exc_info=True)
                 error = _first_line(e)
             finally:
@@ -383,7 +403,7 @@ async def run_reported(key: str, prompt_text: str, state: ReviewState, ctx: RunC
                                                   cwd=str(ctx.snapshot), budget_label=label, **common)
         except (sdk.RepoTrustError, sdk.UsageLimitError, budget.BudgetExceededError):
             raise
-        except Exception as e:  # noqa: BLE001 — the report is kept and the convert left for resume
+        except Exception as e:  # the report is kept and the convert left for resume
             log.error("convert %s failed for %s", key, target.slug, exc_info=True)
             error = _first_line(e)
         finally:

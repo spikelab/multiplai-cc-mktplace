@@ -11,7 +11,7 @@ A leaf module keeps the single definition the collectors and the fast path
 share, without the fast path paying for the collectors.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 def parse_ts(raw) -> datetime | None:
@@ -26,4 +26,4 @@ def parse_ts(raw) -> datetime | None:
         ts = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
     except (TypeError, ValueError):
         return None
-    return ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts
+    return ts.replace(tzinfo=UTC) if ts.tzinfo is None else ts

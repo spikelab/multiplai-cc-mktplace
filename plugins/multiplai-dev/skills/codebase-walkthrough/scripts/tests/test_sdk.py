@@ -5,10 +5,9 @@ import sys
 from types import ModuleType, SimpleNamespace
 
 import pytest
-from pydantic import BaseModel
-
 from multiplai_core import deny_list
 from multiplai_core.agent_runner import AgentRunError
+from pydantic import BaseModel
 from walkthrough_pipeline import budget, sdk
 from walkthrough_pipeline.config import STAGE_MODELS, load_config
 

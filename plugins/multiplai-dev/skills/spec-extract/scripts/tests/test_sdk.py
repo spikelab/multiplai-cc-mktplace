@@ -7,12 +7,11 @@ import sys
 from types import ModuleType, SimpleNamespace
 
 import pytest
+from conftest import make_repo, make_units_repo, read_state, run
 from multiplai_core import budget as core_budget
 from multiplai_core.agent_runner import AgentRunError, UnknownAgentBackendError
 from multiplai_core.budget import BudgetExceededError
 from pydantic import BaseModel
-
-from conftest import make_repo, make_units_repo, read_state, run
 from spec_extract_pipeline import sdk
 
 # These tests are about resolve, scope and explore: the run ends after explore, as it did
@@ -170,7 +169,7 @@ def test_model_key_from_multiplai_conf(monkeypatch):
     assert _REAL_MODEL_FOR("explore") == "pi:some/model"
     monkeypatch.setattr(sdk, "load_multiplai_conf", lambda: {"spec_extract_explore_model": "anthropic:claude-sonnet-5"})
     assert _REAL_MODEL_FOR("explore") == "claude-sonnet-5"  # an Anthropic model goes bare
-    monkeypatch.setattr(sdk, "load_multiplai_conf", lambda: {})
+    monkeypatch.setattr(sdk, "load_multiplai_conf", dict)
     assert _REAL_MODEL_FOR("explore") is None
 
 
