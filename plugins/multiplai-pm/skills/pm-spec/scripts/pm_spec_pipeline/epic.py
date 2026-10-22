@@ -15,11 +15,13 @@ unchanged, makes no call: it creates the child change dirs that are missing
 and prints the same markers. Changed inputs split again.
 
 Each child is `specs/changes/<parent>-<id>/` with its own `.change.yaml`
-(`parent`, and `ticket_refs` when it delivers a ticket child item), its plan as
-`plan.md` (its own interview input), a copy of the parent's `prd.md`, and a run
-state that carries the parent's options. A child dir counts as created once
-its run state exists. Each child is then specified by its own run:
-`resume <parent>-<id>`.
+(`parent`; `depends_on`, the change names of the children it depends on, in
+the answer's order, `[]` for none; and `ticket_refs` when it delivers a ticket
+child item), its plan as `plan.md` (its own interview input), a copy of the
+parent's `prd.md`, and a run state that carries the parent's options. A child
+dir counts as created once its run state exists. A child created by an earlier
+run keeps its files, but its `depends_on` is rewritten when a new answer
+changed it. Each child is then specified by its own run: `resume <parent>-<id>`.
 """
 
 from __future__ import annotations
@@ -29,7 +31,7 @@ import json
 import logging
 import re
 
-from multiplai_core.specs import write_change_meta
+from multiplai_core.specs import read_change_meta, write_change_meta
 from pydantic import BaseModel, Field
 
 from . import intake, sdk
@@ -166,7 +168,9 @@ def child_name(run: Run, child: EpicChild) -> str:
 
 
 def create_children(run: Run, split: SplitRecord) -> list[str]:
-    """Create each child change dir that has no run state yet; return every child's name in order."""
+    """Create each child change dir that has no run state yet, keep every
+    child's `depends_on` as the split answered it, and return every child's
+    name in order."""
     order = waves(split.children)
     by_id = {c.id: c for c in split.children}
     parent_prd = run.config.change_dir / "prd.md"
@@ -177,11 +181,18 @@ def create_children(run: Run, split: SplitRecord) -> list[str]:
         names.append(name)
         child_dir = run.config.change_dir_for(name)
         run_dir = child_dir / ".pm-spec"
+        depends_on = [child_name(run, by_id[d]) for d in child.depends_on]
         if (run_dir / state_mod.STATE_FILE).is_file():
+            # Created by an earlier run: a split answered again with other
+            # dependencies updates the record, and an unchanged one writes nothing.
+            if read_change_meta(child_dir).get("depends_on") != depends_on:
+                write_change_meta(child_dir, {"depends_on": depends_on})
             continue
         intake.create_change(child_dir, parent=run.config.change_name)
+        updates: dict = {"depends_on": depends_on}
         if child.ticket_ref:
-            write_change_meta(child_dir, {"ticket_refs": {"epic": child.ticket_ref, "children": []}})
+            updates["ticket_refs"] = {"epic": child.ticket_ref, "children": []}
+        write_change_meta(child_dir, updates)
         (child_dir / "plan.md").write_text(child.plan.rstrip() + "\n")
         if parent_prd.is_file():
             (child_dir / "prd.md").write_text(parent_prd.read_text())

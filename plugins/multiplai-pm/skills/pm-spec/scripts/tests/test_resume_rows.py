@@ -176,14 +176,26 @@ def test_S3_split_killed_before_the_child_dirs_exist(repo, model, tmp_path, monk
         mine, theirs = state(change_dir(repo, name)), state(change_dir(other, name))
         assert {k: mine[k] for k in ("options", "parent", "split")} == \
             {k: theirs[k] for k in ("options", "parent", "split")}
+    # The child killed before its dir existed gets its dependencies as the
+    # child written before the kill did.
+    assert meta(api)["depends_on"] == [] and meta(ui)["depends_on"] == ["throttle-api"]
 
-    # Unchanged inputs: no second split. Changed parent inputs: split again.
+    # Unchanged inputs: no second split, and no child record is written again.
+    before = {p: (p / ".change.yaml").stat().st_mtime_ns for p in (api, ui)}
     assert run(repo, "resume", "throttle") == 0
     assert model.calls_to("epic_split") == 1
+    assert {p: (p / ".change.yaml").stat().st_mtime_ns for p in (api, ui)} == before
+    # Changed parent inputs: split again. The children already created keep
+    # their files, and their depends_on follows the new answer.
+    from test_epic_split import child
+    model["epic_split"] = {"single": False, "reason": "UI first.", "children": [child("api", deps=["ui"]), child("ui")]}
+    plan_before = (api / "plan.md").read_text()
     interview_md = parent / "interview.md"
     interview_md.write_text(interview_md.read_text() + "\nAlso throttle websockets.\n")
     assert run(repo, "resume", "throttle") == 0
     assert model.calls_to("epic_split") == 2
+    assert meta(api)["depends_on"] == ["throttle-ui"] and meta(ui)["depends_on"] == []
+    assert (api / "plan.md").read_text() == plan_before
 
 
 # --- S4 ---------------------------------------------------------------------------

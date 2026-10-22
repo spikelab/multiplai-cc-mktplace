@@ -93,6 +93,7 @@ def test_a_split_creates_one_change_dir_per_child_and_stops(repo, model, tmp_pat
         assert meta(kid)["parent"] == "throttle"
         assert meta(kid)["ticket_refs"] == {"epic": ref, "children": []}
         assert meta(kid)["spec_status"] == "draft"
+        assert meta(kid)["depends_on"] == ([] if kid.name == "throttle-api" else ["throttle-api"])
         assert "## Done means" in (kid / "plan.md").read_text()
         s = state(kid)
         assert s["parent"] == "throttle" and s["options"]["epic_split"] is False
