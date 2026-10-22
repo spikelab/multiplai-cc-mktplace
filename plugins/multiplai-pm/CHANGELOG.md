@@ -26,11 +26,23 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
 ### Added
 - `pm-spec`: when it splits a change into children, each child's
   `.change.yaml` now says which other children it depends on, as
-  `depends_on: [<child change name>, ...]` (`[]` when it depends on none).
-  When the parent's inputs change and the split runs again, a child that
-  already exists keeps its files, and its `depends_on` is updated to match
-  the new split. `/multiplai-dev:buildme` will read this list to build an
-  epic's children in order.
+  `depends_on: [<child change name>, ...]` (`[]` when it depends on none),
+  and the parent's `.change.yaml` lists its children, as
+  `children: [<child change name>, ...]` in dependency order.
+  `/multiplai-dev:buildme` will read these to build an epic's children in
+  order.
+- When the parent's inputs change and the split runs again, both records
+  follow the new split. A child that already exists keeps its files. A child
+  the new split drops keeps its dir but is no longer in `children`.
+
+### Changed
+- A split now commits the parent's change dir (its inputs and `children`),
+  as `specs(<parent>): children updated`, so it needs a git repository with
+  at least one commit, as the handoff already did. A re-split that changes
+  `depends_on` of a child already handed off commits that child's
+  `.change.yaml` alone, as `specs(<child>): dependencies updated`. A split
+  whose records are unchanged writes and commits nothing, and a commit that
+  failed is made by the next run.
 
 ## [0.7.0] - 2026-10-21
 
