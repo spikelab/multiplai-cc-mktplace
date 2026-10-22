@@ -15,6 +15,72 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.99.0] - 2026-10-22
+
+### Changed
+- **buildme now builds only from specs `/multiplai-pm:pm-spec` marked ready.**
+  Run pm-spec first: it writes the proposal, use cases and requirements, runs
+  the interview, reads a ticket, a PRD or a plan, splits an epic and makes the
+  prototype, then marks the specs ready and commits the change dir. buildme
+  reads those three documents and never writes them. A build whose specs are
+  not marked ready, changed after they were, or (for a build that branches a
+  worktree) are not committed prints `SPEC:NOT_READY:<reason>` and
+  `Run /multiplai-pm:pm-spec <name> first`, and exits `2` with nothing
+  written. When specs pm-spec never marked are on disk (an older buildme
+  build wrote them), the line names `pm-spec resume <name>`, which checks them
+  and marks them ready without rewriting them.
+- buildme: `--change` is now required on `build`. The design reads the
+  research directly, and the research decision reads the ready specs.
+- buildme: a requirements problem goes back to pm-spec instead of being
+  worked around. When the design step reports a `SPEC_ISSUE:` line, a design
+  audit finding needs a requirements change to fix, or a TDD agent reports
+  `SPEC_IMPACT: contradicts` under `respec: {halt_on_contradiction: true}`,
+  the build appends the problem to `spec-issues.md` in the change dir, sets
+  `spec_issues` in `.change.yaml`, prints `SPEC:ISSUES:<path>` with the
+  `pm-spec revise <name> --project-dir <repo>` line, and exits `4`. The
+  checkpoint is kept, not failed: every run refuses the same way, at no cost,
+  until `pm-spec revise` clears it; the next build then writes the design and
+  what follows it again. Exit `4` also still means an agent timed out: the
+  `SPEC:ISSUES` marker tells the two apart.
+- buildme-findings: a finding that asks for a requirements change is recorded
+  in `spec-issues.md` for `/multiplai-pm:pm-spec revise`; the findings stage no
+  longer edits `requirements/*.md` or `specs/registry/`, and makes no model call
+  for it. A code fix that contradicts the specs waits for that change, and its
+  reply says so.
+- buildme epics: `/buildme <parent>` on a parent change pm-spec split (its
+  `.change.yaml` lists `children`) builds the children in their `depends_on`
+  order, with the same review, fix and merge loops as before. It refuses with
+  `SPEC:NOT_READY` when any listed child is not ready, or when the parent's or
+  a child's change dir has uncommitted changes. Each child's worktree branches
+  from the local commit that holds the ready specs, so each child PR carries
+  that commit and nothing is pushed before the build.
+
+### Removed
+- buildme `build` flags: `--mode` (`scratch`, `brief`, `only`),
+  `--interview-summary`, `--context-files`, `--ticket-file`, `--ticket-ref`,
+  `--ticket-url`, `--plan-file`, `--interview-replies`, `--prototype`,
+  `--no-prototype`, `--approve-split` and `--no-epic-split`. A saved command
+  that passes one of them now stops with a usage error (exit `2`). Pass the
+  ticket, PRD, plan or interview to pm-spec instead.
+- buildme `setup` flags `--provider`, `--plane-project` and `--interview`, and
+  the `intake.provider` and `interview` keys of `config-get`: they are
+  pm-spec's settings. buildme ignores `intake`, `interview` and `prototype` in
+  `specs/config.yaml`.
+- buildme's interview (`INTERVIEW:WAITING`), ticket intake, proposal, use-case
+  and requirements generation, prototype stage, and epic split
+  (`EPIC:SPLIT`, `split.md` approval). They are pm-spec's steps now.
+- buildme epics: children in another repository (the `repo` column of
+  `split.md`) are dropped for now. Every child builds in the epic's own
+  repository.
+
+### Upgrading
+- A build stopped before its specs were generated refuses with
+  `Run /multiplai-pm:pm-spec <name> first`. A build stopped later, with a
+  proposal and requirements on disk, refuses with
+  `Run /multiplai-pm:pm-spec resume <name> first`; after pm-spec marks them
+  ready (and they are committed), re-run the same build command and it
+  continues from its checkpoint. Nothing is changed by the refusal.
+
 ## [0.98.1] - 2026-10-21
 
 ### Changed
