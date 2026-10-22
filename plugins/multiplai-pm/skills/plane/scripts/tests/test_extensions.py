@@ -25,14 +25,30 @@ ISSUE = "792a89b1-37db-47e1-a947-6fb1b79198d6"
 # The four cycles of project DB, verbatim bounds. Note 2026-08-03: S16 ends at
 # 21:59:00Z and S17 starts at 22:00:01Z on the same calendar day.
 DB_CYCLES = [
-    {"id": "b001eecb-d718-4890-8198-1dbe2fbe124c", "name": "S18 ~ AUG26",
-     "start_date": "2026-08-17T22:00:01Z", "end_date": "2026-08-31T21:59:00Z"},
-    {"id": "7e7899c4-975f-43c6-9e60-2c8edeb07835", "name": "S17 ~ AUG26",
-     "start_date": "2026-08-03T22:00:01Z", "end_date": "2026-08-17T21:59:00Z"},
-    {"id": "a476a18d-d56a-4835-8ddd-0482c9a9b46a", "name": "S16 ~ JUL26",
-     "start_date": "2026-07-21T10:31:41.143422Z", "end_date": "2026-08-03T21:59:00Z"},
-    {"id": "137a3296-12b8-466c-9b40-3ed8666e35eb", "name": "S15 ~ JUL26",
-     "start_date": "2026-07-06T22:00:01Z", "end_date": "2026-07-20T21:59:00Z"},
+    {
+        "id": "b001eecb-d718-4890-8198-1dbe2fbe124c",
+        "name": "S18 ~ AUG26",
+        "start_date": "2026-08-17T22:00:01Z",
+        "end_date": "2026-08-31T21:59:00Z",
+    },
+    {
+        "id": "7e7899c4-975f-43c6-9e60-2c8edeb07835",
+        "name": "S17 ~ AUG26",
+        "start_date": "2026-08-03T22:00:01Z",
+        "end_date": "2026-08-17T21:59:00Z",
+    },
+    {
+        "id": "a476a18d-d56a-4835-8ddd-0482c9a9b46a",
+        "name": "S16 ~ JUL26",
+        "start_date": "2026-07-21T10:31:41.143422Z",
+        "end_date": "2026-08-03T21:59:00Z",
+    },
+    {
+        "id": "137a3296-12b8-466c-9b40-3ed8666e35eb",
+        "name": "S15 ~ JUL26",
+        "start_date": "2026-07-06T22:00:01Z",
+        "end_date": "2026-07-20T21:59:00Z",
+    },
 ]
 
 DFT_POINTS = [
@@ -43,15 +59,33 @@ DFT_POINTS = [
 ]
 
 MEMBERS = [
-    {"id": "2fd6e2a0-83a4-4415-8475-90d5d8953085", "display_name": "Slack",
-     "first_name": "Slack", "last_name": "", "email": "bot@plane.so",
-     "is_active": True, "is_bot": True},
-    {"id": "f5dab78f-fa50-4055-b415-0b1bfa98652c", "display_name": "alice",
-     "first_name": "Alice", "last_name": "Anders",
-     "email": "alice@example.com", "is_active": True, "is_bot": False},
-    {"id": "093da523-f308-457e-a03f-b681ecba5b5f", "display_name": "bob",
-     "first_name": "BOB", "last_name": "", "email": "robert@example.com",
-     "is_active": True, "is_bot": False},
+    {
+        "id": "2fd6e2a0-83a4-4415-8475-90d5d8953085",
+        "display_name": "Slack",
+        "first_name": "Slack",
+        "last_name": "",
+        "email": "bot@plane.so",
+        "is_active": True,
+        "is_bot": True,
+    },
+    {
+        "id": "f5dab78f-fa50-4055-b415-0b1bfa98652c",
+        "display_name": "alice",
+        "first_name": "Alice",
+        "last_name": "Anders",
+        "email": "alice@example.com",
+        "is_active": True,
+        "is_bot": False,
+    },
+    {
+        "id": "093da523-f308-457e-a03f-b681ecba5b5f",
+        "display_name": "bob",
+        "first_name": "BOB",
+        "last_name": "",
+        "email": "robert@example.com",
+        "is_active": True,
+        "is_bot": False,
+    },
 ]
 
 
@@ -62,7 +96,9 @@ class Recorder:
         self.routes = routes
         self.calls: list[tuple] = []
 
-    def __call__(self, method, path, cfg, *, params=None, body=None, dry_run=False, **kw):
+    def __call__(
+        self, method, path, cfg, *, params=None, body=None, dry_run=False, **kw
+    ):
         self.calls.append((method, path.split("?")[0], body))
         for prefix, payload in self.routes.items():
             if path.split("?")[0] == prefix:
@@ -140,8 +176,10 @@ def test_check_is_green_and_covers_query_params_and_traversal(monkeypatch):
 
 def test_search_asks_for_a_limit_and_says_when_it_hits_it(monkeypatch, capsys):
     """Observed: `search=calendario` returns 10, `&limit=100` returns 29."""
-    hits = [{"id": str(n), "name": f"h{n}", "project_id": OK, "sequence_id": n}
-            for n in range(5)]
+    hits = [
+        {"id": str(n), "name": f"h{n}", "project_id": OK, "sequence_id": n}
+        for n in range(5)
+    ]
     rec = install(monkeypatch, {"/issues/search/": {"issues": hits}})
     plane.cmd_search(dict(CFG), types.SimpleNamespace(query="x", json=True, limit=5))
     assert "TRUNCATED" in capsys.readouterr().err
@@ -193,7 +231,8 @@ def test_nested_list_items_degrade_to_a_paragraph():
 def test_not_found_says_what_it_actually_checked(monkeypatch):
     monkeypatch.setattr(plane, "_request", lambda *a, **k: envelope([]))
     monkeypatch.setattr(
-        plane, "resolve_project",
+        plane,
+        "resolve_project",
         lambda cfg, ref: {"id": OK, "identifier": "SPK", "name": "Mine"},
     )
     with pytest.raises(plane.PlaneError, match="listed by the API"):
@@ -207,7 +246,8 @@ def test_active_cycle_is_decided_on_instants_not_on_dates():
     """2026-08-03 is the changeover day: comparing the first ten characters
     matches both S16 and S17, comparing instants matches exactly one."""
     truncating = [
-        c for c in DB_CYCLES
+        c
+        for c in DB_CYCLES
         if c["start_date"][:10] <= "2026-08-03" <= c["end_date"][:10]
     ]
     assert {c["name"] for c in truncating} == {"S16 ~ JUL26", "S17 ~ AUG26"}
@@ -269,10 +309,19 @@ def test_adding_to_a_cycle_posts_once_and_not_twice(monkeypatch, capsys):
 def test_estimate_points_take_two_calls_and_survive_the_bare_object(monkeypatch):
     """`/estimates/` is a single object: _paginate would yield nothing at all."""
     eid = "2aa00637-e275-4849-a68c-592c26145996"
-    rec = install(monkeypatch, {
-        f"/projects/{OK}/estimates/": {"id": eid, "name": "Points", "type": "points"},
-        f"/projects/{OK}/estimates/{eid}/estimate-points/": list(reversed(DFT_POINTS)),
-    })
+    rec = install(
+        monkeypatch,
+        {
+            f"/projects/{OK}/estimates/": {
+                "id": eid,
+                "name": "Points",
+                "type": "points",
+            },
+            f"/projects/{OK}/estimates/{eid}/estimate-points/": list(
+                reversed(DFT_POINTS)
+            ),
+        },
+    )
     points = plane.estimate_points(dict(CFG), OK)
     assert [p["value"] for p in points] == ["1", "2", "3", "5"]
     assert len(rec.calls) == 2
@@ -280,10 +329,13 @@ def test_estimate_points_take_two_calls_and_survive_the_bare_object(monkeypatch)
 
 def test_estimate_value_resolves_on_the_string_not_the_number(monkeypatch):
     eid = "e"
-    install(monkeypatch, {
-        f"/projects/{OK}/estimates/": {"id": eid},
-        f"/projects/{OK}/estimates/{eid}/estimate-points/": DFT_POINTS,
-    })
+    install(
+        monkeypatch,
+        {
+            f"/projects/{OK}/estimates/": {"id": eid},
+            f"/projects/{OK}/estimates/{eid}/estimate-points/": DFT_POINTS,
+        },
+    )
     assert plane.resolve_estimate_point(dict(CFG), OK, 3) == DFT_POINTS[2]["id"]
     assert plane.resolve_estimate_point(dict(CFG), OK, "5") == DFT_POINTS[3]["id"]
     with pytest.raises(plane.PlaneError, match="Available: 1, 2, 3, 5"):
@@ -292,7 +344,7 @@ def test_estimate_value_resolves_on_the_string_not_the_number(monkeypatch):
 
 def test_a_project_without_an_estimate_set_says_so(monkeypatch):
     def fake(method, path, cfg, **kw):
-        raise plane.PlaneError("GET https://x -> 404 {\"error\":\"Estimate not found\"}")
+        raise plane.PlaneError('GET https://x -> 404 {"error":"Estimate not found"}')
 
     monkeypatch.setattr(plane, "_request", fake)
     with pytest.raises(plane.PlaneError, match="no estimate set"):
@@ -319,17 +371,23 @@ def test_member_resolution_skips_bots_and_refuses_ambiguity(monkeypatch):
 
 def test_a_missing_label_is_only_created_when_asked(monkeypatch):
     label = {"id": "6d4c3ab3-005a-4ef8-9bad-2037fe8d8bfa", "name": "plane-skill-test"}
-    rec = install(monkeypatch, {
-        f"/projects/{OK}/labels/": envelope([label]),
-    })
+    rec = install(
+        monkeypatch,
+        {
+            f"/projects/{OK}/labels/": envelope([label]),
+        },
+    )
     assert plane.resolve_label(dict(CFG), OK, "PLANE-SKILL-TEST") == label["id"]
     assert rec.writes() == []
     with pytest.raises(plane.PlaneError, match="--create-labels"):
         plane.resolve_label(dict(CFG), OK, "nuova")
 
-    rec = install(monkeypatch, {
-        f"/projects/{OK}/labels/": envelope([]),
-    })
+    rec = install(
+        monkeypatch,
+        {
+            f"/projects/{OK}/labels/": envelope([]),
+        },
+    )
     rec.routes[f"/projects/{OK}/labels/"] = envelope([])
     with pytest.raises(plane.PlaneError, match="returned no id"):
         # The POST goes through the same path, and Recorder answers the GET
@@ -340,22 +398,25 @@ def test_a_missing_label_is_only_created_when_asked(monkeypatch):
 
 def test_dry_run_does_not_invent_an_id_for_a_label_it_would_create(monkeypatch, capsys):
     install(monkeypatch, {f"/projects/{OK}/labels/": envelope([])})
-    assert plane.resolve_label(dict(CFG), OK, "nuova", create=True, dry_run=True) is None
+    assert (
+        plane.resolve_label(dict(CFG), OK, "nuova", create=True, dry_run=True) is None
+    )
     assert "[dry-run]" in capsys.readouterr().out
 
 
 def test_assignment_flags_become_whole_list_writes(monkeypatch):
     monkeypatch.setattr(plane, "project_members", lambda cfg, pid: MEMBERS)
     monkeypatch.setattr(plane, "resolve_estimate_point", lambda cfg, pid, v: "point-3")
-    monkeypatch.setattr(
-        plane, "resolve_label", lambda cfg, pid, n, **kw: f"label-{n}"
-    )
+    monkeypatch.setattr(plane, "resolve_label", lambda cfg, pid, n, **kw: f"label-{n}")
     # Listed once for the whole command now, not once per --label.
     monkeypatch.setattr(plane, "project_labels", lambda cfg, pid: [])
     payload: dict = {}
     args = types.SimpleNamespace(
-        assignee=["alice", "bob"], label=["a", "b"],
-        create_labels=False, estimate="3", dry_run=False,
+        assignee=["alice", "bob"],
+        label=["a", "b"],
+        create_labels=False,
+        estimate="3",
+        dry_run=False,
     )
     plane._apply_assignment_flags(dict(CFG), args, OK, payload)
     assert payload == {
@@ -421,26 +482,42 @@ def test_fetch_asset_sends_no_credentials_and_does_not_follow_redirects(monkeypa
         "https://api.plane.so",
     )
     assert blob.startswith(b"\x89PNG")
-    assert not any("api-key" in k.lower() or "authorization" in k.lower()
-                   for k in captured["headers"])
+    assert not any(
+        "api-key" in k.lower() or "authorization" in k.lower()
+        for k in captured["headers"]
+    )
     assert plane._NoRedirect().redirect_request(None, None, 302, "", {}, "") is None
 
 
 def test_attachments_lists_records_and_inline_assets(monkeypatch, capsys):
     asset = "0a147e39-2e55-4a18-9e13-f35279a13ee2"
-    record = {"id": "rec-1", "asset": "11111111-1111-1111-1111-111111111111",
-              "attributes": {"name": "spec.pdf", "type": "application/pdf"}}
-    install(monkeypatch, {
-        f"/projects/{OK}/issues/{ISSUE}/": {"id": ISSUE, "description_html": DESCRIPTION},
-        f"/projects/{OK}/issues/{ISSUE}/issue-attachments/": [record],
-        f"/assets/{asset}/": {"asset_id": asset, "asset_name": "image.png",
-                              "asset_type": "image/png", "asset_url": "https://s3/x"},
-    })
+    record = {
+        "id": "rec-1",
+        "asset": "11111111-1111-1111-1111-111111111111",
+        "attributes": {"name": "spec.pdf", "type": "application/pdf"},
+    }
+    install(
+        monkeypatch,
+        {
+            f"/projects/{OK}/issues/{ISSUE}/": {
+                "id": ISSUE,
+                "description_html": DESCRIPTION,
+            },
+            f"/projects/{OK}/issues/{ISSUE}/issue-attachments/": [record],
+            f"/assets/{asset}/": {
+                "asset_id": asset,
+                "asset_name": "image.png",
+                "asset_type": "image/png",
+                "asset_url": "https://s3/x",
+            },
+        },
+    )
     monkeypatch.setattr(
         plane, "resolve_issue", lambda cfg, ref, p=None: {"id": ISSUE, "project": OK}
     )
     plane.cmd_attachments(
-        dict(CFG), types.SimpleNamespace(ref="SPK-1", project=None, json=False, download=None)
+        dict(CFG),
+        types.SimpleNamespace(ref="SPK-1", project=None, json=False, download=None),
     )
     out = capsys.readouterr().out
     assert "spec.pdf" in out and "image.png" in out

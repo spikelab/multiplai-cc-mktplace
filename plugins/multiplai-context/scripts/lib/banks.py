@@ -112,7 +112,9 @@ def configured_banks() -> tuple[MemoryBank, ...]:
     try:
         return Paths.resolve().memory_banks()
     except Exception:  # pragma: no cover - defensive
-        logger.warning("Could not resolve memory banks; using personal only", exc_info=True)
+        logger.warning(
+            "Could not resolve memory banks; using personal only", exc_info=True
+        )
         try:
             return (personal_bank(Paths.resolve().memory_dir()),)
         except Exception:
@@ -138,7 +140,9 @@ def sync_ttl_hours() -> float:
 
 def shared_banks(banks: Iterable[MemoryBank] | None = None) -> tuple[MemoryBank, ...]:
     """Just the banks somebody else may also write to."""
-    return tuple(b for b in (banks if banks is not None else configured_banks()) if b.is_shared)
+    return tuple(
+        b for b in (banks if banks is not None else configured_banks()) if b.is_shared
+    )
 
 
 def banks_by_name(banks: Iterable[MemoryBank] | None = None) -> dict[str, MemoryBank]:
@@ -198,7 +202,9 @@ def render_shared_block(
     """
     stamp = f", last updated {date}" if date else ""
     header = f"## {ref} — from shared memory bank `{bank.name}`{stamp}"
-    lines = fence(content, f"shared memory bank '{bank.name}' — written by other people")
+    lines = fence(
+        content, f"shared memory bank '{bank.name}' — written by other people"
+    )
     if not lines:
         return header
     return "\n".join([header, *lines])

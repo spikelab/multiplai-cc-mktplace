@@ -124,6 +124,7 @@ class Chunk:
 # Throughput and estimates
 # ---------------------------------------------------------------------------
 
+
 def resolve_throughput(observed: float | None = None) -> float:
     """Bytes of learnings consumable per second: env > observed > default.
 
@@ -168,6 +169,7 @@ def chunk_budget_bytes(timeout_s: float, throughput: float | None = None) -> int
 # Rendering — must match dream.py::_read_all_learnings byte for byte
 # ---------------------------------------------------------------------------
 
+
 def _file_header(file_name: str) -> str:
     return f"### File: {file_name}\n\n"
 
@@ -200,7 +202,9 @@ def _render_blocks(blocks: Sequence[Block]) -> str:
 
     def flush() -> None:
         if group:
-            parts.append(_file_header(group[0].file) + "\n".join(_numbered(b) for b in group))
+            parts.append(
+                _file_header(group[0].file) + "\n".join(_numbered(b) for b in group)
+            )
 
     for b in blocks:
         if group and group[-1].file != b.file:
@@ -219,6 +223,7 @@ def render_chunk(chunk: Chunk) -> str:
 # ---------------------------------------------------------------------------
 # Planning
 # ---------------------------------------------------------------------------
+
 
 def _solo_bytes(block: Block) -> int:
     """Rendered size of *block* alone in a fresh chunk."""
@@ -293,13 +298,19 @@ def plan_chunks(
             logger.warning(
                 "Learnings block %s:%d is %d bytes, over the %d-byte chunk budget — "
                 "own chunk, timeout raised to %.0fs",
-                block.file, block.start_line, current_bytes, budget, escalated,
+                block.file,
+                block.start_line,
+                current_bytes,
+                budget,
+                escalated,
             )
             flush(oversized=True)
             continue
 
         cost = _append_cost(block, current)
-        if current and (current[-1].file != block.file or current_bytes + cost > budget):
+        if current and (
+            current[-1].file != block.file or current_bytes + cost > budget
+        ):
             flush()
             cost = _append_cost(block, current)
         current.append(block)
@@ -312,6 +323,7 @@ def plan_chunks(
 # ---------------------------------------------------------------------------
 # Reporting
 # ---------------------------------------------------------------------------
+
 
 def _fmt_duration(seconds: float) -> str:
     total = int(round(seconds))

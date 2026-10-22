@@ -177,7 +177,7 @@ def parse_blocks(file_name: str, text: str) -> list[Block]:
             not lines[end].strip() or _SEPARATOR_RE.match(lines[end])
         ):
             end -= 1
-        body = "\n".join(lines[start:end + 1])
+        body = "\n".join(lines[start : end + 1])
         blocks.append(
             Block(
                 file=file_name,

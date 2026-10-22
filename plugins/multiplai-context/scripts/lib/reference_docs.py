@@ -367,7 +367,9 @@ def resolve_docs(names: list[str]) -> list[tuple[Path, list[str]]]:
             try:
                 text = path.read_text()
             except (OSError, UnicodeDecodeError) as exc:
-                logger.warning("Reference doc %s exists but is unreadable: %s", path, exc)
+                logger.warning(
+                    "Reference doc %s exists but is unreadable: %s", path, exc
+                )
                 continue
             resolved.append((path, section_index(text)))
             break

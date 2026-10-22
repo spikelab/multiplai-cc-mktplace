@@ -121,6 +121,7 @@ def file_digest(text: str) -> str:
 
 # --- the state file ---------------------------------------------------------
 
+
 def state_path(data_dir: Path) -> Path:
     return Path(data_dir) / STATE_FILENAME
 
@@ -274,15 +275,19 @@ class Finding:
             a, b = data["a"], data["b"]
             return cls(
                 file=str(data["file"]),
-                a_text=str(a["text"]), a_line=int(a["line"]),
-                b_text=str(b["text"]), b_line=int(b["line"]),
+                a_text=str(a["text"]),
+                a_line=int(a["line"]),
+                b_text=str(b["text"]),
+                b_line=int(b["line"]),
                 why=str(data.get("why", "")),
             )
         except (KeyError, TypeError, ValueError):
             return None
 
 
-def build_prompt(filename: str, text: str, *, char_budget: int = FILE_CHAR_BUDGET) -> str:
+def build_prompt(
+    filename: str, text: str, *, char_budget: int = FILE_CHAR_BUDGET
+) -> str:
     """The user half of one per-file call. The file content is fenced (C2).
 
     ``markdown_notice`` is emitted alongside the fence, with
@@ -325,7 +330,8 @@ def _locate(quote: str, lines: Sequence[str]) -> int | None:
         # Too short to be unambiguous; a five-word "quote" matches everywhere.
         return None
     hits = [
-        lineno for lineno, line in enumerate(lines, 1)
+        lineno
+        for lineno, line in enumerate(lines, 1)
         if needle in _WS_RE.sub(" ", line).strip().lower()
     ]
     if not hits:
@@ -338,7 +344,8 @@ def _locate(quote: str, lines: Sequence[str]) -> int | None:
         # is wrong. Report the ambiguity rather than picking silently.
         logger.info(
             "Contradiction quote resolves to %d lines (%s); citing the first",
-            len(hits), ", ".join(str(h) for h in hits),
+            len(hits),
+            ", ".join(str(h) for h in hits),
         )
     return hits[0]
 
@@ -373,12 +380,16 @@ def parse_findings(raw: str, filename: str, text: str) -> list[Finding]:
             continue
         seen.add(key)
         why_m = _WHY_RE.search(body)
-        out.append(Finding(
-            file=filename,
-            a_text=a_text, a_line=a_line,
-            b_text=b_text, b_line=b_line,
-            why=_WS_RE.sub(" ", why_m.group(1)).strip() if why_m else "",
-        ))
+        out.append(
+            Finding(
+                file=filename,
+                a_text=a_text,
+                a_line=a_line,
+                b_text=b_text,
+                b_line=b_line,
+                why=_WS_RE.sub(" ", why_m.group(1)).strip() if why_m else "",
+            )
+        )
     out.sort(key=lambda f: (f.a_line, f.b_line))
     return out
 
@@ -416,7 +427,8 @@ async def check_file(
     except Exception:
         logger.exception(
             "Contradiction check failed for %s (fails closed — nothing reported)",
-            filename)
+            filename,
+        )
         return None
 
 
@@ -465,7 +477,7 @@ async def run_pass(
     # none. On the real corpus this is 4 of 29 files, including 67% of the
     # largest.
     truncated: list[str] = []
-    pending: list[tuple[str, str, str]] = []   # (filename, text, digest)
+    pending: list[tuple[str, str, str]] = []  # (filename, text, digest)
 
     for filename in sorted(texts):
         text = texts[filename]
@@ -477,7 +489,9 @@ async def run_pass(
             skipped += 1
             cached = state.get(filename, {}).get("findings") or []
             for record in cached:
-                parsed = Finding.from_dict(record) if isinstance(record, Mapping) else None
+                parsed = (
+                    Finding.from_dict(record) if isinstance(record, Mapping) else None
+                )
                 if parsed is not None:
                     entry = parsed.as_dict()
                     entry["cached"] = state.get(filename, {}).get("checked")
@@ -498,11 +512,11 @@ async def run_pass(
 
         async def _one(filename: str, text: str):
             async with semaphore:
-                return await check_file(client, filename, text, model=model,
-                                        timeout_s=timeout_s)
+                return await check_file(
+                    client, filename, text, model=model, timeout_s=timeout_s
+                )
 
-        results = await asyncio.gather(
-            *(_one(name, text) for name, text, _ in pending))
+        results = await asyncio.gather(*(_one(name, text) for name, text, _ in pending))
         for (filename, _, digest), result in zip(pending, results):
             if result is None:
                 failed += 1
@@ -534,7 +548,9 @@ async def run_pass(
         logger.warning(
             "Contradiction pass read only the first %d characters of %d file(s): "
             "%s — the rest was not examined",
-            FILE_CHAR_BUDGET, len(truncated), ", ".join(sorted(truncated)),
+            FILE_CHAR_BUDGET,
+            len(truncated),
+            ", ".join(sorted(truncated)),
         )
 
     return {
@@ -605,7 +621,7 @@ def render_section(result: Mapping, *, limit: int = 40) -> str:
             f"⚠️ **{len(truncated)} file(s) were only partly examined.** One call "
             f"reads at most {budget:,} characters, and these are longer, so "
             f"anything past that point was not looked at — a clean result for "
-            f"them means \"nothing found in the part that was read\":"
+            f'them means "nothing found in the part that was read":'
         )
         out.append("")
         for name in truncated:
@@ -619,9 +635,13 @@ def render_section(result: Mapping, *, limit: int = 40) -> str:
 
     for number, item in enumerate(findings[:limit], 1):
         a, b = item["a"], item["b"]
-        stamp = f" _(carried forward from {item['cached']})_" if item.get("cached") else ""
-        out.append(f"### C{number}. `{item['file']}:{a['line']}` "
-                   f"vs `{item['file']}:{b['line']}`{stamp}")
+        stamp = (
+            f" _(carried forward from {item['cached']})_" if item.get("cached") else ""
+        )
+        out.append(
+            f"### C{number}. `{item['file']}:{a['line']}` "
+            f"vs `{item['file']}:{b['line']}`{stamp}"
+        )
         out.append("")
         # `defang` on the way out. These three strings are model output derived
         # from memory-file content, and the model cannot act on anything (no

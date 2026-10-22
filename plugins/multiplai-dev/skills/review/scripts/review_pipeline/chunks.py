@@ -49,11 +49,21 @@ def _section_path(header: str, lines: list[str]) -> str:
     for name, prefix in ((new, "b/"), (old, "a/")):
         if name and name != "/dev/null":
             return name.removeprefix(prefix)
-    rest = header[len("diff --git "):]
+    rest = header[len("diff --git ") :]
     return rest.rsplit(" b/", 1)[-1] if " b/" in rest else rest
 
 
-_ESCAPES = {"a": 7, "b": 8, "t": 9, "n": 10, "v": 11, "f": 12, "r": 13, '"': 34, "\\": 92}
+_ESCAPES = {
+    "a": 7,
+    "b": 8,
+    "t": 9,
+    "n": 10,
+    "v": 11,
+    "f": 12,
+    "r": 13,
+    '"': 34,
+    "\\": 92,
+}
 
 
 def header_path(name: str) -> str:
@@ -71,7 +81,7 @@ def header_path(name: str) -> str:
         c = body[i]
         if c == "\\" and i + 1 < len(body):
             nxt = body[i + 1]
-            octal = body[i + 1:i + 4]
+            octal = body[i + 1 : i + 4]
             if len(octal) == 3 and all(ch in "01234567" for ch in octal):
                 out.append(int(octal, 8))
                 i += 4
@@ -98,9 +108,9 @@ def _sides(header: str, lines: list[str]) -> tuple[str | None, str | None, str]:
         elif text.startswith("+++ "):
             new = header_path(text[4:])
         elif text.startswith("rename from "):
-            rename_from = header_path(text[len("rename from "):])
+            rename_from = header_path(text[len("rename from ") :])
         elif text.startswith("rename to "):
-            rename_to = header_path(text[len("rename to "):])
+            rename_to = header_path(text[len("rename to ") :])
         elif text.startswith("new file mode"):
             added = True
         elif text.startswith("deleted file mode"):
@@ -114,8 +124,10 @@ def _sides(header: str, lines: list[str]) -> tuple[str | None, str | None, str]:
         return name.removeprefix(prefix)
 
     base, head = strip(old, "a/") or rename_from, strip(new, "b/") or rename_to
-    if base is None and head is None:  # a mode change or a binary file: only the `diff --git` line names it
-        rest = header[len("diff --git "):]
+    if (
+        base is None and head is None
+    ):  # a mode change or a binary file: only the `diff --git` line names it
+        rest = header[len("diff --git ") :]
         name = rest.rsplit(" b/", 1)[-1] if " b/" in rest else rest
         base = None if added else name
         head = None if deleted else name
@@ -163,9 +175,17 @@ def diff_files(diff: str) -> list[FileChange]:
                 deleted += 1
         header = section[0].rstrip("\n")
         base, head, status = _sides(header, section[1:])
-        files.append(FileChange(path=head or base or _section_path(header, section[1:]), added=added,
-                                deleted=deleted, text="".join(section), head_path=head, base_path=base,
-                                status=status))
+        files.append(
+            FileChange(
+                path=head or base or _section_path(header, section[1:]),
+                added=added,
+                deleted=deleted,
+                text="".join(section),
+                head_path=head,
+                base_path=base,
+                status=status,
+            )
+        )
     return files
 
 
@@ -222,8 +242,17 @@ def head_changed_lines(diff: str) -> dict[str, list[int]]:
 PIECE_MAX_CHARS = 50_000
 # A directory holding one of these is a package or skill directory: a group of related files.
 GROUP_MARKERS = ("pyproject.toml", "package.json", "Cargo.toml", "go.mod", "SKILL.md")
-META_NAMES = frozenset({"CHANGELOG.md", "plugin.json", "marketplace.json", "VERSION", "version.txt",
-                        ".gitignore", ".gitattributes"})
+META_NAMES = frozenset(
+    {
+        "CHANGELOG.md",
+        "plugin.json",
+        "marketplace.json",
+        "VERSION",
+        "version.txt",
+        ".gitignore",
+        ".gitattributes",
+    }
+)
 META_GROUP = "meta"
 # A test file's name and the name of the module it tests.
 _TEST_NAMES = (
@@ -241,7 +270,9 @@ def is_lockfile(path: str) -> bool:
 def is_meta(path: str) -> bool:
     """Release and repository metadata: changelogs, manifests, version files, licences, `.github/`."""
     name = posixpath.basename(path)
-    return name in META_NAMES or name.startswith("LICENSE") or path.startswith(".github/")
+    return (
+        name in META_NAMES or name.startswith("LICENSE") or path.startswith(".github/")
+    )
 
 
 def tested_module(path: str) -> str | None:
@@ -310,7 +341,9 @@ def _fill(units: Iterable[list[FileChange]], sizes: dict[str, int]) -> list[list
     return pieces
 
 
-def split_pieces(diff: str, *, head_tree: frozenset[str], base_tree: frozenset[str]) -> list[Piece]:
+def split_pieces(
+    diff: str, *, head_tree: frozenset[str], base_tree: frozenset[str]
+) -> list[Piece]:
     """A change review's diff as pieces for the piece finders, ids 1..K, in a fixed order.
 
     *head_tree* and *base_tree* are every path at head and at base (one
@@ -358,13 +391,28 @@ def split_pieces(diff: str, *, head_tree: frozenset[str], base_tree: frozenset[s
     if omitted and not meta_pieces:
         meta_pieces = [[]]
 
-    pieces = [Piece(id=i, group=group, files=paths, binary=[p for p in paths if p in binary],
-                    chars=sum(sizes[p] for p in paths))
-              for i, (group, paths) in enumerate(ordered, 1)]
+    pieces = [
+        Piece(
+            id=i,
+            group=group,
+            files=paths,
+            binary=[p for p in paths if p in binary],
+            chars=sum(sizes[p] for p in paths),
+        )
+        for i, (group, paths) in enumerate(ordered, 1)
+    ]
     for k, paths in enumerate(meta_pieces):
-        pieces.append(Piece(id=len(pieces) + 1, group=META_GROUP, meta=True, files=paths,
-                            omitted=omitted if k == 0 else [], binary=[p for p in paths if p in binary],
-                            chars=sum(sizes[p] for p in paths)))
+        pieces.append(
+            Piece(
+                id=len(pieces) + 1,
+                group=META_GROUP,
+                meta=True,
+                files=paths,
+                omitted=omitted if k == 0 else [],
+                binary=[p for p in paths if p in binary],
+                chars=sum(sizes[p] for p in paths),
+            )
+        )
     return pieces
 
 

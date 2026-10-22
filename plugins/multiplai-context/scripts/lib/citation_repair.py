@@ -60,7 +60,9 @@ _CITATION_RE = re.compile(
 
 # The record's own header, whose date is what the model substitutes for the
 # filename. Only the date part matters — the time is what makes the two differ.
-_STAMP_RE = re.compile(r"^##\s+Session Learnings\s*[—-]\s*(\d{4}-\d{2}-\d{2})", re.MULTILINE)
+_STAMP_RE = re.compile(
+    r"^##\s+Session Learnings\s*[—-]\s*(\d{4}-\d{2}-\d{2})", re.MULTILINE
+)
 
 # A learnings filename is its date. Anything else (a renamed or hand-made file)
 # simply never matches a stamp, so it is reported rather than repaired.
@@ -292,8 +294,7 @@ def render_findings(findings: Sequence[Repair]) -> str:
         )
         out.append("")
         out += [
-            f"- `{f.cited_file}:{f.line}` → `{f.resolved_file}:{f.line}`"
-            for f in fixed
+            f"- `{f.cited_file}:{f.line}` → `{f.resolved_file}:{f.line}`" for f in fixed
         ]
         out.append("")
 

@@ -27,7 +27,9 @@ import pytest
 from conftest import import_script
 from lib import checkpoint as cp
 
-checkpoint_writer = import_script("checkpoint_writer_resilience", "checkpoint_writer.py")
+checkpoint_writer = import_script(
+    "checkpoint_writer_resilience", "checkpoint_writer.py"
+)
 session_stop = import_script("session_stop_resilience", "session_stop.py")
 
 VALID_CHECKPOINT = "\n".join(
@@ -50,20 +52,34 @@ def _write_transcript(path, *, tokens=110_000, text="working on the widget"):
     """A transcript with one user turn, one tool call and a usage record."""
     now = datetime.now(UTC).isoformat()
     records = [
-        {"type": "user", "timestamp": now, "cwd": "/work/proj",
-         "message": {"role": "user", "content": [{"type": "text", "text": text}]}},
-        {"type": "assistant", "timestamp": now, "cwd": "/work/proj",
-         "message": {
-             "role": "assistant",
-             "content": [
-                 {"type": "text", "text": "on it"},
-                 {"type": "tool_use", "name": "Edit", "id": "t1",
-                  "input": {"file_path": "/work/proj/widget.py"}},
-             ],
-             "usage": {"input_tokens": 1_000,
-                       "cache_read_input_tokens": tokens - 1_000,
-                       "cache_creation_input_tokens": 0},
-         }},
+        {
+            "type": "user",
+            "timestamp": now,
+            "cwd": "/work/proj",
+            "message": {"role": "user", "content": [{"type": "text", "text": text}]},
+        },
+        {
+            "type": "assistant",
+            "timestamp": now,
+            "cwd": "/work/proj",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "on it"},
+                    {
+                        "type": "tool_use",
+                        "name": "Edit",
+                        "id": "t1",
+                        "input": {"file_path": "/work/proj/widget.py"},
+                    },
+                ],
+                "usage": {
+                    "input_tokens": 1_000,
+                    "cache_read_input_tokens": tokens - 1_000,
+                    "cache_creation_input_tokens": 0,
+                },
+            },
+        },
     ]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(json.dumps(r) for r in records) + "\n")
@@ -98,8 +114,8 @@ def _good(text=VALID_CHECKPOINT):
 # Criterion 5 — a timed-out save still leaves a file, and moves the bookmark
 # ---------------------------------------------------------------------------
 
-class TestDegradedWrite:
 
+class TestDegradedWrite:
     def test_a_timed_out_call_still_leaves_a_checkpoint(
         self, tmp_path, data_env, monkeypatch
     ):
@@ -107,9 +123,7 @@ class TestDegradedWrite:
         transcript = _write_transcript(tmp_path / "t.jsonl")
         monkeypatch.setattr(checkpoint_writer, "run_agent", _timeout())
 
-        ok = asyncio.run(
-            checkpoint_writer.write_checkpoint(_payload("s1", transcript))
-        )
+        ok = asyncio.run(checkpoint_writer.write_checkpoint(_payload("s1", transcript)))
 
         assert ok is False  # honest: this was not a clean write
         written = cp.checkpoint_file(data_env, "s1")
@@ -134,9 +148,7 @@ class TestDegradedWrite:
         assert state.get("last_checkpoint_ts")
         assert state.get("last_reason") == "band-degraded"
 
-    def test_the_raw_window_is_kept_not_invented(
-        self, tmp_path, data_env, monkeypatch
-    ):
+    def test_the_raw_window_is_kept_not_invented(self, tmp_path, data_env, monkeypatch):
         cp.write_checkpoint_file(data_env, "s1", VALID_CHECKPOINT)
         transcript = _write_transcript(
             tmp_path / "t.jsonl", text="please rename the widget module"
@@ -178,12 +190,13 @@ class TestDegradedWrite:
 
         for i in range(6):
             transcript = _write_transcript(tmp_path / f"t{i}.jsonl", text=f"turn {i}")
-            asyncio.run(
-                checkpoint_writer.write_checkpoint(_payload("s1", transcript))
-            )
+            asyncio.run(checkpoint_writer.write_checkpoint(_payload("s1", transcript)))
 
         text = cp.checkpoint_file(data_env, "s1").read_text()
-        assert text.count("## Unsummarised since") == checkpoint_writer._MAX_DEGRADED_SECTIONS
+        assert (
+            text.count("## Unsummarised since")
+            == checkpoint_writer._MAX_DEGRADED_SECTIONS
+        )
         assert cp.validate_checkpoint(text)
 
     def test_invalid_output_degrades_the_same_way(
@@ -214,15 +227,16 @@ class TestDegradedWrite:
 
 
 class TestDegradedSectionBuilder:
-
     def test_it_uses_no_model_and_invents_nothing(self):
         segment = (
             "[2026-08-09T12:00:00+00:00] [proj] user: rename the widget\n\n"
             "[2026-08-09T12:01:00+00:00] [proj] assistant: sure "
-            "[call Edit({\"file_path\": \"/w/x.py\"})] [call Bash({\"cmd\": \"ls\"})]"
+            '[call Edit({"file_path": "/w/x.py"})] [call Bash({"cmd": "ls"})]'
         )
 
-        out = checkpoint_writer.build_degraded_section(segment, "2026-08-09T11:00:00+00:00")
+        out = checkpoint_writer.build_degraded_section(
+            segment, "2026-08-09T11:00:00+00:00"
+        )
 
         assert "rename the widget" in out
         assert "tools: Edit, Bash" in out
@@ -234,17 +248,20 @@ class TestDegradedSectionBuilder:
 
     def test_it_refuses_to_build_on_an_invalid_previous_checkpoint(self):
         assert checkpoint_writer.build_degraded_checkpoint("", "seg", None) == ""
-        assert checkpoint_writer.build_degraded_checkpoint(
-            "## Notes\n- only one section", "seg", None
-        ) == ""
+        assert (
+            checkpoint_writer.build_degraded_checkpoint(
+                "## Notes\n- only one section", "seg", None
+            )
+            == ""
+        )
 
 
 # ---------------------------------------------------------------------------
 # Criterion 6 — two failures in a row reach the user; a success resets it
 # ---------------------------------------------------------------------------
 
-class TestDegradedIsSurfaced:
 
+class TestDegradedIsSurfaced:
     def _stop(self, monkeypatch, capsys, tmp_path, tokens=110_000, session_id="s1"):
         payload = {
             "session_id": session_id,
@@ -294,9 +311,7 @@ class TestDegradedIsSurfaced:
         assert self._stop(monkeypatch, capsys, tmp_path).strip() != ""
         assert self._stop(monkeypatch, capsys, tmp_path).strip() == ""
 
-    def test_a_later_success_resets_the_counter(
-        self, tmp_path, data_env, monkeypatch
-    ):
+    def test_a_later_success_resets_the_counter(self, tmp_path, data_env, monkeypatch):
         self._fail_writes(tmp_path, data_env, monkeypatch, 2)
         assert cp.consecutive_failures(cp.load_state(data_env, "s1")) == 2
 
@@ -315,8 +330,8 @@ class TestDegradedIsSurfaced:
 # Criteria 7 & 8 — the pointer exists, and windows stop clobbering each other
 # ---------------------------------------------------------------------------
 
-class TestPointer:
 
+class TestPointer:
     def test_a_session_below_the_handoff_threshold_gets_a_pointer(
         self, tmp_path, data_env, monkeypatch, capsys
     ):
@@ -417,17 +432,22 @@ class TestPointer:
         """Markers written before this change are keyed by project alone.
         Dropping them on upgrade would lose a live handoff."""
         legacy = (
-            cp.checkpoints_root(data_env) / "pending"
+            cp.checkpoints_root(data_env)
+            / "pending"
             / f"{cp._project_key('/work/DolceBot')}.json"
         )
         legacy.parent.mkdir(parents=True, exist_ok=True)
-        legacy.write_text(json.dumps({
-            "session_id": "old",
-            "cwd": "/work/DolceBot",
-            "tokens": 210_000,
-            "checkpoint_path": str(cp.checkpoint_file(data_env, "old")),
-            "created_at": datetime.now(UTC).isoformat(),
-        }))
+        legacy.write_text(
+            json.dumps(
+                {
+                    "session_id": "old",
+                    "cwd": "/work/DolceBot",
+                    "tokens": 210_000,
+                    "checkpoint_path": str(cp.checkpoint_file(data_env, "old")),
+                    "created_at": datetime.now(UTC).isoformat(),
+                }
+            )
+        )
         monkeypatch.setenv("HOSTNAME", "claude-work-04221854")
 
         claimed = cp.consume_pending_marker(
@@ -454,9 +474,10 @@ class TestPointer:
         payload["created_at"] = "2020-01-01T00:00:00+00:00"
         marker.write_text(json.dumps(payload))
 
-        assert cp.consume_pending_marker(
-            data_env, "/work/proj", "s2", cp.load_config()
-        ) is None
+        assert (
+            cp.consume_pending_marker(data_env, "/work/proj", "s2", cp.load_config())
+            is None
+        )
 
     def test_the_retirement_guard_still_finds_a_host_keyed_marker(
         self, data_env, monkeypatch
@@ -512,9 +533,13 @@ class TestTheAlertKeepsWorkingAfterARecovery:
         assert self._stop(monkeypatch, capsys, tmp_path, 1).strip() != ""
 
         monkeypatch.setattr(checkpoint_writer, "run_agent", _good())
-        asyncio.run(checkpoint_writer.write_checkpoint(
-            _payload("s1", _write_transcript(tmp_path / "ok.jsonl", text="recovered"))
-        ))
+        asyncio.run(
+            checkpoint_writer.write_checkpoint(
+                _payload(
+                    "s1", _write_transcript(tmp_path / "ok.jsonl", text="recovered")
+                )
+            )
+        )
         # The success itself says nothing, and clears the mark on its way past.
         assert self._stop(monkeypatch, capsys, tmp_path, 2).strip() == ""
 
@@ -531,9 +556,13 @@ class TestTheAlertKeepsWorkingAfterARecovery:
         assert session_stop._degraded_file(data_env, "s1").exists()
 
         monkeypatch.setattr(checkpoint_writer, "run_agent", _good())
-        asyncio.run(checkpoint_writer.write_checkpoint(
-            _payload("s1", _write_transcript(tmp_path / "ok.jsonl", text="recovered"))
-        ))
+        asyncio.run(
+            checkpoint_writer.write_checkpoint(
+                _payload(
+                    "s1", _write_transcript(tmp_path / "ok.jsonl", text="recovered")
+                )
+            )
+        )
         self._stop(monkeypatch, capsys, tmp_path, 2)
 
         assert not session_stop._degraded_file(data_env, "s1").exists()
@@ -554,6 +583,7 @@ class TestTheAlertKeepsWorkingAfterARecovery:
 # ---------------------------------------------------------------------------
 # A queued end-of-session failure has exactly one place left to be reported
 # ---------------------------------------------------------------------------
+
 
 class TestTheExitCodeCarriesTheOutcome:
     """The session that queued the checkpoint has ended.
@@ -620,7 +650,6 @@ class TestTheExitCodeCarriesTheOutcome:
 
 
 class TestDegradedSectionsDoNotAccumulateOnSuccess:
-
     def test_a_section_the_model_copied_through_is_bounded(
         self, tmp_path, data_env, monkeypatch
     ):
@@ -636,9 +665,11 @@ class TestDegradedSectionsDoNotAccumulateOnSuccess:
             checkpoint_writer, "run_agent", _good(VALID_CHECKPOINT + "\n\n" + sections)
         )
 
-        ok = asyncio.run(checkpoint_writer.write_checkpoint(
-            _payload("s1", _write_transcript(tmp_path / "t.jsonl"))
-        ))
+        ok = asyncio.run(
+            checkpoint_writer.write_checkpoint(
+                _payload("s1", _write_transcript(tmp_path / "t.jsonl"))
+            )
+        )
 
         assert ok is True
         written = cp.checkpoint_file(data_env, "s1").read_text()
@@ -656,7 +687,6 @@ class TestDegradedSectionsDoNotAccumulateOnSuccess:
 
 
 class TestTimeout:
-
     def test_the_writer_timeout_is_ten_minutes(self):
         """240s was measured sitting on the boundary: attempt 1 timed out at
         240s and attempt 2 finished at 480s, which made a slow write a coin

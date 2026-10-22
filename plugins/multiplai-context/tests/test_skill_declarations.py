@@ -17,9 +17,19 @@ import pytest
 from conftest import PLUGIN_ROOT
 
 _EXPECTED_SKILLS = {
-    "setup", "dream", "dream-remember", "health",
-    "refresh-catalogs", "memory-health-audit", "backfill", "now",
-    "log-doctor", "qmd-search", "costs", "config-audit", "fleet-status",
+    "setup",
+    "dream",
+    "dream-remember",
+    "health",
+    "refresh-catalogs",
+    "memory-health-audit",
+    "backfill",
+    "now",
+    "log-doctor",
+    "qmd-search",
+    "costs",
+    "config-audit",
+    "fleet-status",
     "memory-bank",
 }
 

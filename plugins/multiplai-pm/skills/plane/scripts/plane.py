@@ -87,7 +87,7 @@ def _load_env_file() -> None:
         key = key.strip()
         # Accept `export PLANE_X=...` so a sourceable shell env file works too.
         if key.startswith("export "):
-            key = key[len("export "):].strip()
+            key = key[len("export ") :].strip()
         # An exported-but-empty var counts as absent, otherwise
         # `export PLANE_API_TOKEN=` silently shadows the file.
         if key.startswith("PLANE_") and not os.environ.get(key, "").strip():
@@ -333,12 +333,19 @@ def _paginate(path: str, cfg: dict, *, params: dict | None = None):
 # Plane's editor mangles some Unicode punctuation; teams commonly ban it in
 # ticket bodies. Normalise to ASCII equivalents.
 _SANITIZE = {
-    "→": "->", "←": "<-", "↔": "<->",
-    "⇒": "=>", "⇐": "<=",
-    "—": "-", "–": "-",
-    "‘": "'", "’": "'",
-    "“": '"', "”": '"',
-    "…": "...", " ": " ",
+    "→": "->",
+    "←": "<-",
+    "↔": "<->",
+    "⇒": "=>",
+    "⇐": "<=",
+    "—": "-",
+    "–": "-",
+    "‘": "'",
+    "’": "'",
+    "“": '"',
+    "”": '"',
+    "…": "...",
+    " ": " ",
 }
 
 
@@ -545,8 +552,12 @@ def html_to_text(html: str) -> str:
     s = re.sub(r"<[^>]+>", "", s)
     # &amp; last, or "&amp;lt;" would decode twice into "<".
     for ent, ch in (
-        ("&nbsp;", " "), ("&lt;", "<"), ("&gt;", ">"),
-        ("&quot;", '"'), ("&#39;", "'"), ("&amp;", "&"),
+        ("&nbsp;", " "),
+        ("&lt;", "<"),
+        ("&gt;", ">"),
+        ("&quot;", '"'),
+        ("&#39;", "'"),
+        ("&amp;", "&"),
     ):
         s = s.replace(ent, ch)
     return re.sub(r"\n{3,}", "\n\n", s).strip()
@@ -743,7 +754,8 @@ def resolve_cycle(cfg: dict, project_id: str, ref: str) -> dict:
         return active_cycle(cfg, project_id)
     cycles = list_cycles(cfg, project_id)
     hits = [
-        c for c in cycles
+        c
+        for c in cycles
         if needle in (c["id"].lower(), (c.get("name") or "").strip().lower())
     ]
     if len(hits) == 1:
@@ -1010,7 +1022,9 @@ def resolve_label_object(
             return hits[0]
         if len(hits) > 1:
             ids = ", ".join(x["id"] for x in hits)
-            raise PlaneError(f"{len(hits)} labels match {ref!r} ({ids}) — give more of the id")
+            raise PlaneError(
+                f"{len(hits)} labels match {ref!r} ({ids}) — give more of the id"
+            )
     elif hits:
         # A short needle that does prefix a real id is a truncated id, not a
         # missing label. Saying "no label matching" there tells the user the
@@ -1067,7 +1081,9 @@ def label_usage(cfg: dict, project_id: str, label_id: str) -> int:
 # Plane Cloud stores a pasted image as an inline node in description_html with
 # the asset UUID in src, and leaves issue-attachments/ empty. <img> is matched
 # too because self-hosted editors have used it.
-_ASSET_SRC = re.compile(r"<(?:image-component|img)\b[^>]*\bsrc=\"([^\"]+)\"", re.IGNORECASE)
+_ASSET_SRC = re.compile(
+    r"<(?:image-component|img)\b[^>]*\bsrc=\"([^\"]+)\"", re.IGNORECASE
+)
 
 
 def inline_asset_ids(issue: dict) -> list[str]:
@@ -1141,7 +1157,9 @@ def fetch_asset(url: str, base: str) -> bytes:
         with opener.open(req, timeout=60) as resp:
             blob = resp.read(_ASSET_MAX_BYTES + 1)
     except urllib.error.HTTPError as exc:
-        raise PlaneError(f"asset download -> {exc.code} (redirects are not followed)") from None
+        raise PlaneError(
+            f"asset download -> {exc.code} (redirects are not followed)"
+        ) from None
     except urllib.error.URLError as exc:
         raise PlaneError(f"asset download -> {exc.reason}") from None
     if len(blob) > _ASSET_MAX_BYTES:
@@ -1149,7 +1167,9 @@ def fetch_asset(url: str, base: str) -> bytes:
     return blob
 
 
-def _multipart(boundary: str, fields: dict, filename: str, mime: str, blob: bytes) -> bytes:
+def _multipart(
+    boundary: str, fields: dict, filename: str, mime: str, blob: bytes
+) -> bytes:
     """Hand-rolled multipart/form-data, because plane.py has no `requests`.
 
     The `file` part goes last: an S3 presigned POST ignores everything after
@@ -1170,7 +1190,9 @@ def _multipart(boundary: str, fields: dict, filename: str, mime: str, blob: byte
     return bytes(out)
 
 
-def push_asset(url: str, fields: dict, filename: str, mime: str, blob: bytes, base: str) -> None:
+def push_asset(
+    url: str, fields: dict, filename: str, mime: str, blob: bytes, base: str
+) -> None:
     """The second network call outside `_request`, and why — same trap as `fetch_asset`.
 
     Plane hands out a presigned S3 POST form; the signature in those fields is
@@ -1194,7 +1216,9 @@ def push_asset(url: str, fields: dict, filename: str, mime: str, blob: bytes, ba
     boundary = "----planeFormBoundary" + os.urandom(16).hex()
     while boundary.encode() in blob:
         boundary = "----planeFormBoundary" + os.urandom(16).hex()
-    body = _multipart(boundary, fields, _safe_filename(filename, "upload.bin"), mime, blob)
+    body = _multipart(
+        boundary, fields, _safe_filename(filename, "upload.bin"), mime, blob
+    )
 
     req = urllib.request.Request(url, data=body, method="POST")
     req.add_header("User-Agent", _UA)
@@ -1270,7 +1294,9 @@ def _table(rows: list[dict], columns: list[str]) -> str:
     out = ["  ".join(c.upper().ljust(widths[c]) for c in columns).rstrip()]
     out.append("  ".join("-" * widths[c] for c in columns).rstrip())
     for r in rows:
-        out.append("  ".join(_cell(r.get(c)).ljust(widths[c]) for c in columns).rstrip())
+        out.append(
+            "  ".join(_cell(r.get(c)).ljust(widths[c]) for c in columns).rstrip()
+        )
     return "\n".join(out)
 
 
@@ -1311,78 +1337,119 @@ def cmd_check(cfg, _args):
     print(f"\nprojects visible to this token ({len(projects)}):")
     for p in projects:
         flag = "ALLOWED" if p["_allowed"] else "BLOCKED"
-        print(f"  {flag:8} {p.get('identifier','?'):6} {p.get('name')}  [{p['id']}]")
+        print(f"  {flag:8} {p.get('identifier', '?'):6} {p.get('name')}  [{p['id']}]")
 
-    unknown = [p for p in cfg["allowed"] if p not in {q["id"].lower() for q in projects}]
+    unknown = [
+        p for p in cfg["allowed"] if p not in {q["id"].lower() for q in projects}
+    ]
     for pid in unknown:
         print(f"  MISSING  allowlisted project {pid} is not visible to this token")
 
     print("\nguardrail self-test:")
     negative: list[tuple[str, str, str]] = []
     for p in (q for q in projects if not q["_allowed"]):
-        negative.append(("GET", f"/projects/{p['id']}/issues/", f"read {p.get('name')}"))
-        negative.append(("POST", f"/projects/{p['id']}/issues/", f"write {p.get('name')}"))
         negative.append(
-            ("PATCH", f"/projects/{p['id']}/issues/{'0'*8}-0000-0000-0000-{'0'*12}/",
-             f"patch an issue in {p.get('name')}")
+            ("GET", f"/projects/{p['id']}/issues/", f"read {p.get('name')}")
+        )
+        negative.append(
+            ("POST", f"/projects/{p['id']}/issues/", f"write {p.get('name')}")
+        )
+        negative.append(
+            (
+                "PATCH",
+                f"/projects/{p['id']}/issues/{'0' * 8}-0000-0000-0000-{'0' * 12}/",
+                f"patch an issue in {p.get('name')}",
+            )
         )
     ok_id = next(iter(cfg["allowed"]))
     # A synthetic UUID nobody allowlisted, so the negative cases exist even when
     # the token happens to see only allowed projects — otherwise `check` could
     # certify the guardrail without once trying to get past it.
     off_id = "00000000-0000-0000-0000-000000000000"
-    negative.append(("GET", f"/projects/{off_id}/issues/", "read a project not in the allowlist"))
     negative.append(
-        ("GET", f"/projects/{ok_id}/issues/?project_id={off_id}",
-         "filter by ?project_id=<not allowlisted>")
+        ("GET", f"/projects/{off_id}/issues/", "read a project not in the allowlist")
     )
     negative.append(
-        ("POST", f"/projects/{ok_id}/../{off_id}/issues/",
-         "walk out of an allowed project with /../")
+        (
+            "GET",
+            f"/projects/{ok_id}/issues/?project_id={off_id}",
+            "filter by ?project_id=<not allowlisted>",
+        )
     )
     negative.append(
-        ("GET", f"/projects/{off_id.replace('-', '')}/issues/",
-         "read a blocked project via a hyphenless UUID")
+        (
+            "POST",
+            f"/projects/{ok_id}/../{off_id}/issues/",
+            "walk out of an allowed project with /../",
+        )
     )
     negative.append(
-        ("POST", f"/projects/{ok_id}" + "\\..\\" + f"{off_id}/issues/",
-         "walk out of an allowed project with \\..\\")
+        (
+            "GET",
+            f"/projects/{off_id.replace('-', '')}/issues/",
+            "read a blocked project via a hyphenless UUID",
+        )
+    )
+    negative.append(
+        (
+            "POST",
+            f"/projects/{ok_id}" + "\\..\\" + f"{off_id}/issues/",
+            "walk out of an allowed project with \\..\\",
+        )
     )
     negative.append(("DELETE", f"/projects/{ok_id}/", "delete an allowed project"))
     negative.append(("PATCH", f"/projects/{ok_id}/", "rename an allowed project"))
     negative.append(
-        ("DELETE", f"/projects/{ok_id}//",
-         "delete an allowed project via a trailing double slash")
+        (
+            "DELETE",
+            f"/projects/{ok_id}//",
+            "delete an allowed project via a trailing double slash",
+        )
     )
     negative.append(
         # "%25252530" is "0" percent-encoded four times: three decode passes
         # leave "%30", which must be refused, not waved through UUID-less.
-        ("GET", f"/projects/%25252530{off_id[1:]}/issues/",
-         "read via a path still percent-encoded after 3 passes")
+        (
+            "GET",
+            f"/projects/%25252530{off_id[1:]}/issues/",
+            "read via a path still percent-encoded after 3 passes",
+        )
     )
     negative.append(
-        ("GET", f"/projects/{ok_id}/issues/?module={off_id}",
-         "filter by a non-'project' query key carrying a blocked UUID")
+        (
+            "GET",
+            f"/projects/{ok_id}/issues/?module={off_id}",
+            "filter by a non-'project' query key carrying a blocked UUID",
+        )
     )
     negative.append(("POST", "/projects/", "create a project"))
     negative.append(("POST", "/issues/search/", "write via a workspace-scoped path"))
     negative.append(
-        ("DELETE", f"/projects/{off_id}/labels/{off_id}/",
-         "delete a label in a project not in the allowlist")
+        (
+            "DELETE",
+            f"/projects/{off_id}/labels/{off_id}/",
+            "delete a label in a project not in the allowlist",
+        )
     )
     # Rule 5. These are the deletions the tool has no command for: the point is
     # that the guard refuses them, not that no call site writes them.
     negative.append(
-        ("DELETE", f"/projects/{ok_id}/issues/{'0'*8}-0000-0000-0000-{'0'*12}/",
-         "delete an issue in an allowed project")
+        (
+            "DELETE",
+            f"/projects/{ok_id}/issues/{'0' * 8}-0000-0000-0000-{'0' * 12}/",
+            "delete an issue in an allowed project",
+        )
     )
     negative.append(
         ("DELETE", f"/projects/{ok_id}/labels/", "delete a project's whole label set")
     )
     negative.append(
-        ("DELETE", f"/projects/{ok_id}/issues/{'0'*8}-0000-0000-0000-{'0'*12}/comments/"
-                   f"{'1'*8}-1111-1111-1111-{'1'*12}/",
-         "delete a comment in an allowed project")
+        (
+            "DELETE",
+            f"/projects/{ok_id}/issues/{'0' * 8}-0000-0000-0000-{'0' * 12}/comments/"
+            f"{'1' * 8}-1111-1111-1111-{'1' * 12}/",
+            "delete a comment in an allowed project",
+        )
     )
 
     failures = 0
@@ -1401,8 +1468,11 @@ def cmd_check(cfg, _args):
         ("GET", "/members/", "read workspace members"),
         # The label's own UUID is not a project id, so the guard must not judge
         # it against the allowlist — only the /projects/<uuid> segment counts.
-        ("DELETE", f"/projects/{ok_id}/labels/{'1'*8}-1111-1111-1111-{'1'*12}/",
-         "delete a label in an allowed project"),
+        (
+            "DELETE",
+            f"/projects/{ok_id}/labels/{'1' * 8}-1111-1111-1111-{'1' * 12}/",
+            "delete a label in an allowed project",
+        ),
     ]
     for method, path, label in positive:
         try:
@@ -1423,8 +1493,11 @@ def cmd_check(cfg, _args):
         ("POST", f"/projects/{off_id}/issues/", "write a project not in the allowlist"),
         ("POST", "/issues/search/", "write via a workspace-scoped path"),
         ("DELETE", f"/projects/{ok_id}/", "delete an allowed project"),
-        ("DELETE", f"/projects/{ok_id}/issues/{'0'*8}-0000-0000-0000-{'0'*12}/",
-         "delete an issue in an allowed project"),
+        (
+            "DELETE",
+            f"/projects/{ok_id}/issues/{'0' * 8}-0000-0000-0000-{'0' * 12}/",
+            "delete an issue in an allowed project",
+        ),
     ]
     for method, path, label in chokepoint:
         swallowed = io.StringIO()
@@ -1434,7 +1507,9 @@ def cmd_check(cfg, _args):
         except GuardError:
             print(f"  blocked  {method:6} {label}")
         else:
-            print(f"  LEAKED   {method:6} {label}   <-- _request did not consult the guard")
+            print(
+                f"  LEAKED   {method:6} {label}   <-- _request did not consult the guard"
+            )
             failures += 1
 
     total = len(negative) + len(positive) + len(chokepoint)
@@ -1534,8 +1609,12 @@ def _apply_assignment_flags(cfg, args, project_id: str, payload: dict) -> None:
         known = project_labels(cfg, project_id)
         ids = [
             resolve_label(
-                cfg, project_id, name,
-                create=args.create_labels, dry_run=args.dry_run, labels=known,
+                cfg,
+                project_id,
+                name,
+                create=args.create_labels,
+                dry_run=args.dry_run,
+                labels=known,
             )
             for name in args.label
         ]
@@ -1546,7 +1625,9 @@ def _apply_assignment_flags(cfg, args, project_id: str, payload: dict) -> None:
         )
 
 
-def _place_in_cycle(cfg, project_id: str, issue: dict | None, ref: str, *, dry_run=False):
+def _place_in_cycle(
+    cfg, project_id: str, issue: dict | None, ref: str, *, dry_run=False
+):
     """Add an issue to a cycle. Membership is a POST, not a field on the issue."""
     cycle = resolve_cycle(cfg, project_id, ref)
     if issue is None:
@@ -1556,8 +1637,11 @@ def _place_in_cycle(cfg, project_id: str, issue: dict | None, ref: str, *, dry_r
         print(f"already in cycle {cycle.get('name')}")
         return
     _request(
-        "POST", f"/projects/{project_id}/cycles/{cycle['id']}/cycle-issues/", cfg,
-        body={"issues": [issue["id"]]}, dry_run=dry_run,
+        "POST",
+        f"/projects/{project_id}/cycles/{cycle['id']}/cycle-issues/",
+        cfg,
+        body={"issues": [issue["id"]]},
+        dry_run=dry_run,
     )
     if not dry_run:
         print(f"added to cycle {cycle.get('name')}")
@@ -1578,8 +1662,11 @@ def cmd_create(cfg, args):
     _apply_assignment_flags(cfg, args, proj["id"], payload)
 
     result = _request(
-        "POST", f"/projects/{proj['id']}/issues/", cfg,
-        body=payload, dry_run=args.dry_run,
+        "POST",
+        f"/projects/{proj['id']}/issues/",
+        cfg,
+        body=payload,
+        dry_run=args.dry_run,
     )
     # Keyed on the flag, not on `result`: _request also returns None for a
     # real 2xx with an empty body, and that create must not read as a dry-run.
@@ -1632,8 +1719,11 @@ def cmd_update(cfg, args):
 
     if payload:
         result = _request(
-            "PATCH", f"/projects/{pid}/issues/{issue['id']}/", cfg,
-            body=payload, dry_run=args.dry_run,
+            "PATCH",
+            f"/projects/{pid}/issues/{issue['id']}/",
+            cfg,
+            body=payload,
+            dry_run=args.dry_run,
         )
         if not args.dry_run:
             name = result.get("name") if isinstance(result, dict) else issue.get("name")
@@ -1650,8 +1740,11 @@ def cmd_comment(cfg, args):
         raise PlaneError("no comment text — pass TEXT, --body or --body-file")
 
     result = _request(
-        "POST", f"/projects/{pid}/issues/{issue['id']}/comments/", cfg,
-        body={"comment_html": md_to_html(text)}, dry_run=args.dry_run,
+        "POST",
+        f"/projects/{pid}/issues/{issue['id']}/comments/",
+        cfg,
+        body={"comment_html": md_to_html(text)},
+        dry_run=args.dry_run,
     )
     if not args.dry_run:
         cid = result.get("id") if isinstance(result, dict) else "?"
@@ -1684,8 +1777,7 @@ def _resolve_comment_id(comments: list[dict], ref: str) -> str:
             f"Comments here: {', '.join(ids) or '(none)'}"
         )
     raise PlaneError(
-        f"{len(hits)} comments match {ref!r} ({', '.join(hits)}) — "
-        "give more of the id"
+        f"{len(hits)} comments match {ref!r} ({', '.join(hits)}) — give more of the id"
     )
 
 
@@ -1703,8 +1795,11 @@ def cmd_comment_edit(cfg, args):
     cid = _resolve_comment_id(comments, args.comment_id)
 
     _request(
-        "PATCH", f"/projects/{pid}/issues/{issue['id']}/comments/{cid}/", cfg,
-        body={"comment_html": md_to_html(text)}, dry_run=args.dry_run,
+        "PATCH",
+        f"/projects/{pid}/issues/{issue['id']}/comments/{cid}/",
+        cfg,
+        body={"comment_html": md_to_html(text)},
+        dry_run=args.dry_run,
     )
     if not args.dry_run:
         print(f"edited comment {cid} on {issue.get('name')}")
@@ -1764,10 +1859,12 @@ def cmd_labels(cfg, args):
     # value — a paragraph (or a newline) in one description would otherwise
     # push `id` off the row, which is the field `label-edit` and `label-delete`
     # need. Full text is in --json.
-    print(_table(
-        [{**r, "description": _one_line(r["description"])} for r in rows],
-        ["name", "color", "id", "description"],
-    ))
+    print(
+        _table(
+            [{**r, "description": _one_line(r["description"])} for r in rows],
+            ["name", "color", "id", "description"],
+        )
+    )
 
 
 def cmd_label_create(cfg, args):
@@ -1783,7 +1880,8 @@ def cmd_label_create(cfg, args):
     # 400 does not tell the user the label they wanted already exists, and the
     # useful next move is `label-edit`, not a retry.
     clash = [
-        x for x in project_labels(cfg, proj["id"])
+        x
+        for x in project_labels(cfg, proj["id"])
         if (x.get("name") or "").strip().lower() == name.lower()
     ]
     if clash:
@@ -1793,15 +1891,21 @@ def cmd_label_create(cfg, args):
         )
 
     new_id = create_label(
-        cfg, proj["id"], name,
-        color=color, description=args.description, dry_run=args.dry_run,
+        cfg,
+        proj["id"],
+        name,
+        color=color,
+        description=args.description,
+        dry_run=args.dry_run,
     )
     if args.dry_run:
         return
     if getattr(args, "json", False):
         _emit(
             {
-                "id": new_id, "name": name, "color": color,
+                "id": new_id,
+                "name": name,
+                "color": color,
                 "description": args.description,
                 "project": {"id": proj["id"], "name": proj.get("name")},
             },
@@ -1824,7 +1928,8 @@ def cmd_label_edit(cfg, args):
         if not renamed:
             raise PlaneError("empty label name")
         collision = [
-            x for x in labels
+            x
+            for x in labels
             if (x.get("name") or "").strip().lower() == renamed.lower()
             and x["id"] != label["id"]
         ]
@@ -1841,8 +1946,11 @@ def cmd_label_edit(cfg, args):
         raise PlaneError("nothing to change — pass --name, --color or --description")
 
     _request(
-        "PATCH", f"/projects/{proj['id']}/labels/{label['id']}/", cfg,
-        body=payload, dry_run=args.dry_run,
+        "PATCH",
+        f"/projects/{proj['id']}/labels/{label['id']}/",
+        cfg,
+        body=payload,
+        dry_run=args.dry_run,
     )
     if args.dry_run:
         return
@@ -1916,7 +2024,9 @@ def cmd_label_delete(cfg, args):
         )
 
     _request(
-        "DELETE", f"/projects/{proj['id']}/labels/{label['id']}/", cfg,
+        "DELETE",
+        f"/projects/{proj['id']}/labels/{label['id']}/",
+        cfg,
         dry_run=args.dry_run,
     )
     if args.dry_run:
@@ -2011,16 +2121,16 @@ def upload_attachment(cfg, project_id: str, issue_id: str, path: str, *, dry_run
     except OSError as exc:
         raise PlaneError(f"cannot read {path!r}: {exc}") from None
     if len(blob) > _ASSET_MAX_BYTES:
-        raise PlaneError(
-            f"{path} is larger than {_ASSET_MAX_BYTES} bytes — refused"
-        )
+        raise PlaneError(f"{path} is larger than {_ASSET_MAX_BYTES} bytes — refused")
 
     name = _safe_filename(os.path.basename(path), "upload.bin")
     mime = mimetypes.guess_type(name)[0] or "application/octet-stream"
     endpoint = f"/projects/{project_id}/issues/{issue_id}/issue-attachments/"
 
     created = _request(
-        "POST", endpoint, cfg,
+        "POST",
+        endpoint,
+        cfg,
         body={"name": name, "size": len(blob), "type": mime},
         dry_run=dry_run,
     )
@@ -2041,7 +2151,9 @@ def upload_attachment(cfg, project_id: str, issue_id: str, path: str, *, dry_run
             "half-uploaded attachment — remove it in Plane before retrying."
         ) from None
     try:
-        _request("PATCH", f"{endpoint}{attachment_id}/", cfg, body={"is_uploaded": True})
+        _request(
+            "PATCH", f"{endpoint}{attachment_id}/", cfg, body={"is_uploaded": True}
+        )
     except PlaneError as exc:
         raise PlaneError(
             f"{name}: the file uploaded but marking attachment "
@@ -2077,7 +2189,9 @@ def cmd_attachments(cfg, args):
     detail = _request("GET", f"/projects/{pid}/issues/{issue['id']}/", cfg) or issue
 
     rows = []
-    for rec in _paginate(f"/projects/{pid}/issues/{issue['id']}/issue-attachments/", cfg):
+    for rec in _paginate(
+        f"/projects/{pid}/issues/{issue['id']}/issue-attachments/", cfg
+    ):
         attrs = rec.get("attributes") or {}
         # `asset` is the storage key on Plane Cloud —
         # "<workspace-uuid>/<hash>-<filename>" — which /assets/ cannot resolve;
@@ -2236,8 +2350,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="plane.py",
         description=(
-            "Plane CLI restricted to the projects named in "
-            "PLANE_ALLOWED_PROJECTS."
+            "Plane CLI restricted to the projects named in PLANE_ALLOWED_PROJECTS."
         ),
     )
     p.add_argument("--json", action="store_true", help="raw JSON output")
@@ -2267,21 +2380,25 @@ def build_parser() -> argparse.ArgumentParser:
     sp = add("issues", cmd_issues, "list issues")
     sp.add_argument("--state", help="filter by state name")
     sp.add_argument("--limit", type=int, help="max rows")
-    sp.add_argument("--full", action="store_true", help="full objects incl. description")
+    sp.add_argument(
+        "--full", action="store_true", help="full objects incl. description"
+    )
 
     sp = add("get", cmd_get, "show one issue (SPK-12 | 12 | uuid)")
     sp.add_argument("ref")
 
     def add_assignment_flags(sp):
         sp.add_argument(
-            "--assignee", action="append",
+            "--assignee",
+            action="append",
             help="member by display name, email or UUID; repeat to set several",
         )
         sp.add_argument(
             "--label", action="append", help="label by name or UUID; repeat for several"
         )
         sp.add_argument(
-            "--create-labels", action="store_true",
+            "--create-labels",
+            action="store_true",
             help="create any --label that does not exist yet",
         )
         sp.add_argument("--estimate", help="estimate value, e.g. 3 (see `estimates`)")
@@ -2315,7 +2432,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp = add("comment-edit", cmd_comment_edit, "replace an existing comment's body")
     sp.add_argument("ref")
     sp.add_argument(
-        "comment_id", metavar="COMMENT_ID",
+        "comment_id",
+        metavar="COMMENT_ID",
         help="comment id, or a unique prefix of one, as printed by `comments`",
     )
     sp.add_argument("text", nargs="?", help="replacement markdown")
@@ -2346,23 +2464,27 @@ def build_parser() -> argparse.ArgumentParser:
         "label", metavar="LABEL", help="label name, UUID, or a unique id prefix"
     )
     sp.add_argument(
-        "--yes", action="store_true",
+        "--yes",
+        action="store_true",
         help="confirm — deletion removes the label from every issue carrying it. "
-             "--dry-run prints the request without this",
+        "--dry-run prints the request without this",
     )
     add("members", cmd_members, "list workspace members", project=False)
     add("cycles", cmd_cycles, "list cycles, marking the active one")
     add("estimates", cmd_estimates, "list the project's estimate points")
 
     sp = add(
-        "attachments", cmd_attachments,
+        "attachments",
+        cmd_attachments,
         "list an issue's attachments, or upload/download files",
     )
     sp.add_argument("ref")
     move = sp.add_mutually_exclusive_group()
     move.add_argument("--download", metavar="DIR", help="download into DIR")
     move.add_argument(
-        "--upload", metavar="FILE", action="append",
+        "--upload",
+        metavar="FILE",
+        action="append",
         help="upload a local file as an attachment; repeat for several",
     )
 
@@ -2371,7 +2493,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sp.add_argument("query")
     sp.add_argument(
-        "--limit", type=int, default=100,
+        "--limit",
+        type=int,
+        default=100,
         help="max hits to ask the server for (default 100; its own default is 10)",
     )
 

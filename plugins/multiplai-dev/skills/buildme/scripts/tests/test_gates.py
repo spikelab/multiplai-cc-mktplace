@@ -22,27 +22,33 @@ from build_pipeline.models import ReviewGatePolicy, ReviewResult, ReviewScore
 
 class TestReviewScoreGate:
     def test_passes_above_threshold(self):
-        r = ReviewResult(scores=[
-            ReviewScore(dimension="A", weight=2, score=4, evidence=""),
-            ReviewScore(dimension="B", weight=1, score=4, evidence=""),
-        ])
+        r = ReviewResult(
+            scores=[
+                ReviewScore(dimension="A", weight=2, score=4, evidence=""),
+                ReviewScore(dimension="B", weight=1, score=4, evidence=""),
+            ]
+        )
         result = review_score_gate(r)
         assert result.passed
 
     def test_fails_below_threshold(self):
-        r = ReviewResult(scores=[
-            ReviewScore(dimension="A", weight=2, score=2, evidence=""),
-            ReviewScore(dimension="B", weight=1, score=3, evidence=""),
-        ])
+        r = ReviewResult(
+            scores=[
+                ReviewScore(dimension="A", weight=2, score=2, evidence=""),
+                ReviewScore(dimension="B", weight=1, score=3, evidence=""),
+            ]
+        )
         result = review_score_gate(r)
         assert not result.passed
         assert result.action == "fix_low_scores"
 
     def test_fails_with_dimension_at_1(self):
-        r = ReviewResult(scores=[
-            ReviewScore(dimension="A", weight=2, score=5, evidence=""),
-            ReviewScore(dimension="B", weight=1, score=1, evidence=""),
-        ])
+        r = ReviewResult(
+            scores=[
+                ReviewScore(dimension="A", weight=2, score=5, evidence=""),
+                ReviewScore(dimension="B", weight=1, score=1, evidence=""),
+            ]
+        )
         result = review_score_gate(r)
         assert not result.passed
         assert result.action == "fix_critical_dimension"
@@ -140,7 +146,9 @@ class TestRedGate:
     """RED gate: tests must fail for the right reason before implementation."""
 
     def test_passes_on_assertion_failure(self):
-        output = "FAILED tests/test_auth.py::test_login - AssertionError: expected token"
+        output = (
+            "FAILED tests/test_auth.py::test_login - AssertionError: expected token"
+        )
         result = red_gate(output, 1)
         assert result.passed
         assert "right reason" in result.reason
@@ -264,15 +272,20 @@ class TestTestGatesShareOneRunner:
 
         for gate in (gates_mod.baseline_test_gate, gates_mod.integration_gate):
             src = inspect.getsource(gate)
-            assert "subprocess.run" not in src, f"{gate.__name__} runs the suite directly"
-            assert "run_test_suite(" in src, f"{gate.__name__} does not use run_test_suite"
+            assert "subprocess.run" not in src, (
+                f"{gate.__name__} runs the suite directly"
+            )
+            assert "run_test_suite(" in src, (
+                f"{gate.__name__} does not use run_test_suite"
+            )
 
     def test_both_gates_delegate_at_runtime(self, tmp_path, trust_repo):
         from unittest.mock import patch
 
         for gate in (baseline_test_gate, integration_gate):
-            with patch("build_pipeline.gates.run_test_suite",
-                       return_value=(0, "5 passed")) as runner:
+            with patch(
+                "build_pipeline.gates.run_test_suite", return_value=(0, "5 passed")
+            ) as runner:
                 assert gate("pytest -q", tmp_path).passed
             runner.assert_called_once()
 
@@ -281,8 +294,10 @@ class TestTestGatesShareOneRunner:
         from unittest.mock import patch
 
         for gate in (baseline_test_gate, integration_gate):
-            with patch("build_pipeline.gates.run_test_suite",
-                       return_value=(None, "Test command failed to run: boom")):
+            with patch(
+                "build_pipeline.gates.run_test_suite",
+                return_value=(None, "Test command failed to run: boom"),
+            ):
                 result = gate("pytest -q", tmp_path)
             assert not result.passed
             assert "boom" in result.reason
@@ -292,10 +307,15 @@ class TestParseAgentStatus:
     """Agents close their report with a REQUIRED STATUS slot (Item 7)."""
 
     def test_parses_plain_slot(self):
-        assert parse_agent_status("Wrote tests.\n\nSTATUS: DONE\nTESTS_RUN: pytest\n") == "DONE"
+        assert (
+            parse_agent_status("Wrote tests.\n\nSTATUS: DONE\nTESTS_RUN: pytest\n")
+            == "DONE"
+        )
 
     def test_parses_underscored_variant(self):
-        assert parse_agent_status("STATUS: DONE_WITH_CONCERNS\n") == "DONE_WITH_CONCERNS"
+        assert (
+            parse_agent_status("STATUS: DONE_WITH_CONCERNS\n") == "DONE_WITH_CONCERNS"
+        )
         assert parse_agent_status("STATUS: NEEDS_CONTEXT\n") == "NEEDS_CONTEXT"
         assert parse_agent_status("STATUS: BLOCKED\n") == "BLOCKED"
 
@@ -323,7 +343,9 @@ class TestAgentStatusGate:
         assert r.metadata["status"] == "DONE"
 
     def test_done_with_concerns_passes(self):
-        r = agent_status_gate("STATUS: DONE_WITH_CONCERNS\nMock is thin.\n", "Implementer")
+        r = agent_status_gate(
+            "STATUS: DONE_WITH_CONCERNS\nMock is thin.\n", "Implementer"
+        )
         assert r.passed
         assert r.metadata["status"] == "DONE_WITH_CONCERNS"
 
@@ -361,7 +383,9 @@ class TestTestIntegrityGate:
         assert r.metadata["checked"] is True
 
     def test_mutated_test_file_fails(self):
-        r = unchanged_tests_gate({"tests/test_a.py": "abc"}, {"tests/test_a.py": "MUTATED"})
+        r = unchanged_tests_gate(
+            {"tests/test_a.py": "abc"}, {"tests/test_a.py": "MUTATED"}
+        )
         assert not r.passed
         assert r.action == "restore_tests"
         assert "tests/test_a.py" in r.reason
@@ -464,6 +488,8 @@ class TestGradedReviewGate:
         r = ReviewResult(scores=self._scores(("A", 2, 3, 1.0)))
         assert not review_score_gate(r).passed
         assert review_score_gate(r, ReviewGatePolicy(min_weighted_average=3.0)).passed
+
+
 # --- Unknowns / explainer gate (B1) -------------------------------------------
 
 COMPLETE_SECTION = """\
@@ -517,32 +543,39 @@ def _unknowns_doc(*sections: str) -> str:
 class TestUnknownsGate:
     def test_passes_on_complete_section(self):
         from build_pipeline.gates import unknowns_gate
+
         r = unknowns_gate(_unknowns_doc(COMPLETE_SECTION), ["mlx-whisper"])
         assert r.passed
 
     def test_no_dependencies_passes(self):
-        """"Nothing new to this project" is a recorded finding, not a failure."""
+        """ "Nothing new to this project" is a recorded finding, not a failure."""
         from build_pipeline.gates import unknowns_gate
+
         r = unknowns_gate("# Unknowns\n\nNo dependencies new to this project.\n", [])
         assert r.passed
         assert r.metadata["dependencies"] == []
 
     def test_missing_section_fails(self):
         from build_pipeline.gates import unknowns_gate
+
         r = unknowns_gate(_unknowns_doc(COMPLETE_SECTION), ["mlx-whisper", "polars"])
         assert not r.passed
         assert r.action == "regenerate_unknowns"
-        assert any("polars" in f and "no `## polars` section" in f
-                   for f in r.metadata["findings"])
+        assert any(
+            "polars" in f and "no `## polars` section" in f
+            for f in r.metadata["findings"]
+        )
 
     def test_empty_edge_cases_list_fails(self):
         from build_pipeline.gates import unknowns_gate
+
         r = unknowns_gate(_unknowns_doc(EMPTY_EDGE_CASES_SECTION), ["mlx-whisper"])
         assert not r.passed
         assert any("Edge cases" in f for f in r.metadata["findings"])
 
     def test_empty_assumptions_list_fails(self):
         from build_pipeline.gates import unknowns_gate
+
         text = _unknowns_doc(
             COMPLETE_SECTION.replace(
                 "- Every clip we pass is under 30 minutes.\n"
@@ -558,6 +591,7 @@ class TestUnknownsGate:
         """A section left at the template's `- <case>: <what happens>` bullets
         is an unwritten explainer, not a written one."""
         from build_pipeline.gates import unknowns_gate
+
         section = COMPLETE_SECTION.replace(
             "- Pure silence: returns hallucinated caption text such as "
             '"thanks for watching",\n  not an empty string.',
@@ -565,9 +599,17 @@ class TestUnknownsGate:
         )
         # Drop the remaining real bullets so only the placeholder is left.
         section = "\n".join(
-            line for line in section.splitlines()
-            if not line.startswith(("- Malformed", "- Oversized", "- Concurrent",
-                                    "- Offline", "  not an empty"))
+            line
+            for line in section.splitlines()
+            if not line.startswith(
+                (
+                    "- Malformed",
+                    "- Oversized",
+                    "- Concurrent",
+                    "- Offline",
+                    "  not an empty",
+                )
+            )
         )
         r = unknowns_gate(_unknowns_doc(section), ["mlx-whisper"])
         assert not r.passed
@@ -575,6 +617,7 @@ class TestUnknownsGate:
     def test_accepts_new_dependency_objects(self):
         from build_pipeline.dependencies import NewDependency
         from build_pipeline.gates import unknowns_gate
+
         dep = NewDependency(name="mlx-whisper", mentioned_in=["proposal.md § Impact"])
         assert unknowns_gate(_unknowns_doc(COMPLETE_SECTION), [dep]).passed
 
@@ -582,6 +625,7 @@ class TestUnknownsGate:
         """`react` must not pass via a `## react-query` section — every
         dependency needs its own heading."""
         from build_pipeline.gates import unknowns_gate
+
         section = COMPLETE_SECTION.replace("## mlx-whisper", "## react-query")
         r = unknowns_gate(_unknowns_doc(section), ["react", "react-query"])
         assert not r.passed
@@ -591,6 +635,7 @@ class TestUnknownsGate:
         """Backticks or a trailing clause around the name are fine — the match
         is whole-token, not exact-string."""
         from build_pipeline.gates import unknowns_gate
+
         section = COMPLETE_SECTION.replace(
             "## mlx-whisper", "## `mlx-whisper` — local transcription"
         )
@@ -599,6 +644,7 @@ class TestUnknownsGate:
 
 # --- The gate's single-regeneration-pass wiring (Done-means criterion 3) ------
 # Named test_unknowns_gate_* per the plan's acceptance criteria.
+
 
 def _audit_setup(tmp_path, unknowns_text):
     from unittest.mock import MagicMock
@@ -626,7 +672,9 @@ def _audit_setup(tmp_path, unknowns_text):
 
 
 @pytest.mark.asyncio
-async def test_unknowns_gate_empty_edge_cases_triggers_exactly_one_regeneration(tmp_path):
+async def test_unknowns_gate_empty_edge_cases_triggers_exactly_one_regeneration(
+    tmp_path,
+):
     from unittest.mock import AsyncMock, patch
 
     from build_pipeline.spec_generator import _audit_unknowns
@@ -727,7 +775,10 @@ SPEC_IMPACT: contradicts
 
     def _parse(self, output, role="implementer"):
         return parse_implementation_note(
-            output, block_number=3, block_name="Uploader", role=role,
+            output,
+            block_number=3,
+            block_name="Uploader",
+            role=role,
         )
 
     def test_parses_contradiction_with_multiline_surprises(self):
@@ -769,7 +820,7 @@ SPEC_IMPACT: contradicts
 
     def test_echoed_template_placeholder_is_not_a_finding(self):
         note = self._parse(
-            "SURPRISES: <what did not match the spec/design, or \"none\">\n"
+            'SURPRISES: <what did not match the spec/design, or "none">\n'
             "SPEC_IMPACT: none\n"
         )
         assert note is None
@@ -779,7 +830,7 @@ SPEC_IMPACT: contradicts
         the template outrank the agent's own answer."""
         output = (
             "I was asked to end with:\n"
-            "SURPRISES: <what did not match the spec/design, or \"none\">\n"
+            'SURPRISES: <what did not match the spec/design, or "none">\n'
             "SPEC_IMPACT: none\n"
             "\nHere is my report.\n"
             "STATUS: DONE\n"
@@ -824,10 +875,12 @@ SPEC_IMPACT: contradicts
         assert note.spec_impact == "contradicts"
 
     def test_colonless_prose_mention_records_nothing(self):
-        assert self._parse(
-            "STATUS: DONE\nFILES: a.py\n"
-            "Surprises were minimal this block.\n"
-        ) is None
+        assert (
+            self._parse(
+                "STATUS: DONE\nFILES: a.py\nSurprises were minimal this block.\n"
+            )
+            is None
+        )
 
     def test_continuation_line_starting_with_a_slot_word_is_kept(self):
         """A multiline value whose continuation line opens with a slot word
@@ -900,7 +953,10 @@ class TestParseDocsImpact:
         from build_pipeline.prompts.docs_update import DOCS_UPDATE_PROMPT
 
         echoed = DOCS_UPDATE_PROMPT.format(
-            project_dir="/tmp/project", change_name="feat", diff="", notes="",
+            project_dir="/tmp/project",
+            change_name="feat",
+            diff="",
+            notes="",
         )
         assert parse_docs_impact(echoed) is None
 
@@ -909,41 +965,63 @@ class TestParseDocsImpact:
         echo of a wrapped placeholder starts with `<` but never reaches the
         closing `>` — a guard requiring both brackets let it through as a
         garbage path list."""
-        assert parse_docs_impact(
-            "DOCS_IMPACT: <none, or a comma-separated list of the documentation files you\n"
-            "              changed, as paths relative to the project root>\n"
-        ) is None
+        assert (
+            parse_docs_impact(
+                "DOCS_IMPACT: <none, or a comma-separated list of the documentation files you\n"
+                "              changed, as paths relative to the project root>\n"
+            )
+            is None
+        )
 
     def test_echoed_single_line_placeholder_is_not_an_answer(self):
-        assert parse_docs_impact("DOCS_IMPACT: <none, or the files you changed>\n") is None
+        assert (
+            parse_docs_impact("DOCS_IMPACT: <none, or the files you changed>\n") is None
+        )
 
 
 class TestDiffPathHelpers:
     def test_parses_every_touched_path_once(self):
         assert parse_diff_paths(_diff_for("src/a.py", "README.md")) == [
-            "src/a.py", "README.md",
+            "src/a.py",
+            "README.md",
         ]
 
     def test_renames_report_both_sides(self):
         diff = "diff --git a/old.py b/new.py\n"
         assert parse_diff_paths(diff) == ["old.py", "new.py"]
 
-    @pytest.mark.parametrize("path", [
-        "README.md", "readme.rst", "CHANGELOG.md", "CHANGELOG",
-        "docs/usage.md", "plugins/x/docs/design.md", "doc/index.md",
-    ])
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "README.md",
+            "readme.rst",
+            "CHANGELOG.md",
+            "CHANGELOG",
+            "docs/usage.md",
+            "plugins/x/docs/design.md",
+            "doc/index.md",
+        ],
+    )
     def test_documentation_paths_are_recognised(self, path):
         assert is_doc_path(path)
 
-    @pytest.mark.parametrize("path", [
-        "src/app.py", "tests/test_app.py", "package.json",
-        "src/readme_parser.py", "src/docs_builder.py",
-        # Living under docs/ does not make a file a document. Every path this
-        # matches stops counting as source in the freshness warning, so code
-        # that happens to sit in a docs tree must not shrink the evidence.
-        "src/docs/generator.py", "docs/conf.py", "docs/_static/theme.css",
-        "doc/scripts/build_index.ts",
-    ])
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "src/app.py",
+            "tests/test_app.py",
+            "package.json",
+            "src/readme_parser.py",
+            "src/docs_builder.py",
+            # Living under docs/ does not make a file a document. Every path this
+            # matches stops counting as source in the freshness warning, so code
+            # that happens to sit in a docs tree must not shrink the evidence.
+            "src/docs/generator.py",
+            "docs/conf.py",
+            "docs/_static/theme.css",
+            "doc/scripts/build_index.ts",
+        ],
+    )
     def test_source_paths_are_not_documentation(self, path):
         assert not is_doc_path(path)
 
@@ -974,7 +1052,7 @@ class TestDocsFreshnessGate:
         project = self._project(tmp_path, "CHANGELOG.md")
         gate = docs_freshness_gate(_diff_for("src/app.py"), [], project)
 
-        assert gate.passed is True          # never fails
+        assert gate.passed is True  # never fails
         assert gate.action == "docs_may_be_stale"
         assert gate.metadata["warning"] is True
         assert gate.metadata["changelog"] == "CHANGELOG.md"
@@ -997,7 +1075,9 @@ class TestDocsFreshnessGate:
     def test_docs_updated_means_no_warning(self, tmp_path):
         project = self._project(tmp_path, "CHANGELOG.md")
         gate = docs_freshness_gate(
-            _diff_for("src/app.py"), ["CHANGELOG.md"], project,
+            _diff_for("src/app.py"),
+            ["CHANGELOG.md"],
+            project,
         )
         assert gate.passed is True
         assert gate.action is None
@@ -1046,20 +1126,25 @@ class TestParallelFullSuite:
         (bin_dir / "pytest").write_text('#!/bin/sh\necho "ARGS: $*"\n')
         (bin_dir / "python").write_text(
             '#!/bin/sh\n[ "$1" = "-m" ] && shift 2 && echo "ARGS: $*" && exit 0\n'
-            f'[ "$*" = "-c import xdist" ] && exit {0 if xdist else 1}\nexit 2\n')
+            f'[ "$*" = "-c import xdist" ] && exit {0 if xdist else 1}\nexit 2\n'
+        )
         for name in ("pytest", "python"):
             (bin_dir / name).chmod(0o755)
         return tmp_path
 
     @pytest.mark.parametrize("gate", [baseline_test_gate, integration_gate])
-    def test_xdist_importable_runs_the_suite_with_n_auto(self, tmp_path, trust_repo, gate):
+    def test_xdist_importable_runs_the_suite_with_n_auto(
+        self, tmp_path, trust_repo, gate
+    ):
         p = self._venv(tmp_path, xdist=True)
         result = gate(".venv/bin/pytest -q", p, parallel="auto")
         assert result.passed
         assert "ARGS: -q -n auto\n" in result.metadata["output"]
 
     @pytest.mark.parametrize("gate", [baseline_test_gate, integration_gate])
-    def test_xdist_missing_runs_the_command_as_written(self, tmp_path, trust_repo, gate):
+    def test_xdist_missing_runs_the_command_as_written(
+        self, tmp_path, trust_repo, gate
+    ):
         p = self._venv(tmp_path, xdist=False)
         result = gate(".venv/bin/pytest -q", p, parallel="auto")
         assert "ARGS: -q\n" in result.metadata["output"]
@@ -1067,7 +1152,10 @@ class TestParallelFullSuite:
     @pytest.mark.parametrize("gate", [baseline_test_gate, integration_gate])
     def test_parallel_off_never_adds_workers(self, tmp_path, trust_repo, gate):
         p = self._venv(tmp_path, xdist=True)
-        assert "ARGS: -q\n" in gate(".venv/bin/pytest -q", p, parallel="off").metadata["output"]
+        assert (
+            "ARGS: -q\n"
+            in gate(".venv/bin/pytest -q", p, parallel="off").metadata["output"]
+        )
         assert "ARGS: -q\n" in gate(".venv/bin/pytest -q", p).metadata["output"]
 
     def test_python_dash_m_pytest_probes_that_python(self, tmp_path, trust_repo):
@@ -1075,106 +1163,198 @@ class TestParallelFullSuite:
         result = integration_gate(".venv/bin/python -m pytest -q", p, parallel="auto")
         assert "ARGS: -q -n auto\n" in result.metadata["output"]
 
-    @pytest.mark.parametrize("command", [
-        ".venv/bin/pytest -n 2", ".venv/bin/pytest -n4", ".venv/bin/pytest --numprocesses=2",
-        ".venv/bin/pytest -p no:xdist", ".venv/bin/pytest --pdb", ".venv/bin/pytest -q -- tests",
-    ])
+    @pytest.mark.parametrize(
+        "command",
+        [
+            ".venv/bin/pytest -n 2",
+            ".venv/bin/pytest -n4",
+            ".venv/bin/pytest --numprocesses=2",
+            ".venv/bin/pytest -p no:xdist",
+            ".venv/bin/pytest --pdb",
+            ".venv/bin/pytest -q -- tests",
+        ],
+    )
     def test_a_command_that_chose_its_workers_is_kept(self, tmp_path, command):
         from build_pipeline.gates import parallel_command
+
         p = self._venv(tmp_path, xdist=True)
         assert parallel_command(command, p, "auto") == command
 
     def test_addopts_that_set_workers_are_kept(self, tmp_path, monkeypatch):
         from build_pipeline.gates import parallel_command
+
         p = self._venv(tmp_path, xdist=True)
         (p / "pytest.ini").write_text("[pytest]\naddopts = -n 4\n")
-        assert parallel_command(".venv/bin/pytest -q", p, "auto") == ".venv/bin/pytest -q"
+        assert (
+            parallel_command(".venv/bin/pytest -q", p, "auto") == ".venv/bin/pytest -q"
+        )
         (p / "pytest.ini").unlink()
         monkeypatch.setenv("PYTEST_ADDOPTS", "-p no:xdist")
-        assert parallel_command(".venv/bin/pytest -q", p, "auto") == ".venv/bin/pytest -q"
+        assert (
+            parallel_command(".venv/bin/pytest -q", p, "auto") == ".venv/bin/pytest -q"
+        )
 
-    @pytest.mark.parametrize("env, command", [
-        ({"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"}, ".venv/bin/pytest -q"),
-        ({"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "0"}, ".venv/bin/pytest -q"),        # any value turns it off
-        ({"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1", "PYTEST_PLUGINS": "xdist"}, ".venv/bin/pytest -q"),
-        ({}, ".venv/bin/pytest -q --disable-plugin-autoload"),
-    ])
-    def test_xdist_not_loaded_without_autoload_is_kept(self, tmp_path, monkeypatch, env, command):
+    @pytest.mark.parametrize(
+        "env, command",
+        [
+            ({"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"}, ".venv/bin/pytest -q"),
+            (
+                {"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "0"},
+                ".venv/bin/pytest -q",
+            ),  # any value turns it off
+            (
+                {"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1", "PYTEST_PLUGINS": "xdist"},
+                ".venv/bin/pytest -q",
+            ),
+            ({}, ".venv/bin/pytest -q --disable-plugin-autoload"),
+        ],
+    )
+    def test_xdist_not_loaded_without_autoload_is_kept(
+        self, tmp_path, monkeypatch, env, command
+    ):
         """With plugin autoloading off, pytest loads xdist only when `-p` or
         `PYTEST_PLUGINS` names it, and rejects `-n` otherwise (exit 4)."""
         from build_pipeline.gates import parallel_command
-        for name, value in env.items():
-            monkeypatch.setenv(name, value)
-        assert parallel_command(command, self._venv(tmp_path, xdist=True), "auto") == command
 
-    @pytest.mark.parametrize("env, command", [
-        ({"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"}, ".venv/bin/pytest -q -p xdist"),
-        ({"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"}, ".venv/bin/pytest -q -pxdist.plugin"),
-        ({"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1", "PYTEST_PLUGINS": "cov,xdist.plugin"}, ".venv/bin/pytest -q"),
-        ({"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1", "PYTEST_ADDOPTS": "-p xdist"}, ".venv/bin/pytest -q"),
-        ({"PYTEST_DISABLE_PLUGIN_AUTOLOAD": ""}, ".venv/bin/pytest -q"),
-    ])
-    def test_xdist_named_without_autoload_gets_workers(self, tmp_path, monkeypatch, env, command):
-        from build_pipeline.gates import parallel_command
         for name, value in env.items():
             monkeypatch.setenv(name, value)
-        assert parallel_command(command, self._venv(tmp_path, xdist=True), "auto") == f"{command} -n auto"
+        assert (
+            parallel_command(command, self._venv(tmp_path, xdist=True), "auto")
+            == command
+        )
+
+    @pytest.mark.parametrize(
+        "env, command",
+        [
+            ({"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"}, ".venv/bin/pytest -q -p xdist"),
+            (
+                {"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"},
+                ".venv/bin/pytest -q -pxdist.plugin",
+            ),
+            (
+                {
+                    "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+                    "PYTEST_PLUGINS": "cov,xdist.plugin",
+                },
+                ".venv/bin/pytest -q",
+            ),
+            (
+                {"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1", "PYTEST_ADDOPTS": "-p xdist"},
+                ".venv/bin/pytest -q",
+            ),
+            ({"PYTEST_DISABLE_PLUGIN_AUTOLOAD": ""}, ".venv/bin/pytest -q"),
+        ],
+    )
+    def test_xdist_named_without_autoload_gets_workers(
+        self, tmp_path, monkeypatch, env, command
+    ):
+        from build_pipeline.gates import parallel_command
+
+        for name, value in env.items():
+            monkeypatch.setenv(name, value)
+        assert (
+            parallel_command(command, self._venv(tmp_path, xdist=True), "auto")
+            == f"{command} -n auto"
+        )
 
     @pytest.mark.parametrize("gate", [baseline_test_gate, integration_gate])
-    def test_a_probe_that_times_out_runs_the_command_as_written(self, tmp_path, trust_repo, monkeypatch, gate):
+    def test_a_probe_that_times_out_runs_the_command_as_written(
+        self, tmp_path, trust_repo, monkeypatch, gate
+    ):
         """A probe that hangs (a first `uv run` sync) or cannot start leaves
         the command as written instead of raising out of the gate."""
         from build_pipeline import gates
+
         p = self._venv(tmp_path, xdist=True)
         python = p / ".venv" / "bin" / "python"
-        python.write_text('#!/bin/sh\n[ "$1" = "-m" ] && shift 2 && echo "ARGS: $*" && exit 0\nexec sleep 5\n')
+        python.write_text(
+            '#!/bin/sh\n[ "$1" = "-m" ] && shift 2 && echo "ARGS: $*" && exit 0\nexec sleep 5\n'
+        )
         monkeypatch.setattr(gates, "XDIST_PROBE_TIMEOUT", 0.2)
-        assert "ARGS: -q\n" in gate(".venv/bin/pytest -q", p, parallel="auto").metadata["output"]
+        assert (
+            "ARGS: -q\n"
+            in gate(".venv/bin/pytest -q", p, parallel="auto").metadata["output"]
+        )
 
-    def test_a_probe_that_cannot_start_runs_the_command_as_written(self, tmp_path, trust_repo):
+    def test_a_probe_that_cannot_start_runs_the_command_as_written(
+        self, tmp_path, trust_repo
+    ):
         p = self._venv(tmp_path, xdist=True)
-        (p / ".venv" / "bin" / "python").chmod(0o644)       # PermissionError, an OSError
-        assert "ARGS: -q\n" in integration_gate(".venv/bin/pytest -q", p, parallel="auto").metadata["output"]
+        (p / ".venv" / "bin" / "python").chmod(0o644)  # PermissionError, an OSError
+        assert (
+            "ARGS: -q\n"
+            in integration_gate(".venv/bin/pytest -q", p, parallel="auto").metadata[
+                "output"
+            ]
+        )
 
-    def test_autoload_off_runs_the_gate_as_written(self, tmp_path, trust_repo, monkeypatch):
+    def test_autoload_off_runs_the_gate_as_written(
+        self, tmp_path, trust_repo, monkeypatch
+    ):
         monkeypatch.setenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
         p = self._venv(tmp_path, xdist=True)
-        assert "ARGS: -q\n" in integration_gate(".venv/bin/pytest -q", p, parallel="auto").metadata["output"]
+        assert (
+            "ARGS: -q\n"
+            in integration_gate(".venv/bin/pytest -q", p, parallel="auto").metadata[
+                "output"
+            ]
+        )
 
-    @pytest.mark.parametrize("command", ["npm test", "make test", "tox -e py", "pytest -q && echo x",
-                                         "cargo test"])
+    @pytest.mark.parametrize(
+        "command",
+        ["npm test", "make test", "tox -e py", "pytest -q && echo x", "cargo test"],
+    )
     def test_other_runners_are_kept(self, tmp_path, command):
         from build_pipeline.gates import parallel_command
-        assert parallel_command(command, self._venv(tmp_path, xdist=True), "auto") == command
 
-    @pytest.mark.parametrize("command, probe", [
-        ("uv run pytest -q", ["uv", "run", "python", "-c", "import xdist"]),
-        ("poetry run pytest", ["poetry", "run", "python", "-c", "import xdist"]),
-        ("uv run python -m pytest", ["uv", "run", "python", "-c", "import xdist"]),
-        ("python3 -m pytest", ["python3", "-c", "import xdist"]),
-        ("env X=1 pytest", None),
-    ])
-    def test_the_probe_runs_in_the_environment_pytest_runs_in(self, tmp_path, command, probe):
+        assert (
+            parallel_command(command, self._venv(tmp_path, xdist=True), "auto")
+            == command
+        )
+
+    @pytest.mark.parametrize(
+        "command, probe",
+        [
+            ("uv run pytest -q", ["uv", "run", "python", "-c", "import xdist"]),
+            ("poetry run pytest", ["poetry", "run", "python", "-c", "import xdist"]),
+            ("uv run python -m pytest", ["uv", "run", "python", "-c", "import xdist"]),
+            ("python3 -m pytest", ["python3", "-c", "import xdist"]),
+            ("env X=1 pytest", None),
+        ],
+    )
+    def test_the_probe_runs_in_the_environment_pytest_runs_in(
+        self, tmp_path, command, probe
+    ):
         import shlex
 
         from build_pipeline.gates import _xdist_probe
+
         assert _xdist_probe(shlex.split(command), tmp_path) == probe
 
-    def test_a_bare_pytest_probes_the_python_beside_it_on_path(self, tmp_path, monkeypatch):
+    def test_a_bare_pytest_probes_the_python_beside_it_on_path(
+        self, tmp_path, monkeypatch
+    ):
         import shlex
 
         from build_pipeline.gates import _xdist_probe
+
         p = self._venv(tmp_path, xdist=True)
         monkeypatch.setenv("PATH", f"{p / '.venv' / 'bin'}:/usr/bin:/bin")
         assert _xdist_probe(shlex.split("pytest -xvs"), p) == [
-            str(p / ".venv" / "bin" / "python"), "-c", "import xdist"]
+            str(p / ".venv" / "bin" / "python"),
+            "-c",
+            "import xdist",
+        ]
 
     def test_an_untrusted_repo_is_not_probed(self, tmp_path, monkeypatch):
         from unittest.mock import patch
+
         monkeypatch.delenv("BUILDME_TRUST_REPO", raising=False)
         p = self._venv(tmp_path, xdist=True)
         with patch("build_pipeline.gates.parallel_command") as probe:
-            assert not integration_gate(".venv/bin/pytest -q", p, parallel="auto").passed
+            assert not integration_gate(
+                ".venv/bin/pytest -q", p, parallel="auto"
+            ).passed
         probe.assert_not_called()
 
     def test_every_full_suite_gate_in_the_engine_passes_the_setting(self):
@@ -1183,6 +1363,7 @@ class TestParallelFullSuite:
         import re
 
         from build_pipeline import tdd_engine
+
         src = inspect.getsource(tdd_engine)
         calls = re.findall(r"(?:integration_gate|baseline_test_gate)\(([^()]*)\)", src)
         assert calls  # every call must pass the setting; adding a gate is allowed
@@ -1192,13 +1373,17 @@ class TestParallelFullSuite:
 class TestFinalVerification:
     def test_requires_a_test_command(self, tmp_path):
         from build_pipeline.gates import final_verification
+
         assert not final_verification("", tmp_path).passed
 
-    def test_rejects_test_command_that_rewrites_tracked_input(self, tmp_path, monkeypatch):
+    def test_rejects_test_command_that_rewrites_tracked_input(
+        self, tmp_path, monkeypatch
+    ):
         import subprocess
         import sys
 
         from build_pipeline.gates import final_verification
+
         monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
         subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
         (tmp_path / "input.txt").write_text("before")
@@ -1214,25 +1399,33 @@ class TestFinalVerification:
         import sys
 
         from build_pipeline.gates import final_verification, verification_inputs
+
         monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
         subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
-        subprocess.run(["git", "commit", "--allow-empty", "-qm", "base"], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "commit", "--allow-empty", "-qm", "base"], cwd=tmp_path, check=True
+        )
         command = f'{sys.executable} -c "print(123)"'
         result = final_verification(command, tmp_path, plan_revision="plan-one")
         assert result.passed
-        assert result.metadata["inputs"] == verification_inputs(command, tmp_path, plan_revision="plan-one")
+        assert result.metadata["inputs"] == verification_inputs(
+            command, tmp_path, plan_revision="plan-one"
+        )
         assert "123" in result.metadata["output"]
 
 
 def _git(repo, *args):
     import subprocess
-    return subprocess.run(["git", *args], cwd=repo, text=True, capture_output=True,
-                          check=True).stdout.strip()
+
+    return subprocess.run(
+        ["git", *args], cwd=repo, text=True, capture_output=True, check=True
+    ).stdout.strip()
 
 
 def _python(code):
     import shlex
     import sys
+
     return shlex.quote(sys.executable) + " -c " + shlex.quote(code)
 
 
@@ -1253,7 +1446,16 @@ def with_submodule(tmp_path, trust_repo):
     (source / "a.txt").write_text("second\n")
     _git(source, "commit", "-qam", "second")
     _repo_with_one_file(project, "project\n")
-    _git(project, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(source), "vendor")
+    _git(
+        project,
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        "-q",
+        str(source),
+        "vendor",
+    )
     _git(project, "commit", "-qm", "add vendor")
     return project, older
 
@@ -1265,15 +1467,19 @@ class TestFinalVerificationSubmodules:
 
     def test_a_clean_submodule_passes_and_its_inputs_are_stable(self, with_submodule):
         from build_pipeline.gates import final_verification, verification_inputs
+
         project, _ = with_submodule
         result = final_verification(self.PASS, project)
         assert result.passed, result.reason
         first = verification_inputs(self.PASS, project, include_files=True)
         assert verification_inputs(self.PASS, project, include_files=True) == first
-        assert first["files"]["vendor"].startswith("checkout:" + _git(project / "vendor", "rev-parse", "HEAD"))
+        assert first["files"]["vendor"].startswith(
+            "checkout:" + _git(project / "vendor", "rev-parse", "HEAD")
+        )
 
     def test_reading_the_inputs_changes_nothing_in_the_submodule(self, with_submodule):
         from build_pipeline.gates import verification_inputs
+
         project, _ = with_submodule
         git_dir = Path(_git(project / "vendor", "rev-parse", "--absolute-git-dir"))
         (project / "vendor" / "a.txt").write_text("edited\n")
@@ -1282,8 +1488,11 @@ class TestFinalVerificationSubmodules:
         assert {p: p.read_bytes() for p in git_dir.rglob("*") if p.is_file()} == before
 
     @pytest.mark.parametrize("mutation", ["head", "tracked", "index", "untracked"])
-    def test_a_submodule_changed_by_the_command_fails_and_is_named(self, with_submodule, mutation):
+    def test_a_submodule_changed_by_the_command_fails_and_is_named(
+        self, with_submodule, mutation
+    ):
         from build_pipeline.gates import final_verification
+
         project, older = with_submodule
         # The parent's ignore setting hides the submodule from the parent's own status.
         _git(project, "config", "submodule.vendor.ignore", "all")
@@ -1292,35 +1501,54 @@ class TestFinalVerificationSubmodules:
             "head": f"import subprocess; subprocess.run(['git', '-C', 'vendor', 'checkout', '-q', '--detach', {older!r}], check=True)",
             "tracked": "from pathlib import Path; Path('vendor/a.txt').write_text('changed')",
             "index": "import subprocess; subprocess.run(['git', '-C', 'vendor', 'update-index', "
-                     f"'--cacheinfo', '100644,{blob},a.txt'], check=True)",
+            f"'--cacheinfo', '100644,{blob},a.txt'], check=True)",
             "untracked": "from pathlib import Path; Path('vendor/new.txt').write_text('new')",
         }[mutation]
         result = final_verification(_python(code), project)
         assert not result.passed
-        assert result.reason.startswith("Inputs changed during final verification: vendor.")
-        assert "vendor is a submodule or nested repository: run git -C vendor status" in result.reason
+        assert result.reason.startswith(
+            "Inputs changed during final verification: vendor."
+        )
+        assert (
+            "vendor is a submodule or nested repository: run git -C vendor status"
+            in result.reason
+        )
         assert result.metadata["changed_files"] == ["vendor"]
 
     def test_a_changed_file_gets_no_submodule_advice(self, with_submodule):
         from build_pipeline.gates import final_verification
+
         project, _ = with_submodule
-        result = final_verification(_python("from pathlib import Path; Path('a.txt').write_text('x')"), project)
+        result = final_verification(
+            _python("from pathlib import Path; Path('a.txt').write_text('x')"), project
+        )
         assert result.metadata["changed_files"] == ["a.txt"]
         assert "submodule" not in result.reason
 
-    def test_a_submodule_edited_before_the_check_and_left_alone_passes(self, with_submodule):
+    def test_a_submodule_edited_before_the_check_and_left_alone_passes(
+        self, with_submodule
+    ):
         from build_pipeline.gates import final_verification
+
         project, _ = with_submodule
         (project / "vendor" / "a.txt").write_text("edited\n")
         (project / "vendor" / "new.txt").write_text("new\n")
         result = final_verification(self.PASS, project)
         assert result.passed, result.reason
 
-    def test_a_tracked_file_git_is_told_to_assume_unchanged_is_still_read(self, with_submodule):
+    def test_a_tracked_file_git_is_told_to_assume_unchanged_is_still_read(
+        self, with_submodule
+    ):
         from build_pipeline.gates import final_verification
+
         project, _ = with_submodule
         _git(project / "vendor", "update-index", "--assume-unchanged", "a.txt")
-        result = final_verification(_python("from pathlib import Path; Path('vendor/a.txt').write_text('changed')"), project)
+        result = final_verification(
+            _python(
+                "from pathlib import Path; Path('vendor/a.txt').write_text('changed')"
+            ),
+            project,
+        )
         assert not result.passed
         assert result.metadata["changed_files"] == ["vendor"]
 
@@ -1329,50 +1557,95 @@ class TestFinalVerificationSubmodules:
         inner = tmp_path / "inner"
         _repo_with_one_file(inner, "inner\n")
         vendor = project / "vendor"
-        _git(vendor, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(inner), "inner")
+        _git(
+            vendor,
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            str(inner),
+            "inner",
+        )
         _git(vendor, "commit", "-qm", "add inner")
         _git(project, "add", "vendor")
         _git(project, "commit", "-qm", "move vendor")
 
-    def test_a_changed_file_in_a_nested_submodule_is_named(self, with_submodule, tmp_path):
+    def test_a_changed_file_in_a_nested_submodule_is_named(
+        self, with_submodule, tmp_path
+    ):
         from build_pipeline.gates import final_verification
+
         project, _ = with_submodule
         self._nest(project, tmp_path)
         assert final_verification(self.PASS, project).passed
-        code = "from pathlib import Path; Path('vendor/inner/a.txt').write_text('changed')"
+        code = (
+            "from pathlib import Path; Path('vendor/inner/a.txt').write_text('changed')"
+        )
         result = final_verification(_python(code), project)
         assert not result.passed
         assert result.metadata["changed_files"] == ["vendor"]
 
-    @pytest.mark.parametrize("command", [
-        "deinit -f inner",
-        "update --init inner",
-    ])
-    def test_a_nested_submodule_removed_or_checked_out_by_the_command_is_named(self, with_submodule,
-                                                                               tmp_path, command):
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "deinit -f inner",
+            "update --init inner",
+        ],
+    )
+    def test_a_nested_submodule_removed_or_checked_out_by_the_command_is_named(
+        self, with_submodule, tmp_path, command
+    ):
         from build_pipeline.gates import final_verification, verification_inputs
+
         project, _ = with_submodule
         self._nest(project, tmp_path)
         if command.startswith("update"):
             _git(project / "vendor", "submodule", "deinit", "-q", "-f", "inner")
-        assert verification_inputs(self.PASS, project) == verification_inputs(self.PASS, project)
+        assert verification_inputs(self.PASS, project) == verification_inputs(
+            self.PASS, project
+        )
         assert final_verification(self.PASS, project).passed
-        argv = ["git", "-C", "vendor", "-c", "protocol.file.allow=always", "submodule", *command.split()]
-        result = final_verification(_python(f"import subprocess; subprocess.run({argv!r}, check=True)"), project)
-        assert (project / "vendor/inner/a.txt").is_file() == command.startswith("update")
+        argv = [
+            "git",
+            "-C",
+            "vendor",
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            *command.split(),
+        ]
+        result = final_verification(
+            _python(f"import subprocess; subprocess.run({argv!r}, check=True)"), project
+        )
+        assert (project / "vendor/inner/a.txt").is_file() == command.startswith(
+            "update"
+        )
         assert not result.passed
         assert result.metadata["changed_files"] == ["vendor"]
 
-    def test_an_uninitialized_submodule_passes_the_same_way_every_time(self, with_submodule):
+    def test_an_uninitialized_submodule_passes_the_same_way_every_time(
+        self, with_submodule
+    ):
         from build_pipeline.gates import final_verification, verification_inputs
+
         project, _ = with_submodule
         _git(project, "submodule", "deinit", "-q", "-f", "vendor")
-        first, second = final_verification(self.PASS, project), final_verification(self.PASS, project)
+        first, second = (
+            final_verification(self.PASS, project),
+            final_verification(self.PASS, project),
+        )
         assert first.passed and second.passed, first.reason
-        assert verification_inputs(self.PASS, project, include_files=True)["files"]["vendor"] == "gitlink:uninitialized"
+        assert (
+            verification_inputs(self.PASS, project, include_files=True)["files"][
+                "vendor"
+            ]
+            == "gitlink:uninitialized"
+        )
 
     def test_a_gitlink_with_no_checkout_passes(self, tmp_path, trust_repo):
         from build_pipeline.gates import final_verification
+
         project = tmp_path / "project"
         _repo_with_one_file(project, "project\n")
         (project / "vendor").mkdir()
@@ -1382,8 +1655,11 @@ class TestFinalVerificationSubmodules:
         result = final_verification(self.PASS, project)
         assert result.passed, result.reason
 
-    def test_a_gitlink_directory_with_files_but_no_checkout_is_unavailable(self, with_submodule):
+    def test_a_gitlink_directory_with_files_but_no_checkout_is_unavailable(
+        self, with_submodule
+    ):
         from build_pipeline.gates import final_verification
+
         project, _ = with_submodule
         _git(project, "submodule", "deinit", "-q", "-f", "vendor")
         (project / "vendor" / "stray.txt").write_text("stray\n")
@@ -1396,14 +1672,18 @@ class TestFinalVerificationSubmodules:
         import shutil
 
         from build_pipeline.gates import verification_inputs
+
         project, _ = with_submodule
         shutil.rmtree(project / "vendor")
         (project / "vendor").write_text("now a file\n")
         files = verification_inputs(self.PASS, project, include_files=True)["files"]
         assert files["vendor"].startswith("0:")
 
-    def test_an_untracked_nested_repository_is_checked_like_a_submodule(self, tmp_path, trust_repo):
+    def test_an_untracked_nested_repository_is_checked_like_a_submodule(
+        self, tmp_path, trust_repo
+    ):
         from build_pipeline.gates import final_verification
+
         project = tmp_path / "project"
         _repo_with_one_file(project, "project\n")
         _repo_with_one_file(project / "nested", "nested\n")
@@ -1416,28 +1696,49 @@ class TestFinalVerificationSubmodules:
 
 def test_red_rejects_missing_fixture_file_even_with_failed_summary():
     from build_pipeline.gates import red_gate
-    gate = red_gate("FileNotFoundError: missing-fixture.json\nFAILED tests/test_app.py::test_read\n1 failed", 1)
+
+    gate = red_gate(
+        "FileNotFoundError: missing-fixture.json\nFAILED tests/test_app.py::test_read\n1 failed",
+        1,
+    )
     assert not gate.passed
 
 
 def test_red_rejects_setup_errors_even_with_assertion_failures():
     from build_pipeline.gates import red_gate
-    assert not red_gate("ERROR at setup of test_app\nAssertionError\n1 failed, 1 error", 1).passed
+
+    assert not red_gate(
+        "ERROR at setup of test_app\nAssertionError\n1 failed, 1 error", 1
+    ).passed
 
 
-@pytest.mark.parametrize("body,expected", [
-    ("def test_behavior():\n    assert 1 == 2\n", True),
-    ("def test_behavior(missing_fixture):\n    assert 1 == 2\n", False),
-    ("def test_behavior():\n    open('missing-input')\n", False),
-    ("import missing_buildme_test_module\n", False),
-])
-def test_real_pytest_red_classifies_behavior_and_attributes_changed_test(tmp_path, body, expected):
+@pytest.mark.parametrize(
+    "body,expected",
+    [
+        ("def test_behavior():\n    assert 1 == 2\n", True),
+        ("def test_behavior(missing_fixture):\n    assert 1 == 2\n", False),
+        ("def test_behavior():\n    open('missing-input')\n", False),
+        ("import missing_buildme_test_module\n", False),
+    ],
+)
+def test_real_pytest_red_classifies_behavior_and_attributes_changed_test(
+    tmp_path, body, expected
+):
     import subprocess
     import sys
+
     (tmp_path / "test_behavior.py").write_text(body)
-    result = subprocess.run([sys.executable, "-m", "pytest", "-q", "test_behavior.py"],
-                            cwd=tmp_path, capture_output=True, text=True)
-    gate = red_gate(result.stdout + result.stderr, result.returncode, expected_tests=["test_behavior.py"])
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "test_behavior.py"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+    )
+    gate = red_gate(
+        result.stdout + result.stderr,
+        result.returncode,
+        expected_tests=["test_behavior.py"],
+    )
     assert gate.passed is expected, gate.reason
 
 
@@ -1445,46 +1746,72 @@ def test_real_pytest_red_classifies_behavior_and_attributes_changed_test(tmp_pat
 def test_red_never_accepts_collection_errors_from_wrapped_runners(tmp_path, runner):
     import subprocess
     import sys
+
     (tmp_path / "test_missing.py").write_text("import nonexistent_buildme_dependency\n")
-    run = subprocess.run([sys.executable, "-m", "pytest", "-q"], cwd=tmp_path,
-                         capture_output=True, text=True)
+    run = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+    )
     gate = red_gate(run.stdout + run.stderr, run.returncode, runner=runner)
     assert not gate.passed
 
 
-@pytest.mark.parametrize("exception", ["FileNotFoundError", "ImportError", "PermissionError"])
+@pytest.mark.parametrize(
+    "exception", ["FileNotFoundError", "ImportError", "PermissionError"]
+)
 def test_red_classifies_exception_diagnostics_not_displayed_source(tmp_path, exception):
     import subprocess
     import sys
+
     (tmp_path / "test_behavior.py").write_text(
         "from unittest.mock import patch\n\n"
         "def test_behavior():\n"
         f"    with patch('builtins.open', side_effect={exception}):\n"
-        "        assert 1 == 2\n")
-    run = subprocess.run([sys.executable, "-m", "pytest", "-q"], cwd=tmp_path,
-                         capture_output=True, text=True)
-    gate = red_gate(run.stdout + run.stderr, run.returncode, expected_tests=["test_behavior.py"])
+        "        assert 1 == 2\n"
+    )
+    run = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+    )
+    gate = red_gate(
+        run.stdout + run.stderr, run.returncode, expected_tests=["test_behavior.py"]
+    )
     assert gate.passed, gate.reason
 
 
 def test_unknown_runner_nonzero_is_explicitly_unverified():
-    for output, code in [("command not found: node", 127), ("Error: Cannot find module 'jest'", 1)]:
+    for output, code in [
+        ("command not found: node", 127),
+        ("Error: Cannot find module 'jest'", 1),
+    ]:
         result = red_gate(output, code, runner=None)
-        assert result.passed and result.metadata['classification'] == 'unverified'
+        assert result.passed and result.metadata["classification"] == "unverified"
 
 
 def test_new_module_can_reach_red_without_collection_failure(tmp_path):
     import subprocess
     import sys
+
     (tmp_path / "test_new.py").write_text(
         "import importlib.util\n\ndef test_api():\n"
         "    assert importlib.util.find_spec('new_buildme_feature') is not None\n"
-        "    from new_buildme_feature import answer\n    assert answer() == 42\n")
-    run = subprocess.run([sys.executable, "-m", "pytest", "-q"], cwd=tmp_path,
-                         capture_output=True, text=True)
-    assert red_gate(run.stdout + run.stderr, run.returncode, expected_tests=["test_new.py"]).passed
+        "    from new_buildme_feature import answer\n    assert answer() == 42\n"
+    )
+    run = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+    )
+    assert red_gate(
+        run.stdout + run.stderr, run.returncode, expected_tests=["test_new.py"]
+    ).passed
 
 
 def test_jest_collection_failure_is_not_behavioral_red():
     output = "FAIL tests/a.test.js\n  ● Test suite failed to run\n\n    Cannot find module 'not-installed' from 'tests/a.test.js'\n\nTest Suites: 1 failed, 1 total\nTests: 0 total"
-    assert not red_gate(output, 1, runner='jest').passed
+    assert not red_gate(output, 1, runner="jest").passed

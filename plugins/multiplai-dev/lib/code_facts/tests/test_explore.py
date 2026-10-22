@@ -31,14 +31,23 @@ def test_check_citation_passes_across_whitespace_and_reads_the_cited_side(resolv
     assert check_citation(Citation(**cit(quote="def   greet(name):")), resolve) is None
     # The same quote at line 1 is in the base commit only.
     assert check_citation(Citation(**cit(a=1, b=1, side="base")), resolve) is None
-    assert check_citation(Citation(**cit(a=1, b=1)), resolve) == "quote not at cited lines"
+    assert (
+        check_citation(Citation(**cit(a=1, b=1)), resolve) == "quote not at cited lines"
+    )
 
 
 def test_check_citation_reasons(resolve):
-    assert check_citation(Citation(**cit(path="app/util.py", side="base", quote="X")), resolve) == \
-        "path not at commit"
+    assert (
+        check_citation(
+            Citation(**cit(path="app/util.py", side="base", quote="X")), resolve
+        )
+        == "path not at commit"
+    )
     assert check_citation(Citation(**cit(path="elsewhere/x.py")), resolve) == UNRESOLVED
-    assert check_citation(Citation(**cit(path="elsewhere/x.py", quote="  ")), resolve) == "empty quote"
+    assert (
+        check_citation(Citation(**cit(path="elsewhere/x.py", quote="  ")), resolve)
+        == "empty quote"
+    )
 
 
 def test_keeper_makes_paths_relative_and_records_reasons(resolve, tmp_path):
@@ -61,17 +70,37 @@ def test_ws_path_strips_root_dots_and_backticks(tmp_path):
 
 def _answers():
     return {
-        "unit:u1": ExploreOutput.model_validate({
-            "facts": [{"claim": "greet builds a greeting", "citations": [cit()]},
-                      {"claim": "invented", "citations": [cit(quote="nothing like this")]}],
-            "files": [{"path": "app/main.py", "purpose": "says hello", "citation": cit()}],
-            "interfaces": [{"claim": "greet(name)", "citations": [cit()]}],
-            "gotchas": [{"claim": "logs every call", "citations": [cit(a=5, b=5, quote="logging.info")]}],
-            "terms": [{"term": "greet", "meaning": "say hi", "citation": cit()},
-                      {"term": "ghost", "meaning": "?", "citation": cit(quote="ghost")}],
-            "conventions": [{"claim": "logs with the logging module", "citations": [cit(a=1, b=1,
-                                                                                         quote="import logging")]}],
-        }).model_dump(),
+        "unit:u1": ExploreOutput.model_validate(
+            {
+                "facts": [
+                    {"claim": "greet builds a greeting", "citations": [cit()]},
+                    {
+                        "claim": "invented",
+                        "citations": [cit(quote="nothing like this")],
+                    },
+                ],
+                "files": [
+                    {"path": "app/main.py", "purpose": "says hello", "citation": cit()}
+                ],
+                "interfaces": [{"claim": "greet(name)", "citations": [cit()]}],
+                "gotchas": [
+                    {
+                        "claim": "logs every call",
+                        "citations": [cit(a=5, b=5, quote="logging.info")],
+                    }
+                ],
+                "terms": [
+                    {"term": "greet", "meaning": "say hi", "citation": cit()},
+                    {"term": "ghost", "meaning": "?", "citation": cit(quote="ghost")},
+                ],
+                "conventions": [
+                    {
+                        "claim": "logs with the logging module",
+                        "citations": [cit(a=1, b=1, quote="import logging")],
+                    }
+                ],
+            }
+        ).model_dump(),
         "unit:u2": {"error": "planted failure"},
     }
 
@@ -79,13 +108,20 @@ def _answers():
 def test_gate_answers_keeps_only_cited_facts_and_numbers_them(resolve):
     g = gate_answers(_answers(), citation_keeper(resolve))
     assert [f.id for f in g.facts] == ["f1", "f2", "f3", "f4"]
-    assert [f.source for f in g.facts] == ["unit:u1/fact", "unit:u1/interface", "unit:u1/gotcha", "unit:u1/file"]
+    assert [f.source for f in g.facts] == [
+        "unit:u1/fact",
+        "unit:u1/interface",
+        "unit:u1/gotcha",
+        "unit:u1/file",
+    ]
     assert [c.id for f in g.facts for c in f.citations] == ["c1", "c2", "c3", "c4"]
     assert (g.interfaces, g.gotchas, g.conventions) == (["f2"], ["f3"], [])
     assert g.purposes == {"app/main.py": "says hello"}
     assert [t.term for t in g.terms] == ["greet"]
-    assert [(d.what, d.reason) for d in g.dropped] == [("invented", "no citation passed"),
-                                                       ("term ghost", "no citation passed")]
+    assert [(d.what, d.reason) for d in g.dropped] == [
+        ("invented", "no citation passed"),
+        ("term ghost", "no citation passed"),
+    ]
 
 
 def test_conventions_are_kept_only_when_asked_for(resolve):
@@ -119,8 +155,13 @@ def test_ask_stores_answers_records_failures_and_reraises_fatal():
     answers: dict[str, dict] = {}
     errors: list[str] = []
     lines: list[str] = []
-    kw = dict(call_kwargs={"allowed_tools": ["Read"], "cwd": "/snap"}, errors=errors, recoverable=(Failed,),
-              fatal=(Fatal,), progress=lines.append)
+    kw = dict(
+        call_kwargs={"allowed_tools": ["Read"], "cwd": "/snap"},
+        errors=errors,
+        recoverable=(Failed,),
+        fatal=(Fatal,),
+        progress=lines.append,
+    )
     asyncio.run(ask("unit:u1", "ok", call, answers, **kw))
     asyncio.run(ask("unit:u2", "fail", call, answers, **kw))
     with pytest.raises(Fatal):
@@ -130,7 +171,11 @@ def test_ask_stores_answers_records_failures_and_reraises_fatal():
     assert errors == ["explore unit:u2: no answer"]
     assert "unit:u3" not in answers
     assert lines == ["  explore unit:u1: 1 facts", "  explore unit:u2: 0 facts"]
-    assert calls[0] == {"budget_label": "explore:unit", "allowed_tools": ["Read"], "cwd": "/snap"}
+    assert calls[0] == {
+        "budget_label": "explore:unit",
+        "allowed_tools": ["Read"],
+        "cwd": "/snap",
+    }
 
 
 def test_ask_treats_an_encode_failure_like_a_call_failure():
@@ -152,14 +197,25 @@ def test_run_tasks_skips_answered_keys():
         return schema()
 
     answers = {"unit:u1": {"facts": []}}
-    asyncio.run(run_tasks([("unit:u1", "p1"), ("unit:u2", "p2")], call, answers, concurrency=2,
-                          call_kwargs={}, errors=[]))
+    asyncio.run(
+        run_tasks(
+            [("unit:u1", "p1"), ("unit:u2", "p2")],
+            call,
+            answers,
+            concurrency=2,
+            call_kwargs={},
+            errors=[],
+        )
+    )
     assert asked == ["p2"]
     assert set(answers) == {"unit:u1", "unit:u2"}
 
 
 def test_reask_names_missed_files_once():
-    units = [Unit(id="u1", files=["a.py", "b.py"], lines=10), Unit(id="u2", files=["c.py"], lines=5)]
+    units = [
+        Unit(id="u1", files=["a.py", "b.py"], lines=10),
+        Unit(id="u2", files=["c.py"], lines=5),
+    ]
     retry = reask_units(units, {"b.py"}, {}, lambda u, miss: f"{u.id}:{','.join(miss)}")
     assert retry == [("unit:u1:reask", "u1:b.py")]
     assert reask_units(units, {"b.py"}, {"unit:u1:reask": {}}, lambda u, m: "") == []

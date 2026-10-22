@@ -207,9 +207,7 @@ def check_text(text: str, policy: BankPolicy) -> list[str]:
     lowered = (text or "").lower()
     hits = sorted({term for term in policy.no_go if term and term in lowered})
     if hits:
-        reasons.append(
-            "names a no-go domain declared by the bank: " + ", ".join(hits)
-        )
+        reasons.append("names a no-go domain declared by the bank: " + ", ".join(hits))
     for label in find_secrets(text):
         reasons.append(f"contains what looks like a {label}")
     return reasons

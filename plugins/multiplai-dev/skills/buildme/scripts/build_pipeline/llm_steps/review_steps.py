@@ -88,14 +88,18 @@ def _merge_scores(results: list[ReviewResult]) -> list[ReviewScore]:
                 # sends a 2/3 split to 2 and a 3/4 split to 4 — a tie-break rule
                 # nobody chose and one that differs by dimension.
                 score=math.floor(mean + 0.5),
-                evidence="\n".join(f"[{i + 1}] {s.evidence}" for i, s in enumerate(scores)),
+                evidence="\n".join(
+                    f"[{i + 1}] {s.evidence}" for i, s in enumerate(scores)
+                ),
                 confidence=round(min(1.0, max(0.0, confidence)), 3),
             )
         )
     return merged
 
 
-def _merge_findings(results: list[ReviewResult], labels: list[str]) -> list[ReviewFinding]:
+def _merge_findings(
+    results: list[ReviewResult], labels: list[str]
+) -> list[ReviewFinding]:
     """Dedupe findings across the panel, raising confidence on agreement.
 
     Independent confirmation is combined noisy-or (`1 - Π(1 - c)`): two
@@ -117,8 +121,12 @@ def _merge_findings(results: list[ReviewResult], labels: list[str]) -> list[Revi
             # Keep the harshest severity anyone assigned — a Critical seen by
             # one reviewer must not be softened by another's Minor.
             order = ["Note", "Minor", "Major", "Critical"]
-            if order.index(f.severity.title() if f.severity.title() in order else "Minor") > order.index(
-                existing.severity.title() if existing.severity.title() in order else "Minor"
+            if order.index(
+                f.severity.title() if f.severity.title() in order else "Minor"
+            ) > order.index(
+                existing.severity.title()
+                if existing.severity.title() in order
+                else "Minor"
             ):
                 existing.severity = f.severity
             if f.evidence and f.evidence not in existing.evidence:
@@ -126,7 +134,11 @@ def _merge_findings(results: list[ReviewResult], labels: list[str]) -> list[Revi
             # Every place any reviewer saw the same defect.
             existing.other_locations = [
                 *existing.other_locations,
-                *(loc for loc in f.other_locations if loc not in existing.other_locations),
+                *(
+                    loc
+                    for loc in f.other_locations
+                    if loc not in existing.other_locations
+                ),
             ]
             existing.defect_class = existing.defect_class or f.defect_class
     return list(merged.values())
@@ -140,7 +152,9 @@ def _merge_prior_assessments(results: list[ReviewResult]) -> list[PriorAssessmen
     for result in results:
         for a in result.prior_assessments:
             existing = merged.get(a.finding_id)
-            if existing is None or PRIOR_STATUSES.index(a.status) > PRIOR_STATUSES.index(existing.status):
+            if existing is None or PRIOR_STATUSES.index(
+                a.status
+            ) > PRIOR_STATUSES.index(existing.status):
                 merged[a.finding_id] = a.model_copy()
     return list(merged.values())
 
@@ -155,8 +169,12 @@ def merge_panel_results(results: list[ReviewResult], labels: list[str]) -> Revie
     """
     if len(results) == 1:
         only = results[0]
-        return only.model_copy(update={
-            "panel": list(labels), "prior_assessments": _merge_prior_assessments(results)})
+        return only.model_copy(
+            update={
+                "panel": list(labels),
+                "prior_assessments": _merge_prior_assessments(results),
+            }
+        )
 
     def _union(attr: str) -> list[str]:
         seen: list[str] = []
@@ -239,24 +257,37 @@ async def run_code_review(
     # MORE likely to fail the review than the single-reviewer default, the exact
     # opposite of the feature's purpose. Survivors are merged; only an
     # all-members-failed panel is a real failure.
-    settled = await asyncio.gather(*[
-        agent_call_structured(
-            prompt, ReviewResult, allowed_tools=REVIEWER_TOOLS,
-            model=m, effort=config.effort_for("review"),
-            max_retries=1, max_turns=REVIEWER_MAX_TURNS,
-            cwd=str(config.project_dir), budget_label="review",
-        )
-        for m in models
-    ], return_exceptions=True)
+    settled = await asyncio.gather(
+        *[
+            agent_call_structured(
+                prompt,
+                ReviewResult,
+                allowed_tools=REVIEWER_TOOLS,
+                model=m,
+                effort=config.effort_for("review"),
+                max_retries=1,
+                max_turns=REVIEWER_MAX_TURNS,
+                cwd=str(config.project_dir),
+                budget_label="review",
+            )
+            for m in models
+        ],
+        return_exceptions=True,
+    )
 
     results: list[ReviewResult] = []
     survivors: list[str] = []
     for model_name, outcome in zip(models, settled):
-        if isinstance(outcome, BudgetExceededError) or (isinstance(outcome, BaseException) and not isinstance(outcome, Exception)):
+        if isinstance(outcome, BudgetExceededError) or (
+            isinstance(outcome, BaseException) and not isinstance(outcome, Exception)
+        ):
             raise outcome
         if isinstance(outcome, BaseException):
-            log.warning("Review panel member %s failed, dropping it from the merge: %s",
-                        model_name, outcome)
+            log.warning(
+                "Review panel member %s failed, dropping it from the merge: %s",
+                model_name,
+                outcome,
+            )
             continue
         results.append(outcome)
         survivors.append(model_name)
@@ -269,8 +300,12 @@ async def run_code_review(
             f"warnings above for each member's error."
         )
     if len(results) < len(models):
-        log.warning("Review panel degraded: %d of %d members returned (%s)",
-                    len(results), len(models), ", ".join(survivors))
+        log.warning(
+            "Review panel degraded: %d of %d members returned (%s)",
+            len(results),
+            len(models),
+            ", ".join(survivors),
+        )
 
     result = merge_panel_results(results, survivors)
     log.info(
@@ -305,7 +340,11 @@ async def run_review_fix(
     """
     issues_text = "\n".join(
         f"- [{i.get('severity', 'Unknown')}] {i.get('dimension', '')}: {i.get('description', '')}"
-        + (f" ({i.get('file_path', '')}:{i.get('line', '')})" if i.get('file_path') else "")
+        + (
+            f" ({i.get('file_path', '')}:{i.get('line', '')})"
+            if i.get("file_path")
+            else ""
+        )
         for i in issues
     )
 

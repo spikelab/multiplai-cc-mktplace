@@ -39,13 +39,19 @@ if str(SCRIPTS_DIR) not in sys.path:
 # Helpers
 # ---------------------------------------------------------------------------
 
-_SAMPLE_LLM_RESPONSE = json.dumps({
-    "sessions": [
-        {"id": "session-1", "project": "acme-api", "summary": "Worked on auth refactor"}
-    ],
-    "projects": ["acme-api"],
-    "topics": ["auth refactor", "rate limiting"],
-})
+_SAMPLE_LLM_RESPONSE = json.dumps(
+    {
+        "sessions": [
+            {
+                "id": "session-1",
+                "project": "acme-api",
+                "summary": "Worked on auth refactor",
+            }
+        ],
+        "projects": ["acme-api"],
+        "topics": ["auth refactor", "rate limiting"],
+    }
+)
 
 
 def _make_mock_client(response_content=None):
@@ -107,9 +113,7 @@ def _make_day_dir(diary_dir, date_str, files=None):
     for fname, content in files.items():
         sid = fname.removesuffix(".md")
         ts = f"{date_str}T00:00:00+00:00"
-        parts.append(
-            f"\n## Session: {sid} — {ts} — /test/cwd\n\n{content}\n"
-        )
+        parts.append(f"\n## Session: {sid} — {ts} — /test/cwd\n\n{content}\n")
 
     day_file = diary_dir / f"{date_str}.md"
     day_file.write_text("".join(parts), encoding="utf-8")
@@ -124,9 +128,7 @@ def _rewrite_day_file(day_file, files):
     for fname, content in files.items():
         sid = fname.removesuffix(".md")
         ts = f"{date_str}T00:00:00+00:00"
-        parts.append(
-            f"\n## Session: {sid} — {ts} — /test/cwd\n\n{content}\n"
-        )
+        parts.append(f"\n## Session: {sid} — {ts} — /test/cwd\n\n{content}\n")
     day_file.write_text("".join(parts), encoding="utf-8")
 
 
@@ -185,6 +187,7 @@ class TestDiaryGeneratorModuleStructure:
     def test_diary_generator_class_exists(self):
         """DiaryGenerator class must be exposed by the module."""
         from generators.diary import DiaryGenerator
+
         assert DiaryGenerator is not None
 
     def test_diary_generator_is_generator_base_subclass(self):
@@ -194,16 +197,19 @@ class TestDiaryGeneratorModuleStructure:
         """
         from generators.base import GeneratorBase
         from generators.diary import DiaryGenerator
+
         assert issubclass(DiaryGenerator, GeneratorBase)
 
     def test_diary_generator_name(self):
         """Generator name must be 'diary' for state namespacing."""
         from generators.diary import DiaryGenerator
+
         assert DiaryGenerator.name == "diary"
 
     def test_diary_generator_catalog_filename(self):
         """Catalog filename must be 'diary.json'."""
         from generators.diary import DiaryGenerator
+
         assert DiaryGenerator.catalog_filename == "diary.json"
 
 
@@ -470,10 +476,13 @@ class TestHashSource:
 
         hash1 = gen.hash_source(day_dir)
 
-        _rewrite_day_file(day_dir, {
-            "session1.md": "content",
-            "session2.md": "extra content",
-        })
+        _rewrite_day_file(
+            day_dir,
+            {
+                "session1.md": "content",
+                "session2.md": "extra content",
+            },
+        )
         hash2 = gen.hash_source(day_dir)
 
         assert hash1 != hash2
@@ -515,9 +524,9 @@ class TestBuildPrompt:
     def test_prompt_contains_day_content(self, tmp_path):
         """Prompt must include the actual diary content."""
         gen, _, diary_dir = _make_diary_generator(tmp_path)
-        day_dir = _make_day_dir(diary_dir, "2026-04-15", {
-            "session.md": "Worked on acme-api auth refactor."
-        })
+        day_dir = _make_day_dir(
+            diary_dir, "2026-04-15", {"session.md": "Worked on acme-api auth refactor."}
+        )
 
         prompt = gen.build_prompt(day_dir)
         assert "acme-api" in prompt
@@ -526,10 +535,14 @@ class TestBuildPrompt:
     def test_prompt_includes_multiple_files(self, tmp_path):
         """Prompt should include content from all files in the day directory."""
         gen, _, diary_dir = _make_diary_generator(tmp_path)
-        day_dir = _make_day_dir(diary_dir, "2026-04-15", {
-            "session1.md": "Morning: worked on auth.",
-            "session2.md": "Afternoon: rate limiting work.",
-        })
+        day_dir = _make_day_dir(
+            diary_dir,
+            "2026-04-15",
+            {
+                "session1.md": "Morning: worked on auth.",
+                "session2.md": "Afternoon: rate limiting work.",
+            },
+        )
 
         prompt = gen.build_prompt(day_dir)
         assert "auth" in prompt
@@ -572,11 +585,13 @@ class TestParseResponse:
         """Parses a well-formed JSON response."""
         gen, _, _ = _make_diary_generator(tmp_path)
 
-        raw = json.dumps({
-            "sessions": [{"id": "s1", "project": "acme", "summary": "Auth work"}],
-            "projects": ["acme"],
-            "topics": ["auth"],
-        })
+        raw = json.dumps(
+            {
+                "sessions": [{"id": "s1", "project": "acme", "summary": "Auth work"}],
+                "projects": ["acme"],
+                "topics": ["auth"],
+            }
+        )
 
         entry = gen.parse_response(raw)
         assert "sessions" in entry
@@ -598,14 +613,16 @@ class TestParseResponse:
         """Sessions field must be an array."""
         gen, _, _ = _make_diary_generator(tmp_path)
 
-        raw = json.dumps({
-            "sessions": [
-                {"id": "s1", "project": "proj", "summary": "Did stuff"},
-                {"id": "s2", "project": "proj2", "summary": "More stuff"},
-            ],
-            "projects": ["proj", "proj2"],
-            "topics": ["topic1"],
-        })
+        raw = json.dumps(
+            {
+                "sessions": [
+                    {"id": "s1", "project": "proj", "summary": "Did stuff"},
+                    {"id": "s2", "project": "proj2", "summary": "More stuff"},
+                ],
+                "projects": ["proj", "proj2"],
+                "topics": ["topic1"],
+            }
+        )
 
         entry = gen.parse_response(raw)
         assert isinstance(entry["sessions"], list)
@@ -615,11 +632,13 @@ class TestParseResponse:
         """Projects field must be an array of strings."""
         gen, _, _ = _make_diary_generator(tmp_path)
 
-        raw = json.dumps({
-            "sessions": [],
-            "projects": ["acme-api", "dotfiles"],
-            "topics": [],
-        })
+        raw = json.dumps(
+            {
+                "sessions": [],
+                "projects": ["acme-api", "dotfiles"],
+                "topics": [],
+            }
+        )
 
         entry = gen.parse_response(raw)
         assert isinstance(entry["projects"], list)
@@ -629,11 +648,13 @@ class TestParseResponse:
         """Topics field must be an array of strings."""
         gen, _, _ = _make_diary_generator(tmp_path)
 
-        raw = json.dumps({
-            "sessions": [],
-            "projects": [],
-            "topics": ["auth refactor", "rate limiting"],
-        })
+        raw = json.dumps(
+            {
+                "sessions": [],
+                "projects": [],
+                "topics": ["auth refactor", "rate limiting"],
+            }
+        )
 
         entry = gen.parse_response(raw)
         assert isinstance(entry["topics"], list)
@@ -667,7 +688,9 @@ class TestWordCount:
         """
         content = "one two three four five six seven eight nine ten"
         gen, catalogs_dir, diary_dir = _make_diary_generator(tmp_path)
-        day_file = _make_day_dir(diary_dir, _date_str_days_ago(0), {"session.md": content})
+        day_file = _make_day_dir(
+            diary_dir, _date_str_days_ago(0), {"session.md": content}
+        )
         expected = len(day_file.read_text().split())
 
         await gen.run()
@@ -685,7 +708,9 @@ class TestWordCount:
         increase the count beyond the header. Validates the field is
         always present and derived from the file."""
         gen, catalogs_dir, diary_dir = _make_diary_generator(tmp_path)
-        day_file = _make_day_dir(diary_dir, _date_str_days_ago(0), {"session.md": "   \n  \n  "})
+        day_file = _make_day_dir(
+            diary_dir, _date_str_days_ago(0), {"session.md": "   \n  \n  "}
+        )
         expected = len(day_file.read_text().split())
 
         await gen.run()
@@ -701,10 +726,14 @@ class TestWordCount:
     async def test_word_count_across_multiple_session_blocks(self, tmp_path):
         """Word count covers all ``## Session:`` blocks in the per-day file."""
         gen, catalogs_dir, diary_dir = _make_diary_generator(tmp_path)
-        day_file = _make_day_dir(diary_dir, _date_str_days_ago(0), {
-            "session1.md": "one two three",
-            "session2.md": "four five",
-        })
+        day_file = _make_day_dir(
+            diary_dir,
+            _date_str_days_ago(0),
+            {
+                "session1.md": "one two three",
+                "session2.md": "four five",
+            },
+        )
         expected = len(day_file.read_text().split())
 
         await gen.run()
@@ -1047,16 +1076,19 @@ class TestStateFilePersistence:
         _make_day_dir(diary_dir, _date_str_days_ago(0))
 
         # Pre-seed state with a memory namespace
-        _write_state(catalogs_dir, {
-            "schema_version": 1,
-            "generators": {
-                "memory": {
-                    "last_run": "2026-04-19T10:00:00Z",
-                    "source_hashes": {"memory.md": "abc123"},
-                    "entry_count": 1,
-                }
-            }
-        })
+        _write_state(
+            catalogs_dir,
+            {
+                "schema_version": 1,
+                "generators": {
+                    "memory": {
+                        "last_run": "2026-04-19T10:00:00Z",
+                        "source_hashes": {"memory.md": "abc123"},
+                        "entry_count": 1,
+                    }
+                },
+            },
+        )
 
         await gen.run()
 
@@ -1276,7 +1308,9 @@ class TestModelConfiguration:
         from generators.config import CatalogConfig
 
         client = _make_mock_client()
-        config = CatalogConfig(model="claude-sonnet-4-6", model_diary="claude-haiku-4-5")
+        config = CatalogConfig(
+            model="claude-sonnet-4-6", model_diary="claude-haiku-4-5"
+        )
         gen, catalogs_dir, diary_dir = _make_diary_generator(
             tmp_path, client=client, config=config
         )

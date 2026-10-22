@@ -24,7 +24,9 @@ def _imports(path: Path) -> set[str]:
 def test_no_module_imports_buildme_or_another_plugin():
     for path in PACKAGE.rglob("*.py"):
         for name in _imports(path):
-            assert not name.startswith(("build_pipeline", "plugins", "multiplai_dev")), (path, name)
+            assert not name.startswith(
+                ("build_pipeline", "plugins", "multiplai_dev")
+            ), (path, name)
 
 
 def test_no_ticket_system_is_named():

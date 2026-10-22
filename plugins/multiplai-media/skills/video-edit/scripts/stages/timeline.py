@@ -9,6 +9,7 @@ arithmetic in the same order, so a caption timed here lands on the frame the
 render produces. A source time inside a cut, or inside a muted segment
 (speed > 4, or `mute`), has no output time: its audio is not heard.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -42,10 +43,17 @@ def place_segments(edl: EDL) -> list[Placed]:
         else:
             start = cur_off - _xfade(edl, i)
         cur_off = start + seg.duration
-        placed.append(Placed(
-            index=i, src_start=seg.src_start, src_end=seg.src_end, speed=seg.speed,
-            out_start=start, out_end=cur_off, muted=seg.mute or seg.speed > MUTE_SPEED,
-        ))
+        placed.append(
+            Placed(
+                index=i,
+                src_start=seg.src_start,
+                src_end=seg.src_end,
+                speed=seg.speed,
+                out_start=start,
+                out_end=cur_off,
+                muted=seg.mute or seg.speed > MUTE_SPEED,
+            )
+        )
     return placed
 
 
@@ -62,8 +70,10 @@ def segment_lines(edl: EDL, placed: list[Placed]) -> list[str]:
         if p.index > 0 or edl.title:
             d = _xfade(edl, p.index)
             join = f"  joins with a {'hard cut' if d == 0 else 'crossfade'} ({d:.2f}s)"
-        lines.append(f"seg {p.index}: src {p.src_start:.2f}–{p.src_end:.2f} → out "
-                     f"{p.out_start:.2f}–{p.out_end:.2f}  {framing}{join}")
+        lines.append(
+            f"seg {p.index}: src {p.src_start:.2f}–{p.src_end:.2f} → out "
+            f"{p.out_start:.2f}–{p.out_end:.2f}  {framing}{join}"
+        )
     return lines
 
 
@@ -77,7 +87,9 @@ def to_output(t: float, placed: list[Placed]) -> float | None:
     return None
 
 
-def map_span(start: float, end: float, placed: list[Placed]) -> tuple[float, float] | None:
+def map_span(
+    start: float, end: float, placed: list[Placed]
+) -> tuple[float, float] | None:
     """Output span of a word [start, end].
 
     A word that straddles a cut belongs to the segment holding most of it and
@@ -97,8 +109,10 @@ def map_span(start: float, end: float, placed: list[Placed]) -> tuple[float, flo
         return None
     s = max(start, best.src_start)
     e = min(end, best.src_end)
-    return (best.out_start + (s - best.src_start) / best.speed,
-            best.out_start + (e - best.src_start) / best.speed)
+    return (
+        best.out_start + (s - best.src_start) / best.speed,
+        best.out_start + (e - best.src_start) / best.speed,
+    )
 
 
 def map_words(words: list[dict], placed: list[Placed]) -> list[dict]:
@@ -107,7 +121,13 @@ def map_words(words: list[dict], placed: list[Placed]) -> list[dict]:
     for w in words:
         span = map_span(w["start"], w["end"], placed)
         if span is not None:
-            out.append({**w, "start": round(span[0], 3), "end": round(span[1], 3),
-                        "src_start": w["start"]})
+            out.append(
+                {
+                    **w,
+                    "start": round(span[0], 3),
+                    "end": round(span[1], 3),
+                    "src_start": w["start"],
+                }
+            )
     out.sort(key=lambda w: w["start"])
     return out

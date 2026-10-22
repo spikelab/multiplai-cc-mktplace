@@ -92,9 +92,9 @@ class TestConventionsAngle:
         assert "Name the `CLAUDE.md` path" in _flat(review.CODE_REVIEW_PROMPT)
 
     def test_empty_is_the_right_answer_when_no_claude_md_applies(self):
-        assert (
-            "return nothing for this angle" in _flat(review.CODE_REVIEW_PROMPT)
-        ), "the no-CLAUDE.md case must be stated, or the reviewer invents rules"
+        assert "return nothing for this angle" in _flat(review.CODE_REVIEW_PROMPT), (
+            "the no-CLAUDE.md case must be stated, or the reviewer invents rules"
+        )
 
     def test_offers_conventions_as_a_dimension_value(self):
         assert "`conventions`" in review.CODE_REVIEW_PROMPT
@@ -137,9 +137,8 @@ class TestToolsSection:
         assert "## Tools" in review.CODE_REVIEW_PROMPT
 
     def test_diff_is_still_ground_truth_for_what_changed(self):
-        assert (
-            "The diff stays ground truth for *what changed*"
-            in _flat(review.CODE_REVIEW_PROMPT)
+        assert "The diff stays ground truth for *what changed*" in _flat(
+            review.CODE_REVIEW_PROMPT
         )
 
     def test_names_the_three_tools_it_actually_holds(self):
@@ -149,9 +148,9 @@ class TestToolsSection:
     def test_grants_no_tool_beyond_the_read_only_three(self):
         # The prompt must never imply a capability the SDK allow-list denies.
         tools_section = review.CODE_REVIEW_PROMPT[
-            review.CODE_REVIEW_PROMPT.index("## Tools") : review.CODE_REVIEW_PROMPT.index(
-                "## Diff (ground truth)"
-            )
+            review.CODE_REVIEW_PROMPT.index(
+                "## Tools"
+            ) : review.CODE_REVIEW_PROMPT.index("## Diff (ground truth)")
         ]
         for denied in ("`Write`", "`Edit`", "`Bash`", "`Task`", "`Agent`"):
             assert denied not in tools_section
@@ -160,9 +159,8 @@ class TestToolsSection:
         assert "you report, you never fix" in _flat(review.CODE_REVIEW_PROMPT)
 
     def test_tells_it_to_grep_for_callers(self):
-        assert (
-            "Grep for callers of every changed symbol"
-            in _flat(review.CODE_REVIEW_PROMPT)
+        assert "Grep for callers of every changed symbol" in _flat(
+            review.CODE_REVIEW_PROMPT
         )
 
 
@@ -292,23 +290,38 @@ class TestRoundMemoryFields:
     def test_output_schema_asks_for_prior_assessments(self):
         flat = _flat(review.CODE_REVIEW_PROMPT)
         assert '"prior_assessments"' in flat
-        assert ("For each finding listed under Findings still open from earlier rounds, "
-                "give its status with the diff lines that show it.") in flat
-        for status in ("resolved", "still_present", "partially_resolved", "cannot_verify"):
+        assert (
+            "For each finding listed under Findings still open from earlier rounds, "
+            "give its status with the diff lines that show it."
+        ) in flat
+        for status in (
+            "resolved",
+            "still_present",
+            "partially_resolved",
+            "cannot_verify",
+        ):
             assert status in flat
 
     def test_findings_schema_asks_for_defect_class_and_other_locations(self):
         flat = _flat(review.CODE_REVIEW_PROMPT)
         assert '"defect_class"' in flat and '"other_locations"' in flat
-        assert ("Name the kind of defect in a few words in `defect_class`, and list every "
-                "other place in the diff with the same defect as `path:line` in "
-                "`other_locations`.") in flat
+        assert (
+            "Name the kind of defect in a few words in `defect_class`, and list every "
+            "other place in the diff with the same defect as `path:line` in "
+            "`other_locations`."
+        ) in flat
 
     def test_the_schema_example_is_valid_json_after_formatting(self):
-        text = review.CODE_REVIEW_PROMPT.format(**{k: "x" for k in EXPECTED_PLACEHOLDERS})
+        text = review.CODE_REVIEW_PROMPT.format(
+            **{k: "x" for k in EXPECTED_PLACEHOLDERS}
+        )
         example = text.split("```json\n", 1)[1].split("\n```", 1)[0]
         parsed = json.loads(example)
-        assert parsed["prior_assessments"][0].keys() == {"finding_id", "status", "evidence"}
+        assert parsed["prior_assessments"][0].keys() == {
+            "finding_id",
+            "status",
+            "evidence",
+        }
         assert {"defect_class", "other_locations"} <= parsed["findings"][0].keys()
 
 
@@ -316,6 +329,8 @@ class TestReviewPromptStaysUnbiased:
     """Scoping happens after the reviewer, in adjudication and code
     (scripts/CLAUDE.md, "Review prompts stay unbiased")."""
 
-    @pytest.mark.parametrize("phrase", ["do not flag", "do not report", "ignore", "only report"])
+    @pytest.mark.parametrize(
+        "phrase", ["do not flag", "do not report", "ignore", "only report"]
+    )
     def test_the_review_prompt_never_tells_the_reviewer_what_to_leave_out(self, phrase):
         assert phrase not in _flat(review.CODE_REVIEW_PROMPT).lower()

@@ -52,8 +52,11 @@ def _make_catalogs_dir(tmp_path: Path) -> Path:
 def _import_context_manager():
     """Dynamically import context_manager module, resetting caches."""
     from multiplai_core.paths import _reset_cache
+
     _reset_cache()
-    spec = importlib.util.spec_from_file_location("context_manager", CONTEXT_ROUTER_PATH)
+    spec = importlib.util.spec_from_file_location(
+        "context_manager", CONTEXT_ROUTER_PATH
+    )
     if spec is None or spec.loader is None:
         raise ImportError(f"Cannot import context_manager from {CONTEXT_ROUTER_PATH}")
     mod = importlib.util.module_from_spec(spec)
@@ -68,19 +71,25 @@ def _import_context_manager():
 class TestContextRouterPathResolution:
     """Context router must resolve memory files via paths.memory_dir(), not hardcoded paths."""
 
-    def test_reads_memory_files_from_path_resolver(self, tmp_path, monkeypatch, reset_paths_cache):
+    def test_reads_memory_files_from_path_resolver(
+        self, tmp_path, monkeypatch, reset_paths_cache
+    ):
         """WHEN the ported context-router runs in plugin mode with memory_dir set
         THEN it reads memory files from paths returned by paths.memory_dir()."""
-        mem_dir = _make_memory_dir(tmp_path, {
-            "me.md": "# About Me\nI am a developer.",
-            "technical-pref.md": "# Technical\nI prefer Python.",
-            "preferences.md": "# Preferences\nKeep it concise.",
-        })
+        mem_dir = _make_memory_dir(
+            tmp_path,
+            {
+                "me.md": "# About Me\nI am a developer.",
+                "technical-pref.md": "# Technical\nI prefer Python.",
+                "preferences.md": "# Preferences\nKeep it concise.",
+            },
+        )
         monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(tmp_path / "plugin"))
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path / "data"))
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(mem_dir))
 
         from multiplai_core.paths import Paths, _reset_cache
+
         _reset_cache()
         paths = Paths.resolve()
 
@@ -106,8 +115,9 @@ class TestContextRouterPathResolution:
         """WHEN the context-router source is inspected
         THEN it imports from multiplai_core.paths for all path resolution."""
         text = CONTEXT_ROUTER_PATH.read_text()
-        assert "from multiplai_core.paths" in text or "multiplai_core.paths" in text, \
+        assert "from multiplai_core.paths" in text or "multiplai_core.paths" in text, (
             "Context router must import from multiplai_core.paths"
+        )
 
 
 # ===========================================================================
@@ -143,8 +153,9 @@ class TestContextRouterModelClient:
         # a direct model_client/create_client import (which would wrongly
         # imply an inline LLM call on the per-prompt hook path).
         has_router = "create_router" in text or "memory_router" in text
-        assert has_router, \
+        assert has_router, (
             "Context router must delegate LLM routing to lib.memory_router"
+        )
 
 
 # ===========================================================================
@@ -202,25 +213,42 @@ class TestMetadataFirstRanking:
         THEN it has a function that ranks files by metadata before reading content."""
         text = CONTEXT_ROUTER_PATH.read_text()
         # Should have some form of metadata-based ranking/sorting
-        has_metadata_ranking = any(kw in text for kw in [
-            "mtime", "st_mtime", "stat()", "os.stat",
-            "file_size", "st_size", "getsize",
-            "rank_by_metadata", "metadata_rank", "sort_by_metadata",
-            "metadata_first",
-        ])
-        assert has_metadata_ranking, \
+        has_metadata_ranking = any(
+            kw in text
+            for kw in [
+                "mtime",
+                "st_mtime",
+                "stat()",
+                "os.stat",
+                "file_size",
+                "st_size",
+                "getsize",
+                "rank_by_metadata",
+                "metadata_rank",
+                "sort_by_metadata",
+                "metadata_first",
+            ]
+        )
+        assert has_metadata_ranking, (
             "Context router must implement metadata-first ranking (size, mtime)"
+        )
 
-    def test_metadata_ranking_uses_stat_not_read(self, tmp_path, monkeypatch, reset_paths_cache):
+    def test_metadata_ranking_uses_stat_not_read(
+        self, tmp_path, monkeypatch, reset_paths_cache
+    ):
         """WHEN the context router ranks memory files
         THEN it uses file stat (size, mtime) before reading content."""
         # Create several memory files with different sizes and modification times
-        mem_dir = _make_memory_dir(tmp_path, {
-            "old-small.md": "Small old file.",
-            "recent-large.md": "# Recent Large\n" + ("Context data. " * 500),
-            "me.md": "# About Me\nI am a developer with many interests.",
-            "technical-pref.md": "# Technical Preferences\n" + ("Python code. " * 200),
-        })
+        mem_dir = _make_memory_dir(
+            tmp_path,
+            {
+                "old-small.md": "Small old file.",
+                "recent-large.md": "# Recent Large\n" + ("Context data. " * 500),
+                "me.md": "# About Me\nI am a developer with many interests.",
+                "technical-pref.md": "# Technical Preferences\n"
+                + ("Python code. " * 200),
+            },
+        )
         # Make "old-small.md" have an older mtime
         old_file = mem_dir / "old-small.md"
         os.utime(old_file, (time.time() - 86400 * 30, time.time() - 86400 * 30))
@@ -228,6 +256,7 @@ class TestMetadataFirstRanking:
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(mem_dir))
 
         from multiplai_core.paths import Paths, _reset_cache
+
         _reset_cache()
         paths = Paths.resolve()
 
@@ -241,16 +270,20 @@ class TestMetadataFirstRanking:
 
         # Each ranked item should contain metadata (at minimum path and rank info)
         first = ranked[0]
-        assert hasattr(first, 'path') or isinstance(first, (tuple, dict, Path)), \
+        assert hasattr(first, "path") or isinstance(first, (tuple, dict, Path)), (
             "Ranked items must contain path information"
+        )
 
     def test_recent_files_ranked_higher(self, tmp_path):
         """WHEN memory files have different modification times
         THEN more recently modified files are ranked higher."""
-        mem_dir = _make_memory_dir(tmp_path, {
-            "stale.md": "# Stale\nOld content.",
-            "fresh.md": "# Fresh\nNew content.",
-        })
+        mem_dir = _make_memory_dir(
+            tmp_path,
+            {
+                "stale.md": "# Stale\nOld content.",
+                "fresh.md": "# Fresh\nNew content.",
+            },
+        )
         # Make stale.md 30 days old
         stale = mem_dir / "stale.md"
         os.utime(stale, (time.time() - 86400 * 30, time.time() - 86400 * 30))
@@ -259,22 +292,28 @@ class TestMetadataFirstRanking:
 
         ranked = _rank_memory_files(mem_dir)
         # Extract filenames in ranked order
-        names = [Path(r.path if hasattr(r, 'path') else r).name
-                 if not isinstance(r, dict)
-                 else Path(r.get('path', r.get('name', ''))).name
-                 for r in ranked]
+        names = [
+            Path(r.path if hasattr(r, "path") else r).name
+            if not isinstance(r, dict)
+            else Path(r.get("path", r.get("name", ""))).name
+            for r in ranked
+        ]
         fresh_idx = names.index("fresh.md") if "fresh.md" in names else len(names)
         stale_idx = names.index("stale.md") if "stale.md" in names else len(names)
-        assert fresh_idx < stale_idx, \
+        assert fresh_idx < stale_idx, (
             "More recently modified files should be ranked higher"
+        )
 
     def test_larger_files_ranked_with_size_consideration(self, tmp_path):
         """WHEN memory files have different sizes
         THEN size is factored into the ranking decision."""
-        mem_dir = _make_memory_dir(tmp_path, {
-            "tiny.md": "# Tiny",
-            "large.md": "# Large File\n" + ("Substantial content. " * 500),
-        })
+        mem_dir = _make_memory_dir(
+            tmp_path,
+            {
+                "tiny.md": "# Tiny",
+                "large.md": "# Large File\n" + ("Substantial content. " * 500),
+            },
+        )
         # Both files have the same mtime (just created)
 
         from context_manager import _rank_memory_files
@@ -301,8 +340,7 @@ class TestMetadataFirstRanking:
         # Should exist: a function that reads only the top N files
         result = _read_top_memory_files(mem_dir, max_files=5)
         assert isinstance(result, dict), "Should return dict of filename->content"
-        assert len(result) <= 5, \
-            f"Should read at most 5 files, but read {len(result)}"
+        assert len(result) <= 5, f"Should read at most 5 files, but read {len(result)}"
 
 
 # ===========================================================================
@@ -325,11 +363,14 @@ class TestMissingMemoryFiles:
     def test_partial_memory_files(self, tmp_path):
         """WHEN the memory directory exists but only has some expected files
         THEN the available files are read and missing ones are skipped."""
-        mem_dir = _make_memory_dir(tmp_path, {
-            "me.md": "# About Me\nI exist.",
-            # technical-pref.md is missing
-            # preferences.md is missing
-        })
+        mem_dir = _make_memory_dir(
+            tmp_path,
+            {
+                "me.md": "# About Me\nI exist.",
+                # technical-pref.md is missing
+                # preferences.md is missing
+            },
+        )
         from context_manager import _read_top_memory_files
 
         result = _read_top_memory_files(mem_dir)
@@ -339,10 +380,13 @@ class TestMissingMemoryFiles:
     def test_unreadable_file_skipped_gracefully(self, tmp_path):
         """WHEN a memory file exists but cannot be read (permissions, encoding)
         THEN it is skipped without crashing the router."""
-        mem_dir = _make_memory_dir(tmp_path, {
-            "me.md": "# About Me\nI exist.",
-            "corrupt.md": "Valid content for now.",
-        })
+        mem_dir = _make_memory_dir(
+            tmp_path,
+            {
+                "me.md": "# About Me\nI exist.",
+                "corrupt.md": "Valid content for now.",
+            },
+        )
         # Make corrupt.md unreadable
         corrupt = mem_dir / "corrupt.md"
         corrupt.chmod(0o000)
@@ -386,8 +430,9 @@ class TestTimeoutCompliance:
         but the opt-in llm router runs a model call inline (~12s+ via the
         Agent SDK cold-start), so the budget is raised to 30s (router timeout
         25s + headroom) to let it complete."""
-        user_prompt_hooks = [h for h in parse_hooks()
-                             if h["event"] == "UserPromptSubmit"]
+        user_prompt_hooks = [
+            h for h in parse_hooks() if h["event"] == "UserPromptSubmit"
+        ]
         assert len(user_prompt_hooks) > 0, "No UserPromptSubmit hook found"
 
         context_manager_hook = None
@@ -396,17 +441,23 @@ class TestTimeoutCompliance:
                 context_manager_hook = h
                 break
         assert context_manager_hook is not None, "No context_manager hook found"
-        assert context_manager_hook["timeout"] == 30, \
+        assert context_manager_hook["timeout"] == 30, (
             f"Context manager timeout should be 30s, got {context_manager_hook['timeout']}"
+        )
 
-    def test_completes_under_5_seconds_small_memory(self, tmp_path, monkeypatch, reset_paths_cache):
+    def test_completes_under_5_seconds_small_memory(
+        self, tmp_path, monkeypatch, reset_paths_cache
+    ):
         """WHEN the context router runs with a small memory set (3 files)
         THEN execution completes in well under 5 seconds."""
-        mem_dir = _make_memory_dir(tmp_path, {
-            "me.md": "# About Me\nDeveloper.",
-            "technical-pref.md": "# Tech\nPython, Go.",
-            "preferences.md": "# Prefs\nConcise.",
-        })
+        mem_dir = _make_memory_dir(
+            tmp_path,
+            {
+                "me.md": "# About Me\nDeveloper.",
+                "technical-pref.md": "# Tech\nPython, Go.",
+                "preferences.md": "# Prefs\nConcise.",
+            },
+        )
         data_dir = tmp_path / "data"
         data_dir.mkdir(parents=True, exist_ok=True)
 
@@ -415,16 +466,19 @@ class TestTimeoutCompliance:
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(mem_dir))
 
         from multiplai_core.paths import _reset_cache
+
         _reset_cache()
 
         start = time.monotonic()
         from context_manager import _rank_memory_files, _read_top_memory_files
+
         _rank_memory_files(mem_dir)
         _read_top_memory_files(mem_dir)
         elapsed = time.monotonic() - start
 
-        assert elapsed < 1.0, \
+        assert elapsed < 1.0, (
             f"Small memory set should complete in <1s, took {elapsed:.2f}s"
+        )
 
     def test_completes_under_5_seconds_large_memory(self, tmp_path):
         """WHEN the context router runs with a large memory set (50 files)
@@ -441,8 +495,9 @@ class TestTimeoutCompliance:
         _read_top_memory_files(mem_dir, max_files=10)
         elapsed = time.monotonic() - start
 
-        assert elapsed < 5.0, \
+        assert elapsed < 5.0, (
             f"Large memory set should complete in <5s, took {elapsed:.2f}s"
+        )
 
 
 # ===========================================================================
@@ -460,23 +515,26 @@ class TestVenvPreamble:
         """WHEN the context_manager.py source is inspected
         THEN it carries no PEP 723 inline-metadata header."""
         text = CONTEXT_ROUTER_PATH.read_text()
-        assert "# /// script" not in text, \
-            "Context router carries a PEP 723 header again — it fires on every " \
+        assert "# /// script" not in text, (
+            "Context router carries a PEP 723 header again — it fires on every "
             "prompt, so a per-run resolve is a user-visible timeout"
+        )
 
     def test_member_declares_multiplai_core(self):
         """WHEN the workspace member manifest is inspected
         THEN it depends on multiplai-core, which is what supplies the router."""
         manifest = (CONTEXT_ROUTER_PATH.parent / "pyproject.toml").read_text()
-        assert "multiplai-core" in manifest, \
+        assert "multiplai-core" in manifest, (
             "scripts/pyproject.toml must declare a multiplai-core dependency"
+        )
 
     def test_no_venv_guard(self):
         """WHEN the context_manager.py source is inspected
         THEN the retired venv guard preamble is gone."""
         text = CONTEXT_ROUTER_PATH.read_text()
-        assert "venv_guard" not in text and "ensure_venv_python" not in text, \
+        assert "venv_guard" not in text and "ensure_venv_python" not in text, (
             "Context router must not reference the retired venv guard"
+        )
 
 
 # ===========================================================================
@@ -497,52 +555,78 @@ class TestContextRouterMainFlow:
         """WHEN context_manager.py is inspected
         THEN it has an if __name__ == '__main__' guard."""
         text = CONTEXT_ROUTER_PATH.read_text()
-        assert "__name__" in text and "__main__" in text, \
+        assert "__name__" in text and "__main__" in text, (
             "Context router must have __name__ == '__main__' guard"
+        )
 
     def test_reads_stdin_for_user_prompt(self):
         """WHEN the UserPromptSubmit hook fires
         THEN the context router receives user prompt via stdin JSON."""
         text = CONTEXT_ROUTER_PATH.read_text()
         # The hook should read stdin for the user's prompt
-        has_stdin_read = any(kw in text for kw in [
-            "sys.stdin", "stdin", "json.load", "input()",
-        ])
-        assert has_stdin_read, \
-            "Context router should read user prompt from stdin"
+        has_stdin_read = any(
+            kw in text
+            for kw in [
+                "sys.stdin",
+                "stdin",
+                "json.load",
+                "input()",
+            ]
+        )
+        assert has_stdin_read, "Context router should read user prompt from stdin"
 
     def test_outputs_context_as_json(self):
         """WHEN the context router determines relevant context
         THEN it outputs the result as JSON to stdout."""
         text = CONTEXT_ROUTER_PATH.read_text()
-        has_json_output = any(kw in text for kw in [
-            "json.dump", "json.dumps", "sys.stdout", "print(",
-        ])
-        assert has_json_output, \
-            "Context router should output results as JSON"
+        has_json_output = any(
+            kw in text
+            for kw in [
+                "json.dump",
+                "json.dumps",
+                "sys.stdout",
+                "print(",
+            ]
+        )
+        assert has_json_output, "Context router should output results as JSON"
 
     def test_memory_file_routing_preserved(self):
         """WHEN the context router processes a prompt
         THEN memory-file routing logic is present (not stripped)."""
         text = CONTEXT_ROUTER_PATH.read_text()
         # Memory file routing should be preserved (unlike catalog routing which is stripped)
-        has_memory_routing = any(kw in text for kw in [
-            "memory_files", "memory_dir", "_read_memory",
-            "context", "route",
-        ])
-        assert has_memory_routing, \
+        has_memory_routing = any(
+            kw in text
+            for kw in [
+                "memory_files",
+                "memory_dir",
+                "_read_memory",
+                "context",
+                "route",
+            ]
+        )
+        assert has_memory_routing, (
             "Memory-file routing must be preserved in context router"
+        )
 
     def test_session_context_injection_preserved(self):
         """WHEN the context router processes a prompt
         THEN session context injection logic is present."""
         text = CONTEXT_ROUTER_PATH.read_text()
-        has_session_ctx = any(kw in text for kw in [
-            "session", "context", "inject", "system_prompt",
-            "prefix", "prepend",
-        ])
-        assert has_session_ctx, \
+        has_session_ctx = any(
+            kw in text
+            for kw in [
+                "session",
+                "context",
+                "inject",
+                "system_prompt",
+                "prefix",
+                "prepend",
+            ]
+        )
+        assert has_session_ctx, (
             "Session context injection must be preserved in context router"
+        )
 
 
 # ===========================================================================
@@ -564,16 +648,16 @@ class TestContextRouterHookWiring:
         THEN there is a UserPromptSubmit hook pointing to context_manager.py."""
         user_hooks = [h for h in self.hooks if h["event"] == "UserPromptSubmit"]
         scripts = [h["script"] for h in user_hooks]
-        assert any("context_manager" in s for s in scripts), \
+        assert any("context_manager" in s for s in scripts), (
             "context_manager.py must be registered as UserPromptSubmit hook"
+        )
 
     def test_timeout_set_to_30(self):
         """WHEN the context_manager hook entry is inspected
         THEN it has a 30-second timeout (headroom for the inline llm router)."""
         for h in self.hooks:
             if h["event"] == "UserPromptSubmit" and "context_manager" in h["script"]:
-                assert h["timeout"] == 30, \
-                    f"Expected 30s timeout, got {h['timeout']}"
+                assert h["timeout"] == 30, f"Expected 30s timeout, got {h['timeout']}"
                 return
         pytest.fail("Context manager hook not found in hooks.json")
 
@@ -583,8 +667,7 @@ class TestContextRouterHookWiring:
         for h in self.hooks:
             if h["event"] == "UserPromptSubmit" and "context_manager" in h["script"]:
                 script_path = PLUGIN_ROOT / h["script"]
-                assert script_path.is_file(), \
-                    f"Hook script not found: {script_path}"
+                assert script_path.is_file(), f"Hook script not found: {script_path}"
                 return
         pytest.fail("Context router hook not found in hooks.json")
 
@@ -626,9 +709,12 @@ class TestEdgeCases:
     def test_non_markdown_files_ignored(self, tmp_path):
         """WHEN the memory directory contains non-.md files
         THEN they are excluded from routing."""
-        mem_dir = _make_memory_dir(tmp_path, {
-            "me.md": "# About Me\nDeveloper.",
-        })
+        mem_dir = _make_memory_dir(
+            tmp_path,
+            {
+                "me.md": "# About Me\nDeveloper.",
+            },
+        )
         # Add non-markdown files
         (mem_dir / "notes.txt").write_text("Some notes")
         (mem_dir / "config.json").write_text("{}")
@@ -645,10 +731,13 @@ class TestEdgeCases:
     def test_empty_file_handled(self, tmp_path):
         """WHEN a memory file exists but is empty (0 bytes)
         THEN it is either included with empty content or skipped without error."""
-        mem_dir = _make_memory_dir(tmp_path, {
-            "me.md": "# About Me\nDeveloper.",
-            "empty.md": "",
-        })
+        mem_dir = _make_memory_dir(
+            tmp_path,
+            {
+                "me.md": "# About Me\nDeveloper.",
+                "empty.md": "",
+            },
+        )
 
         from context_manager import _read_top_memory_files
 
@@ -675,10 +764,13 @@ class TestEdgeCases:
         """WHEN a memory file is very large (>1MB)
         THEN the context router handles it without crashing."""
         large_content = "# Large Memory File\n" + ("x" * 1_100_000)
-        mem_dir = _make_memory_dir(tmp_path, {
-            "large.md": large_content,
-            "normal.md": "# Normal\nSmall file.",
-        })
+        mem_dir = _make_memory_dir(
+            tmp_path,
+            {
+                "large.md": large_content,
+                "normal.md": "# Normal\nSmall file.",
+            },
+        )
 
         from context_manager import _read_top_memory_files
 
@@ -700,27 +792,39 @@ class TestContextRouterLogging:
         """WHEN context_manager.py is inspected
         THEN it imports from lib.log_utils."""
         text = CONTEXT_ROUTER_PATH.read_text()
-        assert "log_utils" in text or "logging" in text, \
+        assert "log_utils" in text or "logging" in text, (
             "Context router should use logging"
+        )
 
     def test_logs_number_of_files_loaded(self):
         """WHEN the context router loads memory files
         THEN it logs how many files were loaded."""
         text = CONTEXT_ROUTER_PATH.read_text()
-        has_count_log = any(kw in text for kw in [
-            "loaded %d", "loaded {", "memory files",
-            "len(memory_files)", "file_count",
-        ])
-        assert has_count_log, \
+        has_count_log = any(
+            kw in text
+            for kw in [
+                "loaded %d",
+                "loaded {",
+                "memory files",
+                "len(memory_files)",
+                "file_count",
+            ]
+        )
+        assert has_count_log, (
             "Context router should log the number of memory files loaded"
+        )
 
     def test_logs_when_no_memory_files(self):
         """WHEN no memory files are found
         THEN the context router logs this condition."""
         text = CONTEXT_ROUTER_PATH.read_text()
-        has_empty_log = any(kw in text for kw in [
-            "No memory files", "no memory files",
-            "skipping", "empty",
-        ])
-        assert has_empty_log, \
-            "Context router should log when no memory files are found"
+        has_empty_log = any(
+            kw in text
+            for kw in [
+                "No memory files",
+                "no memory files",
+                "skipping",
+                "empty",
+            ]
+        )
+        assert has_empty_log, "Context router should log when no memory files are found"

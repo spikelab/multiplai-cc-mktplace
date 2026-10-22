@@ -52,6 +52,7 @@ def head12(repo: Path) -> str:
 
 # --- names ----------------------------------------------------------------------
 
+
 def test_whole_tree(repo, root, capsys):
     assert run("run", "--repo", repo, "--tree", "HEAD", "--out", root) == 0
     folder = root / "widgets" / f"tree@{head12(repo)}"
@@ -62,23 +63,59 @@ def test_whole_tree(repo, root, capsys):
     assert state["target"]["head_sha"] == git(repo, "rev-parse", "HEAD")
     assert state["target"]["remote_url"] == "https://github.com/acme/widgets.git"
     assert (folder / "snapshot" / "src" / "billing" / "charge.py").is_file()
-    assert (folder / "snapshot" / ".spec-extract-head").read_text().strip() == state["target"]["head_sha"]
+    assert (folder / "snapshot" / ".spec-extract-head").read_text().strip() == state[
+        "target"
+    ]["head_sha"]
     assert (root / "widgets" / ".locks" / f"tree@{head12(repo)}.lock").is_file()
 
 
 def test_path_is_cleaned(repo, root):
-    assert run("run", "--repo", repo, "--tree", "HEAD", "--path", "src/billing/", "--out", root) == 0
+    assert (
+        run(
+            "run",
+            "--repo",
+            repo,
+            "--tree",
+            "HEAD",
+            "--path",
+            "src/billing/",
+            "--out",
+            root,
+        )
+        == 0
+    )
     folder = root / "widgets" / f"tree-src_billing@{head12(repo)}"
     assert read_state(folder)["target"]["path"] == "src/billing"
 
 
 def test_path_from_a_subdirectory_is_repo_relative(repo, root):
-    assert run("run", "--repo", repo / "src", "--tree", "HEAD", "--path", "billing", "--out", root) == 0
-    assert read_state(root / "widgets" / f"tree-src_billing@{head12(repo)}")["target"]["path"] == "src/billing"
+    assert (
+        run(
+            "run",
+            "--repo",
+            repo / "src",
+            "--tree",
+            "HEAD",
+            "--path",
+            "billing",
+            "--out",
+            root,
+        )
+        == 0
+    )
+    assert (
+        read_state(root / "widgets" / f"tree-src_billing@{head12(repo)}")["target"][
+            "path"
+        ]
+        == "src/billing"
+    )
 
 
 def test_path_outside_the_repo_is_refused(repo, root, capsys):
-    assert run("run", "--repo", repo, "--tree", "HEAD", "--path", "../x", "--out", root) == 2
+    assert (
+        run("run", "--repo", repo, "--tree", "HEAD", "--path", "../x", "--out", root)
+        == 2
+    )
     assert "outside" in capsys.readouterr().err
 
 
@@ -115,9 +152,12 @@ def test_exactly_one_target(repo, root, capsys):
 
 # --- folders another run wrote ----------------------------------------------------
 
+
 def test_pr_folder_of_another_remote_moves_to_owner(repo, root, pr_view):
     base = git(repo, "rev-parse", "HEAD")
-    head = commit_file(repo, "src/billing/charge.py", "def charge(amount):\n    return amount * 2\n")
+    head = commit_file(
+        repo, "src/billing/charge.py", "def charge(amount):\n    return amount * 2\n"
+    )
     pr_view.info[12] = {"headRefOid": head, "baseRefOid": base}
     theirs = root / "widgets" / f"pr-12@{head[:12]}"
     fake_state(theirs, kind="pr", remote_url=OTHER)
@@ -132,8 +172,14 @@ def test_pr_folder_of_another_remote_moves_to_owner(repo, root, pr_view):
 def test_same_remote_in_another_url_form_is_this_remote(repo, root):
     sha = git(repo, "rev-parse", "HEAD")
     folder = root / "widgets" / f"tree@{sha[:12]}"
-    fake_state(folder, kind="tree", repo=str(repo), head_sha=sha, path="",
-               remote_url="git@github.com:ACME/widgets.git")
+    fake_state(
+        folder,
+        kind="tree",
+        repo=str(repo),
+        head_sha=sha,
+        path="",
+        remote_url="git@github.com:ACME/widgets.git",
+    )
     assert run("run", "--repo", repo, "--tree", "HEAD", "--out", root) == 0
     state = read_state(folder)  # this target's folder: its state is resumed
     assert state["steps_done"] == ["resolve", "scope", "explore"]
@@ -152,8 +198,14 @@ def test_folder_naming_no_remote_is_used(repo, root):
 
 def test_two_paths_that_clean_to_one_name(repo, root):
     sha12 = head12(repo)
-    assert run("run", "--repo", repo, "--tree", "HEAD", "--path", "src_a", "--out", root) == 0
-    assert run("run", "--repo", repo, "--tree", "HEAD", "--path", "src/a", "--out", root) == 0
+    assert (
+        run("run", "--repo", repo, "--tree", "HEAD", "--path", "src_a", "--out", root)
+        == 0
+    )
+    assert (
+        run("run", "--repo", repo, "--tree", "HEAD", "--path", "src/a", "--out", root)
+        == 0
+    )
     first = root / "widgets" / f"tree-src_a@{sha12}"
     second = root / "widgets" / f"tree-src_a-{_hex6('src/a')}@{sha12}"
     assert read_state(first)["target"]["path"] == "src_a"
@@ -161,16 +213,25 @@ def test_two_paths_that_clean_to_one_name(repo, root):
     assert not (root / "widgets@acme").exists()
     assert not (root / "widgets@local").exists()
     # each resumes in its own folder
-    assert run("run", "--repo", repo, "--tree", "HEAD", "--path", "src/a", "--out", root) == 0
-    assert run("run", "--repo", repo, "--tree", "HEAD", "--path", "src_a", "--out", root) == 0
+    assert (
+        run("run", "--repo", repo, "--tree", "HEAD", "--path", "src/a", "--out", root)
+        == 0
+    )
+    assert (
+        run("run", "--repo", repo, "--tree", "HEAD", "--path", "src_a", "--out", root)
+        == 0
+    )
     assert sorted(p.name for p in (root / "widgets").iterdir()) == sorted(
-        [".locks", first.name, second.name])
+        [".locks", first.name, second.name]
+    )
 
 
 def test_legacy_folder_of_another_remote_is_refused(tmp_path, root, capsys):
     repo = make_repo(tmp_path / "legacy", origin="git@github.com:o/legacy.git")
     folder = root / "legacy@o" / f"tree@{head12(repo)}"
-    fake_state(folder, kind="tree", path="", remote_url="https://github.com/p/legacy.git")
+    fake_state(
+        folder, kind="tree", path="", remote_url="https://github.com/p/legacy.git"
+    )
     assert run("run", "--repo", repo, "--tree", "HEAD", "--out", root) == 2
     err = capsys.readouterr().err
     assert str(folder) in err and "--out" in err
@@ -178,8 +239,12 @@ def test_legacy_folder_of_another_remote_is_refused(tmp_path, root, capsys):
 
 def test_every_candidate_taken_is_refused(repo, root, capsys):
     sha12 = head12(repo)
-    fake_state(root / "widgets" / f"tree@{sha12}", kind="tree", path="", remote_url=OTHER)
-    fake_state(root / "widgets@acme" / f"tree@{sha12}", kind="tree", path="", remote_url=OTHER)
+    fake_state(
+        root / "widgets" / f"tree@{sha12}", kind="tree", path="", remote_url=OTHER
+    )
+    fake_state(
+        root / "widgets@acme" / f"tree@{sha12}", kind="tree", path="", remote_url=OTHER
+    )
     assert run("run", "--repo", repo, "--tree", "HEAD", "--out", root) == 2
     err = capsys.readouterr().err
     assert str(root / "widgets" / f"tree@{sha12}") in err
@@ -193,7 +258,10 @@ def test_every_path_candidate_taken_is_refused(repo, root, capsys):
     hashed = root / "widgets" / f"tree-src_a-{_hex6('src/a')}@{sha12}"
     fake_state(first, kind="tree", path="src_a")
     fake_state(hashed, kind="tree", path="src-a-other")
-    assert run("run", "--repo", repo, "--tree", "HEAD", "--path", "src/a", "--out", root) == 2
+    assert (
+        run("run", "--repo", repo, "--tree", "HEAD", "--path", "src/a", "--out", root)
+        == 2
+    )
     err = capsys.readouterr().err
     assert str(first) in err and str(hashed) in err
 
@@ -203,8 +271,14 @@ def test_this_targets_folder_found_at_a_later_candidate(repo, root):
     in `widgets@acme/tree@…`, where an earlier run went, so it resumes there."""
     sha = git(repo, "rev-parse", "HEAD")
     ours = root / "widgets@acme" / f"tree@{sha[:12]}"
-    fake_state(ours, kind="tree", repo=str(repo), head_sha=sha, path="",
-               remote_url="https://github.com/acme/widgets.git")
+    fake_state(
+        ours,
+        kind="tree",
+        repo=str(repo),
+        head_sha=sha,
+        path="",
+        remote_url="https://github.com/acme/widgets.git",
+    )
     assert run("run", "--repo", repo, "--tree", "HEAD", "--out", root) == 0
     assert read_state(ours)["steps_done"] == ["resolve", "scope", "explore"]
     assert not (root / "widgets").exists()
@@ -223,15 +297,34 @@ def test_another_targets_held_folder_is_skipped(repo, root):
         assert run("run", "--repo", repo, "--tree", "HEAD", "--out", root) == 0
     finally:
         _release(holder)
-    assert read_state(root / "widgets@acme" / f"tree@{sha[:12]}")["steps_done"] == ["resolve", "scope", "explore"]
+    assert read_state(root / "widgets@acme" / f"tree@{sha[:12]}")["steps_done"] == [
+        "resolve",
+        "scope",
+        "explore",
+    ]
 
 
 def test_absolute_path_with_a_subdirectory_repo(repo, root):
     """An absolute `--path` gives the folder its relative form gives."""
     sha = git(repo, "rev-parse", "HEAD")
-    assert run("run", "--repo", repo / "src", "--tree", "HEAD", "--path",
-               (repo / "src" / "billing").resolve(), "--out", root) == 0
-    assert read_state(root / "widgets" / f"tree-src_billing@{sha[:12]}")["target"]["path"] == "src/billing"
+    assert (
+        run(
+            "run",
+            "--repo",
+            repo / "src",
+            "--tree",
+            "HEAD",
+            "--path",
+            (repo / "src" / "billing").resolve(),
+            "--out",
+            root,
+        )
+        == 0
+    )
+    assert (
+        read_state(root / "widgets" / f"tree-src_billing@{sha[:12]}")["target"]["path"]
+        == "src/billing"
+    )
 
 
 def test_unknown_field_inside_the_saved_target_is_refused(repo, root, capsys):
@@ -248,7 +341,9 @@ def test_unknown_field_inside_the_saved_target_is_refused(repo, root, capsys):
     assert (folder / "state.json").read_bytes() == before
 
 
-def test_pr_without_gh_is_refused_with_the_install_hint(repo, root, monkeypatch, capsys):
+def test_pr_without_gh_is_refused_with_the_install_hint(
+    repo, root, monkeypatch, capsys
+):
     monkeypatch.setattr(target_mod.shutil, "which", lambda name: None)
     assert run("run", "--repo", repo, "--pr", "7", "--out", root) == 2
     assert "cli.github.com" in capsys.readouterr().err
@@ -268,6 +363,7 @@ def test_unreadable_state_at_a_later_candidate_stops_the_run(repo, root, capsys)
 
 
 # --- --pr -----------------------------------------------------------------------
+
 
 def _pr_repo(tmp_path):
     repo = make_repo(tmp_path / "widgets")
@@ -292,14 +388,23 @@ def test_pr_resume_keeps_the_saved_base(tmp_path, root, pr_view):
     repo, fork, head, base_tip = _pr_repo(tmp_path)
     pr_view.info[7] = {"headRefOid": head, "baseRefOid": base_tip}
     assert run("run", "--repo", repo, "--pr", "7", "--out", root) == 0
-    git(repo, "merge", "-q", "--no-ff", "-m", "merge", "feature")  # the PR merged: base tip contains head
+    git(
+        repo, "merge", "-q", "--no-ff", "-m", "merge", "feature"
+    )  # the PR merged: base tip contains head
     pr_view.info[7] = {"headRefOid": head, "baseRefOid": git(repo, "rev-parse", "HEAD")}
     assert run("run", "--repo", repo, "--pr", "7", "--out", root) == 0
-    assert read_state(root / "widgets" / f"pr-7@{head[:12]}")["target"]["base_sha"] == fork
+    assert (
+        read_state(root / "widgets" / f"pr-7@{head[:12]}")["target"]["base_sha"] == fork
+    )
 
 
-def test_pr_head_not_in_clone_is_refused_with_the_fetch_command(repo, root, pr_view, capsys):
-    pr_view.info[9] = {"headRefOid": "a" * 40, "baseRefOid": git(repo, "rev-parse", "HEAD")}
+def test_pr_head_not_in_clone_is_refused_with_the_fetch_command(
+    repo, root, pr_view, capsys
+):
+    pr_view.info[9] = {
+        "headRefOid": "a" * 40,
+        "baseRefOid": git(repo, "rev-parse", "HEAD"),
+    }
     assert run("run", "--repo", repo, "--pr", "9", "--out", root) == 2
     err = capsys.readouterr().err
     assert "git -C" in err and "fetch origin" in err and "--fetch" in err
@@ -307,7 +412,10 @@ def test_pr_head_not_in_clone_is_refused_with_the_fetch_command(repo, root, pr_v
 
 
 def test_pr_base_not_in_clone_is_refused(repo, root, pr_view, capsys):
-    pr_view.info[9] = {"headRefOid": git(repo, "rev-parse", "HEAD"), "baseRefOid": "b" * 40}
+    pr_view.info[9] = {
+        "headRefOid": git(repo, "rev-parse", "HEAD"),
+        "baseRefOid": "b" * 40,
+    }
     assert run("run", "--repo", repo, "--pr", "9", "--out", root) == 2
     assert "fetch origin" in capsys.readouterr().err
 
@@ -319,51 +427,97 @@ def test_pr_fetch_fetches_origin_and_the_pr_head(tmp_path, root, pr_view):
     git(upstream, "update-ref", "refs/pull/4/head", head)
     git(upstream, "checkout", "-q", "main")
     clone = tmp_path / "widgets"
-    git(tmp_path, "clone", "-q", "--no-local", "--single-branch", "--branch", "main", str(upstream), str(clone))
-    pr_view.info[4] = {"headRefOid": head, "baseRefOid": git(clone, "rev-parse", "HEAD")}
+    git(
+        tmp_path,
+        "clone",
+        "-q",
+        "--no-local",
+        "--single-branch",
+        "--branch",
+        "main",
+        str(upstream),
+        str(clone),
+    )
+    pr_view.info[4] = {
+        "headRefOid": head,
+        "baseRefOid": git(clone, "rev-parse", "HEAD"),
+    }
     assert run("run", "--repo", clone, "--pr", "4", "--out", root) == 2
     assert run("run", "--repo", clone, "--pr", "4", "--fetch", "--out", root) == 0
-
 
 
 def _fake_gh(tmp_path: Path, monkeypatch, stdout: str, code: int = 0) -> Path:
     """Put a `gh` in place that saves its argv to the returned file and prints *stdout*."""
     argv_file = tmp_path / "gh-argv.json"
     gh = tmp_path / "bin" / "gh"
-    write(gh, f"#!{sys.executable}\nimport json, sys\n"
-              f"open({str(argv_file)!r}, 'w').write(json.dumps(sys.argv[1:]))\n"
-              f"sys.stdout.write({stdout!r})\nsys.exit({code})\n")
+    write(
+        gh,
+        f"#!{sys.executable}\nimport json, sys\n"
+        f"open({str(argv_file)!r}, 'w').write(json.dumps(sys.argv[1:]))\n"
+        f"sys.stdout.write({stdout!r})\nsys.exit({code})\n",
+    )
     gh.chmod(0o755)
     which = target_mod.shutil.which
-    monkeypatch.setattr(target_mod.shutil, "which", lambda name: str(gh) if name == "gh" else which(name))
+    monkeypatch.setattr(
+        target_mod.shutil,
+        "which",
+        lambda name: str(gh) if name == "gh" else which(name),
+    )
     return argv_file
 
 
-@pytest.mark.parametrize("origin", ["https://github.com/acme/widgets.git",
-                                    "git@github.com:acme/widgets.git",
-                                    "ssh://git@github.com/acme/widgets"])
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "https://github.com/acme/widgets.git",
+        "git@github.com:acme/widgets.git",
+        "ssh://git@github.com/acme/widgets",
+    ],
+)
 def test_pr_asks_gh_about_origins_repository(tmp_path, root, monkeypatch, origin):
     """In a fork clone gh would pick `upstream` over `origin`; the fetch, the hints and the
     folder all name origin, so gh is told origin's repository."""
     repo, fork, head, base_tip = _pr_repo(tmp_path)
     git(repo, "remote", "set-url", "origin", origin)
     git(repo, "remote", "add", "upstream", OTHER)
-    argv_file = _fake_gh(tmp_path, monkeypatch, json.dumps(
-        {"headRefOid": head, "baseRefOid": base_tip, "url": "https://github.com/acme/widgets/pull/7"}))
+    argv_file = _fake_gh(
+        tmp_path,
+        monkeypatch,
+        json.dumps(
+            {
+                "headRefOid": head,
+                "baseRefOid": base_tip,
+                "url": "https://github.com/acme/widgets/pull/7",
+            }
+        ),
+    )
     assert run("run", "--repo", repo, "--pr", "7", "--out", root) == 0
     argv = json.loads(argv_file.read_text())
     assert argv[:3] == ["pr", "view", "7"]
     assert argv[argv.index("--repo") + 1] == "acme/widgets"
-    assert read_state(root / "widgets" / f"pr-7@{head[:12]}")["target"]["base_sha"] == fork
+    assert (
+        read_state(root / "widgets" / f"pr-7@{head[:12]}")["target"]["base_sha"] == fork
+    )
 
 
-def test_pr_of_another_repository_than_origin_is_refused(tmp_path, root, monkeypatch, capsys):
+def test_pr_of_another_repository_than_origin_is_refused(
+    tmp_path, root, monkeypatch, capsys
+):
     """origin is not on github.com, so gh chooses the repository; a PR of another one than
     origin is refused rather than fetched from and filed under origin."""
     repo, _, head, base_tip = _pr_repo(tmp_path)
     git(repo, "remote", "set-url", "origin", "https://git.example.com/acme/widgets.git")
-    argv_file = _fake_gh(tmp_path, monkeypatch, json.dumps(
-        {"headRefOid": head, "baseRefOid": base_tip, "url": "https://git.example.com/other/widgets/pull/7"}))
+    argv_file = _fake_gh(
+        tmp_path,
+        monkeypatch,
+        json.dumps(
+            {
+                "headRefOid": head,
+                "baseRefOid": base_tip,
+                "url": "https://git.example.com/other/widgets/pull/7",
+            }
+        ),
+    )
     assert run("run", "--repo", repo, "--pr", "7", "--out", root) == 2
     assert "--repo" not in json.loads(argv_file.read_text())
     err = capsys.readouterr().err
@@ -381,6 +535,7 @@ def test_pr_gh_failure_is_refused(repo, root, monkeypatch, capsys, stdout, code)
 
 # --- --dir ----------------------------------------------------------------------
 
+
 def _source(tmp_path) -> Path:
     src = tmp_path / "x" / "y"
     write(src / "pkg" / "mod.py", "def f():\n    return 1\n")
@@ -394,13 +549,19 @@ def test_dir_names_and_import(tmp_path, root):
     folder = root / "y" / f"dir-y-{_hex6(str(src.resolve()))}"
     t = read_state(folder)["target"]
     assert t["kind"] == "dir" and t["source"] == str(src.resolve())
-    assert t["repo"] == str(folder / "source") and t["remote_url"] is None and t["base_sha"] is None
+    assert (
+        t["repo"] == str(folder / "source")
+        and t["remote_url"] is None
+        and t["base_sha"] is None
+    )
     assert t["head_sha"] == source_head(folder)
     assert (folder / "source" / "pkg" / "mod.py").is_file()
     assert not (folder / "source" / "node_modules").exists()
     assert (folder / "snapshot" / "pkg" / "mod.py").is_file()
-    assert sorted(p.name for p in src.iterdir()) == ["node_modules", "pkg"]  # nothing written there
-
+    assert sorted(p.name for p in src.iterdir()) == [
+        "node_modules",
+        "pkg",
+    ]  # nothing written there
 
 
 def test_dir_import_commits_what_a_copied_gitignore_names(tmp_path, root):
@@ -414,17 +575,24 @@ def test_dir_import_commits_what_a_copied_gitignore_names(tmp_path, root):
     assert run("run", "--dir", src, "--out", root) == 0
     folder = root / "y" / f"dir-y-{_hex6(str(src.resolve()))}"
     assert sorted(git(folder / "source", "ls-files").splitlines()) == [
-        ".gitignore", "app/.gitignore", "app/b.py", "lib/core/a.py"]
+        ".gitignore",
+        "app/.gitignore",
+        "app/b.py",
+        "lib/core/a.py",
+    ]
     assert git(folder / "source", "status", "--porcelain", "--ignored") == ""
     assert (folder / "snapshot" / "lib" / "core" / "a.py").read_text() == "A = 1\n"
     assert (folder / "snapshot" / "app" / "b.py").read_text() == "B = 2\n"
+
 
 def test_dir_import_is_the_same_commit_for_the_same_files_and_clock(tmp_path):
     src = _source(tmp_path)
     assert run("run", "--dir", src, "--out", tmp_path / "a") == 0
     assert run("run", "--dir", src, "--out", tmp_path / "b") == 0
     name = f"dir-y-{_hex6(str(src.resolve()))}"
-    assert source_head(tmp_path / "a" / "y" / name) == source_head(tmp_path / "b" / "y" / name)
+    assert source_head(tmp_path / "a" / "y" / name) == source_head(
+        tmp_path / "b" / "y" / name
+    )
 
 
 def test_dir_keeps_its_first_import(tmp_path, root):
@@ -476,7 +644,9 @@ def test_dir_run_folder_at_or_under_the_source_is_refused(tmp_path, capsys, out)
     """`--out` the source's parent puts `<root>/y/` at the source itself."""
     src = _source(tmp_path)
     before = everything(tmp_path / "x")
-    assert run("run", "--dir", src, "--out", src if out == "source" else src.parent) == 2
+    assert (
+        run("run", "--dir", src, "--out", src if out == "source" else src.parent) == 2
+    )
     assert "inside" in capsys.readouterr().err
     assert everything(tmp_path / "x") == before
 
@@ -490,6 +660,7 @@ def test_dir_run_folder_beside_the_source_is_used(tmp_path):
 
 # --- snapshot, state and --restart ---------------------------------------------------
 
+
 def _blobs(repo: Path, sha: str) -> dict[str, bytes]:
     """Every regular file at *sha* with its bytes as git stores them."""
     out = {}
@@ -497,20 +668,29 @@ def _blobs(repo: Path, sha: str) -> dict[str, bytes]:
         meta, path = line.split("\t", 1)
         mode, kind, oid = meta.split()
         if kind == "blob" and mode != "120000":
-            out[path] = subprocess.run(["git", "-C", str(repo), "cat-file", "blob", oid],
-                                       capture_output=True, check=True).stdout
+            out[path] = subprocess.run(
+                ["git", "-C", str(repo), "cat-file", "blob", oid],
+                capture_output=True,
+                check=True,
+            ).stdout
     return out
 
 
 def _files(folder: Path) -> dict[str, bytes]:
-    return {p.relative_to(folder).as_posix(): p.read_bytes() for p in sorted(folder.rglob("*"))
-            if p.is_file() and not p.is_symlink() and p.name != ".spec-extract-head"}
+    return {
+        p.relative_to(folder).as_posix(): p.read_bytes()
+        for p in sorted(folder.rglob("*"))
+        if p.is_file() and not p.is_symlink() and p.name != ".spec-extract-head"
+    }
 
 
 def test_snapshot_ignores_export_attributes(repo, root):
     """export-ignore, export-subst and eol conversion change what `git archive` writes;
     the snapshot holds the bytes git stores, which the gates read."""
-    write(repo / ".gitattributes", "/tests export-ignore\npkg/v.py export-subst\n*.txt text eol=crlf\n")
+    write(
+        repo / ".gitattributes",
+        "/tests export-ignore\npkg/v.py export-subst\n*.txt text eol=crlf\n",
+    )
     write(repo / "tests" / "test_m.py", "def test_m():\n    pass\n")
     write(repo / "pkg" / "v.py", 'V = "$Format:%H$"\n')
     sha = commit_file(repo, "notes.txt", "one\ntwo\n")
@@ -610,7 +790,9 @@ def test_restart_renames_and_never_deletes(repo, root):
 
 def test_restart_with_no_folder_just_runs(repo, root):
     assert run("run", "--repo", repo, "--tree", "HEAD", "--restart", "--out", root) == 0
-    assert [p.name for p in (root / "widgets").iterdir() if p.name != ".locks"] == [f"tree@{head12(repo)}"]
+    assert [p.name for p in (root / "widgets").iterdir() if p.name != ".locks"] == [
+        f"tree@{head12(repo)}"
+    ]
 
 
 def test_restart_reimports_a_dir(tmp_path, root):

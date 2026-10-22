@@ -56,7 +56,9 @@ def _merge(ranges: list[tuple[int, int]]) -> list[tuple[int, int]]:
     return out
 
 
-def diff_ranges(diff: str) -> tuple[dict[str, list[tuple[int, int]]], dict[str, list[tuple[int, int]]]]:
+def diff_ranges(
+    diff: str,
+) -> tuple[dict[str, list[tuple[int, int]]], dict[str, list[tuple[int, int]]]]:
     """(head hunks per new path, removed-line runs per old path), each as (start, end) ranges.
 
     A hunk's lines are counted from its `@@` header, so a removed line that
@@ -104,11 +106,19 @@ def diff_ranges(diff: str) -> tuple[dict[str, list[tuple[int, int]]], dict[str, 
         else:
             m = _HUNK.match(line)
             if m:
-                old_start, old_count = int(m.group(1)), int(m.group(2) if m.group(2) is not None else 1)
-                new_start, new_count = int(m.group(3)), int(m.group(4) if m.group(4) is not None else 1)
+                old_start, old_count = (
+                    int(m.group(1)),
+                    int(m.group(2) if m.group(2) is not None else 1),
+                )
+                new_start, new_count = (
+                    int(m.group(3)),
+                    int(m.group(4) if m.group(4) is not None else 1),
+                )
                 old_line, old_left, new_left = old_start, old_count, new_count
                 if new_count and new_path:
-                    head.setdefault(new_path, []).append((new_start, new_start + new_count - 1))
+                    head.setdefault(new_path, []).append(
+                        (new_start, new_start + new_count - 1)
+                    )
     close_run(old_line - 1)
     return head, base
 
@@ -132,9 +142,15 @@ def diff_scope(diff: str, snapshot: Path, context: int = CONTEXT_LINES) -> Scope
         for start, end in head[path]:
             end = end + context
             widened.append((max(1, start - context), min(end, last) if last else end))
-        spans += [Span(path=path, start=s, end=e, side="head") for s, e in _merge(widened) if e >= s]
+        spans += [
+            Span(path=path, start=s, end=e, side="head")
+            for s, e in _merge(widened)
+            if e >= s
+        ]
     for path in sorted(base):
-        spans += [Span(path=path, start=s, end=e, side="base") for s, e in _merge(base[path])]
+        spans += [
+            Span(path=path, start=s, end=e, side="base") for s, e in _merge(base[path])
+        ]
     return Scope(spans=spans)
 
 
@@ -144,7 +160,9 @@ def tree_scope(target: TargetInfo, snapshot: Path) -> Scope:
 
 
 def scope_for(target: TargetInfo, diff: str, snapshot: Path) -> Scope:
-    return tree_scope(target, snapshot) if target.is_tree else diff_scope(diff, snapshot)
+    return (
+        tree_scope(target, snapshot) if target.is_tree else diff_scope(diff, snapshot)
+    )
 
 
 # --- placing a citation ---------------------------------------------------------------
@@ -152,6 +170,7 @@ def scope_for(target: TargetInfo, diff: str, snapshot: Path) -> Scope:
 
 def resolver(target: TargetInfo) -> Resolve:
     """`resolve(path, side) -> (repo, sha, path)`; None for an empty path or a base side in a tree review."""
+
     def resolve(path: str, side: Side) -> tuple[str, str, str] | None:
         if not path:
             return None
@@ -176,11 +195,14 @@ class FactsFile(ExplainedFacts):
     citation that passed. `uncovered` lists files in the scope that no fact
     cites; `dropped` records each claim whose citations all failed.
     """
+
     schema_version: Literal[1]
     generated_at: str
     base_sha: str
     head_sha: str
-    kind: Literal["change", "tree"] = Field(description="`tree` for a review of files as they stand, no base side")
+    kind: Literal["change", "tree"] = Field(
+        description="`tree` for a review of files as they stand, no base side"
+    )
 
 
 def schema_text() -> str:
@@ -191,11 +213,17 @@ def schema_text() -> str:
     return json.dumps(schema, indent=2, sort_keys=True) + "\n"
 
 
-def write_facts_file(target: TargetInfo, facts: ExplainedFacts, target_dir: Path) -> Path:
+def write_facts_file(
+    target: TargetInfo, facts: ExplainedFacts, target_dir: Path
+) -> Path:
     data = FactsFile(
         schema_version=1,
-        generated_at=datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
-        base_sha=target.base_sha, head_sha=target.head_sha, kind="tree" if target.is_tree else "change",
+        generated_at=datetime.now(UTC)
+        .isoformat(timespec="seconds")
+        .replace("+00:00", "Z"),
+        base_sha=target.base_sha,
+        head_sha=target.head_sha,
+        kind="tree" if target.is_tree else "change",
         **facts.model_dump(),
     )
     path = target_dir / FACTS_FILE

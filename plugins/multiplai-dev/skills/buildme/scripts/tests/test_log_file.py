@@ -14,12 +14,23 @@ SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 
 def _run_probe(code: str, data_dir) -> subprocess.CompletedProcess:
     """Run *code* in a fresh interpreter whose data directory is *data_dir*."""
-    env = {k: v for k, v in os.environ.items()
-           if not k.startswith(("CLAUDE_PLUGIN", "PYTEST")) and k not in ("WORKSPACE", "CLAUDE_PROJECT_DIR")}
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith(("CLAUDE_PLUGIN", "PYTEST"))
+        and k not in ("WORKSPACE", "CLAUDE_PROJECT_DIR")
+    }
     env["CLAUDE_PLUGIN_OPTION_DATA_DIR"] = str(data_dir)
     env.pop("MULTIPLAI_LOG_LEVEL", None)
-    return subprocess.run([sys.executable, "-c", code], cwd=SCRIPTS_DIR, env=env,
-                          capture_output=True, text=True, timeout=120)
+    return subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=SCRIPTS_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
 
 _PROBE = """
 import logging, sys

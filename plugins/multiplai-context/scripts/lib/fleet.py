@@ -117,13 +117,13 @@ class Agent:
     hostname: str = ""
     cwd: str = ""
     branch: str = ""
-    repo_root: str = ""           # the checkout containing cwd, "" outside git
-    repo_id: str = ""             # main .git dir — shared across worktrees
+    repo_root: str = ""  # the checkout containing cwd, "" outside git
+    repo_id: str = ""  # main .git dir — shared across worktrees
     started_at: str = ""
     last_ts: datetime | None = None
     last_kind: str = ""
-    status: str = "idle"          # working | waiting_input | idle | ended
-    in_container: bool | None = None   # None = entry predates the field
+    status: str = "idle"  # working | waiting_input | idle | ended
+    in_container: bool | None = None  # None = entry predates the field
     # Where this session's tab is, joined host-side — see :class:`PaneMap`.
     # Empty is the vanilla case: no kit, or no tmux. `tmux_server` is not
     # decoration; a pane id is only meaningful alongside the server that
@@ -142,7 +142,7 @@ class Agent:
     # every agent `seen=False`, which renders exactly as the board did before.
     seen: bool = False
     seen_at: datetime | None = None
-    disposition: str = "active"   # active | parked | done — how it was LEFT
+    disposition: str = "active"  # active | parked | done — how it was LEFT
     disposition_reason: str = ""
     intent: str = ""
     next_action: str = ""
@@ -560,7 +560,9 @@ def roster_dead_sids(
     if roster is None:
         return set()
     now = now or datetime.now(UTC)
-    cutoff = now - (grace if grace is not None else timedelta(hours=ROSTER_DEAD_GRACE_HOURS))
+    cutoff = now - (
+        grace if grace is not None else timedelta(hours=ROSTER_DEAD_GRACE_HOURS)
+    )
 
     dead: set[str] = set()
     for path in (data_dir / "sessions").glob("*.json"):
@@ -643,8 +645,9 @@ class Fleet:
         `agents` is pre-sorted by recency and the sort is stable, so this is a
         single partition on top of that order.
         """
-        return sorted((a for a in self.agents if a.group == title),
-                      key=lambda a: a.seen)
+        return sorted(
+            (a for a in self.agents if a.group == title), key=lambda a: a.seen
+        )
 
     @property
     def live(self) -> list[Agent]:
@@ -659,6 +662,7 @@ class Fleet:
 # Reading the two stores
 # ---------------------------------------------------------------------------
 
+
 def split_sections(text: str) -> dict[str, str]:
     """Split a checkpoint into ``{section name: body}``.
 
@@ -671,7 +675,7 @@ def split_sections(text: str) -> dict[str, str]:
     matches = list(_SECTION_RE.finditer(text))
     for i, m in enumerate(matches):
         end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
-        out[m.group("name").strip()] = text[m.end():end].strip()
+        out[m.group("name").strip()] = text[m.end() : end].strip()
     return out
 
 
@@ -761,9 +765,11 @@ def _git_info(cwd: str) -> tuple[str, str, str]:
             else:
                 gitdir = dotgit
                 repo_id = str(dotgit)
-            head = (gitdir / "HEAD").read_text(encoding="utf-8", errors="replace").strip()
+            head = (
+                (gitdir / "HEAD").read_text(encoding="utf-8", errors="replace").strip()
+            )
             if head.startswith("ref: refs/heads/"):
-                name = head[len("ref: refs/heads/"):]
+                name = head[len("ref: refs/heads/") :]
             else:
                 name = head[:8] or ""
             branch = f"{name} (worktree: {worktree})" if worktree else name
@@ -1007,14 +1013,16 @@ def _collision_key(agent: Agent, path: str) -> tuple[tuple[str, str], str] | Non
     if root:
         prefix = root.rstrip("/") + "/"
         if path.startswith(prefix):
-            rel = path[len(prefix):]
+            rel = path[len(prefix) :]
             return ((agent.repo_id or root, rel), rel) if rel else None
         if path.rstrip("/") == root.rstrip("/"):
             return None
     return ("", path), path
 
 
-def find_collisions(agents: list[Agent], now: datetime | None = None) -> list[Collision]:
+def find_collisions(
+    agents: list[Agent], now: datetime | None = None
+) -> list[Collision]:
     """Files held by two or more agents that are **both still in play**.
 
     This is the overlapping-work anxiety answered without any agent talking to
@@ -1071,11 +1079,13 @@ def find_collisions(agents: list[Agent], now: datetime | None = None) -> list[Co
         # session id is the last resort that is always distinct.
         if len(set(labels)) < len(labels):
             labels = [f"{lb} ({a.session_id[:8]})" for lb, a in zip(labels, owners)]
-        out.append(Collision(
-            path=display[key],
-            session_ids=[a.session_id for a in owners],
-            labels=labels,
-        ))
+        out.append(
+            Collision(
+                path=display[key],
+                session_ids=[a.session_id for a in owners],
+                labels=labels,
+            )
+        )
     out.sort(key=lambda c: c.path)
     return out
 
@@ -1111,8 +1121,12 @@ def collect(data_dir: Path, now: datetime | None = None) -> Fleet:
     # Newest first within a group; stable on session_id so two entries with
     # the same timestamp always render in the same order (the cache property
     # depends on this).
-    agents.sort(key=lambda a: (-(a.last_ts or datetime.min.replace(
-        tzinfo=UTC)).timestamp(), a.session_id))
+    agents.sort(
+        key=lambda a: (
+            -(a.last_ts or datetime.min.replace(tzinfo=UTC)).timestamp(),
+            a.session_id,
+        )
+    )
     return Fleet(
         agents=agents,
         collisions=find_collisions(agents, now),
@@ -1123,6 +1137,7 @@ def collect(data_dir: Path, now: datetime | None = None) -> Fleet:
 # ---------------------------------------------------------------------------
 # Rendering
 # ---------------------------------------------------------------------------
+
 
 def format_age(delta: timedelta) -> str:
     """Coarse age: ``3d`` / ``5h`` / ``12m`` / ``just now``."""
@@ -1205,6 +1220,7 @@ def _sanitize_reason(reason: str) -> str:
 # reports on its own line. Dropping the display costs no collision detection;
 # that is pinned by a test.
 
+
 def _render_agent(agent: Agent, now: datetime) -> list[str]:
     head = agent.project or agent.cwd or agent.session_id[:8]
     # Marked on the *seen* side, not the unseen one, and that choice is load-
@@ -1248,7 +1264,9 @@ def _render_agent(agent: Agent, now: datetime) -> list[str]:
     return lines
 
 
-def render_agents_md(fleet: Fleet, now: datetime, generated_at: str | None = None) -> str:
+def render_agents_md(
+    fleet: Fleet, now: datetime, generated_at: str | None = None
+) -> str:
     """The full fleet read.
 
     Everything below the generation stamp is a function of the two stores
@@ -1313,11 +1331,15 @@ def render_agents_md(fleet: Fleet, now: datetime, generated_at: str | None = Non
 # The extra sections — only when someone paid for them
 # ---------------------------------------------------------------------------
 
+
 def _render_prs(scan: "PRScan") -> list[str]:
     out = ["## Pull requests", ""]
     if not scan.available:
-        out += ["_`gh` is unavailable or unauthenticated — PRs not read. "
-                "Install the GitHub CLI and run `gh auth login`._", ""]
+        out += [
+            "_`gh` is unavailable or unauthenticated — PRs not read. "
+            "Install the GitHub CLI and run `gh auth login`._",
+            "",
+        ]
         return out
     human, bots = scan.human, scan.bots
     if not scan.prs:
@@ -1334,7 +1356,9 @@ def _render_prs(scan: "PRScan") -> list[str]:
             bits.append(f"CI {pr.ci}")
             out.append(f"- `{pr.label}` {pr.title} — {' · '.join(bits)}  \n  {pr.url}")
         if bots:
-            out.append(f"- _plus {len(bots)} bot PR(s) — dependency bumps, not listed._")
+            out.append(
+                f"- _plus {len(bots)} bot PR(s) — dependency bumps, not listed._"
+            )
         out.append("")
     for slug, err in sorted(scan.errors.items()):
         out.append(f"- ⚠️ `{slug}` — {err}")
@@ -1389,7 +1413,9 @@ def _render_jobs(jobs: "list[BackgroundJob]") -> list[str]:
         out += ["_None recorded._", ""]
         return out
     running = [j for j in jobs if j.running]
-    out.append(f"**{len(running)} running · {len(jobs) - len(running)} finished or stale**")
+    out.append(
+        f"**{len(running)} running · {len(jobs) - len(running)} finished or stale**"
+    )
     out.append("")
     for job in jobs:
         if job.running:
@@ -1412,7 +1438,9 @@ def _render_backlog(backlog: "Backlog") -> list[str]:
         out += ["_Nothing pending._", ""]
         return out
     if backlog.learnings_lines:
-        oldest = f", oldest {backlog.oldest_learning}" if backlog.oldest_learning else ""
+        oldest = (
+            f", oldest {backlog.oldest_learning}" if backlog.oldest_learning else ""
+        )
         out.append(
             f"- {backlog.learnings_lines} learning line(s) across "
             f"{backlog.learnings_files} file(s){oldest} — `/multiplai-context:dream`"
@@ -1535,8 +1563,7 @@ def fleet_payload(
         # ago", which is honest: it does not claim freshness, it states when
         # somebody looked.
         "collected_at": {
-            name: stamp for name in CARRIED_SECTIONS
-            if getattr(fleet, name) is not None
+            name: stamp for name in CARRIED_SECTIONS if getattr(fleet, name) is not None
         },
     }
 
@@ -1659,7 +1686,10 @@ def write_fleet_view(data_dir: Path, now: datetime | None = None) -> Path:
 
     logger.info(
         "Fleet: %d front(s), %d listed of %d session(s), %d collision(s) → %s",
-        len(fleet.fronts), len(fleet.live), len(fleet.agents),
-        len(fleet.collisions), agents_path,
+        len(fleet.fronts),
+        len(fleet.live),
+        len(fleet.agents),
+        len(fleet.collisions),
+        agents_path,
     )
     return agents_path

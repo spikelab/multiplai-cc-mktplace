@@ -28,8 +28,10 @@ if str(SCRIPTS_DIR) not in sys.path:
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_mock_client(content: str):
     from multiplai_core.model_client import ModelResponse
+
     client = AsyncMock()
     client.query = AsyncMock(return_value=ModelResponse(content=content))
     return client
@@ -86,21 +88,25 @@ def _sample_units():
 # EXTRACTION_PROMPT structure
 # ---------------------------------------------------------------------------
 
+
 class TestExtractionPrompt:
     """EXTRACTION_PROMPT must be diary-first and tag-delimited (not JSON)."""
 
     def test_prompt_imported(self):
         from lib.extraction import EXTRACTION_PROMPT
+
         assert EXTRACTION_PROMPT
 
     def test_prompt_asks_for_diary_block(self):
         from lib.extraction import EXTRACTION_PROMPT
+
         assert "<diary>" in EXTRACTION_PROMPT
 
     def test_prompt_is_not_json(self):
         """Prose-in-JSON-strings broke strict parsing on real sessions —
         the prompt must not ask for JSON output."""
         from lib.extraction import EXTRACTION_PROMPT
+
         assert "valid JSON" not in EXTRACTION_PROMPT
         assert '"units"' not in EXTRACTION_PROMPT
 
@@ -108,19 +114,23 @@ class TestExtractionPrompt:
         """Trivial sessions need an explicit marker so the parser can
         distinguish 'genuinely empty' from 'unparseable'."""
         from lib.extraction import EXTRACTION_PROMPT
+
         assert "<no-units/>" in EXTRACTION_PROMPT
 
     def test_prompt_no_max_chars_constraint_on_diary(self):
         """Old prompt had 'max 300 chars' — new one must not."""
         from lib.extraction import EXTRACTION_PROMPT
+
         assert "max 300 chars" not in EXTRACTION_PROMPT
 
     def test_prompt_has_valid_targets_placeholder(self):
         from lib.extraction import EXTRACTION_PROMPT
+
         assert "{valid_targets}" in EXTRACTION_PROMPT
 
     def test_prompt_has_transcript_placeholder(self):
         from lib.extraction import EXTRACTION_PROMPT
+
         assert "{transcript}" in EXTRACTION_PROMPT
 
 
@@ -135,6 +145,7 @@ class TestPromptRequestsBothAxes:
     def test_both_fields_are_requested_with_their_closed_sets(self):
         from lib import taxonomy
         from lib.extraction import EXTRACTION_PROMPT
+
         spec = EXTRACTION_PROMPT.split("<learning>")[1].split("</learning>")[0]
         assert "provenance:" in spec and "kind:" in spec
         for value in taxonomy.PROVENANCES:
@@ -146,6 +157,7 @@ class TestPromptRequestsBothAxes:
         """Asking for both `type` and the two axes would get all three, in
         conflict. The key stays *accepted* on read; it is no longer requested."""
         from lib.extraction import EXTRACTION_PROMPT
+
         spec = EXTRACTION_PROMPT.split("<learning>")[1].split("</learning>")[0]
         assert "type:" not in spec
 
@@ -153,24 +165,30 @@ class TestPromptRequestsBothAxes:
         """Deprecated, not removed: dropping it in the same change that adds two
         fields would make both impossible to evaluate."""
         from lib.extraction import EXTRACTION_PROMPT
+
         spec = EXTRACTION_PROMPT.split("<learning>")[1].split("</learning>")[0]
         assert "trust:" in spec
 
-    @pytest.mark.parametrize("distinction", [
-        "CORRECTION vs DECLARATION",
-        "INFERENCE vs EMPIRICAL",
-        "FACT vs RULE",
-    ])
+    @pytest.mark.parametrize(
+        "distinction",
+        [
+            "CORRECTION vs DECLARATION",
+            "INFERENCE vs EMPIRICAL",
+            "FACT vs RULE",
+        ],
+    )
     def test_the_three_hard_distinctions_are_spelled_out(self, distinction):
         """These three carry essentially all the classification difficulty, and
         each is stated with a worked example rather than a definition."""
         from lib.extraction import EXTRACTION_PROMPT
+
         assert f"**{distinction}**" in EXTRACTION_PROMPT
 
     def test_the_unclear_defaults_are_stated_with_their_cost(self):
         """The asymmetry is deliberate — both defaults send an item to a human —
         and the model is told so, otherwise it optimises for looking decisive."""
         from lib.extraction import EXTRACTION_PROMPT
+
         assert "unclear, answer `INFERENCE`" in EXTRACTION_PROMPT
         assert "unclear, answer `RULE`" in EXTRACTION_PROMPT
         assert "send the item to a human" in EXTRACTION_PROMPT
@@ -180,35 +198,52 @@ class TestPromptRequestsBothAxes:
 # extract_units
 # ---------------------------------------------------------------------------
 
+
 class TestExtractUnits:
     def test_returns_units_on_valid_response(self):
         from lib.extraction import extract_units
-        response = _tag_response([
-            {"timestamp": "2026-05-16T14:00:00Z", "diary_entry": "Did X.", "learnings": []}
-        ])
+
+        response = _tag_response(
+            [
+                {
+                    "timestamp": "2026-05-16T14:00:00Z",
+                    "diary_entry": "Did X.",
+                    "learnings": [],
+                }
+            ]
+        )
         client = _make_mock_client(response)
-        result = asyncio.run(extract_units("some transcript", valid_targets=["technical-pref.md"], client=client))
+        result = asyncio.run(
+            extract_units(
+                "some transcript", valid_targets=["technical-pref.md"], client=client
+            )
+        )
         assert len(result) == 1
         assert result[0]["diary_entry"] == "Did X."
 
     def test_calls_client_query(self):
         from lib.extraction import extract_units
+
         client = _make_mock_client(_tag_response([]))
         asyncio.run(extract_units("transcript", valid_targets=[], client=client))
         client.query.assert_awaited_once()
 
     def test_passes_system_prompt(self):
         from lib.extraction import extract_units
+
         client = _make_mock_client(_tag_response([]))
         asyncio.run(extract_units("t", valid_targets=[], client=client))
         call_kwargs = client.query.call_args
-        assert call_kwargs.kwargs.get("system") or (call_kwargs.args and "system" in str(call_kwargs))
+        assert call_kwargs.kwargs.get("system") or (
+            call_kwargs.args and "system" in str(call_kwargs)
+        )
 
     def test_raises_on_unparseable_response(self):
         # An unparseable response must NOT be silently treated as "empty" —
         # that would drop the session's extraction marker as if nothing
         # happened. It raises so the caller retains the marker for retry.
         from lib.extraction import ExtractionParseError, extract_units
+
         client = _make_mock_client("no tags at all")
         with pytest.raises(ExtractionParseError):
             asyncio.run(extract_units("t", valid_targets=[], client=client))
@@ -217,6 +252,7 @@ class TestExtractUnits:
         # Parse failures are stochastic — one in-place retry with the same
         # prompt. Both attempts failing surfaces the error to the caller.
         from lib.extraction import ExtractionParseError, extract_units
+
         client = _make_mock_client("no tags at all")
         with pytest.raises(ExtractionParseError):
             asyncio.run(extract_units("t", valid_targets=[], client=client))
@@ -225,12 +261,17 @@ class TestExtractUnits:
     def test_retry_recovers_on_second_attempt(self):
         from lib.extraction import extract_units
         from multiplai_core.model_client import ModelResponse
+
         client = AsyncMock()
-        good = _tag_response([{"timestamp": "", "diary_entry": "Recovered.", "learnings": []}])
-        client.query = AsyncMock(side_effect=[
-            ModelResponse(content="garbage"),
-            ModelResponse(content=good),
-        ])
+        good = _tag_response(
+            [{"timestamp": "", "diary_entry": "Recovered.", "learnings": []}]
+        )
+        client.query = AsyncMock(
+            side_effect=[
+                ModelResponse(content="garbage"),
+                ModelResponse(content=good),
+            ]
+        )
         result = asyncio.run(extract_units("t", valid_targets=[], client=client))
         assert len(result) == 1
         assert result[0]["diary_entry"] == "Recovered."
@@ -238,13 +279,19 @@ class TestExtractUnits:
     def test_returns_empty_on_no_units_marker(self):
         # An explicit <no-units/> IS a genuine empty extraction.
         from lib.extraction import extract_units
+
         client = _make_mock_client("<no-units/>")
         result = asyncio.run(extract_units("t", valid_targets=[], client=client))
         assert result == []
 
     def test_tolerates_fenced_code_block(self):
         from lib.extraction import extract_units
-        fenced = "```\n" + _tag_response([{"timestamp": "", "diary_entry": "x", "learnings": []}]) + "\n```"
+
+        fenced = (
+            "```\n"
+            + _tag_response([{"timestamp": "", "diary_entry": "x", "learnings": []}])
+            + "\n```"
+        )
         client = _make_mock_client(fenced)
         result = asyncio.run(extract_units("t", valid_targets=[], client=client))
         assert len(result) == 1
@@ -253,27 +300,41 @@ class TestExtractUnits:
         # The whole point of the tag format: quotes, backslashes, newlines
         # and code snippets in diary prose must round-trip unmodified.
         from lib.extraction import extract_units
-        prose = 'Fixed "quoting" and C:\\paths\\here.\n\nAdded `json.loads("{...}")` retry.'
-        response = _tag_response([{"timestamp": "", "diary_entry": prose, "learnings": []}])
+
+        prose = (
+            'Fixed "quoting" and C:\\paths\\here.\n\nAdded `json.loads("{...}")` retry.'
+        )
+        response = _tag_response(
+            [{"timestamp": "", "diary_entry": prose, "learnings": []}]
+        )
         client = _make_mock_client(response)
         result = asyncio.run(extract_units("t", valid_targets=[], client=client))
         assert result[0]["diary_entry"] == prose
 
     def test_parses_learnings_key_value_lines(self):
         from lib.extraction import extract_units
-        response = _tag_response([{
-            "timestamp": "2026-05-16T14:00:00Z",
-            "diary_entry": "Did X.",
-            "learnings": [{
-                "trust": "verified",
-                "type": "CORRECTION",
-                "target": "technical-pref.md",
-                "description": "Use X not Y: the colon survives",
-                "action": "Add the rule",
-            }],
-        }])
+
+        response = _tag_response(
+            [
+                {
+                    "timestamp": "2026-05-16T14:00:00Z",
+                    "diary_entry": "Did X.",
+                    "learnings": [
+                        {
+                            "trust": "verified",
+                            "type": "CORRECTION",
+                            "target": "technical-pref.md",
+                            "description": "Use X not Y: the colon survives",
+                            "action": "Add the rule",
+                        }
+                    ],
+                }
+            ]
+        )
         client = _make_mock_client(response)
-        result = asyncio.run(extract_units("t", valid_targets=["technical-pref.md"], client=client))
+        result = asyncio.run(
+            extract_units("t", valid_targets=["technical-pref.md"], client=client)
+        )
         learning = result[0]["learnings"][0]
         assert learning["trust"] == "verified"
         assert learning["type"] == "CORRECTION"
@@ -284,6 +345,7 @@ class TestExtractUnits:
 
     def test_learning_without_description_dropped(self):
         from lib.extraction import extract_units
+
         response = (
             "<unit>\n<timestamp></timestamp>\n<diary>\nWork.\n</diary>\n"
             "<learning>\ntrust: high\ntype: OBSERVATION\n</learning>\n</unit>"
@@ -296,8 +358,13 @@ class TestExtractUnits:
         # A response cut off mid-unit still yields every completed unit —
         # with JSON, the same truncation lost the entire extraction.
         from lib.extraction import extract_units
-        complete = _tag_response([{"timestamp": "", "diary_entry": "First unit.", "learnings": []}])
-        truncated = complete + "\n<unit>\n<timestamp></timestamp>\n<diary>\nCut off mid-sent"
+
+        complete = _tag_response(
+            [{"timestamp": "", "diary_entry": "First unit.", "learnings": []}]
+        )
+        truncated = (
+            complete + "\n<unit>\n<timestamp></timestamp>\n<diary>\nCut off mid-sent"
+        )
         client = _make_mock_client(truncated)
         result = asyncio.run(extract_units("t", valid_targets=[], client=client))
         assert len(result) == 1
@@ -307,6 +374,7 @@ class TestExtractUnits:
 # ---------------------------------------------------------------------------
 # write_diary_entries
 # ---------------------------------------------------------------------------
+
 
 class TestWriteDiaryEntries:
     """Per-day diary file format (aligned with append_learnings).
@@ -318,8 +386,11 @@ class TestWriteDiaryEntries:
 
     def test_writes_to_day_file(self, tmp_path):
         from lib.extraction import write_diary_entries
+
         ts = "2026-05-16T14:00:00+00:00"
-        path = write_diary_entries(_sample_units(), tmp_path, "sid-abc", "/some/cwd", ts)
+        path = write_diary_entries(
+            _sample_units(), tmp_path, "sid-abc", "/some/cwd", ts
+        )
         assert path is not None
         assert path == tmp_path / "2026-05-16.md"
         assert path.exists()
@@ -328,6 +399,7 @@ class TestWriteDiaryEntries:
 
     def test_day_header_on_first_write(self, tmp_path):
         from lib.extraction import write_diary_entries
+
         ts = "2026-05-16T14:00:00+00:00"
         path = write_diary_entries(_sample_units(), tmp_path, "sid-abc", "/cwd", ts)
         first_line = path.read_text().split("\n", 1)[0]
@@ -335,9 +407,14 @@ class TestWriteDiaryEntries:
 
     def test_session_header_contains_id_ts_and_cwd(self, tmp_path):
         from lib.extraction import write_diary_entries
+
         ts = "2026-05-16T14:00:00+00:00"
         path = write_diary_entries(
-            _sample_units(), tmp_path, "sid-xyz", "/Users/spike/knowhere", ts,
+            _sample_units(),
+            tmp_path,
+            "sid-xyz",
+            "/Users/spike/knowhere",
+            ts,
         )
         text = path.read_text()
         # The session header is the parser anchor for downstream tools.
@@ -347,6 +424,7 @@ class TestWriteDiaryEntries:
 
     def test_body_contains_diary_entry(self, tmp_path):
         from lib.extraction import write_diary_entries
+
         ts = "2026-05-16T14:00:00+00:00"
         path = write_diary_entries(_sample_units(), tmp_path, "s1", "/cwd", ts)
         assert "Implemented extraction refactor" in path.read_text()
@@ -354,6 +432,7 @@ class TestWriteDiaryEntries:
     def test_second_session_same_day_appends(self, tmp_path):
         """Two sessions on the same UTC day → one file, two ## Session blocks."""
         from lib.extraction import write_diary_entries
+
         ts = "2026-05-16T14:00:00+00:00"
         p1 = write_diary_entries(_sample_units(), tmp_path, "sid-1", "/a", ts)
         p2 = write_diary_entries(_sample_units(), tmp_path, "sid-2", "/b", ts)
@@ -367,6 +446,7 @@ class TestWriteDiaryEntries:
     def test_idempotent_on_same_session_id(self, tmp_path):
         """Re-running extraction for the same session_id is a no-op."""
         from lib.extraction import write_diary_entries
+
         ts = "2026-05-16T14:00:00+00:00"
         path1 = write_diary_entries(_sample_units(), tmp_path, "sid-1", "/cwd", ts)
         original = path1.read_text()
@@ -376,18 +456,25 @@ class TestWriteDiaryEntries:
 
     def test_returns_none_when_no_diary_content(self, tmp_path):
         from lib.extraction import write_diary_entries
+
         units = [{"timestamp": "", "diary_entry": "", "learnings": []}]
-        result = write_diary_entries(units, tmp_path, "s1", "/cwd", "2026-05-16T14:00:00+00:00")
+        result = write_diary_entries(
+            units, tmp_path, "s1", "/cwd", "2026-05-16T14:00:00+00:00"
+        )
         assert result is None
 
     def test_returns_none_for_empty_units(self, tmp_path):
         from lib.extraction import write_diary_entries
-        result = write_diary_entries([], tmp_path, "s1", "/cwd", "2026-05-16T14:00:00+00:00")
+
+        result = write_diary_entries(
+            [], tmp_path, "s1", "/cwd", "2026-05-16T14:00:00+00:00"
+        )
         assert result is None
 
     def test_creates_diary_dir_if_missing(self, tmp_path):
         """diary_dir itself is mkdir'd; no per-day subdir is created."""
         from lib.extraction import write_diary_entries
+
         ts = "2026-05-16T09:00:00+00:00"
         target = tmp_path / "diary"  # does not exist yet
         path = write_diary_entries(_sample_units(), target, "s1", "/cwd", ts)
@@ -399,8 +486,17 @@ class TestWriteDiaryEntries:
     def test_date_from_unit_timestamp(self, tmp_path):
         """Date in filename derived from unit timestamp, not provided timestamp."""
         from lib.extraction import write_diary_entries
-        units = [{"timestamp": "2026-04-01T12:00:00+00:00", "diary_entry": "Work.", "learnings": []}]
-        path = write_diary_entries(units, tmp_path, "s1", "/cwd", "2026-05-16T09:00:00+00:00")
+
+        units = [
+            {
+                "timestamp": "2026-04-01T12:00:00+00:00",
+                "diary_entry": "Work.",
+                "learnings": [],
+            }
+        ]
+        path = write_diary_entries(
+            units, tmp_path, "s1", "/cwd", "2026-05-16T09:00:00+00:00"
+        )
         assert path == tmp_path / "2026-04-01.md"
 
 
@@ -408,11 +504,15 @@ class TestWriteDiaryEntries:
 # append_learnings
 # ---------------------------------------------------------------------------
 
+
 class TestAppendLearnings:
     def test_writes_learning_entries(self, tmp_path):
         from lib.extraction import append_learnings
+
         lf = tmp_path / "2026-05-16.md"
-        result = append_learnings(_sample_units(), lf, "sid-1", "2026-05-16T14:00:00+00:00")
+        result = append_learnings(
+            _sample_units(), lf, "sid-1", "2026-05-16T14:00:00+00:00"
+        )
         assert result is True
         content = lf.read_text()
         assert "PATTERN" in content
@@ -420,26 +520,34 @@ class TestAppendLearnings:
 
     def test_dedup_skips_if_session_present(self, tmp_path):
         from lib.extraction import append_learnings
+
         lf = tmp_path / "2026-05-16.md"
         lf.write_text("---\n## Session Learnings\nSession: sid-1\n- existing\n")
-        result = append_learnings(_sample_units(), lf, "sid-1", "2026-05-16T14:00:00+00:00")
+        result = append_learnings(
+            _sample_units(), lf, "sid-1", "2026-05-16T14:00:00+00:00"
+        )
         assert result is False
         assert lf.read_text().count("Session: sid-1") == 1
 
     def test_creates_parent_dirs(self, tmp_path):
         from lib.extraction import append_learnings
+
         lf = tmp_path / "subdir" / "2026-05-16.md"
         append_learnings(_sample_units(), lf, "sid-3", "2026-05-16T14:00:00+00:00")
         assert lf.exists()
 
     def test_session_id_written_to_file(self, tmp_path):
         from lib.extraction import append_learnings
+
         lf = tmp_path / "2026-05-16.md"
-        append_learnings(_sample_units(), lf, "my-session-id", "2026-05-16T14:00:00+00:00")
+        append_learnings(
+            _sample_units(), lf, "my-session-id", "2026-05-16T14:00:00+00:00"
+        )
         assert "Session: my-session-id" in lf.read_text()
 
     def test_units_with_no_learnings_not_written(self, tmp_path):
         from lib.extraction import append_learnings
+
         units = [{"timestamp": "", "diary_entry": "x", "learnings": []}]
         lf = tmp_path / "2026-05-16.md"
         result = append_learnings(units, lf, "s1", "2026-05-16T14:00:00+00:00")
@@ -448,6 +556,7 @@ class TestAppendLearnings:
     def test_learning_format_matches_kit_schema(self, tmp_path):
         """Learning entries must use the structured kit format."""
         from lib.extraction import append_learnings
+
         lf = tmp_path / "2026-05-16.md"
         append_learnings(_sample_units(), lf, "s1", "2026-05-16T14:00:00+00:00")
         content = lf.read_text()
@@ -458,15 +567,28 @@ class TestAppendLearnings:
         """End to end through the writer: what the extractor labelled is what
         lands in the file a human reads."""
         from lib.extraction import append_learnings
+
         lf = tmp_path / "2026-08-08.md"
         append_learnings(
-            [{"timestamp": "2026-08-08T09:00:00+00:00", "diary_entry": "Work.",
-              "learnings": [{
-                  "trust": "verified", "provenance": "CORRECTION", "kind": "RULE",
-                  "target": "dev.md", "description": "Stage with a pathspec.",
-                  "action": "Add to the git section.",
-              }]}],
-            lf, "s1", "2026-08-08T09:00:00+00:00",
+            [
+                {
+                    "timestamp": "2026-08-08T09:00:00+00:00",
+                    "diary_entry": "Work.",
+                    "learnings": [
+                        {
+                            "trust": "verified",
+                            "provenance": "CORRECTION",
+                            "kind": "RULE",
+                            "target": "dev.md",
+                            "description": "Stage with a pathspec.",
+                            "action": "Add to the git section.",
+                        }
+                    ],
+                }
+            ],
+            lf,
+            "s1",
+            "2026-08-08T09:00:00+00:00",
         )
         content = lf.read_text()
         assert "- **[CORRECTION/RULE]** Stage with a pathspec." in content
@@ -476,14 +598,30 @@ class TestAppendLearnings:
         """They will, for as long as the pending backlog lives. Neither one
         rewrites the other."""
         from lib.extraction import append_learnings
+
         lf = tmp_path / "2026-08-08.md"
         append_learnings(
-            [{"timestamp": "2026-08-08T09:00:00+00:00", "diary_entry": "Work.",
-              "learnings": [
-                  {"trust": "high", "type": "OBSERVATION", "description": "Old shape."},
-                  {"provenance": "EMPIRICAL", "kind": "FACT", "description": "New shape."},
-              ]}],
-            lf, "s1", "2026-08-08T09:00:00+00:00",
+            [
+                {
+                    "timestamp": "2026-08-08T09:00:00+00:00",
+                    "diary_entry": "Work.",
+                    "learnings": [
+                        {
+                            "trust": "high",
+                            "type": "OBSERVATION",
+                            "description": "Old shape.",
+                        },
+                        {
+                            "provenance": "EMPIRICAL",
+                            "kind": "FACT",
+                            "description": "New shape.",
+                        },
+                    ],
+                }
+            ],
+            lf,
+            "s1",
+            "2026-08-08T09:00:00+00:00",
         )
         content = lf.read_text()
         assert "- **[trust: high]** OBSERVATION Old shape." in content
@@ -494,8 +632,10 @@ class TestAppendLearnings:
 # Target charters (purpose + NOT-here routing)
 # ---------------------------------------------------------------------------
 
+
 def _write_catalog(catalogs_dir: Path, entries: list[dict]) -> None:
     import json
+
     catalogs_dir.mkdir(parents=True, exist_ok=True)
     (catalogs_dir / "memory.json").write_text(json.dumps({"entries": entries}))
 
@@ -503,24 +643,33 @@ def _write_catalog(catalogs_dir: Path, entries: list[dict]) -> None:
 class TestLoadTargetCharters:
     def test_charters_from_catalog(self, tmp_path):
         from lib.extraction import load_target_charters
+
         memory = tmp_path / "memory"
         memory.mkdir()
         (memory / "python.md").write_text("# Python\n")
         catalogs = tmp_path / "catalogs"
-        _write_catalog(catalogs, [{
-            "source": "python.md",
-            "summary": "Python tooling and idioms. Second sentence dropped.",
-            "anti_domains": ["Swift concurrency", "git workflow"],
-        }])
+        _write_catalog(
+            catalogs,
+            [
+                {
+                    "source": "python.md",
+                    "summary": "Python tooling and idioms. Second sentence dropped.",
+                    "anti_domains": ["Swift concurrency", "git workflow"],
+                }
+            ],
+        )
         charters = load_target_charters(memory, catalogs)
-        assert charters == [{
-            "name": "python.md",
-            "purpose": "Python tooling and idioms",
-            "not_here": ["Swift concurrency", "git workflow"],
-        }]
+        assert charters == [
+            {
+                "name": "python.md",
+                "purpose": "Python tooling and idioms",
+                "not_here": ["Swift concurrency", "git workflow"],
+            }
+        ]
 
     def test_catalog_absent_falls_back_to_bare_names(self, tmp_path):
         from lib.extraction import load_target_charters
+
         memory = tmp_path / "memory"
         memory.mkdir()
         (memory / "a.md").write_text("x")
@@ -531,6 +680,7 @@ class TestLoadTargetCharters:
 
     def test_corrupt_catalog_falls_back(self, tmp_path):
         from lib.extraction import load_target_charters
+
         memory = tmp_path / "memory"
         memory.mkdir()
         (memory / "a.md").write_text("x")
@@ -542,26 +692,35 @@ class TestLoadTargetCharters:
 
     def test_missing_memory_dir_returns_empty(self, tmp_path):
         from lib.extraction import load_target_charters
+
         assert load_target_charters(tmp_path / "nope") == []
 
 
 class TestRenderTargetLine:
     def test_bare_string_back_compat(self):
         from lib.extraction import render_target_line
+
         assert render_target_line("python.md") == "- python.md"
 
     def test_full_charter_line(self):
         from lib.extraction import render_target_line
-        line = render_target_line({
-            "name": "python.md",
-            "purpose": "Python tooling",
-            "not_here": ["Swift", "git"],
-        })
+
+        line = render_target_line(
+            {
+                "name": "python.md",
+                "purpose": "Python tooling",
+                "not_here": ["Swift", "git"],
+            }
+        )
         assert line == "- python.md — Python tooling. NOT: Swift; git"
 
     def test_charter_without_catalog_fields_is_bare(self):
         from lib.extraction import render_target_line
-        assert render_target_line({"name": "a.md", "purpose": "", "not_here": []}) == "- a.md"
+
+        assert (
+            render_target_line({"name": "a.md", "purpose": "", "not_here": []})
+            == "- a.md"
+        )
 
 
 class TestPromptCarriesCharters:
@@ -578,21 +737,31 @@ class TestPromptCarriesCharters:
         which channel carried it — concatenate both.
         """
         from lib.extraction import extract_units
+
         client = _make_mock_client(_tag_response([]))
-        asyncio.run(extract_units("transcript", valid_targets=valid_targets, client=client))
+        asyncio.run(
+            extract_units("transcript", valid_targets=valid_targets, client=client)
+        )
         kwargs = client.query.call_args.kwargs
         return kwargs["system"] + "\n" + kwargs["messages"][0]["content"]
 
     def test_prompt_renders_purpose_and_not_lines(self):
-        prompt = self._sent_prompt([{
-            "name": "python.md",
-            "purpose": "Python tooling and idioms",
-            "not_here": ["Swift concurrency"],
-        }])
-        assert "- python.md — Python tooling and idioms. NOT: Swift concurrency" in prompt
+        prompt = self._sent_prompt(
+            [
+                {
+                    "name": "python.md",
+                    "purpose": "Python tooling and idioms",
+                    "not_here": ["Swift concurrency"],
+                }
+            ]
+        )
+        assert (
+            "- python.md — Python tooling and idioms. NOT: Swift concurrency" in prompt
+        )
 
     def test_prompt_offers_unknown_instead_of_closest_match(self):
         from lib.extraction import EXTRACTION_PROMPT
+
         assert "target: unknown" in EXTRACTION_PROMPT
         assert "closest match" not in EXTRACTION_PROMPT.lower()
 
@@ -616,12 +785,17 @@ class TestSystemHalfIsACacheablePrefix:
 
     def _system_for(self, transcript: str) -> str:
         from lib.extraction import extract_units
+
         client = _make_mock_client(_tag_response([]))
-        asyncio.run(extract_units(
-            transcript,
-            valid_targets=[{"name": "python.md", "purpose": "Python", "not_here": []}],
-            client=client,
-        ))
+        asyncio.run(
+            extract_units(
+                transcript,
+                valid_targets=[
+                    {"name": "python.md", "purpose": "Python", "not_here": []}
+                ],
+                client=client,
+            )
+        )
         return client.query.call_args.kwargs["system"]
 
     def test_no_per_call_placeholder_lives_in_the_system_half(self):
@@ -632,6 +806,7 @@ class TestSystemHalfIsACacheablePrefix:
         extraction that follows it.
         """
         from lib.extraction import EXTRACTION_SYSTEM
+
         assert "{today}" not in EXTRACTION_SYSTEM
         assert "{transcript}" not in EXTRACTION_SYSTEM
 
@@ -668,9 +843,7 @@ class TestExtractionThinking:
         from lib.extraction import extract_units
         from multiplai_core.plugin_options import option_var
 
-        monkeypatch.setattr(
-            th, "core_supports_thinking", lambda target=None: supported
-        )
+        monkeypatch.setattr(th, "core_supports_thinking", lambda target=None: supported)
         monkeypatch.delenv(option_var(th.EXTRACTION_THINKING_OPTION), raising=False)
 
         client = _make_mock_client(_tag_response([]))

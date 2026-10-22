@@ -223,7 +223,9 @@ class TestVerificationVerdictWiring:
         async def fake_triage(
             config, results, sub_questions, target_domains, authority_domains=None
         ):
-            return [Source(url=r.url, title=r.title, snippet=r.snippet) for r in results]
+            return [
+                Source(url=r.url, title=r.title, snippet=r.snippet) for r in results
+            ]
 
         new = Finding(
             fact="new fact",
@@ -240,7 +242,10 @@ class TestVerificationVerdictWiring:
         async def fake_verdicts(config, claims, new_findings):
             captured["claims"] = claims
             captured["new_findings"] = new_findings
-            return [ClaimVerdict(claim=c, verdict="confirmed", evidence=["new fact"]) for c in claims]
+            return [
+                ClaimVerdict(claim=c, verdict="confirmed", evidence=["new fact"])
+                for c in claims
+            ]
 
         monkeypatch.setattr(pipeline.triage_node, "triage", fake_triage)
         monkeypatch.setattr(pipeline.read_node, "read", fake_read)
@@ -267,9 +272,7 @@ class TestVerificationVerdictWiring:
         router = StubRouter()
         progress = _mk_progress(tmp_path)
 
-        await pipeline._run_reassess_cycle(
-            config, state, _as_router(router), progress
-        )
+        await pipeline._run_reassess_cycle(config, state, _as_router(router), progress)
 
         assert router.batch_search_calls == []  # no queries → no search
         assert [v.claim for v in state.verdicts] == ["claim L"]

@@ -1,5 +1,6 @@
 """Transcript corrections (stages/corrections.py): replace misheard words,
 keep their timing, back up the original, write nothing on a miss."""
+
 from __future__ import annotations
 
 import json
@@ -19,10 +20,21 @@ def w(text, s, e, **kw):
     return {"text": text, "start": s, "end": e, **kw}
 
 
-WORDS = [w("It", 10.0, 10.2), w("is", 10.2, 10.4), w("a", 10.4, 10.5), w("bug", 10.5, 10.8),
-         w("in", 10.8, 10.9), w("Century.", 10.9, 11.5), w("Sono", 20.0, 20.3),
-         w("CINFUORI", 20.3, 21.1), w("ok,", 21.2, 21.5), w("una", 30.0, 30.2),
-         w("ostra", 30.2, 30.8), w("sub", 40.0, 40.2), w("-milliseconds,", 40.2, 40.9)]
+WORDS = [
+    w("It", 10.0, 10.2),
+    w("is", 10.2, 10.4),
+    w("a", 10.4, 10.5),
+    w("bug", 10.5, 10.8),
+    w("in", 10.8, 10.9),
+    w("Century.", 10.9, 11.5),
+    w("Sono", 20.0, 20.3),
+    w("CINFUORI", 20.3, 21.1),
+    w("ok,", 21.2, 21.5),
+    w("una", 30.0, 30.2),
+    w("ostra", 30.2, 30.8),
+    w("sub", 40.0, 40.2),
+    w("-milliseconds,", 40.2, 40.9),
+]
 
 
 def texts(words):
@@ -45,7 +57,9 @@ def test_one_word_for_two_splits_the_time_by_length() -> None:
 
 
 def test_two_words_for_one_spans_the_run() -> None:
-    out = co.apply(WORDS, [{"at": 40, "from": "sub -milliseconds", "to": "sub-milliseconds"}])
+    out = co.apply(
+        WORDS, [{"at": 40, "from": "sub -milliseconds", "to": "sub-milliseconds"}]
+    )
     assert out[-1] == w("sub-milliseconds,", 40.0, 40.9)
     assert len(out) == len(WORDS) - 1
 
@@ -56,11 +70,13 @@ def test_two_words_for_two_keep_their_own_timing() -> None:
 
 
 def test_match_is_case_sensitive_ignores_punctuation_and_stays_near_at() -> None:
-    assert co.apply(WORDS, [{"at": 21, "from": "ok", "to": "okay"}])[8]["text"] == "okay,"
+    assert (
+        co.apply(WORDS, [{"at": 21, "from": "ok", "to": "okay"}])[8]["text"] == "okay,"
+    )
     with pytest.raises(co.CorrectionError):
         co.apply(WORDS, [{"at": 11, "from": "century", "to": "Sentry"}])
     with pytest.raises(co.CorrectionError):
-        co.apply(WORDS, [{"at": 14, "from": "Century", "to": "Sentry"}])   # 3.1 s away
+        co.apply(WORDS, [{"at": 14, "from": "Century", "to": "Sentry"}])  # 3.1 s away
 
 
 def test_the_nearest_of_two_matches_wins() -> None:
@@ -76,7 +92,10 @@ def test_a_new_word_keeps_the_runs_speaker() -> None:
 
 
 def _cache(tmp_path: Path) -> Path:
-    tx.write({"language": "en", "engine": "test", "words": WORDS}, tmp_path / "transcript.json")
+    tx.write(
+        {"language": "en", "engine": "test", "words": WORDS},
+        tmp_path / "transcript.json",
+    )
     return tmp_path
 
 
@@ -94,12 +113,20 @@ def test_correct_backs_up_the_original_and_writes_the_srt(tmp_path: Path) -> Non
     assert "Century." in texts(tx.load(cache / "transcript.raw.json")["words"])
 
 
-def test_an_entry_that_matches_nothing_writes_nothing_and_names_it(tmp_path: Path) -> None:
+def test_an_entry_that_matches_nothing_writes_nothing_and_names_it(
+    tmp_path: Path,
+) -> None:
     cache = _cache(tmp_path)
     before = (cache / "transcript.json").read_text()
     fixes = tmp_path / "fixes.json"
-    fixes.write_text(json.dumps([{"at": 11, "from": "Century", "to": "Sentry"},
-                                 {"at": 99, "from": "Sentinel", "to": "x"}]))
+    fixes.write_text(
+        json.dumps(
+            [
+                {"at": 11, "from": "Century", "to": "Sentry"},
+                {"at": 99, "from": "Sentinel", "to": "x"},
+            ]
+        )
+    )
     with pytest.raises(co.CorrectionError, match="'Sentinel' within 2s of 99"):
         co.correct(cache, fixes)
     assert (cache / "transcript.json").read_text() == before
@@ -114,7 +141,9 @@ def test_a_malformed_entry_is_refused(tmp_path: Path) -> None:
 
 
 def test_source_of_reads_the_context_line(tmp_path: Path) -> None:
-    (tmp_path / "context.md").write_text("# video-edit prep context\n\n- source: /rec/talk.mp4\n")
+    (tmp_path / "context.md").write_text(
+        "# video-edit prep context\n\n- source: /rec/talk.mp4\n"
+    )
     assert co.source_of(tmp_path) == "/rec/talk.mp4"
 
 
@@ -127,7 +156,9 @@ def test_a_new_transcription_replaces_the_saved_original(tmp_path: Path) -> None
     co.correct(cache, fixes)
     fresh = [dict(x) for x in WORDS]
     fresh[0] = {**fresh[0], "text": "Retranscribed"}
-    tx.write({"language": "en", "engine": "test", "words": fresh}, cache / "transcript.json")
+    tx.write(
+        {"language": "en", "engine": "test", "words": fresh}, cache / "transcript.json"
+    )
     co.correct(cache, fixes)
     words = texts(tx.load(cache / "transcript.json")["words"])
     assert "Retranscribed" in words and "Sentry." in words

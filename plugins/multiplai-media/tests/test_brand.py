@@ -1,4 +1,5 @@
 """Brand file loading (stages/brand.py) and how render uses it."""
+
 from __future__ import annotations
 
 import json
@@ -28,7 +29,7 @@ def test_fixture_brand_loads_with_paths_resolved() -> None:
 
 def test_defaults_without_a_brand_file() -> None:
     b = brand.default()
-    assert b.caption_font() is None          # render falls back to the title-card font
+    assert b.caption_font() is None  # render falls back to the title-card font
     assert (b.primary, b.accent, b.logo) == ("#FFFFFF", "#FFD400", None)
 
 

@@ -50,8 +50,11 @@ def records_of(rnd: FindingsRound) -> list[TriageRecord]:
     for c in rnd.comments:
         act, note = should_triage(c)
         t = rnd.triaged.get(c.id) if act else None
-        out.append(TriageRecord(round=rnd.number, comment=c, triage=t,
-                                note=note if t is None else ""))
+        out.append(
+            TriageRecord(
+                round=rnd.number, comment=c, triage=t, note=note if t is None else ""
+            )
+        )
     return out
 
 
@@ -65,15 +68,21 @@ def _spec_lines(rnd: FindingsRound, key: str) -> list[str]:
             continue
         what = _line(s.requirement, 200) or "the requirement"
         commit = f" (commit `{_short(rnd.spec_commit)}`)" if rnd.spec_commit else ""
-        recorded = (f"{'Recorded' if s.appended else 'Already recorded'} as an issue in "
-                    f"`{_line(s.issues_file, 200)}`{commit}")
+        recorded = (
+            f"{'Recorded' if s.appended else 'Already recorded'} as an issue in "
+            f"`{_line(s.issues_file, 200)}`{commit}"
+        )
         waits = f"`{_line(s.command, 200)}` makes the edit; buildme does not edit requirements."
         if s.defers_fix:
-            lines.append(f"Not fixed this round: the fix contradicts {what}, so it waits on "
-                         f"the requirements change. {recorded}; {waits}")
+            lines.append(
+                f"Not fixed this round: the fix contradicts {what}, so it waits on "
+                f"the requirements change. {recorded}; {waits}"
+            )
         else:
-            lines.append(f"The requirements change for {what} waits on `pm-spec revise`. "
-                         f"{recorded}; {waits}")
+            lines.append(
+                f"The requirements change for {what} waits on `pm-spec revise`. "
+                f"{recorded}; {waits}"
+            )
     return lines
 
 
@@ -87,15 +96,23 @@ def outcome(rnd: FindingsRound, record: TriageRecord, *, searched: bool = True) 
     parts = _spec_lines(rnd, key)
     if t.verdict == Verdict.CODE_FIX and t.spec_conflict:
         if not parts:
-            parts.append("Not fixed: the fix contradicts the current requirements, which "
-                         "buildme does not edit, and no requirements issue was recorded.")
+            parts.append(
+                "Not fixed: the fix contradicts the current requirements, which "
+                "buildme does not edit, and no requirements issue was recorded."
+            )
     elif t.verdict == Verdict.CODE_FIX:
         fix = rnd.fixes.get(key)
         if fix and fix.get("impl"):
-            test = f" (failing test first in `{_short(fix.get('test'))}`)" if fix.get("test") else ""
+            test = (
+                f" (failing test first in `{_short(fix.get('test'))}`)"
+                if fix.get("test")
+                else ""
+            )
             parts.append(f"Fixed in `{_short(fix['impl'])}`{test}.")
             if searched and fix.get("searched"):
-                parts.append(f"Searched for the same mistake: {_line(fix['searched'], 600)}")
+                parts.append(
+                    f"Searched for the same mistake: {_line(fix['searched'], 600)}"
+                )
         elif fix and fix.get("failed"):
             parts.append(f"Not fixed: {fix['failed']}.")
         else:
@@ -112,17 +129,24 @@ def outcome(rnd: FindingsRound, record: TriageRecord, *, searched: bool = True) 
 def reply_body(rnd: FindingsRound, record: TriageRecord) -> str:
     t = record.triage
     assert t is not None
-    return (f"{outcome(rnd, record)}\n\n{_line(t.reason, 1500)}\n\n"
-            f"_buildme findings, round {rnd.number}._\n\n{REPLY_MARKER}")
+    return (
+        f"{outcome(rnd, record)}\n\n{_line(t.reason, 1500)}\n\n"
+        f"_buildme findings, round {rnd.number}._\n\n{REPLY_MARKER}"
+    )
 
 
 def issue_reply_body(rnd: FindingsRound, records: list[TriageRecord]) -> str:
-    lines = [f"buildme findings, round {rnd.number}: the comments outside review threads.", ""]
+    lines = [
+        f"buildme findings, round {rnd.number}: the comments outside review threads.",
+        "",
+    ]
     for r in records:
         c = r.comment
         ident = f"finding {c.finding_id}" if c.finding_id else c.label
         link = f"[{ident}]({c.url})" if c.url else ident
-        lines.append(f"- {link} by @{c.author}: {outcome(rnd, r)} {_line(r.triage.reason, 600)}")
+        lines.append(
+            f"- {link} by @{c.author}: {outcome(rnd, r)} {_line(r.triage.reason, 600)}"
+        )
     return "\n".join(lines) + f"\n\n{REPLY_MARKER}"
 
 
@@ -140,8 +164,10 @@ def render_section(fs: FindingsState) -> str:
                 c = r.comment
                 ident = f"finding {c.finding_id}" if c.finding_id else c.label
                 link = f"[{ident}]({c.url})" if c.url else ident
-                out.append(f"| {link} | {r.triage.verdict.value} | "
-                           f"{outcome(rnd, r, searched=False).replace('|', '/')} |")
+                out.append(
+                    f"| {link} | {r.triage.verdict.value} | "
+                    f"{outcome(rnd, r, searched=False).replace('|', '/')} |"
+                )
         check = rnd.self_check or {}
         if check.get("block"):
             # Not a comment, so no reply answers it: this is where it shows.
@@ -152,20 +178,32 @@ def render_section(fs: FindingsState) -> str:
                 done = f"Not fixed: {fix['failed']}."
             else:
                 done = "Not fixed: the fix did not produce a commit."
-            out += ["", f"The check of this round's fixes found: "
-                        f"{_line(check.get('report', ''), 600)} {done}"]
+            out += [
+                "",
+                f"The check of this round's fixes found: "
+                f"{_line(check.get('report', ''), 600)} {done}",
+            ]
         skipped = len(records) - len(acted)
         if skipped:
-            out += ["", f"{skipped} comment(s) not acted on; `findings-r{rnd.number}.md` "
-                        "in the change directory says why."]
+            out += [
+                "",
+                f"{skipped} comment(s) not acted on; `findings-r{rnd.number}.md` "
+                "in the change directory says why.",
+            ]
         if rnd.spec_issues:
             first = rnd.spec_issues[0]
             commit = f" (commit `{_short(rnd.spec_commit)}`)" if rnd.spec_commit else ""
-            out += ["", f"Requirements issues recorded in `{_line(first.issues_file, 200)}`"
-                        f"{commit}, waiting on `{_line(first.command, 200)}`:"]
-            out += [f"- {_line(s.requirement, 160) or '(requirement not named)'}, for "
-                    f"{s.finding_key}" + (" (its code fix is deferred)" if s.defers_fix else "")
-                    for s in rnd.spec_issues]
+            out += [
+                "",
+                f"Requirements issues recorded in `{_line(first.issues_file, 200)}`"
+                f"{commit}, waiting on `{_line(first.command, 200)}`:",
+            ]
+            out += [
+                f"- {_line(s.requirement, 160) or '(requirement not named)'}, for "
+                f"{s.finding_key}"
+                + (" (its code fix is deferred)" if s.defers_fix else "")
+                for s in rnd.spec_issues
+            ]
         out.append("")
     return "\n".join(out).rstrip() + "\n"
 
@@ -178,47 +216,99 @@ def write_section(change_dir: Path, fs: FindingsState) -> Path:
     return path
 
 
-def pr_edit_argv(project_dir: Path, change_dir: Path, pr: int, section: Path) -> list[str]:
+def pr_edit_argv(
+    project_dir: Path, change_dir: Path, pr: int, section: Path
+) -> list[str]:
     """`pr_pipeline edit`, run as a subprocess the way publish runs `open`."""
     from ..orchestrator import _pr_skill_dir
+
     return [
-        "uv", "run", "--directory", str(_pr_skill_dir()),
-        "python", "-m", "pr_pipeline", "edit", str(pr),
-        "--repo", str(project_dir), "--change-dir", str(change_dir),
-        "--section", str(section),
+        "uv",
+        "run",
+        "--directory",
+        str(_pr_skill_dir()),
+        "python",
+        "-m",
+        "pr_pipeline",
+        "edit",
+        str(pr),
+        "--repo",
+        str(project_dir),
+        "--change-dir",
+        str(change_dir),
+        "--section",
+        str(section),
     ]
 
 
-def update_body(project_dir: Path, change_dir: Path, pr: int, fs: FindingsState) -> tuple[bool, list[str]]:
+def update_body(
+    project_dir: Path, change_dir: Path, pr: int, fs: FindingsState
+) -> tuple[bool, list[str]]:
     """(edited, its PR_DIAGNOSIS lines). The pr skill prints PR_DIAGNOSIS
     lines after a successful edit too (a section it kept as it was), so the
     lines say why the refresh failed only when *edited* is False. Never raises."""
     section = write_section(change_dir, fs)
     argv = pr_edit_argv(project_dir, change_dir, pr, section)
     res = git_ops._run_pr_skill(argv, cwd=project_dir)
-    diagnoses = [line[len("PR_DIAGNOSIS:"):].strip() for line in (res.stdout or "").splitlines()
-                 if line.startswith("PR_DIAGNOSIS:")]
+    diagnoses = [
+        line[len("PR_DIAGNOSIS:") :].strip()
+        for line in (res.stdout or "").splitlines()
+        if line.startswith("PR_DIAGNOSIS:")
+    ]
     if not res.ok:
-        diagnoses.append(f"pr skill edit exited {res.returncode}: "
-                         f"{' '.join((res.stderr or '').split())[-400:]}")
+        diagnoses.append(
+            f"pr skill edit exited {res.returncode}: "
+            f"{' '.join((res.stderr or '').split())[-400:]}"
+        )
     return res.ok, diagnoses
 
 
-def _reply_review(repo: str, pr: int, comment: PRComment, body: str, cwd: Path) -> git_ops.GitResult:
+def _reply_review(
+    repo: str, pr: int, comment: PRComment, body: str, cwd: Path
+) -> git_ops.GitResult:
     target = comment.reply_to or comment.id
     return git_ops._run_gh(
-        ["gh", "api", "-X", "POST", f"repos/{repo}/pulls/{pr}/comments/{target}/replies",
-         "-f", f"body={body}", "--jq", ".id"], cwd=cwd)
+        [
+            "gh",
+            "api",
+            "-X",
+            "POST",
+            f"repos/{repo}/pulls/{pr}/comments/{target}/replies",
+            "-f",
+            f"body={body}",
+            "--jq",
+            ".id",
+        ],
+        cwd=cwd,
+    )
 
 
 def _post_issue_comment(repo: str, pr: int, body: str, cwd: Path) -> git_ops.GitResult:
     return git_ops._run_gh(
-        ["gh", "api", "-X", "POST", f"repos/{repo}/issues/{pr}/comments",
-         "-f", f"body={body}", "--jq", ".id"], cwd=cwd)
+        [
+            "gh",
+            "api",
+            "-X",
+            "POST",
+            f"repos/{repo}/issues/{pr}/comments",
+            "-f",
+            f"body={body}",
+            "--jq",
+            ".id",
+        ],
+        cwd=cwd,
+    )
 
 
-def publish_round(fs: FindingsState, rnd: FindingsRound, *, project_dir: Path, change_dir: Path,
-                  save: Callable[[], None], emit: Callable[[str], None] = print) -> None:
+def publish_round(
+    fs: FindingsState,
+    rnd: FindingsRound,
+    *,
+    project_dir: Path,
+    change_dir: Path,
+    save: Callable[[], None],
+    emit: Callable[[str], None] = print,
+) -> None:
     """Push, refresh the body, reply. Raises `PublishError` when the push or a
     reply fails; a body refresh that fails is reported and does not stop the
     replies (the commits they name are already pushed)."""
@@ -228,8 +318,10 @@ def publish_round(fs: FindingsState, rnd: FindingsRound, *, project_dir: Path, c
     if rnd.pushed_head != head:
         res = git_ops.push_branch(project_dir, fs.branch)
         if not res.ok:
-            raise PublishError(f"push of {fs.branch} failed, so nothing was posted: "
-                               f"{' '.join((res.stderr or res.stdout).split())[:400]}")
+            raise PublishError(
+                f"push of {fs.branch} failed, so nothing was posted: "
+                f"{' '.join((res.stderr or res.stdout).split())[:400]}"
+            )
         rnd.pushed_head = head
         save()
         emit(f"FINDINGS:PUSHED:{fs.branch}:{_short(head)}")
@@ -254,19 +346,24 @@ def publish_round(fs: FindingsState, rnd: FindingsRound, *, project_dir: Path, c
             continue
         res = _reply_review(fs.repo, fs.pr, c, reply_body(rnd, r), project_dir)
         if not res.ok:
-            raise PublishError(f"reply to review comment {c.id} failed: "
-                               f"{' '.join((res.stderr or res.stdout).split())[:400]}")
+            raise PublishError(
+                f"reply to review comment {c.id} failed: "
+                f"{' '.join((res.stderr or res.stdout).split())[:400]}"
+            )
         rnd.replies_sent.append(key)
         save()
     # Top-level comments and review bodies have no thread to reply in.
     issue = [r for r in records if r.comment.kind != "review"]
     key = f"issue:r{rnd.number}"
     if issue and key not in rnd.replies_sent:
-        res = _post_issue_comment(fs.repo, fs.pr, issue_reply_body(rnd, issue), project_dir)
+        res = _post_issue_comment(
+            fs.repo, fs.pr, issue_reply_body(rnd, issue), project_dir
+        )
         if not res.ok:
-            raise PublishError(f"the round's top-level reply failed: "
-                               f"{' '.join((res.stderr or res.stdout).split())[:400]}")
+            raise PublishError(
+                f"the round's top-level reply failed: "
+                f"{' '.join((res.stderr or res.stdout).split())[:400]}"
+            )
         rnd.replies_sent.append(key)
         save()
     emit(f"FINDINGS:REPLIED:{rnd.number}:{len(rnd.replies_sent)}")
-

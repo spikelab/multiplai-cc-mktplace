@@ -19,6 +19,7 @@ It holds:
 The file is written to a hidden partial name and renamed, so a reader never
 sees half of one.
 """
+
 from __future__ import annotations
 
 import copy
@@ -66,9 +67,18 @@ def segments(edl: EDL) -> list[dict]:
     out = []
     for p in timeline.place_segments(edl):
         joins = p.index > 0 or edl.title is not None
-        out.append({"index": p.index, "src_start": p.src_start, "src_end": p.src_end, "speed": p.speed,
-                    "out_start": round(p.out_start, 3), "out_end": round(p.out_end, 3), "muted": p.muted,
-                    "xfade_in": edl.xfade_before(p.index) if joins else 0.0})
+        out.append(
+            {
+                "index": p.index,
+                "src_start": p.src_start,
+                "src_end": p.src_end,
+                "speed": p.speed,
+                "out_start": round(p.out_start, 3),
+                "out_end": round(p.out_end, 3),
+                "muted": p.muted,
+                "xfade_in": edl.xfade_before(p.index) if joins else 0.0,
+            }
+        )
     return out
 
 
@@ -77,6 +87,7 @@ def captions_events(edl: EDL) -> list[dict]:
     if edl.captions is None:
         return []
     from stages import captions as cap
+
     words = timeline.map_words(composite._load_words(edl), timeline.place_segments(edl))
     brand = brand_mod.load(edl.brand) if edl.brand else brand_mod.default()
     return cap.caption_lines(words, edl.captions, brand)
@@ -101,7 +112,9 @@ def write(out: Path, record: dict) -> Path:
     final = path_for(out)
     part = out.with_name(f".{out.stem}.edl.partial.json")
     try:
-        part.write_text(json.dumps(record, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+        part.write_text(
+            json.dumps(record, indent=1, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
         os.replace(part, final)
     except BaseException:
         part.unlink(missing_ok=True)

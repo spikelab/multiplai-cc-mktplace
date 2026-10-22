@@ -26,7 +26,12 @@ def _write(path: Path, text: str = "## Summary\n") -> Path:
 def test_standard_template_parses_into_its_six_sections_in_order():
     sections = load(STANDARD_TEMPLATE)
     assert [s.title for s in sections[1:]] == [
-        "Why", "Blocks", "Documentation", "Companion artifacts", "Ticket", "Size",
+        "Why",
+        "Blocks",
+        "Documentation",
+        "Companion artifacts",
+        "Ticket",
+        "Size",
     ]
     assert all(s.level == 2 for s in sections[1:])
     # Each heading carries an HTML-comment hint, as GitHub templates usually do.
@@ -37,15 +42,20 @@ def test_standard_template_parses_into_its_six_sections_in_order():
 # --- discovery: one fixture repo per GitHub location -------------------------
 
 
-@pytest.mark.parametrize("rel", [
-    ".github/pull_request_template.md",
-    "pull_request_template.md",
-    "docs/pull_request_template.md",
-])
+@pytest.mark.parametrize(
+    "rel",
+    [
+        ".github/pull_request_template.md",
+        "pull_request_template.md",
+        "docs/pull_request_template.md",
+    ],
+)
 def test_discovery_finds_the_template_in_each_github_location(tmp_path, rel):
     path = _write(tmp_path / rel)
     found = discover(tmp_path)
-    assert found.path == path.resolve() and not found.standard and found.diagnosis is None
+    assert (
+        found.path == path.resolve() and not found.standard and found.diagnosis is None
+    )
 
 
 @pytest.mark.parametrize("loc", [".github", "", "docs"])
@@ -81,7 +91,9 @@ def test_discovery_matches_a_lowercase_directory_name(tmp_path):
 
 def test_no_template_uses_the_standard_template(tmp_path):
     found = discover(tmp_path)
-    assert found.path == STANDARD_TEMPLATE and found.standard and found.diagnosis is None
+    assert (
+        found.path == STANDARD_TEMPLATE and found.standard and found.diagnosis is None
+    )
 
 
 def test_several_templates_use_the_standard_template_and_name_them(tmp_path):
@@ -101,7 +113,9 @@ def test_several_templates_use_the_standard_template_and_name_them(tmp_path):
 def _repo_and_outside(tmp_path: Path) -> tuple[Path, Path]:
     repo = tmp_path / "repo"
     repo.mkdir()
-    outside = _write(tmp_path / "outside" / "pull_request_template.md", "## Secret\nOUTSIDE-TEXT\n")
+    outside = _write(
+        tmp_path / "outside" / "pull_request_template.md", "## Secret\nOUTSIDE-TEXT\n"
+    )
     return repo, outside
 
 
@@ -111,7 +125,10 @@ def test_a_template_symlinked_outside_the_repo_is_ignored_and_named(tmp_path):
     (repo / ".github" / "pull_request_template.md").symlink_to(outside)
     found = discover(repo)
     assert found.path == STANDARD_TEMPLATE and found.standard
-    assert found.diagnosis == "`.github/pull_request_template.md` resolves outside the repository; ignored"
+    assert (
+        found.diagnosis
+        == "`.github/pull_request_template.md` resolves outside the repository; ignored"
+    )
 
 
 def test_a_symlinked_github_directory_outside_the_repo_is_ignored_and_named(tmp_path):
@@ -128,7 +145,10 @@ def test_a_template_directory_entry_symlinked_outside_is_ignored(tmp_path):
     (repo / ".github" / "PULL_REQUEST_TEMPLATE" / "leak.md").symlink_to(outside)
     found = discover(repo)
     assert found.path == inside.resolve() and not found.standard
-    assert found.diagnosis == "`.github/PULL_REQUEST_TEMPLATE/leak.md` resolves outside the repository; ignored"
+    assert (
+        found.diagnosis
+        == "`.github/PULL_REQUEST_TEMPLATE/leak.md` resolves outside the repository; ignored"
+    )
 
 
 def test_discovery_goes_on_to_the_next_location_after_an_outside_symlink(tmp_path):
@@ -137,7 +157,10 @@ def test_discovery_goes_on_to_the_next_location_after_an_outside_symlink(tmp_pat
     (repo / ".github" / "pull_request_template.md").symlink_to(outside)
     docs = _write(repo / "docs" / "pull_request_template.md")
     found = discover(repo)
-    assert found.path == docs.resolve() and "resolves outside the repository" in found.diagnosis
+    assert (
+        found.path == docs.resolve()
+        and "resolves outside the repository" in found.diagnosis
+    )
 
 
 def test_a_template_symlinked_inside_the_repo_is_still_used(tmp_path):
@@ -154,14 +177,18 @@ def test_config_template_takes_precedence_over_discovery(tmp_path):
     _write(tmp_path / ".github" / "pull_request_template.md")
     chosen = _write(tmp_path / ".github" / "PULL_REQUEST_TEMPLATE" / "feature.md")
     _write(tmp_path / ".github" / "PULL_REQUEST_TEMPLATE" / "bug.md")
-    _write(tmp_path / "specs" / "config.yaml",
-           "pr:\n  template: .github/PULL_REQUEST_TEMPLATE/feature.md\n  draft: false\n")
+    _write(
+        tmp_path / "specs" / "config.yaml",
+        "pr:\n  template: .github/PULL_REQUEST_TEMPLATE/feature.md\n  draft: false\n",
+    )
     found = discover(tmp_path)
     assert found.path == chosen.resolve() and not found.standard
     assert load_config(tmp_path).draft is False
 
 
-def test_config_template_that_is_missing_or_outside_the_repo_warns_and_discovers(tmp_path):
+def test_config_template_that_is_missing_or_outside_the_repo_warns_and_discovers(
+    tmp_path,
+):
     # buildme's config.py accepts any string here and runs the whole build before PUBLISH, so
     # the skill treats an unusable value as it treats a malformed one: say so, then discover.
     found_file = _write(tmp_path / ".github" / "pull_request_template.md")
@@ -173,7 +200,9 @@ def test_config_template_that_is_missing_or_outside_the_repo_warns_and_discovers
     _write(tmp_path / "specs" / "config.yaml", "pr:\n  template: ../elsewhere.md\n")
     found = discover(tmp_path)
     assert found.standard
-    assert "pr.template points outside the repository: ../elsewhere.md" in found.diagnosis
+    assert (
+        "pr.template points outside the repository: ../elsewhere.md" in found.diagnosis
+    )
 
 
 def test_an_unusable_config_template_keeps_the_several_templates_diagnosis(tmp_path):
@@ -188,7 +217,9 @@ def test_an_unusable_config_template_keeps_the_several_templates_diagnosis(tmp_p
 def test_discover_reads_the_config_it_is_given(tmp_path):
     chosen = _write(tmp_path / ".github" / "PULL_REQUEST_TEMPLATE" / "feature.md")
     _write(tmp_path / ".github" / "PULL_REQUEST_TEMPLATE" / "bug.md")
-    found = discover(tmp_path, PrConfig(template=".github/PULL_REQUEST_TEMPLATE/feature.md"))
+    found = discover(
+        tmp_path, PrConfig(template=".github/PULL_REQUEST_TEMPLATE/feature.md")
+    )
     assert found.path == chosen.resolve() and found.diagnosis is None
 
 
@@ -206,14 +237,19 @@ def test_config_defaults_when_there_is_no_pr_block(tmp_path):
     assert cfg.template is None and cfg.draft is True
 
 
-@pytest.mark.parametrize("text", [
-    "pr: [a, b]\n",                      # `pr:` not a mapping
-    "pr:\n  template: 3\n",              # `pr.template` not a string
-    "pr:\n  draft: maybe\n",             # `pr.draft` not a boolean
-    "pr:\n  template: [\n",              # not valid YAML
-    "- just a list\n",                   # top level not a mapping
-])
-def test_a_malformed_pr_block_warns_and_uses_the_defaults_as_buildme_does(tmp_path, caplog, text):
+@pytest.mark.parametrize(
+    "text",
+    [
+        "pr: [a, b]\n",  # `pr:` not a mapping
+        "pr:\n  template: 3\n",  # `pr.template` not a string
+        "pr:\n  draft: maybe\n",  # `pr.draft` not a boolean
+        "pr:\n  template: [\n",  # not valid YAML
+        "- just a list\n",  # top level not a mapping
+    ],
+)
+def test_a_malformed_pr_block_warns_and_uses_the_defaults_as_buildme_does(
+    tmp_path, caplog, text
+):
     # buildme's config.py warns and falls back on these same values, then runs this skill
     # with that config: refusing here would fail every PUBLISH buildme itself ran.
     found_file = _write(tmp_path / ".github" / "pull_request_template.md")
@@ -242,23 +278,31 @@ def test_nested_headings_belong_to_the_section_above_them():
     assert titles == ["", "Title", "Changes", "Added", "Removed", "Notes"]
     changes = sections[2]
     # A section runs to the next heading of the same or higher level.
-    assert [s.title for s in sections[3:changes.subtree_end]] == ["Added", "Removed"]
+    assert [s.title for s in sections[3 : changes.subtree_end]] == ["Added", "Removed"]
     assert sections[1].subtree_end == len(sections)
     assert sections[3].subtree_end == 4
 
 
 def test_headings_checkboxes_and_comments_are_kept_byte_for_byte():
-    text = ("<!-- Thanks for the PR -->\n"
-            "##  Summary  \n"
-            "<!--\n  multi-line\n  hint\n-->\n"
-            "  - [ ] Tests pass\n"
-            "* [x] Docs updated\n")
+    text = (
+        "<!-- Thanks for the PR -->\n"
+        "##  Summary  \n"
+        "<!--\n  multi-line\n  hint\n-->\n"
+        "  - [ ] Tests pass\n"
+        "* [x] Docs updated\n"
+    )
     sections = parse(text)
     assert sections[0].blocks[0].text == "<!-- Thanks for the PR -->"
     s = sections[1]
     assert s.heading == "##  Summary  " and s.title == "Summary"
-    assert s.blocks[0].kind == "comment" and s.blocks[0].text == "<!--\n  multi-line\n  hint\n-->"
-    assert [b.text for b in s.checkboxes] == ["  - [ ] Tests pass", "* [x] Docs updated"]
+    assert (
+        s.blocks[0].kind == "comment"
+        and s.blocks[0].text == "<!--\n  multi-line\n  hint\n-->"
+    )
+    assert [b.text for b in s.checkboxes] == [
+        "  - [ ] Tests pass",
+        "* [x] Docs updated",
+    ]
     assert [b.id for b in s.checkboxes] == ["cb1", "cb2"]
 
 

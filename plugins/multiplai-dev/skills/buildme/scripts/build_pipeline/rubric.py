@@ -52,7 +52,9 @@ def detect_change_type(change_dir: Path) -> str:
 
     log.debug(
         "Change type detection: frontend=%d backend=%d infra=%d",
-        frontend_hits, backend_hits, infra_hits,
+        frontend_hits,
+        backend_hits,
+        infra_hits,
     )
 
     # Infra dominates if it has the most hits
@@ -97,7 +99,12 @@ async def generate_rubric(change_dir: Path, config) -> str:
     )
 
     log.info("Generating rubric for change_type=%s", change_type)
-    result = await llm_call(prompt, model=config.model_for("rubric"), effort=config.effort_for("rubric"), budget_label="rubric")
+    result = await llm_call(
+        prompt,
+        model=config.model_for("rubric"),
+        effort=config.effort_for("rubric"),
+        budget_label="rubric",
+    )
     log.info("Rubric generated (%d chars)", len(result))
     return result
 

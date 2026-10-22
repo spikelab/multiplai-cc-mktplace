@@ -67,25 +67,41 @@ class ConsistencyAnswer(BaseModel):
 
 
 def as_dicts(answer: ConsistencyAnswer) -> list[dict]:
-    return [{"category": f.type, "severity": f.severity, "description": f.description,
-             "suggestion": f.suggestion, "places": [p.model_dump() for p in f.places]} for f in answer.findings]
+    return [
+        {
+            "category": f.type,
+            "severity": f.severity,
+            "description": f.description,
+            "suggestion": f.suggestion,
+            "places": [p.model_dump() for p in f.places],
+        }
+        for f in answer.findings
+    ]
 
 
 def check_prompt(run: Run, prior: list[dict] | None = None) -> str:
     change_dir = run.config.change_dir
     use_cases = change_dir / "use-cases.md"
     return CONSISTENCY_PROMPT.format(
-        notice=UNTRUSTED_NOTICE, project_context=run.config.project_context,
+        notice=UNTRUSTED_NOTICE,
+        project_context=run.config.project_context,
         proposal_content=artifacts.proposal_text(run) or "(missing)",
         use_cases_content=use_cases.read_text() if use_cases.is_file() else "(missing)",
         requirements_content=artifacts.all_requirements_text(change_dir),
-        prior_section=prior_findings_section(prior))
+        prior_section=prior_findings_section(prior),
+    )
 
 
 async def check(run: Run, prior: list[dict] | None = None) -> ConsistencyAnswer:
     """One call of the read-only consistency agent."""
-    return await sdk.agent_structured(check_prompt(run, prior), ConsistencyAnswer, config=run.config,
-                                      step="consistency", label="consistency", cwd=str(run.config.project_dir))
+    return await sdk.agent_structured(
+        check_prompt(run, prior),
+        ConsistencyAnswer,
+        config=run.config,
+        step="consistency",
+        label="consistency",
+        cwd=str(run.config.project_dir),
+    )
 
 
 async def recheck(run: Run, name: str, reason: str) -> str:
@@ -97,24 +113,35 @@ async def recheck(run: Run, name: str, reason: str) -> str:
     listed = step.repair_findings
     revision = spec_revision(run.config.change_dir)
     answer = await check(run, prior=listed)
-    blocking, advisory = F.recheck_verdict(listed, answer.prior_assessments, as_dicts(answer))
-    step.repair_findings = F.saved_findings(F.assess_listed(listed, answer.prior_assessments))
+    blocking, advisory = F.recheck_verdict(
+        listed, answer.prior_assessments, as_dicts(answer)
+    )
+    step.repair_findings = F.saved_findings(
+        F.assess_listed(listed, answer.prior_assessments)
+    )
     F.log_findings(name, "listed", step.repair_findings)
     F.record_advisory(run, name, advisory)
     if blocking:
         F.block_on_findings(run, name, revision, reason, blocking)
     F.record_passed(run, name, revision, "Every listed finding resolved")
-    run.progress(name.upper() + "_PASSED", "Recheck: every listed finding resolved.\n"
-                 + F.findings_report(step.repair_findings))
+    run.progress(
+        name.upper() + "_PASSED",
+        "Recheck: every listed finding resolved.\n"
+        + F.findings_report(step.repair_findings),
+    )
     return revision
 
 
-async def rewrite_and_publish(run: Run, name: str, listed: list[dict], caps: list[str], reason: str) -> None:
+async def rewrite_and_publish(
+    run: Run, name: str, listed: list[dict], caps: list[str], reason: str
+) -> None:
     """Rewrite *caps* for the listed findings; publish, or block on a broken text."""
     files = await rewrite_requirements(run, listed, caps, label=name)
     if problems := check_texts(run, files):
         blocking, _ = F.recheck_verdict(listed, [], [], deterministic=problems)
-        F.block_on_findings(run, name, spec_revision(run.config.change_dir), reason, blocking)
+        F.block_on_findings(
+            run, name, spec_revision(run.config.change_dir), reason, blocking
+        )
     publish(run, name, files)
 
 
@@ -144,12 +171,20 @@ async def run_consistency(run: Run) -> None:
         return
     if step.repair_attempts:
         # The rewrite was spent and never published (a stop part way): no second one.
-        F.block_on_findings(run, NAME, revision, BLOCK_REASON, [F.new_finding(f) for f in actionable])
+        F.block_on_findings(
+            run, NAME, revision, BLOCK_REASON, [F.new_finding(f) for f in actionable]
+        )
     numbered = F.number_findings(NAME, actionable)
     F.admit_repair(run, NAME, revision, numbered)
     # The requirements files the findings cite; every file when one cites none
     # (a finding between the proposal and the use cases, say).
     named = [cited_caps(change_dir, f) for f in numbered]
-    caps = change_caps(change_dir) if not all(named) else sorted({c for cs in named for c in cs})
-    await rewrite_and_publish(run, NAME, run.state.step(NAME).repair_findings, caps, BLOCK_REASON)
+    caps = (
+        change_caps(change_dir)
+        if not all(named)
+        else sorted({c for cs in named for c in cs})
+    )
+    await rewrite_and_publish(
+        run, NAME, run.state.step(NAME).repair_findings, caps, BLOCK_REASON
+    )
     await recheck(run, NAME, BLOCK_REASON)

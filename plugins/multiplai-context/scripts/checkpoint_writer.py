@@ -122,9 +122,7 @@ def _cap_segment(text: str) -> str:
     head = int(_MAX_SEGMENT_CHARS * _HEAD_FRACTION)
     tail = _MAX_SEGMENT_CHARS - head
     return (
-        text[:head]
-        + "\n\n[… middle of segment elided for length …]\n\n"
-        + text[-tail:]
+        text[:head] + "\n\n[… middle of segment elided for length …]\n\n" + text[-tail:]
     )
 
 
@@ -364,7 +362,8 @@ async def write_checkpoint(payload: dict) -> bool:
         if not cp.validate_checkpoint(text):
             logger.warning(
                 "Writer output failed validation for %s (%d chars)",
-                session_id, len(text),
+                session_id,
+                len(text),
             )
             failure = f"output failed validation ({len(text)} chars)"
             text = ""
@@ -378,7 +377,9 @@ async def write_checkpoint(payload: dict) -> bool:
             # bookmark where it is so the window is retried, not skipped.
             logger.error(
                 "Checkpoint failed for %s with no previous checkpoint to "
-                "degrade onto (%s); nothing written", session_id, failure,
+                "degrade onto (%s); nothing written",
+                session_id,
+                failure,
             )
             _record_failure(data_dir, session_id, state, failure)
             return False
@@ -431,17 +432,24 @@ async def write_checkpoint(payload: dict) -> bool:
     # the in-container Stop path, where the two are the same — the key falls
     # back to the registry and then to this process.
     cp.write_pending_marker(
-        data_dir, cwd, session_id, tokens,
+        data_dir,
+        cwd,
+        session_id,
+        tokens,
         hostname=str(payload.get("hostname") or "") or None,
     )
 
     logger.info(
         "Checkpoint %s for %s (%d tokens, reason=%s, handoff=%s)",
         "degraded" if degraded else "written",
-        session_id, tokens, reason, tokens >= cfg.handoff_tokens,
+        session_id,
+        tokens,
+        reason,
+        tokens >= cfg.handoff_tokens,
     )
     log_event(
-        "checkpoint", "degraded" if degraded else "write",
+        "checkpoint",
+        "degraded" if degraded else "write",
         (
             f"checkpoint DEGRADED at {tokens:,} tokens ({reason}): {failure} — "
             "previous checkpoint kept plus the raw unsummarised window"
@@ -490,7 +498,8 @@ def main() -> int:
     data_dir = get_paths().plugin_data()
     before = (
         cp.consecutive_failures(cp.load_state(data_dir, session_id))
-        if session_id else 0
+        if session_id
+        else 0
     )
     try:
         asyncio.run(write_checkpoint(payload))
@@ -515,7 +524,8 @@ def main() -> int:
 
     after = (
         cp.consecutive_failures(cp.load_state(data_dir, session_id))
-        if session_id else 0
+        if session_id
+        else 0
     )
     return 1 if after > before else 0
 

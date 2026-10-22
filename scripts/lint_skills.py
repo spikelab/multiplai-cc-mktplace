@@ -65,7 +65,9 @@ PEP723_RE = re.compile(r"^# /// script\s*$(.*?)^# ///\s*$", re.MULTILINE | re.DO
 
 # The leading `name[extras]` of a PEP 508 requirement, before any version
 # specifier, `@ url`, or environment marker.
-REQUIREMENT_HEAD_RE = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[([^\]]*)\])?")
+REQUIREMENT_HEAD_RE = re.compile(
+    r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[([^\]]*)\])?"
+)
 
 # Every LLM call in this repo goes through `multiplai_core.run_agent()`, so
 # multiplai-core's `[sdk]` extra is the single place the claude-agent-sdk
@@ -108,6 +110,7 @@ def _rel(p: Path | str) -> str:
 # --------------------------------------------------------------------------- #
 # Frontmatter
 # --------------------------------------------------------------------------- #
+
 
 def parse_frontmatter(text: str) -> tuple[dict[str, str] | None, str]:
     """Return (fields, error). A minimal YAML-subset parser.
@@ -172,18 +175,23 @@ def check_frontmatter(skill_md: Path, f: Findings) -> dict[str, str]:
     # means /slash-command and the catalog disagree.
     dir_name = skill_md.parent.name
     if fields.get("name") and fields["name"] != dir_name:
-        f.error(skill_md,
-                f"frontmatter name '{fields['name']}' != directory '{dir_name}'")
+        f.error(
+            skill_md, f"frontmatter name '{fields['name']}' != directory '{dir_name}'"
+        )
 
     model = fields.get("model")
     if model is not None and model not in KNOWN_MODELS:
-        f.error(skill_md,
-                f"unknown model '{model}' (known: {', '.join(sorted(KNOWN_MODELS))})")
+        f.error(
+            skill_md,
+            f"unknown model '{model}' (known: {', '.join(sorted(KNOWN_MODELS))})",
+        )
 
     effort = fields.get("effort")
     if effort is not None and effort not in KNOWN_EFFORTS:
-        f.error(skill_md,
-                f"unknown effort '{effort}' (known: {', '.join(sorted(KNOWN_EFFORTS))})")
+        f.error(
+            skill_md,
+            f"unknown effort '{effort}' (known: {', '.join(sorted(KNOWN_EFFORTS))})",
+        )
 
     return fields
 
@@ -191,6 +199,7 @@ def check_frontmatter(skill_md: Path, f: Findings) -> dict[str, str]:
 # --------------------------------------------------------------------------- #
 # Script references
 # --------------------------------------------------------------------------- #
+
 
 def check_script_refs(skill_md: Path, plugin_dir: Path, f: Findings) -> None:
     """Every `${CLAUDE_PLUGIN_ROOT}/...` path in a SKILL.md must resolve.
@@ -213,6 +222,7 @@ def check_script_refs(skill_md: Path, plugin_dir: Path, f: Findings) -> None:
 # Host paths
 # --------------------------------------------------------------------------- #
 
+
 def check_host_paths(path: Path, f: Findings) -> None:
     if path.name in HOST_PATH_EXEMPT_NAMES:
         return
@@ -230,6 +240,7 @@ def check_host_paths(path: Path, f: Findings) -> None:
 # --------------------------------------------------------------------------- #
 # Dependency declarations
 # --------------------------------------------------------------------------- #
+
 
 def _requirement_head(spec: str) -> tuple[str, set[str]]:
     """Return (normalised distribution name, extras) for a PEP 508 spec.
@@ -265,10 +276,13 @@ def check_sdk_via_core(where: Path, deps: list[str], f: Findings) -> None:
             declares_sdk = True
 
     if declares_sdk and core_extras is not None:
-        f.error(where, (
-            f"declares {SDK_DIST} directly alongside {CORE_DIST}; depend on "
-            f"'{CORE_DIST}[{SDK_EXTRA}]' instead so core owns the version floor"
-        ))
+        f.error(
+            where,
+            (
+                f"declares {SDK_DIST} directly alongside {CORE_DIST}; depend on "
+                f"'{CORE_DIST}[{SDK_EXTRA}]' instead so core owns the version floor"
+            ),
+        )
 
 
 def _pep723_deps(text: str) -> list[str] | None:
@@ -324,6 +338,7 @@ def check_dependency_files(repo: Path, f: Findings) -> None:
 # marketplace.json
 # --------------------------------------------------------------------------- #
 
+
 def check_marketplace(repo: Path, f: Findings) -> None:
     manifest = repo / ".claude-plugin" / "marketplace.json"
     if not manifest.exists():
@@ -335,10 +350,14 @@ def check_marketplace(repo: Path, f: Findings) -> None:
         f.error(manifest, f"invalid JSON: {exc}")
         return
 
-    listed = {str(p.get("name") or "") for p in data.get("plugins", [])
-              if isinstance(p, dict)} - {""}
-    present = {d.name for d in (repo / "plugins").iterdir()
-               if d.is_dir() and not d.name.startswith(".")}
+    listed = {
+        str(p.get("name") or "") for p in data.get("plugins", []) if isinstance(p, dict)
+    } - {""}
+    present = {
+        d.name
+        for d in (repo / "plugins").iterdir()
+        if d.is_dir() and not d.name.startswith(".")
+    }
 
     for missing in sorted(present - listed):
         f.error(manifest, f"plugin directory '{missing}' exists but is not listed")
@@ -352,12 +371,16 @@ def check_marketplace(repo: Path, f: Findings) -> None:
             continue
         source = entry.get("source", "")
         if source.startswith("./") and not (repo / source[2:]).is_dir():
-            f.error(manifest, f"plugin '{entry.get('name')}' source does not resolve: {source}")
+            f.error(
+                manifest,
+                f"plugin '{entry.get('name')}' source does not resolve: {source}",
+            )
 
 
 # --------------------------------------------------------------------------- #
 # Driver
 # --------------------------------------------------------------------------- #
+
 
 def lint(repo: Path) -> Findings:
     f = Findings()
@@ -385,10 +408,13 @@ def lint(repo: Path) -> Findings:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=(__doc__ or "").split("\n")[0])
-    ap.add_argument("--repo", type=Path, default=REPO_ROOT,
-                    help="marketplace repo root (default: this script's repo)")
-    ap.add_argument("--quiet", action="store_true",
-                    help="print only failures")
+    ap.add_argument(
+        "--repo",
+        type=Path,
+        default=REPO_ROOT,
+        help="marketplace repo root (default: this script's repo)",
+    )
+    ap.add_argument("--quiet", action="store_true", help="print only failures")
     args = ap.parse_args(argv)
 
     f = lint(args.repo.resolve())

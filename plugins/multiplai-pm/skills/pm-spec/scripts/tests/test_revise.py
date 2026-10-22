@@ -48,8 +48,12 @@ The system SHALL apply 100 a minute.
 
 
 def resolved(n=1):
-    return {"findings": [], "prior_assessments": [{"finding_id": f"RV-F{i}", "status": "resolved"}
-                                                  for i in range(1, n + 1)]}
+    return {
+        "findings": [],
+        "prior_assessments": [
+            {"finding_id": f"RV-F{i}", "status": "resolved"} for i in range(1, n + 1)
+        ],
+    }
 
 
 def ready_change(repo, model):
@@ -60,13 +64,17 @@ def ready_change(repo, model):
     return cdir
 
 
-def test_revise_rewrites_the_named_file_rechecks_clears_and_hands_off(repo, model, capsys):
+def test_revise_rewrites_the_named_file_rechecks_clears_and_hands_off(
+    repo, model, capsys
+):
     cdir = ready_change(repo, model)
     capsys.readouterr()
     model["consistency"] = resolved()
     assert run(repo, "revise", "throttle") == 0
     out = capsys.readouterr().out
-    assert [label for label in model.labels() if ":rewrite:" in label] == ["revise:rewrite:retry-policy"]
+    assert [label for label in model.labels() if ":rewrite:" in label] == [
+        "revise:rewrite:retry-policy"
+    ]
     assert "Retry-After" in model.prompts("revise:rewrite:retry-policy")[0]
     assert "RV-F1" in model.exactly("consistency")[-1]
     assert meta(cdir)["spec_issues"] is None
@@ -80,8 +88,10 @@ def test_revise_rewrites_the_named_file_rechecks_clears_and_hands_off(repo, mode
 
 def test_an_issue_not_resolved_blocks_and_keeps_spec_issues(repo, model, capsys):
     cdir = ready_change(repo, model)
-    model["consistency"] = {"findings": [], "prior_assessments": [{"finding_id": "RV-F1",
-                                                                   "status": "still_present"}]}
+    model["consistency"] = {
+        "findings": [],
+        "prior_assessments": [{"finding_id": "RV-F1", "status": "still_present"}],
+    }
     assert run(repo, "revise", "throttle") == 4
     assert "RV-F1 still_present" in capsys.readouterr().out
     assert meta(cdir)["spec_issues"] == "spec-issues.md"
@@ -100,15 +110,19 @@ def test_from_respec_reads_each_requirement_block_as_an_issue(repo, model):
     model["consistency"] = resolved(2)
     assert run(repo, "revise", "throttle", "--from-respec") == 0
     # The ADDED block names no file: every file is rewritten.
-    assert sorted(label for label in model.labels() if ":rewrite:" in label) == \
-        [f"revise:rewrite:{c}" for c in CAPS]
+    assert sorted(label for label in model.labels() if ":rewrite:" in label) == [
+        f"revise:rewrite:{c}" for c in CAPS
+    ]
     # Resolved, it is moved aside like spec-issues.md.
     assert not (cdir / "respec.md").exists()
     assert [p.read_text() for p in cdir.glob("respec.resolved-*.md")] == [RESPEC]
 
 
 def test_the_same_issue_raised_again_after_a_passed_revise_is_a_new_round(repo, model):
-    model["consistency"] = {"findings": [], "prior_assessments": [{"finding_id": "RV-F1", "status": "resolved"}]}
+    model["consistency"] = {
+        "findings": [],
+        "prior_assessments": [{"finding_id": "RV-F1", "status": "resolved"}],
+    }
     assert run(repo, "new", "throttle", "--auto") == 0
     cdir = change_dir(repo)
     for round_ in (1, 2):
@@ -132,7 +146,9 @@ def test_a_second_respec_after_a_passed_one_is_a_new_round(repo, model):
 def test_parse_respec_skips_notes():
     issues = R.parse_respec(RESPEC)
     assert len(issues) == 2
-    assert issues[0].startswith("ADDED requirement") and issues[1].startswith("MODIFIED requirement")
+    assert issues[0].startswith("ADDED requirement") and issues[1].startswith(
+        "MODIFIED requirement"
+    )
 
 
 def test_parse_spec_issues_without_sections_is_one_issue():
@@ -144,7 +160,9 @@ def test_an_issue_naming_a_requirement_by_name_targets_its_file(tmp_path):
     cdir = tmp_path / "c"
     for cap in CAPS:
         write(cdir / "requirements" / f"{cap}.md", requirements(cap))
-    assert R.requirement_caps(cdir, "The 'Rate limit holds' requirement is wrong") == ["rate-limit"]
+    assert R.requirement_caps(cdir, "The 'Rate limit holds' requirement is wrong") == [
+        "rate-limit"
+    ]
 
 
 def test_no_issues_file_is_refused(repo, model, capsys):
@@ -156,6 +174,7 @@ def test_no_issues_file_is_refused(repo, model, capsys):
 def test_revise_adopts_a_change_pm_spec_did_not_write(repo, model):
     cdir = change_dir(repo)
     from conftest import proposal
+
     write(cdir / "proposal.md", proposal())
     for cap in CAPS:
         write(cdir / "requirements" / f"{cap}.md", requirements(cap))

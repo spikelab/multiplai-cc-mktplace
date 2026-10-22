@@ -180,7 +180,8 @@ def rotate(path: Path, *, max_records: int = MAX_RECORDS) -> int:
     path = Path(path)
     try:
         lines = [
-            line for line in path.read_text(encoding="utf-8").splitlines()
+            line
+            for line in path.read_text(encoding="utf-8").splitlines()
             if line.strip()
         ]
     except OSError:

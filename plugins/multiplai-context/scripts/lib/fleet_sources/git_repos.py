@@ -37,11 +37,24 @@ REPO_BUDGET = 10.0
 # Directories never worth descending into. `.worktrees` is excluded on purpose:
 # worktrees are not independent repos and are reported *per repo* by
 # `git worktree list`, so walking into them would double-count every branch.
-_SKIP_DIRS = frozenset({
-    ".git", ".worktrees", "node_modules", ".venv", "venv", "__pycache__",
-    ".mypy_cache", ".pytest_cache", ".ruff_cache", "site-packages", ".next",
-    "dist", "build", ".tox",
-})
+_SKIP_DIRS = frozenset(
+    {
+        ".git",
+        ".worktrees",
+        "node_modules",
+        ".venv",
+        "venv",
+        "__pycache__",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        "site-packages",
+        ".next",
+        "dist",
+        "build",
+        ".tox",
+    }
+)
 
 # git@github.com:owner/name.git | https://github.com/owner/name(.git)
 _REMOTE_RE = re.compile(r"[:/](?P<slug>[^/:]+/[^/]+?)(?:\.git)?/?$")
@@ -51,12 +64,12 @@ _REMOTE_RE = re.compile(r"[:/](?P<slug>[^/:]+/[^/]+?)(?:\.git)?/?$")
 class RepoState:
     """One checkout, as far as `git` alone can describe it."""
 
-    path: str                                   # workspace-relative
-    slug: str = ""                              # owner/name, "" without a remote
+    path: str  # workspace-relative
+    slug: str = ""  # owner/name, "" without a remote
     branch: str = ""
-    dirty: int = 0                              # changed + untracked paths
+    dirty: int = 0  # changed + untracked paths
     untracked: int = 0
-    unpushed: list[str] = field(default_factory=list)   # "branch (ahead 3)"
+    unpushed: list[str] = field(default_factory=list)  # "branch (ahead 3)"
     no_upstream: list[str] = field(default_factory=list)
     worktrees: list[str] = field(default_factory=list)  # paths, minus the main one
     error: str = ""
@@ -146,11 +159,15 @@ def _tracking(repo: Path, has_remote: bool) -> tuple[list[str], list[str]]:
     """
     if not has_remote:
         return [], []
-    got = run([
-        "git", "for-each-ref",
-        "--format=%(refname:short)\t%(upstream)\t%(upstream:track)",
-        "refs/heads",
-    ], cwd=repo)
+    got = run(
+        [
+            "git",
+            "for-each-ref",
+            "--format=%(refname:short)\t%(upstream)\t%(upstream:track)",
+            "refs/heads",
+        ],
+        cwd=repo,
+    )
     if not got.ok:
         return [], []
     unpushed: list[str] = []
@@ -178,7 +195,9 @@ def _worktrees(repo: Path) -> list[str]:
     got = run(["git", "worktree", "list", "--porcelain"], cwd=repo)
     if not got.ok:
         return []
-    paths = [ln.split(" ", 1)[1].strip() for ln in got.lines if ln.startswith("worktree ")]
+    paths = [
+        ln.split(" ", 1)[1].strip() for ln in got.lines if ln.startswith("worktree ")
+    ]
     main = str(repo.resolve())
     return [p for p in paths if str(Path(p).resolve()) != main]
 

@@ -92,6 +92,3 @@ async def _assert_safe_url(url: str) -> None:
     for ip in candidates:
         if _ip_is_blocked(ip):
             raise UnsafeURLError(f"host {host} resolves to non-public address {ip}")
-
-
-

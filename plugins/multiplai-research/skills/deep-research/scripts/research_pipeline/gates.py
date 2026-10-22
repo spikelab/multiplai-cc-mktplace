@@ -29,16 +29,94 @@ log = logging.getLogger(__name__)
 
 STOPWORDS = frozenset(
     {
-        "the", "a", "an", "and", "or", "but", "is", "are", "was", "were",
-        "be", "been", "being", "have", "has", "had", "do", "does", "did",
-        "will", "would", "could", "should", "may", "might", "can", "of",
-        "in", "on", "at", "to", "for", "with", "from", "by", "as", "into",
-        "about", "through", "during", "before", "after", "above", "below",
-        "between", "under", "up", "down", "out", "off", "over", "it", "its",
-        "this", "that", "these", "those", "what", "which", "who", "whom",
-        "how", "why", "when", "where", "i", "you", "he", "she", "we", "they",
-        "me", "him", "her", "us", "them", "my", "your", "his", "our", "their",
-        "if", "then", "else", "not", "no", "so", "than",
+        "the",
+        "a",
+        "an",
+        "and",
+        "or",
+        "but",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "have",
+        "has",
+        "had",
+        "do",
+        "does",
+        "did",
+        "will",
+        "would",
+        "could",
+        "should",
+        "may",
+        "might",
+        "can",
+        "of",
+        "in",
+        "on",
+        "at",
+        "to",
+        "for",
+        "with",
+        "from",
+        "by",
+        "as",
+        "into",
+        "about",
+        "through",
+        "during",
+        "before",
+        "after",
+        "above",
+        "below",
+        "between",
+        "under",
+        "up",
+        "down",
+        "out",
+        "off",
+        "over",
+        "it",
+        "its",
+        "this",
+        "that",
+        "these",
+        "those",
+        "what",
+        "which",
+        "who",
+        "whom",
+        "how",
+        "why",
+        "when",
+        "where",
+        "i",
+        "you",
+        "he",
+        "she",
+        "we",
+        "they",
+        "me",
+        "him",
+        "her",
+        "us",
+        "them",
+        "my",
+        "your",
+        "his",
+        "our",
+        "their",
+        "if",
+        "then",
+        "else",
+        "not",
+        "no",
+        "so",
+        "than",
     }
 )
 
@@ -126,7 +204,9 @@ def deduplicate_findings(
 # ---------------------------------------------------------------------------
 
 
-def cluster_queries(queries: list[str], similarity_threshold: float = 0.6) -> list[list[str]]:
+def cluster_queries(
+    queries: list[str], similarity_threshold: float = 0.6
+) -> list[list[str]]:
     """Cluster queries by keyword overlap.
 
     Simple greedy single-linkage clustering: each query is added to the first
@@ -287,9 +367,9 @@ def critical_source_gate(
     was unreachable and no credible alternative covered the topic.
     """
     failed_critical = [
-        s for s in sources
-        if s.status == SourceStatus.FAILED
-        and s.reputation in CREDIBLE_TIERS
+        s
+        for s in sources
+        if s.status == SourceStatus.FAILED and s.reputation in CREDIBLE_TIERS
     ]
 
     if not failed_critical:
@@ -303,7 +383,8 @@ def critical_source_gate(
     for i, question in enumerate(sub_questions):
         # Find findings for this sub-question (same logic as coverage_gate)
         q_findings = [
-            f for f in findings
+            f
+            for f in findings
             if f.relates_to_sub_question == i
             or _finding_relates_to_question(f, question)
         ]
@@ -315,14 +396,15 @@ def critical_source_gate(
 
         # No credible coverage — check if any failed critical source was relevant
         relevant_failures = [
-            s for s in failed_critical
-            if _source_relevant_to_question(s, question)
+            s for s in failed_critical if _source_relevant_to_question(s, question)
         ]
         if relevant_failures:
-            uncovered_critical.append({
-                "question": question,
-                "failed_sources": [s.url for s in relevant_failures],
-            })
+            uncovered_critical.append(
+                {
+                    "question": question,
+                    "failed_sources": [s.url for s in relevant_failures],
+                }
+            )
 
     if uncovered_critical:
         failed_urls = list({s.url for s in failed_critical})

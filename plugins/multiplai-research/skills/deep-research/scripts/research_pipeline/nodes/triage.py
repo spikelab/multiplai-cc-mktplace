@@ -23,14 +23,32 @@ log = logging.getLogger(__name__)
 
 # Heuristic reputation tiers by domain pattern
 AUTHORITATIVE_PATTERNS = [
-    ".gov", ".edu", "arxiv.org", "nature.com", "science.org", "who.int",
-    "ieee.org", "acm.org",
+    ".gov",
+    ".edu",
+    "arxiv.org",
+    "nature.com",
+    "science.org",
+    "who.int",
+    "ieee.org",
+    "acm.org",
 ]
 ESTABLISHED_PATTERNS = [
-    "wikipedia.org", "reuters.com", "apnews.com", "bloomberg.com", "nytimes.com",
-    "wsj.com", "theguardian.com", "bbc.com", "bbc.co.uk", "economist.com",
-    "crunchbase.com", "linkedin.com", "glassdoor.com", "github.com",
-    "stackoverflow.com", "ycombinator.com",
+    "wikipedia.org",
+    "reuters.com",
+    "apnews.com",
+    "bloomberg.com",
+    "nytimes.com",
+    "wsj.com",
+    "theguardian.com",
+    "bbc.com",
+    "bbc.co.uk",
+    "economist.com",
+    "crunchbase.com",
+    "linkedin.com",
+    "glassdoor.com",
+    "github.com",
+    "stackoverflow.com",
+    "ycombinator.com",
 ]
 
 
@@ -109,8 +127,12 @@ def apply_diversity_filter(
         if domain_counts[domain] < max_per_domain:
             kept.append(r)
             domain_counts[domain] += 1
-    log.info("TRIAGE diversity: %d → %d (max %d per domain)",
-             len(results), len(kept), max_per_domain)
+    log.info(
+        "TRIAGE diversity: %d → %d (max %d per domain)",
+        len(results),
+        len(kept),
+        max_per_domain,
+    )
     return kept
 
 
@@ -139,9 +161,7 @@ def select_obvious_sources(
     _authority_domains = authority_domains or []
     for r in results:
         reputation = _reputation_for_domain(r.url)
-        is_authority = any(
-            _host_matches_domain(r.url, ad) for ad in _authority_domains
-        )
+        is_authority = any(_host_matches_domain(r.url, ad) for ad in _authority_domains)
         # Tag for downstream budget reservation
         r.is_authority = is_authority
 
@@ -177,7 +197,9 @@ async def triage(
 
     # 3. Split into auto-include and borderline
     obvious, borderline = select_obvious_sources(
-        filtered, target_domains, authority_domains,
+        filtered,
+        target_domains,
+        authority_domains,
     )
 
     # 4. Score borderline sources via LLM (only if we have capacity and borderline items)
@@ -189,16 +211,14 @@ async def triage(
         # Only score if we have more borderline sources than slots (otherwise keep all)
         if len(borderline) > remaining_slots:
             sources_text = "\n".join(
-                f"{i+1}. {r.title} — {r.url}\n   {r.snippet[:200]}"
+                f"{i + 1}. {r.title} — {r.url}\n   {r.snippet[:200]}"
                 for i, r in enumerate(borderline[:30])  # cap LLM input
             )
             try:
                 response = await llm_call_structured(
                     TRIAGE_RELEVANCE_PROMPT.format(
                         query=config.query,
-                        sub_questions="\n".join(
-                            f"- {q}" for q in sub_questions
-                        ),
+                        sub_questions="\n".join(f"- {q}" for q in sub_questions),
                         sources=sources_text,
                     ),
                     RelevanceScores,
@@ -246,6 +266,11 @@ async def triage(
         sources.append(s)
 
     authority_count = sum(1 for s in sources if s.is_authority)
-    log.info("TRIAGE: %d sources selected (obvious=%d, borderline=%d, authority=%d)",
-             len(sources), len(obvious), len(selected_borderline), authority_count)
+    log.info(
+        "TRIAGE: %d sources selected (obvious=%d, borderline=%d, authority=%d)",
+        len(sources),
+        len(obvious),
+        len(selected_borderline),
+        authority_count,
+    )
     return sources

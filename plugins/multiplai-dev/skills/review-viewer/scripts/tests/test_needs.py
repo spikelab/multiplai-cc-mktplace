@@ -10,14 +10,24 @@ from conftest import FIXTURE
 from pydantic import ValidationError
 from review_viewer.models import SCHEMA_PATH, FindingsFile
 
-NEED = {"what": "GitHub's rules on main.", "blocks": "review", "cause": "lookup-failed",
-        "command": "gh api repos/example/booking-engine/rules/branches/main", "source": "pipeline"}
+NEED = {
+    "what": "GitHub's rules on main.",
+    "blocks": "review",
+    "cause": "lookup-failed",
+    "command": "gh api repos/example/booking-engine/rules/branches/main",
+    "source": "pipeline",
+}
 
 
 def with_needs(data: dict) -> dict:
-    finding_need = {**NEED, "blocks": data["findings"][1]["id"], "source": "verifier",
-                    "cause": "no-access", "command": "",
-                    "where": "Console > Dataform > example > Workflow execution logs"}
+    finding_need = {
+        **NEED,
+        "blocks": data["findings"][1]["id"],
+        "source": "verifier",
+        "cause": "no-access",
+        "command": "",
+        "where": "Console > Dataform > example > Workflow execution logs",
+    }
     data["findings"][1]["needs"] = [finding_need]
     data["needs"] = [NEED, finding_need]
     return data
@@ -32,10 +42,15 @@ def test_findings_file_with_and_without_needs_validates():
     data = with_needs(json.loads(FIXTURE.read_text(encoding="utf-8")))
     jsonschema.validate(data, schema)
     ff = FindingsFile.model_validate(data)
-    assert ff.needs[0].command.startswith("gh api") and ff.findings[1].needs[0].cause == "no-access"
+    assert (
+        ff.needs[0].command.startswith("gh api")
+        and ff.findings[1].needs[0].cause == "no-access"
+    )
 
 
-@pytest.mark.parametrize("bad", [{"cause": "forbidden"}, {"source": "user"}, {"extra": 1}])
+@pytest.mark.parametrize(
+    "bad", [{"cause": "forbidden"}, {"source": "user"}, {"extra": 1}]
+)
 def test_a_malformed_need_is_rejected(bad):
     data = json.loads(FIXTURE.read_text(encoding="utf-8"))
     data["needs"] = [{**NEED, **bad}]
@@ -48,10 +63,17 @@ def test_server_serves_needs_and_a_file_without_them(start_live, findings_path):
     status, detail = live.request("GET", f"/api/targets/{live.slug}")
     assert status == 200 and detail["findings"]["needs"] == []
 
-    findings_path.write_text(json.dumps(with_needs(json.loads(findings_path.read_text()))), encoding="utf-8")
+    findings_path.write_text(
+        json.dumps(with_needs(json.loads(findings_path.read_text()))), encoding="utf-8"
+    )
     live = start_live(path=findings_path)
     status, detail = live.request("GET", f"/api/targets/{live.slug}")
     assert status == 200
-    assert detail["findings"]["needs"][0] == {**NEED, "where": ""}  # a need written without `where` gets ""
+    assert detail["findings"]["needs"][0] == {
+        **NEED,
+        "where": "",
+    }  # a need written without `where` gets ""
     served = detail["findings"]["findings"][1]["needs"][0]
-    assert served["source"] == "verifier" and served["where"].startswith("Console > Dataform")
+    assert served["source"] == "verifier" and served["where"].startswith(
+        "Console > Dataform"
+    )

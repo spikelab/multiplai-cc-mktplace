@@ -107,6 +107,7 @@ def _record_usage(usage: LLMCallUsage) -> None:
     with _usage_lock:
         _accumulated_usage.accumulate(usage)
 
+
 # Default per-call timeout: 10 minutes. Synthesis on large finding sets can
 # take 3-5 minutes; REASSESS is lighter. Adjust per-node via call_timeout kwarg.
 DEFAULT_LLM_CALL_TIMEOUT_S = 600.0
@@ -152,7 +153,11 @@ def _track_call_end(label: str, *, elapsed: float, ok: bool) -> None:
     status = "OK" if ok else "FAIL"
     log.debug(
         "SDK call END   [%s] %s %.1fs active=%d peak=%d",
-        label, status, elapsed, active, peak,
+        label,
+        status,
+        elapsed,
+        active,
+        peak,
     )
 
 
@@ -289,7 +294,10 @@ async def llm_call(
     """
     log.info(
         "SDK call [%s] prompt=%d bytes tools=%s timeout=%.0fs",
-        label, len(prompt.encode("utf-8")), allowed_tools or "none", call_timeout,
+        label,
+        len(prompt.encode("utf-8")),
+        allowed_tools or "none",
+        call_timeout,
     )
 
     def _capture_usage(into: LLMCallUsage, result: AgentRunResult | None) -> None:
@@ -334,7 +342,9 @@ async def llm_call(
             _capture_usage(call_usage, e.partial)
             log.error(
                 "FAIL llm_call [%s] reason=timeout after %.0fs\n--- CLI stderr ---\n%s",
-                label, call_timeout, e.stderr_tail,
+                label,
+                call_timeout,
+                e.stderr_tail,
             )
             raise LLMCallTimeoutError(
                 f"LLM call [{label}] exceeded {call_timeout:.0f}s timeout\n"
@@ -344,7 +354,9 @@ async def llm_call(
             _capture_usage(call_usage, e.partial)
             log.error(
                 "FAIL llm_call [%s] error=%s\n--- CLI stderr ---\n%s",
-                label, e.reason, e.stderr_tail,
+                label,
+                e.reason,
+                e.stderr_tail,
             )
             raise LLMCallError(
                 f"SDK query failed [{label}]: {e.reason}\n"

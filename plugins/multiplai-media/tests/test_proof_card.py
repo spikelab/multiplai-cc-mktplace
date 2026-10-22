@@ -4,6 +4,7 @@ Pages are built from a generated PNG and shot.json, then checked with the
 same lint render runs (stages/overlay_lint.py) and by reading the end of
 their move keyframes: the highlight box must end inside the card's window.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -24,14 +25,28 @@ from test_capture import png
 BOX = {"text": "rise 4%", "x": 180, "y": 1900, "w": 520, "h": 44}
 
 
-def shot(tmp_path: Path, w: int = 1280, h: int = 2400, box: dict | None = BOX,
-         url: str = "https://www.news.example.org/post") -> Path:
+def shot(
+    tmp_path: Path,
+    w: int = 1280,
+    h: int = 2400,
+    box: dict | None = BOX,
+    url: str = "https://www.news.example.org/post",
+) -> Path:
     d = tmp_path / "shot"
     d.mkdir(exist_ok=True)
     (d / "shot.png").write_bytes(png(w, h))
-    (d / "shot.json").write_text(json.dumps({"url": url, "captured_at": "2026-10-11T09:00:00Z",
-                                             "width": w, "height": h, "source": "browser",
-                                             "highlight": box}))
+    (d / "shot.json").write_text(
+        json.dumps(
+            {
+                "url": url,
+                "captured_at": "2026-10-11T09:00:00Z",
+                "width": w,
+                "height": h,
+                "source": "browser",
+                "highlight": box,
+            }
+        )
+    )
     return d
 
 
@@ -45,14 +60,20 @@ def window(page: str) -> tuple[float, float]:
 
 
 def move_end(page: str) -> tuple[float, float, float]:
-    m = re.search(r"@keyframes move\{from\{transform:[^}]*\}to\{transform:translate\(([-\d.]+)px,"
-                  r"([-\d.]+)px\) scale\(([\d.]+)\)\}\}", page)
+    m = re.search(
+        r"@keyframes move\{from\{transform:[^}]*\}to\{transform:translate\(([-\d.]+)px,"
+        r"([-\d.]+)px\) scale\(([\d.]+)\)\}\}",
+        page,
+    )
     assert m, "no move keyframes"
     return float(m.group(1)), float(m.group(2)), float(m.group(3))
 
 
 def resting(page: str) -> tuple[float, float, float]:
-    m = re.search(r"\.page\{[^}]*transform:translate\(([-\d.]+)px,([-\d.]+)px\) scale\(([\d.]+)\)", page)
+    m = re.search(
+        r"\.page\{[^}]*transform:translate\(([-\d.]+)px,([-\d.]+)px\) scale\(([\d.]+)\)",
+        page,
+    )
     return float(m.group(1)), float(m.group(2)), float(m.group(3))
 
 
@@ -65,7 +86,9 @@ def test_the_page_passes_the_overlay_lint(tmp_path: Path, motion: str) -> None:
 
 
 @pytest.mark.parametrize("motion", ["scroll", "zoom"])
-def test_the_move_ends_with_the_highlight_inside_the_window(tmp_path: Path, motion: str) -> None:
+def test_the_move_ends_with_the_highlight_inside_the_window(
+    tmp_path: Path, motion: str
+) -> None:
     page, _ = proof_card.build(shot(tmp_path), motion, style())
     win_w, win_h = window(page)
     tx, ty, s = move_end(page)
@@ -91,12 +114,14 @@ def test_none_holds_the_highlight_in_view_without_moving(tmp_path: Path) -> None
     assert 0 <= ty + BOX["y"] * s <= window(page)[1]
 
 
-def test_the_ring_is_drawn_in_the_accent_and_the_domain_is_shown(tmp_path: Path) -> None:
+def test_the_ring_is_drawn_in_the_accent_and_the_domain_is_shown(
+    tmp_path: Path,
+) -> None:
     page, _ = proof_card.build(shot(tmp_path), "scroll", style())
     assert "border-color:#3DDC97" in page
     assert '<span class="site">news.example.org</span>' in page
     assert "2026-10-11" in page
-    assert page.count("<img") == 1                      # the screenshot itself, unedited
+    assert page.count("<img") == 1  # the screenshot itself, unedited
 
 
 def test_the_card_has_no_shadow(tmp_path: Path) -> None:
@@ -107,12 +132,17 @@ def test_the_card_has_no_shadow(tmp_path: Path) -> None:
 
 def test_the_card_fits_a_vertical_region(tmp_path: Path) -> None:
     page, _ = proof_card.build(shot(tmp_path), "zoom", style(), width=1080, height=1920)
-    card = re.search(r"\.card\{position:absolute;left:([\d.]+)px;top:([\d.]+)px;width:([\d.]+)px", page)
+    card = re.search(
+        r"\.card\{position:absolute;left:([\d.]+)px;top:([\d.]+)px;width:([\d.]+)px",
+        page,
+    )
     left, width = float(card.group(1)), float(card.group(3))
     assert left > 0 and left + width <= 1080
 
 
-def test_a_short_overlay_warns_that_the_highlight_is_not_held_2_s(tmp_path: Path) -> None:
+def test_a_short_overlay_warns_that_the_highlight_is_not_held_2_s(
+    tmp_path: Path,
+) -> None:
     _, warnings = proof_card.build(shot(tmp_path), "scroll", style(), duration=3.0)
     assert warnings and "2 s" in warnings[0]
     _, warnings = proof_card.build(shot(tmp_path), "scroll", style(), duration=6.0)
@@ -136,8 +166,15 @@ def test_style_values_come_from_the_style_file() -> None:
 
 def test_cli_writes_the_card_and_lints_it(tmp_path: Path, capsys) -> None:
     out = tmp_path / "card.html"
-    args = argparse.Namespace(shot_dir=str(shot(tmp_path)), motion="zoom", style="clean-tech",
-                              width=1920, height=1080, duration=6.0, out=str(out))
+    args = argparse.Namespace(
+        shot_dir=str(shot(tmp_path)),
+        motion="zoom",
+        style="clean-tech",
+        width=1920,
+        height=1080,
+        duration=6.0,
+        out=str(out),
+    )
     assert pipeline.cmd_proof_card(args) == 0
     assert out.exists()
     assert "CARD:" in capsys.readouterr().out

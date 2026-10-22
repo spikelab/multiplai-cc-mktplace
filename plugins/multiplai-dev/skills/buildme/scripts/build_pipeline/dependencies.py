@@ -76,9 +76,7 @@ class NewDependency(BaseModel):
 
 # The spec templates write these as level-2 headings; match to the next
 # level-2 heading (or EOF).
-_IMPACT_RE = re.compile(
-    r"^##\s+Impact\s*$(.*?)(?=^##\s|\Z)", re.MULTILINE | re.DOTALL
-)
+_IMPACT_RE = re.compile(r"^##\s+Impact\s*$(.*?)(?=^##\s|\Z)", re.MULTILINE | re.DOTALL)
 _DECISIONS_RE = re.compile(
     r"^##\s+Decisions\s*$(.*?)(?=^##\s|\Z)", re.MULTILINE | re.DOTALL
 )
@@ -100,13 +98,13 @@ _NEGATION_MAX_GLUE_WORDS = 2  # e.g. "rather than adding `tomli`"
 
 def _negated(line: str, token_start: int) -> bool:
     """Whether a negation cue directly governs the token at ``token_start``."""
-    window = line[max(0, token_start - _NEGATION_WINDOW):token_start]
+    window = line[max(0, token_start - _NEGATION_WINDOW) : token_start]
     cue = None
     for cue in _NEGATION_RE.finditer(window):
         pass  # keep the cue closest to the token
     if cue is None:
         return False
-    between = window[cue.end():]
+    between = window[cue.end() :]
     # A backticked token between the cue and this one means the cue governs
     # THAT token, not this one.
     if "`" in between:
@@ -123,20 +121,114 @@ def _section(text: str, pattern: re.Pattern[str]) -> str:
 
 # Words that name a language, runtime, packaging tool, protocol, or file format
 # rather than a dependency this change would newly take on.
-_GENERIC_TERMS = frozenset({
-    "python", "python3", "py", "node", "nodejs", "deno", "bun", "npm", "npx",
-    "pnpm", "yarn", "pip", "pipx", "uv", "poetry", "pdm", "hatch", "hatchling",
-    "setuptools", "wheel", "conda", "brew", "apt", "make", "cmake", "cargo",
-    "rust", "rustc", "go", "golang", "swift", "swiftpm", "spm", "xcode",
-    "java", "kotlin", "javascript", "typescript", "js", "ts", "tsx", "jsx",
-    "html", "css", "scss", "sql", "bash", "sh", "zsh", "shell", "git", "gh",
-    "github", "gitlab", "docker", "dockerfile", "compose", "kubernetes", "k8s",
-    "json", "yaml", "yml", "toml", "ini", "csv", "tsv", "xml", "markdown", "md",
-    "http", "https", "rest", "grpc", "graphql", "api", "cli", "ui", "ux",
-    "tdd", "bdd", "ci", "cd", "utf-8", "utf8", "ascii", "regex", "env",
-    "readme", "license", "main", "src", "tests", "test", "lib", "bin", "docs",
-    "true", "false", "none", "null", "todo", "tbd", "n/a", "na",
-})
+_GENERIC_TERMS = frozenset(
+    {
+        "python",
+        "python3",
+        "py",
+        "node",
+        "nodejs",
+        "deno",
+        "bun",
+        "npm",
+        "npx",
+        "pnpm",
+        "yarn",
+        "pip",
+        "pipx",
+        "uv",
+        "poetry",
+        "pdm",
+        "hatch",
+        "hatchling",
+        "setuptools",
+        "wheel",
+        "conda",
+        "brew",
+        "apt",
+        "make",
+        "cmake",
+        "cargo",
+        "rust",
+        "rustc",
+        "go",
+        "golang",
+        "swift",
+        "swiftpm",
+        "spm",
+        "xcode",
+        "java",
+        "kotlin",
+        "javascript",
+        "typescript",
+        "js",
+        "ts",
+        "tsx",
+        "jsx",
+        "html",
+        "css",
+        "scss",
+        "sql",
+        "bash",
+        "sh",
+        "zsh",
+        "shell",
+        "git",
+        "gh",
+        "github",
+        "gitlab",
+        "docker",
+        "dockerfile",
+        "compose",
+        "kubernetes",
+        "k8s",
+        "json",
+        "yaml",
+        "yml",
+        "toml",
+        "ini",
+        "csv",
+        "tsv",
+        "xml",
+        "markdown",
+        "md",
+        "http",
+        "https",
+        "rest",
+        "grpc",
+        "graphql",
+        "api",
+        "cli",
+        "ui",
+        "ux",
+        "tdd",
+        "bdd",
+        "ci",
+        "cd",
+        "utf-8",
+        "utf8",
+        "ascii",
+        "regex",
+        "env",
+        "readme",
+        "license",
+        "main",
+        "src",
+        "tests",
+        "test",
+        "lib",
+        "bin",
+        "docs",
+        "true",
+        "false",
+        "none",
+        "null",
+        "todo",
+        "tbd",
+        "n/a",
+        "na",
+    }
+)
 
 # A dependency name looks like a package identifier: letters/digits with
 # ``.-_`` separators, optionally npm-scoped (``@scope/name``).
@@ -158,11 +250,42 @@ _BUILTIN_NAMES = frozenset(
 # stdlib modules to build a denylist would be a side effect nobody asked a
 # dependency scanner for.
 _STDLIB_MEMBER_MODULES = (
-    "builtins", "os", "os.path", "sys", "io", "re", "json", "pathlib", "shutil",
-    "subprocess", "itertools", "functools", "collections", "datetime", "time",
-    "math", "string", "typing", "dataclasses", "enum", "logging", "contextlib",
-    "tempfile", "textwrap", "argparse", "hashlib", "base64", "uuid", "random",
-    "csv", "glob", "stat", "socket", "struct", "threading", "asyncio",
+    "builtins",
+    "os",
+    "os.path",
+    "sys",
+    "io",
+    "re",
+    "json",
+    "pathlib",
+    "shutil",
+    "subprocess",
+    "itertools",
+    "functools",
+    "collections",
+    "datetime",
+    "time",
+    "math",
+    "string",
+    "typing",
+    "dataclasses",
+    "enum",
+    "logging",
+    "contextlib",
+    "tempfile",
+    "textwrap",
+    "argparse",
+    "hashlib",
+    "base64",
+    "uuid",
+    "random",
+    "csv",
+    "glob",
+    "stat",
+    "socket",
+    "struct",
+    "threading",
+    "asyncio",
 )
 
 
@@ -203,13 +326,48 @@ _STRUCT_FIELD_RE = re.compile(r"^st-[a-z]+$")
 # `create-react-app`), so a JS project must never have its dependencies
 # swallowed by this. Even for Python, the list is scoped to the verbs that show
 # up in design prose describing what the code will do.
-_PROSE_VERBS = frozenset({
-    "add", "scan", "get", "set", "run", "make", "build", "parse", "write",
-    "read", "create", "delete", "update", "fetch", "load", "save", "render",
-    "compute", "collect", "emit", "handle", "check", "detect", "resolve",
-    "skip", "log", "return", "raise", "keep", "drop", "reject", "apply",
-    "route", "wrap", "surface", "record", "gate", "suppress",
-})
+_PROSE_VERBS = frozenset(
+    {
+        "add",
+        "scan",
+        "get",
+        "set",
+        "run",
+        "make",
+        "build",
+        "parse",
+        "write",
+        "read",
+        "create",
+        "delete",
+        "update",
+        "fetch",
+        "load",
+        "save",
+        "render",
+        "compute",
+        "collect",
+        "emit",
+        "handle",
+        "check",
+        "detect",
+        "resolve",
+        "skip",
+        "log",
+        "return",
+        "raise",
+        "keep",
+        "drop",
+        "reject",
+        "apply",
+        "route",
+        "wrap",
+        "surface",
+        "record",
+        "gate",
+        "suppress",
+    }
+)
 
 # Filenames/paths, not packages.
 _FILE_EXT_RE = re.compile(
@@ -249,7 +407,9 @@ def _aliases(canonical_name: str) -> set[str]:
     return {a for a in out if a}
 
 
-def _collapse(canonical_name: str, declared: set[str] | frozenset[str] = frozenset()) -> str:
+def _collapse(
+    canonical_name: str, declared: set[str] | frozenset[str] = frozenset()
+) -> str:
     """``pkg.sub.thing`` → ``pkg``. A distribution is the head, not the path.
 
     Without this, `rich`, `rich.print`, `rich.console.console` and
@@ -278,7 +438,9 @@ def _collapse(canonical_name: str, declared: set[str] | frozenset[str] = frozens
     return parts[0]
 
 
-def _is_plausible_dependency(canonical_name: str, *, python_ecosystem: bool = True) -> bool:
+def _is_plausible_dependency(
+    canonical_name: str, *, python_ecosystem: bool = True
+) -> bool:
     if len(canonical_name) < 2:
         return False
     if not _NAME_RE.match(canonical_name):
@@ -338,9 +500,13 @@ _MANIFESTS = (
 # the stdlib subtraction in _is_plausible_dependency. A project with no
 # manifest at all keeps the subtraction (it may yet become Python, and the
 # stdlib filter is the conservative default).
-_PYTHON_MANIFESTS = frozenset({
-    "pyproject.toml", "requirements.txt", "requirements-dev.txt",
-})
+_PYTHON_MANIFESTS = frozenset(
+    {
+        "pyproject.toml",
+        "requirements.txt",
+        "requirements-dev.txt",
+    }
+)
 
 
 def _declared_in_pyproject(path: Path) -> set[str]:
@@ -362,7 +528,7 @@ def _declared_in_pyproject(path: Path) -> set[str]:
             if isinstance(dep, str):
                 names.add(_canonical(dep))
 
-    poetry = ((data.get("tool", {}) or {}).get("poetry", {}) or {})
+    poetry = (data.get("tool", {}) or {}).get("poetry", {}) or {}
     for key in ("dependencies", "dev-dependencies", "group"):
         section = poetry.get(key, {}) or {}
         if key == "group":
@@ -373,7 +539,7 @@ def _declared_in_pyproject(path: Path) -> set[str]:
             for name in section:
                 names.add(_canonical(name))
 
-    uv = ((data.get("tool", {}) or {}).get("uv", {}) or {})
+    uv = (data.get("tool", {}) or {}).get("uv", {}) or {}
     for dep in uv.get("dev-dependencies", []) or []:
         names.add(_canonical(str(dep)))
     return names
@@ -401,10 +567,12 @@ def _declared_in_package_json(path: Path) -> set[str]:
         log.warning("Could not parse %s: %s", path, e)
         return names
     for key in (
-        "dependencies", "devDependencies",
-        "peerDependencies", "optionalDependencies",
+        "dependencies",
+        "devDependencies",
+        "peerDependencies",
+        "optionalDependencies",
     ):
-        for name in (data.get(key, {}) or {}):
+        for name in data.get(key, {}) or {}:
             names.add(_canonical(name))
     return names
 
@@ -439,12 +607,14 @@ def _declared_in_cargo(path: Path) -> set[str]:
         log.warning("Could not parse %s: %s", path, e)
         return names
     for key in ("dependencies", "dev-dependencies", "build-dependencies"):
-        for name in (data.get(key, {}) or {}):
+        for name in data.get(key, {}) or {}:
             names.add(_canonical(name))
     return names
 
 
-_GO_REQUIRE_LINE_RE = re.compile(r"^\s*(?:require\s+)?([\w.\-]+(?:/[\w.\-]+)+)\s+v", re.MULTILINE)
+_GO_REQUIRE_LINE_RE = re.compile(
+    r"^\s*(?:require\s+)?([\w.\-]+(?:/[\w.\-]+)+)\s+v", re.MULTILINE
+)
 
 
 def _declared_in_go_mod(path: Path) -> set[str]:
@@ -512,15 +682,42 @@ def project_module_names(project_dir: Path) -> set[str]:
 
 # --- Existing imports ---------------------------------------------------------
 
-_SOURCE_SUFFIXES = frozenset({
-    ".py", ".pyi", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx",
-    ".swift", ".rs", ".go", ".java", ".kt",
-})
-_SKIP_DIRS = frozenset({
-    ".git", ".venv", "venv", "node_modules", "__pycache__", "dist", "build",
-    ".mypy_cache", ".pytest_cache", ".ruff_cache", "target", ".build",
-    "vendor", "site-packages", ".worktrees",
-})
+_SOURCE_SUFFIXES = frozenset(
+    {
+        ".py",
+        ".pyi",
+        ".js",
+        ".mjs",
+        ".cjs",
+        ".jsx",
+        ".ts",
+        ".tsx",
+        ".swift",
+        ".rs",
+        ".go",
+        ".java",
+        ".kt",
+    }
+)
+_SKIP_DIRS = frozenset(
+    {
+        ".git",
+        ".venv",
+        "venv",
+        "node_modules",
+        "__pycache__",
+        "dist",
+        "build",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        "target",
+        ".build",
+        "vendor",
+        "site-packages",
+        ".worktrees",
+    }
+)
 _MAX_SOURCE_FILES = 3000
 
 _IMPORT_RES = (
@@ -590,16 +787,16 @@ def existing_import_names(project_dir: Path) -> set[str]:
     if scanned >= _MAX_SOURCE_FILES:
         log.info(
             "Import scan stopped at the %d-file cap in %s",
-            _MAX_SOURCE_FILES, project_dir,
+            _MAX_SOURCE_FILES,
+            project_dir,
         )
     return names
 
 
 # --- Public API ---------------------------------------------------------------
 
-def detect_new_dependencies(
-    change_dir: Path, project_dir: Path
-) -> list[NewDependency]:
+
+def detect_new_dependencies(change_dir: Path, project_dir: Path) -> list[NewDependency]:
     """Tools/libraries/services named in the specs but absent from the manifests.
 
     Reads ``proposal.md``'s ``## Impact`` and ``design.md``'s ``## Decisions``,
@@ -631,7 +828,8 @@ def detect_new_dependencies(
                 if python_ecosystem:
                     canonical_name = _collapse(canonical_name, declared)
                 if not _is_plausible_dependency(
-                    canonical_name, python_ecosystem=python_ecosystem,
+                    canonical_name,
+                    python_ecosystem=python_ecosystem,
                 ):
                     continue
                 if _aliases(canonical_name) & declared:
@@ -643,7 +841,8 @@ def detect_new_dependencies(
                 if _negated(line, match.start()):
                     log.debug(
                         "Skipping '%s' — rejected alternative in: %s",
-                        canonical_name, line.strip()[:120],
+                        canonical_name,
+                        line.strip()[:120],
                     )
                     continue
                 sites = mentions.setdefault(canonical_name, [])

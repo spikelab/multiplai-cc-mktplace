@@ -40,7 +40,9 @@ class Citation(_Model):
     @model_validator(mode="after")
     def _ordered(self) -> Citation:
         if self.line_end < self.line_start:
-            raise ValueError(f"line_end {self.line_end} is before line_start {self.line_start}")
+            raise ValueError(
+                f"line_end {self.line_end} is before line_start {self.line_start}"
+            )
         return self
 
 
@@ -48,7 +50,9 @@ class Fact(_Model):
     claim: str
     citations: list[Citation] = Field(default_factory=list)
     id: str = ""
-    source: str = ""   # which agent produced it: "unit:3", "boundary:inbound:DolceFront:0"
+    source: str = (
+        ""  # which agent produced it: "unit:3", "boundary:inbound:DolceFront:0"
+    )
 
 
 class FilePurpose(_Model):
@@ -79,9 +83,10 @@ class ExploreOutput(_Model):
 
 class Span(BaseModel):
     """Lines `start..end` (1-based, inclusive) of one file at one side of a change."""
+
     path: str
     start: int = Field(default=1, ge=1)
-    end: int = Field(ge=0)          # 0 only for an empty whole file
+    end: int = Field(ge=0)  # 0 only for an empty whole file
     side: Side = "head"
     whole_file: bool = False
 
@@ -96,6 +101,7 @@ class Span(BaseModel):
 
 class Scope(BaseModel):
     """The line ranges to explain: whole files for a module, hunks for a diff."""
+
     spans: list[Span] = Field(default_factory=list)
 
     @classmethod
@@ -106,7 +112,7 @@ class Scope(BaseModel):
 
 class Unit(BaseModel):
     id: str
-    files: list[str]         # the distinct paths of its spans, in order
+    files: list[str]  # the distinct paths of its spans, in order
     lines: int
     oversize: bool = False
     spans: list[Span] = Field(default_factory=list)

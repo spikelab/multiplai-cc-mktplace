@@ -42,13 +42,17 @@ class _Hidden:
 
 
 def _tree(repo, path: str = "") -> Target:
-    return Target(kind="tree", repo=str(repo), head_sha=git(repo, "rev-parse", "HEAD"), path=path)
+    return Target(
+        kind="tree", repo=str(repo), head_sha=git(repo, "rev-parse", "HEAD"), path=path
+    )
 
 
 def test_python_files_symbols_and_skips(tmp_path):
     repo = make_repo(tmp_path / "widgets")
     write(repo / "pkg" / "api.py", API)
-    write(repo / "pkg" / "tests" / "test_api.py", "def test_charge():\n    assert True\n")
+    write(
+        repo / "pkg" / "tests" / "test_api.py", "def test_charge():\n    assert True\n"
+    )
     write(repo / "pkg" / "api_test.py", "def test_more():\n    pass\n")
     write(repo / "pkg" / "test_top.py", "def helper_in_test():\n    pass\n")
     write(repo / "pkg" / "bad.py", "def broken(:\n    pass\n")
@@ -56,7 +60,10 @@ def test_python_files_symbols_and_skips(tmp_path):
     write(repo / "pkg" / "big.py", "# " + "x" * 200_001 + "\n")
     write(repo / "pkg" / "gen.py", "def generated():\n    pass\n")
     write(repo / "pkg" / "vendored.py", "def vendored():\n    pass\n")
-    write(repo / ".gitattributes", "pkg/gen.py linguist-generated\npkg/vendored.py linguist-vendored=true\n")
+    write(
+        repo / ".gitattributes",
+        "pkg/gen.py linguist-generated\npkg/vendored.py linguist-vendored=true\n",
+    )
     write(repo / "README.md", "# not python\n")
     (repo / "pkg" / "link.py").symlink_to("api.py")
     git(repo, "add", "-A")
@@ -66,8 +73,15 @@ def test_python_files_symbols_and_skips(tmp_path):
 
     s = scope_mod.compute(_tree(repo))
 
-    assert s.files == ["pkg/api.py", "pkg/api_test.py", "pkg/test_top.py", "pkg/tests/test_api.py",
-                       "src/a/one.py", "src/billing/charge.py", "src_a/two.py"]
+    assert s.files == [
+        "pkg/api.py",
+        "pkg/api_test.py",
+        "pkg/test_top.py",
+        "pkg/tests/test_api.py",
+        "src/a/one.py",
+        "src/billing/charge.py",
+        "src_a/two.py",
+    ]
     assert [(x.path, x.reason) for x in s.skipped] == [
         ("pkg/big.py", "over 200000 characters"),
         ("pkg/blob.py", "binary"),
@@ -77,9 +91,14 @@ def test_python_files_symbols_and_skips(tmp_path):
         ("pkg/vendored.py", "linguist-vendored is set"),
     ]
     assert [x.path for x in s.unparsed] == ["pkg/bad.py"]
-    assert s.unparsed[0].reason.startswith("ast could not parse it:") and "(line 1)" in s.unparsed[0].reason
+    assert (
+        s.unparsed[0].reason.startswith("ast could not parse it:")
+        and "(line 1)" in s.unparsed[0].reason
+    )
     # Public top-level functions and classes, and public methods of public classes; no test file's.
-    assert [(x.path, x.name, x.kind, x.line) for x in s.symbols if x.path == "pkg/api.py"] == [
+    assert [
+        (x.path, x.name, x.kind, x.line) for x in s.symbols if x.path == "pkg/api.py"
+    ] == [
         ("pkg/api.py", "charge", "function", 5),
         ("pkg/api.py", "refund", "function", 9),
         ("pkg/api.py", "Ledger", "class", 17),
@@ -87,7 +106,12 @@ def test_python_files_symbols_and_skips(tmp_path):
         ("pkg/api.py", "Ledger.flush", "method", 21),
     ]
     assert not [x for x in s.symbols if scope_mod.is_test_file(x.path)]
-    assert {x.path for x in s.symbols} == {"pkg/api.py", "src/a/one.py", "src/billing/charge.py", "src_a/two.py"}
+    assert {x.path for x in s.symbols} == {
+        "pkg/api.py",
+        "src/a/one.py",
+        "src/billing/charge.py",
+        "src_a/two.py",
+    }
     # Units come from code_facts.partition over the files, in its order.
     assert [f for u in s.units for f in u.files] == s.files
 
@@ -112,11 +136,17 @@ def test_pr_scope_from_a_fixed_base(tmp_path):
     repo = make_repo(tmp_path / "widgets")
     write(repo / "keep.py", "def keep():\n    pass\n")
     write(repo / "gone.py", "def gone():\n    pass\n")
-    write(repo / "old_name.py", "def moved():\n    return 'a long enough body to be a rename'\n")
+    write(
+        repo / "old_name.py",
+        "def moved():\n    return 'a long enough body to be a rename'\n",
+    )
     git(repo, "add", "-A")
     git(repo, "commit", "-q", "-m", "base")
     base = git(repo, "rev-parse", "HEAD")
-    write(repo / "src" / "billing" / "charge.py", "def charge(amount):\n    return amount * 2\n")
+    write(
+        repo / "src" / "billing" / "charge.py",
+        "def charge(amount):\n    return amount * 2\n",
+    )
     write(repo / "new.py", "def new():\n    pass\n")
     write(repo / "notes.md", "not python\n")
     git(repo, "rm", "-q", "gone.py")
@@ -159,7 +189,10 @@ def test_too_many_units_is_refused_naming_the_count(tmp_path, capsys, fake_call)
     git(repo, "add", "-A")
     git(repo, "commit", "-q", "-m", "big")
     root = tmp_path / "out"
-    assert run("run", "--repo", repo, "--tree", "HEAD", "--out", root, "--max-units", "1") == 2
+    assert (
+        run("run", "--repo", repo, "--tree", "HEAD", "--out", root, "--max-units", "1")
+        == 2
+    )
     err = capsys.readouterr().err
     assert "2 explore units" in err and "--max-units 1" in err and "--path" in err
     assert not fake_call.calls
@@ -174,7 +207,11 @@ def test_scope_is_saved_and_read_back(tmp_path):
     (folder,) = (root / "widgets").glob("tree@*")
     state = read_state(folder)
     assert state["steps_done"][:2] == ["resolve", "scope"]
-    assert state["scope"]["files"] == ["src/a/one.py", "src/billing/charge.py", "src_a/two.py"]
+    assert state["scope"]["files"] == [
+        "src/a/one.py",
+        "src/billing/charge.py",
+        "src_a/two.py",
+    ]
     assert (folder / "plan.txt").is_file()
 
 
@@ -187,8 +224,9 @@ def test_a_failed_check_attr_warns_and_skips_nothing(tmp_path, caplog):
     with caplog.at_level("WARNING", logger=scope_mod.log.name):
         assert scope_mod._check_attrs(str(repo), "no-such-ref", ["gen.py"]) == {}
     assert "git check-attr --source failed; not skipping generated files" in caplog.text
-    assert scope_mod._check_attrs(str(repo), git(repo, "rev-parse", "HEAD"), ["gen.py"]) == {
-        "gen.py": "linguist-generated"}
+    assert scope_mod._check_attrs(
+        str(repo), git(repo, "rev-parse", "HEAD"), ["gen.py"]
+    ) == {"gen.py": "linguist-generated"}
 
 
 def test_the_size_limit_counts_characters_not_bytes(tmp_path):
@@ -198,4 +236,6 @@ def test_the_size_limit_counts_characters_not_bytes(tmp_path):
     commit_file(repo, "long.py", "# " + "é" * 200_000 + "\n", "wide and long")
     s = scope_mod.compute(_tree(repo))
     assert "wide.py" in s.files
-    assert [(x.path, x.reason) for x in s.skipped] == [("long.py", "over 200000 characters")]
+    assert [(x.path, x.reason) for x in s.skipped] == [
+        ("long.py", "over 200000 characters")
+    ]

@@ -50,16 +50,25 @@ def commit_message(run: Run) -> str:
 def _commit(run: Run) -> None:
     handoff = run.state.handoff
     try:
-        sha = commit_change_dir(run.config.project_dir, run.config.change_dir, commit_message(run))
+        sha = commit_change_dir(
+            run.config.project_dir, run.config.change_dir, commit_message(run)
+        )
     except GitError as e:
         run.progress("HANDOFF_ERROR", f"The commit failed: {e}")
-        print(f"ERROR: handoff: the ready record is written but the commit failed: {e}\n"
-              f"Fix that, then run `resume {run.config.change_name}`: it retries only the commit.", flush=True)
+        print(
+            f"ERROR: handoff: the ready record is written but the commit failed: {e}\n"
+            f"Fix that, then run `resume {run.config.change_name}`: it retries only the commit.",
+            flush=True,
+        )
         raise Stop(EXIT_FAILED, str(e)) from e
     handoff.committed = True
     handoff.commit = sha
     run.save()
-    run.progress("HANDOFF", f"Ready at {handoff.revision}; " + (f"committed {sha}" if sha else "nothing to commit"))
+    run.progress(
+        "HANDOFF",
+        f"Ready at {handoff.revision}; "
+        + (f"committed {sha}" if sha else "nothing to commit"),
+    )
     print(f"{MARKER_READY}:{run.config.change_dir}:{handoff.revision}", flush=True)
 
 
@@ -78,8 +87,11 @@ def refuse_open_issues(run: Run) -> None:
     if issues is None:
         return
     name = run.config.change_name
-    print(f"{name} has open requirements issues in {run.config.change_dir / issues}; "
-          f"it cannot be ready until `revise {name}` resolves them.", flush=True)
+    print(
+        f"{name} has open requirements issues in {run.config.change_dir / issues}; "
+        f"it cannot be ready until `revise {name}` resolves them.",
+        flush=True,
+    )
     print(f"{MARKER_BLOCKED}:{run.config.change_dir}", flush=True)
     raise Stop(EXIT_BLOCKED, "open requirements issues")
 
@@ -122,8 +134,11 @@ async def check_and_hand_off(run: Run) -> None:
         await consistency.run_consistency(run)
         if handoff(run):
             return
-    print(f"ERROR: handoff: the files of {run.config.change_name} kept changing while they were checked; "
-          "run `resume` once they are saved.", flush=True)
+    print(
+        f"ERROR: handoff: the files of {run.config.change_name} kept changing while they were checked; "
+        "run `resume` once they are saved.",
+        flush=True,
+    )
     raise Stop(EXIT_FAILED, "files kept changing")
 
 
@@ -137,11 +152,17 @@ def pending_commit(run: Run) -> bool:
     ready, reason = is_ready(run.config.change_dir)
     if ready:
         return True
-    log.info("handoff: the ready record no longer matches the files (%s); back to draft", reason)
+    log.info(
+        "handoff: the ready record no longer matches the files (%s); back to draft",
+        reason,
+    )
     mark_draft(run.config.change_dir)
     run.state.handoff = None
     run.save()
-    run.progress("HANDOFF_STALE", f"The ready record is stale ({reason}); set to draft and checking again.")
+    run.progress(
+        "HANDOFF_STALE",
+        f"The ready record is stale ({reason}); set to draft and checking again.",
+    )
     return False
 
 

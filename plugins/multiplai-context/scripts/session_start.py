@@ -82,6 +82,7 @@ def _log_client_selection() -> str:
     which backend will be used (AgentSDK vs API key fallback).
     """
     from multiplai_core.model_client import detect_client_type
+
     client_type = detect_client_type()
     logger.info("Model client selected: %s", client_type)
     return client_type
@@ -168,9 +169,7 @@ def _config_audit_gate_open(config_audit_state_file: Path) -> bool:
             )
         return False
 
-    return _gate_open(
-        config_audit_state_file, timedelta(days=_CONFIG_AUDIT_GATE_DAYS)
-    )
+    return _gate_open(config_audit_state_file, timedelta(days=_CONFIG_AUDIT_GATE_DAYS))
 
 
 def _learnings_pending(learnings_dir: Path, dream_state_file: Path) -> bool:
@@ -202,8 +201,6 @@ def _learnings_pending(learnings_dir: Path, dream_state_file: Path) -> bool:
 
     newest = datetime.fromtimestamp(max(mtimes), tz=UTC)
     return newest > last_dt
-
-
 
 
 def _emit_no_client_warning(data_dir: Path) -> None:
@@ -349,9 +346,7 @@ def _maintainer_gate_open(maintainer_state_file: Path) -> bool:
     — cheap to state twice, and the child re-checks authoritatively anyway, so
     a disagreement costs at most one no-op child.
     """
-    return _gate_open(
-        maintainer_state_file, timedelta(hours=_MAINTAINER_GATE_HOURS)
-    )
+    return _gate_open(maintainer_state_file, timedelta(hours=_MAINTAINER_GATE_HOURS))
 
 
 def _launch_bank_sync(scripts_dir: Path) -> bool:
@@ -524,7 +519,10 @@ def _inject_checkpoint_recovery(
         if source not in ("clear", "compact"):
             return False
         payload = cp.consume_pending_marker(
-            data_dir, cwd, session_id, cfg,
+            data_dir,
+            cwd,
+            session_id,
+            cfg,
             allow_same_session=(source == "compact"),
         )
         if not payload and source == "compact":
@@ -554,10 +552,13 @@ def _inject_checkpoint_recovery(
             cp.reset_session_counters(data_dir, old_session)
         logger.info(
             "Injected checkpoint rebuild from session %s (%d tokens, source=%s)",
-            payload.get("session_id"), tokens, source or "startup",
+            payload.get("session_id"),
+            tokens,
+            source or "startup",
         )
         log_event(
-            "checkpoint", "rebuild",
+            "checkpoint",
+            "rebuild",
             f"session rebuilt from checkpoint of {payload.get('session_id', '?')} "
             f"({tokens:,} tokens, {'automatic via compact' if source == 'compact' else 'manual'})",
             session_id=session_id,
@@ -588,7 +589,9 @@ def main() -> None:
     setup_logging("session_start", session_id=hook_input.get("session_id") or "")
 
     with hook_run(
-        "session_start", logger, session_id=hook_input.get("session_id") or "",
+        "session_start",
+        logger,
+        session_id=hook_input.get("session_id") or "",
     ) as run:
         _start_pass(hook_input, cwd, run)
 
@@ -641,9 +644,7 @@ def _start_pass(hook_input: dict, cwd: str, run) -> None:
     # per-prompt memory injection on UserPromptSubmit.
     memory_dir = paths.memory_dir()
     memory_files = (
-        sorted(p.name for p in memory_dir.glob("*.md"))
-        if memory_dir.is_dir()
-        else []
+        sorted(p.name for p in memory_dir.glob("*.md")) if memory_dir.is_dir() else []
     )
 
     # Use the real Claude Code session id so every hook (context, nudge,
@@ -736,7 +737,8 @@ def _start_pass(hook_input: dict, cwd: str, run) -> None:
             if processed:
                 logger.info("Launched %d deferred extraction(s)", processed)
                 log_event(
-                    "extract", "launch",
+                    "extract",
+                    "launch",
                     f"launched {processed} deferred extraction(s) from prior session(s)",
                     session_id=session_id,
                     count=processed,
@@ -758,7 +760,8 @@ def _start_pass(hook_input: dict, cwd: str, run) -> None:
             if written:
                 logger.info("Launched %d queued end-of-session checkpoint(s)", written)
                 log_event(
-                    "checkpoint", "drain",
+                    "checkpoint",
+                    "drain",
                     f"launched {written} queued end-of-session checkpoint(s)",
                     session_id=session_id,
                     count=written,
@@ -779,7 +782,8 @@ def _start_pass(hook_input: dict, cwd: str, run) -> None:
             expired, collected = cp.sweep_checkpoints(data_dir, cp.load_config())
             if collected:
                 log_event(
-                    "checkpoint", "sweep",
+                    "checkpoint",
+                    "sweep",
                     f"collected {collected} superseded checkpoint(s) and "
                     f"{expired} expired marker(s)",
                     session_id=session_id,
@@ -808,9 +812,8 @@ def _start_pass(hook_input: dict, cwd: str, run) -> None:
     learnings_dir = paths.learnings_dir
     with run.stage("dream_gate"):
         try:
-            dream_due = (
-                _dream_gate_open(dream_state_file)
-                and _learnings_pending(learnings_dir, dream_state_file)
+            dream_due = _dream_gate_open(dream_state_file) and _learnings_pending(
+                learnings_dir, dream_state_file
             )
         except Exception:
             logger.exception("Dream gate check failed; no nudge this session")
@@ -818,7 +821,8 @@ def _start_pass(hook_input: dict, cwd: str, run) -> None:
     if dream_due:
         logger.info("Dream gate open with pending learnings; emitting nudge")
         log_event(
-            "nudge", "dream",
+            "nudge",
+            "dream",
             "dream gate open (>24h, pending learnings) — surfaced to user",
             session_id=session_id,
         )
@@ -835,7 +839,8 @@ def _start_pass(hook_input: dict, cwd: str, run) -> None:
     if config_audit_due:
         logger.info("Config-audit gate open; emitting nudge")
         log_event(
-            "nudge", "config_audit",
+            "nudge",
+            "config_audit",
             "config-audit gate open (>60 days since last audit) — surfaced to user",
             session_id=session_id,
         )
@@ -848,7 +853,8 @@ def _start_pass(hook_input: dict, cwd: str, run) -> None:
     if surfaced:
         logger.info("Prospective memory: %d intention(s) surfaced", surfaced)
         log_event(
-            "nudge", "prospective",
+            "nudge",
+            "prospective",
             f"{surfaced} due intention(s) surfaced to user",
             session_id=session_id,
         )
@@ -860,16 +866,22 @@ def _start_pass(hook_input: dict, cwd: str, run) -> None:
         maintainer_launched = _launch_maintainer(paths.scripts_dir(), data_dir)
     if maintainer_launched:
         logger.info("Memory maintainer launched (detached)")
-        log_event("maintenance", "memory_maintainer",
-                  "proactive maintenance pass launched", session_id=session_id)
+        log_event(
+            "maintenance",
+            "memory_maintainer",
+            "proactive maintenance pass launched",
+            session_id=session_id,
+        )
 
     run.note(client=client_type, memory_files=len(memory_files))
     logger.info(
         "Session started: %s (%d memory files on disk; not injected — routed per-prompt)",
-        session_id, len(memory_files),
+        session_id,
+        len(memory_files),
     )
     log_event(
-        "session", "start",
+        "session",
+        "start",
         f"session started — {len(memory_files)} memory files indexed "
         f"(not injected; routed per-prompt), client={client_type}",
         session_id=session_id,

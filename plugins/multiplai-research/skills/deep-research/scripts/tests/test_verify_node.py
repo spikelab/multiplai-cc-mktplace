@@ -160,9 +160,7 @@ class TestVerdictsRenderedForSynthesis:
             output_file=config.output_file_path(),
             state_file=config.state_file_path(),
         )
-        state.verdicts = [
-            ClaimVerdict(claim="c", verdict="confirmed", evidence=["e"])
-        ]
+        state.verdicts = [ClaimVerdict(claim="c", verdict="confirmed", evidence=["e"])]
         state.checkpoint()
         loaded = ResearchState.load(Path(state.state_file))
         assert loaded.verdicts[0].claim == "c"

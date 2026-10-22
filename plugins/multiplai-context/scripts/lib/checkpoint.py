@@ -198,6 +198,7 @@ _MIN_VALID_SECTIONS = 6
 # Configuration
 # ---------------------------------------------------------------------------
 
+
 @dataclasses.dataclass(frozen=True)
 class CheckpointConfig:
     """Thresholds for the checkpoint lifecycle (absolute tokens)."""
@@ -243,14 +244,16 @@ def load_config() -> CheckpointConfig:
         except ValueError:
             logger.warning(
                 "Malformed checkpoint_tokens=%r; using defaults %s",
-                raw_bands, _DEFAULT_BANDS,
+                raw_bands,
+                _DEFAULT_BANDS,
             )
 
     handoff = option_int("checkpoint_handoff_tokens", bands[-1])
     if handoff < bands[-1]:
         logger.warning(
             "checkpoint_handoff_tokens=%d below last band %d; clamping",
-            handoff, bands[-1],
+            handoff,
+            bands[-1],
         )
         handoff = bands[-1]
 
@@ -261,21 +264,27 @@ def load_config() -> CheckpointConfig:
     if hard_stop and hard_stop < handoff:
         logger.warning(
             "checkpoint_hard_stop_tokens=%d below handoff %d; clamping",
-            hard_stop, handoff,
+            hard_stop,
+            handoff,
         )
         hard_stop = handoff
 
     return CheckpointConfig(
         bands=bands,
         handoff_tokens=handoff,
-        refresh_tokens=max(1, option_int("checkpoint_refresh_tokens", _DEFAULT_REFRESH)),
+        refresh_tokens=max(
+            1, option_int("checkpoint_refresh_tokens", _DEFAULT_REFRESH)
+        ),
         ttl_hours=option_float("checkpoint_ttl_hours", _DEFAULT_TTL_HOURS),
         timeout_s=option_int("checkpoint_timeout_s", _DEFAULT_TIMEOUT_S),
         model=option("checkpoint_model") or None,
         enabled=enabled,
-        stale_hours=max(0.0, option_float("checkpoint_stale_hours", _DEFAULT_STALE_HOURS)),
+        stale_hours=max(
+            0.0, option_float("checkpoint_stale_hours", _DEFAULT_STALE_HOURS)
+        ),
         min_session_minutes=max(
-            0, option_int("checkpoint_min_session_minutes", _DEFAULT_MIN_SESSION_MINUTES)
+            0,
+            option_int("checkpoint_min_session_minutes", _DEFAULT_MIN_SESSION_MINUTES),
         ),
         hard_stop_tokens=hard_stop,
         gc_days=max(0.0, option_float("checkpoint_gc_days", _DEFAULT_GC_DAYS)),
@@ -285,6 +294,7 @@ def load_config() -> CheckpointConfig:
 # ---------------------------------------------------------------------------
 # Paths & state
 # ---------------------------------------------------------------------------
+
 
 def checkpoints_root(data_dir: Path) -> Path:
     return data_dir / "checkpoints"
@@ -328,6 +338,7 @@ def write_checkpoint_file(data_dir: Path, session_id: str, content: str) -> Path
 # ---------------------------------------------------------------------------
 # Context-size measurement
 # ---------------------------------------------------------------------------
+
 
 def read_context_tokens(
     transcript_path: str | Path, after_ts: str | None = None
@@ -458,6 +469,7 @@ def is_child_session(transcript_path: str | Path | None = None) -> bool:
 # Trigger decision
 # ---------------------------------------------------------------------------
 
+
 def band_index(tokens: int, bands: tuple[int, ...]) -> int:
     """Highest band index (1-based) at/below *tokens*; 0 when below all."""
     idx = 0
@@ -533,7 +545,9 @@ def _session_started_at(data_dir: Path, session_id: str) -> datetime | None:
     try:
         from lib.session_registry import registry_dir
 
-        raw = (registry_dir(data_dir) / f"{session_id}.json").read_text(encoding="utf-8")
+        raw = (registry_dir(data_dir) / f"{session_id}.json").read_text(
+            encoding="utf-8"
+        )
         started = json.loads(raw).get("started_at")
         ts = datetime.fromisoformat(str(started))
         return ts if ts.tzinfo else ts.replace(tzinfo=UTC)
@@ -691,6 +705,7 @@ def consecutive_failures(state: dict) -> int:
 # Pending-handoff markers (rebuild linkage)
 # ---------------------------------------------------------------------------
 
+
 def _pending_dir(data_dir: Path) -> Path:
     return checkpoints_root(data_dir) / "pending"
 
@@ -779,7 +794,9 @@ def _registry_identity(data_dir: Path, session_id: str) -> dict:
     try:
         from lib.session_registry import registry_dir  # type: ignore
 
-        raw = (registry_dir(data_dir) / f"{session_id}.json").read_text(encoding="utf-8")
+        raw = (registry_dir(data_dir) / f"{session_id}.json").read_text(
+            encoding="utf-8"
+        )
         entry = json.loads(raw)
     except Exception:
         return {}
@@ -910,7 +927,9 @@ def consume_pending_marker(
             created = created.replace(tzinfo=UTC)
         age_h = (datetime.now(UTC) - created).total_seconds() / 3600
         if age_h > cfg.ttl_hours:
-            logger.info("Pending checkpoint marker expired (%.1fh old); discarding", age_h)
+            logger.info(
+                "Pending checkpoint marker expired (%.1fh old); discarding", age_h
+            )
             return None
         return payload
     except (OSError, json.JSONDecodeError, ValueError, TypeError):
@@ -956,6 +975,7 @@ def reset_session_counters(data_dir: Path, session_id: str) -> None:
 # The two guards below are this module's, because they are facts about the
 # checkpoint layout. The caller owns the pipeline-level ones (diary written?
 # session parked?) — see ``extract_learnings.py``.
+
 
 def pending_marker_owner(data_dir: Path, session_id: str) -> Path | None:
     """The pending handoff marker still pointing at *session_id*, if any.
@@ -1115,9 +1135,7 @@ def _last_activity(data_dir: Path, session_id: str, sdir: Path) -> datetime | No
         newest = max(newest, sdir.stat().st_mtime)
     except OSError:
         pass
-    latest = (
-        datetime.fromtimestamp(newest, tz=UTC) if newest else None
-    )
+    latest = datetime.fromtimestamp(newest, tz=UTC) if newest else None
 
     entry = _registry_identity(data_dir, session_id)
     raw = ((entry.get("last_event") or {}) if isinstance(entry, dict) else {}).get("ts")
@@ -1174,7 +1192,8 @@ def sweep_checkpoints(data_dir: Path, cfg: CheckpointConfig) -> tuple[int, int]:
     cutoff = datetime.now(UTC) - timedelta(days=cfg.gc_days)
     try:
         candidates = sorted(
-            d for d in checkpoints_root(data_dir).iterdir()
+            d
+            for d in checkpoints_root(data_dir).iterdir()
             if d.is_dir() and d.name != "pending"
         )
     except OSError:
@@ -1194,7 +1213,8 @@ def sweep_checkpoints(data_dir: Path, cfg: CheckpointConfig) -> tuple[int, int]:
             logger.info(
                 "Checkpoint sweep stopped at %d collections; %d directories "
                 "remain for the next run",
-                retired, len(candidates) - index,
+                retired,
+                len(candidates) - index,
             )
             break
         seen = _last_activity(data_dir, sdir.name, sdir)
@@ -1209,7 +1229,8 @@ def sweep_checkpoints(data_dir: Path, cfg: CheckpointConfig) -> tuple[int, int]:
     if expired or retired:
         logger.info(
             "Checkpoint sweep: %d expired marker(s), %d checkpoint(s) collected",
-            expired, retired,
+            expired,
+            retired,
         )
     return expired, retired
 
@@ -1311,7 +1332,11 @@ def autocompact_trigger_tokens() -> int | None:
         max_out = int(os.environ.get("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "") or 0)
     except ValueError:
         max_out = 0
-    reserve = min(max_out, _NATIVE_OUTPUT_RESERVE_CAP) if max_out > 0 else _NATIVE_OUTPUT_RESERVE_CAP
+    reserve = (
+        min(max_out, _NATIVE_OUTPUT_RESERVE_CAP)
+        if max_out > 0
+        else _NATIVE_OUTPUT_RESERVE_CAP
+    )
     usable = window - reserve
 
     raw_pct = os.environ.get("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "").strip()
@@ -1328,6 +1353,7 @@ def autocompact_trigger_tokens() -> int | None:
 # ---------------------------------------------------------------------------
 # Checkpoint validation & rebuild seed
 # ---------------------------------------------------------------------------
+
 
 def validate_checkpoint(text: str) -> bool:
     """A checkpoint is usable when most of the 11 sections are present."""

@@ -64,8 +64,16 @@ REQUIRED_API_KEYS = [
 ]
 
 OPTIONAL_API_KEYS = [
-    ("BRAVE_API_KEY", "Brave Search (1,000 queries/month free)", "https://brave.com/search/api/"),
-    ("SERPER_API_KEY", "Serper.dev (50K one-time free, $1/1K paid — cheapest overflow)", "https://serper.dev"),
+    (
+        "BRAVE_API_KEY",
+        "Brave Search (1,000 queries/month free)",
+        "https://brave.com/search/api/",
+    ),
+    (
+        "SERPER_API_KEY",
+        "Serper.dev (50K one-time free, $1/1K paid — cheapest overflow)",
+        "https://serper.dev",
+    ),
     ("YOU_API_KEY", "You.com ($100 one-time credit)", "https://api.you.com"),
 ]
 
@@ -88,7 +96,10 @@ def validate_api_keys(prefer_claude_tools: bool = True) -> list[str]:
             if os.environ.get(env_var):
                 log.info("Fallback API configured: %s", env_var)
             else:
-                log.info("Fallback API not configured (OK — Claude Agent is primary): %s", env_var)
+                log.info(
+                    "Fallback API not configured (OK — Claude Agent is primary): %s",
+                    env_var,
+                )
         for env_var, description, _ in OPTIONAL_API_KEYS:
             if os.environ.get(env_var):
                 log.info("Fallback API configured: %s", env_var)
@@ -133,7 +144,8 @@ def _setup_logging(session_id: str = "") -> None:
     logging.getLogger("research_pipeline").info(
         "Session settings: model=%s effort=%s",
         os.environ.get("MULTIPLAI_SESSION_MODEL") or "not found",
-        os.environ.get("MULTIPLAI_SESSION_EFFORT") or "not found")
+        os.environ.get("MULTIPLAI_SESSION_EFFORT") or "not found",
+    )
 
 
 async def run_pipeline(config: ResearchConfig, *, reset_usage: bool = True) -> int:
@@ -228,9 +240,8 @@ async def run_pipeline(config: ResearchConfig, *, reset_usage: bool = True) -> i
             return 0
 
         # 9. Check if pipeline aborted (DONE without SYNTHESIZE_COMPLETE)
-        aborted = (
-            state.stage == Stage.DONE
-            and not state.is_complete(Stage.SYNTHESIZE_COMPLETE)
+        aborted = state.stage == Stage.DONE and not state.is_complete(
+            Stage.SYNTHESIZE_COMPLETE
         )
 
         # 10. Write output file
@@ -300,26 +311,36 @@ async def run_pipeline(config: ResearchConfig, *, reset_usage: bool = True) -> i
         peak = get_sdk_peak_concurrency()
         print(f"PATH: {state.output_file}")
         if aborted:
-            print(f"SUMMARY: Research INCOMPLETE. {len(state.findings)} findings from "
-                  f"{len(state.completed_sources())} sources. "
-                  f"State preserved at: {state.state_file}")
+            print(
+                f"SUMMARY: Research INCOMPLETE. {len(state.findings)} findings from "
+                f"{len(state.completed_sources())} sources. "
+                f"State preserved at: {state.state_file}"
+            )
             print("STATUS: INCOMPLETE")
         else:
-            print(f"SUMMARY: Research complete. {len(state.findings)} findings from "
-                  f"{len(state.completed_sources())} sources.")
+            print(
+                f"SUMMARY: Research complete. {len(state.findings)} findings from "
+                f"{len(state.completed_sources())} sources."
+            )
         if challenge_line:
             print(challenge_line)
-        print(f"COST: ${usage.cost_usd:.4f} | "
-              f"input={usage.input_tokens} output={usage.output_tokens} "
-              f"cache_write={usage.cache_creation_tokens} "
-              f"cache_read={usage.cache_read_tokens} | "
-              f"{usage.num_calls} SDK calls | peak_concurrency={peak}")
+        print(
+            f"COST: ${usage.cost_usd:.4f} | "
+            f"input={usage.input_tokens} output={usage.output_tokens} "
+            f"cache_write={usage.cache_creation_tokens} "
+            f"cache_read={usage.cache_read_tokens} | "
+            f"{usage.num_calls} SDK calls | peak_concurrency={peak}"
+        )
         log.info(
             "Pipeline %s: %d findings, %d sources, %d SDK calls, "
             "peak_concurrency=%d, cache_write=%d, cache_read=%d",
             "INCOMPLETE" if aborted else "complete",
-            len(state.findings), len(state.completed_sources()), usage.num_calls,
-            peak, usage.cache_creation_tokens, usage.cache_read_tokens,
+            len(state.findings),
+            len(state.completed_sources()),
+            usage.num_calls,
+            peak,
+            usage.cache_creation_tokens,
+            usage.cache_read_tokens,
         )
         return 0
 
@@ -381,9 +402,7 @@ async def _run_main_stages(
 
     # Diversity gate
     assert state.plan is not None
-    diversity_result = query_diversity_gate(
-        state.plan.all_queries, min_clusters=3
-    )
+    diversity_result = query_diversity_gate(state.plan.all_queries, min_clusters=3)
     progress.log_stage(
         "DIVERSITY GATE",
         f"passed={diversity_result.passed} | {diversity_result.reason}",
@@ -394,9 +413,7 @@ async def _run_main_stages(
         state.plan = await plan_node.diverge(config, state.plan)
         # Re-check after the one retry (no infinite loop) — proceed either
         # way, but the recheck result is actually computed and logged.
-        diversity_result = query_diversity_gate(
-            state.plan.all_queries, min_clusters=3
-        )
+        diversity_result = query_diversity_gate(state.plan.all_queries, min_clusters=3)
         progress.log_stage(
             "DIVERSITY GATE (recheck)",
             f"passed={diversity_result.passed} | {diversity_result.reason}",
@@ -458,7 +475,11 @@ async def _run_main_stages(
             f"{len(state.failed_sources())} failed, "
             f"{len(state.findings)} findings, "
             f"{state.total_fetches} total fetches"
-            + (f", {state.tavily_fallback_count} Tavily fallbacks" if state.tavily_fallback_count else ""),
+            + (
+                f", {state.tavily_fallback_count} Tavily fallbacks"
+                if state.tavily_fallback_count
+                else ""
+            ),
         )
 
     # Coverage gate — run targeted search if sub-questions are uncovered
@@ -488,7 +509,9 @@ async def _run_main_stages(
                     # Floor at 1: sources // uncovered integer-divides to 0 for
                     # small presets with many uncovered questions (e.g. micro
                     # preset, 4+ uncovered), which would request zero results.
-                    max_results=max(config.preset.sources // max(len(fresh_queries), 1), 1),
+                    max_results=max(
+                        config.preset.sources // max(len(fresh_queries), 1), 1
+                    ),
                     strategy="keyword",
                 )
                 if fresh_queries
@@ -525,7 +548,9 @@ async def _run_main_stages(
     # Critical source gate — abort if failed critical sources left fatal gaps
     if not state.is_complete(Stage.CRITICAL_SOURCE_GATE_PASSED):
         cs_result = critical_source_gate(
-            state.sources, state.findings, state.plan.sub_questions,
+            state.sources,
+            state.findings,
+            state.plan.sub_questions,
         )
         progress.log_stage(
             "CRITICAL SOURCE GATE",
@@ -534,7 +559,10 @@ async def _run_main_stages(
         if not cs_result.passed:
             log.warning("Critical source gate failed — aborting: %s", cs_result.reason)
             report = synthesize_node.write_incomplete_report(
-                config, state, cs_result.reason, cs_result.metadata,
+                config,
+                state,
+                cs_result.reason,
+                cs_result.metadata,
             )
             atomic_write_text(Path(state.output_file), report)
             progress.log_stage("ABORTED", cs_result.reason)
@@ -587,7 +615,9 @@ async def _run_main_stages(
         if not qc_result.go:
             log.warning("Quality check failed — aborting: %s", qc_result.reasoning)
             report = synthesize_node.write_incomplete_report(
-                config, state, qc_result.reasoning,
+                config,
+                state,
+                qc_result.reasoning,
                 {"critical_gaps": qc_result.critical_gaps},
             )
             atomic_write_text(Path(state.output_file), report)
@@ -656,7 +686,9 @@ async def _run_refinement(
     assert state.reassessment is not None
     queries = state.select_unseen_queries(state.reassessment.refinement_queries)
     if not queries:
-        log.info("REFINEMENT: all refinement queries already searched this run; skipping")
+        log.info(
+            "REFINEMENT: all refinement queries already searched this run; skipping"
+        )
         return
     log.info("REFINEMENT: running %d new queries", len(queries))
 
@@ -775,6 +807,7 @@ async def run_parallel(config: ResearchConfig) -> int:
     # concurrently by the sub-pipelines' routers — a known v1 limitation of
     # parallel mode; quota accounting may undercount under heavy contention.
     from .sdk import reset_accumulated_usage, reset_sdk_concurrency_stats
+
     reset_accumulated_usage()
     reset_sdk_concurrency_stats()
 
@@ -790,9 +823,7 @@ async def run_parallel(config: ResearchConfig) -> int:
     # For now, treat each sub-question as a sub-topic. A full parallel plan
     # decomposition node would go here for queries that need deeper sub-topic
     # structure. Keeping this simple for v1.
-    num_agents = config.agents or min(
-        len(state.plan.sub_questions), 3
-    )
+    num_agents = config.agents or min(len(state.plan.sub_questions), 3)
     sub_topics = [
         SubTopic(
             title=sq[:60],
@@ -834,7 +865,9 @@ async def run_parallel(config: ResearchConfig) -> int:
     merged_text = _merge_sub_reports(config, completed_files)
     atomic_write_text(Path(state.output_file), merged_text)
     print(f"PATH: {state.output_file}")
-    print(f"SUMMARY: Parallel research complete. {len(completed_files)}/{len(sub_topics)} sub-pipelines succeeded.")
+    print(
+        f"SUMMARY: Parallel research complete. {len(completed_files)}/{len(sub_topics)} sub-pipelines succeeded."
+    )
     return 0
 
 
@@ -869,7 +902,7 @@ def _merge_sub_reports(config: ResearchConfig, files: list[Path]) -> str:
         "## Sub-research\n",
     ]
     for i, f in enumerate(files):
-        parts.append(f"### Agent {i+1}: {f.name}\n")
+        parts.append(f"### Agent {i + 1}: {f.name}\n")
         try:
             parts.append(f.read_text())
         except Exception:  # noqa: BLE001

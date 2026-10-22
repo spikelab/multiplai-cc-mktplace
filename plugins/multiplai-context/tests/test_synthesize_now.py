@@ -218,9 +218,7 @@ class TestWindowAttribution:
         assert "Written by session:" not in content
         assert content.startswith("# Project Status: foo")
 
-    def test_a_slice_marker_never_leaks_into_the_summary(
-        self, workspace, _no_llm
-    ):
+    def test_a_slice_marker_never_leaks_into_the_summary(self, workspace, _no_llm):
         """The diary's append-idempotency marker is a comment for machines,
         not content for a status summary."""
         import asyncio
@@ -230,8 +228,13 @@ class TestWindowAttribution:
 
         _write_diary(
             workspace,
-            [("sess-a", "/work/PROJECTS/foo",
-              "<!-- slice: sess-a:start -->\n\nReal work happened.")],
+            [
+                (
+                    "sess-a",
+                    "/work/PROJECTS/foo",
+                    "<!-- slice: sess-a:start -->\n\nReal work happened.",
+                )
+            ],
         )
         (workspace / ".multiplai" / "project-map.yaml").write_text(
             "project_roots:\n  - /work/PROJECTS\n"
@@ -253,9 +256,7 @@ class TestSummaryThinking:
         import synthesize_now
         from multiplai_core.plugin_options import option_var
 
-        monkeypatch.setattr(
-            th, "core_supports_thinking", lambda target=None: supported
-        )
+        monkeypatch.setattr(th, "core_supports_thinking", lambda target=None: supported)
         monkeypatch.delenv(option_var(th.NOW_THINKING_OPTION), raising=False)
 
         captured = {}

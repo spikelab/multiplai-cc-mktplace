@@ -77,9 +77,11 @@ STOP_MESSAGES = {
     "share_changed": "viewer restarted to offer Slack (serve --share slack)",
 }
 
-CSP = ("default-src 'none'; script-src 'self' https://cdnjs.cloudflare.com; "
-       "style-src 'self' https://cdnjs.cloudflare.com; img-src 'self' data:; font-src 'self'; "
-       "connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+CSP = (
+    "default-src 'none'; script-src 'self' https://cdnjs.cloudflare.com; "
+    "style-src 'self' https://cdnjs.cloudflare.com; img-src 'self' data:; font-src 'self'; "
+    "connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+)
 
 
 class ViewerHTTPServer(ThreadingHTTPServer):
@@ -90,6 +92,7 @@ class ViewerHTTPServer(ThreadingHTTPServer):
     random, and one review's questions land in another's mailbox. Here the
     bind must fail so the search moves on to the next port.
     """
+
     allow_reuse_address = False
     daemon_threads = True
 
@@ -131,15 +134,22 @@ class TargetState:
             if self.pr and time.monotonic() - self._pr_checked >= PR_REFRESH_S:
                 self._pr_checked = time.monotonic()
                 try:
-                    self.pr.update(pr_status(self.findings.target.repo_path, self.pr["number"],
-                                             self.pr.get("url") or ""))
+                    self.pr.update(
+                        pr_status(
+                            self.findings.target.repo_path,
+                            self.pr["number"],
+                            self.pr.get("url") or "",
+                        )
+                    )
                 except TargetError as exc:
                     log.warning("cannot refresh PR #%s: %s", self.pr["number"], exc)
                 else:
                     if self.stats is not None:
-                        self.stats["badges"] = (
-                            [b for b in self.stats.get("badges", []) if b.get("id") not in PR_BADGE_IDS]
-                            + [b.to_dict() for b in pr_badges(self.pr)])
+                        self.stats["badges"] = [
+                            b
+                            for b in self.stats.get("badges", [])
+                            if b.get("id") not in PR_BADGE_IDS
+                        ] + [b.to_dict() for b in pr_badges(self.pr)]
             return {"pr": self.pr, "stats": self.stats}
 
     def walkthrough(self) -> Walkthrough | None:
@@ -180,12 +190,19 @@ class Viewer:
         return self.httpd.server_address[1]
 
     def whoami(self) -> dict:
-        return {"agent": self.agent, "session_id": self.session_id, "pid": os.getpid(),
-                "started": self.started, "targets": list(self.targets),
-                "mailboxes": [str(t.mailbox.dir.resolve()) for t in self.targets.values()],
-                "digests": {str(t.mailbox.dir.resolve()): findings_digest(t.findings)
-                            for t in self.targets.values()},
-                "share_slack": self.share_slack}
+        return {
+            "agent": self.agent,
+            "session_id": self.session_id,
+            "pid": os.getpid(),
+            "started": self.started,
+            "targets": list(self.targets),
+            "mailboxes": [str(t.mailbox.dir.resolve()) for t in self.targets.values()],
+            "digests": {
+                str(t.mailbox.dir.resolve()): findings_digest(t.findings)
+                for t in self.targets.values()
+            },
+            "share_slack": self.share_slack,
+        }
 
     def note_reject(self, status: int, route: str, reason: str) -> None:
         """Log a refused request, at most once a minute per status code, so a
@@ -197,8 +214,15 @@ class Viewer:
                 return
             self._rejects[status] = now
         log.warning("refused %s %s: %s", status, route, reason)
-        log_event(COMPONENT, "rejected_request", f"refused request: {reason}",
-                  session_id=self.session_id, level="WARNING", status=status, route=route)
+        log_event(
+            COMPONENT,
+            "rejected_request",
+            f"refused request: {reason}",
+            session_id=self.session_id,
+            level="WARNING",
+            status=status,
+            route=route,
+        )
 
 
 def checks_beside(ff: FindingsFile, review_dir: Path) -> ChecksFile | None:
@@ -211,12 +235,20 @@ def checks_beside(ff: FindingsFile, review_dir: Path) -> ChecksFile | None:
     try:
         checks = load_checks(path)
     except (OSError, ValidationError) as exc:
-        log.warning("ignoring %s: not a valid checks.json v1: %s", path, str(exc).splitlines()[0])
+        log.warning(
+            "ignoring %s: not a valid checks.json v1: %s",
+            path,
+            str(exc).splitlines()[0],
+        )
         return None
     t, c = ff.target, checks.target
     if (c.base_sha, c.head_sha) != (t.base_sha, t.head_sha):
-        log.warning("ignoring %s: it describes %s..%s, not the reviewed commits", path,
-                    c.base_sha[:10], c.head_sha[:10])
+        log.warning(
+            "ignoring %s: it describes %s..%s, not the reviewed commits",
+            path,
+            c.base_sha[:10],
+            c.head_sha[:10],
+        )
         return None
     return checks
 
@@ -224,6 +256,7 @@ def checks_beside(ff: FindingsFile, review_dir: Path) -> ChecksFile | None:
 class PathsStatus(NamedTuple):
     """What `inspect_paths` made of `<review_dir>/paths.json`. `result` is set
     only when `status` is accepted; `detail` says why a file was not."""
+
     status: Literal["accepted", "stale", "invalid", "absent"]
     result: PathsResult | None
     detail: str
@@ -265,7 +298,9 @@ def paths_beside(review_dir: Path, head_sha: str | None) -> PathsResult | None:
     without --paths) logs nothing. Never raises for a bad file."""
     status, result, detail = inspect_paths(review_dir, head_sha)
     if status in ("stale", "invalid"):
-        log.warning("paths.json ignored (%s): %s %s", status, review_dir / "paths.json", detail)
+        log.warning(
+            "paths.json ignored (%s): %s %s", status, review_dir / "paths.json", detail
+        )
     return result
 
 
@@ -346,8 +381,11 @@ def make_handler(viewer: Viewer):
             self.wfile.write(body)
 
         def _json(self, obj, status: int = 200) -> None:
-            self._send(status, json.dumps(obj, ensure_ascii=False, default=str).encode("utf-8"),
-                       "application/json; charset=utf-8")
+            self._send(
+                status,
+                json.dumps(obj, ensure_ascii=False, default=str).encode("utf-8"),
+                "application/json; charset=utf-8",
+            )
 
         # --- checks -----------------------------------------------------------
 
@@ -361,13 +399,17 @@ def make_handler(viewer: Viewer):
 
         def _check_token(self) -> None:
             given = self.headers.get("X-Review-Token", "")
-            if not hmac.compare_digest(given.encode("utf-8"), viewer.token.encode("utf-8")):
+            if not hmac.compare_digest(
+                given.encode("utf-8"), viewer.token.encode("utf-8")
+            ):
                 raise _Reject(401, "unauthorized", "bad token")
 
         def _body(self) -> dict:
             ctype = self.headers.get("Content-Type", "").split(";")[0].strip().lower()
             if ctype != "application/json":
-                raise _Reject(415, "content type must be application/json", "wrong content type")
+                raise _Reject(
+                    415, "content type must be application/json", "wrong content type"
+                )
             try:
                 length = int(self.headers.get("Content-Length") or 0)
             except ValueError:
@@ -429,7 +471,7 @@ def make_handler(viewer: Viewer):
         def _static(self, route: str) -> None:
             name = "index.html" if route in ("/", "/index.html") else None
             if route.startswith("/static/"):
-                name = route[len("/static/"):]
+                name = route[len("/static/") :]
             if not name or "/" in name or name.startswith("."):
                 raise _Reject(404, "not found")
             path = STATIC_DIR / name
@@ -448,7 +490,9 @@ def make_handler(viewer: Viewer):
                 if route == "/api/alive":
                     return self._json({"ok": True})
                 if route == "/api/targets":
-                    return self._json({"targets": [summarise(s) for s in viewer.targets.values()]})
+                    return self._json(
+                        {"targets": [summarise(s) for s in viewer.targets.values()]}
+                    )
                 if route == "/api/poll":
                     state = self._target(q.get("target"))
                     try:
@@ -458,7 +502,7 @@ def make_handler(viewer: Viewer):
                     rows, n = state.mailbox.read_outbox(since)
                     return self._json({"answers": rows, "n": n})
                 if route.startswith("/api/targets/"):
-                    rest = route[len("/api/targets/"):]
+                    rest = route[len("/api/targets/") :]
                     if rest.endswith("/file"):
                         state = self._target(rest[: -len("/file")])
                         return self._file(state, q.get("path", ""))
@@ -466,7 +510,9 @@ def make_handler(viewer: Viewer):
                         state = self._target(rest[: -len("/definitions")])
                         return self._definitions(state, q.get("name", ""))
                     if rest.endswith("/pr"):
-                        return self._json(self._target(rest[: -len("/pr")]).refresh_pr())
+                        return self._json(
+                            self._target(rest[: -len("/pr")]).refresh_pr()
+                        )
                     if rest.endswith("/walkthrough"):
                         state = self._target(rest[: -len("/walkthrough")])
                         wt = state.walkthrough()
@@ -474,23 +520,35 @@ def make_handler(viewer: Viewer):
                             raise _Reject(404, "no walkthrough yet")
                         return self._json(wt.model_dump(mode="json"))
                     state = self._target(rest)
-                    return self._json({
-                        "findings": state.findings.model_dump(mode="json"),
-                        "files": state.findings.target.files_changed,
-                        "repo_files": state.repo_files[:REPO_FILES_MAX],
-                        "repo_files_total": len(state.repo_files),
-                        "decisions": state.mailbox.read_decisions(),
-                        "viewed": state.mailbox.read_viewed(),
-                        "questions": [r for r in state.mailbox.read_inbox()
-                                      if r.get("kind") in ("question", "share")],
-                        "share": {"github": state.pr_number is not None, "pr": state.pr_number,
-                                  "slack": viewer.share_slack},
-                        "pr": state.pr,
-                        "notice": state.notice,
-                        "stats": state.stats,
-                        "checks": state.checks.model_dump(mode="json") if state.checks else None,
-                        "paths": state.paths.model_dump(mode="json") if state.paths is not None else None,
-                    })
+                    return self._json(
+                        {
+                            "findings": state.findings.model_dump(mode="json"),
+                            "files": state.findings.target.files_changed,
+                            "repo_files": state.repo_files[:REPO_FILES_MAX],
+                            "repo_files_total": len(state.repo_files),
+                            "decisions": state.mailbox.read_decisions(),
+                            "viewed": state.mailbox.read_viewed(),
+                            "questions": [
+                                r
+                                for r in state.mailbox.read_inbox()
+                                if r.get("kind") in ("question", "share")
+                            ],
+                            "share": {
+                                "github": state.pr_number is not None,
+                                "pr": state.pr_number,
+                                "slack": viewer.share_slack,
+                            },
+                            "pr": state.pr,
+                            "notice": state.notice,
+                            "stats": state.stats,
+                            "checks": state.checks.model_dump(mode="json")
+                            if state.checks
+                            else None,
+                            "paths": state.paths.model_dump(mode="json")
+                            if state.paths is not None
+                            else None,
+                        }
+                    )
             if method == "POST":
                 if route == "/api/ask":
                     return self._ask(body)
@@ -505,26 +563,44 @@ def make_handler(viewer: Viewer):
                     reason = reason if reason in STOP_MESSAGES else "stop"
                     viewer.stop_reason = reason
                     self._json({"ok": True})
-                    log_event(COMPONENT, "stop", STOP_MESSAGES[reason],
-                              session_id=viewer.session_id, reason=reason)
+                    log_event(
+                        COMPONENT,
+                        "stop",
+                        STOP_MESSAGES[reason],
+                        session_id=viewer.session_id,
+                        reason=reason,
+                    )
                     threading.Thread(target=viewer.httpd.shutdown, daemon=True).start()
                     return
             raise _Reject(404, "not found")
 
         def _file(self, state: TargetState, path: str) -> None:
             try:
-                hops = _path_ranges(state.paths, path) if state.paths is not None else []
-                view = file_view(state.findings.target, path, state.findings, state.allowed, extra_ranges=hops)
+                hops = (
+                    _path_ranges(state.paths, path) if state.paths is not None else []
+                )
+                view = file_view(
+                    state.findings.target,
+                    path,
+                    state.findings,
+                    state.allowed,
+                    extra_ranges=hops,
+                )
             except PathNotInReview:
                 raise _Reject(404, "path is not part of this review")
             except GitError as exc:
                 log.warning("file view failed for %s: %s", path, exc)
-                raise _Reject(422, "git could not read this file at the reviewed commits")
+                raise _Reject(
+                    422, "git could not read this file at the reviewed commits"
+                )
             self._json(view.to_dict())
 
         def _definitions(self, state: TargetState, name: str) -> None:
             if not DEFINITION_NAME_RE.match(name):
-                raise _Reject(400, "name must be an identifier: a letter, _ or $, then up to 99 of those or digits")
+                raise _Reject(
+                    400,
+                    "name must be an identifier: a letter, _ or $, then up to 99 of those or digits",
+                )
             try:
                 hits = definitions(state.findings.target, name, state.allowed)
             except GitError as exc:
@@ -535,13 +611,21 @@ def make_handler(viewer: Viewer):
         def _ask(self, body: dict) -> None:
             state = self._target(body.get("target"))
             text = body.get("text")
-            if not isinstance(text, str) or not (1 <= len(text.strip()) and len(text) <= MAX_QUESTION_CHARS):
+            if not isinstance(text, str) or not (
+                1 <= len(text.strip()) and len(text) <= MAX_QUESTION_CHARS
+            ):
                 raise _Reject(400, f"text must be 1-{MAX_QUESTION_CHARS} characters")
             finding_id = body.get("finding_id")
-            if finding_id is not None and not any(f.id == finding_id for f in state.findings.findings):
+            if finding_id is not None and not any(
+                f.id == finding_id for f in state.findings.findings
+            ):
                 raise _Reject(404, "unknown finding")
             try:
-                anchor = Anchor.model_validate(body["anchor"]) if body.get("anchor") else None
+                anchor = (
+                    Anchor.model_validate(body["anchor"])
+                    if body.get("anchor")
+                    else None
+                )
             except ValidationError:
                 raise _Reject(400, "invalid anchor")
             step_id = body.get("step_id")
@@ -554,16 +638,40 @@ def make_handler(viewer: Viewer):
             explain = body.get("explain") is True
             if explain and anchor is None:
                 raise _Reject(400, "explain needs the block's anchor")
-            row = InboxRow(id=new_question_id(), ts=utc_now(), target=state.slug,
-                           kind="question", finding_id=finding_id, anchor=anchor, text=text,
-                           step_id=step_id, explain=explain)
+            row = InboxRow(
+                id=new_question_id(),
+                ts=utc_now(),
+                target=state.slug,
+                kind="question",
+                finding_id=finding_id,
+                anchor=anchor,
+                text=text,
+                step_id=step_id,
+                explain=explain,
+            )
             state.mailbox.append_inbox(row)
-            about = f"block {anchor.path}:{anchor.line_start}" if explain else f"finding {finding_id}" if finding_id else (
-                f"step {step_id}" if step_id else (
-                    f"{anchor.path}:{anchor.line_start}" if anchor else "the review"))
-            log_event(COMPONENT, "question", f"question {row.id} on {about}",
-                      session_id=viewer.session_id, target=state.slug,
-                      finding_id=finding_id, chars=len(text))
+            about = (
+                f"block {anchor.path}:{anchor.line_start}"
+                if explain
+                else f"finding {finding_id}"
+                if finding_id
+                else (
+                    f"step {step_id}"
+                    if step_id
+                    else (
+                        f"{anchor.path}:{anchor.line_start}" if anchor else "the review"
+                    )
+                )
+            )
+            log_event(
+                COMPONENT,
+                "question",
+                f"question {row.id} on {about}",
+                session_id=viewer.session_id,
+                target=state.slug,
+                finding_id=finding_id,
+                chars=len(text),
+            )
             self._json({"id": row.id})
 
         def _decision(self, body: dict) -> None:
@@ -578,14 +686,28 @@ def make_handler(viewer: Viewer):
             if not isinstance(note, str) or len(note) > MAX_QUESTION_CHARS:
                 raise _Reject(400, "invalid note")
             entry = state.mailbox.write_decision(finding_id, decision, note)
-            row = InboxRow(id=new_question_id(), ts=entry.ts, target=state.slug,
-                           kind="decision", finding_id=finding_id, text=note,
-                           decision=decision)
+            row = InboxRow(
+                id=new_question_id(),
+                ts=entry.ts,
+                target=state.slug,
+                kind="decision",
+                finding_id=finding_id,
+                text=note,
+                decision=decision,
+            )
             state.mailbox.append_inbox(row)
-            past = {"accept": "accepted", "reject": "rejected", "defer": "deferred"}[decision]
-            log_event(COMPONENT, "decision", f"finding {finding_id} {past}",
-                      session_id=viewer.session_id, target=state.slug,
-                      finding_id=finding_id, decision=decision)
+            past = {"accept": "accepted", "reject": "rejected", "defer": "deferred"}[
+                decision
+            ]
+            log_event(
+                COMPONENT,
+                "decision",
+                f"finding {finding_id} {past}",
+                session_id=viewer.session_id,
+                target=state.slug,
+                finding_id=finding_id,
+                decision=decision,
+            )
             self._json({"id": row.id, "decision": entry.model_dump(mode="json")})
 
         def _share(self, body: dict) -> None:
@@ -593,43 +715,78 @@ def make_handler(viewer: Viewer):
             PR or to Slack. Nothing is posted here; the row goes to the inbox."""
             state = self._target(body.get("target"))
             finding_id = body.get("finding_id")
-            finding = next((f for f in state.findings.findings if f.id == finding_id), None)
+            finding = next(
+                (f for f in state.findings.findings if f.id == finding_id), None
+            )
             if finding is None:
                 raise _Reject(404, "unknown finding")
             to, where, text = body.get("to"), body.get("where"), body.get("text")
             if to not in ("github", "slack"):
                 raise _Reject(400, "to must be github or slack")
-            if not isinstance(text, str) or not text.strip() or len(text) > SHARE_TEXT_MAX:
+            if (
+                not isinstance(text, str)
+                or not text.strip()
+                or len(text) > SHARE_TEXT_MAX
+            ):
                 raise _Reject(400, f"text must be 1-{SHARE_TEXT_MAX} characters")
             if to == "github":
                 if state.pr_number is None:
                     raise _Reject(403, "this review is not of a PR")
                 if where not in ("pr", "line"):
                     raise _Reject(400, "where must be pr or line")
-                if where == "line" and finding.file not in state.findings.target.files_changed:
+                if (
+                    where == "line"
+                    and finding.file not in state.findings.target.files_changed
+                ):
                     raise _Reject(400, "a line comment needs a file the PR changes")
             else:
                 if not viewer.share_slack:
-                    raise _Reject(403, "the Slack skill is not installed in this session")
-                if not isinstance(where, str) or not SHARE_RECIPIENT.match(where.strip()):
+                    raise _Reject(
+                        403, "the Slack skill is not installed in this session"
+                    )
+                if not isinstance(where, str) or not SHARE_RECIPIENT.match(
+                    where.strip()
+                ):
                     raise _Reject(400, "name one person or #channel, on one line")
                 where = where.strip()
-            row = InboxRow(id=new_question_id(), ts=utc_now(), target=state.slug, kind="share",
-                           finding_id=finding_id, text=text, to=to, where=where)
+            row = InboxRow(
+                id=new_question_id(),
+                ts=utc_now(),
+                target=state.slug,
+                kind="share",
+                finding_id=finding_id,
+                text=text,
+                to=to,
+                where=where,
+            )
             try:
                 state.mailbox.append_inbox(row)
             except MailboxError:
                 raise _Reject(400, "the text is too large to send")
-            dest = f"PR #{state.pr_number}" + (" line" if where == "line" else "") if to == "github" else "Slack"
-            log_event(COMPONENT, "share", f"share {row.id}: finding {finding_id} to {dest}",
-                      session_id=viewer.session_id, target=state.slug, finding_id=finding_id,
-                      to=to, chars=len(text))
+            dest = (
+                f"PR #{state.pr_number}" + (" line" if where == "line" else "")
+                if to == "github"
+                else "Slack"
+            )
+            log_event(
+                COMPONENT,
+                "share",
+                f"share {row.id}: finding {finding_id} to {dest}",
+                session_id=viewer.session_id,
+                target=state.slug,
+                finding_id=finding_id,
+                to=to,
+                chars=len(text),
+            )
             self._json({"id": row.id})
 
         def _viewed(self, body: dict) -> None:
             state = self._target(body.get("target"))
             path = body.get("path")
-            if not isinstance(path, str) or path not in state.findings.target.files_changed:
+            if (
+                not isinstance(path, str)
+                or path not in state.findings.target.files_changed
+            ):
                 raise _Reject(404, "path is not a changed file")
             viewed = body.get("viewed")
             if not isinstance(viewed, bool):
@@ -639,9 +796,15 @@ def make_handler(viewer: Viewer):
     return Handler
 
 
-def build_viewer(findings: list[tuple[FindingsFile, Path]], *, agent: str, session_id: str,
-                 idle_minutes: float, meta: dict[str, dict] | None = None,
-                 share_slack: bool = False) -> Viewer:
+def build_viewer(
+    findings: list[tuple[FindingsFile, Path]],
+    *,
+    agent: str,
+    session_id: str,
+    idle_minutes: float,
+    meta: dict[str, dict] | None = None,
+    share_slack: bool = False,
+) -> Viewer:
     """`meta` maps a target slug to `{"pr", "notice", "stats"}`: PR metadata
     for the page header, the note that a review exists for other commits, and
     the measured badges (`stats.change_stats`). None goes into findings.json."""
@@ -656,16 +819,29 @@ def build_viewer(findings: list[tuple[FindingsFile, Path]], *, agent: str, sessi
             log.warning("cannot list the files at %s: %s", ff.target.head_sha[:12], exc)
             listed = []
         paths = paths_beside(Path(box).parent, ff.target.head_sha)
-        allowed = allowed_paths(ff.target, ff, listed, extra=_path_files(paths) if paths is not None else ())
-        targets[ff.target.slug] = TargetState(ff, mailbox, allowed,
-                                              pr=extra.get("pr"), notice=extra.get("notice"),
-                                              stats=extra.get("stats"),
-                                              checks=checks_beside(ff, Path(box).parent),
-                                              paths=paths,
-                                              repo_files=listed,
-                                              pr_number=pr_number_of(extra, Path(box).parent))
-    return Viewer(targets=targets, token=secrets.token_urlsafe(32), agent=agent,
-                  session_id=session_id, idle_minutes=idle_minutes, share_slack=share_slack)
+        allowed = allowed_paths(
+            ff.target, ff, listed, extra=_path_files(paths) if paths is not None else ()
+        )
+        targets[ff.target.slug] = TargetState(
+            ff,
+            mailbox,
+            allowed,
+            pr=extra.get("pr"),
+            notice=extra.get("notice"),
+            stats=extra.get("stats"),
+            checks=checks_beside(ff, Path(box).parent),
+            paths=paths,
+            repo_files=listed,
+            pr_number=pr_number_of(extra, Path(box).parent),
+        )
+    return Viewer(
+        targets=targets,
+        token=secrets.token_urlsafe(32),
+        agent=agent,
+        session_id=session_id,
+        idle_minutes=idle_minutes,
+        share_slack=share_slack,
+    )
 
 
 def pr_number_of(meta: dict, review_dir: Path) -> int | None:
@@ -675,13 +851,17 @@ def pr_number_of(meta: dict, review_dir: Path) -> int | None:
     if isinstance(pr, dict) and isinstance(pr.get("number"), int):
         return pr["number"]
     try:
-        n = json.loads((review_dir / "review-state.json").read_text(encoding="utf-8"))["target"]["pr"]
+        n = json.loads((review_dir / "review-state.json").read_text(encoding="utf-8"))[
+            "target"
+        ]["pr"]
     except (OSError, ValueError, KeyError, TypeError):
         return None
     return n if isinstance(n, int) and not isinstance(n, bool) and n > 0 else None
 
 
-def bind(viewer: Viewer, host: str, first_port: int, span: int) -> ViewerHTTPServer | None:
+def bind(
+    viewer: Viewer, host: str, first_port: int, span: int
+) -> ViewerHTTPServer | None:
     handler = make_handler(viewer)
     for port in range(first_port, first_port + span):
         try:
@@ -694,34 +874,48 @@ def bind(viewer: Viewer, host: str, first_port: int, span: int) -> ViewerHTTPSer
 
 def open_page_html(url: str, token: str) -> str:
     target = escape(f"{url}?t={token}", quote=True)
-    return ("<!doctype html>\n<meta charset=\"utf-8\">\n"
-            "<meta name=\"referrer\" content=\"no-referrer\">\n"
-            f"<meta http-equiv=\"refresh\" content=\"0; url={target}\">\n"
-            "<title>Opening review viewer…</title>\n"
-            f"<p><a href=\"{target}\" rel=\"noreferrer\">Open the review viewer</a></p>\n")
+    return (
+        '<!doctype html>\n<meta charset="utf-8">\n'
+        '<meta name="referrer" content="no-referrer">\n'
+        f'<meta http-equiv="refresh" content="0; url={target}">\n'
+        "<title>Opening review viewer…</title>\n"
+        f'<p><a href="{target}" rel="noreferrer">Open the review viewer</a></p>\n'
+    )
 
 
 def publish(viewer: Viewer, urls: list[tuple[str, str]]) -> None:
     """Write the token file, the tokenised redirect page and the server record
     into every mailbox, and create an empty inbox so `tail -F` has a file."""
-    record = {"url_path_only": "/", "port": viewer.port, "pid": os.getpid(),
-              "session_id": viewer.session_id, "started": viewer.started,
-              "targets": list(viewer.targets)}
+    record = {
+        "url_path_only": "/",
+        "port": viewer.port,
+        "pid": os.getpid(),
+        "session_id": viewer.session_id,
+        "started": viewer.started,
+        "targets": list(viewer.targets),
+    }
     for state in viewer.targets.values():
         box = state.mailbox
         write_private(box.token_file, viewer.token + "\n")
         write_private(box.open_html, open_page_html(urls[0][0], viewer.token))
         write_private(box.server_json, json.dumps(record, indent=2) + "\n")
         # What `walkthrough put` checks against. Kept after exit: no secret.
-        write_private(served_path(box.dir),
-                      Served(state.findings, state.pr, state.notice, state.stats).to_json())
-    registry.register(os.getpid(), [s.mailbox.dir.resolve() for s in viewer.targets.values()])
+        write_private(
+            served_path(box.dir),
+            Served(state.findings, state.pr, state.notice, state.stats).to_json(),
+        )
+    registry.register(
+        os.getpid(), [s.mailbox.dir.resolve() for s in viewer.targets.values()]
+    )
 
 
 def unpublish(viewer: Viewer) -> None:
     for state in viewer.targets.values():
-        for path in (state.mailbox.token_file, state.mailbox.open_html,
-                     state.mailbox.server_json):
+        for path in (
+            state.mailbox.token_file,
+            state.mailbox.open_html,
+            state.mailbox.server_json,
+        ):
             try:
                 path.unlink()
             except OSError:
@@ -746,8 +940,13 @@ def watchdog(viewer: Viewer) -> None:
             minutes = viewer.idle_minutes
             span = f"{minutes:g} min"
             log.info("no request for %.0f s; stopping", quiet)
-            log_event(COMPONENT, "idle_stop", f"viewer stopped after {span} with no open page",
-                      session_id=viewer.session_id, idle_minutes=minutes)
+            log_event(
+                COMPONENT,
+                "idle_stop",
+                f"viewer stopped after {span} with no open page",
+                session_id=viewer.session_id,
+                idle_minutes=minutes,
+            )
             viewer.httpd.shutdown()
             return
 
@@ -761,8 +960,13 @@ def run(viewer: Viewer) -> None:
         viewer.httpd.serve_forever(poll_interval=0.2)
     except KeyboardInterrupt:
         viewer.stop_reason = viewer.stop_reason or "signal"
-        log_event(COMPONENT, "stop", "viewer stopped by a signal",
-                  session_id=viewer.session_id, reason="signal")
+        log_event(
+            COMPONENT,
+            "stop",
+            "viewer stopped by a signal",
+            session_id=viewer.session_id,
+            reason="signal",
+        )
     finally:
         viewer.stopped.set()
         viewer.httpd.server_close()

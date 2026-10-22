@@ -17,11 +17,14 @@ from conftest import (
 # Directory structure
 # ---------------------------------------------------------------------------
 
+
 class TestDirectoryStructure:
     """Verify the D1 directory layout exists."""
 
     def test_plugin_root_exists(self):
-        assert PLUGIN_ROOT.is_dir(), f"multiplai-plugin/ does not exist at {PLUGIN_ROOT}"
+        assert PLUGIN_ROOT.is_dir(), (
+            f"multiplai-plugin/ does not exist at {PLUGIN_ROOT}"
+        )
 
     def test_scripts_dir_exists(self):
         assert (PLUGIN_ROOT / "scripts").is_dir()
@@ -58,6 +61,7 @@ class TestDirectoryStructure:
 # ---------------------------------------------------------------------------
 # plugin.json
 # ---------------------------------------------------------------------------
+
 
 class TestPluginJson:
     """Verify plugin.json manifest."""
@@ -118,12 +122,15 @@ class TestPluginJson:
     def test_userconfig_fields_have_title(self):
         for key, cfg in self.manifest.get("userConfig", {}).items():
             assert "title" in cfg, f"userConfig.{key} missing title"
-            assert isinstance(cfg["title"], str), f"userConfig.{key}.title must be string"
+            assert isinstance(cfg["title"], str), (
+                f"userConfig.{key}.title must be string"
+            )
 
 
 # ---------------------------------------------------------------------------
 # marketplace.json
 # ---------------------------------------------------------------------------
+
 
 class TestMarketplaceJson:
     """Verify marketplace.json metadata (Claude Code marketplace schema)."""
@@ -168,8 +175,7 @@ class TestMarketplaceJson:
             (PLUGIN_ROOT / ".claude-plugin" / "plugin.json").read_text()
         )["version"]
         entries = [
-            p for p in self.manifest["plugins"]
-            if p.get("name") == "multiplai-context"
+            p for p in self.manifest["plugins"] if p.get("name") == "multiplai-context"
         ]
         assert entries, "marketplace.json must list the multiplai-context plugin"
         assert entries[0].get("version") == plugin_version, (
@@ -182,6 +188,7 @@ class TestMarketplaceJson:
 # ---------------------------------------------------------------------------
 # hooks.json
 # ---------------------------------------------------------------------------
+
 
 class TestHooksJson:
     """Verify hooks/hooks.json declarations (official nested CC schema)."""
@@ -223,8 +230,8 @@ class TestHooksJson:
 # LICENSE, README, CHANGELOG, requirements.txt
 # ---------------------------------------------------------------------------
 
-class TestSupportFiles:
 
+class TestSupportFiles:
     # In the marketplace monorepo a single LICENSE covers the whole repo;
     # it lives at REPO_ROOT (fall back to the plugin dir if a per-plugin
     # LICENSE is ever added).
@@ -240,7 +247,9 @@ class TestSupportFiles:
         assert len(lines) >= 10
 
     def test_license_matches_plugin_json(self):
-        manifest = json.loads((PLUGIN_ROOT / ".claude-plugin" / "plugin.json").read_text())
+        manifest = json.loads(
+            (PLUGIN_ROOT / ".claude-plugin" / "plugin.json").read_text()
+        )
         license_text = self.LICENSE_PATH.read_text()
         if manifest["license"] == "MIT":
             assert "MIT" in license_text
@@ -252,11 +261,14 @@ class TestSupportFiles:
         text = (PLUGIN_ROOT / "README.md").read_text()
         assert re.search(r"(?i)install", text)
         # Marketplace-based install — accept any documented install path.
-        assert any(marker in text for marker in (
-            "/plugin marketplace add",
-            "/plugin install",
-            "plugin-dir",
-        )), "README must document marketplace/plugin installation"
+        assert any(
+            marker in text
+            for marker in (
+                "/plugin marketplace add",
+                "/plugin install",
+                "plugin-dir",
+            )
+        ), "README must document marketplace/plugin installation"
 
     def test_readme_documents_config(self):
         text = (PLUGIN_ROOT / "README.md").read_text()
@@ -265,14 +277,20 @@ class TestSupportFiles:
 
     def test_readme_lists_skills(self):
         text = (PLUGIN_ROOT / "README.md").read_text()
-        for skill in ("multiplai-context:setup", "multiplai-context:dream", "multiplai-context:health"):
+        for skill in (
+            "multiplai-context:setup",
+            "multiplai-context:dream",
+            "multiplai-context:health",
+        ):
             assert skill in text, f"README missing skill: {skill}"
 
     def test_changelog_exists(self):
         assert (PLUGIN_ROOT / "CHANGELOG.md").is_file()
 
     def test_changelog_has_version_entry(self):
-        manifest = json.loads((PLUGIN_ROOT / ".claude-plugin" / "plugin.json").read_text())
+        manifest = json.loads(
+            (PLUGIN_ROOT / ".claude-plugin" / "plugin.json").read_text()
+        )
         version = manifest["version"]
         text = (PLUGIN_ROOT / "CHANGELOG.md").read_text()
         assert version in text
@@ -307,6 +325,7 @@ class TestSupportFiles:
 # No hardcoded paths
 # ---------------------------------------------------------------------------
 
+
 class TestNoHardcodedPaths:
     """Verify no user-specific paths in scaffold files."""
 
@@ -332,10 +351,13 @@ class TestNoHardcodedPaths:
         assert "/Users/spike" not in text
 
     def test_user_config_defaults_use_tilde(self):
-        manifest = json.loads((PLUGIN_ROOT / ".claude-plugin" / "plugin.json").read_text())
+        manifest = json.loads(
+            (PLUGIN_ROOT / ".claude-plugin" / "plugin.json").read_text()
+        )
         for key, cfg in manifest.get("userConfig", {}).items():
             default = str(cfg.get("default", ""))
             # URL defaults (e.g. qmd_http_url) contain "/" but aren't paths.
             if "/" in default and "://" not in default:
-                assert default.startswith("~"), \
+                assert default.startswith("~"), (
                     f"userConfig.{key}.default should use ~ prefix"
+                )

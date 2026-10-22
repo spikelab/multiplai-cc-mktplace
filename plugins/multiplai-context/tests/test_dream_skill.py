@@ -17,13 +17,14 @@ from conftest import PLUGIN_ROOT, SCRIPTS_DIR
 
 def _dream_fm():
     import re as _re
+
     text = (PLUGIN_ROOT / "skills" / "dream" / "SKILL.md").read_text()
-    m = _re.match(r'^---\n(.*?)\n---', text, _re.DOTALL)
+    m = _re.match(r"^---\n(.*?)\n---", text, _re.DOTALL)
     fm = {}
     if m:
         for line in m.group(1).splitlines():
-            if ':' in line:
-                k, _, v = line.partition(':')
+            if ":" in line:
+                k, _, v = line.partition(":")
                 fm[k.strip()] = v.strip().strip('"')
     return fm
 
@@ -129,6 +130,7 @@ class TestAutodreamScriptExists:
     def test_script_compiles(self):
         """dream.py must be syntactically valid Python."""
         import py_compile
+
         py_compile.compile(
             str(SCRIPTS_DIR / "dream.py"),
             doraise=True,
@@ -156,8 +158,9 @@ class TestAutodreamUsesPathResolver:
         for line in lines:
             if line.strip().startswith("#"):
                 continue  # skip comments
-            assert "/home/" not in line or "expanduser" in line, \
+            assert "/home/" not in line or "expanduser" in line, (
                 f"Hardcoded /home/ path found: {line.strip()}"
+            )
 
 
 class TestAutodreamUsesModelClient:
@@ -177,10 +180,12 @@ class TestAutodreamUsesModelClient:
         for line in lines:
             if line.strip().startswith("#"):
                 continue
-            assert "import claude_agent_sdk" not in line, \
+            assert "import claude_agent_sdk" not in line, (
                 f"Direct SDK import found: {line.strip()}"
-            assert "from claude_agent_sdk" not in line, \
+            )
+            assert "from claude_agent_sdk" not in line, (
                 f"Direct SDK import found: {line.strip()}"
+            )
 
     def test_uses_create_client(self):
         """dream.py must use create_client() factory."""
@@ -200,7 +205,9 @@ class TestAutodreamDreamState:
 
     def test_writes_dream_state(self):
         """dream must save dream state after processing."""
-        assert re.search(r"save.*dream.*state|dream_state.*write|_save_dream_state", self.source)
+        assert re.search(
+            r"save.*dream.*state|dream_state.*write|_save_dream_state", self.source
+        )
 
     def test_uses_yaml_for_state(self):
         """Dream state should be persisted as YAML."""
@@ -288,11 +295,11 @@ class TestDreamNoGitOperations:
     def test_dream_no_git_add(self):
         """dream.py must not contain git add calls."""
         # Check for subprocess git add, not variable names
-        assert not re.search(r'git\s+add\b', self.dream_source)
+        assert not re.search(r"git\s+add\b", self.dream_source)
 
     def test_dream_no_git_commit(self):
         """dream.py must not contain git commit calls."""
-        assert not re.search(r'git\s+commit\b', self.dream_source)
+        assert not re.search(r"git\s+commit\b", self.dream_source)
 
 
 # ---------------------------------------------------------------------------
@@ -303,7 +310,10 @@ class TestDreamNoGitOperations:
 def _load_dream_module():
     """Import dream.py as an isolated module (the venv guard no-ops in-venv)."""
     import importlib.util
-    spec = importlib.util.spec_from_file_location("dream_under_test", SCRIPTS_DIR / "dream.py")
+
+    spec = importlib.util.spec_from_file_location(
+        "dream_under_test", SCRIPTS_DIR / "dream.py"
+    )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -333,8 +343,10 @@ class TestProposalOutputPath:
 
     def test_never_returns_an_existing_path(self, tmp_path):
         # Whatever the state, the returned path must not already exist.
-        for name in ("processed-learnings-2026-06-26.md",
-                     "processed-learnings-2026-06-26-2.md"):
+        for name in (
+            "processed-learnings-2026-06-26.md",
+            "processed-learnings-2026-06-26-2.md",
+        ):
             (tmp_path / name).write_text("x")
         p = self.dream._proposal_output_path(tmp_path, "2026-06-26")
         assert not p.exists()
@@ -382,7 +394,9 @@ class TestArchiveProposal:
         second.write_text("second proposal")
         dest = self.dream._archive_proposal(second, tmp_path)
         assert dest == tmp_path / "applied" / "processed-learnings-2026-07-10-2.md"
-        assert (tmp_path / "applied" / "processed-learnings-2026-07-10.md").read_text() == "proposal body"
+        assert (
+            tmp_path / "applied" / "processed-learnings-2026-07-10.md"
+        ).read_text() == "proposal body"
         assert dest.read_text() == "second proposal"
 
     def test_suffix_increments_past_existing(self, tmp_path):

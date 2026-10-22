@@ -106,9 +106,9 @@ class TestProcessDeferredExtractions:
 
         # Dequeued: gone from pending, present in processing.
         assert list((data_dir / "pending_extractions").glob("*.json")) == []
-        assert [p.name for p in (data_dir / "processing_extractions").glob("*.json")] == [
-            "sess-a.json"
-        ]
+        assert [
+            p.name for p in (data_dir / "processing_extractions").glob("*.json")
+        ] == ["sess-a.json"]
 
         argv, kwargs = spy.calls[0]
         # --project is mandatory: without it the child cannot resolve
@@ -136,7 +136,9 @@ class TestProcessDeferredExtractions:
         payload = json.loads(spy.handles[0].stdin.written.decode())
         assert payload["trigger"] == "pre_compact"
 
-    def test_a_triggerless_marker_forwards_an_empty_trigger(self, drain_dirs, monkeypatch):
+    def test_a_triggerless_marker_forwards_an_empty_trigger(
+        self, drain_dirs, monkeypatch
+    ):
         """SessionEnd markers carry no `trigger`; the payload still carries
         the key (empty) so the child never KeyErrors on it."""
         data_dir, extract_script = drain_dirs
@@ -155,22 +157,30 @@ class TestProcessDeferredExtractions:
         spy = _PopenSpy()
         monkeypatch.setattr(extraction_drain.subprocess, "Popen", spy)
 
-        assert extraction_drain.process_deferred_extractions(
-            data_dir, data_dir / "nope.py"
-        ).launched == 0
+        assert (
+            extraction_drain.process_deferred_extractions(
+                data_dir, data_dir / "nope.py"
+            ).launched
+            == 0
+        )
         # Marker stays queued for a caller that does have the script.
         assert len(list((data_dir / "pending_extractions").glob("*.json"))) == 1
         assert spy.calls == []
 
     def test_unparseable_marker_is_discarded(self, drain_dirs, monkeypatch):
         data_dir, extract_script = drain_dirs
-        (data_dir / "pending_extractions" / "junk.json").write_text("{not json", encoding="utf-8")
+        (data_dir / "pending_extractions" / "junk.json").write_text(
+            "{not json", encoding="utf-8"
+        )
         spy = _PopenSpy()
         monkeypatch.setattr(extraction_drain.subprocess, "Popen", spy)
 
-        assert extraction_drain.process_deferred_extractions(
-            data_dir, extract_script
-        ).launched == 0
+        assert (
+            extraction_drain.process_deferred_extractions(
+                data_dir, extract_script
+            ).launched
+            == 0
+        )
         assert list((data_dir / "processing_extractions").glob("*.json")) == []
         assert spy.calls == []
 
@@ -183,15 +193,20 @@ class TestProcessDeferredExtractions:
 
         monkeypatch.setattr(extraction_drain.subprocess, "Popen", _boom)
 
-        assert extraction_drain.process_deferred_extractions(
-            data_dir, extract_script
-        ).launched == 0
+        assert (
+            extraction_drain.process_deferred_extractions(
+                data_dir, extract_script
+            ).launched
+            == 0
+        )
         # Back in the queue — a later drain retries rather than losing it.
         assert [p.name for p in (data_dir / "pending_extractions").glob("*.json")] == [
             "sess-a.json"
         ]
 
-    def test_dequeued_old_marker_is_not_immediately_stale(self, drain_dirs, monkeypatch):
+    def test_dequeued_old_marker_is_not_immediately_stale(
+        self, drain_dirs, monkeypatch
+    ):
         """Regression: staleness must be measured from launch, not from when
         SessionEnd wrote the marker.
 
@@ -234,9 +249,9 @@ class TestProcessDeferredExtractions:
 
         assert result.launched == 1
         assert list((data_dir / "pending_extractions").glob("*.json")) == []
-        assert [p.name for p in (data_dir / "processing_extractions").glob("*.json")] == [
-            "sess-a.json"
-        ]
+        assert [
+            p.name for p in (data_dir / "processing_extractions").glob("*.json")
+        ] == ["sess-a.json"]
 
     def test_wait_counts_children_that_exited_nonzero(self, drain_dirs, monkeypatch):
         data_dir, extract_script = drain_dirs
@@ -250,7 +265,9 @@ class TestProcessDeferredExtractions:
 
         assert result == extraction_drain.DrainResult(launched=1, failed=1)
 
-    def test_without_wait_children_are_never_counted_failed(self, drain_dirs, monkeypatch):
+    def test_without_wait_children_are_never_counted_failed(
+        self, drain_dirs, monkeypatch
+    ):
         data_dir, extract_script = drain_dirs
         _write_marker(data_dir, "sess-a")
         spy = _PopenSpy(returncode=3)
@@ -267,7 +284,9 @@ class TestProcessDeferredExtractions:
         spy = _PopenSpy()
         monkeypatch.setattr(extraction_drain.subprocess, "Popen", spy)
 
-        extraction_drain.process_deferred_extractions(data_dir, extract_script, wait=True)
+        extraction_drain.process_deferred_extractions(
+            data_dir, extract_script, wait=True
+        )
 
         assert spy.handles[0].waited is True
         assert spy.calls[0][1]["stderr"] is None  # inherited, not swallowed
@@ -288,9 +307,13 @@ class TestRecoverStaleProcessing:
     def test_fresh_marker_is_left_alone(self, drain_dirs):
         data_dir, _ = drain_dirs
         proc_dir = data_dir / "processing_extractions"
-        (proc_dir / "sess-a.json").write_text(json.dumps({"session_id": "a"}), encoding="utf-8")
+        (proc_dir / "sess-a.json").write_text(
+            json.dumps({"session_id": "a"}), encoding="utf-8"
+        )
 
-        extraction_drain.recover_stale_processing(proc_dir, data_dir / "pending_extractions")
+        extraction_drain.recover_stale_processing(
+            proc_dir, data_dir / "pending_extractions"
+        )
 
         assert (proc_dir / "sess-a.json").exists()
 

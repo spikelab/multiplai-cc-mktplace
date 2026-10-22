@@ -1,6 +1,5 @@
 """TRIAGE relevance scoring prompt — scores borderline sources 1-5."""
 
-
 TRIAGE_RELEVANCE_PROMPT = """You are the TRIAGE stage of a research pipeline. Score \
 borderline sources for relevance to the research query.
 

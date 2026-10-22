@@ -19,8 +19,15 @@ def partition(scope: Scope, limit: int) -> list[Unit]:
 
     def add(spans: list[Span], oversize: bool = False) -> None:
         files = list(dict.fromkeys(s.path for s in spans))
-        units.append(Unit(id=f"u{len(units) + 1}", files=files, lines=sum(s.lines for s in spans),
-                          oversize=oversize, spans=spans))
+        units.append(
+            Unit(
+                id=f"u{len(units) + 1}",
+                files=files,
+                lines=sum(s.lines for s in spans),
+                oversize=oversize,
+                spans=spans,
+            )
+        )
 
     # Directories stay whole when they fit in the unit being filled; small
     # directories share a unit; a directory larger than the limit is split by size.

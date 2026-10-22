@@ -5,15 +5,18 @@ survives plugin updates. The session reads it at the start of every job and
 appends lines to it only after the user approves them (SKILL.md, "Learning
 loop"); this module never decides what to write.
 """
+
 from __future__ import annotations
 
 import os
 from datetime import date
 from pathlib import Path
 
-HEADER = ("# video-edit preferences\n\n"
-          "Standing corrections the user approved. The video-edit skill reads this file at the\n"
-          "start of every job. One preference per line; newest at the bottom.\n\n")
+HEADER = (
+    "# video-edit preferences\n\n"
+    "Standing corrections the user approved. The video-edit skill reads this file at the\n"
+    "start of every job. One preference per line; newest at the bottom.\n\n"
+)
 
 
 def path() -> Path:
@@ -38,5 +41,7 @@ def append(lines: list[str], today: date | None = None) -> Path:
     existing = p.read_text(encoding="utf-8") if p.exists() else HEADER
     if existing and not existing.endswith("\n"):
         existing += "\n"
-    p.write_text(existing + "".join(f"- ({stamp}) {c}\n" for c in clean), encoding="utf-8")
+    p.write_text(
+        existing + "".join(f"- ({stamp}) {c}\n" for c in clean), encoding="utf-8"
+    )
     return p

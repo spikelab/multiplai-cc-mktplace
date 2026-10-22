@@ -88,8 +88,11 @@ OPEN_DECISIONS = ("accept", "defer", "")
 _RULE = re.compile(r"\b(" + "|".join(prompt.LOW_VALUE_RULES) + r")\b", re.IGNORECASE)
 
 
-def gate_assessments(items: list[AssessItem], candidates: list[Finding],
-                     earlier: list[rounds.EarlierFinding]) -> tuple[dict[str, Assessment], list[str]]:
+def gate_assessments(
+    items: list[AssessItem],
+    candidates: list[Finding],
+    earlier: list[rounds.EarlierFinding],
+) -> tuple[dict[str, Assessment], list[str]]:
     """(an Assessment for every candidate, one line per item the gate turned into `useful`)."""
     ids = {f.id for f in candidates}
     by_earlier = {e.id: e for e in earlier}
@@ -119,9 +122,13 @@ def gate_assessments(items: list[AssessItem], candidates: list[Finding],
             out[item.id] = Assessment(label="useful")
             continue
         out[item.id] = Assessment(
-            label=item.label, reason=item.reason.strip(), earlier_id=item.earlier_id if e else "",
-            earlier_round=e.head_sha if e else "", earlier_decision=e.decision if e else "",
-            earlier_note=e.note if e else "")
+            label=item.label,
+            reason=item.reason.strip(),
+            earlier_id=item.earlier_id if e else "",
+            earlier_round=e.head_sha if e else "",
+            earlier_decision=e.decision if e else "",
+            earlier_note=e.note if e else "",
+        )
     missing = [f.id for f in candidates if f.id not in out]
     if missing:
         errors.append(f"no label for {', '.join(missing)}; labelled useful")
@@ -130,7 +137,9 @@ def gate_assessments(items: list[AssessItem], candidates: list[Finding],
     return out, errors
 
 
-def anchored_sets(sets: list[DuplicateSet], candidates: list[Finding]) -> list[DuplicateSet]:
+def anchored_sets(
+    sets: list[DuplicateSet], candidates: list[Finding]
+) -> list[DuplicateSet]:
     """Each set split into the runs of members `anchors_near` chains together; members in no run are dropped.
 
     Logs one line per set that loses a member, with the ids kept and dropped.
@@ -143,22 +152,39 @@ def anchored_sets(sets: list[DuplicateSet], candidates: list[Finding]) -> list[D
         kept = [f.id for g in groups for f in g]
         dropped = [f.id for f in members if f.id not in kept]
         if dropped:
-            log.info("assess: duplicate set %s: dropped %s, anchored more than %d lines from every other "
-                     "member's anchor in its file%s", ", ".join(f.id for f in members), ", ".join(dropped),
-                     MERGE_LINE_GAP, f"; kept {', '.join(kept)}" if kept else "; set dropped")
-        out.extend(DuplicateSet(finding_ids=[f.id for f in g], reason=s.reason) for g in groups)
+            log.info(
+                "assess: duplicate set %s: dropped %s, anchored more than %d lines from every other "
+                "member's anchor in its file%s",
+                ", ".join(f.id for f in members),
+                ", ".join(dropped),
+                MERGE_LINE_GAP,
+                f"; kept {', '.join(kept)}" if kept else "; set dropped",
+            )
+        out.extend(
+            DuplicateSet(finding_ids=[f.id for f in g], reason=s.reason) for g in groups
+        )
     return out
 
 
 def _repeat_assessments(state: ReviewState) -> dict[str, Assessment]:
     shown = {f.id for f in shown_findings(state)}
-    return {fid: Assessment(label="repeat", reason=r.reason, earlier_id=r.rejected_id, earlier_round=r.round,
-                            earlier_decision="reject", earlier_note=r.note)
-            for fid, r in state.repeats.items() if fid in shown}
+    return {
+        fid: Assessment(
+            label="repeat",
+            reason=r.reason,
+            earlier_id=r.rejected_id,
+            earlier_round=r.round,
+            earlier_decision="reject",
+            earlier_note=r.note,
+        )
+        for fid, r in state.repeats.items()
+        if fid in shown
+    }
 
 
-def absorbed_still_open(state: ReviewState,
-                        earlier: list[rounds.EarlierFinding]) -> dict[str, list[tuple[str, Assessment]]]:
+def absorbed_still_open(
+    state: ReviewState, earlier: list[rounds.EarlierFinding]
+) -> dict[str, list[tuple[str, Assessment]]]:
     """(merged id, its `still-open` label) for each finding merged away with one, by the id it ended up in.
 
     A label counts only when its earlier finding is in *earlier* with a decision in `OPEN_DECISIONS`; it
@@ -169,15 +195,29 @@ def absorbed_still_open(state: ReviewState,
     out: dict[str, list[tuple[str, Assessment]]] = {}
     for m in state.merged:
         a = m.assessment
-        e = by_earlier.get(a.earlier_id) if a is not None and a.label == "still-open" else None
+        e = (
+            by_earlier.get(a.earlier_id)
+            if a is not None and a.label == "still-open"
+            else None
+        )
         if e is None or e.decision not in OPEN_DECISIONS:
             continue
         top, seen = m.into, {m.finding.id}
         while top in into and top not in seen:
             seen.add(top)
             top = into[top]
-        out.setdefault(top, []).append((m.finding.id, a.model_copy(update={
-            "earlier_round": e.head_sha, "earlier_decision": e.decision, "earlier_note": e.note})))
+        out.setdefault(top, []).append(
+            (
+                m.finding.id,
+                a.model_copy(
+                    update={
+                        "earlier_round": e.head_sha,
+                        "earlier_decision": e.decision,
+                        "earlier_note": e.note,
+                    }
+                ),
+            )
+        )
     return out
 
 
@@ -187,17 +227,27 @@ def carry_still_open(state: ReviewState, earlier: list[rounds.EarlierFinding]) -
     for fid, a in list(state.assessments.items()):
         if a.label in ("useful", "low-value") and absorbed.get(fid):
             merged_id, carried = absorbed[fid][0]
-            state.assessments[fid] = carried.model_copy(update={
-                "reason": f"{merged_id}, merged into this finding: {carried.reason}".rstrip(": ")})
+            state.assessments[fid] = carried.model_copy(
+                update={
+                    "reason": f"{merged_id}, merged into this finding: {carried.reason}".rstrip(
+                        ": "
+                    )
+                }
+            )
 
 
-def reconcile_earlier(state: ReviewState, ctx: RunContext,
-                      earlier: list[rounds.EarlierFinding] | None = None) -> None:
+def reconcile_earlier(
+    state: ReviewState,
+    ctx: RunContext,
+    earlier: list[rounds.EarlierFinding] | None = None,
+) -> None:
     """Set `state.lineage` and `state.earlier_status` from the final labels and the stored recheck answers.
 
     Code only, so running it again on the same state and rounds gives the same result.
     """
-    by_earlier = {e.id: e for e in (earlier_findings(state, ctx) if earlier is None else earlier)}
+    by_earlier = {
+        e.id: e for e in (earlier_findings(state, ctx) if earlier is None else earlier)
+    }
     absorbed = absorbed_still_open(state, list(by_earlier.values()))
     lineage: dict[str, str] = {}
     against: dict[str, list[Finding]] = {}
@@ -208,7 +258,9 @@ def reconcile_earlier(state: ReviewState, ctx: RunContext,
             e = by_earlier.get(a.earlier_id)
             lineage[f.id] = str((e.finding.get("lineage") if e else "") or a.earlier_id)
         links = [a] if a is not None and a.label == "still-open" else []
-        for earlier_id in dict.fromkeys(x.earlier_id for x in links + [x for _, x in absorbed.get(f.id, [])]):
+        for earlier_id in dict.fromkeys(
+            x.earlier_id for x in links + [x for _, x in absorbed.get(f.id, [])]
+        ):
             if earlier_id:
                 against.setdefault(earlier_id, []).append(f)
     state.lineage = lineage
@@ -216,16 +268,31 @@ def reconcile_earlier(state: ReviewState, ctx: RunContext,
     statuses: list[EarlierStatus] = []
     for o in open_set(state, ctx):
         status = state.recheck_answers.get(o.id) or EarlierStatus(
-            earlier_id=o.id, lineage=o.lineage, round=o.head_sha, status="cannot_verify", reason="not rechecked")
+            earlier_id=o.id,
+            lineage=o.lineage,
+            round=o.head_sha,
+            status="cannot_verify",
+            reason="not rechecked",
+        )
         still = against.get(o.id, [])
         if still:
             cited = list(status.citations)
             for f in still:
-                cited += [c for c in f.citations if not c.is_web and not c.is_dependency and c not in cited]
+                cited += [
+                    c
+                    for c in f.citations
+                    if not c.is_web and not c.is_dependency and c not in cited
+                ]
             ids = ", ".join(f.id for f in still)
-            status = status.model_copy(update={
-                "status": worst_status(status.status, "still_present"), "citations": cited,
-                "reason": f"{status.reason.rstrip('. ')}. Still open in this round as {ids}.".lstrip(". ")})
+            status = status.model_copy(
+                update={
+                    "status": worst_status(status.status, "still_present"),
+                    "citations": cited,
+                    "reason": f"{status.reason.rstrip('. ')}. Still open in this round as {ids}.".lstrip(
+                        ". "
+                    ),
+                }
+            )
         statuses.append(status)
     state.earlier_status = statuses
 
@@ -236,11 +303,17 @@ async def run_assess(state: ReviewState, ctx: RunContext) -> ReviewState:
     target, cfg = state.target, ctx.config
     earlier = earlier_findings(state, ctx)
     repeats = _repeat_assessments(state)
-    candidates = [f for f in shown_findings(state) if f.id not in repeats and not is_trim(f)]
+    candidates = [
+        f for f in shown_findings(state) if f.id not in repeats and not is_trim(f)
+    ]
     important = important_assessments(state)
 
     if not candidates or (len(candidates) < 2 and not earlier):
-        state.assessments = {**{f.id: Assessment(label="useful") for f in candidates}, **repeats, **important}
+        state.assessments = {
+            **{f.id: Assessment(label="useful") for f in candidates},
+            **repeats,
+            **important,
+        }
         carry_still_open(state, earlier)
         reconcile_earlier(state, ctx, earlier)
         ctx.counts = {"skipped": 1, "repeats": len(repeats)}
@@ -256,9 +329,14 @@ async def run_assess(state: ReviewState, ctx: RunContext) -> ReviewState:
         with sdk.recording() as rec:
             try:
                 answer = await sdk.agent_call_structured(
-                    prompt.build(target, candidates, state.verdicts, prior), AssessOutput,
-                    allowed_tools=sdk.MERGER_TOOLS, model=cfg.merger_model, effort=cfg.effort,
-                    max_turns=cfg.max_turns, cwd=str(ctx.snapshot), budget_label="assess",
+                    prompt.build(target, candidates, state.verdicts, prior),
+                    AssessOutput,
+                    allowed_tools=sdk.MERGER_TOOLS,
+                    model=cfg.merger_model,
+                    effort=cfg.effort,
+                    max_turns=cfg.max_turns,
+                    cwd=str(ctx.snapshot),
+                    budget_label="assess",
                 )
             except (sdk.RepoTrustError, sdk.UsageLimitError):
                 raise
@@ -268,12 +346,21 @@ async def run_assess(state: ReviewState, ctx: RunContext) -> ReviewState:
                 state.errors.append(error)
                 answer, failed = AssessOutput(), True
         check = AgentCheck(
-            stage="assess", subject="assess",
-            given=[f"findings ({len(candidates)})", f"earlier findings ({len(prior)})",
-                   f"commit subjects ({len(target.commits)})"]
-                  + (["PR description"] if target.title or target.description else []),
-            calls=[checks.summarise_call(c, target, ctx.snapshot) for c in rec.tool_calls],
-            turns=rec.turns, cost_usd=round(rec.cost_usd, 6), started_at=started, ended_at=checks.now(),
+            stage="assess",
+            subject="assess",
+            given=[
+                f"findings ({len(candidates)})",
+                f"earlier findings ({len(prior)})",
+                f"commit subjects ({len(target.commits)})",
+            ]
+            + (["PR description"] if target.title or target.description else []),
+            calls=[
+                checks.summarise_call(c, target, ctx.snapshot) for c in rec.tool_calls
+            ],
+            turns=rec.turns,
+            cost_usd=round(rec.cost_usd, 6),
+            started_at=started,
+            ended_at=checks.now(),
         )
         if error:
             check.error, check.outcome = error, f"failed: {checks.failure_kind(error)}"
@@ -293,7 +380,11 @@ async def run_assess(state: ReviewState, ctx: RunContext) -> ReviewState:
     for m in state.merged:
         if m.finding.id in removed:
             m.assessment = labels.get(m.finding.id)
-    state.assessments = {**{k: v for k, v in labels.items() if k not in removed}, **repeats, **important}
+    state.assessments = {
+        **{k: v for k, v in labels.items() if k not in removed},
+        **repeats,
+        **important,
+    }
     carry_still_open(state, earlier)
     mark_merged(state)
     if check is not None and not check.error:
@@ -303,13 +394,22 @@ async def run_assess(state: ReviewState, ctx: RunContext) -> ReviewState:
                 label = state.assessments[fid].label
                 counts[label] = counts.get(label, 0) + 1
         parts = [f"{n} {label}" for label, n in sorted(counts.items())]
-        parts += [f"merged {m.finding.id} into {m.into}" for m in state.merged if m.finding.id in removed]
+        parts += [
+            f"merged {m.finding.id} into {m.into}"
+            for m in state.merged
+            if m.finding.id in removed
+        ]
         check.outcome = "; ".join(parts) or "no labels"
 
     reconcile_earlier(state, ctx, earlier)
     values = [a.label for a in state.assessments.values()]
-    ctx.counts = {"useful": values.count("useful"), "still_open": values.count("still-open"),
-                  "low_value": values.count("low-value"), "repeats": values.count("repeat"),
-                  "merged": len(removed), "agent_failures": int(failed)}
+    ctx.counts = {
+        "useful": values.count("useful"),
+        "still_open": values.count("still-open"),
+        "low_value": values.count("low-value"),
+        "repeats": values.count("repeat"),
+        "merged": len(removed),
+        "agent_failures": int(failed),
+    }
     state.stage = "assess"
     return state

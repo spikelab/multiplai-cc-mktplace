@@ -21,6 +21,7 @@ skills/embedded-captions/references/caption-grouping.md:27-46.)
 
 The words passed in are already in output time (stages/timeline.map_words).
 """
+
 from __future__ import annotations
 
 import shutil
@@ -32,10 +33,10 @@ from stages.edl import Captions, Headline
 
 MAX_GAP_S = 0.3
 MIN_EVENT_S = 0.05
-MIN_LINE_S = 0.5       # a line spoken faster than this joins a neighbour
-LEAD_S = 0.08          # a line appears this long before its first word …
-HOLD_S = 0.6           # … and stays up to this long after its last word,
-CLEAR_S = 0.05         # but leaves this long before the next line appears
+MIN_LINE_S = 0.5  # a line spoken faster than this joins a neighbour
+LEAD_S = 0.08  # a line appears this long before its first word …
+HOLD_S = 0.6  # … and stays up to this long after its last word,
+CLEAR_S = 0.05  # but leaves this long before the next line appears
 SENTENCE_END = (".", "?", "!", "…")
 
 
@@ -52,7 +53,10 @@ def _runs(words: list[dict], max_gap: float) -> list[list[dict]]:
     runs: list[list[dict]] = []
     cur: list[dict] = []
     for w in words:
-        if cur and (w["start"] - cur[-1]["end"] > max_gap or cur[-1]["text"].endswith(SENTENCE_END)):
+        if cur and (
+            w["start"] - cur[-1]["end"] > max_gap
+            or cur[-1]["text"].endswith(SENTENCE_END)
+        ):
             runs.append(cur)
             cur = []
         cur.append(w)
@@ -74,17 +78,24 @@ def _clause_end_ahead(run: list[dict], i: int, cur: list[dict], max_chars: int) 
     return False
 
 
-def _break_line(cur: list[dict], w: dict, max_chars: int) -> tuple[list[dict], list[dict]]:
+def _break_line(
+    cur: list[dict], w: dict, max_chars: int
+) -> tuple[list[dict], list[dict]]:
     """Where to end the line `cur` now that `w` must start a new one: after
     the last clause end in it, when that leaves at least 2 words on each
     line and the carried words still fit with `w`; else after all of `cur`."""
     for k in range(len(cur) - 2, 0, -1):
-        if cur[k]["text"].endswith(CLAUSE_END) and _chars(cur[k + 1:] + [w]) <= max_chars:
-            return cur[:k + 1], cur[k + 1:]
+        if (
+            cur[k]["text"].endswith(CLAUSE_END)
+            and _chars(cur[k + 1 :] + [w]) <= max_chars
+        ):
+            return cur[: k + 1], cur[k + 1 :]
     return cur, []
 
 
-def _split_run(run: list[dict], words_per_line: int, max_chars: int) -> list[list[dict]]:
+def _split_run(
+    run: list[dict], words_per_line: int, max_chars: int
+) -> list[list[dict]]:
     lines: list[list[dict]] = []
     cur: list[dict] = []
     for i, w in enumerate(run):
@@ -120,25 +131,36 @@ def _no_lone_words(lines: list[list[dict]], max_chars: int) -> list[list[dict]]:
             word = lines[i][0]
             moves = []
             if prev is not None:
-                moves += [("join_prev", prev + [word]), ("borrow_prev", prev[-1:] + [word])]
+                moves += [
+                    ("join_prev", prev + [word]),
+                    ("borrow_prev", prev[-1:] + [word]),
+                ]
             if nxt is not None:
-                moves += [("join_next", [word] + nxt), ("borrow_next", [word] + nxt[:1])]
+                moves += [
+                    ("join_next", [word] + nxt),
+                    ("borrow_next", [word] + nxt[:1]),
+                ]
             if prev is not None and prev[-1]["text"].endswith(CLAUSE_END):
                 moves.sort(key=lambda m: not m[0].endswith("next"))
             for kind, line in moves:
                 if _chars(line) > max_chars:
                     continue
-                if kind == "borrow_prev" and len(prev) < 3 or kind == "borrow_next" and len(nxt) < 3:
+                if (
+                    kind == "borrow_prev"
+                    and len(prev) < 3
+                    or kind == "borrow_next"
+                    and len(nxt) < 3
+                ):
                     continue
                 if kind == "join_prev":
-                    lines[i - 1:i + 1] = [line]
+                    lines[i - 1 : i + 1] = [line]
                     i -= 1
                 elif kind == "join_next":
-                    lines[i:i + 2] = [line]
+                    lines[i : i + 2] = [line]
                 elif kind == "borrow_prev":
-                    lines[i - 1:i + 1] = [prev[:-1], line]
+                    lines[i - 1 : i + 1] = [prev[:-1], line]
                 else:
-                    lines[i:i + 2] = [line, nxt[1:]]
+                    lines[i : i + 2] = [line, nxt[1:]]
                 break
         i += 1
     return lines
@@ -165,25 +187,31 @@ def _join_short_lines(lines: list[list[dict]], max_chars: int) -> list[list[dict
             for side, line in sides:
                 if _chars(line) <= max_chars:
                     if side == "prev":
-                        lines[i - 1:i + 1] = [line]
+                        lines[i - 1 : i + 1] = [line]
                         i -= 1
                     else:
-                        lines[i:i + 2] = [line]
+                        lines[i : i + 2] = [line]
                     joined = True
                     break
             if joined:
-                continue        # the joined line may still be short
+                continue  # the joined line may still be short
         i += 1
     return lines
 
 
-def group_words(words: list[dict], words_per_line: int = 5, max_chars: int = 22,
-                max_gap: float = MAX_GAP_S) -> list[list[dict]]:
+def group_words(
+    words: list[dict],
+    words_per_line: int = 5,
+    max_chars: int = 22,
+    max_gap: float = MAX_GAP_S,
+) -> list[list[dict]]:
     """Caption lines. A sentence end or a pause longer than max_gap always
     ends a line; max_chars is a hard limit; words_per_line is a soft cap."""
     groups: list[list[dict]] = []
     for run in _runs(words, max_gap):
-        groups.extend(_join_short_lines(_split_run(run, words_per_line, max_chars), max_chars))
+        groups.extend(
+            _join_short_lines(_split_run(run, words_per_line, max_chars), max_chars)
+        )
     return groups
 
 
@@ -204,8 +232,9 @@ def _esc(text: str) -> str:
     return text.replace("\\", "").replace("{", "(").replace("}", ")").replace("\n", " ")
 
 
-def caption_events(groups: list[list[dict]], highlight: bool, accent: str,
-                   primary: str) -> list[tuple[float, float, str]]:
+def caption_events(
+    groups: list[list[dict]], highlight: bool, accent: str, primary: str
+) -> list[tuple[float, float, str]]:
     """(start, end, ASS text) events, timed by line_times. With highlight,
     one event per word: the group's text with that word in the accent colour,
     from the word's start (the line's, for its first word) until the next
@@ -227,7 +256,9 @@ def caption_events(groups: list[list[dict]], highlight: bool, accent: str,
     return events
 
 
-def forward_only(events: list[tuple[float, float, str]]) -> list[tuple[float, float, str]]:
+def forward_only(
+    events: list[tuple[float, float, str]],
+) -> list[tuple[float, float, str]]:
     """Each event starts no earlier than the previous one ends."""
     out = []
     prev_end = float("-inf")
@@ -249,7 +280,7 @@ def _ts(t: float) -> str:
 
 def layout_metrics(W: int, H: int, captions: Captions | None) -> dict:
     """Sizes and positions in output pixels, shared with the safe-zone lint."""
-    size = (captions.size if captions and captions.size else round(H * 0.036))
+    size = captions.size if captions and captions.size else round(H * 0.036)
     margin = round(W * 0.12)
     return {
         "caption_size": size,
@@ -260,11 +291,14 @@ def layout_metrics(W: int, H: int, captions: Captions | None) -> dict:
     }
 
 
-def _caption_plan(words: list[dict], captions: Captions,
-                  brand: Brand) -> tuple[list[list[dict]], list[tuple[float, float, str]]]:
+def _caption_plan(
+    words: list[dict], captions: Captions, brand: Brand
+) -> tuple[list[list[dict]], list[tuple[float, float, str]]]:
     """The caption lines and the timed events build_ass burns in for them."""
     groups = group_words(words, captions.words_per_line, captions.max_chars)
-    return groups, forward_only(caption_events(groups, captions.highlight, brand.accent, brand.primary))
+    return groups, forward_only(
+        caption_events(groups, captions.highlight, brand.accent, brand.primary)
+    )
 
 
 def caption_lines(words: list[dict], captions: Captions, brand: Brand) -> list[dict]:
@@ -278,14 +312,29 @@ def caption_lines(words: list[dict], captions: Captions, brand: Brand) -> list[d
     lines, k = [], 0
     for g in groups:
         n = len(g) if captions.highlight else 1
-        mine, k = events[k:k + n], k + n
-        lines.append({"start": mine[0][0], "end": mine[-1][1], "text": " ".join(w["text"] for w in g),
-                      "words": [{"text": w["text"], "start": w["start"], "end": w["end"]} for w in g]})
+        mine, k = events[k : k + n], k + n
+        lines.append(
+            {
+                "start": mine[0][0],
+                "end": mine[-1][1],
+                "text": " ".join(w["text"] for w in g),
+                "words": [
+                    {"text": w["text"], "start": w["start"], "end": w["end"]} for w in g
+                ],
+            }
+        )
     return lines
 
 
-def build_ass(words: list[dict], captions: Captions | None, headline: Headline | None,
-              W: int, H: int, font_name: str, brand: Brand) -> str:
+def build_ass(
+    words: list[dict],
+    captions: Captions | None,
+    headline: Headline | None,
+    W: int,
+    H: int,
+    font_name: str,
+    brand: Brand,
+) -> str:
     m = layout_metrics(W, H, captions)
     outline = max(2, round(m["caption_size"] * 0.07))
     styles = [
@@ -320,25 +369,32 @@ def build_ass(words: list[dict], captions: Captions | None, headline: Headline |
             lines.append(f"Dialogue: 0,{_ts(s)},{_ts(e)},Caption,,0,0,0,,{pos}{text}")
     if headline is not None:
         pos = f"{{\\an8\\pos({W // 2},{m['headline_y']})}}"
-        lines.append(f"Dialogue: 1,{_ts(headline.start)},{_ts(headline.end)},Headline,,0,0,0,,"
-                     f"{pos}{_esc(headline.text)}")
+        lines.append(
+            f"Dialogue: 1,{_ts(headline.start)},{_ts(headline.end)},Headline,,0,0,0,,"
+            f"{pos}{_esc(headline.text)}"
+        )
     return "\n".join(lines) + "\n"
 
 
 # --- fonts -------------------------------------------------------------------
 
+
 def font_family(font_file: str) -> str:
     """The family name libass matches against (fontTools, else fc-query)."""
     try:
         from fontTools.ttLib import TTFont  # type: ignore[import-not-found]
+
         name = TTFont(font_file, fontNumber=0)["name"].getDebugName(1)
         if name:
             return name
     except Exception:
         pass
     if shutil.which("fc-query"):
-        out = subprocess.run(["fc-query", "--format=%{family[0]}", font_file],
-                             capture_output=True, text=True).stdout.strip()
+        out = subprocess.run(
+            ["fc-query", "--format=%{family[0]}", font_file],
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
         if out:
             return out
     return Path(font_file).stem
@@ -347,13 +403,15 @@ def font_family(font_file: str) -> str:
 def _charset(font_file: str) -> set[int] | None:
     try:
         from fontTools.ttLib import TTFont  # type: ignore[import-not-found]
+
         return set(TTFont(font_file, fontNumber=0).getBestCmap())
     except ImportError:
         pass
     if not shutil.which("fc-query"):
         return None
-    out = subprocess.run(["fc-query", "--format=%{charset}", font_file],
-                         capture_output=True, text=True).stdout
+    out = subprocess.run(
+        ["fc-query", "--format=%{charset}", font_file], capture_output=True, text=True
+    ).stdout
     return parse_fc_charset(out)
 
 

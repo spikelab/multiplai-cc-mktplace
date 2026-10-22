@@ -29,6 +29,7 @@ def _read_logs(logs, stem, ext):
     assert files, f"no {stem} log in {logs}"
     return "".join(f.read_text() for f in files)
 
+
 HIGH = "b561bd34ce"
 QUESTION = "Is the qty field ever missing in production carts?"
 ANSWER = "Only from the legacy checkout, which still exists."
@@ -43,10 +44,12 @@ def logs_env(tmp_path, monkeypatch):
 
 
 def _post(port, route, body, token):
-    req = urllib.request.Request(f"http://127.0.0.1:{port}{route}", method="POST",
-                                 data=json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json",
-                                          "X-Review-Token": token})
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}{route}",
+        method="POST",
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json", "X-Review-Token": token},
+    )
     try:
         with urllib.request.urlopen(req, timeout=5) as resp:
             return resp.status, json.loads(resp.read())
@@ -57,9 +60,24 @@ def _post(port, route, body, token):
 def test_cycle_logs_events_without_text_or_token(findings_path, logs_env, tmp_path):
     port = free_port()
     server = subprocess.Popen(
-        [PYTHON, "-m", "review_viewer", "--session-id", "sess-L", "serve", str(findings_path),
-         "--port", str(port), "--idle", "0"],
-        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=logs_env)
+        [
+            PYTHON,
+            "-m",
+            "review_viewer",
+            "--session-id",
+            "sess-L",
+            "serve",
+            str(findings_path),
+            "--port",
+            str(port),
+            "--idle",
+            "0",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        env=logs_env,
+    )
     try:
         for line in server.stdout:
             if line.startswith("monitor:"):
@@ -68,19 +86,48 @@ def test_cycle_logs_events_without_text_or_token(findings_path, logs_env, tmp_pa
         token = (box / "server.token").read_text().strip()
         slug = json.loads(findings_path.read_text())["target"]["slug"]
 
-        status, res = _post(port, "/api/ask", {"target": slug, "finding_id": HIGH,
-                                               "text": QUESTION}, token)
+        status, res = _post(
+            port,
+            "/api/ask",
+            {"target": slug, "finding_id": HIGH, "text": QUESTION},
+            token,
+        )
         assert status == 200
         answer = tmp_path / "answer.md"
         answer.write_text(ANSWER, encoding="utf-8")
         reply = subprocess.run(
-            [PYTHON, "-m", "review_viewer", "--session-id", "sess-L", "reply", "--box", str(box),
-             "--to", res["id"], "--file", str(answer)], capture_output=True, text=True,
-            env=logs_env)
+            [
+                PYTHON,
+                "-m",
+                "review_viewer",
+                "--session-id",
+                "sess-L",
+                "reply",
+                "--box",
+                str(box),
+                "--to",
+                res["id"],
+                "--file",
+                str(answer),
+            ],
+            capture_output=True,
+            text=True,
+            env=logs_env,
+        )
         assert reply.returncode == 0, reply.stderr
-        assert _post(port, "/api/decision", {"target": slug, "finding_id": HIGH,
-                                             "decision": "reject"}, token)[0] == 200
-        assert _post(port, "/api/ask", {"target": slug, "text": "x"}, "bad-token")[0] == 401
+        assert (
+            _post(
+                port,
+                "/api/decision",
+                {"target": slug, "finding_id": HIGH, "decision": "reject"},
+                token,
+            )[0]
+            == 200
+        )
+        assert (
+            _post(port, "/api/ask", {"target": slug, "text": "x"}, "bad-token")[0]
+            == 401
+        )
         assert _post(port, "/api/shutdown", {}, token)[0] == 200
         server.wait(timeout=10)
     finally:
@@ -90,15 +137,27 @@ def test_cycle_logs_events_without_text_or_token(findings_path, logs_env, tmp_pa
     logs = _get_logs_dir()
     assert logs == tmp_path / "ws" / ".multiplai" / "data" / "logs"
     assert _read_logs(logs, "review-viewer", "log")
-    records = [json.loads(line) for line in _read_logs(logs, "activity", "jsonl").splitlines()
-               if line.strip()]
+    records = [
+        json.loads(line)
+        for line in _read_logs(logs, "activity", "jsonl").splitlines()
+        if line.strip()
+    ]
     ours = [r for r in records if r.get("component") == "review-viewer"]
     events = [r["event"] for r in ours]
-    for expected in ("start", "question", "reply", "decision", "rejected_request", "stop"):
+    for expected in (
+        "start",
+        "question",
+        "reply",
+        "decision",
+        "rejected_request",
+        "stop",
+    ):
         assert expected in events, (expected, events)
     by_event = {r["event"]: r for r in ours}
     assert by_event["question"]["chars"] == len(QUESTION)
-    assert by_event["reply"]["done"] is True and by_event["reply"]["chars"] == len(ANSWER)
+    assert by_event["reply"]["done"] is True and by_event["reply"]["chars"] == len(
+        ANSWER
+    )
     assert by_event["decision"]["decision"] == "reject"
     assert by_event["decision"]["msg"] == f"finding {HIGH} rejected"
     assert by_event["start"]["port"] == port
@@ -115,7 +174,14 @@ def test_rejected_requests_are_rate_limited(start_live, logs_env):
     live = start_live()
     for _ in range(5):
         assert live.request("GET", "/api/whoami", token="nope")[0] == 401
-    records = [json.loads(line) for line in
-               _read_logs(_get_logs_dir(), "activity", "jsonl").splitlines() if line.strip()]
-    rejected = [r for r in records if r.get("event") == "rejected_request" and r["status"] == 401]
+    records = [
+        json.loads(line)
+        for line in _read_logs(_get_logs_dir(), "activity", "jsonl").splitlines()
+        if line.strip()
+    ]
+    rejected = [
+        r
+        for r in records
+        if r.get("event") == "rejected_request" and r["status"] == 401
+    ]
     assert len(rejected) == 1

@@ -44,19 +44,25 @@ async def run_docs_update(config, state=None) -> tuple[list[str], GateResult]:
     )
 
     agent = await agent_call(
-        prompt, allowed_tools=DOCS_TOOLS,
-        model=config.model_for("docs_update"), effort=config.effort_for("docs_update"),
-        cwd=str(config.project_dir), budget_label="docs_update",
+        prompt,
+        allowed_tools=DOCS_TOOLS,
+        model=config.model_for("docs_update"),
+        effort=config.effort_for("docs_update"),
+        cwd=str(config.project_dir),
+        budget_label="docs_update",
     )
     if not agent.success:
-        raise RuntimeError(f"Documentation writer failed: {agent.error or agent.output}")
+        raise RuntimeError(
+            f"Documentation writer failed: {agent.error or agent.output}"
+        )
     output = agent.output or ""
 
     files = parse_docs_impact(output)
     gate = docs_freshness_gate(diff, files, Path(config.project_dir))
     log.info(
         "DONE step=DOCS_UPDATE files=%s gate=%s",
-        files if files else "none", gate.action or "ok",
+        files if files else "none",
+        gate.action or "ok",
     )
     return list(files or []), gate
 

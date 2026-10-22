@@ -3,6 +3,7 @@
 They fail rather than skip without node, as review-viewer's do: CI's runner
 image ships node.
 """
+
 from __future__ import annotations
 
 import json
@@ -21,8 +22,13 @@ STATIC = TESTS.parent / "skills" / "video-edit" / "scripts" / "static"
 def test_page_logic_under_node() -> None:
     node = shutil.which("node")
     assert node, "node is required for the page-logic tests"
-    proc = subprocess.run([node, "--test", str(TESTS / "review_logic.test.js")], capture_output=True,
-                          text=True, cwd=TESTS.parent, timeout=120)
+    proc = subprocess.run(
+        [node, "--test", str(TESTS / "review_logic.test.js")],
+        capture_output=True,
+        text=True,
+        cwd=TESTS.parent,
+        timeout=120,
+    )
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
@@ -30,23 +36,39 @@ def test_page_logic_under_node() -> None:
 def test_every_page_script_parses(name: str) -> None:
     node = shutil.which("node")
     assert node, "node is required for the page-logic tests"
-    proc = subprocess.run([node, "--check", str(STATIC / name)], capture_output=True, text=True, timeout=60)
+    proc = subprocess.run(
+        [node, "--check", str(STATIC / name)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
     assert proc.returncode == 0, proc.stderr
 
 
 def test_the_page_loads_logic_and_app_first_then_one_script_per_tab() -> None:
     html = (STATIC / "review.html").read_text()
     scripts = re.findall(r'<script src="/static/([^"]+)"></script>', html)
-    assert scripts == ["logic.js", "app.js", "tab-clips.js", "tab-speakers.js", "tab-look.js",
-                       "tab-music.js", "tab-review.js", "review-style.js", "review-live.js"]
+    assert scripts == [
+        "logic.js",
+        "app.js",
+        "tab-clips.js",
+        "tab-speakers.js",
+        "tab-look.js",
+        "tab-music.js",
+        "tab-review.js",
+        "review-style.js",
+        "review-live.js",
+    ]
     assert all((STATIC / s).is_file() for s in scripts)
-    assert "<script>" not in html                      # CSP: script-src 'self', no inline scripts
+    assert "<script>" not in html  # CSP: script-src 'self', no inline scripts
 
 
 def test_each_tab_file_registers_the_tab_it_is_named_for() -> None:
     """A wrong id in registerTab leaves its panel blank; the script-order test cannot see that."""
     logic = (STATIC / "logic.js").read_text()
-    tabs = re.findall(r'"([a-z]+)"', re.search(r"const TABS = \[([^\]]+)\]", logic).group(1))
+    tabs = re.findall(
+        r'"([a-z]+)"', re.search(r"const TABS = \[([^\]]+)\]", logic).group(1)
+    )
     files = sorted(p.stem.removeprefix("tab-") for p in STATIC.glob("tab-*.js"))
     assert sorted(tabs) == files
     for tab in tabs:
@@ -61,12 +83,24 @@ def test_the_page_and_the_server_agree_on_the_drawing_and_body_limits() -> None:
 
     node = shutil.which("node")
     assert node, "node is required for the page-logic tests"
-    names = ["MAX_SHAPES", "MAX_PEN_POINTS", "MAX_DRAWING_POINTS", "MAX_MARK_BYTES", "MAX_BODY_BYTES"]
-    script = (f"const L = require({json.dumps(str(STATIC / 'logic.js'))});"
-              f"console.log(JSON.stringify({json.dumps(names)}.map((n) => L[n])))")
-    proc = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=60)
+    names = [
+        "MAX_SHAPES",
+        "MAX_PEN_POINTS",
+        "MAX_DRAWING_POINTS",
+        "MAX_MARK_BYTES",
+        "MAX_BODY_BYTES",
+    ]
+    script = (
+        f"const L = require({json.dumps(str(STATIC / 'logic.js'))});"
+        f"console.log(JSON.stringify({json.dumps(names)}.map((n) => L[n])))"
+    )
+    proc = subprocess.run(
+        [node, "-e", script], capture_output=True, text=True, timeout=60
+    )
     assert proc.returncode == 0, proc.stderr
-    assert dict(zip(names, json.loads(proc.stdout))) == {n: getattr(rs, n) for n in names}
+    assert dict(zip(names, json.loads(proc.stdout))) == {
+        n: getattr(rs, n) for n in names
+    }
 
 
 def test_the_page_and_the_server_agree_on_what_a_restyle_may_change() -> None:
@@ -75,9 +109,13 @@ def test_the_page_and_the_server_agree_on_what_a_restyle_may_change() -> None:
 
     node = shutil.which("node")
     assert node, "node is required for the page-logic tests"
-    script = (f"const L = require({json.dumps(str(STATIC / 'logic.js'))});"
-              "console.log(JSON.stringify([L.RESTYLE_PROPS, L.MAX_SELECTOR]))")
-    proc = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=60)
+    script = (
+        f"const L = require({json.dumps(str(STATIC / 'logic.js'))});"
+        "console.log(JSON.stringify([L.RESTYLE_PROPS, L.MAX_SELECTOR]))"
+    )
+    proc = subprocess.run(
+        [node, "-e", script], capture_output=True, text=True, timeout=60
+    )
     assert proc.returncode == 0, proc.stderr
     props, max_selector = json.loads(proc.stdout)
     assert (tuple(props), max_selector) == (rs.RESTYLE_PROPS, rs.MAX_SELECTOR)

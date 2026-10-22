@@ -38,16 +38,48 @@ CITED_CONTEXT = 12
 HUNK_CONTEXT = 3
 
 LANGUAGES = {
-    ".py": "python", ".pyi": "python", ".js": "javascript", ".mjs": "javascript",
-    ".cjs": "javascript", ".jsx": "javascript", ".ts": "typescript",
-    ".tsx": "typescript", ".json": "json", ".md": "markdown", ".html": "xml",
-    ".htm": "xml", ".xml": "xml", ".svg": "xml", ".css": "css", ".scss": "scss",
-    ".sh": "bash", ".bash": "bash", ".zsh": "bash", ".yml": "yaml",
-    ".yaml": "yaml", ".toml": "ini", ".ini": "ini", ".cfg": "ini", ".sql": "sql",
-    ".go": "go", ".rs": "rust", ".swift": "swift", ".java": "java",
-    ".kt": "kotlin", ".rb": "ruby", ".php": "php", ".c": "c", ".h": "c",
-    ".cpp": "cpp", ".hpp": "cpp", ".cc": "cpp", ".cs": "csharp",
-    ".dockerfile": "dockerfile", ".tf": "hcl", ".lua": "lua", ".r": "r",
+    ".py": "python",
+    ".pyi": "python",
+    ".js": "javascript",
+    ".mjs": "javascript",
+    ".cjs": "javascript",
+    ".jsx": "javascript",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".json": "json",
+    ".md": "markdown",
+    ".html": "xml",
+    ".htm": "xml",
+    ".xml": "xml",
+    ".svg": "xml",
+    ".css": "css",
+    ".scss": "scss",
+    ".sh": "bash",
+    ".bash": "bash",
+    ".zsh": "bash",
+    ".yml": "yaml",
+    ".yaml": "yaml",
+    ".toml": "ini",
+    ".ini": "ini",
+    ".cfg": "ini",
+    ".sql": "sql",
+    ".go": "go",
+    ".rs": "rust",
+    ".swift": "swift",
+    ".java": "java",
+    ".kt": "kotlin",
+    ".rb": "ruby",
+    ".php": "php",
+    ".c": "c",
+    ".h": "c",
+    ".cpp": "cpp",
+    ".hpp": "cpp",
+    ".cc": "cpp",
+    ".cs": "csharp",
+    ".dockerfile": "dockerfile",
+    ".tf": "hcl",
+    ".lua": "lua",
+    ".r": "r",
 }
 FILENAMES = {"Dockerfile": "dockerfile", "Makefile": "makefile"}
 
@@ -84,7 +116,9 @@ class FileView:
         return asdict(self)
 
 
-GIT_MISSING = "this skill reads the review's commits with git; install git and run it again"
+GIT_MISSING = (
+    "this skill reads the review's commits with git; install git and run it again"
+)
 
 
 # Settings that would otherwise let the user's or the repo's git config
@@ -95,13 +129,22 @@ _DIFF_FLAGS = ("--no-color", "--no-ext-diff", "--no-textconv")
 
 
 def git(repo: str | Path, *args: str, ok: tuple[int, ...] = (0,)) -> str:
-    env = {k: v for k, v in os.environ.items() if k not in ("GIT_EXTERNAL_DIFF", "GIT_PAGER")}
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("GIT_EXTERNAL_DIFF", "GIT_PAGER")
+    }
     env["GIT_TERMINAL_PROMPT"] = "0"
     try:
         proc = subprocess.run(
-            ["git", *_GIT_CONFIG, "-C", str(repo), *args], shell=False,
-            stdin=subprocess.DEVNULL, capture_output=True, encoding="utf-8",
-            errors="replace", env=env)
+            ["git", *_GIT_CONFIG, "-C", str(repo), *args],
+            shell=False,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+        )
     except FileNotFoundError:
         raise GitError(GIT_MISSING) from None
     if proc.returncode not in ok:
@@ -226,15 +269,20 @@ def tree_pathspec(target: Target) -> list[str]:
     """`["--", <dir>]` for a tree review whose files share a directory, else []."""
     if target.base_sha != EMPTY_TREE or not target.files_changed:
         return []
-    common = os.path.commonpath(target.files_changed) if len(target.files_changed) > 1 \
+    common = (
+        os.path.commonpath(target.files_changed)
+        if len(target.files_changed) > 1
         else os.path.dirname(target.files_changed[0])
+    )
     return ["--", common] if common else []
 
 
 def repo_files(target: Target) -> list[str]:
     """Every file (blob) at head, in git's order; for a tree review, only under
     the directory it reviewed. Submodules are left out: there is no text to show."""
-    out = git(target.repo_path, "ls-tree", "-r", "-z", target.head_sha, *tree_pathspec(target))
+    out = git(
+        target.repo_path, "ls-tree", "-r", "-z", target.head_sha, *tree_pathspec(target)
+    )
     files = []
     for rec in out.split("\0"):
         meta, _, name = rec.partition("\t")
@@ -243,8 +291,12 @@ def repo_files(target: Target) -> list[str]:
     return files
 
 
-def allowed_paths(target: Target, findings: FindingsFile | None,
-                  listed: list[str] | None = None, extra: Iterable[str] = ()) -> set[str]:
+def allowed_paths(
+    target: Target,
+    findings: FindingsFile | None,
+    listed: list[str] | None = None,
+    extra: Iterable[str] = (),
+) -> set[str]:
     """The paths the file route serves: changed files, finding and citation
     paths, `listed` (`repo_files()`: every file git lists at head) and `extra`
     (the entry, handler and hop files of an accepted paths.json, which
@@ -288,27 +340,45 @@ def definition_pattern(name: str) -> str:
         raise ValueError(f"not an identifier: {name!r}")
     n = name.replace("$", r"\$")
     end = "([^A-Za-z0-9_$]|$)"
-    keywords = "def|class|function\\*?|func|fn|type|interface|struct|enum|trait|const|let|var"
-    lead = (f"^{_S}*(export{_S}+)?(default{_S}+)?(pub(\\([^)]*\\))?{_S}+)?(async{_S}+)?"
-            f"(abstract{_S}+)?(static{_S}+)?")
+    keywords = (
+        "def|class|function\\*?|func|fn|type|interface|struct|enum|trait|const|let|var"
+    )
+    lead = (
+        f"^{_S}*(export{_S}+)?(default{_S}+)?(pub(\\([^)]*\\))?{_S}+)?(async{_S}+)?"
+        f"(abstract{_S}+)?(static{_S}+)?"
+    )
     forms = [
         f"{lead}({keywords}){_S}+{n}{end}",
         f"^{_S}*func{_S}*\\([^)]*\\){_S}*{n}{end}",
         f"^{n}{_S}*(:[^=]*)?=([^=]|$)",
         f"^{_S}*{_any_case('create')}{_S}+({_any_case('or')}{_S}+{_any_case('replace')}{_S}+)?"
-        f"{_any_case('function')}{_S}+([A-Za-z0-9_\".]+\\.)?\"?{n}\"?{end}",
+        f'{_any_case("function")}{_S}+([A-Za-z0-9_".]+\\.)?"?{n}"?{end}',
     ]
     return "|".join(f"({f})" for f in forms)
 
 
-def definitions(target: Target, name: str, allowed: set[str],
-                limit: int = DEFINITIONS_MAX) -> list[dict]:
+def definitions(
+    target: Target, name: str, allowed: set[str], limit: int = DEFINITIONS_MAX
+) -> list[dict]:
     """Lines at head that look like they define `name`: [{path, line, text}],
     at most `limit`, only in paths the file route serves (`allowed`).
     Raises ValueError for a name that is not an identifier."""
     pattern = definition_pattern(name)
-    out = git(target.repo_path, "grep", "-n", "-I", "--null", "--full-name", "--no-color", "-E",
-              "-e", pattern, target.head_sha, *(tree_pathspec(target) or ["--"]), ok=(0, 1))
+    out = git(
+        target.repo_path,
+        "grep",
+        "-n",
+        "-I",
+        "--null",
+        "--full-name",
+        "--no-color",
+        "-E",
+        "-e",
+        pattern,
+        target.head_sha,
+        *(tree_pathspec(target) or ["--"]),
+        ok=(0, 1),
+    )
     prefix = f"{target.head_sha}:"
     hits: list[dict] = []
     for line in split_lines(out):
@@ -318,8 +388,15 @@ def definitions(target: Target, name: str, allowed: set[str],
         if path not in allowed or not number.isdigit():
             continue
         text = text.strip()
-        hits.append({"path": path, "line": int(number),
-                     "text": text if len(text) <= DEFINITION_TEXT_MAX else text[:DEFINITION_TEXT_MAX - 1] + "…"})
+        hits.append(
+            {
+                "path": path,
+                "line": int(number),
+                "text": text
+                if len(text) <= DEFINITION_TEXT_MAX
+                else text[: DEFINITION_TEXT_MAX - 1] + "…",
+            }
+        )
         if len(hits) >= limit:
             break
     return hits
@@ -332,8 +409,11 @@ def _cited_ranges(path: str, findings: FindingsFile | None) -> list[tuple[int, i
     for f in findings.findings:
         if f.file == path:
             ranges.append((f.line_start, f.line_end))
-        ranges.extend((c.line_start, c.line_end) for c in [*f.citations, *(f.verifier_citations or [])]
-                      if c.path == path)
+        ranges.extend(
+            (c.line_start, c.line_end)
+            for c in [*f.citations, *(f.verifier_citations or [])]
+            if c.path == path
+        )
     return sorted(set(ranges))
 
 
@@ -352,9 +432,13 @@ def _exists_at(repo: str, sha: str, path: str) -> bool:
     return True
 
 
-def file_view(target: Target, path: str, findings: FindingsFile | None = None,
-              allowed: set[str] | None = None,
-              extra_ranges: Sequence[tuple[int, int]] = ()) -> FileView:
+def file_view(
+    target: Target,
+    path: str,
+    findings: FindingsFile | None = None,
+    allowed: set[str] | None = None,
+    extra_ranges: Sequence[tuple[int, int]] = (),
+) -> FileView:
     """The file at head, with the diff folded in and cited ranges attached.
     In a file too large to show whole, `extra_ranges` (a path's entry, handler
     and hop lines) stay in view like cited ranges, without being marked cited."""
@@ -363,8 +447,11 @@ def file_view(target: Target, path: str, findings: FindingsFile | None = None,
     if path not in allowed:
         raise PathNotInReview(path)
     repo, base, head = target.repo_path, target.base_sha, target.head_sha
-    view = FileView(path=path, language=language_for(path),
-                    cited_ranges=_cited_ranges(path, findings))
+    view = FileView(
+        path=path,
+        language=language_for(path),
+        cited_ranges=_cited_ranges(path, findings),
+    )
 
     # A file the change leaves alone has no diff, so ask git whether it is
     # binary against the empty tree instead.
@@ -379,13 +466,17 @@ def file_view(target: Target, path: str, findings: FindingsFile | None = None,
         old = split_lines(git(repo, "show", f"{base}:{path}"))
         view.deleted = True
         view.truncated = len(old) > DELETED_PREVIEW_LINES
-        view.rows = [Row("del", i, None, t)
-                     for i, t in enumerate(old[:DELETED_PREVIEW_LINES], 1)]
+        view.rows = [
+            Row("del", i, None, t) for i, t in enumerate(old[:DELETED_PREVIEW_LINES], 1)
+        ]
         return view
 
     lines = split_lines(git(repo, "show", f"{head}:{path}"))
-    added, deleted_before = _hunks(
-        git(repo, "diff", *_DIFF_FLAGS, "--unified=0", base, head, "--", path)) if changed else (set(), {})
+    added, deleted_before = (
+        _hunks(git(repo, "diff", *_DIFF_FLAGS, "--unified=0", base, head, "--", path))
+        if changed
+        else (set(), {})
+    )
 
     keep: set[int] | None = None
     if len(lines) > MAX_FULL_LINES:
@@ -412,7 +503,9 @@ def file_view(target: Target, path: str, findings: FindingsFile | None = None,
             rows.append(Row("add" if n in added else "ctx", None, n, lines[n - 1]))
         last = n
     if keep is not None and last < len(lines):
-        rows.append(Row("gap", None, None, f"… lines {last + 1}–{len(lines)} not shown"))
+        rows.append(
+            Row("gap", None, None, f"… lines {last + 1}–{len(lines)} not shown")
+        )
     view.rows = rows
     return view
 
@@ -428,15 +521,28 @@ def diff_target(repo: str | Path, rev_range: str) -> Target:
         raise ValueError(f"expected <base>..<head>, got {rev_range!r}")
     base_ref, head_ref = rev_range.split("..", 1)
     repo_path = Path(repo).resolve()
-    base = git(repo_path, "rev-parse", "--verify", f"{base_ref or 'HEAD'}^{{commit}}").strip()
-    head = git(repo_path, "rev-parse", "--verify", f"{head_ref or 'HEAD'}^{{commit}}").strip()
-    files = [f for f in git(repo_path, "diff", *_DIFF_FLAGS, "--name-only", "-z", base,
-                            head).split("\0") if f]
+    base = git(
+        repo_path, "rev-parse", "--verify", f"{base_ref or 'HEAD'}^{{commit}}"
+    ).strip()
+    head = git(
+        repo_path, "rev-parse", "--verify", f"{head_ref or 'HEAD'}^{{commit}}"
+    ).strip()
+    files = [
+        f
+        for f in git(
+            repo_path, "diff", *_DIFF_FLAGS, "--name-only", "-z", base, head
+        ).split("\0")
+        if f
+    ]
     return Target(
         slug=f"{slug_part(repo_path.name)}--{base[:8]}..{head[:8]}",
         label=f"{repo_path.name} {rev_range}",
-        repo_path=str(repo_path), remote_url=None,
-        base_sha=base, head_sha=head, files_changed=files)
+        repo_path=str(repo_path),
+        remote_url=None,
+        base_sha=base,
+        head_sha=head,
+        files_changed=files,
+    )
 
 
 # --- target resolution ------------------------------------------------------------
@@ -448,11 +554,15 @@ def diff_target(repo: str | Path, rev_range: str) -> Target:
 
 TargetKind = Literal["pr", "range2", "range3", "path", "branch"]
 
-GH_MISSING = ("a PR target needs the GitHub CLI (`gh`), which is not installed. Install it "
-              "from https://cli.github.com and run `gh auth login`, or pass a <base>..<head> "
-              "range.")
+GH_MISSING = (
+    "a PR target needs the GitHub CLI (`gh`), which is not installed. Install it "
+    "from https://cli.github.com and run `gh auth login`, or pass a <base>..<head> "
+    "range."
+)
 
-_PR_URL_RE = re.compile(r"^https://github\.com/([^/\s]+)/([^/\s]+)/pull/(\d+)(?:[/?#]\S*)?$")
+_PR_URL_RE = re.compile(
+    r"^https://github\.com/([^/\s]+)/([^/\s]+)/pull/(\d+)(?:[/?#]\S*)?$"
+)
 _PR_SHORT_RE = re.compile(r"^([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)#(\d+)$")
 _PR_NUMBER_RE = re.compile(r"^#?(\d+)$")
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -465,6 +575,7 @@ class TargetError(ValueError):
 @dataclass(frozen=True)
 class TargetSpec:
     """What the user typed, classified. No git has run yet."""
+
     kind: TargetKind
     text: str
     owner: str | None = None
@@ -478,6 +589,7 @@ class TargetSpec:
 @dataclass
 class PrInfo:
     """PR metadata for the page header. Held in memory, never in findings.json."""
+
     number: int
     title: str
     author: str
@@ -495,8 +607,15 @@ class PrInfo:
 
 
 _CHECK_PASS = {"SUCCESS", "NEUTRAL", "SKIPPED"}
-_CHECK_FAIL = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE",
-               "STALE"}
+_CHECK_FAIL = {
+    "FAILURE",
+    "ERROR",
+    "CANCELLED",
+    "TIMED_OUT",
+    "ACTION_REQUIRED",
+    "STARTUP_FAILURE",
+    "STALE",
+}
 
 
 def summarize_checks(rollup) -> dict:
@@ -522,6 +641,7 @@ def summarize_checks(rollup) -> dict:
 @dataclass
 class Resolved:
     """A resolved target, plus the PR metadata when the target was a PR."""
+
     target: Target
     pr: PrInfo | None = None
 
@@ -540,10 +660,14 @@ def parse_target(text: str | None, *, cwd: Path | None = None) -> TargetSpec:
         return TargetSpec("path", raw, path=base)
     m = _PR_URL_RE.match(raw)
     if m:
-        return TargetSpec("pr", raw, owner=m.group(1), repo=m.group(2), number=int(m.group(3)))
+        return TargetSpec(
+            "pr", raw, owner=m.group(1), repo=m.group(2), number=int(m.group(3))
+        )
     m = _PR_SHORT_RE.match(raw)
     if m:
-        return TargetSpec("pr", raw, owner=m.group(1), repo=m.group(2), number=int(m.group(3)))
+        return TargetSpec(
+            "pr", raw, owner=m.group(1), repo=m.group(2), number=int(m.group(3))
+        )
     m = _PR_NUMBER_RE.match(raw)
     if m:
         return TargetSpec("pr", raw, number=int(m.group(1)))
@@ -592,7 +716,9 @@ def slug_repo_name(repo: Path) -> str:
 # Same rules as `review_pipeline.target.REVIEW_FILES`, `NOT_OBJECT_NAMES` and
 # `TAKEN_REPO_NAMES`: where a review folder can be under a reviews directory.
 REVIEW_FILES = ("findings.json", "review-state.json", "files.txt")
-NOT_OBJECT_NAMES = frozenset({"rounds", "viewer", "base-tree", "assess-tree", "source", ".git", ".locks"})
+NOT_OBJECT_NAMES = frozenset(
+    {"rounds", "viewer", "base-tree", "assess-tree", "source", ".git", ".locks"}
+)
 TAKEN_REPO_NAMES = frozenset({"legacy", ".locks"})
 # Never a review an older version nested inside a review folder: the folder's own
 # rounds, viewer state and snapshots.
@@ -621,21 +747,34 @@ def review_findings(root: Path) -> list[Path]:
         return found
     own = is_review_folder(root)
     for first in sorted(root.iterdir()):
-        if (not first.is_dir() or first.name in TAKEN_REPO_NAMES or first.name.startswith(".partial-")
-                or (own and first.name in NOT_NESTED_NAMES)):
+        if (
+            not first.is_dir()
+            or first.name in TAKEN_REPO_NAMES
+            or first.name.startswith(".partial-")
+            or (own and first.name in NOT_NESTED_NAMES)
+        ):
             continue
         if (first / "findings.json").is_file():
             found.append(first / "findings.json")
         if is_review_folder(first):
             continue
         for obj in sorted(first.iterdir()):
-            if not obj.is_dir() or obj.name in NOT_OBJECT_NAMES or obj.name.startswith(".partial-"):
+            if (
+                not obj.is_dir()
+                or obj.name in NOT_OBJECT_NAMES
+                or obj.name.startswith(".partial-")
+            ):
                 continue
             if (obj / "findings.json").is_file():
                 found.append(obj / "findings.json")
-            found.extend(nested / "findings.json" for nested in sorted(obj.iterdir())
-                         if nested.is_dir() and nested.name not in NOT_NESTED_NAMES
-                         and not nested.name.startswith(".") and (nested / "findings.json").is_file())
+            found.extend(
+                nested / "findings.json"
+                for nested in sorted(obj.iterdir())
+                if nested.is_dir()
+                and nested.name not in NOT_NESTED_NAMES
+                and not nested.name.startswith(".")
+                and (nested / "findings.json").is_file()
+            )
     return found
 
 
@@ -651,7 +790,7 @@ def legacy_slug(target: Target) -> str | None:
     prefix = sanitize_slug(name) + "--"
     if name == repo.name or not target.slug.startswith(prefix):
         return None
-    return sanitize_slug(f"{repo.name}--{target.slug[len(prefix):]}")
+    return sanitize_slug(f"{repo.name}--{target.slug[len(prefix) :]}")
 
 
 def github_web_base(url: str | None) -> str | None:
@@ -659,8 +798,11 @@ def github_web_base(url: str | None) -> str | None:
     Copied from `review_pipeline.target`."""
     if not url:
         return None
-    m = re.match(r"^(?:https?://(?:[^@/]+@)?github\.com/|git@github\.com:|ssh://git@github\.com/)"
-                 r"([^/]+)/([^/]+?)(?:\.git)?/?$", url)
+    m = re.match(
+        r"^(?:https?://(?:[^@/]+@)?github\.com/|git@github\.com:|ssh://git@github\.com/)"
+        r"([^/]+)/([^/]+?)(?:\.git)?/?$",
+        url,
+    )
     return f"https://github.com/{m.group(1)}/{m.group(2)}" if m else None
 
 
@@ -690,7 +832,7 @@ def default_branch(repo: Path) -> str:
     """`origin/HEAD`'s branch; `main` when origin/HEAD is not set."""
     ref = _try(repo, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD") or ""
     prefix = "refs/remotes/origin/"
-    return ref[len(prefix):] if ref.startswith(prefix) else "main"
+    return ref[len(prefix) :] if ref.startswith(prefix) else "main"
 
 
 def remote_url(repo: Path) -> str | None:
@@ -706,8 +848,13 @@ def _is_repo(path: Path) -> bool:
     return _try(path, "rev-parse", "--git-dir") is not None
 
 
-def _gh_json(repo: Path, number: int, owner_repo: str | None, fields: str,
-             timeout: float | None = None) -> dict:
+def _gh_json(
+    repo: Path,
+    number: int,
+    owner_repo: str | None,
+    fields: str,
+    timeout: float | None = None,
+) -> dict:
     gh = shutil.which("gh")
     if gh is None:
         raise TargetError(GH_MISSING)
@@ -717,43 +864,72 @@ def _gh_json(repo: Path, number: int, owner_repo: str | None, fields: str,
     argv += ["--json", fields]
     env = dict(os.environ, GH_PROMPT_DISABLED="1", GIT_TERMINAL_PROMPT="0")
     try:
-        proc = subprocess.run(argv, cwd=repo, shell=False, stdin=subprocess.DEVNULL,
-                              capture_output=True, encoding="utf-8", errors="replace",
-                              env=env, check=False, timeout=timeout)
+        proc = subprocess.run(
+            argv,
+            cwd=repo,
+            shell=False,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+            check=False,
+            timeout=timeout,
+        )
     except FileNotFoundError:
         raise TargetError(GH_MISSING) from None
     except subprocess.TimeoutExpired:
-        raise TargetError(f"gh pr view {number} did not answer within {timeout:g} s") from None
+        raise TargetError(
+            f"gh pr view {number} did not answer within {timeout:g} s"
+        ) from None
     if proc.returncode != 0:
         raise TargetError(f"gh pr view {number} failed: {proc.stderr.strip()}")
     try:
         info = json.loads(proc.stdout)
     except json.JSONDecodeError:
-        raise TargetError(f"gh pr view {number} printed something that is not JSON") from None
+        raise TargetError(
+            f"gh pr view {number} printed something that is not JSON"
+        ) from None
     if not isinstance(info, dict):
-        raise TargetError(f"gh pr view {number} printed something that is not an object")
+        raise TargetError(
+            f"gh pr view {number} printed something that is not an object"
+        )
     return info
 
 
 def _gh_pr_view(repo: Path, number: int, owner_repo: str | None) -> dict:
-    info = _gh_json(repo, number, owner_repo,
-                    "number,title,author,url,headRefOid,baseRefOid,headRefName,"
-                    "baseRefName,body,statusCheckRollup,mergeable,isDraft,reviewDecision")
+    info = _gh_json(
+        repo,
+        number,
+        owner_repo,
+        "number,title,author,url,headRefOid,baseRefOid,headRefName,"
+        "baseRefName,body,statusCheckRollup,mergeable,isDraft,reviewDecision",
+    )
     for key in ("headRefOid", "baseRefOid", "baseRefName"):
         if not isinstance(info.get(key), str) or not info[key]:
             raise TargetError(f"gh pr view {number} did not return {key}")
     return info
 
 
-def pr_status(repo: str | Path, number: int, url: str = "", timeout: float = 6.0) -> dict:
+def pr_status(
+    repo: str | Path, number: int, url: str = "", timeout: float = 6.0
+) -> dict:
     """The parts of an open PR that change while you read it: check counts,
     mergeable, draft, review decision. One `gh pr view` call."""
     m = _PR_URL_RE.match(url or "")
-    info = _gh_json(Path(repo), number, f"{m[1]}/{m[2]}" if m else None,
-                    "statusCheckRollup,mergeable,isDraft,reviewDecision", timeout=timeout)
-    return {"checks": summarize_checks(info.get("statusCheckRollup")),
-            "mergeable": str(info.get("mergeable") or ""), "draft": bool(info.get("isDraft")),
-            "review_decision": str(info.get("reviewDecision") or "")}
+    info = _gh_json(
+        Path(repo),
+        number,
+        f"{m[1]}/{m[2]}" if m else None,
+        "statusCheckRollup,mergeable,isDraft,reviewDecision",
+        timeout=timeout,
+    )
+    return {
+        "checks": summarize_checks(info.get("statusCheckRollup")),
+        "mergeable": str(info.get("mergeable") or ""),
+        "draft": bool(info.get("isDraft")),
+        "review_decision": str(info.get("reviewDecision") or ""),
+    }
 
 
 def _pick_repo(spec: TargetSpec, repo: Path | None, cwd: Path) -> Path:
@@ -770,8 +946,10 @@ def _pick_repo(spec: TargetSpec, repo: Path | None, cwd: Path) -> Path:
         want = f"https://github.com/{spec.owner}/{spec.repo}".lower()
         have = _is_repo(chosen) and github_web_base(remote_url(chosen))
         if not have or have.lower() != want:
-            raise TargetError(f"no local clone of {spec.owner}/{spec.repo} here; pass --repo "
-                              f"<path to a clone of {spec.owner}/{spec.repo}>")
+            raise TargetError(
+                f"no local clone of {spec.owner}/{spec.repo} here; pass --repo "
+                f"<path to a clone of {spec.owner}/{spec.repo}>"
+            )
         return chosen
     if not _is_repo(chosen):
         raise TargetError(f"{chosen} is not a git repository; pass --repo <path>")
@@ -783,7 +961,10 @@ def pick_repo(repo: Path | None, cwd: Path) -> Path:
     chosen = Path(repo).expanduser().resolve() if repo is not None else cwd.resolve()
     top = _try(chosen, "rev-parse", "--show-toplevel")
     if not top:
-        raise TargetError(f"{chosen} is not a git repository" + ("" if repo else "; pass --repo <path>"))
+        raise TargetError(
+            f"{chosen} is not a git repository"
+            + ("" if repo else "; pass --repo <path>")
+        )
     return Path(top).resolve()
 
 
@@ -809,12 +990,21 @@ def _base_ref(repo: Path, base_branch: str | None) -> str:
     for ref in (f"origin/{name}", name):
         if rev_parse(repo, ref):
             return ref
-    raise TargetError(f"neither origin/{name} nor {name} exists in {repo}; pass --base <branch>")
+    raise TargetError(
+        f"neither origin/{name} nor {name} exists in {repo}; pass --base <branch>"
+    )
 
 
 def _make_target(repo: Path, slug: str, label: str, base: str, head: str) -> Target:
-    return Target(slug=slug, label=label, repo_path=str(repo), remote_url=remote_url(repo),
-                  base_sha=base, head_sha=head, files_changed=_changed_files(repo, base, head))
+    return Target(
+        slug=slug,
+        label=label,
+        repo_path=str(repo),
+        remote_url=remote_url(repo),
+        base_sha=base,
+        head_sha=head,
+        files_changed=_changed_files(repo, base, head),
+    )
 
 
 def _resolve_pr(spec: TargetSpec, repo: Path) -> Resolved:
@@ -826,31 +1016,52 @@ def _resolve_pr(spec: TargetSpec, repo: Path) -> Resolved:
         # No destination refspec: this writes objects and FETCH_HEAD only,
         # never a branch or a remote-tracking ref.
         try:
-            git(repo, "fetch", "--quiet", "origin", f"refs/pull/{n}/head", info["baseRefName"])
+            git(
+                repo,
+                "fetch",
+                "--quiet",
+                "origin",
+                f"refs/pull/{n}/head",
+                info["baseRefName"],
+            )
         except GitError as exc:
             if str(exc) == GIT_MISSING:
                 raise
-            raise TargetError(f"PR #{n}'s commits are not in {repo}, and fetching them from "
-                              f"origin failed: {exc}") from None
+            raise TargetError(
+                f"PR #{n}'s commits are not in {repo}, and fetching them from "
+                f"origin failed: {exc}"
+            ) from None
     head = rev_parse(repo, head_oid)
     base_tip = rev_parse(repo, base_oid)
     if not head:
-        raise TargetError(f"PR #{n} head {head_oid[:12]} is not in {repo}, even after fetching "
-                          f"refs/pull/{n}/head from origin; is origin the PR's repository?")
+        raise TargetError(
+            f"PR #{n} head {head_oid[:12]} is not in {repo}, even after fetching "
+            f"refs/pull/{n}/head from origin; is origin the PR's repository?"
+        )
     if not base_tip:
-        raise TargetError(f"PR #{n} base {base_oid[:12]} is not in {repo}, even after fetching "
-                          f"{info['baseRefName']} from origin")
+        raise TargetError(
+            f"PR #{n} base {base_oid[:12]} is not in {repo}, even after fetching "
+            f"{info['baseRefName']} from origin"
+        )
     base = merge_base(repo, base_tip, head)
     if not base:
-        raise TargetError(f"PR #{n}: no merge-base between {base_oid[:12]} and {head_oid[:12]}")
+        raise TargetError(
+            f"PR #{n}: no merge-base between {base_oid[:12]} and {head_oid[:12]}"
+        )
     author = info.get("author") or {}
-    pr = PrInfo(number=n, title=str(info.get("title") or ""),
-                author=str(author.get("login") or "") if isinstance(author, dict) else "",
-                url=str(info.get("url") or ""), body=str(info.get("body") or ""),
-                head_ref=str(info.get("headRefName") or ""), base_ref=str(info["baseRefName"]),
-                checks=summarize_checks(info.get("statusCheckRollup")),
-                mergeable=str(info.get("mergeable") or ""), draft=bool(info.get("isDraft")),
-                review_decision=str(info.get("reviewDecision") or ""))
+    pr = PrInfo(
+        number=n,
+        title=str(info.get("title") or ""),
+        author=str(author.get("login") or "") if isinstance(author, dict) else "",
+        url=str(info.get("url") or ""),
+        body=str(info.get("body") or ""),
+        head_ref=str(info.get("headRefName") or ""),
+        base_ref=str(info["baseRefName"]),
+        checks=summarize_checks(info.get("statusCheckRollup")),
+        mergeable=str(info.get("mergeable") or ""),
+        draft=bool(info.get("isDraft")),
+        review_decision=str(info.get("reviewDecision") or ""),
+    )
     slug = sanitize_slug(f"{slug_repo_name(repo)}--pr-{n}")
     return Resolved(_make_target(repo, slug, f"{repo.name} PR #{n}", base, head), pr)
 
@@ -859,8 +1070,10 @@ def _resolve_branch(spec: TargetSpec, repo: Path, base_branch: str | None) -> Re
     name = spec.text
     head = rev_parse(repo, f"refs/heads/{name}") or rev_parse(repo, f"origin/{name}")
     if not head:
-        raise TargetError(f"no branch {name!r} here or on origin (pass --fetch to fetch origin "
-                          "first), and it is not a PR number, a range or a directory")
+        raise TargetError(
+            f"no branch {name!r} here or on origin (pass --fetch to fetch origin "
+            "first), and it is not a PR number, a range or a directory"
+        )
     base_ref = _base_ref(repo, base_branch)
     base = merge_base(repo, base_ref, head)
     if not base:
@@ -886,9 +1099,11 @@ def _resolve_path(spec: TargetSpec, base_branch: str | None) -> Resolved:
         if not base:
             raise TargetError(f"no merge-base between {name} and its upstream")
         if base == head:
-            raise TargetError(f"{name} has no commits that are not pushed to its upstream; "
-                              f"pass the branch name ({name}) to see it against the default "
-                              "branch")
+            raise TargetError(
+                f"{name} has no commits that are not pushed to its upstream; "
+                f"pass the branch name ({name}) to see it against the default "
+                "branch"
+            )
         slug = sanitize_slug(f"{slug_repo_name(repo)}--{name}--unpushed")
         label = f"{repo.name} {name} (not pushed)"
     else:
@@ -901,8 +1116,14 @@ def _resolve_path(spec: TargetSpec, base_branch: str | None) -> Resolved:
     return Resolved(_make_target(repo, slug, label, base, head))
 
 
-def resolve_target(spec: TargetSpec, repo: Path | None, *, base_branch: str | None = None,
-                   fetch: bool = False, cwd: Path | None = None) -> Resolved:
+def resolve_target(
+    spec: TargetSpec,
+    repo: Path | None,
+    *,
+    base_branch: str | None = None,
+    fetch: bool = False,
+    cwd: Path | None = None,
+) -> Resolved:
     """Turn a parsed target into base and head shas.
 
     PR: head = the PR's head commit, base = merge-base(PR base commit, head).
@@ -935,10 +1156,17 @@ def resolve_target(spec: TargetSpec, repo: Path | None, *, base_branch: str | No
     base = merge_base(chosen, left, right)
     if not base:
         raise TargetError(f"no merge-base between {spec.left} and {spec.right}")
-    return Resolved(Target(
-        slug=f"{slug_part(chosen.name)}--{base[:8]}..{right[:8]}",
-        label=f"{chosen.name} {spec.text}", repo_path=str(chosen), remote_url=None,
-        base_sha=base, head_sha=right, files_changed=_changed_files(chosen, base, right)))
+    return Resolved(
+        Target(
+            slug=f"{slug_part(chosen.name)}--{base[:8]}..{right[:8]}",
+            label=f"{chosen.name} {spec.text}",
+            repo_path=str(chosen),
+            remote_url=None,
+            base_sha=base,
+            head_sha=right,
+            files_changed=_changed_files(chosen, base, right),
+        )
+    )
 
 
 # git's empty tree. A review whose base_sha is this reviews a whole tree (or a
@@ -965,17 +1193,34 @@ def tree_target(repo: Path, commit: str = "HEAD", path: str | None = None) -> Ta
         sub = sub[2:]
     sub = "" if sub in ("", ".") else sub
     spec = ["--", sub] if sub else []
-    files = [f for f in git(repo, "ls-tree", "-r", "-z", "--name-only", head, *spec).split("\0") if f]
+    files = [
+        f
+        for f in git(repo, "ls-tree", "-r", "-z", "--name-only", head, *spec).split(
+            "\0"
+        )
+        if f
+    ]
     if not files:
         raise TargetError(f"no file under {sub or 'the tree'} at {head[:12]}")
     slug = sanitize_slug(f"{slug_repo_name(repo)}--tree" + (f"-{sub}" if sub else ""))
     label = f"{repo.name}: {sub or 'whole tree'} at {head[:8]}"
-    return Target(slug=slug, label=label, repo_path=str(repo), remote_url=remote_url(repo),
-                  base_sha=EMPTY_TREE, head_sha=head, files_changed=files)
+    return Target(
+        slug=slug,
+        label=label,
+        repo_path=str(repo),
+        remote_url=remote_url(repo),
+        base_sha=EMPTY_TREE,
+        head_sha=head,
+        files_changed=files,
+    )
 
 
 def diff_findings(target: Target) -> FindingsFile:
     """The in-memory FindingsFile for plain-diff mode: a target and no findings."""
     return FindingsFile(
-        schema_version=1, generated_at=datetime.now(UTC),
-        producer="review-viewer:diff", target=target, findings=[])
+        schema_version=1,
+        generated_at=datetime.now(UTC),
+        producer="review-viewer:diff",
+        target=target,
+        findings=[],
+    )

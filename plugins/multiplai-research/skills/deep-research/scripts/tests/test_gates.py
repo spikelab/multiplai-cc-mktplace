@@ -35,7 +35,9 @@ class TestDeduplicateFindings:
     def test_similar_findings_cluster(self) -> None:
         findings = [
             self._make_finding("httpx supports async HTTP client requests", "high"),
-            self._make_finding("httpx provides async HTTP client functionality", "medium"),
+            self._make_finding(
+                "httpx provides async HTTP client functionality", "medium"
+            ),
             self._make_finding("python httpx async HTTP library client", "low"),
         ]
         result = deduplicate_findings(findings, similarity_threshold=0.3)
@@ -46,16 +48,27 @@ class TestDeduplicateFindings:
         findings = [
             self._make_finding("httpx supports async HTTP requests"),
             self._make_finding("Django uses synchronous request handling by default"),
-            self._make_finding("PostgreSQL supports JSONB column type for document storage"),
+            self._make_finding(
+                "PostgreSQL supports JSONB column type for document storage"
+            ),
         ]
         result = deduplicate_findings(findings)
         assert len(result) == 3  # all distinct
 
     def test_keeps_highest_confidence_per_cluster(self) -> None:
         findings = [
-            self._make_finding("trafilatura extraction score outperforms readability extraction score", "low"),
-            self._make_finding("trafilatura extraction score beats readability extraction library", "high"),
-            self._make_finding("trafilatura extraction score higher than readability extraction", "medium"),
+            self._make_finding(
+                "trafilatura extraction score outperforms readability extraction score",
+                "low",
+            ),
+            self._make_finding(
+                "trafilatura extraction score beats readability extraction library",
+                "high",
+            ),
+            self._make_finding(
+                "trafilatura extraction score higher than readability extraction",
+                "medium",
+            ),
         ]
         result = deduplicate_findings(findings, similarity_threshold=0.3)
         assert len(result) == 1
@@ -72,9 +85,22 @@ class TestDeduplicateFindings:
         """Simulate 5 sources all reporting the same 3 facts = 15 findings → ~3."""
         findings = []
         for i in range(5):
-            findings.append(self._make_finding(f"httpx supports async HTTP client library source{i}", "medium"))
-            findings.append(self._make_finding(f"aiohttp has memory leak issues in version three source{i}", "high"))
-            findings.append(self._make_finding(f"FastAPI is built on top of Starlette framework source{i}", "medium"))
+            findings.append(
+                self._make_finding(
+                    f"httpx supports async HTTP client library source{i}", "medium"
+                )
+            )
+            findings.append(
+                self._make_finding(
+                    f"aiohttp has memory leak issues in version three source{i}", "high"
+                )
+            )
+            findings.append(
+                self._make_finding(
+                    f"FastAPI is built on top of Starlette framework source{i}",
+                    "medium",
+                )
+            )
         assert len(findings) == 15
         result = deduplicate_findings(findings, similarity_threshold=0.3)
         # Should collapse to roughly 3 clusters

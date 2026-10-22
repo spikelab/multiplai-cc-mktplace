@@ -49,37 +49,42 @@ import requests
 
 @pytest.fixture
 def snap(tmp_path):
-    return make_tree(tmp_path / "snap", {
-        "pkg/__init__.py": "",
-        "pkg/cmds.py": CMDS,
-        "pkg/other.py": OTHER,
-        "pkg/tc.py": "def ghost():\n    pass\n",
-        "pkg/cli.py": CLI,
-        "pkg/sub/__init__.py": "",
-        "pkg/sub/c.py": "def c():\n    pass\n",
-        "loose/run.py": "import helper\n",
-        "loose/helper.py": "def h():\n    pass\n",
-        "repo_a/pyproject.toml": "[project]\nname = 'a'\n",
-        "repo_a/tool/__init__.py": "",
-        "repo_a/tool/__main__.py": "from tool.cli import main\n",
-        "repo_a/tool/cli.py": "def main():\n    pass\n",
-        "repo_a/scripts/pyproject.toml": "[project]\nname = 'a-scripts'\n",
-        "repo_a/scripts/job.py": "import only_in_b\n",
-        "repo_b/.git/HEAD": "ref: refs/heads/main\n",
-        "repo_b/tool/__init__.py": "",
-        "repo_b/tool/cli.py": "def main():\n    pass\n",
-        "repo_b/only_in_b.py": "X = 1\n",
-        "repo_c/pyproject.toml": "[project]\nname = 'c'\n",
-        "repo_c/src/tool/__init__.py": "",
-        "repo_c/src/tool/cli.py": "def main():\n    pass\n",
-        "repo_c/tool_user.py": "from tool.cli import main\n",
-        "notes.md": "not python\n",
-        "bad.py": "def broken(:\n",
-        "bin.py": b"x = '\xff\xfe'\n",
-        "nul.py": b"x = 1\x00\n",
-        "bom.py": b"\xef\xbb\xbfdef with_bom():\n    pass\n",
-        "latin.py": "# -*- coding: latin-1 -*-\n\n\ndef caf\u00e9():\n    return '\u00e9'\n".encode("latin-1"),
-    })
+    return make_tree(
+        tmp_path / "snap",
+        {
+            "pkg/__init__.py": "",
+            "pkg/cmds.py": CMDS,
+            "pkg/other.py": OTHER,
+            "pkg/tc.py": "def ghost():\n    pass\n",
+            "pkg/cli.py": CLI,
+            "pkg/sub/__init__.py": "",
+            "pkg/sub/c.py": "def c():\n    pass\n",
+            "loose/run.py": "import helper\n",
+            "loose/helper.py": "def h():\n    pass\n",
+            "repo_a/pyproject.toml": "[project]\nname = 'a'\n",
+            "repo_a/tool/__init__.py": "",
+            "repo_a/tool/__main__.py": "from tool.cli import main\n",
+            "repo_a/tool/cli.py": "def main():\n    pass\n",
+            "repo_a/scripts/pyproject.toml": "[project]\nname = 'a-scripts'\n",
+            "repo_a/scripts/job.py": "import only_in_b\n",
+            "repo_b/.git/HEAD": "ref: refs/heads/main\n",
+            "repo_b/tool/__init__.py": "",
+            "repo_b/tool/cli.py": "def main():\n    pass\n",
+            "repo_b/only_in_b.py": "X = 1\n",
+            "repo_c/pyproject.toml": "[project]\nname = 'c'\n",
+            "repo_c/src/tool/__init__.py": "",
+            "repo_c/src/tool/cli.py": "def main():\n    pass\n",
+            "repo_c/tool_user.py": "from tool.cli import main\n",
+            "notes.md": "not python\n",
+            "bad.py": "def broken(:\n",
+            "bin.py": b"x = '\xff\xfe'\n",
+            "nul.py": b"x = 1\x00\n",
+            "bom.py": b"\xef\xbb\xbfdef with_bom():\n    pass\n",
+            "latin.py": "# -*- coding: latin-1 -*-\n\n\ndef caf\u00e9():\n    return '\u00e9'\n".encode(
+                "latin-1"
+            ),
+        },
+    )
 
 
 class TestModuleNames:
@@ -120,11 +125,17 @@ class TestResolveModule:
 
     def test_same_repository_only_with_colliding_packages(self, snap):
         idx = build(snap)
-        assert idx.resolve_module("repo_a/tool/__main__.py", "tool.cli") == "repo_a/tool/cli.py"
+        assert (
+            idx.resolve_module("repo_a/tool/__main__.py", "tool.cli")
+            == "repo_a/tool/cli.py"
+        )
         assert idx.resolve_module("repo_a/scripts/job.py", "only_in_b") is None
 
     def test_src_layout(self, snap):
-        assert build(snap).resolve_module("repo_c/tool_user.py", "tool.cli") == "repo_c/src/tool/cli.py"
+        assert (
+            build(snap).resolve_module("repo_c/tool_user.py", "tool.cli")
+            == "repo_c/src/tool/cli.py"
+        )
 
     def test_importing_files_own_directory(self, snap):
         assert build(snap).resolve_module("loose/run.py", "helper") == "loose/helper.py"
@@ -142,38 +153,66 @@ class TestResolveModule:
 class TestResolveName:
     def test_function_scope_wins_over_module_scope(self, snap):
         idx = build(snap)
-        h = idx.resolve_name("pkg/cli.py", line_of(CLI, "# function-scope handler"), "handler")
-        assert (h.path, h.line, h.symbol) == ("pkg/other.py", line_of(OTHER, "def handler"), "handler")
+        h = idx.resolve_name(
+            "pkg/cli.py", line_of(CLI, "# function-scope handler"), "handler"
+        )
+        assert (h.path, h.line, h.symbol) == (
+            "pkg/other.py",
+            line_of(OTHER, "def handler"),
+            "handler",
+        )
 
     def test_module_scope_import_outside_the_function(self, snap):
         idx = build(snap)
-        h = idx.resolve_name("pkg/cli.py", line_of(CLI, "# module-scope handler"), "handler")
+        h = idx.resolve_name(
+            "pkg/cli.py", line_of(CLI, "# module-scope handler"), "handler"
+        )
         assert (h.path, h.line, h.symbol) == ("pkg/cmds.py", 1, "handler")
 
     def test_function_local_import_binds_only_inside_its_function(self, snap):
         idx = build(snap)
         # `x` is imported inside main(); at module scope it is unbound.
-        assert idx.resolve_name("pkg/cli.py", line_of(CLI, "# module-scope handler"), "x") is None
-        h = idx.resolve_name("pkg/cli.py", line_of(CLI, "# function-scope handler"), "x")
+        assert (
+            idx.resolve_name("pkg/cli.py", line_of(CLI, "# module-scope handler"), "x")
+            is None
+        )
+        h = idx.resolve_name(
+            "pkg/cli.py", line_of(CLI, "# function-scope handler"), "x"
+        )
         assert (h.path, h.line) == ("pkg/cmds.py", line_of(CMDS, "def x"))
 
     def test_method_and_try_imports_are_collected(self, snap):
         idx = build(snap)
-        h = idx.resolve_name("pkg/cli.py", line_of(CLI, "# method-scope import"), "method_x")
+        h = idx.resolve_name(
+            "pkg/cli.py", line_of(CLI, "# method-scope import"), "method_x"
+        )
         assert (h.path, h.line) == ("pkg/cmds.py", line_of(CMDS, "def x"))
-        t = idx.resolve_name("pkg/cli.py", line_of(CLI, "# module-scope handler"), "tried")
+        t = idx.resolve_name(
+            "pkg/cli.py", line_of(CLI, "# module-scope handler"), "tried"
+        )
         assert (t.path, t.line) == ("pkg/cmds.py", line_of(CMDS, "def tried"))
 
     def test_type_checking_imports_are_excluded(self, snap):
-        assert build(snap).resolve_name("pkg/cli.py", line_of(CLI, "# module-scope handler"), "ghost") is None
+        assert (
+            build(snap).resolve_name(
+                "pkg/cli.py", line_of(CLI, "# module-scope handler"), "ghost"
+            )
+            is None
+        )
 
     def test_locally_defined_function(self, snap):
         h = build(snap).resolve_name("pkg/cli.py", line_of(CLI, "def main"), "local_fn")
-        assert (h.path, h.line, h.symbol) == ("pkg/cli.py", line_of(CLI, "def local_fn"), "local_fn")
+        assert (h.path, h.line, h.symbol) == (
+            "pkg/cli.py",
+            line_of(CLI, "def local_fn"),
+            "local_fn",
+        )
 
     def test_dotted_names_through_module_bindings(self, snap):
         idx = build(snap)
-        assert idx.resolve_name("pkg/cli.py", 1, "pkg.cmds.handler") is None  # `pkg` is unbound in cli.py
+        assert (
+            idx.resolve_name("pkg/cli.py", 1, "pkg.cmds.handler") is None
+        )  # `pkg` is unbound in cli.py
         src = "import pkg.cmds\nimport pkg.cmds as c\nfrom pkg import cmds\nfrom . import sub\n"
         root = make_tree(snap, {"pkg/dotted.py": src})
         idx = build(root)
@@ -193,22 +232,37 @@ class TestResolveName:
         assert not idx.is_external("pkg/cli.py", line, "local_fn")
         assert not idx.is_external("pkg/cli.py", line, "nowhere")
         assert not idx.is_external("repo_a/tool/__main__.py", 1, "main")
-        root = make_tree(snap, {"pkg/reexport.py": "from requests import get\n",
-                                "pkg/user.py": "from pkg.reexport import get\nfrom .sub import nothing\n"})
+        root = make_tree(
+            snap,
+            {
+                "pkg/reexport.py": "from requests import get\n",
+                "pkg/user.py": "from pkg.reexport import get\nfrom .sub import nothing\n",
+            },
+        )
         idx = build(root)
         assert idx.is_external("pkg/user.py", 1, "get")
         assert not idx.is_external("pkg/user.py", 2, "nothing")
 
-    @pytest.mark.parametrize("binding, name", [
-        ("import tools.cli", "tools.cli.not_a_def"),
-        ("import tools", "tools.cli"),
-        ("from tools import cli", "cli.not_a_def"),
-        ("from tools import nothing", "nothing"),
-    ])
-    def test_namespace_package_in_the_repository_is_not_external(self, tmp_path, binding, name):
-        root = make_tree(tmp_path / "snap", {"app.py": f"{binding}\n", "tools/cli.py": "def run():\n    return 0\n"})
+    @pytest.mark.parametrize(
+        "binding, name",
+        [
+            ("import tools.cli", "tools.cli.not_a_def"),
+            ("import tools", "tools.cli"),
+            ("from tools import cli", "cli.not_a_def"),
+            ("from tools import nothing", "nothing"),
+        ],
+    )
+    def test_namespace_package_in_the_repository_is_not_external(
+        self, tmp_path, binding, name
+    ):
+        root = make_tree(
+            tmp_path / "snap",
+            {"app.py": f"{binding}\n", "tools/cli.py": "def run():\n    return 0\n"},
+        )
         assert not build(root).is_external("app.py", 1, name)
-        other = make_tree(tmp_path / "other", {"app.py": "import tool.cli\n", "tools/cli.py": ""})
+        other = make_tree(
+            tmp_path / "other", {"app.py": "import tool.cli\n", "tools/cli.py": ""}
+        )
         assert build(other).is_external("app.py", 1, "tool.cli.run")
 
     def test_unknown_and_third_party_names(self, snap):
@@ -230,13 +284,20 @@ class TestEnclosingScope:
 
     def test_module_level_line_gives_the_whole_module(self, snap):
         idx = build(snap)
-        assert idx.enclosing_scope("pkg/cli.py", line_of(CLI, "import requests")) == (1, len(CLI.splitlines()))
+        assert idx.enclosing_scope("pkg/cli.py", line_of(CLI, "import requests")) == (
+            1,
+            len(CLI.splitlines()),
+        )
 
 
 class TestParseErrors:
     def test_unparseable_files_are_reported_and_the_rest_indexed(self, snap):
         idx = build(snap)
-        assert {path for path, _ in idx.parse_errors()} == {"bad.py", "bin.py", "nul.py"}
+        assert {path for path, _ in idx.parse_errors()} == {
+            "bad.py",
+            "bin.py",
+            "nul.py",
+        }
         assert all(detail for _, detail in idx.parse_errors())
         assert idx.module_name("pkg/cli.py") == "pkg.cli"
 

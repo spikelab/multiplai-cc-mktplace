@@ -173,6 +173,7 @@ class MaintenanceReport:
 
 # --- gate -------------------------------------------------------------------
 
+
 def _state_file(data_dir: Path) -> Path:
     return data_dir / STATE_FILENAME
 
@@ -227,8 +228,9 @@ def doctor_gate_open(state_file: Path, *, now: datetime | None = None) -> bool:
     return gate_open(state_file, now=now, key=DOCTOR_KEY, hours=DOCTOR_GATE_HOURS)
 
 
-def stamp(state_file: Path, *, now: datetime | None = None,
-          key: str = LAST_RUN_KEY) -> None:
+def stamp(
+    state_file: Path, *, now: datetime | None = None, key: str = LAST_RUN_KEY
+) -> None:
     """Record that a run happened under *key*. Best-effort: a failed stamp costs
     one duplicate run next session, so it must never abort the passes.
 
@@ -253,7 +255,10 @@ def stamp_doctor(state_file: Path, *, now: datetime | None = None) -> None:
 
 # --- pass 1: staleness lint -------------------------------------------------
 
-def run_lint(memory_dir: Path, dreams_dir: Path, *, dry_run: bool = False) -> PassResult:
+
+def run_lint(
+    memory_dir: Path, dreams_dir: Path, *, dry_run: bool = False
+) -> PassResult:
     """Write a lint report next to the dream proposals.
 
     Reported, never fixed: the linter's whole design is that it warns about
@@ -279,6 +284,7 @@ def run_lint(memory_dir: Path, dreams_dir: Path, *, dry_run: bool = False) -> Pa
 
 # --- pass 2: dream proposal -------------------------------------------------
 
+
 def pending_proposals(dreams_dir: Path) -> list[Path]:
     """Un-archived proposals sitting in *dreams_dir*, oldest first.
 
@@ -288,12 +294,17 @@ def pending_proposals(dreams_dir: Path) -> list[Path]:
     """
     if not dreams_dir.is_dir():
         return []
-    return sorted(p for p in dreams_dir.glob("processed-learnings-*.md")
-                  if p.is_file())
+    return sorted(p for p in dreams_dir.glob("processed-learnings-*.md") if p.is_file())
 
 
-def run_dream(script_dir: Path, dream_state: Path, learnings_dir: Path,
-              dreams_dir: Path, *, dry_run: bool = False) -> PassResult:
+def run_dream(
+    script_dir: Path,
+    dream_state: Path,
+    learnings_dir: Path,
+    dreams_dir: Path,
+    *,
+    dry_run: bool = False,
+) -> PassResult:
     """Generate a consolidation proposal when there is a backlog to consolidate.
 
     Runs plain `dream.py` — deliberately NOT `--auto`. `--auto` applies a whole
@@ -318,9 +329,11 @@ def run_dream(script_dir: Path, dream_state: Path, learnings_dir: Path,
         waiting = pending_proposals(dreams_dir)
         if waiting:
             return PassResult(
-                "dream", False,
+                "dream",
+                False,
                 f"{len(waiting)} proposal(s) already awaiting review "
-                f"(oldest: {waiting[0].name}) — run /dream-remember")
+                f"(oldest: {waiting[0].name}) — run /dream-remember",
+            )
         if dry_run:
             return PassResult("dream", True, "would generate a proposal (dry run)")
 
@@ -330,8 +343,10 @@ def run_dream(script_dir: Path, dream_state: Path, learnings_dir: Path,
             return PassResult("dream", False, f"exit {proc.returncode}")
         return PassResult("dream", True, "proposal generated")
     except subprocess.TimeoutExpired:
-        logger.warning("Dream pass timed out after %.0fs; its process group was killed",
-                       DREAM_PASS_TIMEOUT_S)
+        logger.warning(
+            "Dream pass timed out after %.0fs; its process group was killed",
+            DREAM_PASS_TIMEOUT_S,
+        )
         return PassResult("dream", False, "timed out")
     except Exception as exc:
         logger.exception("Dream pass failed")
@@ -340,20 +355,24 @@ def run_dream(script_dir: Path, dream_state: Path, learnings_dir: Path,
 
 # --- pass 3: catalog refresh ------------------------------------------------
 
+
 def catalog_is_stale(memory_dir: Path, catalog_path: Path) -> bool:
     """True when any memory file is newer than the catalog that indexes it."""
     if not catalog_path.is_file():
         return True
     try:
         cat_mtime = catalog_path.stat().st_mtime
-        return any(f.stat().st_mtime > cat_mtime + CATALOG_STALE_SECONDS
-                   for f in memory_dir.glob("*.md"))
+        return any(
+            f.stat().st_mtime > cat_mtime + CATALOG_STALE_SECONDS
+            for f in memory_dir.glob("*.md")
+        )
     except OSError:
         return False
 
 
-def run_catalog(script_dir: Path, memory_dir: Path, catalogs_dir: Path,
-                *, dry_run: bool = False) -> PassResult:
+def run_catalog(
+    script_dir: Path, memory_dir: Path, catalogs_dir: Path, *, dry_run: bool = False
+) -> PassResult:
     try:
         catalog_path = catalogs_dir / "memory.json"
         if not catalog_is_stale(memory_dir, catalog_path):
@@ -411,9 +430,15 @@ def skills_catalog_is_stale(
         return False
 
 
-def run_skills_catalog(script_dir: Path, catalogs_dir: Path, *,
-                       enable_skills: bool, ttl_hours: float, plugins_dir: Path,
-                       dry_run: bool = False) -> PassResult:
+def run_skills_catalog(
+    script_dir: Path,
+    catalogs_dir: Path,
+    *,
+    enable_skills: bool,
+    ttl_hours: float,
+    plugins_dir: Path,
+    dry_run: bool = False,
+) -> PassResult:
     """Rebuild the skills catalog when it is stale (see the staleness test).
 
     ``--only skills`` runs the generator even when the subprocess does not
@@ -424,7 +449,9 @@ def run_skills_catalog(script_dir: Path, catalogs_dir: Path, *,
         if not enable_skills:
             return PassResult("skills_catalog", False, "enable_skills is off")
         manifest = plugins_dir / "installed_plugins.json"
-        if not skills_catalog_is_stale(catalogs_dir / "skills.json", ttl_hours, manifest):
+        if not skills_catalog_is_stale(
+            catalogs_dir / "skills.json", ttl_hours, manifest
+        ):
             return PassResult("skills_catalog", False, "skills catalog is current")
         if dry_run:
             return PassResult("skills_catalog", True, "would rebuild (dry run)")
@@ -442,8 +469,9 @@ def run_skills_catalog(script_dir: Path, catalogs_dir: Path, *,
         return PassResult("skills_catalog", False, f"error: {exc}")
 
 
-def _skills_catalog_pass(script_dir: Path, catalogs_dir: Path, *,
-                         dry_run: bool) -> PassResult:
+def _skills_catalog_pass(
+    script_dir: Path, catalogs_dir: Path, *, dry_run: bool
+) -> PassResult:
     """``run_skills_catalog`` with its settings read from the plugin options."""
     try:
         from generators.config import load_catalog_config
@@ -451,7 +479,8 @@ def _skills_catalog_pass(script_dir: Path, catalogs_dir: Path, *,
 
         cfg = load_catalog_config()
         return run_skills_catalog(
-            script_dir, catalogs_dir,
+            script_dir,
+            catalogs_dir,
             enable_skills=cfg.enable_skills,
             ttl_hours=cfg.ttl_hours,
             plugins_dir=default_plugins_dir(cfg.plugins_dir or None),
@@ -463,6 +492,7 @@ def _skills_catalog_pass(script_dir: Path, catalogs_dir: Path, *,
 
 
 # --- pass 4: project status -------------------------------------------------
+
 
 def active_project(diary_dir: Path) -> str | None:
     """The project with the most recent diary activity.
@@ -479,7 +509,8 @@ def active_project(diary_dir: Path) -> str | None:
         return max(
             entries_by_project,
             key=lambda p: max(
-                (e.get("timestamp") or "") for e in entries_by_project[p]),
+                (e.get("timestamp") or "") for e in entries_by_project[p]
+            ),
         )
     except Exception:
         logger.exception("Could not determine the active project")
@@ -492,7 +523,9 @@ def run_status(diary_dir: Path, *, dry_run: bool = False) -> PassResult:
         if not project:
             return PassResult("status", False, "no recent diary activity")
         if dry_run:
-            return PassResult("status", True, f"would rebuild now/{project}.md (dry run)")
+            return PassResult(
+                "status", True, f"would rebuild now/{project}.md (dry run)"
+            )
 
         from multiplai_core.env import pick_model
         from synthesize_now import synthesize
@@ -511,6 +544,7 @@ def run_status(diary_dir: Path, *, dry_run: bool = False) -> PassResult:
 
 # --- pass 5: utilisation retention ------------------------------------------
 
+
 def run_utilisation_compact(data_dir: Path, *, dry_run: bool = False) -> PassResult:
     """Collapse utilisation records older than 90 days into running totals.
 
@@ -528,24 +562,30 @@ def run_utilisation_compact(data_dir: Path, *, dry_run: bool = False) -> PassRes
         if dry_run:
             preview = compact(path, dry_run=True)
             return PassResult(
-                "utilisation-compact", True,
+                "utilisation-compact",
+                True,
                 f"would collapse {preview['collapsed']} session record(s) "
                 f"older than {RETENTION_DAYS}d, keeping {preview['kept']} "
-                f"(dry run)")
+                f"(dry run)",
+            )
         result = compact(path)
         if not result["collapsed"]:
-            return PassResult("utilisation-compact", False, "nothing older than "
-                              f"{RETENTION_DAYS}d")
+            return PassResult(
+                "utilisation-compact", False, f"nothing older than {RETENTION_DAYS}d"
+            )
         return PassResult(
-            "utilisation-compact", True,
+            "utilisation-compact",
+            True,
             f"collapsed {result['collapsed']} session record(s) into totals "
-            f"over {result['sections']} section(s)")
+            f"over {result['sections']} section(s)",
+        )
     except Exception as exc:
         logger.exception("Utilisation compaction failed")
         return PassResult("utilisation-compact", False, f"error: {exc}")
 
 
 # --- pass 6: utilisation judge (estimator B) --------------------------------
+
 
 def run_utilisation_judge(data_dir: Path, *, dry_run: bool = False) -> PassResult:
     """Judge a sample of un-judged sessions on the cheap tier.
@@ -572,18 +612,23 @@ def run_utilisation_judge(data_dir: Path, *, dry_run: bool = False) -> PassResul
 
         sample_size = configured_sample_size()
         if sample_size <= 0:
-            return PassResult("utilisation-judge", False,
-                              "disabled (utilisation_judge_sample=0)")
+            return PassResult(
+                "utilisation-judge", False, "disabled (utilisation_judge_sample=0)"
+            )
 
         path = utilisation_path(data_dir)
         eligible = sessions_awaiting_judge(read_records(path))
         if not eligible:
-            return PassResult("utilisation-judge", False, "no sessions awaiting a judgement")
+            return PassResult(
+                "utilisation-judge", False, "no sessions awaiting a judgement"
+            )
         if dry_run:
             return PassResult(
-                "utilisation-judge", True,
+                "utilisation-judge",
+                True,
                 f"would judge {min(sample_size, len(eligible))} of "
-                f"{len(eligible)} eligible session(s) (dry run)")
+                f"{len(eligible)} eligible session(s) (dry run)",
+            )
 
         from multiplai_core.env import pick_model
         from multiplai_core.model_client import create_client
@@ -593,7 +638,10 @@ def run_utilisation_judge(data_dir: Path, *, dry_run: bool = False) -> PassResul
         async def _run() -> dict:
             client = await create_client(component="utilisation_judge")
             return await judge_sessions(
-                path, client=client, model=model, sample_size=sample_size,
+                path,
+                client=client,
+                model=model,
+                sample_size=sample_size,
             )
 
         report = asyncio.run(_run())
@@ -605,8 +653,10 @@ def run_utilisation_judge(data_dir: Path, *, dry_run: bool = False) -> PassResul
             f"plugin {instrument.get('plugin_version', '?')})"
         )
         if report["kept_default"]:
-            detail += (f"; {report['kept_default']} kept the conservative "
-                       f"default (call failed — recorded as unjudged, not unused)")
+            detail += (
+                f"; {report['kept_default']} kept the conservative "
+                f"default (call failed — recorded as unjudged, not unused)"
+            )
         return PassResult("utilisation-judge", True, detail)
     except Exception as exc:
         # Includes create_client raising on vanilla Claude Code: record
@@ -617,7 +667,10 @@ def run_utilisation_judge(data_dir: Path, *, dry_run: bool = False) -> PassResul
 
 # --- pass 7: classified triage apply ----------------------------------------
 
-def run_triage(script_dir: Path, dreams_dir: Path, *, dry_run: bool = False) -> PassResult:
+
+def run_triage(
+    script_dir: Path, dreams_dir: Path, *, dry_run: bool = False
+) -> PassResult:
     """Classify the waiting proposal and apply what clears every check.
 
     The only pass that writes `.multiplai/memory/`. See the module docstring for
@@ -633,27 +686,33 @@ def run_triage(script_dir: Path, dreams_dir: Path, *, dry_run: bool = False) -> 
 
         mode = write_mode()
         if mode == "review":
-            return PassResult("triage", False,
-                              "memory_write_mode=review — nothing applied")
+            return PassResult(
+                "triage", False, "memory_write_mode=review — nothing applied"
+            )
         waiting = pending_proposals(dreams_dir)
         if not waiting:
             return PassResult("triage", False, "no proposal awaiting triage")
         if dry_run:
-            return PassResult("triage", True,
-                              f"would triage {waiting[-1].name} in {mode} mode "
-                              f"(dry run)")
+            return PassResult(
+                "triage",
+                True,
+                f"would triage {waiting[-1].name} in {mode} mode (dry run)",
+            )
 
         proc = run_supervised(
-            uv_run_argv(script_dir / "dream.py", "--triage",
-                        "--proposal", str(waiting[-1])),
+            uv_run_argv(
+                script_dir / "dream.py", "--triage", "--proposal", str(waiting[-1])
+            ),
             timeout=DREAM_PASS_TIMEOUT_S,
         )
         if proc.returncode != 0:
             return PassResult("triage", False, f"exit {proc.returncode}")
         return PassResult("triage", True, f"triaged {waiting[-1].name} in {mode} mode")
     except subprocess.TimeoutExpired:
-        logger.warning("Triage pass timed out after %.0fs; its process group was killed",
-                       DREAM_PASS_TIMEOUT_S)
+        logger.warning(
+            "Triage pass timed out after %.0fs; its process group was killed",
+            DREAM_PASS_TIMEOUT_S,
+        )
         return PassResult("triage", False, "timed out")
     except Exception as exc:
         logger.exception("Triage pass failed")
@@ -662,8 +721,10 @@ def run_triage(script_dir: Path, dreams_dir: Path, *, dry_run: bool = False) -> 
 
 # --- pass 8: the memory doctor (weekly) -------------------------------------
 
-def run_doctor(memory_dir: Path, data_dir: Path, dreams_dir: Path,
-               *, dry_run: bool = False) -> PassResult:
+
+def run_doctor(
+    memory_dir: Path, data_dir: Path, dreams_dir: Path, *, dry_run: bool = False
+) -> PassResult:
     """Duplication, within-file contradiction and dead weight — as a *report*.
 
     **This pass never writes `.multiplai/memory/`** (contract C5), and there is
@@ -711,20 +772,25 @@ def run_doctor(memory_dir: Path, data_dir: Path, dreams_dir: Path,
                     # Vanilla Claude Code with no SDK. The model-backed passes
                     # are skipped and the report says so; there is no heuristic
                     # fallback, because a guess is worse than an absence here.
-                    logger.info("Memory doctor: no model client — model-backed "
-                                "passes will be skipped (contract C3)")
+                    logger.info(
+                        "Memory doctor: no model client — model-backed "
+                        "passes will be skipped (contract C3)"
+                    )
                     client = None
             dup = await doctor_duplication.run_pass(
-                memory_dir, client=client, model=model)
+                memory_dir, client=client, model=model
+            )
             contra = await doctor_contradiction.run_pass(
-                memory_dir, data_dir, client=client, model=model, dry_run=dry_run)
+                memory_dir, data_dir, client=client, model=model, dry_run=dry_run
+            )
             return dup, contra
 
         duplication, contradiction = asyncio.run(_run())
         dead = doctor_deadweight.run_pass(memory_dir, data_dir)
 
         report = doctor_report.render_report(
-            duplication, contradiction, dead, memory_dir=memory_dir)
+            duplication, contradiction, dead, memory_dir=memory_dir
+        )
         doctor_report.assert_not_appliable(report)
 
         summary = (
@@ -734,7 +800,9 @@ def run_doctor(memory_dir: Path, data_dir: Path, dreams_dir: Path,
             f"{_dead_total(dead)} dead-weight finding(s)"
         )
         if dry_run:
-            return PassResult("doctor", True, f"{summary} (dry run — no report written)")
+            return PassResult(
+                "doctor", True, f"{summary} (dry run — no report written)"
+            )
 
         dreams_dir.mkdir(parents=True, exist_ok=True)
         path = dreams_dir / doctor_report.report_name()
@@ -746,11 +814,14 @@ def run_doctor(memory_dir: Path, data_dir: Path, dreams_dir: Path,
 
 
 def _dead_total(dead: dict) -> int:
-    return sum(len(dead.get(name) or [])
-               for name in ("never_retrieved", "retrieved_unused", "expensive"))
+    return sum(
+        len(dead.get(name) or [])
+        for name in ("never_retrieved", "retrieved_unused", "expensive")
+    )
 
 
 # --- orchestration ----------------------------------------------------------
+
 
 def run_maintenance(*, force: bool = False, dry_run: bool = False) -> MaintenanceReport:
     paths = get_paths()
@@ -765,13 +836,21 @@ def run_maintenance(*, force: bool = False, dry_run: bool = False) -> Maintenanc
 
     report = MaintenanceReport(gate_open=True)
     report.passes.append(run_lint(memory_dir, paths.dreams_dir(), dry_run=dry_run))
-    report.passes.append(run_dream(script_dir, paths.dream_state_file(),
-                                   paths.learnings_dir(), paths.dreams_dir(),
-                                   dry_run=dry_run))
-    report.passes.append(run_catalog(script_dir, memory_dir, paths.catalogs_dir(),
-                                     dry_run=dry_run))
-    report.passes.append(_skills_catalog_pass(script_dir, paths.catalogs_dir(),
-                                              dry_run=dry_run))
+    report.passes.append(
+        run_dream(
+            script_dir,
+            paths.dream_state_file(),
+            paths.learnings_dir(),
+            paths.dreams_dir(),
+            dry_run=dry_run,
+        )
+    )
+    report.passes.append(
+        run_catalog(script_dir, memory_dir, paths.catalogs_dir(), dry_run=dry_run)
+    )
+    report.passes.append(
+        _skills_catalog_pass(script_dir, paths.catalogs_dir(), dry_run=dry_run)
+    )
     report.passes.append(run_status(paths.diary_dir(), dry_run=dry_run))
     report.passes.append(run_utilisation_compact(data_dir, dry_run=dry_run))
     report.passes.append(run_utilisation_judge(data_dir, dry_run=dry_run))
@@ -788,8 +867,9 @@ def run_maintenance(*, force: bool = False, dry_run: bool = False) -> Maintenanc
     # The doctor is on its own weekly key. `--force` opens both gates; nothing
     # else lets a daily run drag the weekly pass along with it.
     if force or doctor_gate_open(state):
-        doctor_result = run_doctor(memory_dir, data_dir, paths.dreams_dir(),
-                                   dry_run=dry_run)
+        doctor_result = run_doctor(
+            memory_dir, data_dir, paths.dreams_dir(), dry_run=dry_run
+        )
         report.passes.append(doctor_result)
         # Stamp only a run that actually ran. `run_doctor` catches every
         # exception and returns ran=False, so an unwritable dreams/ or an
@@ -804,9 +884,13 @@ def run_maintenance(*, force: bool = False, dry_run: bool = False) -> Maintenanc
                 "next maintenance run retries instead of waiting a week"
             )
     else:
-        report.passes.append(PassResult(
-            "doctor", False,
-            f"doctor gate closed (<{DOCTOR_GATE_HOURS // 24}d since last run)"))
+        report.passes.append(
+            PassResult(
+                "doctor",
+                False,
+                f"doctor gate closed (<{DOCTOR_GATE_HOURS // 24}d since last run)",
+            )
+        )
 
     if not dry_run:
         stamp(state)
@@ -816,13 +900,19 @@ def run_maintenance(*, force: bool = False, dry_run: bool = False) -> Maintenanc
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Proactive memory maintenance (lint, dream, catalog, "
-                    "status, utilisation compaction, utilisation judge, triage, "
-                    "and the weekly memory doctor)")
-    parser.add_argument("--force", action="store_true",
-                        help="Run even if the 24h gate is closed (also opens the "
-                             "doctor's weekly gate)")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Report what each pass would do; write nothing")
+        "status, utilisation compaction, utilisation judge, triage, "
+        "and the weekly memory doctor)"
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Run even if the 24h gate is closed (also opens the doctor's weekly gate)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report what each pass would do; write nothing",
+    )
     args = parser.parse_args()
 
     # stdin may carry a hook payload; drain it so a piping caller doesn't block.

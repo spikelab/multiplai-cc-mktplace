@@ -17,8 +17,13 @@ def test_new_runs_to_ready_and_commits_only_the_change_dir(repo, model, capsys):
     assert ready_line(out) == f"SPEC:READY:{cdir}:{spec_revision(cdir)}"
     assert is_ready(cdir) == (True, "")
     assert meta(cdir)["spec_status"] == "ready"
-    for name in ("proposal.md", "use-cases.md", "interview.md", "tickets.json",
-                 *(f"requirements/{c}.md" for c in CAPS)):
+    for name in (
+        "proposal.md",
+        "use-cases.md",
+        "interview.md",
+        "tickets.json",
+        *(f"requirements/{c}.md" for c in CAPS),
+    ):
         assert (cdir / name).is_file(), name
     # Only the change dir is in the commit, the run folder is not, and the
     # user's staged file stays staged and uncommitted.
@@ -34,12 +39,19 @@ def test_new_runs_to_ready_and_commits_only_the_change_dir(repo, model, capsys):
 def test_the_order_of_the_calls(repo, model):
     assert run(repo, "new", "throttle", "--auto") == 0
     assert model.labels() == [
-        "interview:questions", "interview:answers", "epic_split", "spec:proposal", "spec:use-cases",
-        *(f"spec:requirements:{c}" for c in CAPS), "consistency"]
+        "interview:questions",
+        "interview:answers",
+        "epic_split",
+        "spec:proposal",
+        "spec:use-cases",
+        *(f"spec:requirements:{c}" for c in CAPS),
+        "consistency",
+    ]
 
 
 def test_the_spend_line_is_last(repo, model, capsys):
     from pm_spec_pipeline.__main__ import cli
+
     assert cli(["new", "throttle", "--project-dir", str(repo), "--auto"]) == 0
     last = capsys.readouterr().out.strip().splitlines()[-1]
     assert last.startswith("SPEND:") and float(last.split(":")[1]) > 0
@@ -68,7 +80,9 @@ def test_a_finished_run_resumed_prints_ready_again_with_no_call(repo, model, cap
     assert len(model.calls) == calls
 
 
-def test_an_untrusted_repository_is_refused_before_any_tool_call(repo, model, monkeypatch, capsys):
+def test_an_untrusted_repository_is_refused_before_any_tool_call(
+    repo, model, monkeypatch, capsys
+):
     monkeypatch.delenv("PM_SPEC_TRUST_REPO")
     assert run(repo, "new", "throttle", "--auto") == 2
     assert "--trust-repo" in capsys.readouterr().out
@@ -90,7 +104,8 @@ def test_models_come_from_specs_config(repo, model):
     (repo / "specs").mkdir()
     (repo / "specs" / "config.yaml").write_text(
         "models:\n  interview: claude-haiku-4-5\n  spec: claude-sonnet-4-5\n  prototype: claude-opus-4-1\n"
-        "efforts:\n  spec: high\n")
+        "efforts:\n  spec: high\n"
+    )
     assert run(repo, "new", "throttle", "--auto") == 0
     by_label = {label: kw for label, _, kw in model.calls}
     assert by_label["interview:questions"]["model"] == "claude-haiku-4-5"
@@ -103,4 +118,9 @@ def test_the_change_yaml_starts_as_draft(repo, model, capsys):
     model["consistency"] = lambda *a: (_ for _ in ()).throw(RuntimeError("down"))
     assert run(repo, "new", "throttle", "--auto") == 1
     assert meta(change_dir(repo))["spec_status"] == "draft"
-    assert json.loads((change_dir(repo) / ".pm-spec" / "state.json").read_text())["handoff"] is None
+    assert (
+        json.loads((change_dir(repo) / ".pm-spec" / "state.json").read_text())[
+            "handoff"
+        ]
+        is None
+    )

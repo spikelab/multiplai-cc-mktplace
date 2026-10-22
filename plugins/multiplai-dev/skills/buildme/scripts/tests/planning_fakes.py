@@ -2,6 +2,7 @@
 
 Completion-contract tests use the public entry points without these fixtures.
 """
+
 from build_pipeline import git_ops
 from build_pipeline.orchestrator import _run_publish
 
@@ -12,9 +13,15 @@ def _plan_fixture(config, state):
     from build_pipeline.spec_generator import reconcile_plan
 
     from tests.spec_fixtures import write_specs
+
     root = config.change_dir
     write_specs(root)
-    for name, text in {"design": "# Design", "unknowns": "# Unknowns", "tasks": "## 1. Behavior\nReturn a value", "rubric": "# Rubric"}.items():
+    for name, text in {
+        "design": "# Design",
+        "unknowns": "# Unknowns",
+        "tasks": "## 1. Behavior\nReturn a value",
+        "rubric": "# Rubric",
+    }.items():
         path = root / f"{name}.md"
         if not path.exists():
             path.write_text(text)
@@ -30,18 +37,22 @@ def _prepare_and_publish(config, state, progress, **kwargs):
 
     from build_pipeline.gates import final_verification
     from build_pipeline.orchestrator import _pre_publish_sections, _worktree_section
+
     os.environ["BUILDME_TRUST_REPO"] = "1"
     config.test_command = config.test_command or "true"
     docs = kwargs.get("docs_dir", config.change_dir)
     sections = [p for p in [_worktree_section(state, docs)] if p is not None]
     sections += _pre_publish_sections(config, state, docs)
     state.publish_sections = [str(p) for p in sections]
-    gate = final_verification(config.test_command, config.project_dir, parallel=config.parallel_tests,
-                             plan_revision=state.spec_gen.revision if state.spec_gen else "")
+    gate = final_verification(
+        config.test_command,
+        config.project_dir,
+        parallel=config.parallel_tests,
+        plan_revision=state.spec_gen.revision if state.spec_gen else "",
+    )
     assert gate.passed, gate.reason
     state.verification = gate.model_dump()
     return _run_publish(config, state, progress, **kwargs)
-
 
 
 from unittest.mock import AsyncMock
@@ -58,10 +69,15 @@ def accepted_planning(monkeypatch, request):
 
     async def generated(cm, change_dir, config, state):
         _plan_fixture(config, state)
-        git_ops.commit_stage(config, f"docs(specs): {config.change_name} — fixture plan", [str(change_dir.relative_to(config.project_dir))])
+        git_ops.commit_stage(
+            config,
+            f"docs(specs): {config.change_name} — fixture plan",
+            [str(change_dir.relative_to(config.project_dir))],
+        )
 
     monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
     real = orchestrator.run_orchestrator
+
     async def run(config, args):
         config.test_command = config.test_command or "true"
         return await real(config, args)
@@ -69,8 +85,15 @@ def accepted_planning(monkeypatch, request):
     monkeypatch.setattr(spec_generator, "_generate_all_artifacts", generated)
     monkeypatch.setattr(spec_steps, "run_tasks_audit", AsyncMock(return_value=[]))
     monkeypatch.setattr(spec_steps, "run_design_audit", AsyncMock(return_value=[]))
-    monkeypatch.setattr(plan_review_steps, "run_plan_review", AsyncMock(return_value=PlanReviewResult(findings=[])))
-    monkeypatch.setattr("build_pipeline.llm_steps.docs_steps.run_docs_update", AsyncMock(return_value=([], GateResult(passed=True, reason="fixture docs"))))
+    monkeypatch.setattr(
+        plan_review_steps,
+        "run_plan_review",
+        AsyncMock(return_value=PlanReviewResult(findings=[])),
+    )
+    monkeypatch.setattr(
+        "build_pipeline.llm_steps.docs_steps.run_docs_update",
+        AsyncMock(return_value=([], GateResult(passed=True, reason="fixture docs"))),
+    )
     monkeypatch.setattr(orchestrator, "run_orchestrator", run)
     if hasattr(request.module, "run_orchestrator"):
         monkeypatch.setattr(request.module, "run_orchestrator", run)

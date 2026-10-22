@@ -50,7 +50,9 @@ TS = "2026-07-31T09:00:00Z"
 FIXTURE_DECISIONS = [
     Decision("update", 1, "applied", file="git-policy.md", target="git-policy.md"),
     Decision("update", 2, "rejected", file="git-policy.md"),
-    Decision("update", 1, "edited", file="technical-pref.md", target="technical-pref.md"),
+    Decision(
+        "update", 1, "edited", file="technical-pref.md", target="technical-pref.md"
+    ),
     Decision("action", 1, "applied"),
     Decision("action", 2, "rejected"),
 ]
@@ -153,13 +155,14 @@ class TestBatchMarking:
     def test_unsorted_indices_match_descending_order(self):
         descending = [
             Decision("update", 2, "rejected", file="git-policy.md"),
-            Decision("update", 1, "applied", file="git-policy.md", target="git-policy.md"),
+            Decision(
+                "update", 1, "applied", file="git-policy.md", target="git-policy.md"
+            ),
         ]
         unsorted = list(reversed(descending))
-        assert (
-            move_many_to_processed(PENDING, unsorted, ts=TS)
-            == move_many_to_processed(PENDING, descending, ts=TS)
-        )
+        assert move_many_to_processed(
+            PENDING, unsorted, ts=TS
+        ) == move_many_to_processed(PENDING, descending, ts=TS)
 
     def test_batch_matches_the_same_decisions_applied_one_at_a_time(self):
         """The stop-and-ask gate: a batched call must not differ *in any way*
@@ -292,9 +295,20 @@ _Items decided via `/dream-remember` or the GUI, moved here so they are no longe
     def test_single_flag_invocation_is_unchanged(self, tmp_path):
         p = _proposal(tmp_path)
         r = _run_dream(
-            tmp_path, "--mark-processed", "--proposal", str(p),
-            "--kind", "update", "--file", "git-policy.md", "--index", "1",
-            "--status", "applied", "--target", "git-policy.md",
+            tmp_path,
+            "--mark-processed",
+            "--proposal",
+            str(p),
+            "--kind",
+            "update",
+            "--file",
+            "git-policy.md",
+            "--index",
+            "1",
+            "--status",
+            "applied",
+            "--target",
+            "git-policy.md",
         )
         assert r.returncode == 0, r.stderr
         assert "Marked update git-policy.md#1 as applied" in r.stdout
@@ -303,8 +317,16 @@ _Items decided via `/dream-remember` or the GUI, moved here so they are no longe
     def test_single_flag_action_item(self, tmp_path):
         p = _proposal(tmp_path)
         r = _run_dream(
-            tmp_path, "--mark-processed", "--proposal", str(p),
-            "--kind", "action", "--index", "1", "--status", "rejected",
+            tmp_path,
+            "--mark-processed",
+            "--proposal",
+            str(p),
+            "--kind",
+            "action",
+            "--index",
+            "1",
+            "--status",
+            "rejected",
         )
         assert r.returncode == 0, r.stderr
         assert "Marked action A1 as rejected" in r.stdout
@@ -313,8 +335,16 @@ _Items decided via `/dream-remember` or the GUI, moved here so they are no longe
     def test_still_reports_no_change_for_an_unknown_item(self, tmp_path):
         p = _proposal(tmp_path)
         r = _run_dream(
-            tmp_path, "--mark-processed", "--proposal", str(p),
-            "--kind", "action", "--index", "99", "--status", "applied",
+            tmp_path,
+            "--mark-processed",
+            "--proposal",
+            str(p),
+            "--kind",
+            "action",
+            "--index",
+            "99",
+            "--status",
+            "applied",
         )
         assert r.returncode == 0, r.stderr
         assert "No change" in r.stdout
@@ -323,20 +353,42 @@ _Items decided via `/dream-remember` or the GUI, moved here so they are no longe
 
 class TestBatchCli:
     def _payload(self):
-        return json.dumps([
-            {"kind": "update", "file": "git-policy.md", "index": 1,
-             "status": "applied", "target": "git-policy.md"},
-            {"kind": "update", "file": "git-policy.md", "index": 2, "status": "rejected"},
-            {"kind": "update", "file": "technical-pref.md", "index": 1,
-             "status": "edited", "target": "technical-pref.md"},
-            {"kind": "action", "index": 1, "status": "applied"},
-            {"kind": "action", "index": 2, "status": "rejected"},
-        ])
+        return json.dumps(
+            [
+                {
+                    "kind": "update",
+                    "file": "git-policy.md",
+                    "index": 1,
+                    "status": "applied",
+                    "target": "git-policy.md",
+                },
+                {
+                    "kind": "update",
+                    "file": "git-policy.md",
+                    "index": 2,
+                    "status": "rejected",
+                },
+                {
+                    "kind": "update",
+                    "file": "technical-pref.md",
+                    "index": 1,
+                    "status": "edited",
+                    "target": "technical-pref.md",
+                },
+                {"kind": "action", "index": 1, "status": "applied"},
+                {"kind": "action", "index": 2, "status": "rejected"},
+            ]
+        )
 
     def test_stdin_array_marks_everything_in_one_call(self, tmp_path):
         p = _proposal(tmp_path)
         r = _run_dream(
-            tmp_path, "--mark-processed", "--proposal", str(p), "--decisions", "-",
+            tmp_path,
+            "--mark-processed",
+            "--proposal",
+            str(p),
+            "--decisions",
+            "-",
             stdin=self._payload(),
         )
         assert r.returncode == 0, r.stderr
@@ -348,11 +400,27 @@ class TestBatchCli:
         the same file (timestamps normalized — the clock is not the contract)."""
         a = _proposal(tmp_path, name="A.md")
         b = _proposal(tmp_path, name="B.md")
-        _run_dream(tmp_path, "--mark-processed", "--proposal", str(a),
-                   "--decisions", "-", stdin=self._payload())
+        _run_dream(
+            tmp_path,
+            "--mark-processed",
+            "--proposal",
+            str(a),
+            "--decisions",
+            "-",
+            stdin=self._payload(),
+        )
         for d in order_decisions(FIXTURE_DECISIONS):
-            args = ["--mark-processed", "--proposal", str(b), "--kind", d.kind,
-                    "--index", str(d.index), "--status", d.status]
+            args = [
+                "--mark-processed",
+                "--proposal",
+                str(b),
+                "--kind",
+                d.kind,
+                "--index",
+                str(d.index),
+                "--status",
+                d.status,
+            ]
             if d.file:
                 args += ["--file", d.file]
             if d.target:
@@ -365,24 +433,43 @@ class TestBatchCli:
         p = _proposal(tmp_path)
         payload = tmp_path / "decisions.json"
         payload.write_text(self._payload())
-        r = _run_dream(tmp_path, "--mark-processed", "--proposal", str(p),
-                       "--decisions", str(payload))
+        r = _run_dream(
+            tmp_path,
+            "--mark-processed",
+            "--proposal",
+            str(p),
+            "--decisions",
+            str(payload),
+        )
         assert r.returncode == 0, r.stderr
         assert "marked 5 processed" in r.stdout
 
     def test_malformed_json_exits_two_and_writes_nothing(self, tmp_path):
         p = _proposal(tmp_path)
-        r = _run_dream(tmp_path, "--mark-processed", "--proposal", str(p),
-                       "--decisions", "-", stdin="not json")
+        r = _run_dream(
+            tmp_path,
+            "--mark-processed",
+            "--proposal",
+            str(p),
+            "--decisions",
+            "-",
+            stdin="not json",
+        )
         assert r.returncode == 2
         assert "ERROR: --decisions could not be read" in r.stdout
         assert p.read_text() == PENDING
 
     def test_invalid_decision_exits_two_and_writes_nothing(self, tmp_path):
         p = _proposal(tmp_path)
-        r = _run_dream(tmp_path, "--mark-processed", "--proposal", str(p),
-                       "--decisions", "-",
-                       stdin='[{"kind":"update","index":1,"status":"applied"}]')
+        r = _run_dream(
+            tmp_path,
+            "--mark-processed",
+            "--proposal",
+            str(p),
+            "--decisions",
+            "-",
+            stdin='[{"kind":"update","index":1,"status":"applied"}]',
+        )
         assert r.returncode == 2
         assert p.read_text() == PENDING
 
@@ -398,8 +485,15 @@ class TestBatchCli:
         original = p.read_bytes()
         d.chmod(0o500)
         try:
-            r = _run_dream(tmp_path, "--mark-processed", "--proposal", str(p),
-                           "--decisions", "-", stdin=self._payload())
+            r = _run_dream(
+                tmp_path,
+                "--mark-processed",
+                "--proposal",
+                str(p),
+                "--decisions",
+                "-",
+                stdin=self._payload(),
+            )
             assert r.returncode == 1
             assert "proposal unchanged" in r.stdout
             assert p.read_bytes() == original
@@ -495,11 +589,15 @@ def _archive(env, proposal, disposition="applied", body="x"):
 
 
 class TestGcLearnings:
-    def test_deletes_a_fully_ledgered_file_whose_proposal_is_archived(self, gc_env, capsys):
+    def test_deletes_a_fully_ledgered_file_whose_proposal_is_archived(
+        self, gc_env, capsys
+    ):
         _write_learnings(gc_env, "2026-07-29.md", LEARNINGS_A)
         _ledger_all(gc_env, "2026-07-29.md", "processed-learnings-2026-07-29.md")
         (gc_env["dreams"] / "applied").mkdir()
-        (gc_env["dreams"] / "applied" / "processed-learnings-2026-07-29.md").write_text("x")
+        (gc_env["dreams"] / "applied" / "processed-learnings-2026-07-29.md").write_text(
+            "x"
+        )
 
         gc_env["dream"]._gc_learnings()
 
@@ -719,7 +817,9 @@ class TestGcDoesNotEatLiveInputs:
 # ---------------------------------------------------------------------------
 
 
-SKILL = (Path(__file__).parent.parent / "skills" / "dream-remember" / "SKILL.md").read_text()
+SKILL = (
+    Path(__file__).parent.parent / "skills" / "dream-remember" / "SKILL.md"
+).read_text()
 
 
 class TestSkillIsBatched:

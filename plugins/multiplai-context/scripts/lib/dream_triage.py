@@ -411,13 +411,17 @@ class Triage:
         for item in self.review:
             # Bucket by the first (most significant) reason so an item appears
             # once; `item.reasons` still carries the rest for the detail line.
-            out.setdefault(item.reasons[0] if item.reasons else "unjudged", []).append(item)
+            out.setdefault(item.reasons[0] if item.reasons else "unjudged", []).append(
+                item
+            )
         return out
 
     def dropped_by_reason(self) -> dict[str, list[Item]]:
         out: dict[str, list[Item]] = {}
         for item in self.dropped:
-            out.setdefault(item.reasons[0] if item.reasons else "judge-drop", []).append(item)
+            out.setdefault(
+                item.reasons[0] if item.reasons else "judge-drop", []
+            ).append(item)
         return out
 
 
@@ -450,9 +454,7 @@ def has_routing_section(proposal: str) -> bool:
     "never ran" *are* distinguishable — but only if somebody checks, which is
     what this exists for.
     """
-    return any(
-        line.startswith("## Routing Warnings") for line in proposal.splitlines()
-    )
+    return any(line.startswith("## Routing Warnings") for line in proposal.splitlines())
 
 
 def duplicate_labels(proposal: str) -> list[tuple[str, int]]:
@@ -720,9 +722,7 @@ def shared_bank_items(triage: Triage) -> tuple[Item, ...]:
     dropped item must not become a pull request on somebody else's repo just
     because it also happened to be bank-bound.
     """
-    return tuple(
-        item for item in triage.review if "shared-bank-write" in item.reasons
-    )
+    return tuple(item for item in triage.review if "shared-bank-write" in item.reasons)
 
 
 def auto_slice(items: list[Item]) -> str:
@@ -848,7 +848,9 @@ def render_receipt(
             "",
         ]
         for item in triage.dropped:
-            _render_item_detail(out, item, drop_reason=item.reasons[0] if item.reasons else "")
+            _render_item_detail(
+                out, item, drop_reason=item.reasons[0] if item.reasons else ""
+            )
     else:
         out += [
             f"{len(triage.dropped)} items were dropped — too many to read here "

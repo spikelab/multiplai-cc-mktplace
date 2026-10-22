@@ -160,12 +160,13 @@ def section_text(memory_dir: Path, key: str) -> str:
 
 # --- findings ---------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class Candidate:
     """One dead-weight finding, carrying the evidence that produced it."""
 
     key: str
-    finding: str            # "never-retrieved" | "retrieved-unused" | "expensive"
+    finding: str  # "never-retrieved" | "retrieved-unused" | "expensive"
     retrieved: int = 0
     bytes: int = 0
     self_report: dict | None = None
@@ -224,8 +225,9 @@ class DeadWeight:
 
     @property
     def total(self) -> int:
-        return (len(self.never_retrieved) + len(self.retrieved_unused)
-                + len(self.expensive))
+        return (
+            len(self.never_retrieved) + len(self.retrieved_unused) + len(self.expensive)
+        )
 
 
 def _estimator_block(row: Mapping, name: str) -> dict:
@@ -270,8 +272,7 @@ def find_dead_weight(
     reports nothing rather than proposing deletions it cannot screen.
     """
     thresholds = table.get("thresholds") or {}
-    min_observations = int(thresholds.get("min_observations")
-                           or util.MIN_OBSERVATIONS)
+    min_observations = int(thresholds.get("min_observations") or util.MIN_OBSERVATIONS)
     coverage = dict(table.get("coverage") or {})
     result = DeadWeight(
         min_observations=min_observations,
@@ -332,18 +333,21 @@ def find_dead_weight(
     def _emit(candidate: Candidate, bucket: list[Candidate]) -> None:
         protect, reason = _protect(candidate)
         if protect:
-            result.protected.append(replace(
-                candidate,
-                protected=True,
-                protected_reason=reason,
-            ))
+            result.protected.append(
+                replace(
+                    candidate,
+                    protected=True,
+                    protected_reason=reason,
+                )
+            )
             return
         bucket.append(candidate)
 
     # --- never retrieved ---
     for key in table.get("never_retrieved") or []:
-        _emit(Candidate(key=str(key), finding="never-retrieved"),
-              result.never_retrieved)
+        _emit(
+            Candidate(key=str(key), finding="never-retrieved"), result.never_retrieved
+        )
 
     # --- retrieved but unused, and expensive ---
     ranked = [r for r in (table.get("sections") or []) if r.get("sufficient")]
@@ -357,8 +361,9 @@ def find_dead_weight(
             judge=_estimator_block(row, "judge"),
             rank_basis=row.get("rank_basis"),
             cost_per_use=row.get("cost_per_use"),
-            zero_use=bool((row.get("zero_estimated_use") or {}).get(
-                row.get("rank_basis"))),
+            zero_use=bool(
+                (row.get("zero_estimated_use") or {}).get(row.get("rank_basis"))
+            ),
             disagreement=bool(row.get("disagreement")),
         )
         if not candidate.key:
@@ -369,23 +374,27 @@ def find_dead_weight(
     unused_keys = {c.key for c in result.retrieved_unused}
     unused_keys |= {c.key for c in result.protected}
     expensive = [
-        r for r in ranked
+        r
+        for r in ranked
         if r.get("key") not in unused_keys
         and isinstance(r.get("cost_per_use"), (int, float))
     ]
     expensive.sort(key=lambda r: (-(r.get("cost_per_use") or 0.0), str(r.get("key"))))
     for row in expensive[:expensive_limit]:
-        _emit(Candidate(
-            key=str(row.get("key")),
-            finding="expensive",
-            retrieved=int(row.get("retrieved") or 0),
-            bytes=int(row.get("bytes") or 0),
-            self_report=_estimator_block(row, "self_report"),
-            judge=_estimator_block(row, "judge"),
-            rank_basis=row.get("rank_basis"),
-            cost_per_use=row.get("cost_per_use"),
-            disagreement=bool(row.get("disagreement")),
-        ), result.expensive)
+        _emit(
+            Candidate(
+                key=str(row.get("key")),
+                finding="expensive",
+                retrieved=int(row.get("retrieved") or 0),
+                bytes=int(row.get("bytes") or 0),
+                self_report=_estimator_block(row, "self_report"),
+                judge=_estimator_block(row, "judge"),
+                rank_basis=row.get("rank_basis"),
+                cost_per_use=row.get("cost_per_use"),
+                disagreement=bool(row.get("disagreement")),
+            ),
+            result.expensive,
+        )
 
     return result
 
@@ -406,11 +415,14 @@ def run_pass(
     )
     payload = result.as_dict()
     payload["disclaimer"] = table.get("disclaimer", util.DISCLAIMER)
-    payload["estimator_notes"] = table.get("estimator_notes", dict(util.ESTIMATOR_NOTES))
+    payload["estimator_notes"] = table.get(
+        "estimator_notes", dict(util.ESTIMATOR_NOTES)
+    )
     return payload
 
 
 # --- rendering --------------------------------------------------------------
+
 
 def _fmt_rate(block: Mapping | None) -> str:
     if not block or not block.get("observed"):
@@ -432,22 +444,30 @@ def _fmt_cost(value: float | None) -> str:
 def _render_candidate(number: str, item: Mapping) -> list[str]:
     out = [f"- **{number}** `{item['key']}`"]
     if item["finding"] == "never-retrieved":
-        out.append("  - No injection record at all. There is **no evidence either "
-                   "way** about its value — it has never reached a prompt.")
+        out.append(
+            "  - No injection record at all. There is **no evidence either "
+            "way** about its value — it has never reached a prompt."
+        )
         return out
     out.append(f"  - retrieved {item['retrieved']}x, {item['bytes']:,} bytes injected")
     out.append(f"  - self-report: {_fmt_rate(item.get('self_report'))}")
     out.append(f"  - judge: {_fmt_rate(item.get('judge'))}")
     basis = item.get("rank_basis") or "—"
     if item.get("zero_use"):
-        out.append(f"  - cost per estimated use: **unbounded** (zero estimated "
-                   f"uses under `{basis}`)")
+        out.append(
+            f"  - cost per estimated use: **unbounded** (zero estimated "
+            f"uses under `{basis}`)"
+        )
     else:
-        out.append(f"  - cost per estimated use: {_fmt_cost(item.get('cost_per_use'))} "
-                   f"(basis: `{basis}`)")
+        out.append(
+            f"  - cost per estimated use: {_fmt_cost(item.get('cost_per_use'))} "
+            f"(basis: `{basis}`)"
+        )
     if item.get("disagreement"):
-        out.append("  - ⚠️ the two estimators disagree past the stated margin. They "
-                   "are marked, never averaged — treat this row as unresolved.")
+        out.append(
+            "  - ⚠️ the two estimators disagree past the stated margin. They "
+            "are marked, never averaged — treat this row as unresolved."
+        )
     return out
 
 
@@ -492,16 +512,25 @@ def render_section(result: Mapping, *, limit: int = 25) -> str:
         return "\n".join(out)
 
     sections = (
-        ("Never retrieved", "never_retrieved",
-         "No injection record at all. Not the same finding as \"retrieved and "
-         "unused\" — there is no evidence either way here."),
-        ("Retrieved, estimated unused", "retrieved_unused",
-         "Injected enough times to count, and estimated used at or below the "
-         "threshold on **both** estimators independently."),
-        ("Expensive per estimated use", "expensive",
-         "Ranked by bytes per estimated use under each row's own named basis. "
-         "One estimator with data is enough to rank a row here — unlike "
-         "\"retrieved, estimated unused\", which needs both."),
+        (
+            "Never retrieved",
+            "never_retrieved",
+            'No injection record at all. Not the same finding as "retrieved and '
+            'unused" — there is no evidence either way here.',
+        ),
+        (
+            "Retrieved, estimated unused",
+            "retrieved_unused",
+            "Injected enough times to count, and estimated used at or below the "
+            "threshold on **both** estimators independently.",
+        ),
+        (
+            "Expensive per estimated use",
+            "expensive",
+            "Ranked by bytes per estimated use under each row's own named basis. "
+            "One estimator with data is enough to rank a row here — unlike "
+            '"retrieved, estimated unused", which needs both.',
+        ),
     )
     prefixes = {"never_retrieved": "N", "retrieved_unused": "U", "expensive": "E"}
     any_found = False

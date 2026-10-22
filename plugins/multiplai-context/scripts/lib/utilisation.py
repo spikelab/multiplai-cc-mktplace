@@ -170,6 +170,7 @@ DISCLAIMER = (
 
 # --- keys -------------------------------------------------------------------
 
+
 def section_key(file: str, section: str | None) -> str:
     """``file.md#Section``, or bare ``file.md`` for a whole-file injection."""
     return f"{file}#{section}" if section else file
@@ -200,6 +201,7 @@ def _parse_ts(value: object) -> datetime | None:
 
 
 # --- io ---------------------------------------------------------------------
+
 
 def iter_records(path: Path) -> Iterator[dict]:
     """Yield well-formed records, skipping anything unparseable.
@@ -347,6 +349,7 @@ def upsert_session(
 
 # --- writing the `injected` half -------------------------------------------
 
+
 def injected_from_inject_events(events: Iterable[dict]) -> list[dict]:
     """Turn ``context``/``inject`` activity events into ``injected`` entries.
 
@@ -373,26 +376,40 @@ def injected_from_inject_events(events: Iterable[dict]) -> list[dict]:
         turn = turn if isinstance(turn, int) else None
         for file in sorted(sections):
             names = sections.get(file)
-            names = [n for n in names if isinstance(n, str)] if isinstance(names, list) else []
+            names = (
+                [n for n in names if isinstance(n, str)]
+                if isinstance(names, list)
+                else []
+            )
             try:
                 file_bytes = int(sizes.get(file) or 0)
             except (TypeError, ValueError):
                 file_bytes = 0
             if not names:
                 # Empty list == the whole file was injected.
-                out.append({
-                    "file": file, "section": None, "bytes": file_bytes,
-                    "turn": turn, "co_picks": 1,
-                })
+                out.append(
+                    {
+                        "file": file,
+                        "section": None,
+                        "bytes": file_bytes,
+                        "turn": turn,
+                        "co_picks": 1,
+                    }
+                )
                 continue
             # No per-section byte count exists upstream; split evenly and say
             # so via co_picks rather than presenting a fabricated exact figure.
             share = file_bytes // len(names)
             for name in names:
-                out.append({
-                    "file": file, "section": name, "bytes": share,
-                    "turn": turn, "co_picks": len(names),
-                })
+                out.append(
+                    {
+                        "file": file,
+                        "section": name,
+                        "bytes": share,
+                        "turn": turn,
+                        "co_picks": len(names),
+                    }
+                )
     return out
 
 
@@ -400,11 +417,13 @@ def _activity_files_oldest_first(logs_dir: Path) -> list[Path]:
     """The activity JSONL files in *logs_dir*, oldest content first."""
     keyed: list[tuple[str, int, Path]] = []
     for path in logs_dir.glob("activity-*.jsonl"):
-        keyed.append((path.stem[len("activity-"):], 1, path))
+        keyed.append((path.stem[len("activity-") :], 1, path))
     legacy = logs_dir / "activity.jsonl"
     if legacy.exists():
         try:
-            day = datetime.fromtimestamp(legacy.stat().st_mtime, UTC).strftime("%Y-%m-%d")
+            day = datetime.fromtimestamp(legacy.stat().st_mtime, UTC).strftime(
+                "%Y-%m-%d"
+            )
         except OSError:
             day = ""
         keyed.append((day, 0, legacy))
@@ -515,12 +534,14 @@ def record_judge(
 def sessions_awaiting_judge(records: Sequence[dict]) -> list[dict]:
     """Session records with injections recorded and no judge verdict yet."""
     return [
-        r for r in records
+        r
+        for r in records
         if is_session_record(r) and r.get("injected") and r.get("judge") is None
     ]
 
 
 # --- aggregation ------------------------------------------------------------
+
 
 @dataclass
 class SectionStat:
@@ -531,9 +552,9 @@ class SectionStat:
     """
 
     key: str
-    retrieved: int = 0          # injections, summed over turns and sessions
-    sessions: int = 0           # distinct sessions it was injected into
-    bytes: int = 0              # characters injected, summed
+    retrieved: int = 0  # injections, summed over turns and sessions
+    sessions: int = 0  # distinct sessions it was injected into
+    bytes: int = 0  # characters injected, summed
     self_report_observed: int = 0
     self_report_used: int = 0
     judge_observed: int = 0
@@ -655,8 +676,11 @@ class SectionStat:
             "legacy_judge": {
                 "observed": self.legacy_judge_observed,
                 "used": self.legacy_judge_used,
-                "rate": (self.legacy_judge_used / self.legacy_judge_observed
-                         if self.legacy_judge_observed else None),
+                "rate": (
+                    self.legacy_judge_used / self.legacy_judge_observed
+                    if self.legacy_judge_observed
+                    else None
+                ),
                 "instrument": "unknown (pre-%s stamp)" % JUDGE_INSTRUMENT_CHANGED_AT,
                 "comparable_to_judge": False,
             },
@@ -666,9 +690,7 @@ class SectionStat:
             },
             "zero_estimated_use": {e: self.zero_estimated_use(e) for e in ESTIMATORS},
             "rank_basis": basis,
-            "cost_per_use": (
-                self.bytes_per_estimated_use(basis) if basis else None
-            ),
+            "cost_per_use": (self.bytes_per_estimated_use(basis) if basis else None),
             "sufficient": basis is not None,
             "disagreement": self.disagreement(margin),
             "estimate": True,
@@ -751,7 +773,8 @@ def aggregate(records: Iterable[dict]) -> Aggregate:
         if isinstance(self_report, list):
             agg.sessions_self_reported += 1
             supported = {
-                k for e in self_report
+                k
+                for e in self_report
                 if (k := _entry_key(e)) is not None and e.get("supported", True)
             }
             for key in per_key:
@@ -778,19 +801,24 @@ def aggregate(records: Iterable[dict]) -> Aggregate:
                     # injected in this session.
                     continue
                 stat = agg.stat(key)
-                setattr(stat, f"{prefix}_observed",
-                        getattr(stat, f"{prefix}_observed") + 1)
+                setattr(
+                    stat, f"{prefix}_observed", getattr(stat, f"{prefix}_observed") + 1
+                )
                 if entry.get("used"):
-                    setattr(stat, f"{prefix}_used",
-                            getattr(stat, f"{prefix}_used") + 1)
+                    setattr(stat, f"{prefix}_used", getattr(stat, f"{prefix}_used") + 1)
     return agg
 
 
 _TOTALS_FIELDS = (
-    "retrieved", "sessions", "bytes",
-    "self_report_observed", "self_report_used",
-    "judge_observed", "judge_used",
-    "legacy_judge_observed", "legacy_judge_used",
+    "retrieved",
+    "sessions",
+    "bytes",
+    "self_report_observed",
+    "self_report_used",
+    "judge_observed",
+    "judge_used",
+    "legacy_judge_observed",
+    "legacy_judge_used",
 )
 
 #: Judge counters, and where they go when a totals record is not stamped. A
@@ -823,8 +851,7 @@ def _fold_totals(agg: Aggregate, record: dict) -> None:
     for attr, name in (
         ("sessions", "sessions"),
         ("sessions_self_reported", "sessions_self_reported"),
-        ("sessions_judged" if stamped else "sessions_judged_legacy",
-         "sessions_judged"),
+        ("sessions_judged" if stamped else "sessions_judged_legacy", "sessions_judged"),
         ("sessions_judged_legacy", "sessions_judged_legacy"),
     ):
         try:
@@ -838,6 +865,7 @@ def _fold_totals(agg: Aggregate, record: dict) -> None:
 
 
 # --- ranking ----------------------------------------------------------------
+
 
 def rank(
     agg: Aggregate,
@@ -925,6 +953,7 @@ def catalog_keys(catalog: dict) -> list[str]:
 
 # --- the table (the thing P4 and P5 consume) --------------------------------
 
+
 def build_table(
     records: Iterable[dict],
     *,
@@ -952,9 +981,7 @@ def build_table(
       outage, "never retrieved" is the entire corpus.
     """
     agg = aggregate(records)
-    ranked, insufficient = rank(
-        agg, min_observations=min_observations, margin=margin
-    )
+    ranked, insufficient = rank(agg, min_observations=min_observations, margin=margin)
     never, whole_only = never_retrieved(agg, known_keys or [])
     observed_sessions = agg.sessions + agg.compacted_sessions
     return {
@@ -992,10 +1019,11 @@ def build_table(
         "never_retrieved": never,
         "never_retrieved_sufficient": observed_sessions >= MIN_COVERAGE_SESSIONS,
         "never_retrieved_reason": (
-            None if observed_sessions >= MIN_COVERAGE_SESSIONS
+            None
+            if observed_sessions >= MIN_COVERAGE_SESSIONS
             else f"only {observed_sessions} session(s) recorded; "
-                 f"{MIN_COVERAGE_SESSIONS} needed before 'never retrieved' "
-                 f"means anything other than 'not enough history'"
+            f"{MIN_COVERAGE_SESSIONS} needed before 'never retrieved' "
+            f"means anything other than 'not enough history'"
         ),
         "only_as_whole_file": whole_only,
     }
@@ -1056,8 +1084,11 @@ def render_table(table: dict, *, limit: int = 25) -> str:
         f"Coverage: {cov['sessions']} session(s) with injections · "
         f"{cov['sessions_self_reported']} self-reported · "
         f"{cov['sessions_judged']} judged"
-        + (f" · {cov['sessions_compacted']} compacted into totals"
-           if cov.get("sessions_compacted") else "")
+        + (
+            f" · {cov['sessions_compacted']} compacted into totals"
+            if cov.get("sessions_compacted")
+            else ""
+        )
     )
     instrument = table.get("judge_instrument") or {}
     legacy = int(instrument.get("legacy_sessions_excluded") or 0)
@@ -1078,7 +1109,7 @@ def render_table(table: dict, *, limit: int = 25) -> str:
     thresholds = table["thresholds"]
     out.append(
         f"Rows with fewer than {thresholds['min_observations']} estimator "
-        f"observations are NOT ranked — see \"insufficient data\" below. "
+        f'observations are NOT ranked — see "insufficient data" below. '
         f"`!` marks estimators disagreeing by more than "
         f"{thresholds['disagreement_margin']:.0%}; they are marked, not averaged. "
         f"`∞` in B/est.use means zero estimated uses under that row's basis — "
@@ -1139,7 +1170,7 @@ def render_table(table: dict, *, limit: int = 25) -> str:
     out.append(f"### Never retrieved ({len(table['never_retrieved'])})")
     out.append("")
     out.append(
-        "A different finding from \"retrieved and unused\": these never reached "
+        'A different finding from "retrieved and unused": these never reached '
         "a prompt at all, so there is no evidence either way about their value."
     )
     if not table.get("never_retrieved_sufficient", True):
@@ -1147,7 +1178,7 @@ def render_table(table: dict, *, limit: int = 25) -> str:
         out.append(
             f"**Not enough history to read this list.** "
             f"{table.get('never_retrieved_reason') or ''} On a fresh install, or "
-            f"after a telemetry gap, \"never retrieved\" is simply everything."
+            f'after a telemetry gap, "never retrieved" is simply everything.'
         )
     out.append("")
     if not table["never_retrieved"]:
@@ -1179,6 +1210,7 @@ def render_table(table: dict, *, limit: int = 25) -> str:
 
 
 # --- retention --------------------------------------------------------------
+
 
 def compact(
     path: Path,
@@ -1243,17 +1275,21 @@ def _compact_locked(
             kept.append(record)
 
     if not stale:
-        return {"collapsed": 0, "kept": len(kept), "sections": sum(
-            len(t.get("sections") or {}) for t in totals_records)}
+        return {
+            "collapsed": 0,
+            "kept": len(kept),
+            "sections": sum(len(t.get("sections") or {}) for t in totals_records),
+        }
 
     if dry_run:
-        return {"collapsed": len(stale), "kept": len(kept), "sections": len(
-            aggregate(totals_records + stale).sections)}
+        return {
+            "collapsed": len(stale),
+            "kept": len(kept),
+            "sections": len(aggregate(totals_records + stale).sections),
+        }
 
     folded = aggregate(totals_records + stale)
-    through = max(
-        (record.get("ts") or "" for record in stale), default=""
-    )
+    through = max((record.get("ts") or "" for record in stale), default="")
     totals = {
         "v": SCHEMA_VERSION,
         "kind": "totals",

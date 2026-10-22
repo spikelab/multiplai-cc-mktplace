@@ -27,8 +27,10 @@ TRIAGE_MAX_TURNS = 30
 _DOC_CHARS = 30_000
 
 NOT_ALLOWED_NOTE = "author not allowed (findings.authors / findings.allow_bots)"
-INJECTION_NOTE = ("not acted on: the comment matches an instruction-injection pattern; "
-                  "read it on the PR")
+INJECTION_NOTE = (
+    "not acted on: the comment matches an instruction-injection pattern; "
+    "read it on the PR"
+)
 
 TriageCall = Callable[..., Awaitable[Triage]]
 
@@ -51,17 +53,24 @@ def _design_text(change_dir: Path) -> str:
     return path.read_text()[:_DOC_CHARS] if path.is_file() else "(none)"
 
 
-def build_prompt(config: BuildConfig, change_dir: Path, comment: PRComment,
-                 earlier: list[TriageRecord] | None = None) -> str:
+def build_prompt(
+    config: BuildConfig,
+    change_dir: Path,
+    comment: PRComment,
+    earlier: list[TriageRecord] | None = None,
+) -> str:
     """*earlier*: the earlier rounds' triaged records on the comment's
     lineage (`history.earlier_rows`), each fenced as data in the prompt."""
     return TRIAGE_PROMPT.format(
         change_name=config.change_name,
-        notice=markdown_notice("a comment left on the pull request", "PR comment",
-                               injection_marker=True),
+        notice=markdown_notice(
+            "a comment left on the pull request", "PR comment", injection_marker=True
+        ),
         author=defang(comment.author, 100, markdown_fences=False),
         location=defang(comment.location, 300, markdown_fences=False),
-        outdated=" (outdated: the lines it was left on have changed since)" if comment.outdated else "",
+        outdated=" (outdated: the lines it was left on have changed since)"
+        if comment.outdated
+        else "",
         fenced_body=comment.fenced_body(),
         earlier=earlier_text(earlier or []),
         requirements=_requirements_text(change_dir),
@@ -78,17 +87,22 @@ def should_triage(comment: PRComment) -> tuple[bool, str]:
     return True, ""
 
 
-async def triage_comment(config: BuildConfig, change_dir: Path, comment: PRComment, *,
-                         call: TriageCall | None = None,
-                         earlier: list[TriageRecord] | None = None) -> Triage:
+async def triage_comment(
+    config: BuildConfig,
+    change_dir: Path,
+    comment: PRComment,
+    *,
+    call: TriageCall | None = None,
+    earlier: list[TriageRecord] | None = None,
+) -> Triage:
     """One read-only agent call. Raises `sdk.LLMCallError` when it fails."""
     call = call or sdk.agent_call_structured
     return await call(
         build_prompt(config, change_dir, comment, earlier),
         Triage,
         allowed_tools=TRIAGE_TOOLS,
-        model=config.model_for('findings_triage'),
-        effort=config.effort_for('findings_triage'),
+        model=config.model_for("findings_triage"),
+        effort=config.effort_for("findings_triage"),
         max_turns=TRIAGE_MAX_TURNS,
         cwd=str(config.project_dir),
         budget_label="findings_triage",
@@ -96,7 +110,11 @@ async def triage_comment(config: BuildConfig, change_dir: Path, comment: PRComme
 
 
 async def triage_round(
-    config: BuildConfig, change_dir: Path, round_n: int, comments: list[PRComment], *,
+    config: BuildConfig,
+    change_dir: Path,
+    round_n: int,
+    comments: list[PRComment],
+    *,
     done: dict[int, Triage] | None = None,
     on_triaged: Callable[[int, Triage], None] | None = None,
     call: TriageCall | None = None,
@@ -116,9 +134,15 @@ async def triage_round(
             continue
         result = done.get(c.id)
         if result is None:
-            log.info("START findings_triage round=%d comment=%d author=%s", round_n, c.id, c.author)
-            result = await triage_comment(config, change_dir, c, call=call,
-                                          earlier=(earlier or {}).get(c.id))
+            log.info(
+                "START findings_triage round=%d comment=%d author=%s",
+                round_n,
+                c.id,
+                c.author,
+            )
+            result = await triage_comment(
+                config, change_dir, c, call=call, earlier=(earlier or {}).get(c.id)
+            )
             done[c.id] = result
             if on_triaged:
                 on_triaged(c.id, result)
@@ -132,8 +156,11 @@ def _cell(text: str, limit: int = 400) -> str:
     return flat.replace("|", "\\|") or "—"
 
 
-def render_findings(round_n: int, records: list[TriageRecord],
-                    spec_issues: list[SpecIssue] | None = None) -> str:
+def render_findings(
+    round_n: int,
+    records: list[TriageRecord],
+    spec_issues: list[SpecIssue] | None = None,
+) -> str:
     """`findings-r<N>.md`: one row per finding id (or comment, when it has no
     id) across rounds 1..N, the latest record first in its history."""
     rows: dict[str, list[TriageRecord]] = {}
@@ -166,13 +193,20 @@ def render_findings(round_n: int, records: list[TriageRecord],
             f"{'yes' if c.allowed else 'no'} | {verdict} | {_cell(reason)} | {_cell(past, 600)} |"
         )
     if spec_issues:
-        out += ["", "## Requirements issues", "",
-                "Recorded for `pm-spec revise`, which edits the requirements; buildme "
-                "does not.", "",
-                "| Finding | Requirement | Recorded in | Code fix |",
-                "|---|---|---|---|"]
+        out += [
+            "",
+            "## Requirements issues",
+            "",
+            "Recorded for `pm-spec revise`, which edits the requirements; buildme "
+            "does not.",
+            "",
+            "| Finding | Requirement | Recorded in | Code fix |",
+            "|---|---|---|---|",
+        ]
         for s in spec_issues:
-            where = f"{s.issues_file} ## {s.heading}" + ("" if s.appended else " (already there)")
+            where = f"{s.issues_file} ## {s.heading}" + (
+                "" if s.appended else " (already there)"
+            )
             out.append(
                 f"| {_cell(s.finding_key, 200)} | {_cell(s.requirement, 200)} | "
                 f"{_cell(where, 300)} | {'deferred until the change is made' if s.defers_fix else '—'} |"
@@ -180,8 +214,12 @@ def render_findings(round_n: int, records: list[TriageRecord],
     return "\n".join(out) + "\n"
 
 
-def write_findings(change_dir: Path, round_n: int, records: list[TriageRecord],
-                   spec_issues: list[SpecIssue] | None = None) -> Path:
+def write_findings(
+    change_dir: Path,
+    round_n: int,
+    records: list[TriageRecord],
+    spec_issues: list[SpecIssue] | None = None,
+) -> Path:
     path = findings_path(change_dir, round_n)
     path.write_text(render_findings(round_n, records, spec_issues))
     return path

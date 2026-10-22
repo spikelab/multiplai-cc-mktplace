@@ -122,7 +122,9 @@ class TestReassessCycleSequentialAndFailureVisibility:
         monkeypatch.setattr(pipeline, "_run_verification", fake_verification)
 
         # Must not raise despite the verification failure
-        await pipeline._run_reassess_cycle(config, state, _as_router(StubRouter()), progress)
+        await pipeline._run_reassess_cycle(
+            config, state, _as_router(StubRouter()), progress
+        )
 
         assert order == ["refinement:start", "refinement:end", "verification:start"]
         progress_text = (tmp_path / "progress.md").read_text()
@@ -155,7 +157,9 @@ class TestReassessCycleSequentialAndFailureVisibility:
         monkeypatch.setattr(pipeline, "_run_refinement", fake_refinement)
         monkeypatch.setattr(pipeline, "_run_verification", fake_verification)
 
-        await pipeline._run_reassess_cycle(config, state, _as_router(StubRouter()), progress)
+        await pipeline._run_reassess_cycle(
+            config, state, _as_router(StubRouter()), progress
+        )
 
         assert ran == ["verification"]
         assert state.refinement_error == "refinement broke"
@@ -191,7 +195,9 @@ class TestReassessCycleSequentialAndFailureVisibility:
 # ---------------------------------------------------------------------------
 
 
-def _stub_llm_nodes(monkeypatch: pytest.MonkeyPatch, triage_calls: list, read_calls: list):
+def _stub_llm_nodes(
+    monkeypatch: pytest.MonkeyPatch, triage_calls: list, read_calls: list
+):
     """Stub every LLM node so _run_main_stages runs from INIT without SDK calls.
 
     The stub read marks pending sources EXTRACTED (no findings), so the
@@ -232,7 +238,9 @@ def _stub_llm_nodes(monkeypatch: pytest.MonkeyPatch, triage_calls: list, read_ca
     monkeypatch.setattr(pipeline.triage_node, "triage", fake_triage)
     monkeypatch.setattr(pipeline.read_node, "read", fake_read)
     monkeypatch.setattr(pipeline.reassess_node, "reassess", fake_reassess)
-    monkeypatch.setattr(pipeline.quality_check_node, "quality_check", fake_quality_check)
+    monkeypatch.setattr(
+        pipeline.quality_check_node, "quality_check", fake_quality_check
+    )
     monkeypatch.setattr(pipeline.synthesize_node, "synthesize", fake_synthesize)
     monkeypatch.setattr(
         pipeline,
@@ -367,7 +375,9 @@ class TestDiversityGateRecheck:
         monkeypatch.setattr(pipeline, "query_diversity_gate", fake_gate)
 
         progress = _mk_progress(tmp_path)
-        await pipeline._run_main_stages(config, state, _as_router(StubRouter()), progress)
+        await pipeline._run_main_stages(
+            config, state, _as_router(StubRouter()), progress
+        )
 
         # Gate ran twice: initial + recheck after the DIVERGE retry
         assert len(gate_calls) == 2
@@ -408,7 +418,9 @@ class TestDiversityGateRecheck:
         state.plan = plan
         state.advance_to(Stage.CHALLENGE_COMPLETE)  # skip PLAN/DIVERGE/CHALLENGE
         progress = _mk_progress(tmp_path)
-        await pipeline._run_main_stages(config, state, _as_router(StubRouter()), progress)
+        await pipeline._run_main_stages(
+            config, state, _as_router(StubRouter()), progress
+        )
 
         assert len(gate_calls) == 1
         assert "recheck" not in (tmp_path / "progress.md").read_text()

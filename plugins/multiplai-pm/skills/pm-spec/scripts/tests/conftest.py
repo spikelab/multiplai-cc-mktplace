@@ -20,10 +20,14 @@ SKILL_DIR = Path(__file__).resolve().parents[2]
 SCHEMA = SKILL_DIR / "references" / "tickets.schema.json"
 
 GIT_ENV = {
-    "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
-    "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
-    "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com",
-    "GIT_AUTHOR_DATE": "1700000000 +0000", "GIT_COMMITTER_DATE": "1700000000 +0000",
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_CONFIG_GLOBAL": os.devnull,
+    "GIT_AUTHOR_NAME": "t",
+    "GIT_AUTHOR_EMAIL": "t@example.com",
+    "GIT_COMMITTER_NAME": "t",
+    "GIT_COMMITTER_EMAIL": "t@example.com",
+    "GIT_AUTHOR_DATE": "1700000000 +0000",
+    "GIT_COMMITTER_DATE": "1700000000 +0000",
 }
 
 
@@ -32,7 +36,9 @@ class Killed(BaseException):
 
 
 def git(repo: Path, *args: str) -> str:
-    proc = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, check=True)
+    proc = subprocess.run(
+        ["git", "-C", str(repo), *args], capture_output=True, text=True, check=True
+    )
     return proc.stdout.strip()
 
 
@@ -58,33 +64,57 @@ Each client gets a fixed number of API requests per minute.
 A refused request tells the client when to retry.
 """
 
-PRD_SECTIONS = {"rate-limit": "Limit requests per client", "retry-policy": "Retry guidance"}
+PRD_SECTIONS = {
+    "rate-limit": "Limit requests per client",
+    "retry-policy": "Retry guidance",
+}
 
 
-def proposal(caps=CAPS, *, title="Request throttling", sources: dict | None = None, extra: str = "") -> str:
-    text = (f"# {title}\n\n## Why\n\nClients flood the API server.\n\n## What Changes\n\nThrottle requests.{extra}\n\n"
-            "## Capabilities\n\n### New Capabilities\n" + "".join(f"- `{c}`\n" for c in caps)
-            + "\n### Modified Capabilities\n\n## Impact\n\nThe `server` module.\n")
+def proposal(
+    caps=CAPS,
+    *,
+    title="Request throttling",
+    sources: dict | None = None,
+    extra: str = "",
+) -> str:
+    text = (
+        f"# {title}\n\n## Why\n\nClients flood the API server.\n\n## What Changes\n\nThrottle requests.{extra}\n\n"
+        "## Capabilities\n\n### New Capabilities\n"
+        + "".join(f"- `{c}`\n" for c in caps)
+        + "\n### Modified Capabilities\n\n## Impact\n\nThe `server` module.\n"
+    )
     if sources:
-        text += "\n## Sources\n\n" + "".join(f"- `{c}`: {s}\n" for c, s in sources.items())
+        text += "\n## Sources\n\n" + "".join(
+            f"- `{c}`: {s}\n" for c, s in sources.items()
+        )
     return text
 
 
 def requirements(cap: str, *, rule: str = "", scenario: str = "") -> str:
     name = cap.replace("-", " ").capitalize()
-    return (f"## ADDED Requirements\n\n### Requirement: {name} holds\n"
-            f"The system SHALL apply {rule or cap}.\n\n"
-            f"#### Scenario: {scenario or name + ' applies'}\n"
-            f"- **WHEN** a client sends a request\n- **THEN** {rule or cap} is applied\n")
+    return (
+        f"## ADDED Requirements\n\n### Requirement: {name} holds\n"
+        f"The system SHALL apply {rule or cap}.\n\n"
+        f"#### Scenario: {scenario or name + ' applies'}\n"
+        f"- **WHEN** a client sends a request\n- **THEN** {rule or cap} is applied\n"
+    )
 
 
 USE_CASES = "# Use cases\n\n## Personas\n\n### operator\n- **Who they are:** runs the API server\n"
 
-QUESTIONS = {"questions": ["How many requests per minute?", "Which clients are exempt?"]}
-ANSWERS = {"answers": [
-    {"question": "How many requests per minute?", "answer": "60.", "grounded_in": "PRD: Limit requests"},
-    {"question": "Which clients are exempt?", "answer": "None.", "grounded_in": ""},
-]}
+QUESTIONS = {
+    "questions": ["How many requests per minute?", "Which clients are exempt?"]
+}
+ANSWERS = {
+    "answers": [
+        {
+            "question": "How many requests per minute?",
+            "answer": "60.",
+            "grounded_in": "PRD: Limit requests",
+        },
+        {"question": "Which clients are exempt?", "answer": "None.", "grounded_in": ""},
+    ]
+}
 
 SINGLE = {"single": True, "reason": "One pull request carries it.", "children": []}
 NO_FINDINGS = {"findings": [], "prior_assessments": []}
@@ -97,7 +127,9 @@ def default_proposal(prompt: str) -> str:
         sources = {c: f'PRD "{PRD_SECTIONS[c]}"' for c in CAPS}
     if "child items:" in prompt or "ticket <ref>" in prompt:
         for i, c in enumerate(CAPS, 1):
-            sources[c] = "; ".join(x for x in (sources.get(c, ""), f"ticket T-{i}") if x)
+            sources[c] = "; ".join(
+                x for x in (sources.get(c, ""), f"ticket T-{i}") if x
+            )
     return proposal(sources=sources or None)
 
 
@@ -136,7 +168,9 @@ class FakeModel:
         self.handlers: dict = dict(DEFAULTS)
         self.calls: list[tuple[str, str, dict]] = []
         self.count: Counter = Counter()
-        self.handlers["rewrite"] = lambda prompt, label, kw: default_rewrite(prompt, label)
+        self.handlers["rewrite"] = lambda prompt, label, kw: default_rewrite(
+            prompt, label
+        )
 
     def __setitem__(self, key, value) -> None:
         self.handlers[key] = value
@@ -176,10 +210,19 @@ class FakeModel:
         files: list[str] = []
         if isinstance(value, tuple):
             value, files = value
-        text = json.dumps(value) if isinstance(value, (dict, list)) else str(value or "")
-        usage = SimpleNamespace(cost_usd=0.01, input_tokens=100, output_tokens=10,
-                                cache_read_tokens=0, cache_creation_tokens=0)
-        return SimpleNamespace(text=text, turns=1, usage=usage, files_changed=files, stderr_tail="")
+        text = (
+            json.dumps(value) if isinstance(value, (dict, list)) else str(value or "")
+        )
+        usage = SimpleNamespace(
+            cost_usd=0.01,
+            input_tokens=100,
+            output_tokens=10,
+            cache_read_tokens=0,
+            cache_creation_tokens=0,
+        )
+        return SimpleNamespace(
+            text=text, turns=1, usage=usage, files_changed=files, stderr_tail=""
+        )
 
 
 @pytest.fixture(autouse=True)
@@ -188,10 +231,18 @@ def model(monkeypatch):
     fake = FakeModel()
     monkeypatch.setattr(sdk, "run_agent", fake)
     monkeypatch.setenv(sdk.TRUST_ENV, "1")
-    for key in ("MULTIPLAI_MODEL", "MULTIPLAI_EFFORT", "MULTIPLAI_SESSION_MODEL", "MULTIPLAI_SESSION_EFFORT",
-                "CLAUDE_CODE_SESSION_ID", "CLAUDE_EFFORT"):
+    for key in (
+        "MULTIPLAI_MODEL",
+        "MULTIPLAI_EFFORT",
+        "MULTIPLAI_SESSION_MODEL",
+        "MULTIPLAI_SESSION_EFFORT",
+        "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_EFFORT",
+    ):
         monkeypatch.delenv(key, raising=False)
-    monkeypatch.setattr("multiplai_core.session.load_multiplai_conf", lambda: {"_sections": {}})
+    monkeypatch.setattr(
+        "multiplai_core.session.load_multiplai_conf", lambda: {"_sections": {}}
+    )
     for key, value in GIT_ENV.items():
         monkeypatch.setenv(key, value)
     return fake
@@ -237,7 +288,11 @@ def snapshot(cdir: Path) -> dict[str, str]:
         if not path.is_file() or rel.parts[0] in SNAPSHOT_SKIP:
             continue
         if rel.as_posix() == ".change.yaml":
-            data = {k: v for k, v in meta(cdir).items() if k not in ("created", "spec_checked_at")}
+            data = {
+                k: v
+                for k, v in meta(cdir).items()
+                if k not in ("created", "spec_checked_at")
+            }
             out[".change.yaml"] = json.dumps(data, sort_keys=True)
         else:
             out[rel.as_posix()] = path.read_text()
@@ -247,7 +302,9 @@ def snapshot(cdir: Path) -> dict[str, str]:
 def committed(repo: Path, cdir: Path) -> list[str]:
     """The paths HEAD's commit changed under the change dir."""
     rel = cdir.relative_to(repo).as_posix()
-    return sorted(git(repo, "show", "--name-only", "--format=", "HEAD", "--", rel).splitlines())
+    return sorted(
+        git(repo, "show", "--name-only", "--format=", "HEAD", "--", rel).splitlines()
+    )
 
 
 def ready_line(out: str) -> str:

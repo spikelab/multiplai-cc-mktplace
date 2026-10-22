@@ -10,6 +10,7 @@ structural absence of any send path in the source. These are tripwires — if a
 future refactor weakens a guard, the matching test goes red instead of the
 weakness shipping silently.
 """
+
 from __future__ import annotations
 
 import base64
@@ -174,11 +175,13 @@ class TestReplyRecipient:
 
     def test_reply_without_to_uses_from_header(self, gmail, tmp_path, capsys):
         sink: dict = {}
-        orig = _orig_msg([
-            ("Message-ID", "<abc@x>"),
-            ("Subject", "Contract"),
-            ("From", "Marco Rossi <marco@example.com>"),
-        ])
+        orig = _orig_msg(
+            [
+                ("Message-ID", "<abc@x>"),
+                ("Subject", "Contract"),
+                ("From", "Marco Rossi <marco@example.com>"),
+            ]
+        )
         svc = FakeService(get_result=orig, sink=sink)
         inp = self._payload_file(tmp_path, {"body": "Thanks Marco"})
         gmail.cmd_draft(svc, reply_to="orig-id", input_file=inp)
@@ -189,11 +192,13 @@ class TestReplyRecipient:
 
     def test_reply_prefers_reply_to_over_from(self, gmail, tmp_path):
         sink: dict = {}
-        orig = _orig_msg([
-            ("Message-ID", "<abc@x>"),
-            ("From", "Marco <marco@example.com>"),
-            ("Reply-To", "list@example.com"),
-        ])
+        orig = _orig_msg(
+            [
+                ("Message-ID", "<abc@x>"),
+                ("From", "Marco <marco@example.com>"),
+                ("Reply-To", "list@example.com"),
+            ]
+        )
         svc = FakeService(get_result=orig, sink=sink)
         inp = self._payload_file(tmp_path, {"body": "hi"})
         gmail.cmd_draft(svc, reply_to="orig-id", input_file=inp)
@@ -247,14 +252,14 @@ class TestDraftHtmlAlternative:
     def _created(self, gmail, tmp_path, body: str):
         sink: dict = {}
         inp = tmp_path / "p.json"
-        inp.write_text(json.dumps({"to": "a@example.com", "body": body}),
-                       encoding="utf-8")
-        gmail.cmd_draft(FakeService(sink=sink), reply_to="none",
-                        input_file=str(inp))
+        inp.write_text(
+            json.dumps({"to": "a@example.com", "body": body}), encoding="utf-8"
+        )
+        gmail.cmd_draft(FakeService(sink=sink), reply_to="none", input_file=str(inp))
         raw = sink["body"]["message"]["raw"]
         return email.message_from_bytes(
-            base64.urlsafe_b64decode(raw.encode("utf-8")),
-            policy=email.policy.default)
+            base64.urlsafe_b64decode(raw.encode("utf-8")), policy=email.policy.default
+        )
 
     def test_draft_is_multipart_alternative(self, gmail, tmp_path):
         msg = self._created(gmail, tmp_path, "Hi,\n\n" + self.LONG)
@@ -270,15 +275,21 @@ class TestDraftHtmlAlternative:
 
     def test_html_part_has_paragraphs_and_line_breaks(self, gmail, tmp_path):
         body = "Ciao Mati,\n\n1. one\n2. two\n\nSpike"
-        html = self._created(gmail, tmp_path, body).get_body(
-            preferencelist=("html",)).get_content()
+        html = (
+            self._created(gmail, tmp_path, body)
+            .get_body(preferencelist=("html",))
+            .get_content()
+        )
         assert "<p>Ciao Mati,</p>" in html
         assert "<p>1. one<br>\n2. two</p>" in html
         assert "<p>Spike</p>" in html
 
     def test_html_part_escapes_markup(self, gmail, tmp_path):
-        html = self._created(gmail, tmp_path, "a < b & <script>x</script>").get_body(
-            preferencelist=("html",)).get_content()
+        html = (
+            self._created(gmail, tmp_path, "a < b & <script>x</script>")
+            .get_body(preferencelist=("html",))
+            .get_content()
+        )
         assert "<script>" not in html
         assert "a &lt; b &amp; &lt;script&gt;" in html
 
@@ -341,15 +352,16 @@ class TestAssertScopes:
         assert gmail._assert_scopes(_Creds()) is None
 
     def test_extra_send_scope_aborts(self, gmail, monkeypatch):
-        broad = (f"{gmail.SCOPE_COMPOSE} {gmail.SCOPE_READONLY} "
-                 "https://www.googleapis.com/auth/gmail.send")
+        broad = (
+            f"{gmail.SCOPE_COMPOSE} {gmail.SCOPE_READONLY} "
+            "https://www.googleapis.com/auth/gmail.send"
+        )
         _patch_tokeninfo(monkeypatch, gmail, scope=broad)
         with pytest.raises(SystemExit):
             gmail._assert_scopes(_Creds())
 
     def test_extra_modify_scope_aborts(self, gmail, monkeypatch):
-        broad = (f"{gmail.SCOPE_READONLY} "
-                 "https://www.googleapis.com/auth/gmail.modify")
+        broad = f"{gmail.SCOPE_READONLY} https://www.googleapis.com/auth/gmail.modify"
         _patch_tokeninfo(monkeypatch, gmail, scope=broad)
         with pytest.raises(SystemExit):
             gmail._assert_scopes(_Creds())

@@ -217,11 +217,17 @@ class QuotaStore:
             quota.consecutive_failures = 0
 
         # Monthly quota
-        if quota.monthly_limit is not None and quota.monthly_count >= quota.monthly_limit:
+        if (
+            quota.monthly_limit is not None
+            and quota.monthly_count >= quota.monthly_limit
+        ):
             return False
 
         # One-time quota
-        if quota.one_time_limit is not None and quota.total_count >= quota.one_time_limit:
+        if (
+            quota.one_time_limit is not None
+            and quota.total_count >= quota.one_time_limit
+        ):
             return False
 
         return True
@@ -231,9 +237,13 @@ class QuotaStore:
         quota = self.get_or_create(provider)
         parts = []
         if quota.monthly_limit is not None:
-            parts.append(f"{quota.monthly_limit - quota.monthly_count}/{quota.monthly_limit}/mo")
+            parts.append(
+                f"{quota.monthly_limit - quota.monthly_count}/{quota.monthly_limit}/mo"
+            )
         if quota.one_time_limit is not None:
-            parts.append(f"{quota.one_time_limit - quota.total_count}/{quota.one_time_limit} total")
+            parts.append(
+                f"{quota.one_time_limit - quota.total_count}/{quota.one_time_limit} total"
+            )
         if quota.circuit_open_until:
             parts.append(f"circuit open until {quota.circuit_open_until}")
         return ", ".join(parts) if parts else "no limit"
@@ -255,13 +265,17 @@ class QuotaStore:
             if quota.circuit_open_until or quota.consecutive_failures > 0:
                 log.info(
                     "Resetting circuit breaker for %s (was: %d failures, open_until=%s)",
-                    quota.api_name, quota.consecutive_failures, quota.circuit_open_until,
+                    quota.api_name,
+                    quota.consecutive_failures,
+                    quota.circuit_open_until,
                 )
                 quota.circuit_open_until = None
                 quota.consecutive_failures = 0
         self._save(force=True)
 
-    def record_failure(self, provider: SearchProvider, threshold: int, cooldown_minutes: int) -> None:
+    def record_failure(
+        self, provider: SearchProvider, threshold: int, cooldown_minutes: int
+    ) -> None:
         quota = self.get_or_create(provider)
         quota.consecutive_failures += 1
         if quota.consecutive_failures >= threshold:
@@ -311,9 +325,15 @@ class SearchRouter:
         provider would incur cost on the next call.
         """
         quota = self.quotas.get_or_create(provider)
-        if provider.monthly_limit is not None and quota.monthly_count >= provider.monthly_limit:
+        if (
+            provider.monthly_limit is not None
+            and quota.monthly_count >= provider.monthly_limit
+        ):
             return True
-        if provider.one_time_limit is not None and quota.total_count >= provider.one_time_limit:
+        if (
+            provider.one_time_limit is not None
+            and quota.total_count >= provider.one_time_limit
+        ):
             return True
         return False
 
@@ -349,14 +369,20 @@ class SearchRouter:
                 continue
 
             # Gate providers that have exceeded their free tier.
-            if name not in UNLIMITED_FREE_PROVIDERS and self._free_tier_exhausted(provider):
+            if name not in UNLIMITED_FREE_PROVIDERS and self._free_tier_exhausted(
+                provider
+            ):
                 if name in FREE_TIER_ONLY_PROVIDERS:
                     # Never use beyond free tier (too expensive vs Serper)
-                    attempted[name] = f"free tier exhausted, capped ({self.quotas.remaining(provider)})"
+                    attempted[name] = (
+                        f"free tier exhausted, capped ({self.quotas.remaining(provider)})"
+                    )
                     continue
                 if not self.allow_paid_fallback:
                     # Serper/You: allowed with --allow-paid-fallback
-                    attempted[name] = f"free tier exhausted ({self.quotas.remaining(provider)})"
+                    attempted[name] = (
+                        f"free tier exhausted ({self.quotas.remaining(provider)})"
+                    )
                     continue
 
             try:
@@ -430,9 +456,7 @@ class SearchRouter:
 
         for i in range(0, len(queries), chunk_size):
             chunk = queries[i : i + chunk_size]
-            tasks = [
-                self._safe_single_search(q, max_results, strategy) for q in chunk
-            ]
+            tasks = [self._safe_single_search(q, max_results, strategy) for q in chunk]
             results_per_query = await asyncio.gather(*tasks, return_exceptions=True)
 
             failures = 0
@@ -450,7 +474,10 @@ class SearchRouter:
             total_failures += failures
             log.info(
                 "batch_search chunk %d-%d: %d queries, %d failures",
-                i, i + len(chunk), len(chunk), failures,
+                i,
+                i + len(chunk),
+                len(chunk),
+                failures,
             )
 
         log.info(
@@ -505,7 +532,9 @@ class SearchRouter:
             domain = urlparse(url).netloc
         except Exception:
             domain = ""
-        search_query = f"site:{domain} {title or query}" if domain else f"{title or query}"
+        search_query = (
+            f"site:{domain} {title or query}" if domain else f"{title or query}"
+        )
 
         try:
             results = await asyncio.wait_for(
@@ -548,7 +577,8 @@ class SearchRouter:
             except Exception as e:  # noqa: BLE001
                 log.warning(
                     "Error closing provider %s: %s",
-                    getattr(provider, "name", "?"), e,
+                    getattr(provider, "name", "?"),
+                    e,
                 )
         self.quotas.flush()
 
@@ -863,7 +893,8 @@ class YouProvider:
                 SearchResult(
                     url=item.get("url", ""),
                     title=item.get("title", ""),
-                    snippet=item.get("description", "") or item.get("snippets", [""])[0],
+                    snippet=item.get("description", "")
+                    or item.get("snippets", [""])[0],
                     source_api=self.name,
                 )
             )
@@ -911,7 +942,9 @@ def build_default_router(
     # Claude Agent — primary when preferred (no API key needed)
     if prefer_claude_tools:
         try:
-            providers.append(ClaudeAgentSearchProvider(model=model, effort=effort, thinking=thinking))  # type: ignore[arg-type]
+            providers.append(
+                ClaudeAgentSearchProvider(model=model, effort=effort, thinking=thinking)
+            )  # type: ignore[arg-type]
             log.info("Claude Agent search provider enabled (default)")
         except Exception as e:  # noqa: BLE001
             log.warning("Could not init ClaudeAgentSearchProvider: %s", e)
@@ -937,7 +970,5 @@ def build_default_router(
             "  - Or set at least one of: TAVILY_API_KEY, EXA_API_KEY, SERPER_API_KEY, YOU_API_KEY"
         )
 
-    config = RouterConfig.default(
-        quota_file, prefer_claude_tools=prefer_claude_tools
-    )
+    config = RouterConfig.default(quota_file, prefer_claude_tools=prefer_claude_tools)
     return SearchRouter(providers, config, allow_paid_fallback=allow_paid_fallback)

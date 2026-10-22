@@ -25,6 +25,7 @@ def _no_live_pricing(monkeypatch):
 # Fixture transcript builders
 # ----------------------------------------------------------------------
 
+
 def _usage(inp=100, out=50, cw5m=0, cw1h=0, cr=0):
     return {
         "input_tokens": inp,
@@ -38,9 +39,17 @@ def _usage(inp=100, out=50, cw5m=0, cw1h=0, cr=0):
     }
 
 
-def _assistant(msg_id, *, ts="2026-07-01T10:00:00Z", model="claude-opus-4-8",
-               usage=None, content=None, sidechain=False,
-               git_branch=None, cwd=None):
+def _assistant(
+    msg_id,
+    *,
+    ts="2026-07-01T10:00:00Z",
+    model="claude-opus-4-8",
+    usage=None,
+    content=None,
+    sidechain=False,
+    git_branch=None,
+    cwd=None,
+):
     entry = {
         "type": "assistant",
         "timestamp": ts,
@@ -49,7 +58,9 @@ def _assistant(msg_id, *, ts="2026-07-01T10:00:00Z", model="claude-opus-4-8",
             "id": msg_id,
             "model": model,
             "usage": usage or _usage(),
-            "content": content if content is not None else [{"type": "text", "text": "hi"}],
+            "content": content
+            if content is not None
+            else [{"type": "text", "text": "hi"}],
         },
     }
     if git_branch is not None:
@@ -64,8 +75,12 @@ def _user(text=None, *, tool_result=False, meta=False, git_branch=None, cwd=None
         content = [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]
     else:
         content = text or "hello"
-    entry = {"type": "user", "timestamp": "2026-07-01T10:00:00Z",
-             "isMeta": meta or None, "message": {"content": content}}
+    entry = {
+        "type": "user",
+        "timestamp": "2026-07-01T10:00:00Z",
+        "isMeta": meta or None,
+        "message": {"content": content},
+    }
     if git_branch is not None:
         entry["gitBranch"] = git_branch
     if cwd is not None:
@@ -84,11 +99,16 @@ def _write(path: Path, entries: list[dict]) -> None:
 @pytest.fixture(autouse=True)
 def _workspace(monkeypatch, tmp_path):
     """Isolated workspace so ledger writes land in tmp."""
-    for key in ("CLAUDE_PLUGIN_ROOT", "CLAUDE_PLUGIN_DATA",
-                "CLAUDE_PLUGIN_OPTION_WORKSPACE_DIR", "CLAUDE_PLUGIN_OPTION_DATA_DIR"):
+    for key in (
+        "CLAUDE_PLUGIN_ROOT",
+        "CLAUDE_PLUGIN_DATA",
+        "CLAUDE_PLUGIN_OPTION_WORKSPACE_DIR",
+        "CLAUDE_PLUGIN_OPTION_DATA_DIR",
+    ):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("WORKSPACE", str(tmp_path))
     from multiplai_core.paths import _reset_cache
+
     _reset_cache()
     yield
     _reset_cache()
@@ -105,14 +125,18 @@ def config_dir(tmp_path):
 # collect_file
 # ----------------------------------------------------------------------
 
+
 def test_basic_collection_and_dedup(config_dir):
     f = config_dir / "projects" / "-Users-x-proj" / "sess-1.jsonl"
-    _write(f, [
-        _user("hello"),
-        _assistant("m1"),
-        _assistant("m1"),  # streaming rewrite duplicate
-        _assistant("m2", usage=_usage(inp=2, out=1388, cw1h=919, cr=36499)),
-    ])
+    _write(
+        f,
+        [
+            _user("hello"),
+            _assistant("m1"),
+            _assistant("m1"),  # streaming rewrite duplicate
+            _assistant("m2", usage=_usage(inp=2, out=1388, cw1h=919, cr=36499)),
+        ],
+    )
     records, state = cc.collect_file(f, project="-Users-x-proj", known_ids=set())
     assert [r["msg_id"] for r in records] == ["m1", "m2"]
     assert state["offset"] == f.stat().st_size
@@ -124,11 +148,18 @@ def test_basic_collection_and_dedup(config_dir):
 
 def test_synthetic_and_missing_usage_skipped(config_dir):
     f = config_dir / "projects" / "-Users-x-proj" / "sess-1.jsonl"
-    _write(f, [
-        _assistant("m1", model="<synthetic>"),
-        {"type": "assistant", "timestamp": "t", "message": {"id": "m2", "model": "claude-opus-4-8"}},
-        _assistant("m3"),
-    ])
+    _write(
+        f,
+        [
+            _assistant("m1", model="<synthetic>"),
+            {
+                "type": "assistant",
+                "timestamp": "t",
+                "message": {"id": "m2", "model": "claude-opus-4-8"},
+            },
+            _assistant("m3"),
+        ],
+    )
     records, _ = cc.collect_file(f, project="p", known_ids=set())
     assert [r["msg_id"] for r in records] == ["m3"]
 
@@ -142,7 +173,9 @@ def test_incremental_offset_resume(config_dir):
     # Append more, resume from state — only the new entry is read.
     with f.open("a") as fh:
         fh.write(json.dumps(_assistant("m2")) + "\n")
-    records2, state2 = cc.collect_file(f, project="p", known_ids=known, file_state=state)
+    records2, state2 = cc.collect_file(
+        f, project="p", known_ids=known, file_state=state
+    )
     assert [r["msg_id"] for r in records2] == ["m2"]
     assert state2["offset"] == f.stat().st_size
 
@@ -168,8 +201,11 @@ def test_torn_tail_reread_next_pass(config_dir):
     assert [r["msg_id"] for r in records] == ["m1"]
     # Complete the line; resume picks it up.
     with f.open("a") as fh:
-        fh.write(',"model":"claude-opus-4-8","usage":' + json.dumps(_usage()) +
-                 ',"content":[]},"timestamp":"2026-07-01T10:05:00Z"}\n')
+        fh.write(
+            ',"model":"claude-opus-4-8","usage":'
+            + json.dumps(_usage())
+            + ',"content":[]},"timestamp":"2026-07-01T10:05:00Z"}\n'
+        )
     records2, _ = cc.collect_file(f, project="p", known_ids=known, file_state=state)
     assert [r["msg_id"] for r in records2] == ["m2"]
 
@@ -178,16 +214,20 @@ def test_torn_tail_reread_next_pass(config_dir):
 # Span attribution
 # ----------------------------------------------------------------------
 
+
 def test_skill_span_opens_and_closes_on_user_prompt(config_dir):
     f = config_dir / "projects" / "-Users-x-proj" / "sess-1.jsonl"
-    _write(f, [
-        _user("run the review"),
-        _assistant("m1", content=[_tool_use("Skill", {"skill": "code-review"})]),
-        _user(tool_result=True),          # skill launch result — span stays open
-        _assistant("m2"),                  # inside skill span
-        _user("thanks, now something else"),  # user speaks — span closes
-        _assistant("m3"),
-    ])
+    _write(
+        f,
+        [
+            _user("run the review"),
+            _assistant("m1", content=[_tool_use("Skill", {"skill": "code-review"})]),
+            _user(tool_result=True),  # skill launch result — span stays open
+            _assistant("m2"),  # inside skill span
+            _user("thanks, now something else"),  # user speaks — span closes
+            _assistant("m3"),
+        ],
+    )
     records, _ = cc.collect_file(f, project="p", known_ids=set())
     by_id = {r["msg_id"]: r for r in records}
     # m1 carries the span it opened (cost of deciding to invoke counts toward it)
@@ -198,14 +238,25 @@ def test_skill_span_opens_and_closes_on_user_prompt(config_dir):
 
 def test_sidechain_attributed_to_agent_span(config_dir):
     f = config_dir / "projects" / "-Users-x-proj" / "sess-1.jsonl"
-    _write(f, [
-        _user("go"),
-        _assistant("m1", content=[_tool_use("Agent", {"subagent_type": "Explore", "description": "scan repo"})]),
-        _assistant("s1", sidechain=True),
-        _assistant("s2", sidechain=True),
-        _user(tool_result=True),
-        _assistant("m2"),
-    ])
+    _write(
+        f,
+        [
+            _user("go"),
+            _assistant(
+                "m1",
+                content=[
+                    _tool_use(
+                        "Agent",
+                        {"subagent_type": "Explore", "description": "scan repo"},
+                    )
+                ],
+            ),
+            _assistant("s1", sidechain=True),
+            _assistant("s2", sidechain=True),
+            _user(tool_result=True),
+            _assistant("m2"),
+        ],
+    )
     records, _ = cc.collect_file(f, project="p", known_ids=set())
     by_id = {r["msg_id"]: r for r in records}
     assert by_id["s1"]["sidechain"] is True
@@ -215,22 +266,35 @@ def test_sidechain_attributed_to_agent_span(config_dir):
 
 def test_legacy_task_tool_is_agent_span(config_dir):
     f = config_dir / "projects" / "-Users-x-proj" / "sess-1.jsonl"
-    _write(f, [
-        _assistant("m1", content=[_tool_use("Task", {"description": "old style", "prompt": "x"})]),
-        _assistant("s1", sidechain=True),
-    ])
+    _write(
+        f,
+        [
+            _assistant(
+                "m1",
+                content=[
+                    _tool_use("Task", {"description": "old style", "prompt": "x"})
+                ],
+            ),
+            _assistant("s1", sidechain=True),
+        ],
+    )
     records, _ = cc.collect_file(f, project="p", known_ids=set())
     assert records[1]["span"]["kind"] == "agent"
 
 
 def test_command_invocation_opens_skill_span(config_dir):
     f = config_dir / "projects" / "-Users-x-proj" / "sess-1.jsonl"
-    _write(f, [
-        _user("<command-name>/multiplai-context:dream</command-name> <command-args></command-args>"),
-        _assistant("m1"),
-        _user("ok done"),
-        _assistant("m2"),
-    ])
+    _write(
+        f,
+        [
+            _user(
+                "<command-name>/multiplai-context:dream</command-name> <command-args></command-args>"
+            ),
+            _assistant("m1"),
+            _user("ok done"),
+            _assistant("m2"),
+        ],
+    )
     records, _ = cc.collect_file(f, project="p", known_ids=set())
     by_id = {r["msg_id"]: r for r in records}
     assert by_id["m1"]["span"]["name"] == "multiplai-context:dream"
@@ -239,21 +303,29 @@ def test_command_invocation_opens_skill_span(config_dir):
 
 def test_mechanical_commands_do_not_open_spans(config_dir):
     f = config_dir / "projects" / "-Users-x-proj" / "sess-1.jsonl"
-    _write(f, [
-        _user("<command-name>/model</command-name>"),
-        _assistant("m1"),
-    ])
+    _write(
+        f,
+        [
+            _user("<command-name>/model</command-name>"),
+            _assistant("m1"),
+        ],
+    )
     records, _ = cc.collect_file(f, project="p", known_ids=set())
     assert records[0]["span"] is None
 
 
 def test_nested_spans_flagged_approx(config_dir):
     f = config_dir / "projects" / "-Users-x-proj" / "sess-1.jsonl"
-    _write(f, [
-        _assistant("m1", content=[_tool_use("Skill", {"skill": "deep-research"})]),
-        _assistant("m2", content=[_tool_use("Workflow", {"name": "research-sweep"})]),
-        _assistant("m3"),
-    ])
+    _write(
+        f,
+        [
+            _assistant("m1", content=[_tool_use("Skill", {"skill": "deep-research"})]),
+            _assistant(
+                "m2", content=[_tool_use("Workflow", {"name": "research-sweep"})]
+            ),
+            _assistant("m3"),
+        ],
+    )
     records, _ = cc.collect_file(f, project="p", known_ids=set())
     by_id = {r["msg_id"]: r for r in records}
     assert by_id["m3"]["span"]["kind"] == "workflow"
@@ -262,7 +334,9 @@ def test_nested_spans_flagged_approx(config_dir):
 
 def test_span_state_survives_offset_resume(config_dir):
     f = config_dir / "projects" / "-Users-x-proj" / "sess-1.jsonl"
-    _write(f, [_assistant("m1", content=[_tool_use("Skill", {"skill": "code-review"})])])
+    _write(
+        f, [_assistant("m1", content=[_tool_use("Skill", {"skill": "code-review"})])]
+    )
     known: set[str] = set()
     _, state = cc.collect_file(f, project="p", known_ids=known)
     assert state["spans"] == [{"kind": "skill", "name": "code-review"}]
@@ -275,6 +349,7 @@ def test_span_state_survives_offset_resume(config_dir):
 # ----------------------------------------------------------------------
 # run_collect end-to-end
 # ----------------------------------------------------------------------
+
 
 def test_run_collect_idempotent(config_dir, tmp_path):
     proj = config_dir / "projects" / "-Users-x-proj"
@@ -312,6 +387,7 @@ def test_run_collect_dry_run_writes_nothing(config_dir, tmp_path):
 # Transcript path classification (nested subagent/workflow files)
 # ----------------------------------------------------------------------
 
+
 class TestClassifyTranscript:
     def _projects(self, tmp_path):
         p = tmp_path / "projects"
@@ -324,8 +400,12 @@ class TestClassifyTranscript:
         f.parent.mkdir(parents=True)
         f.touch()
         ctx = cc.classify_transcript(projects, f)
-        assert ctx == {"project": "-Users-x-proj", "session": "abc-123",
-                       "sidechain": False, "base_span": None}
+        assert ctx == {
+            "project": "-Users-x-proj",
+            "session": "abc-123",
+            "sidechain": False,
+            "base_span": None,
+        }
 
     def test_subagent_file_reads_meta_sidecar(self, tmp_path):
         projects = self._projects(tmp_path)
@@ -382,8 +462,8 @@ def test_run_collect_attributes_nested_subagent_costs(config_dir, tmp_path):
     stats = cc.run_collect(config_dir, tmp_path / "state.json")
     assert stats["records"] == 3
     recs = {r["msg_id"]: r for r in iter_ledger()}
-    assert recs["s1"]["session"] == "sess-1"          # same session as main
-    assert recs["s1"]["project"] == "-Users-x-proj"   # not "subagents"
+    assert recs["s1"]["session"] == "sess-1"  # same session as main
+    assert recs["s1"]["project"] == "-Users-x-proj"  # not "subagents"
     assert recs["s1"]["sidechain"] is True
     assert recs["s1"]["span"] == {"kind": "agent", "name": "Explore"}
     assert recs["m1"]["sidechain"] is False
@@ -393,11 +473,14 @@ def test_streaming_snapshots_keep_max_output(config_dir):
     """Duplicate entries of one message are streaming snapshots whose
     output_tokens grow — the final (largest) count must win."""
     f = config_dir / "projects" / "-Users-x-proj" / "sess-1.jsonl"
-    _write(f, [
-        _assistant("m1", usage=_usage(inp=100, out=50)),
-        _assistant("m1", usage=_usage(inp=100, out=700)),   # later snapshot
-        _assistant("m1", usage=_usage(inp=100, out=1388)),  # final
-    ])
+    _write(
+        f,
+        [
+            _assistant("m1", usage=_usage(inp=100, out=50)),
+            _assistant("m1", usage=_usage(inp=100, out=700)),  # later snapshot
+            _assistant("m1", usage=_usage(inp=100, out=1388)),  # final
+        ],
+    )
     records, _ = cc.collect_file(f, project="p", known_ids=set())
     assert len(records) == 1
     assert records[0]["tokens"]["out"] == 1388
@@ -419,12 +502,16 @@ def test_history_copied_to_forked_session_not_double_billed(config_dir, tmp_path
 # Branch / cwd attribution
 # ----------------------------------------------------------------------
 
+
 def test_record_carries_branch_and_cwd(config_dir):
     f = config_dir / "projects" / "-Users-x-proj" / "sess-1.jsonl"
-    _write(f, [
-        _user("go", git_branch="main", cwd="/w/proj"),
-        _assistant("m1", git_branch="main", cwd="/w/proj"),
-    ])
+    _write(
+        f,
+        [
+            _user("go", git_branch="main", cwd="/w/proj"),
+            _assistant("m1", git_branch="main", cwd="/w/proj"),
+        ],
+    )
     records, state = cc.collect_file(f, project="p", known_ids=set())
     assert records[0]["branch"] == "main"
     assert records[0]["cwd"] == "/w/proj"
@@ -434,21 +521,27 @@ def test_record_carries_branch_and_cwd(config_dir):
 
 def test_mid_file_branch_switch_splits_records(config_dir):
     f = config_dir / "projects" / "-Users-x-proj" / "sess-1.jsonl"
-    _write(f, [
-        _assistant("m1", git_branch="main", cwd="/w"),
-        _assistant("m2", git_branch="feat/x", cwd="/w"),
-        _assistant("m3", git_branch="feat/x", cwd="/w"),
-    ])
+    _write(
+        f,
+        [
+            _assistant("m1", git_branch="main", cwd="/w"),
+            _assistant("m2", git_branch="feat/x", cwd="/w"),
+            _assistant("m3", git_branch="feat/x", cwd="/w"),
+        ],
+    )
     records, _ = cc.collect_file(f, project="p", known_ids=set())
     assert [r["branch"] for r in records] == ["main", "feat/x", "feat/x"]
 
 
 def test_missing_branch_falls_back_to_last_seen(config_dir):
     f = config_dir / "projects" / "-Users-x-proj" / "sess-1.jsonl"
-    _write(f, [
-        _assistant("m1", git_branch="main", cwd="/w"),
-        _assistant("m2"),  # old-style entry without the fields
-    ])
+    _write(
+        f,
+        [
+            _assistant("m1", git_branch="main", cwd="/w"),
+            _assistant("m2"),  # old-style entry without the fields
+        ],
+    )
     records, _ = cc.collect_file(f, project="p", known_ids=set())
     assert records[1]["branch"] == "main"
     assert records[1]["cwd"] == "/w"
@@ -478,8 +571,10 @@ def test_fallback_branch_survives_offset_resume(config_dir):
 
 def test_subagent_file_branch_from_own_entries(config_dir, tmp_path):
     proj = config_dir / "projects" / "-Users-x-proj"
-    _write(proj / "sess-1.jsonl", [_user("go", git_branch="main"),
-                                   _assistant("m1", git_branch="main")])
+    _write(
+        proj / "sess-1.jsonl",
+        [_user("go", git_branch="main"), _assistant("m1", git_branch="main")],
+    )
     sub = proj / "sess-1" / "subagents"
     sub.mkdir(parents=True)
     _write(sub / "agent-a1.jsonl", [_assistant("s1", git_branch="feat/z", cwd="/w/z")])
@@ -493,6 +588,7 @@ def test_subagent_file_branch_from_own_entries(config_dir, tmp_path):
 # ----------------------------------------------------------------------
 # --backfill-branches
 # ----------------------------------------------------------------------
+
 
 def test_backfill_enriches_idempotently(config_dir, tmp_path):
     from multiplai_core.costing import ledger_file
@@ -519,9 +615,18 @@ def test_backfill_enriches_idempotently(config_dir, tmp_path):
 
     # Add one record the transcripts can't match (e.g. SDK-sourced).
     with path.open("a") as fh:
-        fh.write(json.dumps({"ts": "2026-07-01T00:00:00Z", "msg_id": "sdk-1",
-                             "session": "x", "cost_usd": 0.1},
-                            separators=(",", ":")) + "\n")
+        fh.write(
+            json.dumps(
+                {
+                    "ts": "2026-07-01T00:00:00Z",
+                    "msg_id": "sdk-1",
+                    "session": "x",
+                    "cost_usd": 0.1,
+                },
+                separators=(",", ":"),
+            )
+            + "\n"
+        )
 
     stats = cc.run_backfill_branches(config_dir)
     assert stats["examined"] == 4
@@ -552,6 +657,7 @@ def test_backfill_ignores_collector_offsets(config_dir, tmp_path):
     cc.run_collect(config_dir, state_path)  # offsets now at EOF
 
     from multiplai_core.costing import ledger_file
+
     path = ledger_file("2026-07")
     rec = json.loads(path.read_text())
     rec.pop("branch", None)
@@ -573,6 +679,7 @@ def test_backfill_preserves_torn_tail_verbatim(config_dir, tmp_path):
     cc.run_collect(config_dir, tmp_path / "state.json")
 
     from multiplai_core.costing import ledger_file
+
     path = ledger_file("2026-07")
     rec = json.loads(path.read_text())
     rec.pop("branch", None)
@@ -591,23 +698,31 @@ def test_backfill_preserves_torn_tail_verbatim(config_dir, tmp_path):
 # Pricing refresh and fallback reporting
 # ----------------------------------------------------------------------
 
+
 def test_run_collect_reports_fallback_priced_records(config_dir, tmp_path):
     proj = config_dir / "projects" / "-Users-x-proj"
-    _write(proj / "sess-1.jsonl", [
-        _user("a"),
-        _assistant("m1"),
-        _assistant("m2", model="gpt-nonsense"),
-        _assistant("m3", model="gpt-nonsense"),
-    ])
+    _write(
+        proj / "sess-1.jsonl",
+        [
+            _user("a"),
+            _assistant("m1"),
+            _assistant("m2", model="gpt-nonsense"),
+            _assistant("m3", model="gpt-nonsense"),
+        ],
+    )
     stats = cc.run_collect(config_dir, tmp_path / "state.json", refresh_pricing=False)
     assert stats["records"] == 3
     assert stats["fallback_records"] == 2
     assert stats["fallback_models"] == ["gpt-nonsense"]
 
 
-def test_run_collect_calls_refresh_once_and_can_opt_out(config_dir, tmp_path, monkeypatch):
+def test_run_collect_calls_refresh_once_and_can_opt_out(
+    config_dir, tmp_path, monkeypatch
+):
     calls = []
-    monkeypatch.setattr(cc.costing, "refresh_pricing", lambda: calls.append(1) or None, raising=False)
+    monkeypatch.setattr(
+        cc.costing, "refresh_pricing", lambda: calls.append(1) or None, raising=False
+    )
     proj = config_dir / "projects" / "-Users-x-proj"
     _write(proj / "sess-1.jsonl", [_assistant("m1")])
 
@@ -620,6 +735,7 @@ def test_run_collect_calls_refresh_once_and_can_opt_out(config_dir, tmp_path, mo
 def test_refresh_pricing_table_never_raises(monkeypatch, caplog):
     def boom():
         raise OSError("offline")
+
     monkeypatch.setattr(cc.costing, "refresh_pricing", boom, raising=False)
     with caplog.at_level("WARNING"):
         assert cc.refresh_pricing_table() is False

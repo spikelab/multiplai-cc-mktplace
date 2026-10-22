@@ -120,7 +120,9 @@ def dreams(tmp_path, monkeypatch):
 
     calls = {"gc": 0}
     monkeypatch.setattr(dream, "get_paths", lambda: _Paths())
-    monkeypatch.setattr(dream, "_gc_learnings", lambda: calls.__setitem__("gc", calls["gc"] + 1))
+    monkeypatch.setattr(
+        dream, "_gc_learnings", lambda: calls.__setitem__("gc", calls["gc"] + 1)
+    )
     return dreams_dir, state_file, calls
 
 
@@ -155,7 +157,9 @@ def test_finished_proposal_is_archived_stamped_and_collected(dreams, capsys):
     assert (dreams_dir / "applied" / "processed-learnings-2026-08-10.md").is_file()
     assert state_file.exists(), "dream_state must be stamped or the gate nudges forever"
     assert "last_run" in state_file.read_text()
-    assert calls["gc"] == 1, "collection runs only after the archive makes sources spent"
+    assert calls["gc"] == 1, (
+        "collection runs only after the archive makes sources spent"
+    )
     assert "archived:" in capsys.readouterr().out
 
 
@@ -215,7 +219,9 @@ def test_undecided_conflict_blocks_the_archive(dreams, capsys):
     assert dream._reconcile() == 0
     out = capsys.readouterr().out
     assert "pending:" in out
-    assert proposal.is_file(), "an undecided conflict must keep the proposal in the root"
+    assert proposal.is_file(), (
+        "an undecided conflict must keep the proposal in the root"
+    )
     assert not (dreams_dir / "applied").exists()
     assert not state_file.exists()
     assert calls["gc"] == 0, "collection would delete the conflict's source learnings"
@@ -229,7 +235,9 @@ def test_deciding_the_conflict_unblocks_it(dreams):
     proposal = dreams_dir / "processed-learnings-2026-08-12.md"
     proposal.write_text(
         move_to_processed(
-            UNDECIDED_CONFLICT, ("conflict", "dolcebot.md", 453), "rejected",
+            UNDECIDED_CONFLICT,
+            ("conflict", "dolcebot.md", 453),
+            "rejected",
             ts="2026-08-16T00:00:00Z",
         )
     )
@@ -321,7 +329,8 @@ def test_bare_dry_run_is_still_rejected():
 
     result = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "dream.py"), "--dry-run"],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     assert result.returncode != 0
     assert "--dry-run requires" in result.stderr
@@ -332,6 +341,7 @@ def test_reconcile_accepts_dry_run():
 
     result = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "dream.py"), "--reconcile", "--dry-run"],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     assert "--dry-run requires" not in result.stderr

@@ -42,7 +42,9 @@ class Calls:
         self.listings: list[str] = []
         self.scans: list[tuple] = []
 
-    def __call__(self, method, path, cfg, *, params=None, body=None, dry_run=False, **kw):
+    def __call__(
+        self, method, path, cfg, *, params=None, body=None, dry_run=False, **kw
+    ):
         bare = path.split("?")[0]
         self.calls.append((method, bare, body, dry_run))
         payload = self.routes.get(bare)
@@ -101,10 +103,14 @@ def test_a_label_uuid_is_not_judged_against_the_project_allowlist():
 
 
 def test_check_self_test_still_passes_with_the_label_cases(monkeypatch):
-    monkeypatch.setattr(plane, "list_projects", lambda cfg: [
-        {"id": OK, "name": "Mine", "identifier": "SPK", "_allowed": True},
-        {"id": BAD, "name": "Theirs", "identifier": "THR", "_allowed": False},
-    ])
+    monkeypatch.setattr(
+        plane,
+        "list_projects",
+        lambda cfg: [
+            {"id": OK, "name": "Mine", "identifier": "SPK", "_allowed": True},
+            {"id": BAD, "name": "Theirs", "identifier": "THR", "_allowed": False},
+        ],
+    )
     out = run(plane.cmd_check, CFG, Args())
     assert "LEAKED" not in out
     assert "BROKEN" not in out
@@ -116,7 +122,12 @@ def test_check_self_test_still_passes_with_the_label_cases(monkeypatch):
 
 @pytest.mark.parametrize(
     "given,want",
-    [("#FF8800", "#ff8800"), ("ff8800", "#ff8800"), ("#f80", "#ff8800"), ("f80", "#ff8800")],
+    [
+        ("#FF8800", "#ff8800"),
+        ("ff8800", "#ff8800"),
+        ("#f80", "#ff8800"),
+        ("f80", "#ff8800"),
+    ],
 )
 def test_colour_forms_normalise_to_six_digit_hex(given, want):
     assert plane.normalize_color(given) == want
@@ -166,10 +177,13 @@ def test_a_reference_matching_nothing_at_all_lists_what_exists(monkeypatch):
 
 
 def test_duplicate_names_are_refused_rather_than_resolved(monkeypatch):
-    stub(monkeypatch, labels=[
-        {"id": L1, "name": "bug"},
-        {"id": L2, "name": "Bug"},
-    ])
+    stub(
+        monkeypatch,
+        labels=[
+            {"id": L1, "name": "bug"},
+            {"id": L2, "name": "Bug"},
+        ],
+    )
     with pytest.raises(plane.PlaneError, match="2 labels are named"):
         plane.resolve_label_object(CFG, OK, "bug")
 
@@ -193,7 +207,9 @@ def test_attaching_and_editing_read_a_reference_the_same_way(monkeypatch):
     # An ambiguous reference is never answered by creating a third label.
     with pytest.raises(plane.PlaneError, match="2 labels are named"):
         plane.resolve_label(
-            CFG, OK, "bug",
+            CFG,
+            OK,
+            "bug",
             labels=[{"id": L1, "name": "bug"}, {"id": L2, "name": "Bug"}],
         )
 
@@ -203,9 +219,15 @@ def test_the_label_list_is_fetched_once_per_command_not_once_per_flag(monkeypatc
     payload: dict = {}
     plane._apply_assignment_flags(
         CFG,
-        Args(assignee=None, label=["bug", "chore", "docs"], create_labels=False,
-             estimate=None, dry_run=False),
-        OK, payload,
+        Args(
+            assignee=None,
+            label=["bug", "chore", "docs"],
+            create_labels=False,
+            estimate=None,
+            dry_run=False,
+        ),
+        OK,
+        payload,
     )
     assert payload["labels"] == [L1, L2, L3]
     assert len(calls.listings) == 1
@@ -216,9 +238,15 @@ def test_repeating_a_new_label_name_creates_it_once(monkeypatch):
     payload: dict = {}
     plane._apply_assignment_flags(
         CFG,
-        Args(assignee=None, label=["triage", "triage"], create_labels=True,
-             estimate=None, dry_run=False),
-        OK, payload,
+        Args(
+            assignee=None,
+            label=["triage", "triage"],
+            create_labels=True,
+            estimate=None,
+            dry_run=False,
+        ),
+        OK,
+        payload,
     )
     assert [c[0] for c in calls.calls] == ["POST"]
     assert payload["labels"] == [L3, L3]
@@ -237,10 +265,17 @@ def test_a_short_new_label_name_that_prefixes_an_id_can_still_be_created(monkeyp
 
 def test_creating_a_label_posts_name_colour_and_description(monkeypatch):
     calls = stub(monkeypatch, routes={f"/projects/{OK}/labels/": {"id": L3}})
-    out = run(plane.cmd_label_create, CFG, Args(
-        project=None, name="triage", color="#F80", description="needs a look",
-        dry_run=False,
-    ))
+    out = run(
+        plane.cmd_label_create,
+        CFG,
+        Args(
+            project=None,
+            name="triage",
+            color="#F80",
+            description="needs a look",
+            dry_run=False,
+        ),
+    )
     method, path, body, dry = calls.calls[0]
     assert (method, path, dry) == ("POST", f"/projects/{OK}/labels/", False)
     assert body == {"name": "triage", "color": "#ff8800", "description": "needs a look"}
@@ -249,35 +284,65 @@ def test_creating_a_label_posts_name_colour_and_description(monkeypatch):
 
 def test_creating_a_label_omits_fields_that_were_not_given(monkeypatch):
     calls = stub(monkeypatch, routes={f"/projects/{OK}/labels/": {"id": L3}})
-    run(plane.cmd_label_create, CFG, Args(
-        project=None, name="triage", color=None, description=None, dry_run=False,
-    ))
+    run(
+        plane.cmd_label_create,
+        CFG,
+        Args(
+            project=None,
+            name="triage",
+            color=None,
+            description=None,
+            dry_run=False,
+        ),
+    )
     assert calls.calls[0][2] == {"name": "triage"}
 
 
 def test_creating_a_label_that_already_exists_points_at_label_edit(monkeypatch):
     calls = stub(monkeypatch)
     with pytest.raises(plane.PlaneError, match="already exists"):
-        plane.cmd_label_create(CFG, Args(
-            project=None, name="Bug", color=None, description=None, dry_run=False,
-        ))
+        plane.cmd_label_create(
+            CFG,
+            Args(
+                project=None,
+                name="Bug",
+                color=None,
+                description=None,
+                dry_run=False,
+            ),
+        )
     assert calls.calls == []
 
 
 def test_creating_a_label_with_a_bad_colour_sends_nothing(monkeypatch):
     calls = stub(monkeypatch)
     with pytest.raises(plane.PlaneError, match="hex colour"):
-        plane.cmd_label_create(CFG, Args(
-            project=None, name="triage", color="reddish", description=None, dry_run=False,
-        ))
+        plane.cmd_label_create(
+            CFG,
+            Args(
+                project=None,
+                name="triage",
+                color="reddish",
+                description=None,
+                dry_run=False,
+            ),
+        )
     assert calls.calls == []
 
 
 def test_create_dry_run_sends_nothing(monkeypatch):
     calls = stub(monkeypatch)
-    out = run(plane.cmd_label_create, CFG, Args(
-        project=None, name="triage", color=None, description=None, dry_run=True,
-    ))
+    out = run(
+        plane.cmd_label_create,
+        CFG,
+        Args(
+            project=None,
+            name="triage",
+            color=None,
+            description=None,
+            dry_run=True,
+        ),
+    )
     assert calls.calls[0][3] is True
     assert "created label" not in out
 
@@ -287,10 +352,18 @@ def test_create_dry_run_sends_nothing(monkeypatch):
 
 def test_editing_a_label_patches_only_the_fields_given(monkeypatch):
     calls = stub(monkeypatch)
-    out = run(plane.cmd_label_edit, CFG, Args(
-        project=None, label="bug", name=None, color="#123abc", description=None,
-        dry_run=False,
-    ))
+    out = run(
+        plane.cmd_label_edit,
+        CFG,
+        Args(
+            project=None,
+            label="bug",
+            name=None,
+            color="#123abc",
+            description=None,
+            dry_run=False,
+        ),
+    )
     method, path, body, dry = calls.calls[0]
     assert (method, path, dry) == ("PATCH", f"/projects/{OK}/labels/{L1}/", False)
     assert body == {"color": "#123abc"}
@@ -299,57 +372,103 @@ def test_editing_a_label_patches_only_the_fields_given(monkeypatch):
 
 def test_editing_a_label_can_rename_it(monkeypatch):
     calls = stub(monkeypatch)
-    run(plane.cmd_label_edit, CFG, Args(
-        project=None, label=L1, name="  defect  ", color=None, description=None,
-        dry_run=False,
-    ))
+    run(
+        plane.cmd_label_edit,
+        CFG,
+        Args(
+            project=None,
+            label=L1,
+            name="  defect  ",
+            color=None,
+            description=None,
+            dry_run=False,
+        ),
+    )
     assert calls.calls[0][2] == {"name": "defect"}
 
 
 def test_renaming_onto_an_existing_name_is_refused(monkeypatch):
     calls = stub(monkeypatch)
     with pytest.raises(plane.PlaneError, match="already named"):
-        plane.cmd_label_edit(CFG, Args(
-            project=None, label="bug", name="chore", color=None, description=None,
-            dry_run=False,
-        ))
+        plane.cmd_label_edit(
+            CFG,
+            Args(
+                project=None,
+                label="bug",
+                name="chore",
+                color=None,
+                description=None,
+                dry_run=False,
+            ),
+        )
     assert calls.calls == []
 
 
 def test_renaming_a_label_to_its_own_name_is_not_a_collision(monkeypatch):
     calls = stub(monkeypatch)
-    run(plane.cmd_label_edit, CFG, Args(
-        project=None, label="bug", name="bug", color=None, description=None,
-        dry_run=False,
-    ))
+    run(
+        plane.cmd_label_edit,
+        CFG,
+        Args(
+            project=None,
+            label="bug",
+            name="bug",
+            color=None,
+            description=None,
+            dry_run=False,
+        ),
+    )
     assert calls.calls[0][2] == {"name": "bug"}
 
 
 def test_an_edit_with_no_fields_is_refused_rather_than_sent_empty(monkeypatch):
     calls = stub(monkeypatch)
     with pytest.raises(plane.PlaneError, match="nothing to change"):
-        plane.cmd_label_edit(CFG, Args(
-            project=None, label="bug", name=None, color=None, description=None,
-            dry_run=False,
-        ))
+        plane.cmd_label_edit(
+            CFG,
+            Args(
+                project=None,
+                label="bug",
+                name=None,
+                color=None,
+                description=None,
+                dry_run=False,
+            ),
+        )
     assert calls.calls == []
 
 
 def test_an_edit_can_clear_a_description_with_an_empty_string(monkeypatch):
     calls = stub(monkeypatch)
-    run(plane.cmd_label_edit, CFG, Args(
-        project=None, label="docs", name=None, color=None, description="",
-        dry_run=False,
-    ))
+    run(
+        plane.cmd_label_edit,
+        CFG,
+        Args(
+            project=None,
+            label="docs",
+            name=None,
+            color=None,
+            description="",
+            dry_run=False,
+        ),
+    )
     assert calls.calls[0][2] == {"description": ""}
 
 
 def test_edit_dry_run_sends_nothing(monkeypatch):
     calls = stub(monkeypatch)
-    out = run(plane.cmd_label_edit, CFG, Args(
-        project=None, label="bug", name=None, color="#111111", description=None,
-        dry_run=True,
-    ))
+    out = run(
+        plane.cmd_label_edit,
+        CFG,
+        Args(
+            project=None,
+            label="bug",
+            name=None,
+            color="#111111",
+            description=None,
+            dry_run=True,
+        ),
+    )
     assert calls.calls[0][3] is True
     assert "edited label" not in out
 
@@ -365,36 +484,68 @@ def test_deleting_without_yes_refuses_and_sends_nothing(monkeypatch):
     calls = stub(monkeypatch, issues=issues_carrying(L1, L1, L2))
     with pytest.raises(plane.PlaneError, match="without --yes"):
         with redirect_stdout(io.StringIO()):
-            plane.cmd_label_delete(CFG, Args(
-                project=None, label="bug", yes=False, dry_run=False,
-            ))
+            plane.cmd_label_delete(
+                CFG,
+                Args(
+                    project=None,
+                    label="bug",
+                    yes=False,
+                    dry_run=False,
+                ),
+            )
     assert calls.calls == []
 
 
 def test_deleting_reports_how_many_issues_carry_the_label_first(monkeypatch):
     calls = stub(monkeypatch, issues=issues_carrying(L1, L1, L2))
-    out = run(plane.cmd_label_delete, CFG, Args(
-        project=None, label="bug", yes=True, dry_run=False,
-    ))
+    out = run(
+        plane.cmd_label_delete,
+        CFG,
+        Args(
+            project=None,
+            label="bug",
+            yes=True,
+            dry_run=False,
+        ),
+    )
     assert "2 issue(s)" in out
     method, path, body, dry = calls.calls[0]
-    assert (method, path, body, dry) == ("DELETE", f"/projects/{OK}/labels/{L1}/", None, False)
+    assert (method, path, body, dry) == (
+        "DELETE",
+        f"/projects/{OK}/labels/{L1}/",
+        None,
+        False,
+    )
     assert "deleted label 'bug'" in out
 
 
 def test_an_unused_label_says_so_rather_than_printing_zero(monkeypatch):
     stub(monkeypatch, issues=issues_carrying(L2))
-    out = run(plane.cmd_label_delete, CFG, Args(
-        project=None, label="bug", yes=True, dry_run=False,
-    ))
+    out = run(
+        plane.cmd_label_delete,
+        CFG,
+        Args(
+            project=None,
+            label="bug",
+            yes=True,
+            dry_run=False,
+        ),
+    )
     assert "no issues" in out
 
 
 def test_delete_dry_run_sends_nothing(monkeypatch):
     calls = stub(monkeypatch, issues=issues_carrying(L1))
-    out = run(plane.cmd_label_delete, CFG, Args(
-        project=None, label="bug", yes=True, dry_run=True,
-    ))
+    out = run(
+        plane.cmd_label_delete,
+        CFG,
+        Args(
+            project=None,
+            label="bug",
+            yes=True,
+            dry_run=True,
+        ),
+    )
     assert calls.calls[0][3] is True
     assert "deleted label" not in out
 
@@ -406,9 +557,16 @@ def test_dry_run_previews_the_delete_without_needing_yes(monkeypatch):
     type the confirmation, and dropping --dry-run from that line deletes.
     """
     calls = stub(monkeypatch, issues=issues_carrying(L1))
-    run(plane.cmd_label_delete, CFG, Args(
-        project=None, label="bug", yes=False, dry_run=True,
-    ))
+    run(
+        plane.cmd_label_delete,
+        CFG,
+        Args(
+            project=None,
+            label="bug",
+            yes=False,
+            dry_run=True,
+        ),
+    )
     method, path, _body, dry = calls.calls[0]
     assert (method, path, dry) == ("DELETE", f"/projects/{OK}/labels/{L1}/", True)
 
@@ -417,9 +575,16 @@ def test_the_usage_count_names_what_it_scanned(monkeypatch):
     """The count gates an irreversible write, so it must not read as absolute:
     archived issues are not in /issues/ and are not counted."""
     stub(monkeypatch, issues=issues_carrying(L2))
-    out = run(plane.cmd_label_delete, CFG, Args(
-        project=None, label="bug", yes=True, dry_run=False,
-    ))
+    out = run(
+        plane.cmd_label_delete,
+        CFG,
+        Args(
+            project=None,
+            label="bug",
+            yes=True,
+            dry_run=False,
+        ),
+    )
     assert "no issues" in out
     assert "archived issues are not scanned" in out
 
@@ -428,37 +593,65 @@ def test_the_usage_scan_does_not_ask_for_issue_bodies(monkeypatch):
     """A count needs every page, so the payload is the whole cost — and rule 11
     has the user run this twice."""
     calls = stub(monkeypatch, issues=issues_carrying(L1))
-    run(plane.cmd_label_delete, CFG, Args(
-        project=None, label="bug", yes=True, dry_run=False,
-    ))
+    run(
+        plane.cmd_label_delete,
+        CFG,
+        Args(
+            project=None,
+            label="bug",
+            yes=True,
+            dry_run=False,
+        ),
+    )
     scans = [params for path, params in calls.scans if path.endswith("/issues/")]
-    assert scans and all((params or {}).get("fields") == "id,labels" for params in scans)
+    assert scans and all(
+        (params or {}).get("fields") == "id,labels" for params in scans
+    )
 
 
 def test_deleting_a_label_group_parent_is_refused_not_counted(monkeypatch):
     """Plane deletes a group's children with it, and the issue count does not
     see that: a parent usually carries no issues at all."""
-    calls = stub(monkeypatch, labels=[
-        {"id": L1, "name": "Platform"},
-        {"id": L2, "name": "backend", "parent": L1},
-        {"id": L3, "name": "frontend", "parent": {"id": L1}},
-    ])
+    calls = stub(
+        monkeypatch,
+        labels=[
+            {"id": L1, "name": "Platform"},
+            {"id": L2, "name": "backend", "parent": L1},
+            {"id": L3, "name": "frontend", "parent": {"id": L1}},
+        ],
+    )
     with pytest.raises(plane.PlaneError, match="label group with 2 child"):
         with redirect_stdout(io.StringIO()):
-            plane.cmd_label_delete(CFG, Args(
-                project=None, label="Platform", yes=True, dry_run=False,
-            ))
+            plane.cmd_label_delete(
+                CFG,
+                Args(
+                    project=None,
+                    label="Platform",
+                    yes=True,
+                    dry_run=False,
+                ),
+            )
     assert calls.calls == []
 
 
 def test_a_child_label_is_still_deletable(monkeypatch):
-    calls = stub(monkeypatch, labels=[
-        {"id": L1, "name": "Platform"},
-        {"id": L2, "name": "backend", "parent": L1},
-    ])
-    run(plane.cmd_label_delete, CFG, Args(
-        project=None, label="backend", yes=True, dry_run=False,
-    ))
+    calls = stub(
+        monkeypatch,
+        labels=[
+            {"id": L1, "name": "Platform"},
+            {"id": L2, "name": "backend", "parent": L1},
+        ],
+    )
+    run(
+        plane.cmd_label_delete,
+        CFG,
+        Args(
+            project=None,
+            label="backend",
+            yes=True,
+            dry_run=False,
+        ),
+    )
     assert calls.calls[0][:2] == ("DELETE", f"/projects/{OK}/labels/{L2}/")
 
 
@@ -467,19 +660,36 @@ def test_a_child_label_is_still_deletable(monkeypatch):
 
 def test_json_output_carries_the_new_label_id(monkeypatch):
     stub(monkeypatch, routes={f"/projects/{OK}/labels/": {"id": L3}})
-    out = run(plane.cmd_label_create, CFG, Args(
-        project=None, name="triage", color="#f80", description=None,
-        dry_run=False, json=True,
-    ))
+    out = run(
+        plane.cmd_label_create,
+        CFG,
+        Args(
+            project=None,
+            name="triage",
+            color="#f80",
+            description=None,
+            dry_run=False,
+            json=True,
+        ),
+    )
     assert json.loads(out)["id"] == L3
 
 
 def test_json_output_carries_what_the_edit_changed(monkeypatch):
     stub(monkeypatch)
-    out = run(plane.cmd_label_edit, CFG, Args(
-        project=None, label="bug", name="defect", color=None, description=None,
-        dry_run=False, json=True,
-    ))
+    out = run(
+        plane.cmd_label_edit,
+        CFG,
+        Args(
+            project=None,
+            label="bug",
+            name="defect",
+            color=None,
+            description=None,
+            dry_run=False,
+            json=True,
+        ),
+    )
     got = json.loads(out)
     assert (got["id"], got["was"], got["changed"]) == (L1, "bug", {"name": "defect"})
 
@@ -491,9 +701,16 @@ def test_the_blast_radius_is_parseable_when_the_delete_is_refused(monkeypatch):
     out = io.StringIO()
     with pytest.raises(plane.PlaneError, match="without --yes"):
         with redirect_stdout(out):
-            plane.cmd_label_delete(CFG, Args(
-                project=None, label="bug", yes=False, dry_run=False, json=True,
-            ))
+            plane.cmd_label_delete(
+                CFG,
+                Args(
+                    project=None,
+                    label="bug",
+                    yes=False,
+                    dry_run=False,
+                    json=True,
+                ),
+            )
     got = json.loads(out.getvalue())
     assert (got["on_issues"], got["deleted"]) == (2, False)
     assert "archived" in got["counted_over"]
@@ -501,21 +718,32 @@ def test_the_blast_radius_is_parseable_when_the_delete_is_refused(monkeypatch):
 
 def test_a_completed_delete_prints_one_json_document(monkeypatch):
     stub(monkeypatch, issues=issues_carrying(L1))
-    out = run(plane.cmd_label_delete, CFG, Args(
-        project=None, label="bug", yes=True, dry_run=False, json=True,
-    ))
+    out = run(
+        plane.cmd_label_delete,
+        CFG,
+        Args(
+            project=None,
+            label="bug",
+            yes=True,
+            dry_run=False,
+            json=True,
+        ),
+    )
     assert json.loads(out)["deleted"] is True
 
 
 def test_usage_counts_an_issue_once_even_with_expanded_labels(monkeypatch):
     monkeypatch.setattr(
-        plane, "_paginate",
-        lambda path, cfg, **kw: iter([
-            {"id": "i1", "labels": [{"id": L1}, {"id": L2}]},
-            {"id": "i2", "labels": [{"id": L2}]},
-            {"id": "i3", "labels": []},
-            {"id": "i4"},
-        ]),
+        plane,
+        "_paginate",
+        lambda path, cfg, **kw: iter(
+            [
+                {"id": "i1", "labels": [{"id": L1}, {"id": L2}]},
+                {"id": "i2", "labels": [{"id": L2}]},
+                {"id": "i3", "labels": []},
+                {"id": "i4"},
+            ]
+        ),
     )
     assert plane.label_usage(CFG, OK, L1) == 1
     assert plane.label_usage(CFG, OK, L2) == 2
@@ -534,11 +762,18 @@ def test_labels_listing_shows_the_description_it_can_now_set(monkeypatch):
 def test_a_long_or_multiline_description_does_not_push_the_id_off_the_row(monkeypatch):
     """`_table` sizes a column to its longest value, and `id` is what
     `label-edit` and `label-delete` need. Free text goes last, one line, capped."""
-    stub(monkeypatch, labels=[
-        {"id": L1, "name": "bug", "color": "#ff0000",
-         "description": "why this exists " * 12 + "\nand a second paragraph"},
-        {"id": L2, "name": "chore", "color": "#00ff00", "description": ""},
-    ])
+    stub(
+        monkeypatch,
+        labels=[
+            {
+                "id": L1,
+                "name": "bug",
+                "color": "#ff0000",
+                "description": "why this exists " * 12 + "\nand a second paragraph",
+            },
+            {"id": L2, "name": "chore", "color": "#00ff00", "description": ""},
+        ],
+    )
     out = run(plane.cmd_labels, CFG, Args(project=None))
     lines = out.splitlines()
     assert any("bug" in ln and L1 in ln for ln in lines)
@@ -548,8 +783,11 @@ def test_a_long_or_multiline_description_does_not_push_the_id_off_the_row(monkey
 
 def test_json_output_keeps_the_whole_description(monkeypatch):
     long = "why this exists " * 12
-    stub(monkeypatch, labels=[
-        {"id": L1, "name": "bug", "color": "#ff0000", "description": long},
-    ])
+    stub(
+        monkeypatch,
+        labels=[
+            {"id": L1, "name": "bug", "color": "#ff0000", "description": long},
+        ],
+    )
     out = run(plane.cmd_labels, CFG, Args(project=None, json=True))
     assert json.loads(out)[0]["description"] == long

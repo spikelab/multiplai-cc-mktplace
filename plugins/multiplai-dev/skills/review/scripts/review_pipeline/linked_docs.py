@@ -56,7 +56,12 @@ def _unfenced_lines(text: str) -> list[tuple[int, str]]:
     for i, line in enumerate(text.split("\n")):
         m = FENCE_OPEN.match(line)
         if fence is not None:
-            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) and not line[m.end():].strip():
+            if (
+                m
+                and m.group(1)[0] == fence[0]
+                and len(m.group(1)) >= len(fence)
+                and not line[m.end() :].strip()
+            ):
                 fence = None
             continue
         if m:
@@ -79,7 +84,9 @@ def links(text: str) -> list[tuple[str, bool]]:
         if definition:
             label = definition.group(1).strip().lower()
             using = [ln for _, ln in lines if f"[{label}]" in ln.lower()]
-            found.append((i, 0, definition.group(2), any(BINDING.search(ln) for ln in using)))
+            found.append(
+                (i, 0, definition.group(2), any(BINDING.search(ln) for ln in using))
+            )
             continue
         for m in INLINE_LINK.finditer(line):
             found.append((i, m.start(), m.group(1), bool(BINDING.search(line))))
@@ -94,7 +101,11 @@ def resolve(source: str, target: str) -> str | None:
     bare = unquote(re.split(r"[#?]", target, maxsplit=1)[0])
     if not bare or not bare.lower().endswith(MARKDOWN_SUFFIXES):
         return None
-    joined = bare.lstrip("/") if bare.startswith("/") else posixpath.join(posixpath.dirname(source), bare)
+    joined = (
+        bare.lstrip("/")
+        if bare.startswith("/")
+        else posixpath.join(posixpath.dirname(source), bare)
+    )
     return posixpath.normpath(joined)
 
 
@@ -109,8 +120,14 @@ def _outside(path: str) -> bool:
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run([*GIT_ARGV, "-C", str(repo), *args], capture_output=True, stdin=subprocess.DEVNULL,
-                          env=git_env(), shell=False, check=False)
+    return subprocess.run(
+        [*GIT_ARGV, "-C", str(repo), *args],
+        capture_output=True,
+        stdin=subprocess.DEVNULL,
+        env=git_env(),
+        shell=False,
+        check=False,
+    )
 
 
 def _entry(repo: Path, sha: str, path: str) -> tuple[str, str] | None:
@@ -163,8 +180,14 @@ def read_doc(repo: Path, sha: str, path: str) -> tuple[str | None, str]:
         return None, "unreadable"
 
 
-def linked_docs(sources: list[LinkSource], *, repo: Path, head: str, base: str | None,
-                remaining: int) -> LinkedDocs:
+def linked_docs(
+    sources: list[LinkSource],
+    *,
+    repo: Path,
+    head: str,
+    base: str | None,
+    remaining: int,
+) -> LinkedDocs:
     """The docs *sources* link, fenced, binding ones first, while each whole block fits in *remaining*.
 
     Links come from each source at head, then (with *base*) those only at
@@ -173,7 +196,9 @@ def linked_docs(sources: list[LinkSource], *, repo: Path, head: str, base: str |
     """
     own = {s.path for s in sources}
     order: dict[str, bool] = {}
-    sides = [[s.head_text for s in sources]] + ([[s.base_text for s in sources]] if base is not None else [])
+    sides = [[s.head_text for s in sources]] + (
+        [[s.base_text for s in sources]] if base is not None else []
+    )
     for texts in sides:
         for source, text in zip(sources, texts):
             for target, binding in links(text or ""):
@@ -184,7 +209,11 @@ def linked_docs(sources: list[LinkSource], *, repo: Path, head: str, base: str |
     ranked = [p for p, b in order.items() if b] + [p for p, b in order.items() if not b]
 
     def skip(path: str, reason: str) -> None:
-        skipped.append(CoverageRecord(stage="conventions", subject=path, level="info", reason=reason))
+        skipped.append(
+            CoverageRecord(
+                stage="conventions", subject=path, level="info", reason=reason
+            )
+        )
 
     blocks, included, skipped = [], [], []
     for path in ranked:

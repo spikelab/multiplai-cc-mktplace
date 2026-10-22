@@ -36,9 +36,14 @@ def must_assess(ff: FindingsFile) -> tuple[str, ...]:
     (a module walkthrough, or `review --tree`) is not a change: no commit says why,
     no test covers a change, and nothing is merged, so it needs none, and no risk."""
     return () if is_tree_review(ff.target) else MUST_ASSESS
+
+
 # Topics a new walkthrough may no longer use: size is measured, and risk is the
 # header score built from `risk` (models.RiskInput).
-RETIRED_TOPICS = {"size": "size is measured from git", "risk": "risk is scored from the `risk` block"}
+RETIRED_TOPICS = {
+    "size": "size is measured from git",
+    "risk": "risk is scored from the `risk` block",
+}
 # A badge shows its title on one line (see models.ASSESSMENT_TITLE_MAX).
 TITLE_MAX = ASSESSMENT_TITLE_MAX
 
@@ -59,16 +64,30 @@ class Served:
     stats: dict | None = None
 
     def to_json(self) -> str:
-        return json.dumps({"findings": self.findings.model_dump(mode="json"), "pr": self.pr,
-                           "notice": self.notice, "stats": self.stats},
-                          indent=2, ensure_ascii=False) + "\n"
+        return (
+            json.dumps(
+                {
+                    "findings": self.findings.model_dump(mode="json"),
+                    "pr": self.pr,
+                    "notice": self.notice,
+                    "stats": self.stats,
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+            + "\n"
+        )
 
 
 def load_served(box: Path) -> Served:
     """The target `serve` wrote for this mailbox. Raises OSError or ValueError."""
     data = json.loads(served_path(box).read_text(encoding="utf-8"))
-    return Served(FindingsFile.model_validate(data["findings"]), data.get("pr"),
-                  data.get("notice"), data.get("stats"))
+    return Served(
+        FindingsFile.model_validate(data["findings"]),
+        data.get("pr"),
+        data.get("notice"),
+        data.get("stats"),
+    )
 
 
 def load_walkthrough(box: Path) -> Walkthrough | None:
@@ -81,6 +100,7 @@ def load_walkthrough(box: Path) -> Walkthrough | None:
 @dataclass
 class _Lines:
     """Line counts of files at a commit, read once each."""
+
     repo: str
     base: str
     head: str
@@ -97,7 +117,9 @@ class _Lines:
         key = (sha, path)
         if key not in self.counts:
             try:
-                self.counts[key] = len(split_lines(git(self.repo, "show", f"{sha}:{path}")))
+                self.counts[key] = len(
+                    split_lines(git(self.repo, "show", f"{sha}:{path}"))
+                )
             except GitError as exc:
                 if str(exc) == GIT_MISSING:
                     raise
@@ -113,12 +135,19 @@ def coverage(wt: Walkthrough | None, ff: FindingsFile) -> tuple[list[str], list[
         covered: set[str] = set()
         linked: set[str] = set()
     else:
-        covered = {a.path for s in wt.steps for a in s.anchors} | {k.path for k in wt.skipped}
+        covered = {a.path for s in wt.steps for a in s.anchors} | {
+            k.path for k in wt.skipped
+        }
         linked = {fid for s in wt.steps for fid in s.finding_ids}
     uncovered = [f for f in files if f not in covered]
-    unlinked = [f.id for f in ff.findings if f.status in MUST_LINK and f.id not in linked
-                and not (f.assessment and f.assessment.label in NOT_SHOWN_LABELS)
-                and not (ff.mode == "critical" and f.impact not in CRITICAL_IMPACTS)]
+    unlinked = [
+        f.id
+        for f in ff.findings
+        if f.status in MUST_LINK
+        and f.id not in linked
+        and not (f.assessment and f.assessment.label in NOT_SHOWN_LABELS)
+        and not (ff.mode == "critical" and f.impact not in CRITICAL_IMPACTS)
+    ]
     return uncovered, unlinked
 
 
@@ -128,8 +157,10 @@ def check(wt: Walkthrough, ff: FindingsFile) -> list[str]:
     t = ff.target
     errors: list[str] = []
     if wt.base_sha != t.base_sha or wt.head_sha != t.head_sha:
-        errors.append(f"walkthrough: base_sha/head_sha {wt.base_sha[:12]}..{wt.head_sha[:12]} "
-                      f"are not the served target's {t.base_sha[:12]}..{t.head_sha[:12]}")
+        errors.append(
+            f"walkthrough: base_sha/head_sha {wt.base_sha[:12]}..{wt.head_sha[:12]} "
+            f"are not the served target's {t.base_sha[:12]}..{t.head_sha[:12]}"
+        )
     changed = set(t.files_changed)
     known = {f.id for f in ff.findings}
     lines = _Lines(t.repo_path, t.base_sha, t.head_sha)
@@ -142,59 +173,79 @@ def check(wt: Walkthrough, ff: FindingsFile) -> list[str]:
         for a in step.anchors:
             at = f"{a.path}:{a.line_start}-{a.line_end} ({a.side})"
             if a.path not in changed:
-                errors.append(f"{where}: anchor {at}: {a.path} is not a changed file in this diff")
+                errors.append(
+                    f"{where}: anchor {at}: {a.path} is not a changed file in this diff"
+                )
                 continue
             if a.line_end < a.line_start:
                 errors.append(f"{where}: anchor {at}: line_end is before line_start")
                 continue
             if lines.is_binary(a.path):
-                errors.append(f"{where}: anchor {at}: {a.path} is binary and has no lines; "
-                              "list it in skipped instead")
+                errors.append(
+                    f"{where}: anchor {at}: {a.path} is binary and has no lines; "
+                    "list it in skipped instead"
+                )
                 continue
             sha = t.head_sha if a.side == "head" else t.base_sha
             n = lines.count(sha, a.path)
             if n is None:
                 other = "base" if a.side == "head" else "head"
-                errors.append(f"{where}: anchor {at}: {a.path} does not exist at {a.side} "
-                              f"({sha[:12]}); anchor it on side {other!r}")
+                errors.append(
+                    f"{where}: anchor {at}: {a.path} does not exist at {a.side} "
+                    f"({sha[:12]}); anchor it on side {other!r}"
+                )
             elif a.line_end > n:
-                errors.append(f"{where}: anchor {at}: {a.path} has {n} lines at {a.side} "
-                              f"({sha[:12]})")
+                errors.append(
+                    f"{where}: anchor {at}: {a.path} has {n} lines at {a.side} "
+                    f"({sha[:12]})"
+                )
         for fid in step.finding_ids:
             if fid not in known:
                 errors.append(f"{where}: finding {fid} is not in the loaded findings")
         # The page shows linked findings under the step; the text must not repeat them.
         named = sorted(fid for fid in known if fid in step.body_md)
         if named:
-            errors.append(f"{where}: body_md names finding {', '.join(named)}; the page shows "
-                          "linked findings under the step, so explain the code instead")
+            errors.append(
+                f"{where}: body_md names finding {', '.join(named)}; the page shows "
+                "linked findings under the step, so explain the code instead"
+            )
     for k in wt.skipped:
         if k.path not in changed:
             errors.append(f"skipped {k.path}: not a changed file in this diff")
     topics = [a.topic for a in wt.assessments]
     for a in wt.assessments:
         if a.topic in RETIRED_TOPICS:
-            errors.append(f"assessment {a.topic}: not an assessment topic any more "
-                          f"({RETIRED_TOPICS[a.topic]})")
+            errors.append(
+                f"assessment {a.topic}: not an assessment topic any more "
+                f"({RETIRED_TOPICS[a.topic]})"
+            )
         if len(a.title) > TITLE_MAX:
-            errors.append(f"assessment {a.topic}: title is {len(a.title)} characters, over "
-                          f"{TITLE_MAX}; put the rest in detail_md")
+            errors.append(
+                f"assessment {a.topic}: title is {len(a.title)} characters, over "
+                f"{TITLE_MAX}; put the rest in detail_md"
+            )
     for topic in sorted({t for t in topics if t != "other" and topics.count(t) > 1}):
         errors.append(f"assessment {topic}: more than one assessment has this topic")
     if wt.complete:
         for topic in must_assess(ff):
             if topic not in topics:
-                errors.append(f"walkthrough: complete is true but there is no {topic!r} "
-                              "assessment")
+                errors.append(
+                    f"walkthrough: complete is true but there is no {topic!r} "
+                    "assessment"
+                )
         if wt.risk is None and not is_tree_review(t):
             errors.append("walkthrough: complete is true but there is no 'risk' block")
         uncovered, unlinked = coverage(wt, ff)
         for path in uncovered:
-            errors.append(f"walkthrough: complete is true but changed file {path} has no "
-                          "anchor in any step and is not in skipped")
+            errors.append(
+                f"walkthrough: complete is true but changed file {path} has no "
+                "anchor in any step and is not in skipped"
+            )
         for fid in unlinked:
-            errors.append(f"walkthrough: complete is true but finding {fid} is not linked "
-                          "from any step")
+            errors.append(
+                f"walkthrough: complete is true but finding {fid} is not linked "
+                "from any step"
+            )
     return errors
 
 

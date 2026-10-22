@@ -94,7 +94,8 @@ class SkillsGenerator(GeneratorBase):
         for name, path in self._discover_plugin_skills().items():
             sources.setdefault(name, path)
         return {
-            name: path for name, path in sources.items()
+            name: path
+            for name, path in sources.items()
             if not model_invocation_disabled(path)
         }
 
@@ -133,7 +134,7 @@ class SkillsGenerator(GeneratorBase):
             'that should invoke this skill (e.g., "writing a blog post", '
             '"running a code review"). 2-6 phrases.\n'
             '- "anti_domains": an array of short phrases describing task intents '
-            'where this skill should NOT be invoked (use sparingly). 0-3 phrases.\n\n'
+            "where this skill should NOT be invoked (use sparingly). 0-3 phrases.\n\n"
             "Respond with ONLY valid JSON, no explanation.\n\n"
             f"---\n{content}\n---"
         )

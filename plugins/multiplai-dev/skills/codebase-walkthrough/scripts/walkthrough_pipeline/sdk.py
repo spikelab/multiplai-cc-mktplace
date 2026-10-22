@@ -58,7 +58,11 @@ class RepoTrustError(AgentCallError):
 
 
 def repo_is_trusted() -> bool:
-    return os.environ.get("WALKTHROUGH_TRUST_REPO", "").strip().lower() in ("1", "true", "yes")
+    return os.environ.get("WALKTHROUGH_TRUST_REPO", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
 
 
 def require_trusted_repo() -> None:
@@ -75,9 +79,19 @@ def require_trusted_repo() -> None:
         )
 
 
-async def _run(prompt: str, *, allowed_tools: list[str], model: str | None, effort: str | None,
-               max_turns: int, cwd: str | None, call_timeout: float, budget_label: str,
-               run_label: str = "", read_roots: list[str] | None = None) -> str:
+async def _run(
+    prompt: str,
+    *,
+    allowed_tools: list[str],
+    model: str | None,
+    effort: str | None,
+    max_turns: int,
+    cwd: str | None,
+    call_timeout: float,
+    budget_label: str,
+    run_label: str = "",
+    read_roots: list[str] | None = None,
+) -> str:
     require_trusted_repo()
     budget.check(stage=budget_label)
     try:
@@ -125,11 +139,19 @@ async def agent_call_structured(
     error appended.
     """
     name = budget_label or "agent"
-    common = dict(model=model, effort=effort, cwd=cwd, call_timeout=call_timeout, budget_label=budget_label,
-                  read_roots=read_roots)
+    common = dict(
+        model=model,
+        effort=effort,
+        cwd=cwd,
+        call_timeout=call_timeout,
+        budget_label=budget_label,
+        read_roots=read_roots,
+    )
     text: str | None = None
     try:
-        text = await _run(prompt, allowed_tools=allowed_tools, max_turns=max_turns, **common)
+        text = await _run(
+            prompt, allowed_tools=allowed_tools, max_turns=max_turns, **common
+        )
         return parse_answer(text, schema)
     except RepoTrustError:
         raise
@@ -144,10 +166,17 @@ async def agent_call_structured(
                 f"Return ONLY one JSON object matching this schema:\n"
                 f"{json.dumps(schema.model_json_schema(), indent=1)}\n"
             )
-            text = await _run(retry, allowed_tools=allowed_tools, max_turns=max_turns, **common)
+            text = await _run(
+                retry, allowed_tools=allowed_tools, max_turns=max_turns, **common
+            )
         else:
-            text = await _run(reformat_prompt(text, schema, first_error), allowed_tools=[],
-                              max_turns=REFORMAT_MAX_TURNS, run_label=f"{name}:reformat", **common)
+            text = await _run(
+                reformat_prompt(text, schema, first_error),
+                allowed_tools=[],
+                max_turns=REFORMAT_MAX_TURNS,
+                run_label=f"{name}:reformat",
+                **common,
+            )
         return parse_answer(text, schema)
     except RepoTrustError:
         raise

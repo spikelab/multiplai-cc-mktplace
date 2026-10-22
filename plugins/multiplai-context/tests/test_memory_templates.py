@@ -37,16 +37,18 @@ class TestTemplateValidMarkdown:
     @pytest.mark.parametrize("filename", TEMPLATE_FILES)
     def test_has_heading(self, filename):
         text = (TEMPLATES_DIR / filename).read_text()
-        assert re.search(r"^#{1,2}\s+\S", text, re.MULTILINE), \
+        assert re.search(r"^#{1,2}\s+\S", text, re.MULTILINE), (
             f"{filename} has no markdown heading"
+        )
 
     @pytest.mark.parametrize("filename", TEMPLATE_FILES)
     def test_has_placeholder_or_prompt(self, filename):
         text = (TEMPLATES_DIR / filename).read_text()
         has_comment = "<!--" in text
         has_prompt = re.search(r"(?i)(list|describe|what|how|your)", text) is not None
-        assert has_comment or has_prompt, \
+        assert has_comment or has_prompt, (
             f"{filename} has no placeholder or instructional text"
+        )
 
 
 class TestMeTemplate:
@@ -67,7 +69,9 @@ class TestMeTemplate:
 
     def test_no_developer_specific_data(self):
         assert "Spike" not in self.text
-        assert "spike" not in self.text.split("<!--")[0]  # Allow in comments only if needed
+        assert (
+            "spike" not in self.text.split("<!--")[0]
+        )  # Allow in comments only if needed
         assert "spikelab" not in self.text
 
 
@@ -91,7 +95,9 @@ class TestTechnicalPrefTemplate:
         assert re.search(r"(?i)tool", self.text)
 
     def test_has_actionable_placeholders(self):
-        has_examples = re.search(r"(?i)(list|describe|e\.g\.|example|prefer)", self.text)
+        has_examples = re.search(
+            r"(?i)(list|describe|e\.g\.|example|prefer)", self.text
+        )
         has_comments = "<!--" in self.text
         assert has_examples or has_comments
 
@@ -127,7 +133,9 @@ class TestNoSensitiveContent:
     def test_no_credentials(self, filename):
         text = (TEMPLATES_DIR / filename).read_text()
         assert not re.search(r"sk-[a-zA-Z0-9]{20,}", text), "Possible API key found"
-        assert not re.search(r"(?i)password\s*[:=]\s*\S+", text), "Possible password found"
+        assert not re.search(r"(?i)password\s*[:=]\s*\S+", text), (
+            "Possible password found"
+        )
 
 
 class TestEncoding:

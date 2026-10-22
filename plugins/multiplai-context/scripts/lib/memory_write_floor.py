@@ -99,6 +99,7 @@ __all__ = [
 # `"python.md\n"` was contained one layer out by `memory_file.exists()`.
 _SAFE_TARGET_RE = re.compile(r"\A[A-Za-z0-9._-]+\.md\Z")
 
+
 # Mirrors ``multiplai_core.banks``'s own name rule. Kept as a literal here
 # rather than imported because it guards a *refusal*: this file must be able to
 # reject a target with nothing loaded but stdlib and a regex.

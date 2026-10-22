@@ -18,8 +18,20 @@ from walkthrough_pipeline.render import markdown_headings, split_sections
 
 
 def run_args(ws, tmp_path, *extra):
-    return ["run", str(ws["engine"] / "bookings"), "--trust-repo", "--runs-dir", str(tmp_path / "runs"),
-            "--output", str(tmp_path / "out"), "--docs", "https://docs.acme.test", "--lsp-timeout", "0", *extra]
+    return [
+        "run",
+        str(ws["engine"] / "bookings"),
+        "--trust-repo",
+        "--runs-dir",
+        str(tmp_path / "runs"),
+        "--output",
+        str(tmp_path / "out"),
+        "--docs",
+        "https://docs.acme.test",
+        "--lsp-timeout",
+        "0",
+        *extra,
+    ]
 
 
 def test_run_writes_markdown_json_and_html_with_the_same_headings(done_run):
@@ -29,22 +41,41 @@ def test_run_writes_markdown_json_and_html_with_the_same_headings(done_run):
     assert md_path.with_suffix(".json").exists()
     assert "<svg" not in html
     md_heads = markdown_headings(md)
-    html_heads = [re.sub(r"<[^>]+>", "", h) for h in re.findall(r"<h2>(.*?)</h2>", html)]
-    assert md_heads == html_heads == ["What it is", "Use cases", "How it works", "What it creates", "Configuration",
-                                      "Gotchas", "Reference", "How this was made"]
+    html_heads = [
+        re.sub(r"<[^>]+>", "", h) for h in re.findall(r"<h2>(.*?)</h2>", html)
+    ]
+    assert (
+        md_heads
+        == html_heads
+        == [
+            "What it is",
+            "Use cases",
+            "How it works",
+            "What it creates",
+            "Configuration",
+            "Gotchas",
+            "Reference",
+            "How this was made",
+        ]
+    )
     assert "End-to-end scenarios" not in md_heads
 
 
 def test_boundary_json_lists_every_planted_reference_once(done_run):
     _, run_dir, _ = done_run
     data = json.loads((run_dir / "boundary.json").read_text())
-    refs = {(r["repo"], r["kind"], r["path"].split("/", 1)[1]) for r in data["references"]}
+    refs = {
+        (r["repo"], r["kind"], r["path"].split("/", 1)[1]) for r in data["references"]
+    }
     assert ("engine", "python-import", "reports/usage.py") in refs
     assert ("engine", "url-include", "project/urls.py") in refs
     assert ("engine", "celery-name", "project/settings.py") in refs
     assert ("front", "http-route", "src/api.ts") in refs
     assert ("warehouse", "sql-table", "models.sql") in refs
-    assert all(r["method"] in ("ast", "ast-grep", "lsp", "sql-identifier") for r in data["references"])
+    assert all(
+        r["method"] in ("ast", "ast-grep", "lsp", "sql-identifier")
+        for r in data["references"]
+    )
     # comments are not references
     for r in data["references"]:
         assert not r["quote"].startswith(("#", "//", "--")), r
@@ -62,8 +93,14 @@ def test_walkthrough_content(done_run):
     md_path, _, _ = done_run
     md = md_path.read_text()
     # The webhook route and the beat task, traced from their handlers as caller seeds.
-    assert "`HTTP /hooks/acme/` (caller seed)" in md and "`bookings.poll (beat)` (caller seed)" in md
-    assert "[`engine/bookings/views.py:5`](" in md and "[`engine/bookings/tasks.py:5`](" in md
+    assert (
+        "`HTTP /hooks/acme/` (caller seed)" in md
+        and "`bookings.poll (beat)` (caller seed)" in md
+    )
+    assert (
+        "[`engine/bookings/views.py:5`](" in md
+        and "[`engine/bookings/tasks.py:5`](" in md
+    )
     assert re.search(r"\| `ACME_ENV` \| \[`engine/project/settings.py:5`\]", md)
     assert "`/bookings/{}/ack`" in md and "`/webhooks`" in md
     assert "acme-api-collection/bookings/ack.yml" in md
@@ -86,55 +123,92 @@ def test_snapshots_never_hold_env_files_and_secrets_never_leave(done_run):
 def test_agent_mode_writes_compact_markdown_only(ws, tmp_path, monkeypatch, fake_fetch):
     agents = FakeAgents()
     monkeypatch.setattr(sdk, "agent_call_structured", agents)
-    args = ["run", str(ws["engine"] / "bookings"), "--trust-repo", "--runs-dir", str(tmp_path / "runs"),
-            "--output", str(tmp_path / "out"), "--mode", "agent", "--lsp-timeout", "0"]
+    args = [
+        "run",
+        str(ws["engine"] / "bookings"),
+        "--trust-repo",
+        "--runs-dir",
+        str(tmp_path / "runs"),
+        "--output",
+        str(tmp_path / "out"),
+        "--mode",
+        "agent",
+        "--lsp-timeout",
+        "0",
+    ]
     assert main(args) == 0
     out = tmp_path / "out"
     assert sorted(p.name for p in out.iterdir()) == ["bookings-walkthrough.md"]
     md = (out / "bookings-walkthrough.md").read_text()
-    assert markdown_headings(md) == ["Commits read", "Files (7)", "Architecture", "Patterns & Conventions",
-                                     "Key Interfaces", "Gotchas", "Coverage"]
+    assert markdown_headings(md) == [
+        "Commits read",
+        "Files (7)",
+        "Architecture",
+        "Patterns & Conventions",
+        "Key Interfaces",
+        "Gotchas",
+        "Coverage",
+    ]
     assert {c["schema"] for c in agents.calls} == {"ExploreOutput", "SectionOutput"}
     assert main(["check", str(out / "bookings-walkthrough.md")]) == 0
 
 
 # --- walkthrough.json, for the review-viewer ---------------------------------------------
 
-DEV = Path(__file__).resolve().parents[3]                  # plugins/multiplai-dev/skills
+DEV = Path(__file__).resolve().parents[3]  # plugins/multiplai-dev/skills
 VIEWER_SCHEMA = DEV / "review-viewer" / "schema" / "walkthrough.v1.schema.json"
 # The file the review-viewer suite loads through its own validation (its test_walkthrough_module.py).
-VIEWER_FIXTURE = DEV / "review-viewer" / "scripts" / "tests" / "fixtures" / "module-walkthrough.json"
+VIEWER_FIXTURE = (
+    DEV / "review-viewer" / "scripts" / "tests" / "fixtures" / "module-walkthrough.json"
+)
 # Set to rewrite VIEWER_FIXTURE from this run, after a deliberate change to what `run` writes.
 WRITE_FIXTURE = "WALKTHROUGH_WRITE_VIEWER_FIXTURE"
 
 
 def _git_out(repo, *args):
-    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, check=True).stdout
+    return subprocess.run(
+        ["git", "-C", str(repo), *args], capture_output=True, text=True, check=True
+    ).stdout
 
 
 def test_run_writes_a_walkthrough_json_the_viewer_schema_accepts(done_run, ws):
     md_path, _, _ = done_run
     wt = json.loads(md_path.with_suffix(".json").read_text())
     jsonschema.validate(wt, json.loads(VIEWER_SCHEMA.read_text()))
-    empty_tree = subprocess.run(["git", "hash-object", "-t", "tree", "/dev/null"], capture_output=True,
-                                text=True, check=True).stdout.strip()
+    empty_tree = subprocess.run(
+        ["git", "hash-object", "-t", "tree", "/dev/null"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
     assert wt["base_sha"] == empty_tree
     assert wt["head_sha"] == _git_out(ws["engine"], "rev-parse", "HEAD").strip()
     assert wt["complete"] is True and "assessments" not in wt and "risk" not in wt
-    tree = set(_git_out(ws["engine"], "ls-tree", "-r", "--name-only", "HEAD", "--", "bookings").split())
+    tree = set(
+        _git_out(
+            ws["engine"], "ls-tree", "-r", "--name-only", "HEAD", "--", "bookings"
+        ).split()
+    )
     anchored = {a["path"] for s in wt["steps"] for a in s["anchors"]}
-    assert anchored and anchored <= tree                      # only the module's own files are anchors
+    assert anchored and anchored <= tree  # only the module's own files are anchors
     assert all(a["side"] == "head" for s in wt["steps"] for a in s["anchors"])
     assert {k["path"] for k in wt["skipped"]} == tree - anchored
     titles = [s["title"] for s in wt["steps"]]
-    assert "Module tour" in titles and "Coverage" not in titles and "Commits read" not in titles
+    assert (
+        "Module tour" in titles
+        and "Coverage" not in titles
+        and "Commits read" not in titles
+    )
     assert "## Coverage" in wt["overview_md"] and "## Commits read" in wt["overview_md"]
     # Citations into the other repos stay as links in the text.
     who = next(s for s in wt["steps"] if s["title"] == "Who calls it and what it calls")
     assert "[`front/src/api.ts:" in who["body_md"]
-    assert who["diagram"]["source"].startswith("graph LR") and "```mermaid" not in who["body_md"]
+    assert (
+        who["diagram"]["source"].startswith("graph LR")
+        and "```mermaid" not in who["body_md"]
+    )
     md = md_path.read_text()
-    for step in wt["steps"]:                                  # the text is the Markdown's, unchanged
+    for step in wt["steps"]:  # the text is the Markdown's, unchanged
         if "diagram" not in step:
             assert step["body_md"] in md, step["id"]
 
@@ -144,14 +218,21 @@ def test_the_viewer_fixture_is_what_run_writes(done_run):
     md_path, _, _ = done_run
     wt = json.loads(md_path.with_suffix(".json").read_text())
     if os.environ.get(WRITE_FIXTURE):
-        VIEWER_FIXTURE.write_text(json.dumps(wt, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        VIEWER_FIXTURE.write_text(
+            json.dumps(wt, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
 
-    def shape(w):     # the text holds paths relative to pytest's temporary directories
-        return {**{k: v for k, v in w.items() if k not in ("generated_at", "overview_md")},
-                "steps": [{k: v for k, v in s.items() if k != "body_md"} for s in w["steps"]]}
+    def shape(w):  # the text holds paths relative to pytest's temporary directories
+        return {
+            **{k: v for k, v in w.items() if k not in ("generated_at", "overview_md")},
+            "steps": [
+                {k: v for k, v in s.items() if k != "body_md"} for s in w["steps"]
+            ],
+        }
 
-    assert shape(json.loads(VIEWER_FIXTURE.read_text())) == shape(wt), \
+    assert shape(json.loads(VIEWER_FIXTURE.read_text())) == shape(wt), (
         f"run {WRITE_FIXTURE}=1 with this test to rewrite {VIEWER_FIXTURE.name}"
+    )
 
 
 def test_header_names_the_module_directory_depth_and_mode(done_run, ws):
@@ -159,7 +240,9 @@ def test_header_names_the_module_directory_depth_and_mode(done_run, ws):
     md = md_path.read_text()
     where = re.search(r"^- Module directory: `([^`]+)`$", md, re.MULTILINE).group(1)
     assert (md_path.parent / where).resolve() == (ws["engine"] / "bookings").resolve()
-    assert re.search(r"^- Depth: `standard`$", md, re.MULTILINE) and re.search(r"^- Mode: `human`$", md, re.MULTILINE)
+    assert re.search(r"^- Depth: `standard`$", md, re.MULTILINE) and re.search(
+        r"^- Mode: `human`$", md, re.MULTILINE
+    )
 
 
 def test_split_sections_ignores_headings_inside_code_blocks():
@@ -170,16 +253,37 @@ def test_split_sections_ignores_headings_inside_code_blocks():
     assert "## not a heading" in sections[0][1]
 
 
-def test_repo_key_names_a_worktree_by_its_project_not_its_directory(fresh_ws, tmp_path, monkeypatch, fake_fetch):
+def test_repo_key_names_a_worktree_by_its_project_not_its_directory(
+    fresh_ws, tmp_path, monkeypatch, fake_fetch
+):
     """buildme regenerates a walkthrough inside its build worktree, `buildme-<change>`, writing it into
     that worktree: `--repo-key` keeps the project's own key in the "Commits read" row and every citation."""
     worktree = fresh_ws["ws"] / "buildme-c"
-    _git_out(fresh_ws["engine"], "worktree", "add", "-q", "-b", "buildme/c", str(worktree))
+    _git_out(
+        fresh_ws["engine"], "worktree", "add", "-q", "-b", "buildme/c", str(worktree)
+    )
     out = worktree / "docs" / "walkthroughs"
     monkeypatch.setattr(sdk, "agent_call_structured", FakeAgents())
-    assert main(["run", str(worktree / "bookings"), "--trust-repo", "--runs-dir", str(tmp_path / "runs"),
-                 "--output", str(out), "--lsp-timeout", "0", "--repos", str(worktree),
-                 "--repo-key", "engine"]) == 0
+    assert (
+        main(
+            [
+                "run",
+                str(worktree / "bookings"),
+                "--trust-repo",
+                "--runs-dir",
+                str(tmp_path / "runs"),
+                "--output",
+                str(out),
+                "--lsp-timeout",
+                "0",
+                "--repos",
+                str(worktree),
+                "--repo-key",
+                "engine",
+            ]
+        )
+        == 0
+    )
     md = (out / "bookings-walkthrough.md").read_text()
     sha = _git_out(worktree, "rev-parse", "HEAD").strip()
     assert re.search(rf"^\| engine \| \.\./\.\. \| `{sha}` \|$", md, re.MULTILINE), md

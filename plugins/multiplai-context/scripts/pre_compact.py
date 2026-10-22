@@ -132,9 +132,11 @@ def _sync_checkpoint(hook_input: dict, data_dir, gate=_GATE_UNSET) -> bool:
                 return False
             time.sleep(_INFLIGHT_POLL_S)
         log_event(
-            "checkpoint", "precompact",
+            "checkpoint",
+            "precompact",
             f"pre-compaction checkpoint ready (band writer, {tokens:,} tokens)",
-            session_id=session_id, tokens=tokens,
+            session_id=session_id,
+            tokens=tokens,
         )
         return True
 
@@ -142,13 +144,15 @@ def _sync_checkpoint(hook_input: dict, data_dir, gate=_GATE_UNSET) -> bool:
     if not script.exists():
         logger.warning("PreCompact: checkpoint writer script missing at %s", script)
         return False
-    payload = json.dumps({
-        "session_id": session_id,
-        "transcript_path": transcript_path,
-        "cwd": hook_input.get("cwd", ""),
-        "tokens": tokens,
-        "reason": "precompact",
-    })
+    payload = json.dumps(
+        {
+            "session_id": session_id,
+            "transcript_path": transcript_path,
+            "cwd": hook_input.get("cwd", ""),
+            "tokens": tokens,
+            "reason": "precompact",
+        }
+    )
     cp.claim_writer(data_dir, session_id)
     try:
         # Synchronous on purpose: compaction is imminent and this state is
@@ -170,9 +174,11 @@ def _sync_checkpoint(hook_input: dict, data_dir, gate=_GATE_UNSET) -> bool:
             return False
         logger.info("PreCompact: synchronous checkpoint completed at %d tokens", tokens)
         log_event(
-            "checkpoint", "precompact",
+            "checkpoint",
+            "precompact",
             f"pre-compaction checkpoint written ({tokens:,} tokens)",
-            session_id=session_id, tokens=tokens,
+            session_id=session_id,
+            tokens=tokens,
         )
         return True
     except subprocess.TimeoutExpired:
@@ -218,18 +224,18 @@ def _mark_pending_rebuild(hook_input: dict, data_dir, gate=_GATE_UNSET) -> bool:
         return False
 
     try:
-        cp.write_pending_marker(
-            data_dir, hook_input.get("cwd", ""), session_id, tokens
-        )
+        cp.write_pending_marker(data_dir, hook_input.get("cwd", ""), session_id, tokens)
     except OSError:
         logger.exception("PreCompact: pending-marker write failed")
         return False
 
     logger.info("PreCompact: pending rebuild marker written at %d tokens", tokens)
     log_event(
-        "checkpoint", "precompact",
+        "checkpoint",
+        "precompact",
         f"rebuild marker written for post-compaction injection ({tokens:,} tokens)",
-        session_id=session_id, tokens=tokens,
+        session_id=session_id,
+        tokens=tokens,
     )
     return True
 
@@ -256,9 +262,7 @@ def main() -> None:
     # hold a different concurrent session's id, which would misattribute this
     # marker (see session_end.py for the same fix).
     session_id = (
-        hook_input.get("session_id")
-        or session_state.get("session_id")
-        or "unknown"
+        hook_input.get("session_id") or session_state.get("session_id") or "unknown"
     )
     # Bind the session to the formatter *before* the ENTRY line, not partway
     # through the body. Rebinding it later stamped ENTRY with `--------` and
@@ -356,7 +360,8 @@ def _compact_pass(
         atomic_write_json(marker_path, marker)
         logger.info("PreCompact: wrote deferred extraction marker %s", marker_path)
         log_event(
-            "session", "precompact",
+            "session",
+            "precompact",
             "context compacting — queued deferred extraction to preserve learnings",
             session_id=session_id,
         )

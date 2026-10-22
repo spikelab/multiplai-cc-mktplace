@@ -80,6 +80,7 @@ class Epic(BaseModel):
 
 # --- the directory name (copied from review_pipeline/target.py) ---------------
 
+
 def origin_owner_repo(url: str | None) -> tuple[str, str] | None:
     """`(owner, repo)` from a remote URL (the last two path parts, `.git` dropped), else None."""
     if not url:
@@ -116,8 +117,12 @@ def slug_repo_name(repo: Path) -> str:
     pair = origin_owner_repo(_remote_url(repo)) if repo.is_dir() else None
     if pair:
         return "-".join(pair)
-    log.info("no origin remote in %s with an owner and a name: the epic directory uses the "
-             "directory name %s", repo, repo.name)
+    log.info(
+        "no origin remote in %s with an owner and a name: the epic directory uses the "
+        "directory name %s",
+        repo,
+        repo.name,
+    )
     return repo.name
 
 
@@ -129,10 +134,16 @@ def sanitize_slug(text: str) -> str:
 def epic_dir_for(repo: Path, change_name: str) -> Path:
     """`<data_dir>/buildme/epics/<owner>-<repo>--<change>/`."""
     repo = Path(repo)
-    return get_paths().data_dir / "buildme" / "epics" / sanitize_slug(f"{slug_repo_name(repo)}--{change_name}")
+    return (
+        get_paths().data_dir
+        / "buildme"
+        / "epics"
+        / sanitize_slug(f"{slug_repo_name(repo)}--{change_name}")
+    )
 
 
 # --- epic.json -----------------------------------------------------------------
+
 
 def load_epic(epic_dir: Path) -> Epic:
     """The saved epic. Raises EpicFileError when epic.json is missing or unparsable;
@@ -143,7 +154,9 @@ def load_epic(epic_dir: Path) -> Epic:
     try:
         return Epic.model_validate_json(path.read_text())
     except (OSError, ValueError) as e:
-        raise EpicFileError(f"{path} cannot be read ({type(e).__name__}); fix or remove it by hand") from None
+        raise EpicFileError(
+            f"{path} cannot be read ({type(e).__name__}); fix or remove it by hand"
+        ) from None
 
 
 def save_epic(epic_dir: Path, epic: Epic) -> Path:

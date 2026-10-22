@@ -1,6 +1,5 @@
 """PLAN prompt — decomposes a research query into focused sub-questions."""
 
-
 PLAN_PROMPT = """You are the PLAN stage of a research pipeline. Decompose a \
 research query into focused sub-questions that guide the subsequent search and \
 reading phases.

@@ -38,11 +38,19 @@ class FetcherProtocol(Protocol):
     """Swappable fetch interface. Both HttpxFetcher and ClaudeAgentFetcher
     implement this so the pipeline can swap backends via config."""
 
-    async def fetch_url(self, url: str, *, query: str = "", sub_questions: list[str] | None = None) -> FetchResult:
+    async def fetch_url(
+        self, url: str, *, query: str = "", sub_questions: list[str] | None = None
+    ) -> FetchResult:
         """Fetch a single URL and return content + optionally pre-extracted findings."""
         ...
 
-    async def fetch_batch(self, urls: list[str], *, query: str = "", sub_questions: list[str] | None = None) -> list[FetchResult]:
+    async def fetch_batch(
+        self,
+        urls: list[str],
+        *,
+        query: str = "",
+        sub_questions: list[str] | None = None,
+    ) -> list[FetchResult]:
         """Fetch multiple URLs concurrently with per-request isolation."""
         ...
 
@@ -168,6 +176,7 @@ class ClaudeAgentFetcher:
         # Extract domain for labeling
         try:
             from urllib.parse import urlparse
+
             _domain = urlparse(url).netloc or url[:40]
         except Exception:
             _domain = url[:40]
@@ -273,7 +282,9 @@ class ClaudeAgentFetcher:
         if pending:
             log.warning(
                 "ClaudeAgentFetcher batch timeout at %.1fs (%d/%d still pending)",
-                self.batch_timeout, len(pending), len(tasks),
+                self.batch_timeout,
+                len(pending),
+                len(tasks),
             )
         raw_results = []
         for url, t in zip(urls, tasks):

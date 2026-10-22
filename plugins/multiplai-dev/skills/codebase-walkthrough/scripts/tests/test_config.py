@@ -16,24 +16,44 @@ def _conf(text: str) -> None:
 
 def test_defaults_without_conf_or_yaml(tmp_path):
     cfg = load_config(tmp_path)
-    assert (cfg.concurrency, cfg.explore_model, cfg.effort, cfg.max_turns) == (DEFAULT_CONCURRENCY, None, None, 60)
+    assert (cfg.concurrency, cfg.explore_model, cfg.effort, cfg.max_turns) == (
+        DEFAULT_CONCURRENCY,
+        None,
+        None,
+        60,
+    )
 
 
 def test_conf_over_defaults_and_yaml_over_conf(tmp_path):
-    _conf("walkthrough_explore_model = sonnet\nwalkthrough_write_model = opus\nwalkthrough_effort = medium\n")
+    _conf(
+        "walkthrough_explore_model = sonnet\nwalkthrough_write_model = opus\nwalkthrough_effort = medium\n"
+    )
     cfg = load_config(tmp_path)
-    assert (cfg.explore_model, cfg.write_model, cfg.effort) == ("sonnet", "opus", "medium")
-    (tmp_path / "walkthrough.yaml").write_text("explore_model: haiku\neffort: high\nconcurrency: 2\n")
+    assert (cfg.explore_model, cfg.write_model, cfg.effort) == (
+        "sonnet",
+        "opus",
+        "medium",
+    )
+    (tmp_path / "walkthrough.yaml").write_text(
+        "explore_model: haiku\neffort: high\nconcurrency: 2\n"
+    )
     cfg = load_config(tmp_path)
-    assert (cfg.explore_model, cfg.write_model, cfg.effort, cfg.concurrency) == ("haiku", "opus", "high", 2)
+    assert (cfg.explore_model, cfg.write_model, cfg.effort, cfg.concurrency) == (
+        "haiku",
+        "opus",
+        "high",
+        2,
+    )
 
 
 def test_bad_integers_and_an_unknown_effort_are_dropped(tmp_path):
-    (tmp_path / "walkthrough.yaml").write_text("concurrency: 0\nmax_turns: lots\neffort: turbo\n")
+    (tmp_path / "walkthrough.yaml").write_text(
+        "concurrency: 0\nmax_turns: lots\neffort: turbo\n"
+    )
     cfg = load_config(tmp_path)
-    assert cfg.concurrency == 1          # clamped
-    assert cfg.max_turns == 60           # not an integer: ignored
-    assert cfg.effort is None            # unknown effort: dropped
+    assert cfg.concurrency == 1  # clamped
+    assert cfg.max_turns == 60  # not an integer: ignored
+    assert cfg.effort is None  # unknown effort: dropped
 
 
 def test_unparseable_yaml_keeps_conf(tmp_path):

@@ -35,8 +35,10 @@ PROGRESS_FILE = "progress.md"
 class Unreadable(Exception):
     def __init__(self, path: Path):
         self.path = path
-        super().__init__(f"{path} cannot be read as a pm-spec state; nothing was written. "
-                         "Move it aside to start the change's run again.")
+        super().__init__(
+            f"{path} cannot be read as a pm-spec state; nothing was written. "
+            "Move it aside to start the change's run again."
+        )
 
 
 class Options(BaseModel):
@@ -155,6 +157,7 @@ def save(state: RunState, run_dir: Path, *, ledger: bool = True) -> None:
     """Save *state*, with the current run's spend unless *ledger* is False (a
     child change's first state, which starts with a ledger of its own)."""
     from . import sdk
+
     if ledger:
         state.budget = sdk.ledger().to_state()
     ensure_run_dir(run_dir)

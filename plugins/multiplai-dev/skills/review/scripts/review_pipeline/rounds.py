@@ -70,11 +70,15 @@ def _read_json(path: Path) -> dict | None:
 # `keep_round` skips every other top-level directory too (a review an older
 # version nested inside this folder, with its own rounds), and the rollups such a
 # version wrote beside it (`ROLLUP_FILES`): a kept round holds this run's files only.
-NOT_KEPT = frozenset({ROUNDS_DIR, "viewer", "tree", "base-tree", "assess-tree", "source", PATHS_CACHE})
+NOT_KEPT = frozenset(
+    {ROUNDS_DIR, "viewer", "tree", "base-tree", "assess-tree", "source", PATHS_CACHE}
+)
 # Written by one run and read by the next only through a kept round: `clear_stale_outputs`
 # deletes them, and `PATHS_FILE`, when a fresh run starts.
 STALE_REPORTS = ("report-piece-*.md", "report-path-*.md")
-ROLLUP_FILES = frozenset({"HIGH-only.md", "MEDIUM-only.md", "LOW-only.md", "runs.jsonl"})
+ROLLUP_FILES = frozenset(
+    {"HIGH-only.md", "MEDIUM-only.md", "LOW-only.md", "runs.jsonl"}
+)
 # Progress logs `review` moved aside because no kept round held them: they stay
 # beside the rounds, and are not copied into the next one.
 SET_ASIDE_PROGRESS = "progress-*.log"
@@ -113,12 +117,16 @@ def _round_dirs(target_dir: Path) -> list[Path]:
     root = target_dir / ROUNDS_DIR
     if not root.is_dir():
         return []
-    return sorted(d for d in root.iterdir() if d.is_dir() and not d.name.startswith("."))
+    return sorted(
+        d for d in root.iterdir() if d.is_dir() and not d.name.startswith(".")
+    )
 
 
 def _round_key(data: dict) -> tuple[str, str]:
     """What tells two rounds apart: `generated_at` (whole seconds) and the run's start (milliseconds)."""
-    return str(data.get("generated_at") or ""), str((data.get("run") or {}).get("started_at") or "")
+    return str(data.get("generated_at") or ""), str(
+        (data.get("run") or {}).get("started_at") or ""
+    )
 
 
 def round_number(target_dir: Path) -> int:
@@ -180,7 +188,13 @@ def round_name(target_dir: Path, findings_file: dict) -> str:
 STATE_FILE = "review-state.json"
 # What a run writes only when it finishes (export and render). In the directory
 # of a run that stopped before export they are the earlier run's, kept already.
-EXPORTED = ("findings.json", "checks.json", "review-*.md", "summary-*.md", "checks-*.md")
+EXPORTED = (
+    "findings.json",
+    "checks.json",
+    "review-*.md",
+    "summary-*.md",
+    "checks-*.md",
+)
 
 
 def _run_start(state: dict | None) -> str:
@@ -247,8 +261,14 @@ def keep_round(target_dir: Path, slug: str, new_head_sha: str) -> Path | None:
     def skip(directory: str, names: list[str]) -> set[str]:
         if Path(directory) != target_dir:
             return set()
-        return {n for n in names if n in NOT_KEPT or n in ROLLUP_FILES or (target_dir / n).is_dir()
-                or any(fnmatch.fnmatchcase(n, p) for p in (*skip_files, SET_ASIDE_PROGRESS))}
+        return {
+            n
+            for n in names
+            if n in NOT_KEPT
+            or n in ROLLUP_FILES
+            or (target_dir / n).is_dir()
+            or any(fnmatch.fnmatchcase(n, p) for p in (*skip_files, SET_ASIDE_PROGRESS))
+        }
 
     shutil.copytree(target_dir, partial, symlinks=True, ignore=skip)
     round_dir = root / name
@@ -265,6 +285,7 @@ def load_decisions(target_dir: Path) -> dict[str, dict]:
 @dataclass
 class EarlierFinding:
     """A finding from an earlier round, with the person's decision on it."""
+
     finding: dict  # the findings.json v1 row
     head_sha: str  # the round it came from
     decision: str  # "accept", "reject", "defer", or "" when none was recorded
@@ -300,7 +321,9 @@ def _carried(f: dict) -> dict:
 
 # Not walked when looking for a target's history under other names: snapshots,
 # imported checkouts and git internals hold no findings.json of a round.
-_NOT_WALKED = frozenset({"viewer", "tree", "base-tree", "assess-tree", "source", ".git", ".locks"})
+_NOT_WALKED = frozenset(
+    {"viewer", "tree", "base-tree", "assess-tree", "source", ".git", ".locks"}
+)
 
 
 def _walked(here: Path, name: str, depth: int | None) -> bool:
@@ -318,7 +341,9 @@ def _walked(here: Path, name: str, depth: int | None) -> bool:
     if name.startswith(PARTIAL_PREFIX):
         return False
     if depth == 0:
-        return name not in {".locks", ".git"} and not (name in _NOT_WALKED and is_review_folder(here))
+        return name not in {".locks", ".git"} and not (
+            name in _NOT_WALKED and is_review_folder(here)
+        )
     if depth == 1 and not is_review_folder(here):
         return name not in NOT_OBJECT_NAMES
     return name not in _NOT_WALKED
@@ -331,7 +356,10 @@ def _history_roots(target_dir: Path, slug: str) -> list[Path]:
     from . import ledger
 
     roots = [out_root(target_dir, slug)]
-    for root in (lambda: ledger.reviews_root() / ledger.LEGACY_DIR, ledger.legacy_reviews_root):
+    for root in (
+        lambda: ledger.reviews_root() / ledger.LEGACY_DIR,
+        ledger.legacy_reviews_root,
+    ):
         try:
             roots.append(root())
         except Exception:  # no data directory or workspace: nothing there to read
@@ -345,7 +373,9 @@ def _history_roots(target_dir: Path, slug: str) -> list[Path]:
     return out
 
 
-def history_elsewhere(target_dir: Path, slug: str, remote_url: str | None) -> list[Path]:
+def history_elsewhere(
+    target_dir: Path, slug: str, remote_url: str | None
+) -> list[Path]:
     """The `findings.json` of every round of this target written under another directory name.
 
     Before multiplai-dev 0.46 a slug started with the local checkout's
@@ -372,43 +402,64 @@ def history_elsewhere(target_dir: Path, slug: str, remote_url: str | None) -> li
     found: dict[Path, Path] = {}
     flat = first / slug
     if flat.is_dir() and flat.resolve() != own:
-        for path in [flat / "findings.json", *(d / "findings.json" for d in _round_dirs(flat))]:
+        for path in [
+            flat / "findings.json",
+            *(d / "findings.json" for d in _round_dirs(flat)),
+        ]:
             if path.is_file():
                 found.setdefault(path.resolve(), path)
     origin = origin_name(remote_url)
     matching = bool(origin) and slug.startswith(f"{origin}--")
-    suffix = slug[len(origin) + 2:] if matching else ""
+    suffix = slug[len(origin) + 2 :] if matching else ""
     in_path = re.compile(rf"--{re.escape(suffix)}(?![0-9A-Za-z])")
     for root in _history_roots(target_dir, slug) if matching else []:
         positional = root.resolve() == first.resolve()
         for dirpath, dirnames, filenames in os.walk(root):
             here = Path(dirpath)
             if here.resolve() == own:
-                dirnames[:] = sorted(d for d in dirnames if d not in _NOT_WALKED and d != ROUNDS_DIR)
+                dirnames[:] = sorted(
+                    d for d in dirnames if d not in _NOT_WALKED and d != ROUNDS_DIR
+                )
                 continue
             depth = len(here.relative_to(root).parts)
-            dirnames[:] = sorted(d for d in dirnames if _walked(here, d, depth if positional else None))
-            if "findings.json" not in filenames or not in_path.search(str(here.relative_to(root))):
+            dirnames[:] = sorted(
+                d for d in dirnames if _walked(here, d, depth if positional else None)
+            )
+            if "findings.json" not in filenames or not in_path.search(
+                str(here.relative_to(root))
+            ):
                 continue
             path = here / "findings.json"
             data = _read_json(path) or {}
             t = data.get("target") or {}
-            if (origin_name(t.get("remote_url")) == origin and str(t.get("slug") or "").endswith(f"--{suffix}")
-                    and path.resolve() not in found):
+            if (
+                origin_name(t.get("remote_url")) == origin
+                and str(t.get("slug") or "").endswith(f"--{suffix}")
+                and path.resolve() not in found
+            ):
                 found[path.resolve()] = path
     if found:
-        log.info("%s: reading %d earlier round(s) kept under other directory names", slug, len(found))
+        log.info(
+            "%s: reading %d earlier round(s) kept under other directory names",
+            slug,
+            len(found),
+        )
     return list(found.values())
 
 
 def _decisions_beside(findings: Path) -> dict[str, dict]:
     """The decisions of the target directory a `findings.json` belongs to (its own, or a kept round's)."""
-    target_dir = findings.parent.parent.parent if findings.parent.parent.name == ROUNDS_DIR else findings.parent
+    target_dir = (
+        findings.parent.parent.parent
+        if findings.parent.parent.name == ROUNDS_DIR
+        else findings.parent
+    )
     return load_decisions(target_dir)
 
 
-def _read_rounds(target_dir: Path, current_head: str,
-                 elsewhere: list[Path] | tuple) -> tuple[list[tuple[str, str, dict, datetime | None]], dict]:
+def _read_rounds(
+    target_dir: Path, current_head: str, elsewhere: list[Path] | tuple
+) -> tuple[list[tuple[str, str, dict, datetime | None]], dict]:
     """The earlier rounds `load_rounds` and `open_findings` read, oldest first, and the decisions.
 
     Each round is `(generated_at, head_sha, findings.json dict, until)`: a
@@ -434,20 +485,27 @@ def _read_rounds(target_dir: Path, current_head: str,
         rounds.append((str(data.get("generated_at") or ""), head, data))
     for path in elsewhere:
         for fid, d in _decisions_beside(path).items():
-            if str(d.get("ts") or "") >= str((decisions.get(fid) or {}).get("ts") or ""):
+            if str(d.get("ts") or "") >= str(
+                (decisions.get(fid) or {}).get("ts") or ""
+            ):
                 decisions[fid] = d
     rounds.sort(key=lambda r: r[0])
     current = _read_json(target_dir / "findings.json") or {}
     current_at = None
-    if (current_head and str((current.get("target") or {}).get("head_sha") or "") == current_head
-            and str(current.get("generated_at") or "") not in {r[0] for r in rounds}):
+    if (
+        current_head
+        and str((current.get("target") or {}).get("head_sha") or "") == current_head
+        and str(current.get("generated_at") or "") not in {r[0] for r in rounds}
+    ):
         current_at = _when(current.get("generated_at") or "")
     ends = [_when(r[0]) for r in rounds[1:]] + [current_at]
     decisions.update(load_decisions(target_dir))
     return [(*r, until) for r, until in zip(rounds, ends)], decisions
 
 
-def load_rounds(target_dir: Path, current_head: str = "", elsewhere: list[Path] | tuple = ()) -> list[EarlierFinding]:
+def load_rounds(
+    target_dir: Path, current_head: str = "", elsewhere: list[Path] | tuple = ()
+) -> list[EarlierFinding]:
     """Every finding in `rounds/*/findings.json`, the latest round's copy of each id.
 
     Rounds are ordered by `generated_at`; a round on *current_head* counts
@@ -470,8 +528,12 @@ def load_rounds(target_dir: Path, current_head: str = "", elsewhere: list[Path] 
             if not isinstance(f, dict) or not f.get("id"):
                 continue
             d = _made_by(decisions.get(f["id"]) or {}, until) or _carried(f)
-            by_id[f["id"]] = EarlierFinding(finding=f, head_sha=head, decision=str(d.get("decision") or ""),
-                                            note=str(d.get("note") or ""))
+            by_id[f["id"]] = EarlierFinding(
+                finding=f,
+                head_sha=head,
+                decision=str(d.get("decision") or ""),
+                note=str(d.get("note") or ""),
+            )
     return list(by_id.values())
 
 
@@ -483,6 +545,7 @@ class OpenFinding:
     it any more), `head_sha` the head of the round it was listed in (the
     commit its citations are at), `lineage` the id of its first appearance.
     """
+
     finding: dict
     head_sha: str
     lineage: str
@@ -492,8 +555,9 @@ class OpenFinding:
         return self.finding["id"]
 
 
-def open_findings(target_dir: Path, current_head: str = "",
-                  elsewhere: list[Path] | tuple = ()) -> list[OpenFinding]:
+def open_findings(
+    target_dir: Path, current_head: str = "", elsewhere: list[Path] | tuple = ()
+) -> list[OpenFinding]:
     """The findings the latest kept round with a `findings.json` left open.
 
     Those it listed (`render.listed`, in its own mode), and its own `earlier`
@@ -509,18 +573,26 @@ def open_findings(target_dir: Path, current_head: str = "",
     if not rounds:
         return []
     _, head, latest, until = rounds[-1]
-    rows = {f["id"]: (f, h) for _, h, data, _ in rounds for f in data.get("findings") or []
-            if isinstance(f, dict) and f.get("id")}
+    rows = {
+        f["id"]: (f, h)
+        for _, h, data, _ in rounds
+        for f in data.get("findings") or []
+        if isinstance(f, dict) and f.get("id")
+    }
 
     def rejected_(fid: str, row: dict) -> bool:
         d = _made_by(decisions.get(fid) or {}, until) or _carried(row)
         return d.get("decision") == "reject"
 
     out: dict[str, OpenFinding] = {}
-    findings = [f for f in latest.get("findings") or [] if isinstance(f, dict) and f.get("id")]
+    findings = [
+        f for f in latest.get("findings") or [] if isinstance(f, dict) and f.get("id")
+    ]
     for f in listed(findings, latest.get("mode")):
         if not rejected_(f["id"], f):
-            out[f["id"]] = OpenFinding(finding=f, head_sha=head, lineage=str(f.get("lineage") or f["id"]))
+            out[f["id"]] = OpenFinding(
+                finding=f, head_sha=head, lineage=str(f.get("lineage") or f["id"])
+            )
     for e in latest.get("earlier") or []:
         fid = str((e or {}).get("earlier_id") or "") if isinstance(e, dict) else ""
         if not fid or fid in out or e.get("status") == "resolved":
@@ -528,14 +600,21 @@ def open_findings(target_dir: Path, current_head: str = "",
         row, row_head = rows.get(fid, ({"id": fid}, ""))
         if rejected_(fid, row):
             continue
-        out[fid] = OpenFinding(finding=row, head_sha=str(e.get("round") or row_head),
-                               lineage=str(e.get("lineage") or fid))
+        out[fid] = OpenFinding(
+            finding=row,
+            head_sha=str(e.get("round") or row_head),
+            lineage=str(e.get("lineage") or fid),
+        )
     return list(out.values())
 
 
 def kept_findings_files(target_dir: Path) -> list[dict]:
     """Every kept round's `findings.json`, oldest first (`generated_at`); rounds without one left out."""
-    files = [d for d in (_read_json(p / "findings.json") for p in _round_dirs(target_dir)) if d is not None]
+    files = [
+        d
+        for d in (_read_json(p / "findings.json") for p in _round_dirs(target_dir))
+        if d is not None
+    ]
     return sorted(files, key=lambda d: str(d.get("generated_at") or ""))
 
 
@@ -546,8 +625,11 @@ def rejected(earlier: list[EarlierFinding]) -> list[EarlierFinding]:
 
 def accepted_or_open(earlier: list[EarlierFinding]) -> list[EarlierFinding]:
     """Earlier shown findings the person accepted or has not decided (deferred counts as not decided)."""
-    return [e for e in earlier
-            if e.decision != "reject" and e.finding.get("status") in SHOWN_STATUSES]
+    return [
+        e
+        for e in earlier
+        if e.decision != "reject" and e.finding.get("status") in SHOWN_STATUSES
+    ]
 
 
 def clear_stale_outputs(target_dir: Path) -> None:

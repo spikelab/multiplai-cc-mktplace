@@ -56,7 +56,10 @@ def test_g2_404_during_uuid_scan_still_means_not_found(monkeypatch):
 def test_g3_colliding_attachment_names_get_distinct_files(monkeypatch, tmp_path):
     issue = {"id": "792a89b1-37db-47e1-a947-6fb1b79198d6", "name": "x"}
     records = [
-        {"attributes": {"name": "shot.png"}, "asset": f"aaaaaaa{n}-0000-0000-0000-000000000000"}
+        {
+            "attributes": {"name": "shot.png"},
+            "asset": f"aaaaaaa{n}-0000-0000-0000-000000000000",
+        }
         for n in (1, 2)
     ]
 
@@ -68,8 +71,12 @@ def test_g3_colliding_attachment_names_get_distinct_files(monkeypatch, tmp_path)
     monkeypatch.setattr(plane, "_request", fake_request)
     monkeypatch.setattr(plane, "resolve_issue", lambda *a, **k: dict(issue, project=OK))
     monkeypatch.setattr(
-        plane, "asset_meta",
-        lambda cfg, aid: {"asset_name": "shot.png", "asset_url": f"https://api.plane.so/{aid}"},
+        plane,
+        "asset_meta",
+        lambda cfg, aid: {
+            "asset_name": "shot.png",
+            "asset_url": f"https://api.plane.so/{aid}",
+        },
     )
     monkeypatch.setattr(plane, "fetch_asset", lambda url, base: url.encode())
 
@@ -83,13 +90,27 @@ def test_g3_colliding_attachment_names_get_distinct_files(monkeypatch, tmp_path)
 # --- G4: an empty-body 2xx write is not a dry-run ------------------------------
 
 
-def test_g4_create_with_empty_response_body_does_not_pretend_dry_run(monkeypatch, capsys):
-    monkeypatch.setattr(plane, "resolve_project", lambda cfg, ref: {"id": OK, "identifier": "SPK"})
+def test_g4_create_with_empty_response_body_does_not_pretend_dry_run(
+    monkeypatch, capsys
+):
+    monkeypatch.setattr(
+        plane, "resolve_project", lambda cfg, ref: {"id": OK, "identifier": "SPK"}
+    )
     monkeypatch.setattr(plane, "_request", lambda *a, **k: None)  # 201, empty body
     args = _Args(
-        project=None, title="t", body=None, body_file=None, priority=None,
-        state=None, target_date=None, assignee=None, label=None,
-        create_labels=False, estimate=None, cycle=None, dry_run=False,
+        project=None,
+        title="t",
+        body=None,
+        body_file=None,
+        priority=None,
+        state=None,
+        target_date=None,
+        assignee=None,
+        label=None,
+        create_labels=False,
+        estimate=None,
+        cycle=None,
+        dry_run=False,
     )
     plane.cmd_create(dict(CFG), args)
     out = capsys.readouterr().out
@@ -99,15 +120,30 @@ def test_g4_create_with_empty_response_body_does_not_pretend_dry_run(monkeypatch
 
 def test_g4_update_with_empty_response_body_still_confirms(monkeypatch, capsys):
     monkeypatch.setattr(
-        plane, "resolve_issue",
-        lambda *a, **k: {"id": "792a89b1-37db-47e1-a947-6fb1b79198d6",
-                         "name": "the issue", "project": OK},
+        plane,
+        "resolve_issue",
+        lambda *a, **k: {
+            "id": "792a89b1-37db-47e1-a947-6fb1b79198d6",
+            "name": "the issue",
+            "project": OK,
+        },
     )
     monkeypatch.setattr(plane, "_request", lambda *a, **k: None)  # 200, empty body
     args = _Args(
-        ref="SPK-1", project=None, title="new", body=None, body_file=None,
-        priority=None, state=None, target_date=None, assignee=None, label=None,
-        create_labels=False, estimate=None, cycle=None, dry_run=False,
+        ref="SPK-1",
+        project=None,
+        title="new",
+        body=None,
+        body_file=None,
+        priority=None,
+        state=None,
+        target_date=None,
+        assignee=None,
+        label=None,
+        create_labels=False,
+        estimate=None,
+        cycle=None,
+        dry_run=False,
     )
     plane.cmd_update(dict(CFG), args)
     assert "updated" in capsys.readouterr().out
@@ -207,9 +243,7 @@ def test_g8_separatorless_letters_only_ref_still_parses(monkeypatch):
     monkeypatch.setattr(
         plane, "resolve_project", lambda cfg, ref: {"id": OK, "identifier": "SPK"}
     )
-    monkeypatch.setattr(
-        plane, "_paginate", lambda *a, **k: iter([{"sequence_id": 12}])
-    )
+    monkeypatch.setattr(plane, "_paginate", lambda *a, **k: iter([{"sequence_id": 12}]))
     assert plane.resolve_issue(dict(CFG), "SPK12")["sequence_id"] == 12
 
 
@@ -217,9 +251,13 @@ def test_g8_separatorless_letters_only_ref_still_parses(monkeypatch):
 
 
 def test_g9_check_output_contains_no_token_material(monkeypatch, capsys):
-    cfg = dict(CFG, token="plane_api_supersecretvalue", _projects=[
-        {"id": OK, "identifier": "SPK", "name": "Mine", "_allowed": True},
-    ])
+    cfg = dict(
+        CFG,
+        token="plane_api_supersecretvalue",
+        _projects=[
+            {"id": OK, "identifier": "SPK", "name": "Mine", "_allowed": True},
+        ],
+    )
     monkeypatch.setattr(plane, "list_projects", lambda c: cfg["_projects"])
     plane.cmd_check(cfg, None)
     out = capsys.readouterr().out

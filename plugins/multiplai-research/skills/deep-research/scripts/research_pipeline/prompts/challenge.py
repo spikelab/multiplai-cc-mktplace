@@ -1,6 +1,5 @@
 """CHALLENGE prompt — generates contrarian/devil's-advocate queries."""
 
-
 CHALLENGE_PROMPT = """You are the CHALLENGE stage of a research pipeline. Generate \
 devil's-advocate queries that deliberately seek contrarian perspectives. The goal is \
 to prevent echo-chamber research by finding minority views and criticisms.

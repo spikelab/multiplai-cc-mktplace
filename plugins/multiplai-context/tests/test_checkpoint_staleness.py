@@ -50,12 +50,16 @@ def make_registry_entry(data_dir, sid="s1", *, age=timedelta(hours=2)):
     rdir = data_dir / "sessions"
     rdir.mkdir(parents=True, exist_ok=True)
     started = (datetime.now(UTC) - age).isoformat()
-    (rdir / f"{sid}.json").write_text(json.dumps({
-        "session_id": sid,
-        "cwd": "/work",
-        "started_at": started,
-        "last_event": {"ts": started, "kind": "stop"},
-    }))
+    (rdir / f"{sid}.json").write_text(
+        json.dumps(
+            {
+                "session_id": sid,
+                "cwd": "/work",
+                "started_at": started,
+                "last_event": {"ts": started, "kind": "stop"},
+            }
+        )
+    )
 
 
 def state_with_checkpoint(age=timedelta(hours=1)):
@@ -68,13 +72,17 @@ def _write_marker(data_dir, *, cwd="/work", sid="s1", age=timedelta(hours=1)):
     pdir = data_dir / "checkpoints" / "pending"
     pdir.mkdir(parents=True, exist_ok=True)
     marker = pdir / f"{cp._project_key(cwd)}.json"
-    marker.write_text(json.dumps({
-        "session_id": sid,
-        "cwd": cwd,
-        "tokens": 210_000,
-        "checkpoint_path": str(cp.checkpoint_file(data_dir, sid)),
-        "created_at": (datetime.now(UTC) - age).isoformat(),
-    }))
+    marker.write_text(
+        json.dumps(
+            {
+                "session_id": sid,
+                "cwd": cwd,
+                "tokens": 210_000,
+                "checkpoint_path": str(cp.checkpoint_file(data_dir, sid)),
+                "created_at": (datetime.now(UTC) - age).isoformat(),
+            }
+        )
+    )
     return marker
 
 
@@ -82,8 +90,8 @@ def _write_marker(data_dir, *, cwd="/work", sid="s1", age=timedelta(hours=1)):
 # The trigger
 # ---------------------------------------------------------------------------
 
-class TestStalenessTrigger:
 
+class TestStalenessTrigger:
     def test_an_old_session_with_no_checkpoint_fires(self, tmp_path):
         """The case the trigger exists for: never crossed a band, still open."""
         make_registry_entry(tmp_path, age=timedelta(hours=2))
@@ -107,9 +115,12 @@ class TestStalenessTrigger:
     def test_a_fresh_checkpoint_does_not_fire(self, tmp_path):
         make_registry_entry(tmp_path, age=timedelta(hours=4))
 
-        assert cp.staleness_trigger(
-            tmp_path, "s1", state_with_checkpoint(timedelta(minutes=12)), CFG
-        ) is None
+        assert (
+            cp.staleness_trigger(
+                tmp_path, "s1", state_with_checkpoint(timedelta(minutes=12)), CFG
+            )
+            is None
+        )
 
     def test_a_forty_minute_session_with_a_thirty_five_minute_old_save_fires(
         self, tmp_path
@@ -119,9 +130,12 @@ class TestStalenessTrigger:
         and a half hours."""
         make_registry_entry(tmp_path, age=timedelta(minutes=40))
 
-        assert cp.staleness_trigger(
-            tmp_path, "s1", state_with_checkpoint(timedelta(minutes=35)), CFG
-        ) == "stale"
+        assert (
+            cp.staleness_trigger(
+                tmp_path, "s1", state_with_checkpoint(timedelta(minutes=35)), CFG
+            )
+            == "stale"
+        )
 
     def test_a_twenty_minute_session_still_writes_nothing(self, tmp_path):
         """`min_session_minutes` is unchanged at 30, so short sessions are
@@ -133,9 +147,12 @@ class TestStalenessTrigger:
     def test_a_checkpoint_past_stale_hours_fires(self, tmp_path):
         make_registry_entry(tmp_path, age=timedelta(hours=6))
 
-        assert cp.staleness_trigger(
-            tmp_path, "s1", state_with_checkpoint(timedelta(hours=4)), CFG
-        ) == "stale"
+        assert (
+            cp.staleness_trigger(
+                tmp_path, "s1", state_with_checkpoint(timedelta(hours=4)), CFG
+            )
+            == "stale"
+        )
 
     def test_a_naive_checkpoint_timestamp_is_read_as_utc(self, tmp_path):
         """Timestamps in this store are written with tzinfo, but a
@@ -144,18 +161,24 @@ class TestStalenessTrigger:
         make_registry_entry(tmp_path, age=timedelta(hours=6))
         naive = (datetime.now(UTC) - timedelta(hours=4)).replace(tzinfo=None)
 
-        assert cp.staleness_trigger(
-            tmp_path, "s1", {"last_checkpoint_ts": naive.isoformat()}, CFG
-        ) == "stale"
+        assert (
+            cp.staleness_trigger(
+                tmp_path, "s1", {"last_checkpoint_ts": naive.isoformat()}, CFG
+            )
+            == "stale"
+        )
 
     def test_a_corrupt_checkpoint_timestamp_fires(self, tmp_path):
         """Unreadable age means we cannot tell — and the alternative to firing
         is never refreshing this session again."""
         make_registry_entry(tmp_path, age=timedelta(hours=6))
 
-        assert cp.staleness_trigger(
-            tmp_path, "s1", {"last_checkpoint_ts": "not a date"}, CFG
-        ) == "stale"
+        assert (
+            cp.staleness_trigger(
+                tmp_path, "s1", {"last_checkpoint_ts": "not a date"}, CFG
+            )
+            == "stale"
+        )
 
 
 class TestUnknownSessionAge:
@@ -191,7 +214,6 @@ class TestUnknownSessionAge:
 
 
 class TestDisabling:
-
     def test_stale_hours_zero_disables_it(self, tmp_path):
         make_registry_entry(tmp_path, age=timedelta(days=3))
         cfg = cp.CheckpointConfig(stale_hours=0)
@@ -209,8 +231,8 @@ class TestDisabling:
 # Criterion 12 — a NEW config field, and ttl_hours untouched
 # ---------------------------------------------------------------------------
 
-class TestConfig:
 
+class TestConfig:
     def test_the_defaults_favour_recoverability_over_write_volume(self):
         """0.5, not 3.0 — deliberately about two writes an hour rather than
         well under one. At 3.0 a session's unwritten segment reached 174,154
@@ -234,7 +256,9 @@ class TestConfig:
         """A config problem must never crash a hook — the existing
         `load_config` contract."""
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_STALE_HOURS", "soon")
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_MIN_SESSION_MINUTES", "a lot")
+        monkeypatch.setenv(
+            "CLAUDE_PLUGIN_OPTION_CHECKPOINT_MIN_SESSION_MINUTES", "a lot"
+        )
 
         cfg = cp.load_config()
 
@@ -247,7 +271,7 @@ class TestConfig:
 
         cfg = cp.load_config()
 
-        assert cfg.stale_hours == 0.0        # i.e. disabled, never "always"
+        assert cfg.stale_hours == 0.0  # i.e. disabled, never "always"
         assert cfg.min_session_minutes == 0
 
 
@@ -289,8 +313,8 @@ class TestTtlHoursUntouched:
 # Criterion 12 — the call site
 # ---------------------------------------------------------------------------
 
-class TestSessionStopWiring:
 
+class TestSessionStopWiring:
     def test_session_stop_calls_it(self):
         source = (SCRIPTS_DIR / "session_stop.py").read_text()
 
@@ -302,7 +326,9 @@ class TestSessionStopWiring:
         source = (SCRIPTS_DIR / "session_stop.py").read_text()
 
         assert "reason = reason or cp.staleness_trigger(" in source
-        assert source.index("cp.checkpoint_trigger(") < source.index("cp.staleness_trigger(")
+        assert source.index("cp.checkpoint_trigger(") < source.index(
+            "cp.staleness_trigger("
+        )
 
     def test_the_single_flight_guard_still_applies(self):
         """A stale trigger must not be able to spawn a second writer."""
@@ -322,20 +348,25 @@ class TestCheckpointPassExecuted:
         """A main-chain assistant record putting the session at *tokens* —
         below every band, so only the stale trigger can fire."""
         t = tmp_path / "transcript.jsonl"
-        t.write_text(json.dumps({
-            "type": "assistant",
-            "timestamp": datetime.now(UTC).isoformat(),
-            "message": {
-                "role": "assistant",
-                "content": [{"type": "text", "text": "ok"}],
-                "usage": {
-                    "input_tokens": 1_000,
-                    "cache_read_input_tokens": tokens - 1_000,
-                    "cache_creation_input_tokens": 0,
-                    "output_tokens": 50,
-                },
-            },
-        }) + "\n")
+        t.write_text(
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "ok"}],
+                        "usage": {
+                            "input_tokens": 1_000,
+                            "cache_read_input_tokens": tokens - 1_000,
+                            "cache_creation_input_tokens": 0,
+                            "output_tokens": 50,
+                        },
+                    },
+                }
+            )
+            + "\n"
+        )
         return t
 
     def _run(self, tmp_path, monkeypatch, transcript):
@@ -437,8 +468,8 @@ class TestRegistryGcAgeReset:
 # The cost the plan asked to be stated rather than assumed
 # ---------------------------------------------------------------------------
 
-class TestWriteVolume:
 
+class TestWriteVolume:
     def _writes_over(self, tmp_path, hours, cfg=CFG, step_minutes=10):
         """Replay a session as a series of Stop hooks, counting writes.
 
@@ -462,11 +493,13 @@ class TestWriteVolume:
         for minute in range(0, int(hours * 60) + 1, step_minutes):
             at = started + timedelta(minutes=minute)
             # Re-anchor the registry so "now" is the simulated moment.
-            (tmp_path / "sessions" / "s1.json").write_text(json.dumps({
-                "started_at": (
-                    datetime.now(UTC) - (at - started)
-                ).isoformat(),
-            }))
+            (tmp_path / "sessions" / "s1.json").write_text(
+                json.dumps(
+                    {
+                        "started_at": (datetime.now(UTC) - (at - started)).isoformat(),
+                    }
+                )
+            )
             shifted = {}
             if state.get("last_checkpoint_ts"):
                 elapsed = at - datetime.fromisoformat(state["last_checkpoint_ts"])

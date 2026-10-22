@@ -156,8 +156,10 @@ def conf_thinking(
             "multiplai.conf [%s] THINKING=%s is not a recognized value; "
             "ignoring it and keeping this node's default. Use %s to restore "
             "extended thinking, or %s to disable it.",
-            task, requested,
-            "/".join(_THINKING_ON_VALUES), "/".join(_THINKING_OFF_VALUES),
+            task,
+            requested,
+            "/".join(_THINKING_ON_VALUES),
+            "/".join(_THINKING_OFF_VALUES),
         )
     return fallback
 
@@ -334,7 +336,9 @@ class ResearchConfig:
 
     # Claude Agent tools (WebSearch/WebFetch via SDK)
     prefer_claude_tools: bool = True  # use SDK for search/fetch by default
-    allow_paid_fallback: bool = False  # if Claude Agent fails, don't auto-fallback to paid APIs
+    allow_paid_fallback: bool = (
+        False  # if Claude Agent fails, don't auto-fallback to paid APIs
+    )
 
     # Session tracking
     session_id: str = ""  # Claude Code session ID for log correlation
@@ -446,6 +450,7 @@ class ResearchConfig:
     def query_slug(self) -> str:
         """URL-safe slug from the query for filenames."""
         import re
+
         slug = re.sub(r"[^\w\s-]", "", self.query.lower())
         slug = re.sub(r"[\s_-]+", "-", slug).strip("-")
         return slug[:80]  # limit length

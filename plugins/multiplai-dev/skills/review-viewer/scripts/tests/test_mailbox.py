@@ -17,14 +17,18 @@ def box(tmp_path) -> Mailbox:
 
 
 def _question(box: Mailbox, text: str = "why?") -> InboxRow:
-    row = InboxRow(id=new_question_id(), ts=utc_now(), target="t", kind="question", text=text)
+    row = InboxRow(
+        id=new_question_id(), ts=utc_now(), target="t", kind="question", text=text
+    )
     box.append_inbox(row)
     return row
 
 
 def test_append_and_read_outbox(box):
     for i in range(3):
-        box.append_outbox(OutboxRow(reply_to="q", ts=utc_now(), text=f"part {i}", done=i == 2))
+        box.append_outbox(
+            OutboxRow(reply_to="q", ts=utc_now(), text=f"part {i}", done=i == 2)
+        )
     rows, n = box.read_outbox(0)
     assert n == 3 and [r["text"] for r in rows] == ["part 0", "part 1", "part 2"]
     rows, n = box.read_outbox(2)
@@ -41,7 +45,9 @@ def test_truncated_trailing_line_is_skipped(box):
 
 def test_row_size_limit(box):
     with pytest.raises(MailboxError):
-        box.append_outbox(OutboxRow(reply_to="q", ts=utc_now(), text="x" * 70000, done=True))
+        box.append_outbox(
+            OutboxRow(reply_to="q", ts=utc_now(), text="x" * 70000, done=True)
+        )
 
 
 def test_decisions_keep_latest(box):
@@ -49,7 +55,9 @@ def test_decisions_keep_latest(box):
     box.write_decision("abc", "reject", "changed my mind")
     box.write_decision("def", "defer")
     data = box.read_decisions()
-    assert data["abc"]["decision"] == "reject" and data["abc"]["note"] == "changed my mind"
+    assert (
+        data["abc"]["decision"] == "reject" and data["abc"]["note"] == "changed my mind"
+    )
     assert data["def"]["decision"] == "defer"
     assert not list(box.dir.glob(".decisions.json.*")), "temp file left behind"
 
@@ -71,8 +79,12 @@ def test_viewed_ignores_a_damaged_file(box):
 
 
 def _reply(*args, stdin: str | None = None) -> subprocess.CompletedProcess:
-    return subprocess.run([PYTHON, "-m", "review_viewer", "reply", *args],
-                          input=stdin, capture_output=True, text=True)
+    return subprocess.run(
+        [PYTHON, "-m", "review_viewer", "reply", *args],
+        input=stdin,
+        capture_output=True,
+        text=True,
+    )
 
 
 def test_reply_reads_60k_answer_from_stdin(box):
@@ -102,11 +114,18 @@ def test_reply_more_and_file(box, tmp_path):
     q = _question(box)
     md = tmp_path / "answer.md"
     md.write_text("Looking at `app/service.py:9`…", encoding="utf-8")
-    assert _reply("--box", str(box.dir), "--to", q.id, "--more", "--file", str(md)).returncode == 0
+    assert (
+        _reply(
+            "--box", str(box.dir), "--to", q.id, "--more", "--file", str(md)
+        ).returncode
+        == 0
+    )
     assert _reply("--box", str(box.dir), "--to", q.id, stdin="Done.").returncode == 0
     rows, _ = box.read_outbox(0)
     assert [(r["text"], r["done"]) for r in rows] == [
-        ("Looking at `app/service.py:9`…", False), ("Done.", True)]
+        ("Looking at `app/service.py:9`…", False),
+        ("Done.", True),
+    ]
 
 
 def test_reply_unknown_id_refused(box):
@@ -135,6 +154,7 @@ def test_rows_survive_unicode_line_separators(box):
 
 def test_mailbox_is_private(box):
     import stat
+
     box.append_outbox(OutboxRow(reply_to="q", ts=utc_now(), text="a", done=True))
     _question(box)
     box.write_decision("abc", "accept")
@@ -146,6 +166,7 @@ def test_mailbox_is_private(box):
 
 def test_create_tightens_existing_files(tmp_path):
     import stat
+
     d = tmp_path / "old"
     d.mkdir(mode=0o755)
     (d / "outbox.jsonl").write_text("")
@@ -157,8 +178,16 @@ def test_create_tightens_existing_files(tmp_path):
 
 # --- share rows: the page's Send button ----------------------------------------------
 
+
 def _share(**kw) -> InboxRow:
-    base = dict(id="q-1", ts="t", target="t", kind="share", finding_id="b561bd34ce", text="### finding")
+    base = dict(
+        id="q-1",
+        ts="t",
+        target="t",
+        kind="share",
+        finding_id="b561bd34ce",
+        text="### finding",
+    )
     return InboxRow(**{**base, **kw})
 
 
@@ -166,12 +195,18 @@ def test_share_row_carries_where_it_goes(box):
     row = _share(to="slack", where="#reviews")
     box.append_inbox(row)
     got = box.read_inbox()[-1]
-    assert (got["kind"], got["to"], got["where"], got["text"]) == ("share", "slack", "#reviews", "### finding")
+    assert (got["kind"], got["to"], got["where"], got["text"]) == (
+        "share",
+        "slack",
+        "#reviews",
+        "### finding",
+    )
     assert _share(to="github", where="line").where == "line"
 
 
 def test_share_row_refuses_an_unknown_destination_or_a_multiline_recipient():
     from pydantic import ValidationError
+
     with pytest.raises(ValidationError):
         _share(to="email", where="x")
     for bad in ("", "a\nb", "a\tb", "x" * 101):

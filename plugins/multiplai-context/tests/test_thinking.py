@@ -91,9 +91,7 @@ class TestThinkingKwargs:
     """The one place the omit-or-send decision is made, so the one place it is
     worth asserting. Mirrors test_memory_router.py's pair of assertions."""
 
-    def test_sends_the_keyword_when_enabled_and_supported(
-        self, monkeypatch, supported
-    ):
+    def test_sends_the_keyword_when_enabled_and_supported(self, monkeypatch, supported):
         monkeypatch.delenv(ENV_VAR, raising=False)
         assert th.thinking_kwargs(OPTION) == {"thinking": {"type": "disabled"}}
 
@@ -141,7 +139,8 @@ class TestUnsupportedWarning:
             assert th.core_supports_thinking() is False
             assert th.core_supports_thinking() is False
         warnings = [
-            r for r in caplog.records
+            r
+            for r in caplog.records
             if r.levelno == logging.WARNING and r.name == "lib.thinking"
         ]
         assert len(warnings) == 1, "warn once per process, not per call"
@@ -195,7 +194,9 @@ class TestCoreProbe:
     def test_cache_probes_each_target_once(self, monkeypatch):
         calls = []
         monkeypatch.setattr(
-            th, "_probe", lambda target: (calls.append(target) or (True, "")),
+            th,
+            "_probe",
+            lambda target: calls.append(target) or (True, ""),
         )
         assert th.core_supports_thinking() is True
         assert th.core_supports_thinking() is True
@@ -213,6 +214,7 @@ class TestCoreProbe:
     def test_a_kwargs_callable_counts_as_support(self, monkeypatch):
         """Test fakes take **kwargs, and there is no declared forwarding path
         left to probe past one."""
+
         def fake(prompt, **kwargs):
             return None
 
@@ -264,7 +266,8 @@ class TestOptionRegistry:
             (PLUGIN_ROOT / ".claude-plugin" / "plugin.json").read_text()
         )["userConfig"]
         keys = [
-            value for name, value in vars(th).items()
+            value
+            for name, value in vars(th).items()
             if name.endswith("_THINKING_OPTION")
         ]
         assert len(keys) == 6, f"expected six subsystem options, found {keys}"

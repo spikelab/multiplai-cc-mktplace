@@ -65,8 +65,8 @@ def _checkpoint(data_dir, session_id):
 # #182 — the writer's hostname is not the session's
 # ---------------------------------------------------------------------------
 
-class TestHostnameBelongsToTheSession:
 
+class TestHostnameBelongsToTheSession:
     def test_a_marker_written_off_host_is_claimable_on_the_session_host(
         self, data_env, monkeypatch
     ):
@@ -136,8 +136,8 @@ class TestHostnameBelongsToTheSession:
 # #183 — the project is where the session started, not where its shell is
 # ---------------------------------------------------------------------------
 
-class TestProjectDoesNotFollowCwdDrift:
 
+class TestProjectDoesNotFollowCwdDrift:
     def test_a_session_that_wandered_into_a_subrepo_still_finds_its_own(
         self, data_env, monkeypatch
     ):
@@ -196,6 +196,7 @@ class TestProjectDoesNotFollowCwdDrift:
 # #181 — the store is collected
 # ---------------------------------------------------------------------------
 
+
 def _age(path, days):
     """Backdate every file in *path* (and *path* itself) by *days*."""
     when = time.time() - days * 86_400
@@ -205,7 +206,6 @@ def _age(path, days):
 
 
 class TestSweep:
-
     def test_an_expired_marker_stops_pinning_its_checkpoint(
         self, data_env, monkeypatch
     ):
@@ -216,9 +216,7 @@ class TestSweep:
         marker = cp.write_pending_marker(data_env, "/work/proj", "s1", 214_000)
         _checkpoint(data_env, "s1")
         payload = json.loads(marker.read_text())
-        payload["created_at"] = (
-            datetime.now(UTC) - timedelta(hours=48)
-        ).isoformat()
+        payload["created_at"] = (datetime.now(UTC) - timedelta(hours=48)).isoformat()
         marker.write_text(json.dumps(payload))
         _age(cp.session_dir(data_env, "s1"), 30)
 
@@ -228,9 +226,7 @@ class TestSweep:
         assert not marker.exists()
         assert not cp.session_dir(data_env, "s1").exists()
 
-    def test_a_live_marker_still_protects_its_checkpoint(
-        self, data_env, monkeypatch
-    ):
+    def test_a_live_marker_still_protects_its_checkpoint(self, data_env, monkeypatch):
         """Explicitly out of scope: ``pending_marker_owner`` is not relaxed.
         Inside ``ttl_hours`` the checkpoint survives however old it is."""
         monkeypatch.setenv("HOSTNAME", "host-a")
@@ -250,9 +246,7 @@ class TestSweep:
         assert cp.sweep_checkpoints(data_env, cp.load_config()) == (0, 0)
         assert cp.session_dir(data_env, "s1").exists()
 
-    def test_a_quiet_but_live_session_keeps_its_checkpoint(
-        self, data_env, monkeypatch
-    ):
+    def test_a_quiet_but_live_session_keeps_its_checkpoint(self, data_env, monkeypatch):
         """A session can write one checkpoint and then go a long time without
         another. Its registry ``last_event`` is restamped on every Stop, so
         that — not the file mtime alone — is what says it is still alive."""

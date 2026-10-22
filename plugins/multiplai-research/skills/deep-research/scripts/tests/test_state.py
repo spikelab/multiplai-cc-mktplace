@@ -47,7 +47,9 @@ class TestSelectUnseenQueries:
         assert fresh == ["dup"]
         assert fresh_state.executed_queries == ["dup"]
 
-    def test_dedup_survives_checkpoint_roundtrip(self, fresh_state: ResearchState) -> None:
+    def test_dedup_survives_checkpoint_roundtrip(
+        self, fresh_state: ResearchState
+    ) -> None:
         fresh_state.select_unseen_queries(["alpha"])
         fresh_state.checkpoint()
         reloaded = ResearchState.load(Path(fresh_state.state_file))
@@ -129,10 +131,16 @@ class TestPerSourceTracking:
         assert fresh_state.sources[0].status == SourceStatus.FAILED
         assert fresh_state.sources[0].error == "timeout"
 
-    def test_pending_sources_excludes_completed(self, fresh_state: ResearchState) -> None:
+    def test_pending_sources_excludes_completed(
+        self, fresh_state: ResearchState
+    ) -> None:
         fresh_state.sources = [
-            Source(url="https://a", title="A", snippet="a", status=SourceStatus.EXTRACTED),
-            Source(url="https://b", title="B", snippet="b", status=SourceStatus.PENDING),
+            Source(
+                url="https://a", title="A", snippet="a", status=SourceStatus.EXTRACTED
+            ),
+            Source(
+                url="https://b", title="B", snippet="b", status=SourceStatus.PENDING
+            ),
             Source(url="https://c", title="C", snippet="c", status=SourceStatus.FAILED),
         ]
         pending = fresh_state.pending_sources()
@@ -145,10 +153,14 @@ class TestPerSourceTracking:
             Source(url=f"https://{i}", title=str(i), snippet="") for i in range(5)
         ]
         fresh_state.mark_source_extracted(
-            "https://0", "content0", [Finding(fact="f0", source_url="https://0", source_title="0")]
+            "https://0",
+            "content0",
+            [Finding(fact="f0", source_url="https://0", source_title="0")],
         )
         fresh_state.mark_source_extracted(
-            "https://1", "content1", [Finding(fact="f1", source_url="https://1", source_title="1")]
+            "https://1",
+            "content1",
+            [Finding(fact="f1", source_url="https://1", source_title="1")],
         )
 
         loaded = ResearchState.load(Path(fresh_state.state_file))

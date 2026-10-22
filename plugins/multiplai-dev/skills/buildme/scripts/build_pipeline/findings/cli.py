@@ -37,10 +37,23 @@ class ResolveError(RuntimeError):
 
 def pr_head(repo: str, pr: int, cwd: Path) -> tuple[str, bool]:
     """(head branch, head is in a fork)."""
-    res = git_ops._run_gh(["gh", "pr", "view", str(pr), "--repo", repo, "--json",
-                           "headRefName,isCrossRepository"], cwd=cwd)
+    res = git_ops._run_gh(
+        [
+            "gh",
+            "pr",
+            "view",
+            str(pr),
+            "--repo",
+            repo,
+            "--json",
+            "headRefName,isCrossRepository",
+        ],
+        cwd=cwd,
+    )
     if not res.ok:
-        raise ResolveError(f"could not read PR {pr} on {repo}: {(res.stderr or res.stdout).strip()}")
+        raise ResolveError(
+            f"could not read PR {pr} on {repo}: {(res.stderr or res.stdout).strip()}"
+        )
     try:
         data = json.loads(res.stdout)
     except json.JSONDecodeError as e:
@@ -51,10 +64,12 @@ def pr_head(repo: str, pr: int, cwd: Path) -> tuple[str, bool]:
 def change_name_for(change: str, head: str) -> str:
     if change:
         return normalize_change_name(change)
-    if head.startswith(BRANCH_PREFIX) and head[len(BRANCH_PREFIX):]:
-        return normalize_change_name(head[len(BRANCH_PREFIX):])
-    raise ResolveError(f"the PR's branch {head!r} is not buildme/<name>; "
-                       "name the change with --change <name>")
+    if head.startswith(BRANCH_PREFIX) and head[len(BRANCH_PREFIX) :]:
+        return normalize_change_name(head[len(BRANCH_PREFIX) :])
+    raise ResolveError(
+        f"the PR's branch {head!r} is not buildme/<name>; "
+        "name the change with --change <name>"
+    )
 
 
 def change_dir_for(specs_dir: Path, name: str) -> Path:
@@ -64,8 +79,10 @@ def change_dir_for(specs_dir: Path, name: str) -> Path:
     archived = archived_change_dirs(specs_dir, name)
     if archived:
         return archived[-1]
-    raise ResolveError(f"no change '{name}' under {specs_dir / 'changes'} or "
-                       f"{specs_dir / 'archive'}; name it with --change <name>")
+    raise ResolveError(
+        f"no change '{name}' under {specs_dir / 'changes'} or "
+        f"{specs_dir / 'archive'}; name it with --change <name>"
+    )
 
 
 def worktree_for(root: Path, branch: str, name: str) -> Path:
@@ -74,8 +91,10 @@ def worktree_for(root: Path, branch: str, name: str) -> Path:
         return existing
     dest = git_ops.worktrees_root(root) / f"buildme-findings-{name}"
     if dest.exists():
-        raise ResolveError(f"{dest} exists but does not have {branch} checked out; "
-                           "move it or check the branch out there")
+        raise ResolveError(
+            f"{dest} exists but does not have {branch} checked out; "
+            "move it or check the branch out there"
+        )
     git_ops.add_worktree_for_branch(root, branch, dest)
     return dest
 
@@ -91,8 +110,10 @@ def resolve(args: argparse.Namespace) -> FindingsRun:
         raise ResolveError(str(e)) from e
     head, fork = pr_head(repo, args.pr, root)
     if fork:
-        raise ResolveError(f"PR {args.pr}'s branch lives in a fork; this command pushes to "
-                           "origin, so it only works on a PR from this repository")
+        raise ResolveError(
+            f"PR {args.pr}'s branch lives in a fork; this command pushes to "
+            "origin, so it only works on a PR from this repository"
+        )
     if not head:
         raise ResolveError(f"PR {args.pr} has no head branch")
     name = change_name_for(args.change or "", head)
@@ -103,7 +124,11 @@ def resolve(args: argparse.Namespace) -> FindingsRun:
     if git_ops.tree_is_clean(wt):
         ff = git_ops.fast_forward_from_origin(wt, head)
         if not ff.ok:
-            log.info("No fast-forward of %s from origin: %s", head, (ff.stderr or ff.stdout).strip())
+            log.info(
+                "No fast-forward of %s from origin: %s",
+                head,
+                (ff.stderr or ff.stdout).strip(),
+            )
     wt_project = wt / project.relative_to(root)
 
     cli = argparse.Namespace(**vars(args))
@@ -112,14 +137,23 @@ def resolve(args: argparse.Namespace) -> FindingsRun:
     config = BuildConfig.from_cli_args(cli)
     config.change_dir = change_dir_for(config.specs_dir, name)
     if getattr(args, "max_rounds", None) is not None:
-        config.findings = dataclasses.replace(config.findings, max_rounds=args.max_rounds)
-    return FindingsRun(config=config, pr=args.pr, repo=repo, branch=head,
-                       change_dir=config.change_dir, auto=bool(args.auto),
-                       trust_repo=bool(args.trust_repo), max_usd=getattr(args, "max_usd", None),
-                       severities=getattr(args, "severities", None),
-                       code_only=bool(getattr(args, "code_only", False)),
-                       review=not getattr(args, "no_review", False),
-                       escalate=not getattr(args, "no_escalation", False))
+        config.findings = dataclasses.replace(
+            config.findings, max_rounds=args.max_rounds
+        )
+    return FindingsRun(
+        config=config,
+        pr=args.pr,
+        repo=repo,
+        branch=head,
+        change_dir=config.change_dir,
+        auto=bool(args.auto),
+        trust_repo=bool(args.trust_repo),
+        max_usd=getattr(args, "max_usd", None),
+        severities=getattr(args, "severities", None),
+        code_only=bool(getattr(args, "code_only", False)),
+        review=not getattr(args, "no_review", False),
+        escalate=not getattr(args, "no_escalation", False),
+    )
 
 
 def run_cli(args: argparse.Namespace) -> int:

@@ -31,17 +31,38 @@ from ..sdk import agent_call
 MERGE_TOOLS = ["Read", "Edit", "Bash"]
 MERGE_MAX_TURNS = 40
 # The lockfiles the merge agent may regenerate (item 40.3).
-LOCKFILES = frozenset({
-    "uv.lock", "poetry.lock", "Pipfile.lock", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
-    "bun.lock", "Cargo.lock", "Gemfile.lock", "go.sum", "Package.resolved", "composer.lock",
-})
+LOCKFILES = frozenset(
+    {
+        "uv.lock",
+        "poetry.lock",
+        "Pipfile.lock",
+        "package-lock.json",
+        "yarn.lock",
+        "pnpm-lock.yaml",
+        "bun.lock",
+        "Cargo.lock",
+        "Gemfile.lock",
+        "go.sum",
+        "Package.resolved",
+        "composer.lock",
+    }
+)
 # A marker a conflict always leaves: `=======` alone is also a heading's underline.
 _LEFT = re.compile(r"^(?:<{7}|>{7}|\|{7})(?: |$)", re.MULTILINE)
 # The CHANGELOGs 40.3 lets the step resolve: by name, never a source file such as `changelog.py`.
 _CHANGELOG_SUFFIXES = frozenset({"", ".md", ".markdown", ".rst", ".txt", ".adoc"})
 # The tables of a TOML or INI file whose `version` is the package's own (not a dependency's). commitizen's
 # `version` is its copy of the project's version, which `cz bump` raises with it.
-_PACKAGE_TABLES = frozenset({"project", "package", "tool.poetry", "workspace.package", "metadata", "tool.commitizen"})
+_PACKAGE_TABLES = frozenset(
+    {
+        "project",
+        "package",
+        "tool.poetry",
+        "workspace.package",
+        "metadata",
+        "tool.commitizen",
+    }
+)
 _TABLE = re.compile(r"^\s*(\[\[?)\s*([^\]]+?)\s*\]\]?\s*(?:#.*)?$")
 # JSON: a string, or a punctuation mark that opens, closes or separates.
 _TOKEN = re.compile(r'"(?:\\.|[^"\\])*"|[{}\[\]:,]')
@@ -51,11 +72,15 @@ _TOKEN = re.compile(r'"(?:\\.|[^"\\])*"|[{}\[\]:,]')
 _OWN_JSON = frozenset({(None,), (None, '"metadata"'), (None, '"plugins"', None)})
 # The YAML files whose unindented `version` is the package's own. In another, such as
 # docker-compose.yml or dependabot.yml, it is the file format's.
-_OWN_YAML = frozenset({"pubspec.yaml", "Chart.yaml", "package.yaml", "galaxy.yml", "galaxy.yaml"})
+_OWN_YAML = frozenset(
+    {"pubspec.yaml", "Chart.yaml", "package.yaml", "galaxy.yml", "galaxy.yaml"}
+)
 # A version field and nothing else on the line: `"version": "1.2.0",`, `version = "1.2.0"`,
 # `__version__ = "1.2"`, `version: 1.2.0`. Not any line that mentions "version".
-_VERSION_FIELD = re.compile(r"""^\s*(["']?)(?:__)?version(?:__)?\1\s*[:=]\s*(["']?)v?(?P<v>\d[\w.+-]*)\2\s*,?\s*$""",
-                            re.IGNORECASE)
+_VERSION_FIELD = re.compile(
+    r"""^\s*(["']?)(?:__)?version(?:__)?\1\s*[:=]\s*(["']?)v?(?P<v>\d[\w.+-]*)\2\s*,?\s*$""",
+    re.IGNORECASE,
+)
 # The files a refused abort of the merge names (git 2.43).
 _NAMED = re.compile(r"^error: Entry '([^']+)' not uptodate|^\t(\S.*)$", re.MULTILINE)
 
@@ -98,7 +123,9 @@ def merge_parent(w: Path, commit: str, default: str) -> str | None:
     return None
 
 
-def unpushed_merge(w: Path, reviewed: str | None, branch_name: str, default: str) -> bool:
+def unpushed_merge(
+    w: Path, reviewed: str | None, branch_name: str, default: str
+) -> bool:
     """Item 37's shape: HEAD merges `origin/<default>` into the last clean
     reviewed head or into `origin/<branch>`, and is not on `origin/<branch>`.
     It must also be the reviewed head plus merges `merges_onto` accepts: a
@@ -109,7 +136,9 @@ def unpushed_merge(w: Path, reviewed: str | None, branch_name: str, default: str
     origin = sha(w, f"refs/remotes/origin/{branch_name}")
     if first is None or first not in (reviewed, origin) or reviewed is None:
         return False
-    return not (origin and _ancestor(w, head, origin)) and merges_onto(w, head, reviewed, default)
+    return not (origin and _ancestor(w, head, origin)) and merges_onto(
+        w, head, reviewed, default
+    )
 
 
 def merges_onto(w: Path, head: str, reviewed: str, default: str) -> bool:
@@ -150,19 +179,22 @@ def _only_resolutions(w: Path, commit: str, first: str) -> bool:
 
 class Plan(NamedTuple):
     """What merging *second* into *first* leaves the merge step (item 40.3)."""
-    files: list[str]          # what the merge agent resolves, in this order: conflicted files it may resolve;
+
+    files: list[
+        str
+    ]  # what the merge agent resolves, in this order: conflicted files it may resolve;
     #                           version files both sides raised, which git merges cleanly when both wrote the
     #                           same version; with those, the CHANGELOGs and lockfiles both sides changed and
     #                           each CHANGELOG only *first* changed whose added lines name a version it raised
-    refused: list[str]        # conflicted files it may not resolve
+    refused: list[str]  # conflicted files it may not resolve
 
 
 class _Merge(NamedTuple):
-    tree: str                 # git's own merge (`git merge-tree`)
+    tree: str  # git's own merge (`git merge-tree`)
     conflicted: list[str]
     raised: list[str]
     plan: Plan
-    sides: dict[str, tuple[str, str, str] | None]       # of each file in `plan.files`
+    sides: dict[str, tuple[str, str, str] | None]  # of each file in `plan.files`
 
 
 def plan(w: Path, first: str, second: str) -> Plan | None:
@@ -181,16 +213,49 @@ def agent_ahead(w: Path, default: str) -> bool:
 
 
 def _merge(w: Path, first: str, second: str) -> _Merge | None:
-    res = git(w, "merge-tree", "--write-tree", "--name-only", "--no-messages", "-z", first, second)
+    res = git(
+        w,
+        "merge-tree",
+        "--write-tree",
+        "--name-only",
+        "--no-messages",
+        "-z",
+        first,
+        second,
+    )
     base = git(w, "merge-base", first, second)
     if res.returncode not in (0, 1) or not base.ok or not base.stdout.strip():
         return None
     tree, *paths = res.stdout.split("\0")
-    ours = _lines(git(w, "diff", "--name-only", "-z", "--no-renames", base.stdout.split()[0], first))
-    theirs = _lines(git(w, "diff", "--name-only", "-z", "--no-renames", base.stdout.split()[0], second))
+    ours = _lines(
+        git(
+            w,
+            "diff",
+            "--name-only",
+            "-z",
+            "--no-renames",
+            base.stdout.split()[0],
+            first,
+        )
+    )
+    theirs = _lines(
+        git(
+            w,
+            "diff",
+            "--name-only",
+            "-z",
+            "--no-renames",
+            base.stdout.split()[0],
+            second,
+        )
+    )
     if not tree.strip() or ours is None or theirs is None:
         return None
-    base_sha, conflicted, both = base.stdout.split()[0], list(dict.fromkeys(p for p in paths if p)), set(theirs)
+    base_sha, conflicted, both = (
+        base.stdout.split()[0],
+        list(dict.fromkeys(p for p in paths if p)),
+        set(theirs),
+    )
     both_changed = [p for p in ours if p in both]
     sides: dict[str, tuple[str, str, str] | None] = {}
 
@@ -200,21 +265,52 @@ def _merge(w: Path, first: str, second: str) -> _Merge | None:
         return sides[p]
 
     refused = [p for p in conflicted if not _resolvable(p, side(p))]
-    raised = [p for p in both_changed if p not in refused and not _special(p)
-              and (s := side(p)) is not None and _raised(p, *s)]
-    extra = [p for p in both_changed if raised and _special(p) and p not in refused and side(p) is not None]
+    raised = [
+        p
+        for p in both_changed
+        if p not in refused
+        and not _special(p)
+        and (s := side(p)) is not None
+        and _raised(p, *s)
+    ]
+    extra = [
+        p
+        for p in both_changed
+        if raised and _special(p) and p not in refused and side(p) is not None
+    ]
+
     # The child's raised versions in *changelog*'s package: a CHANGELOG only the child changed whose added lines
     # name one must move to the version the agent writes (finding 54632ff87f), not another package's (9149e1b300).
     def mine(changelog: str) -> set[str]:
         top = Path(changelog).parent.as_posix()
         files = [p for p in raised if top == "." or p.startswith(top + "/")]
-        return ({v for p in files for v in _normal(p, side(p)[1])[1].values()}
-                - {v for p in files for v in _normal(p, side(p)[0])[1].values()})
-    extra += [p for p in ours if p not in both and _is_changelog(p) and (s := side(p)) is not None
-              and (raised_here := mine(p))
-              and any(v in raised_here for x in _added(s[0], s[1]) for v in _VERSION_TEXT.findall(x))]
-    files = list(dict.fromkeys([*(p for p in conflicted if p not in refused), *raised, *extra]))
-    return _Merge(tree.strip(), conflicted, raised, Plan(files, refused), {p: side(p) for p in files})
+        return {v for p in files for v in _normal(p, side(p)[1])[1].values()} - {
+            v for p in files for v in _normal(p, side(p)[0])[1].values()
+        }
+
+    extra += [
+        p
+        for p in ours
+        if p not in both
+        and _is_changelog(p)
+        and (s := side(p)) is not None
+        and (raised_here := mine(p))
+        and any(
+            v in raised_here
+            for x in _added(s[0], s[1])
+            for v in _VERSION_TEXT.findall(x)
+        )
+    ]
+    files = list(
+        dict.fromkeys([*(p for p in conflicted if p not in refused), *raised, *extra])
+    )
+    return _Merge(
+        tree.strip(),
+        conflicted,
+        raised,
+        Plan(files, refused),
+        {p: side(p) for p in files},
+    )
 
 
 def not_resolutions(w: Path, first: str, second: str, result: str) -> list[str] | None:
@@ -237,36 +333,65 @@ def not_resolutions(w: Path, first: str, second: str, result: str) -> list[str] 
       *second*'s copy, or a version written in a version file, and each
       pinned package must be one side's whole, under its name (`_lockfile`)."""
     m = _merge(w, first, second)
-    differ = None if m is None else _lines(git(w, "diff", "--name-only", "-z", "--no-renames", m.tree, result))
+    differ = (
+        None
+        if m is None
+        else _lines(git(w, "diff", "--name-only", "-z", "--no-renames", m.tree, result))
+    )
     if m is None or differ is None:
         return None
     check = list(dict.fromkeys([*differ, *m.conflicted, *m.raised]))
-    allowed = {p: (m.sides.get(p), _blob(w, result, p)) for p in check if p in m.plan.files}
+    allowed = {
+        p: (m.sides.get(p), _blob(w, result, p)) for p in check if p in m.plan.files
+    }
     bad, wrote = [p for p in check if p not in allowed], {}
     for p, (s, new) in allowed.items():
         if not _special(p):
-            ok, wrote[p] = _versions(p, *s, new) if s and new is not None else (False, {})
+            ok, wrote[p] = (
+                _versions(p, *s, new) if s and new is not None else (False, {})
+            )
             if not ok:
                 bad.append(p)
-    for p in m.plan.files:              # the child's entry still under its old version, where git left it
-        if (_is_changelog(p) and p not in allowed and (s := m.sides.get(p))
-                and any(v in _renames(p, wrote) for x in _added(s[0], s[1]) for v in _VERSION_TEXT.findall(x))):
+    for p in (
+        m.plan.files
+    ):  # the child's entry still under its old version, where git left it
+        if (
+            _is_changelog(p)
+            and p not in allowed
+            and (s := m.sides.get(p))
+            and any(
+                v in _renames(p, wrote)
+                for x in _added(s[0], s[1])
+                for v in _VERSION_TEXT.findall(x)
+            )
+        ):
             check.append(p)
             allowed[p] = (s, _blob(w, result, p))
     written = set().union(*_renames("", wrote).values())
     for p, (s, new) in allowed.items():
-        if is_lockfile(p) and not (s and new is not None and _lockfile(p, s[1], s[2], new, written)) or _is_changelog(p) and not (s and new is not None and _entries(*s, new, _renames(p, wrote))):
+        if (
+            is_lockfile(p)
+            and not (s and new is not None and _lockfile(p, s[1], s[2], new, written))
+            or _is_changelog(p)
+            and not (s and new is not None and _entries(*s, new, _renames(p, wrote)))
+        ):
             bad.append(p)
     return [p for p in check if p in bad]
 
 
-def _renames(changelog: str, wrote: dict[str, dict[str, set[str]]]) -> dict[str, set[str]]:
+def _renames(
+    changelog: str, wrote: dict[str, dict[str, set[str]]]
+) -> dict[str, set[str]]:
     """Each version value replaced, with the values written for it, in the
     version files *wrote* holds (`_versions`) under *changelog*'s directory:
     its package's, not another's at the same version; in all of them when
     none is there (or *changelog* is "")."""
     top = Path(changelog).parent.as_posix()
-    mine = [r for f, r in wrote.items() if top == "." or f.startswith(top + "/")] if changelog else []
+    mine = (
+        [r for f, r in wrote.items() if top == "." or f.startswith(top + "/")]
+        if changelog
+        else []
+    )
     found: dict[str, set[str]] = {}
     for renames in mine or wrote.values():
         for old, values in renames.items():
@@ -283,12 +408,18 @@ def _blob(w: Path, tree: str, path: str) -> str | None:
     return res.stdout if res.ok and "\0" not in res.stdout else None
 
 
-def _sides(w: Path, base: str, first: str, second: str, path: str) -> tuple[str, str, str] | None:
+def _sides(
+    w: Path, base: str, first: str, second: str, path: str
+) -> tuple[str, str, str] | None:
     """*path*'s text at *base*, *first* and *second*: base "" when neither had
     it (both added it); None when *first* or *second* lacks it (a deletion)
     or any side is not text."""
     o, t, b = _blob(w, first, path), _blob(w, second, path), _blob(w, base, path)
-    if o is None or t is None or (b is None and git(w, "cat-file", "-e", f"{base}:{path}").ok):
+    if (
+        o is None
+        or t is None
+        or (b is None and git(w, "cat-file", "-e", f"{base}:{path}").ok)
+    ):
         return None
     return ("" if b is None else b, o, t)
 
@@ -323,7 +454,7 @@ def _normal(path: str, text: str) -> tuple[list[str], dict[int, str]]:
     own = _own(path, lines)
     for i in own:
         m = _VERSION_FIELD.match(lines[i])
-        lines[i] = lines[i][:m.start("v")] + _HOLE + lines[i][m.end("v"):]
+        lines[i] = lines[i][: m.start("v")] + _HOLE + lines[i][m.end("v") :]
     return lines, own
 
 
@@ -340,8 +471,11 @@ def _merge3(ours: list[str], base: list[str], theirs: list[str]) -> list[str] | 
 
 def _matched(a: list[str], b: list[str]) -> dict[int, int]:
     """Each line of *a* that `difflib` matches to a line of *b*."""
-    return {blk.a + k: blk.b + k for blk in SequenceMatcher(None, a, b, autojunk=False).get_matching_blocks()
-            for k in range(blk.size)}
+    return {
+        blk.a + k: blk.b + k
+        for blk in SequenceMatcher(None, a, b, autojunk=False).get_matching_blocks()
+        for k in range(blk.size)
+    }
 
 
 def _raised(path: str, b: str, o: str, t: str) -> bool:
@@ -351,11 +485,18 @@ def _raised(path: str, b: str, o: str, t: str) -> bool:
         return False
     (nb, vb), (nt, vt) = (_normal(path, x) for x in (b, t))
     to_b, to_t = _matched(no, nb), _matched(no, nt)
-    return any(i in to_b and i in to_t and vb.get(to_b[i]) not in (None, v)
-               and vt.get(to_t[i]) not in (None, vb[to_b[i]]) for i, v in vo.items())
+    return any(
+        i in to_b
+        and i in to_t
+        and vb.get(to_b[i]) not in (None, v)
+        and vt.get(to_t[i]) not in (None, vb[to_b[i]])
+        for i, v in vo.items()
+    )
 
 
-def _versions(path: str, b: str, o: str, t: str, r: str) -> tuple[bool, dict[str, set[str]]]:
+def _versions(
+    path: str, b: str, o: str, t: str, r: str
+) -> tuple[bool, dict[str, set[str]]]:
     """*r* is git's merge of *path* with its version values aside, and each
     value is what `_expected` says; with each value *r* wrote that neither
     side has, under *o*'s value it replaces."""
@@ -369,7 +510,10 @@ def _versions(path: str, b: str, o: str, t: str, r: str) -> tuple[bool, dict[str
         want = _expected(vb.get(to_b.get(i, -1)), ours, theirs)
         if want is None or value != want:
             return False, {}
-        if want not in (ours, theirs):          # both raised it, so *ours* is a value (`_expected`)
+        if want not in (
+            ours,
+            theirs,
+        ):  # both raised it, so *ours* is a value (`_expected`)
             renames.setdefault(ours, set()).add(want)
     return True, renames
 
@@ -393,7 +537,10 @@ def _next(b: str, o: str, t: str) -> str | None:
     after it 0: base 0.64.0, ours 0.65.0, theirs 0.64.1 gives 0.65.0, and
     theirs 0.65.0 gives 0.66.0. None unless all three are dotted numbers
     and *o* raised *b*."""
-    parts = [[int(x) for x in v.split(".")] if re.fullmatch(r"\d+(?:\.\d+)*", v) else None for v in (b, o, t)]
+    parts = [
+        [int(x) for x in v.split(".")] if re.fullmatch(r"\d+(?:\.\d+)*", v) else None
+        for v in (b, o, t)
+    ]
     if None in parts:
         return None
     n = max(len(p) for p in parts)
@@ -401,7 +548,10 @@ def _next(b: str, o: str, t: str) -> str | None:
     i = next((k for k in range(n) if op[k] != bp[k]), None)
     if i is None or op[i] < bp[i]:
         return None
-    return ".".join(str(x) for x in (tp[:i] + [tp[i] + 1] + [0] * (n - i - 1))[:max(len(parts[2]), i + 1)])
+    return ".".join(
+        str(x)
+        for x in (tp[:i] + [tp[i] + 1] + [0] * (n - i - 1))[: max(len(parts[2]), i + 1)]
+    )
 
 
 # --- CHANGELOGs -------------------------------------------------------------
@@ -414,8 +564,14 @@ _MAX_CELLS = 4_000_000
 def _added(b: str, o: str) -> list[str]:
     """The lines *o* added to *b*, in their order. Blank lines do not count."""
     bl, ol = ([x for x in text.splitlines() if x.strip()] for text in (b, o))
-    return [x for tag, _, _, j1, j2 in SequenceMatcher(None, bl, ol, autojunk=False).get_opcodes()
-            if tag in ("insert", "replace") for x in ol[j1:j2]]
+    return [
+        x
+        for tag, _, _, j1, j2 in SequenceMatcher(
+            None, bl, ol, autojunk=False
+        ).get_opcodes()
+        if tag in ("insert", "replace")
+        for x in ol[j1:j2]
+    ]
 
 
 def _entries(b: str, o: str, t: str, r: str, renames: dict[str, set[str]]) -> bool:
@@ -424,10 +580,14 @@ def _entries(b: str, o: str, t: str, r: str, renames: dict[str, set[str]]) -> bo
     *renames* replaced by one written for it and nothing else changed, and
     nothing more. Blank lines do not count."""
     kept = [x for x in r.splitlines() if x.strip()]
-    return _interleaves(kept, [x for x in t.splitlines() if x.strip()], _added(b, o), renames)
+    return _interleaves(
+        kept, [x for x in t.splitlines() if x.strip()], _added(b, o), renames
+    )
 
 
-def _interleaves(lines: list[str], theirs: list[str], ours: list[str], renames: dict[str, set[str]]) -> bool:
+def _interleaves(
+    lines: list[str], theirs: list[str], ours: list[str], renames: dict[str, set[str]]
+) -> bool:
     """*lines* are *theirs* and *ours* merged, each in its order, every line
     of both kept once and nothing added; a line of *ours* matches with each
     version in *renames* replaced by one written for it. Time: len(theirs)
@@ -435,19 +595,29 @@ def _interleaves(lines: list[str], theirs: list[str], ours: list[str], renames: 
     if len(lines) != len(theirs) + len(ours) or len(theirs) * len(ours) > _MAX_CELLS:
         return False
     shapes = [(_VERSION_TEXT.sub(_HOLE, x), _VERSION_TEXT.findall(x)) for x in lines]
-    wants = [(_VERSION_TEXT.sub(_HOLE, x), [renames.get(v, {v}) for v in _VERSION_TEXT.findall(x)]) for x in ours]
+    wants = [
+        (
+            _VERSION_TEXT.sub(_HOLE, x),
+            [renames.get(v, {v}) for v in _VERSION_TEXT.findall(x)],
+        )
+        for x in ours
+    ]
 
-    def fits(i: int, k: int) -> bool:           # ours[i] may stand as lines[k]
+    def fits(i: int, k: int) -> bool:  # ours[i] may stand as lines[k]
         (form, values), (want, allowed) = shapes[k], wants[i]
         return form == want and all(v in a for v, a in zip(values, allowed))
 
-    row = [True] * (len(ours) + 1)              # row[i]: lines[:j + i] merge theirs[:j] and ours[:i]
+    row = [True] * (
+        len(ours) + 1
+    )  # row[i]: lines[:j + i] merge theirs[:j] and ours[:i]
     for i in range(1, len(ours) + 1):
         row[i] = row[i - 1] and fits(i - 1, i - 1)
     for j in range(1, len(theirs) + 1):
         row[0] = row[0] and theirs[j - 1] == lines[j - 1]
         for i in range(1, len(ours) + 1):
-            row[i] = (row[i] and theirs[j - 1] == lines[i + j - 1]) or (row[i - 1] and fits(i - 1, i + j - 1))
+            row[i] = (row[i] and theirs[j - 1] == lines[i + j - 1]) or (
+                row[i - 1] and fits(i - 1, i + j - 1)
+            )
         if not any(row):
             return False
     return row[-1]
@@ -456,15 +626,33 @@ def _interleaves(lines: list[str], theirs: list[str], ours: list[str], renames: 
 # --- lockfiles --------------------------------------------------------------
 
 _TOML_LOCKS = frozenset({"uv.lock", "poetry.lock", "Cargo.lock"})
-_JSON_LOCKS = frozenset({"package-lock.json", "Pipfile.lock", "composer.lock", "Package.resolved"})
+_JSON_LOCKS = frozenset(
+    {"package-lock.json", "Pipfile.lock", "composer.lock", "Package.resolved"}
+)
 # The keys that pin a package's content: a hash, or a git revision (uv.lock's `source.git`,
 # poetry.lock's `resolved_reference`, Package.resolved's `revision`).
-_HASH_KEYS = frozenset({"hash", "hashes", "checksum", "integrity", "shasum", "sha256", "sha512",
-                        "git", "resolved_reference", "revision"})
+_HASH_KEYS = frozenset(
+    {
+        "hash",
+        "hashes",
+        "checksum",
+        "integrity",
+        "shasum",
+        "sha256",
+        "sha512",
+        "git",
+        "resolved_reference",
+        "revision",
+    }
+)
 _PINNED_TEXT = re.compile(r"^\s*(?:integrity|checksum|resolved)\b", re.MULTILINE)
 # Where a lockfile keeps a hash of its manifest, which regenerating it rewrites: a hex digest.
-_MANIFEST_HASH = {"poetry.lock": ("metadata", "content-hash"), "composer.lock": ("content-hash",),
-                  "Pipfile.lock": ("_meta", "hash", "sha256"), "Package.resolved": ("originHash",)}
+_MANIFEST_HASH = {
+    "poetry.lock": ("metadata", "content-hash"),
+    "composer.lock": ("content-hash",),
+    "Pipfile.lock": ("_meta", "hash", "sha256"),
+    "Package.resolved": ("originHash",),
+}
 _DIGEST = re.compile(r"[0-9a-f]{32,128}")
 
 
@@ -482,22 +670,35 @@ def _lockfile(path: str, o: str, t: str, r: str, written: set[str]) -> bool:
     name = Path(path).name
     try:
         loaded = [_load(name, x) for x in (o, t, r)]
-    except (ValueError, yaml.YAMLError):         # tomllib's and json's errors are ValueErrors
+    except (ValueError, yaml.YAMLError):  # tomllib's and json's errors are ValueErrors
         return False
     if name in _TOML_LOCKS | _JSON_LOCKS | {"pnpm-lock.yaml"}:
         digest = [_digest(name, x) for x in loaded][2]
-        if digest is not None and not (isinstance(digest, str) and _DIGEST.fullmatch(digest)):
+        if digest is not None and not (
+            isinstance(digest, str) and _DIGEST.fullmatch(digest)
+        ):
             return False
-        known = _items(loaded[0]) | _items(loaded[1]) | {("=", "version", _canon(v)) for v in written}
+        known = (
+            _items(loaded[0])
+            | _items(loaded[1])
+            | {("=", "version", _canon(v)) for v in written}
+        )
         units = {_canon(x) for d in loaded[:2] for x in _units(name, d)}
-        return _items(loaded[2]) <= known and all(_canon(x) in units for x in _units(name, loaded[2]))
+        return _items(loaded[2]) <= known and all(
+            _canon(x) in units for x in _units(name, loaded[2])
+        )
     known = set(o.splitlines()) | set(t.splitlines())
-    if any(line not in known and not ((m := _VERSION_FIELD.match(line)) and m["v"] in written)
-           for line in r.splitlines()):
+    if any(
+        line not in known
+        and not ((m := _VERSION_FIELD.match(line)) and m["v"] in written)
+        for line in r.splitlines()
+    ):
         return False
-    if name == "yarn.lock":                      # one package per paragraph
+    if name == "yarn.lock":  # one package per paragraph
         blocks = {b.strip() for x in (o, t) for b in x.split("\n\n")}
-        return all(b.strip() in blocks for b in r.split("\n\n") if _PINNED_TEXT.search(b))
+        return all(
+            b.strip() in blocks for b in r.split("\n\n") if _PINNED_TEXT.search(b)
+        )
     return True
 
 
@@ -526,11 +727,15 @@ class _UniqueKeys(yaml.SafeLoader):
 def _unique_mapping(loader: yaml.SafeLoader, node: yaml.MappingNode) -> dict:
     keys = [_canon(loader.construct_object(k, deep=True)) for k, _ in node.value]
     if len(set(keys)) != len(keys):
-        raise yaml.constructor.ConstructorError(None, None, "a key appears twice", node.start_mark)
+        raise yaml.constructor.ConstructorError(
+            None, None, "a key appears twice", node.start_mark
+        )
     return loader.construct_mapping(node, deep=True)
 
 
-_UniqueKeys.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _unique_mapping)
+_UniqueKeys.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _unique_mapping
+)
 
 
 def _digest(name: str, data):
@@ -569,10 +774,16 @@ def _units(name: str, data) -> list:
     `revision`, each pin whole, its name with its version and revision."""
     found: list = _pinned(data)
     if name == "pnpm-lock.yaml" and isinstance(data, dict):
-        found += [{k: v} for part in ("packages", "snapshots") if isinstance(data.get(part), dict)
-                  for k, v in data[part].items()]
+        found += [
+            {k: v}
+            for part in ("packages", "snapshots")
+            if isinstance(data.get(part), dict)
+            for k, v in data[part].items()
+        ]
     if name == "Package.resolved" and isinstance(data, dict):
-        top = data.get("object") if isinstance(data.get("object"), dict) else data     # version 1 nests them
+        top = (
+            data.get("object") if isinstance(data.get("object"), dict) else data
+        )  # version 1 nests them
         found += top["pins"] if isinstance(top.get("pins"), list) else []
     return found
 
@@ -587,10 +798,16 @@ def _pinned(data) -> list[tuple[tuple, dict]]:
     whose `git` is a request, not a revision), not what it locked."""
     found: list[tuple[tuple, dict]] = []
 
-    def walk(x, at: tuple) -> bool:              # True: x holds a pin no package below claims
+    def walk(x, at: tuple) -> bool:  # True: x holds a pin no package below claims
         if isinstance(x, dict):
-            held = [walk(v, (*at, k)) for k, v in x.items() if not (k == "metadata" and "version" in x)]
-            pins = any(k in _HASH_KEYS for k in x) or str(x.get("source", "")).startswith("git+")   # Cargo.lock
+            held = [
+                walk(v, (*at, k))
+                for k, v in x.items()
+                if not (k == "metadata" and "version" in x)
+            ]
+            pins = any(k in _HASH_KEYS for k in x) or str(
+                x.get("source", "")
+            ).startswith("git+")  # Cargo.lock
             if (any(held) or pins) and "version" in x and at:
                 found.append((at, x))
                 return False
@@ -611,27 +828,41 @@ def not_reviewed(w: Path, reviewed: str | None, default: str) -> str | None:
     `others_work`'s `origin_ref` passes any commit on `origin/<branch>`, an
     older one too (E.S25)."""
     head = git_ops.rev_parse_head(w)
-    if reviewed is None or head == reviewed or (head and merges_onto(w, head, reviewed, default)):
+    if (
+        reviewed is None
+        or head == reviewed
+        or (head and merges_onto(w, head, reviewed, default))
+    ):
         return None
     at = f"HEAD {(head or 'unknown')[:12]} in {w}"
     if sha(w, reviewed) is None:
-        return (f"{at} is not the reviewed head {reviewed[:12]}, which {w} has not fetched; "
-                f"git -C {w} fetch origin, then re-run")
+        return (
+            f"{at} is not the reviewed head {reviewed[:12]}, which {w} has not fetched; "
+            f"git -C {w} fetch origin, then re-run"
+        )
     if head and _ancestor(w, head, reviewed):
-        return (f"{at} is behind the reviewed head {reviewed[:12]}, pushed from elsewhere; "
-                f"git -C {w} merge --ff-only {reviewed}, then re-run")
+        return (
+            f"{at} is behind the reviewed head {reviewed[:12]}, pushed from elsewhere; "
+            f"git -C {w} merge --ff-only {reviewed}, then re-run"
+        )
     if not (head and _ancestor(w, reviewed, head)):
-        return (f"{at} does not hold the reviewed head {reviewed[:12]}: origin's branch moved; "
-                f"{move_hint(w, reviewed)}")
-    return (f"{at} is not the reviewed head {reviewed[:12]} or a merge of origin/{default} onto it, "
-            "so it holds commits the review did not see; push them to be reviewed, then re-run")
+        return (
+            f"{at} does not hold the reviewed head {reviewed[:12]}: origin's branch moved; "
+            f"{move_hint(w, reviewed)}"
+        )
+    return (
+        f"{at} is not the reviewed head {reviewed[:12]} or a merge of origin/{default} onto it, "
+        "so it holds commits the review did not see; push them to be reviewed, then re-run"
+    )
 
 
 def move_hint(w: Path, to: str) -> str:
     """What a person runs when `<W>` holds only a merge of the step's onto a
     head origin's branch has left behind (E.S7)."""
-    return (f"git -C {w} fetch origin, then git -C {w} reset --keep {to} if HEAD holds only "
-            "the merge step's merge, then re-run")
+    return (
+        f"git -C {w} fetch origin, then git -C {w} reset --keep {to} if HEAD holds only "
+        "the merge step's merge, then re-run"
+    )
 
 
 def ready(w: Path, reviewed: str | None, origin_ref: str, default: str) -> str | None:
@@ -639,8 +870,11 @@ def ready(w: Path, reviewed: str | None, origin_ref: str, default: str) -> str |
     the change directory would let an abort run over a user's spec edit.
     Uncommitted changes first, then HEAD (`not_reviewed` says why it is not
     the reviewed head better than `others_work` does)."""
-    return (stop_record.others_work(w, None) or not_reviewed(w, reviewed, default)
-            or stop_record.others_work(w, None, head=reviewed, origin_ref=origin_ref))
+    return (
+        stop_record.others_work(w, None)
+        or not_reviewed(w, reviewed, default)
+        or stop_record.others_work(w, None, head=reviewed, origin_ref=origin_ref)
+    )
 
 
 def conflicted(w: Path) -> list[str] | None:
@@ -664,14 +898,18 @@ def _own(path: str, lines: list[str]) -> dict[int, str]:
     only in a package manifest, `_OWN_YAML`). A dependency's version
     requirement, or a nested component's version, is not one. One pass."""
     suffix, found = Path(path).suffix.lower(), {}
-    stack: list[str | None] = []             # JSON: the key each open container is under
+    stack: list[str | None] = []  # JSON: the key each open container is under
     key = last = table = None
     for i, line in enumerate(lines):
         m = _VERSION_FIELD.match(line)
-        if m and (tuple(stack) in _OWN_JSON if suffix == ".json"
-                  else (table is None or (table[0] == "[" and table[1] in _PACKAGE_TABLES))
-                  if suffix in (".toml", ".cfg", ".ini")
-                  else line == line.lstrip() and (suffix not in (".yml", ".yaml") or Path(path).name in _OWN_YAML)):
+        if m and (
+            tuple(stack) in _OWN_JSON
+            if suffix == ".json"
+            else (table is None or (table[0] == "[" and table[1] in _PACKAGE_TABLES))
+            if suffix in (".toml", ".cfg", ".ini")
+            else line == line.lstrip()
+            and (suffix not in (".yml", ".yaml") or Path(path).name in _OWN_YAML)
+        ):
             found[i] = m["v"]
         if suffix == ".json":
             for tok in _TOKEN.findall(line):
@@ -692,7 +930,6 @@ def _own(path: str, lines: list[str]) -> dict[int, str]:
     return found
 
 
-
 def unresolved(w: Path, files: list[str]) -> list[str]:
     """The files that still hold a conflict marker line, or cannot be read.
     A lone `=======` is not one: it underlines a heading too."""
@@ -709,7 +946,9 @@ def unresolved(w: Path, files: list[str]) -> list[str]:
 def index(w: Path) -> dict[str, list[str]] | None:
     """*w*'s index, path to its entries (mode, blob and stage), buildme's
     bookkeeping left out; None when git cannot list it."""
-    entries = _lines(git(w, "ls-files", "--stage", "-z", "--", ".", *git_ops.BOOKKEEPING_EXCLUDES))
+    entries = _lines(
+        git(w, "ls-files", "--stage", "-z", "--", ".", *git_ops.BOOKKEEPING_EXCLUDES)
+    )
     if entries is None:
         return None
     found: dict[str, list[str]] = {}
@@ -723,12 +962,26 @@ def changed_since(w: Path, before: dict[str, list[str]]) -> list[str] | None:
     """Every path staged since the index was *before*, changed and not staged,
     or untracked, bookkeeping left out; None when git cannot list them."""
     now = index(w)
-    changed = _lines(git(w, "diff", "--name-only", "-z", "--", ".", *git_ops.BOOKKEEPING_EXCLUDES))
-    new = _lines(git(w, "ls-files", "--others", "--exclude-standard", "-z", "--", ".",
-                     *git_ops.BOOKKEEPING_EXCLUDES))
+    changed = _lines(
+        git(w, "diff", "--name-only", "-z", "--", ".", *git_ops.BOOKKEEPING_EXCLUDES)
+    )
+    new = _lines(
+        git(
+            w,
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "-z",
+            "--",
+            ".",
+            *git_ops.BOOKKEEPING_EXCLUDES,
+        )
+    )
     if now is None or changed is None or new is None:
         return None
-    staged = [p for p in sorted(now.keys() | before.keys()) if now.get(p) != before.get(p)]
+    staged = [
+        p for p in sorted(now.keys() | before.keys()) if now.get(p) != before.get(p)
+    ]
     return list(dict.fromkeys(staged + changed + new))
 
 
@@ -759,10 +1012,18 @@ def undo_hint(w: Path, files: list[str]) -> str:
     put back from the index; a new file is removed."""
     if not files:
         return abort_hint(w)
-    new = set(_lines(git(w, "ls-files", "--others", "--exclude-standard", "-z", "--", *files)) or [])
-    steps = [f"git -C {w} checkout -- {' '.join(shlex.quote(f) for f in files if f not in new)}"
-             if any(f not in new for f in files) else "",
-             f"rm -- {' '.join(shlex.quote(str(w / f)) for f in files if f in new)}" if new else ""]
+    new = set(
+        _lines(git(w, "ls-files", "--others", "--exclude-standard", "-z", "--", *files))
+        or []
+    )
+    steps = [
+        f"git -C {w} checkout -- {' '.join(shlex.quote(f) for f in files if f not in new)}"
+        if any(f not in new for f in files)
+        else "",
+        f"rm -- {' '.join(shlex.quote(str(w / f)) for f in files if f in new)}"
+        if new
+        else "",
+    ]
     return f"{', then '.join(x for x in steps if x)}, then {abort_hint(w)}"
 
 
@@ -795,29 +1056,34 @@ def suite_command(p: Path) -> str | None:
     command = test_command(p)
     if command is None:
         return None
-    return parallel_command(command, Path(p), parse_parallel(_tdd(p).get("parallel", "auto")))
+    return parallel_command(
+        command, Path(p), parse_parallel(_tdd(p).get("parallel", "auto"))
+    )
 
 
-async def run_merge_agent(config, w: Path, files: list[str], branch_name: str, default: str) -> AgentResult:
+async def run_merge_agent(
+    config, w: Path, files: list[str], branch_name: str, default: str
+) -> AgentResult:
     """Item 40.3: one agent call (step `merge`) that resolves *files* in *w*.
     The coordinator vouches for the repo here as it does for every build,
     review and fixer it launches (`--trust-repo`): without it, `agent_call`
     would raise `RepoTrustError` mid-merge in a run started without the flag."""
-    prompt = MERGE_PROMPT.format(default=default, branch=branch_name,
-                                 files="\n".join(f"- `{f}`" for f in files))
+    prompt = MERGE_PROMPT.format(
+        default=default, branch=branch_name, files="\n".join(f"- `{f}`" for f in files)
+    )
     before = os.environ.get("BUILDME_TRUST_REPO")
     os.environ["BUILDME_TRUST_REPO"] = "1"
     try:
         return await agent_call(
             prompt,
             allowed_tools=MERGE_TOOLS,
-            model=config.model_for('merge'),
-            effort=config.effort_for('merge'),
+            model=config.model_for("merge"),
+            effort=config.effort_for("merge"),
             max_turns=MERGE_MAX_TURNS,
             cwd=str(w),
             budget_label="merge",
         )
-    finally:                                     # the trust is this call's only, not the process's
+    finally:  # the trust is this call's only, not the process's
         if before is None:
             os.environ.pop("BUILDME_TRUST_REPO", None)
         else:

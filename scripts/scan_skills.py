@@ -39,7 +39,8 @@ SCRIPT_SUFFIXES = {".py", ".sh", ".bash", ".zsh"}
 # Piping a download straight into an interpreter executes whatever the server
 # returns today, which is not reviewable and not what was reviewed.
 CURL_BASH_RE = re.compile(
-    r"(?:curl|wget)\b[^|\n]*\|\s*(?:sudo\s+)?(?:ba|z|d)?sh\b", re.IGNORECASE)
+    r"(?:curl|wget)\b[^|\n]*\|\s*(?:sudo\s+)?(?:ba|z|d)?sh\b", re.IGNORECASE
+)
 
 # Decoding a blob and handing it to an interpreter is the standard way to ship
 # code that reads as data.
@@ -47,21 +48,25 @@ B64_EXEC_RE = re.compile(
     r"(?:b64decode|base64\s+(?:-d|--decode)|atob)\b[^\n]{0,120}"
     r"(?:\bexec\b|\beval\b|\|\s*(?:ba)?sh\b)"
     r"|(?:\bexec\b|\beval\b)\s*\([^\n]{0,80}(?:b64decode|decode\(['\"]base64)",
-    re.IGNORECASE)
+    re.IGNORECASE,
+)
 
 # --- WARN patterns --------------------------------------------------------- #
 NETWORK_RE = re.compile(
     r"\b(?:requests\.(?:get|post|put|patch|delete)|httpx\.(?:get|post|AsyncClient|Client)"
-    r"|urllib\.request|urlopen|aiohttp|socket\.socket|curl\s+http|wget\s+http)\b")
+    r"|urllib\.request|urlopen|aiohttp|socket\.socket|curl\s+http|wget\s+http)\b"
+)
 
 # Env vars whose names say "credential". Matched against reads, not writes.
 CREDENTIAL_ENV_RE = re.compile(
     r"(?:os\.environ(?:\.get)?\(?\[?[\"']|getenv\([\"']|\$\{?)"
-    r"([A-Z][A-Z0-9_]*(?:TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL|CREDS)[A-Z0-9_]*)")
+    r"([A-Z][A-Z0-9_]*(?:TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL|CREDS)[A-Z0-9_]*)"
+)
 
 # Writes to an absolute path outside the workspace/skill/tmp world.
 ABS_WRITE_RE = re.compile(
-    r"open\(\s*[\"'](/(?!tmp/|var/folders/|dev/null)[^\"']+)[\"']\s*,\s*[\"'][wa]")
+    r"open\(\s*[\"'](/(?!tmp/|var/folders/|dev/null)[^\"']+)[\"']\s*,\s*[\"'][wa]"
+)
 
 
 @dataclass
@@ -105,11 +110,10 @@ def _strip_noise(text: str, suffix: str) -> str:
     by line.
     """
     if suffix == ".py":
-        text = _TRIPLE_QUOTED_RE.sub(
-            lambda m: "\n" * m.group(0).count("\n"), text)
+        text = _TRIPLE_QUOTED_RE.sub(lambda m: "\n" * m.group(0).count("\n"), text)
     return "\n".join(
-        "" if line.lstrip().startswith("#") else line
-        for line in text.splitlines())
+        "" if line.lstrip().startswith("#") else line for line in text.splitlines()
+    )
 
 
 def _suppressions(raw: str) -> dict[int, set[str]]:
@@ -195,21 +199,27 @@ def scan_skill(skill_dir: Path, plugin: str) -> SkillReport:
                 continue
             report.fails.append(
                 f"{rel}:{_lineno(body, match.start())}: pipes a download into a "
-                f"shell: {match.group(0)[:70]!r}")
+                f"shell: {match.group(0)[:70]!r}"
+            )
         for match in B64_EXEC_RE.finditer(body):
             if allowed("base64-exec", match.start()):
                 continue
             report.fails.append(
                 f"{rel}:{_lineno(body, match.start())}: decodes and executes a "
-                f"payload: {match.group(0)[:70]!r}")
+                f"payload: {match.group(0)[:70]!r}"
+            )
 
         net = NETWORK_RE.search(body)
         if net and not allowed("network", net.start()):
             # Declared if the SKILL.md says anything about reaching the network.
-            if not re.search(r"\b(?:network|http|https|api|fetch|download|url|web)\b",
-                             declared, re.IGNORECASE):
+            if not re.search(
+                r"\b(?:network|http|https|api|fetch|download|url|web)\b",
+                declared,
+                re.IGNORECASE,
+            ):
                 report.warns.append(
-                    f"{rel}: makes network calls, but SKILL.md never mentions network use")
+                    f"{rel}: makes network calls, but SKILL.md never mentions network use"
+                )
 
         local_vars = _locally_assigned(body) if script.suffix != ".py" else set()
         for match in CREDENTIAL_ENV_RE.finditer(body):
@@ -219,13 +229,15 @@ def scan_skill(skill_dir: Path, plugin: str) -> SkillReport:
             if allowed("env-read", match.start()):
                 continue
             report.warns.append(
-                f"{rel}: reads credential env var {var}, undeclared in SKILL.md")
+                f"{rel}: reads credential env var {var}, undeclared in SKILL.md"
+            )
 
         for match in ABS_WRITE_RE.finditer(body):
             if allowed("abs-write", match.start()):
                 continue
             report.warns.append(
-                f"{rel}: writes to absolute path outside the workspace: {match.group(1)}")
+                f"{rel}: writes to absolute path outside the workspace: {match.group(1)}"
+            )
 
     # Collapse duplicates while keeping order — the same undeclared var read on
     # ten lines is one finding, not ten.
@@ -263,10 +275,12 @@ def render(reports: list[SkillReport], show_all: bool) -> str:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=(__doc__ or "").split("\n")[0])
     ap.add_argument("--repo", type=Path, default=REPO_ROOT)
-    ap.add_argument("--all", action="store_true",
-                    help="include skills with no findings")
-    ap.add_argument("--strict", action="store_true",
-                    help="treat warnings as failures too")
+    ap.add_argument(
+        "--all", action="store_true", help="include skills with no findings"
+    )
+    ap.add_argument(
+        "--strict", action="store_true", help="treat warnings as failures too"
+    )
     args = ap.parse_args(argv)
 
     reports = scan(args.repo.resolve())
@@ -274,7 +288,9 @@ def main(argv: list[str] | None = None) -> int:
 
     fails = sum(len(r.fails) for r in reports)
     warns = sum(len(r.warns) for r in reports)
-    print(f"\nscan_skills: {len(reports)} skills, {fails} failure(s), {warns} warning(s)")
+    print(
+        f"\nscan_skills: {len(reports)} skills, {fails} failure(s), {warns} warning(s)"
+    )
 
     if fails or (args.strict and warns):
         return 1

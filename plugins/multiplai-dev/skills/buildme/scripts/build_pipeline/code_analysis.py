@@ -74,20 +74,61 @@ MAX_FILE_BYTES = 2 * 1024 * 1024
 SMALL_FILE_LINES = 30
 
 # Vendored, generated and tool directories: never part of the scope.
-SKIP_DIRS = frozenset({
-    ".git", ".venv", "venv", "node_modules", "__pycache__", ".worktrees", "specs", ".build", "dist",
-    "build", ".mypy_cache", ".pytest_cache", "target", ".tox", ".next", "vendor", "third_party",
-    "staticfiles", "migrations",
-})
-GENERATED_SUFFIXES = (".min.js", ".min.css", ".map", "_pb2.py", "_pb2_grpc.py", ".pb.go", ".generated.ts")
+SKIP_DIRS = frozenset(
+    {
+        ".git",
+        ".venv",
+        "venv",
+        "node_modules",
+        "__pycache__",
+        ".worktrees",
+        "specs",
+        ".build",
+        "dist",
+        "build",
+        ".mypy_cache",
+        ".pytest_cache",
+        "target",
+        ".tox",
+        ".next",
+        "vendor",
+        "third_party",
+        "staticfiles",
+        "migrations",
+    }
+)
+GENERATED_SUFFIXES = (
+    ".min.js",
+    ".min.css",
+    ".map",
+    "_pb2.py",
+    "_pb2_grpc.py",
+    ".pb.go",
+    ".generated.ts",
+)
 
 # Files that declare a project's dependencies, by name. A manifest that is
 # itself code (setup.py, Package.swift, mix.exs) is analysed as source.
-MANIFEST_NAMES = frozenset({
-    "pyproject.toml", "setup.cfg", "Pipfile", "package.json", "Cargo.toml", "go.mod", "Gemfile",
-    "composer.json", "pom.xml", "build.gradle", "build.gradle.kts", "Dockerfile",
-    "docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml",
-})
+MANIFEST_NAMES = frozenset(
+    {
+        "pyproject.toml",
+        "setup.cfg",
+        "Pipfile",
+        "package.json",
+        "Cargo.toml",
+        "go.mod",
+        "Gemfile",
+        "composer.json",
+        "pom.xml",
+        "build.gradle",
+        "build.gradle.kts",
+        "Dockerfile",
+        "docker-compose.yml",
+        "docker-compose.yaml",
+        "compose.yml",
+        "compose.yaml",
+    }
+)
 _REQUIREMENTS = re.compile(r"requirements[\w.-]*\.txt")
 CONFIG_SUFFIXES = frozenset({".toml", ".yaml", ".yml", ".ini", ".cfg"})
 # Lock files with a config suffix: generated, and long.
@@ -103,15 +144,19 @@ the code loads it, and which external services the project is set up to talk to.
 """
 # Test files a slice is pointed at for test style.
 MAX_TEST_EXAMPLES = 2
-TEST_STYLE_INTRO = "Test files, read only to learn how this project's tests are written:"
+TEST_STYLE_INTRO = (
+    "Test files, read only to learn how this project's tests are written:"
+)
 TEST_STYLE_NOTE = """
 {intro} their layout, fixtures, naming and assertion style. State that in `conventions`, with
 citations into them. They are not among the files to explain: cite them in `conventions` only.
 {files}
 """
 
-PATH_RULE = ("- `path` is the path exactly as listed above, relative to your working directory "
-             "(the project root).")
+PATH_RULE = (
+    "- `path` is the path exactly as listed above, relative to your working directory "
+    "(the project root)."
+)
 
 HEADINGS = ("Architecture", "Patterns", "Dependencies", "Conventions")
 # The first line of the report written when there is no commit to read the code at.
@@ -123,8 +168,9 @@ MAX_LISTED_FILES = 100
 @dataclass
 class ProjectGit:
     """Where the project sits in its repo, and the commit read."""
-    root: Path      # the repo root
-    prefix: str     # the project dir relative to the root, "" or ending in "/"
+
+    root: Path  # the repo root
+    prefix: str  # the project dir relative to the root, "" or ending in "/"
     sha: str
 
     def resolver(self) -> Resolve:
@@ -132,6 +178,7 @@ class ProjectGit:
             if side != "head" or not path:
                 return None
             return str(self.root), self.sha, self.prefix + path
+
         return resolve
 
     def text(self, path: str) -> str | None:
@@ -187,7 +234,11 @@ def _files_at_head(project_dir: Path, git: ProjectGit, want) -> dict[str, str]:
         if p.name.endswith(GENERATED_SUFFIXES) or not want(path):
             continue
         text = git.text(path)
-        if text is None or "\0" in text or len(text.encode("utf-8", errors="replace")) >= MAX_FILE_BYTES:
+        if (
+            text is None
+            or "\0" in text
+            or len(text.encode("utf-8", errors="replace")) >= MAX_FILE_BYTES
+        ):
             continue
         out[path] = text
     return out
@@ -200,7 +251,9 @@ def source_files(project_dir: Path, git: ProjectGit) -> dict[str, str]:
     vendored, generated and tool directories, binary files and files over
     MAX_FILE_BYTES are left out.
     """
-    return _files_at_head(project_dir, git, lambda p: _is_source(p) and not is_test_file(p))
+    return _files_at_head(
+        project_dir, git, lambda p: _is_source(p) and not is_test_file(p)
+    )
 
 
 def project_tests(project_dir: Path, git: ProjectGit) -> dict[str, str]:
@@ -211,8 +264,11 @@ def project_tests(project_dir: Path, git: ProjectGit) -> dict[str, str]:
 def config_files(project_dir: Path, git: ProjectGit) -> dict[str, str]:
     """{path: text} of the project's manifests and config files at HEAD, by `source_files`'
     other rules, without lock files and files over MAX_CONFIG_LINES lines."""
-    return {p: t for p, t in _files_at_head(project_dir, git, is_config_file).items()
-            if line_count(t) <= MAX_CONFIG_LINES}
+    return {
+        p: t
+        for p, t in _files_at_head(project_dir, git, is_config_file).items()
+        if line_count(t) <= MAX_CONFIG_LINES
+    }
 
 
 def working_tree_source_files(project_dir: Path) -> list[str]:
@@ -220,10 +276,16 @@ def working_tree_source_files(project_dir: Path) -> list[str]:
     (no test, vendored, generated or tool files), for a project with no commit."""
     out: list[str] = []
     for root, dirs, files in os.walk(project_dir):
-        dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS and not d.startswith("."))
+        dirs[:] = sorted(
+            d for d in dirs if d not in SKIP_DIRS and not d.startswith(".")
+        )
         for name in sorted(files):
             path = (Path(root) / name).relative_to(project_dir).as_posix()
-            if _is_source(path) and not name.endswith(GENERATED_SUFFIXES) and not is_test_file(path):
+            if (
+                _is_source(path)
+                and not name.endswith(GENERATED_SUFFIXES)
+                and not is_test_file(path)
+            ):
                 out.append(path)
     return out
 
@@ -234,11 +296,15 @@ def no_commit_report(project_dir: Path) -> str:
     analysed and why, and which source files exist, so the design does not read
     the project as new."""
     files = working_tree_source_files(project_dir)
-    lines = [NOT_ANALYSED_HEADING, "",
-             "The project has no git commit, and the codebase analysis reads the code at a commit so "
-             "that every fact it reports can be checked there. Nothing below describes what the code "
-             "does. The project is not new: these source files are in its working tree. To get the "
-             "analysis, commit them before the build starts.", ""]
+    lines = [
+        NOT_ANALYSED_HEADING,
+        "",
+        "The project has no git commit, and the codebase analysis reads the code at a commit so "
+        "that every fact it reports can be checked there. Nothing below describes what the code "
+        "does. The project is not new: these source files are in its working tree. To get the "
+        "analysis, commit them before the build starts.",
+        "",
+    ]
     lines += [f"- `{p}`" for p in files[:MAX_LISTED_FILES]]
     if len(files) > MAX_LISTED_FILES:
         lines.append(f"- … and {len(files) - MAX_LISTED_FILES} more")
@@ -263,23 +329,37 @@ def _named_in(text: str, paths: list[str]) -> set[str]:
         if re.search(rf"(?<![\w./-]){re.escape(p)}(?![\w/-])", text):
             found.add(p)
     for name, owners in names.items():
-        if len(owners) == 1 and "." in name and re.search(rf"(?<![\w./-]){re.escape(name)}(?![\w/-])", text):
+        if (
+            len(owners) == 1
+            and "." in name
+            and re.search(rf"(?<![\w./-]){re.escape(name)}(?![\w/-])", text)
+        ):
             found.add(owners[0])
     for token in {t.rstrip(".").removeprefix("./") for t in _PATH_TOKEN.findall(text)}:
         if "/" in token and re.search(r"\.\w+$", token):
-            owners = [p for p in names.get(PurePosixPath(token).name, []) if p == token or p.endswith("/" + token)]
+            owners = [
+                p
+                for p in names.get(PurePosixPath(token).name, [])
+                if p == token or p.endswith("/" + token)
+            ]
             if len(owners) == 1:
                 found.add(owners[0])
     return found
 
 
-_IMPORT_LINE = re.compile(r"^\s*(?:from|import|require|use|using|include|#include|@import)\b.*$|require\(.*\)",
-                          re.MULTILINE)
+_IMPORT_LINE = re.compile(
+    r"^\s*(?:from|import|require|use|using|include|#include|@import)\b.*$|require\(.*\)",
+    re.MULTILINE,
+)
 
 
 def _module_word(path: str) -> str:
     p = PurePosixPath(path)
-    return p.parent.name if p.stem in ("__init__", "index", "mod") and p.parent.name else p.stem
+    return (
+        p.parent.name
+        if p.stem in ("__init__", "index", "mod") and p.parent.name
+        else p.stem
+    )
 
 
 def import_words(text: str) -> set[str]:
@@ -311,7 +391,9 @@ def spec_text(change_dir: Path | None) -> str:
     if change_dir is None or not change_dir.is_dir():
         return ""
     parts = []
-    for f in sorted(change_dir.glob("*.md")) + sorted((change_dir / "requirements").glob("*.md")):
+    for f in sorted(change_dir.glob("*.md")) + sorted(
+        (change_dir / "requirements").glob("*.md")
+    ):
         if f.name == "codebase-analysis.md":
             continue
         try:
@@ -321,14 +403,17 @@ def spec_text(change_dir: Path | None) -> str:
     return "\n".join(parts)
 
 
-def limit_scope(lines: dict[str, int], ranked: list[str], max_units: int) -> tuple[Scope, list[str]]:
+def limit_scope(
+    lines: dict[str, int], ranked: list[str], max_units: int
+) -> tuple[Scope, list[str]]:
     """(the scope of the longest prefix of *ranked* that fits in *max_units* units, the files left out)."""
+
     def scope_of(paths: list[str]) -> Scope:
         return Scope.whole_files([(p, lines[p]) for p in sorted(paths)])
 
     if len(partition(scope_of(ranked), UNIT_LINES)) <= max_units:
         return scope_of(ranked), []
-    lo, hi = 0, len(ranked)          # the largest k whose first k files fit
+    lo, hi = 0, len(ranked)  # the largest k whose first k files fit
     while lo < hi:
         mid = (lo + hi + 1) // 2
         if len(partition(scope_of(ranked[:mid]), UNIT_LINES)) <= max_units:
@@ -350,7 +435,9 @@ def dependency_slice(lines: dict[str, int]) -> tuple[list[str], list[str]]:
     Manifests first, then the files nearest the project root, then by path,
     while they fit in UNIT_LINES lines; the first file always goes in.
     """
-    ranked = sorted(lines, key=lambda p: (not is_manifest(p), len(PurePosixPath(p).parts), p))
+    ranked = sorted(
+        lines, key=lambda p: (not is_manifest(p), len(PurePosixPath(p).parts), p)
+    )
     kept: list[str] = []
     size = 0
     for i, p in enumerate(ranked):
@@ -384,7 +471,9 @@ def tests_for_units(units: list[Unit], tests: dict[str, str]) -> dict[str, list[
 def _test_note(paths: list[str]) -> str:
     if not paths:
         return ""
-    return TEST_STYLE_NOTE.format(intro=TEST_STYLE_INTRO, files="\n".join(f"- {p}" for p in paths))
+    return TEST_STYLE_NOTE.format(
+        intro=TEST_STYLE_INTRO, files="\n".join(f"- {p}" for p in paths)
+    )
 
 
 # --- the analysis ---------------------------------------------------------------------
@@ -398,18 +487,30 @@ class Analysis:
     not_analysed: list[str] = field(default_factory=list)
     # Manifest and config files the dependency slice did not read.
     config_not_analysed: list[str] = field(default_factory=list)
-    failed: list[tuple[list[str], str]] = field(default_factory=list)   # (unit files, error)
+    failed: list[tuple[list[str], str]] = field(
+        default_factory=list
+    )  # (unit files, error)
     uncovered: list[str] = field(default_factory=list)
 
 
 def uncovered(scope: Scope, facts: list[Fact]) -> list[str]:
     """Files in the scope, over SMALL_FILE_LINES lines, that no surviving fact cites."""
     cited = {c.path for f in facts for c in f.citations}
-    return [s.path for s in scope.spans if s.lines > SMALL_FILE_LINES and s.path not in cited]
+    return [
+        s.path
+        for s in scope.spans
+        if s.lines > SMALL_FILE_LINES and s.path not in cited
+    ]
 
 
-async def analyse(project_dir: Path, *, call: CallFn, max_units: int, name: str,
-                  change_dir: Path | None = None) -> Analysis | None:
+async def analyse(
+    project_dir: Path,
+    *,
+    call: CallFn,
+    max_units: int,
+    name: str,
+    change_dir: Path | None = None,
+) -> Analysis | None:
     """Explain the project's source files at HEAD. None when it is not a git repo with a commit.
 
     A unit whose call raises is recorded in `failed` and the rest go on, so a
@@ -427,41 +528,93 @@ async def analyse(project_dir: Path, *, call: CallFn, max_units: int, name: str,
     else:
         deps, config_not_analysed = [], sorted(config_lines)
     ranked = rank_files(texts, _named_in(spec_text(change_dir), list(texts)))
-    scope, not_analysed = limit_scope(lines, ranked, max_units - 1 if deps else max_units)
+    scope, not_analysed = limit_scope(
+        lines, ranked, max_units - 1 if deps else max_units
+    )
     units = partition(scope, UNIT_LINES)
     examples = tests_for_units(units, project_tests(project_dir, git))
     label = name or project_dir.name
 
     answers: dict[str, dict] = {}
-    tasks = [(unit_key(u), explore_unit(label, u.spans, ExploreOutput, "standard", conventions=True,
-                                        path_rule=PATH_RULE, notes=_test_note(examples.get(u.id, []))))
-             for u in units]
+    tasks = [
+        (
+            unit_key(u),
+            explore_unit(
+                label,
+                u.spans,
+                ExploreOutput,
+                "standard",
+                conventions=True,
+                path_rule=PATH_RULE,
+                notes=_test_note(examples.get(u.id, [])),
+            ),
+        )
+        for u in units
+    ]
     if deps:
         deps_spans = [Span.whole(p, config_lines[p]) for p in deps]
-        units.append(Unit(id=DEPENDENCY_UNIT_ID, files=deps, lines=sum(config_lines[p] for p in deps),
-                          spans=deps_spans))
-        tasks.append((unit_key(units[-1]), explore_unit(label, deps_spans, ExploreOutput, "standard",
-                                                        conventions=True, path_rule=PATH_RULE,
-                                                        notes=DEPENDENCY_NOTE)))
+        units.append(
+            Unit(
+                id=DEPENDENCY_UNIT_ID,
+                files=deps,
+                lines=sum(config_lines[p] for p in deps),
+                spans=deps_spans,
+            )
+        )
+        tasks.append(
+            (
+                unit_key(units[-1]),
+                explore_unit(
+                    label,
+                    deps_spans,
+                    ExploreOutput,
+                    "standard",
+                    conventions=True,
+                    path_rule=PATH_RULE,
+                    notes=DEPENDENCY_NOTE,
+                ),
+            )
+        )
         scope = Scope(spans=scope.spans + deps_spans)
     await run_tasks(
-        tasks, call, answers, concurrency=CONCURRENCY,
-        call_kwargs=dict(allowed_tools=ANALYSIS_TOOLS, max_turns=MAX_TURNS, cwd=str(project_dir)),
-        errors=[], recoverable=(Exception,),
+        tasks,
+        call,
+        answers,
+        concurrency=CONCURRENCY,
+        call_kwargs=dict(
+            allowed_tools=ANALYSIS_TOOLS, max_turns=MAX_TURNS, cwd=str(project_dir)
+        ),
+        errors=[],
+        recoverable=(Exception,),
     )
     keep = citation_keeper(git.resolver(), root=project_dir)
     gated = gate_answers(answers, keep, conventions=True)
     by_key = {unit_key(u): u for u in units}
-    failed = [(by_key[k].files, a["error"]) for k, a in answers.items() if "error" in a and k in by_key]
-    return Analysis(gated=gated, git=git, scope=scope, not_analysed=not_analysed,
-                    config_not_analysed=config_not_analysed, failed=failed, uncovered=uncovered(scope, gated.facts))
+    failed = [
+        (by_key[k].files, a["error"])
+        for k, a in answers.items()
+        if "error" in a and k in by_key
+    ]
+    return Analysis(
+        gated=gated,
+        git=git,
+        scope=scope,
+        not_analysed=not_analysed,
+        config_not_analysed=config_not_analysed,
+        failed=failed,
+        uncovered=uncovered(scope, gated.facts),
+    )
 
 
 # --- codebase-analysis.md -------------------------------------------------------------
 
 
 def _where(c: Citation) -> str:
-    return f"{c.path}:{c.line_start}" if c.line_end == c.line_start else f"{c.path}:{c.line_start}-{c.line_end}"
+    return (
+        f"{c.path}:{c.line_start}"
+        if c.line_end == c.line_start
+        else f"{c.path}:{c.line_start}-{c.line_end}"
+    )
 
 
 def _link(c: Citation, project_dir: Path, md_dir: Path) -> str:
@@ -469,7 +622,9 @@ def _link(c: Citation, project_dir: Path, md_dir: Path) -> str:
     return f"[`{_where(c)}`]({target}#L{c.line_start})"
 
 
-def _bullet(claim: str, citations: list[Citation], project_dir: Path, md_dir: Path) -> str:
+def _bullet(
+    claim: str, citations: list[Citation], project_dir: Path, md_dir: Path
+) -> str:
     links = ", ".join(_link(c, project_dir, md_dir) for c in citations)
     return f"- {' '.join(claim.split())} ({links})"
 
@@ -496,29 +651,45 @@ def render_markdown(a: Analysis, project_dir: Path, md_dir: Path) -> str:
     for f in by_bucket.get("gotcha", []):
         sections["Patterns"].append(_bullet(f.claim, f.citations, project_dir, md_dir))
     for t in g.terms:
-        sections["Patterns"].append(_bullet(f"Term **{t.term}**: {t.meaning}", [t.citation], project_dir, md_dir))
+        sections["Patterns"].append(
+            _bullet(
+                f"Term **{t.term}**: {t.meaning}", [t.citation], project_dir, md_dir
+            )
+        )
     for f in by_bucket.get("interface", []):
-        sections["Dependencies"].append(_bullet(f.claim, f.citations, project_dir, md_dir))
+        sections["Dependencies"].append(
+            _bullet(f.claim, f.citations, project_dir, md_dir)
+        )
     for f in by_bucket.get("convention", []):
-        sections["Conventions"].append(_bullet(f.claim, f.citations, project_dir, md_dir))
+        sections["Conventions"].append(
+            _bullet(f.claim, f.citations, project_dir, md_dir)
+        )
 
-    out = [f"Every `path:line` below was re-read at commit `{a.git.sha}`. "
-           f"{len(g.dropped)} claim(s) whose citations were not found there were dropped."]
+    out = [
+        f"Every `path:line` below was re-read at commit `{a.git.sha}`. "
+        f"{len(g.dropped)} claim(s) whose citations were not found there were dropped."
+    ]
     for h in HEADINGS:
         out += ["", f"## {h}", ""]
         out += sections[h] or ["(no checked facts)"]
     if a.not_analysed or a.config_not_analysed or a.failed or a.uncovered:
         out += ["", "## Not analysed", ""]
         if a.not_analysed:
-            out.append(f"Left out by `codebase_analysis_max_units` ({len(a.not_analysed)} file(s)):")
+            out.append(
+                f"Left out by `codebase_analysis_max_units` ({len(a.not_analysed)} file(s)):"
+            )
             out += [f"- `{p}`" for p in a.not_analysed]
         if a.config_not_analysed:
-            out.append(f"Manifest and config files not read ({len(a.config_not_analysed)} file(s); the "
-                       f"dependency slice reads up to {UNIT_LINES} lines of them, and none when "
-                       f"`codebase_analysis_max_units` is 1):")
+            out.append(
+                f"Manifest and config files not read ({len(a.config_not_analysed)} file(s); the "
+                f"dependency slice reads up to {UNIT_LINES} lines of them, and none when "
+                f"`codebase_analysis_max_units` is 1):"
+            )
             out += [f"- `{p}`" for p in a.config_not_analysed]
         for files, error in a.failed:
-            out.append(f"- (analysis failed: {', '.join(f'`{p}`' for p in files)}: {error})")
+            out.append(
+                f"- (analysis failed: {', '.join(f'`{p}`' for p in files)}: {error})"
+            )
         if a.uncovered:
             out.append("Read, but no fact about them passed the check:")
             out += [f"- `{p}`" for p in a.uncovered]
@@ -534,12 +705,26 @@ def facts_document(a: Analysis) -> dict:
     by_id = {f.id: f for f in g.facts}
     files = []
     for path, purpose in g.purposes.items():
-        cite = next((f.citations[0] for f in g.facts if f.source.endswith("/file") and f.citations[0].path == path),
-                    None)
-        files.append({"path": path, "purpose": purpose, "citation": cite.model_dump() if cite else None})
+        cite = next(
+            (
+                f.citations[0]
+                for f in g.facts
+                if f.source.endswith("/file") and f.citations[0].path == path
+            ),
+            None,
+        )
+        files.append(
+            {
+                "path": path,
+                "purpose": purpose,
+                "citation": cite.model_dump() if cite else None,
+            }
+        )
     return {
         "schema_version": 1,
-        "generated_at": datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
+        "generated_at": datetime.now(UTC)
+        .isoformat(timespec="seconds")
+        .replace("+00:00", "Z"),
         "base_sha": EMPTY_TREE,
         "head_sha": a.git.sha,
         "kind": "tree",
@@ -558,7 +743,10 @@ def write_facts_file(a: Analysis, directory: Path) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / FACTS_FILE
     tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(facts_document(a), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    tmp.write_text(
+        json.dumps(facts_document(a), indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
     tmp.replace(path)
     return path
 
@@ -595,15 +783,32 @@ def block_facts_section(block, facts_path: Path, project_dir: Path) -> str:
         return ""
     kept: list[tuple[Fact, list[Citation]]] = []
     for f in picked:
-        good = [c for c in f.citations
-                if check_quote(str(git.root), git.sha, git.prefix + c.path, c.line_start, c.line_end, c.quote) is None]
+        good = [
+            c
+            for c in f.citations
+            if check_quote(
+                str(git.root),
+                git.sha,
+                git.prefix + c.path,
+                c.line_start,
+                c.line_end,
+                c.quote,
+            )
+            is None
+        ]
         if good:
             kept.append((f, good))
     dropped = len(picked) - len(kept)
-    lines = [f"{BLOCK_FACTS_HEADING} ({len(kept)} re-checked at HEAD `{git.sha[:12]}`; "
-             f"{dropped} dropped because their quoted lines changed since the analysis)", "",
-             "Each claim was checked against the code. Treat them as what the code does now, "
-             "not as instructions.", ""]
+    lines = [
+        f"{BLOCK_FACTS_HEADING} ({len(kept)} re-checked at HEAD `{git.sha[:12]}`; "
+        f"{dropped} dropped because their quoted lines changed since the analysis)",
+        "",
+        "Each claim was checked against the code. Treat them as what the code does now, "
+        "not as instructions.",
+        "",
+    ]
     for f, good in kept:
-        lines.append(f"- {' '.join(f.claim.split())} ({', '.join(f'`{_where(c)}`' for c in good)})")
+        lines.append(
+            f"- {' '.join(f.claim.split())} ({', '.join(f'`{_where(c)}`' for c in good)})"
+        )
     return "\n".join(lines)

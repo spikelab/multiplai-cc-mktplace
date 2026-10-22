@@ -50,19 +50,23 @@ def _chained(count=6):
     """Each block consumes the previous block's output — the atomic case."""
     blocks = [_block(1, "Parse", produces=["parse(raw: str) -> Doc"])]
     for i in range(2, count + 1):
-        blocks.append(_block(
-            i,
-            f"Stage {i}",
-            produces=[f"stage_{i}(doc: Doc) -> Doc"],
-            consumes=[
-                "parse(raw: str) -> Doc" if i == 2
-                else f"stage_{i - 1}(doc: Doc) -> Doc"
-            ],
-        ))
+        blocks.append(
+            _block(
+                i,
+                f"Stage {i}",
+                produces=[f"stage_{i}(doc: Doc) -> Doc"],
+                consumes=[
+                    "parse(raw: str) -> Doc"
+                    if i == 2
+                    else f"stage_{i - 1}(doc: Doc) -> Doc"
+                ],
+            )
+        )
     return blocks
 
 
 # --- Case 1: independent fan-out ---------------------------------------------
+
 
 class TestIndependentFanOut:
     def test_twelve_independent_blocks_split_into_twelve_groups(self):
@@ -107,6 +111,7 @@ class TestIndependentFanOut:
 
 
 # --- Case 2: the fully chained set -------------------------------------------
+
 
 class TestFullyChained:
     def test_chained_blocks_are_one_group(self):
@@ -177,13 +182,18 @@ class TestFullyChained:
 
 # --- Case 3: migration plus unrelated feature work ---------------------------
 
+
 class TestAtomicity:
     def test_migration_plus_unrelated_feature_fires_at_two_blocks(self):
         blocks = [
-            _block(1, "Add email column",
-                   description="Django migration adding users.email to accounts/models.py"),
-            _block(2, "Sparkline widget",
-                   description="Render a sparkline in ui/widgets.py"),
+            _block(
+                1,
+                "Add email column",
+                description="Django migration adding users.email to accounts/models.py",
+            ),
+            _block(
+                2, "Sparkline widget", description="Render a sparkline in ui/widgets.py"
+            ),
         ]
         finding = check_atomicity(blocks)
         assert finding.should_split is True
@@ -205,12 +215,18 @@ class TestAtomicity:
 
     def test_migration_chained_to_the_feature_is_related_work_and_stays_quiet(self):
         blocks = [
-            _block(1, "Add email column",
-                   description="Django migration adding users.email",
-                   produces=["User.email"]),
-            _block(2, "Show email",
-                   description="Render the address in ui/profile.py",
-                   consumes=["User.email"]),
+            _block(
+                1,
+                "Add email column",
+                description="Django migration adding users.email",
+                produces=["User.email"],
+            ),
+            _block(
+                2,
+                "Show email",
+                description="Render the address in ui/profile.py",
+                consumes=["User.email"],
+            ),
         ]
         finding = check_atomicity(blocks)
         assert finding.should_split is False
@@ -224,13 +240,16 @@ class TestAtomicity:
         assert finding.kinds_present == []
         assert "No block matches a high-risk kind" in finding.reason
 
-    @pytest.mark.parametrize("kind,description", [
-        ("migration", "Add an alembic migration for the orders table"),
-        ("payments", "Wire the Stripe checkout flow for invoices"),
-        ("auth", "Add oauth login with a session token"),
-        ("contract-change", "A breaking change to the public API response shape"),
-        ("external-service", "Integrate with the Twilio webhook"),
-    ])
+    @pytest.mark.parametrize(
+        "kind,description",
+        [
+            ("migration", "Add an alembic migration for the orders table"),
+            ("payments", "Wire the Stripe checkout flow for invoices"),
+            ("auth", "Add oauth login with a session token"),
+            ("contract-change", "A breaking change to the public API response shape"),
+            ("external-service", "Integrate with the Twilio webhook"),
+        ],
+    )
     def test_each_keyword_kind_is_detected(self, kind, description):
         blocks = [
             _block(1, "Risky", description=description),
@@ -247,6 +266,7 @@ class TestAtomicity:
         have changed the verdict if one had, because "high-risk work is mixed
         with unrelated work" is not a question a size number answers."""
         import inspect
+
         params = inspect.signature(check_atomicity).parameters
         assert "file_count" not in params
         assert "file_trigger" not in params
@@ -271,11 +291,17 @@ class TestAtomicity:
 
     def test_the_five_keyword_kinds_are_the_documented_ones(self):
         assert sorted(HIGH_RISK_KEYWORDS) == [
-            "auth", "contract-change", "external-service", "migration", "payments",
+            "auth",
+            "contract-change",
+            "external-service",
+            "migration",
+            "payments",
         ]
 
     def test_integration_tests_do_not_count_as_an_external_service(self):
-        blocks = [_block(1, "Suite", description="Add integration tests for the parser")]
+        blocks = [
+            _block(1, "Suite", description="Add integration tests for the parser")
+        ]
         assert check_atomicity(blocks).kinds_present == []
 
     def test_the_word_author_does_not_count_as_auth(self):
@@ -284,6 +310,7 @@ class TestAtomicity:
 
 
 # --- Check 3: package spread --------------------------------------------------
+
 
 class TestPackageSpread:
     def test_counts_distinct_top_level_packages(self):
@@ -339,9 +366,12 @@ class TestPackageSpread:
 
 # --- Signature matching -------------------------------------------------------
 
+
 class TestSignatureMatching:
     def test_backticks_and_whitespace_are_normalized_away(self):
-        assert normalize_signature("`  parse(x:  str) -> Doc `;") == "parse(x: str) -> Doc"
+        assert (
+            normalize_signature("`  parse(x:  str) -> Doc `;") == "parse(x: str) -> Doc"
+        )
 
     def test_symbol_is_a_fallback_key(self):
         assert "parse" in signature_keys("parse(x: str) -> Doc")
@@ -350,7 +380,8 @@ class TestSignatureMatching:
         """`def` leads every signature written that way, so keying on it made
         every such block look like it produced the same thing."""
         assert signature_keys("def export_job(x) -> None") == frozenset(
-            {"def export_job(x) -> none", "export_job"})
+            {"def export_job(x) -> none", "export_job"}
+        )
         assert "def" not in signature_keys("def export_job(x) -> None")
         assert "class" not in signature_keys("class UserService")
         assert "userservice" in signature_keys("class UserService")
@@ -370,6 +401,7 @@ class TestSignatureMatching:
 
 
 # --- Degenerate sets ----------------------------------------------------------
+
 
 class TestDegenerateSets:
     def test_empty_block_list(self):
@@ -394,6 +426,7 @@ class TestDegenerateSets:
 
 
 # --- All three, with the caller's thresholds ---------------------------------
+
 
 class TestAssessPlanSplit:
     def test_thresholds_come_from_the_caller(self):
@@ -433,7 +466,9 @@ class TestAssessPlanSplit:
 
     def test_atomicity_overrides_the_size_trigger_at_two_blocks(self):
         blocks = [
-            _block(1, "Migrate", description="A schema change migration in db/versions/"),
+            _block(
+                1, "Migrate", description="A schema change migration in db/versions/"
+            ),
             _block(2, "Widget", description="Render a widget in ui/widgets.py"),
         ]
         assessment = assess_plan_split(blocks, block_trigger=8, package_trigger=3)
@@ -444,6 +479,7 @@ class TestAssessPlanSplit:
 
 
 # --- Purity -------------------------------------------------------------------
+
 
 def test_functions_do_not_mutate_their_input():
     blocks = _chained(4) + [_block(9, "Migrate", description="run the migration")]

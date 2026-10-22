@@ -77,7 +77,11 @@ def ordered_answers(units: list[Unit], answers: dict[str, dict]) -> dict[str, di
 
 
 def answered(units: list[Unit], answers: dict[str, dict]) -> list[Unit]:
-    return [u for u in units if unit_key(u) in answers and "error" not in answers[unit_key(u)]]
+    return [
+        u
+        for u in units
+        if unit_key(u) in answers and "error" not in answers[unit_key(u)]
+    ]
 
 
 def eligible(unit: Unit, answers: dict[str, dict], attempts: dict[str, int]) -> bool:
@@ -94,7 +98,11 @@ def not_answered_files(units: list[Unit], answers: dict[str, dict]) -> list[str]
 
 def label(target: Target) -> str:
     """The name the explore prompt gives the code."""
-    base = Path(target.source).name if target.kind == "dir" and target.source else Path(target.repo).name
+    base = (
+        Path(target.source).name
+        if target.kind == "dir" and target.source
+        else Path(target.repo).name
+    )
     if target.kind == "pr":
         return f"{base} (PR #{target.pr})"
     return f"{base}/{target.path}" if target.path else base
@@ -105,7 +113,9 @@ def unit_prompt(target: Target, unit: Unit) -> str:
     return explore_unit(label(target), unit.spans, ExploreOutput, "standard")
 
 
-async def run(state: State, run_dir: Path, *, call: CallFn, ledger: SpendLedger, model: str | None) -> None:
+async def run(
+    state: State, run_dir: Path, *, call: CallFn, ledger: SpendLedger, model: str | None
+) -> None:
     """Ask every unit the dispatch rule allows, in at most two rounds.
 
     Raises `sdk.RepoTrustError` before the first call when the repository is not
@@ -119,8 +129,12 @@ async def run(state: State, run_dir: Path, *, call: CallFn, ledger: SpendLedger,
         return
     sdk.require_trusted_repo()
     snapshot = run_dir / SNAPSHOT_DIR
-    call_kwargs = dict(allowed_tools=list(sdk.READ_ONLY_TOOLS), max_turns=sdk.EXPLORE_MAX_TURNS,
-                       cwd=str(snapshot), model=model)
+    call_kwargs = dict(
+        allowed_tools=list(sdk.READ_ONLY_TOOLS),
+        max_turns=sdk.EXPLORE_MAX_TURNS,
+        cwd=str(snapshot),
+        model=model,
+    )
     stopped: list[str] = []
     cannot_run: list[Exception] = []
 
@@ -135,13 +149,23 @@ async def run(state: State, run_dir: Path, *, call: CallFn, ledger: SpendLedger,
         except BudgetExceededError as e:
             stopped.append(str(e))
             return
-        answers.pop(key, None)  # only an error answer can be here: an answered unit is not eligible
+        answers.pop(
+            key, None
+        )  # only an error answer can be here: an answered unit is not eligible
         before = attempts.get(key)
         attempts[key] = (before or 0) + 1
         save()
         try:
-            await ask(key, unit_prompt(state.target, unit), call, answers, call_kwargs=call_kwargs, errors=[],
-                      recoverable=(sdk.CallFailed,), fatal=(BudgetExceededError,))
+            await ask(
+                key,
+                unit_prompt(state.target, unit),
+                call,
+                answers,
+                call_kwargs=call_kwargs,
+                errors=[],
+                recoverable=(sdk.CallFailed,),
+                fatal=(BudgetExceededError,),
+            )
         except (BudgetExceededError, sdk.BackendUnavailable, sdk.RepoTrustError) as e:
             if before is None:
                 attempts.pop(key, None)
@@ -168,34 +192,59 @@ async def run(state: State, run_dir: Path, *, call: CallFn, ledger: SpendLedger,
 
 def resolver(target: Target) -> Callable[[str, str], tuple[str, str, str] | None]:
     """A cited path is read at the target's head commit, in its repository (`<run>/source` for --dir)."""
+
     def resolve(path: str, side: str):
         if side != "head" or not path:
             return None
         return target.repo, str(target.head_sha), path
+
     return resolve
 
 
-def gated_facts(target: Target, scope: TargetScope, answers: dict[str, dict], run_dir: Path) -> Gated:
+def gated_facts(
+    target: Target, scope: TargetScope, answers: dict[str, dict], run_dir: Path
+) -> Gated:
     """The facts whose citations pass at the commit, rebuilt from the stored answers in unit order."""
     keep = citation_keeper(resolver(target), root=run_dir / SNAPSHOT_DIR)
     return gate_answers(ordered_answers(scope.units, answers), keep)
 
 
-def facts_document(target: Target, scope: TargetScope, answers: dict[str, dict], run_dir: Path,
-                   generated_at: datetime) -> dict:
+def facts_document(
+    target: Target,
+    scope: TargetScope,
+    answers: dict[str, dict],
+    run_dir: Path,
+    generated_at: datetime,
+) -> dict:
     """`facts.json` in review's format (`review/schema/facts.v1.schema.json`), kind `tree`."""
     g = gated_facts(target, scope, answers, run_dir)
     by_id = {f.id: f for f in g.facts}
     files = []
     for path, purpose in g.purposes.items():
-        cite = next((f.citations[0] for f in g.facts if f.source.endswith("/file") and f.citations[0].path == path),
-                    None)
-        files.append({"path": path, "purpose": purpose, "citation": cite.model_dump() if cite else None})
+        cite = next(
+            (
+                f.citations[0]
+                for f in g.facts
+                if f.source.endswith("/file") and f.citations[0].path == path
+            ),
+            None,
+        )
+        files.append(
+            {
+                "path": path,
+                "purpose": purpose,
+                "citation": cite.model_dump() if cite else None,
+            }
+        )
     cited = {c.path for f in g.facts for c in f.citations}
-    uncovered = [p for u in answered(scope.units, answers) for p in u.files if p not in cited]
+    uncovered = [
+        p for u in answered(scope.units, answers) for p in u.files if p not in cited
+    ]
     return {
         "schema_version": 1,
-        "generated_at": generated_at.isoformat(timespec="seconds").replace("+00:00", "Z"),
+        "generated_at": generated_at.isoformat(timespec="seconds").replace(
+            "+00:00", "Z"
+        ),
         "base_sha": EMPTY_TREE,
         "head_sha": target.head_sha,
         "kind": "tree",
@@ -210,7 +259,9 @@ def facts_document(target: Target, scope: TargetScope, answers: dict[str, dict],
     }
 
 
-def finish(state: State, run_dir: Path, now: datetime, git_target: Target) -> tuple[int, int]:
+def finish(
+    state: State, run_dir: Path, now: datetime, git_target: Target
+) -> tuple[int, int]:
     """Write `facts.json` and `report.md` from state, then add `explore`. (answered, units).
 
     Runs on every run that gets past explore, so a resume rewrites both files
@@ -226,9 +277,14 @@ def finish(state: State, run_dir: Path, now: datetime, git_target: Target) -> tu
         state.facts_generated_at = now
         state_mod.save(state, run_dir)
     doc = facts_document(git_target, scope, answers, run_dir, state.facts_generated_at)
-    report_mod.write_output(run_dir, FACTS_FILE, json.dumps(doc, indent=2, ensure_ascii=False) + "\n")
-    report_mod.write_report(run_dir, state.target,
-                            report_mod.scope_sections(scope, not_answered_files(scope.units, answers)))
+    report_mod.write_output(
+        run_dir, FACTS_FILE, json.dumps(doc, indent=2, ensure_ascii=False) + "\n"
+    )
+    report_mod.write_report(
+        run_dir,
+        state.target,
+        report_mod.scope_sections(scope, not_answered_files(scope.units, answers)),
+    )
     if "explore" not in state.steps_done:
         state.steps_done.append("explore")
         state_mod.save(state, run_dir)

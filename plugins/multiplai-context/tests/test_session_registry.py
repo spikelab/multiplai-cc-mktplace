@@ -47,8 +47,8 @@ def _read_entry(data_dir: Path, sid=SID) -> dict:
 # record_event — creation and contract fields
 # ===========================================================================
 
-class TestRecordEventStart:
 
+class TestRecordEventStart:
     def test_start_creates_entry_with_contract_fields(self, tmp_path):
         assert sr.record_event(tmp_path, _hook_input(), "start") is True
         entry = _read_entry(tmp_path)
@@ -99,16 +99,16 @@ class TestRecordEventStart:
         )
 
     def test_path_traversal_session_id_rejected(self, tmp_path):
-        assert sr.record_event(
-            tmp_path, {"session_id": "../evil", "cwd": "/x"}, "start"
-        ) is False
+        assert (
+            sr.record_event(tmp_path, {"session_id": "../evil", "cwd": "/x"}, "start")
+            is False
+        )
 
     def test_unknown_kind_rejected(self, tmp_path):
         assert sr.record_event(tmp_path, _hook_input(), "reboot") is False
 
 
 class TestRecordEventUpdates:
-
     def test_stop_updates_last_event_and_preserves_identity(self, tmp_path):
         sr.record_event(tmp_path, _hook_input(), "start")
         started_at = _read_entry(tmp_path)["started_at"]
@@ -153,7 +153,6 @@ class TestRecordEventUpdates:
 
 
 class TestRecordEventRobustness:
-
     def test_atomic_no_tmp_left_behind(self, tmp_path):
         sr.record_event(tmp_path, _hook_input(), "start")
         files = sorted(p.name for p in (tmp_path / "sessions").iterdir())
@@ -171,9 +170,7 @@ class TestRecordEventRobustness:
         monkeypatch.setattr(fsio.os, "replace", boom)
         assert sr.record_event(tmp_path, _hook_input(), "start") is False
         assert list((tmp_path / "sessions").glob("*.json")) == []
-        assert [
-            p for p in (tmp_path / "sessions").iterdir() if "tmp" in p.name
-        ] == []
+        assert [p for p in (tmp_path / "sessions").iterdir() if "tmp" in p.name] == []
 
     def test_never_raises_on_unwritable_dir(self, tmp_path):
         target = tmp_path / "blocked"
@@ -197,9 +194,7 @@ class TestRecordEventRobustness:
 
     def test_lock_failure_fails_open(self, tmp_path):
         """Hooks must never crash or skip the write on a flock-less FS."""
-        with patch.object(
-            sr.fcntl, "flock", side_effect=OSError("flock unsupported")
-        ):
+        with patch.object(sr.fcntl, "flock", side_effect=OSError("flock unsupported")):
             assert sr.record_event(tmp_path, _hook_input(), "start") is True
         assert _read_entry(tmp_path)["last_event"]["kind"] == "start"
 
@@ -213,19 +208,23 @@ class TestRecordEventRobustness:
 # gc_stale
 # ===========================================================================
 
+
 def _write_entry(data_dir: Path, sid: str, kind: str, ts: datetime) -> Path:
     rdir = data_dir / "sessions"
     rdir.mkdir(parents=True, exist_ok=True)
     path = rdir / f"{sid}.json"
-    path.write_text(json.dumps({
-        "session_id": sid,
-        "last_event": {"ts": ts.isoformat(), "kind": kind},
-    }))
+    path.write_text(
+        json.dumps(
+            {
+                "session_id": sid,
+                "last_event": {"ts": ts.isoformat(), "kind": kind},
+            }
+        )
+    )
     return path
 
 
 class TestGcStale:
-
     def test_old_ended_entry_removed(self, tmp_path):
         old = datetime.now(UTC) - timedelta(days=8)
         _write_entry(tmp_path, "old-ended", "end", old)
@@ -346,9 +345,7 @@ class TestGcRosterDead:
 class TestGcConcurrency:
     """GC vs writer races: an entry can't be deleted out from under a writer."""
 
-    def test_recheck_under_lock_keeps_just_refreshed_entry(
-        self, tmp_path, monkeypatch
-    ):
+    def test_recheck_under_lock_keeps_just_refreshed_entry(self, tmp_path, monkeypatch):
         """A writer that refreshed the entry between GC's first staleness
         check and its lock acquisition must win — the re-check under the
         lock keeps the entry."""
@@ -490,9 +487,7 @@ class TestOrphanSweep:
         def open_and_recreate(path, *a, **k):
             fd = real_open(path, *a, **k)
             if str(path).endswith("reborn.lock"):
-                _write_entry(
-                    tmp_path, "reborn", "start", datetime.now(UTC)
-                )
+                _write_entry(tmp_path, "reborn", "start", datetime.now(UTC))
             return fd
 
         monkeypatch.setattr(sr.os, "open", open_and_recreate)
@@ -505,17 +500,18 @@ class TestOrphanSweep:
 # Hook wiring
 # ===========================================================================
 
-class TestHookWiring:
 
+class TestHookWiring:
     def _hooks(self):
         from conftest import parse_hooks
+
         return parse_hooks()
 
     def test_notification_hook_registered(self):
         hooks = [
-            h for h in self._hooks()
-            if h["event"] == "Notification"
-            and "session_notification" in h["script"]
+            h
+            for h in self._hooks()
+            if h["event"] == "Notification" and "session_notification" in h["script"]
         ]
         assert len(hooks) == 1, (
             "hooks.json must register exactly one Notification hook for "
@@ -525,9 +521,7 @@ class TestHookWiring:
     def test_notification_hook_has_uv_guard_and_timeout(self):
         from conftest import HOOKS_JSON
 
-        hook = next(
-            h for h in self._hooks() if h["event"] == "Notification"
-        )
+        hook = next(h for h in self._hooks() if h["event"] == "Notification")
         # The uv guard lives in the shared hooks/run.sh launcher now; the
         # command must route through it like its siblings.
         assert 'sh "${CLAUDE_PLUGIN_ROOT}/hooks/run.sh"' in hook["command"], (
@@ -545,12 +539,15 @@ class TestHookWiring:
         manifest = (SCRIPTS_DIR / "pyproject.toml").read_text()
         assert "multiplai-core" in manifest
 
-    @pytest.mark.parametrize("script,kind", [
-        ("session_start.py", '"start"'),
-        ("session_stop.py", '"stop"'),
-        ("session_end.py", '"end"'),
-        ("session_notification.py", '"notification"'),
-    ])
+    @pytest.mark.parametrize(
+        "script,kind",
+        [
+            ("session_start.py", '"start"'),
+            ("session_stop.py", '"stop"'),
+            ("session_end.py", '"end"'),
+            ("session_notification.py", '"notification"'),
+        ],
+    )
     def test_lifecycle_scripts_record_registry_events(self, script, kind):
         source = (SCRIPTS_DIR / script).read_text()
         assert "session_registry" in source, (
@@ -567,18 +564,23 @@ class TestHookWiring:
 # End-to-end through the real hook scripts
 # ===========================================================================
 
-class TestLifecycleIntegration:
 
+class TestLifecycleIntegration:
     def test_start_stop_end_lifecycle_via_scripts(self, tmp_path, monkeypatch):
         data_dir = tmp_path / "data"
         data_dir.mkdir()
         hook_json = json.dumps({"session_id": SID, "cwd": str(tmp_path)})
 
-        with patch.dict(os.environ, {
-            "CLAUDE_PLUGIN_DATA": str(data_dir),
-            "HOSTNAME": "claude-e2e-test",
-        }, clear=False):
+        with patch.dict(
+            os.environ,
+            {
+                "CLAUDE_PLUGIN_DATA": str(data_dir),
+                "HOSTNAME": "claude-e2e-test",
+            },
+            clear=False,
+        ):
             from multiplai_core.paths import _reset_cache
+
             _reset_cache()
             try:
                 import importlib
@@ -587,6 +589,7 @@ class TestLifecycleIntegration:
                 import session_end
                 import session_start
                 import session_stop
+
                 importlib.reload(session_start)
                 importlib.reload(session_stop)
                 importlib.reload(session_end)
@@ -617,12 +620,14 @@ class TestLifecycleIntegration:
                 del env[k]
         env["CLAUDE_PLUGIN_DATA"] = str(data_dir)
         env["HOSTNAME"] = "claude-e2e-notif"
-        payload = json.dumps({
-            "hook_event_name": "Notification",
-            "session_id": SID,
-            "cwd": str(tmp_path),
-            "message": "Claude is waiting for your input",
-        })
+        payload = json.dumps(
+            {
+                "hook_event_name": "Notification",
+                "session_id": SID,
+                "cwd": str(tmp_path),
+                "message": "Claude is waiting for your input",
+            }
+        )
         result = subprocess.run(
             [sys.executable, str(SCRIPTS_DIR / "session_notification.py")],
             input=payload,

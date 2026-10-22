@@ -68,7 +68,9 @@ def _parse_ts(record: dict) -> datetime | None:
     return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt
 
 
-def _transcript_time_bounds(jsonl_path: Path) -> tuple[datetime | None, datetime | None]:
+def _transcript_time_bounds(
+    jsonl_path: Path,
+) -> tuple[datetime | None, datetime | None]:
     """Return (first, last) parseable timestamps from a transcript.
 
     Scans the head for the first and the tail for the last so a long session
@@ -119,7 +121,9 @@ def _session_id_from_path(jsonl_path: Path) -> str:
     if stem and len(stem) > 8:
         return stem
     try:
-        for line in jsonl_path.read_text(encoding="utf-8", errors="replace").splitlines()[:10]:
+        for line in jsonl_path.read_text(
+            encoding="utf-8", errors="replace"
+        ).splitlines()[:10]:
             record = json.loads(line.strip())
             sid = record.get("session_id") or record.get("sessionId")
             if sid:
@@ -211,7 +215,8 @@ def _is_already_processed(
         return True
 
     if learnings_file.exists() and f"Session: {session_id}" in learnings_file.read_text(
-        encoding="utf-8", errors="replace",
+        encoding="utf-8",
+        errors="replace",
     ):
         return True
 
@@ -226,7 +231,9 @@ def _is_already_processed(
 def _session_cwd(jsonl_path: Path) -> str:
     """Get the dominant cwd from the transcript (first non-empty cwd record)."""
     try:
-        for line in jsonl_path.read_text(encoding="utf-8", errors="replace").splitlines()[:100]:
+        for line in jsonl_path.read_text(
+            encoding="utf-8", errors="replace"
+        ).splitlines()[:100]:
             try:
                 r = json.loads(line.strip())
                 cwd = r.get("cwd", "")
@@ -254,7 +261,12 @@ async def _process_session(
     processed: set[str] | None = None,
 ) -> dict:
     """Process one session transcript. Returns a stats dict."""
-    stats = {"session_id": session_id, "status": "ok", "diary": False, "learnings": False}
+    stats = {
+        "session_id": session_id,
+        "status": "ok",
+        "diary": False,
+        "learnings": False,
+    }
 
     if _is_already_processed(session_id, learnings_file, diary_dir, processed):
         stats["status"] = "skipped"
@@ -288,7 +300,9 @@ async def _process_session(
                 units.extend(chunk_units)
             except Exception as e:
                 failed_chunks += 1
-                logger.warning("LLM call failed for session %s chunk %d: %s", session_id, i, e)
+                logger.warning(
+                    "LLM call failed for session %s chunk %d: %s", session_id, i, e
+                )
 
     if units:
         diary_path = write_diary_entries(units, diary_dir, session_id, cwd, timestamp)
@@ -307,7 +321,9 @@ async def _process_session(
         logger.warning(
             "Session %s: %d/%d chunk(s) failed — not recorded as processed, "
             "so a later run will retry it",
-            session_id, failed_chunks, len(chunks),
+            session_id,
+            failed_chunks,
+            len(chunks),
         )
     else:
         _record_processed(session_id, _ledger_path())
@@ -350,23 +366,41 @@ async def backfill(
     # Filter by project
     if project_slugs:
         slugs = set(project_slugs)
-        in_window = [t for t in in_window if Path(t.parent.name).name in slugs or t.parent.name in slugs]
+        in_window = [
+            t
+            for t in in_window
+            if Path(t.parent.name).name in slugs or t.parent.name in slugs
+        ]
 
     if not in_window:
-        return {"scanned": 0, "written": 0, "skipped": 0, "errored": 0, "dry_run": dry_run}
+        return {
+            "scanned": 0,
+            "written": 0,
+            "skipped": 0,
+            "errored": 0,
+            "dry_run": dry_run,
+        }
 
-    summary = {"scanned": len(in_window), "written": 0, "skipped": 0, "errored": 0, "dry_run": dry_run}
+    summary = {
+        "scanned": len(in_window),
+        "written": 0,
+        "skipped": 0,
+        "errored": 0,
+        "dry_run": dry_run,
+    }
 
     if dry_run:
         total_est = sum(estimate_tokens(t) for t in in_window)
         summary["sessions"] = []
         for t in in_window:
             sid = _session_id_from_path(t)
-            summary["sessions"].append({
-                "path": str(t),
-                "session_id": sid,
-                "est_tokens": estimate_tokens(t),
-            })
+            summary["sessions"].append(
+                {
+                    "path": str(t),
+                    "session_id": sid,
+                    "est_tokens": estimate_tokens(t),
+                }
+            )
         summary["total_est_tokens"] = total_est
         return summary
 
@@ -388,16 +422,21 @@ async def backfill(
         _, last_ts = _transcript_time_bounds(jsonl_path)
         date_str = last_ts.strftime("%Y-%m-%d") if last_ts else None
         learnings_file = paths.learnings_file(date_str)
-        tasks.append(_process_session(
-            jsonl_path, session_id, since, until,
-            valid_targets=valid_targets,
-            diary_dir=diary_dir,
-            learnings_file=learnings_file,
-            client=client,
-            dry_run=False,
-            sem=sem,
-            processed=processed,
-        ))
+        tasks.append(
+            _process_session(
+                jsonl_path,
+                session_id,
+                since,
+                until,
+                valid_targets=valid_targets,
+                diary_dir=diary_dir,
+                learnings_file=learnings_file,
+                client=client,
+                dry_run=False,
+                sem=sem,
+                processed=processed,
+            )
+        )
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -415,6 +454,7 @@ async def backfill(
     if run_now:
         try:
             from synthesize_now import synthesize
+
             await synthesize()
             logger.info("Synthesized now/")
         except Exception as e:
@@ -427,9 +467,8 @@ async def backfill(
             # event loop.
             from generators.config import load_catalog_config
             from generators.dispatcher import generate_catalogs
-            await generate_catalogs(
-                config=load_catalog_config(), generators=["diary"]
-            )
+
+            await generate_catalogs(config=load_catalog_config(), generators=["diary"])
             logger.info("Regenerated diary catalog")
         except Exception as e:
             logger.warning("generate_catalog failed (non-fatal): %s", e)
@@ -438,24 +477,48 @@ async def backfill(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     window = parser.add_mutually_exclusive_group()
-    window.add_argument("--days", type=int, default=DEFAULT_DAYS, metavar="N",
-                        help=f"Process last N days (default: {DEFAULT_DAYS})")
-    window.add_argument("--since", metavar="YYYY-MM-DD",
-                        help="Process sessions since this date")
-    window.add_argument("--all", action="store_true",
-                        help="Process entire history (no date window)")
-    parser.add_argument("--projects", metavar="SLUG,...",
-                        help="Comma-separated project slugs to include")
-    parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY,
-                        metavar="N", help=f"Max parallel LLM calls (default: {DEFAULT_CONCURRENCY})")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="List in-window sessions + token estimate; no writes")
-    parser.add_argument("--no-catalogs", action="store_true",
-                        help="Skip catalog regeneration after backfill")
-    parser.add_argument("--no-now", action="store_true",
-                        help="Skip now/ regeneration after backfill")
+    window.add_argument(
+        "--days",
+        type=int,
+        default=DEFAULT_DAYS,
+        metavar="N",
+        help=f"Process last N days (default: {DEFAULT_DAYS})",
+    )
+    window.add_argument(
+        "--since", metavar="YYYY-MM-DD", help="Process sessions since this date"
+    )
+    window.add_argument(
+        "--all", action="store_true", help="Process entire history (no date window)"
+    )
+    parser.add_argument(
+        "--projects",
+        metavar="SLUG,...",
+        help="Comma-separated project slugs to include",
+    )
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=DEFAULT_CONCURRENCY,
+        metavar="N",
+        help=f"Max parallel LLM calls (default: {DEFAULT_CONCURRENCY})",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="List in-window sessions + token estimate; no writes",
+    )
+    parser.add_argument(
+        "--no-catalogs",
+        action="store_true",
+        help="Skip catalog regeneration after backfill",
+    )
+    parser.add_argument(
+        "--no-now", action="store_true", help="Skip now/ regeneration after backfill"
+    )
     args = parser.parse_args()
 
     if args.all:
@@ -469,7 +532,9 @@ def main() -> None:
     else:
         since = datetime.now(UTC) - timedelta(days=args.days)
 
-    project_slugs = [s.strip() for s in args.projects.split(",")] if args.projects else None
+    project_slugs = (
+        [s.strip() for s in args.projects.split(",")] if args.projects else None
+    )
 
     if not args.dry_run:
         print(
@@ -480,22 +545,28 @@ def main() -> None:
         if project_slugs:
             print(f"Scoped to projects: {', '.join(project_slugs)}")
         else:
-            print("Tip: use --projects SLUG,... to scope. Review results with "
-                  "/multiplai-context:dream-remember before applying.")
+            print(
+                "Tip: use --projects SLUG,... to scope. Review results with "
+                "/multiplai-context:dream-remember before applying."
+            )
 
-    summary = asyncio.run(backfill(
-        since,
-        project_slugs=project_slugs,
-        concurrency=args.concurrency,
-        dry_run=args.dry_run,
-        run_catalogs=not args.no_catalogs,
-        run_now=not args.no_now,
-    ))
+    summary = asyncio.run(
+        backfill(
+            since,
+            project_slugs=project_slugs,
+            concurrency=args.concurrency,
+            dry_run=args.dry_run,
+            run_catalogs=not args.no_catalogs,
+            run_now=not args.no_now,
+        )
+    )
 
     if args.dry_run:
         print(f"\n[dry-run] {summary['scanned']} sessions in window")
         print(f"[dry-run] Estimated tokens: {summary.get('total_est_tokens', '?')}")
-        print("[dry-run] Privacy notice: backfill reads ALL local Claude Code transcripts.")
+        print(
+            "[dry-run] Privacy notice: backfill reads ALL local Claude Code transcripts."
+        )
         if project_slugs:
             print(f"[dry-run] Scoped to projects: {', '.join(project_slugs)}")
         else:
@@ -509,7 +580,9 @@ def main() -> None:
             f"{summary['skipped']} skipped, "
             f"{summary['errored']} errored"
         )
-        print("Run /multiplai-context:dream then /multiplai-context:dream-remember to consolidate new learnings.")
+        print(
+            "Run /multiplai-context:dream then /multiplai-context:dream-remember to consolidate new learnings."
+        )
 
 
 if __name__ == "__main__":

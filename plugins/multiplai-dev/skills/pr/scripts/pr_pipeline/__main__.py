@@ -27,37 +27,75 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     def common(p: argparse.ArgumentParser) -> None:
-        p.add_argument("--repo", required=True,
-                       help="the git repository (or worktree) the PR is from, or a project directory "
-                            "inside it; the pr: settings are read from <repo>/specs/config.yaml")
-        p.add_argument("--change-dir", required=True,
-                       help="the change's documents: specs/changes/<name>/ or its archive")
-        p.add_argument("--section", action="append", default=[], metavar="FILE",
-                       help="an extra body section; the file's first line is its Markdown heading (repeatable)")
+        p.add_argument(
+            "--repo",
+            required=True,
+            help="the git repository (or worktree) the PR is from, or a project directory "
+            "inside it; the pr: settings are read from <repo>/specs/config.yaml",
+        )
+        p.add_argument(
+            "--change-dir",
+            required=True,
+            help="the change's documents: specs/changes/<name>/ or its archive",
+        )
+        p.add_argument(
+            "--section",
+            action="append",
+            default=[],
+            metavar="FILE",
+            help="an extra body section; the file's first line is its Markdown heading (repeatable)",
+        )
 
     op = sub.add_parser("open", help="push the branch and open a PR from the template")
     common(op)
-    op.add_argument("--base", help="the base branch (default: the repo's default branch)")
-    op.add_argument("--head", help="the branch to open the PR from (default: the current branch)")
+    op.add_argument(
+        "--base", help="the base branch (default: the repo's default branch)"
+    )
+    op.add_argument(
+        "--head", help="the branch to open the PR from (default: the current branch)"
+    )
     op.add_argument("--title", help="the PR title (default: buildme: <change-name>)")
     readiness = op.add_mutually_exclusive_group()
-    readiness.add_argument("--ready", action="store_true",
-                           help="open it ready for review, whatever pr.draft says")
-    readiness.add_argument("--draft", action="store_true",
-                           help="open it as a draft, whatever pr.draft says")
-    op.add_argument("--no-push", action="store_true", help="do not push the branch first")
-    op.add_argument("--ticket-url", help="the ticket's URL (default: a url: or Source: <link> line in <change-dir>/ticket.md)")
-    op.add_argument("--dry-run", action="store_true",
-                    help="print the commands and the body; write nothing to git or GitHub")
+    readiness.add_argument(
+        "--ready",
+        action="store_true",
+        help="open it ready for review, whatever pr.draft says",
+    )
+    readiness.add_argument(
+        "--draft",
+        action="store_true",
+        help="open it as a draft, whatever pr.draft says",
+    )
+    op.add_argument(
+        "--no-push", action="store_true", help="do not push the branch first"
+    )
+    op.add_argument(
+        "--ticket-url",
+        help="the ticket's URL (default: a url: or Source: <link> line in <change-dir>/ticket.md)",
+    )
+    op.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the commands and the body; write nothing to git or GitHub",
+    )
 
-    ed = sub.add_parser("edit", help="refresh the sections this skill owns in an open PR's body")
+    ed = sub.add_parser(
+        "edit", help="refresh the sections this skill owns in an open PR's body"
+    )
     ed.add_argument("pr", help="the PR number or URL")
     common(ed)
-    ed.add_argument("--push", action="store_true", help="push the PR's branch before editing")
-    ed.add_argument("--dry-run", action="store_true",
-                    help="print the commands and the body; write nothing to git or GitHub")
+    ed.add_argument(
+        "--push", action="store_true", help="push the PR's branch before editing"
+    )
+    ed.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the commands and the body; write nothing to git or GitHub",
+    )
 
-    rd = sub.add_parser("render", help="print the body `open` would write; no gh call, no push")
+    rd = sub.add_parser(
+        "render", help="print the body `open` would write; no gh call, no push"
+    )
     common(rd)
     return parser
 
@@ -75,6 +113,7 @@ def main(argv: list[str] | None = None) -> int:
         return _main(args)
     finally:
         from .fill import spend_marker
+
         print(spend_marker(), flush=True)
 
 
@@ -88,14 +127,18 @@ def _main(args: argparse.Namespace) -> int:
         logging.getLogger("pr_pipeline").info(
             "Session settings: model=%s effort=%s",
             os.environ.get("MULTIPLAI_SESSION_MODEL") or "not found",
-            os.environ.get("MULTIPLAI_SESSION_EFFORT") or "not found")
+            os.environ.get("MULTIPLAI_SESSION_EFFORT") or "not found",
+        )
 
         from . import commands
     except Exception as e:  # before commands.run's handler exists: exit 2, never Python's 1, which means a gate
         traceback.print_exc()
         # On one line, like commands._diagnose (which may be the import that failed).
         why = " ".join(part.strip() for part in str(e).splitlines() if part.strip())
-        print(f"PR_DIAGNOSIS:pr {args.command} failed to start: {type(e).__name__}: {why}", flush=True)
+        print(
+            f"PR_DIAGNOSIS:pr {args.command} failed to start: {type(e).__name__}: {why}",
+            flush=True,
+        )
         return 2
 
     return commands.run(args)

@@ -10,6 +10,7 @@ build Playwright can find:
 Without playwright importable, or without the browser it expects, every test
 here is skipped.
 """
+
 from __future__ import annotations
 
 import json
@@ -58,7 +59,13 @@ def test_the_highlight_box_is_the_elements_box(tmp_path: Path, launch) -> None:
     shot = capture.capture(url, tmp_path / "out", highlight="rose 4%", launch=launch)
     meta = json.loads((tmp_path / "out" / "shot.json").read_text())
     assert (meta["width"], meta["height"]) == (1280, 800)
-    assert meta["highlight"] == {"text": "rose 4%", "x": 100, "y": 300, "w": 400, "h": 40}
+    assert meta["highlight"] == {
+        "text": "rose 4%",
+        "x": 100,
+        "y": 300,
+        "w": 400,
+        "h": 40,
+    }
     assert shot.matched == "Prices rose 4% in March"
 
 
@@ -67,13 +74,24 @@ def test_full_page_finds_text_below_the_fold(tmp_path: Path, launch) -> None:
     shot = capture.capture(url, tmp_path / "view", highlight="Far below", launch=launch)
     assert shot.meta["highlight"] is None
     assert any("--full-page" in w for w in shot.warnings)
-    shot = capture.capture(url, tmp_path / "full", highlight="Far below", full_page=True, launch=launch)
+    shot = capture.capture(
+        url, tmp_path / "full", highlight="Far below", full_page=True, launch=launch
+    )
     assert shot.meta["height"] == 2000
-    assert shot.meta["highlight"] == {"text": "Far below", "x": 60, "y": 1500, "w": 500, "h": 30}
+    assert shot.meta["highlight"] == {
+        "text": "Far below",
+        "x": 60,
+        "y": 1500,
+        "w": 500,
+        "h": 30,
+    }
 
 
 def test_a_visible_password_field_is_a_login_wall(tmp_path: Path, launch) -> None:
-    url = _page(tmp_path, "<!doctype html><form><input name=u><input type=password name=p></form>")
+    url = _page(
+        tmp_path,
+        "<!doctype html><form><input name=u><input type=password name=p></form>",
+    )
     with pytest.raises(capture.CaptureError) as e:
         capture.capture(url, tmp_path / "out", launch=launch)
     assert e.value.code == 2 and "--from-file" in str(e.value)
@@ -86,4 +104,6 @@ def test_the_page_is_not_changed(tmp_path: Path, launch) -> None:
     url = _page(tmp_path, PAGE)
     capture.capture(url, tmp_path / "plain", launch=launch)
     capture.capture(url, tmp_path / "marked", highlight="rose 4%", launch=launch)
-    assert (tmp_path / "plain" / "shot.png").read_bytes() == (tmp_path / "marked" / "shot.png").read_bytes()
+    assert (tmp_path / "plain" / "shot.png").read_bytes() == (
+        tmp_path / "marked" / "shot.png"
+    ).read_bytes()

@@ -54,7 +54,9 @@ def legacy_reviews_root() -> Path:
     config_dir = os.environ.get("CLAUDE_CONFIG_DIR")
     if config_dir:
         try:
-            workspace = Path((Path(config_dir) / ".workspace").read_text(encoding="utf-8").strip()).expanduser()
+            workspace = Path(
+                (Path(config_dir) / ".workspace").read_text(encoding="utf-8").strip()
+            ).expanduser()
         except OSError:
             workspace = None
         if workspace and (workspace / "INBOX").is_dir():
@@ -73,7 +75,9 @@ def now() -> str:
 def append(entry: dict) -> None:
     """Append one JSON line. A failed write is logged, never raised: the ledger must not stop a review."""
     path = ledger_path()
-    line = (json.dumps(entry, sort_keys=True, ensure_ascii=False) + "\n").encode("utf-8")
+    line = (json.dumps(entry, sort_keys=True, ensure_ascii=False) + "\n").encode(
+        "utf-8"
+    )
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
@@ -113,19 +117,56 @@ def interrupted(target_dir: Path, head_sha: str) -> bool:
     """True when the last ledger line for this directory and head is a `started` line."""
     last = None
     for entry in read():
-        if entry.get("target_dir") == str(target_dir) and entry.get("head_sha") == head_sha \
-                and entry.get("event") in ("started", "finished"):
+        if (
+            entry.get("target_dir") == str(target_dir)
+            and entry.get("head_sha") == head_sha
+            and entry.get("event") in ("started", "finished")
+        ):
             last = entry["event"]
     return last == "started"
 
 
 def started(*, slug: str, target_dir: Path, head_sha: str, session_id: str) -> None:
-    append({"event": "started", "generated_at": now(), "slug": slug, "target_dir": str(target_dir),
-            "head_sha": head_sha, "session_id": session_id})
+    append(
+        {
+            "event": "started",
+            "generated_at": now(),
+            "slug": slug,
+            "target_dir": str(target_dir),
+            "head_sha": head_sha,
+            "session_id": session_id,
+        }
+    )
 
 
-def finished(*, producer: str, session_id: str, slug: str, target_dir: Path, round_: str, head_sha: str,
-             base_sha: str, kind: str, pr: int | None, stopped: str | None, run: dict | None) -> None:
-    append({"event": "finished", "generated_at": now(), "producer": producer, "session_id": session_id,
-            "slug": slug, "target_dir": str(target_dir), "round": round_, "head_sha": head_sha,
-            "base_sha": base_sha, "kind": kind, "pr": pr, "stopped": stopped, "run": run})
+def finished(
+    *,
+    producer: str,
+    session_id: str,
+    slug: str,
+    target_dir: Path,
+    round_: str,
+    head_sha: str,
+    base_sha: str,
+    kind: str,
+    pr: int | None,
+    stopped: str | None,
+    run: dict | None,
+) -> None:
+    append(
+        {
+            "event": "finished",
+            "generated_at": now(),
+            "producer": producer,
+            "session_id": session_id,
+            "slug": slug,
+            "target_dir": str(target_dir),
+            "round": round_,
+            "head_sha": head_sha,
+            "base_sha": base_sha,
+            "kind": kind,
+            "pr": pr,
+            "stopped": stopped,
+            "run": run,
+        }
+    )

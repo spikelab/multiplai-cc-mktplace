@@ -40,15 +40,22 @@ class Fetched:
         return 200 <= self.status < 300 and not self.error
 
 
-async def _get_validated(client: httpx.AsyncClient, url: str, allowed_host: str | None) -> httpx.Response:
+async def _get_validated(
+    client: httpx.AsyncClient, url: str, allowed_host: str | None
+) -> httpx.Response:
     """GET *url*, following redirects by hand and checking every hop (scheme, public IP, host)."""
     current = url
     for _ in range(MAX_REDIRECTS + 1):
         await _assert_safe_url(current)
         if allowed_host and httpx.URL(current).host != allowed_host:
-            raise UnsafeURLError(f"host {httpx.URL(current).host} is not the docs host {allowed_host}")
+            raise UnsafeURLError(
+                f"host {httpx.URL(current).host} is not the docs host {allowed_host}"
+            )
         async with client.stream("GET", current, follow_redirects=False) as response:
-            if response.status_code in _REDIRECT_STATUS and "location" in response.headers:
+            if (
+                response.status_code in _REDIRECT_STATUS
+                and "location" in response.headers
+            ):
                 current = urljoin(current, response.headers["location"])
                 continue
             body = bytearray()
@@ -62,20 +69,35 @@ async def _get_validated(client: httpx.AsyncClient, url: str, allowed_host: str 
 
 
 def basic_tag_strip(html: str) -> str:
-    html = re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", html, flags=re.DOTALL | re.IGNORECASE)
+    html = re.sub(
+        r"<(script|style)[^>]*>.*?</\1>", " ", html, flags=re.DOTALL | re.IGNORECASE
+    )
     return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html)).strip()
 
 
-async def fetch_url(url: str, client: httpx.AsyncClient, *, allowed_host: str | None = None,
-                    request_timeout: float = DEFAULT_REQUEST_TIMEOUT_S, max_retries: int = 2) -> Fetched:
+async def fetch_url(
+    url: str,
+    client: httpx.AsyncClient,
+    *,
+    allowed_host: str | None = None,
+    request_timeout: float = DEFAULT_REQUEST_TIMEOUT_S,
+    max_retries: int = 2,
+) -> Fetched:
     """Fetch one URL; retry timeouts, connection errors and 5xx. Never raises."""
     last = Fetched(url=url, error="not fetched")
     for attempt in range(max_retries + 1):
         try:
-            resp = await asyncio.wait_for(_get_validated(client, url, allowed_host), timeout=request_timeout)
+            resp = await asyncio.wait_for(
+                _get_validated(client, url, allowed_host), timeout=request_timeout
+            )
         except UnsafeURLError as e:
             return Fetched(url=url, error=f"blocked: {e}")
-        except (TimeoutError, httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadError) as e:
+        except (
+            TimeoutError,
+            httpx.ConnectError,
+            httpx.ConnectTimeout,
+            httpx.ReadError,
+        ) as e:
             last = Fetched(url=url, error=f"{type(e).__name__}")
             if attempt < max_retries:
                 await asyncio.sleep(RETRY_DELAYS[min(attempt, len(RETRY_DELAYS) - 1)])
@@ -85,15 +107,26 @@ async def fetch_url(url: str, client: httpx.AsyncClient, *, allowed_host: str | 
             return Fetched(url=url, error=f"{type(e).__name__}: {str(e)[:200]}")
         if 500 <= resp.status_code < 600 and attempt < max_retries:
             await asyncio.sleep(RETRY_DELAYS[min(attempt, len(RETRY_DELAYS) - 1)])
-            last = Fetched(url=url, status=resp.status_code, error=f"HTTP {resp.status_code}")
+            last = Fetched(
+                url=url, status=resp.status_code, error=f"HTTP {resp.status_code}"
+            )
             continue
         text = resp.text
-        if "html" in resp.headers.get("content-type", "") and "<html" in text[:2000].lower():
+        if (
+            "html" in resp.headers.get("content-type", "")
+            and "<html" in text[:2000].lower()
+        ):
             text = basic_tag_strip(text)
-        return Fetched(url=url, status=resp.status_code, text=text,
-                       error="" if 200 <= resp.status_code < 300 else f"HTTP {resp.status_code}")
+        return Fetched(
+            url=url,
+            status=resp.status_code,
+            text=text,
+            error="" if 200 <= resp.status_code < 300 else f"HTTP {resp.status_code}",
+        )
     return last
 
 
 def client() -> httpx.AsyncClient:
-    return httpx.AsyncClient(headers={"User-Agent": USER_AGENT}, timeout=DEFAULT_REQUEST_TIMEOUT_S)
+    return httpx.AsyncClient(
+        headers={"User-Agent": USER_AGENT}, timeout=DEFAULT_REQUEST_TIMEOUT_S
+    )

@@ -1,6 +1,5 @@
 """READ-stage extraction prompt — extracts structured findings from markdown."""
 
-
 EXTRACT_PROMPT = """You are the READ stage of a research pipeline. Extract structured \
 findings from a fetched web page.
 

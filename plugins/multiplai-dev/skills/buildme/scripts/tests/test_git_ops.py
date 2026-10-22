@@ -26,7 +26,9 @@ def make_repo(path: Path, *, commit: bool = True) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     subprocess.run(
         ["git", "-c", "init.defaultBranch=main", "init"],
-        cwd=str(path), capture_output=True, check=True,
+        cwd=str(path),
+        capture_output=True,
+        check=True,
     )
     _git(path, "config", "user.email", "test@example.com")
     _git(path, "config", "user.name", "Test")
@@ -213,7 +215,9 @@ class TestPreflight:
 
 
 class TestWorktree:
-    def test_create_worktree_leaves_source_checkout_untouched(self, tmp_path, monkeypatch):
+    def test_create_worktree_leaves_source_checkout_untouched(
+        self, tmp_path, monkeypatch
+    ):
         """Criterion 10 at the git_ops level: the caller's checkout is never written to."""
         monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
         repo = make_repo(tmp_path / "proj")
@@ -261,7 +265,9 @@ class TestCommitPaths:
         assert sha
         files = subprocess.run(
             ["git", "show", "--name-only", "--pretty=format:", "HEAD"],
-            cwd=str(repo), capture_output=True, text=True,
+            cwd=str(repo),
+            capture_output=True,
+            text=True,
         ).stdout.split()
         assert files == ["wanted.txt"]
         assert (repo / "unwanted.txt").exists()  # still untracked, not committed
@@ -287,7 +293,8 @@ class TestCommitPaths:
         assert git_ops.commit_stage(config, "feat: x", ["f.txt"]) is not None
 
     def test_commit_stage_commits_a_new_change_dir_holding_a_bookkeeping_file(
-        self, tmp_path,
+        self,
+        tmp_path,
     ):
         """The first spec-stage commit stages specs/changes/<name> while that
         directory is wholly untracked and already holds .board.json. Passing
@@ -308,7 +315,9 @@ class TestCommitPaths:
         assert sha
         committed = subprocess.run(
             ["git", "show", "--name-only", "--pretty=format:", "HEAD"],
-            cwd=str(repo), capture_output=True, text=True,
+            cwd=str(repo),
+            capture_output=True,
+            text=True,
         ).stdout.split()
         assert committed == ["specs/changes/c/interview.md"]
 
@@ -339,7 +348,9 @@ class TestCommitPaths:
 
         committed = subprocess.run(
             ["git", "show", "--name-only", "--pretty=format:", "HEAD"],
-            cwd=str(repo), capture_output=True, text=True,
+            cwd=str(repo),
+            capture_output=True,
+            text=True,
         ).stdout.split()
         assert "specs/changes/c/proposal.md" in committed
         assert "specs/archive/2026-01-01-c/design.md" in committed
@@ -347,7 +358,10 @@ class TestCommitPaths:
         assert not any(".board.json" in f for f in committed)
         # Never tracked, so a later cleanup unlink leaves no uncommitted deletion.
         tracked = subprocess.run(
-            ["git", "ls-files"], cwd=str(repo), capture_output=True, text=True,
+            ["git", "ls-files"],
+            cwd=str(repo),
+            capture_output=True,
+            text=True,
         ).stdout
         assert ".build-state.json" not in tracked
         assert ".board.json" not in tracked
@@ -364,7 +378,9 @@ def _out(repo: Path, *argv: str) -> str:
     return _git(repo, *argv).stdout
 
 
-def _project_repo(tmp_path: Path, name: str = "repo", subdir: bool = True) -> tuple[Path, Path]:
+def _project_repo(
+    tmp_path: Path, name: str = "repo", subdir: bool = True
+) -> tuple[Path, Path]:
     """A repo whose project is ``pkg/app`` (or the root, with ``subdir=False``),
     with a committed change directory, two project files, and two files
     outside the project. Returns ``(root, project)``."""
@@ -494,8 +510,11 @@ class TestCommitScope:
         (root / "app.py").write_bytes(original)
         before, head = _repo_view(root), _head(root)
         with pytest.raises(git_ops.GitLifecycleError):
-            (git_ops.commit_tree(root, "build") if whole_tree else
-             git_ops.commit_paths(root, "plan", ["app.py"]))
+            (
+                git_ops.commit_tree(root, "build")
+                if whole_tree
+                else git_ops.commit_paths(root, "plan", ["app.py"])
+            )
         assert _repo_view(root) == before
         assert _head(root) == head
         assert _out(root, "show", ":app.py") == "user staged B\n"
@@ -528,7 +547,11 @@ class TestCommitScope:
         else:
             assert git_ops.save_wip_ref(proj, "refs/buildme/wip/feat/c2", "wip")
 
-        start, end = ("HEAD", "refs/buildme/wip/feat/c2") if commit == "save_wip_ref" else ("HEAD~1", "HEAD")
+        start, end = (
+            ("HEAD", "refs/buildme/wip/feat/c2")
+            if commit == "save_wip_ref"
+            else ("HEAD~1", "HEAD")
+        )
         committed = _out(root, "diff", "--name-only", start, end).split()
         assert committed == ["pkg/app/app.py"]
         _assert_outside_edits_kept(root)
@@ -554,7 +577,9 @@ class TestCommitScope:
 
         assert git_ops.commit_tree(root, "block", "row C3")
         assert _out(root, "diff", "--name-only", "HEAD~1", "HEAD").split() == ["app.py"]
-        assert _out(root, "diff", "--cached", "--name-only").split() == ["build-progress.md"]
+        assert _out(root, "diff", "--cached", "--name-only").split() == [
+            "build-progress.md"
+        ]
 
     def test_row_C5_commit_during_a_merge_reports_failure(self, tmp_path):
         root, _ = _project_repo(tmp_path, subdir=False)
@@ -593,7 +618,9 @@ class TestPush:
 
         log = subprocess.run(
             ["git", "log", "--oneline", branch],
-            cwd=str(bare), capture_output=True, text=True,
+            cwd=str(bare),
+            capture_output=True,
+            text=True,
         )
         assert log.returncode == 0
         assert "feat: p" in log.stdout
@@ -624,10 +651,14 @@ class TestOpenPRWithSkill:
         def fake_pr(argv, cwd=None, timeout=None):
             seen["argv"] = argv
             seen["cwd"] = cwd
-            return GitResult(argv, 0, "DIFF:2 files, +3 -1\nPR:https://github.com/o/r/pull/42\n", "")
+            return GitResult(
+                argv, 0, "DIFF:2 files, +3 -1\nPR:https://github.com/o/r/pull/42\n", ""
+            )
 
         monkeypatch.setattr(git_ops, "_run_pr_skill", fake_pr)
-        argv = _pr_open_argv(tmp_path, tmp_path / "c", "buildme/c", "buildme: c", draft=True)
+        argv = _pr_open_argv(
+            tmp_path, tmp_path / "c", "buildme/c", "buildme: c", draft=True
+        )
         url, diagnoses, res = git_ops.open_pr_with_skill(tmp_path, argv)
         assert url == "https://github.com/o/r/pull/42"
         assert res.ok and diagnoses == []
@@ -643,11 +674,15 @@ class TestOpenPRWithSkill:
         argv = _pr_open_argv(tmp_path, tmp_path / "c", "b", "t", draft=True)
         assert "--draft" in argv and "--ready" not in argv
 
-    def test_failure_returns_none_and_the_diagnosis_without_raising(self, tmp_path, monkeypatch):
+    def test_failure_returns_none_and_the_diagnosis_without_raising(
+        self, tmp_path, monkeypatch
+    ):
         monkeypatch.setattr(
-            git_ops, "_run_pr_skill",
+            git_ops,
+            "_run_pr_skill",
             lambda argv, cwd=None, timeout=None: GitResult(
-                argv, 2, "PR_DIAGNOSIS:gh: not authenticated\n", ""),
+                argv, 2, "PR_DIAGNOSIS:gh: not authenticated\n", ""
+            ),
         )
         url, diagnoses, res = git_ops.open_pr_with_skill(tmp_path, ["uv"])
         assert url is None
@@ -657,7 +692,9 @@ class TestOpenPRWithSkill:
 
 class TestManualFinishCommands:
     def test_contains_exact_push_and_pr_commands(self, tmp_path):
-        text = git_ops.manual_finish_commands(tmp_path / "wt", "buildme/c", "buildme: c")
+        text = git_ops.manual_finish_commands(
+            tmp_path / "wt", "buildme/c", "buildme: c"
+        )
         assert "git push -u origin buildme/c" in text
         assert "gh pr create --title 'buildme: c'" in text
         assert "--draft" in text
@@ -665,7 +702,10 @@ class TestManualFinishCommands:
     def test_lists_the_pr_skill_before_the_gh_fallback(self, tmp_path):
         argv = _pr_open_argv(tmp_path / "wt", tmp_path / "c", "buildme/c", "buildme: c")
         text = git_ops.manual_finish_commands(
-            tmp_path / "wt", "buildme/c", "buildme: c", pr_skill_argv=argv,
+            tmp_path / "wt",
+            "buildme/c",
+            "buildme: c",
+            pr_skill_argv=argv,
         )
         assert text.index("python -m pr_pipeline open") < text.index("gh pr create")
 
@@ -688,7 +728,9 @@ class TestSafetyInvariants:
                 continue
             if "remove_worktree" in path.read_text():
                 offenders.append(str(path))
-        assert offenders == [], f"remove_worktree referenced outside git_ops: {offenders}"
+        assert offenders == [], (
+            f"remove_worktree referenced outside git_ops: {offenders}"
+        )
 
     def test_no_shell_true_or_force_in_git_ops(self):
         text = Path(git_ops.__file__).read_text()
@@ -716,7 +758,9 @@ class TestWholeTreeOperations:
         sha = git_ops.commit_tree(repo, "impl(block-1): B", "block=1")
         assert sha == git_ops.rev_parse_head(repo)
 
-        committed = _git(repo, "show", "--name-only", "--pretty=format:", "HEAD").stdout.split()
+        committed = _git(
+            repo, "show", "--name-only", "--pretty=format:", "HEAD"
+        ).stdout.split()
         assert "module.py" in committed
         assert "build-progress.md" not in committed
         assert not any(".build-state.json" in f for f in committed)
@@ -858,7 +902,9 @@ class TestDiscardInSubdirectory:
 
         assert git_ops.discard_to(repo, start, "row D1") is True
         assert _head(repo) == start
-        assert _out(repo, "rev-parse", "HEAD^{tree}") == _out(ref, "rev-parse", "HEAD^{tree}")
+        assert _out(repo, "rev-parse", "HEAD^{tree}") == _out(
+            ref, "rev-parse", "HEAD^{tree}"
+        )
         assert _out(repo, "log", "--format=%s") == _out(ref, "log", "--format=%s")
         assert _repo_view(repo) == _repo_view(ref)
         _assert_project_discarded(repo)
@@ -912,14 +958,26 @@ class TestDiscardInSubdirectory:
         _do_step_work(proj)
         (root / "other" / "notes.txt").write_text("v2 committed by the user\n")
         _git(root, "commit", "-qm", "user", "--", "other/notes.txt")
-        before = (_head(root), _repo_view(root), _out(root, "diff"),
-                  (proj / "app.py").read_text(), (proj / "untracked.py").read_text())
+        before = (
+            _head(root),
+            _repo_view(root),
+            _out(root, "diff"),
+            (proj / "app.py").read_text(),
+            (proj / "untracked.py").read_text(),
+        )
 
         assert git_ops.discard_to(proj, start, "row D4") is False
-        after = (_head(root), _repo_view(root), _out(root, "diff"),
-                 (proj / "app.py").read_text(), (proj / "untracked.py").read_text())
+        after = (
+            _head(root),
+            _repo_view(root),
+            _out(root, "diff"),
+            (proj / "app.py").read_text(),
+            (proj / "untracked.py").read_text(),
+        )
         assert after == before
-        assert (root / "other" / "notes.txt").read_text() == "v2 committed by the user\n"
+        assert (
+            root / "other" / "notes.txt"
+        ).read_text() == "v2 committed by the user\n"
 
     def test_row_D4_inside_commit_discards(self, sub):
         root, proj, start = sub
@@ -958,8 +1016,11 @@ class TestDiscardInSubdirectory:
         assert git_ops.discard_to(proj, start, "row D6") is False
         assert _head(root) == start
         staged = _out(root, "diff", "--cached", "--name-status").splitlines()
-        assert sorted(staged) == ["A\tpkg/app/added.py", "D\tpkg/app/gone.py",
-                                  "M\tpkg/app/app.py"]
+        assert sorted(staged) == [
+            "A\tpkg/app/added.py",
+            "D\tpkg/app/gone.py",
+            "M\tpkg/app/app.py",
+        ]
         assert (proj / "app.py").read_text() == "x = 3\n"
         assert (proj / "added.py").exists()
         assert (proj / "untracked.py").exists()
@@ -1008,7 +1069,9 @@ class TestSaveWipRef:
         (repo / "attempt.txt").write_text("x\n")
         assert git_ops.save_wip_ref(repo, ref, "wip") == ref
         assert git_ops.save_wip_ref(repo, ref, "wip") == ref
-        refs = _git(repo, "for-each-ref", "--format=%(refname)", "refs/buildme/wip/").stdout
+        refs = _git(
+            repo, "for-each-ref", "--format=%(refname)", "refs/buildme/wip/"
+        ).stdout
         assert refs.split() == [ref]
 
     def test_a_ref_outside_the_wip_namespace_is_refused(self, tmp_path):
@@ -1028,14 +1091,22 @@ class TestSaveWipRef:
         ref = "refs/buildme/wip/calc/r1-code-block1"
 
         original = git_ops._run
+
         def fail_commit_tree(argv, **kwargs):
             if argv[:2] == ["git", "commit-tree"]:
                 return git_ops.GitResult(argv, 1, "", "object write failed")
             return original(argv, **kwargs)
+
         monkeypatch.setattr(git_ops, "_run", fail_commit_tree)
         assert git_ops.save_wip_ref(repo, ref, "wip") is None
-        assert subprocess.run(["git", "rev-parse", "--verify", "-q", ref],
-                              cwd=str(repo), capture_output=True).returncode != 0
+        assert (
+            subprocess.run(
+                ["git", "rev-parse", "--verify", "-q", ref],
+                cwd=str(repo),
+                capture_output=True,
+            ).returncode
+            != 0
+        )
         assert _git(repo, "rev-parse", "HEAD").stdout.strip() == head
         assert (repo / "attempt.txt").read_text() == "unsaved\n"
 
@@ -1060,6 +1131,7 @@ def _gone(pid: int, wait: float = 5.0) -> bool:
     """True once *pid* no longer runs (gone, or a zombie nobody reaped yet)."""
     import os
     import time
+
     deadline = time.monotonic() + wait
     while time.monotonic() < deadline:
         try:
@@ -1076,7 +1148,9 @@ def _gone(pid: int, wait: float = 5.0) -> bool:
 
 
 # The pr skill's seam is refused by conftest; it is the same one-line call to `_run_skill`.
-@pytest.mark.parametrize("seam", ["_run_review_skill", "_run_walkthrough_skill", "_run_skill"])
+@pytest.mark.parametrize(
+    "seam", ["_run_review_skill", "_run_walkthrough_skill", "_run_skill"]
+)
 def test_a_skill_timeout_kills_the_launchers_child_too(tmp_path, seam):
     """`uv run` starts the skill as its own child. A timeout that killed only
     `uv` left the review running: it kept the target's run lock (the next
@@ -1084,6 +1158,7 @@ def test_a_skill_timeout_kills_the_launchers_child_too(tmp_path, seam):
     failure, so the findings stage never resumed it."""
     import os
     import signal
+
     pidfile = tmp_path / "child.pid"
     # The launcher (sh) starts a child that outlives it unless it is killed.
     script = f"sleep 60 & echo $! > {pidfile}; wait"
@@ -1100,7 +1175,9 @@ def test_a_skill_timeout_kills_the_launchers_child_too(tmp_path, seam):
 
 
 def test_a_skill_run_returns_output_and_exit_code(tmp_path):
-    res = git_ops._run_review_skill(["sh", "-c", "echo out; echo err >&2; exit 3"], cwd=tmp_path)
+    res = git_ops._run_review_skill(
+        ["sh", "-c", "echo out; echo err >&2; exit 3"], cwd=tmp_path
+    )
     assert (res.returncode, res.stdout, res.stderr) == (3, "out\n", "err\n")
 
 
@@ -1127,8 +1204,15 @@ else:
 """
 
 
-@pytest.mark.parametrize("signame,mode", [("SIGTERM", "plain"), ("SIGHUP", "plain"),
-                                          ("SIGTERM", "asyncio"), ("SIGINT", "asyncio")])
+@pytest.mark.parametrize(
+    "signame,mode",
+    [
+        ("SIGTERM", "plain"),
+        ("SIGHUP", "plain"),
+        ("SIGTERM", "asyncio"),
+        ("SIGINT", "asyncio"),
+    ],
+)
 def test_a_signal_to_buildme_kills_the_skill_it_is_waiting_on(tmp_path, signame, mode):
     """Before, a SIGTERM or SIGHUP ended buildme at once with no cleanup, and
     the review, in its own session, kept running: it spent model budget and
@@ -1139,19 +1223,25 @@ def test_a_signal_to_buildme_kills_the_skill_it_is_waiting_on(tmp_path, signame,
     import signal
     import sys
     import time
+
     sig = getattr(signal, signame)
     pidfile = tmp_path / "child.pid"
     script = f"sleep 30 & echo $! > {pidfile}; wait"
     scripts_dir = Path(git_ops.__file__).resolve().parent.parent
     env = {**os.environ, "PYTHONPATH": str(scripts_dir)}
-    runner = subprocess.Popen([sys.executable, "-c", _SKILL_RUNNER, script, mode],
-                              cwd=str(scripts_dir), env=env,
-                              stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    runner = subprocess.Popen(
+        [sys.executable, "-c", _SKILL_RUNNER, script, mode],
+        cwd=str(scripts_dir),
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
     child = None
     try:
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline and not (
-                pidfile.exists() and pidfile.read_text().strip()):
+            pidfile.exists() and pidfile.read_text().strip()
+        ):
             time.sleep(0.05)
         child = int(pidfile.read_text())
         time.sleep(0.3)  # let the runner settle into the wait
@@ -1178,7 +1268,9 @@ def test_a_signal_to_buildme_kills_the_skill_it_is_waiting_on(tmp_path, signame,
 
 @pytest.mark.parametrize("whole_tree", [False, True])
 @pytest.mark.parametrize("rename", [False, True])
-def test_commit_preserves_staged_removal_and_recreated_worktree(tmp_path, whole_tree, rename):
+def test_commit_preserves_staged_removal_and_recreated_worktree(
+    tmp_path, whole_tree, rename
+):
     root, _ = _project_repo(tmp_path, subdir=False)
     if rename:
         _git(root, "mv", "app.py", "renamed.py")
@@ -1187,8 +1279,11 @@ def test_commit_preserves_staged_removal_and_recreated_worktree(tmp_path, whole_
     (root / "app.py").write_text("recreated working version\n")
     before, head = _repo_view(root), _head(root)
     with pytest.raises(git_ops.GitLifecycleError):
-        (git_ops.commit_tree(root, "build") if whole_tree else
-         git_ops.commit_paths(root, "plan", ["."]))
+        (
+            git_ops.commit_tree(root, "build")
+            if whole_tree
+            else git_ops.commit_paths(root, "plan", ["."])
+        )
     assert _repo_view(root) == before
     assert _head(root) == head
     assert "app.py" not in git_ops.index_entries(root)
@@ -1197,82 +1292,84 @@ def test_commit_preserves_staged_removal_and_recreated_worktree(tmp_path, whole_
 def test_agent_staging_then_edit_can_commit_after_restart(tmp_path):
     root, _ = _project_repo(tmp_path, subdir=False)
     with git_ops.agent_write_window(root):
-        (root / 'app.py').write_text('agent first\n')
-        _git(root, 'add', 'app.py')
-        (root / 'app.py').write_text('agent final\n')
+        (root / "app.py").write_text("agent first\n")
+        _git(root, "add", "app.py")
+        (root / "app.py").write_text("agent final\n")
     # Evidence is on disk, not in a process-global ownership cache.
-    assert git_ops.commit_tree(root, 'agent implementation')
-    assert _out(root, 'show', 'HEAD:app.py') == 'agent final\n'
+    assert git_ops.commit_tree(root, "agent implementation")
+    assert _out(root, "show", "HEAD:app.py") == "agent final\n"
     assert git_ops.tree_is_clean(root)
 
 
 def test_agent_write_window_never_claims_existing_user_staging(tmp_path):
     root, _ = _project_repo(tmp_path, subdir=False)
-    (root / 'app.py').write_text('user staged\n')
-    _git(root, 'add', 'app.py')
-    (root / 'app.py').write_text('user working\n')
+    (root / "app.py").write_text("user staged\n")
+    _git(root, "add", "app.py")
+    (root / "app.py").write_text("user working\n")
     with git_ops.agent_write_window(root):
-        (root / 'app.py').write_text('agent edit\n')
-    with pytest.raises(git_ops.GitLifecycleError, match='staged and working'):
-        git_ops.commit_tree(root, 'must refuse')
-    assert _out(root, 'show', ':app.py') == 'user staged\n'
-    assert (root / 'app.py').read_text() == 'agent edit\n'
+        (root / "app.py").write_text("agent edit\n")
+    with pytest.raises(git_ops.GitLifecycleError, match="staged and working"):
+        git_ops.commit_tree(root, "must refuse")
+    assert _out(root, "show", ":app.py") == "user staged\n"
+    assert (root / "app.py").read_text() == "agent edit\n"
 
 
 def test_later_external_staging_invalidates_agent_ownership(tmp_path):
     root, _ = _project_repo(tmp_path, subdir=False)
     with git_ops.agent_write_window(root):
-        (root / 'app.py').write_text('agent staged\n')
-        _git(root, 'add', 'app.py')
-    (root / 'app.py').write_text('user staged later\n')
-    _git(root, 'add', 'app.py')
-    (root / 'app.py').write_text('user working later\n')
-    with pytest.raises(git_ops.GitLifecycleError, match='staged and working'):
-        git_ops.commit_tree(root, 'must refuse')
-    assert _out(root, 'show', ':app.py') == 'user staged later\n'
+        (root / "app.py").write_text("agent staged\n")
+        _git(root, "add", "app.py")
+    (root / "app.py").write_text("user staged later\n")
+    _git(root, "add", "app.py")
+    (root / "app.py").write_text("user working later\n")
+    with pytest.raises(git_ops.GitLifecycleError, match="staged and working"):
+        git_ops.commit_tree(root, "must refuse")
+    assert _out(root, "show", ":app.py") == "user staged later\n"
 
 
 def test_unstaged_user_edit_after_agent_window_invalidates_ownership(tmp_path):
     root, _ = _project_repo(tmp_path, subdir=False)
     with git_ops.agent_write_window(root):
-        (root / 'app.py').write_text('agent staged\n')
-        _git(root, 'add', 'app.py')
-        (root / 'app.py').write_text('agent working\n')
-    (root / 'app.py').write_text('user after stop\n')
+        (root / "app.py").write_text("agent staged\n")
+        _git(root, "add", "app.py")
+        (root / "app.py").write_text("agent working\n")
+    (root / "app.py").write_text("user after stop\n")
     before, head = _repo_view(root), _head(root)
-    with pytest.raises(git_ops.GitLifecycleError, match='staged and working'):
-        git_ops.commit_tree(root, 'must refuse')
+    with pytest.raises(git_ops.GitLifecycleError, match="staged and working"):
+        git_ops.commit_tree(root, "must refuse")
     assert _repo_view(root) == before
     assert _head(root) == head
 
 
 def test_unrecorded_staging_names_paths_and_can_be_resolved_explicitly(tmp_path):
-    repo = make_repo(tmp_path / 'repo')
-    source = repo / 'README.md'
-    source.write_text('staged before interruption\n')
-    _git(repo, 'add', 'README.md')
-    source.write_text('working after interruption\n')
-    with pytest.raises(GitLifecycleError, match='README.md') as stopped:
-        git_ops.commit_tree(repo, 'agent update')
-    assert 'git diff --cached' in str(stopped.value)
-    assert _git(repo, 'show', ':README.md').stdout == 'staged before interruption\n'
-    assert source.read_text() == 'working after interruption\n'
+    repo = make_repo(tmp_path / "repo")
+    source = repo / "README.md"
+    source.write_text("staged before interruption\n")
+    _git(repo, "add", "README.md")
+    source.write_text("working after interruption\n")
+    with pytest.raises(GitLifecycleError, match="README.md") as stopped:
+        git_ops.commit_tree(repo, "agent update")
+    assert "git diff --cached" in str(stopped.value)
+    assert _git(repo, "show", ":README.md").stdout == "staged before interruption\n"
+    assert source.read_text() == "working after interruption\n"
     # The documented action explicitly selects the working version.
-    _git(repo, 'add', 'README.md')
-    assert git_ops.commit_tree(repo, 'chosen working version')
-    assert _git(repo, 'show', 'HEAD:README.md').stdout == 'working after interruption\n'
+    _git(repo, "add", "README.md")
+    assert git_ops.commit_tree(repo, "chosen working version")
+    assert _git(repo, "show", "HEAD:README.md").stdout == "working after interruption\n"
 
 
 def test_commits_never_invoke_test_runner(tmp_path, monkeypatch):
-    repo = make_repo(tmp_path / 'repo')
-    monkeypatch.setattr('build_pipeline.gates.run_test_suite',
-                        lambda *a, **kw: pytest.fail('commit ran the test suite'))
-    (repo / 'specs').mkdir()
+    repo = make_repo(tmp_path / "repo")
+    monkeypatch.setattr(
+        "build_pipeline.gates.run_test_suite",
+        lambda *a, **kw: pytest.fail("commit ran the test suite"),
+    )
+    (repo / "specs").mkdir()
     # Old declarations are inert, even globs; Git operations do not parse config.
-    (repo / 'specs/config.yaml').write_text('test_outputs: ["out/*"]\n')
-    (repo / 'out').mkdir()
-    (repo / 'out/report.txt').write_text('report')
+    (repo / "specs/config.yaml").write_text('test_outputs: ["out/*"]\n')
+    (repo / "out").mkdir()
+    (repo / "out/report.txt").write_text("report")
     assert not git_ops.tree_is_clean(repo)
-    assert git_ops.commit_tree(repo, 'commit inputs')
+    assert git_ops.commit_tree(repo, "commit inputs")
     assert git_ops.tree_is_clean(repo)
-    assert git_ops.commit_tree(repo, 'no changes') is None
+    assert git_ops.commit_tree(repo, "no changes") is None

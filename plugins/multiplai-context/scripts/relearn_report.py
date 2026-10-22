@@ -36,27 +36,38 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         description="Rules memory already held that a session derived again.",
     )
     parser.add_argument(
-        "--limit", type=int, default=20,
+        "--limit",
+        type=int,
+        default=20,
         help="rows to print; 0 for all (default: 20)",
     )
     parser.add_argument(
-        "--all-kinds", action="store_true",
+        "--all-kinds",
+        action="store_true",
         help="include FACT and DECISION drops, not just RULE",
     )
     parser.add_argument(
-        "--since", metavar="YYYY-MM-DD", default="",
+        "--since",
+        metavar="YYYY-MM-DD",
+        default="",
         help="ignore drops logged before this date",
     )
     parser.add_argument(
-        "--json", action="store_true", dest="as_json",
+        "--json",
+        action="store_true",
+        dest="as_json",
         help="emit JSON instead of the markdown section",
     )
     parser.add_argument(
-        "--rejections", type=Path, default=None,
+        "--rejections",
+        type=Path,
+        default=None,
         help="override the rejection log path (testing)",
     )
     parser.add_argument(
-        "--utilisation", type=Path, default=None,
+        "--utilisation",
+        type=Path,
+        default=None,
         help="override the utilisation log path (testing)",
     )
     return parser.parse_args(argv)
@@ -80,22 +91,33 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     if args.as_json:
-        print(json.dumps([
-            {
-                "count": g.count,
-                "target": g.target,
-                "title": g.title,
-                "verdict": g.verdict,
-                "evidence": g.evidence,
-                "dates": g.dates,
-                "occurrences": [
-                    {"title": o.title, "source": o.source, "ts": o.ts,
-                     "kind": o.kind, "judge_reason": o.judge_reason}
-                    for o in g.occurrences
+        print(
+            json.dumps(
+                [
+                    {
+                        "count": g.count,
+                        "target": g.target,
+                        "title": g.title,
+                        "verdict": g.verdict,
+                        "evidence": g.evidence,
+                        "dates": g.dates,
+                        "occurrences": [
+                            {
+                                "title": o.title,
+                                "source": o.source,
+                                "ts": o.ts,
+                                "kind": o.kind,
+                                "judge_reason": o.judge_reason,
+                            }
+                            for o in g.occurrences
+                        ],
+                    }
+                    for g in groups
                 ],
-            }
-            for g in groups
-        ], indent=2, ensure_ascii=False))
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
         return 0
 
     limit = len(groups) if args.limit == 0 else args.limit

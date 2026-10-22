@@ -1,6 +1,5 @@
 """VERIFY prompt — per-claim verdicts from verification-cycle findings."""
 
-
 VERIFY_VERDICTS_PROMPT = """You are the VERIFICATION stage of a research pipeline. \
 Earlier analysis flagged specific claims as suspect (load-bearing single-source \
 claims, possible conflations, or convenience-bias risks). Targeted searches were \

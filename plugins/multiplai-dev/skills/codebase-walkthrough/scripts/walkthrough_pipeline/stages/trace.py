@@ -99,9 +99,17 @@ def _view_handler(state: WalkState, url: SymbolEntry) -> tuple[str, str] | None:
     if not parts:
         return None
     name, qualifier = parts[-1], parts[-2] if len(parts) > 1 else ""
-    found = [e for e in state.symbols if e.kind in ("function", "class") and e.name == name and _rel(state, e.path)]
+    found = [
+        e
+        for e in state.symbols
+        if e.kind in ("function", "class") and e.name == name and _rel(state, e.path)
+    ]
     if qualifier:
-        found = [e for e in found if posixpath.splitext(posixpath.basename(e.path))[0] == qualifier] or found
+        found = [
+            e
+            for e in found
+            if posixpath.splitext(posixpath.basename(e.path))[0] == qualifier
+        ] or found
     return (_rel(state, found[0].path), name) if len(found) == 1 else None
 
 
@@ -125,12 +133,18 @@ def _matching_route(state: WalkState, route: str) -> SymbolEntry | None:
         return found
     want = route.strip("/")
     urls = [e for e in state.symbols if e.kind == "url" and e.name.strip("/")]
-    ends = [e for e in urls if want == e.name.strip("/") or want.endswith("/" + e.name.strip("/"))]
+    ends = [
+        e
+        for e in urls
+        if want == e.name.strip("/") or want.endswith("/" + e.name.strip("/"))
+    ]
     return max(ends, key=lambda e: len(e.name.strip("/")), default=None)
 
 
 def _task(state: WalkState, task: str) -> SymbolEntry | None:
-    return next((e for e in state.symbols if e.kind == "celery-task" and e.name == task), None)
+    return next(
+        (e for e in state.symbols if e.kind == "celery-task" and e.name == task), None
+    )
 
 
 def web_seeds(state: WalkState) -> list[Seed]:
@@ -145,21 +159,40 @@ def web_seeds(state: WalkState) -> list[Seed]:
             seeds.append(seed)
 
     for e in urls:
-        hay = (e.name + " " + e.detail.get("view", "") + " " + e.detail.get("url_name", "")).lower()
+        hay = (
+            e.name + " " + e.detail.get("view", "") + " " + e.detail.get("url_name", "")
+        ).lower()
         if "webhook" in hay or "wbhk" in hay:
             add("route:" + e.name, _route_seed(state, e, _route_name(e.name)))
     for r in state.references:
         if r.kind == "http-route" and r.repo != state.target.repo_key:
             url = _matching_route(state, r.symbol)
             if url is not None:
-                add("route:" + url.name, _route_seed(state, url, f"{r.repo}: {_route_name(r.symbol)}"))
+                add(
+                    "route:" + url.name,
+                    _route_seed(state, url, f"{r.repo}: {_route_name(r.symbol)}"),
+                )
     for r in state.references:
         if r.kind == "celery-name":
             task, name = _task(state, r.symbol), f"{r.symbol} (beat)"
-            if task is not None and task.detail.get("function") and _rel(state, task.path):
-                add("task:" + r.symbol, Seed(path=_rel(state, task.path), symbol=task.detail["function"], name=name))
+            if (
+                task is not None
+                and task.detail.get("function")
+                and _rel(state, task.path)
+            ):
+                add(
+                    "task:" + r.symbol,
+                    Seed(
+                        path=_rel(state, task.path),
+                        symbol=task.detail["function"],
+                        name=name,
+                    ),
+                )
             elif _rel(state, r.path):
-                add("task:" + r.symbol, Seed(path=_rel(state, r.path), line=r.line, name=name))
+                add(
+                    "task:" + r.symbol,
+                    Seed(path=_rel(state, r.path), line=r.line, name=name),
+                )
     for e in urls:
         add("route:" + e.name, _route_seed(state, e, _route_name(e.name)))
     return seeds
@@ -178,13 +211,20 @@ def known_places(state: WalkState) -> list[Location]:
             found.append((r.kind, _task(state, r.symbol)))
     found += [(e.kind, e) for e in state.symbols if e.kind == "url"]
     found += [(e.kind, e) for e in state.symbols if e.kind == "celery-task"]
-    found += [(r.kind, r) for r in state.references if r.kind == "celery-name" and r.repo == state.target.repo_key]
+    found += [
+        (r.kind, r)
+        for r in state.references
+        if r.kind == "celery-name" and r.repo == state.target.repo_key
+    ]
     out: list[Location] = []
     for kind, e in found:
         rel = _rel(state, e.path) if e is not None else None
         if not rel:
             # Only the type: the edge's text is the repository's.
-            log.info("known places: left out a %s edge with no location in the target repo", kind)
+            log.info(
+                "known places: left out a %s edge with no location in the target repo",
+                kind,
+            )
             continue
         place = Location(path=rel, line=e.line)
         if place not in out:
@@ -201,6 +241,7 @@ def _resolver(state: WalkState) -> code_facts.Resolve:
         if not rel or rel.startswith(("/", "../")) or rel in (".", ".."):
             return None
         return repo.path, repo.head_sha, rel
+
     return resolve
 
 
@@ -211,6 +252,7 @@ FATAL = (sdk.RepoTrustError, budget.BudgetExceededError)
 @dataclass
 class _FatalLatch:
     """The first trust or budget stop raised by a trace call, kept so no later call is made."""
+
     exc: BaseException | None = None
 
 
@@ -224,19 +266,32 @@ def _trace_call(ctx: RunContext, root: Path, latch: _FatalLatch) -> code_facts.C
             raise latch.exc
         try:
             return await sdk.agent_call_structured(
-                prompt, schema, allowed_tools=sdk.TRACE_TOOLS, model=cfg.trace_model, effort=cfg.effort,
-                max_turns=cfg.max_turns, cwd=str(root), budget_label="trace", read_roots=[str(root)])
+                prompt,
+                schema,
+                allowed_tools=sdk.TRACE_TOOLS,
+                model=cfg.trace_model,
+                effort=cfg.effort,
+                max_turns=cfg.max_turns,
+                cwd=str(root),
+                budget_label="trace",
+                read_roots=[str(root)],
+            )
         except FATAL as e:
             latch.exc = e
             raise
+
     return call
 
 
 def rewind_legacy_trace(state: WalkState) -> WalkState:
     """A human-mode state past `trace` with neither paths nor a paths error was written before path
     finding: send it back to the stage before `trace`, so a resume traces instead of rendering no paths."""
-    if (state.options.get("mode") != "agent" and state.past("trace") and state.paths is None
-            and state.paths_error is None):
+    if (
+        state.options.get("mode") != "agent"
+        and state.past("trace")
+        and state.paths is None
+        and state.paths_error is None
+    ):
         state.stage = STAGES[STAGES.index("trace") - 1]
     return state
 
@@ -283,8 +338,10 @@ async def run_trace(state: WalkState, ctx: RunContext) -> WalkState:
     if latch.exc is not None:
         raise latch.exc
     state.paths, state.paths_error = result, None
-    ctx.counts = {"paths": len(result.paths),
-                  "cut_short": sum(1 for p in result.paths if p.stops_at is not None),
-                  "left_out": left_out_count(result)}
+    ctx.counts = {
+        "paths": len(result.paths),
+        "cut_short": sum(1 for p in result.paths if p.stops_at is not None),
+        "left_out": left_out_count(result),
+    }
     state.stage = "trace"
     return state

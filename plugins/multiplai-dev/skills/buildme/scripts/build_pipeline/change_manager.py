@@ -241,14 +241,25 @@ class ChangeManager:
         log.info("Created change '%s' at %s", name, change_dir)
         return change_dir
 
-    def artifact_status(self, change_dir: Path, stale: list[str] | None = None) -> dict[str, ArtifactStatus]:
+    def artifact_status(
+        self, change_dir: Path, stale: list[str] | None = None
+    ) -> dict[str, ArtifactStatus]:
         """Check which artifacts are done/ready/blocked."""
         result: dict[str, ArtifactStatus] = {}
-        done = {name for name, generates in INPUTS.items() if self._artifact_exists(change_dir, generates)}
+        done = {
+            name
+            for name, generates in INPUTS.items()
+            if self._artifact_exists(change_dir, generates)
+        }
         for artifact_id, spec in ARTIFACT_DAG.items():
-            if not all(dep in done or result.get(dep) == ArtifactStatus.DONE for dep in spec["requires"]):
+            if not all(
+                dep in done or result.get(dep) == ArtifactStatus.DONE
+                for dep in spec["requires"]
+            ):
                 result[artifact_id] = ArtifactStatus.BLOCKED
-            elif artifact_id not in (stale or []) and self._artifact_exists(change_dir, spec["generates"]):
+            elif artifact_id not in (stale or []) and self._artifact_exists(
+                change_dir, spec["generates"]
+            ):
                 result[artifact_id] = ArtifactStatus.DONE
             else:
                 result[artifact_id] = ArtifactStatus.READY
@@ -258,8 +269,11 @@ class ChangeManager:
         """The required inputs (`INPUTS`) not on disk, as their file patterns.
         Requirements count only when every capability the proposal names has
         a valid file."""
-        return [generates for generates in INPUTS.values()
-                if not self._artifact_exists(change_dir, generates)]
+        return [
+            generates
+            for generates in INPUTS.values()
+            if not self._artifact_exists(change_dir, generates)
+        ]
 
     def ready_artifacts(self, change_dir: Path) -> list[str]:
         """Return IDs of artifacts that can be created next."""
@@ -313,7 +327,9 @@ class ChangeManager:
             dep_generates = _generates(dep_id)
             if "*" in dep_generates:
                 matches = list(change_dir.glob(dep_generates))
-                dep_paths[dep_id] = ", ".join(str(m.relative_to(change_dir)) for m in matches)
+                dep_paths[dep_id] = ", ".join(
+                    str(m.relative_to(change_dir)) for m in matches
+                )
             else:
                 dep_paths[dep_id] = dep_generates
 
@@ -335,13 +351,15 @@ class ChangeManager:
             if d.is_dir() and (d / ".change.yaml").exists():
                 status = self.artifact_status(d)
                 done = sum(1 for s in status.values() if s == ArtifactStatus.DONE)
-                result.append({
-                    "name": d.name,
-                    "path": str(d),
-                    "artifacts_done": done,
-                    "artifacts_total": len(ARTIFACT_DAG),
-                    "is_complete": done == len(ARTIFACT_DAG),
-                })
+                result.append(
+                    {
+                        "name": d.name,
+                        "path": str(d),
+                        "artifacts_done": done,
+                        "artifacts_total": len(ARTIFACT_DAG),
+                        "is_complete": done == len(ARTIFACT_DAG),
+                    }
+                )
         return result
 
     def archive_change(self, change_dir: Path, merge_specs: bool = True) -> Path:
@@ -358,7 +376,9 @@ class ChangeManager:
                 return False
             capabilities = expected_capabilities(proposal.read_text())
             return bool(capabilities) and all(
-                valid_requirement(change_dir / "requirements" / f"{name}.md") for name in capabilities)
+                valid_requirement(change_dir / "requirements" / f"{name}.md")
+                for name in capabilities
+            )
         path = change_dir / generates
         return path.is_file() and bool(path.read_text().strip())
 

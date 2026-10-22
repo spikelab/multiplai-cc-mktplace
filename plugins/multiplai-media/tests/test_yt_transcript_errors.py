@@ -15,6 +15,7 @@ caller tell the user a video has no subtitles when nothing ever looked.
 These run the real bash script against a configurable fake yt-dlp on PATH — no
 network, no SSH, no real downloads.
 """
+
 from __future__ import annotations
 
 import shutil
@@ -95,8 +96,22 @@ exit 0
 """
 
 _SHIM_TOOLS = [
-    "uname", "dirname", "basename", "cat", "grep", "sed", "tr", "head", "tail",
-    "find", "wc", "mktemp", "rm", "mkdir", "du", "cut",
+    "uname",
+    "dirname",
+    "basename",
+    "cat",
+    "grep",
+    "sed",
+    "tr",
+    "head",
+    "tail",
+    "find",
+    "wc",
+    "mktemp",
+    "rm",
+    "mkdir",
+    "du",
+    "cut",
 ]
 
 
@@ -156,7 +171,11 @@ def _run(tmp_path: Path, args: list[str], env: dict[str, str]):
     run_dir.mkdir(exist_ok=True)
     res = subprocess.run(
         [_BASH, str(_YT), _URL, *args],
-        env=env, cwd=run_dir, capture_output=True, text=True, timeout=60,
+        env=env,
+        cwd=run_dir,
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
     return res, run_dir
 

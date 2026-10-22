@@ -65,30 +65,32 @@ gcloud compute instances create batch-processor \
 # Deploy a container to Cloud Run using Python client
 from google.cloud import run_v2
 
+
 def deploy_cloud_run_service(project_id, service_name, image_url, region="us-central1"):
     client = run_v2.ServicesClient()
 
     service = run_v2.Service(
         name=f"projects/{project_id}/locations/{region}/services/{service_name}",
         template=run_v2.RevisionTemplate(
-            containers=[run_v2.Container(
-                image=image_url,
-                resources=run_v2.ResourceRequirements(
-                    limits={"cpu": "1", "memory": "512Mi"}
-                ),
-                ports=[run_v2.ContainerPort(container_port=8080)]
-            )],
+            containers=[
+                run_v2.Container(
+                    image=image_url,
+                    resources=run_v2.ResourceRequirements(
+                        limits={"cpu": "1", "memory": "512Mi"}
+                    ),
+                    ports=[run_v2.ContainerPort(container_port=8080)],
+                )
+            ],
             scaling=run_v2.RevisionScaling(
-                min_instance_count=0,
-                max_instance_count=100
-            )
-        )
+                min_instance_count=0, max_instance_count=100
+            ),
+        ),
     )
 
     request = run_v2.CreateServiceRequest(
         parent=f"projects/{project_id}/locations/{region}",
         service=service,
-        service_id=service_name
+        service_id=service_name,
     )
 
     operation = client.create_service(request=request)
@@ -200,6 +202,7 @@ gcloud run services update-traffic api-service \
 ```python
 from google.cloud import compute_v1
 
+
 def create_preemptible_instance(project_id, zone, instance_name):
     client = compute_v1.InstancesClient()
 
@@ -213,9 +216,7 @@ def create_preemptible_instance(project_id, zone, instance_name):
         name=instance_name,
         machine_type=f"zones/{zone}/machineTypes/n2-standard-4",
         scheduling=compute_v1.Scheduling(
-            preemptible=True,
-            automatic_restart=False,
-            on_host_maintenance="TERMINATE"
+            preemptible=True, automatic_restart=False, on_host_maintenance="TERMINATE"
         ),
         disks=[
             compute_v1.AttachedDisk(
@@ -223,22 +224,20 @@ def create_preemptible_instance(project_id, zone, instance_name):
                 boot=True,
                 initialize_params=compute_v1.AttachedDiskInitializeParams(
                     source_image="projects/debian-cloud/global/images/family/debian-11"
-                )
+                ),
             )
         ],
         metadata=compute_v1.Metadata(
-            items=[
-                compute_v1.Items(key="shutdown-script", value=shutdown_script)
-            ]
+            items=[compute_v1.Items(key="shutdown-script", value=shutdown_script)]
         ),
         network_interfaces=[
             compute_v1.NetworkInterface(
                 network="global/networks/default",
                 access_configs=[
                     compute_v1.AccessConfig(name="External NAT", type_="ONE_TO_ONE_NAT")
-                ]
+                ],
             )
-        ]
+        ],
     )
 
     operation = client.insert(project=project_id, zone=zone, instance_resource=instance)
@@ -444,10 +443,8 @@ from google.cloud import run_v2
 
 service = run_v2.Service(
     template=run_v2.RevisionTemplate(
-        containers=[run_v2.Container(
-            image="gcr.io/project/api:latest"
-        )],
-        max_instance_request_concurrency=10  # Limit concurrent requests per instance
+        containers=[run_v2.Container(image="gcr.io/project/api:latest")],
+        max_instance_request_concurrency=10,  # Limit concurrent requests per instance
     )
 )
 ```

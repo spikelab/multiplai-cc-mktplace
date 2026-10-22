@@ -62,13 +62,33 @@ class CostlyReview(FakeReview):
     fixer's own calls in the round cost *own*. Each round also writes a
     review of another PR, which is not this fixer's spend."""
 
-    def __init__(self, pr, repo: Path, ledger: Path, *, cost: float, own: float, slug: str = f"repo--pr-{PR}"):
+    def __init__(
+        self,
+        pr,
+        repo: Path,
+        ledger: Path,
+        *,
+        cost: float,
+        own: float,
+        slug: str = f"repo--pr-{PR}",
+    ):
         super().__init__(pr, new_threads_per_round=1)
-        self.repo, self.ledger, self.cost, self.own, self.slug = repo, ledger, cost, own, slug
+        self.repo, self.ledger, self.cost, self.own, self.slug = (
+            repo,
+            ledger,
+            cost,
+            own,
+            slug,
+        )
 
     def review(self, run, rnd):
-        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.repo, capture_output=True,
-                              text=True, check=True).stdout.strip()
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=self.repo,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
         budget.add_process_spend(self.own, 10)
         _ledger(self.ledger, self.slug, f"/reviews/r{rnd.number}", head, self.cost)
         _ledger(self.ledger, "repo--pr-999", f"/other/r{rnd.number}", head, 50.0)
@@ -79,7 +99,12 @@ def _ledger(ledger: Path, slug: str, target: str, head: str, cost: float) -> Non
     ledger.parent.mkdir(parents=True, exist_ok=True)
     with ledger.open("a") as f:
         for event in ("started", "finished"):
-            entry = {"event": event, "slug": slug, "target_dir": target, "head_sha": head}
+            entry = {
+                "event": event,
+                "slug": slug,
+                "target_dir": target,
+                "head_sha": head,
+            }
             if event == "finished":
                 entry["run"] = {"cost_usd": cost, "started_at": target}
             f.write(json.dumps(entry) + "\n")
@@ -92,7 +117,9 @@ class TestSpendCeiling:
         self.ledger = use_workspace(monkeypatch, tmp_path) / "reviews" / "ledger.jsonl"
 
     @pytest.mark.asyncio
-    async def test_it_stops_between_rounds_once_its_spend_reaches_the_ceiling(self, built, fake_pr):
+    async def test_it_stops_between_rounds_once_its_spend_reaches_the_ceiling(
+        self, built, fake_pr
+    ):
         """Round 1 costs $0.70 (its own $0.10 and its review's $0.60), under
         the $1 ceiling, so round 2 runs; after it $1.40 is spent and no round
         3 starts. The PR's review from before the fixer started ($9) and
@@ -110,18 +137,28 @@ class TestSpendCeiling:
         assert [r.number for r in loop.load_state(run).findings.rounds] == [1, 2]
 
     @pytest.mark.asyncio
-    async def test_with_an_origin_its_reviews_are_read_under_the_origins_slug(self, built, fake_pr, tmp_path):
+    async def test_with_an_origin_its_reviews_are_read_under_the_origins_slug(
+        self, built, fake_pr, tmp_path
+    ):
         """With an `origin` remote, the PR's reviews are in the ledger under
         `<owner>-<repo>--pr-<n>` (here `o-r`), as the epic counts them, not
         under the checkout's directory name, whose $50 line is not this
         fixer's spend."""
         repo, change, config = built
         config.findings.max_rounds = 5
-        subprocess.run(["git", "init", "-q", "--bare", str(tmp_path / "o" / "r.git")], check=True)
-        subprocess.run(["git", "remote", "add", "origin", str(tmp_path / "o" / "r.git")], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "init", "-q", "--bare", str(tmp_path / "o" / "r.git")], check=True
+        )
+        subprocess.run(
+            ["git", "remote", "add", "origin", str(tmp_path / "o" / "r.git")],
+            cwd=repo,
+            check=True,
+        )
         _ledger(self.ledger, f"repo--pr-{PR}", "/reviews/dir-name", "0" * 40, 50.0)
         fake_pr.add_thread("alice", "first finding", fid="f0")
-        review = CostlyReview(fake_pr, repo, self.ledger, cost=0.6, own=0.1, slug=f"o-r--pr-{PR}")
+        review = CostlyReview(
+            fake_pr, repo, self.ledger, cost=0.6, own=0.1, slug=f"o-r--pr-{PR}"
+        )
         run, lines = _run(config, change, triage_call=FakeTriage({}), review=review)
         run.max_usd = 1.0
         assert await loop.run_findings(run) == 0
@@ -129,7 +166,9 @@ class TestSpendCeiling:
         assert review.calls == 2
 
     @pytest.mark.asyncio
-    async def test_float_noise_does_not_buy_a_round_past_the_ceiling(self, built, fake_pr):
+    async def test_float_noise_does_not_buy_a_round_past_the_ceiling(
+        self, built, fake_pr
+    ):
         """$0.10 of its own and a $0.70 review make $0.80, the ceiling; added
         as floats they make 0.7999999999999999. The spend is rounded to the 6
         decimals `--max-usd` is passed with, as the epic rounds its own, so no
@@ -145,7 +184,9 @@ class TestSpendCeiling:
         assert review.calls == 1
 
     @pytest.mark.asyncio
-    async def test_a_round_that_leaves_nothing_to_act_on_ends_done_past_the_ceiling(self, built, fake_pr):
+    async def test_a_round_that_leaves_nothing_to_act_on_ends_done_past_the_ceiling(
+        self, built, fake_pr
+    ):
         """Round 1 costs $0.70, past the $0.50 ceiling, and its re-review posts
         nothing new: the fetch finds nothing to act on, so the loop ends
         `FINDINGS:DONE`, not `FINDINGS:BUDGET`, and the epic can use its
@@ -189,49 +230,98 @@ class TestSpendCeiling:
 
 def _findings_json(review_dir: Path) -> None:
     review_dir.mkdir(parents=True, exist_ok=True)
-    (review_dir / "findings.json").write_text(json.dumps({"findings": [
-        {"id": f"c-{s.lower()}", "topic": "code", "file": "calc.py", "severity": s, "status": "confirmed"}
-        for s in ("HIGH", "MEDIUM", "LOW")
-    ] + [{"id": "t-low", "topic": "tests", "file": "calc.py", "severity": "LOW", "status": "confirmed"},
-         {"id": "t-high", "topic": "tests", "file": "calc.py", "severity": "HIGH", "status": "confirmed"}]}))
+    (review_dir / "findings.json").write_text(
+        json.dumps(
+            {
+                "findings": [
+                    {
+                        "id": f"c-{s.lower()}",
+                        "topic": "code",
+                        "file": "calc.py",
+                        "severity": s,
+                        "status": "confirmed",
+                    }
+                    for s in ("HIGH", "MEDIUM", "LOW")
+                ]
+                + [
+                    {
+                        "id": "t-low",
+                        "topic": "tests",
+                        "file": "calc.py",
+                        "severity": "LOW",
+                        "status": "confirmed",
+                    },
+                    {
+                        "id": "t-high",
+                        "topic": "tests",
+                        "file": "calc.py",
+                        "severity": "HIGH",
+                        "status": "confirmed",
+                    },
+                ]
+            }
+        )
+    )
 
 
 class TestSeverities:
     def test_write_decisions_keeps_only_the_severities_asked_for(self, tmp_path):
         _findings_json(tmp_path)
-        got = json.loads(decisions.write_decisions(tmp_path, severities=("HIGH", "MEDIUM")).read_text())
+        got = json.loads(
+            decisions.write_decisions(
+                tmp_path, severities=("HIGH", "MEDIUM")
+            ).read_text()
+        )
         assert set(got) == {"c-high", "c-medium", "t-high"}
 
     def test_code_only_leaves_out_tests_findings(self, tmp_path):
         """What the epic blocks on (`epic.review.blockers`): Code findings at
         HIGH or MEDIUM, never a Tests finding, even one on a source file."""
         _findings_json(tmp_path)
-        got = json.loads(decisions.write_decisions(tmp_path, severities=("HIGH", "MEDIUM"),
-                                                   code_only=True).read_text())
+        got = json.loads(
+            decisions.write_decisions(
+                tmp_path, severities=("HIGH", "MEDIUM"), code_only=True
+            ).read_text()
+        )
         assert set(got) == {"c-high", "c-medium"}
-        got = json.loads(decisions.write_decisions(tmp_path, code_only=True).read_text())
+        got = json.loads(
+            decisions.write_decisions(tmp_path, code_only=True).read_text()
+        )
         assert set(got) == {"c-high", "c-medium", "c-low"}
 
     def test_the_epics_choice_matches_what_it_blocks_on(self, tmp_path):
         from build_pipeline.epic import fix, review
 
         _findings_json(tmp_path)
-        assert set(json.loads(fix.write_decisions(tmp_path).read_text())) == {"c-high", "c-medium"}
+        assert set(json.loads(fix.write_decisions(tmp_path).read_text())) == {
+            "c-high",
+            "c-medium",
+        }
         assert len(review.blockers(tmp_path)) == 2
 
     def test_without_severities_every_severity_is_kept(self, tmp_path):
         _findings_json(tmp_path)
         assert set(json.loads(decisions.write_decisions(tmp_path).read_text())) == {
-            "c-high", "c-medium", "c-low", "t-low", "t-high"}
+            "c-high",
+            "c-medium",
+            "c-low",
+            "t-low",
+            "t-high",
+        }
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("severities,code_only,posted", [
-        (("HIGH", "MEDIUM"), True, {"c-high", "c-medium"}),
-        (("HIGH", "MEDIUM"), False, {"c-high", "c-medium", "t-high"}),
-        (None, False, {"c-high", "c-medium", "c-low", "t-low", "t-high"}),
-    ], ids=["epic", "blocking", "all"])
-    async def test_the_rereview_posts_only_those_severities(self, built, fake_pr, tmp_path, severities,
-                                                           code_only, posted):
+    @pytest.mark.parametrize(
+        "severities,code_only,posted",
+        [
+            (("HIGH", "MEDIUM"), True, {"c-high", "c-medium"}),
+            (("HIGH", "MEDIUM"), False, {"c-high", "c-medium", "t-high"}),
+            (None, False, {"c-high", "c-medium", "c-low", "t-low", "t-high"}),
+        ],
+        ids=["epic", "blocking", "all"],
+    )
+    async def test_the_rereview_posts_only_those_severities(
+        self, built, fake_pr, tmp_path, severities, code_only, posted
+    ):
         repo, change, config = built
         config.findings.max_rounds = 1
         review_dir = tmp_path / "reviews" / "r1"
@@ -248,7 +338,13 @@ class TestSeverities:
                 seen.append(json.loads(Path(chosen).read_text()))
                 return True, ""
 
-        run, lines = _run(config, change, triage_call=FakeTriage({}), review=Review(fake_pr), decisions=None)
+        run, lines = _run(
+            config,
+            change,
+            triage_call=FakeTriage({}),
+            review=Review(fake_pr),
+            decisions=None,
+        )
         run.severities, run.code_only = severities, code_only
         assert await loop.run_findings(run) == 0
         assert [set(s) for s in seen] == [posted]
@@ -265,18 +361,42 @@ class TestCli:
         assert "--max-usd" in out and "--severities" in out and "--code-only" in out
 
     def test_they_parse(self):
-        args = build_parser().parse_args(["findings", "--pr", "1", "--max-usd", "3.5",
-                                          "--severities", "high,MEDIUM", "--code-only"])
-        assert (args.max_usd, args.severities, args.code_only) == (3.5, ("HIGH", "MEDIUM"), True)
+        args = build_parser().parse_args(
+            [
+                "findings",
+                "--pr",
+                "1",
+                "--max-usd",
+                "3.5",
+                "--severities",
+                "high,MEDIUM",
+                "--code-only",
+            ]
+        )
+        assert (args.max_usd, args.severities, args.code_only) == (
+            3.5,
+            ("HIGH", "MEDIUM"),
+            True,
+        )
         args = build_parser().parse_args(["findings", "--pr", "1"])
         assert (args.max_usd, args.severities, args.code_only) == (None, None, False)
 
     def test_severities_are_trimmed_upper_cased_and_kept_once(self):
-        args = build_parser().parse_args(["findings", "--pr", "1", "--severities", " high , MEDIUM,High,"])
+        args = build_parser().parse_args(
+            ["findings", "--pr", "1", "--severities", " high , MEDIUM,High,"]
+        )
         assert args.severities == ("HIGH", "MEDIUM")
 
-    @pytest.mark.parametrize("argv", [["--max-usd", "-1"], ["--max-usd", "abc"], ["--max-usd", "nan"],
-                                      ["--severities", "CRITICAL"], ["--severities", ""]])
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            ["--max-usd", "-1"],
+            ["--max-usd", "abc"],
+            ["--max-usd", "nan"],
+            ["--severities", "CRITICAL"],
+            ["--severities", ""],
+        ],
+    )
     def test_bad_values_are_refused(self, argv):
         with pytest.raises(SystemExit):
             build_parser().parse_args(["findings", "--pr", "1", *argv])
@@ -287,15 +407,40 @@ class TestCli:
         def gh(argv, cwd=None, timeout=None):
             if argv[:3] == ["gh", "repo", "view"]:
                 return git_ops.GitResult(argv, 0, REPO + "\n", "")
-            return git_ops.GitResult(argv, 0, json.dumps(
-                {"headRefName": "buildme/calc", "isCrossRepository": False}), "")
+            return git_ops.GitResult(
+                argv,
+                0,
+                json.dumps({"headRefName": "buildme/calc", "isCrossRepository": False}),
+                "",
+            )
 
         monkeypatch.setattr(git_ops, "_run_gh", gh)
-        run = cli.resolve(build_parser().parse_args(
-            ["findings", "--pr", str(PR), "--project-dir", str(repo), "--max-usd", "2.25",
-             "--severities", "HIGH,MEDIUM", "--code-only"]))
-        assert (run.max_usd, run.severities, run.code_only) == (2.25, ("HIGH", "MEDIUM"), True)
-        run = cli.resolve(build_parser().parse_args(["findings", "--pr", str(PR), "--project-dir", str(repo)]))
+        run = cli.resolve(
+            build_parser().parse_args(
+                [
+                    "findings",
+                    "--pr",
+                    str(PR),
+                    "--project-dir",
+                    str(repo),
+                    "--max-usd",
+                    "2.25",
+                    "--severities",
+                    "HIGH,MEDIUM",
+                    "--code-only",
+                ]
+            )
+        )
+        assert (run.max_usd, run.severities, run.code_only) == (
+            2.25,
+            ("HIGH", "MEDIUM"),
+            True,
+        )
+        run = cli.resolve(
+            build_parser().parse_args(
+                ["findings", "--pr", str(PR), "--project-dir", str(repo)]
+            )
+        )
         assert (run.max_usd, run.severities, run.code_only) == (None, None, False)
 
 
@@ -311,16 +456,32 @@ def test_the_epics_post_holds_only_the_severities_it_blocks_on(tmp_path, monkeyp
     Code finding and a Tests finding on a source file, neither of which the
     epic blocks on; the fixer is told the same for its re-reviews."""
     tests_high = {**high("f7"), "topic": "tests"}
-    reviews = {str(N): [{"findings": [high("f1"), high("f8", "MEDIUM"), high("f9", "LOW"), tests_high]}]}
+    reviews = {
+        str(N): [
+            {
+                "findings": [
+                    high("f1"),
+                    high("f8", "MEDIUM"),
+                    high("f9", "LOW"),
+                    tests_high,
+                ]
+            }
+        ]
+    }
     e = Epic(tmp_path, monkeypatch, reviews=reviews, fixes={str(N): [{"rounds": [{}]}]})
     assert e.run() == 3
     assert e.posted() == [{"f1": {"decision": "accept"}, "f8": {"decision": "accept"}}]
     [fixer] = e.fakes.fix_launches()
-    assert _opt(fixer["argv"], "--severities") == "HIGH,MEDIUM" and "--code-only" in fixer["argv"]
-    assert _opt(fixer["argv"], "--max-usd") is None          # no epic.max_usd: no ceiling
+    assert (
+        _opt(fixer["argv"], "--severities") == "HIGH,MEDIUM"
+        and "--code-only" in fixer["argv"]
+    )
+    assert _opt(fixer["argv"], "--max-usd") is None  # no epic.max_usd: no ceiling
 
 
-def test_a_fixer_stopped_at_the_epics_remaining_budget_stops_the_epic(tmp_path, monkeypatch, capsys):
+def test_a_fixer_stopped_at_the_epics_remaining_budget_stops_the_epic(
+    tmp_path, monkeypatch, capsys
+):
     """Defect 1. The fixer starts with $10 of the $20 left and is given that
     as `--max-usd`. It stops there (`FINDINGS:BUDGET`): the run launches
     nothing more and exits 3 with `EPIC:BUDGET`, the child is not parked, and
@@ -331,8 +492,11 @@ def test_a_fixer_stopped_at_the_epics_remaining_budget_stops_the_epic(tmp_path, 
 
     fixes = {str(N): [{"rounds": [{}], "budget": "10.000000"}, {}]}
     e = Epic(tmp_path, monkeypatch, answer=CHAIN, fixes=fixes, max_usd=20.0)
-    monkeypatch.setattr(coordinator.Coordinator, "spent",
-                        lambda self: (25.0 if any(a.result for a in e.fixes()) else 10.0, True))
+    monkeypatch.setattr(
+        coordinator.Coordinator,
+        "spent",
+        lambda self: (25.0 if any(a.result for a in e.fixes()) else 10.0, True),
+    )
     assert e.run() == 3
     assert "EPIC:BUDGET:25.00" in capsys.readouterr().out.splitlines()
     assert e.kinds() == ["build", "review", "post", "fix"]
@@ -343,7 +507,7 @@ def test_a_fixer_stopped_at_the_epics_remaining_budget_stops_the_epic(tmp_path, 
     assert "FINDINGS:BUDGET:1:10.000000" in fix.result["markers"]
     assert e.status()["status"] == "built" and e.status("b")["status"] == "waiting"
 
-    assert e.run() == 3                       # still over: nothing launched
+    assert e.run() == 3  # still over: nothing launched
     assert "EPIC:BUDGET:25.00" in capsys.readouterr().out.splitlines()
     assert e.kinds() == ["build", "review", "post", "fix"]
     assert len(e.fakes.fix_launches()) == 1 and len(e.fakes.post_launches()) == 1
@@ -364,8 +528,16 @@ def _fake_spend(monkeypatch, e: Epic, start: float, per_fix: float) -> None:
     `spend.attempts_spend` does not count it)."""
     from build_pipeline.epic import coordinator, records
 
-    monkeypatch.setattr(coordinator.Coordinator, "spent", lambda self: (
-        start + per_fix * sum(1 for a in records.attempts(e.dir) if a.kind == "fix" and a.result), True))
+    monkeypatch.setattr(
+        coordinator.Coordinator,
+        "spent",
+        lambda self: (
+            start
+            + per_fix
+            * sum(1 for a in records.attempts(e.dir) if a.kind == "fix" and a.result),
+            True,
+        ),
+    )
 
 
 def _fix_of(launch: dict) -> int:
@@ -384,9 +556,17 @@ def test_two_fixers_at_once_share_what_is_left(tmp_path, monkeypatch):
 
     monkeypatch.setattr(coordinator.Coordinator, "_held_back", lambda self: False)
     na, nb = pr_number("e-a"), pr_number("e-b")
-    reviews = {str(na): [{"findings": [high("f1")]}], str(nb): [{"findings": [high("g1")]}]}
-    fixes = {str(na): [{"block": True, "rounds": [{}]}], str(nb): [{"block": True, "rounds": [{}]}]}
-    e = Epic(tmp_path, monkeypatch, answer=TWO, reviews=reviews, fixes=fixes, max_usd=20.0)
+    reviews = {
+        str(na): [{"findings": [high("f1")]}],
+        str(nb): [{"findings": [high("g1")]}],
+    }
+    fixes = {
+        str(na): [{"block": True, "rounds": [{}]}],
+        str(nb): [{"block": True, "rounds": [{}]}],
+    }
+    e = Epic(
+        tmp_path, monkeypatch, answer=TWO, reviews=reviews, fixes=fixes, max_usd=20.0
+    )
     _fake_spend(monkeypatch, e, 10.0, 4.0)
     released: dict[int, float] = {}
     overlap: list[list[int]] = []
@@ -409,14 +589,21 @@ def test_two_fixers_at_once_share_what_is_left(tmp_path, monkeypatch):
                 released[n] = time.monotonic()
 
     monkeypatch.setattr(coordinator, "_tick", tick)
-    assert e.run() == 3 and sorted(merge_waiting()) == sorted([pr_url("e-a"), pr_url("e-b")])
+    assert e.run() == 3 and sorted(merge_waiting()) == sorted(
+        [pr_url("e-a"), pr_url("e-b")]
+    )
     assert overlap == []
     one, two = e.fakes.fix_launches()
-    assert (_opt(one["argv"], "--max-usd"), _opt(two["argv"], "--max-usd")) == ("10.000000", "6.000000")
+    assert (_opt(one["argv"], "--max-usd"), _opt(two["argv"], "--max-usd")) == (
+        "10.000000",
+        "6.000000",
+    )
     assert len(e.fakes.post_launches()) == 2
 
 
-def test_nothing_new_launches_while_running_fixers_hold_what_is_left(tmp_path, monkeypatch):
+def test_nothing_new_launches_while_running_fixers_hold_what_is_left(
+    tmp_path, monkeypatch
+):
     """Child a's fixer holds all that is left of `epic.max_usd`; child c,
     ready once b's review ends, is not built until a's fixer has ended, as
     its build would spend what a's fixer was given."""
@@ -424,17 +611,27 @@ def test_nothing_new_launches_while_running_fixers_hold_what_is_left(tmp_path, m
 
     from .epic_row_helpers import EpicSplitAnswer
 
-    answer = EpicSplitAnswer(single=False, reason="Three parts.", children=[child("a"), child("b"), child("c")])
+    answer = EpicSplitAnswer(
+        single=False,
+        reason="Three parts.",
+        children=[child("a"), child("b"), child("c")],
+    )
     na, nb = pr_number("e-a"), pr_number("e-b")
     reviews = {str(na): [{"findings": [high("f1")]}], str(nb): [{"block": True}]}
     fixes = {str(na): [{"block": True, "rounds": [{}]}]}
-    e = Epic(tmp_path, monkeypatch, answer=answer, reviews=reviews, fixes=fixes, max_usd=20.0)
+    e = Epic(
+        tmp_path, monkeypatch, answer=answer, reviews=reviews, fixes=fixes, max_usd=20.0
+    )
     _fake_spend(monkeypatch, e, 10.0, 4.0)
     early: list[str] = []
     since: list[float] = []
 
     def builds_of_c() -> list[dict]:
-        return [x for x in CallLog(e.root / "calls.log").calls() if x["kind"] == "build" and "e-c" in x["argv"]]
+        return [
+            x
+            for x in CallLog(e.root / "calls.log").calls()
+            if x["kind"] == "build" and "e-c" in x["argv"]
+        ]
 
     def tick(coord):
         if not e.fakes.fix_launches():
@@ -457,7 +654,9 @@ def test_nothing_new_launches_while_running_fixers_hold_what_is_left(tmp_path, m
     assert len(builds_of_c()) == 1
 
 
-def test_a_fixer_stopped_at_its_share_runs_again_once_the_others_end(tmp_path, monkeypatch, capsys):
+def test_a_fixer_stopped_at_its_share_runs_again_once_the_others_end(
+    tmp_path, monkeypatch, capsys
+):
     """A fixer launched with a small share ($1 of the $20 cap: $10 spent, the
     other fixer holding $9) stops there with `FINDINGS:BUDGET` while the
     epic's spend ($14) is under the cap. That is not a budget stop: once the
@@ -469,28 +668,55 @@ def test_a_fixer_stopped_at_its_share_runs_again_once_the_others_end(tmp_path, m
 
     monkeypatch.setattr(coordinator.Coordinator, "_held_back", lambda self: False)
     # a running fixer's PR has $1 of reviews since its launch: a's share of $10 holds $9
-    monkeypatch.setattr(coordinator.Coordinator, "_pr_reviews", lambda self, c: 1.0 if c.id in self.shares else 0.0)
+    monkeypatch.setattr(
+        coordinator.Coordinator,
+        "_pr_reviews",
+        lambda self, c: 1.0 if c.id in self.shares else 0.0,
+    )
     na, nb = pr_number("e-a"), pr_number("e-b")
-    reviews = {str(na): [{"findings": [high("f1")]}], str(nb): [{"block": True, "findings": [high("g1")]}]}
-    fixes = {str(na): [{"block": True, "rounds": [{}]}], str(nb): [{"rounds": [{}], "budget": "1.000000"}, {}]}
-    e = Epic(tmp_path, monkeypatch, answer=TWO, reviews=reviews, fixes=fixes, max_usd=20.0)
+    reviews = {
+        str(na): [{"findings": [high("f1")]}],
+        str(nb): [{"block": True, "findings": [high("g1")]}],
+    }
+    fixes = {
+        str(na): [{"block": True, "rounds": [{}]}],
+        str(nb): [{"rounds": [{}], "budget": "1.000000"}, {}],
+    }
+    e = Epic(
+        tmp_path, monkeypatch, answer=TWO, reviews=reviews, fixes=fixes, max_usd=20.0
+    )
     _fake_spend(monkeypatch, e, 10.0, 4.0)
 
     def b_fixes() -> list[records.Attempt]:
-        return [a for a in records.attempts(e.dir) if a.child == "b" and a.kind == "fix"]
+        return [
+            a for a in records.attempts(e.dir) if a.child == "b" and a.kind == "fix"
+        ]
 
     def tick(coord):
         if na not in [_fix_of(x) for x in e.fakes.fix_launches()]:
             return
         (e.root / "release").mkdir(exist_ok=True)
-        (e.root / "release" / f"review-{nb}").write_text("")      # b is reviewed once a's fixer runs
+        (e.root / "release" / f"review-{nb}").write_text(
+            ""
+        )  # b is reviewed once a's fixer runs
         if any(a.result for a in b_fixes()):
             (e.root / "release" / f"fix-{na}").write_text("")
 
     monkeypatch.setattr(coordinator, "_tick", tick)
-    assert e.run() == 3 and sorted(merge_waiting()) == sorted([pr_url("e-a"), pr_url("e-b")])
-    assert not [x for x in capsys.readouterr().out.splitlines() if x.startswith("EPIC:BUDGET")]
-    usd = {n: [_opt(x["argv"], "--max-usd") for x in e.fakes.fix_launches() if _fix_of(x) == n] for n in (na, nb)}
+    assert e.run() == 3 and sorted(merge_waiting()) == sorted(
+        [pr_url("e-a"), pr_url("e-b")]
+    )
+    assert not [
+        x for x in capsys.readouterr().out.splitlines() if x.startswith("EPIC:BUDGET")
+    ]
+    usd = {
+        n: [
+            _opt(x["argv"], "--max-usd")
+            for x in e.fakes.fix_launches()
+            if _fix_of(x) == n
+        ]
+        for n in (na, nb)
+    }
     assert usd == {na: ["10.000000"], nb: ["1.000000", "2.000000"]}
     first, again = b_fixes()
     assert (first.result["exit_code"], first.result["interrupted"]) == (0, True)
@@ -502,11 +728,18 @@ def _hold_after(monkeypatch, hold: dict) -> None:
     """`_held_back` is True until the coordinator's clock reaches `hold["until"]`."""
     from build_pipeline.epic import coordinator
 
-    monkeypatch.setattr(coordinator.Coordinator, "_held_back",
-                        lambda self: hold["until"] is not None and coordinator.CLOCK.now() < hold["until"])
+    monkeypatch.setattr(
+        coordinator.Coordinator,
+        "_held_back",
+        lambda self: (
+            hold["until"] is not None and coordinator.CLOCK.now() < hold["until"]
+        ),
+    )
 
 
-def test_a_running_review_step_launches_nothing_while_fixers_hold_what_is_left(tmp_path, monkeypatch):
+def test_a_running_review_step_launches_nothing_while_fixers_hold_what_is_left(
+    tmp_path, monkeypatch
+):
     """A review step that is already running launches no review and no
     resume while running fixers hold all that is left (`_held_back`). Its
     first review is told another runs now (exit 2), so it asks again; the
@@ -530,13 +763,17 @@ def test_a_running_review_step_launches_nothing_while_fixers_hold_what_is_left(t
         return code, out
 
     monkeypatch.setattr(coordinator.Coordinator, "_run_review", run_review)
-    e = Epic(tmp_path, monkeypatch, answer=CHAIN, reviews={str(N): [{"busy": True}, {}]})
+    e = Epic(
+        tmp_path, monkeypatch, answer=CHAIN, reviews={str(N): [{"busy": True}, {}]}
+    )
     assert e.run() == 3 and merge_waiting() == [pr_url("e-a")]
     assert e.kinds() == ["build", "review", "review", "resume"]
     assert early == []
 
 
-def test_the_merge_agent_waits_while_running_fixers_hold_what_is_left(tmp_path, monkeypatch):
+def test_the_merge_agent_waits_while_running_fixers_hold_what_is_left(
+    tmp_path, monkeypatch
+):
     """The merge step's agent is a paid launch too: while running fixers hold
     all that is left (`_held_back`, here for 120 s of the coordinator's clock
     from the merge step's start), it waits, then resolves and the PR merges.
@@ -596,7 +833,9 @@ def test_float_noise_never_lifts_the_hold_or_gives_a_share_of_zero(monkeypatch):
     assert not coord._over_budget()
 
 
-def test_a_running_fixer_holds_its_share_less_its_prs_reviews_since_launch(tmp_path, monkeypatch):
+def test_a_running_fixer_holds_its_share_less_its_prs_reviews_since_launch(
+    tmp_path, monkeypatch
+):
     """`_held` with the real `_pr_reviews` and a real ledger. a's fixer was
     given $10 when its PR (`o-r--pr-12`) had $3 of reviews; another $2.50
     of them has finished since, so it holds $7.50. A review of another PR,
@@ -608,9 +847,13 @@ def test_a_running_fixer_holds_its_share_less_its_prs_reviews_since_launch(tmp_p
     _ledger(ledger, "o-r--pr-12", "/r/pr-12/1", "h1", 3.0)
     coord = object.__new__(coordinator.Coordinator)
     coord.slug = "o-r"
-    coord.children = {"a": coordinator.Child(id="a", depends_on=[], pr=url),
-                      "b": coordinator.Child(id="b", depends_on=[])}
-    coord.shares = {"a": coordinator.Share(10.0, coord._pr_reviews(coord.children["a"]))}
+    coord.children = {
+        "a": coordinator.Child(id="a", depends_on=[], pr=url),
+        "b": coordinator.Child(id="b", depends_on=[]),
+    }
+    coord.shares = {
+        "a": coordinator.Share(10.0, coord._pr_reviews(coord.children["a"]))
+    }
     assert coord._held("b") == 10.0
     _ledger(ledger, "o-r--pr-12", "/r/pr-12/2", "h2", 2.5)
     _ledger(ledger, "o-r--pr-99", "/r/pr-99", "h1", 40.0)

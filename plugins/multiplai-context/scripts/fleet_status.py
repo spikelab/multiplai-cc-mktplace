@@ -106,34 +106,64 @@ def main() -> int:
             "PRs, repo hygiene, background jobs, and the pending backlog."
         )
     )
-    parser.add_argument("--data-dir", type=Path, default=None,
-                        help="Runtime data dir holding sessions/ and checkpoints/.")
-    parser.add_argument("--workspace", type=Path, default=None,
-                        help="Root to scan for git checkouts. Defaults to the workspace.")
-    parser.add_argument("--full", action="store_true",
-                        help="Print the full AGENTS.md report instead of the digest.")
-    parser.add_argument("--json", action="store_true",
-                        help="Print fleet.json to stdout instead of the digest.")
-    parser.add_argument("--fresh", action="store_true",
-                        help="Ignore the PR cache and re-query GitHub.")
-    parser.add_argument("--offline", action="store_true",
-                        help="Skip GitHub entirely. PRs render as not collected.")
-    parser.add_argument("--ttl", type=float, default=DEFAULT_TTL_SECONDS,
-                        help=f"PR cache lifetime in seconds (default {DEFAULT_TTL_SECONDS:g}).")
-    parser.add_argument("--no-write", action="store_true",
-                        help="Print only; do not refresh AGENTS.md or fleet.json.")
+    parser.add_argument(
+        "--data-dir",
+        type=Path,
+        default=None,
+        help="Runtime data dir holding sessions/ and checkpoints/.",
+    )
+    parser.add_argument(
+        "--workspace",
+        type=Path,
+        default=None,
+        help="Root to scan for git checkouts. Defaults to the workspace.",
+    )
+    parser.add_argument(
+        "--full",
+        action="store_true",
+        help="Print the full AGENTS.md report instead of the digest.",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print fleet.json to stdout instead of the digest.",
+    )
+    parser.add_argument(
+        "--fresh", action="store_true", help="Ignore the PR cache and re-query GitHub."
+    )
+    parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="Skip GitHub entirely. PRs render as not collected.",
+    )
+    parser.add_argument(
+        "--ttl",
+        type=float,
+        default=DEFAULT_TTL_SECONDS,
+        help=f"PR cache lifetime in seconds (default {DEFAULT_TTL_SECONDS:g}).",
+    )
+    parser.add_argument(
+        "--no-write",
+        action="store_true",
+        help="Print only; do not refresh AGENTS.md or fleet.json.",
+    )
     args = parser.parse_args()
 
     paths = get_paths()
-    data_dir = args.data_dir.expanduser().resolve() if args.data_dir else paths.data_dir()
+    data_dir = (
+        args.data_dir.expanduser().resolve() if args.data_dir else paths.data_dir()
+    )
     workspace = (
-        args.workspace.expanduser().resolve() if args.workspace
+        args.workspace.expanduser().resolve()
+        if args.workspace
         else data_dir.parent.parent
     )
     now = datetime.now(UTC)
 
     fleet = collect_full(
-        data_dir, workspace, now,
+        data_dir,
+        workspace,
+        now,
         ttl=0 if args.fresh else args.ttl,
         offline=args.offline,
     )

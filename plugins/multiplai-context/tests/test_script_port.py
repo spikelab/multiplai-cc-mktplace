@@ -40,8 +40,14 @@ class TestNoBashWrappers:
 
     def test_no_sh_files(self):
         if SCRIPTS_DIR.exists():
-            sh_files = list(SCRIPTS_DIR.glob("*.sh")) + list(SCRIPTS_DIR.glob("*.bash")) + list(SCRIPTS_DIR.glob("*.zsh"))
-            assert len(sh_files) == 0, f"Shell scripts found: {[f.name for f in sh_files]}"
+            sh_files = (
+                list(SCRIPTS_DIR.glob("*.sh"))
+                + list(SCRIPTS_DIR.glob("*.bash"))
+                + list(SCRIPTS_DIR.glob("*.zsh"))
+            )
+            assert len(sh_files) == 0, (
+                f"Shell scripts found: {[f.name for f in sh_files]}"
+            )
 
     def test_no_subprocess_calls_to_sh_scripts(self):
         for script in EXPECTED_SCRIPTS:
@@ -49,8 +55,9 @@ class TestNoBashWrappers:
             if path.exists():
                 text = path.read_text()
                 # Check for subprocess calls to .sh scripts
-                assert not re.search(r'subprocess\.\w+\([^)]*\.sh', text), \
+                assert not re.search(r"subprocess\.\w+\([^)]*\.sh", text), (
                     f"{script} calls a .sh script via subprocess"
+                )
 
 
 class TestNoDirectSDKImports:
@@ -61,10 +68,12 @@ class TestNoDirectSDKImports:
         path = SCRIPTS_DIR / script
         if path.exists():
             text = path.read_text()
-            assert "import claude_agent_sdk" not in text, \
+            assert "import claude_agent_sdk" not in text, (
                 f"{script} has direct claude_agent_sdk import"
-            assert "from claude_agent_sdk" not in text, \
+            )
+            assert "from claude_agent_sdk" not in text, (
                 f"{script} has direct claude_agent_sdk import"
+            )
 
     @pytest.mark.parametrize("script", EXPECTED_SCRIPTS)
     def test_no_direct_anthropic_import(self, script):
@@ -72,8 +81,9 @@ class TestNoDirectSDKImports:
         if path.exists():
             text = path.read_text()
             # Direct anthropic import only allowed in model_client.py
-            assert "import anthropic" not in text, \
+            assert "import anthropic" not in text, (
                 f"{script} has direct anthropic import"
+            )
 
 
 class TestNoHardcodedPaths:
@@ -110,7 +120,10 @@ class TestContextManagerPort:
         assert "resource-catalog" not in self.text
 
     def test_uses_path_resolver(self):
-        assert "from multiplai_core.paths" in self.text or "multiplai_core.paths" in self.text
+        assert (
+            "from multiplai_core.paths" in self.text
+            or "multiplai_core.paths" in self.text
+        )
 
 
 class TestSessionLifecyclePort:
@@ -145,10 +158,16 @@ class TestExtractLearningsPort:
         self.text = (SCRIPTS_DIR / "extract_learnings.py").read_text()
 
     def test_uses_path_resolver(self):
-        assert "from multiplai_core.paths" in self.text or "multiplai_core.paths" in self.text
+        assert (
+            "from multiplai_core.paths" in self.text
+            or "multiplai_core.paths" in self.text
+        )
 
     def test_uses_model_client(self):
-        assert "from multiplai_core.model_client" in self.text or "model_client" in self.text
+        assert (
+            "from multiplai_core.model_client" in self.text
+            or "model_client" in self.text
+        )
 
     def test_no_git_stage(self):
         assert "git_stage" not in self.text
@@ -163,10 +182,16 @@ class TestAutodreamPort:
         self.text = (SCRIPTS_DIR / "dream.py").read_text()
 
     def test_uses_path_resolver(self):
-        assert "from multiplai_core.paths" in self.text or "multiplai_core.paths" in self.text
+        assert (
+            "from multiplai_core.paths" in self.text
+            or "multiplai_core.paths" in self.text
+        )
 
     def test_uses_model_client(self):
-        assert "from multiplai_core.model_client" in self.text or "model_client" in self.text
+        assert (
+            "from multiplai_core.model_client" in self.text
+            or "model_client" in self.text
+        )
 
 
 class TestSynthesizeNowPort:
@@ -177,10 +202,16 @@ class TestSynthesizeNowPort:
         self.text = (SCRIPTS_DIR / "synthesize_now.py").read_text()
 
     def test_uses_path_resolver(self):
-        assert "from multiplai_core.paths" in self.text or "multiplai_core.paths" in self.text
+        assert (
+            "from multiplai_core.paths" in self.text
+            or "multiplai_core.paths" in self.text
+        )
 
     def test_uses_model_client(self):
-        assert "from multiplai_core.model_client" in self.text or "model_client" in self.text
+        assert (
+            "from multiplai_core.model_client" in self.text
+            or "model_client" in self.text
+        )
 
 
 class TestGenerateCatalogPort:
@@ -191,7 +222,10 @@ class TestGenerateCatalogPort:
         self.text = (SCRIPTS_DIR / "generate_catalog.py").read_text()
 
     def test_uses_path_resolver(self):
-        assert "from multiplai_core.paths" in self.text or "multiplai_core.paths" in self.text
+        assert (
+            "from multiplai_core.paths" in self.text
+            or "multiplai_core.paths" in self.text
+        )
 
     def test_no_skill_catalog(self):
         assert "skill-catalog" not in self.text

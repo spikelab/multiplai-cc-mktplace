@@ -30,11 +30,18 @@ from walkthrough_pipeline.models import RepoInfo, TargetInfo, WalkState
 ANCHOR = re.compile(r'<a id="(p\d+h\d+)"></a>')
 HOP_ID = re.compile(r"p\d+h\d+")
 
-TOOL = "\n".join(["# pad"] * 9 + ["parser.add_parser('export')"] + ["# pad"] * 9
-                 + ["def export(args):", "    rows = load()", "    return write(rows)"]) + "\n"
+TOOL = (
+    "\n".join(
+        ["# pad"] * 9
+        + ["parser.add_parser('export')"]
+        + ["# pad"] * 9
+        + ["def export(args):", "    rows = load()", "    return write(rows)"]
+    )
+    + "\n"
+)
 FILES = {
     "cli/main.py": "import click\n\nfrom billing.core import charge\n\n\n@click.command()\ndef sync():\n"
-                   "    return charge(1)\n",
+    "    return charge(1)\n",
     "cli/tool.py": TOOL,
     "cli/later.py": "def later():\n    return 1\n",
     "billing/__init__.py": "",
@@ -43,17 +50,28 @@ FILES = {
 
 
 def _entry(kind, name, path, line):
-    return PathEntry(kind=kind, name=name, location=Location(path=path, line=line), handler=None, invocation=None,
-                     invoked_by=f"a person or a script running {name}", also_invoked_by=[])
+    return PathEntry(
+        kind=kind,
+        name=name,
+        location=Location(path=path, line=line),
+        handler=None,
+        invocation=None,
+        invoked_by=f"a person or a script running {name}",
+        also_invoked_by=[],
+    )
 
 
 def _hop(path, a, b, quote, called="f"):
-    return PathHop(symbol_called=called, path=path, line_start=a, line_end=b, quote=quote)
+    return PathHop(
+        symbol_called=called, path=path, line_start=a, line_end=b, quote=quote
+    )
 
 
 def _e2e(node, cls=E2ETest, **extra):
     file = node.split("::")[0]
-    return cls(node_id=node, file=file, line=3, match="cli_runner", invocation_line=4, **extra)
+    return cls(
+        node_id=node, file=file, line=3, match="cli_runner", invocation_line=4, **extra
+    )
 
 
 CHARGE = _hop("billing/core.py", 4, 5, "def charge(amount):", "charge")
@@ -62,40 +80,85 @@ COVERED = [Location(path="billing/core.py", line=4)]
 
 def _result() -> PathsResult:
     p1 = TracedPath(  # hop 1 holds the entry line: the entry bullet points at p1h1
-        id="p1", entry=_entry("click", "sync", "cli/main.py", 6),
+        id="p1",
+        entry=_entry("click", "sync", "cli/main.py", 6),
         hops=[_hop("cli/main.py", 6, 8, "def sync():", "sync"), CHARGE],
-        stops_at=None, break_reason=None, changed_lines_covered=COVERED,
-        tests=E2EListing(e2e=[_e2e("tests/e2e/test_sync.py::test_sync"),
-                              _e2e("tests/e2e/test_sync.py::test_sync_dry")], mocks_hop_2=[]))
+        stops_at=None,
+        break_reason=None,
+        changed_lines_covered=COVERED,
+        tests=E2EListing(
+            e2e=[
+                _e2e("tests/e2e/test_sync.py::test_sync"),
+                _e2e("tests/e2e/test_sync.py::test_sync_dry"),
+            ],
+            mocks_hop_2=[],
+        ),
+    )
     p2 = TracedPath(  # hop 1 is elsewhere: the entry bullet links the declaration
-        id="p2", entry=_entry("argparse", "export", "cli/tool.py", 10),
+        id="p2",
+        entry=_entry("argparse", "export", "cli/tool.py", 10),
         hops=[_hop("cli/tool.py", 20, 22, "def export(args):", "export"), CHARGE],
-        stops_at=2, break_reason="unconnected_hop", changed_lines_covered=COVERED,
-        tests=E2EListing(e2e=[], mocks_hop_2=[
-            _e2e("tests/e2e/test_export.py::test_offline", MockedE2ETest,
-                 patch_file="tests/e2e/conftest.py", patch_line=7)]))
+        stops_at=2,
+        break_reason="unconnected_hop",
+        changed_lines_covered=COVERED,
+        tests=E2EListing(
+            e2e=[],
+            mocks_hop_2=[
+                _e2e(
+                    "tests/e2e/test_export.py::test_offline",
+                    MockedE2ETest,
+                    patch_file="tests/e2e/conftest.py",
+                    patch_line=7,
+                )
+            ],
+        ),
+    )
     p3 = TracedPath(
-        id="p3", entry=_entry("main", "later", "cli/later.py", 1),
+        id="p3",
+        entry=_entry("main", "later", "cli/later.py", 1),
         hops=[_hop("cli/later.py", 1, 2, "def later():", "later")],
-        stops_at=None, break_reason=None, changed_lines_covered=[],
-        tests=E2EListing(e2e=[], mocks_hop_2=[]))
-    return PathsResult(schema_version="paths.v1", commit="c0ffee", scoped=True, cap=21,
-                       fallback=FallbackStatus(status="ok", reason=None), paths=[p1, p2, p3], dropped=[],
-                       diagnostics=[], test_listing_skips=[])
+        stops_at=None,
+        break_reason=None,
+        changed_lines_covered=[],
+        tests=E2EListing(e2e=[], mocks_hop_2=[]),
+    )
+    return PathsResult(
+        schema_version="paths.v1",
+        commit="c0ffee",
+        scoped=True,
+        cap=21,
+        fallback=FallbackStatus(status="ok", reason=None),
+        paths=[p1, p2, p3],
+        dropped=[],
+        diagnostics=[],
+        test_listing_skips=[],
+    )
 
 
 def _state(tmp_path: Path, result: PathsResult | None) -> WalkState:
     repo = tmp_path / "ws" / "shop"
     sha = fixture_repo.make_repo(repo, FILES)
-    target = TargetInfo(repo_key="shop", repo_path=str(repo), subpath="billing", head_sha=sha, name="billing",
-                        package="billing", files=["billing/__init__.py", "billing/core.py"],
-                        file_lines={"billing/__init__.py": 0, "billing/core.py": 5})
-    return WalkState(target=target, repos={"shop": RepoInfo(key="shop", path=str(repo), head_sha=sha)},
-                     stage="trace", paths=result)
+    target = TargetInfo(
+        repo_key="shop",
+        repo_path=str(repo),
+        subpath="billing",
+        head_sha=sha,
+        name="billing",
+        package="billing",
+        files=["billing/__init__.py", "billing/core.py"],
+        file_lines={"billing/__init__.py": 0, "billing/core.py": 5},
+    )
+    return WalkState(
+        target=target,
+        repos={"shop": RepoInfo(key="shop", path=str(repo), head_sha=sha)},
+        stage="trace",
+        paths=result,
+    )
 
 
 def _render(state: WalkState, out_dir: Path) -> str:
     from walkthrough_pipeline.render import Linker, render_paths_section
+
     out_dir.mkdir(parents=True, exist_ok=True)
     return render_paths_section(state, Linker(state, out_dir))
 
@@ -126,16 +189,29 @@ def test_paths_body_lists_each_path_with_entry_hops_stop_and_tests(tmp_path):
     assert blocks["p1"][0] == "**p1** — `sync` (click command)"
     assert blocks["p2"][0] == "**p2** — `export` (argparse command)"
 
-    entry1 = next(line for line in blocks["p1"] if line.startswith("- Entry: invoked by "))
-    assert re.fullmatch(r"- Entry: invoked by `a person or a script running sync`,? at `p1h1`", entry1)
-    entry2 = next(line for line in blocks["p2"] if line.startswith("- Entry: invoked by "))
-    assert entry2.startswith("- Entry: invoked by `a person or a script running export`")
+    entry1 = next(
+        line for line in blocks["p1"] if line.startswith("- Entry: invoked by ")
+    )
+    assert re.fullmatch(
+        r"- Entry: invoked by `a person or a script running sync`,? at `p1h1`", entry1
+    )
+    entry2 = next(
+        line for line in blocks["p2"] if line.startswith("- Entry: invoked by ")
+    )
+    assert entry2.startswith(
+        "- Entry: invoked by `a person or a script running export`"
+    )
     assert re.search(r'\[`shop/cli/tool\.py:10`\]\(\S+ "[^"]*"\)$', entry2)
 
-    hop = re.search(r'<a id="p1h1"></a>`p1h1` \[`shop/cli/main\.py:6-8`\]\((\S+) "def sync\(\):"\)', body)
+    hop = re.search(
+        r'<a id="p1h1"></a>`p1h1` \[`shop/cli/main\.py:6-8`\]\((\S+) "def sync\(\):"\)',
+        body,
+    )
     assert hop and hop.group(1).endswith("cli/main.py#L6-L8")
-    assert re.search(r'<a id="p2h2"></a>`p2h2` \[`shop/billing/core\.py:4-5`\]\(\S+ "def charge\(amount\):"\)',
-                     body)
+    assert re.search(
+        r'<a id="p2h2"></a>`p2h2` \[`shop/billing/core\.py:4-5`\]\(\S+ "def charge\(amount\):"\)',
+        body,
+    )
     assert ANCHOR.findall(body) == ["p1h1", "p1h2", "p2h1", "p2h2", "p3h1"]
 
     assert "- Ends at `p1h2` (trace complete)." in blocks["p1"]
@@ -146,18 +222,26 @@ def test_paths_body_lists_each_path_with_entry_hops_stop_and_tests(tmp_path):
 def test_e2e_lines_count_e2e_tests_and_label_mocked_ones_not_counted(tmp_path):
     blocks = _blocks(_render(_state(tmp_path, _result()), tmp_path / "out"))
     p1 = "\n".join(blocks["p1"])
-    assert "`tests/e2e/test_sync.py::test_sync`" in p1 and "`tests/e2e/test_sync.py::test_sync_dry`" in p1
+    assert (
+        "`tests/e2e/test_sync.py::test_sync`" in p1
+        and "`tests/e2e/test_sync.py::test_sync_dry`" in p1
+    )
     assert "no e2e test" not in p1 and "not counted" not in p1
     # A mocked test does not count: the path still says it has no e2e test.
     mocked = next(line for line in blocks["p2"] if "no e2e test" in line)
-    assert "not counted: `tests/e2e/test_export.py::test_offline` (mocks `p2h2`, not counted)" in mocked
+    assert (
+        "not counted: `tests/e2e/test_export.py::test_offline` (mocks `p2h2`, not counted)"
+        in mocked
+    )
     assert any("no e2e test" in line for line in blocks["p3"])
 
 
 def test_an_unknown_kind_renders_verbatim(tmp_path):
     result = _result()
     p3 = result.paths[2]
-    odd = p3.model_copy(update={"entry": p3.entry.model_copy(update={"kind": "future_kind"})})
+    odd = p3.model_copy(
+        update={"entry": p3.entry.model_copy(update={"kind": "future_kind"})}
+    )
     result = result.model_copy(update={"paths": [*result.paths[:2], odd]})
     blocks = _blocks(_render(_state(tmp_path, result), tmp_path / "out"))
     assert blocks["p3"][0] == "**p3** — `later` (future_kind)"
@@ -165,7 +249,12 @@ def test_an_unknown_kind_renders_verbatim(tmp_path):
 
 def test_kind_labels_cover_only_paths_v1_kinds():
     from walkthrough_pipeline.render import KIND_LABELS
-    assert set(get_args(EntryKind)) >= {"click", "skill_command", "model"}    # the paths.v1 kind values
+
+    assert set(get_args(EntryKind)) >= {
+        "click",
+        "skill_command",
+        "model",
+    }  # the paths.v1 kind values
     assert set(KIND_LABELS) <= set(get_args(EntryKind))
     assert KIND_LABELS["click"] == "click command"
     assert KIND_LABELS["skill_command"] == "skill command"
@@ -175,8 +264,15 @@ def test_the_invoker_is_always_present(tmp_path):
     # paths.v1 requires `invoked_by`, so the "unknown invoker" case cannot reach the renderer.
     for bad in ({}, {"invoked_by": ""}):
         with pytest.raises(ValidationError):
-            PathEntry(kind="click", name="x", location=Location(path="a.py", line=1), handler=None,
-                      invocation=None, also_invoked_by=[], **bad)
+            PathEntry(
+                kind="click",
+                name="x",
+                location=Location(path="a.py", line=1),
+                handler=None,
+                invocation=None,
+                also_invoked_by=[],
+                **bad,
+            )
     body = _render(_state(tmp_path, _result()), tmp_path / "out")
     entries = [line for line in _lines(body) if line.startswith("- Entry: invoked by ")]
     assert len(entries) == 3
@@ -200,6 +296,7 @@ def test_no_entries_and_no_drops_says_none_were_found(tmp_path):
 
 def test_coverage_counts_paths_traced_and_cut_short(tmp_path):
     from walkthrough_pipeline.render import coverage_lines
+
     table = "\n".join(coverage_lines(_state(tmp_path, _result())))
     assert re.search(r"^\| Paths traced \| 3\b", table, re.MULTILINE)
     assert re.search(r"^\| Paths cut short \| 1\b", table, re.MULTILINE)
@@ -212,8 +309,10 @@ def test_every_link_in_the_paths_body_re_reads_at_the_commit(tmp_path, capsys):
     out = tmp_path / "out"
     body = _render(state, out)
     md = out / "x-walkthrough.md"
-    md.write_text("# x\n\n## Commits read\n\n| Repo | Path | Commit |\n|---|---|---|\n"
-                  f"| shop | {state.repos['shop'].path} | `{state.target.head_sha}` |\n\n## Paths\n\n{body}")
+    md.write_text(
+        "# x\n\n## Commits read\n\n| Repo | Path | Commit |\n|---|---|---|\n"
+        f"| shop | {state.repos['shop'].path} | `{state.target.head_sha}` |\n\n## Paths\n\n{body}"
+    )
     capsys.readouterr()
     assert main(["check", str(md)]) == 0
     assert "check: 6 checked, 0 failed" in capsys.readouterr().out
@@ -221,10 +320,17 @@ def test_every_link_in_the_paths_body_re_reads_at_the_commit(tmp_path, capsys):
 
 def test_every_hop_id_in_the_paths_body_comes_from_hop_id(tmp_path, monkeypatch):
     from walkthrough_pipeline import render
+
     monkeypatch.setattr(render, "hop_id", lambda path_id, k: f"{path_id}x{k}")
     body = _render(_state(tmp_path, _result()), tmp_path / "out")
     assert not HOP_ID.search(body)
-    assert re.findall(r'<a id="(p\d+x\d+)"></a>`\1`', body) == ["p1x1", "p1x2", "p2x1", "p2x2", "p3x1"]
+    assert re.findall(r'<a id="(p\d+x\d+)"></a>`\1`', body) == [
+        "p1x1",
+        "p1x2",
+        "p2x1",
+        "p2x2",
+        "p3x1",
+    ]
     blocks = _blocks(body)
     assert any(line.endswith("at `p1x1`") for line in blocks["p1"])
     assert "- Ends at `p1x2` (trace complete)." in blocks["p1"]
@@ -235,26 +341,44 @@ def test_every_hop_id_in_the_paths_body_comes_from_hop_id(tmp_path, monkeypatch)
 FALLBACK_FAILED = " Entry discovery was incomplete: the model fallback failed."
 
 
-@pytest.mark.parametrize("paths, dropped, lead", [
-    (None, False, "3 paths reach this module."),
-    ([], False, "No entry points reaching this module were found."),
-    ([], True, "No paths were traced. 1 entry was left out; see **Left out** under Coverage."),
-])
+@pytest.mark.parametrize(
+    "paths, dropped, lead",
+    [
+        (None, False, "3 paths reach this module."),
+        ([], False, "No entry points reaching this module were found."),
+        (
+            [],
+            True,
+            "No paths were traced. 1 entry was left out; see **Left out** under Coverage.",
+        ),
+    ],
+)
 def test_a_failed_fallback_is_said_after_the_lead(tmp_path, paths, dropped, lead):
     from code_facts import PathDrop
+
     result = _result()
-    update = {"fallback": FallbackStatus(status="failed", reason="the fallback call failed")}
+    update = {
+        "fallback": FallbackStatus(status="failed", reason="the fallback call failed")
+    }
     if paths is not None:
         update["paths"] = paths
     if dropped:
-        update["dropped"] = [PathDrop(entry=result.paths[2].entry, stage="trace_limit",
-                                      reason="over_trace_limit", detail="past the trace limit")]
+        update["dropped"] = [
+            PathDrop(
+                entry=result.paths[2].entry,
+                stage="trace_limit",
+                reason="over_trace_limit",
+                detail="past the trace limit",
+            )
+        ]
     body = _render(_state(tmp_path, result.model_copy(update=update)), tmp_path / "out")
     assert _lines(body)[0] == lead + FALLBACK_FAILED
 
 
 def test_an_ok_or_skipped_fallback_adds_nothing(tmp_path):
     for status in ("ok", "skipped"):
-        result = _result().model_copy(update={"fallback": FallbackStatus(status=status, reason=None)})
+        result = _result().model_copy(
+            update={"fallback": FallbackStatus(status=status, reason=None)}
+        )
         body = _render(_state(tmp_path / status, result), tmp_path / status / "out")
         assert "Entry discovery" not in body

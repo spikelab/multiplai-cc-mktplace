@@ -20,7 +20,8 @@ class TestBuildState:
     def test_checkpoint_and_load(self, tmp_path):
         state_file = tmp_path / "state.json"
         s = BuildState(
-            change_name="feat", tier="advanced",
+            change_name="feat",
+            tier="advanced",
             state_file=str(state_file),
         )
         s.phase = BuildPhase.RESEARCH
@@ -36,7 +37,8 @@ class TestBuildState:
     def test_advance_to(self, tmp_path):
         state_file = tmp_path / "state.json"
         s = BuildState(
-            change_name="test", tier="standard",
+            change_name="test",
+            tier="standard",
             state_file=str(state_file),
         )
         s.advance_to(BuildPhase.SPEC_GENERATION, state_file)
@@ -46,7 +48,8 @@ class TestBuildState:
     def test_complete_keeps_the_checkpoint_under_its_completed_name(self, tmp_path):
         state_file = tmp_path / ".build-state.json"
         s = BuildState(
-            change_name="test", tier="standard",
+            change_name="test",
+            tier="standard",
             state_file=str(state_file),
         )
         s.checkpoint(state_file)
@@ -73,11 +76,14 @@ class TestAtomicCheckpoint:
 
     def _state(self, state_file):
         return BuildState(
-            change_name="atomic", tier="advanced",
+            change_name="atomic",
+            tier="advanced",
             state_file=str(state_file),
         )
 
-    def test_writes_through_a_same_directory_temp_then_replaces(self, tmp_path, monkeypatch):
+    def test_writes_through_a_same_directory_temp_then_replaces(
+        self, tmp_path, monkeypatch
+    ):
         state_file = tmp_path / "sub" / "state.json"
         seen = {}
         real_replace = os.replace
@@ -98,7 +104,9 @@ class TestAtomicCheckpoint:
         assert seen["src"] != state_file
         assert json.loads(state_file.read_text())["change_name"] == "atomic"
 
-    def test_serialization_failure_leaves_no_partial_and_no_temp(self, tmp_path, monkeypatch):
+    def test_serialization_failure_leaves_no_partial_and_no_temp(
+        self, tmp_path, monkeypatch
+    ):
         state_file = tmp_path / "state.json"
         s = self._state(state_file)
         s.checkpoint(state_file)
@@ -106,7 +114,8 @@ class TestAtomicCheckpoint:
 
         s.phase = BuildPhase.TDD_BUILD
         monkeypatch.setattr(
-            BuildState, "model_dump_json",
+            BuildState,
+            "model_dump_json",
             lambda self, **kw: (_ for _ in ()).throw(RuntimeError("boom")),
         )
         with pytest.raises(RuntimeError):
@@ -117,7 +126,9 @@ class TestAtomicCheckpoint:
         assert BuildState.load(state_file).phase == BuildPhase.INIT
         assert [p.name for p in tmp_path.iterdir()] == ["state.json"]
 
-    def test_a_crashed_write_never_leaves_a_truncated_checkpoint(self, tmp_path, monkeypatch):
+    def test_a_crashed_write_never_leaves_a_truncated_checkpoint(
+        self, tmp_path, monkeypatch
+    ):
         """os.replace dying mid-checkpoint is the crash we cannot recover from
         if the write were in place — the old checkpoint must still parse."""
         state_file = tmp_path / "state.json"
@@ -144,7 +155,8 @@ class TestTDDState:
             BlockInfo(number=2, name="Engine", description="build"),
         ]
         s = BuildState(
-            change_name="test", tier="advanced",
+            change_name="test",
+            tier="advanced",
             state_file=str(state_file),
             tdd=TDDState(blocks=blocks),
         )
@@ -164,7 +176,8 @@ class TestTDDState:
             BlockInfo(number=2, name="B", description="b", status=BlockStatus.TESTING),
         ]
         s = BuildState(
-            change_name="test", tier="advanced",
+            change_name="test",
+            tier="advanced",
             state_file=str(state_file),
             tdd=TDDState(blocks=blocks, current_block=1),
         )
@@ -198,6 +211,8 @@ class TestBudgetSnapshot:
     def test_absent_budget_defaults_to_empty(self):
         budget.reset()
         assert BuildState(change_name="c", tier="standard").budget == {}
+
+
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
@@ -211,8 +226,10 @@ class TestLegacyCheckpointResume:
     def test_pre_prototype_fixture_has_no_prototype_fields(self):
         """Guard the guard: if someone regenerates these fixtures with the
         current code they stop testing backwards compatibility."""
-        for name in ("build-state-pre-prototype-design-audit.json",
-                     "build-state-pre-prototype-tdd.json"):
+        for name in (
+            "build-state-pre-prototype-design-audit.json",
+            "build-state-pre-prototype-tdd.json",
+        ):
             raw = (FIXTURES / name).read_text()
             assert "prototype" not in raw, f"{name} is no longer a pre-change fixture"
 
@@ -223,7 +240,9 @@ class TestLegacyCheckpointResume:
         assert s.change_name == "legacy-change"
         # Fields added after the checkpoint was written take their defaults.
         assert s.spec_gen.step_passed("prototype") is False
-        assert s.spec_gen.step_passed("tasks_audit") is False  # legacy booleans are not revision evidence
+        assert (
+            s.spec_gen.step_passed("tasks_audit") is False
+        )  # legacy booleans are not revision evidence
 
         # Everything before the design audit stays complete...
         assert s.is_phase_complete(BuildPhase.BOOTSTRAP)
@@ -276,7 +295,12 @@ class TestPreCodebaseAnalysisCheckpointResume:
         """Guard the guard: regenerating this fixture with current code would
         stop it testing backwards compatibility."""
         raw = (FIXTURES / self.FIXTURE).read_text()
-        for token in ("codebase_analysis_path", "prototype_done", "explainers_done", "budget"):
+        for token in (
+            "codebase_analysis_path",
+            "prototype_done",
+            "explainers_done",
+            "budget",
+        ):
             assert token not in raw, f"{self.FIXTURE} is no longer a pre-change fixture"
 
     def test_loads_and_resumes_with_codebase_analysis_still_ahead(self):
@@ -297,8 +321,12 @@ class TestPreCodebaseAnalysisCheckpointResume:
 
     def test_codebase_analysis_is_ordered_between_research_and_spec_generation(self):
         order = list(BuildPhase)
-        assert order.index(BuildPhase.RESEARCH) < order.index(BuildPhase.CODEBASE_ANALYSIS)
-        assert order.index(BuildPhase.CODEBASE_ANALYSIS) < order.index(BuildPhase.SPEC_GENERATION)
+        assert order.index(BuildPhase.RESEARCH) < order.index(
+            BuildPhase.CODEBASE_ANALYSIS
+        )
+        assert order.index(BuildPhase.CODEBASE_ANALYSIS) < order.index(
+            BuildPhase.SPEC_GENERATION
+        )
 
     def test_a_checkpoint_past_research_does_not_rewind_for_analysis(self):
         """...and an old checkpoint already at spec generation is not sent
@@ -326,7 +354,9 @@ class TestPreEpicSplitCheckpoint:
 
     def test_fixture_predates_the_change(self):
         raw = (FIXTURES / self.FIXTURE).read_text()
-        assert "epic_dir" not in raw, f"{self.FIXTURE} is no longer a pre-change fixture"
+        assert "epic_dir" not in raw, (
+            f"{self.FIXTURE} is no longer a pre-change fixture"
+        )
 
     def test_loads_and_resumes_with_epic_split_still_ahead(self):
         s = BuildState.load(FIXTURES / self.FIXTURE)
@@ -339,8 +369,12 @@ class TestPreEpicSplitCheckpoint:
 
     def test_epic_split_is_ordered_between_codebase_analysis_and_spec_generation(self):
         order = list(BuildPhase)
-        assert order.index(BuildPhase.CODEBASE_ANALYSIS) + 1 == order.index(BuildPhase.EPIC_SPLIT)
-        assert order.index(BuildPhase.EPIC_SPLIT) + 1 == order.index(BuildPhase.SPEC_GENERATION)
+        assert order.index(BuildPhase.CODEBASE_ANALYSIS) + 1 == order.index(
+            BuildPhase.EPIC_SPLIT
+        )
+        assert order.index(BuildPhase.EPIC_SPLIT) + 1 == order.index(
+            BuildPhase.SPEC_GENERATION
+        )
 
     def test_a_checkpoint_past_spec_generation_does_not_rewind_for_the_split(self):
         s = BuildState.load(FIXTURES / self.FIXTURE)
@@ -378,20 +412,29 @@ class TestRespecPhaseAndNotes:
         """A .build-state.json written before BuildPhase.RESPEC existed (no
         `notes` on blocks, phase from the old enum) loads and resumes."""
         state_file = tmp_path / "state.json"
-        state_file.write_text(json.dumps({
-            "change_name": "legacy",
-            "mode": "scratch",
-            "tier": "advanced",
-            "phase": "tdd_build",
-            "bootstrap_done": True,
-            "state_file": str(state_file),
-            "tdd": {
-                "blocks": [{
-                    "number": 1, "name": "A", "description": "a", "status": "done",
-                }],
-                "current_block": 0,
-            },
-        }))
+        state_file.write_text(
+            json.dumps(
+                {
+                    "change_name": "legacy",
+                    "mode": "scratch",
+                    "tier": "advanced",
+                    "phase": "tdd_build",
+                    "bootstrap_done": True,
+                    "state_file": str(state_file),
+                    "tdd": {
+                        "blocks": [
+                            {
+                                "number": 1,
+                                "name": "A",
+                                "description": "a",
+                                "status": "done",
+                            }
+                        ],
+                        "current_block": 0,
+                    },
+                }
+            )
+        )
 
         loaded = BuildState.load(state_file)
         assert loaded.phase == BuildPhase.TDD_BUILD
@@ -443,13 +486,20 @@ class TestRespecPhaseAndNotes:
         s.checkpoint(path)
         assert BuildState.load(path).tdd.mutation_done is True
 
-    @pytest.mark.parametrize("name, phase, current_block", [
-        ("build-state-pre-prototype-tdd.json", BuildPhase.REVIEW, 1),
-        ("build-state-pre-refactor-all.json", BuildPhase.TDD_BUILD, 2),
-        ("build-state-pre-docs-update.json", BuildPhase.TDD_BUILD, 2),
-    ])
+    @pytest.mark.parametrize(
+        "name, phase, current_block",
+        [
+            ("build-state-pre-prototype-tdd.json", BuildPhase.REVIEW, 1),
+            ("build-state-pre-refactor-all.json", BuildPhase.TDD_BUILD, 2),
+            ("build-state-pre-docs-update.json", BuildPhase.TDD_BUILD, 2),
+        ],
+    )
     def test_checkpoint_with_final_review_done_still_loads_and_resumes(
-        self, tmp_path, name, phase, current_block,
+        self,
+        tmp_path,
+        name,
+        phase,
+        current_block,
     ):
         """buildme no longer runs a final review, and TDDState lost its
         final_review_done flag. Checkpoints written before that still carry
@@ -478,13 +528,20 @@ class TestRespecPhaseAndNotes:
     def test_block_notes_survive_checkpoint_and_reload(self, tmp_path):
         state_file = tmp_path / "state.json"
         block = BlockInfo(number=2, name="Uploader", description="u")
-        block.notes.append(ImplementationNote(
-            block_number=2, block_name="Uploader", role="implementer",
-            surprises="The client raises on timeout.", spec_impact="contradicts",
-        ))
+        block.notes.append(
+            ImplementationNote(
+                block_number=2,
+                block_name="Uploader",
+                role="implementer",
+                surprises="The client raises on timeout.",
+                spec_impact="contradicts",
+            )
+        )
         s = BuildState(
-            change_name="t", tier="advanced",
-            state_file=str(state_file), tdd=TDDState(blocks=[block]),
+            change_name="t",
+            tier="advanced",
+            state_file=str(state_file),
+            tdd=TDDState(blocks=[block]),
         )
         s.checkpoint(state_file)
 
@@ -531,16 +588,34 @@ class TestDocsUpdatePhaseAndImpact:
         assert s.split_required is False
         assert s.size_accepted is False
 
-    def test_a_checkpoint_from_before_pm_spec_loads_and_drops_the_removed_fields(self, tmp_path):
+    def test_a_checkpoint_from_before_pm_spec_loads_and_drops_the_removed_fields(
+        self, tmp_path
+    ):
         """Row S13: the fields of the interview, intake, --mode and the epic
         split are ignored on load and not written back."""
         import json
-        removed = {"mode": "scratch", "interview_summary": "S", "ticket_ref": "#1",
-                   "ticket_url": "https://example.invalid/1", "plan_file": "p.md",
-                   "interview_waiting": True, "epic_dir": "/x", "epic_single": True}
+
+        removed = {
+            "mode": "scratch",
+            "interview_summary": "S",
+            "ticket_ref": "#1",
+            "ticket_url": "https://example.invalid/1",
+            "plan_file": "p.md",
+            "interview_waiting": True,
+            "epic_dir": "/x",
+            "epic_single": True,
+        }
         path = tmp_path / ".build-state.json"
-        path.write_text(json.dumps({"change_name": "c", "tier": "advanced",
-                                    "phase": "spec_generation", **removed}))
+        path.write_text(
+            json.dumps(
+                {
+                    "change_name": "c",
+                    "tier": "advanced",
+                    "phase": "spec_generation",
+                    **removed,
+                }
+            )
+        )
         state = BuildState.load(path)
         assert state.phase == BuildPhase.SPEC_GENERATION
         state.checkpoint(path)
@@ -564,7 +639,8 @@ class TestDocsUpdatePhaseAndImpact:
     def test_docs_impact_round_trips_through_a_checkpoint(self, tmp_path):
         path = tmp_path / ".build-state.json"
         s = BuildState(
-            change_name="c", tier="advanced",
+            change_name="c",
+            tier="advanced",
             docs_impact=["README.md", "CHANGELOG.md"],
         )
         s.checkpoint(path)
@@ -572,6 +648,7 @@ class TestDocsUpdatePhaseAndImpact:
 
 
 # --- Git lifecycle state (work item 4) -----------------------------------
+
 
 class TestGitLifecycleState:
     def test_new_fields_default_to_none(self):
@@ -588,7 +665,8 @@ class TestGitLifecycleState:
 
         path = tmp_path / ".build-state.json"
         state = BuildState(
-            change_name="c", tier="advanced",
+            change_name="c",
+            tier="advanced",
             worktree_path="/ws/.worktrees/buildme-c",
             branch="buildme/c",
             source_repo="/proj",
@@ -617,8 +695,11 @@ class TestGitLifecycleState:
             "bootstrap_done": True,
             "interview_summary": "old run",
             "research_path": None,
-            "spec_gen": {"completed_artifacts": ["proposal"], "research_path": None,
-                         "codebase_analysis_path": None},
+            "spec_gen": {
+                "completed_artifacts": ["proposal"],
+                "research_path": None,
+                "codebase_analysis_path": None,
+            },
             "tdd": None,
             "state_file": "",
             "started_at": "2026-01-01T00:00:00+00:00",
@@ -670,7 +751,9 @@ class TestPrePlanReviewCheckpointResume:
         assert s.spec_gen.step_passed("plan_review") is False
         assert s.spec_gen.repair_attempts("plan_review") == 0
         # A field that predates it keeps the value it was written with.
-        assert s.spec_gen.step_passed("tasks_audit") is False  # legacy booleans are not revision evidence
+        assert (
+            s.spec_gen.step_passed("tasks_audit") is False
+        )  # legacy booleans are not revision evidence
 
         assert s.is_phase_complete(BuildPhase.SPEC_GENERATION)
         # The resume point is the design audit, with the new phase after it
@@ -681,7 +764,9 @@ class TestPrePlanReviewCheckpointResume:
 
     def test_plan_review_is_ordered_between_design_audit_and_prototype(self):
         order = list(BuildPhase)
-        assert order.index(BuildPhase.DESIGN_AUDIT) < order.index(BuildPhase.PLAN_REVIEW)
+        assert order.index(BuildPhase.DESIGN_AUDIT) < order.index(
+            BuildPhase.PLAN_REVIEW
+        )
         assert order.index(BuildPhase.PLAN_REVIEW) < order.index(BuildPhase.PROTOTYPE)
 
     def test_a_checkpoint_past_the_prototype_does_not_rewind_for_the_review(self):
@@ -725,13 +810,20 @@ class TestPreFindingsCheckpoint:
         from build_pipeline.findings.models import PRComment, Triage, Verdict
         from build_pipeline.state import FindingsRound, FindingsState
 
-        rnd = FindingsRound(number=1, started=["fetch"],
-                            comments=[PRComment(id=7, kind="review", author="a")],
-                            triaged={7: Triage(verdict=Verdict.QUESTION, reason="why")},
-                            blocks={1: "comment:7"})
-        s = BuildState(change_name="c", tier="advanced",
-                       findings=FindingsState(pr=3, repo="o/r", branch="buildme/c",
-                                              change_dir="/x", rounds=[rnd]))
+        rnd = FindingsRound(
+            number=1,
+            started=["fetch"],
+            comments=[PRComment(id=7, kind="review", author="a")],
+            triaged={7: Triage(verdict=Verdict.QUESTION, reason="why")},
+            blocks={1: "comment:7"},
+        )
+        s = BuildState(
+            change_name="c",
+            tier="advanced",
+            findings=FindingsState(
+                pr=3, repo="o/r", branch="buildme/c", change_dir="/x", rounds=[rnd]
+            ),
+        )
         path = tmp_path / ".findings-state.json"
         s.checkpoint(path)
         back = BuildState.load(path).findings
@@ -741,8 +833,9 @@ class TestPreFindingsCheckpoint:
 
 
 def _is_build_phase(node) -> bool:
-    return ((isinstance(node, ast.Name) and node.id == "BuildPhase")
-            or (isinstance(node, ast.Attribute) and node.attr == "BuildPhase"))
+    return (isinstance(node, ast.Name) and node.id == "BuildPhase") or (
+        isinstance(node, ast.Attribute) and node.attr == "BuildPhase"
+    )
 
 
 def _failed_writes(source: str) -> list[tuple[str, int]]:
@@ -750,7 +843,9 @@ def _failed_writes(source: str) -> list[tuple[str, int]]:
     (enclosing function, line): `BuildPhase.FAILED` anywhere but a comparison
     or a dict key, `BuildPhase("failed")`, and "failed" given as a `phase`."""
     tree = ast.parse(source)
-    parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+    parents = {
+        child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)
+    }
 
     def func_of(node) -> str:
         while node in parents:
@@ -772,18 +867,39 @@ def _failed_writes(source: str) -> list[tuple[str, int]]:
 
     hits = []
     for node in ast.walk(tree):
-        if (isinstance(node, ast.Attribute) and node.attr == "FAILED"
-                and _is_build_phase(node.value) and not only_read(node)) or (isinstance(node, ast.Call) and _is_build_phase(node.func)
-                and any(is_failed_text(a) for a in node.args)):
+        if (
+            isinstance(node, ast.Attribute)
+            and node.attr == "FAILED"
+            and _is_build_phase(node.value)
+            and not only_read(node)
+        ) or (
+            isinstance(node, ast.Call)
+            and _is_build_phase(node.func)
+            and any(is_failed_text(a) for a in node.args)
+        ):
             hits.append(node)
-        elif isinstance(node, ast.keyword) and node.arg == "phase" and is_failed_text(node.value):
+        elif (
+            isinstance(node, ast.keyword)
+            and node.arg == "phase"
+            and is_failed_text(node.value)
+        ):
             hits.append(node.value)
-        elif (isinstance(node, ast.Assign) and is_failed_text(node.value)
-                and any(isinstance(t, ast.Attribute) and t.attr == "phase" for t in node.targets)):
+        elif (
+            isinstance(node, ast.Assign)
+            and is_failed_text(node.value)
+            and any(
+                isinstance(t, ast.Attribute) and t.attr == "phase" for t in node.targets
+            )
+        ):
             hits.append(node)
         elif isinstance(node, ast.Dict):
-            hits.extend(v for k, v in zip(node.keys, node.values)
-                        if isinstance(k, ast.Constant) and k.value == "phase" and is_failed_text(v))
+            hits.extend(
+                v
+                for k, v in zip(node.keys, node.values)
+                if isinstance(k, ast.Constant)
+                and k.value == "phase"
+                and is_failed_text(v)
+            )
     return sorted((func_of(n), n.lineno) for n in hits)
 
 
@@ -791,7 +907,9 @@ class TestFailRecordsTheTree:
     """`BuildState.fail` records what the tree held before it checkpoints
     FAILED; a re-run of the FAILED build compares the tree with it."""
 
-    def test_fail_records_head_and_uncommitted_paths_and_survives_a_reload(self, tmp_path):
+    def test_fail_records_head_and_uncommitted_paths_and_survives_a_reload(
+        self, tmp_path
+    ):
         import subprocess
 
         from tests.test_git_ops import make_repo
@@ -804,8 +922,13 @@ class TestFailRecordsTheTree:
 
         back = BuildState.load(path)
         assert back.phase == BuildPhase.FAILED
-        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True,
-                              text=True, check=True).stdout.strip()
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
         assert back.failed_stop.head == head
         assert list(back.failed_stop.edits) == ["left.txt"]
 
@@ -819,34 +942,51 @@ class TestFailRecordsTheTree:
 
     def test_a_checkpoint_without_the_field_loads_with_no_record(self, tmp_path):
         path = tmp_path / "state.json"
-        path.write_text(json.dumps({"change_name": "c", "mode": "scratch", "tier": "advanced",
-                                    "phase": "failed"}))
+        path.write_text(
+            json.dumps(
+                {
+                    "change_name": "c",
+                    "mode": "scratch",
+                    "tier": "advanced",
+                    "phase": "failed",
+                }
+            )
+        )
         assert BuildState.load(path).failed_stop is None
 
     def test_every_failed_checkpoint_goes_through_fail(self):
         """A FAILED written without the record would make its re-run refuse
         the failed run's own leftovers, or compare them with an older failure's."""
         scripts = Path(__file__).resolve().parents[1]
-        users = sorted({(p.relative_to(scripts).as_posix(), func)
-                        for p in (scripts / "build_pipeline").rglob("*.py")
-                        for func, _ in _failed_writes(p.read_text())})
+        users = sorted(
+            {
+                (p.relative_to(scripts).as_posix(), func)
+                for p in (scripts / "build_pipeline").rglob("*.py")
+                for func, _ in _failed_writes(p.read_text())
+            }
+        )
         assert users == [("build_pipeline/state.py", "fail")]
 
-    @pytest.mark.parametrize("body", [
-        "state.advance_to(BuildPhase.FAILED)",
-        "state.advance_to(BuildPhase.FAILED, path)",
-        "state.advance_to(phase=BuildPhase.FAILED)",
-        "state.phase = BuildPhase.FAILED; state.checkpoint(path)",
-        "failed = BuildPhase.FAILED\nstate.advance_to(failed)",
-        "state = state.model_copy(update={'phase': BuildPhase.FAILED})",
-        "state.advance_to(models.BuildPhase.FAILED)",
-        "state.advance_to(BuildPhase('failed'))",
-        "state.phase = 'failed'",
-        "BuildState(change_name='c', phase='failed')",
-        "BuildState.model_validate({'phase': 'failed'})",
-    ])
+    @pytest.mark.parametrize(
+        "body",
+        [
+            "state.advance_to(BuildPhase.FAILED)",
+            "state.advance_to(BuildPhase.FAILED, path)",
+            "state.advance_to(phase=BuildPhase.FAILED)",
+            "state.phase = BuildPhase.FAILED; state.checkpoint(path)",
+            "failed = BuildPhase.FAILED\nstate.advance_to(failed)",
+            "state = state.model_copy(update={'phase': BuildPhase.FAILED})",
+            "state.advance_to(models.BuildPhase.FAILED)",
+            "state.advance_to(BuildPhase('failed'))",
+            "state.phase = 'failed'",
+            "BuildState(change_name='c', phase='failed')",
+            "BuildState.model_validate({'phase': 'failed'})",
+        ],
+    )
     def test_the_scan_finds_each_way_of_writing_failed(self, body):
-        hits = _failed_writes("def bypass(state, path):\n    " + body.replace("\n", "\n    "))
+        hits = _failed_writes(
+            "def bypass(state, path):\n    " + body.replace("\n", "\n    ")
+        )
         assert hits and {func for func, _ in hits} == {"bypass"}
 
     def test_the_scan_leaves_reads_of_failed_alone(self):

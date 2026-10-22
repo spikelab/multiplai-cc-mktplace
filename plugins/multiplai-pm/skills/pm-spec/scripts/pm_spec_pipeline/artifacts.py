@@ -72,7 +72,10 @@ def registry_names(run: Run) -> list[str]:
 def intake_hash(run: Run) -> str:
     """The proposal's inputs: the intake files, the interview, the project context and the registry's names."""
     change_dir = run.config.change_dir
-    parts = {name: _read(change_dir / name) for name in ("prd.md", "ticket.md", "plan.md", "interview.md")}
+    parts = {
+        name: _read(change_dir / name)
+        for name in ("prd.md", "ticket.md", "plan.md", "interview.md")
+    }
     parts["context"] = run.config.project_context
     parts["registry"] = ",".join(registry_names(run))
     parts["ticket_children"] = ",".join(intake.ticket_refs(change_dir)["children"])
@@ -88,11 +91,27 @@ def inputs_for(run: Run, key: str) -> str:
     if key == "proposal":
         return intake_hash(run)
     if key == "use-cases":
-        return sha(json.dumps({"proposal": proposal_text(run), "interview": _read(change_dir / "interview.md"),
-                               "context": run.config.project_context}, sort_keys=True))
+        return sha(
+            json.dumps(
+                {
+                    "proposal": proposal_text(run),
+                    "interview": _read(change_dir / "interview.md"),
+                    "context": run.config.project_context,
+                },
+                sort_keys=True,
+            )
+        )
     cap = key.split("/", 1)[1]
-    return sha(json.dumps({"proposal": proposal_text(run), "context": run.config.project_context,
-                           "registry": _read(registry_dir(run) / f"{cap}.md")}, sort_keys=True))
+    return sha(
+        json.dumps(
+            {
+                "proposal": proposal_text(run),
+                "context": run.config.project_context,
+                "registry": _read(registry_dir(run) / f"{cap}.md"),
+            },
+            sort_keys=True,
+        )
+    )
 
 
 def artifact_path(run: Run, key: str) -> Path:
@@ -113,7 +132,9 @@ def record_current(run: Run) -> None:
     for key in ["proposal", "use-cases", *requirement_keys(run)]:
         path = artifact_path(run, key)
         if path.is_file():
-            run.state.artifacts[key] = ArtifactRecord(inputs=inputs_for(run, key), output=sha(path.read_text()))
+            run.state.artifacts[key] = ArtifactRecord(
+                inputs=inputs_for(run, key), output=sha(path.read_text())
+            )
     for key in [k for k in run.state.artifacts if k.startswith("requirements/")]:
         if not artifact_path(run, key).is_file():
             del run.state.artifacts[key]
@@ -139,8 +160,12 @@ def _decide(run: Run, key: str) -> str:
 
 # --- the PRD citations and the ticket refs in `## Sources` ---------------------
 
-_SOURCES_RE = re.compile(r"^##\s+Sources\s*$(.*?)(?=^##\s|\Z)", re.MULTILINE | re.DOTALL)
-_SOURCE_LINE_RE = re.compile(r"^-\s+`([a-z0-9]+(?:-[a-z0-9]+)*)`\s*:\s*(.+?)\s*$", re.MULTILINE)
+_SOURCES_RE = re.compile(
+    r"^##\s+Sources\s*$(.*?)(?=^##\s|\Z)", re.MULTILINE | re.DOTALL
+)
+_SOURCE_LINE_RE = re.compile(
+    r"^-\s+`([a-z0-9]+(?:-[a-z0-9]+)*)`\s*:\s*(.+?)\s*$", re.MULTILINE
+)
 _PRD_RE = re.compile(r"^PRD\s*(?:§\s*)?[\"“']?(.+?)[\"”']?$", re.IGNORECASE)
 _TICKET_RE = re.compile(r"^ticket\s+(\S+)$", re.IGNORECASE)
 
@@ -170,7 +195,9 @@ def proposal_errors(run: Run, text: str) -> list[str]:
     with no `## Sources` line naming a heading the PRD has."""
     caps = expected_capabilities(text)
     if not caps:
-        return ["the proposal names no capability under `## Capabilities` (a list item `- `name``)"]
+        return [
+            "the proposal names no capability under `## Capabilities` (a list item `- `name``)"
+        ]
     prd = intake.prd_text(run.config.change_dir)
     if not prd:
         return []
@@ -180,13 +207,18 @@ def proposal_errors(run: Run, text: str) -> list[str]:
     for cap in caps:
         named = cited.get(cap, {}).get("prd", [])
         if not named:
-            errors.append(f"capability `{cap}` has no `## Sources` line naming the PRD section it comes from")
+            errors.append(
+                f"capability `{cap}` has no `## Sources` line naming the PRD section it comes from"
+            )
         elif not any(_norm(h) in headings for h in named):
-            errors.append(f"capability `{cap}` names PRD section(s) {named}, which are not headings of the PRD")
+            errors.append(
+                f"capability `{cap}` names PRD section(s) {named}, which are not headings of the PRD"
+            )
     return errors
 
 
 # --- prompts --------------------------------------------------------------------
+
 
 def prd_section(run: Run) -> str:
     prd = intake.prd_text(run.config.change_dir)
@@ -211,7 +243,9 @@ def proposal_template(run: Run) -> str:
         forms.append("ticket <ref>")
     if not forms:
         return P.PROPOSAL_TEMPLATE
-    return P.PROPOSAL_TEMPLATE + P.SOURCES_TEMPLATE.format(source_forms="; ".join(forms))
+    return P.PROPOSAL_TEMPLATE + P.SOURCES_TEMPLATE.format(
+        source_forms="; ".join(forms)
+    )
 
 
 def _registry_names_section(run: Run) -> str:
@@ -252,33 +286,49 @@ def requirements_prompt(run: Run, cap: str, *, proposal: str | None = None) -> s
     prompt = P.REQUIREMENTS_PROMPT.format(
         notice=UNTRUSTED_NOTICE,
         project_context=run.config.project_context,
-        proposal_content=(proposal_text(run) if proposal is None else proposal) or "(not available)",
+        proposal_content=(proposal_text(run) if proposal is None else proposal)
+        or "(not available)",
         capability_name=cap,
         instruction=P.REQUIREMENTS_INSTRUCTION,
         template=P.REQUIREMENTS_TEMPLATE,
     )
     current = _read(registry_dir(run) / f"{cap}.md")
     if current:
-        prompt += (f"\n\n{P.REGISTRY_HEADING}\n\n{P.REGISTRY_REQUIREMENTS_RULE}\n\n"
-                   f"### {cap} (specs/registry/{cap}.md)\n{current[:REGISTRY_TEXT_LIMIT]}\n")
+        prompt += (
+            f"\n\n{P.REGISTRY_HEADING}\n\n{P.REGISTRY_REQUIREMENTS_RULE}\n\n"
+            f"### {cap} (specs/registry/{cap}.md)\n{current[:REGISTRY_TEXT_LIMIT]}\n"
+        )
     return prompt
 
 
 def all_requirements_text(change_dir: Path) -> str:
-    parts = [f"### requirements/{p.name}\n{p.read_text()}" for p in sorted((change_dir / "requirements").glob("*.md"))]
+    parts = [
+        f"### requirements/{p.name}\n{p.read_text()}"
+        for p in sorted((change_dir / "requirements").glob("*.md"))
+    ]
     return "\n\n".join(parts) or "(none)"
 
 
 # --- generation -------------------------------------------------------------------
 
+
 async def write_proposal(run: Run) -> str:
     """One proposal call, and one more with the problems listed when it cannot be kept."""
-    text = await sdk.text_call(proposal_prompt(run), config=run.config, step="spec_artifact", label="spec:proposal")
+    text = await sdk.text_call(
+        proposal_prompt(run),
+        config=run.config,
+        step="spec_artifact",
+        label="spec:proposal",
+    )
     errors = proposal_errors(run, text)
     if errors:
         log.warning("proposal rejected, asking once more: %s", "; ".join(errors))
-        text = await sdk.text_call(proposal_prompt(run, errors), config=run.config, step="spec_artifact",
-                                   label="spec:proposal")
+        text = await sdk.text_call(
+            proposal_prompt(run, errors),
+            config=run.config,
+            step="spec_artifact",
+            label="spec:proposal",
+        )
         errors = proposal_errors(run, text)
         if errors:
             raise ValueError("The proposal was rejected twice: " + "; ".join(errors))
@@ -286,10 +336,16 @@ async def write_proposal(run: Run) -> str:
 
 
 async def write_requirements(run: Run, cap: str) -> str:
-    text = await sdk.text_call(requirements_prompt(run, cap), config=run.config, step="spec_artifact",
-                               label=f"spec:requirements:{cap}")
+    text = await sdk.text_call(
+        requirements_prompt(run, cap),
+        config=run.config,
+        step="spec_artifact",
+        label=f"spec:requirements:{cap}",
+    )
     if not valid_requirement_text(text):
-        raise ValueError(f"Invalid requirements for {cap}: expected Requirement/Scenario/WHEN/THEN")
+        raise ValueError(
+            f"Invalid requirements for {cap}: expected Requirement/Scenario/WHEN/THEN"
+        )
     return text
 
 
@@ -301,7 +357,9 @@ async def _produce(run: Run, key: str) -> None:
         return
     if decision == "adopt":
         log.info("artifact %s: adopted the file on disk", key)
-        run.state.artifacts[key] = ArtifactRecord(inputs=inputs_for(run, key), output=sha(path.read_text()))
+        run.state.artifacts[key] = ArtifactRecord(
+            inputs=inputs_for(run, key), output=sha(path.read_text())
+        )
         run.save()
         return
     inputs = inputs_for(run, key)
@@ -311,8 +369,12 @@ async def _produce(run: Run, key: str) -> None:
     if key == "proposal":
         text = await write_proposal(run)
     elif key == "use-cases":
-        text = await sdk.text_call(use_cases_prompt(run), config=run.config, step="spec_artifact",
-                                   label="spec:use-cases")
+        text = await sdk.text_call(
+            use_cases_prompt(run),
+            config=run.config,
+            step="spec_artifact",
+            label="spec:use-cases",
+        )
     else:
         text = await write_requirements(run, key.split("/", 1)[1])
     atomic_write(path, text)
@@ -332,7 +394,9 @@ def retire_superseded(run: Run) -> list[str]:
             moved.append(path.stem)
     if moved:
         run.save()
-        run.progress("ARTIFACTS", "Moved superseded requirements aside: " + ", ".join(moved))
+        run.progress(
+            "ARTIFACTS", "Moved superseded requirements aside: " + ", ".join(moved)
+        )
     return moved
 
 

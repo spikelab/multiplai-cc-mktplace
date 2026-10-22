@@ -131,13 +131,15 @@ def recover_stale_processing(
                 os.replace(str(claim), str(failed_dir / m.name))
                 logger.warning(
                     "Deferred extraction permanently failed after %d attempts: %s",
-                    attempts - 1, m.name,
+                    attempts - 1,
+                    m.name,
                 )
             else:
                 os.replace(str(claim), str(pending_dir / m.name))
                 logger.info(
                     "Requeued stale extraction marker (attempt %d): %s",
-                    attempts, m.name,
+                    attempts,
+                    m.name,
                 )
         except OSError:
             logger.exception("Could not recover stale marker %s", m.name)
@@ -313,7 +315,8 @@ def _launch_queue(
         except OSError:
             logger.warning(
                 "Drain child for %s died before reading its payload; "
-                "leaving marker for stale recovery", dest.name,
+                "leaving marker for stale recovery",
+                dest.name,
             )
         children.append(proc)
         launched += 1

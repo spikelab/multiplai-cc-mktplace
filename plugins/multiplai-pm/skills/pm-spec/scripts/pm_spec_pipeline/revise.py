@@ -76,8 +76,15 @@ def issues_path(run: Run, from_respec: bool) -> Path:
 
 def _sections(text: str) -> list[tuple[str, str]]:
     marks = list(_H2_RE.finditer(text))
-    return [(m.group(1), text[m.end(): marks[i + 1].start() if i + 1 < len(marks) else len(text)].strip())
-            for i, m in enumerate(marks)]
+    return [
+        (
+            m.group(1),
+            text[
+                m.end() : marks[i + 1].start() if i + 1 < len(marks) else len(text)
+            ].strip(),
+        )
+        for i, m in enumerate(marks)
+    ]
 
 
 def parse_spec_issues(text: str) -> list[str]:
@@ -97,7 +104,9 @@ def parse_respec(text: str) -> list[str]:
         blocks = re.split(r"(?=^###\s+Requirement:)", body, flags=re.MULTILINE)
         for block in blocks:
             if block.strip().startswith("### Requirement:"):
-                issues.append(f"{m.group(1).upper()} requirement (proposed by the build):\n{block.strip()}")
+                issues.append(
+                    f"{m.group(1).upper()} requirement (proposed by the build):\n{block.strip()}"
+                )
     return issues
 
 
@@ -108,7 +117,12 @@ def requirement_caps(change_dir: Path, text: str) -> list[str]:
     for cap in caps:
         if cap in found:
             continue
-        names = [r.name for r in parse_requirements((change_dir / "requirements" / f"{cap}.md").read_text())]
+        names = [
+            r.name
+            for r in parse_requirements(
+                (change_dir / "requirements" / f"{cap}.md").read_text()
+            )
+        ]
         if any(name and name in text for name in names):
             found.append(cap)
     return found
@@ -118,15 +132,24 @@ def as_findings(change_dir: Path, issues: list[str]) -> list[dict]:
     out = []
     for issue in issues:
         caps = requirement_caps(change_dir, issue)
-        out.append({"category": "spec-issue", "severity": "major", "description": issue,
-                    "places": [{"file": f"requirements/{c}.md", "where": ""} for c in caps]})
+        out.append(
+            {
+                "category": "spec-issue",
+                "severity": "major",
+                "description": issue,
+                "places": [{"file": f"requirements/{c}.md", "where": ""} for c in caps],
+            }
+        )
     return out
 
 
 def read_issues(run: Run, from_respec: bool) -> tuple[Path, str, list[str]]:
     path = issues_path(run, from_respec)
     if not path.is_file():
-        print(f"ERROR: revise: {path} does not exist; there is nothing to revise", flush=True)
+        print(
+            f"ERROR: revise: {path} does not exist; there is nothing to revise",
+            flush=True,
+        )
         raise Stop(EXIT_REFUSED, "no issues file")
     text = path.read_text()
     issues = parse_respec(text) if from_respec else parse_spec_issues(text)
@@ -162,14 +185,23 @@ async def run_revise(run: Run, *, from_respec: bool = False) -> None:
         # Row S9: the rewrite published; the recheck alone, against the listed issues.
         await recheck(run, from_respec)
         return
-    if step and step.outcome == "passed" and run.state.handoff and not run.state.handoff.committed:
+    if (
+        step
+        and step.outcome == "passed"
+        and run.state.handoff
+        and not run.state.handoff.committed
+    ):
         if handoff.pending_commit(run):
             handoff.retry_commit(run)
             return
     path, text, issues = read_issues(run, from_respec)
     source = f"{path.name}:{sha(text)}"
     step = run.state.steps.get(NAME)
-    if step and (step.source != source or step.outcome == "passed") and not F.rewrite_pending(run, NAME):
+    if (
+        step
+        and (step.source != source or step.outcome == "passed")
+        and not F.rewrite_pending(run, NAME)
+    ):
         # Another issues file, or one raised again after a passed revise: a new
         # round, with its one rewrite.
         run.state.steps[NAME] = StepOutcome()
@@ -180,8 +212,13 @@ async def run_revise(run: Run, *, from_respec: bool = False) -> None:
     step = run.state.step(NAME)
     listed = F.number_findings(NAME, as_findings(change_dir, issues))
     if step.repair_attempts:
-        F.block_on_findings(run, NAME, revision, "The rewrite for these issues was already attempted",
-                            step.repair_findings or listed)
+        F.block_on_findings(
+            run,
+            NAME,
+            revision,
+            "The rewrite for these issues was already attempted",
+            step.repair_findings or listed,
+        )
     mark_draft(change_dir)
     run.state.handoff = None
     print("PHASE:REVISE", flush=True)
@@ -189,11 +226,18 @@ async def run_revise(run: Run, *, from_respec: bool = False) -> None:
     run.state.step(NAME).source = source
     run.save()
     named = [cited_caps(change_dir, f) for f in listed]
-    caps = change_caps(change_dir) if not all(named) else sorted({c for cs in named for c in cs})
-    files = await rewrite_requirements(run, run.state.step(NAME).repair_findings, caps, label=NAME)
+    caps = (
+        change_caps(change_dir)
+        if not all(named)
+        else sorted({c for cs in named for c in cs})
+    )
+    files = await rewrite_requirements(
+        run, run.state.step(NAME).repair_findings, caps, label=NAME
+    )
     if problems := check_texts(run, files):
         blocking, _ = F.recheck_verdict(listed, [], [], deterministic=problems)
         F.block_on_findings(run, NAME, revision, BLOCK_REASON, blocking)
     from .publish import publish
+
     publish(run, NAME, files)
     await recheck(run, from_respec)

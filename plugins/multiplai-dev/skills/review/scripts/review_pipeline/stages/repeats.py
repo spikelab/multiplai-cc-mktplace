@@ -43,10 +43,16 @@ SHOWN_STATUSES = ("confirmed", "unverifiable")
 
 
 def shown_findings(state: ReviewState) -> list[Finding]:
-    return [f for f in state.findings if getattr(state.verdicts.get(f.id), "status", "") in SHOWN_STATUSES]
+    return [
+        f
+        for f in state.findings
+        if getattr(state.verdicts.get(f.id), "status", "") in SHOWN_STATUSES
+    ]
 
 
-def earlier_findings(state: ReviewState, ctx: RunContext) -> list[rounds.EarlierFinding]:
+def earlier_findings(
+    state: ReviewState, ctx: RunContext
+) -> list[rounds.EarlierFinding]:
     if ctx.target_dir is None:
         return []
     t = state.target
@@ -54,8 +60,9 @@ def earlier_findings(state: ReviewState, ctx: RunContext) -> list[rounds.Earlier
     return rounds.load_rounds(ctx.target_dir, t.head_sha, elsewhere)
 
 
-def gate_matches(matches: list[RepeatMatch], shown_ids: set[str],
-                 rejected_ids: set[str]) -> tuple[list[RepeatMatch], list[str]]:
+def gate_matches(
+    matches: list[RepeatMatch], shown_ids: set[str], rejected_ids: set[str]
+) -> tuple[list[RepeatMatch], list[str]]:
     """(the matches kept, one line per match dropped)."""
     kept, dropped, used = [], [], set()
     for m in matches:
@@ -88,10 +95,19 @@ async def run_repeats(state: ReviewState, ctx: RunContext) -> ReviewState:
     for f in shown:
         e = by_id.get(f.id)
         if e is not None and f.id not in state.repeats:
-            state.repeats[f.id] = Repeat(rejected_id=f.id, round=e.head_sha, note=e.note, by="id",
-                                         reason=f"the same finding was rejected in round {e.head_sha[:12]}")
+            state.repeats[f.id] = Repeat(
+                rejected_id=f.id,
+                round=e.head_sha,
+                note=e.note,
+                by="id",
+                reason=f"the same finding was rejected in round {e.head_sha[:12]}",
+            )
 
-    todo = [f for f in shown if f.id not in state.repeats and f.id not in state.repeats_checked]
+    todo = [
+        f
+        for f in shown
+        if f.id not in state.repeats and f.id not in state.repeats_checked
+    ]
     failed = False
     if todo:
         started = checks.now()
@@ -99,9 +115,14 @@ async def run_repeats(state: ReviewState, ctx: RunContext) -> ReviewState:
         with sdk.recording() as rec:
             try:
                 out = await sdk.agent_call_structured(
-                    prompt.build(target, todo, rejected), RepeatsOutput,
-                    allowed_tools=sdk.MERGER_TOOLS, model=cfg.merger_model, effort=cfg.effort,
-                    max_turns=cfg.max_turns, cwd=str(ctx.snapshot), budget_label="repeats",
+                    prompt.build(target, todo, rejected),
+                    RepeatsOutput,
+                    allowed_tools=sdk.MERGER_TOOLS,
+                    model=cfg.merger_model,
+                    effort=cfg.effort,
+                    max_turns=cfg.max_turns,
+                    cwd=str(ctx.snapshot),
+                    budget_label="repeats",
                 )
             except (sdk.RepoTrustError, sdk.UsageLimitError):
                 raise
@@ -112,11 +133,18 @@ async def run_repeats(state: ReviewState, ctx: RunContext) -> ReviewState:
                 out, failed = RepeatsOutput(), True
         kept, dropped = gate_matches(out.matches, {f.id for f in todo}, set(by_id))
         check = AgentCheck(
-            stage="repeats", subject="repeats",
+            stage="repeats",
+            subject="repeats",
             given=[f"findings ({len(todo)})", f"rejected earlier ({len(rejected)})"],
-            calls=[checks.summarise_call(c, target, ctx.snapshot) for c in rec.tool_calls],
-            turns=rec.turns, cost_usd=round(rec.cost_usd, 6), started_at=started, ended_at=checks.now(),
-            outcome="; ".join(f"{m.id} repeats {m.rejected_id}" for m in kept) or "no repeats",
+            calls=[
+                checks.summarise_call(c, target, ctx.snapshot) for c in rec.tool_calls
+            ],
+            turns=rec.turns,
+            cost_usd=round(rec.cost_usd, 6),
+            started_at=started,
+            ended_at=checks.now(),
+            outcome="; ".join(f"{m.id} repeats {m.rejected_id}" for m in kept)
+            or "no repeats",
         )
         if error:
             check.error, check.outcome = error, f"failed: {checks.failure_kind(error)}"
@@ -125,12 +153,20 @@ async def run_repeats(state: ReviewState, ctx: RunContext) -> ReviewState:
             state.errors.append(f"repeats: dropped a match: {line}")
         for m in kept:
             e = by_id[m.rejected_id]
-            state.repeats[m.id] = Repeat(rejected_id=m.rejected_id, reason=m.reason.strip(), round=e.head_sha,
-                                         note=e.note, by="agent")
+            state.repeats[m.id] = Repeat(
+                rejected_id=m.rejected_id,
+                reason=m.reason.strip(),
+                round=e.head_sha,
+                note=e.note,
+                by="agent",
+            )
         # Stored as the answer arrives, so a resume does not ask again.
         state.repeats_checked.extend(f.id for f in todo)
 
-    ctx.counts = {"rejected earlier": len(rejected), "repeats": len(state.repeats),
-                  "agent_failures": int(failed)}
+    ctx.counts = {
+        "rejected earlier": len(rejected),
+        "repeats": len(state.repeats),
+        "agent_failures": int(failed),
+    }
     state.stage = "repeats"
     return state

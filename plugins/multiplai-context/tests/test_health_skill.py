@@ -19,13 +19,14 @@ from conftest import PLUGIN_ROOT, SCRIPTS_DIR
 
 def _parse_fm(skill_file):
     import re as _re
+
     text = (PLUGIN_ROOT / skill_file).read_text()
-    m = _re.match(r'^---\n(.*?)\n---', text, _re.DOTALL)
+    m = _re.match(r"^---\n(.*?)\n---", text, _re.DOTALL)
     fm = {}
     if m:
         for line in m.group(1).splitlines():
-            if ':' in line:
-                k, _, v = line.partition(':')
+            if ":" in line:
+                k, _, v = line.partition(":")
                 fm[k.strip()] = v.strip().strip('"')
     return fm
 
@@ -37,7 +38,9 @@ class TestHealthSkillFrontmatter:
         assert (PLUGIN_ROOT / "skills" / "health" / "SKILL.md").is_file()
 
     def test_health_skill_has_frontmatter(self):
-        assert _parse_fm("skills/health/SKILL.md"), "skills/health/SKILL.md missing YAML frontmatter"
+        assert _parse_fm("skills/health/SKILL.md"), (
+            "skills/health/SKILL.md missing YAML frontmatter"
+        )
 
     def test_health_skill_name(self):
         assert _parse_fm("skills/health/SKILL.md").get("name") == "health"
@@ -150,8 +153,9 @@ class TestHealthSkillReportsModelClient:
         configuration issues.
         """
         health_script = SCRIPTS_DIR / "health_check.py"
-        assert health_script.is_file(), \
+        assert health_script.is_file(), (
             "health_check.py must exist for health skill to report client type"
+        )
         source = health_script.read_text()
         # Must reference detect_client_type or ModelClient detection
         assert re.search(
@@ -166,11 +170,13 @@ class TestDetectClientTypeFunction:
     def test_detect_client_type_exists(self):
         """model_client module must expose detect_client_type()."""
         from multiplai_core.model_client import detect_client_type
+
         assert callable(detect_client_type)
 
     def test_detect_client_type_returns_string(self):
         """detect_client_type() must return a human-readable string."""
         from multiplai_core.model_client import detect_client_type
+
         result = detect_client_type()
         assert isinstance(result, str)
         assert len(result) > 0
@@ -183,22 +189,43 @@ class TestDetectClientTypeFunction:
             import importlib
 
             import multiplai_core.model_client as mc
+
             # Mock claude_agent_sdk import to fail
             with patch.dict("sys.modules", {"claude_agent_sdk": None}):
-                with patch("builtins.__import__", side_effect=lambda name, *a, **kw: (_ for _ in ()).throw(ImportError()) if name == "claude_agent_sdk" else importlib.__import__(name, *a, **kw)):
+                with patch(
+                    "builtins.__import__",
+                    side_effect=lambda name, *a, **kw: (
+                        (_ for _ in ()).throw(ImportError())
+                        if name == "claude_agent_sdk"
+                        else importlib.__import__(name, *a, **kw)
+                    ),
+                ):
                     result = mc.detect_client_type()
-            assert "none" in result.lower() or "unavailable" in result.lower() \
+            assert (
+                "none" in result.lower()
+                or "unavailable" in result.lower()
                 or "no" in result.lower()
+            )
 
     def test_detect_client_type_with_api_key(self):
         """When API key is set, reports AnthropicAPIClient."""
-        with patch.dict(os.environ, {"CLAUDE_PLUGIN_OPTION_ANTHROPIC_API_KEY": "sk-test"}):
+        with patch.dict(
+            os.environ, {"CLAUDE_PLUGIN_OPTION_ANTHROPIC_API_KEY": "sk-test"}
+        ):
             import importlib
 
             import multiplai_core.model_client as mc
+
             # Mock claude_agent_sdk import to fail so API key fallback is tested
             with patch.dict("sys.modules", {"claude_agent_sdk": None}):
-                with patch("builtins.__import__", side_effect=lambda name, *a, **kw: (_ for _ in ()).throw(ImportError()) if name == "claude_agent_sdk" else importlib.__import__(name, *a, **kw)):
+                with patch(
+                    "builtins.__import__",
+                    side_effect=lambda name, *a, **kw: (
+                        (_ for _ in ()).throw(ImportError())
+                        if name == "claude_agent_sdk"
+                        else importlib.__import__(name, *a, **kw)
+                    ),
+                ):
                     result = mc.detect_client_type()
             assert "anthropic" in result.lower() or "api" in result.lower()
 
@@ -217,12 +244,14 @@ class TestHealthCheckScriptExists:
         The health.md skill references 'python scripts/health_check.py',
         so this script must exist for the skill to work.
         """
-        assert (SCRIPTS_DIR / "health_check.py").is_file(), \
+        assert (SCRIPTS_DIR / "health_check.py").is_file(), (
             "health_check.py must exist — health.md skill references it"
+        )
 
     def test_script_compiles(self):
         """health_check.py must be syntactically valid Python."""
         import py_compile
+
         py_compile.compile(
             str(SCRIPTS_DIR / "health_check.py"),
             doraise=True,
@@ -250,8 +279,9 @@ class TestHealthCheckUsesPathResolver:
         for line in lines:
             if line.strip().startswith("#"):
                 continue
-            assert "/home/" not in line or "expanduser" in line, \
+            assert "/home/" not in line or "expanduser" in line, (
                 f"Hardcoded /home/ path found: {line.strip()}"
+            )
 
 
 class TestHealthCheckUsesModelClient:
@@ -354,8 +384,9 @@ class TestHealthCheckMemoryInventory:
     def test_scans_whole_memory_dir_not_fixed_list(self):
         """Inventory must glob every *.md in memory_dir, not iterate a
         hardcoded trio (the trio is required-existence only)."""
-        assert re.search(r"memory_dir\.glob\(\s*['\"]\*\.md['\"]\s*\)", self.source), \
+        assert re.search(r"memory_dir\.glob\(\s*['\"]\*\.md['\"]\s*\)", self.source), (
             "health_check must scan memory_dir.glob('*.md') for the inventory"
+        )
         assert "REQUIRED_MEMORY_FILES" in self.source
         # The old bug: comprehension over the fixed list for the inventory.
         assert "for f in MEMORY_FILES" not in self.source
@@ -371,10 +402,14 @@ class TestHealthCheckMemoryInventory:
         """Only absent starter-template files trigger the setup hint."""
         assert '"required_missing"' in self.source
         assert "required_missing" in self.source
-        assert re.search(
-            r"required_missing.*\n.*multiplai-context:setup|setup.*required",
-            self.source, re.DOTALL,
-        ) or "Run /multiplai-context:setup" in self.source
+        assert (
+            re.search(
+                r"required_missing.*\n.*multiplai-context:setup|setup.*required",
+                self.source,
+                re.DOTALL,
+            )
+            or "Run /multiplai-context:setup" in self.source
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -424,7 +459,9 @@ class TestHealthCheckDiaryAndLearnings:
 
     def test_reports_last_dream_date(self):
         """health_check.py must report last Dream date or 'never'."""
-        assert re.search(r"(?i)(dream.*state|last.*dream|never|consolidat)", self.source)
+        assert re.search(
+            r"(?i)(dream.*state|last.*dream|never|consolidat)", self.source
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -500,7 +537,7 @@ class TestHealthNoGitOperations:
         path = SCRIPTS_DIR / "health_check.py"
         if path.is_file():
             source = path.read_text()
-            assert not re.search(r'git\s+commit\b', source)
+            assert not re.search(r"git\s+commit\b", source)
 
 
 # ---------------------------------------------------------------------------
@@ -540,7 +577,12 @@ class TestSkillsPluginDirExecution:
 
     def test_all_skill_files_exist(self):
         """All skill files in skills/ must exist with frontmatter."""
-        for skill_file in ["skills/health/SKILL.md", "skills/dream/SKILL.md", "skills/setup/SKILL.md", "skills/refresh-catalogs/SKILL.md"]:
+        for skill_file in [
+            "skills/health/SKILL.md",
+            "skills/dream/SKILL.md",
+            "skills/setup/SKILL.md",
+            "skills/refresh-catalogs/SKILL.md",
+        ]:
             path = PLUGIN_ROOT / skill_file
             assert path.is_file(), f"Skill file missing: {skill_file}"
 
@@ -550,8 +592,9 @@ class TestSkillsPluginDirExecution:
 
     def test_health_skill_health_check_script_exists(self):
         """health_check.py referenced by health skill must exist."""
-        assert (SCRIPTS_DIR / "health_check.py").is_file(), \
+        assert (SCRIPTS_DIR / "health_check.py").is_file(), (
             "health_check.py must exist for health skill to function under --plugin-dir"
+        )
 
     def test_synthesize_now_exists(self):
         """synthesize_now.py used by dream pipeline must exist."""
@@ -561,16 +604,18 @@ class TestSkillsPluginDirExecution:
         """All scripts must set up sys.path for lib/ imports."""
         for script_name in ["dream.py"]:
             source = (SCRIPTS_DIR / script_name).read_text()
-            assert re.search(r"sys\.path\.insert", source), \
+            assert re.search(r"sys\.path\.insert", source), (
                 f"{script_name} must set up sys.path for lib/ imports"
+            )
 
     def test_health_check_uses_sys_path_setup(self):
         """health_check.py must set up sys.path for lib/ imports."""
         path = SCRIPTS_DIR / "health_check.py"
         assert path.is_file(), "health_check.py must exist"
         source = path.read_text()
-        assert re.search(r"sys\.path\.insert", source), \
+        assert re.search(r"sys\.path\.insert", source), (
             "health_check.py must set up sys.path for lib/ imports"
+        )
 
 
 # ---------------------------------------------------------------------------

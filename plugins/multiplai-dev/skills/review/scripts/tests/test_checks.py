@@ -48,8 +48,12 @@ def _schema(path: Path) -> dict:
 
 
 def _result(text: str, *calls: ToolCall, cost: float = 0.5, turns: int = 3):
-    return SimpleNamespace(text=text, tool_calls=tuple(calls), turns=turns,
-                           usage=SimpleNamespace(input_tokens=1, output_tokens=1, cost_usd=cost))
+    return SimpleNamespace(
+        text=text,
+        tool_calls=tuple(calls),
+        turns=turns,
+        usage=SimpleNamespace(input_tokens=1, output_tokens=1, cost_usd=cost),
+    )
 
 
 @pytest.fixture
@@ -73,10 +77,17 @@ async def test_recording_collects_tool_calls_turns_and_cost_from_run_agent(fake_
     class Value(BaseModel):
         value: int
 
-    fake_run.append(_result('{"value": 1}', ToolCall("Read", {"file_path": "/s/a.py"}),
-                            ToolCall("Grep", {"pattern": "x"})))
+    fake_run.append(
+        _result(
+            '{"value": 1}',
+            ToolCall("Read", {"file_path": "/s/a.py"}),
+            ToolCall("Grep", {"pattern": "x"}),
+        )
+    )
     with sdk.recording() as rec:
-        assert (await sdk.agent_call_structured("p", Value, allowed_tools=sdk.FINDER_TOOLS)).value == 1
+        assert (
+            await sdk.agent_call_structured("p", Value, allowed_tools=sdk.FINDER_TOOLS)
+        ).value == 1
     assert [c.name for c in rec.tool_calls] == ["Read", "Grep"]
     assert (rec.turns, rec.cost_usd) == (3, 0.5)
 
@@ -87,10 +98,16 @@ async def test_a_reask_concatenates_both_attempts(fake_run):
     class Value(BaseModel):
         value: int
 
-    fake_run += [_result('{"value": "nope"}', ToolCall("Read", {"file_path": "a.py"}), turns=4),
-                 _result('{"value": 2}', ToolCall("Glob", {"pattern": "*.py"}), turns=1, cost=0.1)]
+    fake_run += [
+        _result('{"value": "nope"}', ToolCall("Read", {"file_path": "a.py"}), turns=4),
+        _result(
+            '{"value": 2}', ToolCall("Glob", {"pattern": "*.py"}), turns=1, cost=0.1
+        ),
+    ]
     with sdk.recording() as rec:
-        assert (await sdk.agent_call_structured("p", Value, allowed_tools=sdk.FINDER_TOOLS)).value == 2
+        assert (
+            await sdk.agent_call_structured("p", Value, allowed_tools=sdk.FINDER_TOOLS)
+        ).value == 2
     assert [c.name for c in rec.tool_calls] == ["Read", "Glob"]
     assert rec.turns == 5 and rec.cost_usd == pytest.approx(0.6)
 
@@ -103,8 +120,10 @@ async def test_a_failed_run_still_records_its_partial_calls_turns_and_cost(fake_
         value: int
 
     partial = _result("", ToolCall("Read", {"file_path": "a.py"}), turns=7, cost=0.9)
-    fake_run += [AgentRunTimeout("timed out", reason="timed out after 600s", partial=partial),
-                 AgentRunTimeout("timed out", reason="timed out after 600s", partial=partial)]
+    fake_run += [
+        AgentRunTimeout("timed out", reason="timed out after 600s", partial=partial),
+        AgentRunTimeout("timed out", reason="timed out after 600s", partial=partial),
+    ]
     with sdk.recording() as rec, pytest.raises(sdk.AgentCallError):
         await sdk.agent_call_structured("p", Value, allowed_tools=sdk.FINDER_TOOLS)
     # Both attempts timed out, and each one's partial result is recorded.
@@ -119,45 +138,115 @@ async def test_without_a_recording_block_nothing_is_kept(fake_run):
         value: int
 
     fake_run.append(_result('{"value": 1}', ToolCall("Read", {"file_path": "a.py"})))
-    await sdk.agent_call_structured("p", Value, allowed_tools=sdk.FINDER_TOOLS)  # no error, no record
+    await sdk.agent_call_structured(
+        "p", Value, allowed_tools=sdk.FINDER_TOOLS
+    )  # no error, no record
 
 
 # --- pure functions -------------------------------------------------------------------
 
 
-def test_summarise_call_makes_paths_repo_relative_and_keeps_inputs_only(target_info, tmp_path):
+def test_summarise_call_makes_paths_repo_relative_and_keeps_inputs_only(
+    target_info, tmp_path
+):
     snap = tmp_path / "tree"
-    s = lambda name, **data: checks.summarise_call(ToolCall(name, data), target_info, snap)
-    assert s("Read", file_path=str(snap / "pkg/a.py")) == {"tool": "Read", "target": "pkg/a.py", "detail": "whole file"}
+    s = lambda name, **data: checks.summarise_call(
+        ToolCall(name, data), target_info, snap
+    )
+    assert s("Read", file_path=str(snap / "pkg/a.py")) == {
+        "tool": "Read",
+        "target": "pkg/a.py",
+        "detail": "whole file",
+    }
     assert s("Read", file_path="a.py", offset=10, limit=5)["detail"] == "lines 10-14"
     assert s("Read", file_path="a.py", offset=10)["detail"] == "lines 10-end"
-    assert s("Grep", pattern="def x", path=str(snap / "pkg"), glob="*.py") == \
-        {"tool": "Grep", "target": "def x", "detail": "in pkg, glob *.py"}
-    assert s("Glob", pattern="**/*.md") == {"tool": "Glob", "target": "**/*.md", "detail": "in ."}
-    assert s("WebFetch", url="https://example.com/x", prompt="p")["target"] == "https://example.com/x"
-    assert s("WebSearch", query="q") == {"tool": "WebSearch", "target": "q", "detail": ""}
-    assert s("Bash", command="rm -rf /") == {"tool": "Bash", "target": "", "detail": "input keys: command"}
+    assert s("Grep", pattern="def x", path=str(snap / "pkg"), glob="*.py") == {
+        "tool": "Grep",
+        "target": "def x",
+        "detail": "in pkg, glob *.py",
+    }
+    assert s("Glob", pattern="**/*.md") == {
+        "tool": "Glob",
+        "target": "**/*.md",
+        "detail": "in .",
+    }
+    assert (
+        s("WebFetch", url="https://example.com/x", prompt="p")["target"]
+        == "https://example.com/x"
+    )
+    assert s("WebSearch", query="q") == {
+        "tool": "WebSearch",
+        "target": "q",
+        "detail": "",
+    }
+    assert s("Bash", command="rm -rf /") == {
+        "tool": "Bash",
+        "target": "",
+        "detail": "input keys: command",
+    }
 
 
 def test_diff_hunks_reads_new_side_ranges():
-    diff = ("diff --git a/x.py b/x.py\n--- a/x.py\n+++ b/x.py\n@@ -1,2 +10,3 @@\n a\n+b\n c\n"
-            "@@ -20 +30 @@\n-x\n+y\n--- a/gone.py\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-a\n-b\n")
+    diff = (
+        "diff --git a/x.py b/x.py\n--- a/x.py\n+++ b/x.py\n@@ -1,2 +10,3 @@\n a\n+b\n c\n"
+        "@@ -20 +30 @@\n-x\n+y\n--- a/gone.py\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-a\n-b\n"
+    )
     assert checks.diff_hunks(diff) == {"x.py": [(10, 12), (30, 30)]}
 
 
-@pytest.mark.parametrize("calls, hunks, cite_, expected", [
-    ([ToolCall("Read", {"file_path": "/snap/a.py"})], {}, ("a.py", 50, 50), "read"),
-    ([ToolCall("Read", {"file_path": "a.py", "offset": 40, "limit": 20})], {}, ("a.py", 50, 52), "read"),
-    # A read whose range misses the cited lines does not count as reading them.
-    ([ToolCall("Read", {"file_path": "a.py", "offset": 1, "limit": 20})], {}, ("a.py", 50, 50), "not-seen"),
-    ([ToolCall("Read", {"file_path": "a.py", "offset": 1, "limit": 20}), ToolCall("Grep", {"pattern": "x"})],
-     {}, ("a.py", 50, 50), "searched"),
-    ([ToolCall("Grep", {"pattern": "x", "path": "/snap/pkg"})], {}, ("pkg/a.py", 5, 5), "searched"),
-    ([ToolCall("Grep", {"pattern": "x", "path": "other"})], {"a.py": [(48, 60)]}, ("a.py", 50, 50), "diff"),
-    ([], {"a.py": [(1, 10)]}, ("a.py", 50, 50), "not-seen"),
-    ([ToolCall("WebFetch", {"url": "https://ex.com/doc/"})], {}, ("https://ex.com/doc", 1, 1), "fetched"),
-    ([ToolCall("WebSearch", {"query": "doc"})], {}, ("https://ex.com/doc", 1, 1), "not-seen"),
-])
+@pytest.mark.parametrize(
+    "calls, hunks, cite_, expected",
+    [
+        ([ToolCall("Read", {"file_path": "/snap/a.py"})], {}, ("a.py", 50, 50), "read"),
+        (
+            [ToolCall("Read", {"file_path": "a.py", "offset": 40, "limit": 20})],
+            {},
+            ("a.py", 50, 52),
+            "read",
+        ),
+        # A read whose range misses the cited lines does not count as reading them.
+        (
+            [ToolCall("Read", {"file_path": "a.py", "offset": 1, "limit": 20})],
+            {},
+            ("a.py", 50, 50),
+            "not-seen",
+        ),
+        (
+            [
+                ToolCall("Read", {"file_path": "a.py", "offset": 1, "limit": 20}),
+                ToolCall("Grep", {"pattern": "x"}),
+            ],
+            {},
+            ("a.py", 50, 50),
+            "searched",
+        ),
+        (
+            [ToolCall("Grep", {"pattern": "x", "path": "/snap/pkg"})],
+            {},
+            ("pkg/a.py", 5, 5),
+            "searched",
+        ),
+        (
+            [ToolCall("Grep", {"pattern": "x", "path": "other"})],
+            {"a.py": [(48, 60)]},
+            ("a.py", 50, 50),
+            "diff",
+        ),
+        ([], {"a.py": [(1, 10)]}, ("a.py", 50, 50), "not-seen"),
+        (
+            [ToolCall("WebFetch", {"url": "https://ex.com/doc/"})],
+            {},
+            ("https://ex.com/doc", 1, 1),
+            "fetched",
+        ),
+        (
+            [ToolCall("WebSearch", {"query": "doc"})],
+            {},
+            ("https://ex.com/doc", 1, 1),
+            "not-seen",
+        ),
+    ],
+)
 def test_seen(target_info, calls, hunks, cite_, expected):
     path, start, end = cite_
     citation = Citation(path=path, line_start=start, line_end=end, quote="q")
@@ -166,23 +255,55 @@ def test_seen(target_info, calls, hunks, cite_, expected):
 
 def test_seen_marks_lines_the_prompt_showed_another_way(target_info):
     citation = Citation(path="a.py", line_start=50, line_end=51, quote="q")
-    shown = checks.cited_ranges([Citation(path="a.py", line_start=49, line_end=50, quote="q"),
-                                 Citation(path="https://ex.com/doc", line_start=1, line_end=1, quote="q")])
+    shown = checks.cited_ranges(
+        [
+            Citation(path="a.py", line_start=49, line_end=50, quote="q"),
+            Citation(path="https://ex.com/doc", line_start=1, line_end=1, quote="q"),
+        ]
+    )
     assert shown == {"a.py": [(49, 50)]}
     assert checks.seen(citation, [], {}, target_info, Path("/snap"), shown) == "prompt"
-    assert checks.seen(citation, [], {}, target_info, Path("/snap"), {"a.py": [(1, 10)]}) == "not-seen"
+    assert (
+        checks.seen(citation, [], {}, target_info, Path("/snap"), {"a.py": [(1, 10)]})
+        == "not-seen"
+    )
     # A read still wins over what the prompt held.
-    assert checks.seen(citation, [ToolCall("Read", {"file_path": "a.py"})], {}, target_info, Path("/snap"),
-                       shown) == "read"
+    assert (
+        checks.seen(
+            citation,
+            [ToolCall("Read", {"file_path": "a.py"})],
+            {},
+            target_info,
+            Path("/snap"),
+            shown,
+        )
+        == "read"
+    )
 
 
 def test_prompt_labels(target_info):
-    pr = target_info.model_copy(update={"title": "t", "base_ref": "main", "branch_rules": []})
-    labels = checks.prompt_labels(pr, diff="x" * 10, diff_limit=5, rules=[("CLAUDE.md", True), ("a/CLAUDE.md", False)])
-    assert labels == [f"diff ({len(pr.files)} files, cut at 5 characters)", "commit subjects (1)", "PR description",
-                      "branch rules", "rules: CLAUDE.md", "rules skipped: a/CLAUDE.md"]
+    pr = target_info.model_copy(
+        update={"title": "t", "base_ref": "main", "branch_rules": []}
+    )
+    labels = checks.prompt_labels(
+        pr,
+        diff="x" * 10,
+        diff_limit=5,
+        rules=[("CLAUDE.md", True), ("a/CLAUDE.md", False)],
+    )
+    assert labels == [
+        f"diff ({len(pr.files)} files, cut at 5 characters)",
+        "commit subjects (1)",
+        "PR description",
+        "branch rules",
+        "rules: CLAUDE.md",
+        "rules skipped: a/CLAUDE.md",
+    ]
     unread = target_info.model_copy(update={"base_ref": "main", "branch_rules": None})
-    assert checks.prompt_labels(unread, extra=["finding abc"]) == ["finding abc", "branch rules (could not be read)"]
+    assert checks.prompt_labels(unread, extra=["finding abc"]) == [
+        "finding abc",
+        "branch rules (could not be read)",
+    ]
 
 
 # --- stages ---------------------------------------------------------------------------
@@ -191,12 +312,16 @@ def test_prompt_labels(target_info):
 class Recorded:
     """Stands in for sdk.agent_call_structured and feeds the recorder like `_run` does."""
 
-    def __init__(self, answers: dict[str, list], calls: dict[str, list[ToolCall]] | None = None):
+    def __init__(
+        self, answers: dict[str, list], calls: dict[str, list[ToolCall]] | None = None
+    ):
         self.answers, self.tool_calls, self.labels = answers, calls or {}, []
 
     async def __call__(self, prompt, schema, *, budget_label="", **kwargs):
         self.labels.append(budget_label)
-        sdk._note(_result("", *self.tool_calls.get(budget_label, ()), cost=0.25, turns=2))
+        sdk._note(
+            _result("", *self.tool_calls.get(budget_label, ()), cost=0.25, turns=2)
+        )
         answer = self.answers[budget_label].pop(0)
         if isinstance(answer, Exception):
             raise answer
@@ -207,116 +332,241 @@ class Recorded:
 def ctx(target_info, tmp_path) -> RunContext:
     snapshot = tmp_path / "tree"
     snapshot.mkdir()
-    return RunContext(config=ReviewConfig(concurrency=1, dimensions=("diff-bugs", "callers")),
-                      snapshot=snapshot, diff=Path(target_info.diff_path).read_text())
+    return RunContext(
+        config=ReviewConfig(concurrency=1, dimensions=("diff-bugs", "callers")),
+        snapshot=snapshot,
+        diff=Path(target_info.diff_path).read_text(),
+    )
 
 
-async def test_find_records_one_check_per_finder_with_fates_and_gate_results(target_info, ctx, monkeypatch):
+async def test_find_records_one_check_per_finder_with_fates_and_gate_results(
+    target_info, ctx, monkeypatch
+):
     high, medium, bad = high_finding(), medium_finding(), rejected_finding()
-    reads = [ToolCall("Read", {"file_path": str(ctx.snapshot / "rateplan_service.py")}),
-             ToolCall("Grep", {"pattern": "KEYWORD", "path": str(ctx.snapshot)})]
-    recorded = Recorded({"find:diff-bugs": [FinderOutput(findings=[high, bad])],
-                         "find:callers": [FinderOutput(findings=[high, medium])],  # high again: deduped
-                         "find:trim": [FinderOutput()]},
-                        {"find:diff-bugs": reads})
+    reads = [
+        ToolCall("Read", {"file_path": str(ctx.snapshot / "rateplan_service.py")}),
+        ToolCall("Grep", {"pattern": "KEYWORD", "path": str(ctx.snapshot)}),
+    ]
+    recorded = Recorded(
+        {
+            "find:diff-bugs": [FinderOutput(findings=[high, bad])],
+            "find:callers": [
+                FinderOutput(findings=[high, medium])
+            ],  # high again: deduped
+            "find:trim": [FinderOutput()],
+        },
+        {"find:diff-bugs": reads},
+    )
     monkeypatch.setattr(sdk, "agent_call_structured", recorded)
     state = await run_find(ReviewState(target=target_info), ctx)
 
-    assert [(c.stage, c.subject) for c in state.checks] == [("find", "diff-bugs"), ("find", "callers"),
-                                                             ("find", "trim")]
+    assert [(c.stage, c.subject) for c in state.checks] == [
+        ("find", "diff-bugs"),
+        ("find", "callers"),
+        ("find", "trim"),
+    ]
     first, second, _ = state.checks
-    assert first.calls[0] == {"tool": "Read", "target": "rateplan_service.py", "detail": "whole file"}
+    assert first.calls[0] == {
+        "tool": "Read",
+        "target": "rateplan_service.py",
+        "detail": "whole file",
+    }
     assert first.calls[1]["detail"] == "in ."
     assert (first.turns, first.cost_usd, first.outcome) == (2, 0.25, "2 findings")
     assert first.given[0].startswith("diff (") and "commit subjects (1)" in first.given
     assert first.started_at <= first.ended_at
     by_id = {e["id"]: e for e in first.findings}
     assert by_id[high.id]["fate"] == "kept"
-    assert by_id[bad.id]["fate"] == "rejected" and by_id[bad.id]["rule"] == "quote not at cited lines"
+    assert (
+        by_id[bad.id]["fate"] == "rejected"
+        and by_id[bad.id]["rule"] == "quote not at cited lines"
+    )
     assert [c["seen"] for c in by_id[high.id]["citations"]] == ["read", "read"]
     assert by_id[bad.id]["citations"][0]["gate"] == "fail"
-    assert second.findings[0] == {**second.findings[0], "fate": "deduped", "into": high.id}
+    assert second.findings[0] == {
+        **second.findings[0],
+        "fate": "deduped",
+        "into": high.id,
+    }
     # The callers finder read nothing, but its diff showed the lines.
     assert second.findings[1]["citations"][0]["seen"] == "diff"
 
     gates = {(g.finding_id, g.passed, g.rule) for g in state.gate_checks}
-    assert gates == {(high.id, True, ""), (bad.id, False, "quote not at cited lines"), (medium.id, True, "")}
+    assert gates == {
+        (high.id, True, ""),
+        (bad.id, False, "quote not at cited lines"),
+        (medium.id, True, ""),
+    }
 
 
-async def test_a_failed_finder_is_recorded_with_its_error(target_info, ctx, monkeypatch):
-    monkeypatch.setattr(sdk, "agent_call_structured", Recorded({
-        "find:diff-bugs": [sdk.AgentCallError("agent call failed (timeout)")],
-        "find:callers": [FinderOutput()], "find:trim": [FinderOutput()]}))
+async def test_a_failed_finder_is_recorded_with_its_error(
+    target_info, ctx, monkeypatch
+):
+    monkeypatch.setattr(
+        sdk,
+        "agent_call_structured",
+        Recorded(
+            {
+                "find:diff-bugs": [sdk.AgentCallError("agent call failed (timeout)")],
+                "find:callers": [FinderOutput()],
+                "find:trim": [FinderOutput()],
+            }
+        ),
+    )
     state = await run_find(ReviewState(target=target_info), ctx)
     failed = state.checks[0]
-    assert failed.subject == "diff-bugs" and failed.error.startswith("finder diff-bugs: agent call failed")
+    assert failed.subject == "diff-bugs" and failed.error.startswith(
+        "finder diff-bugs: agent call failed"
+    )
     assert failed.outcome == "failed: timeout" and failed.findings == []
     assert state.checks[1].outcome == "0 findings"
 
 
-async def test_a_resumed_find_does_not_record_a_finder_twice(target_info, ctx, monkeypatch):
+async def test_a_resumed_find_does_not_record_a_finder_twice(
+    target_info, ctx, monkeypatch
+):
     from review_pipeline import budget
 
     state = ReviewState(target=target_info)
-    monkeypatch.setattr(sdk, "agent_call_structured", Recorded({
-        "find:diff-bugs": [FinderOutput(findings=[high_finding()])],
-        "find:callers": [budget.BudgetExceededError("stop")], "find:trim": [FinderOutput()]}))
+    monkeypatch.setattr(
+        sdk,
+        "agent_call_structured",
+        Recorded(
+            {
+                "find:diff-bugs": [FinderOutput(findings=[high_finding()])],
+                "find:callers": [budget.BudgetExceededError("stop")],
+                "find:trim": [FinderOutput()],
+            }
+        ),
+    )
     with pytest.raises(budget.BudgetExceededError):
         await run_find(state, ctx)
     assert [c.subject for c in state.checks] == ["diff-bugs", "trim"]
     reloaded = load_state(save_state(state, ctx.snapshot.parent))
-    monkeypatch.setattr(sdk, "agent_call_structured", Recorded({"find:callers": [FinderOutput()]}))
+    monkeypatch.setattr(
+        sdk, "agent_call_structured", Recorded({"find:callers": [FinderOutput()]})
+    )
     reloaded = await run_find(reloaded, ctx)
     assert [c.subject for c in reloaded.checks] == ["diff-bugs", "trim", "callers"]
 
 
-async def test_verify_records_the_verdict_its_citations_and_the_gate(target_info, ctx, monkeypatch):
+async def test_verify_records_the_verdict_its_citations_and_the_gate(
+    target_info, ctx, monkeypatch
+):
     high, medium = high_finding(), medium_finding()
-    reads = [ToolCall("Read", {"file_path": "rateplan_service.py", "offset": 1, "limit": 3})]
-    monkeypatch.setattr(sdk, "agent_call_structured", Recorded({"verify": [
-        Verdict(status="confirmed", impact="breaks-users", topic="code", reason="r", citations=[KEYWORD_CITATION, KEYWORD_USE_CITATION]),
-        Verdict(status="confirmed", impact="breaks-users", topic="code", reason="no cite"),  # lowered by verdict_gate
-    ]}, {"verify": reads}))
-    state = await run_verify(ReviewState(target=target_info, stage="find", findings=[high, medium]), ctx)
+    reads = [
+        ToolCall("Read", {"file_path": "rateplan_service.py", "offset": 1, "limit": 3})
+    ]
+    monkeypatch.setattr(
+        sdk,
+        "agent_call_structured",
+        Recorded(
+            {
+                "verify": [
+                    Verdict(
+                        status="confirmed",
+                        impact="breaks-users",
+                        topic="code",
+                        reason="r",
+                        citations=[KEYWORD_CITATION, KEYWORD_USE_CITATION],
+                    ),
+                    Verdict(
+                        status="confirmed",
+                        impact="breaks-users",
+                        topic="code",
+                        reason="no cite",
+                    ),  # lowered by verdict_gate
+                ]
+            },
+            {"verify": reads},
+        ),
+    )
+    state = await run_verify(
+        ReviewState(target=target_info, stage="find", findings=[high, medium]), ctx
+    )
     one, two = state.checks
     assert (one.stage, one.subject, one.outcome) == ("verify", high.id, "confirmed")
     assert one.given == [f"finding {high.id}"]
     # The read covered lines 1-3, so line 1 was read. Line 6 was not read, but the finding cites it,
     # so the verifier's prompt showed it.
-    assert [(c["gate"], c["seen"]) for c in one.verdict["citations"]] == [("pass", "read"), ("pass", "prompt")]
+    assert [(c["gate"], c["seen"]) for c in one.verdict["citations"]] == [
+        ("pass", "read"),
+        ("pass", "prompt"),
+    ]
     assert one.verdict["lowered"] is False
-    assert two.verdict == {"status": "unverifiable", "reason": two.verdict["reason"], "citations": [], "lowered": True}
+    assert two.verdict == {
+        "status": "unverifiable",
+        "reason": two.verdict["reason"],
+        "citations": [],
+        "lowered": True,
+    }
     assert two.outcome == "unverifiable (answered confirmed)"
     assert [(g.gate, g.passed, g.rule) for g in state.gate_checks] == [
-        ("verdict_gate", True, ""), ("verdict_gate", False, "confirmed without citing")]
+        ("verdict_gate", True, ""),
+        ("verdict_gate", False, "confirmed without citing"),
+    ]
 
 
-async def test_a_failed_verifier_is_recorded_and_gets_no_gate_result(target_info, ctx, monkeypatch):
-    monkeypatch.setattr(sdk, "agent_call_structured", Recorded({"verify": [sdk.AgentCallError("boom")] * 3}))
+async def test_a_failed_verifier_is_recorded_and_gets_no_gate_result(
+    target_info, ctx, monkeypatch
+):
+    monkeypatch.setattr(
+        sdk,
+        "agent_call_structured",
+        Recorded({"verify": [sdk.AgentCallError("boom")] * 3}),
+    )
     state = ReviewState(target=target_info, stage="find", findings=[high_finding()])
     with pytest.raises(VerifyIncomplete):
         await run_verify(state, ctx)
-    assert state.checks[0].error.startswith("the verifier failed") and state.checks[0].verdict is None
+    assert (
+        state.checks[0].error.startswith("the verifier failed")
+        and state.checks[0].verdict is None
+    )
     assert state.gate_checks == []
 
 
 async def test_merge_records_the_group_and_marks_merged_findings_in_their_finder_entry(
-        target_info, ctx, monkeypatch):
+    target_info, ctx, monkeypatch
+):
     a, b = high_finding(), medium_finding().with_location(line_start=1, line_end=1)
-    monkeypatch.setattr(sdk, "agent_call_structured", Recorded({
-        "find:diff-bugs": [FinderOutput(findings=[a])], "find:callers": [FinderOutput(findings=[b])],
-        "find:trim": [FinderOutput()]}))
+    monkeypatch.setattr(
+        sdk,
+        "agent_call_structured",
+        Recorded(
+            {
+                "find:diff-bugs": [FinderOutput(findings=[a])],
+                "find:callers": [FinderOutput(findings=[b])],
+                "find:trim": [FinderOutput()],
+            }
+        ),
+    )
     state = await run_find(ReviewState(target=target_info), ctx)
-    state.verdicts = {f.id: Verdict(finding_id=f.id, status="confirmed", reason="r") for f in state.findings}
+    state.verdicts = {
+        f.id: Verdict(finding_id=f.id, status="confirmed", reason="r")
+        for f in state.findings
+    }
     state.stage = "verify"
     ids = [f.id for f in state.findings]
-    monkeypatch.setattr(sdk, "agent_call_structured", Recorded({
-        "merge": [MergeOutput(duplicate_sets=[DuplicateSet(finding_ids=ids, reason="same")])]}))
+    monkeypatch.setattr(
+        sdk,
+        "agent_call_structured",
+        Recorded(
+            {
+                "merge": [
+                    MergeOutput(
+                        duplicate_sets=[DuplicateSet(finding_ids=ids, reason="same")]
+                    )
+                ]
+            }
+        ),
+    )
     state = await run_merge(state, ctx)
     merge = state.checks[-1]
     assert (merge.stage, merge.given) == ("merge", ["findings (2)"])
     assert merge.outcome == f"merged {ids[1]} into {ids[0]}"
-    fates = {e["id"]: (e["fate"], e.get("into")) for c in state.checks for e in c.findings}
+    fates = {
+        e["id"]: (e["fate"], e.get("into")) for c in state.checks for e in c.findings
+    }
     assert fates == {ids[0]: ("kept", None), ids[1]: ("merged", ids[0])}
 
 
@@ -327,20 +577,54 @@ def _recorded_state(canned_state) -> ReviewState:
     high = canned_state.findings[0]
     marked = {**KEYWORD_CITATION.model_dump(), "gate": "pass", "seen": "read"}
     canned_state.checks = [
-        AgentCheck(stage="verify", subject=high.id, given=[f"finding {high.id}"],
-                              calls=[{"tool": "Read", "target": "rateplan_service.py", "detail": "whole file"}],
-                              outcome="confirmed", turns=2, cost_usd=0.1, started_at="2026-10-09T10:00:02.000Z",
-                              ended_at="2026-10-09T10:00:03.000Z",
-                              verdict={"status": "confirmed", "reason": "r", "citations": [marked], "lowered": False}),
-        AgentCheck(stage="find", subject="diff-bugs", given=["diff (3 files)"],
-                              calls=[{"tool": "WebFetch", "target": "https://example.com", "detail": ""}],
-                              outcome="1 finding", turns=4, cost_usd=0.2, started_at="2026-10-09T10:00:00.000Z",
-                              ended_at="2026-10-09T10:00:01.000Z",
-                              findings=[{"id": high.id, "claim": high.claim, "severity": "HIGH",
-                                         "failure_scenario": "s", "citations": [{**marked, "seen": "not-seen"}],
-                                         "fate": "kept"}]),
+        AgentCheck(
+            stage="verify",
+            subject=high.id,
+            given=[f"finding {high.id}"],
+            calls=[
+                {
+                    "tool": "Read",
+                    "target": "rateplan_service.py",
+                    "detail": "whole file",
+                }
+            ],
+            outcome="confirmed",
+            turns=2,
+            cost_usd=0.1,
+            started_at="2026-10-09T10:00:02.000Z",
+            ended_at="2026-10-09T10:00:03.000Z",
+            verdict={
+                "status": "confirmed",
+                "reason": "r",
+                "citations": [marked],
+                "lowered": False,
+            },
+        ),
+        AgentCheck(
+            stage="find",
+            subject="diff-bugs",
+            given=["diff (3 files)"],
+            calls=[{"tool": "WebFetch", "target": "https://example.com", "detail": ""}],
+            outcome="1 finding",
+            turns=4,
+            cost_usd=0.2,
+            started_at="2026-10-09T10:00:00.000Z",
+            ended_at="2026-10-09T10:00:01.000Z",
+            findings=[
+                {
+                    "id": high.id,
+                    "claim": high.claim,
+                    "severity": "HIGH",
+                    "failure_scenario": "s",
+                    "citations": [{**marked, "seen": "not-seen"}],
+                    "fate": "kept",
+                }
+            ],
+        ),
     ]
-    canned_state.gate_checks = [GateCheck(finding_id=high.id, gate="finding_gate", passed=True)]
+    canned_state.gate_checks = [
+        GateCheck(finding_id=high.id, gate="finding_gate", passed=True)
+    ]
     return canned_state
 
 
@@ -352,7 +636,14 @@ def test_checks_file_validates_and_orders_agents_by_start(canned_state, tmp_path
     jsonschema.Draft202012Validator.check_schema(schema)
     jsonschema.validate(data, schema)
     assert [a["stage"] for a in data["agents"]] == ["find", "verify"]
-    assert data["gates"] == [{"finding_id": state.findings[0].id, "gate": "finding_gate", "passed": True, "rule": ""}]
+    assert data["gates"] == [
+        {
+            "finding_id": state.findings[0].id,
+            "gate": "finding_gate",
+            "passed": True,
+            "rule": "",
+        }
+    ]
     assert data["target"] == to_findings_file(state)["target"]
 
 
@@ -366,8 +657,13 @@ def test_findings_file_validates_with_and_without_verifier_citations(canned_stat
     data = to_findings_file(canned_state)
     by_claim = {f["claim"]: f for f in data["findings"]}
     high = canned_state.findings[0]
-    assert by_claim[high.claim]["verifier_citations"] == [KEYWORD_USE_CITATION.model_dump()]
-    assert "verifier_citations" not in [f for f in data["findings"] if f["status"] == "rejected"][0]
+    assert by_claim[high.claim]["verifier_citations"] == [
+        KEYWORD_USE_CITATION.model_dump()
+    ]
+    assert (
+        "verifier_citations"
+        not in [f for f in data["findings"] if f["status"] == "rejected"][0]
+    )
     jsonschema.validate(data, schema)
     for f in data["findings"]:
         f.pop("verifier_citations", None)
@@ -384,7 +680,9 @@ def test_an_old_state_without_checks_still_loads(canned_state, tmp_path):
     assert state is not None and state.checks == [] and state.gate_checks == []
 
 
-def test_render_checks_has_the_checklist_then_each_agent_with_marked_citations(canned_state):
+def test_render_checks_has_the_checklist_then_each_agent_with_marked_citations(
+    canned_state,
+):
     text = render_checks(_recorded_state(canned_state))
     high = canned_state.findings[0]
     assert text.index("## Checklist") < text.index("## Agents")

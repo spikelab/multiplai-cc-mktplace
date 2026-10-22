@@ -170,9 +170,7 @@ class TestConfigAuditGate:
         import session_start
 
         f = tmp_path / "config_audit_state.yaml"
-        naive = (
-            datetime.now(UTC) - timedelta(days=1)
-        ).replace(tzinfo=None).isoformat()
+        naive = (datetime.now(UTC) - timedelta(days=1)).replace(tzinfo=None).isoformat()
         _write_state(f, naive)
         assert session_start._config_audit_gate_open(f) is False
 

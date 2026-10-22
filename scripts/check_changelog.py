@@ -186,41 +186,46 @@ def _message(
     ]
     if not bumped:
         lines.append(
-            f"    - bump \"version\" for \"{name}\" in {MANIFEST} "
-            f"(currently \"{new}\", same as the base branch)")
+            f'    - bump "version" for "{name}" in {MANIFEST} '
+            f'(currently "{new}", same as the base branch)'
+        )
     if not noted:
         lines.append(
             f"    - add an entry to plugins/{name}/CHANGELOG.md under a new "
-            f"`## [<version>] - <YYYY-MM-DD>` heading")
+            f"`## [<version>] - <YYYY-MM-DD>` heading"
+        )
     if bumped and not noted:
         lines.append(
-            f"      (the version moved {old} -> {new}; the notes have to move "
-            f"with it)")
+            f"      (the version moved {old} -> {new}; the notes have to move with it)"
+        )
     lines.append(
         f"    - or, if this genuinely needs no notes: add the `{SKIP_LABEL}` "
-        f"label, or `{SKIP_MARKER}` in the PR body")
+        f"label, or `{SKIP_MARKER}` in the PR body"
+    )
     return "\n".join(lines)
 
 
 def _git(repo: Path, *args: str) -> str:
-    proc = subprocess.run(["git", *args], cwd=repo,
-                          capture_output=True, text=True)
+    proc = subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True)
     if proc.returncode != 0:
         raise GateError(f"git {' '.join(args)} failed: {proc.stderr.strip()}")
     return proc.stdout
 
 
-def collect(repo: Path, base: str, head: str = "HEAD") -> tuple[
-        list[str], dict[str, str], dict[str, str]]:
+def collect(
+    repo: Path, base: str, head: str = "HEAD"
+) -> tuple[list[str], dict[str, str], dict[str, str]]:
     """Diff and both manifests, read out of git rather than the worktree.
 
     `base...head` (three dots) is deliberate: it diffs against the merge base,
     so commits that landed on the base branch after this one forked do not show
     up as changes this PR made.
     """
-    changed = [ln for ln in
-               _git(repo, "diff", "--name-only", f"{base}...{head}").splitlines()
-               if ln]
+    changed = [
+        ln
+        for ln in _git(repo, "diff", "--name-only", f"{base}...{head}").splitlines()
+        if ln
+    ]
     base_manifest = _git(repo, "show", f"{base}:{MANIFEST}")
     head_manifest = _git(repo, "show", f"{head}:{MANIFEST}")
     return changed, versions(base_manifest), versions(head_manifest)
@@ -228,24 +233,40 @@ def collect(repo: Path, base: str, head: str = "HEAD") -> tuple[
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=(__doc__ or "").split("\n")[0])
-    ap.add_argument("--repo", type=Path, default=REPO_ROOT,
-                    help="marketplace repo root (default: this script's repo)")
-    ap.add_argument("--base", default="origin/main",
-                    help="base ref to compare against (default: origin/main)")
+    ap.add_argument(
+        "--repo",
+        type=Path,
+        default=REPO_ROOT,
+        help="marketplace repo root (default: this script's repo)",
+    )
+    ap.add_argument(
+        "--base",
+        default="origin/main",
+        help="base ref to compare against (default: origin/main)",
+    )
     ap.add_argument("--head", default="HEAD", help="head ref (default: HEAD)")
-    ap.add_argument("--labels", default=os.environ.get("PR_LABELS", ""),
-                    help="comma-separated PR labels (default: $PR_LABELS)")
-    ap.add_argument("--pr-body", default=os.environ.get("PR_BODY", ""),
-                    help="PR body text (default: $PR_BODY)")
+    ap.add_argument(
+        "--labels",
+        default=os.environ.get("PR_LABELS", ""),
+        help="comma-separated PR labels (default: $PR_LABELS)",
+    )
+    ap.add_argument(
+        "--pr-body",
+        default=os.environ.get("PR_BODY", ""),
+        help="PR body text (default: $PR_BODY)",
+    )
     ap.add_argument("--quiet", action="store_true", help="print only failures")
     args = ap.parse_args(argv)
 
     try:
-        changed, base_v, head_v = collect(
-            args.repo.resolve(), args.base, args.head)
-        f = check(changed, base_v, head_v,
-                  labels=[s.strip() for s in args.labels.split(",") if s.strip()],
-                  pr_body=args.pr_body)
+        changed, base_v, head_v = collect(args.repo.resolve(), args.base, args.head)
+        f = check(
+            changed,
+            base_v,
+            head_v,
+            labels=[s.strip() for s in args.labels.split(",") if s.strip()],
+            pr_body=args.pr_body,
+        )
     except GateError as exc:
         print(f"check_changelog: cannot run: {exc}", file=sys.stderr)
         return 2
@@ -260,8 +281,9 @@ def main(argv: list[str] | None = None) -> int:
         if not args.quiet:
             print("check_changelog: clean")
         return 0
-    print(f"\ncheck_changelog: {len(f.failures)} plugin(s) changed without "
-          f"release notes")
+    print(
+        f"\ncheck_changelog: {len(f.failures)} plugin(s) changed without release notes"
+    )
     return 1
 
 

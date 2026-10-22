@@ -1,4 +1,5 @@
 """The review page's input files (stages/job_files.py and skills/video-edit/schema/)."""
+
 from __future__ import annotations
 
 import json
@@ -24,23 +25,43 @@ def job(tmp_path: Path) -> dict[str, Path]:
 def media(tmp_path: Path) -> dict[str, str]:
     d = tmp_path / "media"
     d.mkdir()
-    names = ("style.md", "sample.html", "brand.json", "bed.m4a", "whoosh.wav", "pop.wav")
+    names = (
+        "style.md",
+        "sample.html",
+        "brand.json",
+        "bed.m4a",
+        "whoosh.wav",
+        "pop.wav",
+    )
     for n in names:
         (d / n).write_bytes(b"x")
     return {n.split(".")[0]: str(d / n) for n in names}
 
 
 def _looks(m: dict[str, str]) -> dict:
-    return {"styles": [{"name": "clean", "file": m["style"], "sample_html": m["sample"]}],
-            "brands": [{"name": "house", "file": m["brand"]}],
-            "captions": [{"name": "big", "values": {"size": 72, "position_y": 0.7,
-                                                    "words_per_line": 3, "highlight": True}}]}
+    return {
+        "styles": [{"name": "clean", "file": m["style"], "sample_html": m["sample"]}],
+        "brands": [{"name": "house", "file": m["brand"]}],
+        "captions": [
+            {
+                "name": "big",
+                "values": {
+                    "size": 72,
+                    "position_y": 0.7,
+                    "words_per_line": 3,
+                    "highlight": True,
+                },
+            }
+        ],
+    }
 
 
 def _music(m: dict[str, str]) -> dict:
-    return {"beds": [{"name": "calm", "file": m["bed"]}],
-            "sfx_sets": [{"name": "soft", "files": [m["whoosh"], m["pop"]]}],
-            "voice_sample": {"start": 10.0, "end": 18.0}}
+    return {
+        "beds": [{"name": "calm", "file": m["bed"]}],
+        "sfx_sets": [{"name": "soft", "files": [m["whoosh"], m["pop"]]}],
+        "voice_sample": {"start": 10.0, "end": 18.0},
+    }
 
 
 def _write(outdir: Path, name: str, data) -> None:
@@ -50,11 +71,17 @@ def _write(outdir: Path, name: str, data) -> None:
 
 # --- each schema: a valid file, and one invalid case ---------------------------------
 
+
 def test_fixture_job_and_candidates_are_valid(job) -> None:
     for name in ("job", "candidates"):
         got = jf.load(job["dir"], name)
         assert got["status"] == "ok", got.get("error")
-    assert [c["id"] for c in jf.load(job["dir"], "candidates")["data"]] == ["c1", "c2", "c3", "c4"]
+    assert [c["id"] for c in jf.load(job["dir"], "candidates")["data"]] == [
+        "c1",
+        "c2",
+        "c3",
+        "c4",
+    ]
 
 
 def test_fixture_looks_and_music_are_valid(job) -> None:
@@ -62,7 +89,7 @@ def test_fixture_looks_and_music_are_valid(job) -> None:
     assert looks["status"] == "ok", looks.get("error")
     assert music["status"] == "ok", music.get("error")
     assert [s["name"] for s in looks["data"]["styles"]] == ["clean-tech", "flat-vector"]
-    for s in looks["data"]["styles"]:                       # each style's Example page is its sample
+    for s in looks["data"]["styles"]:  # each style's Example page is its sample
         assert Path(s["sample_html"]).read_text().startswith("<!doctype html>")
     assert [b["name"] for b in music["data"]["beds"]] == ["calm", "bright"]
     vs = music["data"]["voice_sample"]
@@ -116,7 +143,9 @@ def test_candidate_score_out_of_range(job) -> None:
     data = json.loads(job["candidates"].read_text())
     data[1]["scores"]["hook"] = 6
     job["candidates"].write_text(json.dumps(data))
-    assert jf.load(job["dir"], "candidates")["error"] == "$[1].scores.hook: must be <= 5"
+    assert (
+        jf.load(job["dir"], "candidates")["error"] == "$[1].scores.hook: must be <= 5"
+    )
 
 
 def test_candidate_end_before_start_and_duplicate_ids(job) -> None:
@@ -125,7 +154,9 @@ def test_candidate_end_before_start_and_duplicate_ids(job) -> None:
     data[2]["id"] = "c2"
     job["candidates"].write_text(json.dumps(data))
     assert jf.load(job["dir"], "candidates")["error"].split("\n") == [
-        "$[0]: end must be after start", "$[2].id: 'c2' is used twice"]
+        "$[0]: end must be after start",
+        "$[2].id: 'c2' is used twice",
+    ]
 
 
 def test_looks_caption_values_have_their_types(tmp_path, media) -> None:
@@ -135,7 +166,8 @@ def test_looks_caption_values_have_their_types(tmp_path, media) -> None:
     _write(tmp_path, "looks", looks)
     assert jf.load(tmp_path, "looks")["error"].split("\n") == [
         "$.captions[0].values.highlight: expected boolean",
-        "$.captions[0].values: unknown field 'colour'"]
+        "$.captions[0].values: unknown field 'colour'",
+    ]
 
 
 def test_music_voice_sample_and_duplicate_names(tmp_path, media) -> None:
@@ -144,23 +176,31 @@ def test_music_voice_sample_and_duplicate_names(tmp_path, media) -> None:
     music["beds"].append({"name": "calm", "file": media["bed"]})
     _write(tmp_path, "music", music)
     assert jf.load(tmp_path, "music")["error"].split("\n") == [
-        "$.beds: name 'calm' is used twice", "$.voice_sample: end must be after start"]
+        "$.beds: name 'calm' is used twice",
+        "$.voice_sample: end must be after start",
+    ]
 
 
 def test_music_sfx_set_needs_a_file(tmp_path, media) -> None:
     music = _music(media)
     music["sfx_sets"][0]["files"] = []
     _write(tmp_path, "music", music)
-    assert jf.load(tmp_path, "music")["error"] == "$.sfx_sets[0].files: needs at least 1 item(s)"
+    assert (
+        jf.load(tmp_path, "music")["error"]
+        == "$.sfx_sets[0].files: needs at least 1 item(s)"
+    )
 
 
 # --- the checker -------------------------------------------------------------------------
+
 
 def test_missing_file_and_bad_json(tmp_path) -> None:
     assert jf.load(tmp_path, "looks")["status"] == "missing"
     (tmp_path / "music.json").write_text("{not json")
     got = jf.load(tmp_path, "music")
-    assert got["status"] == "invalid" and got["error"].startswith("music.json is not valid JSON")
+    assert got["status"] == "invalid" and got["error"].startswith(
+        "music.json is not valid JSON"
+    )
 
 
 @pytest.mark.parametrize("value", [True, float("nan"), float("inf"), "3"])
@@ -198,6 +238,7 @@ def test_every_shipped_schema_uses_only_supported_keywords(name) -> None:
             for key in ("items", "additionalProperties"):
                 if isinstance(node.get(key), dict):
                     walk(node[key])
+
     walk(jf.schema(name))
 
 
@@ -206,7 +247,9 @@ def test_named_files_lists_only_what_valid_files_name(tmp_path, job, media) -> N
     _write(job["dir"], "music", _music(media))
     named = jf.named_files(job["dir"])
     assert named["source"] == {job["source"].resolve()}
-    assert named["audio"] == {Path(media[k]).resolve() for k in ("bed", "whoosh", "pop")}
+    assert named["audio"] == {
+        Path(media[k]).resolve() for k in ("bed", "whoosh", "pop")
+    }
     assert named["sample"] == {Path(media["sample"]).resolve()}
     music = _music(media)
     music["beds"][0]["file"] = "relative.m4a"

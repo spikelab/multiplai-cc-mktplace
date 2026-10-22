@@ -73,8 +73,13 @@ def main() -> int:
     except _BadInput as e:
         print(f"stop_record_cli: {e}", file=sys.stderr)
         return 2
-    reason = stop_record.others_work(project_dir, stop, ignore=options["ignore"],
-                                     head=options["head"], origin_ref=options["origin_ref"])
+    reason = stop_record.others_work(
+        project_dir,
+        stop,
+        ignore=options["ignore"],
+        head=options["head"],
+        origin_ref=options["origin_ref"],
+    )
     print(json.dumps({"reason": reason}))
     return 0
 

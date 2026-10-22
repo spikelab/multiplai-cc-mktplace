@@ -116,7 +116,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    data_dir = args.data_dir.expanduser().resolve() if args.data_dir else get_paths().data_dir()
+    data_dir = (
+        args.data_dir.expanduser().resolve()
+        if args.data_dir
+        else get_paths().data_dir()
+    )
     scripts_dir = Path(__file__).parent
     extract_script = scripts_dir / "extract_learnings.py"
 
@@ -168,7 +172,8 @@ def main(argv: list[str] | None = None) -> int:
     cp_result = process_pending_checkpoints(data_dir, writer_script, wait=args.wait)
     if cp_result.launched:
         log_event(
-            "checkpoint", "drain",
+            "checkpoint",
+            "drain",
             f"host drain launched {cp_result.launched} end-of-session checkpoint(s)",
             count=cp_result.launched,
         )
@@ -179,10 +184,12 @@ def main(argv: list[str] | None = None) -> int:
         # gets here, because without it nobody is around to read an exit code.
         logger.error(
             "%d of %d checkpoint child(ren) exited nonzero",
-            cp_result.failed, cp_result.launched,
+            cp_result.failed,
+            cp_result.launched,
         )
         log_event(
-            "checkpoint", "drain-failed",
+            "checkpoint",
+            "drain-failed",
             f"{cp_result.failed} of {cp_result.launched} end-of-session "
             "checkpoint write(s) failed or degraded — see checkpoint_writer-YYYY-MM-DD.log",
             count=cp_result.failed,
@@ -200,7 +207,8 @@ def main(argv: list[str] | None = None) -> int:
             "Drained %d deferred extraction(s) from %s", result.launched, data_dir
         )
         log_event(
-            "extract", "launch",
+            "extract",
+            "launch",
             f"host drain launched {result.launched} deferred extraction(s)",
             count=result.launched,
         )
@@ -209,7 +217,9 @@ def main(argv: list[str] | None = None) -> int:
         # children). A scripted check (`drain … --wait && echo ok`) must not
         # report success when every extraction failed.
         logger.error(
-            "%d of %d extraction child(ren) exited nonzero", result.failed, result.launched
+            "%d of %d extraction child(ren) exited nonzero",
+            result.failed,
+            result.launched,
         )
         print(
             f"[drain] {result.failed} of {result.launched} extraction child(ren) failed",

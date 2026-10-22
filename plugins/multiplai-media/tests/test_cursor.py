@@ -2,6 +2,7 @@
 synthetic recording: a pointer crosses a white page, rests, and a button
 under it changes. Skipped where OpenCV is not installed (the media suite
 runs without the workspace environment)."""
+
 from __future__ import annotations
 
 import sys
@@ -17,14 +18,16 @@ sys.path.insert(0, str(_SCRIPTS))
 
 from stages import cursor
 
-W, H, FPS = 1280, 720, 10   # proxy size: the pointer must be a small part of the frame
-ARROW = np.array([[0, 0], [0, 14], [4, 10], [7, 16], [9, 15], [6, 9], [11, 9]], np.int32)
+W, H, FPS = 1280, 720, 10  # proxy size: the pointer must be a small part of the frame
+ARROW = np.array(
+    [[0, 0], [0, 14], [4, 10], [7, 16], [9, 15], [6, 9], [11, 9]], np.int32
+)
 
 
 def _pointer(img, x: int, y: int) -> None:
     pts = ARROW + [x, y]
     cv2.fillPoly(img, [pts], 255)
-    cv2.polylines(img, [pts], True, 255, 3)       # the light border
+    cv2.polylines(img, [pts], True, 255, 3)  # the light border
     cv2.fillPoly(img, [pts], 0)
 
 
@@ -58,7 +61,9 @@ def test_a_click_is_found_where_the_pointer_rests(tmp_path: Path) -> None:
 
 def test_a_marked_pointer_becomes_a_picture(tmp_path: Path) -> None:
     rest = _recording(tmp_path / "rec.mp4")
-    looks = cursor.marked(tmp_path / "rec.mp4", [(2.2, (rest[0] + 8) / W, (rest[1] + 10) / H)])
+    looks = cursor.marked(
+        tmp_path / "rec.mp4", [(2.2, (rest[0] + 8) / W, (rest[1] + 10) / H)]
+    )
     assert len(looks) == 1
     picture, outline = looks[0]
     assert picture.shape == outline.shape == (cursor.PATCH, cursor.PATCH)

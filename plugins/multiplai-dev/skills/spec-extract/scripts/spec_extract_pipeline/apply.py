@@ -48,7 +48,15 @@ def check_argv() -> list[str]:
     `<skills>` is `parents[3]` of this file (spec_extract_pipeline → scripts →
     spec-extract → skills), in the repo and in an installed copy of the plugin."""
     buildme = Path(__file__).resolve().parents[3] / "buildme" / "scripts"
-    return ["uv", "run", "--directory", str(buildme), "python", "-m", "build_pipeline.stop_record_cli"]
+    return [
+        "uv",
+        "run",
+        "--directory",
+        str(buildme),
+        "python",
+        "-m",
+        "build_pipeline.stop_record_cli",
+    ]
 
 
 def refuse_early(apply: bool, dir: str | None, specs_dir: str | None) -> None:
@@ -56,8 +64,11 @@ def refuse_early(apply: bool, dir: str | None, specs_dir: str | None) -> None:
     if specs_dir is not None and not apply:
         raise ApplyRefused("--specs-dir is used only with --apply")
     if apply and dir is not None and specs_dir is None:
-        raise ApplyRefused("--apply with --dir needs --specs-dir: a directory has no "
-                           "repository to default to; nothing was written", line=NEEDS_SPECS_DIR)
+        raise ApplyRefused(
+            "--apply with --dir needs --specs-dir: a directory has no "
+            "repository to default to; nothing was written",
+            line=NEEDS_SPECS_DIR,
+        )
 
 
 def registry_dir(target: Target, specs_dir: str | None, run_dir: Path) -> Path:
@@ -73,11 +84,18 @@ def registry_dir(target: Target, specs_dir: str | None, run_dir: Path) -> Path:
     if specs == run_dir or run_dir in specs.parents:
         raise ApplyRefused(f"--specs-dir {specs} is inside the run folder {run_dir}")
     nearest = next(p for p in (specs, *specs.parents) if p.exists())
-    inside = nearest.is_dir() and git(nearest, "rev-parse", "--is-inside-work-tree",
-                                      check=False).stdout.strip() == "true"
+    inside = (
+        nearest.is_dir()
+        and git(
+            nearest, "rev-parse", "--is-inside-work-tree", check=False
+        ).stdout.strip()
+        == "true"
+    )
     if not inside:
-        raise ApplyRefused(f"--specs-dir {specs} is not in a git work tree ({nearest} is not); "
-                           "--apply copies only into a repository, where git shows what it added")
+        raise ApplyRefused(
+            f"--specs-dir {specs} is not in a git work tree ({nearest} is not); "
+            "--apply copies only into a repository, where git shows what it added"
+        )
     return specs / "registry"
 
 
@@ -92,17 +110,33 @@ def _kill(proc: subprocess.Popen) -> None:
 def uncommitted_work(registry: Path, stop: ApplyStop | None) -> str | None:
     """buildme's `stop_record.others_work(<registry>, stop, ignore=.spec-extract-tmp)`:
     None when apply may go on, else why not. ApplyRefused when the check cannot run."""
-    payload = json.dumps({"project_dir": str(registry), "ignore": APPLY_TMP, "head": None,
-                          "stop": stop.model_dump() if stop is not None else None})
+    payload = json.dumps(
+        {
+            "project_dir": str(registry),
+            "ignore": APPLY_TMP,
+            "head": None,
+            "stop": stop.model_dump() if stop is not None else None,
+        }
+    )
 
     def cannot(why: str, err: str = "") -> ApplyRefused:
         tail = "\n".join(err.strip().splitlines()[-5:])
-        return ApplyRefused("the uncommitted-work check could not run: " + why + (f"\n{tail}" if tail else ""))
+        return ApplyRefused(
+            "the uncommitted-work check could not run: "
+            + why
+            + (f"\n{tail}" if tail else "")
+        )
 
     try:
         # A session of its own, so a timeout kills `uv` and the check it started.
-        proc = subprocess.Popen(check_argv(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, text=True, start_new_session=True)
+        proc = subprocess.Popen(
+            check_argv(),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
     except OSError as e:
         raise cannot(str(e)) from None
     try:
@@ -120,8 +154,11 @@ def uncommitted_work(registry: Path, stop: ApplyStop | None) -> str | None:
         answer = json.loads(lines[0]) if len(lines) == 1 else None
     except ValueError:
         answer = None
-    if not (isinstance(answer, dict) and set(answer) == {"reason"}
-            and (answer["reason"] is None or isinstance(answer["reason"], str))):
+    if not (
+        isinstance(answer, dict)
+        and set(answer) == {"reason"}
+        and (answer["reason"] is None or isinstance(answer["reason"], str))
+    ):
         raise cannot(f"its output is not one JSON line: {out[:200]!r}", err)
     return answer["reason"]
 

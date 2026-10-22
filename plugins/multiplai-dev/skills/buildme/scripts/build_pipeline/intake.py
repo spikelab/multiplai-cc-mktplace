@@ -102,12 +102,18 @@ def check_input_files(args, state, change_dirs) -> str | None:
             continue
         copies = [Path(d) / copy for d in change_dirs if (Path(d) / copy).is_file()]
         if state.is_phase_complete(phase) or copies:
-            log.info("%s %s is gone; the build already has what it read (%s)",
-                     flag, raw, copies[0] if copies else f"phase {phase.value} done")
+            log.info(
+                "%s %s is gone; the build already has what it read (%s)",
+                flag,
+                raw,
+                copies[0] if copies else f"phase {phase.value} done",
+            )
             setattr(args, attr, "")
             continue
-        return (f"{flag} {raw}: no such file. Pass an absolute path, "
-                f"or one relative to --project-dir {base}.")
+        return (
+            f"{flag} {raw}: no such file. Pass an absolute path, "
+            f"or one relative to --project-dir {base}."
+        )
     return None
 
 
@@ -137,6 +143,7 @@ def carry_over_inputs(previous: Path, change_dir: Path) -> list[Path]:
 
 # --- Bootstrap helpers --------------------------------------------------------
 
+
 def config_commit_state(project_dir: Path) -> str:
     """``committed``, ``uncommitted`` or ``no-repo`` for ``specs/config.yaml``.
 
@@ -150,7 +157,10 @@ def config_commit_state(project_dir: Path) -> str:
     try:
         tracked = subprocess.run(
             ["git", "ls-files", "--error-unmatch", "--", rel],
-            cwd=str(project_dir), capture_output=True, text=True, timeout=30,
+            cwd=str(project_dir),
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         if tracked.returncode not in (0, 1):
             return "no-repo"
@@ -158,7 +168,10 @@ def config_commit_state(project_dir: Path) -> str:
             return "uncommitted"
         status = subprocess.run(
             ["git", "status", "--porcelain", "--", rel],
-            cwd=str(project_dir), capture_output=True, text=True, timeout=30,
+            cwd=str(project_dir),
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
     except (OSError, subprocess.SubprocessError):
         return "no-repo"
@@ -190,9 +203,20 @@ def config_yaml_off_ref(project_dir: Path, ref: str) -> bool:
     blobs = []
     for rev in ("HEAD", ref):
         try:
-            res = subprocess.run(["git", "rev-parse", "--verify", "--quiet", f"{rev}:./specs/config.yaml"],
-                                 cwd=str(project_dir), capture_output=True, text=True, timeout=30,
-                                 check=False)
+            res = subprocess.run(
+                [
+                    "git",
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    f"{rev}:./specs/config.yaml",
+                ],
+                cwd=str(project_dir),
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
         except (OSError, subprocess.SubprocessError):
             return False
         blobs.append(res.stdout.strip() if res.returncode == 0 else None)
@@ -200,6 +224,7 @@ def config_yaml_off_ref(project_dir: Path, ref: str) -> bool:
 
 
 # --- Research -----------------------------------------------------------------
+
 
 def import_research(src: str, dest: Path) -> bool:
     """Copy --research-path's content into the change dir's ``research.md``."""
@@ -214,7 +239,9 @@ def import_research(src: str, dest: Path) -> bool:
     return True
 
 
-async def run_research_phase(config, state, args, state_path: Path, progress) -> int | None:
+async def run_research_phase(
+    config, state, args, state_path: Path, progress
+) -> int | None:
     """The RESEARCH phase.
 
     --research-path wins: its content lands in ``research.md``. Otherwise one
@@ -239,6 +266,7 @@ async def run_research_phase(config, state, args, state_path: Path, progress) ->
         return None
 
     from .llm_steps.research_steps import decide_research, specs_summary
+
     try:
         decision = await decide_research(config, specs_summary(config.change_dir))
     except BudgetExceededError:
@@ -247,9 +275,12 @@ async def run_research_phase(config, state, args, state_path: Path, progress) ->
         log.warning("FAILED phase=RESEARCH reason=%s — continuing without research", e)
         dest.write_text(
             "# Research\n\nNot run: the research decision call failed "
-            f"({e}). The design is written without outside research.\n")
+            f"({e}). The design is written without outside research.\n"
+        )
         state.research_path = str(dest)
-        _progress_note(progress, "RESEARCH", f"Research decision failed (non-fatal): {e}")
+        _progress_note(
+            progress, "RESEARCH", f"Research decision failed (non-fatal): {e}"
+        )
         return None
 
     if not decision.needed:
@@ -260,7 +291,14 @@ async def run_research_phase(config, state, args, state_path: Path, progress) ->
         return None
 
     request = config.change_dir / "research-request.md"
-    lines = ["# Research request", "", f"Why: {decision.reason.strip()}", "", "## Topics", ""]
+    lines = [
+        "# Research request",
+        "",
+        f"Why: {decision.reason.strip()}",
+        "",
+        "## Topics",
+        "",
+    ]
     lines += [f"- {t}" for t in decision.topics] or ["- (none named)"]
     request.write_text("\n".join(lines) + "\n")
     # Pointer AT RESEARCH: this phase re-runs on resume.

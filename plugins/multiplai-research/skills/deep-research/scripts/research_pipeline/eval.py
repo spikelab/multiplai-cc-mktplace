@@ -195,10 +195,7 @@ def score_report(
 
     if isinstance(sources, list):
         score.source_count = len(sources)
-        urls = [
-            s.get("url", "") if isinstance(s, dict) else ""
-            for s in sources
-        ]
+        urls = [s.get("url", "") if isinstance(s, dict) else "" for s in sources]
         score.unique_domains = len({urlparse(u).netloc for u in urls if u})
 
     if isinstance(findings, list):
@@ -209,9 +206,7 @@ def score_report(
     # Coverage — check if 'index.questions_investigated' is present and all
     # listed sub-questions have at least one finding that keywords-match
     questions = (
-        index.get("questions_investigated", [])
-        if isinstance(index, dict)
-        else []
+        index.get("questions_investigated", []) if isinstance(index, dict) else []
     )
     if isinstance(questions, list) and questions:
         covered = 0
@@ -265,8 +260,12 @@ def main() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(description="Deep research eval harness")
-    parser.add_argument("--resources", type=Path, required=True, help="Path to RESOURCES/")
-    parser.add_argument("--output", type=Path, required=True, help="Where to write JSONL fixture")
+    parser.add_argument(
+        "--resources", type=Path, required=True, help="Path to RESOURCES/"
+    )
+    parser.add_argument(
+        "--output", type=Path, required=True, help="Where to write JSONL fixture"
+    )
     args = parser.parse_args()
 
     fixtures = build_dataset(args.resources)

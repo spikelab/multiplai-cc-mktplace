@@ -46,8 +46,10 @@ class TestParsing:
         assert i.is_dated
 
     def test_parses_a_conditional_intention(self):
-        [i] = parse("- [on: the runtime moves past v0.5] Re-run the config audit "
-                    "(captured 2026-07-26)")
+        [i] = parse(
+            "- [on: the runtime moves past v0.5] Re-run the config audit "
+            "(captured 2026-07-26)"
+        )
         assert i.due is None
         assert i.condition == "the runtime moves past v0.5"
         assert i.text == "Re-run the config audit"
@@ -57,29 +59,33 @@ class TestParsing:
         assert i.captured is None and i.text == "Do the thing"
 
     def test_prose_and_headings_are_ignored(self):
-        text = ("# Prospective Memory\n\n"
-                "Some explanatory prose about intentions.\n\n"
-                "## Dated\n\n"
-                + dated(3) + "\n")
+        text = (
+            "# Prospective Memory\n\n"
+            "Some explanatory prose about intentions.\n\n"
+            "## Dated\n\n" + dated(3) + "\n"
+        )
         assert len(parse(text)) == 1
 
     def test_commented_out_template_examples_are_not_intentions(self):
         """The shipped template carries HTML-commented examples. If those
         parsed, every fresh install would nudge about a fake September task."""
-        text = ("<!-- - [due: 2026-09-01] Re-check X (captured 2026-07-26) -->\n"
-                "<!-- - [on: the image moves past v0.5] Re-run it -->\n")
+        text = (
+            "<!-- - [due: 2026-09-01] Re-check X (captured 2026-07-26) -->\n"
+            "<!-- - [on: the image moves past v0.5] Re-run it -->\n"
+        )
         assert parse(text) == []
 
     def test_multiline_comment_blocks_are_skipped(self):
         """Caught by the shipped-template test: the template documents the
         line format *using the line format*, inside a `<!-- -->` block. Without
         comment-awareness a fresh install parses its own instructions."""
-        text = ("<!--\n"
-                "One intention per line, in one of two shapes:\n"
-                "  - [due: YYYY-MM-DD] What to do (captured YYYY-MM-DD)\n"
-                "  - [on: a condition in plain words] What to do\n"
-                "-->\n"
-                + dated(-1, "a real one") + "\n")
+        text = (
+            "<!--\n"
+            "One intention per line, in one of two shapes:\n"
+            "  - [due: YYYY-MM-DD] What to do (captured YYYY-MM-DD)\n"
+            "  - [on: a condition in plain words] What to do\n"
+            "-->\n" + dated(-1, "a real one") + "\n"
+        )
         assert [i.text for i in parse(text)] == ["a real one"]
 
     def test_commenting_one_out_silences_it(self):
@@ -94,13 +100,16 @@ class TestParsing:
 
 
 class TestStatus:
-    @pytest.mark.parametrize("offset,expected", [
-        (-30, "overdue"),
-        (-1, "overdue"),
-        (0, "due"),
-        (LEAD_DAYS, "upcoming"),
-        (LEAD_DAYS + 1, "future"),
-    ])
+    @pytest.mark.parametrize(
+        "offset,expected",
+        [
+            (-30, "overdue"),
+            (-1, "overdue"),
+            (0, "due"),
+            (LEAD_DAYS, "upcoming"),
+            (LEAD_DAYS + 1, "future"),
+        ],
+    )
     def test_status_boundaries(self, offset, expected):
         [i] = parse(dated(offset))
         assert i.status(TODAY) == expected
@@ -166,8 +175,9 @@ class TestActionable:
 
     def test_a_stamp_for_a_different_intention_does_not_silence_this_one(self):
         [mine] = parse("- [on: X happens] Do it (captured 2026-01-01)")
-        assert actionable([mine], TODAY,
-                          last_surfaced={"unrelated :: thing": TODAY}) == [mine]
+        assert actionable(
+            [mine], TODAY, last_surfaced={"unrelated :: thing": TODAY}
+        ) == [mine]
 
     def test_sweep_key_survives_reordering_and_reflowing(self):
         """Keyed on content, not line number: removing a line above, or
@@ -186,8 +196,9 @@ class TestActionable:
         path = tmp_path / "sweep.json"
         path.write_text("{not json", encoding="utf-8")
         assert load_sweep_state(path) == {}
-        path.write_text('{"a :: b": "not-a-date", "c :: d": "2026-07-01"}',
-                        encoding="utf-8")
+        path.write_text(
+            '{"a :: b": "not-a-date", "c :: d": "2026-07-01"}', encoding="utf-8"
+        )
         assert load_sweep_state(path) == {"c :: d": date(2026, 7, 1)}
 
     def test_binary_garbage_sweep_state_degrades_the_same_way(self, tmp_path):
@@ -209,7 +220,9 @@ class TestNudge:
         assert render_nudge([], TODAY) == ""
 
     def test_overdue_entry_produces_a_nudge(self):
-        out = render_nudge(actionable(parse(dated(-3, "Re-check the rule")), TODAY), TODAY)
+        out = render_nudge(
+            actionable(parse(dated(-3, "Re-check the rule")), TODAY), TODAY
+        )
         assert "SYSTEM NUDGE" in out
         assert "Re-check the rule" in out
         assert "OVERDUE by 3 days" in out
@@ -243,16 +256,16 @@ class TestLoad:
 
 class TestFormatLine:
     def test_round_trips_through_the_parser(self):
-        line = format_line("Re-check the rule", due=date(2026, 9, 1),
-                           captured=TODAY)
+        line = format_line("Re-check the rule", due=date(2026, 9, 1), captured=TODAY)
         [i] = parse(line)
         assert i.due == date(2026, 9, 1)
         assert i.text == "Re-check the rule"
         assert i.captured == TODAY
 
     def test_condition_round_trips(self):
-        line = format_line("Re-run the audit", condition="the runtime updates",
-                           captured=TODAY)
+        line = format_line(
+            "Re-run the audit", condition="the runtime updates", captured=TODAY
+        )
         [i] = parse(line)
         assert i.condition == "the runtime updates"
 
@@ -264,8 +277,9 @@ class TestFormatLine:
 
 
 class TestShippedTemplate:
-    TEMPLATE = (Path(__file__).resolve().parent.parent
-                / "templates" / PROSPECTIVE_FILENAME)
+    TEMPLATE = (
+        Path(__file__).resolve().parent.parent / "templates" / PROSPECTIVE_FILENAME
+    )
 
     def test_template_exists(self):
         assert self.TEMPLATE.is_file()
@@ -279,6 +293,7 @@ class TestShippedTemplate:
 class TestOnboardingSeedsTheFile:
     def test_setup_write_copies_the_template(self, tmp_path, monkeypatch):
         import sys
+
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
         import setup_write
 
@@ -299,6 +314,7 @@ class TestOnboardingSeedsTheFile:
         `all_present`, so adding this filename there would tell every existing
         install its memory is incomplete the next time /setup runs."""
         import sys
+
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
         from multiplai_core.config import TEMPLATE_FILENAMES
 
@@ -308,12 +324,14 @@ class TestOnboardingSeedsTheFile:
 class TestExtractionKnowsTheType:
     def test_intention_is_a_declared_learning_type(self):
         from scripts.lib.extraction import EXTRACTION_PROMPT
+
         assert "INTENTION" in EXTRACTION_PROMPT
 
     def test_prompt_carries_todays_date(self):
         """A model asked to turn "in about six weeks" into a due date needs to
         know what day it is; without it, it invents one."""
         from scripts.lib.extraction import EXTRACTION_PROMPT
+
         assert "Today's date:" in EXTRACTION_PROMPT
 
 
@@ -328,6 +346,7 @@ class TestSessionStartIntegration:
 
     def _run(self, tmp_path, capsys, contents: str | None) -> tuple[int, str]:
         import sys
+
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
         import session_start
 
@@ -347,7 +366,8 @@ class TestSessionStartIntegration:
 
     def test_past_due_entry_emits_the_nudge(self, tmp_path, capsys):
         count, out = self._run(
-            tmp_path, capsys, self._line(-4, "Re-check the residency rule"))
+            tmp_path, capsys, self._line(-4, "Re-check the residency rule")
+        )
         assert count == 1
         assert "SYSTEM NUDGE" in out
         assert "Re-check the residency rule" in out
@@ -366,6 +386,7 @@ class TestSessionStartIntegration:
     def _run_twice(self, tmp_path, capsys, contents: str):
         """Two hook invocations against ONE data dir, as consecutive sessions."""
         import sys
+
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
         import session_start
 
@@ -381,14 +402,17 @@ class TestSessionStartIntegration:
         return first, second, data_dir
 
     def test_a_swept_condition_is_stamped_and_does_not_repeat_next_session(
-            self, tmp_path, capsys):
+        self, tmp_path, capsys
+    ):
         """The counterpart to dropping the modulo test: `>=` fires every session
         until something records that it fired."""
         captured = date.today() - timedelta(days=CONDITION_SWEEP_DAYS + 3)
         first, second, data_dir = self._run_twice(
-            tmp_path, capsys,
+            tmp_path,
+            capsys,
             f"- [on: the runtime updates] Re-run the audit "
-            f"(captured {captured.isoformat()})")
+            f"(captured {captured.isoformat()})",
+        )
         assert (first, second) == (1, 0)
 
         state = load_sweep_state(data_dir / SWEEP_STATE_FILENAME)
@@ -398,6 +422,7 @@ class TestSessionStartIntegration:
         """The state file must not grow forever: a reword is a new key by
         design, so without pruning every edit leaves an orphan behind."""
         import sys
+
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
         import session_start
 
@@ -408,9 +433,11 @@ class TestSessionStartIntegration:
         captured = date.today() - timedelta(days=CONDITION_SWEEP_DAYS + 3)
         (memory_dir / PROSPECTIVE_FILENAME).write_text(
             f"- [on: X happens] Do it (captured {captured.isoformat()})",
-            encoding="utf-8")
-        save_sweep_state(data_dir / SWEEP_STATE_FILENAME,
-                         {"deleted :: long ago": date(2026, 1, 1)})
+            encoding="utf-8",
+        )
+        save_sweep_state(
+            data_dir / SWEEP_STATE_FILENAME, {"deleted :: long ago": date(2026, 1, 1)}
+        )
 
         assert session_start._emit_prospective_nudge(memory_dir, data_dir) == 1
         capsys.readouterr()
@@ -422,7 +449,8 @@ class TestSessionStartIntegration:
         """Dated intentions have a real gate — their due date. Stamping them
         would silence an overdue item after one sighting."""
         first, second, data_dir = self._run_twice(
-            tmp_path, capsys, self._line(-4, "Re-check the residency rule"))
+            tmp_path, capsys, self._line(-4, "Re-check the residency rule")
+        )
         assert (first, second) == (1, 1)
         assert not (data_dir / SWEEP_STATE_FILENAME).exists()
 
@@ -430,6 +458,7 @@ class TestSessionStartIntegration:
         """Losing the stamp costs a duplicate nudge. Losing the nudge is the
         failure this channel exists to prevent, so the print comes first."""
         import sys
+
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
         import session_start
 
@@ -438,7 +467,8 @@ class TestSessionStartIntegration:
         captured = date.today() - timedelta(days=CONDITION_SWEEP_DAYS + 3)
         (memory_dir / PROSPECTIVE_FILENAME).write_text(
             f"- [on: X happens] Do it (captured {captured.isoformat()})",
-            encoding="utf-8")
+            encoding="utf-8",
+        )
         not_a_dir = tmp_path / "blocked"
         not_a_dir.write_text("x", encoding="utf-8")
 

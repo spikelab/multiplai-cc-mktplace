@@ -90,7 +90,11 @@ def _repo_is_trusted() -> bool:
     execution as the user (CWE-94). We therefore require an explicit opt-in —
     the `--trust-repo` flag or BUILDME_TRUST_REPO=1 — before any such agent runs.
     """
-    return os.environ.get("BUILDME_TRUST_REPO", "").strip().lower() in ("1", "true", "yes")
+    return os.environ.get("BUILDME_TRUST_REPO", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
 
 
 # Tool denial lives in multiplai-core. run_agent's allow-list is advisory
@@ -161,8 +165,12 @@ async def llm_call(
     if allowed_tools:
         _require_trusted_repo()
 
-    log.info("START sdk_call=llm prompt_bytes=%d model=%s timeout=%.0fs",
-             len(prompt.encode("utf-8")), model or "default", call_timeout)
+    log.info(
+        "START sdk_call=llm prompt_bytes=%d model=%s timeout=%.0fs",
+        len(prompt.encode("utf-8")),
+        model or "default",
+        call_timeout,
+    )
     async with _get_semaphore():
         budget.check(phase=budget_label or "sdk")
         try:
@@ -185,15 +193,21 @@ async def llm_call(
             # exactly the spend the budget exists to catch, so account for the
             # partial usage before propagating (same rule as `agent_call`).
             _record_partial(e, budget_label or "llm")
-            log.error("FAIL sdk_call=llm reason=timeout after %.0fs\n--- CLI stderr ---\n%s",
-                      call_timeout, e.stderr_tail)
+            log.error(
+                "FAIL sdk_call=llm reason=timeout after %.0fs\n--- CLI stderr ---\n%s",
+                call_timeout,
+                e.stderr_tail,
+            )
             raise LLMCallTimeoutError(
                 f"LLM call exceeded {call_timeout:.0f}s timeout"
             ) from e
         except AgentRunError as e:
             _record_partial(e, budget_label or "llm")
-            log.error("FAIL sdk_call=llm error=%s\n--- CLI stderr ---\n%s",
-                      e.reason, e.stderr_tail)
+            log.error(
+                "FAIL sdk_call=llm error=%s\n--- CLI stderr ---\n%s",
+                e.reason,
+                e.stderr_tail,
+            )
             raise LLMCallError(
                 f"SDK query failed: {e.reason}\n--- CLI stderr ---\n{e.stderr_tail}"
             ) from e
@@ -223,8 +237,13 @@ async def agent_call(
 
     _require_trusted_repo()
 
-    log.info("START sdk_call=agent tools=%s model=%s max_turns=%d timeout=%.0fs",
-             allowed_tools, model or "default", max_turns, call_timeout)
+    log.info(
+        "START sdk_call=agent tools=%s model=%s max_turns=%d timeout=%.0fs",
+        allowed_tools,
+        model or "default",
+        max_turns,
+        call_timeout,
+    )
     start = time.monotonic()
 
     async with _get_semaphore():
@@ -232,6 +251,7 @@ async def agent_call(
         from contextlib import nullcontext
 
         from . import git_ops
+
         writable = bool(set(allowed_tools) & {"Write", "Edit", "Bash", "NotebookEdit"})
         window = git_ops.agent_write_window(cwd) if writable else nullcontext()
         with window:
@@ -258,9 +278,13 @@ async def agent_call(
                 timed_out = isinstance(e, AgentRunTimeout)
                 # A failed agent still burned tokens up to the failure point.
                 _record_partial(e, budget_label or "agent")
-                log.error("FAIL sdk_call=agent reason=%s elapsed=%.0fs turns=%d\n--- CLI stderr ---\n%s",
-                          "timeout" if timed_out else e.reason, elapsed,
-                          partial.turns if partial else 0, e.stderr_tail)
+                log.error(
+                    "FAIL sdk_call=agent reason=%s elapsed=%.0fs turns=%d\n--- CLI stderr ---\n%s",
+                    "timeout" if timed_out else e.reason,
+                    elapsed,
+                    partial.turns if partial else 0,
+                    e.stderr_tail,
+                )
                 error_msg = (
                     f"Agent timed out after {elapsed:.0f}s\nCLI stderr:\n{e.stderr_tail}"
                     if timed_out
@@ -279,8 +303,12 @@ async def agent_call(
             budget.record(result.usage, label=budget_label or "agent")
 
     elapsed = time.monotonic() - start
-    log.info("DONE sdk_call=agent turns=%d elapsed=%.0fs files_changed=%d",
-             result.turns, elapsed, len(result.files_changed))
+    log.info(
+        "DONE sdk_call=agent turns=%d elapsed=%.0fs files_changed=%d",
+        result.turns,
+        elapsed,
+        len(result.files_changed),
+    )
     return AgentResult(
         success=True,
         output=result.text,
@@ -306,14 +334,24 @@ async def llm_call_structured(
     last_error: Exception | None = None
 
     for attempt in range(max_retries + 1):
-        raw = await llm_call(current_prompt, model=model, effort=effort,
-                             system_prompt=system_prompt, call_timeout=call_timeout,
-                             budget_label=budget_label)
+        raw = await llm_call(
+            current_prompt,
+            model=model,
+            effort=effort,
+            system_prompt=system_prompt,
+            call_timeout=call_timeout,
+            budget_label=budget_label,
+        )
         try:
             return parse_answer(raw, schema)
         except (ValidationError, ValueError, json.JSONDecodeError) as e:
             last_error = e
-            log.warning("Structured output validation failed (attempt %d/%d): %s", attempt + 1, max_retries + 1, e)
+            log.warning(
+                "Structured output validation failed (attempt %d/%d): %s",
+                attempt + 1,
+                max_retries + 1,
+                e,
+            )
             if attempt < max_retries:
                 current_prompt = (
                     f"{prompt}\n\n---\n"
@@ -322,7 +360,9 @@ async def llm_call_structured(
                     f"{json.dumps(schema.model_json_schema(), indent=2)}\n"
                 )
 
-    raise LLMCallError(f"Structured output validation failed after {max_retries + 1} attempts: {last_error}")
+    raise LLMCallError(
+        f"Structured output validation failed after {max_retries + 1} attempts: {last_error}"
+    )
 
 
 async def agent_call_structured(
@@ -354,18 +394,30 @@ async def agent_call_structured(
     last_error: Exception | None = None
 
     for attempt in range(max_retries + 1):
-        result = await agent_call(current_prompt, allowed_tools=allowed_tools,
-                                  model=model, effort=effort, max_turns=max_turns,
-                                  cwd=cwd, call_timeout=call_timeout,
-                                  budget_label=budget_label)
+        result = await agent_call(
+            current_prompt,
+            allowed_tools=allowed_tools,
+            model=model,
+            effort=effort,
+            max_turns=max_turns,
+            cwd=cwd,
+            call_timeout=call_timeout,
+            budget_label=budget_label,
+        )
         try:
             if not result.success:
-                raise ValueError(f"Agent call failed: {result.error or 'no error reported'}")
+                raise ValueError(
+                    f"Agent call failed: {result.error or 'no error reported'}"
+                )
             return parse_answer(result.output, schema)
         except (ValidationError, ValueError, json.JSONDecodeError) as e:
             last_error = e
-            log.warning("Structured agent output validation failed (attempt %d/%d): %s",
-                        attempt + 1, max_retries + 1, e)
+            log.warning(
+                "Structured agent output validation failed (attempt %d/%d): %s",
+                attempt + 1,
+                max_retries + 1,
+                e,
+            )
             if attempt < max_retries:
                 current_prompt = (
                     f"{prompt}\n\n---\n"
@@ -374,4 +426,6 @@ async def agent_call_structured(
                     f"{json.dumps(schema.model_json_schema(), indent=2)}\n"
                 )
 
-    raise LLMCallError(f"Structured agent output validation failed after {max_retries + 1} attempts: {last_error}")
+    raise LLMCallError(
+        f"Structured agent output validation failed after {max_retries + 1} attempts: {last_error}"
+    )

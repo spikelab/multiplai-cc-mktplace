@@ -351,9 +351,13 @@ def render_batch(items: Sequence, target_texts: Mapping[str, str]) -> str:
         number = getattr(item, "number", 0)
         section = getattr(item, "section", "") or ""
         out.append(f"### {target}#{number}")
-        out.append(f"- **Would append to:** `{target}`" + (f" § {section}" if section else ""))
+        out.append(
+            f"- **Would append to:** `{target}`" + (f" § {section}" if section else "")
+        )
         pair = getattr(item, "pair", "") or "(none — drafted before the taxonomy)"
-        out.append(f"- **Extractor's labels (a claim to check, not an answer):** {pair}")
+        out.append(
+            f"- **Extractor's labels (a claim to check, not an answer):** {pair}"
+        )
         out.append(f"- **Citation given:** {getattr(item, 'source', '') or '(none)'}")
         if getattr(item, "routing_flagged", False):
             out.append(ROUTING_FLAG_EVIDENCE)
@@ -404,8 +408,10 @@ def batch_labels(items: Sequence) -> list[tuple[str, int]]:
     The one place the batch's identity set is derived, so the renderer and the
     parser cannot disagree about what was asked.
     """
-    return [(str(getattr(item, "target", "")), int(getattr(item, "number", 0)))
-            for item in items]
+    return [
+        (str(getattr(item, "target", "")), int(getattr(item, "number", 0)))
+        for item in items
+    ]
 
 
 def parse_verdicts(
@@ -464,7 +470,8 @@ def parse_verdicts(
         if expected_set is not None and key not in expected_set:
             logger.warning(
                 "Judge reply carried a verdict for %r, which was not in this "
-                "batch — discarding it", key,
+                "batch — discarding it",
+                key,
             )
             continue
         if key in verdicts:

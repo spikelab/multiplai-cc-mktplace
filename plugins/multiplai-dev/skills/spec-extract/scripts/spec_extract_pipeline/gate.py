@@ -65,13 +65,19 @@ class Spec:
 
 @dataclass
 class Checked:
-    specs: list[Spec] = field(default_factory=list)  # capabilities with a file, in group order
+    specs: list[Spec] = field(
+        default_factory=list
+    )  # capabilities with a file, in group order
     dropped: list[str] = field(default_factory=list)
-    not_specified: list[tuple[str, str]] = field(default_factory=list)  # (symbol id, reason), scope order
+    not_specified: list[tuple[str, str]] = field(
+        default_factory=list
+    )  # (symbol id, reason), scope order
     not_written: list[str] = field(default_factory=list)
 
 
-def symbol_spans(target: Target, symbols: list[Symbol]) -> dict[str, list[tuple[int, int]]]:
+def symbol_spans(
+    target: Target, symbols: list[Symbol]
+) -> dict[str, list[tuple[int, int]]]:
     """{symbol id: (first line, last line) of each of its defs} at the commit, once per id in scope
     order; just the `def` lines when `ast` cannot say."""
     def_lines: dict[str, list[tuple[int, int]]] = {}
@@ -88,12 +94,15 @@ def symbol_spans(target: Target, symbols: list[Symbol]) -> dict[str, list[tuple[
             continue
         for node in tree.body:
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                spans.setdefault(f"{path}::{node.name}", []).append((node.lineno, node.end_lineno or node.lineno))
+                spans.setdefault(f"{path}::{node.name}", []).append(
+                    (node.lineno, node.end_lineno or node.lineno)
+                )
             if isinstance(node, ast.ClassDef):
                 for item in node.body:
                     if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
                         spans.setdefault(f"{path}::{node.name}.{item.name}", []).append(
-                            (item.lineno, item.end_lineno or item.lineno))
+                            (item.lineno, item.end_lineno or item.lineno)
+                        )
     return {sid: spans.get(sid) or lines for sid, lines in def_lines.items()}
 
 
@@ -102,11 +111,19 @@ def _as_written(cap: Capability, name: str, scenario: Scenario) -> str:
     from .render import (
         capability_md,  # here, not at the top: render imports this module
     )
-    return capability_md("", "", Spec(cap.name, cap.summary, [Requirement(name, "", [scenario])]))
+
+    return capability_md(
+        "", "", Spec(cap.name, cap.summary, [Requirement(name, "", [scenario])])
+    )
 
 
-def check(caps: list[Capability], answers: dict[str, dict], symbols: list[Symbol], target: Target,
-          snapshot: Path) -> Checked:
+def check(
+    caps: list[Capability],
+    answers: dict[str, dict],
+    symbols: list[Symbol],
+    target: Target,
+    snapshot: Path,
+) -> Checked:
     """Gate every write answer. *target* is read through this run's checkout."""
     resolve = resolver(target)
     spans = symbol_spans(target, symbols)
@@ -124,16 +141,27 @@ def check(caps: list[Capability], answers: dict[str, dict], symbols: list[Symbol
         for r in WriteOutput.model_validate(raw).requirements:
             name = one_line(r.name)
             if not name or name in {q.name for q in reqs}:
-                out.dropped.append(f"{cap.name} / {name or '(no name)'}: a requirement needs a name "
-                                   "no other requirement in its capability has")
+                out.dropped.append(
+                    f"{cap.name} / {name or '(no name)'}: a requirement needs a name "
+                    "no other requirement in its capability has"
+                )
                 continue
             # As written to the file, both ways round: the first kept name stays.
-            clash = next((q.name for q in reqs if md(q.name).startswith(md(name))
-                          or md(name).startswith(md(q.name))), None)
+            clash = next(
+                (
+                    q.name
+                    for q in reqs
+                    if md(q.name).startswith(md(name))
+                    or md(name).startswith(md(q.name))
+                ),
+                None,
+            )
             if clash is not None:
-                out.dropped.append(f"{cap.name} / {name}: the kept requirement `{clash}` is a prefix of its "
-                                   "name as written, or the other way round; buildme matches requirement "
-                                   "names by prefix")
+                out.dropped.append(
+                    f"{cap.name} / {name}: the kept requirement `{clash}` is a prefix of its "
+                    "name as written, or the other way round; buildme matches requirement "
+                    "names by prefix"
+                )
                 continue
             kept = []
             for sc in r.scenarios:
@@ -146,19 +174,34 @@ def check(caps: list[Capability], answers: dict[str, dict], symbols: list[Symbol
                     elif reason not in reasons:
                         reasons.append(reason)
                 if not good:
-                    out.dropped.append(f"{cap.name} / {name} / {one_line(sc.name)}: "
-                                       f"{'; '.join(reasons) or 'no citation'}")
+                    out.dropped.append(
+                        f"{cap.name} / {name} / {one_line(sc.name)}: "
+                        f"{'; '.join(reasons) or 'no citation'}"
+                    )
                     continue
-                scenario = Scenario(one_line(sc.name), one_line(sc.when), one_line(sc.then), good,
-                                    pinned=any(is_test_file(c.path) for c in good))
+                scenario = Scenario(
+                    one_line(sc.name),
+                    one_line(sc.when),
+                    one_line(sc.then),
+                    good,
+                    pinned=any(is_test_file(c.path) for c in good),
+                )
                 if not valid_requirement_text(_as_written(cap, name, scenario)):
-                    out.dropped.append(f"{cap.name} / {name} / {scenario.name or '(no name)'}: a scenario "
-                                       "needs a name, a WHEN and a THEN, each with text")
+                    out.dropped.append(
+                        f"{cap.name} / {name} / {scenario.name or '(no name)'}: a scenario "
+                        "needs a name, a WHEN and a THEN, each with text"
+                    )
                     continue
                 kept.append(scenario)
                 for c in good:
-                    cited.update(sid for sid, ranges in spans.items() if path_of[sid] == c.path
-                                 and any(c.line_start <= hi and c.line_end >= lo for lo, hi in ranges))
+                    cited.update(
+                        sid
+                        for sid, ranges in spans.items()
+                        if path_of[sid] == c.path
+                        and any(
+                            c.line_start <= hi and c.line_end >= lo for lo, hi in ranges
+                        )
+                    )
             if not kept:
                 out.dropped.append(f"{cap.name} / {name}: no scenario left")
                 continue
@@ -169,6 +212,10 @@ def check(caps: list[Capability], answers: dict[str, dict], symbols: list[Symbol
             out.dropped.append(f"{cap.name}: no requirement left, so no file")
     for sid in spans:
         if sid not in cited:
-            reason = "its capability was not written" if sid in unwritten else "no kept scenario cites it"
+            reason = (
+                "its capability was not written"
+                if sid in unwritten
+                else "no kept scenario cites it"
+            )
             out.not_specified.append((sid, reason))
     return out

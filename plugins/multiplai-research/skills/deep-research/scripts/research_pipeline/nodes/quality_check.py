@@ -37,33 +37,47 @@ def _summarize_findings(state: ResearchState) -> dict:
     failed = state.failed_sources()
     failed_lines = []
     for s in failed:
-        failed_lines.append(f"- [{s.reputation.value}] {s.title[:60]} ({s.url}) — {s.error or 'unknown'}")
+        failed_lines.append(
+            f"- [{s.reputation.value}] {s.title[:60]} ({s.url}) — {s.error or 'unknown'}"
+        )
 
     # Coverage: for each sub-question, count findings
     coverage_lines = []
     sub_questions = state.plan.sub_questions if state.plan else []
     for i, q in enumerate(sub_questions):
         tagged = sum(1 for f in state.findings if f.relates_to_sub_question == i)
-        coverage_lines.append(f"- Q{i+1}: {tagged} directly tagged findings — {q[:80]}")
+        coverage_lines.append(
+            f"- Q{i + 1}: {tagged} directly tagged findings — {q[:80]}"
+        )
 
     return {
         "total_findings": len(state.findings),
-        "confidence_breakdown": ", ".join(f"{v} {k}" for k, v in sorted(confidence_counts.items())) or "none",
-        "reputation_breakdown": ", ".join(f"{v} {k}" for k, v in sorted(reputation_counts.items())) or "none",
+        "confidence_breakdown": ", ".join(
+            f"{v} {k}" for k, v in sorted(confidence_counts.items())
+        )
+        or "none",
+        "reputation_breakdown": ", ".join(
+            f"{v} {k}" for k, v in sorted(reputation_counts.items())
+        )
+        or "none",
         "failed_count": len(failed),
         "failed_sources": "\n".join(failed_lines) if failed_lines else "None",
-        "coverage_assessment": "\n".join(coverage_lines) if coverage_lines else "No sub-questions defined",
+        "coverage_assessment": "\n".join(coverage_lines)
+        if coverage_lines
+        else "No sub-questions defined",
     }
 
 
-async def quality_check(config: ResearchConfig, state: ResearchState) -> QualityCheckResult:
+async def quality_check(
+    config: ResearchConfig, state: ResearchState
+) -> QualityCheckResult:
     """Cheap LLM assessment: is this research worth synthesizing?"""
     summary = _summarize_findings(state)
     sub_questions = state.plan.sub_questions if state.plan else []
 
     prompt = QUALITY_CHECK_PROMPT.format(
         query=config.query,
-        sub_questions="\n".join(f"{i+1}. {q}" for i, q in enumerate(sub_questions)),
+        sub_questions="\n".join(f"{i + 1}. {q}" for i, q in enumerate(sub_questions)),
         preset_name=config.preset.name,
         preset_sources=config.preset.sources,
         min_sources=config.preset.min_sources,
@@ -83,7 +97,9 @@ async def quality_check(config: ResearchConfig, state: ResearchState) -> Quality
         )
         log.info(
             "Quality check: go=%s confidence=%.2f reason=%s",
-            result.go, result.confidence, result.reasoning[:100],
+            result.go,
+            result.confidence,
+            result.reasoning[:100],
         )
         return result
     except Exception as e:  # noqa: BLE001

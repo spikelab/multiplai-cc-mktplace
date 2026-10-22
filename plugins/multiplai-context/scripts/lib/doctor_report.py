@@ -111,8 +111,11 @@ def render_report(
         "were looked for, so the absence of cross-file findings is not evidence "
         "that there are none."
     )
-    basis = [name for name in ("self_report", "judge")
-             if (deadweight.get("estimator_notes") or {}).get(name)]
+    basis = [
+        name
+        for name in ("self_report", "judge")
+        if (deadweight.get("estimator_notes") or {}).get(name)
+    ]
     out.append(
         f"- **Dead weight is backed by these utilisation estimators:** "
         f"{', '.join(f'`{b}`' for b in basis) or '_none available_'}. Both are "

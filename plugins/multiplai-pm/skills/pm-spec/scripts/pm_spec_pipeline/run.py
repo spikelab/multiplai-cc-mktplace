@@ -13,7 +13,14 @@ from .state import RunState
 log = logging.getLogger(__name__)
 
 # Markers and exit codes (SKILL.md, "Exit codes").
-EXIT_DONE, EXIT_FAILED, EXIT_REFUSED, EXIT_WAITING, EXIT_BLOCKED, EXIT_LOCKED = 0, 1, 2, 3, 4, 5
+EXIT_DONE, EXIT_FAILED, EXIT_REFUSED, EXIT_WAITING, EXIT_BLOCKED, EXIT_LOCKED = (
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+)
 MARKER_READY = "SPEC:READY"
 MARKER_SPLIT = "SPEC:SPLIT"
 MARKER_CHILD = "SPEC:CHILD"

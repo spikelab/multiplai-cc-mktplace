@@ -24,10 +24,14 @@ def make_repo(tmp_path: Path, *, skills=None, plugins=("myplug",)) -> Path:
     (repo / ".claude-plugin").mkdir(parents=True)
     for p in plugins:
         (repo / "plugins" / p / "skills").mkdir(parents=True)
-    (repo / ".claude-plugin" / "marketplace.json").write_text(json.dumps({
-        "name": "test",
-        "plugins": [{"name": p, "source": f"./plugins/{p}"} for p in plugins],
-    }))
+    (repo / ".claude-plugin" / "marketplace.json").write_text(
+        json.dumps(
+            {
+                "name": "test",
+                "plugins": [{"name": p, "source": f"./plugins/{p}"} for p in plugins],
+            }
+        )
+    )
     for name, body in (skills or {}).items():
         d = repo / "plugins" / plugins[0] / "skills" / name
         d.mkdir(parents=True, exist_ok=True)
@@ -56,8 +60,9 @@ class TestCleanTreePasses:
         assert errors_for(repo) == []
 
     def test_optional_model_and_effort_may_be_absent(self, tmp_path):
-        repo = make_repo(tmp_path, skills={
-            "alpha": "---\nname: alpha\ndescription: d\n---\n\n# A\n"})
+        repo = make_repo(
+            tmp_path, skills={"alpha": "---\nname: alpha\ndescription: d\n---\n\n# A\n"}
+        )
         assert errors_for(repo) == []
 
 
@@ -73,7 +78,8 @@ class TestFrontmatter:
     @pytest.mark.parametrize("field", ["name", "description"])
     def test_required_fields(self, tmp_path, field):
         body = "---\nname: alpha\ndescription: d\n---\n\n# A\n".replace(
-            f"{field}: ", f"x{field}: ")
+            f"{field}: ", f"x{field}: "
+        )
         repo = make_repo(tmp_path, skills={"alpha": body})
         assert any(f"missing required field '{field}'" in e for e in errors_for(repo))
 
@@ -93,9 +99,11 @@ class TestFrontmatter:
         assert any("unknown effort" in e for e in errors_for(repo))
 
     def test_quoted_values_are_unquoted(self):
-        fields, err = parse_frontmatter('---\nname: "alpha"\ndesc: \'x\'\n---\n')
+        fields, err = parse_frontmatter("---\nname: \"alpha\"\ndesc: 'x'\n---\n")
         assert err == ""
-        assert fields is not None and fields["name"] == "alpha" and fields["desc"] == "x"
+        assert (
+            fields is not None and fields["name"] == "alpha" and fields["desc"] == "x"
+        )
 
     def test_unquoted_value_with_colon_space_is_an_error(self, tmp_path):
         """Real YAML reads `Default window: last 7 days` as a nested mapping.
@@ -104,22 +112,25 @@ class TestFrontmatter:
         load entirely, which this lenient parser happily ignored until the
         check was added.
         """
-        body = ("---\nname: alpha\n"
-                "description: Does a thing. Default window: last 7 days.\n"
-                "---\n\n# A\n")
+        body = (
+            "---\nname: alpha\n"
+            "description: Does a thing. Default window: last 7 days.\n"
+            "---\n\n# A\n"
+        )
         repo = make_repo(tmp_path, skills={"alpha": body})
         assert any("unquoted" in e for e in errors_for(repo))
 
     def test_quoted_value_with_colon_space_is_fine(self, tmp_path):
-        body = ('---\nname: alpha\n'
-                'description: "Does a thing. Default window: last 7 days."\n'
-                "---\n\n# A\n")
+        body = (
+            "---\nname: alpha\n"
+            'description: "Does a thing. Default window: last 7 days."\n'
+            "---\n\n# A\n"
+        )
         repo = make_repo(tmp_path, skills={"alpha": body})
         assert errors_for(repo) == []
 
     def test_multiline_continuation_joins(self):
-        fields, _ = parse_frontmatter(
-            "---\nname: a\ndescription: one\n  two\n---\n")
+        fields, _ = parse_frontmatter("---\nname: a\ndescription: one\n  two\n---\n")
         assert fields is not None and fields["description"] == "one two"
 
 
@@ -128,13 +139,15 @@ class TestScriptReferences:
         return VALID.format(name="alpha") + f"\nRun `${{CLAUDE_PLUGIN_ROOT}}{ref}`\n"
 
     def test_broken_reference_is_caught(self, tmp_path):
-        repo = make_repo(tmp_path, skills={
-            "alpha": self._skill_with_ref("/scripts/missing.py")})
+        repo = make_repo(
+            tmp_path, skills={"alpha": self._skill_with_ref("/scripts/missing.py")}
+        )
         assert any("broken script reference" in e for e in errors_for(repo))
 
     def test_resolving_reference_passes(self, tmp_path):
-        repo = make_repo(tmp_path, skills={
-            "alpha": self._skill_with_ref("/scripts/real.py")})
+        repo = make_repo(
+            tmp_path, skills={"alpha": self._skill_with_ref("/scripts/real.py")}
+        )
         s = repo / "plugins" / "myplug" / "scripts"
         s.mkdir(parents=True)
         (s / "real.py").write_text("print(1)\n")
@@ -142,14 +155,20 @@ class TestScriptReferences:
 
     def test_placeholder_references_are_skipped(self, tmp_path):
         """`/skills/<name>/scripts/` is documentation, not a real path."""
-        repo = make_repo(tmp_path, skills={
-            "alpha": self._skill_with_ref("/skills/<name>/scripts/x.py")})
+        repo = make_repo(
+            tmp_path,
+            skills={"alpha": self._skill_with_ref("/skills/<name>/scripts/x.py")},
+        )
         assert errors_for(repo) == []
 
     def test_trailing_punctuation_is_stripped(self, tmp_path):
-        repo = make_repo(tmp_path, skills={
-            "alpha": VALID.format(name="alpha")
-            + "\nSee ${CLAUDE_PLUGIN_ROOT}/scripts/real.py.\n"})
+        repo = make_repo(
+            tmp_path,
+            skills={
+                "alpha": VALID.format(name="alpha")
+                + "\nSee ${CLAUDE_PLUGIN_ROOT}/scripts/real.py.\n"
+            },
+        )
         s = repo / "plugins" / "myplug" / "scripts"
         s.mkdir(parents=True)
         (s / "real.py").write_text("x\n")
@@ -161,7 +180,8 @@ class TestHostPaths:
         repo = make_repo(tmp_path, skills={"alpha": VALID.format(name="alpha")})
         (repo / "plugins" / "myplug" / "scripts").mkdir(parents=True)
         (repo / "plugins" / "myplug" / "scripts" / "go.py").write_text(
-            'P = "/Users/someone/Documents/knowhere"\n')
+            'P = "/Users/someone/Documents/knowhere"\n'
+        )
         assert any("absolute host path" in e for e in errors_for(repo))
 
     def test_container_home_is_not_flagged(self, tmp_path):
@@ -173,7 +193,8 @@ class TestHostPaths:
         repo = make_repo(tmp_path, skills={"alpha": VALID.format(name="alpha")})
         (repo / "plugins" / "myplug" / "scripts").mkdir(parents=True)
         (repo / "plugins" / "myplug" / "scripts" / "go.sh").write_text(
-            'for c in /home/agent/.ssh/build_key "$HOME/.ssh/build_key"; do :; done\n')
+            'for c in /home/agent/.ssh/build_key "$HOME/.ssh/build_key"; do :; done\n'
+        )
         assert errors_for(repo) == []
 
     def test_test_fixtures_are_exempt(self, tmp_path):
@@ -229,37 +250,49 @@ class TestSdkComesFromCore:
         return repo
 
     def test_bare_sdk_alongside_core_is_caught(self, tmp_path):
-        repo = self._with_manifest(tmp_path, (
-            '[project]\nname = "p"\ndependencies = [\n'
-            '  "multiplai-core @ git+https://example.com/c@v0.11.0",\n'
-            '  "claude-agent-sdk>=0.2.116,<0.3",\n]\n'
-        ))
+        repo = self._with_manifest(
+            tmp_path,
+            (
+                '[project]\nname = "p"\ndependencies = [\n'
+                '  "multiplai-core @ git+https://example.com/c@v0.11.0",\n'
+                '  "claude-agent-sdk>=0.2.116,<0.3",\n]\n'
+            ),
+        )
         assert any("directly alongside multiplai-core" in e for e in errors_for(repo))
 
     def test_matching_version_specs_do_not_excuse_the_duplicate(self, tmp_path):
         """Even the [sdk] extra plus an identical local pin is an error —
         the second copy is what drifts when core bumps its floor."""
-        repo = self._with_manifest(tmp_path, (
-            '[project]\nname = "p"\ndependencies = [\n'
-            '  "multiplai-core[sdk] @ git+https://example.com/c@v0.11.0",\n'
-            '  "claude-agent-sdk>=0.2.116,<0.3",\n]\n'
-        ))
+        repo = self._with_manifest(
+            tmp_path,
+            (
+                '[project]\nname = "p"\ndependencies = [\n'
+                '  "multiplai-core[sdk] @ git+https://example.com/c@v0.11.0",\n'
+                '  "claude-agent-sdk>=0.2.116,<0.3",\n]\n'
+            ),
+        )
         assert any("directly alongside multiplai-core" in e for e in errors_for(repo))
 
     def test_sdk_extra_alone_is_clean(self, tmp_path):
-        repo = self._with_manifest(tmp_path, (
-            '[project]\nname = "p"\ndependencies = [\n'
-            '  "multiplai-core[sdk] @ git+https://example.com/c@v0.11.0",\n'
-            '  "pydantic>=2.0",\n]\n'
-        ))
+        repo = self._with_manifest(
+            tmp_path,
+            (
+                '[project]\nname = "p"\ndependencies = [\n'
+                '  "multiplai-core[sdk] @ git+https://example.com/c@v0.11.0",\n'
+                '  "pydantic>=2.0",\n]\n'
+            ),
+        )
         assert errors_for(repo) == []
 
     def test_sdk_hiding_in_an_optional_extra_is_caught(self, tmp_path):
-        repo = self._with_manifest(tmp_path, (
-            '[project]\nname = "p"\ndependencies = ["multiplai-core"]\n'
-            '[project.optional-dependencies]\n'
-            'agent = ["claude-agent-sdk>=0.2.116"]\n'
-        ))
+        repo = self._with_manifest(
+            tmp_path,
+            (
+                '[project]\nname = "p"\ndependencies = ["multiplai-core"]\n'
+                "[project.optional-dependencies]\n"
+                'agent = ["claude-agent-sdk>=0.2.116"]\n'
+            ),
+        )
         assert any("directly alongside multiplai-core" in e for e in errors_for(repo))
 
     def test_pep723_inline_metadata_is_checked_too(self, tmp_path):
@@ -286,18 +319,22 @@ class TestSdkComesFromCore:
 
     def test_distribution_name_is_normalised(self, tmp_path):
         """`multiplai_core` and `Claude_Agent_SDK` are the same distributions."""
-        repo = self._with_manifest(tmp_path, (
-            '[project]\nname = "p"\ndependencies = [\n'
-            '  "multiplai_core",\n  "Claude_Agent_SDK>=0.1.0",\n]\n'
-        ))
+        repo = self._with_manifest(
+            tmp_path,
+            (
+                '[project]\nname = "p"\ndependencies = [\n'
+                '  "multiplai_core",\n  "Claude_Agent_SDK>=0.1.0",\n]\n'
+            ),
+        )
         assert any("directly alongside multiplai-core" in e for e in errors_for(repo))
 
     def test_sdk_without_core_is_not_this_checks_business(self, tmp_path):
         """A standalone script that never touches core is out of scope —
         a narrow rule that never false-positives is one that stays enabled."""
-        repo = self._with_manifest(tmp_path, (
-            '[project]\nname = "p"\ndependencies = ["claude-agent-sdk>=0.2.116"]\n'
-        ))
+        repo = self._with_manifest(
+            tmp_path,
+            ('[project]\nname = "p"\ndependencies = ["claude-agent-sdk>=0.2.116"]\n'),
+        )
         assert errors_for(repo) == []
 
     def test_test_fixtures_are_exempt(self, tmp_path):

@@ -52,7 +52,9 @@ class StubProvider:
             await asyncio.sleep(60)  # would hang longer than any test timeout
         if self.fail_count > 0:
             self.fail_count -= 1
-            raise ProviderError(self.name, "synthetic failure", transient=self.fail_transient)
+            raise ProviderError(
+                self.name, "synthetic failure", transient=self.fail_transient
+            )
         return [
             SearchResult(
                 url=f"https://{self.name}.example/{query}/{i}",
@@ -160,6 +162,7 @@ class TestQuotaTracking:
 
         # Reload quota file
         from research_pipeline.models import QuotaState
+
         state = QuotaState.model_validate_json(tmp_quota_file.read_text())
         assert state.quotas["primary"].monthly_count == 5
         assert state.quotas["primary"].total_count == 5
@@ -266,15 +269,28 @@ class TestBatchAndTimeout:
     @pytest.mark.asyncio
     async def test_batch_deduplicates_urls(self, fast_config: RouterConfig) -> None:
         """Same URLs across queries should be deduplicated."""
+
         class SameUrlProvider:
             name = "primary"  # must match fast_config.keyword_priority
             monthly_limit = 1000
             one_time_limit: int | None = None
 
-            async def search(self, query: str, max_results: int = 10) -> list[SearchResult]:
+            async def search(
+                self, query: str, max_results: int = 10
+            ) -> list[SearchResult]:
                 return [
-                    SearchResult(url="https://same.example/a", title="A", snippet="", source_api=self.name),
-                    SearchResult(url="https://same.example/b", title="B", snippet="", source_api=self.name),
+                    SearchResult(
+                        url="https://same.example/a",
+                        title="A",
+                        snippet="",
+                        source_api=self.name,
+                    ),
+                    SearchResult(
+                        url="https://same.example/b",
+                        title="B",
+                        snippet="",
+                        source_api=self.name,
+                    ),
                 ]
 
         router = SearchRouter([SameUrlProvider()], fast_config)  # type: ignore[list-item]
@@ -307,12 +323,19 @@ class TestBatchAndTimeout:
             def __init__(self):
                 self.calls = 0
 
-            async def search(self, query: str, max_results: int = 10) -> list[SearchResult]:
+            async def search(
+                self, query: str, max_results: int = 10
+            ) -> list[SearchResult]:
                 self.calls += 1
                 if "fail" in query:
                     raise ProviderError(self.name, "boom", transient=False)
                 return [
-                    SearchResult(url=f"https://example/{query}", title=query, snippet="", source_api=self.name)
+                    SearchResult(
+                        url=f"https://example/{query}",
+                        title=query,
+                        snippet="",
+                        source_api=self.name,
+                    )
                 ]
 
         provider = SelectivelyFailingProvider()
@@ -449,7 +472,9 @@ class TestAclose:
             async def search(self, query: str, max_results: int = 10):
                 return [
                     SearchResult(
-                        url="https://x.example/1", title="x", snippet="",
+                        url="https://x.example/1",
+                        title="x",
+                        snippet="",
                         source_api=self.name,
                     )
                 ]
@@ -465,6 +490,7 @@ class TestAclose:
         assert closed == ["primary"]  # provider client was closed
         # Debounced quota write was flushed to disk by aclose.
         from research_pipeline.models import QuotaState
+
         state = QuotaState.model_validate_json(tmp_quota_file.read_text())
         assert state.quotas["primary"].monthly_count == 1
 
@@ -488,8 +514,11 @@ class TestClaudeAgentModelPin:
             return SimpleNamespace(
                 text="[]",
                 usage=SimpleNamespace(
-                    input_tokens=1, output_tokens=1,
-                    cache_creation_tokens=0, cache_read_tokens=0, cost_usd=0.0,
+                    input_tokens=1,
+                    output_tokens=1,
+                    cache_creation_tokens=0,
+                    cache_read_tokens=0,
+                    cost_usd=0.0,
                 ),
             )
 
@@ -500,9 +529,7 @@ class TestClaudeAgentModelPin:
         assert captured["model"] == "pinned-model"
         assert captured["effort"] == "low"
 
-    def test_build_default_router_pins_claude_agent_model(
-        self, tmp_path: Path
-    ) -> None:
+    def test_build_default_router_pins_claude_agent_model(self, tmp_path: Path) -> None:
         from research_pipeline.search_router import build_default_router
 
         router = build_default_router(

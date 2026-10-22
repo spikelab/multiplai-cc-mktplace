@@ -18,6 +18,7 @@ transcript.raw.json), so the file holds every correction for the source and
 re-running it gives the same result. If any entry matches nothing, nothing
 is written.
 """
+
 from __future__ import annotations
 
 import json
@@ -58,7 +59,9 @@ def load(path: str | Path) -> list[dict]:
         raise CorrectionError(f"{path}: expected a list of {{at, from, to}} entries")
     for i, e in enumerate(data):
         if not isinstance(e, dict) or set(e) != {"at", "from", "to"}:
-            raise CorrectionError(f"{path}: entry {i} must have exactly at, from and to: {e!r}")
+            raise CorrectionError(
+                f"{path}: entry {i} must have exactly at, from and to: {e!r}"
+            )
         if not str(e["from"]).split() or not str(e["to"]).split():
             raise CorrectionError(f"{path}: entry {i} has an empty from or to: {e!r}")
     return data
@@ -72,7 +75,9 @@ def _find(words: list[dict], entry: dict) -> int | None:
         d = abs(words[i]["start"] - float(entry["at"]))
         if d > WINDOW_S:
             continue
-        if [_bare(w["text"]) for w in words[i:i + n]] == target and (best_d is None or d < best_d):
+        if [_bare(w["text"]) for w in words[i : i + n]] == target and (
+            best_d is None or d < best_d
+        ):
             best, best_d = i, d
     return best
 
@@ -109,12 +114,15 @@ def apply(words: list[dict], corrections: list[dict]) -> list[dict]:
             missing.append(e)
             continue
         n = len(str(e["from"]).split())
-        out[i:i + n] = _replace(out[i:i + n], str(e["to"]))
+        out[i : i + n] = _replace(out[i : i + n], str(e["to"]))
     if missing:
         raise CorrectionError(
-            "no words match " + "; ".join(
-                f"{e['from']!r} within {WINDOW_S:g}s of {e['at']}" for e in missing)
-            + ". Check the spelling and time against transcript.json; nothing was written.")
+            "no words match "
+            + "; ".join(
+                f"{e['from']!r} within {WINDOW_S:g}s of {e['at']}" for e in missing
+            )
+            + ". Check the spelling and time against transcript.json; nothing was written."
+        )
     return out
 
 
@@ -149,5 +157,7 @@ def source_of(cache: Path) -> str:
     ctx = cache / "context.md"
     for line in ctx.read_text().splitlines() if ctx.exists() else []:
         if line.startswith("- source: "):
-            return line[len("- source: "):]
-    raise CorrectionError(f"{ctx} names no source; run `pipeline.py prep <source>` first.")
+            return line[len("- source: ") :]
+    raise CorrectionError(
+        f"{ctx} names no source; run `pipeline.py prep <source>` first."
+    )

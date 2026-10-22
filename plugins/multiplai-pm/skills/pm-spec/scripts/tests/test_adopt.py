@@ -20,8 +20,11 @@ def buildme_era_change(repo):
 
 
 def files(cdir):
-    return sorted(p.relative_to(cdir).as_posix() for p in cdir.rglob("*")
-                  if p.is_file() and ".pm-spec" not in p.parts)
+    return sorted(
+        p.relative_to(cdir).as_posix()
+        for p in cdir.rglob("*")
+        if p.is_file() and ".pm-spec" not in p.parts
+    )
 
 
 def test_adopt_runs_only_the_check_then_marks_ready(repo, model, capsys):
@@ -37,6 +40,7 @@ def test_adopt_runs_only_the_check_then_marks_ready(repo, model, capsys):
 
 def test_adopt_blocked_on_findings_stops_with_exit_4(repo, model, capsys):
     from test_consistency import finding, recheck
+
     cdir = buildme_era_change(repo)
     model["consistency"] = [{"findings": [finding()]}, recheck("still_present")]
     assert run(repo, "resume", "throttle") == 4

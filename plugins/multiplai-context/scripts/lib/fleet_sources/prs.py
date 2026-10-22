@@ -48,15 +48,15 @@ _FIELDS = (
 
 @dataclass
 class PullRequest:
-    repo: str = ""                 # owner/name
+    repo: str = ""  # owner/name
     number: int = 0
     title: str = ""
     url: str = ""
     author: str = ""
     is_bot: bool = False
     is_draft: bool = False
-    review_decision: str = ""      # APPROVED | CHANGES_REQUESTED | REVIEW_REQUIRED | ""
-    ci: str = "none"               # passing | failing | pending | none
+    review_decision: str = ""  # APPROVED | CHANGES_REQUESTED | REVIEW_REQUIRED | ""
+    ci: str = "none"  # passing | failing | pending | none
     head: str = ""
     base: str = ""
     created_at: datetime | None = None
@@ -90,9 +90,9 @@ class PRScan:
     """
 
     prs: list[PullRequest] = field(default_factory=list)
-    errors: dict[str, str] = field(default_factory=dict)     # slug -> message
-    no_access: list[str] = field(default_factory=list)       # invisible to this token
-    available: bool = True                                   # was `gh` usable at all
+    errors: dict[str, str] = field(default_factory=dict)  # slug -> message
+    no_access: list[str] = field(default_factory=list)  # invisible to this token
+    available: bool = True  # was `gh` usable at all
 
     @property
     def human(self) -> list[PullRequest]:
@@ -143,10 +143,7 @@ def _rollup(raw) -> str:
             continue
         # CheckRun uses conclusion/status; StatusContext uses state.
         value = (
-            check.get("conclusion")
-            or check.get("state")
-            or check.get("status")
-            or ""
+            check.get("conclusion") or check.get("state") or check.get("status") or ""
         )
         states.add(str(value).upper())
     if states & {"FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED"}:
@@ -194,8 +191,19 @@ _NO_ACCESS_MARKERS = (
 def _for_repo(slug: str) -> tuple[str, list[PullRequest], str, bool]:
     """``(slug, prs, error, no_access)``."""
     got = run(
-        ["gh", "pr", "list", "-R", slug, "--state", "open",
-         "--limit", "50", "--json", _FIELDS],
+        [
+            "gh",
+            "pr",
+            "list",
+            "-R",
+            slug,
+            "--state",
+            "open",
+            "--limit",
+            "50",
+            "--json",
+            _FIELDS,
+        ],
         timeout=PR_TIMEOUT,
     )
     if not got.ok:
@@ -252,8 +260,11 @@ def scan_to_dict(scan: PRScan) -> dict:
         "no_access": list(scan.no_access),
         "prs": [
             {
-                **{k: v for k, v in vars(pr).items()
-                   if k not in ("created_at", "updated_at")},
+                **{
+                    k: v
+                    for k, v in vars(pr).items()
+                    if k not in ("created_at", "updated_at")
+                },
                 "created_at": pr.created_at.isoformat() if pr.created_at else None,
                 "updated_at": pr.updated_at.isoformat() if pr.updated_at else None,
             }
@@ -283,7 +294,9 @@ def scan_from_dict(raw) -> PRScan | None:
             fields["created_at"] = _parse_ts(fields.get("created_at"))
             fields["updated_at"] = _parse_ts(fields.get("updated_at"))
             known = {f for f in PullRequest.__dataclass_fields__}
-            scan.prs.append(PullRequest(**{k: v for k, v in fields.items() if k in known}))
+            scan.prs.append(
+                PullRequest(**{k: v for k, v in fields.items() if k in known})
+            )
         return scan
     except (TypeError, ValueError):
         return None
@@ -329,7 +342,9 @@ def stacks(prs: list[PullRequest]) -> list[list[PullRequest]]:
         based_on = based_on_by_repo.get(pr.repo, {})
         cursor = chain[-1]
         while True:
-            children = [c for c in based_on.get(cursor.head, []) if c.number not in walked]
+            children = [
+                c for c in based_on.get(cursor.head, []) if c.number not in walked
+            ]
             if not children:
                 break
             child = min(children, key=lambda c: c.number)

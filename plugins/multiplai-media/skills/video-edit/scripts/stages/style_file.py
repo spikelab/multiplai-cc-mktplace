@@ -12,6 +12,7 @@ half read.
 names (`palette.accent`, `fonts.weights.display`, `motion.enter_s`): the names
 a `style` mailbox row uses for its changes.
 """
+
 from __future__ import annotations
 
 import re
@@ -21,11 +22,21 @@ from typing import Any
 STYLES_DIR = Path(__file__).resolve().parents[2] / "references" / "styles"
 
 _FENCE = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.DOTALL)
-_KEY = re.compile(r"^(?P<indent> *)(?P<key>[A-Za-z_][\w-]*)\s*:(?:\s+(?P<value>.*?))?\s*$")
+_KEY = re.compile(
+    r"^(?P<indent> *)(?P<key>[A-Za-z_][\w-]*)\s*:(?:\s+(?P<value>.*?))?\s*$"
+)
 _NUMBER = re.compile(r"^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$")
 # The keys the style panel shows and edits; palette keys are whatever the file names.
-PANEL_KEYS = ("fonts.display", "fonts.body", "fonts.weights.display", "fonts.weights.body",
-              "shape.radius_px", "motion.enter_s", "motion.exit_s", "motion.stagger_s")
+PANEL_KEYS = (
+    "fonts.display",
+    "fonts.body",
+    "fonts.weights.display",
+    "fonts.weights.body",
+    "shape.radius_px",
+    "motion.enter_s",
+    "motion.exit_s",
+    "motion.stagger_s",
+)
 
 
 class StyleFileError(ValueError):
@@ -118,18 +129,24 @@ def frontmatter(text: str) -> dict:
     """The frontmatter of a style file as nested dicts; StyleFileError if it has none or is malformed."""
     m = _FENCE.match(text.lstrip("﻿"))
     if not m:
-        raise StyleFileError("no frontmatter: the file must start with a --- line and close it with another")
+        raise StyleFileError(
+            "no frontmatter: the file must start with a --- line and close it with another"
+        )
     root: dict = {}
-    stack: list[tuple[int, dict]] = [(0, root)]      # (indent of the keys in it, mapping)
-    opened: tuple[dict, str, int] | None = None      # a key with no value: a deeper block may follow
+    stack: list[tuple[int, dict]] = [(0, root)]  # (indent of the keys in it, mapping)
+    opened: tuple[dict, str, int] | None = (
+        None  # a key with no value: a deeper block may follow
+    )
     for n, line in enumerate(m.group(1).splitlines(), start=2):
         if not line.strip() or line.lstrip().startswith("#"):
             continue
-        if "\t" in line[:len(line) - len(line.lstrip())]:
+        if "\t" in line[: len(line) - len(line.lstrip())]:
             raise StyleFileError(f"line {n}: indent with spaces, not tabs")
         km = _KEY.match(line)
         if not km:
-            raise StyleFileError(f"line {n}: expected `key: value`, got {line.strip()!r}")
+            raise StyleFileError(
+                f"line {n}: expected `key: value`, got {line.strip()!r}"
+            )
         indent, key = len(km["indent"]), km["key"]
         if opened is not None:
             parent, k, at = opened
@@ -140,7 +157,9 @@ def frontmatter(text: str) -> dict:
         while stack[-1][0] > indent:
             stack.pop()
         if stack[-1][0] != indent:
-            raise StyleFileError(f"line {n}: indentation does not match any mapping above it")
+            raise StyleFileError(
+                f"line {n}: indentation does not match any mapping above it"
+            )
         parent = stack[-1][1]
         if key in parent:
             raise StyleFileError(f"line {n}: duplicate key {key!r}")
@@ -172,8 +191,16 @@ def panel_values(fm: dict) -> dict[str, Any]:
     """
     flat: dict[str, Any] = {}
     _flatten(fm, "", flat)
-    out = {k: v for k, v in flat.items() if k.startswith("palette.") and isinstance(v, str)}
-    out.update({k: flat[k] for k in PANEL_KEYS if k in flat and not isinstance(flat[k], (list, dict))})
+    out = {
+        k: v for k, v in flat.items() if k.startswith("palette.") and isinstance(v, str)
+    }
+    out.update(
+        {
+            k: flat[k]
+            for k in PANEL_KEYS
+            if k in flat and not isinstance(flat[k], (list, dict))
+        }
+    )
     return out
 
 
@@ -184,7 +211,12 @@ def load(path: str | Path) -> dict:
         fm = frontmatter(p.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, StyleFileError) as e:
         return {"status": "invalid", "file": str(p), "error": str(e)}
-    return {"status": "ok", "file": str(p), "name": fm.get("name"), "values": panel_values(fm)}
+    return {
+        "status": "ok",
+        "file": str(p),
+        "name": fm.get("name"),
+        "values": panel_values(fm),
+    }
 
 
 def shipped(name: str) -> Path | None:

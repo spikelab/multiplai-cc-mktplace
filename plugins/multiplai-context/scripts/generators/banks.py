@@ -100,7 +100,8 @@ def derive_entry(bank: MemoryBank, path: Path, text: str) -> dict[str, Any]:
     entry: dict[str, Any] = {
         "source": bank.ref(path.name),
         "bank": bank.name,
-        "summary": _first_paragraph(text) or f"{path.name} from shared bank {bank.name}",
+        "summary": _first_paragraph(text)
+        or f"{path.name} from shared bank {bank.name}",
         "topics": [],
         "keywords": [],
         "derived": True,
@@ -136,18 +137,26 @@ def _read_fragment(bank: MemoryBank) -> list[dict] | None:
     try:
         data = json.loads(fragment.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        logger.warning("Bank %s has an unreadable %s — deriving entries instead",
-                       bank.name, CATALOG_FRAGMENT)
+        logger.warning(
+            "Bank %s has an unreadable %s — deriving entries instead",
+            bank.name,
+            CATALOG_FRAGMENT,
+        )
         return None
     entries = data.get("entries") if isinstance(data, dict) else None
     if not isinstance(entries, list):
-        logger.warning("Bank %s %s has no entries list — deriving instead",
-                       bank.name, CATALOG_FRAGMENT)
+        logger.warning(
+            "Bank %s %s has no entries list — deriving instead",
+            bank.name,
+            CATALOG_FRAGMENT,
+        )
         return None
     return [e for e in entries if isinstance(e, dict)]
 
 
-def _adopt_fragment_entry(bank: MemoryBank, entry: dict, present: set[str]) -> dict | None:
+def _adopt_fragment_entry(
+    bank: MemoryBank, entry: dict, present: set[str]
+) -> dict | None:
     """Re-key one committed entry onto this consumer's bank namespace.
 
     The bank authored ``"source": "dev.md"``; every consumer needs
@@ -155,7 +164,9 @@ def _adopt_fragment_entry(bank: MemoryBank, entry: dict, present: set[str]) -> d
     entry naming a file the bank does not (any longer) contain is dropped —
     the working tree is the authority on what exists, not the fragment.
     """
-    raw = str(entry.get("source") or entry.get("path") or entry.get("file") or "").strip()
+    raw = str(
+        entry.get("source") or entry.get("path") or entry.get("file") or ""
+    ).strip()
     filename = raw.rsplit("/", 1)[-1]
     if not filename or filename not in present:
         return None
@@ -219,8 +230,13 @@ class BanksGenerator:
         banks = shared_banks()
         if not banks:
             return GenerationResult(
-                generator=self.name, total_sources=0, skipped=0, generated=0,
-                pruned=0, errors=[], dry_run=dry_run,
+                generator=self.name,
+                total_sources=0,
+                skipped=0,
+                generated=0,
+                pruned=0,
+                errors=[],
+                dry_run=dry_run,
             )
 
         entries: list[dict] = []
@@ -292,14 +308,17 @@ class BanksGenerator:
 
         if collisions:
             log_event(
-                "catalog", "bank-collisions",
+                "catalog",
+                "bank-collisions",
                 f"{len(collisions)} cross-bank collision(s) — a fact should live "
                 "in exactly one bank",
-                level="WARNING", count=len(collisions),
+                level="WARNING",
+                count=len(collisions),
             )
             logger.warning(
                 "%d cross-bank collision(s); see %s",
-                len(collisions), self._catalogs_dir / COLLISION_REPORT,
+                len(collisions),
+                self._catalogs_dir / COLLISION_REPORT,
             )
 
         return GenerationResult(

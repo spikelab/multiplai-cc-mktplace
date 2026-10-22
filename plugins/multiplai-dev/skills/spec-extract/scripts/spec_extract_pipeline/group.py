@@ -47,7 +47,9 @@ NAME_MAX = 60
 UNASSIGNED = "unassigned"
 CAPABILITIES_FILE = "capabilities.json"
 MAX_TURNS = 1  # no tools: the answer is the first turn
-NOT_GROUPED = report_mod.Section("Not grouped", ["- not grouped: group gave no answer in 2 attempts"])
+NOT_GROUPED = report_mod.Section(
+    "Not grouped", ["- not grouped: group gave no answer in 2 attempts"]
+)
 
 
 class _Model(BaseModel):
@@ -75,7 +77,9 @@ class Capability(BaseModel):
 @dataclass
 class Grouping:
     capabilities: list[Capability] = field(default_factory=list)
-    unassigned: list[str] = field(default_factory=list)  # symbol ids the answer did not place
+    unassigned: list[str] = field(
+        default_factory=list
+    )  # symbol ids the answer did not place
     dropped: list[str] = field(default_factory=list)
 
 
@@ -98,7 +102,10 @@ def symbol_line(s: Symbol) -> str:
 
 
 def kebab(name: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:NAME_MAX].strip("-") or "capability"
+    return (
+        re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:NAME_MAX].strip("-")
+        or "capability"
+    )
 
 
 def _module(path: str) -> str:
@@ -119,7 +126,13 @@ def _split(cap: Capability, path_of: dict[str, str]) -> list[Capability]:
             out.append(Capability(name=base, summary=cap.summary, symbols=ids))
             continue
         for n, start in enumerate(range(0, len(ids), MAX_SYMBOLS), 1):
-            out.append(Capability(name=f"{base}-{n}", summary=cap.summary, symbols=ids[start:start + MAX_SYMBOLS]))
+            out.append(
+                Capability(
+                    name=f"{base}-{n}",
+                    summary=cap.summary,
+                    symbols=ids[start : start + MAX_SYMBOLS],
+                )
+            )
     return out
 
 
@@ -137,19 +150,31 @@ def gate(answer: dict, symbols: list[Symbol]) -> Grouping:
         mine = []
         for sid in (s.strip().strip("`") for s in cap.symbols):
             if sid not in order:
-                g.dropped.append(f"group named {one_line(sid)}, which is not a public symbol of this target")
+                g.dropped.append(
+                    f"group named {one_line(sid)}, which is not a public symbol of this target"
+                )
             elif sid not in placed:
                 placed.add(sid)
                 mine.append(sid)
         if not mine:
             g.dropped.append(f"capability {kebab(cap.name)}: no symbol, so no file")
             continue
-        raw.append(Capability(name=kebab(cap.name), summary=one_line(cap.summary),
-                              symbols=sorted(mine, key=order.__getitem__)))
+        raw.append(
+            Capability(
+                name=kebab(cap.name),
+                summary=one_line(cap.summary),
+                symbols=sorted(mine, key=order.__getitem__),
+            )
+        )
     g.unassigned = [sid for sid in order if sid not in placed]
     if g.unassigned:
-        raw.append(Capability(name=UNASSIGNED, summary="Public symbols the group answer did not place.",
-                              symbols=g.unassigned))
+        raw.append(
+            Capability(
+                name=UNASSIGNED,
+                summary="Public symbols the group answer did not place.",
+                symbols=g.unassigned,
+            )
+        )
     seen: set[str] = set()
     for cap in (c for r in raw for c in _split(r, path_of)):
         name, n = cap.name, 1
@@ -162,8 +187,11 @@ def gate(answer: dict, symbols: list[Symbol]) -> Grouping:
 
 
 def prompt(code: str, symbols: list[Symbol], gated: Gated) -> str:
-    facts = [f"- {f.id}: {one_line(f.claim)} ({c.path}:{c.line_start}-{c.line_end})"
-             for f in gated.facts for c in f.citations[:1]]
+    facts = [
+        f"- {f.id}: {one_line(f.claim)} ({c.path}:{c.line_start}-{c.line_end})"
+        for f in gated.facts
+        for c in f.citations[:1]
+    ]
     return f"""\
 Group the public Python symbols of {code} into capabilities. A capability is one area of
 behaviour that callers or users rely on (for example "billing" or "user-sessions").
@@ -187,8 +215,15 @@ Answer with JSON only, matching this schema:
 """
 
 
-async def run(state: State, run_dir: Path, gated: Gated, *, call: CallFn, ledger: SpendLedger,
-              model: str | None) -> None:
+async def run(
+    state: State,
+    run_dir: Path,
+    gated: Gated,
+    *,
+    call: CallFn,
+    ledger: SpendLedger,
+    model: str | None,
+) -> None:
     """Ask the group call when the dispatch rule allows. No symbols, no call."""
     scope = state.scope
     assert scope is not None
@@ -205,9 +240,21 @@ async def run(state: State, run_dir: Path, gated: Gated, *, call: CallFn, ledger
         state_mod.save(state, run_dir)
 
     task = (KEY, prompt(label(state.target), scope.symbols, gated), KEY)
-    await calls.dispatch([task], GroupOutput, call, answers, attempts, ledger, save,
-                         call_kwargs=dict(allowed_tools=[], max_turns=MAX_TURNS,
-                                          cwd=str(run_dir / SNAPSHOT_DIR), model=model))
+    await calls.dispatch(
+        [task],
+        GroupOutput,
+        call,
+        answers,
+        attempts,
+        ledger,
+        save,
+        call_kwargs=dict(
+            allowed_tools=[],
+            max_turns=MAX_TURNS,
+            cwd=str(run_dir / SNAPSHOT_DIR),
+            model=model,
+        ),
+    )
 
 
 def finish(state: State, run_dir: Path) -> Grouping | None:
@@ -222,7 +269,9 @@ def finish(state: State, run_dir: Path) -> Grouping | None:
     else:
         grouping = gate(state.group_answer, scope.symbols)
     doc = {"capabilities": [c.model_dump() for c in grouping.capabilities]}
-    report_mod.write_output(run_dir, CAPABILITIES_FILE, json.dumps(doc, indent=2, ensure_ascii=False) + "\n")
+    report_mod.write_output(
+        run_dir, CAPABILITIES_FILE, json.dumps(doc, indent=2, ensure_ascii=False) + "\n"
+    )
     if "group" not in state.steps_done:
         state.steps_done.append("group")
         state_mod.save(state, run_dir)

@@ -144,7 +144,7 @@ def collect_jobs(
         jobs.append(job)
 
     jobs.sort(
-        key=lambda j: (j.updated or datetime.min.replace(tzinfo=UTC)),
+        key=lambda j: j.updated or datetime.min.replace(tzinfo=UTC),
         reverse=True,
     )
     return jobs

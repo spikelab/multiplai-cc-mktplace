@@ -20,6 +20,7 @@ NOW = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
 # git repos
 # ---------------------------------------------------------------------------
 
+
 def _git(repo, *args):
     subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
 
@@ -118,6 +119,7 @@ def test_worktree_is_listed_against_its_owner(tmp_path, repo):
 # pull requests
 # ---------------------------------------------------------------------------
 
+
 def _pr(**kw):
     base = {"repo": "o/r", "number": 1, "title": "t", "head": "h", "base": "main"}
     base.update(kw)
@@ -162,9 +164,13 @@ def test_stacks_survive_a_base_cycle():
 
 def test_no_access_is_not_an_error(monkeypatch):
     """A repo outside the token's scope is a standing fact, reported separately."""
+
     def fake_run(args, **kw):
         from lib.fleet_sources.common import Ran
-        return Ran(False, err="GraphQL: Could not resolve to a Repository with the name 'x/y'.")
+
+        return Ran(
+            False, err="GraphQL: Could not resolve to a Repository with the name 'x/y'."
+        )
 
     monkeypatch.setattr(prs, "run", fake_run)
     monkeypatch.setattr(prs, "gh_available", lambda: True)
@@ -174,10 +180,15 @@ def test_no_access_is_not_an_error(monkeypatch):
 
 def test_total_auth_failure_reports_unavailable_not_zero(monkeypatch):
     """The failure mode that matters: never claim "no open PRs" over a bad token."""
+
     def fake_run(args, **kw):
         from lib.fleet_sources.common import Ran
-        return Ran(False, err="gh: To use GitHub CLI in a GitHub Actions workflow, "
-                              "authentication required. Run gh auth login")
+
+        return Ran(
+            False,
+            err="gh: To use GitHub CLI in a GitHub Actions workflow, "
+            "authentication required. Run gh auth login",
+        )
 
     monkeypatch.setattr(prs, "run", fake_run)
     monkeypatch.setattr(prs, "gh_available", lambda: True)
@@ -208,16 +219,24 @@ def test_corrupt_cache_falls_through_to_a_live_query():
 # background jobs
 # ---------------------------------------------------------------------------
 
+
 def _job(cfg, short, state="running", mtime=None, detail="doing a thing"):
     d = cfg / "jobs" / short
     d.mkdir(parents=True)
     f = d / "state.json"
-    f.write_text(json.dumps({
-        "state": state, "detail": detail, "tokens": 10,
-        "inFlight": {"tasks": 1, "queued": 0},
-    }))
+    f.write_text(
+        json.dumps(
+            {
+                "state": state,
+                "detail": detail,
+                "tokens": 10,
+                "inFlight": {"tasks": 1, "queued": 0},
+            }
+        )
+    )
     if mtime is not None:
         import os
+
         os.utime(f, (mtime, mtime))
     return d
 
@@ -243,7 +262,7 @@ def test_finished_job_is_never_running(tmp_path):
 
 def test_liveness_never_probes_a_pid():
     """Roster pids live in another namespace; probing one would lie confidently."""
-    source = (jobs.__file__)
+    source = jobs.__file__
     text = open(source, encoding="utf-8").read()
     for forbidden in ("os.kill", "psutil", "/proc/", "pid_exists"):
         assert forbidden not in text, f"{forbidden} would probe a foreign pid"
@@ -252,9 +271,9 @@ def test_liveness_never_probes_a_pid():
 def test_roster_supplies_cwd_and_session(tmp_path):
     _job(tmp_path, "ddd", mtime=NOW.timestamp())
     (tmp_path / "daemon").mkdir()
-    (tmp_path / "daemon" / "roster.json").write_text(json.dumps({
-        "workers": {"ddd": {"sessionId": "sid-1", "cwd": "/w"}}
-    }))
+    (tmp_path / "daemon" / "roster.json").write_text(
+        json.dumps({"workers": {"ddd": {"sessionId": "sid-1", "cwd": "/w"}}})
+    )
     (job,) = jobs.collect_jobs(tmp_path, now=NOW)
     assert job.session_id == "sid-1" and job.cwd == "/w" and job.in_roster
 
@@ -273,6 +292,7 @@ def test_absent_config_dir_is_empty(tmp_path):
 # ---------------------------------------------------------------------------
 # backlog
 # ---------------------------------------------------------------------------
+
 
 def test_backlog_counts_lines_not_files(tmp_path):
     """One file can hold thirty learnings; the unit a dream run consumes is a line."""
@@ -322,7 +342,7 @@ def test_inbox_counts_every_top_level_file_not_just_markdown(tmp_path):
     (inbox / "note.md").write_text("x")
     (inbox / "screenshot.png").write_bytes(b"x")
     (inbox / "link.webloc").write_text("x")
-    (inbox / "sub" / "filed.md").write_text("x")   # the user's own filing
+    (inbox / "sub" / "filed.md").write_text("x")  # the user's own filing
 
     assert backlog_mod.collect_backlog(data).inbox_items == 3
 

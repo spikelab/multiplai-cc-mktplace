@@ -29,10 +29,30 @@ def _normalise(md: str, out: Path, ws: Path) -> str:
 def test_agent_mode_markdown_is_unchanged(ws, tmp_path, monkeypatch, fake_fetch):
     monkeypatch.setattr(sdk, "agent_call_structured", FakeAgents())
     out = tmp_path / "out"
-    assert main(["run", str(ws["engine"] / "bookings"), "--trust-repo", "--runs-dir", str(tmp_path / "runs"),
-                 "--output", str(out), "--mode", "agent", "--lsp-timeout", "0"]) == 0
-    md = _normalise((out / "bookings-walkthrough.md").read_text(encoding="utf-8"), out, ws["ws"])
+    assert (
+        main(
+            [
+                "run",
+                str(ws["engine"] / "bookings"),
+                "--trust-repo",
+                "--runs-dir",
+                str(tmp_path / "runs"),
+                "--output",
+                str(out),
+                "--mode",
+                "agent",
+                "--lsp-timeout",
+                "0",
+            ]
+        )
+        == 0
+    )
+    md = _normalise(
+        (out / "bookings-walkthrough.md").read_text(encoding="utf-8"), out, ws["ws"]
+    )
     if os.environ.get(WRITE):
         EXPECTED.parent.mkdir(exist_ok=True)
         EXPECTED.write_text(md, encoding="utf-8")
-    assert md == EXPECTED.read_text(encoding="utf-8"), f"run with {WRITE}=1 only after a deliberate change"
+    assert md == EXPECTED.read_text(encoding="utf-8"), (
+        f"run with {WRITE}=1 only after a deliberate change"
+    )

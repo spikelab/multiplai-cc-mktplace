@@ -99,7 +99,9 @@ def cmd_list(args) -> int:
                 "present": present,
                 "remote": bank.remote,
                 "files": len(list(bank.path.glob("*.md"))) if present else 0,
-                "head": head_sha(bank.path)[:12] if present and is_git_repo(bank.path) else "",
+                "head": head_sha(bank.path)[:12]
+                if present and is_git_repo(bank.path)
+                else "",
             }
         )
     if args.json:
@@ -109,8 +111,10 @@ def cmd_list(args) -> int:
     for row in rows:
         flag = "shared" if row["shared"] else "personal"
         state = "" if row["present"] else "  [MISSING — run `sync`]"
-        print(f"  {row['name']:<20} {flag:<9} mode={row['mode']:<8} "
-              f"{row['files']:>3} file(s){state}")
+        print(
+            f"  {row['name']:<20} {flag:<9} mode={row['mode']:<8} "
+            f"{row['files']:>3} file(s){state}"
+        )
         print(f"  {'':<20} {row['path']}")
         if row["remote"]:
             print(f"  {'':<20} remote: {row['remote']}  head: {row['head'] or '?'}")
@@ -140,8 +144,11 @@ def cmd_sync(args) -> int:
             continue
         if not bank.path.exists():
             logger.warning(
-                "Bank %s is not cloned at %s — clone it once with "
-                "`git clone %s %s`", bank.name, bank.path, bank.remote, bank.path,
+                "Bank %s is not cloned at %s — clone it once with `git clone %s %s`",
+                bank.name,
+                bank.path,
+                bank.remote,
+                bank.path,
             )
             failed += 1
             continue
@@ -158,10 +165,13 @@ def cmd_sync(args) -> int:
             logger.warning("Bank %s did not sync: %s", bank.name, result.detail)
     _save_state(state)
     log_event(
-        "banks", "sync",
+        "banks",
+        "sync",
         f"synced {synced}, skipped {skipped}, failed {failed}",
         level="WARNING" if failed else "INFO",
-        synced=synced, skipped=skipped, failed=failed,
+        synced=synced,
+        skipped=skipped,
+        failed=failed,
     )
     if not args.quiet:
         print(f"banks: synced={synced} skipped={skipped} failed={failed}")
@@ -182,7 +192,9 @@ def _catalog_entries(name: str) -> list[dict]:
 
 def cmd_check(args) -> int:
     """Report cross-bank collisions. A defect report, never a resolution."""
-    personal = [{**e, "bank": e.get("bank") or "personal"} for e in _catalog_entries("memory")]
+    personal = [
+        {**e, "bank": e.get("bank") or "personal"} for e in _catalog_entries("memory")
+    ]
     banked = _catalog_entries("banks")
     collisions = find_collisions(personal + banked)
     if not collisions:
@@ -243,9 +255,12 @@ def cmd_adopt(args) -> int:
         bank,
         memory_dir=memory_dir,
         personal_entries=[
-            {**e, "bank": e.get("bank") or "personal"} for e in _catalog_entries("memory")
+            {**e, "bank": e.get("bank") or "personal"}
+            for e in _catalog_entries("memory")
         ],
-        bank_entries=[e for e in _catalog_entries("banks") if e.get("bank") == bank.name],
+        bank_entries=[
+            e for e in _catalog_entries("banks") if e.get("bank") == bank.name
+        ],
     )
     for err in plan.errors:
         print(f"! {err}", file=sys.stderr)
@@ -318,11 +333,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_contrib.add_argument("--proposal", required=True, help="Dream proposal path")
     p_contrib.add_argument("--bank", default="", help="Only this bank")
     p_contrib.add_argument(
-        "--apply", action="store_true",
+        "--apply",
+        action="store_true",
         help="Actually branch, commit, push and open the PR (default: report only)",
     )
     p_contrib.add_argument(
-        "--dry-run-only", action="store_true",
+        "--dry-run-only",
+        action="store_true",
         help="Do not even write the contribution record to dreams/banks/",
     )
     p_contrib.set_defaults(func=cmd_contribute)
@@ -332,12 +349,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_adopt.add_argument("name", help="Bank name")
     p_adopt.add_argument(
-        "--file", action="append", default=[],
+        "--file",
+        action="append",
+        default=[],
         help="A personal memory file to adopt. Repeatable. Required to act — "
-             "there is no adopt-everything.",
+        "there is no adopt-everything.",
     )
     p_adopt.add_argument(
-        "--apply", action="store_true",
+        "--apply",
+        action="store_true",
         help="Actually delete the named personal files (default: report only)",
     )
     p_adopt.set_defaults(func=cmd_adopt)

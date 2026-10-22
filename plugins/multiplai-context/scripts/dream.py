@@ -106,6 +106,7 @@ def _is_rate_limit(exc: BaseException) -> bool:
     text = f"{type(exc).__name__}: {exc}".lower()
     return any(marker in text for marker in _RATE_LIMIT_MARKERS)
 
+
 # Weight of the newest observation in the throughput EWMA. Low enough that one
 # slow chunk (a cold model, a retried call) does not swing the next run's plan.
 _THROUGHPUT_EWMA_ALPHA = 0.3
@@ -125,6 +126,7 @@ _RUN_LOCK_FD: int | None = None
 # ---------------------------------------------------------------------------
 # Run state — lock, staging area, throughput calibration
 # ---------------------------------------------------------------------------
+
 
 def _state_dir() -> Path:
     """Dream's git-ignored state bucket: lock, ledger, staged chunk drafts."""
@@ -246,8 +248,12 @@ def _update_throughput(observed: float) -> None:
         path = _dream_state_path()
         state = load_yaml(path) or {}
         prior = _calibrated_throughput()
-        value = observed if prior is None else (
-            (1 - _THROUGHPUT_EWMA_ALPHA) * prior + _THROUGHPUT_EWMA_ALPHA * observed
+        value = (
+            observed
+            if prior is None
+            else (
+                (1 - _THROUGHPUT_EWMA_ALPHA) * prior + _THROUGHPUT_EWMA_ALPHA * observed
+            )
         )
         state["throughput_bytes_per_s"] = round(value, 1)
         save_yaml(path, state)
@@ -264,7 +270,9 @@ def _new_run_id() -> str:
     return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:6]
 
 
-def _stage_draft(run_dir: Path, index: int, text: str, keys: list[str], kind: str = "chunk") -> Path:
+def _stage_draft(
+    run_dir: Path, index: int, text: str, keys: list[str], kind: str = "chunk"
+) -> Path:
     """Persist one draft plus the block keys it consolidated.
 
     Written **before** the ledger records those keys. Crashing in between costs
@@ -304,12 +312,15 @@ def _resume_staged_drafts(current_run_dir: Path, ledger: dict) -> list[str]:
                 # An unreadable sidecar means "unknown blocks", not "no draft":
                 # keep the content and let the ledger's own dedup handle any
                 # overlap. Dropping it would be the one irreversible choice.
-                logger.warning("Staged draft %s has no readable sidecar — kept anyway", md)
+                logger.warning(
+                    "Staged draft %s has no readable sidecar — kept anyway", md
+                )
                 keys = []
             if keys and not all(k in processed for k in keys):
                 logger.warning(
                     "Discarding staged draft %s — its blocks are not ledgered, "
-                    "so they are being re-drafted this run", md,
+                    "so they are being re-drafted this run",
+                    md,
                 )
                 md.unlink(missing_ok=True)
                 side.unlink(missing_ok=True)
@@ -336,6 +347,7 @@ def _clear_staging() -> None:
 # ---------------------------------------------------------------------------
 # Learnings I/O
 # ---------------------------------------------------------------------------
+
 
 def _read_all_learnings(learnings_dir: Path) -> tuple[str, list[Path]]:
     """Read all pending learnings files. Returns (combined_text, source_files).
@@ -384,7 +396,9 @@ def _proposal_output_path(dreams_dir: Path, today: str) -> Path:
         n += 1
 
 
-def _archive_proposal(proposal_path: Path, dreams_dir: Path, disposition: str = "applied") -> Path:
+def _archive_proposal(
+    proposal_path: Path, dreams_dir: Path, disposition: str = "applied"
+) -> Path:
     """Move a reviewed proposal out of the dreams root into `applied/` (or
     `rejected/`), so the root holds only pending proposals.
 
@@ -492,7 +506,9 @@ def _is_unmodified_generated(text: str) -> bool:
 # undecided conflict that leaves the dreams root (folded forward, or archived)
 # is gone for good. Nothing brings it back.
 _REGENERATED_SECTIONS = (
-    "## Routing Warnings", "## Conflict Resolutions", "## Rules Re-learned",
+    "## Routing Warnings",
+    "## Conflict Resolutions",
+    "## Rules Re-learned",
 )
 
 
@@ -576,7 +592,9 @@ def _fold_pending_proposals(dreams_dir: Path) -> list[str]:
         try:
             text = path.read_text()
         except OSError:
-            logger.warning("Could not read pending proposal %s — left in place", path.name)
+            logger.warning(
+                "Could not read pending proposal %s — left in place", path.name
+            )
             continue
         ok, reason = _fold_verdict(text)
         if not ok:
@@ -589,7 +607,9 @@ def _fold_pending_proposals(dreams_dir: Path) -> list[str]:
         except OSError:
             continue
         if fresh != text:
-            logger.info("Not folding %s — it changed during the scan; left pending", path.name)
+            logger.info(
+                "Not folding %s — it changed during the scan; left pending", path.name
+            )
             continue
         ok, reason = _fold_verdict(fresh)
         if not ok:
@@ -598,11 +618,14 @@ def _fold_pending_proposals(dreams_dir: Path) -> list[str]:
         try:
             dest = _archive_proposal(path, dreams_dir, "superseded")
         except OSError:
-            logger.exception("Could not supersede %s — left pending, not folded", path.name)
+            logger.exception(
+                "Could not supersede %s — left pending, not folded", path.name
+            )
             continue
         folded.append(_strip_regenerated(fresh))
-        logger.info("Folded undecided proposal %s into this run (moved to %s)",
-                    path.name, dest)
+        logger.info(
+            "Folded undecided proposal %s into this run (moved to %s)", path.name, dest
+        )
     return folded
 
 
@@ -876,11 +899,9 @@ routing knowledge is in those blocks — apply these generic principles to them:
 # cannot teach an ordering the code has moved on from. A sentinel rather than
 # str.format: the prompt is full of literal `{N}`-style placeholders the model
 # is meant to see.
-_PROPOSAL_SYSTEM = (
-    _PROPOSAL_SYSTEM
-    .replace("@PROVENANCE_STRENGTH@", taxonomy.render_ranking(taxonomy.PROVENANCE_STRENGTH))
-    .replace("@KIND_BREADTH@", taxonomy.render_ranking(taxonomy.KIND_BREADTH))
-)
+_PROPOSAL_SYSTEM = _PROPOSAL_SYSTEM.replace(
+    "@PROVENANCE_STRENGTH@", taxonomy.render_ranking(taxonomy.PROVENANCE_STRENGTH)
+).replace("@KIND_BREADTH@", taxonomy.render_ranking(taxonomy.KIND_BREADTH))
 
 
 _BANK_ROUTING_RULES = (
@@ -1041,8 +1062,12 @@ async def _query(client, system: str, messages: list[dict], timeout_s: float | N
     global _TIMEOUT_KWARG_UNSUPPORTED
     if timeout_s and not _TIMEOUT_KWARG_UNSUPPORTED:
         try:
-            return await client.query(system=system, messages=messages, timeout_s=timeout_s,
-                                      **effort_kwargs(DREAM_EFFORT_OPTION))
+            return await client.query(
+                system=system,
+                messages=messages,
+                timeout_s=timeout_s,
+                **effort_kwargs(DREAM_EFFORT_OPTION),
+            )
         except TypeError as exc:
             if "timeout_s" not in str(exc):
                 raise
@@ -1051,8 +1076,9 @@ async def _query(client, system: str, messages: list[dict], timeout_s: float | N
                 "Installed multiplai-core has no query(timeout_s=…) (pre-v0.12.0) — "
                 "per-chunk timeouts fall back to MULTIPLAI_SDK_CALL_TIMEOUT_S"
             )
-    return await client.query(system=system, messages=messages,
-                              **effort_kwargs(DREAM_EFFORT_OPTION))
+    return await client.query(
+        system=system, messages=messages, **effort_kwargs(DREAM_EFFORT_OPTION)
+    )
 
 
 async def _generate_proposal(
@@ -1071,12 +1097,14 @@ async def _generate_proposal(
     messages = [
         {
             "role": "user",
-            "content": _draft_prompt_prefix(memory_context, source_names) + all_learnings,
+            "content": _draft_prompt_prefix(memory_context, source_names)
+            + all_learnings,
         }
     ]
 
-    response = await client.query(system=_PROPOSAL_SYSTEM, messages=messages,
-                                  **effort_kwargs(DREAM_EFFORT_OPTION))
+    response = await client.query(
+        system=_PROPOSAL_SYSTEM, messages=messages, **effort_kwargs(DREAM_EFFORT_OPTION)
+    )
     cleaned = await _critique_proposal(client, response.content, memory_context)
     sourced = _with_repaired_citations(cleaned, get_paths().learnings_dir)
     validated = _with_relearns(_with_routing_warnings(sourced, memory_contents))
@@ -1087,6 +1115,7 @@ async def _generate_proposal(
 # Chunked parallel draft
 # ---------------------------------------------------------------------------
 
+
 def _concurrency() -> int:
     raw = os.environ.get("MULTIPLAI_DREAM_CONCURRENCY", "")
     try:
@@ -1096,7 +1125,9 @@ def _concurrency() -> int:
     return max(1, value)
 
 
-def _plan_line(*, new_bytes: int, total_bytes: int, chunks: list, throughput: float) -> str:
+def _plan_line(
+    *, new_bytes: int, total_bytes: int, chunks: list, throughput: float
+) -> str:
     """One planning line, logged and printed BEFORE anything is spent."""
     from lib import dream_chunking
 
@@ -1109,8 +1140,16 @@ def _plan_line(*, new_bytes: int, total_bytes: int, chunks: list, throughput: fl
     )
 
 
-async def _draft_one_chunk(client, chunk, *, prefix: str, sem, run_dir: Path,
-                           ledger_path: Path, proposal_name: str) -> str | None:
+async def _draft_one_chunk(
+    client,
+    chunk,
+    *,
+    prefix: str,
+    sem,
+    run_dir: Path,
+    ledger_path: Path,
+    proposal_name: str,
+) -> str | None:
     """Draft one chunk, stage it, and ledger its blocks. ``None`` on failure.
 
     Staging and recording happen here rather than after the gather so that a
@@ -1121,13 +1160,17 @@ async def _draft_one_chunk(client, chunk, *, prefix: str, sem, run_dir: Path,
 
     async with sem:
         started = time.monotonic()
-        messages = [{"role": "user", "content": prefix + dream_chunking.render_chunk(chunk)}]
+        messages = [
+            {"role": "user", "content": prefix + dream_chunking.render_chunk(chunk)}
+        ]
         try:
             response = await _query(client, _PROPOSAL_SYSTEM, messages, chunk.timeout_s)
         except Exception:
             logger.exception(
                 "Chunk %02d failed (%d bytes) — skipped; its blocks stay unprocessed "
-                "for the next run", chunk.index, chunk.n_bytes,
+                "for the next run",
+                chunk.index,
+                chunk.n_bytes,
             )
             return None
         elapsed = max(time.monotonic() - started, 1e-6)
@@ -1136,14 +1179,21 @@ async def _draft_one_chunk(client, chunk, *, prefix: str, sem, run_dir: Path,
     if not text:
         logger.warning(
             "Chunk %02d returned nothing (%d bytes, %.0fs) — skipped; its blocks stay "
-            "unprocessed", chunk.index, chunk.n_bytes, elapsed,
+            "unprocessed",
+            chunk.index,
+            chunk.n_bytes,
+            elapsed,
         )
         return None
 
     observed = chunk.n_bytes / elapsed
     logger.info(
         "Chunk %02d complete: %d bytes in, %d bytes out, %.0fs, %.0f B/s",
-        chunk.index, chunk.n_bytes, len(text.encode("utf-8")), elapsed, observed,
+        chunk.index,
+        chunk.n_bytes,
+        len(text.encode("utf-8")),
+        elapsed,
+        observed,
     )
     try:
         _stage_draft(run_dir, chunk.index, text, [b.key for b in chunk.blocks])
@@ -1157,8 +1207,16 @@ async def _draft_one_chunk(client, chunk, *, prefix: str, sem, run_dir: Path,
     return text
 
 
-async def _draft_chunks(client, chunks: list, *, memory_context: str, source_names: str,
-                        run_dir: Path, ledger_path: Path, proposal_name: str) -> list[str]:
+async def _draft_chunks(
+    client,
+    chunks: list,
+    *,
+    memory_context: str,
+    source_names: str,
+    run_dir: Path,
+    ledger_path: Path,
+    proposal_name: str,
+) -> list[str]:
     """Draft every chunk concurrently behind a semaphore, in chunk order.
 
     A failed chunk is skipped: its blocks are never ledgered, so the next run
@@ -1168,13 +1226,20 @@ async def _draft_chunks(client, chunks: list, *, memory_context: str, source_nam
     """
     prefix = _draft_prompt_prefix(memory_context, source_names)
     sem = asyncio.Semaphore(_concurrency())
-    results = await asyncio.gather(*(
-        _draft_one_chunk(
-            client, chunk, prefix=prefix, sem=sem, run_dir=run_dir,
-            ledger_path=ledger_path, proposal_name=proposal_name,
+    results = await asyncio.gather(
+        *(
+            _draft_one_chunk(
+                client,
+                chunk,
+                prefix=prefix,
+                sem=sem,
+                run_dir=run_dir,
+                ledger_path=ledger_path,
+                proposal_name=proposal_name,
+            )
+            for chunk in chunks
         )
-        for chunk in chunks
-    ))
+    )
     drafts = [r for r in results if r]
     if chunks and not drafts:
         raise RuntimeError(
@@ -1183,12 +1248,15 @@ async def _draft_chunks(client, chunks: list, *, memory_context: str, source_nam
     if len(drafts) < len(chunks):
         logger.warning(
             "%d of %d chunks failed; their blocks stay unprocessed for the next run",
-            len(chunks) - len(drafts), len(chunks),
+            len(chunks) - len(drafts),
+            len(chunks),
         )
     return drafts
 
 
-def _enforce_ledger_coverage(ledger_path: Path, staged_run_dir: Path, merged: list[str]) -> None:
+def _enforce_ledger_coverage(
+    ledger_path: Path, staged_run_dir: Path, merged: list[str]
+) -> None:
     """Un-record any block whose draft did not reach the merge.
 
     The hard invariant of this pipeline: a block marked consolidated but absent
@@ -1252,8 +1320,9 @@ def _with_conflict_resolutions(
     if not section:
         return proposal
 
-    logger.info("Conflict-edit pass: %d resolution(s) prepended",
-                section.count("\n### "))
+    logger.info(
+        "Conflict-edit pass: %d resolution(s) prepended", section.count("\n### ")
+    )
     return f"{section}\n\n---\n\n{proposal}"
 
 
@@ -1302,7 +1371,8 @@ def _with_repaired_citations(proposal: str, learnings_dir: Path) -> str:
     fixed = sum(1 for f in findings if f.repaired)
     logger.info(
         "Citation repair: %d corrected, %d left unresolved",
-        fixed, len(findings) - fixed,
+        fixed,
+        len(findings) - fixed,
     )
     for finding in findings:
         if finding.repaired:
@@ -1314,7 +1384,9 @@ def _with_repaired_citations(proposal: str, learnings_dir: Path) -> str:
         log = logger.info if finding.advisory else logger.warning
         log(
             "Unverifiable citation %s:%d — %s",
-            finding.cited_file, finding.line, finding.reason,
+            finding.cited_file,
+            finding.line,
+            finding.reason,
         )
     return f"{repaired.rstrip()}\n\n---\n\n{section}"
 
@@ -1337,26 +1409,33 @@ def _with_routing_warnings(proposal: str, memory_contents: dict[str, str]) -> st
 
         try:
             from lib import memory_corpus
+
             dedup_extra = memory_corpus.extra_contents(get_paths())
             if dedup_extra:
                 logger.info(
                     "Dedup corpus extended with %d always-loaded/bank file(s): %s",
-                    len(dedup_extra), ", ".join(sorted(dedup_extra)),
+                    len(dedup_extra),
+                    ", ".join(sorted(dedup_extra)),
                 )
         except Exception:
             # A missing CLAUDE.md or a malformed bank config must narrow the
             # evidence, never lose the proposal.
-            logger.exception("Could not read the always-loaded corpus — dedup runs on memory files only")
+            logger.exception(
+                "Could not read the always-loaded corpus — dedup runs on memory files only"
+            )
             dedup_extra = {}
 
         warnings = validate_proposal(proposal, memory_contents, dedup_extra=dedup_extra)
         if warnings:
             logger.warning(
                 "Routing validation flagged %d issue(s):\n%s",
-                len(warnings), "\n".join(f"  - {w}" for w in warnings),
+                len(warnings),
+                "\n".join(f"  - {w}" for w in warnings),
             )
         else:
-            logger.info("Routing validation clean — no misroutes or cross-file duplicates")
+            logger.info(
+                "Routing validation clean — no misroutes or cross-file duplicates"
+            )
         return proposal.rstrip() + render_warnings_section(warnings)
     except Exception:
         logger.exception(
@@ -1396,7 +1475,8 @@ def _with_relearns(proposal: str) -> str:
             logger.info(
                 "Re-learn scan: %d rule(s) memory already held were derived "
                 "again across %d drop(s)",
-                len(groups), sum(g.count for g in groups),
+                len(groups),
+                sum(g.count for g in groups),
             )
         else:
             logger.info("Re-learn scan clean — no rule was re-derived")
@@ -1551,8 +1631,9 @@ def _batch_proposal_for_critic(proposal: str) -> list[str]:
     return batches or [proposal]
 
 
-async def _critique_batch(client, batch: str, memory_context: str, sem, index: int,
-                          total: int) -> str:
+async def _critique_batch(
+    client, batch: str, memory_context: str, sem, index: int, total: int
+) -> str:
     """One critic call over one batch. Returns raw directive text ("" on failure).
 
     Fails open per batch: a batch that times out loses only its own directives,
@@ -1575,7 +1656,9 @@ async def _critique_batch(client, batch: str, memory_context: str, sem, index: i
     n_bytes = len(batch.encode("utf-8"))
     # An oversized section cannot be split, so give it the same escalation
     # plan_chunks gives an oversized block rather than letting it fail outright.
-    budget = dream_chunking.chunk_budget_bytes(CHUNK_TIMEOUT_S, _calibrated_throughput())
+    budget = dream_chunking.chunk_budget_bytes(
+        CHUNK_TIMEOUT_S, _calibrated_throughput()
+    )
     timeout_s = (
         min(2.0 * CHUNK_TIMEOUT_S, dream_chunking.MAX_ESCALATED_TIMEOUT_S)
         if n_bytes > budget
@@ -1593,8 +1676,10 @@ async def _critique_batch(client, batch: str, memory_context: str, sem, index: i
         for attempt in range(1, _RATE_LIMIT_ATTEMPTS + 1):
             try:
                 response = await _query(
-                    client, _CRITIC_SYSTEM,
-                    [{"role": "user", "content": content}], timeout_s,
+                    client,
+                    _CRITIC_SYSTEM,
+                    [{"role": "user", "content": content}],
+                    timeout_s,
                 )
                 break
             except Exception as exc:
@@ -1602,13 +1687,19 @@ async def _critique_batch(client, batch: str, memory_context: str, sem, index: i
                     logger.warning(
                         "Critic batch %d/%d rate limited (%s) — retrying once in "
                         "%.0fs rather than dropping its directives",
-                        index, total, exc, _RATE_LIMIT_BACKOFF_S,
+                        index,
+                        total,
+                        exc,
+                        _RATE_LIMIT_BACKOFF_S,
                     )
                     await asyncio.sleep(_RATE_LIMIT_BACKOFF_S)
                     continue
                 logger.exception(
                     "Critic batch %d/%d failed (%d bytes) — its directives are lost, "
-                    "the other batches still apply", index, total, n_bytes,
+                    "the other batches still apply",
+                    index,
+                    total,
+                    n_bytes,
                 )
                 return ""
         elapsed = max(time.monotonic() - started, 1e-6)
@@ -1623,13 +1714,18 @@ async def _critique_batch(client, batch: str, memory_context: str, sem, index: i
     raw = (response.content or "").strip()
     logger.info(
         "Critic batch %d/%d: %d bytes in, %d directive bytes out, %.0fs",
-        index, total, n_bytes, len(raw.encode("utf-8")), elapsed,
+        index,
+        total,
+        n_bytes,
+        len(raw.encode("utf-8")),
+        elapsed,
     )
     return raw
 
 
-async def _critique_proposal(client, proposal: str, memory_context: str = "",
-                             stats: dict | None = None) -> str:
+async def _critique_proposal(
+    client, proposal: str, memory_context: str = "", stats: dict | None = None
+) -> str:
     """Run the directive critic over a drafted proposal; return the edited version.
 
     ``memory_context`` carries the same PURPOSE / OWNS DOMAINS / NOT HERE file
@@ -1651,14 +1747,17 @@ async def _critique_proposal(client, proposal: str, memory_context: str = "",
         batches = _batch_proposal_for_critic(proposal)
         if len(batches) > 1:
             logger.info(
-                "Critic: %d bytes over %d batches", len(proposal.encode("utf-8")),
+                "Critic: %d bytes over %d batches",
+                len(proposal.encode("utf-8")),
                 len(batches),
             )
         sem = asyncio.Semaphore(_concurrency())
-        raws = await asyncio.gather(*(
-            _critique_batch(client, b, memory_context, sem, i, len(batches))
-            for i, b in enumerate(batches, 1)
-        ))
+        raws = await asyncio.gather(
+            *(
+                _critique_batch(client, b, memory_context, sem, i, len(batches))
+                for i, b in enumerate(batches, 1)
+            )
+        )
         if stats is not None:
             stats["batches"] = len(batches)
             stats["failed"] = sum(1 for r in raws if not r)
@@ -1679,7 +1778,8 @@ async def _critique_proposal(client, proposal: str, memory_context: str = "",
         if not directives:
             logger.warning(
                 "Critic emitted no usable directives (%d line(s) rejected) — keeping the "
-                "merged draft", len(rejected),
+                "merged draft",
+                len(rejected),
             )
             return proposal
 
@@ -1690,13 +1790,18 @@ async def _critique_proposal(client, proposal: str, memory_context: str = "",
             logger.info("Critic refused: %s", reason)
         logger.info(
             "Critic pass: %d applied, %d refused, %d rejected (%d -> %d bytes)",
-            len(applied), len(refused), len(rejected),
-            len(proposal.encode("utf-8")), len(edited.encode("utf-8")),
+            len(applied),
+            len(refused),
+            len(rejected),
+            len(proposal.encode("utf-8")),
+            len(edited.encode("utf-8")),
         )
         # Same degenerate-output guard as the rewrite critic: never let the pass
         # hand back something that no longer looks like a proposal.
         if "## Updates for" not in edited and "## Filtered Out" not in edited:
-            logger.warning("Critic output lost the proposal structure — keeping the draft")
+            logger.warning(
+                "Critic output lost the proposal structure — keeping the draft"
+            )
             return proposal
         return edited
     except Exception:
@@ -1730,7 +1835,8 @@ def _plan_run(
     if moved:
         logger.info(
             "Migrated %d ledger key(s) to the format-invariant scheme%s",
-            moved, "" if persist_migration else " (in memory — no lock held)",
+            moved,
+            "" if persist_migration else " (in memory — no lock held)",
         )
     # Persist on a version bump even when nothing moved. A v1 ledger holding no
     # legacy records is already in the v2 scheme, but it kept `"version": 1` on
@@ -1740,8 +1846,9 @@ def _plan_run(
         learnings_ledger.save(ledger_path, ledger)
     pending = learnings_ledger.unprocessed(blocks, ledger)
     throughput = dream_chunking.resolve_throughput(_calibrated_throughput())
-    chunks = dream_chunking.plan_chunks(pending, timeout_s=CHUNK_TIMEOUT_S,
-                                        throughput=throughput)
+    chunks = dream_chunking.plan_chunks(
+        pending, timeout_s=CHUNK_TIMEOUT_S, throughput=throughput
+    )
     return pending, chunks, files, throughput
 
 
@@ -1781,7 +1888,9 @@ async def dream_report() -> None:
         logger.info("Ledger: pruned %d key(s) for deleted learnings files", pruned)
 
     if not pending and not resumed:
-        logger.info("No new learnings since the last consolidation — nothing to propose")
+        logger.info(
+            "No new learnings since the last consolidation — nothing to propose"
+        )
         print("No new learnings — nothing to propose.")
         return
 
@@ -1792,8 +1901,12 @@ async def dream_report() -> None:
         except OSError:
             pass
     new_bytes = sum(len(b.text.encode("utf-8")) for b in pending)
-    plan = _plan_line(new_bytes=new_bytes, total_bytes=total_bytes,
-                      chunks=chunks, throughput=throughput)
+    plan = _plan_line(
+        new_bytes=new_bytes,
+        total_bytes=total_bytes,
+        chunks=chunks,
+        throughput=throughput,
+    )
     logger.info("%s", plan)
     print(plan)
 
@@ -1822,12 +1935,14 @@ async def dream_report() -> None:
         memory_contents = _read_memory_files(memory_dir)
         logger.info(
             "Loaded %d memory files for context: %s",
-            len(memory_contents), ", ".join(sorted(memory_contents)),
+            len(memory_contents),
+            ", ".join(sorted(memory_contents)),
         )
         memory_context = _memory_context(memory_contents)
 
         drafts = await _draft_chunks(
-            client, chunks,
+            client,
+            chunks,
             memory_context=memory_context,
             source_names=", ".join(f.name for f in source_files),
             run_dir=run_dir,
@@ -1843,7 +1958,10 @@ async def dream_report() -> None:
         merged = proposal_merge.merge_drafts(merge_input)
         logger.info(
             "Merged %d draft(s) (%d fresh, %d resumed, %d folded) into %d bytes",
-            len(merge_input), len(drafts), len(resumed), len(folded),
+            len(merge_input),
+            len(drafts),
+            len(resumed),
+            len(folded),
             len(merged.encode("utf-8")),
         )
 
@@ -1864,7 +1982,8 @@ async def dream_report() -> None:
     # without having to open the proposal file.
     proposal_lines = proposal.splitlines()
     target_files = [
-        l.split("`")[1] for l in proposal_lines
+        l.split("`")[1]
+        for l in proposal_lines
         if l.startswith("## Updates for `") and "`" in l[16:]
     ]
     has_filtered = any(l.startswith("## Filtered Out") for l in proposal_lines)
@@ -1911,7 +2030,9 @@ async def dream_report() -> None:
             f"(see dream-YYYY-MM-DD.log)"
         )
     else:
-        print(f"Sources: {len(source_files)} files, {len(pending)} new learning block(s)")
+        print(
+            f"Sources: {len(source_files)} files, {len(pending)} new learning block(s)"
+        )
     if critic_stats.get("failed"):
         print(
             f"  ⚠ second-pass review incomplete: {critic_stats['failed']} of "
@@ -1919,7 +2040,9 @@ async def dream_report() -> None:
             f"items may remain"
         )
     if folded:
-        print(f"Folded in {len(folded)} undecided pending proposal(s) → dreams/superseded/")
+        print(
+            f"Folded in {len(folded)} undecided pending proposal(s) → dreams/superseded/"
+        )
     print(f"Targets: {len(target_files)} files ({', '.join(target_files) or 'none'})")
     print("Review with: /multiplai-context:dream-remember")
 
@@ -1928,13 +2051,16 @@ async def dream_report() -> None:
 # Auto mode (--auto)
 # ---------------------------------------------------------------------------
 
+
 def _memory_dir_is_git_repo(memory_dir: Path) -> bool:
     if not memory_dir.exists():
         return False
     try:
         result = subprocess.run(
             ["git", "-C", str(memory_dir), "rev-parse", "--is-inside-work-tree"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         return result.returncode == 0 and result.stdout.strip() == "true"
     except (subprocess.SubprocessError, FileNotFoundError, OSError):
@@ -1967,14 +2093,26 @@ def _commit_memory_changes(
         # larger repo (dotfiles/workspace) and record it in the snapshot.
         subprocess.run(
             ["git", "-C", str(memory_dir), "add", "--", *pathspec],
-            check=True, timeout=15, capture_output=True,
+            check=True,
+            timeout=15,
+            capture_output=True,
         )
         # Check for staged changes scoped to the *.md pathspec only — otherwise
         # anything the user had pre-staged elsewhere would make this look
         # "dirty" and fire a snapshot that sweeps those unrelated files in.
         diff = subprocess.run(
-            ["git", "-C", str(memory_dir), "diff", "--cached", "--quiet", "--", *pathspec],
-            timeout=10, capture_output=True,
+            [
+                "git",
+                "-C",
+                str(memory_dir),
+                "diff",
+                "--cached",
+                "--quiet",
+                "--",
+                *pathspec,
+            ],
+            timeout=10,
+            capture_output=True,
         )
         if diff.returncode == 0:
             logger.info("Memory auto-commit skipped — no changes to record")
@@ -1984,16 +2122,28 @@ def _commit_memory_changes(
         # Restrict the snapshot to the *.md pathspec: passing the pathspec
         # records just those paths and leaves any other staged files untouched.
         subprocess.run(
-            ["git", "-C", str(memory_dir), "commit",
-             "-m", message or f"dream: consolidate {today}", "--", *pathspec],
-            check=True, timeout=30, capture_output=True,
+            [
+                "git",
+                "-C",
+                str(memory_dir),
+                "commit",
+                "-m",
+                message or f"dream: consolidate {today}",
+                "--",
+                *pathspec,
+            ],
+            check=True,
+            timeout=30,
+            capture_output=True,
         )
         logger.info("Memory auto-committed in %s", memory_dir)
         return True
     except subprocess.CalledProcessError as e:
         logger.warning(
             "Memory auto-commit failed: git %s exited %d (stderr: %s)",
-            e.cmd, e.returncode, e.stderr.decode("utf-8", "replace") if e.stderr else "",
+            e.cmd,
+            e.returncode,
+            e.stderr.decode("utf-8", "replace") if e.stderr else "",
         )
         return False
     except (subprocess.SubprocessError, FileNotFoundError, OSError) as e:
@@ -2100,7 +2250,9 @@ def _atomic_write(path: Path, content: str) -> None:
         raise
 
 
-def _is_additive_result(current: str, new: str, proposed_texts: Sequence[str]) -> str | None:
+def _is_additive_result(
+    current: str, new: str, proposed_texts: Sequence[str]
+) -> str | None:
     """Check an applier result really only *added* to *current*.
 
     Returns ``None`` when the result is additive, else a one-line reason.
@@ -2146,7 +2298,8 @@ def _is_additive_result(current: str, new: str, proposed_texts: Sequence[str]) -
 
 
 _LAST_UPDATED_RE = re.compile(
-    r"^(?P<label>\*\*Last Updated:\*\*[ \t]*)\d{4}-\d{2}-\d{2}", re.MULTILINE | re.IGNORECASE
+    r"^(?P<label>\*\*Last Updated:\*\*[ \t]*)\d{4}-\d{2}-\d{2}",
+    re.MULTILINE | re.IGNORECASE,
 )
 
 
@@ -2180,7 +2333,9 @@ def _refresh_last_updated(content: str, today: str) -> str:
     return _LAST_UPDATED_RE.sub(lambda m: m.group("label") + today, content, count=1)
 
 
-async def _apply_proposal_to_file(client, memory_file: Path, proposal_section: str) -> str | None:
+async def _apply_proposal_to_file(
+    client, memory_file: Path, proposal_section: str
+) -> str | None:
     """Apply one file's slice of the proposal. Returns validated new content,
     or None if the call failed or the result looks unsafe to write."""
     if not memory_file.exists():
@@ -2206,10 +2361,15 @@ async def _apply_proposal_to_file(client, memory_file: Path, proposal_section: s
     # work and escalate, exactly as `plan_chunks` does for an oversized block.
     from lib import dream_chunking
 
-    n_bytes = len(proposal_section.encode("utf-8")) + len(current_content.encode("utf-8"))
+    n_bytes = len(proposal_section.encode("utf-8")) + len(
+        current_content.encode("utf-8")
+    )
     timeout_s = min(
         dream_chunking.MAX_ESCALATED_TIMEOUT_S,
-        max(CHUNK_TIMEOUT_S, dream_chunking.estimate_seconds(n_bytes, _calibrated_throughput())),
+        max(
+            CHUNK_TIMEOUT_S,
+            dream_chunking.estimate_seconds(n_bytes, _calibrated_throughput()),
+        ),
     )
 
     try:
@@ -2217,14 +2377,18 @@ async def _apply_proposal_to_file(client, memory_file: Path, proposal_section: s
     except Exception:
         logger.exception(
             "Failed to apply updates to %s (%d bytes, %.0fs deadline)",
-            memory_file.name, n_bytes, timeout_s,
+            memory_file.name,
+            n_bytes,
+            timeout_s,
         )
         return None
 
     if not _is_safe_memory_update(current_content, response.content):
         logger.error(
             "Rejected unsafe applier output for %s (%d chars -> %d); keeping original",
-            memory_file.name, len(current_content), len(response.content.strip()),
+            memory_file.name,
+            len(current_content),
+            len(response.content.strip()),
         )
         return None
     return response.content
@@ -2273,21 +2437,28 @@ async def dream_auto() -> None:
             # Stage 2 — mechanically apply each file's slice of the proposal.
             # Files are independent, so apply them concurrently.
             per_file = _split_proposal_by_file(proposal)
-            logger.info("Dream (auto) proposal targets %d files: %s",
-                        len(per_file), ", ".join(sorted(per_file)) or "none")
+            logger.info(
+                "Dream (auto) proposal targets %d files: %s",
+                len(per_file),
+                ", ".join(sorted(per_file)) or "none",
+            )
 
             targets = []
             for filename, section in per_file.items():
                 memory_file = memory_dir / filename
                 if not memory_file.exists():
-                    logger.warning("Proposal targets unknown file %s — skipped", filename)
+                    logger.warning(
+                        "Proposal targets unknown file %s — skipped", filename
+                    )
                     continue
                 targets.append((filename, memory_file, section))
 
-            results = await asyncio.gather(*(
-                _apply_proposal_to_file(client, mf, section)
-                for _, mf, section in targets
-            ))
+            results = await asyncio.gather(
+                *(
+                    _apply_proposal_to_file(client, mf, section)
+                    for _, mf, section in targets
+                )
+            )
 
             updated_count = 0
             failed_count = 0
@@ -2297,7 +2468,9 @@ async def dream_auto() -> None:
                         # Atomic, like the triage path: the learnings this came from
                         # are unlinked below, so a half-written file here is the one
                         # loss with no source left to retry from.
-                        _atomic_write(memory_file, _refresh_last_updated(updated_content, today))
+                        _atomic_write(
+                            memory_file, _refresh_last_updated(updated_content, today)
+                        )
                     except OSError:
                         # Same reasoning as the triage path: an unhandled OSError on
                         # the second file aborted the run with the first already
@@ -2340,12 +2513,16 @@ async def dream_auto() -> None:
                     archived = _archive_proposal(proposal_file, dreams_dir)
                     logger.info("Archived auto-applied proposal to %s", archived)
                 except OSError:
-                    logger.exception("Could not archive %s — left in dreams root", proposal_file)
+                    logger.exception(
+                        "Could not archive %s — left in dreams root", proposal_file
+                    )
             else:
                 logger.warning(
                     "Kept %d learnings file(s): %d/%d targets failed to apply — "
                     "will retry next run",
-                    len(source_files), failed_count, len(targets),
+                    len(source_files),
+                    failed_count,
+                    len(targets),
                 )
 
             state = load_yaml(dream_state_file)
@@ -2362,7 +2539,9 @@ async def dream_auto() -> None:
     try:
         config = load_catalog_config()
         catalog_results = await generate_catalogs(config=config)
-        logger.info("Catalog regeneration complete: %d generators ran", len(catalog_results))
+        logger.info(
+            "Catalog regeneration complete: %d generators ran", len(catalog_results)
+        )
     except Exception:
         logger.exception("Catalog generation failed (dream still complete)")
 
@@ -2418,22 +2597,31 @@ async def _judge_batch(client, items, target_texts, sem, index: int, total: int)
         for attempt in range(1, _RATE_LIMIT_ATTEMPTS + 1):
             try:
                 response = await _query(
-                    client, memory_judge.SYSTEM,
-                    [{"role": "user", "content": content}], CHUNK_TIMEOUT_S,
+                    client,
+                    memory_judge.SYSTEM,
+                    [{"role": "user", "content": content}],
+                    CHUNK_TIMEOUT_S,
                 )
                 break
             except Exception as exc:
                 if attempt < _RATE_LIMIT_ATTEMPTS and _is_rate_limit(exc):
                     logger.warning(
-                        "Judge batch %d/%d rate limited (%s) — retrying once in "
-                        "%.0fs", index, total, exc, _RATE_LIMIT_BACKOFF_S,
+                        "Judge batch %d/%d rate limited (%s) — retrying once in %.0fs",
+                        index,
+                        total,
+                        exc,
+                        _RATE_LIMIT_BACKOFF_S,
                     )
                     await asyncio.sleep(_RATE_LIMIT_BACKOFF_S)
                     continue
                 logger.exception(
                     "Judge batch %d/%d failed (%d items, %d bytes) — its %d item(s) "
                     "keep the conservative default and stay pending",
-                    index, total, len(items), n_bytes, len(items),
+                    index,
+                    total,
+                    len(items),
+                    n_bytes,
+                    len(items),
                 )
                 return {}, False
         elapsed = max(time.monotonic() - started, 1e-6)
@@ -2445,11 +2633,16 @@ async def _judge_batch(client, items, target_texts, sem, index: int, total: int)
     # anything else — including one echoed out of a learning's own text — is
     # unaddressable rather than merely implausible.
     verdicts = memory_judge.parse_verdicts(
-        response.content or "", memory_judge.batch_labels(items),
+        response.content or "",
+        memory_judge.batch_labels(items),
     )
     logger.info(
         "Judge batch %d/%d: %d item(s) in, %d verdict(s) out, %.0fs",
-        index, total, len(items), len(verdicts), elapsed,
+        index,
+        total,
+        len(items),
+        len(verdicts),
+        elapsed,
     )
     if not verdicts:
         # An empty parse is indistinguishable from a failed call as far as the
@@ -2460,7 +2653,10 @@ async def _judge_batch(client, items, target_texts, sem, index: int, total: int)
         # their conservative default, which is why one branch covers both.
         logger.warning(
             "Judge batch %d/%d yielded no usable verdict lines — its %d "
-            "item(s) keep the conservative default", index, total, len(items),
+            "item(s) keep the conservative default",
+            index,
+            total,
+            len(items),
         )
         return {}, False
     return verdicts, True
@@ -2507,14 +2703,16 @@ async def _judge_items(
             target_texts[item.target] = ""
 
     batches = [
-        pending[i:i + _JUDGE_BATCH_ITEMS]
+        pending[i : i + _JUDGE_BATCH_ITEMS]
         for i in range(0, len(pending), _JUDGE_BATCH_ITEMS)
     ]
     sem = asyncio.Semaphore(_concurrency())
-    results = await asyncio.gather(*(
-        _judge_batch(client, batch, target_texts, sem, i, len(batches))
-        for i, batch in enumerate(batches, 1)
-    ))
+    results = await asyncio.gather(
+        *(
+            _judge_batch(client, batch, target_texts, sem, i, len(batches))
+            for i, batch in enumerate(batches, 1)
+        )
+    )
 
     fresh: dict[tuple[str, int], object] = {}
     unjudged = 0
@@ -2540,7 +2738,8 @@ async def _judge_items(
     if unjudged:
         logger.warning(
             "Judge: %d item(s) kept a conservative default because their batch "
-            "failed or skipped them", unjudged,
+            "failed or skipped them",
+            unjudged,
         )
     known.update(fresh)
     return known, unjudged
@@ -2583,7 +2782,9 @@ async def dream_triage(proposal_arg: str | None, *, dry_run: bool) -> int:
     dreams_dir = paths.dreams_dir()
     memory_dir = paths.memory_dir()
 
-    proposal_path = Path(proposal_arg) if proposal_arg else _latest_pending_proposal(dreams_dir)
+    proposal_path = (
+        Path(proposal_arg) if proposal_arg else _latest_pending_proposal(dreams_dir)
+    )
     if proposal_path is None:
         print("triage: no pending proposal in the dreams root — nothing to do")
         return 0
@@ -2636,10 +2837,15 @@ async def dream_triage(proposal_arg: str | None, *, dry_run: bool) -> int:
         # *would* have applied is the point of leaving the mode reachable.
         print(f"triage: {proposal_path.name} — {triage.total} pending item(s)")
         print("memory_write_mode=review — nothing judged, nothing applied.")
-        print(triage_lib.render_summary(
-            triage, applied_count=0, receipt_path="(none — review mode)",
-            dry_run=True, mode=mode,
-        ))
+        print(
+            triage_lib.render_summary(
+                triage,
+                applied_count=0,
+                receipt_path="(none — review mode)",
+                dry_run=True,
+                mode=mode,
+            )
+        )
         return 0
 
     # Contract C3: no SDK must never be a hard failure, and must never widen
@@ -2653,11 +2859,15 @@ async def dream_triage(proposal_arg: str | None, *, dry_run: bool) -> int:
             "triage: no model client — every item keeps its conservative default "
             "and nothing is applied"
         )
-        print("triage: no model client available — falling back to review for "
-              "every item (nothing applied).")
+        print(
+            "triage: no model client available — falling back to review for "
+            "every item (nothing applied)."
+        )
 
     verdicts, unjudged = await _judge_items(
-        client, triage.review, memory_dir,
+        client,
+        triage.review,
+        memory_dir,
         memory_judge.default_cache_path(paths.data_dir()),
         persist_cache=not dry_run,
     )
@@ -2687,16 +2897,23 @@ async def dream_triage(proposal_arg: str | None, *, dry_run: bool) -> int:
         logger.debug(
             "triage: %s#%s provenance/kind contested — extractor=%s judge=%s "
             "resolved=%s (provenance won by %s, kind won by %s)",
-            item.target, item.number, detail["extractor_pair"],
-            detail["judge_pair"], detail["resolved_pair"],
-            detail["provenance_won"], detail["kind_won"],
+            item.target,
+            item.number,
+            detail["extractor_pair"],
+            detail["judge_pair"],
+            detail["resolved_pair"],
+            detail["provenance_won"],
+            detail["kind_won"],
         )
     if disagreements:
         logger.info(
             "triage: judge and extractor disagreed on the provenance/kind pair for "
             "%d of %d item(s); the more conservative half of each won "
             "(provenance contested %d, kind contested %d; winners %s)",
-            disagreements, len(triage.review), prov_disagreed, kind_disagreed,
+            disagreements,
+            len(triage.review),
+            prov_disagreed,
+            kind_disagreed,
             ", ".join(f"{k}={v}" for k, v in sorted(won.items())) or "none",
         )
     for resolved_kind, breakdown in sorted(resolved_kinds.items()):
@@ -2705,7 +2922,8 @@ async def dream_triage(proposal_arg: str | None, *, dry_run: bool) -> int:
         # said so, versus because one said so and the other lost.
         logger.info(
             "triage: kind %s — %d item(s) [%s]",
-            resolved_kind or "-", sum(breakdown.values()),
+            resolved_kind or "-",
+            sum(breakdown.values()),
             ", ".join(f"{k}={v}" for k, v in sorted(breakdown.items())),
         )
     triage = triage_lib.apply_verdicts(triage, verdicts, mode=mode)
@@ -2713,18 +2931,26 @@ async def dream_triage(proposal_arg: str | None, *, dry_run: bool) -> int:
         # `apply_verdicts` recounts this from the verdict map; the batch-level
         # number is logged above. Both should agree — if they ever do not, the
         # cache handed back a verdict for an item no batch covered.
-        logger.info("triage: %d item(s) unjudged after folding verdicts",
-                    triage.unjudged)
+        logger.info(
+            "triage: %d item(s) unjudged after folding verdicts", triage.unjudged
+        )
 
     by_file = triage.auto_by_file()
     rejections_path = rejections.default_path(paths.data_dir())
 
     if dry_run:
-        print(f"triage (dry run): {proposal_path.name} — {triage.total} pending item(s)")
-        print(triage_lib.render_summary(
-            triage, applied_count=len(triage.auto),
-            receipt_path="(not written)", dry_run=True, mode=mode,
-        ))
+        print(
+            f"triage (dry run): {proposal_path.name} — {triage.total} pending item(s)"
+        )
+        print(
+            triage_lib.render_summary(
+                triage,
+                applied_count=len(triage.auto),
+                receipt_path="(not written)",
+                dry_run=True,
+                mode=mode,
+            )
+        )
         return 0
 
     # Rejections are logged before anything is applied. A drop writes nothing to
@@ -2735,11 +2961,14 @@ async def dream_triage(proposal_arg: str | None, *, dry_run: bool) -> int:
             written = rejections.append(
                 rejections_path,
                 triage_lib.rejection_records(
-                    triage, proposal_name=proposal_path.name,
+                    triage,
+                    proposal_name=proposal_path.name,
                     key_of=memory_judge.item_key,
                 ),
             )
-            logger.info("triage: logged %d rejection(s) to %s", written, rejections_path)
+            logger.info(
+                "triage: logged %d rejection(s) to %s", written, rejections_path
+            )
             rejections.rotate(rejections_path)
         except Exception:
             # Broader than OSError on purpose. `append` serialises arbitrary item
@@ -2748,15 +2977,20 @@ async def dream_triage(proposal_arg: str | None, *, dry_run: bool) -> int:
             # the memory but fail-open for the audit trail, which is the right way
             # round only if the failure is reported. Losing the log must never
             # undo a decision, and must never abort the run either.
-            logger.exception("triage: could not write the rejection log %s",
-                             rejections_path)
+            logger.exception(
+                "triage: could not write the rejection log %s", rejections_path
+            )
 
     if not by_file and not triage.dropped:
         print(f"triage: {proposal_path.name} — {triage.total} pending item(s)")
-        print(triage_lib.render_summary(
-            triage, applied_count=0, receipt_path="(none — nothing appliable)",
-            mode=mode,
-        ))
+        print(
+            triage_lib.render_summary(
+                triage,
+                applied_count=0,
+                receipt_path="(none — nothing appliable)",
+                mode=mode,
+            )
+        )
         return 0
 
     # Apply per file, concurrently — files are independent. Each call gets a
@@ -2774,7 +3008,9 @@ async def dream_triage(proposal_arg: str | None, *, dry_run: bool) -> int:
         if path_problem:
             skipped[filename] = f"refused by the write floor: {path_problem}"
             logger.error(
-                "triage: refusing to write %s — %s", filename, path_problem,
+                "triage: refusing to write %s — %s",
+                filename,
+                path_problem,
             )
             continue
         if client is None:
@@ -2785,27 +3021,37 @@ async def dream_triage(proposal_arg: str | None, *, dry_run: bool) -> int:
             continue
         if not memory_file.exists():
             skipped[filename] = "target memory file does not exist"
-            logger.warning("triage: proposal targets unknown file %s — skipped", filename)
+            logger.warning(
+                "triage: proposal targets unknown file %s — skipped", filename
+            )
             continue
         targets.append((filename, memory_file, items, memory_file.read_text()))
 
-    results = await asyncio.gather(*(
-        _apply_proposal_to_file(client, memory_file, triage_lib.auto_slice(items))
-        for _, memory_file, items, _before in targets
-    ))
+    results = await asyncio.gather(
+        *(
+            _apply_proposal_to_file(client, memory_file, triage_lib.auto_slice(items))
+            for _, memory_file, items, _before in targets
+        )
+    )
 
     applied: dict[str, list] = {}
     failed: dict[str, str] = dict(skipped)
     decisions: list[Decision] = []
-    for (filename, memory_file, items, before), updated_content in zip(targets, results):
+    for (filename, memory_file, items, before), updated_content in zip(
+        targets, results
+    ):
         if not updated_content:
             # The applier failed or returned something `_is_safe_memory_update`
             # rejected. Write nothing and leave every one of that file's items
             # pending — a partial apply we cannot describe is worse than none.
             failed[filename] = "applier returned no safe content — items left pending"
-            logger.warning("triage: %s not applied (unsafe/empty applier result)", filename)
+            logger.warning(
+                "triage: %s not applied (unsafe/empty applier result)", filename
+            )
             continue
-        not_additive = _is_additive_result(before, updated_content, [i.text for i in items])
+        not_additive = _is_additive_result(
+            before, updated_content, [i.text for i in items]
+        )
         if not_additive:
             # Every triage item is an `add`, so the result must be a superset.
             # It is not — and nobody reviewed this, so refuse the write.
@@ -2834,8 +3080,13 @@ async def dream_triage(proposal_arg: str | None, *, dry_run: bool) -> int:
             continue
         applied[filename] = items
         decisions += [
-            Decision(kind="update", file=filename, index=item.number,
-                     status="applied", target=filename)
+            Decision(
+                kind="update",
+                file=filename,
+                index=item.number,
+                status="applied",
+                target=filename,
+            )
             for item in items
         ]
         logger.info("triage: auto-applied %d item(s) to %s", len(items), filename)
@@ -2844,15 +3095,18 @@ async def dream_triage(proposal_arg: str | None, *, dry_run: bool) -> int:
     # it pending in the proposal would put it back in front of the human, which
     # is exactly the queue `drop` exists to shorten.
     decisions += [
-        Decision(kind="update", file=item.target, index=item.number,
-                 status="rejected")
+        Decision(kind="update", file=item.target, index=item.number, status="rejected")
         for item in triage.dropped
     ]
 
     generated = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
     receipt = triage_lib.render_receipt(
-        triage, proposal_name=proposal_path.name, applied=applied,
-        failed=failed, generated=generated, mode=mode,
+        triage,
+        proposal_name=proposal_path.name,
+        applied=applied,
+        failed=failed,
+        generated=generated,
+        mode=mode,
         rejections_log=str(rejections_path),
     )
     receipts_dir = dreams_dir / "applied"
@@ -2871,18 +3125,26 @@ async def dream_triage(proposal_arg: str | None, *, dry_run: bool) -> int:
     if decisions:
         try:
             marked, _ = mark_many_processed(proposal_path, decisions)
-            logger.info("triage: marked %d item(s) processed in %s",
-                        marked, proposal_path.name)
+            logger.info(
+                "triage: marked %d item(s) processed in %s", marked, proposal_path.name
+            )
         except OSError:
-            logger.exception("triage: could not mark items processed in %s — they "
-                             "were applied and are in the receipt", proposal_path)
+            logger.exception(
+                "triage: could not mark items processed in %s — they "
+                "were applied and are in the receipt",
+                proposal_path,
+            )
 
     applied_count = sum(len(v) for v in applied.values())
     print(f"triage: {proposal_path.name} — {triage.total} pending item(s)")
-    print(triage_lib.render_summary(
-        triage, applied_count=applied_count, receipt_path=str(receipt_path),
-        mode=mode,
-    ))
+    print(
+        triage_lib.render_summary(
+            triage,
+            applied_count=applied_count,
+            receipt_path=str(receipt_path),
+            mode=mode,
+        )
+    )
     if failed:
         print()
         print(f"NOT APPLIED ({len(failed)} file(s)) — items left pending:")
@@ -2897,7 +3159,7 @@ async def dream_triage(proposal_arg: str | None, *, dry_run: bool) -> int:
             memory_dir,
             pathspec=sorted(applied),
             message=f"dream: triage apply {applied_count} item(s) "
-                    f"from {proposal_path.name}",
+            f"from {proposal_path.name}",
         )
         # The receipt is written before the commit on purpose (a crash between
         # the two must leave a visible, re-runnable state), so the sha it tells
@@ -2912,17 +3174,19 @@ def _append_revert_line(receipt_path: Path, memory_dir: Path) -> None:
     try:
         sha = subprocess.run(
             ["git", "-C", str(memory_dir), "rev-parse", "--short", "HEAD"],
-            capture_output=True, text=True, timeout=10, check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=True,
         ).stdout.strip()
         if not sha:
             return
         with open(receipt_path, "a") as f:
-            f.write(
-                f"\n**Revert this batch:** `git -C {memory_dir} revert {sha}`\n"
-            )
+            f.write(f"\n**Revert this batch:** `git -C {memory_dir} revert {sha}`\n")
     except (OSError, subprocess.SubprocessError):
-        logger.warning("triage: could not record the revert sha in the receipt",
-                       exc_info=True)
+        logger.warning(
+            "triage: could not record the revert sha in the receipt", exc_info=True
+        )
 
 
 def _reconcile_is_finished(text: str) -> bool:
@@ -3025,7 +3289,9 @@ def _reconcile(*, dry_run: bool = False) -> int:
             # proposal rejected in full landed in `applied/` — the disposition
             # `/dream-remember` Step 6 requires `--archive-as rejected` for, and
             # the one `_gc_learnings` reads as evidence the memory was written.
-            archived = _archive_proposal(proposal, dreams_dir, archive_disposition(text))
+            archived = _archive_proposal(
+                proposal, dreams_dir, archive_disposition(text)
+            )
         except OSError:
             # Leave it in the root rather than half-finishing it: an un-archived
             # proposal is the state this function exists to report, so failing
@@ -3145,8 +3411,12 @@ def _gc_learnings() -> None:
             # Fail closed. An unreadable pending proposal is the one case where
             # we cannot know what it cites, so nothing may be deleted on the
             # strength of not having seen a citation in it.
-            logger.warning("Pending proposal %s unreadable (%s) — keeping every "
-                           "learnings file this pass", p.name, exc.__class__.__name__)
+            logger.warning(
+                "Pending proposal %s unreadable (%s) — keeping every "
+                "learnings file this pass",
+                p.name,
+                exc.__class__.__name__,
+            )
             print(f"GC learnings: {p.name} unreadable — nothing deleted this pass")
             return
 
@@ -3166,7 +3436,9 @@ def _gc_learnings() -> None:
         entries = [learnings_ledger.lookup(recorded, b) for b in blocks]
         missing = sum(1 for e in entries if e is None)
         if missing:
-            kept.append((f.name, f"{missing}/{len(blocks)} record(s) not yet consolidated"))
+            kept.append(
+                (f.name, f"{missing}/{len(blocks)} record(s) not yet consolidated")
+            )
             continue
         proposals = {e.get("proposal") or "" for e in entries if e is not None}
         if "" in proposals:
@@ -3174,12 +3446,19 @@ def _gc_learnings() -> None:
             continue
         undecided = sorted(n for n in proposals if Path(n).name in pending)
         if undecided:
-            kept.append((f.name, "proposal still pending review: " + ", ".join(undecided)))
+            kept.append(
+                (f.name, "proposal still pending review: " + ", ".join(undecided))
+            )
             continue
         unwritten = sorted(n for n in proposals if Path(n).name not in decided)
         if unwritten:
-            kept.append((f.name, "proposal not yet written — a run may be in "
-                                 "flight or have crashed: " + ", ".join(unwritten)))
+            kept.append(
+                (
+                    f.name,
+                    "proposal not yet written — a run may be in "
+                    "flight or have crashed: " + ", ".join(unwritten),
+                )
+            )
             continue
         if f.name in still_cited:
             kept.append((f.name, "still cited by a pending proposal"))
@@ -3231,8 +3510,8 @@ def main() -> None:
         "--check",
         action="store_true",
         help="Report the pending-learnings count, the chunk plan and the predicted "
-             "wall clock, then exit. Takes no run lock, so it answers while a "
-             "consolidation is in progress.",
+        "wall clock, then exit. Takes no run lock, so it answers while a "
+        "consolidation is in progress.",
     )
     parser.add_argument(
         "--auto",
@@ -3243,43 +3522,45 @@ def main() -> None:
         "--triage",
         action="store_true",
         help="Apply the uncontroversial half of a pending proposal and leave the "
-             "rest for review, then record what was applied in a receipt under "
-             "dreams/applied/. A MODEL decides: each pending item is judged by a "
-             "separate reviewing pass that can only ever be more cautious than "
-             "the code rubric, and an item with no verdict — failed call, no SDK, "
-             "unparseable reply — always stays pending. Anything the rubric does "
-             "not already permit, anything that rewrites rather than appends, and "
-             "any item targeting CLAUDE.md stays pending regardless of what the "
-             "judge says; kind: RULE items are never applied in any mode. "
-             "Governed by the memory_write_mode option (review/triage/auto): "
-             "'review' judges nothing and applies nothing. Uses the newest "
-             "pending proposal unless --proposal names one.",
+        "rest for review, then record what was applied in a receipt under "
+        "dreams/applied/. A MODEL decides: each pending item is judged by a "
+        "separate reviewing pass that can only ever be more cautious than "
+        "the code rubric, and an item with no verdict — failed call, no SDK, "
+        "unparseable reply — always stays pending. Anything the rubric does "
+        "not already permit, anything that rewrites rather than appends, and "
+        "any item targeting CLAUDE.md stays pending regardless of what the "
+        "judge says; kind: RULE items are never applied in any mode. "
+        "Governed by the memory_write_mode option (review/triage/auto): "
+        "'review' judges nothing and applies nothing. Uses the newest "
+        "pending proposal unless --proposal names one.",
     )
     parser.add_argument(
         "--dry-run",
         action="store_true",
         help="With --triage: print the partition and exit without writing to "
-             "memory, without a receipt, and without a commit. It DOES call the "
-             "model — the partition is the judge's answer, so a preview that "
-             "skipped judging could only ever report 'nothing would apply'. The "
-             "verdict cache is not written either, so a dry run leaves nothing "
-             "behind for a later real run to apply from.",
+        "memory, without a receipt, and without a commit. It DOES call the "
+        "model — the partition is the judge's answer, so a preview that "
+        "skipped judging could only ever report 'nothing would apply'. The "
+        "verdict cache is not written either, so a dry run leaves nothing "
+        "behind for a later real run to apply from.",
     )
     parser.add_argument(
         "--stamp",
         action="store_true",
         help="Record that a consolidation was applied (updates dream_state). "
-             "Used by /dream-remember after the human-in-the-loop apply so the "
-             "dream gate stops nudging.",
+        "Used by /dream-remember after the human-in-the-loop apply so the "
+        "dream gate stops nudging.",
     )
     parser.add_argument("--files-updated", type=int, default=0, help=argparse.SUPPRESS)
-    parser.add_argument("--learnings-processed", type=int, default=0, help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--learnings-processed", type=int, default=0, help=argparse.SUPPRESS
+    )
     parser.add_argument(
         "--archive",
         metavar="PROPOSAL_PATH",
         help="With --stamp: move the reviewed proposal file out of the dreams "
-             "root into applied/ (or rejected/, per --archive-as), so the root "
-             "holds only pending proposals. Collision-safe.",
+        "root into applied/ (or rejected/, per --archive-as), so the root "
+        "holds only pending proposals. Collision-safe.",
     )
     parser.add_argument(
         "--archive-as",
@@ -3291,31 +3572,31 @@ def main() -> None:
         "--reconcile",
         action="store_true",
         help="Find proposals in the dreams root with zero pending items and "
-             "finish them: archive, stamp dream_state, then collect spent "
-             "learnings. A fully-decided proposal left in the root is "
-             "indistinguishable from a pending one — it keeps the dream gate "
-             "nudging and pins the learnings files its sources came from. "
-             "Combine with --dry-run to report without changing anything.",
+        "finish them: archive, stamp dream_state, then collect spent "
+        "learnings. A fully-decided proposal left in the root is "
+        "indistinguishable from a pending one — it keeps the dream gate "
+        "nudging and pins the learnings files its sources came from. "
+        "Combine with --dry-run to report without changing anything.",
     )
     parser.add_argument(
         "--mark-processed",
         action="store_true",
         help="Move decided proposal items into the proposal's `## Processed` "
-             "section — the in-file decision record the multiplai-gui hub writes "
-             "too (natively; it does not call this script for it). Batch form: "
-             "--proposal PATH --decisions - with a JSON array on stdin, which is "
-             "what /dream-remember uses, one call per target file. Single-item "
-             "form: --proposal, --kind, --index, --status (and --file for updates).",
+        "section — the in-file decision record the multiplai-gui hub writes "
+        "too (natively; it does not call this script for it). Batch form: "
+        "--proposal PATH --decisions - with a JSON array on stdin, which is "
+        "what /dream-remember uses, one call per target file. Single-item "
+        "form: --proposal, --kind, --index, --status (and --file for updates).",
     )
     parser.add_argument("--proposal", metavar="PATH", help=argparse.SUPPRESS)
     parser.add_argument(
         "--decisions",
         metavar="PATH_OR_DASH",
         help="With --mark-processed: read a JSON array of decisions from this "
-             "file, or from stdin when given `-`. Each element is "
-             '{"kind","file","index","status","target"} — kind update|action, '
-             "status applied|edited|rejected, file names the `## Updates for` "
-             "group, target the memory file actually written.",
+        "file, or from stdin when given `-`. Each element is "
+        '{"kind","file","index","status","target"} — kind update|action, '
+        "status applied|edited|rejected, file names the `## Updates for` "
+        "group, target the memory file actually written.",
     )
     parser.add_argument(
         "--kind",
@@ -3333,9 +3614,9 @@ def main() -> None:
         "--gc-learnings",
         action="store_true",
         help="Delete learnings files that are fully consolidated (every record "
-             "in the ledger) and fully decided (no proposal citing them is still "
-             "pending). Pure code, no model call, no lock. Prints what it removed "
-             "and why it kept the rest.",
+        "in the ledger) and fully decided (no proposal citing them is still "
+        "pending). Pure code, no model call, no lock. Prints what it removed "
+        "and why it kept the rest.",
     )
     args = parser.parse_args()
 
@@ -3455,7 +3736,9 @@ def main() -> None:
             print("No pending learnings")
             return
         if not pending:
-            print(f"No new learnings ({len(files)} file(s), all blocks already consolidated)")
+            print(
+                f"No new learnings ({len(files)} file(s), all blocks already consolidated)"
+            )
             return
         new_bytes = sum(len(b.text.encode("utf-8")) for b in pending)
         total_bytes = 0
@@ -3471,8 +3754,14 @@ def main() -> None:
             f"Pending learnings: {len(files)} file(s), {len(pending)} new block(s), "
             f"{new_bytes} new bytes of {total_bytes}"
         )
-        print(_plan_line(new_bytes=new_bytes, total_bytes=total_bytes,
-                         chunks=chunks, throughput=throughput))
+        print(
+            _plan_line(
+                new_bytes=new_bytes,
+                total_bytes=total_bytes,
+                chunks=chunks,
+                throughput=throughput,
+            )
+        )
         # A floor, not an estimate — see estimate_wall_clock. Saying "at least"
         # is the difference between under-promising and being wrong.
         print(f"Estimated wall clock: at least {eta / 60:.0f} min")

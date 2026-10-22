@@ -379,9 +379,14 @@ class GeneratorBase:
             batch.hashes[key] = current_hash
 
             if self._should_skip(
-                key, current_hash, stored_hashes, force,
+                key,
+                current_hash,
+                stored_hashes,
+                force,
                 has_existing_entry=key in existing_by_key,
-            ) and not self.entry_needs_regeneration(key, source, existing_by_key.get(key)):
+            ) and not self.entry_needs_regeneration(
+                key, source, existing_by_key.get(key)
+            ):
                 batch.skipped += 1
                 batch.entries[key] = existing_by_key[key]
                 continue
@@ -438,8 +443,12 @@ class GeneratorBase:
 
     @staticmethod
     def _should_skip(
-        key: str, current_hash: str, stored_hashes: dict[str, str], force: bool,
-        *, has_existing_entry: bool,
+        key: str,
+        current_hash: str,
+        stored_hashes: dict[str, str],
+        force: bool,
+        *,
+        has_existing_entry: bool,
     ) -> bool:
         """Determine whether a source should be skipped (unchanged hash).
 
@@ -616,8 +625,7 @@ class GeneratorBase:
             try:
                 response = await self._model_client.query(
                     system=(
-                        "You are a catalog generator. "
-                        "Produce structured JSON output."
+                        "You are a catalog generator. Produce structured JSON output."
                     ),
                     messages=[{"role": "user", "content": prompt}],
                     model=self._call_model,
@@ -628,7 +636,7 @@ class GeneratorBase:
             except Exception as e:
                 is_last_attempt = attempt >= MAX_RETRIES
                 if _is_retryable(e) and not is_last_attempt:
-                    delay = RETRY_BACKOFF_BASE * (2 ** attempt)
+                    delay = RETRY_BACKOFF_BASE * (2**attempt)
                     await asyncio.sleep(delay)
                     continue
                 raise

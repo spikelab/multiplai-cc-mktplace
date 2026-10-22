@@ -35,8 +35,10 @@ class Locked(Exception):
     def __init__(self, run_dir: Path, holder: str):
         self.run_dir = run_dir
         self.holder = holder
-        super().__init__(f"a pm-spec run of {run_dir.parent} is running now ({holder}); "
-                         "wait for it to finish, then run again")
+        super().__init__(
+            f"a pm-spec run of {run_dir.parent} is running now ({holder}); "
+            "wait for it to finish, then run again"
+        )
 
 
 def lock_path(run_dir: Path) -> Path:
@@ -75,8 +77,11 @@ def hold(run_dir: Path) -> Iterator[None]:
                 raise Locked(Path(run_dir), _holder(fd)) from None
             log.warning("cannot lock %s, running unlocked: %s", path, e)
         else:
-            info = {"pid": os.getpid(), "host": socket.gethostname(),
-                    "since": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")}
+            info = {
+                "pid": os.getpid(),
+                "host": socket.gethostname(),
+                "since": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            }
             try:
                 os.ftruncate(fd, 0)
                 os.pwrite(fd, json.dumps(info).encode("utf-8"), 0)

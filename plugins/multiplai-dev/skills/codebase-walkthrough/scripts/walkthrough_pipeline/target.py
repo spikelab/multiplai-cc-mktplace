@@ -24,21 +24,105 @@ from .models import GateResult, RepoInfo, TargetInfo
 
 log = logging.getLogger(__name__)
 
-LOCKFILES = {"package-lock.json", "yarn.lock", "pnpm-lock.yaml", "poetry.lock", "uv.lock",
-             "Pipfile.lock", "Cargo.lock", "composer.lock", "Gemfile.lock", "go.sum"}
-BINARY_EXTS = {
-    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".bmp", ".tiff", ".svgz", ".heic",
-    ".pdf", ".zip", ".gz", ".tgz", ".bz2", ".xz", ".7z", ".rar", ".tar", ".jar", ".whl",
-    ".mp3", ".mp4", ".mov", ".m4a", ".wav", ".avi", ".webm", ".ogg",
-    ".woff", ".woff2", ".ttf", ".otf", ".eot",
-    ".pyc", ".pyo", ".so", ".dylib", ".dll", ".exe", ".bin", ".o", ".a",
-    ".sqlite", ".sqlite3", ".db", ".pkl", ".pickle", ".npy", ".npz", ".parquet",
-    ".xlsx", ".xls", ".docx", ".doc", ".pptx", ".key", ".numbers", ".psd", ".ai", ".sketch",
+LOCKFILES = {
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "poetry.lock",
+    "uv.lock",
+    "Pipfile.lock",
+    "Cargo.lock",
+    "composer.lock",
+    "Gemfile.lock",
+    "go.sum",
 }
-GENERATED_SUFFIXES = (".min.js", ".min.css", ".map", "_pb2.py", "_pb2_grpc.py", ".pb.go", ".generated.ts")
-SKIP_DIRS = {"node_modules", ".git", "__pycache__", ".venv", "venv", "dist", "build", ".next", ".mypy_cache",
-             ".pytest_cache", ".tox", "staticfiles"}
-SNAPSHOT_MAX_BYTES = 2 * 1024 * 1024   # a single file larger than this is data, not code
+BINARY_EXTS = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".ico",
+    ".bmp",
+    ".tiff",
+    ".svgz",
+    ".heic",
+    ".pdf",
+    ".zip",
+    ".gz",
+    ".tgz",
+    ".bz2",
+    ".xz",
+    ".7z",
+    ".rar",
+    ".tar",
+    ".jar",
+    ".whl",
+    ".mp3",
+    ".mp4",
+    ".mov",
+    ".m4a",
+    ".wav",
+    ".avi",
+    ".webm",
+    ".ogg",
+    ".woff",
+    ".woff2",
+    ".ttf",
+    ".otf",
+    ".eot",
+    ".pyc",
+    ".pyo",
+    ".so",
+    ".dylib",
+    ".dll",
+    ".exe",
+    ".bin",
+    ".o",
+    ".a",
+    ".sqlite",
+    ".sqlite3",
+    ".db",
+    ".pkl",
+    ".pickle",
+    ".npy",
+    ".npz",
+    ".parquet",
+    ".xlsx",
+    ".xls",
+    ".docx",
+    ".doc",
+    ".pptx",
+    ".key",
+    ".numbers",
+    ".psd",
+    ".ai",
+    ".sketch",
+}
+GENERATED_SUFFIXES = (
+    ".min.js",
+    ".min.css",
+    ".map",
+    "_pb2.py",
+    "_pb2_grpc.py",
+    ".pb.go",
+    ".generated.ts",
+)
+SKIP_DIRS = {
+    "node_modules",
+    ".git",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "dist",
+    "build",
+    ".next",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".tox",
+    "staticfiles",
+}
+SNAPSHOT_MAX_BYTES = 2 * 1024 * 1024  # a single file larger than this is data, not code
 SMALL_FILE_LINES = 30
 
 
@@ -50,10 +134,12 @@ class MissingToolError(Exception):
     """A command-line tool the run cannot do without is not on PATH."""
 
 
-RG_MISSING = ("ripgrep (`rg`) is not on PATH. The walkthrough uses it to find references in every repository "
-              "and to check that written text occurs in the code. Install it (macOS: `brew install ripgrep`; "
-              "Debian/Ubuntu: `apt install ripgrep`; see https://github.com/BurntSushi/ripgrep#installation) "
-              "and run again.")
+RG_MISSING = (
+    "ripgrep (`rg`) is not on PATH. The walkthrough uses it to find references in every repository "
+    "and to check that written text occurs in the code. Install it (macOS: `brew install ripgrep`; "
+    "Debian/Ubuntu: `apt install ripgrep`; see https://github.com/BurntSushi/ripgrep#installation) "
+    "and run again."
+)
 
 
 def require_rg() -> None:
@@ -61,22 +147,35 @@ def require_rg() -> None:
         raise MissingToolError(RG_MISSING)
 
 
-def git(repo: str | Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
+def git(
+    repo: str | Path, *args: str, check: bool = True
+) -> subprocess.CompletedProcess:
     """Run one git command against *repo*; stdout/stderr as text."""
     if args and args[0] not in ("rev-parse", "show", "archive", "ls-files", "ls-tree"):
         raise TargetError(f"git {args[0]} is not allowed here")
     proc = subprocess.run(
         [*GIT_ARGV, "-C", str(repo), *args],
-        capture_output=True, text=True, stdin=subprocess.DEVNULL, env=git_env(), shell=False, check=False,
+        capture_output=True,
+        text=True,
+        stdin=subprocess.DEVNULL,
+        env=git_env(),
+        shell=False,
+        check=False,
     )
     if check and proc.returncode != 0:
-        raise TargetError(f"git {' '.join(args)} failed in {repo}: {proc.stderr.strip()}")
+        raise TargetError(
+            f"git {' '.join(args)} failed in {repo}: {proc.stderr.strip()}"
+        )
     return proc
 
 
 def repo_root(path: str | Path) -> Path | None:
     proc = git(path, "rev-parse", "--show-toplevel", check=False)
-    return Path(proc.stdout.strip()).resolve() if proc.returncode == 0 and proc.stdout.strip() else None
+    return (
+        Path(proc.stdout.strip()).resolve()
+        if proc.returncode == 0 and proc.stdout.strip()
+        else None
+    )
 
 
 def head_sha(repo: str | Path) -> str | None:
@@ -112,8 +211,11 @@ def github_web_base(url: str | None) -> str | None:
     """`https://github.com/<owner>/<repo>` for a GitHub remote, else None."""
     if not url:
         return None
-    m = re.match(r"^(?:https?://(?:[^@/]+@)?github\.com/|git@github\.com:|ssh://git@github\.com/)"
-                 r"([^/]+)/([^/]+?)(?:\.git)?/?$", url)
+    m = re.match(
+        r"^(?:https?://(?:[^@/]+@)?github\.com/|git@github\.com:|ssh://git@github\.com/)"
+        r"([^/]+)/([^/]+?)(?:\.git)?/?$",
+        url,
+    )
     return f"https://github.com/{m.group(1)}/{m.group(2)}" if m else None
 
 
@@ -160,11 +262,17 @@ def snapshot_repo(repo: RepoInfo, dest: Path) -> Path:
     dest.mkdir(parents=True)
     proc = subprocess.run(
         [*GIT_ARGV, "-C", repo.path, "archive", "--format=tar", repo.head_sha],
-        capture_output=True, stdin=subprocess.DEVNULL, env=git_env(), shell=False, check=False,
+        capture_output=True,
+        stdin=subprocess.DEVNULL,
+        env=git_env(),
+        shell=False,
+        check=False,
     )
     if proc.returncode != 0:
-        raise TargetError(f"git archive {repo.head_sha[:12]} failed in {repo.path}: "
-                          f"{proc.stderr.decode(errors='replace').strip()}")
+        raise TargetError(
+            f"git archive {repo.head_sha[:12]} failed in {repo.path}: "
+            f"{proc.stderr.decode(errors='replace').strip()}"
+        )
     with tarfile.open(fileobj=io.BytesIO(proc.stdout), mode="r:") as tar:
         members = [m for m in tar.getmembers() if _keep_member(m)]
         tar.extractall(dest, members=members, filter="data")
@@ -189,7 +297,10 @@ def _python_package(repo: Path, snapshot: Path, subpath: str) -> str:
     if not parts:
         return repo.name
     start = len(parts) - 1
-    while start > 0 and (snapshot / PurePosixPath(*parts[:start]) / "__init__.py").exists():
+    while (
+        start > 0
+        and (snapshot / PurePosixPath(*parts[:start]) / "__init__.py").exists()
+    ):
         start -= 1
     return ".".join(parts[start:])
 
@@ -211,8 +322,9 @@ def resolve_target(path: str | Path) -> tuple[Path, str, str]:
     return root, ("" if sub == "." else sub), sha
 
 
-def list_target_files(snapshot: Path, subpath: str, *, depth: str = "standard") -> tuple[
-        list[str], dict[str, int], dict[str, str], int, str]:
+def list_target_files(
+    snapshot: Path, subpath: str, *, depth: str = "standard"
+) -> tuple[list[str], dict[str, int], dict[str, str], int, str]:
     """(files, line counts, skipped, migration count, latest migration), repo-relative, sorted."""
     base = snapshot / subpath if subpath else snapshot
     files: list[str] = []
@@ -241,22 +353,36 @@ def list_target_files(snapshot: Path, subpath: str, *, depth: str = "standard") 
         if _is_binary(f):
             skipped[rel] = "binary"
             continue
-        if depth == "overview" and ("tests" in parts[:-1] or f.name.startswith("test_") or f.name == "tests.py"):
+        if depth == "overview" and (
+            "tests" in parts[:-1] or f.name.startswith("test_") or f.name == "tests.py"
+        ):
             skipped[rel] = "test file (depth overview)"
             continue
         text = f.read_text(encoding="utf-8", errors="replace")
         files.append(rel)
         lines[rel] = len(text.split("\n")) - (1 if text.endswith("\n") else 0)
-    latest = sorted(migrations, key=lambda m: PurePosixPath(m).name)[-1] if migrations else ""
+    latest = (
+        sorted(migrations, key=lambda m: PurePosixPath(m).name)[-1]
+        if migrations
+        else ""
+    )
     return files, lines, skipped, len(migrations), latest
 
 
-def build_target(path: str | Path, run_dir: Path, *, name: str | None = None,
-                 depth: str = "standard", key: str | None = None) -> tuple[TargetInfo, RepoInfo]:
+def build_target(
+    path: str | Path,
+    run_dir: Path,
+    *,
+    name: str | None = None,
+    depth: str = "standard",
+    key: str | None = None,
+) -> tuple[TargetInfo, RepoInfo]:
     """Resolve, snapshot and list the target. Raises TargetError. *key* names the
     target's repository (default: its directory's name)."""
     root, sub, sha = resolve_target(path)
-    repo = RepoInfo(key=key or root.name, path=str(root), head_sha=sha, remote_url=remote_url(root))
+    repo = RepoInfo(
+        key=key or root.name, path=str(root), head_sha=sha, remote_url=remote_url(root)
+    )
     snap = snapshot_repo(repo, run_dir / "snap" / repo.key)
     files, lines, skipped, n_mig, latest = list_target_files(snap, sub, depth=depth)
     langs: dict[str, int] = {}
@@ -265,10 +391,18 @@ def build_target(path: str | Path, run_dir: Path, *, name: str | None = None,
         langs[ext] = langs.get(ext, 0) + 1
     module = PurePosixPath(sub).name if sub else root.name
     info = TargetInfo(
-        repo_key=repo.key, repo_path=str(root), subpath=sub, head_sha=sha,
-        name=name or module.lower(), package=_python_package(root, snap, sub),
-        files=files, file_lines=lines, skipped=skipped, migrations=n_mig,
-        latest_migration=latest, languages=langs,
+        repo_key=repo.key,
+        repo_path=str(root),
+        subpath=sub,
+        head_sha=sha,
+        name=name or module.lower(),
+        package=_python_package(root, snap, sub),
+        files=files,
+        file_lines=lines,
+        skipped=skipped,
+        migrations=n_mig,
+        latest_migration=latest,
+        languages=langs,
     )
     return info, repo
 
@@ -282,5 +416,8 @@ def target_gate(info: TargetInfo | None, problem: str = "") -> GateResult:
     if not re.fullmatch(r"[0-9a-f]{40}", info.head_sha or ""):
         return GateResult(passed=False, reason="HEAD does not resolve")
     if not info.files:
-        return GateResult(passed=False, reason=f"no files to explain under {info.subpath or '.'} at HEAD")
+        return GateResult(
+            passed=False,
+            reason=f"no files to explain under {info.subpath or '.'} at HEAD",
+        )
     return GateResult(passed=True)

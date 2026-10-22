@@ -43,4 +43,7 @@ def format_marker(finding_id: str, round_id: str) -> str:
 
 def parse_markers(body: str) -> list[dict]:
     """Every marker in *body*, in order: `{"id": str, "round": str, "v": int}`."""
-    return [{"id": m["id"], "round": m["round"], "v": int(m["v"])} for m in MARKER_RE.finditer(body or "")]
+    return [
+        {"id": m["id"], "round": m["round"], "v": int(m["v"])}
+        for m in MARKER_RE.finditer(body or "")
+    ]

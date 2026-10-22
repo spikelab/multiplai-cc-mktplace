@@ -18,13 +18,7 @@ import fixture_repo
 
 CLICK_NAMES = ["sync"]
 
-BILLING_CORE = (
-    "RATE = 2\n"
-    "\n"
-    "\n"
-    "def charge(amount):\n"
-    "    return amount * RATE\n"
-)
+BILLING_CORE = "RATE = 2\n\n\ndef charge(amount):\n    return amount * RATE\n"
 
 
 def click_source(names: list[str]) -> str:
@@ -37,13 +31,16 @@ def click_source(names: list[str]) -> str:
 def click_repo(ws: Path, names: list[str] = CLICK_NAMES) -> Path:
     """`ws/shop`, a repo with one standalone click command per name; returns the module directory."""
     repo = ws / "shop"
-    fixture_repo.make_repo(repo, {
-        "README.md": "# shop\n",
-        "cli/__init__.py": "",
-        "cli/main.py": click_source(names),
-        "billing/__init__.py": "",          # zero lines: never a changed-lines key
-        "billing/core.py": BILLING_CORE,
-    })
+    fixture_repo.make_repo(
+        repo,
+        {
+            "README.md": "# shop\n",
+            "cli/__init__.py": "",
+            "cli/main.py": click_source(names),
+            "billing/__init__.py": "",  # zero lines: never a changed-lines key
+            "billing/core.py": BILLING_CORE,
+        },
+    )
     return repo / "billing"
 
 
@@ -52,15 +49,7 @@ def click_plan(names: list[str] = CLICK_NAMES) -> dict[str, list]:
     return {n: [("billing/core.py", "charge")] for n in names}
 
 
-SKILL_MD = (
-    "# t\n"
-    "\n"
-    "Run the tool.\n"
-    "\n"
-    "```bash\n"
-    "python -m tool\n"
-    "```\n"
-)
+SKILL_MD = "# t\n\nRun the tool.\n\n```bash\npython -m tool\n```\n"
 TOOL_MAIN = "from tool.core import charge\n\ncharge(1)\n"
 SKILL_NAME = "t: tool"
 
@@ -68,12 +57,15 @@ SKILL_NAME = "t: tool"
 def skill_repo(ws: Path) -> Path:
     """`ws/kit`, whose SKILL.md runs `python -m tool`; returns the module directory (the skill)."""
     repo = ws / "kit"
-    fixture_repo.make_repo(repo, {
-        "skills/t/SKILL.md": SKILL_MD,
-        "skills/t/tool/__init__.py": "",
-        "skills/t/tool/__main__.py": TOOL_MAIN,
-        "skills/t/tool/core.py": "def charge(amount):\n    return amount * 2\n",
-    })
+    fixture_repo.make_repo(
+        repo,
+        {
+            "skills/t/SKILL.md": SKILL_MD,
+            "skills/t/tool/__init__.py": "",
+            "skills/t/tool/__main__.py": TOOL_MAIN,
+            "skills/t/tool/core.py": "def charge(amount):\n    return amount * 2\n",
+        },
+    )
     return repo / "skills" / "t"
 
 
@@ -83,10 +75,7 @@ def skill_plan() -> dict[str, list]:
 
 
 SHOP_CORE = (
-    "def charge(amount):\n"
-    "    total = amount * 2\n"
-    "    total += 1\n"
-    "    return total\n"
+    "def charge(amount):\n    total = amount * 2\n    total += 1\n    return total\n"
 )
 SHOP_VIEWS = (
     "from shop.core import charge\n"
@@ -142,7 +131,7 @@ def web_repo(ws: Path, *, cli: bool = True) -> Path:
         "project/__init__.py": "",
         "project/settings.py": SETTINGS,
         "project/urls.py": "from django.urls import include, path\n\nurlpatterns = [\n"
-                           "    path('', include('shop.urls')),\n]\n",
+        "    path('', include('shop.urls')),\n]\n",
         "shop/__init__.py": "",
         "shop/core.py": SHOP_CORE,
         "shop/views.py": SHOP_VIEWS,
@@ -158,11 +147,27 @@ def web_repo(ws: Path, *, cli: bool = True) -> Path:
 
 def web_plan() -> dict[str, list]:
     """The seeds' traces into `charge`, and the click command's, whose hop 2 spans all of `charge`."""
-    return {WEBHOOK: [("shop/core.py", "charge")], CALLED: [], BEAT: [("shop/core.py", "charge")],
-            "settle": [("shop/core.py", 1, 4, "charge", "def charge(amount):")]}
+    return {
+        WEBHOOK: [("shop/core.py", "charge")],
+        CALLED: [],
+        BEAT: [("shop/core.py", "charge")],
+        "settle": [("shop/core.py", 1, 4, "charge", "def charge(amount):")],
+    }
 
 
 def run_args(module: Path, ws: Path, tmp_path: Path, *extra: str) -> list[str]:
     """`run` on `module`, searching the repos under `ws`, with no docs and no LSP."""
-    return ["run", str(module), "--trust-repo", "--runs-dir", str(tmp_path / "runs"),
-            "--output", str(tmp_path / "out"), "--search-root", str(ws), "--lsp-timeout", "0", *extra]
+    return [
+        "run",
+        str(module),
+        "--trust-repo",
+        "--runs-dir",
+        str(tmp_path / "runs"),
+        "--output",
+        str(tmp_path / "out"),
+        "--search-root",
+        str(ws),
+        "--lsp-timeout",
+        "0",
+        *extra,
+    ]

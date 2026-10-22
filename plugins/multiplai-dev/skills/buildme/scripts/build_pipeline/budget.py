@@ -118,7 +118,9 @@ class BuildBudget:
             self.input_tokens += int(getattr(usage, "input_tokens", 0) or 0)
             self.output_tokens += int(getattr(usage, "output_tokens", 0) or 0)
             self.cache_read_tokens += int(getattr(usage, "cache_read_tokens", 0) or 0)
-            self.cache_creation_tokens += int(getattr(usage, "cache_creation_tokens", 0) or 0)
+            self.cache_creation_tokens += int(
+                getattr(usage, "cache_creation_tokens", 0) or 0
+            )
             self.cost_usd += float(getattr(usage, "cost_usd", 0.0) or 0.0)
             if label:
                 spent = (
@@ -128,9 +130,8 @@ class BuildBudget:
                     + int(getattr(usage, "cache_creation_tokens", 0) or 0)
                 )
                 self.by_label[label] = self.by_label.get(label, 0) + spent
-                self.usd_by_label[label] = (
-                    self.usd_by_label.get(label, 0.0)
-                    + float(getattr(usage, "cost_usd", 0.0) or 0.0)
+                self.usd_by_label[label] = self.usd_by_label.get(label, 0.0) + float(
+                    getattr(usage, "cost_usd", 0.0) or 0.0
                 )
         except Exception as e:  # pragma: no cover — accounting must never break a build
             log.warning("Budget accounting failed for a call (ignored): %s", e)
@@ -154,7 +155,10 @@ class BuildBudget:
             f"Budget: {self.total_tokens:,} tokens / ${self.cost_usd:.2f} over {self.calls} SDK calls.",
         ]
         if self.unaccounted_calls:
-            lines.append("  unknown usage for interrupted calls: " + ", ".join(self.unaccounted_calls))
+            lines.append(
+                "  unknown usage for interrupted calls: "
+                + ", ".join(self.unaccounted_calls)
+            )
         if self.max_tokens:
             lines.append(f"  token ceiling: {self.max_tokens:,}")
         if self.max_usd:
@@ -165,8 +169,13 @@ class BuildBudget:
         )
         if self.by_label:
             top = sorted(self.by_label.items(), key=lambda kv: -kv[1])
-            lines.append("  by phase: " + ", ".join(
-                f"{k}={v:,} tokens/${self.usd_by_label.get(k, 0.0):.2f}" for k, v in top))
+            lines.append(
+                "  by phase: "
+                + ", ".join(
+                    f"{k}={v:,} tokens/${self.usd_by_label.get(k, 0.0):.2f}"
+                    for k, v in top
+                )
+            )
         if advice:
             lines.append(
                 "  The review/fix loop is the usual culprit: it re-runs the reviewer "
@@ -203,7 +212,12 @@ class BuildBudget:
             self._warned = True
             where = f" ({phase})" if phase else ""
             diagnosis = self.diagnosis()
-            log.warning("Build has used %.0f%% of its budget%s — %s", used * 100, where, diagnosis)
+            log.warning(
+                "Build has used %.0f%% of its budget%s — %s",
+                used * 100,
+                where,
+                diagnosis,
+            )
             print(f"BUDGET:WARN:{used * 100:.0f}:{self.cost_usd:.2f}", flush=True)
             if _warn_progress is not None:
                 try:
@@ -212,7 +226,9 @@ class BuildBudget:
                         f"{used * 100:.0f}% of the budget used{where}.\n{diagnosis}",
                     )
                 except OSError as e:
-                    log.warning("Could not write the budget warning to the progress file: %s", e)
+                    log.warning(
+                        "Could not write the budget warning to the progress file: %s", e
+                    )
 
     def to_state(self) -> dict:
         """Serializable snapshot for the build state file."""
@@ -239,11 +255,15 @@ class BuildBudget:
             return
         self.calls = int(data.get("calls", 0) or 0)
         self.unaccounted_calls = list(data.get("unaccounted_calls", []))
-        self.accepted_unknown_calls = min(len(self.unaccounted_calls), int(data.get("accepted_unknown_calls", 0)))
+        self.accepted_unknown_calls = min(
+            len(self.unaccounted_calls), int(data.get("accepted_unknown_calls", 0))
+        )
         if accept_unknown_spend and self.unaccounted_calls:
             self.accepted_unknown_calls = len(self.unaccounted_calls)
-            log.warning("Accepted %d interrupted calls with unknown spend; totals remain lower bounds",
-                        self.accepted_unknown_calls)
+            log.warning(
+                "Accepted %d interrupted calls with unknown spend; totals remain lower bounds",
+                self.accepted_unknown_calls,
+            )
         self.input_tokens = int(data.get("input_tokens", 0) or 0)
         self.output_tokens = int(data.get("output_tokens", 0) or 0)
         self.cache_read_tokens = int(data.get("cache_read_tokens", 0) or 0)
@@ -310,7 +330,9 @@ def get_budget() -> BuildBudget:
     return _budget
 
 
-def configure(*, max_tokens: int | None = None, max_usd: float | None = None) -> BuildBudget:
+def configure(
+    *, max_tokens: int | None = None, max_usd: float | None = None
+) -> BuildBudget:
     """Set the ceilings for this build (None = unlimited on that axis).
 
     Ceilings only — the counters are NOT cleared, so a second build in the same
@@ -322,7 +344,9 @@ def configure(*, max_tokens: int | None = None, max_usd: float | None = None) ->
     _budget.max_usd = max_usd
     _budget._warned = False
     if max_tokens or max_usd:
-        log.info("Build budget configured: max_tokens=%s max_usd=%s", max_tokens, max_usd)
+        log.info(
+            "Build budget configured: max_tokens=%s max_usd=%s", max_tokens, max_usd
+        )
     return _budget
 
 
@@ -338,8 +362,15 @@ def record(usage, *, label: str = "") -> None:
     _budget.record(usage, label=label)
     try:
         _process.cost_usd += float(getattr(usage, "cost_usd", 0.0) or 0.0)
-        _process.tokens += sum(int(getattr(usage, name, 0) or 0) for name in (
-            "input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens"))
+        _process.tokens += sum(
+            int(getattr(usage, name, 0) or 0)
+            for name in (
+                "input_tokens",
+                "output_tokens",
+                "cache_read_tokens",
+                "cache_creation_tokens",
+            )
+        )
     except Exception as e:  # pragma: no cover — accounting must never break a build
         log.warning("Process spend accounting failed for a call (ignored): %s", e)
 

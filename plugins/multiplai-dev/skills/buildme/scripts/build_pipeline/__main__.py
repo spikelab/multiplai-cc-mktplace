@@ -39,8 +39,8 @@ def _add_trust_repo_flag(p: argparse.ArgumentParser) -> None:
         "--trust-repo",
         action="store_true",
         help="Confirm you trust this repo's specs/ before running auto-approving "
-             "build agents. Required for build/spec-generate/tdd on any "
-             "repo you did not author (equivalent to BUILDME_TRUST_REPO=1).",
+        "build agents. Required for build/spec-generate/tdd on any "
+        "repo you did not author (equivalent to BUILDME_TRUST_REPO=1).",
     )
 
 
@@ -49,8 +49,8 @@ def _add_lenient_review_flag(p: argparse.ArgumentParser) -> None:
         "--lenient-review",
         action="store_true",
         help="Accept-and-continue when a block's code review stays below "
-             "threshold after all fix iterations (pre-0.4 behavior, for "
-             "overnight runs). Default: fail the build.",
+        "threshold after all fix iterations (pre-0.4 behavior, for "
+        "overnight runs). Default: fail the build.",
     )
 
 
@@ -59,9 +59,9 @@ def _add_skip_explainers_flag(p: argparse.ArgumentParser) -> None:
         "--skip-explainers",
         action="store_true",
         help="Skip the unknowns/edge-case explainer pass for dependencies new "
-             "to this project. unknowns.md is still written, recording the skip. "
-             "Default: explainers on (also settable as "
-             "`explainers: {enabled: false}` in specs/config.yaml).",
+        "to this project. unknowns.md is still written, recording the skip. "
+        "Default: explainers on (also settable as "
+        "`explainers: {enabled: false}` in specs/config.yaml).",
     )
 
 
@@ -76,8 +76,8 @@ def _add_git_lifecycle_flags(p: argparse.ArgumentParser) -> None:
         "--no-worktree",
         action="store_true",
         help="Build in the project dir on the current branch instead of "
-             "creating a dedicated worktree + branch (pre-0.5 behavior; use "
-             "when already inside a worktree).",
+        "creating a dedicated worktree + branch (pre-0.5 behavior; use "
+        "when already inside a worktree).",
     )
     p.add_argument(
         "--no-push",
@@ -107,7 +107,9 @@ def _usd_limit(value: str) -> float:
     try:
         usd = float(value)
     except ValueError:
-        raise argparse.ArgumentTypeError(f"must be a number of US dollars, not {value}") from None
+        raise argparse.ArgumentTypeError(
+            f"must be a number of US dollars, not {value}"
+        ) from None
     if not math.isfinite(usd) or usd < 0:
         raise argparse.ArgumentTypeError(f"must be 0 or more, not {value}")
     return usd
@@ -119,11 +121,14 @@ _SEVERITIES = ("HIGH", "MEDIUM", "LOW")
 
 
 def _severity_list(value: str) -> tuple[str, ...]:
-    names = tuple(dict.fromkeys(v.strip().upper() for v in value.split(",") if v.strip()))
+    names = tuple(
+        dict.fromkeys(v.strip().upper() for v in value.split(",") if v.strip())
+    )
     bad = [n for n in names if n not in _SEVERITIES]
     if not names or bad:
-        raise argparse.ArgumentTypeError(f"must be a comma-separated list of {', '.join(_SEVERITIES)}, "
-                                         f"not {value!r}")
+        raise argparse.ArgumentTypeError(
+            f"must be a comma-separated list of {', '.join(_SEVERITIES)}, not {value!r}"
+        )
     return names
 
 
@@ -133,31 +138,56 @@ def build_parser() -> argparse.ArgumentParser:
         description="Deterministic build pipeline for the buildme skill ecosystem",
     )
     # Global flag available to all subcommands
-    parser.add_argument("--session-id", default="", help="Claude Code session ID for log correlation")
+    parser.add_argument(
+        "--session-id", default="", help="Claude Code session ID for log correlation"
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     # --- build ---
     build = sub.add_parser("build", help="Full build orchestrator")
-    build.add_argument("--change", required=True,
-                       help="Change name: specs/changes/<name>/, its specs marked ready by pm-spec")
+    build.add_argument(
+        "--change",
+        required=True,
+        help="Change name: specs/changes/<name>/, its specs marked ready by pm-spec",
+    )
     build.add_argument("--project-dir", default=".", help="Project directory")
     build.add_argument("--auto", action="store_true", help="Skip review checkpoint")
-    build.add_argument("--spec-only", action="store_true",
-                       help="Stop after the design, tasks and their reviews")
-    build.add_argument("--skip-research", action="store_true", help="Skip research phase")
-    build.add_argument("--research-path", default="",
-                       help="Research file; its content is saved as research.md in the "
-                            "change dir and fed to the design")
-    build.add_argument("--accept-size", action="store_true",
-                       help="Build a plan the size gate says should be split, as one PR")
-    build.add_argument("--epic-child", action="store_true",
-                       help="This build is an epic's child (the coordinator passes it): "
-                            "no spec-extract, and the PR targets the default branch")
-    build.add_argument("--base-ref", default="",
-                       help="The commit a new worktree branches from (default: the source "
-                            "checkout's HEAD); a build that re-binds to its worktree ignores it")
-    build.add_argument("--force", action="store_true",
-                       help="Start a new build even if this change already published")
+    build.add_argument(
+        "--spec-only",
+        action="store_true",
+        help="Stop after the design, tasks and their reviews",
+    )
+    build.add_argument(
+        "--skip-research", action="store_true", help="Skip research phase"
+    )
+    build.add_argument(
+        "--research-path",
+        default="",
+        help="Research file; its content is saved as research.md in the "
+        "change dir and fed to the design",
+    )
+    build.add_argument(
+        "--accept-size",
+        action="store_true",
+        help="Build a plan the size gate says should be split, as one PR",
+    )
+    build.add_argument(
+        "--epic-child",
+        action="store_true",
+        help="This build is an epic's child (the coordinator passes it): "
+        "no spec-extract, and the PR targets the default branch",
+    )
+    build.add_argument(
+        "--base-ref",
+        default="",
+        help="The commit a new worktree branches from (default: the source "
+        "checkout's HEAD); a build that re-binds to its worktree ignores it",
+    )
+    build.add_argument(
+        "--force",
+        action="store_true",
+        help="Start a new build even if this change already published",
+    )
     _add_trust_repo_flag(build)
     _add_lenient_review_flag(build)
     _add_skip_explainers_flag(build)
@@ -182,56 +212,94 @@ def build_parser() -> argparse.ArgumentParser:
     # --- findings ---
     findings = sub.add_parser(
         "findings",
-        help="Fix a PR's review comments through the spec and TDD process, reply, re-review")
+        help="Fix a PR's review comments through the spec and TDD process, reply, re-review",
+    )
     findings.add_argument("--pr", type=int, required=True, help="The PR number")
-    findings.add_argument("--change", default="",
-                          help="Change name (default: from the PR's buildme/<name> branch)")
+    findings.add_argument(
+        "--change",
+        default="",
+        help="Change name (default: from the PR's buildme/<name> branch)",
+    )
     findings.add_argument("--project-dir", default=".", help="Project directory")
-    findings.add_argument("--auto", action="store_true",
-                          help="Unattended: post each re-review's Code findings, and its Tests "
-                               "findings on source files, without the viewer")
-    findings.add_argument("--max-rounds", type=_positive_int, default=None,
-                          help="Fix rounds before the loop stops (overrides findings.max_rounds)")
-    findings.add_argument("--max-usd", type=_usd_limit, default=None,
-                          help="Stop before the next round once this process and the PR's reviews "
-                               "it ran have spent this many US dollars (counted from 0 in each run)")
-    findings.add_argument("--severities", type=_severity_list, default=None,
-                          help="With --auto, post only the re-review's findings of these "
-                               "severities, e.g. HIGH,MEDIUM (default: every severity)")
-    findings.add_argument("--code-only", action="store_true",
-                          help="With --auto, post only the re-review's Code findings, not its "
-                               "Tests findings on source files")
-    findings.add_argument("--no-review", action="store_true",
-                          help="End each round after its replies, with no re-review (an epic's "
-                               "final fix)")
-    findings.add_argument("--no-escalation", action="store_true",
-                          help="Never run the last round's fix as the escalated fix (an epic's "
-                               "fixer, whose --max-rounds allows one round at a time)")
+    findings.add_argument(
+        "--auto",
+        action="store_true",
+        help="Unattended: post each re-review's Code findings, and its Tests "
+        "findings on source files, without the viewer",
+    )
+    findings.add_argument(
+        "--max-rounds",
+        type=_positive_int,
+        default=None,
+        help="Fix rounds before the loop stops (overrides findings.max_rounds)",
+    )
+    findings.add_argument(
+        "--max-usd",
+        type=_usd_limit,
+        default=None,
+        help="Stop before the next round once this process and the PR's reviews "
+        "it ran have spent this many US dollars (counted from 0 in each run)",
+    )
+    findings.add_argument(
+        "--severities",
+        type=_severity_list,
+        default=None,
+        help="With --auto, post only the re-review's findings of these "
+        "severities, e.g. HIGH,MEDIUM (default: every severity)",
+    )
+    findings.add_argument(
+        "--code-only",
+        action="store_true",
+        help="With --auto, post only the re-review's Code findings, not its "
+        "Tests findings on source files",
+    )
+    findings.add_argument(
+        "--no-review",
+        action="store_true",
+        help="End each round after its replies, with no re-review (an epic's "
+        "final fix)",
+    )
+    findings.add_argument(
+        "--no-escalation",
+        action="store_true",
+        help="Never run the last round's fix as the escalated fix (an epic's "
+        "fixer, whose --max-rounds allows one round at a time)",
+    )
     _add_trust_repo_flag(findings)
 
     # --- archive ---
     archive = sub.add_parser("archive", help="Archive a completed change")
     archive.add_argument("--change", required=True, help="Change name")
     archive.add_argument("--project-dir", default=".", help="Project directory")
-    archive.add_argument("--no-merge", action="store_true", help="Skip merging delta specs into main registry")
+    archive.add_argument(
+        "--no-merge",
+        action="store_true",
+        help="Skip merging delta specs into main registry",
+    )
 
     # --- setup ---
     setup = sub.add_parser("setup", help="Write or merge specs/config.yaml")
     setup.add_argument("--project-dir", default=".", help="Project directory")
     setup.add_argument("--architecture", help="architecture (repo-relative path)")
     setup.add_argument("--pr-template", help="pr.template: auto or a path")
-    setup.add_argument("--findings-authors",
-                       help="findings.authors: collaborators, or login,login,…")
+    setup.add_argument(
+        "--findings-authors", help="findings.authors: collaborators, or login,login,…"
+    )
 
     # --- config-get ---
-    cget = sub.add_parser("config-get", help="Print one resolved specs/config.yaml value")
+    cget = sub.add_parser(
+        "config-get", help="Print one resolved specs/config.yaml value"
+    )
     cget.add_argument("key", help="Dotted key, e.g. git.pr or architecture")
     cget.add_argument("--project-dir", default=".", help="Project directory")
 
     for command in (build, spec, tdd, findings):
-        command.add_argument("--accept-unknown-spend", action="store_true",
-                             help="Resume despite prior interrupted calls with unknown usage; "
-                                  "totals remain lower bounds and the cap covers known spend only")
+        command.add_argument(
+            "--accept-unknown-spend",
+            action="store_true",
+            help="Resume despite prior interrupted calls with unknown usage; "
+            "totals remain lower bounds and the cap covers known spend only",
+        )
     return parser
 
 
@@ -258,6 +326,7 @@ def main(argv: list[str] | None = None) -> int:
             return _main(args)
     finally:
         from .budget import spend_marker
+
         print(spend_marker(), flush=True)
 
 
@@ -269,6 +338,7 @@ def _main(args: argparse.Namespace) -> int:
     change = getattr(args, "change", "") or ""
     if change:
         from .change_manager import normalize_change_name
+
         try:
             normalize_change_name(change)
         except ValueError as e:
@@ -281,6 +351,7 @@ def _main(args: argparse.Namespace) -> int:
     # orchestrator decides that (intake.check_input_files).
     if args.command == "build":
         from .intake import resolve_input_paths
+
         resolve_input_paths(args)
 
     # Propagate the repo-trust opt-in to the agent layer (sdk._repo_is_trusted).
@@ -302,44 +373,56 @@ def _main(args: argparse.Namespace) -> int:
         session_id=session_id,
         packages=("build_pipeline", "code_facts"),
     )
-    logger.info("Session settings: model=%s effort=%s",
-                os.environ.get("MULTIPLAI_SESSION_MODEL") or "not found",
-                os.environ.get("MULTIPLAI_SESSION_EFFORT") or "not found")
+    logger.info(
+        "Session settings: model=%s effort=%s",
+        os.environ.get("MULTIPLAI_SESSION_MODEL") or "not found",
+        os.environ.get("MULTIPLAI_SESSION_EFFORT") or "not found",
+    )
 
     if args.command == "setup":
         from .setup import run_setup
+
         return run_setup(args)
 
     elif args.command == "config-get":
         from .setup import config_get
+
         return config_get(args)
 
     elif args.command == "build":
         from .orchestrator import run_orchestrator
+
         config = BuildConfig.from_cli_args(args)
         return asyncio.run(run_orchestrator(config, args))
 
     elif args.command == "spec-generate":
         from .spec_generator import run_spec_generator
+
         config = BuildConfig.from_cli_args(args)
         return asyncio.run(run_spec_generator(config, args))
 
     elif args.command == "tdd":
         from .tdd_engine import run_tdd_engine
+
         config = BuildConfig.from_cli_args(args)
         return asyncio.run(run_tdd_engine(config, args))
 
     elif args.command == "findings":
         from .findings.cli import run_cli
+
         return run_cli(args)
 
     elif args.command == "archive":
         from .change_manager import ChangeManager
+
         config = BuildConfig.from_cli_args(args)
         cm = ChangeManager(config.specs_dir)
         change_dir = config.change_dir
         if not change_dir.exists():
-            print(f"ERROR: Change '{args.change}' not found at {change_dir}", file=sys.stderr)
+            print(
+                f"ERROR: Change '{args.change}' not found at {change_dir}",
+                file=sys.stderr,
+            )
             return 1
         dest = cm.archive_change(change_dir, merge_specs=not args.no_merge)
         print(f"Archived to: {dest}")

@@ -133,6 +133,7 @@ def render_ranking(order: tuple[str, ...]) -> str:
     """
     return ", ".join(f"`{value}`" for value in order)
 
+
 # What the extractor is told to answer when it genuinely cannot tell. Both
 # defaults route toward human review rather than away from it: an unclear
 # provenance is the weakest one, and an unclear kind is the one with the

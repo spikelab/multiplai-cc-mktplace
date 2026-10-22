@@ -73,15 +73,15 @@ def make_step(name="a"):
     return name
 '''
 
-TEST_SHORT = '''\
+TEST_SHORT = """\
 from pkg.stages.trace import trace
 
 
 def test_trace_of_nothing_is_empty():
     assert trace([]) == []
-'''
+"""
 
-TEST_LONG = '''\
+TEST_LONG = """\
 from pkg.stages import trace as tr
 
 
@@ -99,12 +99,12 @@ def test_padding_one():
 
 def test_padding_two():
     assert [] == []
-'''
+"""
 
-TEST_UNRELATED = '''\
+TEST_UNRELATED = """\
 def test_x():
     assert 1 == 1
-'''
+"""
 
 FILES = {
     "pyproject.toml": "[project]\nname = 'pkg'\n",
@@ -122,7 +122,9 @@ FILES = {
 
 
 def _git(repo: Path, *args: str) -> str:
-    return subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True).stdout
+    return subprocess.run(
+        ["git", *args], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout
 
 
 def _repo(path: Path, files: dict[str, str]) -> Path:
@@ -144,8 +146,12 @@ def project(tmp_path):
     return _repo(tmp_path / "proj", FILES)
 
 
-def _block(description="Edit `pkg/stages/trace.py` so `trace` follows calls.", consumes=()) -> BlockInfo:
-    return BlockInfo(number=1, name="Trace calls", description=description, consumes=list(consumes))
+def _block(
+    description="Edit `pkg/stages/trace.py` so `trace` follows calls.", consumes=()
+) -> BlockInfo:
+    return BlockInfo(
+        number=1, name="Trace calls", description=description, consumes=list(consumes)
+    )
 
 
 def _part(section: str, heading: str) -> str:
@@ -165,46 +171,70 @@ class TestModules:
         assert "LIMIT = 40" in part
         assert "@dataclass\nclass Step:  # One step of a path." in part
         assert "    name: str\n    line: int = 0" in part
-        assert "    def render(self, width: int = 80) -> str  # The step as one line." in part
-        assert "def trace(paths: list[str], *, depth: int = 2) -> list[Step]  # Trace every path." in part
+        assert (
+            "    def render(self, width: int = 80) -> str  # The step as one line."
+            in part
+        )
+        assert (
+            "def trace(paths: list[str], *, depth: int = 2) -> list[Step]  # Trace every path."
+            in part
+        )
         for hidden in ("body_marker_do_not_show", "_hidden", "_private", "return"):
             assert hidden not in part
 
     def test_a_partial_path_names_the_module(self, project):
-        section = signatures.signatures_section(_block("Edit stages/trace.py."), project)
+        section = signatures.signatures_section(
+            _block("Edit stages/trace.py."), project
+        )
         assert "### `pkg/stages/trace.py`" in section
 
     def test_a_private_function_the_block_names_is_listed(self, project):
-        section = signatures.signatures_section(_block("Edit `pkg/stages/trace.py`: `_private`."), project)
+        section = signatures.signatures_section(
+            _block("Edit `pkg/stages/trace.py`: `_private`."), project
+        )
         assert "def _private()" in _part(section, "### `pkg/stages/trace.py`")
 
     def test_the_module_defining_a_consumed_name_is_added(self, project):
         block = _block(consumes=["helper_used_by_consumes(x: int) -> int"])
         section = signatures.signatures_section(block, project)
-        assert "def helper_used_by_consumes(x: int) -> int  # Defined once in the project." in \
-            _part(section, "### `pkg/other.py`")
+        assert (
+            "def helper_used_by_consumes(x: int) -> int  # Defined once in the project."
+            in _part(section, "### `pkg/other.py`")
+        )
 
     def test_the_module_defining_a_backticked_name_is_added(self, project):
-        section = signatures.signatures_section(_block("Call `helper_used_by_consumes` from the CLI."), project)
+        section = signatures.signatures_section(
+            _block("Call `helper_used_by_consumes` from the CLI."), project
+        )
         assert "### `pkg/other.py`" in section
 
     def test_a_backticked_name_defined_twice_adds_no_module(self, project):
         (project / "pkg" / "again.py").write_text(OTHER)
-        section = signatures.signatures_section(_block("Call `helper_used_by_consumes`."), project)
+        section = signatures.signatures_section(
+            _block("Call `helper_used_by_consumes`."), project
+        )
         assert section == ""
 
     def test_a_one_word_lowercase_name_or_an_attribute_adds_no_module(self, project):
-        (project / "pkg" / "words.py").write_text("def value():\n    pass\n\n\ndef path():\n    pass\n")
-        section = signatures.signatures_section(_block("Set `value` from `entry.path`."), project)
+        (project / "pkg" / "words.py").write_text(
+            "def value():\n    pass\n\n\ndef path():\n    pass\n"
+        )
+        section = signatures.signatures_section(
+            _block("Set `value` from `entry.path`."), project
+        )
         assert section == ""
 
     def test_modules_named_by_path_come_before_those_found_by_name(self, project):
         block = _block("Edit `pkg/stages/trace.py`; call `helper_used_by_consumes`.")
         section = signatures.signatures_section(block, project)
-        assert section.index("### `pkg/stages/trace.py`") < section.index("### `pkg/other.py`")
+        assert section.index("### `pkg/stages/trace.py`") < section.index(
+            "### `pkg/other.py`"
+        )
 
     def test_files_are_read_from_the_working_tree_not_from_head(self, project):
-        (project / "pkg" / "stages" / "trace.py").write_text(TRACE + "\n\ndef added_since(n: int) -> None:\n    pass\n")
+        (project / "pkg" / "stages" / "trace.py").write_text(
+            TRACE + "\n\ndef added_since(n: int) -> None:\n    pass\n"
+        )
         section = signatures.signatures_section(_block(), project)
         assert "def added_since(n: int) -> None" in section
 
@@ -213,13 +243,18 @@ class TestTestsDirectory:
     def test_conftest_fixtures_and_helper_files_are_listed(self, project):
         section = signatures.signatures_section(_block(), project)
         conftest = _part(section, "### `pkg/tests/conftest.py`")
-        assert "@pytest.fixture\ndef tracer(tmp_path)  # A tracer over a temp dir." in conftest
+        assert (
+            "@pytest.fixture\ndef tracer(tmp_path)  # A tracer over a temp dir."
+            in conftest
+        )
         fakes = _part(section, "### `pkg/tests/fakes.py`")
         assert "class FakeRepo:  # A repo that answers from memory." in fakes
         assert "    def files(self) -> list[str]" in fakes
         assert "def make_step(name='a')" in fakes
 
-    def test_the_tests_that_name_a_symbol_of_the_module_are_listed_as_node_ids(self, project):
+    def test_the_tests_that_name_a_symbol_of_the_module_are_listed_as_node_ids(
+        self, project
+    ):
         section = signatures.signatures_section(_block(), project)
         pins = section.split(signatures.PINS_HEADING, 1)[1].split("\n### ", 1)[0]
         assert "- `pkg/tests/test_trace.py::test_trace_of_nothing_is_empty`" in pins
@@ -227,15 +262,20 @@ class TestTestsDirectory:
         assert "test_unrelated_method" not in pins
         assert "test_unrelated.py" not in pins
 
-    def test_the_shortest_test_file_importing_the_module_is_given_verbatim(self, project):
+    def test_the_shortest_test_file_importing_the_module_is_given_verbatim(
+        self, project
+    ):
         section = signatures.signatures_section(_block(), project)
-        example = section.split(signatures.EXAMPLE_HEADING + " `pkg/tests/test_trace.py`", 1)[1]
+        example = section.split(
+            signatures.EXAMPLE_HEADING + " `pkg/tests/test_trace.py`", 1
+        )[1]
         assert TEST_SHORT in example
         assert "class TestStep" not in example
 
     def test_the_example_is_cut_at_200_lines(self, project):
         long_test = "from pkg.stages.trace import trace\n" + "".join(
-            f"\n\ndef test_{i}():\n    assert trace([]) == []\n" for i in range(100))
+            f"\n\ndef test_{i}():\n    assert trace([]) == []\n" for i in range(100)
+        )
         for name in ("test_trace.py", "test_long.py"):
             (project / "pkg" / "tests" / name).write_text(long_test)
         section = signatures.signatures_section(_block(), project)
@@ -246,8 +286,10 @@ class TestTestsDirectory:
 
 class TestLimits:
     def test_the_section_stops_at_40000_characters_and_says_what_it_cut(self, project):
-        big = "".join(f'def function_number_{i}(argument: int = {i}) -> int:\n    """Doc {i}."""\n    return {i}\n\n'
-                      for i in range(3000))
+        big = "".join(
+            f'def function_number_{i}(argument: int = {i}) -> int:\n    """Doc {i}."""\n    return {i}\n\n'
+            for i in range(3000)
+        )
         (project / "pkg" / "stages" / "trace.py").write_text(big)
         section = signatures.signatures_section(_block(), project)
         assert len(section) <= signatures.MAX_CHARS == 40_000
@@ -271,8 +313,14 @@ class TestLimits:
 
 class TestContext:
     def _config(self, project: Path) -> BuildConfig:
-        config = BuildConfig(project_dir=project, change_name="c", config_dir=project / "cfg",
-                             core_memory_files=[], stack_memory_files=[], additional_memory_files=[])
+        config = BuildConfig(
+            project_dir=project,
+            change_name="c",
+            config_dir=project / "cfg",
+            core_memory_files=[],
+            stack_memory_files=[],
+            additional_memory_files=[],
+        )
         config.specs_dir = project / "specs"
         return config
 

@@ -45,6 +45,7 @@ logger = logging.getLogger(__name__)
 # twice a session) and sharing the field would make each one skip the other's
 # slices.
 
+
 def extraction_state_dir(data_dir: Path) -> Path:
     return data_dir / "extraction_state"
 
@@ -87,8 +88,10 @@ def save_diary_bookmark(data_dir: Path, session_id: str, ts: datetime) -> bool:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
         tmp.write_text(
-            json.dumps({"session_id": session_id,
-                        "last_extracted_ts": ts.isoformat()}, indent=2),
+            json.dumps(
+                {"session_id": session_id, "last_extracted_ts": ts.isoformat()},
+                indent=2,
+            ),
             encoding="utf-8",
         )
         tmp.replace(path)
@@ -132,7 +135,9 @@ def slice_key(session_id: str, through: datetime | None) -> str:
     return f"{session_id}:{through.isoformat() if through else 'start'}"
 
 
-def load_target_charters(memory_dir: Path, catalogs_dir: Path | None = None) -> list[dict]:
+def load_target_charters(
+    memory_dir: Path, catalogs_dir: Path | None = None
+) -> list[dict]:
     """Return the valid extraction targets with their routing charters.
 
     Each entry is ``{"name", "purpose", "not_here"}`` where ``purpose`` is the
@@ -156,7 +161,10 @@ def load_target_charters(memory_dir: Path, catalogs_dir: Path | None = None) -> 
                 if src:
                     catalog[src] = entry
         except (json.JSONDecodeError, OSError):
-            logger.warning("Memory catalog unreadable at %s — extraction targets fall back to bare names", catalog_file)
+            logger.warning(
+                "Memory catalog unreadable at %s — extraction targets fall back to bare names",
+                catalog_file,
+            )
             catalog = {}
 
     charters = []
@@ -165,11 +173,13 @@ def load_target_charters(memory_dir: Path, catalogs_dir: Path | None = None) -> 
         summary = (entry.get("summary") or "").strip()
         # First sentence keeps the prompt cost bounded (~30 tokens/file).
         purpose = summary.split(". ")[0].rstrip(".") if summary else ""
-        charters.append({
-            "name": name,
-            "purpose": purpose,
-            "not_here": entry.get("anti_domains") or [],
-        })
+        charters.append(
+            {
+                "name": name,
+                "purpose": purpose,
+                "not_here": entry.get("anti_domains") or [],
+            }
+        )
     return charters
 
 
@@ -508,8 +518,12 @@ DISPOSITIONS = ("active", "parked", "done")
 DEFAULT_DISPOSITION = "active"
 
 _DISPOSITION_RE = re.compile(r"<disposition>(.*?)</disposition>", re.DOTALL)
-_DISPOSITION_STATE_RE = re.compile(r"^\s*state\s*:\s*([a-z]+)", re.MULTILINE | re.IGNORECASE)
-_DISPOSITION_REASON_RE = re.compile(r"^\s*reason\s*:\s*(.+?)\s*$", re.MULTILINE | re.IGNORECASE)
+_DISPOSITION_STATE_RE = re.compile(
+    r"^\s*state\s*:\s*([a-z]+)", re.MULTILINE | re.IGNORECASE
+)
+_DISPOSITION_REASON_RE = re.compile(
+    r"^\s*reason\s*:\s*(.+?)\s*$", re.MULTILINE | re.IGNORECASE
+)
 
 
 def parse_disposition(raw: str) -> dict:
@@ -542,7 +556,10 @@ def parse_disposition(raw: str) -> dict:
         state = DEFAULT_DISPOSITION
 
     reason_match = _DISPOSITION_REASON_RE.search(body)
-    return {"state": state, "reason": reason_match.group(1).strip() if reason_match else ""}
+    return {
+        "state": state,
+        "reason": reason_match.group(1).strip() if reason_match else "",
+    }
 
 
 # --- Memory utilisation (estimator A: self-report) --------------------------
@@ -619,12 +636,14 @@ def parse_utilisation(raw: str) -> list[dict] | None:
             continue
         seen.add((file, section))
         evidence = " ".join((body or "").split())
-        out.append({
-            "file": file,
-            "section": section,
-            "evidence": evidence,
-            "supported": bool(evidence),
-        })
+        out.append(
+            {
+                "file": file,
+                "section": section,
+                "evidence": evidence,
+                "supported": bool(evidence),
+            }
+        )
     return out
 
 
@@ -675,7 +694,9 @@ def _parse_learning(block: str) -> dict | None:
         if normalized is None:
             logger.warning(
                 "Learning %s=%r is not in the accepted set — dropped rather than "
-                "coerced; the record parses without it", key, entry[key],
+                "coerced; the record parses without it",
+                key,
+                entry[key],
             )
             del entry[key]
         else:
@@ -687,8 +708,9 @@ def _parse_learning(block: str) -> dict | None:
         else:
             outcome = f"ignored, the record's own kind={entry['kind']!r} wins"
         logger.info(
-            "Learning provenance=%r is a kind value — %s; provenance left "
-            "unstated", misfiled_kind, outcome,
+            "Learning provenance=%r is a kind value — %s; provenance left unstated",
+            misfiled_kind,
+            outcome,
         )
     return entry if entry.get("description") else None
 
@@ -712,11 +734,13 @@ def _parse_units(raw: str) -> list[dict]:
             for lblock in _LEARNING_RE.findall(block)
             if (entry := _parse_learning(lblock)) is not None
         ]
-        units.append({
-            "timestamp": ts_match.group(1).strip() if ts_match else "",
-            "diary_entry": diary_match.group(1).strip() if diary_match else "",
-            "learnings": learnings,
-        })
+        units.append(
+            {
+                "timestamp": ts_match.group(1).strip() if ts_match else "",
+                "diary_entry": diary_match.group(1).strip() if diary_match else "",
+                "learnings": learnings,
+            }
+        )
     if units:
         return units
     if _NO_UNITS_MARKER in text:
@@ -777,7 +801,8 @@ async def extract_session_signals(
     """
     targets_block = (
         "\n".join(render_target_line(t) for t in valid_targets)
-        if valid_targets else "(none)"
+        if valid_targets
+        else "(none)"
     )
     # NOT str.format: transcript text routinely contains literal { } (JSON,
     # code, f-strings) which would raise KeyError/ValueError and silently
@@ -791,10 +816,10 @@ async def extract_session_signals(
     # anchored to training time, i.e. wrong, i.e. reminders that fire on the
     # wrong day — worse than no reminder.
     prompt = (
-        EXTRACTION_USER
-        .replace("{today}", datetime.now(UTC).strftime("%Y-%m-%d"))
-        .replace("{injected_sections}",
-                 render_injected_sections(injected_sections or []))
+        EXTRACTION_USER.replace("{today}", datetime.now(UTC).strftime("%Y-%m-%d"))
+        .replace(
+            "{injected_sections}", render_injected_sections(injected_sections or [])
+        )
         .replace("{transcript}", text)
     )
     # Parse failures are stochastic (a fresh sample of the same prompt
@@ -811,10 +836,12 @@ async def extract_session_signals(
     for attempt in range(2):
         response = await client.query(
             system=system,
-            messages=[{
-                "role": "user",
-                "content": prompt,
-            }],
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt,
+                }
+            ],
             **thinking,
             **effort,
         )
@@ -875,7 +902,11 @@ def write_diary_entries(
         dt = datetime.fromisoformat(first_ts.replace("Z", "+00:00"))
         date_str = dt.strftime("%Y-%m-%d")
     except (ValueError, TypeError):
-        date_str = timestamp[:10] if len(timestamp) >= 10 else datetime.now(UTC).strftime("%Y-%m-%d")
+        date_str = (
+            timestamp[:10]
+            if len(timestamp) >= 10
+            else datetime.now(UTC).strftime("%Y-%m-%d")
+        )
 
     diary_dir.mkdir(parents=True, exist_ok=True)
     diary_file = diary_dir / f"{date_str}.md"
@@ -901,9 +932,7 @@ def write_diary_entries(
                 # generator parse on. The slice marker rides BELOW it, as a
                 # comment, so the header's shape (and the regexes reading it)
                 # are untouched.
-                f.write(
-                    f"\n## Session: {session_id} — {timestamp} — {cwd}\n\n"
-                )
+                f.write(f"\n## Session: {session_id} — {timestamp} — {cwd}\n\n")
                 if marker:
                     f.write(f"{marker}\n\n")
                 for unit in diary_units:

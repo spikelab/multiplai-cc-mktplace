@@ -144,9 +144,7 @@ def _lock_entry(path: Path) -> int | None:
     holder's own read-merge-write, i.e. milliseconds.
     """
     try:
-        fd = os.open(
-            str(path.with_suffix(".lock")), os.O_CREAT | os.O_RDWR, 0o644
-        )
+        fd = os.open(str(path.with_suffix(".lock")), os.O_CREAT | os.O_RDWR, 0o644)
     except OSError:
         return None
     try:
@@ -266,7 +264,9 @@ def record_event(data_dir: Path, hook_input: dict, kind: str) -> bool:
         return False
 
 
-def record_disposition(data_dir: Path, session_id: str, state: str, reason: str = "") -> bool:
+def record_disposition(
+    data_dir: Path, session_id: str, state: str, reason: str = ""
+) -> bool:
     """Record how a session was left: ``active | parked | done``.
 
     A **new key**, never an overload of ``last_event.kind`` or the hub's
@@ -298,10 +298,13 @@ def record_disposition(data_dir: Path, session_id: str, state: str, reason: str 
             if state != "active":
                 logger.warning(
                     "No registry entry for %s; %s disposition not recorded",
-                    session_id, state,
+                    session_id,
+                    state,
                 )
             else:
-                logger.debug("No registry entry for %s; disposition not recorded", session_id)
+                logger.debug(
+                    "No registry entry for %s; disposition not recorded", session_id
+                )
             return False
 
         lock_fd = _lock_entry(path)
@@ -312,14 +315,18 @@ def record_disposition(data_dir: Path, session_id: str, state: str, reason: str 
                 if state != "active":
                     logger.warning(
                         "Registry entry for %s unreadable under lock; "
-                        "%s disposition not recorded", session_id, state,
+                        "%s disposition not recorded",
+                        session_id,
+                        state,
                     )
                 return False
             if not isinstance(entry, dict):
                 if state != "active":
                     logger.warning(
                         "Registry entry for %s is not an object; "
-                        "%s disposition not recorded", session_id, state,
+                        "%s disposition not recorded",
+                        session_id,
+                        state,
                     )
                 return False
 
@@ -579,7 +586,8 @@ def gc_stale(
         if removed or orphans:
             logger.info(
                 "GC'd %d stale session registry entr(y/ies), %d orphaned marker/lock file(s)",
-                removed, orphans,
+                removed,
+                orphans,
             )
     except Exception:
         logger.warning("Session registry GC failed", exc_info=True)

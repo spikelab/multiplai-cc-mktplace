@@ -11,6 +11,7 @@ from lib import checkpoint as cp
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _assistant_record(
     input_tokens=1000, cache_read=0, cache_creation=0, sidechain=False, text="ok"
 ):
@@ -47,6 +48,7 @@ VALID_CHECKPOINT = "\n".join(
 # Config
 # ---------------------------------------------------------------------------
 
+
 class TestLoadConfig:
     def test_defaults(self):
         cfg = cp.load_config()
@@ -55,7 +57,9 @@ class TestLoadConfig:
         assert cfg.enabled is True
 
     def test_env_overrides(self, monkeypatch):
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_TOKENS", "50000,90000,150000")
+        monkeypatch.setenv(
+            "CLAUDE_PLUGIN_OPTION_CHECKPOINT_TOKENS", "50000,90000,150000"
+        )
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_HANDOFF_TOKENS", "150000")
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_REFRESH_TOKENS", "10000")
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_MODEL", "sonnet")
@@ -89,6 +93,7 @@ class TestLoadConfig:
 # Token reading
 # ---------------------------------------------------------------------------
 
+
 class TestReadContextTokens:
     def test_missing_file(self, tmp_path):
         assert cp.read_context_tokens(tmp_path / "nope.jsonl") == 0
@@ -96,7 +101,12 @@ class TestReadContextTokens:
     def test_sums_cache_fields(self, tmp_path):
         t = tmp_path / "t.jsonl"
         _write_transcript(
-            t, [_assistant_record(input_tokens=1_200, cache_read=140_000, cache_creation=9_000)]
+            t,
+            [
+                _assistant_record(
+                    input_tokens=1_200, cache_read=140_000, cache_creation=9_000
+                )
+            ],
         )
         assert cp.read_context_tokens(t) == 150_200
 
@@ -115,12 +125,16 @@ class TestReadContextTokens:
 
     def test_garbage_lines_skipped(self, tmp_path):
         t = tmp_path / "t.jsonl"
-        t.write_text('not json\n{"type":"weird"}\n' + json.dumps(_assistant_record(5000)) + "\n")
+        t.write_text(
+            'not json\n{"type":"weird"}\n' + json.dumps(_assistant_record(5000)) + "\n"
+        )
         assert cp.read_context_tokens(t) == 5000
 
     def test_large_file_tail_scan(self, tmp_path):
         t = tmp_path / "t.jsonl"
-        filler = [_assistant_record(input_tokens=1, text="x" * 5_000) for _ in range(200)]
+        filler = [
+            _assistant_record(input_tokens=1, text="x" * 5_000) for _ in range(200)
+        ]
         filler.append(_assistant_record(input_tokens=42_000, cache_read=8_000))
         _write_transcript(t, filler)
         assert t.stat().st_size > 512_000  # forces the tail-seek path
@@ -154,8 +168,10 @@ class TestReadContextTokens:
         records = [
             _assistant_record(input_tokens=42_000, cache_read=8_000),
             # A single line larger than _TAIL_BYTES, holding no usage record.
-            {"type": "user", "message": {"role": "user",
-                                         "content": "y" * (cp._TAIL_BYTES + 10_000)}},
+            {
+                "type": "user",
+                "message": {"role": "user", "content": "y" * (cp._TAIL_BYTES + 10_000)},
+            },
         ]
         _write_transcript(t, records)
         assert cp.read_context_tokens(t) == 50_000
@@ -175,6 +191,7 @@ class TestChildSessionGuard:
 # ---------------------------------------------------------------------------
 # Trigger decision
 # ---------------------------------------------------------------------------
+
 
 class TestTrigger:
     CFG = cp.CheckpointConfig()
@@ -217,9 +234,10 @@ class TestTrigger:
         past `refresh_tokens` would fire on its first Stop. The band trigger
         and `staleness_trigger` own the first write instead."""
         assert cp.checkpoint_trigger(60_000, {}, self.CFG) is None
-        assert cp.checkpoint_trigger(
-            60_000, {"last_checkpoint_tokens": 0}, self.CFG
-        ) is None
+        assert (
+            cp.checkpoint_trigger(60_000, {"last_checkpoint_tokens": 0}, self.CFG)
+            is None
+        )
 
     def test_second_band_crossing(self):
         state = {"last_band_idx": 1, "last_checkpoint_tokens": 105_000}
@@ -247,6 +265,7 @@ class TestWriterMarker:
         marker = cp.claim_writer(tmp_path, "s1")
         old = time.time() - 3600
         import os
+
         os.utime(marker, (old, old))
         assert cp.writer_inflight(tmp_path, "s1") is False
 
@@ -254,6 +273,7 @@ class TestWriterMarker:
 # ---------------------------------------------------------------------------
 # Pending markers
 # ---------------------------------------------------------------------------
+
 
 class TestPendingMarker:
     CFG = cp.CheckpointConfig()
@@ -272,9 +292,7 @@ class TestPendingMarker:
         cwd = str(tmp_path / "myproj")
         marker = cp.write_pending_marker(tmp_path, cwd, "old-sess", 210_000)
         payload = json.loads(marker.read_text())
-        payload["created_at"] = (
-            datetime.now(UTC) - timedelta(hours=48)
-        ).isoformat()
+        payload["created_at"] = (datetime.now(UTC) - timedelta(hours=48)).isoformat()
         marker.write_text(json.dumps(payload))
         assert cp.consume_pending_marker(tmp_path, cwd, "new-sess", self.CFG) is None
         assert not marker.exists()
@@ -385,7 +403,9 @@ class TestAutoCompactSteering:
         monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
         assert cp.autocompact_trigger_tokens() is None
 
-    def test_settings_autocompact_false_wins_via_home_fallback(self, monkeypatch, tmp_path):
+    def test_settings_autocompact_false_wins_via_home_fallback(
+        self, monkeypatch, tmp_path
+    ):
         """Vanilla Claude Code never sets CLAUDE_CONFIG_DIR: the user-level
         settings file is ~/.claude/settings.json and the disable must still
         be seen there (the old code returned False whenever the var was
@@ -396,9 +416,7 @@ class TestAutoCompactSteering:
         monkeypatch.setenv("HOME", str(tmp_path))
         cfg = tmp_path / ".claude"
         cfg.mkdir()
-        (cfg / "settings.json").write_text(
-            json.dumps({"autoCompactEnabled": False})
-        )
+        (cfg / "settings.json").write_text(json.dumps({"autoCompactEnabled": False}))
         assert cp.autocompact_trigger_tokens() is None
 
     def test_settings_autocompact_true_is_not_a_disable(self, monkeypatch, tmp_path):
@@ -421,11 +439,15 @@ class TestAutoCompactSteering:
 
 class TestResetSessionCounters:
     def test_resets_bands_keeps_ts(self, tmp_path):
-        cp.save_state(tmp_path, "s1", {
-            "last_band_idx": 2,
-            "last_checkpoint_tokens": 210_000,
-            "last_checkpoint_ts": "2026-07-06T12:00:00+00:00",
-        })
+        cp.save_state(
+            tmp_path,
+            "s1",
+            {
+                "last_band_idx": 2,
+                "last_checkpoint_tokens": 210_000,
+                "last_checkpoint_ts": "2026-07-06T12:00:00+00:00",
+            },
+        )
         (cp.session_dir(tmp_path, "s1") / "nudge.json").write_text("{}")
         cp.reset_session_counters(tmp_path, "s1")
         state = cp.load_state(tmp_path, "s1")
@@ -438,6 +460,7 @@ class TestResetSessionCounters:
 # ---------------------------------------------------------------------------
 # Validation & rebuild seed
 # ---------------------------------------------------------------------------
+
 
 class TestValidationAndSeed:
     def test_valid_checkpoint(self):

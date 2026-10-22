@@ -77,7 +77,9 @@ def review_slugs(repo_slug: str, prs: list[str | None]) -> set[str]:
 def review_spend(ledger: Path, slugs: set[str]) -> tuple[float, bool]:
     """(USD, complete) of the reviews of the PRs named by *slugs*."""
     try:
-        text = Path(ledger).read_text(encoding="utf-8", errors="replace")   # one bad line is skipped below
+        text = Path(ledger).read_text(
+            encoding="utf-8", errors="replace"
+        )  # one bad line is skipped below
     except FileNotFoundError:
         return 0.0, True
     except OSError as e:
@@ -112,8 +114,11 @@ def review_spend(ledger: Path, slugs: set[str]) -> tuple[float, bool]:
             value = run.get("cost_usd")
             ok = isinstance(value, (int, float)) and not isinstance(value, bool)
             cost[run_key] = float(value) if ok else None
-    complete = (all(e == "finished" for e in last_event.values()) and None not in cost.values()
-                and all(s.accounted() for s in runs.values()))
+    complete = (
+        all(e == "finished" for e in last_event.values())
+        and None not in cost.values()
+        and all(s.accounted() for s in runs.values())
+    )
     return sum(v for v in cost.values() if v is not None), complete
 
 
@@ -128,8 +133,10 @@ class _Unaccounted:
     clock starts."""
 
     def __init__(self) -> None:
-        self.waiting = False          # one is unaccounted; no later run has started yet
-        self.before: str | None = None  # the `started` line after the first unaccounted run
+        self.waiting = False  # one is unaccounted; no later run has started yet
+        self.before: str | None = (
+            None  # the `started` line after the first unaccounted run
+        )
         self.lost = False
 
     def started(self, after_a_kill: bool, at: object) -> None:
@@ -143,7 +150,9 @@ class _Unaccounted:
             self.waiting = True
 
     def finished(self, started_at: object) -> None:
-        if self.waiting or (self.before is not None and not _earlier(started_at, self.before)):
+        if self.waiting or (
+            self.before is not None and not _earlier(started_at, self.before)
+        ):
             self.lost = True
         self.waiting, self.before = False, None
 
@@ -154,7 +163,8 @@ class _Unaccounted:
 def _earlier(a: object, b: object) -> bool:
     """True when ISO time *a* is before *b*; False when either does not parse."""
     try:
-        return datetime.fromisoformat(str(a).replace("Z", "+00:00")) < datetime.fromisoformat(
-            str(b).replace("Z", "+00:00"))
+        return datetime.fromisoformat(
+            str(a).replace("Z", "+00:00")
+        ) < datetime.fromisoformat(str(b).replace("Z", "+00:00"))
     except ValueError:
         return False

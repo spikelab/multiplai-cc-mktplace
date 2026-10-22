@@ -57,23 +57,50 @@ class InterviewAnswers(BaseModel):
 
 
 async def ask_questions(run: Run, inputs: str, *, has_prd: bool) -> list[str]:
-    prompt = QUESTIONER_PROMPT.format(notice=UNTRUSTED_NOTICE, inputs=inputs, max_questions=MAX_QUESTIONS,
-                                      prd_rule=QUESTIONER_PRD_RULE if has_prd else "")
-    result = await sdk.agent_structured(prompt, InterviewQuestions, config=run.config, step="interview",
-                                        label="interview:questions", cwd=str(run.config.project_dir))
+    prompt = QUESTIONER_PROMPT.format(
+        notice=UNTRUSTED_NOTICE,
+        inputs=inputs,
+        max_questions=MAX_QUESTIONS,
+        prd_rule=QUESTIONER_PRD_RULE if has_prd else "",
+    )
+    result = await sdk.agent_structured(
+        prompt,
+        InterviewQuestions,
+        config=run.config,
+        step="interview",
+        label="interview:questions",
+        cwd=str(run.config.project_dir),
+    )
     return [q.strip() for q in result.questions if q and q.strip()][:MAX_QUESTIONS]
 
 
-async def answer_questions(run: Run, inputs: str, questions: list[str], *, has_prd: bool) -> list[InterviewAnswer]:
+async def answer_questions(
+    run: Run, inputs: str, questions: list[str], *, has_prd: bool
+) -> list[InterviewAnswer]:
     numbered = "\n".join(f"{i}. {q}" for i, q in enumerate(questions, 1))
     if has_prd:
-        prompt = ANSWERER_PRD_PROMPT.format(notice=UNTRUSTED_NOTICE, inputs=inputs, questions=numbered)
-        result = await sdk.text_structured(prompt, InterviewAnswers, config=run.config, step="interview",
-                                           label="interview:answers")
+        prompt = ANSWERER_PRD_PROMPT.format(
+            notice=UNTRUSTED_NOTICE, inputs=inputs, questions=numbered
+        )
+        result = await sdk.text_structured(
+            prompt,
+            InterviewAnswers,
+            config=run.config,
+            step="interview",
+            label="interview:answers",
+        )
     else:
-        prompt = ANSWERER_PROMPT.format(notice=UNTRUSTED_NOTICE, inputs=inputs, questions=numbered)
-        result = await sdk.agent_structured(prompt, InterviewAnswers, config=run.config, step="interview",
-                                            label="interview:answers", cwd=str(run.config.project_dir))
+        prompt = ANSWERER_PROMPT.format(
+            notice=UNTRUSTED_NOTICE, inputs=inputs, questions=numbered
+        )
+        result = await sdk.agent_structured(
+            prompt,
+            InterviewAnswers,
+            config=run.config,
+            step="interview",
+            label="interview:answers",
+            cwd=str(run.config.project_dir),
+        )
     return result.answers
 
 
@@ -91,7 +118,9 @@ def _write(run: Run, text: str) -> None:
     run.state.interview_waiting = False
     run.state.interview_done = True
     run.save()
-    run.progress("INTERVIEW", f"Interview saved to {run.config.change_dir / 'interview.md'}")
+    run.progress(
+        "INTERVIEW", f"Interview saved to {run.config.change_dir / 'interview.md'}"
+    )
     print("PHASE:INTERVIEW:COMPLETE", flush=True)
 
 
@@ -114,24 +143,41 @@ async def run_interview(run: Run, *, replies_file: str = "") -> None:
         inputs = intake.interview_inputs(change_dir, summary, contexts)
         try:
             questions = await ask_questions(run, inputs, has_prd=has_prd)
-            answers = await answer_questions(run, inputs, questions, has_prd=has_prd) if questions else []
+            answers = (
+                await answer_questions(run, inputs, questions, has_prd=has_prd)
+                if questions
+                else []
+            )
         except (sdk.BudgetExceededError, sdk.RepoTrustError):
             raise
         except Exception as e:
             # Best effort, as in buildme: the spec is still written from the
             # inputs — only the Q&A is missing.
-            log.warning("FAILED phase=INTERVIEW reason=%s — continuing without the self-interview", e)
+            log.warning(
+                "FAILED phase=INTERVIEW reason=%s — continuing without the self-interview",
+                e,
+            )
             run.progress("INTERVIEW", f"Self-interview failed (non-fatal): {e}")
             questions, answers = [], []
-        _write(run, intake.render_interview(change_dir, summary=summary, contexts=contexts,
-                                            questions=questions, answers=answers))
+        _write(
+            run,
+            intake.render_interview(
+                change_dir,
+                summary=summary,
+                contexts=contexts,
+                questions=questions,
+                answers=answers,
+            ),
+        )
         return
 
     # user: the wrapper ran the interview and passes its summary.
     _write(run, intake.render_interview(change_dir, summary=summary, contexts=contexts))
 
 
-async def _ticket_interview(run: Run, contexts, summary: str, replies_file: str, has_prd: bool) -> None:
+async def _ticket_interview(
+    run: Run, contexts, summary: str, replies_file: str, has_prd: bool
+) -> None:
     change_dir = run.config.change_dir
     questions_path = change_dir / QUESTIONS_FILE
     replies = ""
@@ -142,10 +188,19 @@ async def _ticket_interview(run: Run, contexts, summary: str, replies_file: str,
             log.warning("Interview replies file not found: %s", replies_file)
 
     if replies and questions_path.is_file():
-        _write(run, intake.render_interview(
-            change_dir, summary=summary, contexts=contexts, questions=intake.read_questions(questions_path),
-            replies=replies, replies_source=run.state.options.ticket_url or run.state.options.ticket_ref
-            or "ticket replies"))
+        _write(
+            run,
+            intake.render_interview(
+                change_dir,
+                summary=summary,
+                contexts=contexts,
+                questions=intake.read_questions(questions_path),
+                replies=replies,
+                replies_source=run.state.options.ticket_url
+                or run.state.options.ticket_ref
+                or "ticket replies",
+            ),
+        )
         return
 
     if questions_path.is_file():
@@ -153,14 +208,21 @@ async def _ticket_interview(run: Run, contexts, summary: str, replies_file: str,
         print(f"{MARKER_INTERVIEW_WAITING}:{questions_path}", flush=True)
         raise Stop(EXIT_WAITING, "waiting for the ticket replies")
 
-    questions = await ask_questions(run, intake.interview_inputs(change_dir, summary, contexts), has_prd=has_prd)
+    questions = await ask_questions(
+        run, intake.interview_inputs(change_dir, summary, contexts), has_prd=has_prd
+    )
     if not questions:
         log.info("phase=INTERVIEW mode=ticket questions=0 — continuing without waiting")
-        _write(run, intake.render_interview(change_dir, summary=summary, contexts=contexts))
+        _write(
+            run, intake.render_interview(change_dir, summary=summary, contexts=contexts)
+        )
         return
     intake.write_questions(questions_path, questions, run.state.options.ticket_ref)
     run.state.interview_waiting = True
     run.save()
-    run.progress("INTERVIEW", f"Waiting for replies on {run.state.options.ticket_ref}; questions in {questions_path}")
+    run.progress(
+        "INTERVIEW",
+        f"Waiting for replies on {run.state.options.ticket_ref}; questions in {questions_path}",
+    )
     print(f"{MARKER_INTERVIEW_WAITING}:{questions_path}", flush=True)
     raise Stop(EXIT_WAITING, "waiting for the ticket replies")

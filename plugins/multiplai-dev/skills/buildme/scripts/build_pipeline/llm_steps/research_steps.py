@@ -25,10 +25,15 @@ def specs_summary(change_dir: Path) -> str:
     """What the decision reads: the change's proposal, use cases and requirements."""
     change_dir = Path(change_dir)
     parts = []
-    for path in [change_dir / "proposal.md", change_dir / "use-cases.md",
-                 *sorted((change_dir / "requirements").glob("*.md"))]:
+    for path in [
+        change_dir / "proposal.md",
+        change_dir / "use-cases.md",
+        *sorted((change_dir / "requirements").glob("*.md")),
+    ]:
         if path.is_file():
-            parts.append(f"### {path.relative_to(change_dir).as_posix()}\n{path.read_text()}")
+            parts.append(
+                f"### {path.relative_to(change_dir).as_posix()}\n{path.read_text()}"
+            )
     return "\n\n".join(parts)
 
 
@@ -36,7 +41,8 @@ async def decide_research(config, summary: str, *, call=None) -> ResearchDecisio
     """One toolless call: is outside research needed, and why."""
     call = call or llm_call_structured
     prompt = RESEARCH_DECISION_PROMPT.format(
-        notice=UNTRUSTED_NOTICE, summary=summary or "(no specs)",
+        notice=UNTRUSTED_NOTICE,
+        summary=summary or "(no specs)",
     )
     return await call(
         prompt,

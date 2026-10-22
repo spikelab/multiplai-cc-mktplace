@@ -6,18 +6,27 @@ from code_facts.prompts import UNTRUSTED_RULES, citation_rules, explore_unit  # 
 from code_facts.prompts import schema_json as _schema
 
 # Every path an agent sees starts with the repository key (see models.py).
-WS_PATH_RULE = ("- `path` is the path as given to you: it starts with the repository name, "
-                "e.g. `DolceEngine/DolceChannex/urls.py`.")
+WS_PATH_RULE = (
+    "- `path` is the path as given to you: it starts with the repository name, "
+    "e.g. `DolceEngine/DolceChannex/urls.py`."
+)
 CITATION_RULES = citation_rules(WS_PATH_RULE)
 
 
-def explore_boundary(group: str, name: str, entries: list[tuple[str, str]], schema,
-                     missing: list[str] | None = None) -> str:
+def explore_boundary(
+    group: str,
+    name: str,
+    entries: list[tuple[str, str]],
+    schema,
+    missing: list[str] | None = None,
+) -> str:
     blocks = "\n\n".join(f"[{key}] {head}" for key, head in entries)
     focus = ""
     if missing:
-        focus = ("\nAn earlier pass left these entries with no fact that passed the checks. Return a cited "
-                 "fact for each:\n" + "\n".join(f"- {m}" for m in missing) + "\n")
+        focus = (
+            "\nAn earlier pass left these entries with no fact that passed the checks. Return a cited "
+            "fact for each:\n" + "\n".join(f"- {m}" for m in missing) + "\n"
+        )
     what = {
         "inbound": f"places OUTSIDE `{name}` that use it",
         "outbound": f"places where `{name}` calls out: other apps' modules and external HTTP APIs",
@@ -46,12 +55,20 @@ Schema:
 Answer with ONE JSON object and nothing after it."""
 
 
-def docs_resource(name: str, resource: str, api_paths: list[str], code_facts: list[str],
-                  pages: list[tuple[str, str]], schema) -> str:
-    facts = "\n".join(f"- {f}" for f in code_facts) or "- (no code facts for this resource)"
+def docs_resource(
+    name: str,
+    resource: str,
+    api_paths: list[str],
+    code_facts: list[str],
+    pages: list[tuple[str, str]],
+    schema,
+) -> str:
+    facts = (
+        "\n".join(f"- {f}" for f in code_facts) or "- (no code facts for this resource)"
+    )
     page_list = "\n".join(f"- {url} -> file `{fname}`" for url, fname in pages)
     return f"""You are linking vendor documentation to the code of `{name}`, for a new engineer.
-Resource: `{resource}`. The code calls these API paths: {', '.join(api_paths)}.
+Resource: `{resource}`. The code calls these API paths: {", ".join(api_paths)}.
 
 What the code does with them (each fact was checked against the code; ids in brackets):
 {facts}
@@ -106,13 +123,26 @@ Writing rules (a program checks every sentence, example, box and key; what fails
 - Use only what the material says. Do not use the word "think"."""
 
 
-def write_section(name: str, title: str, brief: str, material: str, schema, failures: list[str] | None = None,
-                  previous: list[str] | None = None, rules: str = WRITE_RULES) -> str:
+def write_section(
+    name: str,
+    title: str,
+    brief: str,
+    material: str,
+    schema,
+    failures: list[str] | None = None,
+    previous: list[str] | None = None,
+    rules: str = WRITE_RULES,
+) -> str:
     redo = ""
     if failures and previous:
-        redo = ("\nYour previous paragraphs failed these checks; rewrite them so they pass, using only the "
-                "material below:\n" + "\n".join(f"- {f}" for f in failures) + "\n\nPrevious paragraphs:\n"
-                + "\n\n".join(previous) + "\n")
+        redo = (
+            "\nYour previous paragraphs failed these checks; rewrite them so they pass, using only the "
+            "material below:\n"
+            + "\n".join(f"- {f}" for f in failures)
+            + "\n\nPrevious paragraphs:\n"
+            + "\n\n".join(previous)
+            + "\n"
+        )
     return f"""You are writing the section "{title}" of a walkthrough of `{name}`.
 {brief}
 
@@ -129,7 +159,6 @@ Schema:
 {_schema(schema)}
 
 Answer with ONE JSON object and nothing after it."""
-
 
 
 # What each structured section of the explainer asks for. The schema follows in the prompt.
@@ -170,13 +199,26 @@ or defines it.""",
 }
 
 
-def write_structured(name: str, kind: str, title: str, brief: str, material: str, schema,
-                     failures: list[str] | None = None, previous: str | None = None) -> str:
+def write_structured(
+    name: str,
+    kind: str,
+    title: str,
+    brief: str,
+    material: str,
+    schema,
+    failures: list[str] | None = None,
+    previous: str | None = None,
+) -> str:
     redo = ""
     if failures and previous:
-        redo = ("\nYour previous answer failed these checks. Return the whole section again, fixed, using only "
-                "the material below:\n" + "\n".join(f"- {f}" for f in failures[:60]) + "\n\nPrevious answer:\n"
-                + previous[:20000] + "\n")
+        redo = (
+            "\nYour previous answer failed these checks. Return the whole section again, fixed, using only "
+            "the material below:\n"
+            + "\n".join(f"- {f}" for f in failures[:60])
+            + "\n\nPrevious answer:\n"
+            + previous[:20000]
+            + "\n"
+        )
     return f"""You are writing the section "{title}" of a friendly explainer of `{name}`, for a reader new to it.
 {brief}
 

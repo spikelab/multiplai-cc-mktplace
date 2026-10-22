@@ -39,8 +39,9 @@ def findings_path(tmp_path, fixture_repo) -> Path:
     at the fixture repo built for this run."""
     repo, base, head = fixture_repo
     data = json.loads(FIXTURE.read_text(encoding="utf-8"))
-    assert (data["target"]["base_sha"], data["target"]["head_sha"]) == (base, head), \
+    assert (data["target"]["base_sha"], data["target"]["head_sha"]) == (base, head), (
         "fixture_repo.py no longer produces the shas the fixture names"
+    )
     data["target"]["repo_path"] = str(repo)
     review = tmp_path / "review"
     review.mkdir()
@@ -83,8 +84,16 @@ class Live:
     def slug(self) -> str:
         return next(iter(self.viewer.targets))
 
-    def request(self, method: str, route: str, body=None, *, token: str | None = "",
-                headers: dict | None = None, ctype: str = "application/json"):
+    def request(
+        self,
+        method: str,
+        route: str,
+        body=None,
+        *,
+        token: str | None = "",
+        headers: dict | None = None,
+        ctype: str = "application/json",
+    ):
         """(status, parsed json or raw bytes). token="" means use the real one."""
         data = None
         hdrs = dict(headers or {})
@@ -95,8 +104,12 @@ class Live:
             token = self.token
         if token is not None:
             hdrs["X-Review-Token"] = token
-        req = urllib.request.Request(f"http://127.0.0.1:{self.port}{route}", data=data,
-                                     method=method, headers=hdrs)
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{self.port}{route}",
+            data=data,
+            method=method,
+            headers=hdrs,
+        )
         try:
             with urllib.request.urlopen(req, timeout=5) as resp:
                 status, raw = resp.status, resp.read()
@@ -114,12 +127,19 @@ def start_live(findings_path):
 
     started: list[Live] = []
 
-    def _start(*, idle: float = 0, session_id: str = "sess-A", path: Path | None = None) -> Live:
+    def _start(
+        *, idle: float = 0, session_id: str = "sess-A", path: Path | None = None
+    ) -> Live:
         from review_viewer.models import load_findings
+
         fpath = path or findings_path
         ff = load_findings(fpath)
-        viewer = server.build_viewer([(ff, fpath.parent / "viewer")], agent="Claude Test",
-                                     session_id=session_id, idle_minutes=idle)
+        viewer = server.build_viewer(
+            [(ff, fpath.parent / "viewer")],
+            agent="Claude Test",
+            session_id=session_id,
+            idle_minutes=idle,
+        )
         port = free_port()
         assert server.bind(viewer, "127.0.0.1", port, 1) is not None
         server.publish(viewer, netinfo.display_urls(port))
@@ -155,5 +175,6 @@ _SESSION_DEFAULT_VARS = (
 def _no_session_defaults(monkeypatch):
     for key in _SESSION_DEFAULT_VARS:
         monkeypatch.delenv(key, raising=False)
-    monkeypatch.setattr("multiplai_core.session.load_multiplai_conf",
-                        lambda: {"_sections": {}})
+    monkeypatch.setattr(
+        "multiplai_core.session.load_multiplai_conf", lambda: {"_sections": {}}
+    )

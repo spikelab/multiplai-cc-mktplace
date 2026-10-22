@@ -87,7 +87,11 @@ def _pending(text):
 
 def test_applied_update_moves_to_processed():
     out = move_to_processed(
-        PROPOSAL, ("update", "testing.md", 1), "applied", target="testing.md", ts="2026-07-20T10:00:00Z"
+        PROPOSAL,
+        ("update", "testing.md", 1),
+        "applied",
+        target="testing.md",
+        ts="2026-07-20T10:00:00Z",
     )
     assert ("update", "testing.md", 1) not in _pending(out)
     # everything else stays pending
@@ -99,7 +103,9 @@ def test_applied_update_moves_to_processed():
 
 
 def test_rejected_item_annotation():
-    out = move_to_processed(PROPOSAL, ("update", "testing.md", 2), "rejected", ts="2026-07-20T10:00:00Z")
+    out = move_to_processed(
+        PROPOSAL, ("update", "testing.md", 2), "rejected", ts="2026-07-20T10:00:00Z"
+    )
     processed = out.split(PROCESSED_HEADING)[1]
     assert "**Processed:** rejected · 2026-07-20T10:00:00Z" in processed
     assert "→" not in processed.split("\n\n")[1]  # no target arrow on a reject line
@@ -107,7 +113,9 @@ def test_rejected_item_annotation():
 
 def test_duplicate_index_targets_the_right_group():
     # index 2 exists in both testing.md and build-tools.md
-    out = move_to_processed(PROPOSAL, ("update", "build-tools.md", 2), "applied", target="build-tools.md")
+    out = move_to_processed(
+        PROPOSAL, ("update", "build-tools.md", 2), "applied", target="build-tools.md"
+    )
     assert ("update", "build-tools.md", 2) not in _pending(out)
     assert ("update", "testing.md", 2) in _pending(out)  # the other #2 untouched
     assert "bun install" in out.split(PROCESSED_HEADING)[1]
@@ -120,7 +128,9 @@ def test_action_item_moves_to_processed():
 
 
 def test_move_is_idempotent():
-    out = move_to_processed(PROPOSAL, ("update", "testing.md", 1), "applied", target="testing.md")
+    out = move_to_processed(
+        PROPOSAL, ("update", "testing.md", 1), "applied", target="testing.md"
+    )
     # a second move of the same item finds nothing pending → unchanged
     assert move_to_processed(out, ("update", "testing.md", 1), "applied") == out
 
@@ -131,7 +141,9 @@ def test_missing_item_is_noop():
 
 
 def test_multiple_moves_accumulate_under_one_heading():
-    out = move_to_processed(PROPOSAL, ("update", "testing.md", 1), "applied", target="testing.md")
+    out = move_to_processed(
+        PROPOSAL, ("update", "testing.md", 1), "applied", target="testing.md"
+    )
     out = move_to_processed(out, ("action", 1), "rejected")
     assert out.count(PROCESSED_HEADING) == 1  # single Processed section
     processed = out.split(PROCESSED_HEADING)[1]
@@ -156,7 +168,9 @@ def test_has_pending_items():
 def test_mark_processed_writes_atomically(tmp_path):
     path = tmp_path / "processed-learnings-2026-07-20.md"
     path.write_text(PROPOSAL)
-    changed = mark_processed(path, ("update", "testing.md", 1), "applied", target="testing.md")
+    changed = mark_processed(
+        path, ("update", "testing.md", 1), "applied", target="testing.md"
+    )
     assert changed is True
     assert "**Processed:** applied → testing.md" in path.read_text()
     assert not (tmp_path / (path.name + ".tmp")).exists()  # temp cleaned up by rename
@@ -233,7 +247,9 @@ _Each of these learnings is about a line that already exists in memory._
 
 def test_conflict_moves_to_processed_keyed_by_file_and_line():
     out = move_to_processed(
-        CONFLICT_PROPOSAL, ("conflict", "dolcebot.md", 453), "rejected",
+        CONFLICT_PROPOSAL,
+        ("conflict", "dolcebot.md", 453),
+        "rejected",
         ts="2026-08-16T00:00:00Z",
     )
     assert PROCESSED_HEADING in out
@@ -249,7 +265,9 @@ def test_conflict_moves_to_processed_keyed_by_file_and_line():
 def test_conflict_line_number_alone_is_not_enough():
     """Two files can each have a conflict at the same line number."""
     out = move_to_processed(
-        CONFLICT_PROPOSAL, ("conflict", "prompt-eng-guide.md", 453), "rejected",
+        CONFLICT_PROPOSAL,
+        ("conflict", "prompt-eng-guide.md", 453),
+        "rejected",
         ts="2026-08-16T00:00:00Z",
     )
     assert out == CONFLICT_PROPOSAL
@@ -257,11 +275,15 @@ def test_conflict_line_number_alone_is_not_enough():
 
 def test_conflict_marking_is_idempotent():
     once = move_to_processed(
-        CONFLICT_PROPOSAL, ("conflict", "dolcebot.md", 453), "applied",
+        CONFLICT_PROPOSAL,
+        ("conflict", "dolcebot.md", 453),
+        "applied",
         ts="2026-08-16T00:00:00Z",
     )
     twice = move_to_processed(
-        once, ("conflict", "dolcebot.md", 453), "applied",
+        once,
+        ("conflict", "dolcebot.md", 453),
+        "applied",
         ts="2026-08-16T00:00:00Z",
     )
     assert twice == once

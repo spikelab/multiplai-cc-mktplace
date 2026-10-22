@@ -81,8 +81,13 @@ def main(argv: list[str] | None = None) -> None:
         status = "dry-run" if r.dry_run else "complete"
         logger.info(
             "%s: %s (sources=%d, generated=%d, skipped=%d, pruned=%d, errors=%d)",
-            r.generator, status, r.total_sources, r.generated,
-            r.skipped, r.pruned, len(r.errors),
+            r.generator,
+            status,
+            r.total_sources,
+            r.generated,
+            r.skipped,
+            r.pruned,
+            len(r.errors),
         )
         if r.errors:
             has_errors = True
@@ -96,7 +101,8 @@ def main(argv: list[str] | None = None) -> None:
     rebuilt = sorted(r.generator for r in results)
     mode = "dry-run" if args.dry_run else "rebuilt"
     log_event(
-        "catalog", "rebuild",
+        "catalog",
+        "rebuild",
         f"{mode} {len(results)} catalog(s) ({total_generated} entries, "
         f"{total_pruned} pruned) in {elapsed_ms}ms"
         + (" — with errors" if has_errors else ""),

@@ -58,7 +58,9 @@ class _CallFailed(Exception):
 async def _call(prompt: str, schema, *, budget_label: str = "", **kwargs):
     """Review's call function under one budget label, `paths`, whatever code_facts names the task."""
     try:
-        return await sdk.agent_call_structured(prompt, schema, budget_label=BUDGET_LABEL, **kwargs)
+        return await sdk.agent_call_structured(
+            prompt, schema, budget_label=BUDGET_LABEL, **kwargs
+        )
     except (sdk.RepoTrustError, sdk.UsageLimitError):
         raise
     except sdk.AgentCallError as e:
@@ -77,7 +79,9 @@ def tree_lines(state: ReviewState, ctx: RunContext) -> dict[str, list[int]]:
     out: dict[str, list[int]] = {}
     for rel in state.target.files:
         try:
-            n = _line_count((ctx.snapshot / rel).read_text(encoding="utf-8", errors="replace"))
+            n = _line_count(
+                (ctx.snapshot / rel).read_text(encoding="utf-8", errors="replace")
+            )
         except OSError as e:
             log.warning("paths: cannot read %s in the snapshot: %s", rel, e)
             continue
@@ -106,22 +110,43 @@ async def run_paths(state: ReviewState, ctx: RunContext) -> ReviewState:
     cache = ctx.target_dir / PATHS_CACHE if ctx.target_dir is not None else None
     try:
         result = await map_paths(
-            root=ctx.snapshot, commit=t.head_sha, resolve=resolver(t), call=_call, changed_lines=changed,
-            cap=PATH_CAP, trace_limit=TRACE_LIMIT, concurrency=cfg.concurrency, cache_dir=cache,
+            root=ctx.snapshot,
+            commit=t.head_sha,
+            resolve=resolver(t),
+            call=_call,
+            changed_lines=changed,
+            cap=PATH_CAP,
+            trace_limit=TRACE_LIMIT,
+            concurrency=cfg.concurrency,
+            cache_dir=cache,
             recoverable=(_CallFailed,),
-            call_kwargs={"model": cfg.finder_model, "effort": cfg.effort, "max_turns": cfg.max_turns},
+            call_kwargs={
+                "model": cfg.finder_model,
+                "effort": cfg.effort,
+                "max_turns": cfg.max_turns,
+            },
             progress=ctx.progress.line if ctx.progress else None,
         )
         if ctx.target_dir is not None:
             write_paths_file(result, ctx.target_dir / PATHS_FILE)
     except (sdk.RepoTrustError, sdk.UsageLimitError, budget.BudgetExceededError):
         raise
-    except Exception as e:  # a failed mapping must not stop the review; find runs without paths
+    except (
+        Exception
+    ) as e:  # a failed mapping must not stop the review; find runs without paths
         log.exception("paths: mapping failed")
         message = (str(e).splitlines() or [type(e).__name__])[0][:300]
         state.paths_status, state.paths_failure, state.path_ids = "failed", message, []
-        add_coverage(state, CoverageRecord(stage="paths", subject="mapping", level="error",
-                                           reason="mapping-failed", detail=message))
+        add_coverage(
+            state,
+            CoverageRecord(
+                stage="paths",
+                subject="mapping",
+                level="error",
+                reason="mapping-failed",
+                detail=message,
+            ),
+        )
         ctx.counts = {"paths": 0, "failed": 1}
         state.stage = "paths"
         return state
@@ -130,24 +155,48 @@ async def run_paths(state: ReviewState, ctx: RunContext) -> ReviewState:
         add_coverage(state, classify_drop(drop))
     ids: list[str] = []
     for path in result.paths:
-        if path.id in ids:  # paths.v1 numbers paths p1..pN, so this only guards a future schema
-            add_coverage(state, CoverageRecord(stage="paths", subject=path.id, level="error",
-                                               reason="duplicate-id"))
+        if (
+            path.id in ids
+        ):  # paths.v1 numbers paths p1..pN, so this only guards a future schema
+            add_coverage(
+                state,
+                CoverageRecord(
+                    stage="paths", subject=path.id, level="error", reason="duplicate-id"
+                ),
+            )
             continue
         ids.append(path.id)
         if path.stops_at is not None:
             add_coverage(state, classify_broken(path))
     if result.fallback.status == "failed":
-        add_coverage(state, CoverageRecord(stage="paths", subject="fallback", level="error",
-                                           reason="fallback-failed", detail=result.fallback.reason or ""))
+        add_coverage(
+            state,
+            CoverageRecord(
+                stage="paths",
+                subject="fallback",
+                level="error",
+                reason="fallback-failed",
+                detail=result.fallback.reason or "",
+            ),
+        )
     state.path_ids = ids
     if ids:
         state.paths_status = "ok"
     else:
-        state.paths_status, state.paths_failure = "empty", _empty_reason(len(result.dropped))
-        add_coverage(state, CoverageRecord(stage="paths", subject="mapping", level="error",
-                                           reason="mapping-empty"))
-    ctx.counts = {"paths": len(ids), "dropped": len(result.dropped),
-                  "broken": sum(1 for p in result.paths if p.stops_at is not None)}
+        state.paths_status, state.paths_failure = (
+            "empty",
+            _empty_reason(len(result.dropped)),
+        )
+        add_coverage(
+            state,
+            CoverageRecord(
+                stage="paths", subject="mapping", level="error", reason="mapping-empty"
+            ),
+        )
+    ctx.counts = {
+        "paths": len(ids),
+        "dropped": len(result.dropped),
+        "broken": sum(1 for p in result.paths if p.stops_at is not None),
+    }
     state.stage = "paths"
     return state

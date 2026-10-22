@@ -71,18 +71,26 @@ class TestSetupScriptImports:
 
     @pytest.fixture(autouse=True)
     def load_sources(self):
-        self.check_src = SETUP_CHECK_SCRIPT.read_text() if SETUP_CHECK_SCRIPT.is_file() else ""
-        self.write_src = SETUP_WRITE_SCRIPT.read_text() if SETUP_WRITE_SCRIPT.is_file() else ""
+        self.check_src = (
+            SETUP_CHECK_SCRIPT.read_text() if SETUP_CHECK_SCRIPT.is_file() else ""
+        )
+        self.write_src = (
+            SETUP_WRITE_SCRIPT.read_text() if SETUP_WRITE_SCRIPT.is_file() else ""
+        )
 
     def test_check_imports_paths(self):
         """setup_check.py must import from multiplai_core.paths for path resolution."""
-        assert re.search(r"from\s+multiplai_core\.paths\s+import|import\s+multiplai_core\.paths", self.check_src), \
-            "setup_check.py must import path resolver from multiplai_core.paths"
+        assert re.search(
+            r"from\s+multiplai_core\.paths\s+import|import\s+multiplai_core\.paths",
+            self.check_src,
+        ), "setup_check.py must import path resolver from multiplai_core.paths"
 
     def test_write_imports_paths(self):
         """setup_write.py must import from multiplai_core.paths for path resolution."""
-        assert re.search(r"from\s+multiplai_core\.paths\s+import|import\s+multiplai_core\.paths", self.write_src), \
-            "setup_write.py must import path resolver from multiplai_core.paths"
+        assert re.search(
+            r"from\s+multiplai_core\.paths\s+import|import\s+multiplai_core\.paths",
+            self.write_src,
+        ), "setup_write.py must import path resolver from multiplai_core.paths"
 
     def test_check_no_hardcoded_paths(self):
         """setup_check.py must not contain hardcoded home directory paths."""
@@ -123,25 +131,29 @@ class TestSetupSkillReferencesScripts:
 
     def test_references_setup_check(self):
         """Setup skill must reference setup_check.py for checking existing files."""
-        assert "setup_check" in self.text, \
+        assert "setup_check" in self.text, (
             "setup.md must reference setup_check.py for existence checks"
+        )
 
     def test_references_setup_write(self):
         """Setup skill must reference setup_write.py for writing memory files."""
-        assert "setup_write" in self.text, \
+        assert "setup_write" in self.text, (
             "setup.md must reference setup_write.py for writing files"
+        )
 
     def test_references_scripts_dir(self):
         """Setup skill must reference scripts/ directory (not inline file ops)."""
-        assert re.search(r"scripts/", self.text), \
+        assert re.search(r"scripts/", self.text), (
             "setup.md must invoke scripts via scripts/ directory, not inline operations"
+        )
 
     def test_no_direct_file_write_instructions(self):
         """Setup skill prompt must not instruct inline file creation — delegate to scripts."""
         # Skill should not contain raw `Write` or file-creation commands
         # It should delegate to scripts/ for all file I/O
-        assert not re.search(r"(?i)write\s+tool|Write\s+file|cat\s+>|echo\s+>", self.text), \
-            "setup.md should delegate file I/O to scripts, not use inline tools"
+        assert not re.search(
+            r"(?i)write\s+tool|Write\s+file|cat\s+>|echo\s+>", self.text
+        ), "setup.md should delegate file I/O to scripts, not use inline tools"
 
 
 # ===================================================================
@@ -168,10 +180,7 @@ class TestTemplateCopyIfAbsent:
     @pytest.fixture
     def source_templates(self):
         """Return dict of template filename -> content from plugin templates."""
-        return {
-            f: (TEMPLATES_DIR / f).read_text()
-            for f in TEMPLATE_FILES
-        }
+        return {f: (TEMPLATES_DIR / f).read_text() for f in TEMPLATE_FILES}
 
     def test_fresh_copy_all_templates(self, memory_dir, source_templates):
         """WHEN memory dir is empty, all three templates must be copied."""
@@ -302,7 +311,9 @@ class TestTemplatePathResolution:
         paths = Paths.resolve()
         assert isinstance(paths.templates_dir, Path)
 
-    def test_template_files_accessible_via_resolved_path(self, monkeypatch, reset_paths_cache):
+    def test_template_files_accessible_via_resolved_path(
+        self, monkeypatch, reset_paths_cache
+    ):
         """All three templates must exist at the path-resolved templates dir."""
         from multiplai_core.paths import Paths, _reset_cache
 
@@ -362,8 +373,9 @@ class TestColdStartOnboarding:
 
         for fname in TEMPLATE_FILES:
             content = (mem / fname).read_text()
-            assert re.search(r"^#{1,2}\s+\S", content, re.MULTILINE), \
+            assert re.search(r"^#{1,2}\s+\S", content, re.MULTILINE), (
                 f"Post-onboarding: {fname} has no markdown heading"
+            )
 
     def test_cold_start_memory_files_contain_placeholders(self, cold_start_dir):
         """Memory files from cold start must have placeholder/instruction text."""
@@ -376,9 +388,12 @@ class TestColdStartOnboarding:
         for fname in TEMPLATE_FILES:
             content = (mem / fname).read_text()
             has_comment = "<!--" in content
-            has_prompt = re.search(r"(?i)(list|describe|what|how|your)", content) is not None
-            assert has_comment or has_prompt, \
+            has_prompt = (
+                re.search(r"(?i)(list|describe|what|how|your)", content) is not None
+            )
+            assert has_comment or has_prompt, (
                 f"Post-onboarding: {fname} has no placeholder or instructional text"
+            )
 
 
 # ===================================================================
@@ -395,29 +410,35 @@ class TestSetupSkillInterviewFlow:
 
     def test_identity_phase_mentioned(self):
         """Interview must include an identity/about phase."""
-        assert re.search(r"(?i)(identity|about|name|role)", self.text), \
+        assert re.search(r"(?i)(identity|about|name|role)", self.text), (
             "Setup skill must mention identity/name/role in interview"
+        )
 
     def test_technical_preferences_phase_mentioned(self):
         """Interview must include a technical preferences phase."""
-        assert re.search(r"(?i)(technical|language|framework|tool)", self.text), \
+        assert re.search(r"(?i)(technical|language|framework|tool)", self.text), (
             "Setup skill must mention technical preferences in interview"
+        )
 
     def test_general_preferences_phase_mentioned(self):
         """Interview must include a general preferences phase."""
-        assert re.search(r"(?i)(preference|verbos|tone|workflow)", self.text), \
+        assert re.search(r"(?i)(preference|verbos|tone|workflow)", self.text), (
             "Setup skill must mention general preferences in interview"
+        )
 
     def test_overwrite_warning_mentioned(self):
         """Skill must warn when files already exist."""
-        assert re.search(r"(?i)(exist|overwrite|warn|confirm)", self.text), \
+        assert re.search(r"(?i)(exist|overwrite|warn|confirm)", self.text), (
             "Setup skill must address existing files scenario"
+        )
 
     def test_three_interview_phases(self):
         """Interview should have at least 3 distinct phases/sections."""
         # Count distinct numbered steps or phase markers
         steps = re.findall(r"(?:^|\n)\s*\d+\.\s+", self.text)
-        assert len(steps) >= 3, f"Expected at least 3 interview steps, found {len(steps)}"
+        assert len(steps) >= 3, (
+            f"Expected at least 3 interview steps, found {len(steps)}"
+        )
 
 
 # ===================================================================
@@ -450,8 +471,12 @@ class TestTemplateSensitivityExtended:
         """No absolute filesystem paths in templates."""
         text = (TEMPLATES_DIR / filename).read_text()
         # Absolute path patterns
-        assert not re.search(r"(?<!\w)/Users/\w+", text), "Found macOS-style absolute path"
-        assert not re.search(r"(?<!\w)/home/\w+", text), "Found Linux-style absolute path"
+        assert not re.search(r"(?<!\w)/Users/\w+", text), (
+            "Found macOS-style absolute path"
+        )
+        assert not re.search(r"(?<!\w)/home/\w+", text), (
+            "Found Linux-style absolute path"
+        )
         assert not re.search(r"[A-Z]:\\", text), "Found Windows-style absolute path"
 
 
@@ -480,8 +505,9 @@ class TestSetupRespectsconfiguredDir:
             shutil.copy2(TEMPLATES_DIR / fname, paths.memory_dir / fname)
 
         for fname in TEMPLATE_FILES:
-            assert (custom_mem / fname).is_file(), \
+            assert (custom_mem / fname).is_file(), (
                 f"Template {fname} not in custom memory dir"
+            )
 
     def test_default_memory_dir_when_unconfigured(self, monkeypatch, reset_paths_cache):
         """WHEN no custom memory_dir and no workspace, should use ~/.multiplai/memory."""
@@ -543,8 +569,9 @@ class TestSetupCheckContract:
 
     def test_checks_memory_dir(self):
         """setup_check.py must reference memory_dir for checking files."""
-        assert re.search(r"memory_dir|memory", self.src), \
+        assert re.search(r"memory_dir|memory", self.src), (
             "setup_check.py must reference memory directory"
+        )
 
     def test_checks_template_filenames(self):
         """setup_check.py must check for the three template filenames."""
@@ -555,8 +582,9 @@ class TestSetupCheckContract:
     def test_reports_existing_files(self):
         """setup_check.py must report which files exist (for skip/overwrite decision)."""
         # Should output or return info about existing vs missing files
-        assert re.search(r"(?i)(exist|missing|found|skip|present)", self.src), \
+        assert re.search(r"(?i)(exist|missing|found|skip|present)", self.src), (
             "setup_check.py must report file existence status"
+        )
 
 
 # ===================================================================
@@ -577,23 +605,27 @@ class TestSetupWriteContract:
 
     def test_reads_templates(self):
         """setup_write.py must read from templates directory."""
-        assert re.search(r"templates|template", self.src), \
+        assert re.search(r"templates|template", self.src), (
             "setup_write.py must reference templates"
+        )
 
     def test_writes_to_memory_dir(self):
         """setup_write.py must write to the resolved memory directory."""
-        assert re.search(r"memory_dir|memory", self.src), \
+        assert re.search(r"memory_dir|memory", self.src), (
             "setup_write.py must write to memory directory"
+        )
 
     def test_uses_path_resolver_for_templates(self):
         """setup_write.py must resolve template paths via lib.paths."""
-        assert re.search(r"templates_dir|paths\.templates", self.src), \
+        assert re.search(r"templates_dir|paths\.templates", self.src), (
             "setup_write.py must use path resolver for template locations"
+        )
 
     def test_uses_path_resolver_for_memory(self):
         """setup_write.py must resolve memory dir via lib.paths."""
-        assert re.search(r"memory_dir|paths\.memory", self.src), \
+        assert re.search(r"memory_dir|paths\.memory", self.src), (
             "setup_write.py must use path resolver for memory directory"
+        )
 
     def test_handles_all_three_templates(self):
         """setup_write.py must handle all three template files."""
@@ -604,8 +636,9 @@ class TestSetupWriteContract:
 
     def test_no_overwrite_when_exists(self):
         """setup_write.py must implement skip-if-exists logic."""
-        assert re.search(r"(?i)(exist|skip|overwrite|already)", self.src), \
+        assert re.search(r"(?i)(exist|skip|overwrite|already)", self.src), (
             "setup_write.py must check for existing files before writing"
+        )
 
 
 # ===================================================================
@@ -631,12 +664,14 @@ class TestTemplateIntegration:
         for fname in TEMPLATE_FILES:
             content = (TEMPLATES_DIR / fname).read_text()
             # Templates must have actual content (not empty stubs)
-            assert len(content.strip()) > 50, \
+            assert len(content.strip()) > 50, (
                 f"Template {fname} seems too short ({len(content.strip())} chars)"
+            )
             # Must have structured markdown
             headings = re.findall(r"^#{1,3}\s+.+", content, re.MULTILINE)
-            assert len(headings) >= 2, \
+            assert len(headings) >= 2, (
                 f"Template {fname} should have at least 2 headings, found {len(headings)}"
+            )
 
 
 # ===================================================================

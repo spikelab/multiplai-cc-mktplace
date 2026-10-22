@@ -21,8 +21,8 @@ logger = logging.getLogger(__name__)
 class Backlog:
     learnings_lines: int = 0
     learnings_files: int = 0
-    oldest_learning: str = ""          # YYYY-MM-DD, from the filename
-    dreams_pending: int = 0            # unapplied proposals in dreams/
+    oldest_learning: str = ""  # YYYY-MM-DD, from the filename
+    dreams_pending: int = 0  # unapplied proposals in dreams/
     pending_extractions: int = 0
     failed_extractions: int = 0
     inbox_items: int = 0

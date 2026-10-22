@@ -41,7 +41,8 @@ INTENTION_RE = re.compile(
     r"due:\s*(?P<due>\d{4}-\d{2}-\d{2})"
     r"|on:\s*(?P<on>[^\]]+)"
     r")\]\s*(?P<text>.+?)"
-    r"(?:\s*\(captured\s*(?P<captured>\d{4}-\d{2}-\d{2})\))?\s*$")
+    r"(?:\s*\(captured\s*(?P<captured>\d{4}-\d{2}-\d{2})\))?\s*$"
+)
 
 # A comment opened AND closed on the same line, anywhere in it.
 _CLOSED_COMMENT_RE = re.compile(r"<!--.*?-->")
@@ -93,7 +94,9 @@ class Intention:
         if self.due is not None:
             if status == "overdue":
                 days = (today - self.due).days
-                when = f"OVERDUE by {days} day{'s' if days != 1 else ''} (was {self.due})"
+                when = (
+                    f"OVERDUE by {days} day{'s' if days != 1 else ''} (was {self.due})"
+                )
             elif status == "due":
                 when = "due today"
             else:
@@ -121,7 +124,7 @@ def parse(text: str) -> list[Intention]:
                 in_comment = False
             continue
         # A comment opened and not closed on the same line swallows what follows.
-        if "<!--" in stripped and "-->" not in stripped[stripped.index("<!--"):]:
+        if "<!--" in stripped and "-->" not in stripped[stripped.index("<!--") :]:
             in_comment = True
             continue
         if stripped.startswith("<!--"):
@@ -140,9 +143,15 @@ def parse(text: str) -> list[Intention]:
         except ValueError:
             continue  # a malformed date is not an intention we can act on
         on = (match.group("on") or "").strip() or None
-        out.append(Intention(
-            text=match.group("text").strip(), due=due, condition=on,
-            captured=captured, lineno=lineno))
+        out.append(
+            Intention(
+                text=match.group("text").strip(),
+                due=due,
+                condition=on,
+                captured=captured,
+                lineno=lineno,
+            )
+        )
     return out
 
 
@@ -207,8 +216,12 @@ def save_sweep_state(path: Path, state: dict[str, date]) -> None:
         pass
 
 
-def actionable(intentions: list[Intention], today: date, *,
-               last_surfaced: dict[str, date] | None = None) -> list[Intention]:
+def actionable(
+    intentions: list[Intention],
+    today: date,
+    *,
+    last_surfaced: dict[str, date] | None = None,
+) -> list[Intention]:
     """Intentions worth surfacing now, most urgent first.
 
     Condition-triggered ones fire on an *elapsed* schedule, not a coincident
@@ -230,8 +243,7 @@ def actionable(intentions: list[Intention], today: date, *,
     nobody ever sees is indistinguishable from one that was never captured.
     """
     stamps = last_surfaced or {}
-    out = [i for i in intentions
-           if i.status(today) in {"overdue", "due", "upcoming"}]
+    out = [i for i in intentions if i.status(today) in {"overdue", "due", "upcoming"}]
     for i in intentions:
         if i.due is not None:
             continue
@@ -240,8 +252,9 @@ def actionable(intentions: list[Intention], today: date, *,
             out.append(i)
     # Overdue first, then by date; conditions last.
     order = {"overdue": 0, "due": 1, "upcoming": 2, "condition": 3}
-    return sorted(out, key=lambda i: (order[i.status(today)],
-                                      i.due or date.max, i.lineno))
+    return sorted(
+        out, key=lambda i: (order[i.status(today)], i.due or date.max, i.lineno)
+    )
 
 
 def render_nudge(intentions: list[Intention], today: date, *, cap: int = 5) -> str:
@@ -270,9 +283,13 @@ def render_nudge(intentions: list[Intention], today: date, *, cap: int = 5) -> s
     )
 
 
-def format_line(text: str, *, due: date | None = None,
-                condition: str | None = None,
-                captured: date | None = None) -> str:
+def format_line(
+    text: str,
+    *,
+    due: date | None = None,
+    condition: str | None = None,
+    captured: date | None = None,
+) -> str:
     """Format one intention for writing into ``prospective.md``."""
     if (due is None) == (condition is None):
         raise ValueError("an intention needs exactly one of due= or condition=")

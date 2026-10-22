@@ -64,16 +64,19 @@ class TestCreateChange:
 class TestNormalizeChangeName:
     def test_empty_input_stays_empty(self):
         from build_pipeline.change_manager import normalize_change_name
+
         assert normalize_change_name("") == ""
 
     def test_traversal_is_stripped(self):
         from build_pipeline.change_manager import normalize_change_name
+
         assert normalize_change_name("../../etc") == "etc"
 
     def test_refuses_name_that_normalizes_to_nothing(self):
         """'!!!' → '' would collapse change_dir to specs/changes and the
         branch to 'buildme/', dying late with a raw git error."""
         from build_pipeline.change_manager import normalize_change_name
+
         with pytest.raises(ValueError) as exc:
             normalize_change_name("!!!")
         assert "no usable characters" in str(exc.value)
@@ -81,11 +84,14 @@ class TestNormalizeChangeName:
     def test_cli_refuses_empty_normalized_change_early(self, tmp_path, capsys):
         """The refusal happens at the CLI entry point, before any phase runs."""
         from build_pipeline.__main__ import main
+
         rc = main(["build", "--change", "!!!", "--project-dir", str(tmp_path)])
         assert rc == 2
         err = capsys.readouterr().err
         assert "ERROR:" in err and "no usable characters" in err
-        assert list(tmp_path.iterdir()) == [], "nothing may be created behind the refusal"
+        assert list(tmp_path.iterdir()) == [], (
+            "nothing may be created behind the refusal"
+        )
 
 
 class TestArchivedChangeDirs:
@@ -93,6 +99,7 @@ class TestArchivedChangeDirs:
         """`foo` must not match `2026-07-26-bar-foo` — a loose `*-foo` glob
         would cross two changes' archives."""
         from build_pipeline.change_manager import archived_change_dirs
+
         (specs_dir / "archive" / "2026-07-26-bar-foo").mkdir(parents=True)
         (specs_dir / "archive" / "2026-07-20-foo").mkdir()
         (specs_dir / "archive" / "2026-07-25-foo").mkdir()
@@ -107,6 +114,7 @@ class TestArchivedChangeDirs:
 
     def test_no_archive_root_or_empty_name(self, tmp_path):
         from build_pipeline.change_manager import archived_change_dirs
+
         assert archived_change_dirs(tmp_path / "specs", "foo") == []
         assert archived_change_dirs(tmp_path / "specs", "") == []
 
@@ -119,7 +127,9 @@ def _inputs(change, *, use_cases=True, requirements=True):
         (change / "use-cases.md").write_text("x")
     if requirements:
         (change / "requirements").mkdir(exist_ok=True)
-        (change / "requirements" / "cap1.md").write_text("### Requirement: A\n#### Scenario: A\nWHEN invoked\nTHEN returns A\n")
+        (change / "requirements" / "cap1.md").write_text(
+            "### Requirement: A\n#### Scenario: A\nWHEN invoked\nTHEN returns A\n"
+        )
 
 
 class TestArtifactStatus:
@@ -162,7 +172,9 @@ class TestArtifactStatus:
         assert status["tasks"] == ArtifactStatus.BLOCKED
 
     def test_tasks_ready_with_requirements_design_unknowns_and_use_cases(
-        self, cm, specs_dir,
+        self,
+        cm,
+        specs_dir,
     ):
         change = cm.create_change("test")
         _inputs(change)
@@ -183,7 +195,11 @@ class TestArtifactStatus:
 
     def test_missing_inputs(self, cm, specs_dir):
         change = cm.create_change("test")
-        assert cm.missing_inputs(change) == ["proposal.md", "use-cases.md", "requirements/*.md"]
+        assert cm.missing_inputs(change) == [
+            "proposal.md",
+            "use-cases.md",
+            "requirements/*.md",
+        ]
         _inputs(change, use_cases=False)
         assert cm.missing_inputs(change) == ["use-cases.md"]
         (change / "use-cases.md").write_text("x")
@@ -224,13 +240,20 @@ class TestArtifactContext:
         ctx = cm.artifact_context(change, "design")
         assert ctx["dependencies"]["proposal"] == "proposal.md"
         assert ctx["dependencies"]["requirements"] == "requirements/cap1.md"
-        assert cm.artifact_context(change, "tasks")["dependencies"]["use-cases"] == "use-cases.md"
+        assert (
+            cm.artifact_context(change, "tasks")["dependencies"]["use-cases"]
+            == "use-cases.md"
+        )
 
     @pytest.mark.parametrize("name", ["proposal", "use-cases", "requirements"])
     def test_buildme_has_no_template_for_pm_specs_documents(self, cm, name):
         change = cm.create_change("test")
         ctx = cm.artifact_context(change, name)
-        assert ctx["template"] == "" and ctx["instruction"] == "" and ctx["output_path"] == ""
+        assert (
+            ctx["template"] == ""
+            and ctx["instruction"] == ""
+            and ctx["output_path"] == ""
+        )
 
     def test_design_drops_goals_non_goals_and_keeps_its_other_sections(self, cm):
         change = cm.create_change("test")
@@ -374,8 +397,16 @@ class TestExtractGlobalConstraints:
 # spec-extract writes registry files with extra lines under each scenario (CITES,
 # EVIDENCE) and an HTML comment on the first line. Both readers must still work on them.
 
-SPEC_EXTRACT_SAMPLE = (Path(__file__).resolve().parents[3] / "spec-extract" / "scripts" / "tests"
-                       / "fixtures" / "golden" / "registry" / "sample.md")
+SPEC_EXTRACT_SAMPLE = (
+    Path(__file__).resolve().parents[3]
+    / "spec-extract"
+    / "scripts"
+    / "tests"
+    / "fixtures"
+    / "golden"
+    / "registry"
+    / "sample.md"
+)
 
 
 def test_merges_delta_into_spec_extract_registry_file(cm, specs_dir):
@@ -386,7 +417,8 @@ def test_merges_delta_into_spec_extract_registry_file(cm, specs_dir):
         "## MODIFIED Requirements\n\n"
         "### Requirement: Adds two numbers\nadd SHALL return the sum as an int.\n\n"
         "#### Scenario: adding ints\n- **WHEN** add(1, 2) is called\n- **THEN** it returns the int 3\n\n"
-        "## REMOVED Requirements\n\n### Requirement: Subtracts two numbers\n")
+        "## REMOVED Requirements\n\n### Requirement: Subtracts two numbers\n"
+    )
     cm.archive_change(change)
     merged = (specs_dir / "registry" / "sample.md").read_text()
     assert merged.startswith("<!-- spec-extract widgets/tree@")
@@ -399,13 +431,15 @@ def test_merges_delta_into_spec_extract_registry_file(cm, specs_dir):
 def test_requirements_need_every_proposed_capability(tmp_path):
     from build_pipeline.change_manager import ChangeManager
     from build_pipeline.models import ArtifactStatus
+
     cm = ChangeManager(tmp_path / "specs")
     change = cm.create_change("two-caps")
     (change / "proposal.md").write_text("## Capabilities\n- `one`\n- `two`\n")
     (change / "use-cases.md").write_text("x")
     (change / "requirements").mkdir()
     (change / "requirements" / "one.md").write_text(
-        "## ADDED Requirements\n### Requirement: One\nRequired.\n#### Scenario: Works\n- **WHEN** called\n- **THEN** succeeds\n")
+        "## ADDED Requirements\n### Requirement: One\nRequired.\n#### Scenario: Works\n- **WHEN** called\n- **THEN** succeeds\n"
+    )
     (change / "design.md").write_text("x")
     (change / "unknowns.md").write_text("x")
     (change / "tasks.md").write_text("## 1. Both\nImplement both capabilities")
@@ -417,9 +451,18 @@ def test_requirements_need_every_proposed_capability(tmp_path):
 
 def test_requirements_validate_every_requirement_and_allow_removal_deltas():
     from build_pipeline.change_manager import valid_requirement_text
-    valid = "### Requirement: Works\n#### Scenario: Normal\nWHEN called\nTHEN succeeds\n"
+
+    valid = (
+        "### Requirement: Works\n#### Scenario: Normal\nWHEN called\nTHEN succeeds\n"
+    )
     assert valid_requirement_text(valid)
     assert not valid_requirement_text(valid + "### Requirement: Missing scenarios\n")
-    assert not valid_requirement_text(valid + "#### Scenario: Incomplete\nWHEN called\n")
-    assert valid_requirement_text("## REMOVED Requirements\n### Requirement: Old behavior\n")
-    assert not valid_requirement_text("## ADDED Requirements\n### Requirement: <!-- name -->\n")
+    assert not valid_requirement_text(
+        valid + "#### Scenario: Incomplete\nWHEN called\n"
+    )
+    assert valid_requirement_text(
+        "## REMOVED Requirements\n### Requirement: Old behavior\n"
+    )
+    assert not valid_requirement_text(
+        "## ADDED Requirements\n### Requirement: <!-- name -->\n"
+    )

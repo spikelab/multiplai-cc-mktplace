@@ -34,8 +34,10 @@ _CUT_NOTE_ROOM = 1_000
 _VALUE_CHARS = 80
 
 HEADING = "## Signatures of the existing code this block's tests will call"
-INTRO = ("Read from the working tree now. Use them instead of reading these files; "
-         "open a file only for what is not here.")
+INTRO = (
+    "Read from the working tree now. Use them instead of reading these files; "
+    "open a file only for what is not here."
+)
 PINS_HEADING = "### Tests that already call this code"
 EXAMPLE_HEADING = "### Example test file"
 
@@ -52,7 +54,9 @@ def signatures_section(block, project_dir: Path) -> str:
     try:
         return _section(block, Path(project_dir))
     except Exception:  # context is best-effort; the block must still run
-        log.warning("signatures: section left out for block %s", block.name, exc_info=True)
+        log.warning(
+            "signatures: section left out for block %s", block.name, exc_info=True
+        )
         return ""
 
 
@@ -71,13 +75,17 @@ def _section(block, project_dir: Path) -> str:
     for path in modules:
         tree = files.tree(path)
         if tree is None:
-            out.group(f"### `{path}`", ["(could not be parsed; open the file)"], f"`{path}`")
+            out.group(
+                f"### `{path}`", ["(could not be parsed; open the file)"], f"`{path}`"
+            )
             continue
         entries = _entries(tree, named_words)
         symbols |= _top_level_names(tree, named_words)
         out.group(_module_title(path, tree), entries, f"`{path}`")
 
-    test_dirs = list(dict.fromkeys(d for d in (_tests_dir(project_dir, m) for m in modules) if d))
+    test_dirs = list(
+        dict.fromkeys(d for d in (_tests_dir(project_dir, m) for m in modules) if d)
+    )
     for tests_dir in test_dirs:
         for path in files.helpers(tests_dir):
             tree = files.tree(path)
@@ -88,7 +96,11 @@ def _section(block, project_dir: Path) -> str:
 
     pins = _pins(files, test_dirs, symbols, named_words)
     if pins:
-        out.group(PINS_HEADING, [f"- `{p}`" for p in pins], "tests that already call this code")
+        out.group(
+            PINS_HEADING,
+            [f"- `{p}`" for p in pins],
+            "tests that already call this code",
+        )
 
     example = _example(files, test_dirs, modules)
     if example:
@@ -121,7 +133,9 @@ class _Section:
         self._add(title)
         for i, entry in enumerate(entries):
             if not self._fits(entry):
-                self.cut.append(f"{len(entries) - i} of {len(entries)} entries of {label}")
+                self.cut.append(
+                    f"{len(entries) - i} of {len(entries)} entries of {label}"
+                )
                 return
             self._add(entry)
 
@@ -129,7 +143,7 @@ class _Section:
         if self.cut:
             note = "Cut to stay under 40,000 characters: " + "; ".join(self.cut) + "."
             if len(note) > _CUT_NOTE_ROOM - 2:
-                note = note[:_CUT_NOTE_ROOM - 6] + " …"
+                note = note[: _CUT_NOTE_ROOM - 6] + " …"
             self._add("")
             self._add(note)
         return "\n".join(self.lines)
@@ -164,8 +178,13 @@ class _Files:
     def helpers(self, tests_dir: str) -> list[str]:
         """The files directly in *tests_dir* that are not tests: conftest.py
         first, then fakes and fixture builders."""
-        names = [p for p in self.paths if str(PurePosixPath(p).parent) == tests_dir
-                 and not _is_test_module(p) and PurePosixPath(p).name != "__init__.py"]
+        names = [
+            p
+            for p in self.paths
+            if str(PurePosixPath(p).parent) == tests_dir
+            and not _is_test_module(p)
+            and PurePosixPath(p).name != "__init__.py"
+        ]
         return sorted(names, key=lambda p: (PurePosixPath(p).name != "conftest.py", p))
 
     def tests(self, tests_dir: str) -> list[str]:
@@ -179,8 +198,21 @@ def _python_files(project_dir: Path) -> list[str]:
     say."""
     try:
         out = subprocess.run(
-            ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", "*.py"],
-            cwd=project_dir, capture_output=True, text=True, check=True, timeout=60,
+            [
+                "git",
+                "ls-files",
+                "--cached",
+                "--others",
+                "--exclude-standard",
+                "-z",
+                "--",
+                "*.py",
+            ],
+            cwd=project_dir,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=60,
         ).stdout
         paths = {p for p in out.split("\0") if p}
     except (OSError, subprocess.SubprocessError):
@@ -249,8 +281,12 @@ def _public(name: str, extra: set[str]) -> bool:
 def _top_level_names(tree: ast.Module, extra: set[str]) -> set[str]:
     """The classes and functions *tree* defines at the top level that its
     section lists: the public ones and the private ones in *extra*."""
-    return {n.name for n in tree.body
-            if isinstance(n, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) and _public(n.name, extra)}
+    return {
+        n.name
+        for n in tree.body
+        if isinstance(n, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+        and _public(n.name, extra)
+    }
 
 
 def _module_title(path: str, tree: ast.Module) -> str:
@@ -265,7 +301,7 @@ def _first_line(doc: str | None) -> str:
 
 def _short(node: ast.AST) -> str:
     text = " ".join(ast.unparse(node).split())
-    return text if len(text) <= _VALUE_CHARS else text[:_VALUE_CHARS - 1] + "…"
+    return text if len(text) <= _VALUE_CHARS else text[: _VALUE_CHARS - 1] + "…"
 
 
 def _is_fixture(node: ast.AST) -> bool:
@@ -319,17 +355,29 @@ def _function(node, indent: str = "") -> str:
 
 
 def _class(node: ast.ClassDef) -> str:
-    bases = [ast.unparse(b) for b in node.bases] + [ast.unparse(k) for k in node.keywords]
+    bases = [ast.unparse(b) for b in node.bases] + [
+        ast.unparse(k) for k in node.keywords
+    ]
     line = f"class {node.name}({', '.join(bases)}):" if bases else f"class {node.name}:"
     lines = [_decorated(node, _with_doc(line, node))]
     for item in node.body:
-        if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name) and _public(item.target.id, set()):
+        if (
+            isinstance(item, ast.AnnAssign)
+            and isinstance(item.target, ast.Name)
+            and _public(item.target.id, set())
+        ):
             value = f" = {_short(item.value)}" if item.value is not None else ""
             lines.append(f"    {item.target.id}: {ast.unparse(item.annotation)}{value}")
-        elif (isinstance(item, ast.Assign) and len(item.targets) == 1 and isinstance(item.targets[0], ast.Name)
-              and _public(item.targets[0].id, set())):
+        elif (
+            isinstance(item, ast.Assign)
+            and len(item.targets) == 1
+            and isinstance(item.targets[0], ast.Name)
+            and _public(item.targets[0].id, set())
+        ):
             lines.append(f"    {item.targets[0].id} = {_short(item.value)}")
-        elif isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and _public(item.name, {"__init__"}):
+        elif isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and _public(
+            item.name, {"__init__"}
+        ):
             lines.append(_function(item, "    "))
     return "\n".join(lines)
 
@@ -343,11 +391,16 @@ def _entries(tree: ast.Module, extra: set[str], *, fixtures: bool = False) -> li
         if isinstance(node, ast.ClassDef) and _public(node.name, extra):
             out.append(_class(node))
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and (
-                _public(node.name, extra) or (fixtures and _is_fixture(node))):
+            _public(node.name, extra) or (fixtures and _is_fixture(node))
+        ):
             out.append(_function(node))
         elif isinstance(node, (ast.Assign, ast.AnnAssign)):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            names = [t.id for t in targets if isinstance(t, ast.Name) and _CONSTANT.match(t.id)]
+            names = [
+                t.id
+                for t in targets
+                if isinstance(t, ast.Name) and _CONSTANT.match(t.id)
+            ]
             if names and node.value is not None:
                 out.append(f"{names[0]} = {_short(node.value)}")
     return out
@@ -357,11 +410,15 @@ def _test_functions(tree: ast.Module):
     """`(node id suffix, function)` for each test function: top-level `test_*`,
     and `test_*` methods of top-level `Test*` classes."""
     for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test"):
+        if isinstance(
+            node, (ast.FunctionDef, ast.AsyncFunctionDef)
+        ) and node.name.startswith("test"):
             yield node.name, node
         elif isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
             for item in node.body:
-                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name.startswith("test"):
+                if isinstance(
+                    item, (ast.FunctionDef, ast.AsyncFunctionDef)
+                ) and item.name.startswith("test"):
                     yield f"{node.name}::{item.name}", item
 
 
@@ -375,7 +432,9 @@ def _names_used(node: ast.AST) -> set[str]:
     return used
 
 
-def _pins(files: _Files, test_dirs: list[str], symbols: set[str], named_words: set[str]) -> list[str]:
+def _pins(
+    files: _Files, test_dirs: list[str], symbols: set[str], named_words: set[str]
+) -> list[str]:
     """The tests in *test_dirs* whose body names one of *symbols*, as
     `path::name`; those naming a symbol the block's text names come first."""
     if not symbols:
@@ -409,7 +468,9 @@ def _module_word(path: str) -> str:
     return p.parent.name if p.name == "__init__.py" else p.stem
 
 
-def _example(files: _Files, test_dirs: list[str], modules: list[str]) -> tuple[str, list[str]] | None:
+def _example(
+    files: _Files, test_dirs: list[str], modules: list[str]
+) -> tuple[str, list[str]] | None:
     """The shortest test file in *test_dirs* that imports one of *modules*,
     as a title and one fenced entry, cut at EXAMPLE_LINES lines."""
     words = {_module_word(m) for m in modules}

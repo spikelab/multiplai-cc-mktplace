@@ -41,7 +41,11 @@ def now() -> str:
 def _rel(path, target: TargetInfo, snapshot: Path) -> str:
     """A repo-relative path; the snapshot or repository root itself is ""."""
     p = str(path or "").strip()
-    if p.rstrip("/") in {str(snapshot.resolve()), str(snapshot), target.repo_path.rstrip("/")}:
+    if p.rstrip("/") in {
+        str(snapshot.resolve()),
+        str(snapshot),
+        target.repo_path.rstrip("/"),
+    }:
         return ""
     return relative_path(p, target, snapshot) if p else ""
 
@@ -77,19 +81,34 @@ def summarise_call(call, target: TargetInfo, snapshot: Path) -> dict:
             detail = f"lines {rng[0]}-end"
         else:
             detail = f"lines {rng[0]}-{rng[1]}"
-        return {"tool": name, "target": rel(data.get("file_path", "")), "detail": detail}
+        return {
+            "tool": name,
+            "target": rel(data.get("file_path", "")),
+            "detail": detail,
+        }
     if name == "Grep":
         where = rel(data.get("path", "")) or "."
         extra = [f"{k} {data[k]}" for k in ("glob", "type") if data.get(k)]
-        return {"tool": name, "target": str(data.get("pattern", "")), "detail": ", ".join([f"in {where}", *extra])}
+        return {
+            "tool": name,
+            "target": str(data.get("pattern", "")),
+            "detail": ", ".join([f"in {where}", *extra]),
+        }
     if name == "Glob":
-        return {"tool": name, "target": str(data.get("pattern", "")),
-                "detail": f"in {rel(data.get('path', '')) or '.'}"}
+        return {
+            "tool": name,
+            "target": str(data.get("pattern", "")),
+            "detail": f"in {rel(data.get('path', '')) or '.'}",
+        }
     if name == "WebFetch":
         return {"tool": name, "target": str(data.get("url", "")), "detail": ""}
     if name == "WebSearch":
         return {"tool": name, "target": str(data.get("query", "")), "detail": ""}
-    return {"tool": name, "target": "", "detail": "input keys: " + ", ".join(sorted(data))}
+    return {
+        "tool": name,
+        "target": "",
+        "detail": "input keys: " + ", ".join(sorted(data)),
+    }
 
 
 def diff_hunks(diff: str) -> dict[str, list[tuple[int, int]]]:
@@ -103,7 +122,10 @@ def diff_hunks(diff: str) -> dict[str, list[tuple[int, int]]]:
             continue
         m = _HUNK.match(line)
         if m and path:
-            start, count = int(m.group(1)), int(m.group(2) if m.group(2) is not None else 1)
+            start, count = (
+                int(m.group(1)),
+                int(m.group(2) if m.group(2) is not None else 1),
+            )
             if count:
                 hunks.setdefault(path, []).append((start, start + count - 1))
     return hunks
@@ -118,27 +140,44 @@ def _covers(path: str, file: str) -> bool:
     return path in ("", ".") or file == path or file.startswith(path + "/")
 
 
-def seen(citation: Citation, calls: list, hunks: dict[str, list[tuple[int, int]]],
-         target: TargetInfo, snapshot: Path, shown: dict[str, list[tuple[int, int]]] | None = None) -> str:
+def seen(
+    citation: Citation,
+    calls: list,
+    hunks: dict[str, list[tuple[int, int]]],
+    target: TargetInfo,
+    snapshot: Path,
+    shown: dict[str, list[tuple[int, int]]] | None = None,
+) -> str:
     """How the agent came to *citation*'s lines: one of SEEN_MARKS. *calls* are raw ToolCalls.
 
     *hunks* are the diff's new-side ranges the prompt held; *shown* any other
     ranges it held, by path.
     """
     if citation.is_web:
-        fetched = {_url_key(str(_input(c).get("url", ""))) for c in calls if getattr(c, "name", "") == "WebFetch"}
+        fetched = {
+            _url_key(str(_input(c).get("url", "")))
+            for c in calls
+            if getattr(c, "name", "") == "WebFetch"
+        }
         return "fetched" if _url_key(citation.path) in fetched else "not-seen"
     searched = False
     for call in calls:
         name, data = getattr(call, "name", ""), _input(call)
-        if name == "Read" and _rel(data.get("file_path", ""), target, snapshot) == citation.path:
+        if (
+            name == "Read"
+            and _rel(data.get("file_path", ""), target, snapshot) == citation.path
+        ):
             rng = _line_range(data)
             if rng is None:
                 return "read"
             first, last = rng
-            if first <= citation.line_end and (last is None or last >= citation.line_start):
+            if first <= citation.line_end and (
+                last is None or last >= citation.line_start
+            ):
                 return "read"
-        elif name == "Grep" and _covers(_rel(data.get("path", ""), target, snapshot), citation.path):
+        elif name == "Grep" and _covers(
+            _rel(data.get("path", ""), target, snapshot), citation.path
+        ):
             searched = True
     if searched:
         return "searched"
@@ -149,13 +188,28 @@ def seen(citation: Citation, calls: list, hunks: dict[str, list[tuple[int, int]]
     return "not-seen"
 
 
-def marked_citation(citation: Citation, calls: list, hunks: dict[str, list[tuple[int, int]]],
-                    target: TargetInfo, snapshot: Path,
-                    shown: dict[str, list[tuple[int, int]]] | None = None) -> dict:
+def marked_citation(
+    citation: Citation,
+    calls: list,
+    hunks: dict[str, list[tuple[int, int]]],
+    target: TargetInfo,
+    snapshot: Path,
+    shown: dict[str, list[tuple[int, int]]] | None = None,
+) -> dict:
     """A citation with its `gate` (pass/fail/web) and `seen` marks."""
-    gate = "web" if citation.is_web else ("pass" if citation_gate(target, citation).passed else "fail")
-    return {"path": citation.path, "line_start": citation.line_start, "line_end": citation.line_end,
-            "quote": citation.quote, "gate": gate, "seen": seen(citation, calls, hunks, target, snapshot, shown)}
+    gate = (
+        "web"
+        if citation.is_web
+        else ("pass" if citation_gate(target, citation).passed else "fail")
+    )
+    return {
+        "path": citation.path,
+        "line_start": citation.line_start,
+        "line_end": citation.line_end,
+        "quote": citation.quote,
+        "gate": gate,
+        "seen": seen(citation, calls, hunks, target, snapshot, shown),
+    }
 
 
 def failure_kind(error: str) -> str:
@@ -168,8 +222,14 @@ def failure_kind(error: str) -> str:
     return "agent error"
 
 
-def prompt_labels(target: TargetInfo, *, diff: str | None = None, diff_limit: int = 0,
-                  rules: list[tuple[str, bool]] | None = None, extra: list[str] | None = None) -> list[str]:
+def prompt_labels(
+    target: TargetInfo,
+    *,
+    diff: str | None = None,
+    diff_limit: int = 0,
+    rules: list[tuple[str, bool]] | None = None,
+    extra: list[str] | None = None,
+) -> list[str]:
     """Short labels for the input blocks a prompt held.
 
     *diff* is the diff text when the prompt included it; *rules* the
@@ -177,13 +237,21 @@ def prompt_labels(target: TargetInfo, *, diff: str | None = None, diff_limit: in
     """
     labels = list(extra or [])
     if diff is not None:
-        cut = f", cut at {diff_limit:,} characters" if diff_limit and len(diff) > diff_limit else ""
+        cut = (
+            f", cut at {diff_limit:,} characters"
+            if diff_limit and len(diff) > diff_limit
+            else ""
+        )
         labels.append(f"diff ({len(target.files)} files{cut})")
         labels.append(f"commit subjects ({len(target.commits)})")
     if target.title or target.description:
         labels.append("PR description")
     if target.base_ref:
-        labels.append("branch rules" if target.branch_rules is not None else "branch rules (could not be read)")
+        labels.append(
+            "branch rules"
+            if target.branch_rules is not None
+            else "branch rules (could not be read)"
+        )
     for path, included in rules or []:
         labels.append(f"rules: {path}" if included else f"rules skipped: {path}")
     return labels
@@ -223,13 +291,24 @@ def add_coverage(state, record: CoverageRecord) -> None:
 
 
 def _error_line(record: CoverageRecord) -> str:
-    form = ERROR_LINES.get((record.stage, record.reason), "{stage} {reason} {subject}: {detail}")
-    return form.format(stage=record.stage, reason=record.reason, subject=record.subject, detail=record.detail)
+    form = ERROR_LINES.get(
+        (record.stage, record.reason), "{stage} {reason} {subject}: {detail}"
+    )
+    return form.format(
+        stage=record.stage,
+        reason=record.reason,
+        subject=record.subject,
+        detail=record.detail,
+    )
 
 
 def drop_coverage(state, *, stage: str, subject: str, reason: str) -> None:
     """Remove the records of a gap a later call closed (a resumed convert that now succeeded), and their lines."""
-    gone = [c for c in state.coverage if (c.stage, c.subject, c.reason) == (stage, subject, reason)]
+    gone = [
+        c
+        for c in state.coverage
+        if (c.stage, c.subject, c.reason) == (stage, subject, reason)
+    ]
     if not gone:
         return
     state.coverage = [c for c in state.coverage if c not in gone]

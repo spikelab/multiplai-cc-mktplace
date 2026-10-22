@@ -131,8 +131,8 @@ def render_split_context(assessment) -> str:
         "buildme's own arithmetic over the three checks: "
         + (
             "THIS PLAN COMES APART. "
-            if assessment.should_split else
-            "no cut is indicated. "
+            if assessment.should_split
+            else "no cut is indicated. "
         )
         + "That is arithmetic, not a finding — an `oversized-plan` finding is "
         "still yours to make or to withhold, and the parse below is the "
@@ -166,16 +166,21 @@ def render_split_context(assessment) -> str:
 
     lines.append(f"Verdict: {split.reason}")
     if split.unresolved_consumes:
-        lines.append(_signature_line(
-            "Consumed but produced outside this plan",
-            split.unresolved_consumes,
-        ))
+        lines.append(
+            _signature_line(
+                "Consumed but produced outside this plan",
+                split.unresolved_consumes,
+            )
+        )
 
     lines.append("")
     lines.append(
         "### Atomicity — "
-        + ("SPLIT: high-risk work ships beside unrelated feature work"
-           if atomicity.should_split else "no unrelated feature work to isolate")
+        + (
+            "SPLIT: high-risk work ships beside unrelated feature work"
+            if atomicity.should_split
+            else "no unrelated feature work to isolate"
+        )
     )
     lines.append(atomicity.reason)
     for high_risk in atomicity.high_risk_blocks:
@@ -189,8 +194,10 @@ def render_split_context(assessment) -> str:
         )
     if atomicity.unrelated_block_numbers:
         unrelated = ", ".join(
-            f"block {n} ({name})" for n, name
-            in zip(atomicity.unrelated_block_numbers, atomicity.unrelated_block_names)
+            f"block {n} ({name})"
+            for n, name in zip(
+                atomicity.unrelated_block_numbers, atomicity.unrelated_block_names
+            )
         )
         lines.append(f"- unrelated feature work: {unrelated}")
 
@@ -241,27 +248,36 @@ def render_split_proposal(assessment, change_name: str) -> str:
         "",
     ]
     for group in split.groups:
-        lines.append(f"{group.index + 1}. {_blocks_phrase(group.block_numbers)} — "
-                     + "; ".join(group.block_names))
+        lines.append(
+            f"{group.index + 1}. {_blocks_phrase(group.block_numbers)} — "
+            + "; ".join(group.block_names)
+        )
         lines.append(_signature_line("produces", group.produces))
         lines.append(_signature_line("consumes", group.consumes))
     if split.boundaries:
         lines += ["", "## Cuts", ""]
         for boundary in split.boundaries:
-            crossing = (", ".join(boundary.crossing_signatures)
-                        if boundary.crossing_signatures else "nothing")
+            crossing = (
+                ", ".join(boundary.crossing_signatures)
+                if boundary.crossing_signatures
+                else "nothing"
+            )
             lines.append(
                 f"- after PR {boundary.after_group + 1}: between block "
                 f"{boundary.last_block_before} and block {boundary.first_block_after}; "
-                f"crosses {crossing}")
+                f"crosses {crossing}"
+            )
     lines += ["", "## Why", "", split.reason or "(no reason recorded)"]
     lines += ["", "## Atomicity", "", atomicity.reason or "(no high-risk work found)"]
     for high_risk in atomicity.high_risk_blocks:
         evidence = "; ".join(
-            f"{kind}: " + ", ".join(f'"{kw}"' for kw in high_risk.matched_keywords.get(kind, []))
+            f"{kind}: "
+            + ", ".join(f'"{kw}"' for kw in high_risk.matched_keywords.get(kind, []))
             for kind in high_risk.kinds
         )
-        lines.append(f"- block {high_risk.number} ({high_risk.name}) — matched {evidence}")
+        lines.append(
+            f"- block {high_risk.number} ({high_risk.name}) — matched {evidence}"
+        )
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -310,14 +326,16 @@ def split_assessment(config, change_dir: Path):
         if not blocks:
             log.info(
                 "No blocks parsed from %s — plan review runs without the "
-                "dependency graph", change_dir / "tasks.md",
+                "dependency graph",
+                change_dir / "tasks.md",
             )
             return "", None
         if not any(block.produces or block.consumes for block in blocks):
             log.info(
                 "%d block(s) in %s declare no Interfaces: signatures — no "
                 "dependency graph to hand the reviewer",
-                len(blocks), change_dir.name,
+                len(blocks),
+                change_dir.name,
             )
             return NO_GRAPH_NOTE, None
 
@@ -332,7 +350,8 @@ def split_assessment(config, change_dir: Path):
     except Exception as split_err:  # a review without the graph beats no review
         log.warning(
             "Could not build the block dependency graph for %s (non-fatal): %s",
-            change_dir, split_err,
+            change_dir,
+            split_err,
         )
         return "", None
 
@@ -380,28 +399,40 @@ async def run_plan_review(
     )
 
 
-def plan_review_actionable(findings: list[PlanReviewFinding]) -> list[PlanReviewFinding]:
+def plan_review_actionable(
+    findings: list[PlanReviewFinding],
+) -> list[PlanReviewFinding]:
     """The findings that earn the rewrite: critical or major, and never
     `oversized-plan`, a proposal for a human, not an instruction for a
     rewriter (see PLAN_REVIEW_PROPOSE_ONLY_CATEGORIES)."""
     return [
-        f for f in findings or []
+        f
+        for f in findings or []
         if f.severity in PLAN_REVIEW_ACTIONABLE
         and f.category not in PLAN_REVIEW_PROPOSE_ONLY_CATEGORIES
     ]
 
 
 def _finding_line(f: PlanReviewFinding) -> str:
-    return (f"{f.file_path}" + (f" @ {f.location}" if f.location else "") + f": {f.claim}"
-            + (f" Reason: {f.reason}" if f.reason else ""))
+    return (
+        f"{f.file_path}"
+        + (f" @ {f.location}" if f.location else "")
+        + f": {f.claim}"
+        + (f" Reason: {f.reason}" if f.reason else "")
+    )
 
 
 def finding_dicts(findings: list[PlanReviewFinding]) -> list[dict]:
     """Plan review findings in the shape the recheck and the checkpoint use."""
-    return [{"category": f.category, "severity": f.severity, "text": _finding_line(f)} for f in findings]
+    return [
+        {"category": f.category, "severity": f.severity, "text": _finding_line(f)}
+        for f in findings
+    ]
 
 
-def plan_review_findings_text(findings: list[PlanReviewFinding], *, ids: list[str] | None = None) -> str:
+def plan_review_findings_text(
+    findings: list[PlanReviewFinding], *, ids: list[str] | None = None
+) -> str:
     """The findings block injected into the single tasks.md regeneration.
 
     Empty string when nothing actionable survives the filter — the caller reads
@@ -414,8 +445,10 @@ def plan_review_findings_text(findings: list[PlanReviewFinding], *, ids: list[st
         return ""
     ids = list(ids or [])
     return "\n".join(
-        "- " + (f"{ids[n]} " if n < len(ids) else "")
-        + f"[{f.severity}] ({f.category}) " + _finding_line(f)
+        "- "
+        + (f"{ids[n]} " if n < len(ids) else "")
+        + f"[{f.severity}] ({f.category}) "
+        + _finding_line(f)
         for n, f in enumerate(actionable)
     )
 
@@ -429,12 +462,14 @@ def log_plan_review_findings(findings: list[PlanReviewFinding]) -> None:
     if critical:
         log.warning(
             "DONE phase=PLAN_REVIEW findings=%d critical=%d",
-            len(findings), len(critical),
+            len(findings),
+            len(critical),
         )
         for finding in critical:
             log.warning(
                 "  finding category=%s at=%s claim=%s",
-                finding.category, finding.location or finding.file_path,
+                finding.category,
+                finding.location or finding.file_path,
                 finding.claim,
             )
         print(f"PHASE: plan_review_warnings — {len(critical)} critical findings")
@@ -447,7 +482,8 @@ def log_plan_review_findings(findings: list[PlanReviewFinding]) -> None:
         # split that never happens. Still only an offer: nothing acts on it.
         log.info(
             "PLAN_REVIEW proposes a split into %d ticket(s) — proposal only, "
-            "nothing was split", len(finding.proposed_cut),
+            "nothing was split",
+            len(finding.proposed_cut),
         )
         print(
             "PHASE: plan_review_split_proposed — "
@@ -490,6 +526,7 @@ async def run_plan_review_stage(
         saved_findings,
         scan_assessments,
     )
+
     name = "plan_review"
     reason = "Plan review still has blocking findings after bounded repair"
     reconcile_plan(config, state)
@@ -502,7 +539,9 @@ async def run_plan_review_stage(
     admitted = sg.steps[name].revision if rewrite_published(sg, name) else None
     try:
         if admitted is None:
-            result = await run_plan_review(change_dir, config, split_context=_split_context(config, change_dir))
+            result = await run_plan_review(
+                change_dir, config, split_context=_split_context(config, change_dir)
+            )
             scanned = _no_behaviour_findings(change_dir)
             findings = list(result.findings) + scanned
             log_plan_review_findings(findings)
@@ -512,25 +551,52 @@ async def run_plan_review_stage(
                 state.checkpoint(state_path)
                 return findings
             if sg.repair_attempts(name):
-                block_on_findings(config, state, state_path, name, reason, open_findings(finding_dicts(actionable)))
+                block_on_findings(
+                    config,
+                    state,
+                    state_path,
+                    name,
+                    reason,
+                    open_findings(finding_dicts(actionable)),
+                )
                 raise PlanBlocked(reason)
-            numbered = number_findings(name, [
-                *finding_dicts(plan_review_actionable(result.findings)),
-                *from_scans(finding_dicts(plan_review_actionable(scanned)))])
+            numbered = number_findings(
+                name,
+                [
+                    *finding_dicts(plan_review_actionable(result.findings)),
+                    *from_scans(finding_dicts(plan_review_actionable(scanned))),
+                ],
+            )
             sg.admit_repair(name, saved_findings(numbered))
             state.checkpoint(state_path)
             admitted = sg.steps[name].revision
-            await rewrite_plan(config, state, plan_review_findings_text(
-                actionable, ids=[f["finding_id"] for f in numbered]), step=name)
+            await rewrite_plan(
+                config,
+                state,
+                plan_review_findings_text(
+                    actionable, ids=[f["finding_id"] for f in numbered]
+                ),
+                step=name,
+            )
         listed = sg.steps[name].repair_findings
-        result = await run_plan_review(change_dir, config, split_context=_split_context(config, change_dir),
-                                       prior=model_listed(listed) or None)
+        result = await run_plan_review(
+            change_dir,
+            config,
+            split_context=_split_context(config, change_dir),
+            prior=model_listed(listed) or None,
+        )
         scanned = finding_dicts(_no_behaviour_findings(change_dir))
         findings = list(result.findings) + _no_behaviour_findings(change_dir)
         log_plan_review_findings(findings)
-        new = [f for f in result.findings if f.category not in PLAN_REVIEW_PROPOSE_ONLY_CATEGORIES]
+        new = [
+            f
+            for f in result.findings
+            if f.category not in PLAN_REVIEW_PROPOSE_ONLY_CATEGORIES
+        ]
         given = list(result.prior_assessments) + scan_assessments(listed, scanned)
-        blocking, advisory = recheck_verdict(listed, given, finding_dicts(new), deterministic=scanned)
+        blocking, advisory = recheck_verdict(
+            listed, given, finding_dicts(new), deterministic=scanned
+        )
         sg.steps[name].repair_findings = saved_findings(assess_listed(listed, given))
         log_findings(name, "listed", sg.steps[name].repair_findings)
         record_advisory(config, name, advisory)
@@ -544,11 +610,20 @@ async def run_plan_review_stage(
         raise
     except PlanRepairRejected as rejection:
         record_advisory(config, name, rejection.advisory)
-        block_on_findings(config, state, state_path, name, str(rejection), rejection.blocking)
+        block_on_findings(
+            config, state, state_path, name, str(rejection), rejection.blocking
+        )
         raise
     except BaseException as error:
-        record_blocked_review(config, state, state_path, name, str(error) or type(error).__name__, "",
-                              revision=admitted)
+        record_blocked_review(
+            config,
+            state,
+            state_path,
+            name,
+            str(error) or type(error).__name__,
+            "",
+            revision=admitted,
+        )
         raise
 
 

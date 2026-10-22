@@ -283,8 +283,9 @@ def group_relearns(relearns: Sequence[Relearn]) -> list[RelearnGroup]:
                 group.occurrences.append(item)
                 break
         else:
-            groups.append(RelearnGroup(target=item.target, title=item.title,
-                                       occurrences=[item]))
+            groups.append(
+                RelearnGroup(target=item.target, title=item.title, occurrences=[item])
+            )
     groups.sort(key=lambda g: (-g.count, g.target, g.title))
     return groups
 
@@ -354,8 +355,10 @@ def render_section(groups: Sequence[RelearnGroup], *, limit: int = 20) -> str:
         )
     if len(groups) > limit:
         lines.append("")
-        lines.append(f"_{len(groups) - limit} more not shown; run "
-                     f"`relearn_report.py --limit 0` for the full list._")
+        lines.append(
+            f"_{len(groups) - limit} more not shown; run "
+            f"`relearn_report.py --limit 0` for the full list._"
+        )
     return "\n".join(lines) + "\n"
 
 

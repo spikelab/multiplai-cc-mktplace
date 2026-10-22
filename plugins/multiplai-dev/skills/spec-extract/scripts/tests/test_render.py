@@ -17,8 +17,15 @@ from spec_extract_pipeline import target
 from test_write_gate import CALC_ANSWER, folder, go, make_calc_repo
 
 GOLDEN = Path(__file__).parent / "fixtures" / "golden"
-SAMPLE_GROUP = {"capabilities": [{"name": "sample", "summary": "Arithmetic on two numbers.",
-                                  "symbols": ["src/calc.py::add", "src/calc.py::sub", "src/calc.py::mul"]}]}
+SAMPLE_GROUP = {
+    "capabilities": [
+        {
+            "name": "sample",
+            "summary": "Arithmetic on two numbers.",
+            "symbols": ["src/calc.py::add", "src/calc.py::sub", "src/calc.py::mul"],
+        }
+    ]
+}
 
 
 @pytest.fixture
@@ -42,13 +49,21 @@ def test_matches_golden(rendered, name):
 
 def test_render_is_recorded_and_the_snapshot_deleted(capsys, rendered):
     state = read_state(rendered)
-    assert state["steps_done"] == ["resolve", "scope", "explore", "group", "write", "render"]
+    assert state["steps_done"] == [
+        "resolve",
+        "scope",
+        "explore",
+        "group",
+        "write",
+        "render",
+    ]
     assert not (rendered / "snapshot").exists()
     assert f"SPEC_EXTRACT:RENDERED 1 {rendered / 'registry'}" in capsys.readouterr().out
 
 
-def test_after_render_a_rerun_makes_no_call_and_leaves_the_outputs_alone(rendered, tmp_path, fake_call,
-                                                                         monkeypatch):
+def test_after_render_a_rerun_makes_no_call_and_leaves_the_outputs_alone(
+    rendered, tmp_path, fake_call, monkeypatch
+):
     """Row R10 (documentation): a stop part-way through deleting `snapshot/`. The re-run
     deletes the rest and never re-renders or extracts again; after render the outputs are
     the user's (R24)."""
@@ -56,9 +71,15 @@ def test_after_render_a_rerun_makes_no_call_and_leaves_the_outputs_alone(rendere
     (rendered / "snapshot" / "src" / "calc.py").write_text("partial\n")
     for name in ("report.md", "plan.txt"):
         (rendered / name).write_text("edited by the user\n")
-    monkeypatch.setattr(target, "snapshot", lambda *a: pytest.fail("extracted the snapshot again"))
+    monkeypatch.setattr(
+        target, "snapshot", lambda *a: pytest.fail("extracted the snapshot again")
+    )
     calls = dict(fake_call.calls)
     assert go(tmp_path / "widgets", tmp_path / "out") == 0
     assert dict(fake_call.calls) == calls
     assert not (rendered / "snapshot").exists()
-    assert (rendered / "report.md").read_text() == (rendered / "plan.txt").read_text() == "edited by the user\n"
+    assert (
+        (rendered / "report.md").read_text()
+        == (rendered / "plan.txt").read_text()
+        == "edited by the user\n"
+    )

@@ -38,6 +38,7 @@ def repo(tmp_path, monkeypatch):
 
 # --- nested lockfiles -------------------------------------------------------
 
+
 def test_root_lock_alone_is_clean(repo):
     """The root uv.lock is the point — it must not trip its own gate."""
     assert lint_workspace.check_no_nested_locks() == []
@@ -77,6 +78,7 @@ def test_message_says_what_to_do(repo):
 
 # --- undeclared members ----------------------------------------------------
 
+
 def test_undeclared_member_is_caught(repo):
     stray = repo / "plugins/myplug/skills/other/scripts"
     stray.mkdir(parents=True)
@@ -102,6 +104,7 @@ def test_lib_exemption_is_only_at_plugin_level(repo):
 
 
 # --- the check is wired in --------------------------------------------------
+
 
 def test_nested_lock_check_is_registered():
     """Registration is the difference between a gate and a dead function."""

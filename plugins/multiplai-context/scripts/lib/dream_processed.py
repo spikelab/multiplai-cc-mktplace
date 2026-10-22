@@ -147,7 +147,12 @@ def _relocate(
 
 
 def move_to_processed(
-    text: str, ref: tuple, status: str, *, target: str | None = None, ts: str | None = None
+    text: str,
+    ref: tuple,
+    status: str,
+    *,
+    target: str | None = None,
+    ts: str | None = None,
 ) -> str:
     """Relocate ``ref``'s block into the ``## Processed`` section. Idempotent:
     if the item is already processed (not found in a pending group), returns
@@ -258,7 +263,9 @@ class Decision:
             raise ValueError(f"index must be an integer, got {index!r}")
         file = raw.get("file")
         if kind == "update" and not file:
-            raise ValueError("kind 'update' needs a 'file' (its `## Updates for` group)")
+            raise ValueError(
+                "kind 'update' needs a 'file' (its `## Updates for` group)"
+            )
         if kind == "conflict" and not file:
             raise ValueError(
                 "kind 'conflict' needs a 'file' (the memory file in its heading); "
@@ -326,7 +333,9 @@ def mark_many_processed(
     new, marked = move_many_to_processed(text, decisions, ts=ts)
     if marked:
         fd, tmp = tempfile.mkstemp(
-            dir=str(proposal_path.parent), prefix=f".{proposal_path.name}-", suffix=".tmp"
+            dir=str(proposal_path.parent),
+            prefix=f".{proposal_path.name}-",
+            suffix=".tmp",
         )
         try:
             with os.fdopen(fd, "w") as f:
@@ -428,7 +437,9 @@ def processed_statuses(text: str) -> list[str]:
     """Every status recorded on a ``**Processed:**`` line, in document order."""
     return [
         m.group("status")
-        for m in (_PROCESSED_STATUS_RE.match(line.strip()) for line in text.splitlines())
+        for m in (
+            _PROCESSED_STATUS_RE.match(line.strip()) for line in text.splitlines()
+        )
         if m
     ]
 

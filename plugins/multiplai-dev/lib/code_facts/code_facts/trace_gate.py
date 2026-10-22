@@ -39,12 +39,23 @@ from .pyindex import PyIndex, count_lines
 log = logging.getLogger(__name__)
 
 BREAK_CODES: tuple[BreakCode, ...] = (
-    "malformed_answer", "empty_trace", "path_outside_root", "missing_file", "line_out_of_range", "text_mismatch",
-    "base_side_citation", "entry_mismatch", "unconnected_hop", "repeated_hop", "hop_limit")
+    "malformed_answer",
+    "empty_trace",
+    "path_outside_root",
+    "missing_file",
+    "line_out_of_range",
+    "text_mismatch",
+    "base_side_citation",
+    "entry_mismatch",
+    "unconnected_hop",
+    "repeated_hop",
+    "hop_limit",
+)
 
 
 class TraceHop(_Model):
     """A hop as a trace agent answers it. Lines are unchecked here so the gate can name a bad range."""
+
     # A branching answer (a nested `hops`, `alternatives`) must fail to parse, not be ignored.
     model_config = ConfigDict(extra="forbid")
 
@@ -59,6 +70,7 @@ class TraceHop(_Model):
 
 class TraceAnswer(_Model):
     """One linear chain of hops, from the entry to its last effect."""
+
     model_config = ConfigDict(extra="forbid")
 
     hops: list[TraceHop]
@@ -66,45 +78,75 @@ class TraceAnswer(_Model):
 
 class GateResult(_Strict):
     """The hops before the first break, and that break (`broken_at` is 1-based; 21 for `hop_limit`)."""
+
     accepted: list[PathHop]
     broken_at: int | None
     break_reason: BreakCode | None
     detail: str
 
 
-def gate_hops(hops: Sequence[TraceHop], *, root: Path, resolve: Resolve, entry: Entry,
-              known_edges: Sequence[KnownEdge], places: Sequence[Location],
-              index: PyIndex | None = None) -> GateResult:
+def gate_hops(
+    hops: Sequence[TraceHop],
+    *,
+    root: Path,
+    resolve: Resolve,
+    entry: Entry,
+    known_edges: Sequence[KnownEdge],
+    places: Sequence[Location],
+    index: PyIndex | None = None,
+) -> GateResult:
     """Check `hops` against the snapshot at `root` (see the module docstring). Makes no model call.
 
     `index` is a `PyIndex` already built for `root`; one is built when a
     connectivity check needs it.
     """
     if not hops:
-        return GateResult(accepted=[], broken_at=1, break_reason="empty_trace", detail="the answer has no hops")
+        return GateResult(
+            accepted=[],
+            broken_at=1,
+            break_reason="empty_trace",
+            detail="the answer has no hops",
+        )
     gate = _Gate(root, resolve, entry, known_edges, places, index)
     accepted: list[PathHop] = []
     for n, hop in enumerate(hops[:HOP_LIMIT], start=1):
         checked = gate.check(hop, accepted)
         if isinstance(checked, Break):
-            log.debug("trace of %s breaks at hop %d: %s (%s)", entry.name, n, checked.code, checked.detail)
-            return GateResult(accepted=accepted, broken_at=n, break_reason=checked.code, detail=checked.detail)
+            log.debug(
+                "trace of %s breaks at hop %d: %s (%s)",
+                entry.name,
+                n,
+                checked.code,
+                checked.detail,
+            )
+            return GateResult(
+                accepted=accepted,
+                broken_at=n,
+                break_reason=checked.code,
+                detail=checked.detail,
+            )
         accepted.append(checked)
     if len(hops) > HOP_LIMIT:
-        return GateResult(accepted=accepted, broken_at=HOP_LIMIT + 1, break_reason="hop_limit",
-                          detail=f"{len(hops)} hops given; the first {HOP_LIMIT} are kept")
+        return GateResult(
+            accepted=accepted,
+            broken_at=HOP_LIMIT + 1,
+            break_reason="hop_limit",
+            detail=f"{len(hops)} hops given; the first {HOP_LIMIT} are kept",
+        )
     return GateResult(accepted=accepted, broken_at=None, break_reason=None, detail="")
 
 
 @dataclass(frozen=True)
 class Break:
     """The first rule a hop or citation breaks, and why."""
+
     code: BreakCode
     detail: str
 
 
-def check_head_citation(root: Path, resolve: Resolve, path: str, line_start: int, line_end: int,
-                        quote: str) -> str | Break:
+def check_head_citation(
+    root: Path, resolve: Resolve, path: str, line_start: int, line_end: int, quote: str
+) -> str | Break:
     """Rules 1-4 for one citation re-read at head: its normalised path when it passes, else its first break."""
     try:
         path = normalise_rel_path(root, path)
@@ -114,10 +156,20 @@ def check_head_citation(root: Path, resolve: Resolve, path: str, line_start: int
         return Break("missing_file", f"{path} is not a file under the snapshot root")
     lines = count_lines((root / path).read_bytes())
     if not 1 <= line_start <= line_end <= lines:
-        return Break("line_out_of_range",
-                     f"lines {line_start}-{line_end} are not within the {lines} lines of {path}")
-    reason = check_citation(Citation(path=path, line_start=line_start, line_end=line_end, quote=quote, side="head"),
-                            resolve)
+        return Break(
+            "line_out_of_range",
+            f"lines {line_start}-{line_end} are not within the {lines} lines of {path}",
+        )
+    reason = check_citation(
+        Citation(
+            path=path,
+            line_start=line_start,
+            line_end=line_end,
+            quote=quote,
+            side="head",
+        ),
+        resolve,
+    )
     if reason is not None:
         return Break("text_mismatch", f"{path}:{line_start}-{line_end}: {reason}")
     return path
@@ -126,8 +178,15 @@ def check_head_citation(root: Path, resolve: Resolve, path: str, line_start: int
 class _Gate:
     """One gate run: the snapshot, the entry, its known connections, and the names read so far."""
 
-    def __init__(self, root: Path, resolve: Resolve, entry: Entry, known_edges: Sequence[KnownEdge],
-                 places: Sequence[Location], index: PyIndex | None):
+    def __init__(
+        self,
+        root: Path,
+        resolve: Resolve,
+        entry: Entry,
+        known_edges: Sequence[KnownEdge],
+        places: Sequence[Location],
+        index: PyIndex | None,
+    ):
         self._root = root
         self._resolve = resolve
         self._entry = entry
@@ -138,7 +197,11 @@ class _Gate:
 
     @cached_property
     def _index(self) -> PyIndex:
-        return self._given_index if self._given_index is not None else PyIndex.build(self._root)
+        return (
+            self._given_index
+            if self._given_index is not None
+            else PyIndex.build(self._root)
+        )
 
     def check(self, hop: TraceHop, earlier: Sequence[PathHop]) -> PathHop | Break:
         """The hop as accepted, or its first break given the hops `earlier` accepted."""
@@ -150,11 +213,19 @@ class _Gate:
     def _cite(self, hop: TraceHop) -> PathHop | Break:
         """Rules 1-5: the hop as a head-side citation that re-reads, or the first rule it breaks."""
         # Always re-read at head: a base-side hop is reported by its own rule, after the text.
-        path = check_head_citation(self._root, self._resolve, hop.path, hop.line_start, hop.line_end, hop.quote)
+        path = check_head_citation(
+            self._root, self._resolve, hop.path, hop.line_start, hop.line_end, hop.quote
+        )
         if isinstance(path, Break):
             return path
-        cited = PathHop(symbol_called=hop.symbol_called, path=path, line_start=hop.line_start,
-                        line_end=hop.line_end, quote=hop.quote, note=hop.note)
+        cited = PathHop(
+            symbol_called=hop.symbol_called,
+            path=path,
+            line_start=hop.line_start,
+            line_end=hop.line_end,
+            quote=hop.quote,
+            note=hop.note,
+        )
         if hop.side == "base":
             return Break("base_side_citation", f"{_where(cited)} cites the base side")
         return cited
@@ -163,19 +234,27 @@ class _Gate:
         """Rules 6-8: the first rule a re-read hop breaks in its place after `earlier`, or None."""
         if not earlier:
             if not self._anchored(cited):
-                return Break("entry_mismatch", f"{_where(cited)} holds neither the entry line "
-                                               f"{self._entry.location.path}:{self._entry.location.line} "
-                                               "nor its handler's line")
+                return Break(
+                    "entry_mismatch",
+                    f"{_where(cited)} holds neither the entry line "
+                    f"{self._entry.location.path}:{self._entry.location.line} "
+                    "nor its handler's line",
+                )
         elif not self._connected(earlier[-1], cited):
-            return Break("unconnected_hop", f"nothing connects {_where(earlier[-1])} to {cited.symbol_called!r} "
-                                            f"at {_where(cited)}")
+            return Break(
+                "unconnected_hop",
+                f"nothing connects {_where(earlier[-1])} to {cited.symbol_called!r} "
+                f"at {_where(cited)}",
+            )
         if any(_span(h) == _span(cited) for h in earlier):
             return Break("repeated_hop", f"{_where(cited)} is already an earlier hop")
         return None
 
     def _anchored(self, hop: PathHop) -> bool:
         handler = self._entry.handler
-        anchors = [self._entry.location] + ([Location(path=handler.path, line=handler.line)] if handler else [])
+        anchors = [self._entry.location] + (
+            [Location(path=handler.path, line=handler.line)] if handler else []
+        )
         return any(_holds(hop, anchor) for anchor in anchors)
 
     def _connected(self, prev: PathHop, hop: PathHop) -> bool:
@@ -189,9 +268,15 @@ class _Gate:
         must lie in `hop`'s range.
         """
         start, end = self._scope(prev)
-        named = self._is_named(prev, hop.symbol_called.strip().rsplit(".", 1)[-1], start, end)
-        by_edge = any(edge.from_.path == prev.path and start <= edge.from_.line <= end and _holds(hop, edge.to)
-                      for edge in self._edges)
+        named = self._is_named(
+            prev, hop.symbol_called.strip().rsplit(".", 1)[-1], start, end
+        )
+        by_edge = any(
+            edge.from_.path == prev.path
+            and start <= edge.from_.line <= end
+            and _holds(hop, edge.to)
+            for edge in self._edges
+        )
         return named or by_edge or any(_holds(hop, place) for place in self._places)
 
     def _is_python(self, hop: PathHop) -> bool:
@@ -206,15 +291,25 @@ class _Gate:
     def _is_named(self, hop: PathHop, name: str, start: int, end: int) -> bool:
         """Whether `name` is a NAME token in lines `start`-`end` of `hop`'s file, or a whole word of its quote."""
         if self._is_python(hop):
-            return any(start <= line <= end and token == name for line, token in self._name_tokens(hop.path))
-        return bool(name) and re.search(rf"(?<!\w){re.escape(name)}(?!\w)", hop.quote) is not None
+            return any(
+                start <= line <= end and token == name
+                for line, token in self._name_tokens(hop.path)
+            )
+        return (
+            bool(name)
+            and re.search(rf"(?<!\w){re.escape(name)}(?!\w)", hop.quote) is not None
+        )
 
     def _name_tokens(self, path: str) -> list[tuple[int, str]]:
         """`(line, name)` of every NAME token of a parsed Python file."""
         if path not in self._names:
             text = importlib.util.decode_source((self._root / path).read_bytes())
             tokens = tokenize.generate_tokens(io.StringIO(text).readline)
-            self._names[path] = [(tok.start[0], tok.string) for tok in tokens if tok.type == tokenize.NAME]
+            self._names[path] = [
+                (tok.start[0], tok.string)
+                for tok in tokens
+                if tok.type == tokenize.NAME
+            ]
         return self._names[path]
 
 

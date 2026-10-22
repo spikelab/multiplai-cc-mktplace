@@ -16,6 +16,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 class TestExpandBundles:
     def test_no_bundle_field_returns_picks_unchanged(self):
         from lib.routing_logic import expand_bundles
+
         catalog = [
             {"source": "a.md"},
             {"source": "b.md"},
@@ -24,6 +25,7 @@ class TestExpandBundles:
 
     def test_picking_bundle_member_pulls_in_siblings(self):
         from lib.routing_logic import expand_bundles
+
         catalog = [
             {"source": "voice.md", "bundle": "writing"},
             {"source": "style.md", "bundle": "writing"},
@@ -39,6 +41,7 @@ class TestExpandBundles:
     def test_picks_preserved_first(self):
         """Original picks come first; bundle siblings appended in catalog order."""
         from lib.routing_logic import expand_bundles
+
         catalog = [
             {"source": "style.md", "bundle": "writing"},
             {"source": "voice.md", "bundle": "writing"},
@@ -49,6 +52,7 @@ class TestExpandBundles:
 
     def test_no_duplicate_when_pick_already_in_bundle(self):
         from lib.routing_logic import expand_bundles
+
         catalog = [
             {"source": "voice.md", "bundle": "writing"},
             {"source": "style.md", "bundle": "writing"},
@@ -58,6 +62,7 @@ class TestExpandBundles:
 
     def test_unknown_pick_silently_skipped(self):
         from lib.routing_logic import expand_bundles
+
         catalog = [{"source": "a.md"}]
         result = expand_bundles(["ghost.md"], catalog)
         # Caller is responsible for filtering unknown picks pre-expand;
@@ -66,6 +71,7 @@ class TestExpandBundles:
 
     def test_excluded_entries_not_introduced(self):
         from lib.routing_logic import expand_bundles
+
         catalog = [
             {"source": "voice.md", "bundle": "writing"},
             {"source": "style.md", "bundle": "writing"},
@@ -76,11 +82,13 @@ class TestExpandBundles:
 
     def test_empty_picks_returns_empty(self):
         from lib.routing_logic import expand_bundles
+
         catalog = [{"source": "voice.md", "bundle": "writing"}]
         assert expand_bundles([], catalog) == []
 
     def test_multiple_bundles_all_expand(self):
         from lib.routing_logic import expand_bundles
+
         catalog = [
             {"source": "voice.md", "bundle": "writing"},
             {"source": "style.md", "bundle": "writing"},
@@ -100,11 +108,13 @@ class TestExpandBundles:
 class TestExpandCoRetrieve:
     def test_no_co_retrieve_returns_picks_unchanged(self):
         from lib.routing_logic import expand_co_retrieve
+
         catalog = [{"source": "a.md"}]
         assert expand_co_retrieve(["a.md"], catalog) == ["a.md"]
 
     def test_pulls_in_listed_companions(self):
         from lib.routing_logic import expand_co_retrieve
+
         catalog = [
             {"source": "main.md", "co_retrieve_for": ["companion.md"]},
             {"source": "companion.md"},
@@ -116,6 +126,7 @@ class TestExpandCoRetrieve:
     def test_companions_not_in_catalog_silently_skipped(self):
         """Filenames not present in the corpus are dropped (e.g. legacy 'diary' refs)."""
         from lib.routing_logic import expand_co_retrieve
+
         catalog = [
             {"source": "main.md", "co_retrieve_for": ["diary", "skills"]},
         ]
@@ -124,6 +135,7 @@ class TestExpandCoRetrieve:
 
     def test_excluded_companions_not_introduced(self):
         from lib.routing_logic import expand_co_retrieve
+
         catalog = [
             {"source": "main.md", "co_retrieve_for": ["companion.md"]},
             {"source": "companion.md"},
@@ -133,6 +145,7 @@ class TestExpandCoRetrieve:
 
     def test_non_string_companions_ignored(self):
         from lib.routing_logic import expand_co_retrieve
+
         catalog = [
             {"source": "main.md", "co_retrieve_for": [42, None, "companion.md"]},
             {"source": "companion.md"},
@@ -142,6 +155,7 @@ class TestExpandCoRetrieve:
 
     def test_non_list_co_retrieve_ignored(self):
         from lib.routing_logic import expand_co_retrieve
+
         catalog = [
             {"source": "main.md", "co_retrieve_for": "not-a-list"},
         ]
@@ -157,8 +171,13 @@ class TestExpandCoRetrieve:
 class TestExpandPicks:
     def test_bundle_then_co_retrieve(self):
         from lib.routing_logic import expand_picks
+
         catalog = [
-            {"source": "voice.md", "bundle": "writing", "co_retrieve_for": ["dictionary.md"]},
+            {
+                "source": "voice.md",
+                "bundle": "writing",
+                "co_retrieve_for": ["dictionary.md"],
+            },
             {"source": "style.md", "bundle": "writing"},
             {"source": "dictionary.md"},
         ]
@@ -168,5 +187,6 @@ class TestExpandPicks:
 
     def test_no_metadata_passes_picks_through(self):
         from lib.routing_logic import expand_picks
+
         catalog = [{"source": "a.md"}, {"source": "b.md"}]
         assert expand_picks(["a.md"], catalog) == ["a.md"]

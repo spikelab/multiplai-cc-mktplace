@@ -110,7 +110,9 @@ class _Run:
 
 
 class TestOnWatchdog:
-    def test_logs_the_sdk_log_its_tail_and_the_probe(self, tmp_path, caplog, monkeypatch):
+    def test_logs_the_sdk_log_its_tail_and_the_probe(
+        self, tmp_path, caplog, monkeypatch
+    ):
         monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
         sdk = tmp_path / "sdk"
         sdk.mkdir()
@@ -119,8 +121,10 @@ class TestOnWatchdog:
             "[DEBUG] [API REQUEST] /v1/messages x-client-request-id=abc source=sdk\n"
         )
         logger = logging.getLogger("test.hook_watchdog")
-        with patch.object(hw, "probe_network", return_value="dns=3ms tcp=40ms"), \
-                caplog.at_level(logging.WARNING, logger="test.hook_watchdog"):
+        with (
+            patch.object(hw, "probe_network", return_value="dns=3ms tcp=40ms"),
+            caplog.at_level(logging.WARNING, logger="test.hook_watchdog"),
+        ):
             hw.make_on_watchdog(logger, lambda: tmp_path)(_Run(elapsed_ms=26_000))
         msgs = [r.getMessage() for r in caplog.records]
         assert msgs[0] == (
@@ -131,8 +135,10 @@ class TestOnWatchdog:
 
     def test_no_sdk_log_is_said_explicitly(self, tmp_path, caplog):
         logger = logging.getLogger("test.hook_watchdog2")
-        with patch.object(hw, "probe_network", return_value="dns=1ms tcp=1ms"), \
-                caplog.at_level(logging.WARNING, logger="test.hook_watchdog2"):
+        with (
+            patch.object(hw, "probe_network", return_value="dns=1ms tcp=1ms"),
+            caplog.at_level(logging.WARNING, logger="test.hook_watchdog2"),
+        ):
             hw.make_on_watchdog(logger, lambda: tmp_path)(_Run(elapsed_ms=26_000))
         assert "sdk_log=none-this-run" in caplog.records[0].getMessage()
 
@@ -142,8 +148,10 @@ class TestOnWatchdog:
         def _boom():
             raise OSError("no data dir")
 
-        with patch.object(hw, "probe_network", return_value="dns=1ms tcp=1ms"), \
-                caplog.at_level(logging.WARNING, logger="test.hook_watchdog3"):
+        with (
+            patch.object(hw, "probe_network", return_value="dns=1ms tcp=1ms"),
+            caplog.at_level(logging.WARNING, logger="test.hook_watchdog3"),
+        ):
             hw.make_on_watchdog(logger, _boom)(_Run(elapsed_ms=26_000))
         assert "dns=1ms tcp=1ms" in caplog.records[0].getMessage()
 
@@ -161,7 +169,9 @@ class TestContextManagerArmsIt:
         ]
         assert timeouts, "context_manager hook not found in hooks.json"
         src = (SCRIPTS_DIR / "context_manager.py").read_text()
-        watchdog_s = float(re.search(r"^_WATCHDOG_S = ([\d.]+)", src, re.MULTILINE).group(1))
+        watchdog_s = float(
+            re.search(r"^_WATCHDOG_S = ([\d.]+)", src, re.MULTILINE).group(1)
+        )
         worst_probe_s = 2 * hw.PROBE_TIMEOUT_S
         for timeout in timeouts:
             assert watchdog_s + worst_probe_s + 1.0 <= timeout, (
@@ -174,14 +184,17 @@ class TestContextManagerArmsIt:
         assert re.search(
             r'setup_logging\(\s*"context_manager",\s*packages=\("lib", "generators"\)',
             src,
-        ), "context_manager must forward lib (and, by default, multiplai_core) to its file"
+        ), (
+            "context_manager must forward lib (and, by default, multiplai_core) to its file"
+        )
         assert "**_watchdog_kwargs()" in src
 
     def test_watchdog_is_armed_on_a_core_that_supports_it(self, monkeypatch):
         import context_manager as cm
 
-        def _new_hook_run(name, logger, *, session_id=None, watchdog_s=None,
-                          on_watchdog=None):
+        def _new_hook_run(
+            name, logger, *, session_id=None, watchdog_s=None, on_watchdog=None
+        ):
             pass
 
         monkeypatch.setattr(cm, "hook_run", _new_hook_run)

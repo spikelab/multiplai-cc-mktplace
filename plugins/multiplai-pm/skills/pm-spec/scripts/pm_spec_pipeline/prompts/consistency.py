@@ -73,5 +73,6 @@ def prior_findings_section(prior: list[dict] | None) -> str:
         return ""
     lines = "\n".join(
         f"- {f.get('finding_id', '?')} [{f.get('severity', '?')}] ({f.get('category', '?')}) {f.get('text', '')}"
-        for f in prior)
+        for f in prior
+    )
     return PRIOR_FINDINGS_SECTION.format(prior_findings=lines)

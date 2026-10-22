@@ -90,9 +90,7 @@ def _resolve_generators(
     return [name for name in GENERATOR_ORDER if _is_generator_enabled(name, config)]
 
 
-def _make_error_result(
-    name: str, error: Exception, dry_run: bool
-) -> GenerationResult:
+def _make_error_result(name: str, error: Exception, dry_run: bool) -> GenerationResult:
     """Create a GenerationResult capturing a generator-level failure."""
     return GenerationResult(
         generator=name,
@@ -168,6 +166,7 @@ async def _create_model_client():
     """Create a model client, with graceful fallback for test environments."""
     try:
         from multiplai_core.model_client import create_client
+
         return await create_client(component="catalogs")
     except Exception:
         logger.debug("Could not create model client, using stub")
@@ -177,6 +176,7 @@ async def _create_model_client():
 @dataclass(frozen=True)
 class _StubModelResponse:
     """Minimal response object for stub client, avoiding external imports."""
+
     content: str = "{}"
 
 

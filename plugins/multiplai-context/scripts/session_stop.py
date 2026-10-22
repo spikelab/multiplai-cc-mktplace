@@ -91,7 +91,8 @@ def _degraded_message(data_dir: Path, session_id: str, state: dict) -> str | Non
         pass
 
     log_event(
-        "checkpoint", "degraded",
+        "checkpoint",
+        "degraded",
         f"{failures} consecutive checkpoint writes degraded — "
         f"{state.get('last_failure', 'unknown cause')}",
         session_id=session_id,
@@ -187,10 +188,13 @@ def _checkpoint_pass(hook_input: dict, data_dir: Path) -> str | None:
         else:
             logger.info(
                 "Checkpoint writer spawned (%s) at %d tokens for %s",
-                reason, tokens, session_id,
+                reason,
+                tokens,
+                session_id,
             )
             log_event(
-                "checkpoint", "spawn",
+                "checkpoint",
+                "spawn",
                 f"checkpoint writer launched at {tokens:,} tokens ({reason})",
                 session_id=session_id,
                 tokens=tokens,
@@ -269,7 +273,8 @@ def main() -> None:
     setup_logging("session_stop", session_id=hook_input.get("session_id") or session_id)
 
     with hook_run(
-        "session_stop", logger,
+        "session_stop",
+        logger,
         session_id=hook_input.get("session_id") or session_id,
     ) as run:
         if session_state:

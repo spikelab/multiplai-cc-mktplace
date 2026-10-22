@@ -62,6 +62,7 @@ class TestSyncCheckpoint:
 
             class R:
                 returncode = 0
+
             return R()
 
         monkeypatch.setattr(pre_compact, "run_supervised", fake_run)
@@ -105,9 +106,7 @@ class TestSyncCheckpoint:
         hook_input = _hook_input(tmp_path, 90_000)
         cp.reset_session_counters(data_env, "sess-pc")  # stamps rebuild_ts=now
         # transcript record timestamp predates... write it in the past:
-        rec = json.loads(
-            (tmp_path / "t.jsonl").read_text().strip()
-        )
+        rec = json.loads((tmp_path / "t.jsonl").read_text().strip())
         rec["timestamp"] = "2020-01-01T00:00:00+00:00"
         (tmp_path / "t.jsonl").write_text(json.dumps(rec) + "\n")
         pre_compact._sync_checkpoint(hook_input, data_env)
@@ -136,6 +135,7 @@ class TestSyncCheckpoint:
 
             class R:
                 returncode = 0
+
             return R()
 
         monkeypatch.setattr(pre_compact, "run_supervised", fake_run)
@@ -168,6 +168,7 @@ class TestSyncCheckpoint:
         monkeypatch.setattr("sys.stdin", __import__("io").StringIO("{broken"))
         pre_compact.main()  # must not raise
 
+
 class _WriterOk:
     returncode = 0
 
@@ -191,33 +192,37 @@ class TestPendingRebuildMarker:
 
     def test_writes_marker(self, tmp_path, data_env):
         self._write_valid_checkpoint(data_env)
-        assert pre_compact._mark_pending_rebuild(
-            _hook_input(tmp_path, 90_000), data_env
-        ) is True
+        assert (
+            pre_compact._mark_pending_rebuild(_hook_input(tmp_path, 90_000), data_env)
+            is True
+        )
         markers = self._pending_markers(data_env)
         assert len(markers) == 1
         assert json.loads(markers[0].read_text())["session_id"] == "sess-pc"
 
     def test_no_marker_without_checkpoint(self, tmp_path, data_env):
-        assert pre_compact._mark_pending_rebuild(
-            _hook_input(tmp_path, 90_000), data_env
-        ) is False
+        assert (
+            pre_compact._mark_pending_rebuild(_hook_input(tmp_path, 90_000), data_env)
+            is False
+        )
         assert self._pending_markers(data_env) == []
 
     def test_no_marker_on_invalid_checkpoint(self, tmp_path, data_env):
         cp.session_dir(data_env, "sess-pc").mkdir(parents=True, exist_ok=True)
         cp.checkpoint_file(data_env, "sess-pc").write_text("## Notes\nonly one")
-        assert pre_compact._mark_pending_rebuild(
-            _hook_input(tmp_path, 90_000), data_env
-        ) is False
+        assert (
+            pre_compact._mark_pending_rebuild(_hook_input(tmp_path, 90_000), data_env)
+            is False
+        )
         assert self._pending_markers(data_env) == []
 
     def test_no_marker_when_disabled(self, tmp_path, data_env, monkeypatch):
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_ENABLED", "false")
         self._write_valid_checkpoint(data_env)
-        assert pre_compact._mark_pending_rebuild(
-            _hook_input(tmp_path, 90_000), data_env
-        ) is False
+        assert (
+            pre_compact._mark_pending_rebuild(_hook_input(tmp_path, 90_000), data_env)
+            is False
+        )
 
     def test_no_marker_for_child_sessions(self, tmp_path, data_env):
         self._write_valid_checkpoint(data_env, session_id="child")
@@ -254,9 +259,10 @@ class TestPendingRebuildMarker:
         path = cp.checkpoint_file(data_env, "sess-pc")
         old = time.time() - 3600
         os.utime(path, (old, old))
-        assert pre_compact._mark_pending_rebuild(
-            _hook_input(tmp_path, 900_000), data_env
-        ) is True
+        assert (
+            pre_compact._mark_pending_rebuild(_hook_input(tmp_path, 900_000), data_env)
+            is True
+        )
 
 
 class TestSummarizerIsLeftAlone:
@@ -300,15 +306,17 @@ class TestSummarizerIsLeftAlone:
         """Cheap tripwire: the directive must not come back by copy-paste."""
         src = (PLUGIN_ROOT / "scripts" / "pre_compact.py").read_text()
         body = src.split('"""', 2)[2]  # skip the module docstring, which explains it
-        for banned in ("PRIORITY OVERRIDE", "newCustomInstructions", "Do not summarize"):
+        for banned in (
+            "PRIORITY OVERRIDE",
+            "newCustomInstructions",
+            "Do not summarize",
+        ):
             assert banned not in body, banned
 
 
 class TestSyncCheckpointResult:
     def test_returns_true_on_success(self, tmp_path, data_env, monkeypatch):
-        monkeypatch.setattr(
-            pre_compact, "run_supervised", lambda *a, **k: _WriterOk()
-        )
+        monkeypatch.setattr(pre_compact, "run_supervised", lambda *a, **k: _WriterOk())
         assert (
             pre_compact._sync_checkpoint(_hook_input(tmp_path, 90_000), data_env)
             is True
@@ -328,9 +336,7 @@ class TestSyncCheckpointResult:
 
         t = threading.Thread(target=release)
         t.start()
-        result = pre_compact._sync_checkpoint(
-            _hook_input(tmp_path, 90_000), data_env
-        )
+        result = pre_compact._sync_checkpoint(_hook_input(tmp_path, 90_000), data_env)
         t.join()
         assert result is True
 

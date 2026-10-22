@@ -86,10 +86,18 @@ class _Round:
             _log(self.log, "triage", "")
             return await triage(prompt, schema, **kw)
 
-        run, lines = _run(self.config, self.change, triage_call=triage_call, review=self.review,
-                          self_check=FakeCheck([self.report], log=self.log, stop=check_stop,
-                                               diffs_log=self.diffs))
-        stubs = block_stubs(self.repo, self.log, stop_at=stop_at, stop=_die if stop_at else None)
+        run, lines = _run(
+            self.config,
+            self.change,
+            triage_call=triage_call,
+            review=self.review,
+            self_check=FakeCheck(
+                [self.report], log=self.log, stop=check_stop, diffs_log=self.diffs
+            ),
+        )
+        stubs = block_stubs(
+            self.repo, self.log, stop_at=stop_at, stop=_die if stop_at else None
+        )
         with _Stubs([*stubs, *patches]):
             exit_code = asyncio.run(loop.run_findings(run))
         self.lines = lines
@@ -97,7 +105,9 @@ class _Round:
 
     def writes(self) -> list[tuple]:
         """The writing calls, without the shas and bodies that name commits."""
-        return [e[:2] for e in self.pr.events] + [("post", p) for p in self.review.posts]
+        return [e[:2] for e in self.pr.events] + [
+            ("post", p) for p in self.review.posts
+        ]
 
 
 def _unstopped(tmp_path: Path, monkeypatch, report: str) -> _Round:
@@ -109,7 +119,9 @@ def _unstopped(tmp_path: Path, monkeypatch, report: str) -> _Round:
 def _assert_like_unstopped(stopped: _Round, clean: _Round, extra_calls=()) -> None:
     assert stopped.lines[-1] == clean.lines[-1], stopped.lines
     assert_same_as_unstopped(stopped.repo, clean.repo)
-    assert Counter(calls(stopped.log)) == Counter(calls(clean.log)) + Counter(extra_calls)
+    assert Counter(calls(stopped.log)) == Counter(calls(clean.log)) + Counter(
+        extra_calls
+    )
     assert stopped.writes() == clean.writes()
 
 
@@ -118,9 +130,18 @@ def _checks(r: _Round) -> int:
 
 
 def _wip_refs(r: _Round) -> dict[str, str]:
-    out = subprocess.run(["git", "for-each-ref", "--format=%(refname) %(objectname)",
-                          "refs/buildme/wip/"], cwd=r.repo, check=True, capture_output=True,
-                         text=True).stdout
+    out = subprocess.run(
+        [
+            "git",
+            "for-each-ref",
+            "--format=%(refname) %(objectname)",
+            "refs/buildme/wip/",
+        ],
+        cwd=r.repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
     return dict(line.split() for line in out.splitlines())
 
 
@@ -134,8 +155,14 @@ def _kill_after_saving_the_check():
 
     def checkpoint(self, *a, **kw):
         real(self, *a, **kw)
-        rnd = self.findings.rounds[-1] if self.findings and self.findings.rounds else None
-        if rnd is not None and rnd.self_check is not None and "code" not in rnd.finished:
+        rnd = (
+            self.findings.rounds[-1] if self.findings and self.findings.rounds else None
+        )
+        if (
+            rnd is not None
+            and rnd.self_check is not None
+            and "code" not in rnd.finished
+        ):
             os._exit(137)
 
     return patch.object(BuildState, "checkpoint", checkpoint)
@@ -168,12 +195,22 @@ class TestD1Rows:
         clean = _unstopped(tmp_path, monkeypatch, PROBLEM)
         s = _Round(tmp_path / "stopped", monkeypatch, PROBLEM)
         report = code.self_check_file_name(1)
-        _killed(lambda: s.run(patches=[_kill_at(
-            "commit_round_files", lambda d, n, paths: any(Path(p).name == report for p in paths))]))
-        assert (s.change / report).exists()            # written, not committed
+        _killed(
+            lambda: s.run(
+                patches=[
+                    _kill_at(
+                        "commit_round_files",
+                        lambda d, n, paths: any(Path(p).name == report for p in paths),
+                    )
+                ]
+            )
+        )
+        assert (s.change / report).exists()  # written, not committed
         assert _checks(s) == 1
         assert s.run() == 0, s.lines
-        assert [ln.split(":")[2] for ln in _wip_lines(s)] == ["refs/buildme/wip/calc/r1-code-stopped"]
+        assert [ln.split(":")[2] for ln in _wip_lines(s)] == [
+            "refs/buildme/wip/calc/r1-code-stopped"
+        ]
         _assert_like_unstopped(s, clean)
 
     def test_row_D1_S4_records_committed_block_not_added(self, tmp_path, monkeypatch):
@@ -181,7 +218,10 @@ class TestD1Rows:
         clean = _unstopped(tmp_path, monkeypatch, PROBLEM)
         s = _Round(tmp_path / "stopped", monkeypatch, PROBLEM)
         _killed(lambda: s.run(patches=[_kill_at("add_block")]))
-        assert [b.number for b in BuildState.load(s.change / code.engine_state_name(1)).tdd.blocks] == [1]
+        assert [
+            b.number
+            for b in BuildState.load(s.change / code.engine_state_name(1)).tdd.blocks
+        ] == [1]
         assert s.run() == 0, s.lines
         assert not _wip_lines(s)
         _assert_like_unstopped(s, clean)
@@ -193,10 +233,14 @@ class TestD1Rows:
         _killed(lambda: s.run(stop_at=("implementer", CHECK_BLOCK)))
         assert s.run() == 0, s.lines
         assert [ln.split(":")[2] for ln in _wip_lines(s)] == [
-            "refs/buildme/wip/calc/r1-code-block2-stopped"]
+            "refs/buildme/wip/calc/r1-code-block2-stopped"
+        ]
         assert _checks(s) == 1
-        _assert_like_unstopped(s, clean, extra_calls=[("test_writer", CHECK_BLOCK),
-                                                      ("implementer", CHECK_BLOCK)])
+        _assert_like_unstopped(
+            s,
+            clean,
+            extra_calls=[("test_writer", CHECK_BLOCK), ("implementer", CHECK_BLOCK)],
+        )
 
     def test_row_D1_S6_check_found_nothing_saved(self, tmp_path, monkeypatch):
         monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
@@ -207,11 +251,15 @@ class TestD1Rows:
         assert not _wip_lines(s)
         _assert_like_unstopped(s, clean)
 
-    def test_row_D1_S10_user_edit_outside_the_change_dir_is_refused(self, tmp_path, monkeypatch):
+    def test_row_D1_S10_user_edit_outside_the_change_dir_is_refused(
+        self, tmp_path, monkeypatch
+    ):
         monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
         s = _Round(tmp_path / "stopped", monkeypatch, PROBLEM)
         _killed(lambda: s.run(check_stop=_die))
-        (s.repo / "calc.py").write_text("def add(a, b):\n    return a + b  # the user's edit\n")
+        (s.repo / "calc.py").write_text(
+            "def add(a, b):\n    return a + b  # the user's edit\n"
+        )
         before = repo_state(s.repo)
         assert s.run() == 1, s.lines
         assert s.lines[-1].startswith("FINDINGS:FAILED:code:code step: "), s.lines
@@ -232,8 +280,10 @@ class TestD1Rows:
             name = kw.get("block_name", "")
             _log(s.log, "test_writer", name)
             test = s.repo / "tests" / f"test_{_slug(name)}.py"
-            test.write_text(f"{test.read_text() if test.exists() else ''}# the second attempt\n"
-                            "from calc import add\n\ndef test_again():\n    assert add(1, 1) == 2\n")
+            test.write_text(
+                f"{test.read_text() if test.exists() else ''}# the second attempt\n"
+                "from calc import add\n\ndef test_again():\n    assert add(1, 1) == 2\n"
+            )
             return AgentResult(success=True, output="tests written")
 
         for attempt in range(2):
@@ -242,17 +292,29 @@ class TestD1Rows:
             elif attempt == 0:
                 _killed(lambda: s.run(stop_at=("implementer", CHECK_BLOCK)))
             else:
-                _killed(lambda: s.run(stop_at=("implementer", CHECK_BLOCK),
-                                      patches=[patch("build_pipeline.tdd_engine.run_test_writer",
-                                                     side_effect=second_attempt)]))
+                _killed(
+                    lambda: s.run(
+                        stop_at=("implementer", CHECK_BLOCK),
+                        patches=[
+                            patch(
+                                "build_pipeline.tdd_engine.run_test_writer",
+                                side_effect=second_attempt,
+                            )
+                        ],
+                    )
+                )
             refs_after.append(_wip_refs(s))
         assert s.run() == 0, s.lines
         if where == "check":
             _assert_like_unstopped(s, clean, extra_calls=[("check", "")] * 2)
         else:
-            assert _checks(s) == 1                     # never again once saved
-            _assert_like_unstopped(s, clean, extra_calls=[("test_writer", CHECK_BLOCK),
-                                                          ("implementer", CHECK_BLOCK)] * 2)
+            assert _checks(s) == 1  # never again once saved
+            _assert_like_unstopped(
+                s,
+                clean,
+                extra_calls=[("test_writer", CHECK_BLOCK), ("implementer", CHECK_BLOCK)]
+                * 2,
+            )
             # The second attempt's work differs, so the second keep writes
             # `<ref>-2`; the first attempt's work stays where the first keep
             # put it.
@@ -264,15 +326,22 @@ class TestD1Rows:
             assert refs[first] == refs_after[1][first]
             assert [ln.split(":")[2] for ln in _wip_lines(s)] == [f"{first}-2"]
             test = f"tests/test_{_slug(CHECK_BLOCK)}.py"
-            show = lambda ref: subprocess.run(
-                ["git", "show", f"{ref}:{test}"], cwd=s.repo, check=True, capture_output=True,
-                text=True).stdout
+            show = lambda ref: (
+                subprocess.run(
+                    ["git", "show", f"{ref}:{test}"],
+                    cwd=s.repo,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout
+            )
             assert "# the second attempt" in show(f"{first}-2")
             assert "# the second attempt" not in show(first)
             assert "# the second attempt" not in (s.repo / test).read_text()
 
-    def test_after_a_resumed_block_the_check_gets_the_unstopped_run_s_range(self, tmp_path,
-                                                                             monkeypatch):
+    def test_after_a_resumed_block_the_check_gets_the_unstopped_run_s_range(
+        self, tmp_path, monkeypatch
+    ):
         """Item 31: a stop in a fix block and its resume must not move
         `code_base`; the check reads the same diff as a run never stopped."""
         monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
@@ -282,4 +351,7 @@ class TestD1Rows:
         assert calls(s.diffs) == []
         assert s.run() == 0, s.lines
         assert calls(s.diffs) == calls(clean.diffs)
-        assert len(calls(clean.diffs)) == 1 and "+    return a + b" in calls(clean.diffs)[0][0]
+        assert (
+            len(calls(clean.diffs)) == 1
+            and "+    return a + b" in calls(clean.diffs)[0][0]
+        )

@@ -32,8 +32,10 @@ logging.getLogger("lib.checkpoint").warning("lib probe warning")
 
 def _clean_env(data_dir: Path) -> dict:
     env = {
-        k: v for k, v in os.environ.items()
-        if not k.startswith("CLAUDE_PLUGIN") and k not in ("WORKSPACE", "CLAUDE_PROJECT_DIR")
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith("CLAUDE_PLUGIN")
+        and k not in ("WORKSPACE", "CLAUDE_PROJECT_DIR")
     }
     env["CLAUDE_PLUGIN_OPTION_DATA_DIR"] = str(data_dir)
     env.pop("MULTIPLAI_LOG_LEVEL", None)
@@ -46,7 +48,10 @@ def test_lib_and_core_lines_reach_the_script_log(tmp_path, script):
     data_dir = tmp_path / "data"
     proc = subprocess.run(
         [sys.executable, "-c", _PROBE, str(SCRIPTS_DIR), script],
-        env=_clean_env(data_dir), capture_output=True, text=True, timeout=60,
+        env=_clean_env(data_dir),
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
     assert proc.returncode == 0, proc.stderr
 

@@ -48,8 +48,11 @@ def _make_memory_dir(tmp_path: Path, files: dict[str, str] | None = None) -> Pat
 def _import_context_manager():
     """Dynamically import context_manager module."""
     from multiplai_core.paths import _reset_cache
+
     _reset_cache()
-    spec = importlib.util.spec_from_file_location("context_manager", CONTEXT_MANAGER_PATH)
+    spec = importlib.util.spec_from_file_location(
+        "context_manager", CONTEXT_MANAGER_PATH
+    )
     if spec is None or spec.loader is None:
         raise ImportError(f"Cannot import context_manager from {CONTEXT_MANAGER_PATH}")
     mod = importlib.util.module_from_spec(spec)
@@ -57,8 +60,16 @@ def _import_context_manager():
     return mod
 
 
-_EXCLUDE_DIRS = {"__pycache__", ".git", "node_modules", "data", "venv",
-                  ".pytest_cache", ".venv", "specs"}
+_EXCLUDE_DIRS = {
+    "__pycache__",
+    ".git",
+    "node_modules",
+    "data",
+    "venv",
+    ".pytest_cache",
+    ".venv",
+    "specs",
+}
 
 
 def _all_plugin_files(suffix: str) -> list[Path]:
@@ -94,19 +105,22 @@ class TestFileRename:
     def test_context_manager_exists(self):
         """WHEN the plugin repository is checked after the rename
         THEN scripts/context_manager.py exists."""
-        assert CONTEXT_MANAGER_PATH.is_file(), \
+        assert CONTEXT_MANAGER_PATH.is_file(), (
             f"scripts/context_manager.py must exist at {CONTEXT_MANAGER_PATH}"
+        )
 
     def test_context_router_does_not_exist(self):
         """WHEN the plugin repository is checked after the rename
         THEN scripts/context_router.py does NOT exist."""
-        assert not CONTEXT_ROUTER_PATH.is_file(), \
+        assert not CONTEXT_ROUTER_PATH.is_file(), (
             "scripts/context_router.py must be removed after rename"
+        )
 
     def test_context_manager_is_python(self):
         """WHEN scripts/context_manager.py is checked
         THEN it is a valid Python file that compiles without errors."""
         import py_compile
+
         assert CONTEXT_MANAGER_PATH.is_file(), "context_manager.py must exist"
         py_compile.compile(str(CONTEXT_MANAGER_PATH), doraise=True)
 
@@ -126,13 +140,11 @@ class TestHooksJsonUpdated:
     def test_hooks_json_references_context_manager(self):
         """WHEN hooks/hooks.json is parsed after the rename
         THEN a UserPromptSubmit hook references scripts/context_manager.py."""
-        user_prompt_hooks = [
-            h for h in self.hooks if h["event"] == "UserPromptSubmit"
-        ]
+        user_prompt_hooks = [h for h in self.hooks if h["event"] == "UserPromptSubmit"]
         assert len(user_prompt_hooks) > 0, "No UserPromptSubmit hook found"
-        assert any(h["script"] == "scripts/context_manager.py"
-                   for h in user_prompt_hooks), \
-            "hooks.json must have a UserPromptSubmit hook -> scripts/context_manager.py"
+        assert any(
+            h["script"] == "scripts/context_manager.py" for h in user_prompt_hooks
+        ), "hooks.json must have a UserPromptSubmit hook -> scripts/context_manager.py"
 
     def test_no_stale_context_router_in_hooks_json(self):
         """WHEN hooks/hooks.json is searched for 'context_router'
@@ -149,7 +161,10 @@ class TestHooksJsonUpdated:
         """WHEN the context_manager hook entry references a script
         THEN that script file exists in the plugin directory."""
         for h in self.hooks:
-            if h["event"] == "UserPromptSubmit" and h["script"] == "scripts/context_manager.py":
+            if (
+                h["event"] == "UserPromptSubmit"
+                and h["script"] == "scripts/context_manager.py"
+            ):
                 script_path = PLUGIN_ROOT / h["script"]
                 assert script_path.is_file(), f"Hook script not found: {script_path}"
                 return
@@ -160,9 +175,11 @@ class TestHooksJsonUpdated:
         THEN its timeout is 30 (seconds, official schema) — headroom for
         the opt-in inline llm router (router timeout 25s + margin)."""
         for h in self.hooks:
-            if h["event"] == "UserPromptSubmit" and h["script"] == "scripts/context_manager.py":
-                assert h["timeout"] == 30, \
-                    f"Expected 30s timeout, got {h['timeout']}"
+            if (
+                h["event"] == "UserPromptSubmit"
+                and h["script"] == "scripts/context_manager.py"
+            ):
+                assert h["timeout"] == 30, f"Expected 30s timeout, got {h['timeout']}"
                 return
         pytest.fail("context_manager hook not found in hooks.json")
 
@@ -178,7 +195,11 @@ class TestZeroContextRouterReferences:
 
     # Files that are allowed to mention context_router (specs/design docs, archives,
     # and this test file itself which tests the rename)
-    EXEMPT_PATHS = {"specs/", "build-progress.md", "tests/test_context_manager_rename.py"}
+    EXEMPT_PATHS = {
+        "specs/",
+        "build-progress.md",
+        "tests/test_context_manager_rename.py",
+    }
 
     def _is_exempt(self, filepath: Path) -> bool:
         rel = str(filepath.relative_to(PLUGIN_ROOT))
@@ -198,22 +219,25 @@ class TestZeroContextRouterReferences:
                 for line_no, line in enumerate(text.splitlines(), 1):
                     if "context_router" in line:
                         violations.append(f"  {rel}:{line_no}: {line.strip()[:80]}")
-        assert len(violations) == 0, \
+        assert len(violations) == 0, (
             "'context_router' found in Python files:\n" + "\n".join(violations)
+        )
 
     def test_no_context_router_in_hooks_json(self):
         """WHEN hooks/hooks.json is searched for 'context_router'
         THEN zero matches are found."""
         text = HOOKS_JSON.read_text()
-        assert "context_router" not in text, \
+        assert "context_router" not in text, (
             "hooks.json still contains 'context_router'"
+        )
 
     def test_no_context_router_in_plugin_json(self):
         """WHEN plugin.json is searched for 'context_router'
         THEN zero matches are found."""
         text = (PLUGIN_ROOT / ".claude-plugin" / "plugin.json").read_text()
-        assert "context_router" not in text, \
+        assert "context_router" not in text, (
             "plugin.json still contains 'context_router'"
+        )
 
     def test_no_context_router_in_skill_files(self):
         """WHEN all .md files under skills/ are searched for 'context_router'
@@ -226,8 +250,9 @@ class TestZeroContextRouterReferences:
             text = md_file.read_text()
             if "context_router" in text:
                 violations.append(md_file.name)
-        assert len(violations) == 0, \
+        assert len(violations) == 0, (
             f"'context_router' found in skill files: {violations}"
+        )
 
     def test_no_context_router_in_markdown_docs(self):
         """WHEN all non-spec markdown files are searched for 'context_router'
@@ -240,8 +265,7 @@ class TestZeroContextRouterReferences:
             if "context_router" in text:
                 rel = md_file.relative_to(PLUGIN_ROOT)
                 violations.append(str(rel))
-        assert len(violations) == 0, \
-            f"'context_router' found in docs: {violations}"
+        assert len(violations) == 0, f"'context_router' found in docs: {violations}"
 
     def test_no_context_router_in_test_files(self):
         """WHEN all test files under tests/ are searched for 'context_router'
@@ -262,8 +286,9 @@ class TestZeroContextRouterReferences:
                     if "context_router" in line:
                         rel = test_file.relative_to(PLUGIN_ROOT)
                         violations.append(f"  {rel}:{line_no}: {stripped[:80]}")
-        assert len(violations) == 0, \
+        assert len(violations) == 0, (
             "'context_router' found in test files:\n" + "\n".join(violations)
+        )
 
 
 # ===========================================================================
@@ -293,22 +318,25 @@ class TestImportsResolve:
         """WHEN context_manager is imported
         THEN it exposes _rank_memory_files."""
         mod = _import_context_manager()
-        assert hasattr(mod, "_rank_memory_files"), \
+        assert hasattr(mod, "_rank_memory_files"), (
             "context_manager must expose _rank_memory_files"
+        )
 
     def test_context_manager_exposes_read_top(self):
         """WHEN context_manager is imported
         THEN it exposes _read_top_memory_files."""
         mod = _import_context_manager()
-        assert hasattr(mod, "_read_top_memory_files"), \
+        assert hasattr(mod, "_read_top_memory_files"), (
             "context_manager must expose _read_top_memory_files"
+        )
 
     def test_context_manager_exposes_ranked_file(self):
         """WHEN context_manager is imported
         THEN it exposes the RankedFile dataclass."""
         mod = _import_context_manager()
-        assert hasattr(mod, "RankedFile"), \
+        assert hasattr(mod, "RankedFile"), (
             "context_manager must expose RankedFile dataclass"
+        )
 
 
 # ===========================================================================
@@ -325,8 +353,9 @@ class TestSelfReferencesUpdated:
         THEN zero matches are found."""
         assert CONTEXT_MANAGER_PATH.is_file(), "context_manager.py must exist"
         text = CONTEXT_MANAGER_PATH.read_text()
-        assert "context_router" not in text, \
+        assert "context_router" not in text, (
             "context_manager.py must not contain any 'context_router' string"
+        )
 
     def test_logger_name_is_context_manager(self):
         """WHEN scripts/context_manager.py creates a logger
@@ -334,10 +363,12 @@ class TestSelfReferencesUpdated:
         assert CONTEXT_MANAGER_PATH.is_file(), "context_manager.py must exist"
         text = CONTEXT_MANAGER_PATH.read_text()
         # The original had: setup_logging("context_router")
-        assert re.search(r"""setup_logging\(\s*["']context_manager["']""", text), \
+        assert re.search(r"""setup_logging\(\s*["']context_manager["']""", text), (
             "Logger must use 'context_manager' as name"
+        )
         assert "context_router" not in re.findall(
-            r"""setup_logging\(\s*["'](\w+)["']""", text)
+            r"""setup_logging\(\s*["'](\w+)["']""", text
+        )
 
     def test_docstring_updated(self):
         """WHEN the module docstring of context_manager.py is read
@@ -345,8 +376,9 @@ class TestSelfReferencesUpdated:
         assert CONTEXT_MANAGER_PATH.is_file(), "context_manager.py must exist"
         text = CONTEXT_MANAGER_PATH.read_text()
         # Original docstring said "Context router hook"
-        assert "context_router" not in text.split('"""')[1] if '"""' in text else True, \
-            "Module docstring must not reference 'context_router'"
+        assert (
+            "context_router" not in text.split('"""')[1] if '"""' in text else True
+        ), "Module docstring must not reference 'context_router'"
 
 
 # ===========================================================================
@@ -370,8 +402,9 @@ class TestNoFunctionalChange:
             "_read_top_memory_files",
         ]
         for name in expected_names:
-            assert hasattr(mod, name), \
+            assert hasattr(mod, name), (
                 f"context_manager.py must expose '{name}' from original context_router.py"
+            )
 
     def test_ranking_still_works(self, tmp_path):
         """WHEN context_manager._rank_memory_files is called with memory files
@@ -380,8 +413,9 @@ class TestNoFunctionalChange:
         mem_dir.mkdir()
         (mem_dir / "recent.md").write_text("# Recent file\nContent here.")
         (mem_dir / "old.md").write_text("# Old file\nContent here too.")
-        os.utime(mem_dir / "old.md",
-                 (time.time() - 86400 * 30, time.time() - 86400 * 30))
+        os.utime(
+            mem_dir / "old.md", (time.time() - 86400 * 30, time.time() - 86400 * 30)
+        )
 
         mod = _import_context_manager()
         ranked = mod._rank_memory_files(mem_dir)
@@ -437,8 +471,9 @@ class TestNoFunctionalChange:
         """WHEN context_manager.py is inspected
         THEN it has if __name__ == '__main__' guard."""
         text = CONTEXT_MANAGER_PATH.read_text()
-        assert "__name__" in text and "__main__" in text, \
+        assert "__name__" in text and "__main__" in text, (
             "context_manager.py must have __name__ == '__main__' guard"
+        )
 
 
 # ===========================================================================
@@ -457,22 +492,25 @@ class TestVenvGuardPreserved:
         THEN it carries no PEP 723 inline-metadata header — its dependencies
         come from scripts/pyproject.toml, resolved once from uv.lock."""
         text = CONTEXT_MANAGER_PATH.read_text()
-        assert "# /// script" not in text, \
+        assert "# /// script" not in text, (
             "context_manager.py carries a PEP 723 header again"
+        )
 
     def test_no_venv_guard(self):
         """WHEN context_manager.py is inspected
         THEN the retired venv guard preamble is gone."""
         text = CONTEXT_MANAGER_PATH.read_text()
-        assert "venv_guard" not in text and "ensure_venv_python" not in text, \
+        assert "venv_guard" not in text and "ensure_venv_python" not in text, (
             "context_manager.py must not reference the retired venv guard"
+        )
 
     def test_uses_core_paths(self):
         """WHEN context_manager.py is inspected
         THEN it imports from multiplai_core.paths."""
         text = CONTEXT_MANAGER_PATH.read_text()
-        assert "from multiplai_core.paths" in text or "multiplai_core.paths" in text, \
+        assert "from multiplai_core.paths" in text or "multiplai_core.paths" in text, (
             "context_manager.py must import from multiplai_core.paths"
+        )
 
     def test_delegates_llm_routing_to_router(self):
         """WHEN context_manager.py is inspected
@@ -481,8 +519,9 @@ class TestVenvGuardPreserved:
         model client directly — the LLM call only fires on the ``llm``
         router path, inside memory_router, never on the hot hook path here."""
         text = CONTEXT_MANAGER_PATH.read_text()
-        assert "create_router" in text or "memory_router" in text, \
+        assert "create_router" in text or "memory_router" in text, (
             "context_manager.py must delegate routing to lib.memory_router"
+        )
 
 
 # ===========================================================================
@@ -501,15 +540,17 @@ class TestReadCatalogOrScanStub:
         """WHEN context_manager.py is imported
         THEN it has a _read_catalog_or_scan function or method."""
         mod = _import_context_manager()
-        assert hasattr(mod, "_read_catalog_or_scan"), \
+        assert hasattr(mod, "_read_catalog_or_scan"), (
             "context_manager.py must expose _read_catalog_or_scan()"
+        )
 
     def test_read_catalog_or_scan_is_callable(self):
         """WHEN _read_catalog_or_scan is accessed
         THEN it is callable."""
         mod = _import_context_manager()
-        assert callable(mod._read_catalog_or_scan), \
+        assert callable(mod._read_catalog_or_scan), (
             "_read_catalog_or_scan must be callable"
+        )
 
     def test_read_catalog_or_scan_accepts_catalog_type(self):
         """WHEN _read_catalog_or_scan signature is inspected
@@ -518,8 +559,9 @@ class TestReadCatalogOrScanStub:
         sig = inspect.signature(mod._read_catalog_or_scan)
         params = list(sig.parameters.keys())
         # Should have catalog_type as first param (after self if it's a method)
-        assert "catalog_type" in params, \
+        assert "catalog_type" in params, (
             "_read_catalog_or_scan must accept catalog_type parameter"
+        )
 
     def test_read_catalog_or_scan_returns_list(self):
         """WHEN _read_catalog_or_scan is called with a catalog type
@@ -527,8 +569,7 @@ class TestReadCatalogOrScanStub:
         mod = _import_context_manager()
         # The stub should return a list, possibly empty
         result = mod._read_catalog_or_scan("memory")
-        assert isinstance(result, list), \
-            "_read_catalog_or_scan must return a list"
+        assert isinstance(result, list), "_read_catalog_or_scan must return a list"
 
     def test_read_catalog_or_scan_fallback_on_missing_catalog(self):
         """WHEN _read_catalog_or_scan is called and no catalog file exists
@@ -536,8 +577,9 @@ class TestReadCatalogOrScanStub:
         mod = _import_context_manager()
         # With no catalog present, should fall back without error
         result = mod._read_catalog_or_scan("memory")
-        assert isinstance(result, list), \
+        assert isinstance(result, list), (
             "_read_catalog_or_scan must return a list on fallback"
+        )
 
     def test_read_catalog_or_scan_fallback_on_invalid_type(self):
         """WHEN _read_catalog_or_scan is called with an unknown catalog type
@@ -557,10 +599,10 @@ class TestReadCatalogOrScanStub:
         doc = mod._read_catalog_or_scan.__doc__
         assert doc is not None, "_read_catalog_or_scan must have a docstring"
         doc_lower = doc.lower()
-        assert "catalog" in doc_lower, \
-            "Docstring must mention catalog"
-        assert "fall" in doc_lower or "fallback" in doc_lower or "scan" in doc_lower, \
+        assert "catalog" in doc_lower, "Docstring must mention catalog"
+        assert "fall" in doc_lower or "fallback" in doc_lower or "scan" in doc_lower, (
             "Docstring must mention fallback or scanning behavior"
+        )
 
 
 # ===========================================================================
@@ -587,9 +629,10 @@ class TestTestFileReferencesUpdated:
                     continue
                 if "context_router" in line and "context_manager" not in line:
                     non_comment_refs.append(f"  line {line_no}: {stripped[:80]}")
-            assert len(non_comment_refs) == 0, \
-                "test_context_router_hook.py has active context_router references:\n" + \
-                "\n".join(non_comment_refs)
+            assert len(non_comment_refs) == 0, (
+                "test_context_router_hook.py has active context_router references:\n"
+                + "\n".join(non_comment_refs)
+            )
 
     def test_test_script_port_updated(self):
         """WHEN tests/test_script_port.py is checked
@@ -645,10 +688,10 @@ class TestHookExecutionAfterRename:
         ups = [h for h in parse_hooks() if h["event"] == "UserPromptSubmit"]
         for h in ups:
             script_path = PLUGIN_ROOT / h["script"]
-            assert script_path.is_file(), \
-                f"Hook script does not exist: {h['script']}"
-        assert any("context_manager" in h["script"] for h in ups), \
+            assert script_path.is_file(), f"Hook script does not exist: {h['script']}"
+        assert any("context_manager" in h["script"] for h in ups), (
             "UserPromptSubmit hooks must include context_manager"
+        )
 
     def test_stdin_json_accepted(self, tmp_path, monkeypatch, reset_paths_cache):
         """WHEN context_manager.py receives valid JSON on stdin
@@ -669,18 +712,22 @@ class TestHookExecutionAfterRename:
         env["CLAUDE_PLUGIN_DATA"] = str(data_dir)
         env["CLAUDE_PLUGIN_OPTION_MEMORY_DIR"] = str(memory_dir)
 
-        input_data = json.dumps({"hook_event_name": "UserPromptSubmit", "prompt": "test"})
+        input_data = json.dumps(
+            {"hook_event_name": "UserPromptSubmit", "prompt": "test"}
+        )
         result = subprocess.run(
             [sys.executable, str(CONTEXT_MANAGER_PATH)],
             input=input_data,
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
             env=env,
             timeout=15,
         )
         # Allow venv-related failures but not crashes
         if result.returncode != 0:
-            assert "Traceback" not in result.stderr or "venv" in result.stderr.lower(), \
-                f"context_manager.py crashed: {result.stderr[:500]}"
+            assert (
+                "Traceback" not in result.stderr or "venv" in result.stderr.lower()
+            ), f"context_manager.py crashed: {result.stderr[:500]}"
 
 
 # ===========================================================================

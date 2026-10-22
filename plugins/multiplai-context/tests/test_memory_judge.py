@@ -58,9 +58,13 @@ class TestParsing:
         assert v.reason == "plain factual append, cited"
 
     def test_several_lines(self):
-        raw = GOOD_LINE + "\n" + (
-            "dolcebot.md#7: provenance=INFERENCE kind=RULE citation=none "
-            "redundant=yes verdict=drop reason=already in the file"
+        raw = (
+            GOOD_LINE
+            + "\n"
+            + (
+                "dolcebot.md#7: provenance=INFERENCE kind=RULE citation=none "
+                "redundant=yes verdict=drop reason=already in the file"
+            )
         )
         verdicts = parse_verdicts(raw)
         assert set(verdicts) == {("python.md", 1), ("dolcebot.md", 7)}
@@ -81,7 +85,7 @@ class TestParsing:
             "python.md#1: provenance=EMPIRICAL kind=FACT verdict=apply reason=x",
             "python.md: provenance=EMPIRICAL kind=FACT citation=supported "
             "redundant=no verdict=apply reason=x",
-            "```json\n{\"verdict\": \"apply\"}\n```",
+            '```json\n{"verdict": "apply"}\n```',
         ],
     )
     def test_anything_malformed_yields_nothing(self, raw):
@@ -89,7 +93,9 @@ class TestParsing:
         which costs one line of reading; a repaired line costs a write."""
         assert parse_verdicts(raw) == {}
 
-    @pytest.mark.parametrize("word", ["APPLY!", "yes", "approve", "definitely-apply", ""])
+    @pytest.mark.parametrize(
+        "word", ["APPLY!", "yes", "approve", "definitely-apply", ""]
+    )
     def test_an_out_of_vocabulary_verdict_is_discarded(self, word):
         raw = (
             f"python.md#1: provenance=EMPIRICAL kind=FACT citation=supported "
@@ -246,13 +252,16 @@ class TestBatchRendering:
 
     def test_a_missing_target_file_says_so_rather_than_inviting_a_guess(self):
         rendered = render_batch([Stub()], {})
-        assert "answer\n`redundant=no` rather than guessing" in rendered.replace(
-            "\n", "\n"
-        ) or "rather than guessing" in rendered
+        assert (
+            "answer\n`redundant=no` rather than guessing"
+            in rendered.replace("\n", "\n")
+            or "rather than guessing" in rendered
+        )
 
     def test_only_the_relevant_section_of_a_large_file_is_shown(self):
         big = (
-            "# Python\n\n## Packaging\n\n" + ("- irrelevant\n" * 500)
+            "# Python\n\n## Packaging\n\n"
+            + ("- irrelevant\n" * 500)
             + "\n## Python Tooling\n\n- uv is fast.\n"
         )
         rendered = render_batch([Stub()], {"python.md": big})
@@ -389,9 +398,7 @@ class TestTheCacheKeyCoversEveryJudgeInput:
 
 class TestPromptContract:
     def test_it_states_the_asymmetry(self):
-        assert "a wrong `review` costs one line of reading" in SYSTEM.replace(
-            "\n", " "
-        )
+        assert "a wrong `review` costs one line of reading" in SYSTEM.replace("\n", " ")
 
     def test_it_states_that_the_judge_may_only_lower(self):
         assert "only ever make an item **more** conservative" in SYSTEM

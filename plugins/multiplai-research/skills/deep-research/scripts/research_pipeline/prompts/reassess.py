@@ -1,6 +1,5 @@
 """REASSESS prompt — 6 checkpoint questions on framing and claims."""
 
-
 REASSESS_PROMPT = """You are the REASSESS stage of a research pipeline. After all \
 reading is complete, pause and check whether the original framing still holds and \
 whether any claims need verification.

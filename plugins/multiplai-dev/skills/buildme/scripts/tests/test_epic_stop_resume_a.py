@@ -47,7 +47,9 @@ class Run:
         return run_build(self.config, args_for(self.config, **flags))
 
 
-def test_A_S11_another_process_holding_the_lock_exits_2_and_writes_nothing(tmp_path, monkeypatch, capsys):
+def test_A_S11_another_process_holding_the_lock_exits_2_and_writes_nothing(
+    tmp_path, monkeypatch, capsys
+):
     """A.S11: exit 2 with its pid; writes nothing. Checked at a first run,
     before any epic.json, and at a re-run of an epic that has one."""
     run = Run(tmp_path / "first", monkeypatch)

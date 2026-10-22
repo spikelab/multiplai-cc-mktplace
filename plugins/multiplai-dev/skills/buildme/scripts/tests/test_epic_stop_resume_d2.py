@@ -44,10 +44,18 @@ from .epic_row_helpers import (
     use_workspace,
 )
 
-TWO = EpicSplitAnswer(single=False, reason="Two parts.", children=[child("a"), child("b")])
+TWO = EpicSplitAnswer(
+    single=False, reason="Two parts.", children=[child("a"), child("b")]
+)
 N = pr_number("e-a")
-HIGH = {"id": "f1", "severity": "HIGH", "status": "confirmed", "claim": "f1 is wrong",
-        "file": "src/app.py", "line_start": 3}
+HIGH = {
+    "id": "f1",
+    "severity": "HIGH",
+    "status": "confirmed",
+    "claim": "f1 is wrong",
+    "file": "src/app.py",
+    "line_start": 3,
+}
 
 
 @pytest.fixture(autouse=True)
@@ -64,7 +72,9 @@ class Root:
         self.root, self.mp = root, monkeypatch
         self.data = use_workspace(monkeypatch, root)
         self.project = make_project(root)
-        self.fakes = Fakes(root, monkeypatch, {}, {str(N): [{"findings": [HIGH]}]}, fixes)
+        self.fakes = Fakes(
+            root, monkeypatch, {}, {str(N): [{"findings": [HIGH]}]}, fixes
+        )
         self.config = make_build(self.project)
         self.config.epic = EpicSettings(max_parallel=1)
         approve(self.config, TWO, CallLog(root / "split.log"))
@@ -85,7 +95,9 @@ class Root:
         run_killed(lambda: run_coordinator(self.config), setup)
 
     def tries(self, kind: str) -> list[records.Attempt]:
-        return [a for a in records.attempts(self.dir) if a.child == "a" and a.kind == kind]
+        return [
+            a for a in records.attempts(self.dir) if a.child == "a" and a.kind == kind
+        ]
 
     def fix_pid(self) -> int:
         """The pid of the fixer the stopped run left blocked, once it has started."""
@@ -98,18 +110,28 @@ class Root:
 
     def snapshot(self) -> dict:
         names = commit_names([self.root / "o" / "r.git", self.project])
-        return name_commits({"epic": epic_snapshot(self.dir, self.root),
-                             "records": records_snapshot(self.dir, self.root),
-                             "summary": last_summary(self.dir, self.root)}, names)
+        return name_commits(
+            {
+                "epic": epic_snapshot(self.dir, self.root),
+                "records": records_snapshot(self.dir, self.root),
+                "summary": last_summary(self.dir, self.root),
+            },
+            names,
+        )
 
     def launches(self) -> list[dict]:
-        return [*CallLog(self.root / "calls.log").calls(), *self.fakes.review_launches(),
-                *self.fakes.post_launches()]
+        return [
+            *CallLog(self.root / "calls.log").calls(),
+            *self.fakes.review_launches(),
+            *self.fakes.post_launches(),
+        ]
 
 
 def _roots(tmp_path, monkeypatch, fixes) -> tuple[Root, Root]:
-    return (Root(tmp_path / "stopped", monkeypatch, fixes),
-            Root(tmp_path / "clean", monkeypatch, fixes))
+    return (
+        Root(tmp_path / "stopped", monkeypatch, fixes),
+        Root(tmp_path / "clean", monkeypatch, fixes),
+    )
 
 
 def _key(calls: list[dict]) -> list[str]:
@@ -130,16 +152,20 @@ def _assert_same(stopped: Root, clean: Root, *, extra_fixes: int = 0) -> None:
         kind, argv, _code, _markers, _ = want[i]
         got = s["records"]["a"]
         assert got[i][:2] == (kind, argv) and (got[i][2], got[i][4]) == (None, True)
-        again = [r for r in got[i + 1:i + 1 + extra_fixes]]
+        again = [r for r in got[i + 1 : i + 1 + extra_fixes]]
         assert [r[:2] for r in again] == [(kind, argv)] * extra_fixes
         assert [(r[2], r[4]) for r in again] == [(0, False)] * extra_fixes
-        want[i:i + 1] = [got[i], *again]
+        want[i : i + 1] = [got[i], *again]
     assert s["records"]["a"] == want
     fix_call = next(x for x in clean.fakes.fix_launches())
-    assert _key(stopped.launches()) == _key([*clean.launches(), *[fix_call] * extra_fixes])
+    assert _key(stopped.launches()) == _key(
+        [*clean.launches(), *[fix_call] * extra_fixes]
+    )
 
 
-def test_D2_S3_stopped_after_the_post_runs_the_fixer_not_a_review(tmp_path, monkeypatch):
+def test_D2_S3_stopped_after_the_post_runs_the_fixer_not_a_review(
+    tmp_path, monkeypatch
+):
     """D2.S3 (Done means 6): the post's result is written, then the coordinator
     dies. The resume starts `findings`, not a review or a second post, and
     `pr_round` keeps counting. Calls equal."""
@@ -158,17 +184,24 @@ def test_D2_S3_stopped_after_the_post_runs_the_fixer_not_a_review(tmp_path, monk
         records.finish = dying
 
     stopped.killed(setup)
-    assert [a.result["exit_code"] for a in stopped.tries("post")] == [0] and stopped.tries("fix") == []
+    assert [a.result["exit_code"] for a in stopped.tries("post")] == [
+        0
+    ] and stopped.tries("fix") == []
     assert stopped.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     assert clean.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     _assert_same(stopped, clean)
     assert len(stopped.fakes.post_launches()) == 1
-    assert [x["kind"] for x in stopped.fakes.review_launches()] == ["review", "review"]   # a's first, b's
+    assert [x["kind"] for x in stopped.fakes.review_launches()] == [
+        "review",
+        "review",
+    ]  # a's first, b's
     status = json.loads((stopped.dir / "epic.json").read_text())["child_status"]["a"]
     assert (status["status"], status["pr_round"]) == ("built", 2)
 
 
-def test_D2_S4_coordinator_killed_with_the_fixer_alive_waits_for_it(tmp_path, monkeypatch):
+def test_D2_S4_coordinator_killed_with_the_fixer_alive_waits_for_it(
+    tmp_path, monkeypatch
+):
     """D2.S4: the coordinator dies while `findings` runs. The resume launches
     nothing while it lives, then writes its result (`exit_code: null`,
     `interrupted: true`) and relaunches it, which ends at once. Never two at
@@ -186,13 +219,13 @@ def test_D2_S4_coordinator_killed_with_the_fixer_alive_waits_for_it(tmp_path, mo
 
     stopped.killed(setup)
     pid = stopped.fix_pid()
-    assert alive(pid)                                        # the fixer outlived its coordinator
+    assert alive(pid)  # the fixer outlived its coordinator
     looks = []
 
     def tick(coord):
         if alive(pid):
             looks.append(1)
-            assert len(stopped.fakes.fix_launches()) == 1     # never a second fixer
+            assert len(stopped.fakes.fix_launches()) == 1  # never a second fixer
             if len(looks) == 5:
                 stopped.fakes.release_fix("e-a")
                 for _ in range(500):
@@ -212,7 +245,9 @@ def test_D2_S4_coordinator_killed_with_the_fixer_alive_waits_for_it(tmp_path, mo
     assert len(stopped.fakes.post_launches()) == 1
 
 
-def test_D2_S7_fixer_ended_with_its_result_unrecorded_reuses_its_last_review(tmp_path, monkeypatch):
+def test_D2_S7_fixer_ended_with_its_result_unrecorded_reuses_its_last_review(
+    tmp_path, monkeypatch
+):
     """D2.S7: `findings` ended (its reviews are in the ledger) but the coordinator
     died before writing its result. The resume writes it, relaunches `findings`
     (which ends at once), reuses the fixer's last review and takes `pr_round`
@@ -236,6 +271,9 @@ def test_D2_S7_fixer_ended_with_its_result_unrecorded_reuses_its_last_review(tmp
     assert stopped.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     assert clean.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     _assert_same(stopped, clean, extra_fixes=1)
-    assert [x["kind"] for x in stopped.fakes.review_launches()] == ["review", "review"]   # a's first, b's
+    assert [x["kind"] for x in stopped.fakes.review_launches()] == [
+        "review",
+        "review",
+    ]  # a's first, b's
     status = json.loads((stopped.dir / "epic.json").read_text())["child_status"]["a"]
     assert (status["status"], status["pr_round"]) == ("built", 2)

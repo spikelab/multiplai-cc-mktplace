@@ -4,6 +4,7 @@
 the old name keeps working. The golden render test pins _find_font, so these
 tests are what catch a dropped fallback or the two lookups swapped.
 """
+
 from __future__ import annotations
 
 import sys

@@ -49,9 +49,7 @@ def api_host() -> tuple[str, int]:
     return DEFAULT_API_HOST, 443
 
 
-def probe_network(
-    host: str, port: int, timeout_s: float = PROBE_TIMEOUT_S
-) -> str:
+def probe_network(host: str, port: int, timeout_s: float = PROBE_TIMEOUT_S) -> str:
     """``dns=<ms|error> tcp=<ms|error>`` for *host*:*port*, each step bounded.
 
     ``getaddrinfo`` has no timeout of its own, so it runs on a daemon thread

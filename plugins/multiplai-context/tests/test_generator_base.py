@@ -52,7 +52,9 @@ class TestGeneratorsPackageStructure:
     def test_base_module_exists(self):
         """scripts/generators/base.py must exist."""
         base_file = SCRIPTS_DIR / "generators" / "base.py"
-        assert base_file.exists(), f"scripts/generators/base.py must exist at {base_file}"
+        assert base_file.exists(), (
+            f"scripts/generators/base.py must exist at {base_file}"
+        )
 
     def test_base_module_importable(self):
         """GeneratorBase must be importable from generators.base."""
@@ -610,9 +612,7 @@ class TestStateAwareSkip:
         sources_dir = tmp_path / "sources"
         (sources_dir / "a.md").write_text("modified content")
 
-        gen2, _ = _make_test_generator(
-            tmp_path, sources={"a.md": "modified content"}
-        )
+        gen2, _ = _make_test_generator(tmp_path, sources={"a.md": "modified content"})
         gen2._catalogs_dir_override = catalogs_dir
         result = asyncio.run(gen2.run())
         assert result.generated >= 1, "Changed source should trigger regeneration"
@@ -666,11 +666,9 @@ class TestDeletionPruning:
         assert result.pruned >= 1, "Deleted source must be pruned"
 
         # Verify state file no longer contains hash for b.md
-        state_data = json.loads(
-            (catalogs_dir / ".generation-state.json").read_text()
-        )
-        hashes = state_data.get("generators", {}).get("test", {}).get(
-            "source_hashes", {}
+        state_data = json.loads((catalogs_dir / ".generation-state.json").read_text())
+        hashes = (
+            state_data.get("generators", {}).get("test", {}).get("source_hashes", {})
         )
         assert "b.md" not in hashes, "Deleted source hash must be removed from state"
 
@@ -693,7 +691,9 @@ class TestDeletionPruning:
         catalog_file = catalogs_dir / "test.json"
         catalog = json.loads(catalog_file.read_text())
         entries = catalog.get("entries", [])
-        entry_keys = [e.get("source", e.get("path", e.get("file", ""))) for e in entries]
+        entry_keys = [
+            e.get("source", e.get("path", e.get("file", ""))) for e in entries
+        ]
         assert "b.md" not in entry_keys, "Deleted source must be pruned from catalog"
 
     def test_all_sources_deleted_produces_empty_catalog(self, tmp_path):
@@ -716,7 +716,9 @@ class TestDeletionPruning:
         catalog = json.loads(catalog_file.read_text())
         entries = catalog.get("entries", [])
         assert len(entries) == 0, "Empty sources should produce empty catalog"
-        assert "schema_version" in catalog, "Empty catalog must still have schema_version"
+        assert "schema_version" in catalog, (
+            "Empty catalog must still have schema_version"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -848,9 +850,9 @@ class TestLLMClientRetry:
         asyncio.run(gen.run())
 
         # The mock model_client's query should have been called
-        assert gen._model_client.query.called or gen._model_client.query.await_count > 0, (
-            "LLM calls must route through model_client"
-        )
+        assert (
+            gen._model_client.query.called or gen._model_client.query.await_count > 0
+        ), "LLM calls must route through model_client"
 
     def test_transient_failure_retried_then_succeeds(self, tmp_path):
         """Scenario: Transient failure followed by success.
@@ -1114,9 +1116,7 @@ class TestDryRunMode:
 
         asyncio.run(gen.run(dry_run=True))
 
-        assert not gen._model_client.query.called, (
-            "Dry run must not make LLM calls"
-        )
+        assert not gen._model_client.query.called, "Dry run must not make LLM calls"
 
     def test_dry_run_returns_generation_result(self, tmp_path):
         """Dry run must return a GenerationResult with dry_run=True."""
@@ -1163,9 +1163,7 @@ class TestDryRunMode:
 
         # Modify source and run dry_run
         (tmp_path / "sources" / "a.md").write_text("modified content")
-        gen2, _ = _make_test_generator(
-            tmp_path, sources={"a.md": "modified content"}
-        )
+        gen2, _ = _make_test_generator(tmp_path, sources={"a.md": "modified content"})
         gen2._catalogs_dir_override = catalogs_dir
         asyncio.run(gen2.run(dry_run=True))
 
@@ -1206,17 +1204,13 @@ class TestForceMode:
         )
         asyncio.run(gen.run())
 
-        state_before = json.loads(
-            (catalogs_dir / ".generation-state.json").read_text()
-        )
+        state_before = json.loads((catalogs_dir / ".generation-state.json").read_text())
 
         gen2, _ = _make_test_generator(tmp_path, sources={"a.md": "content a"})
         gen2._catalogs_dir_override = catalogs_dir
         asyncio.run(gen2.run(force=True))
 
-        state_after = json.loads(
-            (catalogs_dir / ".generation-state.json").read_text()
-        )
+        state_after = json.loads((catalogs_dir / ".generation-state.json").read_text())
 
         # last_run timestamp should be updated
         gen_state_before = state_before.get("generators", {}).get("test", {})
@@ -1310,9 +1304,7 @@ class TestCatalogsDirectoryInit:
 
     def test_existing_directory_left_untouched(self, tmp_path):
         """Scenario: Existing directory is left untouched."""
-        gen, catalogs_dir = _make_test_generator(
-            tmp_path, sources={"a.md": "content"}
-        )
+        gen, catalogs_dir = _make_test_generator(tmp_path, sources={"a.md": "content"})
         # Pre-create a file in catalogs dir
         existing_file = catalogs_dir / "existing.txt"
         existing_file.write_text("do not delete")
@@ -1500,9 +1492,7 @@ class TestSchemaVersioning:
 
     def test_catalog_has_schema_version(self, tmp_path):
         """Scenario: Catalog includes schema version field."""
-        gen, catalogs_dir = _make_test_generator(
-            tmp_path, sources={"a.md": "content"}
-        )
+        gen, catalogs_dir = _make_test_generator(tmp_path, sources={"a.md": "content"})
         asyncio.run(gen.run())
 
         catalog = json.loads((catalogs_dir / "test.json").read_text())
@@ -1510,14 +1500,10 @@ class TestSchemaVersioning:
 
     def test_state_file_has_schema_version(self, tmp_path):
         """State file includes schema version for format tracking."""
-        gen, catalogs_dir = _make_test_generator(
-            tmp_path, sources={"a.md": "content"}
-        )
+        gen, catalogs_dir = _make_test_generator(tmp_path, sources={"a.md": "content"})
         asyncio.run(gen.run())
 
-        state = json.loads(
-            (catalogs_dir / ".generation-state.json").read_text()
-        )
+        state = json.loads((catalogs_dir / ".generation-state.json").read_text())
         assert "schema_version" in state
 
 
@@ -1549,9 +1535,7 @@ class TestRunParameters:
 
     def test_run_force_and_dry_run_together(self, tmp_path):
         """run(force=True, dry_run=True) should show all as would-be-generated."""
-        gen, catalogs_dir = _make_test_generator(
-            tmp_path, sources={"a.md": "content"}
-        )
+        gen, catalogs_dir = _make_test_generator(tmp_path, sources={"a.md": "content"})
         # First normal run
         asyncio.run(gen.run())
 
@@ -1573,9 +1557,7 @@ class TestEdgeCases:
 
     def test_empty_source_file_handled(self, tmp_path):
         """Generator must handle empty source files without crashing."""
-        gen, catalogs_dir = _make_test_generator(
-            tmp_path, sources={"empty.md": ""}
-        )
+        gen, catalogs_dir = _make_test_generator(tmp_path, sources={"empty.md": ""})
         # Should not raise
         result = asyncio.run(gen.run())
         assert result is not None
@@ -1623,9 +1605,7 @@ class TestCatalogThinking:
         import lib.thinking as th
         from multiplai_core.plugin_options import option_var
 
-        monkeypatch.setattr(
-            th, "core_supports_thinking", lambda target=None: supported
-        )
+        monkeypatch.setattr(th, "core_supports_thinking", lambda target=None: supported)
         monkeypatch.delenv(option_var(th.CATALOG_THINKING_OPTION), raising=False)
 
         gen, _catalogs_dir = _make_test_generator(

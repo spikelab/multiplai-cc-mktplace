@@ -7,6 +7,7 @@ The single-token NONE trap is intentionally NOT asserted to pass — it encodes
 the known false-positive bug (see plan-router-scoring-quality) and is expected
 to fail until that fix lands.
 """
+
 import json
 from pathlib import Path
 
@@ -46,8 +47,12 @@ def test_clean_intent_cases_route_correctly():
             c["prompt"], None, {"memory": cat, "skills": [], "resources": []}
         )["memory"]
         got = set(picks)
-        assert set(c["expected_files"]) <= got, f"{c['id']}: missed {c['expected_files']}, got {sorted(got)}"
-        assert not (set(c["unexpected_files"]) & got), f"{c['id']}: pulled unexpected {sorted(set(c['unexpected_files']) & got)}"
+        assert set(c["expected_files"]) <= got, (
+            f"{c['id']}: missed {c['expected_files']}, got {sorted(got)}"
+        )
+        assert not (set(c["unexpected_files"]) & got), (
+            f"{c['id']}: pulled unexpected {sorted(set(c['unexpected_files']) & got)}"
+        )
 
 
 def test_evaluate_scores_anchored_picks_at_file_level():

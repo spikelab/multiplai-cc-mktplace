@@ -1,4 +1,5 @@
 """The prompt blocks added for PR context, branch rules and the web."""
+
 from __future__ import annotations
 
 from conftest import high_finding
@@ -11,15 +12,31 @@ from review_pipeline.prompts import (
     workspace_block,
 )
 
-RULES_NO_CHECKS = [{"type": "pull_request", "parameters": {"required_approving_review_count": 1}}]
-RULES_WITH_CHECKS = [{"type": "required_status_checks",
-                      "parameters": {"required_status_checks": [{"context": "build"}],
-                                     "strict_required_status_checks_policy": True}}]
+RULES_NO_CHECKS = [
+    {"type": "pull_request", "parameters": {"required_approving_review_count": 1}}
+]
+RULES_WITH_CHECKS = [
+    {
+        "type": "required_status_checks",
+        "parameters": {
+            "required_status_checks": [{"context": "build"}],
+            "strict_required_status_checks_policy": True,
+        },
+    }
+]
 
 
 def pr_target(target_info, **extra):
-    return target_info.model_copy(update={"pr": 14, "title": "Add retention", "description": "CI gates the merge.",
-                                          "base_ref": "main", "branch_rules": RULES_NO_CHECKS, **extra})
+    return target_info.model_copy(
+        update={
+            "pr": 14,
+            "title": "Add retention",
+            "description": "CI gates the merge.",
+            "base_ref": "main",
+            "branch_rules": RULES_NO_CHECKS,
+            **extra,
+        }
+    )
 
 
 def test_range_targets_add_no_description_or_settings(target_info):
@@ -43,7 +60,10 @@ def test_description_is_cut_when_long(target_info):
 def test_settings_say_when_no_check_blocks_a_merge(target_info):
     block = settings_block(pr_target(target_info))
     assert "pull_request: 1 approval required" in block
-    assert "no `required_status_checks` rule" in block and "a red run can be merged" in block
+    assert (
+        "no `required_status_checks` rule" in block
+        and "a red run can be merged" in block
+    )
 
 
 def test_settings_name_the_required_checks(target_info):
@@ -59,7 +79,10 @@ def test_settings_when_rules_could_not_be_read(target_info):
 
 def test_settings_when_github_reports_no_rules_at_all(target_info):
     block = settings_block(pr_target(target_info, branch_rules=[]))
-    assert "GitHub reports no rules on this branch" in block and "a red run can be merged" in block
+    assert (
+        "GitHub reports no rules on this branch" in block
+        and "a red run can be merged" in block
+    )
 
 
 def test_finders_and_verifier_get_both_blocks_and_the_web(target_info):
@@ -67,7 +90,9 @@ def test_finders_and_verifier_get_both_blocks_and_the_web(target_info):
     for dimension in find.DIMENSION_TASKS:
         prompt = find.build(t, dimension, "diff")
         assert "WebFetch and WebSearch" in prompt
-        assert "pull request #14 description" in prompt and "Repository settings" in prompt
+        assert (
+            "pull request #14 description" in prompt and "Repository settings" in prompt
+        )
     prompt = verify.build(t, high_finding())
     assert "WebFetch and WebSearch" in prompt and "Repository settings" in prompt
     assert "`unverifiable`, not `confirmed` with a caveat" in prompt
@@ -117,28 +142,47 @@ STRICT_IMPACT = (
     "encoding or opt-out setting does not; (2) the harm follows from this defect alone, with no second failure "
     "needed (a model call failing, an agent breaking its prompt, a person's separate mistake); a crash or stop "
     "the code promises to survive counts as ordinary; (3) no other check in the code, CI or the documented "
-    "workflow stops the harm before it lands. Otherwise rate `correctness-only`.")
+    "workflow stops the harm before it lands. Otherwise rate `correctness-only`."
+)
 
 
-def test_verifier_rates_breaking_impact_only_when_all_three_conditions_hold(target_info):
+def test_verifier_rates_breaking_impact_only_when_all_three_conditions_hold(
+    target_info,
+):
     """plan-review-rounds-and-finders-2026-10-15.md, item 2: the strict
     reading, verbatim, after the `breaks-business` bullet and before
     `correctness-only`."""
     prompt = " ".join(verify.build(target_info, high_finding()).split())
     assert STRICT_IMPACT in prompt
-    assert prompt.index("- `breaks-business`:") < prompt.index(STRICT_IMPACT) < prompt.index("- `correctness-only`:")
+    assert (
+        prompt.index("- `breaks-business`:")
+        < prompt.index(STRICT_IMPACT)
+        < prompt.index("- `correctness-only`:")
+    )
 
 
 def _with_deps(target_info):
     from review_pipeline.models import DepEntry
-    entries = [DepEntry(name=n, url=f"https://example.com/{n}", commit=c * 40, cache="/c", status="ok")
-               for n, c in (("multiplai-core", "a"), ("other-lib", "b"))]
+
+    entries = [
+        DepEntry(
+            name=n,
+            url=f"https://example.com/{n}",
+            commit=c * 40,
+            cache="/c",
+            status="ok",
+        )
+        for n, c in (("multiplai-core", "a"), ("other-lib", "b"))
+    ]
     return target_info.model_copy(update={"deps": entries})
 
 
 def test_finders_and_verifier_are_told_where_the_dependency_source_is(target_info):
     target = _with_deps(target_info)
-    prompts = [find.build(target, "diff-bugs", "diff"), verify.build(target, high_finding())]
+    prompts = [
+        find.build(target, "diff-bugs", "diff"),
+        verify.build(target, high_finding()),
+    ]
     for prompt in prompts:
         assert f".review-deps/multiplai-core@{'a' * 12}/" in prompt
         assert f".review-deps/other-lib@{'b' * 12}/" in prompt
@@ -147,5 +191,8 @@ def test_finders_and_verifier_are_told_where_the_dependency_source_is(target_inf
 
 
 def test_without_dependencies_the_prompts_name_none(target_info):
-    for prompt in (find.build(target_info, "diff-bugs", "diff"), verify.build(target_info, high_finding())):
+    for prompt in (
+        find.build(target_info, "diff-bugs", "diff"),
+        verify.build(target_info, high_finding()),
+    ):
         assert ".review-deps" not in prompt

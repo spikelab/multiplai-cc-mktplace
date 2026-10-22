@@ -41,7 +41,9 @@ UNRESOLVED = "path names no known repo"
 CALL_ERROR = "error"
 
 
-async def bounded(items: Iterable[T], fn: Callable[[T], Awaitable[R]], limit: int) -> list[R]:
+async def bounded(
+    items: Iterable[T], fn: Callable[[T], Awaitable[R]], limit: int
+) -> list[R]:
     """Run fn over items, at most *limit* at a time, results in input order.
 
     A TaskGroup, so the first exception that escapes `fn` (trust, budget)
@@ -70,7 +72,7 @@ def ws_path(path: str, root: Path) -> str:
     for r in (str(root.resolve()), str(root)):
         r = r.rstrip("/") + "/"
         if p.startswith(r):
-            p = p[len(r):]
+            p = p[len(r) :]
             break
     while p.startswith("./"):
         p = p[2:]
@@ -84,15 +86,19 @@ def check_citation(citation: Citation, resolve: Resolve) -> str | None:
         # An empty quote is named first, whatever the path.
         return "empty quote" if not normalise_ws(citation.quote) else UNRESOLVED
     repo, sha, rel = found
-    return check_quote(repo, sha, rel, citation.line_start, citation.line_end, citation.quote)
+    return check_quote(
+        repo, sha, rel, citation.line_start, citation.line_end, citation.quote
+    )
 
 
-def citation_keeper(resolve: Resolve, *, root: Path | None = None,
-                    reasons: list[str] | None = None) -> Callable[[Citation | None], Citation | None]:
+def citation_keeper(
+    resolve: Resolve, *, root: Path | None = None, reasons: list[str] | None = None
+) -> Callable[[Citation | None], Citation | None]:
     """A function that returns the citation (path made relative to *root*) when it passes, else None.
 
     Each failure's reason is appended to *reasons*.
     """
+
     def keep(c: Citation | None) -> Citation | None:
         if c is None:
             return None
@@ -123,14 +129,21 @@ def canonical_digest(value: Any) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-async def ask(key: str, prompt: str, call: CallFn, answers: dict[str, dict], *,
-              call_kwargs: Mapping[str, Any], errors: list[str],
-              recoverable: tuple[type[BaseException], ...] = (Exception,),
-              fatal: tuple[type[BaseException], ...] = (),
-              progress: Callable[[str], None] | None = None,
-              schema: type[BaseModel] = ExploreOutput,
-              budget_label: Callable[[str], str] = explore_budget_label,
-              encode: Callable[[Any], dict] = BaseModel.model_dump) -> None:
+async def ask(
+    key: str,
+    prompt: str,
+    call: CallFn,
+    answers: dict[str, dict],
+    *,
+    call_kwargs: Mapping[str, Any],
+    errors: list[str],
+    recoverable: tuple[type[BaseException], ...] = (Exception,),
+    fatal: tuple[type[BaseException], ...] = (),
+    progress: Callable[[str], None] | None = None,
+    schema: type[BaseModel] = ExploreOutput,
+    budget_label: Callable[[str], str] = explore_budget_label,
+    encode: Callable[[Any], dict] = BaseModel.model_dump,
+) -> None:
     """Ask one task and store its answer in *answers* under *key*, as it returns.
 
     The call gets *schema* and `budget_label(key)`, which replaces any
@@ -141,7 +154,9 @@ async def ask(key: str, prompt: str, call: CallFn, answers: dict[str, dict], *,
     """
     label = budget_label(key)
     try:
-        answer = encode(await call(prompt, schema, **{**call_kwargs, "budget_label": label}))
+        answer = encode(
+            await call(prompt, schema, **{**call_kwargs, "budget_label": label})
+        )
     except fatal:
         raise
     except recoverable as e:
@@ -155,20 +170,31 @@ async def ask(key: str, prompt: str, call: CallFn, answers: dict[str, dict], *,
         progress(f"  explore {key}: {len(answers[key].get('facts', []))} facts")
 
 
-async def run_tasks(tasks: list[tuple[str, str]], call: CallFn, answers: dict[str, dict], *,
-                    concurrency: int, **ask_kwargs: Any) -> None:
+async def run_tasks(
+    tasks: list[tuple[str, str]],
+    call: CallFn,
+    answers: dict[str, dict],
+    *,
+    concurrency: int,
+    **ask_kwargs: Any,
+) -> None:
     """Ask every `(key, prompt)` task whose answer is not already in *answers*.
 
     Skipping answered keys is what lets a resumed run repeat no paid work.
     """
+
     async def one(task: tuple[str, str]) -> None:
         await ask(task[0], task[1], call, answers, **ask_kwargs)
 
     await bounded([t for t in tasks if t[0] not in answers], one, concurrency)
 
 
-def reask_units(units: list[Unit], uncovered: set[str], answers: dict[str, dict],
-                prompt_for: Callable[[Unit, list[str]], str]) -> list[tuple[str, str]]:
+def reask_units(
+    units: list[Unit],
+    uncovered: set[str],
+    answers: dict[str, dict],
+    prompt_for: Callable[[Unit, list[str]], str],
+) -> list[tuple[str, str]]:
     """One re-ask per unit that left files uncovered, naming them. Never a second one."""
     retry = []
     for u in units:
@@ -181,17 +207,23 @@ def reask_units(units: list[Unit], uncovered: set[str], answers: dict[str, dict]
 
 @dataclass
 class Gated:
-    facts: list[Fact] = field(default_factory=list)          # with ids f1.. and citation ids c1..
-    purposes: dict[str, str] = field(default_factory=dict)   # path -> purpose
-    interfaces: list[str] = field(default_factory=list)      # fact ids
-    gotchas: list[str] = field(default_factory=list)         # fact ids
-    conventions: list[str] = field(default_factory=list)     # fact ids
+    facts: list[Fact] = field(
+        default_factory=list
+    )  # with ids f1.. and citation ids c1..
+    purposes: dict[str, str] = field(default_factory=dict)  # path -> purpose
+    interfaces: list[str] = field(default_factory=list)  # fact ids
+    gotchas: list[str] = field(default_factory=list)  # fact ids
+    conventions: list[str] = field(default_factory=list)  # fact ids
     terms: list[Term] = field(default_factory=list)
     dropped: list[Dropped] = field(default_factory=list)
 
 
-def gate_answers(answers: dict[str, dict], keep: Callable[[Citation | None], Citation | None], *,
-                 conventions: bool = False) -> Gated:
+def gate_answers(
+    answers: dict[str, dict],
+    keep: Callable[[Citation | None], Citation | None],
+    *,
+    conventions: bool = False,
+) -> Gated:
     """Rebuild the gated facts from every stored answer, in task order. Deterministic.
 
     A fact with no passing citation is dropped and recorded. Conventions are
@@ -208,30 +240,55 @@ def gate_answers(answers: dict[str, dict], keep: Callable[[Citation | None], Cit
         if CALL_ERROR in raw:
             continue
         out = ExploreOutput.model_validate(raw)
-        buckets = [("fact", out.facts), ("interface", out.interfaces), ("gotcha", out.gotchas)]
+        buckets = [
+            ("fact", out.facts),
+            ("interface", out.interfaces),
+            ("gotcha", out.gotchas),
+        ]
         if conventions:
             buckets.append(("convention", out.conventions))
         for bucket, items in buckets:
             for f in items:
                 good = [c for c in (keep(c) for c in f.citations) if c is not None]
                 if not good:
-                    dropped.append(Dropped(stage="explore", what=f.claim[:300], reason="no citation passed"))
+                    dropped.append(
+                        Dropped(
+                            stage="explore",
+                            what=f.claim[:300],
+                            reason="no citation passed",
+                        )
+                    )
                     continue
-                facts.append(Fact(claim=f.claim, citations=good, source=f"{key}/{bucket}"))
+                facts.append(
+                    Fact(claim=f.claim, citations=good, source=f"{key}/{bucket}")
+                )
                 if bucket in picked:
                     picked[bucket].append(len(facts) - 1)
         for fp in out.files:
             c = keep(fp.citation)
             if c is not None:
                 purposes.setdefault(c.path, fp.purpose)
-                facts.append(Fact(claim=f"{c.path.split('/')[-1]}: {fp.purpose}", citations=[c],
-                                  source=f"{key}/file"))
+                facts.append(
+                    Fact(
+                        claim=f"{c.path.split('/')[-1]}: {fp.purpose}",
+                        citations=[c],
+                        source=f"{key}/file",
+                    )
+                )
         for t in out.terms:
             c = keep(t.citation)
             if c is None:
-                dropped.append(Dropped(stage="explore", what=f"term {t.term}", reason="no citation passed"))
+                dropped.append(
+                    Dropped(
+                        stage="explore",
+                        what=f"term {t.term}",
+                        reason="no citation passed",
+                    )
+                )
                 continue
-            terms.setdefault(t.term.lower(), Term(term=t.term, meaning=t.meaning, citation=c))
+            terms.setdefault(
+                t.term.lower(), Term(term=t.term, meaning=t.meaning, citation=c)
+            )
 
     n = 0
     for i, f in enumerate(facts):
@@ -239,8 +296,12 @@ def gate_answers(answers: dict[str, dict], keep: Callable[[Citation | None], Cit
         for c in f.citations:
             n += 1
             c.id = f"c{n}"
-    return Gated(facts=facts, purposes=purposes,
-                 interfaces=[facts[i].id for i in picked["interface"]],
-                 gotchas=[facts[i].id for i in picked["gotcha"]],
-                 conventions=[facts[i].id for i in picked["convention"]],
-                 terms=list(terms.values()), dropped=dropped)
+    return Gated(
+        facts=facts,
+        purposes=purposes,
+        interfaces=[facts[i].id for i in picked["interface"]],
+        gotchas=[facts[i].id for i in picked["gotcha"]],
+        conventions=[facts[i].id for i in picked["convention"]],
+        terms=list(terms.values()),
+        dropped=dropped,
+    )

@@ -13,10 +13,18 @@ HEAD_APP = "import logging\n\n\ndef greet(name):\n    logging.info('greeting')\n
 
 
 def _git(repo: Path, *args: str) -> str:
-    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
-           "GIT_COMMITTER_EMAIL": "t@t", "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
-    return subprocess.run(["git", *args], cwd=repo, env=env, check=True, capture_output=True,
-                          text=True).stdout.strip()
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@t",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@t",
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_NOSYSTEM": "1",
+    }
+    return subprocess.run(
+        ["git", *args], cwd=repo, env=env, check=True, capture_output=True, text=True
+    ).stdout.strip()
 
 
 @pytest.fixture
@@ -76,22 +84,63 @@ def _loc(path: str, line: int) -> dict:
     return {"path": path, "line": line}
 
 
-def _entry(kind: str, name: str, path: str, line: int, *, handler=None, invocation=None, invokers=()) -> dict:
-    return {"kind": kind, "name": name, "location": _loc(path, line), "handler": handler,
-            "invocation": invocation, "invoked_by": f"a person or a script running {invocation or name}",
-            "also_invoked_by": list(invokers)}
+def _entry(
+    kind: str,
+    name: str,
+    path: str,
+    line: int,
+    *,
+    handler=None,
+    invocation=None,
+    invokers=(),
+) -> dict:
+    return {
+        "kind": kind,
+        "name": name,
+        "location": _loc(path, line),
+        "handler": handler,
+        "invocation": invocation,
+        "invoked_by": f"a person or a script running {invocation or name}",
+        "also_invoked_by": list(invokers),
+    }
 
 
 def _hop(symbol: str, path: str, start: int, end: int, quote: str) -> dict:
-    return {"symbol_called": symbol, "path": path, "line_start": start, "line_end": end, "quote": quote,
-            "note": "", "side": "head"}
+    return {
+        "symbol_called": symbol,
+        "path": path,
+        "line_start": start,
+        "line_end": end,
+        "quote": quote,
+        "note": "",
+        "side": "head",
+    }
 
 
-DISCOVERED_KINDS = ["argparse", "click", "typer", "main", "script", "skill_command", "hook", "seed"]
+DISCOVERED_KINDS = [
+    "argparse",
+    "click",
+    "typer",
+    "main",
+    "script",
+    "skill_command",
+    "hook",
+    "seed",
+]
 # Every break code. The first three only ever break hop 1, which leaves no hop, so they never cut a kept path.
-BREAK_CODES = ["malformed_answer", "empty_trace", "entry_mismatch", "path_outside_root", "missing_file",
-               "line_out_of_range", "text_mismatch", "base_side_citation", "unconnected_hop", "repeated_hop",
-               "hop_limit"]
+BREAK_CODES = [
+    "malformed_answer",
+    "empty_trace",
+    "entry_mismatch",
+    "path_outside_root",
+    "missing_file",
+    "line_out_of_range",
+    "text_mismatch",
+    "base_side_citation",
+    "unconnected_hop",
+    "repeated_hop",
+    "hop_limit",
+]
 CUT_REASONS = BREAK_CODES[3:]
 
 
@@ -100,98 +149,253 @@ def _cut_path(n: int, reason: str, kind: str) -> dict:
     path = f"cut/{reason}.py"
     kept = 20 if reason == "hop_limit" else 1
     return {
-        "id": f"p{n}", "entry": _entry(kind, f"{kind} {reason}", path, 1),
-        "hops": [_hop(f"step{i}", path, i, i, f"step{i}()") for i in range(1, kept + 1)],
-        "stops_at": kept, "break_reason": reason,
-        "changed_lines_covered": [_loc(path, 1)], "tests": {"e2e": [], "mocks_hop_2": []},
+        "id": f"p{n}",
+        "entry": _entry(kind, f"{kind} {reason}", path, 1),
+        "hops": [
+            _hop(f"step{i}", path, i, i, f"step{i}()") for i in range(1, kept + 1)
+        ],
+        "stops_at": kept,
+        "break_reason": reason,
+        "changed_lines_covered": [_loc(path, 1)],
+        "tests": {"e2e": [], "mocks_hop_2": []},
     }
 
 
 def _full_paths_doc() -> dict:
     """A scoped paths.v1 document using every enum value and both arms of every nullable field."""
     open_entry = _entry(
-        "argparse", "open", "pkg/__main__.py", 41,
+        "argparse",
+        "open",
+        "pkg/__main__.py",
+        41,
         handler={"path": "pkg/commands.py", "line": 180, "symbol": "cmd_open"},
-        invokers=[{"kind": kind, "name": f"{kind} invoker", "location": _loc(f"inv/{kind}.py", 3)}
-                  for kind in sorted(DISCOVERED_KINDS)])
-    skill_entry = _entry("skill_command", "café: pkg run", "skills/café/SKILL.md", 12,
-                         invocation="python -m pkg run")
+        invokers=[
+            {
+                "kind": kind,
+                "name": f"{kind} invoker",
+                "location": _loc(f"inv/{kind}.py", 3),
+            }
+            for kind in sorted(DISCOVERED_KINDS)
+        ],
+    )
+    skill_entry = _entry(
+        "skill_command",
+        "café: pkg run",
+        "skills/café/SKILL.md",
+        12,
+        invocation="python -m pkg run",
+    )
     p1 = {
-        "id": "p1", "entry": open_entry,
-        "hops": [_hop("main", "pkg/__main__.py", 40, 42, "sub.add_parser('open')"),
-                 _hop("cmd_open", "pkg/commands.py", 180, 181, "def cmd_open(args):")],
-        "stops_at": 2, "break_reason": "text_mismatch",
+        "id": "p1",
+        "entry": open_entry,
+        "hops": [
+            _hop("main", "pkg/__main__.py", 40, 42, "sub.add_parser('open')"),
+            _hop("cmd_open", "pkg/commands.py", 180, 181, "def cmd_open(args):"),
+        ],
+        "stops_at": 2,
+        "break_reason": "text_mismatch",
         "changed_lines_covered": [_loc("pkg/commands.py", 181)],
         "tests": {
             "e2e": [
-                {"node_id": "tests/test_cli.py::test_a", "file": "tests/test_cli.py", "line": 3,
-                 "match": "direct_call", "invocation_line": 4},
-                {"node_id": "tests/test_cli.py::test_b", "file": "tests/test_cli.py", "line": 8,
-                 "match": "cli_argv", "invocation_line": 9},
-                {"node_id": "tests/test_cli.py::TestX::test_c", "file": "tests/test_cli.py", "line": 14,
-                 "match": "cli_runner", "invocation_line": 15},
-                {"node_id": "tests/test_cli.py::test_f", "file": "tests/test_cli.py", "line": 20,
-                 "match": "subprocess", "invocation_line": 21},
-                {"node_id": "tests/test_cli.py::test_g", "file": "tests/test_cli.py", "line": 25,
-                 "match": "runpy", "invocation_line": 26},
+                {
+                    "node_id": "tests/test_cli.py::test_a",
+                    "file": "tests/test_cli.py",
+                    "line": 3,
+                    "match": "direct_call",
+                    "invocation_line": 4,
+                },
+                {
+                    "node_id": "tests/test_cli.py::test_b",
+                    "file": "tests/test_cli.py",
+                    "line": 8,
+                    "match": "cli_argv",
+                    "invocation_line": 9,
+                },
+                {
+                    "node_id": "tests/test_cli.py::TestX::test_c",
+                    "file": "tests/test_cli.py",
+                    "line": 14,
+                    "match": "cli_runner",
+                    "invocation_line": 15,
+                },
+                {
+                    "node_id": "tests/test_cli.py::test_f",
+                    "file": "tests/test_cli.py",
+                    "line": 20,
+                    "match": "subprocess",
+                    "invocation_line": 21,
+                },
+                {
+                    "node_id": "tests/test_cli.py::test_g",
+                    "file": "tests/test_cli.py",
+                    "line": 25,
+                    "match": "runpy",
+                    "invocation_line": 26,
+                },
             ],
             "mocks_hop_2": [
-                {"node_id": "tests/test_run.py::test_h", "file": "tests/test_run.py", "line": 3,
-                 "match": "direct_call", "invocation_line": 4, "patch_file": "tests/conftest.py",
-                 "patch_line": 2},
-                {"node_id": "tests/test_run.py::test_i", "file": "tests/test_run.py", "line": 6,
-                 "match": "cli_argv", "invocation_line": 7, "patch_file": "tests/test_run.py",
-                 "patch_line": 5},
-                {"node_id": "tests/test_run.py::test_j", "file": "tests/test_run.py", "line": 8,
-                 "match": "cli_runner", "invocation_line": 9, "patch_file": "tests/test_run.py",
-                 "patch_line": 7},
-                {"node_id": "tests/test_run.py::test_d", "file": "tests/test_run.py", "line": 10,
-                 "match": "subprocess", "invocation_line": 12, "patch_file": "tests/conftest.py",
-                 "patch_line": 5},
-                {"node_id": "tests/test_run.py::test_e", "file": "tests/test_run.py", "line": 20,
-                 "match": "runpy", "invocation_line": 21, "patch_file": "tests/test_run.py",
-                 "patch_line": 19},
+                {
+                    "node_id": "tests/test_run.py::test_h",
+                    "file": "tests/test_run.py",
+                    "line": 3,
+                    "match": "direct_call",
+                    "invocation_line": 4,
+                    "patch_file": "tests/conftest.py",
+                    "patch_line": 2,
+                },
+                {
+                    "node_id": "tests/test_run.py::test_i",
+                    "file": "tests/test_run.py",
+                    "line": 6,
+                    "match": "cli_argv",
+                    "invocation_line": 7,
+                    "patch_file": "tests/test_run.py",
+                    "patch_line": 5,
+                },
+                {
+                    "node_id": "tests/test_run.py::test_j",
+                    "file": "tests/test_run.py",
+                    "line": 8,
+                    "match": "cli_runner",
+                    "invocation_line": 9,
+                    "patch_file": "tests/test_run.py",
+                    "patch_line": 7,
+                },
+                {
+                    "node_id": "tests/test_run.py::test_d",
+                    "file": "tests/test_run.py",
+                    "line": 10,
+                    "match": "subprocess",
+                    "invocation_line": 12,
+                    "patch_file": "tests/conftest.py",
+                    "patch_line": 5,
+                },
+                {
+                    "node_id": "tests/test_run.py::test_e",
+                    "file": "tests/test_run.py",
+                    "line": 20,
+                    "match": "runpy",
+                    "invocation_line": 21,
+                    "patch_file": "tests/test_run.py",
+                    "patch_line": 19,
+                },
             ],
         },
     }
     p2 = {
-        "id": "p2", "entry": skill_entry,
+        "id": "p2",
+        "entry": skill_entry,
         "hops": [_hop("pkg", "skills/café/SKILL.md", 12, 12, "python -m pkg run")],
-        "stops_at": None, "break_reason": None,
-        "changed_lines_covered": [], "tests": {"e2e": [], "mocks_hop_2": []},
+        "stops_at": None,
+        "break_reason": None,
+        "changed_lines_covered": [],
+        "tests": {"e2e": [], "mocks_hop_2": []},
     }
     # p1 is cut by `text_mismatch`; one more cut path per remaining cut reason, from every other entry kind.
-    cuts = [_cut_path(n, reason, kind) for n, (reason, kind) in enumerate(
-        zip([r for r in CUT_REASONS if r != "text_mismatch"],
-            ["hook", "click", "typer", "main", "script", "seed", "model"], strict=True), start=3)]
+    cuts = [
+        _cut_path(n, reason, kind)
+        for n, (reason, kind) in enumerate(
+            zip(
+                [r for r in CUT_REASONS if r != "text_mismatch"],
+                ["hook", "click", "typer", "main", "script", "seed", "model"],
+                strict=True,
+            ),
+            start=3,
+        )
+    ]
     drops = [
-        ("model_fallback_citation", "missing_citation", _entry("model", "GET /items", "app/routes.py", 3)),
-        ("model_fallback_citation", "citation_unverified", _entry("model", "GET /items", "app/routes.py", 12)),
-        ("model_fallback_duplicate", "duplicate", _entry("model", "dup", "pkg/commands.py", 180)),
-        ("import_reachability", "unreachable", _entry("click", "cli sync", "cli/app.py", 5,
-                                                      handler={"path": "cli/app.py", "line": 6,
-                                                               "symbol": None})),
-        ("trace_limit", "over_trace_limit", _entry("typer", "users add-user", "cli/users.py", 9)),
-        *(("trace", code, _entry("hook", f"Stop:{code}", "hooks/hooks.json", line))
-          for line, code in enumerate(BREAK_CODES, start=1)),
+        (
+            "model_fallback_citation",
+            "missing_citation",
+            _entry("model", "GET /items", "app/routes.py", 3),
+        ),
+        (
+            "model_fallback_citation",
+            "citation_unverified",
+            _entry("model", "GET /items", "app/routes.py", 12),
+        ),
+        (
+            "model_fallback_duplicate",
+            "duplicate",
+            _entry("model", "dup", "pkg/commands.py", 180),
+        ),
+        (
+            "import_reachability",
+            "unreachable",
+            _entry(
+                "click",
+                "cli sync",
+                "cli/app.py",
+                5,
+                handler={"path": "cli/app.py", "line": 6, "symbol": None},
+            ),
+        ),
+        (
+            "trace_limit",
+            "over_trace_limit",
+            _entry("typer", "users add-user", "cli/users.py", 9),
+        ),
+        *(
+            ("trace", code, _entry("hook", f"Stop:{code}", "hooks/hooks.json", line))
+            for line, code in enumerate(BREAK_CODES, start=1)
+        ),
         ("trace", "call_failed", _entry("main", "tools.report", "tools/report.py", 30)),
-        ("no_changed_line", "no_changed_line_covered", _entry("script", "mytool", "pyproject.toml", 8)),
-        ("cap", "over_cap", _entry("seed", "lib/api.py:handle_request", "lib/api.py", 30)),
+        (
+            "no_changed_line",
+            "no_changed_line_covered",
+            _entry("script", "mytool", "pyproject.toml", 8),
+        ),
+        (
+            "cap",
+            "over_cap",
+            _entry("seed", "lib/api.py:handle_request", "lib/api.py", 30),
+        ),
     ]
     return {
         "schema_version": "paths.v1",
         "commit": "0123456789abcdef0123456789abcdef01234567",
         "scoped": True,
         "cap": 10,
-        "fallback": {"status": "failed", "reason": "1 validation error for FallbackAnswer"},
+        "fallback": {
+            "status": "failed",
+            "reason": "1 validation error for FallbackAnswer",
+        },
         "paths": [p1, p2, *cuts],
-        "dropped": [{"stage": s, "reason": r, "detail": "detail text", "entry": e} for s, r, e in drops],
+        "dropped": [
+            {"stage": s, "reason": r, "detail": "detail text", "entry": e}
+            for s, r, e in drops
+        ],
         "diagnostics": [
-            {"path": "broken.py", "line": None, "reason": "parse_error", "detail": "invalid syntax"},
-            {"path": "cli.py", "line": 3, "reason": "dynamic_name", "detail": "add_parser(name)"},
-            {"path": "cli.py", "line": 9, "reason": "unresolved_handler", "detail": "x"},
-            {"path": "lib/missing.py", "line": None, "reason": "seed_not_found", "detail": "no such file"},
-            {"path": "pyproject.toml", "line": 8, "reason": "unresolved_target", "detail": "ext"},
+            {
+                "path": "broken.py",
+                "line": None,
+                "reason": "parse_error",
+                "detail": "invalid syntax",
+            },
+            {
+                "path": "cli.py",
+                "line": 3,
+                "reason": "dynamic_name",
+                "detail": "add_parser(name)",
+            },
+            {
+                "path": "cli.py",
+                "line": 9,
+                "reason": "unresolved_handler",
+                "detail": "x",
+            },
+            {
+                "path": "lib/missing.py",
+                "line": None,
+                "reason": "seed_not_found",
+                "detail": "no such file",
+            },
+            {
+                "path": "pyproject.toml",
+                "line": 8,
+                "reason": "unresolved_target",
+                "detail": "ext",
+            },
         ],
         "test_listing_skips": [
             {"file": "tests/test_bad_utf8.py", "reason": "decode_error"},
@@ -206,7 +410,9 @@ def unscoped_variant(doc: dict) -> dict:
     doc["scoped"] = False
     doc["cap"] = None
     doc["fallback"] = {"status": "skipped", "reason": None}
-    doc["dropped"] = [d for d in doc["dropped"] if d["stage"] in ("model_fallback_citation", "trace")]
+    doc["dropped"] = [
+        d for d in doc["dropped"] if d["stage"] in ("model_fallback_citation", "trace")
+    ]
     for p in doc["paths"]:
         p["changed_lines_covered"] = []
     return doc
@@ -247,11 +453,15 @@ def make_tree(root: Path, files: dict[str, str | bytes]) -> Path:
 def line_of(text: str, needle: str, nth: int = 1) -> int:
     """The 1-based line of the `nth` line of `text` containing `needle`."""
     hits = [i for i, line in enumerate(text.splitlines(), start=1) if needle in line]
-    assert len(hits) >= nth, f"{needle!r} occurs {len(hits)} times, wanted occurrence {nth}"
+    assert len(hits) >= nth, (
+        f"{needle!r} occurs {len(hits)} times, wanted occurrence {nth}"
+    )
     return hits[nth - 1]
 
 
 def sentinel_prelude(sentinel: Path) -> str:
     """Module code that, if ever imported or run, writes `sentinel` and raises."""
-    return (f"import pathlib as _pl\n_pl.Path({str(sentinel)!r}).write_text('ran')\n"
-            "raise RuntimeError('fixture code was executed')\n")
+    return (
+        f"import pathlib as _pl\n_pl.Path({str(sentinel)!r}).write_text('ran')\n"
+        "raise RuntimeError('fixture code was executed')\n"
+    )

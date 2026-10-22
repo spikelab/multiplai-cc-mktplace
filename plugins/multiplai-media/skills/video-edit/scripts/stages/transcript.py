@@ -22,6 +22,7 @@ The `transcribe` skill does not offer word-level JSON yet. WORDS_JSON_FLAG is
 the flag this skill looks for; whoever adds word output to `transcribe.sh`
 should use this name, or change it here in the same change.
 """
+
 from __future__ import annotations
 
 import json
@@ -32,7 +33,9 @@ from typing import Any
 WORDS_JSON_FLAG = "--words-json"
 
 # skills/video-edit/scripts/stages/transcript.py → skills/transcribe/scripts/
-_SIBLING_TRANSCRIBE = Path(__file__).resolve().parents[3] / "transcribe" / "scripts" / "transcribe.sh"
+_SIBLING_TRANSCRIBE = (
+    Path(__file__).resolve().parents[3] / "transcribe" / "scripts" / "transcribe.sh"
+)
 
 
 def transcribe_skill_script() -> Path | None:
@@ -49,8 +52,9 @@ def transcribe_skill_has_words(script: Path | None) -> bool:
     if script is None:
         return False
     try:
-        proc = subprocess.run(["bash", str(script), "--help"], capture_output=True,
-                              text=True, timeout=30)
+        proc = subprocess.run(
+            ["bash", str(script), "--help"], capture_output=True, text=True, timeout=30
+        )
     except (OSError, subprocess.TimeoutExpired):
         return False
     return WORDS_JSON_FLAG in (proc.stdout + proc.stderr)
@@ -64,9 +68,17 @@ def choose_source() -> tuple[str, Path | None]:
     return "mlx_whisper", None
 
 
-def transcribe_skill_argv(script: Path, audio: Path, out_json: Path,
-                          language: str | None) -> list[str]:
-    argv = ["bash", str(script), str(audio), str(out_json), "--override", WORDS_JSON_FLAG]
+def transcribe_skill_argv(
+    script: Path, audio: Path, out_json: Path, language: str | None
+) -> list[str]:
+    argv = [
+        "bash",
+        str(script),
+        str(audio),
+        str(out_json),
+        "--override",
+        WORDS_JSON_FLAG,
+    ]
     if language:
         argv += ["--language", language]
     return argv
@@ -76,7 +88,11 @@ def _word(text: Any, start: Any, end: Any, speaker: Any = None) -> dict | None:
     t = str(text or "").strip()
     if not t or start is None or end is None:
         return None
-    w: dict[str, Any] = {"text": t, "start": round(float(start), 3), "end": round(float(end), 3)}
+    w: dict[str, Any] = {
+        "text": t,
+        "start": round(float(start), 3),
+        "end": round(float(end), 3),
+    }
     if speaker not in (None, ""):
         w["speaker"] = str(speaker)
     return w
@@ -125,8 +141,12 @@ def from_transcribe_skill(data: dict) -> dict:
 
     def take(items: list, inherited_speaker: Any = None) -> None:
         for w in items or []:
-            cw = _word(w.get("text", w.get("word")), w.get("start"), w.get("end"),
-                       w.get("speaker", inherited_speaker))
+            cw = _word(
+                w.get("text", w.get("word")),
+                w.get("start"),
+                w.get("end"),
+                w.get("speaker", inherited_speaker),
+            )
             if cw:
                 words.append(cw)
 
@@ -160,6 +180,7 @@ def has_speakers(contract: dict) -> bool:
 
 def to_srt(contract: dict, max_words: int = 12) -> str:
     """A plain SRT from the words, for people and tools that want subtitles."""
+
     def ts(t: float) -> str:
         ms = int(round(t * 1000))
         h, ms = divmod(ms, 3_600_000)
@@ -170,8 +191,11 @@ def to_srt(contract: dict, max_words: int = 12) -> str:
     words = contract["words"]
     out, n = [], 0
     for i in range(0, len(words), max_words):
-        chunk = words[i:i + max_words]
+        chunk = words[i : i + max_words]
         n += 1
-        out.append(f"{n}\n{ts(chunk[0]['start'])} --> {ts(chunk[-1]['end'])}\n"
-                   + " ".join(w["text"] for w in chunk) + "\n")
+        out.append(
+            f"{n}\n{ts(chunk[0]['start'])} --> {ts(chunk[-1]['end'])}\n"
+            + " ".join(w["text"] for w in chunk)
+            + "\n"
+        )
     return "\n".join(out)

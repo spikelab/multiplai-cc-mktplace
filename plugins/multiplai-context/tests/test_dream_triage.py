@@ -130,8 +130,9 @@ def _item(**overrides) -> Item:
 
 
 def _triage(*items: Item) -> Triage:
-    return Triage(auto=(), review=tuple(items), conflict_resolutions=0,
-                  unjudged=len(items))
+    return Triage(
+        auto=(), review=tuple(items), conflict_resolutions=0, unjudged=len(items)
+    )
 
 
 def _verdict(item: Item, **overrides) -> Verdict:
@@ -254,7 +255,9 @@ class TestRuleNeverApplies:
 class TestJudgeMayOnlyLower:
     def test_a_judge_review_demotes_a_rubric_apply(self):
         item = _item(provenance="CORRECTION", kind="FACT")
-        result = _decide(item, _verdict(item, verdict="review", reason="ambiguous scope"))
+        result = _decide(
+            item, _verdict(item, verdict="review", reason="ambiguous scope")
+        )
         assert result.auto == ()
         assert result.review[0].reasons[0] == "judge-doubt"
         assert result.review[0].judge_reason == "ambiguous scope"
@@ -343,7 +346,9 @@ class TestCitationCondition:
 class TestRedundancy:
     def test_redundant_yes_drops(self):
         item = _item()
-        result = _decide(item, _verdict(item, redundant=True, reason="already in § Python Tooling"))
+        result = _decide(
+            item, _verdict(item, redundant=True, reason="already in § Python Tooling")
+        )
         assert [i.label for i in result.dropped] == [item.label]
         assert result.dropped[0].reasons == ("redundant",)
         assert result.dropped[0].judge_reason == "already in § Python Tooling"
@@ -361,8 +366,9 @@ class TestRedundancy:
 
         item = _item()
         result = _decide(item, _verdict(item, redundant=True, reason="dupe"))
-        records = rejection_records(result, proposal_name="p.md",
-                                    key_of=lambda i: "deadbeefdeadbeef")
+        records = rejection_records(
+            result, proposal_name="p.md", key_of=lambda i: "deadbeefdeadbeef"
+        )
         assert len(records) == 1
         assert records[0]["reason"] == "redundant"
         assert records[0]["judge_reason"] == "dupe"
@@ -377,8 +383,9 @@ class TestRedundancy:
 class TestNoVerdictIsNeverAWrite:
     def test_a_verdict_for_an_item_that_is_not_here_is_ignored(self):
         item = _item()
-        stray = Verdict(target="ghost.md", number=99, verdict="apply",
-                        citation="supported")
+        stray = Verdict(
+            target="ghost.md", number=99, verdict="apply", citation="supported"
+        )
         result = apply_verdicts(_triage(item), {stray.key: stray})
         assert result.auto == ()
         assert result.review[0].reasons == ("unjudged",)
@@ -413,7 +420,8 @@ class TestNoVerdictIsNeverAWrite:
         good = _item(number=1)
         lost = _item(number=2, text="Another fact.")
         result = apply_verdicts(
-            _triage(good, lost), {(good.target, good.number): _verdict(good)},
+            _triage(good, lost),
+            {(good.target, good.number): _verdict(good)},
         )
         assert [i.number for i in result.auto] == [1]
         assert [i.number for i in result.review] == [2]
@@ -546,13 +554,15 @@ class TestReconciliation:
     def test_the_more_cautious_provenance_wins(self):
         item = _item(provenance="CORRECTION", kind="FACT")
         provenance, kind, disagreed = reconciled_pair(
-            item, _verdict(item, provenance="INFERENCE"))
+            item, _verdict(item, provenance="INFERENCE")
+        )
         assert (provenance, kind, disagreed) == ("INFERENCE", "FACT", True)
 
     def test_it_works_in_the_other_direction(self):
         item = _item(provenance="INFERENCE", kind="FACT")
         provenance, _, disagreed = reconciled_pair(
-            item, _verdict(item, provenance="CORRECTION"))
+            item, _verdict(item, provenance="CORRECTION")
+        )
         assert (provenance, disagreed) == ("INFERENCE", True)
 
     def test_agreement_is_not_a_disagreement(self):
@@ -562,7 +572,8 @@ class TestReconciliation:
     def test_an_unlabelled_item_takes_the_judges_label(self):
         item = _item(provenance="", kind="")
         provenance, kind, disagreed = reconciled_pair(
-            item, _verdict(item, provenance="RESEARCH", kind="FACT"))
+            item, _verdict(item, provenance="RESEARCH", kind="FACT")
+        )
         assert (provenance, kind, disagreed) == ("RESEARCH", "FACT", False)
 
     def test_no_verdict_leaves_the_extractors_pair_alone(self):
@@ -632,22 +643,28 @@ class TestRoutingWarnings:
         )
         warnings = validate_proposal(
             entry,
-            {"personal-projects.md": "## Perfi\n\nnotes\n",
-             "dolcebot.md": "## DolceEngine\n"},
+            {
+                "personal-projects.md": "## Perfi\n\nnotes\n",
+                "dolcebot.md": "## DolceEngine\n",
+            },
         )
         assert warnings, "fixture must actually produce a warning"
         rendered = entry + render_warnings_section(warnings)
         assert ("dolcebot.md", 2) in flagged_by_routing(rendered)
 
     def test_clean_section_flags_nothing(self):
-        clean = PROPOSAL.split("## Routing Warnings")[0] + "## Routing Warnings\n\n(none)\n"
+        clean = (
+            PROPOSAL.split("## Routing Warnings")[0] + "## Routing Warnings\n\n(none)\n"
+        )
         assert flagged_by_routing(clean) == set()
 
     def test_missing_section_flags_nothing(self):
         assert flagged_by_routing(PROPOSAL.split("## Routing Warnings")[0]) == set()
 
     def test_stops_at_the_next_section(self):
-        extended = PROPOSAL + "\n## Action Items\n\n- `dolcebot.md` #1 (not a warning)\n"
+        extended = (
+            PROPOSAL + "\n## Action Items\n\n- `dolcebot.md` #1 (not a warning)\n"
+        )
         assert flagged_by_routing(extended) == {("dolcebot.md", 2)}
 
     def test_every_member_of_a_batch_cluster_is_flagged(self):
@@ -657,10 +674,13 @@ class TestRoutingWarnings:
         section = (
             "## Routing Warnings\n\n"
             "- `dolcebot.md` #3, #9, #21 are near-duplicates of each other "
-            "(up to 61% word overlap; first is \"VM logs\") — merge into one entry.\n"
+            '(up to 61% word overlap; first is "VM logs") — merge into one entry.\n'
         )
         assert flagged_by_routing(section) == {
-            ("dolcebot.md", 3), ("dolcebot.md", 9), ("dolcebot.md", 21)}
+            ("dolcebot.md", 3),
+            ("dolcebot.md", 9),
+            ("dolcebot.md", 21),
+        }
 
     def test_a_number_past_the_leading_run_is_not_an_item_label(self):
         """Only the run of `#N` immediately after the filename is read. A `#12`
@@ -670,16 +690,20 @@ class TestRoutingWarnings:
         section = (
             "## Routing Warnings\n\n"
             "- `dolcebot.md` #4 (rename step #12 of the runbook): near-duplicate "
-            "of an existing line in `python.md:7` — \"see #99 for the rationale\".\n"
+            'of an existing line in `python.md:7` — "see #99 for the rationale".\n'
         )
         assert flagged_by_routing(section) == {("dolcebot.md", 4)}
 
     def test_parses_a_cluster_the_renderer_actually_writes(self):
         """The same end-to-end coupling as above, for the cluster shape."""
-        rule = ("Worktrees for a project live under the shared worktrees "
-                "directory, never scattered inside project folders.")
-        restated = ("Never scatter worktrees inside project directories; each "
-                    "worktree lives under the shared worktrees directory.")
+        rule = (
+            "Worktrees for a project live under the shared worktrees "
+            "directory, never scattered inside project folders."
+        )
+        restated = (
+            "Never scatter worktrees inside project directories; each "
+            "worktree lives under the shared worktrees directory."
+        )
         entry = "# Proposal\n\n## Updates for `dolcebot.md`\n\n" + "".join(
             f"### {n}. Entry {n}\n**Section:** DolceEngine\n**Change:** add\n> {t}\n\n"
             for n, t in ((1, rule), (2, restated))
@@ -687,8 +711,7 @@ class TestRoutingWarnings:
         warnings = validate_proposal(entry, {"dolcebot.md": "## DolceEngine\n"})
         assert any("near-duplicates of each other" in w for w in warnings)
         rendered = entry + render_warnings_section(warnings)
-        assert flagged_by_routing(rendered) == {
-            ("dolcebot.md", 1), ("dolcebot.md", 2)}
+        assert flagged_by_routing(rendered) == {("dolcebot.md", 1), ("dolcebot.md", 2)}
 
 
 class TestRoutingSectionPresence:
@@ -696,7 +719,9 @@ class TestRoutingSectionPresence:
         assert has_routing_section(PROPOSAL)
 
     def test_present_when_the_gate_ran_and_found_nothing(self):
-        clean = PROPOSAL.split("## Routing Warnings")[0] + "## Routing Warnings\n\n(none)\n"
+        clean = (
+            PROPOSAL.split("## Routing Warnings")[0] + "## Routing Warnings\n\n(none)\n"
+        )
         assert has_routing_section(clean)
 
     def test_absent_when_it_did_not(self):
@@ -730,7 +755,9 @@ class TestClassification:
         assert "not-additive" in by_label["`python.md` #2"].reasons
 
     def test_processed_items_are_not_re_triaged(self):
-        processed = PROPOSAL + """
+        processed = (
+            PROPOSAL
+            + """
 ## Processed
 
 ### 9. Something already decided
@@ -738,18 +765,22 @@ class TestClassification:
 **Change:** add
 > decided.
 """
+        )
         assert classify(processed).total == 6
 
     def test_empty_proposal_is_empty_triage(self):
         assert classify("").total == 0
 
     def test_conflict_resolutions_are_counted_never_auto(self):
-        with_conflicts = PROPOSAL + """
+        with_conflicts = (
+            PROPOSAL
+            + """
 ## Conflict Resolutions
 
 ### 1. python.md says two things about uv
 > Keep the newer line.
 """
+        )
         triage = classify(with_conflicts)
         assert triage.conflict_resolutions == 1
         assert triage.total == 6
@@ -777,7 +808,8 @@ class TestAutoSlice:
         triage = classify(PROPOSAL)
         verdicts = {
             (i.target, i.number): _verdict(i)
-            for i in triage.review if i.target in ("python.md", "dolcebot.md")
+            for i in triage.review
+            if i.target in ("python.md", "dolcebot.md")
         }
         return apply_verdicts(triage, verdicts)
 
@@ -806,12 +838,18 @@ class TestAutoSlice:
 
 def _rejected(n: int) -> Triage:
     items = [
-        _item(number=i, title=f"Dupe {i}", text=f"redundant line {i}",
-              reasons=("redundant",), judge_reason="already stated")
+        _item(
+            number=i,
+            title=f"Dupe {i}",
+            text=f"redundant line {i}",
+            reasons=("redundant",),
+            judge_reason="already stated",
+        )
         for i in range(1, n + 1)
     ]
-    return Triage(auto=(), review=(), conflict_resolutions=0, dropped=tuple(items),
-                  judged=True)
+    return Triage(
+        auto=(), review=(), conflict_resolutions=0, dropped=tuple(items), judged=True
+    )
 
 
 class TestReceipt:
@@ -820,8 +858,12 @@ class TestReceipt:
         verdicts = {(i.target, i.number): _verdict(i) for i in triage.review}
         folded = apply_verdicts(triage, verdicts)
         return folded, render_receipt(
-            folded, proposal_name="p.md", applied=folded.auto_by_file(),
-            failed={}, generated="2026-08-06 10:00 UTC", mode="triage",
+            folded,
+            proposal_name="p.md",
+            applied=folded.auto_by_file(),
+            failed={},
+            generated="2026-08-06 10:00 UTC",
+            mode="triage",
             rejections_log="/tmp/rejections.jsonl",
         )
 
@@ -856,7 +898,9 @@ class TestReceipt:
     def test_records_failures_as_still_pending(self):
         triage = classify(PROPOSAL)
         receipt = render_receipt(
-            triage, proposal_name="p.md", applied={},
+            triage,
+            proposal_name="p.md",
+            applied={},
             failed={"python.md": "applier returned no safe content"},
             generated="2026-08-06 10:00 UTC",
         )
@@ -866,7 +910,10 @@ class TestReceipt:
     def test_lists_what_was_left_for_the_human(self):
         triage = classify(PROPOSAL)
         receipt = render_receipt(
-            triage, proposal_name="p.md", applied={}, failed={},
+            triage,
+            proposal_name="p.md",
+            applied={},
+            failed={},
             generated="2026-08-06 10:00 UTC",
         )
         assert "Left for you" in receipt
@@ -875,7 +922,10 @@ class TestReceipt:
     def test_ten_rejections_are_shown_in_full(self):
         triage = _rejected(10)
         receipt = render_receipt(
-            triage, proposal_name="p.md", applied={}, failed={},
+            triage,
+            proposal_name="p.md",
+            applied={},
+            failed={},
             generated="2026-08-06 10:00 UTC",
         )
         for i in range(1, 11):
@@ -886,7 +936,10 @@ class TestReceipt:
         # programme exists to remove.
         triage = _rejected(40)
         receipt = render_receipt(
-            triage, proposal_name="p.md", applied={}, failed={},
+            triage,
+            proposal_name="p.md",
+            applied={},
+            failed={},
             generated="2026-08-06 10:00 UTC",
             rejections_log="/tmp/rejections.jsonl",
         )
@@ -897,20 +950,33 @@ class TestReceipt:
     def test_the_threshold_is_where_it_says_it_is(self):
         assert REJECTION_DETAIL_LIMIT == 25
         assert "redundant line 1" in render_receipt(
-            _rejected(REJECTION_DETAIL_LIMIT), proposal_name="p.md", applied={},
-            failed={}, generated="g")
+            _rejected(REJECTION_DETAIL_LIMIT),
+            proposal_name="p.md",
+            applied={},
+            failed={},
+            generated="g",
+        )
         assert "redundant line 1\n" not in render_receipt(
-            _rejected(REJECTION_DETAIL_LIMIT + 1), proposal_name="p.md",
-            applied={}, failed={}, generated="g")
+            _rejected(REJECTION_DETAIL_LIMIT + 1),
+            proposal_name="p.md",
+            applied={},
+            failed={},
+            generated="g",
+        )
 
 
 class TestSummary:
     def test_it_names_the_mode_and_all_three_buckets(self):
         triage = classify(PROPOSAL)
         item = triage.review[0]
-        folded = apply_verdicts(triage, {
-            (item.target, item.number): _verdict(item, verdict="drop", reason="noise"),
-        })
+        folded = apply_verdicts(
+            triage,
+            {
+                (item.target, item.number): _verdict(
+                    item, verdict="drop", reason="noise"
+                ),
+            },
+        )
         out = render_summary(folded, applied_count=0, receipt_path="r.md", mode="auto")
         assert "mode: auto" in out
         assert "DROPPED (1)" in out
@@ -928,11 +994,19 @@ class TestPolicyConstants:
         pattern cannot answer; re-adding either undoes the phase."""
         import lib.dream_triage as triage_lib
 
-        for gone in ("RECALL_FILES", "_NORMATIVE_RE", "_LOW_CONFIDENCE_RE",
-                     "_RULE_PROPOSAL_RE"):
+        for gone in (
+            "RECALL_FILES",
+            "_NORMATIVE_RE",
+            "_LOW_CONFIDENCE_RE",
+            "_RULE_PROPOSAL_RE",
+        ):
             assert not hasattr(triage_lib, gone), gone
-        for gone in ("normative-language", "not-recall-file", "rule-proposal",
-                     "low-confidence"):
+        for gone in (
+            "normative-language",
+            "not-recall-file",
+            "rule-proposal",
+            "low-confidence",
+        ):
             assert gone not in REASON_LABELS, gone
 
     def test_every_reason_a_classification_can_emit_has_a_label(self):
@@ -952,6 +1026,7 @@ class TestPolicyConstants:
 # processed-learnings-2026-08-12, 79 of 201 items (39%) had a contested label
 # and 64 ended `kind: RULE` (which never auto-applies), and the logs could not
 # say whether those two facts were related.
+
 
 class _Item:
     def __init__(self, provenance="", kind=""):

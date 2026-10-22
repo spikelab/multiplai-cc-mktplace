@@ -24,10 +24,14 @@ FIXED = datetime(2026, 10, 13, 12, 0, 0, tzinfo=UTC)
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 
 _GIT_ENV = {
-    "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
-    "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
-    "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com",
-    "GIT_AUTHOR_DATE": "1700000000 +0000", "GIT_COMMITTER_DATE": "1700000000 +0000",
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_CONFIG_GLOBAL": os.devnull,
+    "GIT_AUTHOR_NAME": "t",
+    "GIT_AUTHOR_EMAIL": "t@example.com",
+    "GIT_COMMITTER_NAME": "t",
+    "GIT_COMMITTER_EMAIL": "t@example.com",
+    "GIT_AUTHOR_DATE": "1700000000 +0000",
+    "GIT_COMMITTER_DATE": "1700000000 +0000",
 }
 
 
@@ -36,8 +40,13 @@ class Killed(BaseException):
 
 
 def git(repo: Path, *args: str) -> str:
-    proc = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True,
-                          env=dict(os.environ, **_GIT_ENV), check=True)
+    proc = subprocess.run(
+        ["git", "-C", str(repo), *args],
+        capture_output=True,
+        text=True,
+        env=dict(os.environ, **_GIT_ENV),
+        check=True,
+    )
     return proc.stdout.strip()
 
 
@@ -46,11 +55,16 @@ def write(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def make_repo(path: Path, origin: str | None = "https://github.com/acme/widgets.git") -> Path:
+def make_repo(
+    path: Path, origin: str | None = "https://github.com/acme/widgets.git"
+) -> Path:
     """A repository with one commit holding a few Python files, and `origin` set (not fetched)."""
     path.mkdir(parents=True)
     git(path, "init", "-q", "-b", "main")
-    write(path / "src" / "billing" / "charge.py", "def charge(amount):\n    return amount\n")
+    write(
+        path / "src" / "billing" / "charge.py",
+        "def charge(amount):\n    return amount\n",
+    )
     write(path / "src" / "a" / "one.py", "def one():\n    return 1\n")
     write(path / "src_a" / "two.py", "def two():\n    return 2\n")
     git(path, "add", "-A")
@@ -62,7 +76,9 @@ def make_repo(path: Path, origin: str | None = "https://github.com/acme/widgets.
 
 def unit_file(i: int, version: int = 1) -> str:
     """A module of 3,502 lines: each file in its own directory is its own explore unit."""
-    return f"def f{i}():\n    return {i * 10 + version}\n" + "".join(f"x{n} = {n}\n" for n in range(3500))
+    return f"def f{i}():\n    return {i * 10 + version}\n" + "".join(
+        f"x{n} = {n}\n" for n in range(3500)
+    )
 
 
 def make_units_repo(path: Path, n: int = 3) -> Path:
@@ -95,7 +111,9 @@ def read_state(run_dir: Path) -> dict:
 def fake_state(run_dir: Path, **target) -> None:
     """A `state.json` another run wrote, holding only the `target` fields given."""
     run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "state.json").write_text(json.dumps({"target": target, "steps_done": []}), encoding="utf-8")
+    (run_dir / "state.json").write_text(
+        json.dumps({"target": target, "steps_done": []}), encoding="utf-8"
+    )
 
 
 def outputs(run_dir: Path) -> dict[str, bytes]:
@@ -104,7 +122,11 @@ def outputs(run_dir: Path) -> dict[str, bytes]:
     out = {}
     for p in sorted(run_dir.rglob("*")):
         rel = p.relative_to(run_dir).as_posix()
-        if not p.is_file() or rel == "state.json" or rel.startswith(("snapshot/", "source/.git/")):
+        if (
+            not p.is_file()
+            or rel == "state.json"
+            or rel.startswith(("snapshot/", "source/.git/"))
+        ):
             continue
         if "/" not in rel and rel.startswith(".state-") and rel.endswith(".tmp"):
             continue
@@ -114,8 +136,10 @@ def outputs(run_dir: Path) -> dict[str, bytes]:
 
 def everything(root: Path) -> dict[str, bytes | None]:
     """Every path under *root*, files with their bytes: what "writes nothing" compares."""
-    return {p.relative_to(root).as_posix(): (p.read_bytes() if p.is_file() else None)
-            for p in sorted(root.rglob("*"))}
+    return {
+        p.relative_to(root).as_posix(): (p.read_bytes() if p.is_file() else None)
+        for p in sorted(root.rglob("*"))
+    }
 
 
 def source_head(run_dir: Path) -> str | None:
@@ -126,6 +150,7 @@ def source_head(run_dir: Path) -> str | None:
 @pytest.fixture
 def pr_view(monkeypatch):
     """Replace `gh pr view`: set `pr_view.info[n] = {"headRefOid": …, "baseRefOid": …}`."""
+
     class View:
         info: dict[int, dict] = {}
         calls: list[int] = []
@@ -177,7 +202,11 @@ class FakeCall:
         self.prompts: dict[str, str] = {}
 
     async def __call__(self, prompt, schema, *, budget_label="", cwd=None, **kwargs):
-        files = [m.group(1) for m in _LISTED.finditer(prompt)] if schema is ExploreOutput else []
+        files = (
+            [m.group(1) for m in _LISTED.finditer(prompt)]
+            if schema is ExploreOutput
+            else []
+        )
         unit = files[0] if files else budget_label
         self.calls[unit] += 1
         self.prompts[unit] = prompt
@@ -189,8 +218,10 @@ class FakeCall:
             raise BudgetExceededError("circuit breaker stopped the run (fake)")
         if action == "backend":
             raise sdk.BackendUnavailable("no model call can run: fake")
-        core_budget.record(SimpleNamespace(cost_usd=self.cost, input_tokens=100, output_tokens=10),
-                           label=budget_label)
+        core_budget.record(
+            SimpleNamespace(cost_usd=self.cost, input_tokens=100, output_tokens=10),
+            label=budget_label,
+        )
         if action == "fail":
             raise sdk.CallFailed(f"fake failure for {unit}")
         if unit in self.answers:
@@ -211,7 +242,12 @@ def group_answer_for(symbols: list[tuple[str, str, str]]) -> dict:
     caps: dict[str, list[str]] = {}
     for path, name, _ in symbols:
         caps.setdefault(Path(path).stem, []).append(f"{path}::{name}")
-    return {"capabilities": [{"name": n, "summary": f"what {n} does", "symbols": s} for n, s in caps.items()]}
+    return {
+        "capabilities": [
+            {"name": n, "summary": f"what {n} does", "symbols": s}
+            for n, s in caps.items()
+        ]
+    }
 
 
 def write_answer_for(symbols: list[tuple[str, str, str]], snapshot: Path) -> dict:
@@ -219,11 +255,24 @@ def write_answer_for(symbols: list[tuple[str, str, str]], snapshot: Path) -> dic
     reqs = []
     for path, name, line in symbols:
         n = int(line)
-        quote = (snapshot / path).read_text(encoding="utf-8").splitlines()[n - 1].strip()
+        quote = (
+            (snapshot / path).read_text(encoding="utf-8").splitlines()[n - 1].strip()
+        )
         cite = {"path": path, "line_start": n, "line_end": n, "quote": quote}
-        reqs.append({"name": f"{name} behaves", "text": f"The system SHALL provide {name}.",
-                     "scenarios": [{"name": f"calling {name}", "when": f"{name} is called",
-                                    "then": "it returns", "citations": [cite]}]})
+        reqs.append(
+            {
+                "name": f"{name} behaves",
+                "text": f"The system SHALL provide {name}.",
+                "scenarios": [
+                    {
+                        "name": f"calling {name}",
+                        "when": f"{name} is called",
+                        "then": "it returns",
+                        "citations": [cite],
+                    }
+                ],
+            }
+        )
     return {"requirements": reqs}
 
 
@@ -234,10 +283,21 @@ def answer_for(files: list[str], snapshot: Path) -> dict:
         n = next((i for i, line in enumerate(lines, 1) if line.strip()), None)
         if n is None:
             continue
-        cite = {"path": f, "line_start": n, "line_end": n, "quote": lines[n - 1].strip()}
-        facts.append({"claim": f"{f} starts with {lines[n - 1].strip()!r}", "citations": [cite]})
-        purposes.append({"path": f, "purpose": f"holds {Path(f).stem}", "citation": cite})
-    return ExploreOutput.model_validate({"facts": facts, "files": purposes}).model_dump()
+        cite = {
+            "path": f,
+            "line_start": n,
+            "line_end": n,
+            "quote": lines[n - 1].strip(),
+        }
+        facts.append(
+            {"claim": f"{f} starts with {lines[n - 1].strip()!r}", "citations": [cite]}
+        )
+        purposes.append(
+            {"path": f, "purpose": f"holds {Path(f).stem}", "citation": cite}
+        )
+    return ExploreOutput.model_validate(
+        {"facts": facts, "files": purposes}
+    ).model_dump()
 
 
 @pytest.fixture(autouse=True)
@@ -276,5 +336,6 @@ _SESSION_DEFAULT_VARS = (
 def _no_session_defaults(monkeypatch):
     for key in _SESSION_DEFAULT_VARS:
         monkeypatch.delenv(key, raising=False)
-    monkeypatch.setattr("multiplai_core.session.load_multiplai_conf",
-                        lambda: {"_sections": {}})
+    monkeypatch.setattr(
+        "multiplai_core.session.load_multiplai_conf", lambda: {"_sections": {}}
+    )

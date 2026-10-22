@@ -41,9 +41,9 @@ _CRITICAL_IMPACTS = ("breaks-users", "breaks-business")
 # .NET, Ruby, Elixir and PHP naming conventions and a `spec/` directory.
 _MORE_TEST_PATHS = re.compile(
     r"(^|/)("
-    r"[^/]+(Test|Tests|IT)\.(java|kt|scala|cs)"          # JVM, .NET
-    r"|[^/]+_(spec|test)\.(rb|exs?)"                     # Ruby, Elixir
-    r"|[^/]+Test\.php"                                   # PHPUnit
+    r"[^/]+(Test|Tests|IT)\.(java|kt|scala|cs)"  # JVM, .NET
+    r"|[^/]+_(spec|test)\.(rb|exs?)"  # Ruby, Elixir
+    r"|[^/]+Test\.php"  # PHPUnit
     r")$"
     r"|(^|/)(spec|__tests__|test|tests|Tests)/"
 )
@@ -71,7 +71,11 @@ def _listed(finding: dict, mode: str | None) -> bool:
 def _is_test_path(path: str) -> bool:
     from ..tdd_engine import _TEST_PATH_RE
 
-    return bool(is_test_file(path) or _TEST_PATH_RE.search(path) or _MORE_TEST_PATHS.search(path))
+    return bool(
+        is_test_file(path)
+        or _TEST_PATH_RE.search(path)
+        or _MORE_TEST_PATHS.search(path)
+    )
 
 
 def _accepted(finding: dict, mode: str | None) -> bool:
@@ -81,11 +85,19 @@ def _accepted(finding: dict, mode: str | None) -> bool:
     if section == "code":
         return True
     path = str(finding.get("file") or "")
-    return section == "tests" and bool(path) and _is_source(path) and not _is_test_path(path)
+    return (
+        section == "tests"
+        and bool(path)
+        and _is_source(path)
+        and not _is_test_path(path)
+    )
 
 
-def write_decisions(review_dir: str | Path, severities: tuple[str, ...] | None = None,
-                    code_only: bool = False) -> Path:
+def write_decisions(
+    review_dir: str | Path,
+    severities: tuple[str, ...] | None = None,
+    code_only: bool = False,
+) -> Path:
     """Write `<review_dir>/buildme-decisions.json` and return its path; with
     *severities*, a finding of another severity is not chosen, and with
     *code_only*, a finding outside the Code section is not.
@@ -98,10 +110,20 @@ def write_decisions(review_dir: str | Path, severities: tuple[str, ...] | None =
     try:
         doc = json.loads(source.read_text(encoding="utf-8"))
         mode = doc.get("mode")
-        chosen = {str(f["id"]): {"decision": "accept"} for f in doc["findings"]
-                  if _accepted(f, mode) and (severities is None or f.get("severity") in severities)
-                  and (not code_only or _section(f) == "code")}
-    except (json.JSONDecodeError, UnicodeDecodeError, KeyError, TypeError, AttributeError) as e:
+        chosen = {
+            str(f["id"]): {"decision": "accept"}
+            for f in doc["findings"]
+            if _accepted(f, mode)
+            and (severities is None or f.get("severity") in severities)
+            and (not code_only or _section(f) == "code")
+        }
+    except (
+        json.JSONDecodeError,
+        UnicodeDecodeError,
+        KeyError,
+        TypeError,
+        AttributeError,
+    ) as e:
         raise ValueError(f"cannot read {source}: {type(e).__name__}: {e}") from e
     path = Path(review_dir) / DECISIONS_FILE
     path.write_text(json.dumps(chosen, indent=2) + "\n", encoding="utf-8")

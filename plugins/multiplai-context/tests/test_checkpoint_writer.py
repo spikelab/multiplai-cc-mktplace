@@ -73,9 +73,17 @@ class TestWriteCheckpoint:
             [
                 _turn("user", "please build the widget", now - timedelta(minutes=10)),
                 _turn(
-                    "assistant", "building it", now,
-                    tool_blocks=[{"type": "tool_use", "name": "Write",
-                                  "input": {"file_path": "/work/proj/w.py"}, "id": "t1"}],
+                    "assistant",
+                    "building it",
+                    now,
+                    tool_blocks=[
+                        {
+                            "type": "tool_use",
+                            "name": "Write",
+                            "input": {"file_path": "/work/proj/w.py"},
+                            "id": "t1",
+                        }
+                    ],
                 ),
             ],
         )
@@ -103,13 +111,22 @@ class TestWriteCheckpoint:
         )
         captured = []
         monkeypatch.setattr(checkpoint_writer, "run_agent", _fake_run_agent(captured))
-        assert asyncio.run(checkpoint_writer.write_checkpoint(_payload("s1", transcript)))
+        assert asyncio.run(
+            checkpoint_writer.write_checkpoint(_payload("s1", transcript))
+        )
 
         # Append newer turns, then write again
         with transcript.open("a") as f:
-            f.write(json.dumps(_turn("user", "new work item beta", now + timedelta(minutes=5))) + "\n")
+            f.write(
+                json.dumps(
+                    _turn("user", "new work item beta", now + timedelta(minutes=5))
+                )
+                + "\n"
+            )
         assert asyncio.run(
-            checkpoint_writer.write_checkpoint(_payload("s1", transcript, tokens=205_000))
+            checkpoint_writer.write_checkpoint(
+                _payload("s1", transcript, tokens=205_000)
+            )
         )
 
         second_prompt = captured[1]["prompt"]
@@ -125,7 +142,9 @@ class TestWriteCheckpoint:
         monkeypatch.setattr(checkpoint_writer, "run_agent", _fake_run_agent([]))
 
         assert asyncio.run(
-            checkpoint_writer.write_checkpoint(_payload("s1", transcript, tokens=210_000))
+            checkpoint_writer.write_checkpoint(
+                _payload("s1", transcript, tokens=210_000)
+            )
         )
         payload = cp.consume_pending_marker(
             data_env, "/work/proj", "other-session", cp.load_config()
@@ -146,7 +165,9 @@ class TestWriteCheckpoint:
         monkeypatch.setattr(checkpoint_writer, "run_agent", _fake_run_agent([]))
 
         assert asyncio.run(
-            checkpoint_writer.write_checkpoint(_payload("s1", transcript, tokens=110_000))
+            checkpoint_writer.write_checkpoint(
+                _payload("s1", transcript, tokens=110_000)
+            )
         )
         payload = cp.consume_pending_marker(
             data_env, "/work/proj", "other", cp.load_config()
@@ -182,7 +203,9 @@ class TestWriteCheckpoint:
         transcript = tmp_path / "t.jsonl"
         _write_transcript(transcript, [_turn("user", "work", now)])
         monkeypatch.setattr(
-            checkpoint_writer, "run_agent", _fake_run_agent([], text="I could not comply.")
+            checkpoint_writer,
+            "run_agent",
+            _fake_run_agent([], text="I could not comply."),
         )
         ok = asyncio.run(checkpoint_writer.write_checkpoint(_payload("s1", transcript)))
         assert ok is False
@@ -190,9 +213,7 @@ class TestWriteCheckpoint:
 
     def test_child_session_skipped(self, tmp_path, data_env, monkeypatch):
         transcript = tmp_path / "subagents" / "t.jsonl"
-        _write_transcript(
-            transcript, [_turn("user", "work", datetime.now(UTC))]
-        )
+        _write_transcript(transcript, [_turn("user", "work", datetime.now(UTC))])
         called = []
         monkeypatch.setattr(checkpoint_writer, "run_agent", _fake_run_agent(called))
         ok = asyncio.run(checkpoint_writer.write_checkpoint(_payload("s1", transcript)))
@@ -244,16 +265,12 @@ class TestCheckpointThinking:
         import lib.thinking as th
         from multiplai_core.plugin_options import option_var
 
-        monkeypatch.setattr(
-            th, "core_supports_thinking", lambda target=None: supported
-        )
+        monkeypatch.setattr(th, "core_supports_thinking", lambda target=None: supported)
         monkeypatch.delenv(option_var(th.CHECKPOINT_THINKING_OPTION), raising=False)
 
         now = datetime.now(UTC)
         transcript = tmp_path / "t.jsonl"
-        _write_transcript(
-            transcript, [_turn("user", "please build the widget", now)]
-        )
+        _write_transcript(transcript, [_turn("user", "please build the widget", now)])
         captured = []
         monkeypatch.setattr(checkpoint_writer, "run_agent", _fake_run_agent(captured))
 

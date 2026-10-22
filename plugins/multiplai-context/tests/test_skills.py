@@ -44,11 +44,13 @@ def _isolate_plugins_discovery(tmp_path, monkeypatch):
 # Helpers
 # ---------------------------------------------------------------------------
 
-_SAMPLE_SKILLS_LLM_RESPONSE = json.dumps({
-    "name": "dream",
-    "summary": "Runs a reflection and diary-writing cycle",
-    "intent_domains": ["reflect", "dream", "consolidate learnings"],
-})
+_SAMPLE_SKILLS_LLM_RESPONSE = json.dumps(
+    {
+        "name": "dream",
+        "summary": "Runs a reflection and diary-writing cycle",
+        "intent_domains": ["reflect", "dream", "consolidate learnings"],
+    }
+)
 
 
 def _make_mock_client(response_content=None):
@@ -87,7 +89,11 @@ def _make_skills_generator(tmp_path, *, client=None, config=None):
     return gen, catalogs_dir, skills_dir
 
 
-def _write_skill_file(skills_dir, filename="dream.md", content="# Dream Skill\nTrigger a reflection cycle."):
+def _write_skill_file(
+    skills_dir,
+    filename="dream.md",
+    content="# Dream Skill\nTrigger a reflection cycle.",
+):
     """Write a skill file under the Claude Code skill layout: <skills_dir>/<name>/SKILL.md.
 
     Accepts ``filename`` for backwards-compatible call sites: a value like
@@ -384,7 +390,9 @@ class TestSkillsBuildPrompt:
         gen, catalogs_dir, skills_dir = _make_skills_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
 
-        skill_path = _write_skill_file(skills_dir, "dream.md", "# Dream\nReflect on the day.")
+        skill_path = _write_skill_file(
+            skills_dir, "dream.md", "# Dream\nReflect on the day."
+        )
 
         prompt = gen.build_prompt(skill_path)
         assert "# Dream" in prompt
@@ -440,7 +448,9 @@ class TestSkillsParseResponse:
         gen, catalogs_dir, skills_dir = _make_skills_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
 
-        raw = json.dumps({"name": "dream", "summary": "Reflect", "intent_domains": ["dream"]})
+        raw = json.dumps(
+            {"name": "dream", "summary": "Reflect", "intent_domains": ["dream"]}
+        )
         result = gen.parse_response(raw)
 
         assert isinstance(result, dict)
@@ -553,6 +563,7 @@ class TestSkillsCatalogOutput:
         assert "generated_at" in catalog
         # Should be parseable as ISO timestamp
         from datetime import datetime
+
         datetime.fromisoformat(catalog["generated_at"])
 
     def test_catalog_has_entries_array(self, tmp_path, monkeypatch):
@@ -836,7 +847,10 @@ class TestSkillsModelConfig:
         client = gen._model_client
         call_kwargs = client.query.call_args
         assert call_kwargs is not None
-        assert call_kwargs.kwargs.get("model", call_kwargs[1].get("model", "")) == DEFAULT_MODEL
+        assert (
+            call_kwargs.kwargs.get("model", call_kwargs[1].get("model", ""))
+            == DEFAULT_MODEL
+        )
 
     def test_custom_model_override(self, tmp_path, monkeypatch):
         """Custom catalog_model is used when configured."""
@@ -862,7 +876,10 @@ class TestSkillsModelConfig:
 
         call_kwargs = client.query.call_args
         assert call_kwargs is not None
-        assert call_kwargs.kwargs.get("model", call_kwargs[1].get("model", "")) == "claude-haiku-4-5"
+        assert (
+            call_kwargs.kwargs.get("model", call_kwargs[1].get("model", ""))
+            == "claude-haiku-4-5"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1145,7 +1162,6 @@ class TestSkillsBaseClassIntegration:
         gen, catalogs_dir, skills_dir = _make_skills_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
 
-
         # Skills generator should not override hash_source (uses base default)
         # If it does override, it should still produce the same result
         content = "# Test content"
@@ -1224,11 +1240,16 @@ class TestPluginSkillsDiscovery:
 
         plugins_dir = tmp_path / "plugins"
         p1 = self._make_installed_plugin(tmp_path, "multiplai-writing", ["writing"])
-        p2 = self._make_installed_plugin(tmp_path, "multiplai-media", ["transcribe", "excalidraw"])
-        self._write_manifest(plugins_dir, {
-            "multiplai-writing@multiplai": [{"installPath": p1}],
-            "multiplai-media@multiplai": [{"installPath": p2}],
-        })
+        p2 = self._make_installed_plugin(
+            tmp_path, "multiplai-media", ["transcribe", "excalidraw"]
+        )
+        self._write_manifest(
+            plugins_dir,
+            {
+                "multiplai-writing@multiplai": [{"installPath": p1}],
+                "multiplai-media@multiplai": [{"installPath": p2}],
+            },
+        )
 
         config = CatalogConfig(
             enable_skills=True,
@@ -1251,9 +1272,12 @@ class TestPluginSkillsDiscovery:
 
         plugins_dir = tmp_path / "plugins"
         p1 = self._make_installed_plugin(tmp_path, "multiplai-writing", ["writing"])
-        self._write_manifest(plugins_dir, {
-            "multiplai-writing@multiplai": [{"installPath": p1}],
-        })
+        self._write_manifest(
+            plugins_dir,
+            {
+                "multiplai-writing@multiplai": [{"installPath": p1}],
+            },
+        )
 
         config = CatalogConfig(
             enable_skills=True, skills_dir=str(skills_dir), plugins_dir=str(plugins_dir)
@@ -1281,7 +1305,9 @@ class TestPluginSkillsDiscovery:
 
         plugins_dir = tmp_path / "plugins"
         plugins_dir.mkdir(parents=True)
-        (plugins_dir / "installed_plugins.json").write_text("{not json", encoding="utf-8")
+        (plugins_dir / "installed_plugins.json").write_text(
+            "{not json", encoding="utf-8"
+        )
 
         config = CatalogConfig(
             enable_skills=True,
@@ -1298,9 +1324,12 @@ class TestPluginSkillsDiscovery:
 
         ccfg = tmp_path / "ccfg"
         p1 = self._make_installed_plugin(tmp_path, "multiplai-pm", ["landing-page"])
-        self._write_manifest(ccfg / "plugins", {
-            "multiplai-pm@multiplai": [{"installPath": p1}],
-        })
+        self._write_manifest(
+            ccfg / "plugins",
+            {
+                "multiplai-pm@multiplai": [{"installPath": p1}],
+            },
+        )
         monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(ccfg))
 
         config = CatalogConfig(
@@ -1335,31 +1364,44 @@ class TestModelInvocationDisabledSkillsAreNotCataloged:
         from generators.skills import SkillsGenerator
 
         install = tmp_path / "cache" / "multiplai-dev" / "0.1.0"
-        for name, body in (("propose-skill", self._DISABLED),
-                           ("review", "---\nname: review\n---\n# Review")):
+        for name, body in (
+            ("propose-skill", self._DISABLED),
+            ("review", "---\nname: review\n---\n# Review"),
+        ):
             d = install / "skills" / name
             d.mkdir(parents=True)
             (d / "SKILL.md").write_text(body, encoding="utf-8")
         plugins_dir = tmp_path / "plugins"
         plugins_dir.mkdir()
-        (plugins_dir / "installed_plugins.json").write_text(json.dumps(
-            {"version": 2, "plugins": {
-                "multiplai-dev@multiplai": [{"installPath": str(install)}]}}
-        ), encoding="utf-8")
+        (plugins_dir / "installed_plugins.json").write_text(
+            json.dumps(
+                {
+                    "version": 2,
+                    "plugins": {
+                        "multiplai-dev@multiplai": [{"installPath": str(install)}]
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
 
         config = CatalogConfig(
-            enable_skills=True, skills_dir=str(tmp_path / "none"),
+            enable_skills=True,
+            skills_dir=str(tmp_path / "none"),
             plugins_dir=str(plugins_dir),
         )
         gen = SkillsGenerator(config=config, model_client=_make_mock_client())
 
         assert set(gen.discover_sources()) == {"review"}
 
-    @pytest.mark.parametrize("body", [
-        "---\nname: x\ndisable-model-invocation: false\n---\n# X",
-        "---\nname: x\n---\n# X\n\ndisable-model-invocation: true\n",
-        "# X\nno frontmatter at all\n",
-    ])
+    @pytest.mark.parametrize(
+        "body",
+        [
+            "---\nname: x\ndisable-model-invocation: false\n---\n# X",
+            "---\nname: x\n---\n# X\n\ndisable-model-invocation: true\n",
+            "# X\nno frontmatter at all\n",
+        ],
+    )
     def test_only_a_true_frontmatter_key_excludes(self, tmp_path, body):
         gen, _catalogs, skills_dir = _make_skills_generator(tmp_path)
         _write_skill_file(skills_dir, "x", body)
@@ -1382,8 +1424,9 @@ class TestModelInvocationDisabledSkillsAreNotCataloged:
         assert result.pruned == 1
         sources = [e.get("source") for e in _read_catalog(catalogs_dir)["entries"]]
         assert "propose-skill" not in sources
-        assert "propose-skill" not in (
-            _read_state(catalogs_dir)["generators"]["skills"]["source_hashes"]
+        assert (
+            "propose-skill"
+            not in (_read_state(catalogs_dir)["generators"]["skills"]["source_hashes"])
         )
 
     def test_a_disabled_local_skill_still_shadows_a_plugin_skill(self, tmp_path):
@@ -1398,20 +1441,31 @@ class TestModelInvocationDisabledSkillsAreNotCataloged:
         (d / "SKILL.md").write_text("---\nname: propose-skill\n---\n", encoding="utf-8")
         plugins_dir = tmp_path / "plugins"
         plugins_dir.mkdir()
-        (plugins_dir / "installed_plugins.json").write_text(json.dumps(
-            {"version": 2, "plugins": {
-                "multiplai-dev@multiplai": [{"installPath": str(install)}]}}
-        ), encoding="utf-8")
-        config = CatalogConfig(enable_skills=True, skills_dir=str(skills_dir),
-                               plugins_dir=str(plugins_dir))
+        (plugins_dir / "installed_plugins.json").write_text(
+            json.dumps(
+                {
+                    "version": 2,
+                    "plugins": {
+                        "multiplai-dev@multiplai": [{"installPath": str(install)}]
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        config = CatalogConfig(
+            enable_skills=True, skills_dir=str(skills_dir), plugins_dir=str(plugins_dir)
+        )
         gen = SkillsGenerator(config=config, model_client=_make_mock_client())
 
         assert gen.discover_sources() == {}
 
-    @pytest.mark.parametrize("raw", [
-        b"\xff\xfe not utf-8 at all",
-        b"---\nname: [x\n---\n# broken yaml",
-    ])
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            b"\xff\xfe not utf-8 at all",
+            b"---\nname: [x\n---\n# broken yaml",
+        ],
+    )
     def test_an_unreadable_or_malformed_skill_stays_cataloged(self, tmp_path, raw):
         gen, _catalogs, skills_dir = _make_skills_generator(tmp_path)
         path = _write_skill_file(skills_dir, "x", "")

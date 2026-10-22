@@ -75,6 +75,7 @@ def timeout_for(cmd) -> float:
         return RESOLVE_TIMEOUT_SECONDS
     return TIMEOUT_SECONDS
 
+
 RUNNABLE_SUFFIXES = {".py", ".sh"}
 
 # Directories that are never the skill's own entry points. `.venv` is the big
@@ -82,15 +83,22 @@ RUNNABLE_SUFFIXES = {".py", ".sh"}
 # up 70+ site-packages modules whose `--help` fails for reasons that have
 # nothing to do with the skill (pygments looking for an Xcode SDK, jsonschema
 # benchmarks wanting pyperf). That is the shape of a gate nobody keeps.
-SKIP_DIRS = {".venv", "venv", "site-packages", "node_modules",
-             "tests", "test", "__pycache__", "fixtures"}
+SKIP_DIRS = {
+    ".venv",
+    "venv",
+    "site-packages",
+    "node_modules",
+    "tests",
+    "test",
+    "__pycache__",
+    "fixtures",
+}
 
 
 PEP723_RE = re.compile(r"^#\s*///\s*script\s*$", re.MULTILINE)
 
 # An import that died before the script's own argv handling ran.
-MISSING_DEP_RE = re.compile(
-    r"ModuleNotFoundError: No module named '([^']+)'")
+MISSING_DEP_RE = re.compile(r"ModuleNotFoundError: No module named '([^']+)'")
 
 
 def _workspace_root(script: Path) -> Path | None:
@@ -135,8 +143,7 @@ def python_command(script: Path) -> list[str]:
             # alone installs nothing and the script dies on import. This bit
             # in CI while passing locally, off an environment a previous run
             # had populated.
-            return ["uv", "run", "--all-packages", "--project", str(root),
-                    str(script)]
+            return ["uv", "run", "--all-packages", "--project", str(root), str(script)]
         text = script.read_text(encoding="utf-8", errors="replace")
         if PEP723_RE.search(text):
             return ["uv", "run", "--script", str(script)]
@@ -191,10 +198,9 @@ class GateReport:
 def check_frontmatter(skill_dir: Path, report: GateReport) -> None:
     cmd = python_command(QUICK_VALIDATE) + [str(skill_dir)]
     proc = subprocess.run(
-        cmd, capture_output=True, text=True, timeout=timeout_for(cmd),
-        env=_clean_env())
-    report.add("frontmatter", proc.returncode == 0,
-               (proc.stdout + proc.stderr).strip())
+        cmd, capture_output=True, text=True, timeout=timeout_for(cmd), env=_clean_env()
+    )
+    report.add("frontmatter", proc.returncode == 0, (proc.stdout + proc.stderr).strip())
 
 
 def _bundled_scripts(skill_dir: Path) -> list[Path]:
@@ -210,8 +216,7 @@ def _bundled_scripts(skill_dir: Path) -> list[Path]:
         if path.suffix == ".py":
             # Library modules are imported, not invoked; only entry points are
             # expected to answer --help.
-            if "__main__" not in path.read_text(encoding="utf-8",
-                                                errors="replace"):
+            if "__main__" not in path.read_text(encoding="utf-8", errors="replace"):
                 continue
             # A module inside a package is reached as `-m pkg.mod`, not by
             # path — running it directly raises "attempted relative import
@@ -232,11 +237,19 @@ def check_scripts(skill_dir: Path, report: GateReport) -> None:
     failures = []
     for script in scripts:
         rel = script.relative_to(skill_dir)
-        cmd = (python_command(script) + ["--help"] if script.suffix == ".py"
-               else ["bash", str(script), "--help"])
+        cmd = (
+            python_command(script) + ["--help"]
+            if script.suffix == ".py"
+            else ["bash", str(script), "--help"]
+        )
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True,
-                                  timeout=timeout_for(cmd), env=_clean_env())
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout_for(cmd),
+                env=_clean_env(),
+            )
         except subprocess.TimeoutExpired as exc:
             failures.append(f"{rel}: --help hung (>{exc.timeout:g}s)")
             continue
@@ -253,16 +266,21 @@ def check_scripts(skill_dir: Path, report: GateReport) -> None:
             # import on any machine that hadn't pre-installed it.
             report.warn(
                 f"{rel}: could not import {missing.group(1)!r} — declare it in "
-                f"PEP 723 inline metadata so the script runs anywhere")
+                f"PEP 723 inline metadata so the script runs anywhere"
+            )
             continue
 
         tail = output.strip().splitlines()
         hint = tail[-1] if tail else f"exit {proc.returncode}"
         failures.append(f"{rel}: --help exited {proc.returncode}: {hint}")
 
-    report.add("scripts", not failures,
-               "\n".join(failures) if failures
-               else f"{len(scripts)} entry point(s) answered --help")
+    report.add(
+        "scripts",
+        not failures,
+        "\n".join(failures)
+        if failures
+        else f"{len(scripts)} entry point(s) answered --help",
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -291,14 +309,15 @@ CONTRACT_CASE_RE = re.compile(
     r"(?P<prose>(?:(?!```)[^\n]*\n)*?)"
     r"```(?:sh|bash)?[ \t]*\n(?P<cmd>.*?)^```[ \t]*\n\s*"
     r"Expect:[ \t]*(?P<expect>[^\n]+?)[ \t]*$",
-    re.MULTILINE | re.DOTALL)
+    re.MULTILINE | re.DOTALL,
+)
 
 
 def parse_contract(text: str) -> list[tuple[str, str, str]]:
-    return [(m.group("name").strip(),
-             m.group("cmd").strip(),
-             m.group("expect").strip())
-            for m in CONTRACT_CASE_RE.finditer(text)]
+    return [
+        (m.group("name").strip(), m.group("cmd").strip(), m.group("expect").strip())
+        for m in CONTRACT_CASE_RE.finditer(text)
+    ]
 
 
 def check_contract(skill_dir: Path, report: GateReport) -> None:
@@ -309,17 +328,25 @@ def check_contract(skill_dir: Path, report: GateReport) -> None:
 
     cases = parse_contract(contract.read_text(encoding="utf-8"))
     if not cases:
-        report.add("contract", False,
-                   "CONTRACT.md exists but no '### name / ```sh``` / Expect:' "
-                   "cases parsed — check the format")
+        report.add(
+            "contract",
+            False,
+            "CONTRACT.md exists but no '### name / ```sh``` / Expect:' "
+            "cases parsed — check the format",
+        )
         return
 
     failures = []
     for name, cmd, expect in cases:
         try:
-            proc = subprocess.run(cmd, shell=True, capture_output=True,
-                                  text=True, timeout=timeout_for(cmd),
-                                  cwd=skill_dir)
+            proc = subprocess.run(
+                cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=timeout_for(cmd),
+                cwd=skill_dir,
+            )
         except subprocess.TimeoutExpired as exc:
             failures.append(f"{name}: timed out after {exc.timeout:g}s")
             continue
@@ -327,8 +354,11 @@ def check_contract(skill_dir: Path, report: GateReport) -> None:
         if expect not in combined:
             failures.append(f"{name}: expected {expect!r} in output, not found")
 
-    report.add("contract", not failures,
-               "\n".join(failures) if failures else f"{len(cases)} assertion(s) held")
+    report.add(
+        "contract",
+        not failures,
+        "\n".join(failures) if failures else f"{len(cases)} assertion(s) held",
+    )
 
 
 def promote(skill_dir: Path, run_contract: bool) -> GateReport:
@@ -342,11 +372,16 @@ def promote(skill_dir: Path, run_contract: bool) -> GateReport:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
-        description="Run the promotion gate against a draft skill directory.")
-    ap.add_argument("skill_directory", type=Path,
-                    help="the skill directory to check (must contain SKILL.md)")
-    ap.add_argument("--contract", action="store_true",
-                    help="also run CONTRACT.md assertions")
+        description="Run the promotion gate against a draft skill directory."
+    )
+    ap.add_argument(
+        "skill_directory",
+        type=Path,
+        help="the skill directory to check (must contain SKILL.md)",
+    )
+    ap.add_argument(
+        "--contract", action="store_true", help="also run CONTRACT.md assertions"
+    )
     args = ap.parse_args(argv)
 
     skill_dir = args.skill_directory.resolve()

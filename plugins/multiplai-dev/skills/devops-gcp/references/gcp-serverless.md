@@ -39,18 +39,22 @@ Activate this skill when:
 import functions_framework
 from google.cloud import storage
 
+
 # HTTP trigger
 @functions_framework.http
 def hello_http(request):
-    name = request.args.get('name', 'World')
-    return f'Hello, {name}!'
+    name = request.args.get("name", "World")
+    return f"Hello, {name}!"
+
 
 # Pub/Sub trigger
 @functions_framework.cloud_event
 def process_message(cloud_event):
     import base64
+
     message = base64.b64decode(cloud_event.data["message"]["data"]).decode()
     print(f"Processing message: {message}")
+
 
 # Cloud Storage trigger
 @functions_framework.cloud_event
@@ -123,16 +127,20 @@ import os
 
 app = FastAPI()
 
+
 @app.get("/")
 def read_root():
     return {"message": "Hello from Cloud Run"}
+
 
 @app.get("/health")
 def health_check():
     return {"status": "healthy"}
 
+
 if __name__ == "__main__":
     import uvicorn
+
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run(app, host="0.0.0.0", port=port)
 ```
@@ -217,29 +225,33 @@ Best for            | Event handlers  | APIs, websites | Web apps       | Docker
 # ❌ Bad: Long-running task in HTTP function (times out)
 @functions_framework.http
 def process_video(request):
-    video_url = request.json['video_url']
+    video_url = request.json["video_url"]
     # This takes 5 minutes, function times out!
     processed_video = expensive_video_processing(video_url)
     return {"status": "done"}
 
+
 # ✅ Good: Publish to Pub/Sub, process asynchronously
 from google.cloud import pubsub_v1
 
+
 @functions_framework.http
 def submit_video(request):
-    video_url = request.json['video_url']
+    video_url = request.json["video_url"]
 
     # Publish to Pub/Sub (fast)
     publisher = pubsub_v1.PublisherClient()
-    topic_path = publisher.topic_path('my-project', 'video-processing')
+    topic_path = publisher.topic_path("my-project", "video-processing")
     publisher.publish(topic_path, video_url.encode())
 
     return {"status": "queued"}, 202
+
 
 # Separate function processes videos asynchronously
 @functions_framework.cloud_event
 def process_video_async(cloud_event):
     import base64
+
     video_url = base64.b64decode(cloud_event.data["message"]["data"]).decode()
 
     # Process for as long as needed (up to 9 minutes)
@@ -344,21 +356,25 @@ def handle_event():
 def api_endpoint(request):
     import tensorflow as tf  # 2 second import!
     import numpy as np
-    model = tf.keras.models.load_model('model.h5')  # 5 second load!
+
+    model = tf.keras.models.load_model("model.h5")  # 5 second load!
     # Process request...
+
 
 # ✅ Good: Load dependencies at module level (once per instance)
 import tensorflow as tf
 import numpy as np
 
 # Load model once when instance starts
-MODEL = tf.keras.models.load_model('model.h5')
+MODEL = tf.keras.models.load_model("model.h5")
+
 
 @functions_framework.http
 def api_endpoint(request):
     # Model already loaded, fast response
-    result = MODEL.predict(request.json['data'])
+    result = MODEL.predict(request.json["data"])
     return {"prediction": result.tolist()}
+
 
 # For Cloud Run, also use min-instances to keep warm
 # gcloud run deploy service --min-instances=1
@@ -394,6 +410,7 @@ gcloud scheduler jobs create pubsub daily-report \
 from google.cloud import tasks_v2
 import json
 
+
 def enqueue_task(project_id, location, queue_name, url, payload, delay_seconds=0):
     client = tasks_v2.CloudTasksClient()
 
@@ -404,27 +421,31 @@ def enqueue_task(project_id, location, queue_name, url, payload, delay_seconds=0
             "http_method": tasks_v2.HttpMethod.POST,
             "url": url,
             "headers": {"Content-Type": "application/json"},
-            "body": json.dumps(payload).encode()
+            "body": json.dumps(payload).encode(),
         }
     }
 
     # Schedule task for future execution
     if delay_seconds:
         import datetime
-        timestamp = datetime.datetime.utcnow() + datetime.timedelta(seconds=delay_seconds)
+
+        timestamp = datetime.datetime.utcnow() + datetime.timedelta(
+            seconds=delay_seconds
+        )
         task["schedule_time"] = timestamp
 
     response = client.create_task(request={"parent": parent, "task": task})
     return response
 
+
 # Example: Send notification email in 1 hour
 enqueue_task(
-    'my-project',
-    'us-central1',
-    'email-queue',
-    'https://api-service-xxx.run.app/send-email',
-    {'to': 'user@example.com', 'subject': 'Reminder'},
-    delay_seconds=3600
+    "my-project",
+    "us-central1",
+    "email-queue",
+    "https://api-service-xxx.run.app/send-email",
+    {"to": "user@example.com", "subject": "Reminder"},
+    delay_seconds=3600,
 )
 ```
 
@@ -561,10 +582,13 @@ App Engine Flex | 1-80            | No (min 1)    | Minutes
 # ❌ NEVER: Perform long-running task synchronously in HTTP function
 @functions_framework.http
 def process_batch(request):
-    for item in request.json['items']:  # 10,000 items!
+    for item in request.json["items"]:  # 10,000 items!
         process_item(item)  # Takes 10 minutes total
     return "Done"
+
+
 # Function times out at 9 minutes!
+
 
 # ✅ CORRECT: Use Pub/Sub or Cloud Run for long tasks
 @functions_framework.http
@@ -572,13 +596,14 @@ def submit_batch(request):
     from google.cloud import pubsub_v1
 
     publisher = pubsub_v1.PublisherClient()
-    topic_path = publisher.topic_path('my-project', 'batch-processing')
+    topic_path = publisher.topic_path("my-project", "batch-processing")
 
     # Enqueue each item
-    for item in request.json['items']:
+    for item in request.json["items"]:
         publisher.publish(topic_path, json.dumps(item).encode())
 
-    return {"status": "queued", "count": len(request.json['items'])}
+    return {"status": "queued", "count": len(request.json["items"])}
+
 
 # Or use Cloud Run with higher timeout
 # gcloud run deploy batch-processor --timeout=3600  # 1 hour
@@ -611,11 +636,14 @@ gcloud run deploy api-service \
 # gcloud run deploy api-service --concurrency=1000
 # Each instance handles 1000 concurrent requests!
 
+
 @app.get("/query")
 def query_database():
     # Database has connection pool of 10
     result = db.execute("SELECT * FROM large_table")
     return result
+
+
 # Database connection pool exhausted, queries fail!
 
 # ✅ Correct: Set concurrency based on backend capacity
@@ -631,17 +659,20 @@ def query_database():
 @functions_framework.http
 def predict(request):
     import tensorflow as tf  # 2 second import on every cold start!
-    model = tf.keras.models.load_model('model.h5')
+
+    model = tf.keras.models.load_model("model.h5")
     # Process request...
+
 
 # ✅ Correct: Import at module level (once per instance)
 import tensorflow as tf
 
-MODEL = tf.keras.models.load_model('model.h5')  # Load once
+MODEL = tf.keras.models.load_model("model.h5")  # Load once
+
 
 @functions_framework.http
 def predict(request):
-    result = MODEL.predict(request.json['data'])
+    result = MODEL.predict(request.json["data"])
     return {"prediction": result.tolist()}
 ```
 

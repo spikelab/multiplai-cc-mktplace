@@ -34,8 +34,16 @@ def _run(capsys, *argv: str) -> tuple[int, str]:
 
 class TestSetupCommand:
     def test_creates_the_file_from_nothing(self, tmp_path, capsys):
-        rc, out = _run(capsys, "setup", "--project-dir", str(tmp_path),
-                       "--architecture", "docs/a.md", "--pr-template", "auto")
+        rc, out = _run(
+            capsys,
+            "setup",
+            "--project-dir",
+            str(tmp_path),
+            "--architecture",
+            "docs/a.md",
+            "--pr-template",
+            "auto",
+        )
         path = tmp_path / "specs" / "config.yaml"
         assert rc == 0
         data = yaml.safe_load(path.read_text())
@@ -48,7 +56,9 @@ class TestSetupCommand:
 
     def test_untracked_file_in_a_repo_requires_a_commit(self, tmp_path, capsys):
         repo = make_repo(tmp_path / "proj")
-        rc, out = _run(capsys, "setup", "--project-dir", str(repo), "--architecture", "a.md")
+        rc, out = _run(
+            capsys, "setup", "--project-dir", str(repo), "--architecture", "a.md"
+        )
         assert rc == 0
         assert "SETUP:COMMIT_REQUIRED:" in out
 
@@ -57,7 +67,9 @@ class TestSetupCommand:
         _run(capsys, "setup", "--project-dir", str(repo), "--architecture", "a.md")
         subprocess.run(["git", "add", "specs/config.yaml"], cwd=repo, check=True)
         subprocess.run(["git", "commit", "-qm", "config"], cwd=repo, check=True)
-        rc, out = _run(capsys, "setup", "--project-dir", str(repo), "--architecture", "a.md")
+        rc, out = _run(
+            capsys, "setup", "--project-dir", str(repo), "--architecture", "a.md"
+        )
         assert rc == 0
         assert "UNCHANGED" in out
         assert "SETUP:COMMIT_REQUIRED" not in out
@@ -66,9 +78,16 @@ class TestSetupCommand:
         specs = tmp_path / "specs"
         specs.mkdir()
         (specs / "config.yaml").write_text(
-            "interview: ticket\nintake:\n  provider: plane\n  plane:\n    project: DB\n")
-        rc, out = _run(capsys, "setup", "--project-dir", str(tmp_path),
-                       "--architecture", "docs/architecture.md")
+            "interview: ticket\nintake:\n  provider: plane\n  plane:\n    project: DB\n"
+        )
+        rc, out = _run(
+            capsys,
+            "setup",
+            "--project-dir",
+            str(tmp_path),
+            "--architecture",
+            "docs/architecture.md",
+        )
         assert rc == 0
         data = yaml.safe_load((specs / "config.yaml").read_text())
         assert data["interview"] == "ticket"
@@ -76,23 +95,38 @@ class TestSetupCommand:
         assert data["architecture"] == "docs/architecture.md"
         assert "CHANGED" not in out
 
-    def test_comments_and_key_order_survive_a_change_and_an_addition(self, tmp_path, capsys):
+    def test_comments_and_key_order_survive_a_change_and_an_addition(
+        self, tmp_path, capsys
+    ):
         specs = tmp_path / "specs"
         specs.mkdir()
         path = specs / "config.yaml"
         path.write_text(COMMENTED)
 
-        rc, out = _run(capsys, "setup", "--project-dir", str(tmp_path),
-                       "--architecture", "docs/new.md", "--pr-template", "auto")
+        rc, out = _run(
+            capsys,
+            "setup",
+            "--project-dir",
+            str(tmp_path),
+            "--architecture",
+            "docs/new.md",
+            "--pr-template",
+            "auto",
+        )
         assert rc == 0
         text = path.read_text()
-        for comment in ("# Project config for buildme — keep this header.\n",
-                        "# Git lifecycle: worktree on, draft PRs.\n",
-                        "  test_command: pytest -q  # the fast suite only\n"):
+        for comment in (
+            "# Project config for buildme — keep this header.\n",
+            "# Git lifecycle: worktree on, draft PRs.\n",
+            "  test_command: pytest -q  # the fast suite only\n",
+        ):
             assert comment in text, comment
         assert text.startswith("# Project config for buildme — keep this header.\n")
-        top_keys = [line.split(":")[0] for line in text.splitlines()
-                    if line and not line.startswith((" ", "#"))]
+        top_keys = [
+            line.split(":")[0]
+            for line in text.splitlines()
+            if line and not line.startswith((" ", "#"))
+        ]
         assert top_keys[:5] == ["schema", "context", "tdd", "interview", "git"]
         data = yaml.safe_load(text)
         assert data["architecture"] == "docs/new.md"
@@ -102,10 +136,13 @@ class TestSetupCommand:
         assert "ADDED: pr.template = auto" in out
 
     def test_findings_authors_list_and_pr_template(self):
-        text, added, changed = apply_setup("", [
-            (("findings", "authors"), ["alice", "bob"]),
-            (("pr", "template"), "auto"),
-        ])
+        text, added, changed = apply_setup(
+            "",
+            [
+                (("findings", "authors"), ["alice", "bob"]),
+                (("pr", "template"), "auto"),
+            ],
+        )
         data = yaml.safe_load(text)
         assert data["findings"]["authors"] == ["alice", "bob"]
         assert data["pr"]["template"] == "auto"
@@ -131,7 +168,10 @@ class TestSetupCommand:
 
 class TestConfigGet:
     def test_prints_a_resolved_value(self, tmp_path, capsys):
-        assert main(["config-get", "pr.max_change_lines", "--project-dir", str(tmp_path)]) == 0
+        assert (
+            main(["config-get", "pr.max_change_lines", "--project-dir", str(tmp_path)])
+            == 0
+        )
         assert capsys.readouterr().out.strip() == "1000"
         specs = tmp_path / "specs"
         specs.mkdir()
@@ -155,7 +195,18 @@ class TestHelp:
         build_help = parser._subparsers._group_actions[0].choices["build"].format_help()
         for flag in ("--change", "--research-path", "--accept-size"):
             assert flag in build_help, flag
-        for flag in ("--mode", "--interview-summary", "--context-files", "--ticket-file",
-                     "--ticket-ref", "--ticket-url", "--plan-file", "--interview-replies",
-                     "--approve-split", "--no-epic-split", "--prototype", "--no-prototype"):
+        for flag in (
+            "--mode",
+            "--interview-summary",
+            "--context-files",
+            "--ticket-file",
+            "--ticket-ref",
+            "--ticket-url",
+            "--plan-file",
+            "--interview-replies",
+            "--approve-split",
+            "--no-epic-split",
+            "--prototype",
+            "--no-prototype",
+        ):
             assert flag not in build_help, flag

@@ -56,7 +56,10 @@ async def plan(config: ResearchConfig) -> PlanResult:
         max_sub_questions=config.preset.max_sub_questions,
     )
     response = await llm_call_structured(
-        prompt, PlanResponse, model=config.models.get("plan"), effort=config.efforts.get("plan"),
+        prompt,
+        PlanResponse,
+        model=config.models.get("plan"),
+        effort=config.efforts.get("plan"),
         label="plan",
     )
 
@@ -79,11 +82,16 @@ async def diverge(config: ResearchConfig, plan_result: PlanResult) -> PlanResult
         query=config.query,
         research_type=config.research_type,
         date=config.date,
-        sub_questions="\n".join(f"{i+1}. {q}" for i, q in enumerate(plan_result.sub_questions)),
+        sub_questions="\n".join(
+            f"{i + 1}. {q}" for i, q in enumerate(plan_result.sub_questions)
+        ),
         research_type_guidance=guidance_for(config.research_type, "diverge"),
     )
     response = await llm_call_structured(
-        prompt, DivergeResponse, model=config.models.get("diverge"), effort=config.efforts.get("diverge"),
+        prompt,
+        DivergeResponse,
+        model=config.models.get("diverge"),
+        effort=config.efforts.get("diverge"),
         label="diverge",
     )
 
@@ -106,12 +114,17 @@ async def challenge(config: ResearchConfig, plan_result: PlanResult) -> PlanResu
         query=config.query,
         research_type=config.research_type,
         date=config.date,
-        sub_questions="\n".join(f"{i+1}. {q}" for i, q in enumerate(plan_result.sub_questions)),
+        sub_questions="\n".join(
+            f"{i + 1}. {q}" for i, q in enumerate(plan_result.sub_questions)
+        ),
         primary_queries="\n".join(f"- {q}" for q in plan_result.primary_queries),
         research_type_guidance=guidance_for(config.research_type, "challenge"),
     )
     response = await llm_call_structured(
-        prompt, ChallengeResponse, model=config.models.get("challenge"), effort=config.efforts.get("challenge"),
+        prompt,
+        ChallengeResponse,
+        model=config.models.get("challenge"),
+        effort=config.efforts.get("challenge"),
         label="challenge",
     )
 

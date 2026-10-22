@@ -66,7 +66,9 @@ async def reassess(
 
     log.info(
         "REASSESS: framing_issues=%s, verify_claims=%d, refinement=%s",
-        result.framing_wrong_question or result.new_framing_emerged or result.missing_angle,
+        result.framing_wrong_question
+        or result.new_framing_emerged
+        or result.missing_angle,
         len(result.verify_claims),
         result.refinement_needed,
     )
@@ -99,31 +101,52 @@ async def _chunked_reassess(
     )
 
     result_a, result_b = await asyncio.gather(
-        llm_call_structured(prompt_a, ReassessResult, model=config.models.get("reassess"), effort=config.efforts.get("reassess"), label="reassess:chunk_a"),
-        llm_call_structured(prompt_b, ReassessResult, model=config.models.get("reassess"), effort=config.efforts.get("reassess"), label="reassess:chunk_b"),
+        llm_call_structured(
+            prompt_a,
+            ReassessResult,
+            model=config.models.get("reassess"),
+            effort=config.efforts.get("reassess"),
+            label="reassess:chunk_a",
+        ),
+        llm_call_structured(
+            prompt_b,
+            ReassessResult,
+            model=config.models.get("reassess"),
+            effort=config.efforts.get("reassess"),
+            label="reassess:chunk_b",
+        ),
     )
 
     # Merge: OR of booleans, union of lists
     merged = ReassessResult(
-        framing_wrong_question=result_a.framing_wrong_question or result_b.framing_wrong_question,
-        new_framing_emerged=result_a.new_framing_emerged or result_b.new_framing_emerged,
+        framing_wrong_question=result_a.framing_wrong_question
+        or result_b.framing_wrong_question,
+        new_framing_emerged=result_a.new_framing_emerged
+        or result_b.new_framing_emerged,
         missing_angle=result_a.missing_angle or result_b.missing_angle,
-        framing_notes="\n".join(filter(None, [result_a.framing_notes, result_b.framing_notes])),
+        framing_notes="\n".join(
+            filter(None, [result_a.framing_notes, result_b.framing_notes])
+        ),
         load_bearing_claims=result_a.load_bearing_claims + result_b.load_bearing_claims,
         conflation_claims=result_a.conflation_claims + result_b.conflation_claims,
-        convenience_bias_claims=result_a.convenience_bias_claims + result_b.convenience_bias_claims,
+        convenience_bias_claims=result_a.convenience_bias_claims
+        + result_b.convenience_bias_claims,
         refinement_needed=result_a.refinement_needed or result_b.refinement_needed,
         # sorted(): set order is randomized per process (hash seed) — unsorted
         # merges would make reruns non-deterministic downstream (query order,
         # prompt content, cache keys).
-        refinement_queries=sorted(set(result_a.refinement_queries + result_b.refinement_queries)),
+        refinement_queries=sorted(
+            set(result_a.refinement_queries + result_b.refinement_queries)
+        ),
         verify_claims=sorted(set(result_a.verify_claims + result_b.verify_claims)),
         verify_queries=sorted(set(result_a.verify_queries + result_b.verify_queries)),
     )
 
     log.info(
         "REASSESS (merged): framing_issues=%s, verify_claims=%d, refinement=%s",
-        merged.framing_wrong_question or merged.new_framing_emerged or merged.missing_angle,
+        merged.framing_wrong_question
+        or merged.new_framing_emerged
+        or merged.missing_angle,
         len(merged.verify_claims),
         merged.refinement_needed,
     )
@@ -135,7 +158,7 @@ def _format_findings(findings: list[Finding]) -> str:
     lines = []
     for i, f in enumerate(findings):
         lines.append(
-            f"{i+1}. [{f.confidence.value}] {f.fact} "
+            f"{i + 1}. [{f.confidence.value}] {f.fact} "
             f"(source: {f.source_title}, reputation: {f.reputation.value})"
         )
     return "\n".join(lines)

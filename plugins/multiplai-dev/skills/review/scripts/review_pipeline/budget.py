@@ -39,7 +39,9 @@ def get_budget() -> ReviewBudget:
     return _core.get(ledger_cls=ReviewBudget)  # type: ignore[return-value]
 
 
-def start(max_usd: float | None = DEFAULT_MAX_USD, state: dict | None = None) -> ReviewBudget:
+def start(
+    max_usd: float | None = DEFAULT_MAX_USD, state: dict | None = None
+) -> ReviewBudget:
     """Begin a target's ledger in the current context, restoring *state* if given."""
     return _core.start(max_usd, state, ledger_cls=ReviewBudget)  # type: ignore[return-value]
 

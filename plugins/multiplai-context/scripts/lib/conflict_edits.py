@@ -60,13 +60,110 @@ _MARKER = (
     r"|\[trust:\s*(?P<trust>\w+)\]\*\*\s+(?P<type>[A-Z-]+)\s+)"
 )
 LEARNING_LINE_RE = re.compile(
-    r"^-\s+\*\*" + _MARKER +
-    r"(?P<description>.*?)"
-    r"(?:\s+→\s+Target:\s*(?P<target>[\w.-]+)(?:\s+—\s+(?P<action>.*))?)?$")
+    r"^-\s+\*\*" + _MARKER + r"(?P<description>.*?)"
+    r"(?:\s+→\s+Target:\s*(?P<target>[\w.-]+)(?:\s+—\s+(?P<action>.*))?)?$"
+)
 
 # Words that carry no discriminating signal. Overlap computed on these produces
 # confident matches between sentences that share nothing but grammar.
-STOPWORDS = frozenset(["a", "an", "the", "and", "or", "but", "if", "then", "than", "that", "this", "these", "those", "is", "are", "was", "were", "be", "been", "being", "do", "does", "did", "done", "have", "has", "had", "having", "will", "would", "shall", "should", "can", "could", "may", "might", "must", "to", "of", "in", "on", "at", "by", "for", "with", "from", "as", "it", "its", "into", "about", "over", "under", "not", "no", "nor", "so", "such", "own", "same", "too", "very", "just", "when", "where", "which", "who", "whom", "what", "why", "how", "all", "any", "both", "each", "few", "more", "most", "other", "some", "only", "own", "s", "t", "don", "now", "use", "used", "using", "via", "per", "within", "without", "across"])
+STOPWORDS = frozenset(
+    [
+        "a",
+        "an",
+        "the",
+        "and",
+        "or",
+        "but",
+        "if",
+        "then",
+        "than",
+        "that",
+        "this",
+        "these",
+        "those",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "do",
+        "does",
+        "did",
+        "done",
+        "have",
+        "has",
+        "had",
+        "having",
+        "will",
+        "would",
+        "shall",
+        "should",
+        "can",
+        "could",
+        "may",
+        "might",
+        "must",
+        "to",
+        "of",
+        "in",
+        "on",
+        "at",
+        "by",
+        "for",
+        "with",
+        "from",
+        "as",
+        "it",
+        "its",
+        "into",
+        "about",
+        "over",
+        "under",
+        "not",
+        "no",
+        "nor",
+        "so",
+        "such",
+        "own",
+        "same",
+        "too",
+        "very",
+        "just",
+        "when",
+        "where",
+        "which",
+        "who",
+        "whom",
+        "what",
+        "why",
+        "how",
+        "all",
+        "any",
+        "both",
+        "each",
+        "few",
+        "more",
+        "most",
+        "other",
+        "some",
+        "only",
+        "own",
+        "s",
+        "t",
+        "don",
+        "now",
+        "use",
+        "used",
+        "using",
+        "via",
+        "per",
+        "within",
+        "without",
+        "across",
+    ]
+)
 
 # Jaccard overlap on content words. Calibrated by hand against real learnings
 # and memory lines: 0.35 admits genuine restatements ("Opus is the default
@@ -274,15 +371,17 @@ def parse_learnings(text: str) -> list[Learning]:
         match = LEARNING_LINE_RE.match(line.strip())
         if not match:
             continue
-        out.append(Learning(
-            trust=match.group("trust") or "",
-            type=match.group("type") or "",
-            description=(match.group("description") or "").strip(),
-            target=(match.group("target") or "").strip(),
-            action=(match.group("action") or "").strip(),
-            provenance=normalize_provenance(match.group("provenance")) or "",
-            kind=normalize_kind(match.group("kind")) or "",
-        ))
+        out.append(
+            Learning(
+                trust=match.group("trust") or "",
+                type=match.group("type") or "",
+                description=(match.group("description") or "").strip(),
+                target=(match.group("target") or "").strip(),
+                action=(match.group("action") or "").strip(),
+                provenance=normalize_provenance(match.group("provenance")) or "",
+                kind=normalize_kind(match.group("kind")) or "",
+            )
+        )
     return out
 
 
@@ -320,9 +419,15 @@ def detect_conflicts(
         if found is None:
             continue
         lineno, old_line, score = found
-        edits.append(ConflictEdit(
-            target=learning.target, lineno=lineno, old_line=old_line,
-            learning=learning, overlap=score))
+        edits.append(
+            ConflictEdit(
+                target=learning.target,
+                lineno=lineno,
+                old_line=old_line,
+                learning=learning,
+                overlap=score,
+            )
+        )
     # Highest-confidence first: the reviewer's attention is the scarce resource.
     return sorted(edits, key=lambda e: (-e.overlap, e.target, e.lineno))
 
@@ -352,9 +457,11 @@ def render_section(edits: list[ConflictEdit], today: date | None = None) -> str:
 
 
 def conflict_section_for(
-    learnings_text: str, memory_contents: dict[str, str],
+    learnings_text: str,
+    memory_contents: dict[str, str],
     today: date | None = None,
 ) -> str:
     """Convenience entry point: learnings text + memory files → proposal section."""
     return render_section(
-        detect_conflicts(parse_learnings(learnings_text), memory_contents), today)
+        detect_conflicts(parse_learnings(learnings_text), memory_contents), today
+    )

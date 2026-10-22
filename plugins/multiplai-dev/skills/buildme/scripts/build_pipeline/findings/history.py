@@ -51,7 +51,12 @@ def ledger_dirs(project_dir: Path, pr: int) -> list[str]:
     out: list[str] = []
     for line in review.ledger_lines():
         target = line.get("target_dir")
-        if line.get("event") == "finished" and line.get("slug") == slug and target and target not in out:
+        if (
+            line.get("event") == "finished"
+            and line.get("slug") == slug
+            and target
+            and target not in out
+        ):
             out.append(str(target))
     return out
 
@@ -69,7 +74,9 @@ def _read(path: Path) -> dict | None:
 
 def _key(data: dict) -> tuple[str, str]:
     """What tells two copies of one review apart (`review_pipeline.rounds._round_key`)."""
-    return str(data.get("generated_at") or ""), str((data.get("run") or {}).get("started_at") or "")
+    return str(data.get("generated_at") or ""), str(
+        (data.get("run") or {}).get("started_at") or ""
+    )
 
 
 def review_files(dirs: Iterable[str | None]) -> list[dict]:
@@ -79,8 +86,13 @@ def review_files(dirs: Iterable[str | None]) -> list[dict]:
     for d in dict.fromkeys(str(d) for d in dirs if d):
         root = Path(d)
         rounds = root / ROUNDS_DIR
-        kept = (sorted(p for p in rounds.iterdir() if p.is_dir() and not p.name.startswith("."))
-                if rounds.is_dir() else [])
+        kept = (
+            sorted(
+                p for p in rounds.iterdir() if p.is_dir() and not p.name.startswith(".")
+            )
+            if rounds.is_dir()
+            else []
+        )
         for path in [*(p / FINDINGS_FILE for p in kept), root / FINDINGS_FILE]:
             data = _read(path)
             if data is not None:
@@ -89,11 +101,15 @@ def review_files(dirs: Iterable[str | None]) -> list[dict]:
 
 
 def _findings(data: dict) -> list[dict]:
-    return [f for f in data.get("findings") or [] if isinstance(f, dict) and f.get("id")]
+    return [
+        f for f in data.get("findings") or [] if isinstance(f, dict) and f.get("id")
+    ]
 
 
 def _earlier(data: dict) -> list[dict]:
-    return [e for e in data.get("earlier") or [] if isinstance(e, dict) and e.get("lineage")]
+    return [
+        e for e in data.get("earlier") or [] if isinstance(e, dict) and e.get("lineage")
+    ]
 
 
 def lineage(finding: dict) -> str:
@@ -117,8 +133,9 @@ def _lineage_of(comment: PRComment, ids: dict[str, str]) -> str | None:
     return ids.get(fid, fid) if fid else None
 
 
-def earlier_rows(earlier: list[TriageRecord], comments: list[PRComment],
-                 files: list[dict]) -> dict[int, list[TriageRecord]]:
+def earlier_rows(
+    earlier: list[TriageRecord], comments: list[PRComment], files: list[dict]
+) -> dict[int, list[TriageRecord]]:
     """Comment id → the *earlier* rounds' triaged records on the same lineage,
     oldest first. A comment without a review finding id has none."""
     ids = lineages(files)
@@ -127,7 +144,11 @@ def earlier_rows(earlier: list[TriageRecord], comments: list[PRComment],
         lin = _lineage_of(c, ids)
         if lin is None:
             continue
-        rows = [r for r in earlier if r.triage is not None and _lineage_of(r.comment, ids) == lin]
+        rows = [
+            r
+            for r in earlier
+            if r.triage is not None and _lineage_of(r.comment, ids) == lin
+        ]
         if rows:
             out[c.id] = sorted(rows, key=lambda r: (r.round, r.comment.id))
     return out
@@ -142,7 +163,11 @@ def earlier_text(rows: list[TriageRecord]) -> str:
         assert r.triage is not None
         ident = r.comment.finding_id or r.comment.label
         text = f"Round {r.round}, finding {ident}: {r.triage.verdict.value}. {r.triage.reason}"
-        parts.append("\n".join(fence(text, source=f"earlier triage, round {r.round}", limit=2000)))
+        parts.append(
+            "\n".join(
+                fence(text, source=f"earlier triage, round {r.round}", limit=2000)
+            )
+        )
     return "\n\n".join(parts)
 
 
@@ -153,7 +178,9 @@ def other_locations(files: list[dict], finding_id: str | None) -> list[str]:
     for data in reversed(files):
         for f in _findings(data):
             if str(f["id"]) == finding_id:
-                return [str(x) for x in f.get("other_locations") or [] if str(x).strip()]
+                return [
+                    str(x) for x in f.get("other_locations") or [] if str(x).strip()
+                ]
     return []
 
 
@@ -165,7 +192,9 @@ def _statuses(data: dict) -> dict[str, list[str]]:
         if _listed(f, data.get("mode")):
             out.setdefault(lineage(f), []).append("listed")
     for e in _earlier(data):
-        out.setdefault(str(e["lineage"]), []).append(str(e.get("status") or "cannot_verify"))
+        out.setdefault(str(e["lineage"]), []).append(
+            str(e.get("status") or "cannot_verify")
+        )
     return out
 
 
@@ -196,7 +225,12 @@ def recurring(files: list[dict], min_rounds: int = 2) -> list[tuple[str, int]]:
     counts: dict[str, int] = {}
     for data in files:
         open_ = {lineage(f) for f in _findings(data) if _listed(f, data.get("mode"))}
-        open_ |= {str(e["lineage"]) for e in _earlier(data) if e.get("status") != "resolved"}
+        open_ |= {
+            str(e["lineage"]) for e in _earlier(data) if e.get("status") != "resolved"
+        }
         for lin in open_:
             counts[lin] = counts.get(lin, 0) + 1
-    return sorted(((k, v) for k, v in counts.items() if v >= min_rounds), key=lambda kv: (-kv[1], kv[0]))
+    return sorted(
+        ((k, v) for k, v in counts.items() if v >= min_rounds),
+        key=lambda kv: (-kv[1], kv[0]),
+    )

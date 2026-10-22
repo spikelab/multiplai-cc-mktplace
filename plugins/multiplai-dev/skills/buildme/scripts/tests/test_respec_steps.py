@@ -65,8 +65,7 @@ def _seed_specs(config: BuildConfig) -> dict[Path, str]:
     req_dir.mkdir(parents=True, exist_ok=True)
     files = {
         req_dir / "upload.md": (
-            "### Requirement: Upload a document\n"
-            "The system SHALL upload a document.\n"
+            "### Requirement: Upload a document\nThe system SHALL upload a document.\n"
         ),
         req_dir / "auth.md": (
             "### Requirement: Authenticate\nThe system SHALL authenticate.\n"
@@ -75,9 +74,7 @@ def _seed_specs(config: BuildConfig) -> dict[Path, str]:
     }
     for path, text in files.items():
         path.write_text(text)
-    return {
-        p: hashlib.sha256(p.read_bytes()).hexdigest() for p in files
-    }
+    return {p: hashlib.sha256(p.read_bytes()).hexdigest() for p in files}
 
 
 def _note(**kw) -> ImplementationNote:
@@ -109,8 +106,13 @@ class TestAppendImplementationNote:
         append_implementation_note(config.change_dir, _note())
         append_implementation_note(
             config.change_dir,
-            _note(block_number=2, block_name="Auth", role="test_writer",
-                  surprises="Token TTL was unspecified.", spec_impact="clarify"),
+            _note(
+                block_number=2,
+                block_name="Auth",
+                role="test_writer",
+                surprises="Token TTL was unspecified.",
+                spec_impact="clarify",
+            ),
         )
 
         text = notes_path(config.change_dir).read_text()
@@ -121,10 +123,12 @@ class TestAppendImplementationNote:
 
 
 def _state_with_notes(*notes: ImplementationNote) -> BuildState:
-    block = BlockInfo(number=1, name="Uploader", description="Upload block",
-                      notes=list(notes))
+    block = BlockInfo(
+        number=1, name="Uploader", description="Upload block", notes=list(notes)
+    )
     return BuildState(
-        change_name="test-change", tier="advanced",
+        change_name="test-change",
+        tier="advanced",
         tdd=TDDState(blocks=[block]),
     )
 
@@ -156,7 +160,9 @@ class TestMergeStateNotes:
         _seed_specs(config)
         state = _state_with_notes(_note())
 
-        with patch(LLM_CALL, new_callable=AsyncMock, return_value=DELTA_RESPONSE) as mock:
+        with patch(
+            LLM_CALL, new_callable=AsyncMock, return_value=DELTA_RESPONSE
+        ) as mock:
             path = await run_respec_audit(config, state)
 
         mock.assert_called_once()
@@ -170,7 +176,9 @@ class TestMergeStateNotes:
         append_implementation_note(config.change_dir, _note())
         state = _state_with_notes(_note())
 
-        with patch(LLM_CALL, new_callable=AsyncMock, return_value=DELTA_RESPONSE) as mock:
+        with patch(
+            LLM_CALL, new_callable=AsyncMock, return_value=DELTA_RESPONSE
+        ) as mock:
             await run_respec_audit(config, state)
 
         prompt = mock.call_args[0][0]
@@ -226,7 +234,9 @@ class TestRunRespecAudit:
         _seed_specs(config)
         append_implementation_note(config.change_dir, _note())
 
-        with patch(LLM_CALL, new_callable=AsyncMock, return_value=DELTA_RESPONSE) as mock:
+        with patch(
+            LLM_CALL, new_callable=AsyncMock, return_value=DELTA_RESPONSE
+        ) as mock:
             await run_respec_audit(config, None)
 
         prompt = mock.call_args[0][0]
@@ -235,7 +245,9 @@ class TestRunRespecAudit:
         assert "Uploads are synchronous." in prompt
 
     @pytest.mark.asyncio
-    async def test_no_notes_writes_empty_proposal_without_calling_the_llm(self, tmp_path):
+    async def test_no_notes_writes_empty_proposal_without_calling_the_llm(
+        self, tmp_path
+    ):
         config = _make_config(tmp_path)
         _seed_specs(config)
 
@@ -267,7 +279,9 @@ class TestRunRespecAudit:
         _seed_specs(config)
         append_implementation_note(config.change_dir, _note())
 
-        with patch(LLM_CALL, new_callable=AsyncMock, return_value="I think the spec is fine."):
+        with patch(
+            LLM_CALL, new_callable=AsyncMock, return_value="I think the spec is fine."
+        ):
             path = await run_respec_audit(config, None)
 
         text = path.read_text()
@@ -278,7 +292,9 @@ class TestRunRespecAudit:
 class TestArchiveCarriesTheLoopArtifacts:
     """3.5 — both artifacts travel into archive/ and neither reaches registry/."""
 
-    def test_archive_moves_notes_and_respec_but_merges_only_requirements(self, tmp_path):
+    def test_archive_moves_notes_and_respec_but_merges_only_requirements(
+        self, tmp_path
+    ):
         config = _make_config(tmp_path)
         _seed_specs(config)
         append_implementation_note(config.change_dir, _note())

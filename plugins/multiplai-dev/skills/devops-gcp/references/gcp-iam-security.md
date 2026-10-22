@@ -64,27 +64,27 @@ gcloud iam roles create customStorageRole \
 from google.cloud import iam_admin_v1
 from google.oauth2 import service_account
 
+
 # Create service account
 def create_service_account(project_id, account_id, display_name):
     client = iam_admin_v1.IAMClient()
 
-    service_account = iam_admin_v1.ServiceAccount(
-        display_name=display_name
-    )
+    service_account = iam_admin_v1.ServiceAccount(display_name=display_name)
 
     request = iam_admin_v1.CreateServiceAccountRequest(
         name=f"projects/{project_id}",
         account_id=account_id,
-        service_account=service_account
+        service_account=service_account,
     )
 
     account = client.create_service_account(request=request)
     return account
 
+
 # Use service account credentials in application
 credentials = service_account.Credentials.from_service_account_file(
-    'path/to/service-account-key.json',
-    scopes=['https://www.googleapis.com/auth/cloud-platform']
+    "path/to/service-account-key.json",
+    scopes=["https://www.googleapis.com/auth/cloud-platform"],
 )
 
 # Best practice: Use Workload Identity instead of key files
@@ -102,6 +102,7 @@ credentials = service_account.Credentials.from_service_account_file(
 ```python
 from google.cloud import secretmanager
 
+
 def create_secret(project_id, secret_id, secret_value):
     client = secretmanager.SecretManagerServiceClient()
 
@@ -118,13 +119,11 @@ def create_secret(project_id, secret_id, secret_value):
     # Add secret version
     payload = secret_value.encode("UTF-8")
     version = client.add_secret_version(
-        request={
-            "parent": secret.name,
-            "payload": {"data": payload}
-        }
+        request={"parent": secret.name, "payload": {"data": payload}}
     )
 
     return version.name
+
 
 def access_secret(project_id, secret_id, version_id="latest"):
     client = secretmanager.SecretManagerServiceClient()
@@ -133,6 +132,7 @@ def access_secret(project_id, secret_id, version_id="latest"):
     response = client.access_secret_version(request={"name": name})
 
     return response.payload.data.decode("UTF-8")
+
 
 # Example usage
 api_key = access_secret("my-project", "third-party-api-key")
@@ -148,16 +148,14 @@ api_key = access_secret("my-project", "third-party-api-key")
 ```python
 from google.cloud import kms
 
+
 def create_key_ring_and_key(project_id, location_id, key_ring_id, key_id):
     client = kms.KeyManagementServiceClient()
 
     # Create key ring
     location_name = f"projects/{project_id}/locations/{location_id}"
     key_ring = client.create_key_ring(
-        request={
-            "parent": location_name,
-            "key_ring_id": key_ring_id
-        }
+        request={"parent": location_name, "key_ring_id": key_ring_id}
     )
 
     # Create crypto key
@@ -169,12 +167,13 @@ def create_key_ring_and_key(project_id, location_id, key_ring_id, key_id):
                 "purpose": kms.CryptoKey.CryptoKeyPurpose.ENCRYPT_DECRYPT,
                 "version_template": {
                     "algorithm": kms.CryptoKeyVersion.CryptoKeyVersionAlgorithm.GOOGLE_SYMMETRIC_ENCRYPTION
-                }
-            }
+                },
+            },
         }
     )
 
     return key
+
 
 def encrypt_symmetric(project_id, location_id, key_ring_id, key_id, plaintext):
     client = kms.KeyManagementServiceClient()
@@ -182,20 +181,17 @@ def encrypt_symmetric(project_id, location_id, key_ring_id, key_id, plaintext):
     key_name = f"projects/{project_id}/locations/{location_id}/keyRings/{key_ring_id}/cryptoKeys/{key_id}"
     plaintext_bytes = plaintext.encode("utf-8")
 
-    response = client.encrypt(
-        request={"name": key_name, "plaintext": plaintext_bytes}
-    )
+    response = client.encrypt(request={"name": key_name, "plaintext": plaintext_bytes})
 
     return response.ciphertext
+
 
 def decrypt_symmetric(project_id, location_id, key_ring_id, key_id, ciphertext):
     client = kms.KeyManagementServiceClient()
 
     key_name = f"projects/{project_id}/locations/{location_id}/keyRings/{key_ring_id}/cryptoKeys/{key_id}"
 
-    response = client.decrypt(
-        request={"name": key_name, "ciphertext": ciphertext}
-    )
+    response = client.decrypt(request={"name": key_name, "ciphertext": ciphertext})
 
     return response.plaintext.decode("utf-8")
 ```
@@ -292,6 +288,7 @@ target_credentials = impersonated_credentials.Credentials(
 ```python
 from google.cloud import secretmanager
 
+
 def rotate_secret(project_id, secret_id, new_value):
     client = secretmanager.SecretManagerServiceClient()
 
@@ -300,10 +297,7 @@ def rotate_secret(project_id, secret_id, new_value):
     payload = new_value.encode("UTF-8")
 
     new_version = client.add_secret_version(
-        request={
-            "parent": secret_name,
-            "payload": {"data": payload}
-        }
+        request={"parent": secret_name, "payload": {"data": payload}}
     )
 
     # Application automatically uses latest version
@@ -398,6 +392,7 @@ kubectl annotate serviceaccount app-sa \
 ```python
 from google.cloud import logging
 
+
 def query_admin_activity_logs(project_id, hours=24):
     client = logging.Client(project=project_id)
 
@@ -411,7 +406,9 @@ def query_admin_activity_logs(project_id, hours=24):
     entries = client.list_entries(filter_=filter_str)
 
     for entry in entries:
-        print(f"User: {entry.payload.get('authenticationInfo', {}).get('principalEmail')}")
+        print(
+            f"User: {entry.payload.get('authenticationInfo', {}).get('principalEmail')}"
+        )
         print(f"Action: {entry.payload.get('methodName')}")
         print(f"Resource: {entry.payload.get('resourceName')}")
         print(f"Time: {entry.timestamp}")

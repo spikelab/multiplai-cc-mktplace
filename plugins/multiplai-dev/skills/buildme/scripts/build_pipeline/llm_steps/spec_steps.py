@@ -69,7 +69,9 @@ async def _audit_agent_text(prompt: str, config, *, budget_label: str) -> str:
         budget_label=budget_label,
     )
     if not result.success:
-        raise LLMCallError(f"{budget_label} audit failed: {result.error or result.output}")
+        raise LLMCallError(
+            f"{budget_label} audit failed: {result.error or result.output}"
+        )
     return result.output or ""
 
 
@@ -96,22 +98,32 @@ def _audit_findings(raw: str, label: str, *, recheck: bool = False) -> AuditFind
     except ValueError as exc:
         raise LLMCallError(f"{label} audit returned invalid JSON") from exc
     assessments = []
-    if recheck and isinstance(findings, dict) and isinstance(findings.get("findings"), list):
+    if (
+        recheck
+        and isinstance(findings, dict)
+        and isinstance(findings.get("findings"), list)
+    ):
         raw_assessments = findings.get("prior_assessments") or []
         if not isinstance(raw_assessments, list):
             raise LLMCallError(f"{label} audit returned invalid prior_assessments")
         try:
             assessments = [PriorAssessment.model_validate(a) for a in raw_assessments]
         except ValueError as exc:
-            raise LLMCallError(f"{label} audit returned an invalid prior assessment") from exc
+            raise LLMCallError(
+                f"{label} audit returned an invalid prior assessment"
+            ) from exc
         findings = findings["findings"]
     if not isinstance(findings, list):
         raise LLMCallError(f"{label} audit must return a findings list")
     for finding in findings:
-        if not isinstance(finding, dict) or any(
-            not isinstance(finding.get(key), str) or not finding[key].strip()
-            for key in ("category", "severity", "description", "suggestion")
-        ) or finding["severity"].lower() not in {"critical", "major", "minor"}:
+        if (
+            not isinstance(finding, dict)
+            or any(
+                not isinstance(finding.get(key), str) or not finding[key].strip()
+                for key in ("category", "severity", "description", "suggestion")
+            )
+            or finding["severity"].lower() not in {"critical", "major", "minor"}
+        ):
             raise LLMCallError(f"{label} audit returned an invalid finding")
         finding["severity"] = finding["severity"].lower()
     log.info("%s audit found %d findings", label, len(findings))
@@ -204,7 +216,9 @@ def _build_prompt(
             audit_findings=audit_findings or "(none — first pass)",
             instruction=instruction,
             template=template,
-        ) + _registry_section(config, context, _change_capabilities(config), REGISTRY_PLAN_RULE)
+        ) + _registry_section(
+            config, context, _change_capabilities(config), REGISTRY_PLAN_RULE
+        )
     elif artifact_id == "tasks":
         proposal_content = _read_dep(context, "proposal", config)
         specs_content = _read_specs(config)
@@ -221,7 +235,9 @@ def _build_prompt(
             audit_findings=audit_findings or "(none — first pass)",
             instruction=instruction,
             template=template,
-        ) + _registry_section(config, context, _change_capabilities(config), REGISTRY_PLAN_RULE)
+        ) + _registry_section(
+            config, context, _change_capabilities(config), REGISTRY_PLAN_RULE
+        )
     elif artifact_id == "unknowns":
         # Regeneration pass only — the first pass is one run_explainer call per
         # dependency (see spec_generator._generate_unknowns).
@@ -283,7 +299,9 @@ def _read_registry(config, context: dict, names: list[str]) -> str:
     registry = config.specs_dir / "registry"
     shown = [n for n in names if (registry / f"{n}.md").is_file()]
     others = [n for n in context.get("registry") or [] if n not in shown]
-    tail = f"Other capabilities in specs/registry: {', '.join(others)}" if others else ""
+    tail = (
+        f"Other capabilities in specs/registry: {', '.join(others)}" if others else ""
+    )
     texts = {n: (registry / f"{n}.md").read_text() for n in shown}
     parts = [f"### {n} (specs/registry/{n}.md)\n{texts[n]}" for n in shown]
     dropped: list[str] = []
@@ -292,12 +310,21 @@ def _read_registry(config, context: dict, names: list[str]) -> str:
         """A left-out file, with its requirement names, which a MODIFIED or REMOVED
         requirement must reuse."""
         reqs = _REGISTRY_REQUIREMENT.findall(texts[n])
-        return f"{n} (specs/registry/{n}.md; requirements: {', '.join(reqs)})" if reqs \
+        return (
+            f"{n} (specs/registry/{n}.md; requirements: {', '.join(reqs)})"
+            if reqs
             else f"{n} (specs/registry/{n}.md)"
+        )
 
     def render() -> str:
-        left_out = (f"Left out to stay under {REGISTRY_TEXT_LIMIT:,} characters: "
-                    + ", ".join(named(n) for n in dropped)) if dropped else ""
+        left_out = (
+            (
+                f"Left out to stay under {REGISTRY_TEXT_LIMIT:,} characters: "
+                + ", ".join(named(n) for n in dropped)
+            )
+            if dropped
+            else ""
+        )
         return "\n\n".join(p for p in (*parts, left_out, tail) if p)
 
     while parts and len(render()) > REGISTRY_TEXT_LIMIT:
@@ -313,7 +340,7 @@ def _cap(text: str) -> str:
     if len(text) <= REGISTRY_TEXT_LIMIT:
         return text
     note = f"\n(cut at {REGISTRY_TEXT_LIMIT:,} characters)"
-    return text[:REGISTRY_TEXT_LIMIT - len(note)] + note
+    return text[: REGISTRY_TEXT_LIMIT - len(note)] + note
 
 
 def _registry_section(config, context: dict, names: list[str], rule: str) -> str:
@@ -334,7 +361,8 @@ async def run_explainer(dep, config, usage_context: str = "") -> str:
     """
     prompt = EXPLAINER_PROMPT.format(
         dep_name=dep.name,
-        mentioned_in=", ".join(getattr(dep, "mentioned_in", []) or []) or "(unrecorded)",
+        mentioned_in=", ".join(getattr(dep, "mentioned_in", []) or [])
+        or "(unrecorded)",
         evidence=getattr(dep, "evidence", "") or "(no manifest evidence recorded)",
         project_context=getattr(config, "project_description", "") or "(none)",
         usage_context=usage_context or "(see the design's Decisions section)",
@@ -350,7 +378,9 @@ async def run_explainer(dep, config, usage_context: str = "") -> str:
     )
 
 
-async def run_design_audit(change_dir: Path, config, *, prior: list[dict] | None = None) -> AuditFindings:
+async def run_design_audit(
+    change_dir: Path, config, *, prior: list[dict] | None = None
+) -> AuditFindings:
     """Run adversarial design audit on generated artifacts.
 
     Runs as a read-only subagent, so the auditor can open the codebase the
@@ -374,6 +404,7 @@ async def run_design_audit(change_dir: Path, config, *, prior: list[dict] | None
 
     # Detect change type for type-specific audit questions
     from ..rubric import detect_change_type
+
     change_type = detect_change_type(change_dir)
 
     prompt = DESIGN_AUDIT_PROMPT.format(
@@ -390,7 +421,9 @@ async def run_design_audit(change_dir: Path, config, *, prior: list[dict] | None
     return _audit_findings(raw, "Design", recheck=bool(prior))
 
 
-async def run_tasks_audit(change_dir: Path, config, *, prior: list[dict] | None = None) -> AuditFindings:
+async def run_tasks_audit(
+    change_dir: Path, config, *, prior: list[dict] | None = None
+) -> AuditFindings:
     """Audit tasks.md for horizontal (layer-by-layer) decomposition.
 
     Checks that each block is a vertical slice — end-to-end exercisable when it
@@ -422,17 +455,25 @@ async def run_tasks_audit(change_dir: Path, config, *, prior: list[dict] | None 
     return _audit_findings(raw, "Tasks shape", recheck=bool(prior))
 
 
-async def _codebase_analysis_call(prompt: str, schema, *, config, budget_label: str = "", **kwargs):
+async def _codebase_analysis_call(
+    prompt: str, schema, *, config, budget_label: str = "", **kwargs
+):
     """buildme's call function for `code_facts`: one tool-using agent with a
     structured answer, re-run whole on a failure (`agent_call_structured`), all
     spend under `codebase_analysis` whatever `code_facts` names the task."""
     return await agent_call_structured(
-        prompt, schema, model=config.model_for("codebase_analysis"), effort=config.effort_for("codebase_analysis"),
-        budget_label="codebase_analysis", **kwargs,
+        prompt,
+        schema,
+        model=config.model_for("codebase_analysis"),
+        effort=config.effort_for("codebase_analysis"),
+        budget_label="codebase_analysis",
+        **kwargs,
     )
 
 
-async def run_codebase_analysis(project_dir: Path, config, *, call: CallFn | None = None) -> str:
+async def run_codebase_analysis(
+    project_dir: Path, config, *, call: CallFn | None = None
+) -> str:
     """Explain the existing codebase as checked, cited facts (`code_facts`).
 
     Wired as BuildPhase.CODEBASE_ANALYSIS (orchestrator, between RESEARCH and
@@ -462,14 +503,21 @@ async def run_codebase_analysis(project_dir: Path, config, *, call: CallFn | Non
     md_path = config.codebase_analysis_path
     call = call or functools.partial(_codebase_analysis_call, config=config)
     analysis = await code_analysis.analyse(
-        project_dir, call=call, max_units=config.codebase_analysis_max_units,
-        name=config.project_name or project_dir.name, change_dir=config.change_dir,
+        project_dir,
+        call=call,
+        max_units=config.codebase_analysis_max_units,
+        name=config.project_name or project_dir.name,
+        change_dir=config.change_dir,
     )
     if analysis is None:
         return code_analysis.no_commit_report(project_dir)
-    log.info("Codebase analysis: %d facts kept, %d dropped, %d slice(s) failed, %d file(s) not analysed",
-             len(analysis.gated.facts), len(analysis.gated.dropped), len(analysis.failed),
-             len(analysis.not_analysed))
+    log.info(
+        "Codebase analysis: %d facts kept, %d dropped, %d slice(s) failed, %d file(s) not analysed",
+        len(analysis.gated.facts),
+        len(analysis.gated.dropped),
+        len(analysis.failed),
+        len(analysis.not_analysed),
+    )
     code_analysis.write_facts_file(analysis, md_path.parent)
     return code_analysis.render_markdown(analysis, project_dir, md_path.parent)
 

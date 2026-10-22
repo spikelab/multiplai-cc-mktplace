@@ -12,8 +12,9 @@ from review_viewer.stats import change_stats, read_commits
 
 
 def _git(repo, *args):
-    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True,
-                          check=True).stdout
+    return subprocess.run(
+        ["git", "-C", str(repo), *args], capture_output=True, text=True, check=True
+    ).stdout
 
 
 def _load(*argv):
@@ -22,19 +23,32 @@ def _load(*argv):
 
 def _files_at(repo, head, path=""):
     spec = ["--", path] if path else []
-    return [f for f in _git(repo, "ls-tree", "-r", "-z", "--name-only", head, *spec).split("\0") if f]
+    return [
+        f
+        for f in _git(repo, "ls-tree", "-r", "-z", "--name-only", head, *spec).split(
+            "\0"
+        )
+        if f
+    ]
 
 
-def test_serve_tree_resolves_every_file_at_head_against_the_empty_tree(fixture_repo, tmp_path, monkeypatch):
+def test_serve_tree_resolves_every_file_at_head_against_the_empty_tree(
+    fixture_repo, tmp_path, monkeypatch
+):
     repo, _, head = fixture_repo
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfg"))
-    loaded, meta = _load("--tree", "--repo", str(repo), "--reviews-dir", str(tmp_path / "none"))
-    (ff, _box), = loaded
+    loaded, meta = _load(
+        "--tree", "--repo", str(repo), "--reviews-dir", str(tmp_path / "none")
+    )
+    ((ff, _box),) = loaded
     t = ff.target
     assert (t.base_sha, t.head_sha) == (EMPTY_TREE, head) and is_tree_review(t)
     assert t.files_changed == _files_at(repo, head)
-    assert t.slug == "fixture-repo--tree" and t.label == f"fixture-repo: whole tree at {head[:8]}"
+    assert (
+        t.slug == "fixture-repo--tree"
+        and t.label == f"fixture-repo: whole tree at {head[:8]}"
+    )
     assert meta[t.slug]["review"] == "none"
 
 
@@ -42,26 +56,44 @@ def test_serve_tree_path_limits_the_files(fixture_repo, tmp_path, monkeypatch):
     repo, _, head = fixture_repo
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfg"))
-    loaded, _ = _load("--tree", "--path", "app", "--repo", str(repo), "--reviews-dir", str(tmp_path / "none"))
-    (ff, _box), = loaded
-    assert ff.target.files_changed == _files_at(repo, head, "app") and ff.target.slug == "fixture-repo--tree-app"
+    loaded, _ = _load(
+        "--tree",
+        "--path",
+        "app",
+        "--repo",
+        str(repo),
+        "--reviews-dir",
+        str(tmp_path / "none"),
+    )
+    ((ff, _box),) = loaded
+    assert (
+        ff.target.files_changed == _files_at(repo, head, "app")
+        and ff.target.slug == "fixture-repo--tree-app"
+    )
     assert _load("--path", "app", "--repo", str(repo)) == 2  # --path needs --tree
     assert _load("--tree", "--range", "a..b", "--repo", str(repo)) == 2
 
 
 def test_serve_tree_with_a_subdirectory_repo_shows_that_directory_under_the_review_slug(
-        fixture_repo, tmp_path, monkeypatch):
+    fixture_repo, tmp_path, monkeypatch
+):
     repo, _, head = fixture_repo
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfg"))
-    loaded, _ = _load("--tree", "--repo", str(repo / "app"), "--reviews-dir", str(tmp_path / "none"))
-    (ff, _box), = loaded
+    loaded, _ = _load(
+        "--tree", "--repo", str(repo / "app"), "--reviews-dir", str(tmp_path / "none")
+    )
+    ((ff, _box),) = loaded
     # The slug and root-relative files `review --repo <repo>/app --tree` writes.
-    assert ff.target.slug == "fixture-repo--tree-app" and ff.target.repo_path == str(repo.resolve())
+    assert ff.target.slug == "fixture-repo--tree-app" and ff.target.repo_path == str(
+        repo.resolve()
+    )
     assert ff.target.files_changed == _files_at(repo, head, "app")
     # --path is relative to the subdirectory.
     first = _files_at(repo, head, "app")[0]
-    assert tree_path(repo / "app", repo.resolve(), "./" + first.split("/", 1)[1]) == first
+    assert (
+        tree_path(repo / "app", repo.resolve(), "./" + first.split("/", 1)[1]) == first
+    )
     assert tree_path(repo, repo.resolve(), "app") == "app"
 
 
@@ -73,12 +105,18 @@ def test_a_tree_review_has_no_commits(fixture_repo):
     assert stats.commits == [] and stats.files == len(_files_at(repo, head))
 
 
-def test_a_tree_review_opens_with_every_file_added_and_no_commits(fixture_repo, findings_path, start_live):
+def test_a_tree_review_opens_with_every_file_added_and_no_commits(
+    fixture_repo, findings_path, start_live
+):
     repo, _, head = fixture_repo
     data = json.loads(findings_path.read_text())
     files = _files_at(repo, head)
-    data["target"].update(base_sha=EMPTY_TREE, slug="fixture-repo--tree",
-                          label=f"fixture-repo: whole tree at {head[:8]}", files_changed=files)
+    data["target"].update(
+        base_sha=EMPTY_TREE,
+        slug="fixture-repo--tree",
+        label=f"fixture-repo: whole tree at {head[:8]}",
+        files_changed=files,
+    )
     findings_path.write_text(json.dumps(data))
     live = start_live()
     status, detail = live.request("GET", f"/api/targets/{live.slug}")
@@ -99,8 +137,14 @@ def _tree_review(dirs, name, repo, head, slug, files):
     from conftest import FIXTURE
 
     data = json.loads(FIXTURE.read_text(encoding="utf-8"))
-    data["target"].update(repo_path=str(repo), base_sha=EMPTY_TREE, head_sha=head, slug=slug,
-                          label=slug, files_changed=files)
+    data["target"].update(
+        repo_path=str(repo),
+        base_sha=EMPTY_TREE,
+        head_sha=head,
+        slug=slug,
+        label=slug,
+        files_changed=files,
+    )
     data["findings"] = []
     out = dirs / name / "findings.json"
     out.parent.mkdir(parents=True)
@@ -108,21 +152,43 @@ def _tree_review(dirs, name, repo, head, slug, files):
     return out
 
 
-def test_find_review_matches_a_tree_review_only_of_the_same_directory(fixture_repo, tmp_path):
+def test_find_review_matches_a_tree_review_only_of_the_same_directory(
+    fixture_repo, tmp_path
+):
     from review_viewer.__main__ import find_review
 
     repo, _, head = fixture_repo
     reviews = tmp_path / "reviews"
-    whole = _tree_review(reviews, "whole", repo, head, "fixture-repo--tree", _files_at(repo, head))
-    app = _tree_review(reviews, "app", repo, head, "fixture-repo--tree-app", _files_at(repo, head, "app"))
-    assert find_review(tree_target(repo, "HEAD", "app"), [reviews])[:2] == ("match", app)
+    whole = _tree_review(
+        reviews, "whole", repo, head, "fixture-repo--tree", _files_at(repo, head)
+    )
+    app = _tree_review(
+        reviews,
+        "app",
+        repo,
+        head,
+        "fixture-repo--tree-app",
+        _files_at(repo, head, "app"),
+    )
+    assert find_review(tree_target(repo, "HEAD", "app"), [reviews])[:2] == (
+        "match",
+        app,
+    )
     assert find_review(tree_target(repo, "HEAD"), [reviews])[:2] == ("match", whole)
     # Same commit, but no review of this directory: none, not the newest tree review.
-    other = sorted({f.split("/", 1)[0] for f in _files_at(repo, head) if "/" in f} - {"app"})[0]
-    assert find_review(tree_target(repo, "HEAD", other), [reviews]) == ("none", None, None)
+    other = sorted(
+        {f.split("/", 1)[0] for f in _files_at(repo, head) if "/" in f} - {"app"}
+    )[0]
+    assert find_review(tree_target(repo, "HEAD", other), [reviews]) == (
+        "none",
+        None,
+        None,
+    )
 
 
-def test_change_stats_of_a_tree_limited_by_path_counts_only_that_directory(fixture_repo):
+def test_change_stats_of_a_tree_limited_by_path_counts_only_that_directory(
+    fixture_repo,
+):
     repo, _, head = fixture_repo
     app = _files_at(repo, head, "app")
     stats = change_stats(tree_target(repo, "HEAD", "app"))

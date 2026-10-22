@@ -37,7 +37,9 @@ class ProgressWriter:
             if details:
                 f.write(f"{details}\n")
 
-    def log_source(self, url: str, status: str, finding_count: int = 0, error: str | None = None) -> None:
+    def log_source(
+        self, url: str, status: str, finding_count: int = 0, error: str | None = None
+    ) -> None:
         with self.path.open("a") as f:
             f.write(f"- [{self._now()}] {status} {url}")
             if finding_count:

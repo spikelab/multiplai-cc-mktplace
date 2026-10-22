@@ -19,32 +19,32 @@ from pydantic import BaseModel, Field
 class Verdict(str, Enum):
     """What a comment is, decided by the triage agent."""
 
-    CODE_FIX = "code_fix"        # a defect in the code; fixed with a failing test first
+    CODE_FIX = "code_fix"  # a defect in the code; fixed with a failing test first
     SPEC_CHANGE = "spec_change"  # the requirement itself is wrong or missing
-    QUESTION = "question"        # asks something; answered, nothing changed
-    NOT_DEFECT = "not_defect"    # the code is right as it is; the reason is replied
+    QUESTION = "question"  # asks something; answered, nothing changed
+    NOT_DEFECT = "not_defect"  # the code is right as it is; the reason is replied
 
 
 class PRComment(BaseModel):
     """One comment on the PR: a review-thread comment or a top-level comment."""
 
-    id: int                                # GitHub's numeric id (`databaseId` for a review comment);
-                                           # made up and negative for a review_body (`fetch.review_body_id`)
+    id: int  # GitHub's numeric id (`databaseId` for a review comment);
+    # made up and negative for a review_body (`fetch.review_body_id`)
     # In a review thread, a top-level (issue) comment, or part of a review's
     # own body (no thread: answered like a top-level comment).
     kind: Literal["review", "issue", "review_body"]
     author: str
     is_bot: bool = False
-    body: str = ""                         # untrusted
+    body: str = ""  # untrusted
     url: str = ""
     created_at: str = ""
     path: str | None = None
     line: int | None = None
-    thread_id: str | None = None           # GraphQL id of the review thread
-    reply_to: int | None = None            # the thread's first comment: where a reply goes
+    thread_id: str | None = None  # GraphQL id of the review thread
+    reply_to: int | None = None  # the thread's first comment: where a reply goes
     outdated: bool = False
-    finding_id: str | None = None          # from the review's hidden marker, when present
-    review_id: int | None = None           # for a review_body comment: the review's id
+    finding_id: str | None = None  # from the review's hidden marker, when present
+    review_id: int | None = None  # for a review_body comment: the review's id
     # Set by fetch.prepare():
     allowed: bool = False
     injection: bool = False
@@ -91,12 +91,12 @@ class Triage(BaseModel):
     spec_conflict: bool = Field(
         default=False,
         description="For code_fix: true when the fix contradicts a requirement in the "
-                    "change's specs, so the spec must change first.",
+        "change's specs, so the spec must change first.",
     )
     requirement: str = Field(
         default="",
         description="For spec_change, or a code_fix with spec_conflict: the requirement "
-                    "that must change (`<capability>: <requirement name>`), when known.",
+        "that must change (`<capability>: <requirement name>`), when known.",
     )
 
 
@@ -105,8 +105,8 @@ class TriageRecord(BaseModel):
 
     round: int
     comment: PRComment
-    triage: Triage | None = None   # None: not allowed, flagged, or not triaged
-    note: str = ""                 # why there is no triage, when there is none
+    triage: Triage | None = None  # None: not allowed, flagged, or not triaged
+    note: str = ""  # why there is no triage, when there is none
 
     @property
     def acted_on(self) -> bool:
@@ -119,10 +119,12 @@ class SpecIssue(BaseModel):
     edit. buildme never edits requirements."""
 
     finding_key: str
-    heading: str                    # the section's `## ` heading
-    issues_file: str                # spec-issues.md, relative to the project
-    command: str                    # the pm-spec command that makes the edit
-    requirement: str = ""           # as triage named it: `<capability>: <requirement name>`
-    requirements_file: str = ""     # `requirements/<cap>.md`, when the change has that file
-    defers_fix: bool = False        # a code_fix whose fix waits on this change
-    appended: bool = True           # False: the file already held this finding's section
+    heading: str  # the section's `## ` heading
+    issues_file: str  # spec-issues.md, relative to the project
+    command: str  # the pm-spec command that makes the edit
+    requirement: str = ""  # as triage named it: `<capability>: <requirement name>`
+    requirements_file: str = (
+        ""  # `requirements/<cap>.md`, when the change has that file
+    )
+    defers_fix: bool = False  # a code_fix whose fix waits on this change
+    appended: bool = True  # False: the file already held this finding's section

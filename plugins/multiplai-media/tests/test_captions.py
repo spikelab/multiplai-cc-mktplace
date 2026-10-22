@@ -1,4 +1,5 @@
 """Captions and headline (stages/captions.py): grouping, timing, colour, glyphs."""
+
 from __future__ import annotations
 
 import json
@@ -25,15 +26,28 @@ def w(text, s, e):
 
 
 def test_groups_break_on_a_pause_longer_than_0_3s() -> None:
-    words = [w("one", 0.0, 0.3), w("two", 0.32, 0.6), w("three", 1.0, 1.3), w("four", 1.32, 1.6)]
+    words = [
+        w("one", 0.0, 0.3),
+        w("two", 0.32, 0.6),
+        w("three", 1.0, 1.3),
+        w("four", 1.32, 1.6),
+    ]
     groups = cap.group_words(words)
-    assert [[x["text"] for x in g] for g in groups] == [["one", "two"], ["three", "four"]]
+    assert [[x["text"] for x in g] for g in groups] == [
+        ["one", "two"],
+        ["three", "four"],
+    ]
 
 
 def test_groups_respect_word_and_character_limits() -> None:
-    words = [w(t, i * 0.2, i * 0.2 + 0.18) for i, t in enumerate(
-        ["a", "b", "c", "d", "extraordinarily", "long", "words"])]
-    groups = [[x["text"] for x in g] for g in cap.group_words(words, words_per_line=3, max_chars=22)]
+    words = [
+        w(t, i * 0.2, i * 0.2 + 0.18)
+        for i, t in enumerate(["a", "b", "c", "d", "extraordinarily", "long", "words"])
+    ]
+    groups = [
+        [x["text"] for x in g]
+        for g in cap.group_words(words, words_per_line=3, max_chars=22)
+    ]
     assert groups[0] == ["a", "b", "c"]
     assert all(len(" ".join(g)) <= 22 for g in groups)
     assert all(len(g) <= 3 for g in groups)
@@ -65,7 +79,9 @@ def test_highlight_colours_the_active_word_with_the_accent() -> None:
 def test_no_highlight_is_one_event_per_group() -> None:
     groups = [[w("ciao", 0.0, 0.3), w("mondo", 0.35, 0.7)]]
     # held 0.6 s past the last word; it cannot appear before 0
-    assert cap.caption_events(groups, False, "#FF0000", "#FFFFFF") == [(0.0, pytest.approx(1.3), "ciao mondo")]
+    assert cap.caption_events(groups, False, "#FF0000", "#FFFFFF") == [
+        (0.0, pytest.approx(1.3), "ciao mondo")
+    ]
 
 
 def test_a_line_appears_just_before_its_first_word() -> None:
@@ -74,41 +90,67 @@ def test_a_line_appears_just_before_its_first_word() -> None:
 
 
 def test_a_line_holds_after_its_last_word_until_just_before_the_next() -> None:
-    groups = [[w("uno", 1.0, 1.3), w("due", 1.3, 1.7)],          # next line appears at 2.12
-              [w("tre", 2.2, 2.5), w("quattro", 2.5, 2.9)],      # next appears at 5.92: full hold
-              [w("cinque", 6.0, 6.3), w("sei", 6.3, 6.6)]]
+    groups = [
+        [w("uno", 1.0, 1.3), w("due", 1.3, 1.7)],  # next line appears at 2.12
+        [w("tre", 2.2, 2.5), w("quattro", 2.5, 2.9)],  # next appears at 5.92: full hold
+        [w("cinque", 6.0, 6.3), w("sei", 6.3, 6.6)],
+    ]
     times = cap.line_times(groups)
-    assert times[0] == (pytest.approx(0.92), pytest.approx(2.07))   # 2.12 - 0.05, before 1.7 + 0.6
-    assert times[1] == (pytest.approx(2.12), pytest.approx(3.5))    # 2.9 + 0.6
+    assert times[0] == (
+        pytest.approx(0.92),
+        pytest.approx(2.07),
+    )  # 2.12 - 0.05, before 1.7 + 0.6
+    assert times[1] == (pytest.approx(2.12), pytest.approx(3.5))  # 2.9 + 0.6
     assert times[2] == (pytest.approx(5.92), pytest.approx(7.2))
 
 
 def test_highlight_moves_only_the_first_appearance_and_holds_the_last_word() -> None:
     groups = [[w("ciao", 1.0, 1.3), w("bel", 1.35, 1.6), w("mondo", 1.65, 2.0)]]
     events = cap.caption_events(groups, True, "#FF0000", "#FFFFFF")
-    assert [(round(s, 3), round(e, 3)) for s, e, _ in events] == [(0.92, 1.35), (1.35, 1.65), (1.65, 2.6)]
+    assert [(round(s, 3), round(e, 3)) for s, e, _ in events] == [
+        (0.92, 1.35),
+        (1.35, 1.65),
+        (1.65, 2.6),
+    ]
 
 
 def test_a_line_spoken_in_under_half_a_second_joins_its_neighbour() -> None:
     # "ok so" is spoken in 0.3 s: it joins the next line of the same sentence
-    words = [w("ok", 0.0, 0.1), w("so,", 0.1, 0.3), w("it", 0.35, 0.6), w("is", 0.6, 0.8),
-             w("done.", 0.8, 1.4)]
+    words = [
+        w("ok", 0.0, 0.1),
+        w("so,", 0.1, 0.3),
+        w("it", 0.35, 0.6),
+        w("is", 0.6, 0.8),
+        w("done.", 0.8, 1.4),
+    ]
     groups = cap.group_words(words, words_per_line=2)
     assert [" ".join(x["text"] for x in g) for g in groups] == ["ok so, it is done."]
 
 
 def test_a_short_line_does_not_join_across_a_sentence_or_a_pause() -> None:
-    words = [w("Fine.", 0.0, 0.3), w("Then", 0.35, 0.6), w("we", 0.6, 0.8), w("go", 0.8, 1.3),
-             w("now", 2.0, 2.2), w("ok.", 2.2, 2.4)]
+    words = [
+        w("Fine.", 0.0, 0.3),
+        w("Then", 0.35, 0.6),
+        w("we", 0.6, 0.8),
+        w("go", 0.8, 1.3),
+        w("now", 2.0, 2.2),
+        w("ok.", 2.2, 2.4),
+    ]
     texts = [" ".join(x["text"] for x in g) for g in cap.group_words(words)]
     assert texts == ["Fine.", "Then we go", "now ok."]
 
 
 def test_a_short_line_stays_when_joining_would_break_max_chars() -> None:
-    words = [w("abcdefghij", 0.0, 0.2), w("klmnop", 0.2, 0.4), w("qrstuvwxyz", 0.45, 1.2),
-             w("abcdefghijk.", 1.2, 2.0)]
+    words = [
+        w("abcdefghij", 0.0, 0.2),
+        w("klmnop", 0.2, 0.4),
+        w("qrstuvwxyz", 0.45, 1.2),
+        w("abcdefghijk.", 1.2, 2.0),
+    ]
     groups = cap.group_words(words, words_per_line=2, max_chars=22)
-    assert [" ".join(x["text"] for x in g) for g in groups][0] == "abcdefghij klmnop"   # 0.4 s, but 28 chars joined
+    assert [" ".join(x["text"] for x in g) for g in groups][
+        0
+    ] == "abcdefghij klmnop"  # 0.4 s, but 28 chars joined
     assert all(len(" ".join(x["text"] for x in g)) <= 22 for g in groups)
 
 
@@ -126,16 +168,32 @@ def test_words_in_cuts_are_dropped_before_captioning() -> None:
 
 
 def test_ass_file_has_wrapstyle_0_and_the_headline_on_top() -> None:
-    ass = cap.build_ass([w("ciao", 0.0, 0.4)], Captions(), Headline(text="Il punto {chiave}", end=3.0),
-                        1080, 1920, "DejaVu Sans", Brand())
+    ass = cap.build_ass(
+        [w("ciao", 0.0, 0.4)],
+        Captions(),
+        Headline(text="Il punto {chiave}", end=3.0),
+        1080,
+        1920,
+        "DejaVu Sans",
+        Brand(),
+    )
     assert "WrapStyle: 0" in ass
     assert "PlayResX: 1080" in ass and "PlayResY: 1920" in ass
     headline = [ln for ln in ass.splitlines() if ",Headline,," in ln]
-    assert headline == ["Dialogue: 1,0:00:00.00,0:00:03.00,Headline,,0,0,0,,{\\an8\\pos(540,240)}Il punto (chiave)"]
+    assert headline == [
+        "Dialogue: 1,0:00:00.00,0:00:03.00,Headline,,0,0,0,,{\\an8\\pos(540,240)}Il punto (chiave)"
+    ]
 
 
 def test_fc_query_charset_parsing() -> None:
-    assert cap.parse_fc_charset("20-22 e0 e8-e9") == {0x20, 0x21, 0x22, 0xE0, 0xE8, 0xE9}
+    assert cap.parse_fc_charset("20-22 e0 e8-e9") == {
+        0x20,
+        0x21,
+        0x22,
+        0xE0,
+        0xE8,
+        0xE9,
+    }
 
 
 @pytest.mark.skipif(not Path(DEJAVU).exists(), reason="needs DejaVu Sans Bold")
@@ -146,6 +204,7 @@ def test_missing_glyphs_names_the_characters_the_font_lacks() -> None:
 
 
 # --- phrase-aware line breaks -------------------------------------------------
+
 
 def _lines(words, **kw):
     return [" ".join(x["text"] for x in g) for g in cap.group_words(words, **kw)]
@@ -161,8 +220,11 @@ def _lone_words_not_allowed(words, groups):
             continue
         i = pos[id(g[0])]
         nxt = words[i + 1] if i + 1 < len(words) else None
-        if g[0]["text"].endswith(cap.SENTENCE_END) or nxt is None \
-                or nxt["start"] - g[0]["end"] > cap.MAX_GAP_S:
+        if (
+            g[0]["text"].endswith(cap.SENTENCE_END)
+            or nxt is None
+            or nxt["start"] - g[0]["end"] > cap.MAX_GAP_S
+        ):
             continue
         bad.append(g[0]["text"])
     return bad
@@ -173,7 +235,9 @@ def _seq(texts, step=0.3):
 
 
 def test_default_settings_leave_no_lone_word_on_the_whisper_fixture() -> None:
-    words = tx.from_whisper_json(json.loads((_FIX / "whisper-words.json").read_text()), engine="t")["words"]
+    words = tx.from_whisper_json(
+        json.loads((_FIX / "whisper-words.json").read_text()), engine="t"
+    )["words"]
     groups = cap.group_words(words)
     assert _lone_words_not_allowed(words, groups) == []
     assert all(len(" ".join(x["text"] for x in g)) <= 22 for g in groups)
@@ -223,9 +287,14 @@ def test_a_lone_word_is_joined_to_its_neighbour() -> None:
 
 def test_a_lone_word_after_a_comma_joins_the_next_line() -> None:
     # "four" belongs to the clause after "three,", not to the one it ends.
-    one, two, three, four, five, six = _seq(["one", "two", "three,", "four", "five", "six"])
+    one, two, three, four, five, six = _seq(
+        ["one", "two", "three,", "four", "five", "six"]
+    )
     lines = cap._no_lone_words([[one, two, three], [four], [five, six]], max_chars=22)
-    assert [[x["text"] for x in g] for g in lines] == [["one", "two", "three,"], ["four", "five", "six"]]
+    assert [[x["text"] for x in g] for g in lines] == [
+        ["one", "two", "three,"],
+        ["four", "five", "six"],
+    ]
 
 
 def test_a_lone_word_that_fits_nowhere_borrows_a_word() -> None:
@@ -233,7 +302,11 @@ def test_a_lone_word_that_fits_nowhere_borrows_a_word() -> None:
     lines = cap._no_lone_words([[a, b, c], [d], [e]], max_chars=14)
     # "stuvwx" cannot join "abcdef ghijkl mnopqr" within 14 characters, so it
     # takes "mnopqr"; "yz" ends the words, so it may stay alone.
-    assert [" ".join(x["text"] for x in g) for g in lines] == ["abcdef ghijkl", "mnopqr stuvwx", "yz"]
+    assert [" ".join(x["text"] for x in g) for g in lines] == [
+        "abcdef ghijkl",
+        "mnopqr stuvwx",
+        "yz",
+    ]
 
 
 def test_a_lone_word_before_a_pause_may_stay_alone() -> None:

@@ -27,7 +27,10 @@ class Answer(BaseModel):
 
 
 def _result(text: str, cost: float = 0.5):
-    return SimpleNamespace(text=text, usage=SimpleNamespace(cost_usd=cost, input_tokens=10, output_tokens=1))
+    return SimpleNamespace(
+        text=text,
+        usage=SimpleNamespace(cost_usd=cost, input_tokens=10, output_tokens=1),
+    )
 
 
 class FakeRunAgent:
@@ -49,7 +52,10 @@ def _call(monkeypatch, *outcomes, max_usd=80.0):
     core_budget.start(max_usd, None, ledger_cls=sdk.SpecExtractBudget)
 
     async def go():
-        return await _REAL_CALL("prompt", Answer, allowed_tools=["Read"], budget_label="explore:unit")
+        return await _REAL_CALL(
+            "prompt", Answer, allowed_tools=["Read"], budget_label="explore:unit"
+        )
+
     return fake, go
 
 
@@ -66,7 +72,10 @@ def test_answer_is_parsed_and_spend_recorded(monkeypatch):
     fake, go = _call(monkeypatch, _result('{"value": 7}'))
     assert asyncio.run(go()) == Answer(value=7)
     assert core_budget.get().cost_usd == 0.5
-    assert fake.calls[0]["allowed_tools"] == ["Read"] and fake.calls[0]["component"] == "spec-extract"
+    assert (
+        fake.calls[0]["allowed_tools"] == ["Read"]
+        and fake.calls[0]["component"] == "spec-extract"
+    )
 
 
 def test_unparsable_answer_is_reformatted_once_without_tools(monkeypatch):
@@ -79,7 +88,9 @@ def test_unparsable_answer_is_reformatted_once_without_tools(monkeypatch):
 def test_a_failed_run_raises_call_failed_without_a_rerun(monkeypatch):
     # The dispatch rule asks the unit once more (plan, item 7); the wrapper does not re-run it
     # too, or each attempt could cost two agent runs.
-    err = AgentRunError("boom", reason="cli", stderr_tail="tail", partial=_result("", cost=0.25))
+    err = AgentRunError(
+        "boom", reason="cli", stderr_tail="tail", partial=_result("", cost=0.25)
+    )
     fake, go = _call(monkeypatch, err, _result('{"value": 1}'))
     with pytest.raises(sdk.CallFailed):
         asyncio.run(go())
@@ -97,19 +108,34 @@ def test_a_reformat_that_does_not_parse_raises_call_failed(monkeypatch):
 # The pi backend's failures that no call can get past (multiplai_core/pi/backend.py).
 PI_SETUP_ERRORS = [
     AgentRunError("pi binary 'pi' not found", reason="pi binary not found"),
-    AgentRunError("pi failed to start (PermissionError)", reason="pi failed to start: PermissionError"),
+    AgentRunError(
+        "pi failed to start (PermissionError)",
+        reason="pi failed to start: PermissionError",
+    ),
     AgentRunError("bad spec", reason="malformed pi model spec"),
-    AgentRunError("PI_GATE_EXT='/x' is not a file", reason="pi gating extension not found"),
+    AgentRunError(
+        "PI_GATE_EXT='/x' is not a file", reason="pi gating extension not found"
+    ),
 ]
 PI_SETUP_IDS = ["pi-missing", "pi-spawn-failed", "pi-spec-malformed", "pi-gate-missing"]
 
 
-@pytest.mark.parametrize("err", [
-    UnknownAgentBackendError("no agent backend for provider 'pi'", reason="unknown agent backend 'pi'"),
-    AgentRunError("claude-agent-sdk is not available", reason="claude-agent-sdk not installed"),
-    AgentRunError("rejected", reason="ClaudeAgentOptions rejected: unexpected keyword"),
-    *PI_SETUP_ERRORS,
-], ids=["unknown-backend", "sdk-missing", "options-rejected", *PI_SETUP_IDS])
+@pytest.mark.parametrize(
+    "err",
+    [
+        UnknownAgentBackendError(
+            "no agent backend for provider 'pi'", reason="unknown agent backend 'pi'"
+        ),
+        AgentRunError(
+            "claude-agent-sdk is not available", reason="claude-agent-sdk not installed"
+        ),
+        AgentRunError(
+            "rejected", reason="ClaudeAgentOptions rejected: unexpected keyword"
+        ),
+        *PI_SETUP_ERRORS,
+    ],
+    ids=["unknown-backend", "sdk-missing", "options-rejected", *PI_SETUP_IDS],
+)
 def test_a_backend_that_cannot_run_is_not_a_call_failure(monkeypatch, err):
     fake, go = _call(monkeypatch, err, _result('{"value": 1}'))
     with pytest.raises(sdk.BackendUnavailable) as e:
@@ -121,7 +147,9 @@ def test_a_backend_that_cannot_run_is_not_a_call_failure(monkeypatch, err):
 def test_a_budget_stop_at_the_reformat_is_a_call_failure(monkeypatch):
     # The first run is paid and recorded. Letting BudgetExceededError through would take its
     # attempt back, and a resume would pay for the whole run again (plan, item 7; row R31).
-    fake, go = _call(monkeypatch, _result("not json", cost=1.0), _result('{"value": 1}'), max_usd=1.0)
+    fake, go = _call(
+        monkeypatch, _result("not json", cost=1.0), _result('{"value": 1}'), max_usd=1.0
+    )
     with pytest.raises(sdk.CallFailed) as e:
         asyncio.run(go())
     assert isinstance(e.value.__cause__, BudgetExceededError)
@@ -165,10 +193,20 @@ def test_budget_reached_is_not_a_call_failure(monkeypatch):
 
 
 def test_model_key_from_multiplai_conf(monkeypatch):
-    monkeypatch.setattr(sdk, "load_multiplai_conf", lambda: {"spec_extract_explore_model": "pi:some/model"})
+    monkeypatch.setattr(
+        sdk,
+        "load_multiplai_conf",
+        lambda: {"spec_extract_explore_model": "pi:some/model"},
+    )
     assert _REAL_MODEL_FOR("explore") == "pi:some/model"
-    monkeypatch.setattr(sdk, "load_multiplai_conf", lambda: {"spec_extract_explore_model": "anthropic:claude-sonnet-5"})
-    assert _REAL_MODEL_FOR("explore") == "claude-sonnet-5"  # an Anthropic model goes bare
+    monkeypatch.setattr(
+        sdk,
+        "load_multiplai_conf",
+        lambda: {"spec_extract_explore_model": "anthropic:claude-sonnet-5"},
+    )
+    assert (
+        _REAL_MODEL_FOR("explore") == "claude-sonnet-5"
+    )  # an Anthropic model goes bare
     monkeypatch.setattr(sdk, "load_multiplai_conf", dict)
     assert _REAL_MODEL_FOR("explore") is None
 
@@ -188,7 +226,9 @@ def _fake_sdk(monkeypatch) -> list[dict]:
         yield AssistantMessage()
 
     fake = ModuleType("claude_agent_sdk")
-    fake.ClaudeAgentOptions = lambda **kwargs: options.append(kwargs) or SimpleNamespace(**kwargs)
+    fake.ClaudeAgentOptions = lambda **kwargs: (
+        options.append(kwargs) or SimpleNamespace(**kwargs)
+    )
     fake.query = query
     fake.AssistantMessage = AssistantMessage
     fake.TextBlock = TextBlock
@@ -196,15 +236,27 @@ def _fake_sdk(monkeypatch) -> list[dict]:
     return options
 
 
-@pytest.mark.parametrize("env, conf, sent", [
-    ({}, {}, ("claude-test-session", "low")),
-    ({"MULTIPLAI_MODEL": "claude-test-default", "MULTIPLAI_EFFORT": "high"}, {},
-     ("claude-test-default", "high")),
-    # spec-extract has a model key and no effort key, so MULTIPLAI_EFFORT still sets the effort.
-    ({"MULTIPLAI_MODEL": "claude-test-default", "MULTIPLAI_EFFORT": "high"},
-     {"spec_extract_explore_model": "claude-test-explicit"}, ("claude-test-explicit", "high")),
-], ids=["session", "multiplai-defaults", "model-key-wins"])
-def test_the_sdk_call_gets_the_configured_then_multiplai_then_the_session_model(monkeypatch, env, conf, sent):
+@pytest.mark.parametrize(
+    "env, conf, sent",
+    [
+        ({}, {}, ("claude-test-session", "low")),
+        (
+            {"MULTIPLAI_MODEL": "claude-test-default", "MULTIPLAI_EFFORT": "high"},
+            {},
+            ("claude-test-default", "high"),
+        ),
+        # spec-extract has a model key and no effort key, so MULTIPLAI_EFFORT still sets the effort.
+        (
+            {"MULTIPLAI_MODEL": "claude-test-default", "MULTIPLAI_EFFORT": "high"},
+            {"spec_extract_explore_model": "claude-test-explicit"},
+            ("claude-test-explicit", "high"),
+        ),
+    ],
+    ids=["session", "multiplai-defaults", "model-key-wins"],
+)
+def test_the_sdk_call_gets_the_configured_then_multiplai_then_the_session_model(
+    monkeypatch, env, conf, sent
+):
     """With no model key, run_agent's own fallback (multiplai-core 0.21) picks the model and
     effort: MULTIPLAI_MODEL / MULTIPLAI_EFFORT, else the session's."""
     # conftest's _no_session_defaults has cleared MULTIPLAI_* and CLAUDE_CODE_SESSION_ID, so
@@ -217,13 +269,21 @@ def test_the_sdk_call_gets_the_configured_then_multiplai_then_the_session_model(
     options = _fake_sdk(monkeypatch)
     core_budget.start(80.0, None, ledger_cls=sdk.SpecExtractBudget)
 
-    answer = asyncio.run(_REAL_CALL("prompt", Answer, allowed_tools=["Read"],
-                                    model=_REAL_MODEL_FOR("explore"), budget_label="explore:unit"))
+    answer = asyncio.run(
+        _REAL_CALL(
+            "prompt",
+            Answer,
+            allowed_tools=["Read"],
+            model=_REAL_MODEL_FOR("explore"),
+            budget_label="explore:unit",
+        )
+    )
     assert answer.value == 1
     assert [(o["model"], o.get("effort")) for o in options] == [sent]
 
 
 # --- the command line ---------------------------------------------------------------------
+
 
 def test_exit_4_without_trust_and_no_call(tmp_path, monkeypatch, capsys, fake_call):
     monkeypatch.delenv(sdk.TRUST_ENV)
@@ -235,14 +295,20 @@ def test_exit_4_without_trust_and_no_call(tmp_path, monkeypatch, capsys, fake_ca
     (folder,) = (root / "widgets").glob("tree@*")
     assert read_state(folder)["explore_attempts"] == {}
     # --trust-repo is the same as the variable.
-    assert run("run", "--repo", repo, "--tree", "HEAD", "--out", root, "--trust-repo") == 0
+    assert (
+        run("run", "--repo", repo, "--tree", "HEAD", "--out", root, "--trust-repo") == 0
+    )
 
 
-def test_plan_only_needs_no_trust_and_makes_no_call(tmp_path, monkeypatch, capsys, fake_call):
+def test_plan_only_needs_no_trust_and_makes_no_call(
+    tmp_path, monkeypatch, capsys, fake_call
+):
     monkeypatch.delenv(sdk.TRUST_ENV)
     repo = make_repo(tmp_path / "widgets")
     root = tmp_path / "out"
-    assert run("run", "--repo", repo, "--tree", "HEAD", "--out", root, "--plan-only") == 0
+    assert (
+        run("run", "--repo", repo, "--tree", "HEAD", "--out", root, "--plan-only") == 0
+    )
     out = capsys.readouterr().out
     (folder,) = (root / "widgets").glob("tree@*")
     assert f"SPEC_EXTRACT:PLAN {folder / 'plan.txt'}" in out
@@ -276,7 +342,9 @@ def test_a_unit_whose_runs_fail_makes_at_most_two_agent_runs(tmp_path, monkeypat
     assert read_state(folder)["explore_attempts"] == {"unit:u1": 2}
 
 
-def test_an_unexpected_exception_fails_one_unit_and_spares_the_others(tmp_path, monkeypatch):
+def test_an_unexpected_exception_fails_one_unit_and_spares_the_others(
+    tmp_path, monkeypatch
+):
     # Not an AgentRunError (the pi backend's int() on a malformed usage field): the unit's
     # call fails as any other does, and the units in flight beside it are not cancelled.
     calls: list[str] = []
@@ -297,15 +365,26 @@ def test_an_unexpected_exception_fails_one_unit_and_spares_the_others(tmp_path, 
     state = read_state(folder)
     assert state["explore_attempts"] == {"unit:u1": 2, "unit:u2": 1, "unit:u3": 1}
     assert "ValueError" in state["explore_answers"]["unit:u1"]["error"]
-    assert "facts" in state["explore_answers"]["unit:u2"] and "facts" in state["explore_answers"]["unit:u3"]
+    assert (
+        "facts" in state["explore_answers"]["unit:u2"]
+        and "facts" in state["explore_answers"]["unit:u3"]
+    )
     assert calls.count("d0") == 2 and calls.count("other") == 2
 
 
-@pytest.mark.parametrize("err", [
-    UnknownAgentBackendError("no agent backend for provider 'pi'", reason="unknown agent backend 'pi'"),
-    PI_SETUP_ERRORS[0],
-], ids=["unknown-backend", "pi-missing"])
-def test_a_backend_that_cannot_run_counts_no_attempt(tmp_path, monkeypatch, capsys, err):
+@pytest.mark.parametrize(
+    "err",
+    [
+        UnknownAgentBackendError(
+            "no agent backend for provider 'pi'", reason="unknown agent backend 'pi'"
+        ),
+        PI_SETUP_ERRORS[0],
+    ],
+    ids=["unknown-backend", "pi-missing"],
+)
+def test_a_backend_that_cannot_run_counts_no_attempt(
+    tmp_path, monkeypatch, capsys, err
+):
     calls = []
 
     async def no_backend(prompt, **kwargs):
@@ -330,4 +409,7 @@ def test_a_backend_that_cannot_run_counts_no_attempt(tmp_path, monkeypatch, caps
     monkeypatch.setattr(sdk, "run_agent", ok)
     assert run("run", "--repo", repo, "--tree", "HEAD", "--out", root) == 0
     state = read_state(folder)
-    assert state["explore_attempts"] == {"unit:u1": 1} and "facts" in state["explore_answers"]["unit:u1"]
+    assert (
+        state["explore_attempts"] == {"unit:u1": 1}
+        and "facts" in state["explore_answers"]["unit:u1"]
+    )

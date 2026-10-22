@@ -79,8 +79,11 @@ class TestDeclaredScriptsResolve:
     """
 
     def test_every_declared_python_script_exists(self):
-        missing = [hook["script"] for hook, path in _python_hook_scripts()
-                   if not path.is_file()]
+        missing = [
+            hook["script"]
+            for hook, path in _python_hook_scripts()
+            if not path.is_file()
+        ]
         assert not missing, (
             f"hooks.json declares scripts that do not exist: {missing}. "
             "The hook would run and find nothing; nothing else in this file "
@@ -103,8 +106,9 @@ class TestDeclaredScriptsResolve:
         declared = {}
         for hook in parse_hooks():
             declared.setdefault(hook["event"], []).append(hook["script"])
-        assert {k: sorted(v) for k, v in declared.items()} == \
-            {k: sorted(v) for k, v in EXPECTED_HOOK_SCRIPTS.items()}
+        assert {k: sorted(v) for k, v in declared.items()} == {
+            k: sorted(v) for k, v in EXPECTED_HOOK_SCRIPTS.items()
+        }
 
 
 class TestStopHookNoGit:
@@ -126,12 +130,14 @@ class TestVenvPythonUsage:
     def test_scripts_have_no_inline_metadata(self):
         for _hook, script_path in _python_hook_scripts():
             text = script_path.read_text()
-            assert "# /// script" not in text, \
-                (f"{script_path.name} carries PEP 723 inline metadata again — "
-                 "dependencies belong in scripts/pyproject.toml, which is a "
-                 "workspace member; inline blocks make uv re-resolve per run")
-            assert "venv_guard" not in text and "ensure_venv_python" not in text, \
+            assert "# /// script" not in text, (
+                f"{script_path.name} carries PEP 723 inline metadata again — "
+                "dependencies belong in scripts/pyproject.toml, which is a "
+                "workspace member; inline blocks make uv re-resolve per run"
+            )
+            assert "venv_guard" not in text and "ensure_venv_python" not in text, (
                 f"{script_path.name} still references the retired venv guard"
+            )
 
 
 class TestPathResolverImports:
@@ -141,8 +147,7 @@ class TestPathResolverImports:
         for _hook, script_path in _python_hook_scripts():
             text = script_path.read_text()
             has_paths_import = (
-                "from multiplai_core.paths" in text
-                or "multiplai_core.paths" in text
+                "from multiplai_core.paths" in text or "multiplai_core.paths" in text
             )
             assert has_paths_import, f"{script_path.name} missing path resolver import"
 
@@ -159,14 +164,17 @@ class TestModelClientUsage:
     def test_no_direct_sdk_imports(self):
         for _hook, script_path in _python_hook_scripts():
             text = script_path.read_text()
-            assert "import claude_agent_sdk" not in text, \
+            assert "import claude_agent_sdk" not in text, (
                 f"{script_path.name} has direct SDK import"
-            assert "from claude_agent_sdk" not in text, \
+            )
+            assert "from claude_agent_sdk" not in text, (
                 f"{script_path.name} has direct SDK import"
+            )
             # anthropic import allowed only in model_client.py
             if "model_client" not in script_path.name:
-                assert "import anthropic" not in text, \
+                assert "import anthropic" not in text, (
                     f"{script_path.name} has direct anthropic import"
+                )
 
 
 class TestHooksSchemaValidity:
@@ -186,8 +194,9 @@ class TestHooksSchemaValidity:
             for group in groups:
                 assert "hooks" in group, f"{event} group missing 'hooks' list"
                 for entry in group["hooks"]:
-                    assert entry.get("type") == "command", \
+                    assert entry.get("type") == "command", (
                         f"{event} entry must be type 'command'"
+                    )
                     assert entry.get("command"), f"{event} entry missing command"
 
     def test_all_entries_have_event_and_script(self):

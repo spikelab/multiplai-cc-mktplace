@@ -44,7 +44,9 @@ class WalkConfig:
     max_cost_usd: float | None = DEFAULT_MAX_USD
 
 
-def load_config(run_dir: Path | None, *, max_cost_usd: float | None = DEFAULT_MAX_USD) -> WalkConfig:
+def load_config(
+    run_dir: Path | None, *, max_cost_usd: float | None = DEFAULT_MAX_USD
+) -> WalkConfig:
     cfg = WalkConfig(max_cost_usd=max_cost_usd)
     try:
         conf = load_multiplai_conf()

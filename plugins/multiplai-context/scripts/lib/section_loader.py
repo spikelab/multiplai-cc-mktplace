@@ -306,8 +306,9 @@ def resolve_section_name(text: str, fragment: str) -> str | None:
     want = tuple(_tokens(fragment))
     if len(want) >= 2:
         suffix_of = [
-            name for toks, name in by_tokens
-            if len(toks) > len(want) and toks[-len(want):] == want
+            name
+            for toks, name in by_tokens
+            if len(toks) > len(want) and toks[-len(want) :] == want
         ]
         if len(suffix_of) == 1:
             return suffix_of[0]

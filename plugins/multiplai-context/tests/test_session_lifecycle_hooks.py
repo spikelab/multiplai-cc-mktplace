@@ -42,6 +42,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _parse_ast(script_path: Path) -> ast.Module:
     """Parse a Python script into an AST."""
     return ast.parse(script_path.read_text(), filename=str(script_path))
@@ -77,12 +78,14 @@ def _load_hooks_json() -> dict:
     {event, script, command, timeout} dicts (timeout in SECONDS).
     """
     from conftest import parse_hooks
+
     return {"hooks": parse_hooks()}
 
 
 # ===========================================================================
 # D8 Transformation: Path Resolution (paths.*)
 # ===========================================================================
+
 
 class TestD8PathTransformation:
     """All three session lifecycle scripts must use paths.* for file resolution.
@@ -97,28 +100,42 @@ class TestD8PathTransformation:
         SCRIPTS_DIR / "session_end.py",
     ]
 
-    @pytest.mark.parametrize("script", [
-        SCRIPTS_DIR / "session_start.py",
-        SCRIPTS_DIR / "session_stop.py",
-        SCRIPTS_DIR / "session_end.py",
-    ], ids=["session_start", "session_stop", "session_end"])
+    @pytest.mark.parametrize(
+        "script",
+        [
+            SCRIPTS_DIR / "session_start.py",
+            SCRIPTS_DIR / "session_stop.py",
+            SCRIPTS_DIR / "session_end.py",
+        ],
+        ids=["session_start", "session_stop", "session_end"],
+    )
     def test_no_hardcoded_home_paths(self, script):
         """No hardcoded home directory references in session lifecycle scripts."""
         tree = _parse_ast(script)
         strings = _get_all_string_literals(tree)
-        forbidden = ["~/.claude/", "~/.multiplai/", "/home/spike", "/Users/spike",
-                      "/home/", "/Users/"]
+        forbidden = [
+            "~/.claude/",
+            "~/.multiplai/",
+            "/home/spike",
+            "/Users/spike",
+            "/home/",
+            "/Users/",
+        ]
         for s in strings:
             for pattern in forbidden:
                 assert pattern not in s, (
                     f"{script.name} contains hardcoded path '{pattern}' in string '{s}'"
                 )
 
-    @pytest.mark.parametrize("script", [
-        SCRIPTS_DIR / "session_start.py",
-        SCRIPTS_DIR / "session_stop.py",
-        SCRIPTS_DIR / "session_end.py",
-    ], ids=["session_start", "session_stop", "session_end"])
+    @pytest.mark.parametrize(
+        "script",
+        [
+            SCRIPTS_DIR / "session_start.py",
+            SCRIPTS_DIR / "session_stop.py",
+            SCRIPTS_DIR / "session_end.py",
+        ],
+        ids=["session_start", "session_stop", "session_end"],
+    )
     def test_imports_path_resolver(self, script):
         """Each script must import from the path resolver module."""
         tree = _parse_ast(script)
@@ -128,11 +145,15 @@ class TestD8PathTransformation:
             f"{script.name} must import from lib.paths for path resolution"
         )
 
-    @pytest.mark.parametrize("script", [
-        SCRIPTS_DIR / "session_start.py",
-        SCRIPTS_DIR / "session_stop.py",
-        SCRIPTS_DIR / "session_end.py",
-    ], ids=["session_start", "session_stop", "session_end"])
+    @pytest.mark.parametrize(
+        "script",
+        [
+            SCRIPTS_DIR / "session_start.py",
+            SCRIPTS_DIR / "session_stop.py",
+            SCRIPTS_DIR / "session_end.py",
+        ],
+        ids=["session_start", "session_stop", "session_end"],
+    )
     def test_uses_get_paths_for_directories(self, script):
         """Each script must call get_paths() to obtain directory paths."""
         source = script.read_text()
@@ -145,6 +166,7 @@ class TestD8PathTransformation:
 # D8 Transformation: SDK Abstraction (ModelClient)
 # ===========================================================================
 
+
 class TestD8SDKTransformation:
     """Session lifecycle scripts must not import claude_agent_sdk or anthropic directly.
 
@@ -152,11 +174,15 @@ class TestD8SDKTransformation:
     replaced with `from lib.model_client import create_client`.
     """
 
-    @pytest.mark.parametrize("script", [
-        SCRIPTS_DIR / "session_start.py",
-        SCRIPTS_DIR / "session_stop.py",
-        SCRIPTS_DIR / "session_end.py",
-    ], ids=["session_start", "session_stop", "session_end"])
+    @pytest.mark.parametrize(
+        "script",
+        [
+            SCRIPTS_DIR / "session_start.py",
+            SCRIPTS_DIR / "session_stop.py",
+            SCRIPTS_DIR / "session_end.py",
+        ],
+        ids=["session_start", "session_stop", "session_end"],
+    )
     def test_no_direct_sdk_import(self, script):
         """No direct claude_agent_sdk imports in session lifecycle scripts."""
         tree = _parse_ast(script)
@@ -176,17 +202,22 @@ class TestD8SDKTransformation:
 # D8 Transformation: Git/Auto-Commit Stripping
 # ===========================================================================
 
+
 class TestD8StrippingTransformation:
     """Session lifecycle scripts must not contain git staging or auto-commit logic.
 
     D8 rule 3: Remove git_stage() calls, auto-commit logic, bash subprocess calls.
     """
 
-    @pytest.mark.parametrize("script", [
-        SCRIPTS_DIR / "session_start.py",
-        SCRIPTS_DIR / "session_stop.py",
-        SCRIPTS_DIR / "session_end.py",
-    ], ids=["session_start", "session_stop", "session_end"])
+    @pytest.mark.parametrize(
+        "script",
+        [
+            SCRIPTS_DIR / "session_start.py",
+            SCRIPTS_DIR / "session_stop.py",
+            SCRIPTS_DIR / "session_end.py",
+        ],
+        ids=["session_start", "session_stop", "session_end"],
+    )
     def test_no_git_stage(self, script):
         """No git_stage() calls in session lifecycle scripts."""
         source = script.read_text()
@@ -194,22 +225,30 @@ class TestD8StrippingTransformation:
             f"{script.name} contains git_stage — must be stripped per D8"
         )
 
-    @pytest.mark.parametrize("script", [
-        SCRIPTS_DIR / "session_start.py",
-        SCRIPTS_DIR / "session_stop.py",
-        SCRIPTS_DIR / "session_end.py",
-    ], ids=["session_start", "session_stop", "session_end"])
+    @pytest.mark.parametrize(
+        "script",
+        [
+            SCRIPTS_DIR / "session_start.py",
+            SCRIPTS_DIR / "session_stop.py",
+            SCRIPTS_DIR / "session_end.py",
+        ],
+        ids=["session_start", "session_stop", "session_end"],
+    )
     def test_no_git_add_or_commit(self, script):
         """No git add/commit calls in session lifecycle scripts."""
         source = script.read_text()
         assert "git add" not in source, f"{script.name} contains 'git add'"
         assert "git commit" not in source, f"{script.name} contains 'git commit'"
 
-    @pytest.mark.parametrize("script", [
-        SCRIPTS_DIR / "session_start.py",
-        SCRIPTS_DIR / "session_stop.py",
-        SCRIPTS_DIR / "session_end.py",
-    ], ids=["session_start", "session_stop", "session_end"])
+    @pytest.mark.parametrize(
+        "script",
+        [
+            SCRIPTS_DIR / "session_start.py",
+            SCRIPTS_DIR / "session_stop.py",
+            SCRIPTS_DIR / "session_end.py",
+        ],
+        ids=["session_start", "session_stop", "session_end"],
+    )
     def test_no_bash_wrapper_calls(self, script):
         """No subprocess calls to .sh/.bash scripts."""
         source = script.read_text()
@@ -222,6 +261,7 @@ class TestD8StrippingTransformation:
 # PEP 723 inline metadata (replaces the retired venv re-exec preamble)
 # ===========================================================================
 
+
 class TestDependencyDeclaration:
     """Lifecycle scripts take dependencies from the workspace member.
 
@@ -230,11 +270,15 @@ class TestDependencyDeclaration:
     declares multiplai-core once for all of them.
     """
 
-    @pytest.mark.parametrize("script", [
-        SCRIPTS_DIR / "session_start.py",
-        SCRIPTS_DIR / "session_stop.py",
-        SCRIPTS_DIR / "session_end.py",
-    ], ids=["session_start", "session_stop", "session_end"])
+    @pytest.mark.parametrize(
+        "script",
+        [
+            SCRIPTS_DIR / "session_start.py",
+            SCRIPTS_DIR / "session_stop.py",
+            SCRIPTS_DIR / "session_end.py",
+        ],
+        ids=["session_start", "session_stop", "session_end"],
+    )
     def test_has_no_inline_metadata(self, script):
         """Script carries no PEP 723 block (it would restore the per-run fetch)."""
         source = script.read_text()
@@ -243,11 +287,15 @@ class TestDependencyDeclaration:
             "dependency in scripts/pyproject.toml instead"
         )
 
-    @pytest.mark.parametrize("script", [
-        SCRIPTS_DIR / "session_start.py",
-        SCRIPTS_DIR / "session_stop.py",
-        SCRIPTS_DIR / "session_end.py",
-    ], ids=["session_start", "session_stop", "session_end"])
+    @pytest.mark.parametrize(
+        "script",
+        [
+            SCRIPTS_DIR / "session_start.py",
+            SCRIPTS_DIR / "session_stop.py",
+            SCRIPTS_DIR / "session_end.py",
+        ],
+        ids=["session_start", "session_stop", "session_end"],
+    )
     def test_declares_multiplai_core(self, script):
         """The workspace member supplying this script depends on multiplai-core."""
         source = (SCRIPTS_DIR / "pyproject.toml").read_text()
@@ -255,11 +303,15 @@ class TestDependencyDeclaration:
             f"scripts/pyproject.toml must declare multiplai-core for {script.name}"
         )
 
-    @pytest.mark.parametrize("script", [
-        SCRIPTS_DIR / "session_start.py",
-        SCRIPTS_DIR / "session_stop.py",
-        SCRIPTS_DIR / "session_end.py",
-    ], ids=["session_start", "session_stop", "session_end"])
+    @pytest.mark.parametrize(
+        "script",
+        [
+            SCRIPTS_DIR / "session_start.py",
+            SCRIPTS_DIR / "session_stop.py",
+            SCRIPTS_DIR / "session_end.py",
+        ],
+        ids=["session_start", "session_stop", "session_end"],
+    )
     def test_no_venv_guard(self, script):
         """The retired venv re-exec preamble must be gone."""
         source = script.read_text()
@@ -275,6 +327,7 @@ class TestDependencyDeclaration:
 # D5: hooks.json Wiring & Timeout Adequacy
 # ===========================================================================
 
+
 class TestHooksJsonWiring:
     """hooks.json must correctly wire all three session lifecycle hooks."""
 
@@ -287,7 +340,8 @@ class TestHooksJsonWiring:
         """SessionStart hook for session_start.py must be registered."""
         data = _load_hooks_json()
         session_start_hooks = [
-            h for h in data["hooks"]
+            h
+            for h in data["hooks"]
             if h["event"] == "SessionStart" and "session_start" in h["script"]
         ]
         assert len(session_start_hooks) >= 1, (
@@ -298,7 +352,8 @@ class TestHooksJsonWiring:
         """Stop hook for session_stop.py must be registered."""
         data = _load_hooks_json()
         stop_hooks = [
-            h for h in data["hooks"]
+            h
+            for h in data["hooks"]
             if h["event"] == "Stop" and "session_stop" in h["script"]
         ]
         assert len(stop_hooks) == 1, (
@@ -309,7 +364,8 @@ class TestHooksJsonWiring:
         """SessionEnd hook for session_end.py must be registered."""
         data = _load_hooks_json()
         end_hooks = [
-            h for h in data["hooks"]
+            h
+            for h in data["hooks"]
             if h["event"] == "SessionEnd" and "session_end" in h["script"]
         ]
         assert len(end_hooks) == 1, (
@@ -358,7 +414,8 @@ class TestHooksJsonTimeouts:
         """SessionStart hook needs time to load memory files and inject context."""
         data = _load_hooks_json()
         start_hooks = [
-            h for h in data["hooks"]
+            h
+            for h in data["hooks"]
             if h["event"] == "SessionStart" and "session_start" in h["script"]
         ]
         assert len(start_hooks) == 1
@@ -374,21 +431,21 @@ class TestHooksJsonTimeouts:
         the SessionEnd → SessionStart path), but still needs headroom."""
         data = _load_hooks_json()
         stop_hooks = [
-            h for h in data["hooks"]
+            h
+            for h in data["hooks"]
             if h["event"] == "Stop" and "session_stop" in h["script"]
         ]
         assert len(stop_hooks) == 1
         timeout = stop_hooks[0]["timeout"]
         # Seconds, per the official CC hooks schema.
-        assert timeout >= 10, (
-            f"Stop timeout {timeout}s is too low"
-        )
+        assert timeout >= 10, f"Stop timeout {timeout}s is too low"
 
     def test_session_end_timeout_adequate_for_diary(self):
         """SessionEnd hook writes diary entry and finalizes captain's log."""
         data = _load_hooks_json()
         end_hooks = [
-            h for h in data["hooks"]
+            h
+            for h in data["hooks"]
             if h["event"] == "SessionEnd" and "session_end" in h["script"]
         ]
         assert len(end_hooks) == 1
@@ -398,9 +455,11 @@ class TestHooksJsonTimeouts:
             f"SessionEnd timeout {timeout}s may be too low for marker write"
         )
 
+
 # ===========================================================================
 # Session Start: Memory Loading & Context Injection
 # ===========================================================================
+
 
 class TestSessionStartMemoryLoading:
     """session_start.py must load memory files and inject context into the session."""
@@ -419,16 +478,21 @@ class TestSessionStartMemoryLoading:
         data_dir = tmp_path / "data"
         data_dir.mkdir()
 
-        with patch.dict(os.environ, {
-            "CLAUDE_PLUGIN_OPTION_MEMORY_DIR": str(memory_dir),
-            "CLAUDE_PLUGIN_DATA": str(data_dir),
-        }, clear=False):
+        with patch.dict(
+            os.environ,
+            {
+                "CLAUDE_PLUGIN_OPTION_MEMORY_DIR": str(memory_dir),
+                "CLAUDE_PLUGIN_DATA": str(data_dir),
+            },
+            clear=False,
+        ):
             _reset_cache()
             try:
                 # Import after env setup
                 import importlib
 
                 import session_start
+
                 importlib.reload(session_start)
 
                 session_start.main()
@@ -447,16 +511,22 @@ class TestSessionStartMemoryLoading:
         data_dir = tmp_path / "data"
         data_dir.mkdir()
 
-        with patch.dict(os.environ, {
-            "CLAUDE_PLUGIN_ROOT": str(tmp_path / "plugin"),
-            "CLAUDE_PLUGIN_DATA": str(data_dir),
-        }, clear=False):
+        with patch.dict(
+            os.environ,
+            {
+                "CLAUDE_PLUGIN_ROOT": str(tmp_path / "plugin"),
+                "CLAUDE_PLUGIN_DATA": str(data_dir),
+            },
+            clear=False,
+        ):
             from multiplai_core.paths import _reset_cache
+
             _reset_cache()
             try:
                 import importlib
 
                 import session_start
+
                 importlib.reload(session_start)
                 session_start.main()
 
@@ -471,15 +541,21 @@ class TestSessionStartMemoryLoading:
         data_dir = tmp_path / "data"
         data_dir.mkdir()
 
-        with patch.dict(os.environ, {
-            "CLAUDE_PLUGIN_DATA": str(data_dir),
-        }, clear=False):
+        with patch.dict(
+            os.environ,
+            {
+                "CLAUDE_PLUGIN_DATA": str(data_dir),
+            },
+            clear=False,
+        ):
             from multiplai_core.paths import _reset_cache
+
             _reset_cache()
             try:
                 import importlib
 
                 import session_start
+
                 importlib.reload(session_start)
 
                 # The session_start script should log client selection info
@@ -487,9 +563,9 @@ class TestSessionStartMemoryLoading:
                 source = (SCRIPTS_DIR / "session_start.py").read_text()
                 # Must reference model client or log client selection
                 has_client_logging = (
-                    "create_client" in source or
-                    "client" in source.lower() or
-                    "model" in source.lower()
+                    "create_client" in source
+                    or "client" in source.lower()
+                    or "model" in source.lower()
                 )
                 assert has_client_logging, (
                     "session_start.py must log which model client was selected "
@@ -503,19 +579,27 @@ class TestSessionStartMemoryLoading:
         data_dir = tmp_path / "data"  # Not created yet
         assert not data_dir.exists()
 
-        with patch.dict(os.environ, {
-            "CLAUDE_PLUGIN_DATA": str(data_dir),
-        }, clear=False):
+        with patch.dict(
+            os.environ,
+            {
+                "CLAUDE_PLUGIN_DATA": str(data_dir),
+            },
+            clear=False,
+        ):
             from multiplai_core.paths import _reset_cache
+
             _reset_cache()
             try:
                 import importlib
 
                 import session_start
+
                 importlib.reload(session_start)
                 session_start.main()
 
-                assert data_dir.exists(), "Session start must create data dir if missing"
+                assert data_dir.exists(), (
+                    "Session start must create data dir if missing"
+                )
             finally:
                 _reset_cache()
 
@@ -524,15 +608,21 @@ class TestSessionStartMemoryLoading:
         data_dir = tmp_path / "data"
         data_dir.mkdir()
 
-        with patch.dict(os.environ, {
-            "CLAUDE_PLUGIN_DATA": str(data_dir),
-        }, clear=False):
+        with patch.dict(
+            os.environ,
+            {
+                "CLAUDE_PLUGIN_DATA": str(data_dir),
+            },
+            clear=False,
+        ):
             from multiplai_core.paths import _reset_cache
+
             _reset_cache()
             try:
                 import importlib
 
                 import session_start
+
                 importlib.reload(session_start)
                 session_start.main()
 
@@ -547,15 +637,21 @@ class TestSessionStartMemoryLoading:
         data_dir = tmp_path / "data"
         data_dir.mkdir()
 
-        with patch.dict(os.environ, {
-            "CLAUDE_PLUGIN_DATA": str(data_dir),
-        }, clear=False):
+        with patch.dict(
+            os.environ,
+            {
+                "CLAUDE_PLUGIN_DATA": str(data_dir),
+            },
+            clear=False,
+        ):
             from multiplai_core.paths import _reset_cache
+
             _reset_cache()
             try:
                 import importlib
 
                 import session_start
+
                 importlib.reload(session_start)
                 session_start.main()
 
@@ -583,21 +679,28 @@ class TestSessionStartMemoryLoading:
         data_dir = tmp_path / "data"
         data_dir.mkdir()
 
-        with patch.dict(os.environ, {
-            "CLAUDE_PLUGIN_OPTION_MEMORY_DIR": str(memory_dir),
-            "CLAUDE_PLUGIN_DATA": str(data_dir),
-        }, clear=False):
+        with patch.dict(
+            os.environ,
+            {
+                "CLAUDE_PLUGIN_OPTION_MEMORY_DIR": str(memory_dir),
+                "CLAUDE_PLUGIN_DATA": str(data_dir),
+            },
+            clear=False,
+        ):
             from multiplai_core.paths import _reset_cache
+
             _reset_cache()
             try:
                 import importlib
 
                 import session_start
+
                 importlib.reload(session_start)
 
                 # Capture stdout to check for context injection
                 import io
                 from contextlib import redirect_stdout
+
                 f = io.StringIO()
                 with redirect_stdout(f):
                     session_start.main()
@@ -607,8 +710,7 @@ class TestSessionStartMemoryLoading:
                 # This is the key feature being ported: loading memory and injecting it
                 source = (SCRIPTS_DIR / "session_start.py").read_text()
                 has_memory_loading = (
-                    "memory_dir" in source or
-                    "memory" in source.lower()
+                    "memory_dir" in source or "memory" in source.lower()
                 )
                 assert has_memory_loading, (
                     "session_start.py must load memory files for context injection"
@@ -620,6 +722,7 @@ class TestSessionStartMemoryLoading:
 # ===========================================================================
 # Session Stop: Learning Extraction Trigger
 # ===========================================================================
+
 
 class TestSessionStopLearningExtraction:
     """session_stop.py must trigger learning extraction on Stop event."""
@@ -639,9 +742,9 @@ class TestSessionStopLearningExtraction:
         """
         source = (SCRIPTS_DIR / "session_stop.py").read_text()
         has_extraction = (
-            "extract_learnings" in source or
-            "extract" in source.lower() or
-            "learning" in source.lower()
+            "extract_learnings" in source
+            or "extract" in source.lower()
+            or "learning" in source.lower()
         )
         assert has_extraction, (
             "session_stop.py must trigger learning extraction — "
@@ -671,12 +774,12 @@ class TestSessionStopLearningExtraction:
         """
         source = (SCRIPTS_DIR / "session_stop.py").read_text()
         reads_input = (
-            "stdin" in source or
-            "sys.stdin" in source or
-            "session_state" in source or
-            "input" in source or
-            "json.load" in source or
-            "read_text" in source
+            "stdin" in source
+            or "sys.stdin" in source
+            or "session_state" in source
+            or "input" in source
+            or "json.load" in source
+            or "read_text" in source
         )
         assert reads_input, (
             "session_stop.py must read session context (stdin JSON or state file) "
@@ -687,9 +790,10 @@ class TestSessionStopLearningExtraction:
         """Extracted learnings must be written via paths.learnings_file()."""
         source = (SCRIPTS_DIR / "session_stop.py").read_text()
         if "extract_learnings" in source or "learning" in source.lower():
-            uses_path_resolver = (
-                "paths" in source and
-                ("learnings_file" in source or "memory_dir" in source or "get_paths" in source)
+            uses_path_resolver = "paths" in source and (
+                "learnings_file" in source
+                or "memory_dir" in source
+                or "get_paths" in source
             )
             assert uses_path_resolver, (
                 "session_stop.py must resolve learnings file location via path resolver"
@@ -711,9 +815,9 @@ class TestSessionStopLearningExtraction:
         # The script should have logic to check if learnings were produced
         # before writing
         has_guard = (
-            "if " in source or  # conditional write
-            "not " in source or  # empty check
-            "len(" in source    # length check
+            "if " in source  # conditional write
+            or "not " in source  # empty check
+            or "len(" in source  # length check
         )
         # This test documents the expected behavior even if not yet implemented
         assert "extract" in source.lower() or has_guard, (
@@ -724,6 +828,7 @@ class TestSessionStopLearningExtraction:
 # ===========================================================================
 # Session End: Captain's Log & Diary Entry
 # ===========================================================================
+
 
 class TestSessionEndDiaryEntry:
     """session_end.py writes a deferred extraction marker; narrative diary
@@ -744,21 +849,29 @@ class TestSessionEndDiaryEntry:
         }
         (data_dir / "session_state.json").write_text(json.dumps(session_state))
 
-        with patch.dict(os.environ, {
-            "CLAUDE_PLUGIN_DATA": str(data_dir),
-            "CLAUDE_PLUGIN_OPTION_DIARY_DIR": str(diary_dir),
-        }, clear=False):
+        with patch.dict(
+            os.environ,
+            {
+                "CLAUDE_PLUGIN_DATA": str(data_dir),
+                "CLAUDE_PLUGIN_OPTION_DIARY_DIR": str(diary_dir),
+            },
+            clear=False,
+        ):
             from multiplai_core.paths import _reset_cache
+
             _reset_cache()
             try:
                 import importlib
 
                 import session_end
+
                 importlib.reload(session_end)
                 session_end.main()
 
                 marker = data_dir / "pending_extractions" / "test-abc.json"
-                assert marker.exists(), "Session end must write deferred extraction marker"
+                assert marker.exists(), (
+                    "Session end must write deferred extraction marker"
+                )
             finally:
                 _reset_cache()
 
@@ -775,16 +888,22 @@ class TestSessionEndDiaryEntry:
         }
         (data_dir / "session_state.json").write_text(json.dumps(session_state))
 
-        with patch.dict(os.environ, {
-            "CLAUDE_PLUGIN_DATA": str(data_dir),
-            "CLAUDE_PLUGIN_OPTION_DIARY_DIR": str(diary_dir),
-        }, clear=False):
+        with patch.dict(
+            os.environ,
+            {
+                "CLAUDE_PLUGIN_DATA": str(data_dir),
+                "CLAUDE_PLUGIN_OPTION_DIARY_DIR": str(diary_dir),
+            },
+            clear=False,
+        ):
             from multiplai_core.paths import _reset_cache
+
             _reset_cache()
             try:
                 import importlib
 
                 import session_end
+
                 importlib.reload(session_end)
                 session_end.main()
 
@@ -810,16 +929,22 @@ class TestSessionEndDiaryEntry:
         }
         (data_dir / "session_state.json").write_text(json.dumps(session_state))
 
-        with patch.dict(os.environ, {
-            "CLAUDE_PLUGIN_DATA": str(data_dir),
-            "CLAUDE_PLUGIN_OPTION_DIARY_DIR": str(diary_dir),
-        }, clear=False):
+        with patch.dict(
+            os.environ,
+            {
+                "CLAUDE_PLUGIN_DATA": str(data_dir),
+                "CLAUDE_PLUGIN_OPTION_DIARY_DIR": str(diary_dir),
+            },
+            clear=False,
+        ):
             from multiplai_core.paths import _reset_cache
+
             _reset_cache()
             try:
                 import importlib
 
                 import session_end
+
                 importlib.reload(session_end)
                 session_end.main()
 
@@ -842,21 +967,29 @@ class TestSessionEndDiaryEntry:
         }
         (data_dir / "session_state.json").write_text(json.dumps(session_state))
 
-        with patch.dict(os.environ, {
-            "CLAUDE_PLUGIN_DATA": str(data_dir),
-            "CLAUDE_PLUGIN_OPTION_DIARY_DIR": str(diary_dir),
-        }, clear=False):
+        with patch.dict(
+            os.environ,
+            {
+                "CLAUDE_PLUGIN_DATA": str(data_dir),
+                "CLAUDE_PLUGIN_OPTION_DIARY_DIR": str(diary_dir),
+            },
+            clear=False,
+        ):
             from multiplai_core.paths import _reset_cache
+
             _reset_cache()
             try:
                 import importlib
 
                 import session_end
+
                 importlib.reload(session_end)
                 session_end.main()
 
                 pending_dir = data_dir / "pending_extractions"
-                assert pending_dir.exists(), "Session end must create pending_extractions dir"
+                assert pending_dir.exists(), (
+                    "Session end must create pending_extractions dir"
+                )
             finally:
                 _reset_cache()
 
@@ -869,16 +1002,22 @@ class TestSessionEndDiaryEntry:
 
         # No session_state.json created
 
-        with patch.dict(os.environ, {
-            "CLAUDE_PLUGIN_DATA": str(data_dir),
-            "CLAUDE_PLUGIN_OPTION_DIARY_DIR": str(diary_dir),
-        }, clear=False):
+        with patch.dict(
+            os.environ,
+            {
+                "CLAUDE_PLUGIN_DATA": str(data_dir),
+                "CLAUDE_PLUGIN_OPTION_DIARY_DIR": str(diary_dir),
+            },
+            clear=False,
+        ):
             from multiplai_core.paths import _reset_cache
+
             _reset_cache()
             try:
                 import importlib
 
                 import session_end
+
                 importlib.reload(session_end)
 
                 # Should not raise an exception
@@ -894,10 +1033,10 @@ class TestSessionEndDiaryEntry:
         """
         source = (SCRIPTS_DIR / "session_end.py").read_text()
         has_log_finalization = (
-            "captain" in source.lower() or
-            "log" in source.lower() or
-            "summary" in source.lower() or
-            "diary" in source.lower()
+            "captain" in source.lower()
+            or "log" in source.lower()
+            or "summary" in source.lower()
+            or "diary" in source.lower()
         )
         assert has_log_finalization, (
             "session_end.py must finalize captain's log / session summary"
@@ -924,6 +1063,7 @@ class TestSessionEndDiaryEntry:
 # Session Start: Context Injection Output
 # ===========================================================================
 
+
 class TestSessionStartContextInjection:
     """session_start.py must output memory context for Claude Code to consume.
 
@@ -948,10 +1088,10 @@ class TestSessionStartContextInjection:
         source = (SCRIPTS_DIR / "session_start.py").read_text()
         # Must reference memory loading/reading behavior
         has_context_output = (
-            "print(" in source or
-            "stdout" in source or
-            "sys.stdout" in source or
-            "json.dumps" in source
+            "print(" in source
+            or "stdout" in source
+            or "sys.stdout" in source
+            or "json.dumps" in source
         )
         # The script should produce output that gets injected into session
         assert has_context_output or "memory" in source.lower(), (
@@ -963,51 +1103,69 @@ class TestSessionStartContextInjection:
 # Script Validity
 # ===========================================================================
 
+
 class TestScriptSyntaxValidity:
     """All session lifecycle scripts must be syntactically valid Python 3.12+."""
 
-    @pytest.mark.parametrize("script", [
-        SCRIPTS_DIR / "session_start.py",
-        SCRIPTS_DIR / "session_stop.py",
-        SCRIPTS_DIR / "session_end.py",
-    ], ids=["session_start", "session_stop", "session_end"])
+    @pytest.mark.parametrize(
+        "script",
+        [
+            SCRIPTS_DIR / "session_start.py",
+            SCRIPTS_DIR / "session_stop.py",
+            SCRIPTS_DIR / "session_end.py",
+        ],
+        ids=["session_start", "session_stop", "session_end"],
+    )
     def test_script_compiles(self, script):
         """Script must compile without syntax errors."""
         import py_compile
+
         py_compile.compile(str(script), doraise=True)
 
-    @pytest.mark.parametrize("script", [
-        SCRIPTS_DIR / "session_start.py",
-        SCRIPTS_DIR / "session_stop.py",
-        SCRIPTS_DIR / "session_end.py",
-    ], ids=["session_start", "session_stop", "session_end"])
+    @pytest.mark.parametrize(
+        "script",
+        [
+            SCRIPTS_DIR / "session_start.py",
+            SCRIPTS_DIR / "session_stop.py",
+            SCRIPTS_DIR / "session_end.py",
+        ],
+        ids=["session_start", "session_stop", "session_end"],
+    )
     def test_script_has_main_guard(self, script):
         """Script must have if __name__ == '__main__' guard."""
         source = script.read_text()
-        assert '__name__' in source and '__main__' in source, (
+        assert "__name__" in source and "__main__" in source, (
             f"{script.name} must have if __name__ == '__main__' entry point"
         )
 
-    @pytest.mark.parametrize("script", [
-        SCRIPTS_DIR / "session_start.py",
-        SCRIPTS_DIR / "session_stop.py",
-        SCRIPTS_DIR / "session_end.py",
-    ], ids=["session_start", "session_stop", "session_end"])
+    @pytest.mark.parametrize(
+        "script",
+        [
+            SCRIPTS_DIR / "session_start.py",
+            SCRIPTS_DIR / "session_stop.py",
+            SCRIPTS_DIR / "session_end.py",
+        ],
+        ids=["session_start", "session_stop", "session_end"],
+    )
     def test_script_has_docstring(self, script):
         """Script must have a module-level docstring."""
         tree = _parse_ast(script)
         assert (
-            tree.body and
-            isinstance(tree.body[0], ast.Expr) and
-            isinstance(tree.body[0].value, ast.Constant) and
-            isinstance(tree.body[0].value.value, str)
+            tree.body
+            and isinstance(tree.body[0], ast.Expr)
+            and isinstance(tree.body[0].value, ast.Constant)
+            and isinstance(tree.body[0].value.value, str)
         ), f"{script.name} must have a module-level docstring"
 
-    @pytest.mark.parametrize("script", [
-        SCRIPTS_DIR / "session_start.py",
-        SCRIPTS_DIR / "session_stop.py",
-        SCRIPTS_DIR / "session_end.py",
-    ], ids=["session_start", "session_stop", "session_end"])
+    @pytest.mark.parametrize(
+        "script",
+        [
+            SCRIPTS_DIR / "session_start.py",
+            SCRIPTS_DIR / "session_stop.py",
+            SCRIPTS_DIR / "session_end.py",
+        ],
+        ids=["session_start", "session_stop", "session_end"],
+    )
     def test_no_shell_scripts_in_scripts_dir(self, script):
         """No .sh/.bash/.zsh wrapper scripts alongside Python scripts."""
         scripts_dir = script.parent
@@ -1022,6 +1180,7 @@ class TestScriptSyntaxValidity:
 # Integration: Session Start -> End Flow
 # ===========================================================================
 
+
 class TestSessionLifecycleFlow:
     """End-to-end session lifecycle: start -> stop -> end."""
 
@@ -1031,17 +1190,23 @@ class TestSessionLifecycleFlow:
         data_dir.mkdir()
         diary_dir = tmp_path / "diary"
 
-        with patch.dict(os.environ, {
-            "CLAUDE_PLUGIN_DATA": str(data_dir),
-            "CLAUDE_PLUGIN_OPTION_DIARY_DIR": str(diary_dir),
-        }, clear=False):
+        with patch.dict(
+            os.environ,
+            {
+                "CLAUDE_PLUGIN_DATA": str(data_dir),
+                "CLAUDE_PLUGIN_OPTION_DIARY_DIR": str(diary_dir),
+            },
+            clear=False,
+        ):
             from multiplai_core.paths import _reset_cache
+
             _reset_cache()
             try:
                 import importlib
 
                 import session_end
                 import session_start
+
                 importlib.reload(session_start)
                 importlib.reload(session_end)
 
@@ -1056,8 +1221,12 @@ class TestSessionLifecycleFlow:
                 session_end.main()
 
                 # Deferred marker should reference the same session ID
-                marker = data_dir / "pending_extractions" / f"{original_session_id}.json"
-                assert marker.exists(), "session_end must write deferred extraction marker"
+                marker = (
+                    data_dir / "pending_extractions" / f"{original_session_id}.json"
+                )
+                assert marker.exists(), (
+                    "session_end must write deferred extraction marker"
+                )
                 entry = json.loads(marker.read_text())
                 assert entry["session_id"] == original_session_id, (
                     "Marker session_id must match session_start's session_id"
@@ -1071,17 +1240,23 @@ class TestSessionLifecycleFlow:
         data_dir.mkdir()
         diary_dir = tmp_path / "diary"
 
-        with patch.dict(os.environ, {
-            "CLAUDE_PLUGIN_DATA": str(data_dir),
-            "CLAUDE_PLUGIN_OPTION_DIARY_DIR": str(diary_dir),
-        }, clear=False):
+        with patch.dict(
+            os.environ,
+            {
+                "CLAUDE_PLUGIN_DATA": str(data_dir),
+                "CLAUDE_PLUGIN_OPTION_DIARY_DIR": str(diary_dir),
+            },
+            clear=False,
+        ):
             from multiplai_core.paths import _reset_cache
+
             _reset_cache()
             try:
                 import importlib
 
                 import session_end
                 import session_start
+
                 importlib.reload(session_start)
                 importlib.reload(session_end)
 
@@ -1102,6 +1277,7 @@ class TestSessionLifecycleFlow:
 # Error Resilience
 # ===========================================================================
 
+
 class TestErrorResilience:
     """Session lifecycle hooks must handle errors gracefully."""
 
@@ -1110,9 +1286,9 @@ class TestErrorResilience:
         source = (SCRIPTS_DIR / "session_start.py").read_text()
         # Should have error handling around directory creation
         has_error_handling = (
-            "try:" in source or
-            "except" in source or
-            "mkdir" in source  # mkdir with exist_ok=True is acceptable
+            "try:" in source
+            or "except" in source
+            or "mkdir" in source  # mkdir with exist_ok=True is acceptable
         )
         assert has_error_handling, (
             "session_start.py should handle directory creation errors"
@@ -1122,18 +1298,20 @@ class TestErrorResilience:
         """session_end should log a warning (not crash) if session state is missing."""
         source = (SCRIPTS_DIR / "session_end.py").read_text()
         handles_missing = (
-            "exists()" in source or
-            "try:" in source or
-            "FileNotFoundError" in source or
-            "warning" in source.lower()
+            "exists()" in source
+            or "try:" in source
+            or "FileNotFoundError" in source
+            or "warning" in source.lower()
         )
         assert handles_missing, (
             "session_end.py must handle missing session_state.json gracefully"
         )
 
+
 # ===========================================================================
 # Exactly Six Hook Event Types
 # ===========================================================================
+
 
 class TestHookEventTypeCompleteness:
     """The plugin must register exactly six lifecycle events plus Setup."""
@@ -1143,8 +1321,13 @@ class TestHookEventTypeCompleteness:
         data = _load_hooks_json()
         event_types = {h["event"] for h in data["hooks"]}
         expected = {
-            "Setup", "SessionStart", "UserPromptSubmit", "Notification",
-            "Stop", "SessionEnd", "PreCompact",
+            "Setup",
+            "SessionStart",
+            "UserPromptSubmit",
+            "Notification",
+            "Stop",
+            "SessionEnd",
+            "PreCompact",
         }
         assert event_types == expected, (
             f"Expected exactly {expected}, got {event_types}"

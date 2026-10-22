@@ -29,7 +29,9 @@ import yaml
 
 log = logging.getLogger(__name__)
 
-STANDARD_TEMPLATE = Path(__file__).resolve().parents[2] / "templates" / "pull_request_template.md"
+STANDARD_TEMPLATE = (
+    Path(__file__).resolve().parents[2] / "templates" / "pull_request_template.md"
+)
 
 # Searched in this order; "" is the repo root.
 LOCATIONS = (".github", "", "docs")
@@ -77,15 +79,27 @@ def load_config(repo: Path) -> PrConfig:
     if pr is None:
         return PrConfig()
     if not isinstance(pr, dict):
-        log.warning("`pr:` in %s must be a mapping, got %s: using the pr defaults", path, type(pr).__name__)
+        log.warning(
+            "`pr:` in %s must be a mapping, got %s: using the pr defaults",
+            path,
+            type(pr).__name__,
+        )
         return PrConfig()
     template = pr.get("template")
     if template is not None and not isinstance(template, str):
-        log.warning("`pr.template` in %s must be a repo-relative path, got %r: discovering the template", path, template)
+        log.warning(
+            "`pr.template` in %s must be a repo-relative path, got %r: discovering the template",
+            path,
+            template,
+        )
         template = None
     draft = pr.get("draft", True)
     if not isinstance(draft, bool):
-        log.warning("`pr.draft` in %s must be true or false, got %r: opening a draft", path, draft)
+        log.warning(
+            "`pr.draft` in %s must be true or false, got %r: opening a draft",
+            path,
+            draft,
+        )
         draft = True
     if template == AUTO_TEMPLATE:
         template = None
@@ -131,8 +145,18 @@ def discover(repo: Path, config: PrConfig | None = None) -> Discovery:
             return Discovery(path, standard=False)
         log.warning("%s; discovering the template", problem)
         found = _discover_unset(repo)
-        return Discovery(found.path, found.standard, "; ".join(
-            d for d in (f"{problem}, discovered the template instead", found.diagnosis) if d))
+        return Discovery(
+            found.path,
+            found.standard,
+            "; ".join(
+                d
+                for d in (
+                    f"{problem}, discovered the template instead",
+                    found.diagnosis,
+                )
+                if d
+            ),
+        )
     return _discover_unset(repo)
 
 
@@ -150,8 +174,14 @@ def _discover_unset(repo: Path) -> Discovery:
         skipped.append(f"`{_rel(repo, path)}` resolves outside the repository; ignored")
         return False
 
-    def found(path: Path, standard: bool = False, diagnosis: str | None = None) -> Discovery:
-        return Discovery(path, standard, "; ".join([*skipped, *([diagnosis] if diagnosis else [])]) or None)
+    def found(
+        path: Path, standard: bool = False, diagnosis: str | None = None
+    ) -> Discovery:
+        return Discovery(
+            path,
+            standard,
+            "; ".join([*skipped, *([diagnosis] if diagnosis else [])]) or None,
+        )
 
     for loc in LOCATIONS:
         base = repo / loc if loc else repo
@@ -163,16 +193,27 @@ def _discover_unset(repo: Path) -> Discovery:
         directory = _entry(base, TEMPLATE_DIR, want_dir=True)
         if directory is None or not inside(directory):
             continue
-        mds = sorted((p for p in directory.iterdir() if p.is_file() and p.suffix.lower() == ".md"),
-                     key=lambda p: p.name)
+        mds = sorted(
+            (
+                p
+                for p in directory.iterdir()
+                if p.is_file() and p.suffix.lower() == ".md"
+            ),
+            key=lambda p: p.name,
+        )
         mds = [p for p in mds if inside(p)]
         if len(mds) == 1:
             return found(mds[0])
         if len(mds) > 1:
             names = ", ".join(_rel(repo, p) for p in mds)
-            return found(STANDARD_TEMPLATE, standard=True, diagnosis=(
-                "several templates, used the standard one; set pr.template in specs/config.yaml "
-                f"to pick one of: {names}"))
+            return found(
+                STANDARD_TEMPLATE,
+                standard=True,
+                diagnosis=(
+                    "several templates, used the standard one; set pr.template in specs/config.yaml "
+                    f"to pick one of: {names}"
+                ),
+            )
     return found(STANDARD_TEMPLATE, standard=True)
 
 
@@ -258,7 +299,12 @@ def parse(text: str) -> list[Section]:
         if fence is not None:
             text_run.append(line)
             m = _FENCE_RE.match(line)
-            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) and not line.strip()[len(m.group(1)):]:
+            if (
+                m
+                and m.group(1)[0] == fence[0]
+                and len(m.group(1)) >= len(fence)
+                and not line.strip()[len(m.group(1)) :]
+            ):
                 fence = None
             continue
         m = _FENCE_RE.match(line)
@@ -278,7 +324,9 @@ def parse(text: str) -> list[Section]:
         if h:
             flush_text()
             title = (h.group(2) or "").strip()
-            sections.append(Section(level=len(h.group(1)), heading=line, title=title, key=""))
+            sections.append(
+                Section(level=len(h.group(1)), heading=line, title=title, key="")
+            )
             continue
         if is_checkbox(line):
             flush_text()

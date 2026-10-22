@@ -64,9 +64,11 @@ def _transcript(tmp_path, tokens=120_000):
         "message": {
             "role": "assistant",
             "content": [{"type": "text", "text": "working"}],
-            "usage": {"input_tokens": 1_000,
-                      "cache_read_input_tokens": tokens - 1_000,
-                      "cache_creation_input_tokens": 0},
+            "usage": {
+                "input_tokens": 1_000,
+                "cache_read_input_tokens": tokens - 1_000,
+                "cache_creation_input_tokens": 0,
+            },
         },
     }
     path = tmp_path / "t.jsonl"
@@ -87,7 +89,6 @@ def _run_end(monkeypatch, tmp_path, *, reason=None, session_id="s1"):
 
 
 class TestTheSplit:
-
     def test_clear_spawns_and_queues_nothing(self, tmp_path, data_env, monkeypatch):
         rec = _SpawnRecorder()
         monkeypatch.setattr(cp, "spawn_writer", rec)
@@ -112,8 +113,8 @@ class TestTheSplit:
         assert cpd.pending_checkpoint_count(data_env) == 0
 
     @pytest.mark.parametrize(
-        "reason", ["prompt_input_exit", "logout", "other",
-                   "bypass_permissions_disabled"]
+        "reason",
+        ["prompt_input_exit", "logout", "other", "bypass_permissions_disabled"],
     )
     def test_a_container_exiting_reason_queues_and_never_spawns(
         self, tmp_path, data_env, monkeypatch, reason
@@ -125,9 +126,7 @@ class TestTheSplit:
 
         assert rec.payloads == []
         assert cpd.pending_checkpoint_count(data_env) == 1
-        marker = json.loads(
-            (cpd.pending_dir(data_env) / "s1.json").read_text()
-        )
+        marker = json.loads((cpd.pending_dir(data_env) / "s1.json").read_text())
         assert marker["session_id"] == "s1"
         assert marker["tokens"] == 120_000
         assert marker["reason"] == f"session-end:{reason}"
@@ -166,9 +165,7 @@ class TestTheSplit:
 
         assert (data_env / "pending_extractions" / "s1.json").exists()
 
-    def test_an_inflight_writer_is_not_respawned(
-        self, tmp_path, data_env, monkeypatch
-    ):
+    def test_an_inflight_writer_is_not_respawned(self, tmp_path, data_env, monkeypatch):
         rec = _SpawnRecorder()
         monkeypatch.setattr(cp, "spawn_writer", rec)
         cp.claim_writer(data_env, "s1")
@@ -177,27 +174,32 @@ class TestTheSplit:
 
         assert rec.payloads == []
 
-    def test_a_failed_spawn_releases_the_marker(
-        self, tmp_path, data_env, monkeypatch
-    ):
+    def test_a_failed_spawn_releases_the_marker(self, tmp_path, data_env, monkeypatch):
         monkeypatch.setattr(cp, "spawn_writer", _SpawnRecorder(ok=False))
 
         _run_end(monkeypatch, tmp_path, reason="clear")
 
         assert cp.writer_inflight(data_env, "s1") is False
 
-    def test_a_child_session_never_checkpoints(
-        self, tmp_path, data_env, monkeypatch
-    ):
+    def test_a_child_session_never_checkpoints(self, tmp_path, data_env, monkeypatch):
         rec = _SpawnRecorder()
         monkeypatch.setattr(cp, "spawn_writer", rec)
         transcript = tmp_path / "subagents" / "t.jsonl"
         transcript.parent.mkdir(parents=True, exist_ok=True)
         transcript.write_text("")
-        monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({
-            "session_id": "s1", "transcript_path": str(transcript),
-            "cwd": "/work/proj", "reason": "clear",
-        })))
+        monkeypatch.setattr(
+            "sys.stdin",
+            io.StringIO(
+                json.dumps(
+                    {
+                        "session_id": "s1",
+                        "transcript_path": str(transcript),
+                        "cwd": "/work/proj",
+                        "reason": "clear",
+                    }
+                )
+            ),
+        )
 
         session_end.main()
 
@@ -231,11 +233,16 @@ class TestTheDrain:
                 return 0
 
         monkeypatch.setattr(extraction_drain.subprocess, "Popen", _Popen)
-        cpd.queue_pending_checkpoint(data_env, {
-            "session_id": "s1", "transcript_path": "/t.jsonl",
-            "cwd": "/work/proj", "tokens": 120_000,
-            "reason": "session-end:prompt_input_exit",
-        })
+        cpd.queue_pending_checkpoint(
+            data_env,
+            {
+                "session_id": "s1",
+                "transcript_path": "/t.jsonl",
+                "cwd": "/work/proj",
+                "tokens": 120_000,
+                "reason": "session-end:prompt_input_exit",
+            },
+        )
         writer = tmp_path / "checkpoint_writer.py"
         writer.write_text("# stub\n")
 
@@ -263,15 +270,21 @@ class TestTheDrain:
 
         monkeypatch.setattr(checkpoint_writer, "run_agent", fake)
         transcript = _transcript(tmp_path)
-        marker = cpd.queue_pending_checkpoint(data_env, {
-            "session_id": "s1", "transcript_path": str(transcript),
-            "cwd": "/work/proj", "tokens": 120_000,
-            "reason": "session-end:logout",
-        })
+        marker = cpd.queue_pending_checkpoint(
+            data_env,
+            {
+                "session_id": "s1",
+                "transcript_path": str(transcript),
+                "cwd": "/work/proj",
+                "tokens": 120_000,
+                "reason": "session-end:logout",
+            },
+        )
         payload = json.loads(marker.read_text())
         payload["marker_path"] = str(marker)
         monkeypatch.setattr(
-            "sys.stdin", type("S", (), {"read": staticmethod(lambda: json.dumps(payload))})
+            "sys.stdin",
+            type("S", (), {"read": staticmethod(lambda: json.dumps(payload))}),
         )
 
         checkpoint_writer.main()
@@ -286,9 +299,7 @@ class TestTheDrain:
         queues."""
         from lib import extraction_drain
 
-        source = (
-            __import__("pathlib").Path(cpd.__file__).read_text(encoding="utf-8")
-        )
+        source = __import__("pathlib").Path(cpd.__file__).read_text(encoding="utf-8")
         assert "claim_pending_markers" in source
         assert "os.rename(str(marker_file), str(dest))" not in source
         assert callable(extraction_drain.claim_pending_markers)
@@ -307,15 +318,21 @@ class TestTheDrain:
         procdir = cpd.processing_dir(data_env)
         procdir.mkdir(parents=True, exist_ok=True)
         m = procdir / "s1.json"
-        m.write_text(json.dumps({
-            "session_id": "s1", "attempts": extraction_drain.MAX_ATTEMPTS,
-        }))
+        m.write_text(
+            json.dumps(
+                {
+                    "session_id": "s1",
+                    "attempts": extraction_drain.MAX_ATTEMPTS,
+                }
+            )
+        )
         old = time.time() - extraction_drain.STALE_SECONDS - 60
         os.utime(m, (old, old))
         writer = tmp_path / "checkpoint_writer.py"
         writer.write_text("# stub\n")
         monkeypatch.setattr(
-            extraction_drain.subprocess, "Popen",
+            extraction_drain.subprocess,
+            "Popen",
             lambda *a, **k: (_ for _ in ()).throw(AssertionError("no launch")),
         )
 
@@ -331,15 +348,25 @@ class TestTheDrain:
         session's state.json — the drain must requeue, not launch a duplicate."""
         launched = []
         monkeypatch.setattr(
-            extraction_drain.subprocess, "Popen",
-            lambda *a, **k: launched.append(1) or (_ for _ in ()).throw(
-                AssertionError("must not launch past an in-flight writer")
+            extraction_drain.subprocess,
+            "Popen",
+            lambda *a, **k: (
+                launched.append(1)
+                or (_ for _ in ()).throw(
+                    AssertionError("must not launch past an in-flight writer")
+                )
             ),
         )
-        cpd.queue_pending_checkpoint(data_env, {
-            "session_id": "s1", "transcript_path": "/t.jsonl", "cwd": "/w",
-            "tokens": 1, "reason": "session-end:other",
-        })
+        cpd.queue_pending_checkpoint(
+            data_env,
+            {
+                "session_id": "s1",
+                "transcript_path": "/t.jsonl",
+                "cwd": "/w",
+                "tokens": 1,
+                "reason": "session-end:other",
+            },
+        )
         cp.claim_writer(data_env, "s1")  # fresh marker: writer mid-write
         writer = tmp_path / "checkpoint_writer.py"
         writer.write_text("# stub\n")
@@ -358,10 +385,16 @@ class TestTheDrain:
             raise OSError("no fork for you")
 
         monkeypatch.setattr(extraction_drain.subprocess, "Popen", _boom)
-        cpd.queue_pending_checkpoint(data_env, {
-            "session_id": "s1", "transcript_path": "/t.jsonl", "cwd": "/w",
-            "tokens": 1, "reason": "session-end:other",
-        })
+        cpd.queue_pending_checkpoint(
+            data_env,
+            {
+                "session_id": "s1",
+                "transcript_path": "/t.jsonl",
+                "cwd": "/w",
+                "tokens": 1,
+                "reason": "session-end:other",
+            },
+        )
         writer = tmp_path / "checkpoint_writer.py"
         writer.write_text("# stub\n")
 
@@ -389,10 +422,16 @@ class TestTheDrain:
                 pass
 
         monkeypatch.setattr(extraction_drain.subprocess, "Popen", _Popen)
-        cpd.queue_pending_checkpoint(data_env, {
-            "session_id": "s1", "transcript_path": "/t.jsonl", "cwd": "/w",
-            "tokens": 1, "reason": "session-end:other",
-        })
+        cpd.queue_pending_checkpoint(
+            data_env,
+            {
+                "session_id": "s1",
+                "transcript_path": "/t.jsonl",
+                "cwd": "/w",
+                "tokens": 1,
+                "reason": "session-end:other",
+            },
+        )
 
         assert drain_extractions.main(["--data-dir", str(data_env)]) == 0
         assert any(c.endswith("checkpoint_writer.py") for c in drain_extractions_calls)
@@ -401,6 +440,7 @@ class TestTheDrain:
 # ---------------------------------------------------------------------------
 # The queued marker has to carry what the container knew (#182, #184)
 # ---------------------------------------------------------------------------
+
 
 class TestWhatTheQueuedMarkerCarries:
     """This hook is the last code that runs inside the session's container.
@@ -434,7 +474,10 @@ class TestWhatTheQueuedMarkerCarries:
         monkeypatch.setenv("HOSTNAME", "ab5d84093a24")  # the drain container
         cp.write_checkpoint_file(data_env, "s1", VALID_CHECKPOINT)
         cp.write_pending_marker(
-            data_env, queued["cwd"], "s1", queued["tokens"],
+            data_env,
+            queued["cwd"],
+            "s1",
+            queued["tokens"],
             hostname=queued["hostname"],
         )
 
@@ -461,7 +504,8 @@ class TestWhatTheQueuedMarkerCarries:
 
         monkeypatch.setattr(session_end, "setup_logging", _bind)
         monkeypatch.setattr(
-            cp, "spawn_writer",
+            cp,
+            "spawn_writer",
             lambda payload: order.append(("checkpoint", "")) or True,
         )
 

@@ -42,12 +42,25 @@ def _mk_config(tmp_path: Path) -> ResearchConfig:
 class TestModelTiers:
     def test_mechanical_nodes_on_parse_tier(self, tmp_path: Path) -> None:
         config = _mk_config(tmp_path)
-        for node in ("search", "triage_relevance", "extract", "verify", "quality_check"):
+        for node in (
+            "search",
+            "triage_relevance",
+            "extract",
+            "verify",
+            "quality_check",
+        ):
             assert config.models[node] == PARSE_MODEL, node
 
     def test_reasoning_nodes_on_default_tier(self, tmp_path: Path) -> None:
         config = _mk_config(tmp_path)
-        for node in ("plan", "diverge", "challenge", "reassess", "synthesize", "adversarial"):
+        for node in (
+            "plan",
+            "diverge",
+            "challenge",
+            "reassess",
+            "synthesize",
+            "adversarial",
+        ):
             assert config.models[node] == DEFAULT_MODEL, node
 
 
@@ -72,9 +85,12 @@ class TestConfModel:
         assert _conf_model("deep-research.parse", skill) == "claude-test-skill"
 
     def test_parse_section_beats_the_skill_wide_model(self, tmp_path, monkeypatch):
-        _write_conf(tmp_path, monkeypatch,
-                    "[deep-research]\nMODEL=claude-test-skill\n"
-                    "[deep-research.parse]\nMODEL=claude-test-parse\n")
+        _write_conf(
+            tmp_path,
+            monkeypatch,
+            "[deep-research]\nMODEL=claude-test-skill\n"
+            "[deep-research.parse]\nMODEL=claude-test-parse\n",
+        )
         skill = _conf_model("deep-research", None)
         assert _conf_model("deep-research.parse", skill) == "claude-test-parse"
 
@@ -120,8 +136,9 @@ async def _sent_per_node(config: ResearchConfig, calls: list[dict]) -> dict:
 
     sent = {}
     for node in config.models:
-        await llm_call("p", model=config.models[node],
-                       effort=config.efforts[node], label=node)
+        await llm_call(
+            "p", model=config.models[node], effort=config.efforts[node], label=node
+        )
         sent[node] = (calls[-1]["model"], calls[-1].get("effort"))
     return sent
 
@@ -171,8 +188,16 @@ class TestSessionDefaults:
         monkeypatch.setenv("MULTIPLAI_MODEL", "claude-test-default")
         monkeypatch.setenv("MULTIPLAI_EFFORT", "high")
         args = build_parser().parse_args(
-            ["--query", "q", "--output", str(tmp_path),
-             "--model", "claude-test-explicit", "--effort", "medium"]
+            [
+                "--query",
+                "q",
+                "--output",
+                str(tmp_path),
+                "--model",
+                "claude-test-explicit",
+                "--effort",
+                "medium",
+            ]
         )
         sent = await _sent_per_node(ResearchConfig.from_cli_args(args), sdk_options)
         assert set(sent.values()) == {("claude-test-explicit", "medium")}, sent
@@ -207,7 +232,9 @@ class TestEffortTiers:
         config = ResearchConfig.from_cli_args(args)
         assert all(e == "high" for e in config.efforts.values())
 
-    def test_no_cli_effort_keeps_per_node_defaults(self, tmp_path: Path, monkeypatch) -> None:
+    def test_no_cli_effort_keeps_per_node_defaults(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
         _write_conf(tmp_path, monkeypatch, "[deep-research.extract]\nEFFORT=low\n")
         args = build_parser().parse_args(["--query", "q", "--output", str(tmp_path)])
         config = ResearchConfig.from_cli_args(args)
@@ -250,8 +277,11 @@ class TestConfEffort:
 
 class TestNodeEffortPrecedence:
     def test_node_section_beats_skill_wide_section(self, tmp_path, monkeypatch):
-        _write_conf(tmp_path, monkeypatch,
-                    "[deep-research]\nEFFORT=medium\n[deep-research.extract]\nEFFORT=low\n")
+        _write_conf(
+            tmp_path,
+            monkeypatch,
+            "[deep-research]\nEFFORT=medium\n[deep-research.extract]\nEFFORT=low\n",
+        )
         assert _node_effort("extract", None) == "low"
         assert _node_effort("plan", None) == "medium"
 
@@ -268,8 +298,9 @@ class TestNodeEffortPrecedence:
 def test_config_efforts_pick_up_the_conf(tmp_path, monkeypatch):
     """End-to-end: the conf value reaches the per-node map the nodes read."""
     _write_conf(tmp_path, monkeypatch, "[deep-research.extract]\nEFFORT=medium\n")
-    config = ResearchConfig(query="q", output_dir=tmp_path,
-                            preset=PRESETS["quick"], date="2026-07-20")
+    config = ResearchConfig(
+        query="q", output_dir=tmp_path, preset=PRESETS["quick"], date="2026-07-20"
+    )
     assert config.efforts["extract"] == "medium"
     assert config.efforts["triage_relevance"] is None  # untouched default
 
@@ -278,7 +309,9 @@ def test_cli_effort_still_overrides_every_node(tmp_path, monkeypatch):
     """--effort is a whole-run override; the conf tunes per node."""
     _write_conf(tmp_path, monkeypatch, "[deep-research.extract]\nEFFORT=medium\n")
     parser = build_parser()
-    args = parser.parse_args(["--query", "q", "--output", str(tmp_path), "--effort", "low"])
+    args = parser.parse_args(
+        ["--query", "q", "--output", str(tmp_path), "--effort", "low"]
+    )
     config = ResearchConfig.from_cli_args(args)
     assert set(config.efforts.values()) == {"low"}
 
@@ -326,7 +359,10 @@ class TestConfThinking:
 
     def test_absent_conf_keeps_the_code_default(self, tmp_path, monkeypatch):
         _write_conf(tmp_path, monkeypatch, "")
-        assert conf_thinking("deep-research.search", THINKING_DISABLED) == THINKING_DISABLED
+        assert (
+            conf_thinking("deep-research.search", THINKING_DISABLED)
+            == THINKING_DISABLED
+        )
         assert conf_thinking("deep-research.plan", None) is None
 
     def test_truthy_value_restores_the_sdk_default(self, tmp_path, monkeypatch):
@@ -344,7 +380,10 @@ class TestConfThinking:
 
     def test_blank_value_is_treated_as_unset(self, tmp_path, monkeypatch):
         _write_conf(tmp_path, monkeypatch, "[deep-research.search]\nTHINKING=\n")
-        assert conf_thinking("deep-research.search", THINKING_DISABLED) == THINKING_DISABLED
+        assert (
+            conf_thinking("deep-research.search", THINKING_DISABLED)
+            == THINKING_DISABLED
+        )
 
     def test_returned_default_is_a_copy(self, tmp_path, monkeypatch):
         _write_conf(tmp_path, monkeypatch, "")
@@ -369,9 +408,10 @@ class TestConfThinking:
         _write_conf(tmp_path, monkeypatch, "[deep-research.plan]\nTHINKING=enable\n")
         with caplog.at_level(logging.WARNING, logger="research_pipeline.config"):
             assert conf_thinking("deep-research.plan", None) is None
-            assert conf_thinking(
-                "deep-research.plan", THINKING_DISABLED
-            ) == THINKING_DISABLED
+            assert (
+                conf_thinking("deep-research.plan", THINKING_DISABLED)
+                == THINKING_DISABLED
+            )
         assert any("not a recognized value" in r.getMessage() for r in caplog.records)
 
     def test_unrecognized_value_warns_once_per_task(
@@ -382,7 +422,9 @@ class TestConfThinking:
         with caplog.at_level(logging.WARNING, logger="research_pipeline.config"):
             for node in ("plan", "search", "extract", "verify"):
                 _node_thinking(node, None)
-        warnings = [r for r in caplog.records if "not a recognized value" in r.getMessage()]
+        warnings = [
+            r for r in caplog.records if "not a recognized value" in r.getMessage()
+        ]
         assert len(warnings) == 1
 
     def test_unrecognized_skill_wide_value_leaves_reasoning_nodes_alone(
@@ -400,8 +442,11 @@ class TestConfThinking:
 
 class TestNodeThinkingPrecedence:
     def test_node_section_beats_skill_wide_section(self, tmp_path, monkeypatch):
-        _write_conf(tmp_path, monkeypatch,
-                    "[deep-research]\nTHINKING=on\n[deep-research.search]\nTHINKING=off\n")
+        _write_conf(
+            tmp_path,
+            monkeypatch,
+            "[deep-research]\nTHINKING=on\n[deep-research.search]\nTHINKING=off\n",
+        )
         assert _node_thinking("search", THINKING_DISABLED) == THINKING_DISABLED
         assert _node_thinking("extract", THINKING_DISABLED) is None
 
@@ -418,8 +463,9 @@ class TestNodeThinkingPrecedence:
 def test_config_thinkings_pick_up_the_conf(tmp_path, monkeypatch):
     """End-to-end: the conf override flips a node in the map the nodes read."""
     _write_conf(tmp_path, monkeypatch, "[deep-research.search]\nTHINKING=on\n")
-    config = ResearchConfig(query="q", output_dir=tmp_path,
-                            preset=PRESETS["quick"], date="2026-07-20")
+    config = ResearchConfig(
+        query="q", output_dir=tmp_path, preset=PRESETS["quick"], date="2026-07-20"
+    )
     assert config.thinkings["search"] is None
     assert config.thinkings["extract"] == {"type": "disabled"}  # untouched default
 

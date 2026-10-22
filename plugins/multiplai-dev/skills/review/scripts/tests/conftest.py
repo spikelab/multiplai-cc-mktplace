@@ -44,6 +44,7 @@ def no_path_mapping(monkeypatch):
     """Every change review maps its paths before find; outside `test_paths_stage.py` that asks no model."""
     paths_stub.install(monkeypatch.setattr)
 
+
 CLAIM_HIGH = "Rate-plan eligibility depends on the hardcoded keyword 'dolcebot'"
 CLAIM_MEDIUM = "eligible_rate_plans lower-cases the title but not the keyword"
 CLAIM_REFUTED = "build_payload drops the booking id"
@@ -55,7 +56,9 @@ def _isolate(tmp_path, monkeypatch):
     """No real multiplai.conf, no inherited trust, a fresh unlimited ledger, no real data directory."""
     monkeypatch.setenv("CLAUDE_MULTIPLAI_HOME", str(tmp_path / "no-conf"))
     monkeypatch.setattr(ledger, "data_dir", lambda: tmp_path / "data")
-    monkeypatch.setattr(ledger, "legacy_reviews_root", lambda: tmp_path / "no-legacy-reviews")
+    monkeypatch.setattr(
+        ledger, "legacy_reviews_root", lambda: tmp_path / "no-legacy-reviews"
+    )
     monkeypatch.delenv("REVIEW_TRUST_REPO", raising=False)
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     monkeypatch.setattr(deps, "cache_root", lambda: tmp_path / "dep-cache")
@@ -80,44 +83,82 @@ def target_info(fixture_repo, tmp_path):
     repo, base, head = fixture_repo
     resolved = target.resolve(repo, range_=f"{base}..{head}")
     info = target.build_target(resolved, tickets=["DB-2038"])
-    return target.write_target_files(info, target.diff_text(resolved.repo, base, head), tmp_path / info.slug)
+    return target.write_target_files(
+        info, target.diff_text(resolved.repo, base, head), tmp_path / info.slug
+    )
 
 
 def cite(path: str, line: int, quote: str) -> Citation:
     return Citation(path=path, line_start=line, line_end=line, quote=quote)
 
 
-DEF_CITATION = cite("settings.py", SETTINGS_DEF_LINE,
-                    "CHANNEX_OC_OTA_NAME = config('CHANNEX_OC_OTA_NAME', default='DolceTech')")
+DEF_CITATION = cite(
+    "settings.py",
+    SETTINGS_DEF_LINE,
+    "CHANNEX_OC_OTA_NAME = config('CHANNEX_OC_OTA_NAME', default='DolceTech')",
+)
 KEYWORD_CITATION = cite("rateplan_service.py", KEYWORD_LINE, "KEYWORD = 'dolcebot'")
-KEYWORD_USE_CITATION = cite("rateplan_service.py", KEYWORD_USE_LINE,
-                            "return [rp for rp in rate_plans if KEYWORD in rp['title'].lower()]")
+KEYWORD_USE_CITATION = cite(
+    "rateplan_service.py",
+    KEYWORD_USE_LINE,
+    "return [rp for rp in rate_plans if KEYWORD in rp['title'].lower()]",
+)
 
 
 def high_finding() -> Finding:
-    return Finding(claim=CLAIM_HIGH, severity="HIGH", dimension="diff-bugs", file="rateplan_service.py",
-                   line_start=KEYWORD_LINE, line_end=KEYWORD_LINE,
-                   failure_scenario="The Open Channel is renamed; no rate plan matches and every room is unbookable.",
-                   citations=[KEYWORD_CITATION, KEYWORD_USE_CITATION], finder="diff-bugs")
+    return Finding(
+        claim=CLAIM_HIGH,
+        severity="HIGH",
+        dimension="diff-bugs",
+        file="rateplan_service.py",
+        line_start=KEYWORD_LINE,
+        line_end=KEYWORD_LINE,
+        failure_scenario="The Open Channel is renamed; no rate plan matches and every room is unbookable.",
+        citations=[KEYWORD_CITATION, KEYWORD_USE_CITATION],
+        finder="diff-bugs",
+    )
 
 
 def medium_finding() -> Finding:
-    return Finding(claim=CLAIM_MEDIUM, severity="MEDIUM", dimension="diff-bugs", file="rateplan_service.py",
-                   line_start=KEYWORD_USE_LINE, line_end=KEYWORD_USE_LINE,
-                   failure_scenario="KEYWORD set to 'DolceBot' never matches a lower-cased title.",
-                   citations=[KEYWORD_USE_CITATION], finder="diff-bugs")
+    return Finding(
+        claim=CLAIM_MEDIUM,
+        severity="MEDIUM",
+        dimension="diff-bugs",
+        file="rateplan_service.py",
+        line_start=KEYWORD_USE_LINE,
+        line_end=KEYWORD_USE_LINE,
+        failure_scenario="KEYWORD set to 'DolceBot' never matches a lower-cased title.",
+        citations=[KEYWORD_USE_CITATION],
+        finder="diff-bugs",
+    )
 
 
 def refuted_finding() -> Finding:
-    return Finding(claim=CLAIM_REFUTED, severity="LOW", dimension="callers", file="direct_booking.py",
-                   line_start=5, line_end=5, failure_scenario="Payload has no id.",
-                   citations=[cite("direct_booking.py", 5, "payload = {'id': booking.id}")], finder="callers")
+    return Finding(
+        claim=CLAIM_REFUTED,
+        severity="LOW",
+        dimension="callers",
+        file="direct_booking.py",
+        line_start=5,
+        line_end=5,
+        failure_scenario="Payload has no id.",
+        citations=[cite("direct_booking.py", 5, "payload = {'id': booking.id}")],
+        finder="callers",
+    )
 
 
 def rejected_finding() -> Finding:
-    return Finding(claim=CLAIM_REJECTED, severity="MEDIUM", dimension="diff-bugs", file="settings.py",
-                   line_start=1, line_end=1, failure_scenario="ImportError at startup.",
-                   citations=[cite("settings.py", 1, "from helpers import missing")], finder="diff-bugs")
+    return Finding(
+        claim=CLAIM_REJECTED,
+        severity="MEDIUM",
+        dimension="diff-bugs",
+        file="settings.py",
+        line_start=1,
+        line_end=1,
+        failure_scenario="ImportError at startup.",
+        citations=[cite("settings.py", 1, "from helpers import missing")],
+        finder="diff-bugs",
+    )
 
 
 EXPECTED_HIGH = "Rate plans are matched on whatever the Open Channel is titled in Channex, not a fixed word."
@@ -127,21 +168,45 @@ EXPECTED_MEDIUM = "A keyword in any case matches a title in any case."
 @pytest.fixture
 def canned_state(target_info) -> ReviewState:
     """One of each outcome: confirmed, lowered unverifiable, refuted, gate-rejected."""
-    high, medium, refuted, rejected = high_finding(), medium_finding(), refuted_finding(), rejected_finding()
+    high, medium, refuted, rejected = (
+        high_finding(),
+        medium_finding(),
+        refuted_finding(),
+        rejected_finding(),
+    )
     medium_lowered = medium.model_copy(update={"severity": "LOW"})
     return ReviewState(
         target=target_info.model_copy(update={"deployed_in": None}),
         stage="merge",
         findings=[high, medium_lowered, refuted],
         verdicts={
-            high.id: Verdict(finding_id=high.id, status="confirmed", reason="the keyword is the only filter",
-                             citations=[KEYWORD_USE_CITATION], expected_behaviour=EXPECTED_HIGH),
-            medium.id: Verdict(finding_id=medium.id, status="unverifiable",
-                               reason="depends on the production channel title", expected_behaviour=EXPECTED_MEDIUM),
-            refuted.id: Verdict(finding_id=refuted.id, status="refuted", reason="line 5 sets the id",
-                                citations=[refuted.citations[0]], expected_behaviour="should not be exported"),
+            high.id: Verdict(
+                finding_id=high.id,
+                status="confirmed",
+                reason="the keyword is the only filter",
+                citations=[KEYWORD_USE_CITATION],
+                expected_behaviour=EXPECTED_HIGH,
+            ),
+            medium.id: Verdict(
+                finding_id=medium.id,
+                status="unverifiable",
+                reason="depends on the production channel title",
+                expected_behaviour=EXPECTED_MEDIUM,
+            ),
+            refuted.id: Verdict(
+                finding_id=refuted.id,
+                status="refuted",
+                reason="line 5 sets the id",
+                citations=[refuted.citations[0]],
+                expected_behaviour="should not be exported",
+            ),
         },
-        rejected=[Rejected(finding=rejected, reason="citation 0 (settings.py:1-1): quote not at cited lines")],
+        rejected=[
+            Rejected(
+                finding=rejected,
+                reason="citation 0 (settings.py:1-1): quote not at cited lines",
+            )
+        ],
         original_severity={medium.id: "MEDIUM"},
         budget={"cost_usd": 1.25, "calls": 9},
     )
@@ -175,7 +240,9 @@ class FakeGh(list):
         self._real_run = real_run
         self._responses: list[tuple[str, int, str, str]] = []
 
-    def respond(self, fragment: str, stdout: str = "", returncode: int = 0, stderr: str = "") -> None:
+    def respond(
+        self, fragment: str, stdout: str = "", returncode: int = 0, stderr: str = ""
+    ) -> None:
         self._responses.insert(0, (fragment, returncode, stdout, stderr))
 
     def __call__(self, argv, **kwargs):
@@ -186,7 +253,9 @@ class FakeGh(list):
         for fragment, code, out, err in self._responses:
             if fragment in joined:
                 return subprocess.CompletedProcess(argv, code, out, err)
-        return subprocess.CompletedProcess(argv, 0, "[]" if "--paginate" in argv else "{}", "")
+        return subprocess.CompletedProcess(
+            argv, 0, "[]" if "--paginate" in argv else "{}", ""
+        )
 
     def posts(self) -> list[tuple[list[str], dict]]:
         """The POST calls, with their JSON payload parsed."""
@@ -194,7 +263,7 @@ class FakeGh(list):
 
     def posted_text(self) -> str:
         """Every body in the one POST: the review body, then each comment's."""
-        (_, payload), = self.posts()
+        ((_, payload),) = self.posts()
         return "\n".join([payload["body"], *(c["body"] for c in payload["comments"])])
 
 
@@ -227,5 +296,6 @@ _SESSION_DEFAULT_VARS = (
 def _no_session_defaults(monkeypatch):
     for key in _SESSION_DEFAULT_VARS:
         monkeypatch.delenv(key, raising=False)
-    monkeypatch.setattr("multiplai_core.session.load_multiplai_conf",
-                        lambda: {"_sections": {}})
+    monkeypatch.setattr(
+        "multiplai_core.session.load_multiplai_conf", lambda: {"_sections": {}}
+    )

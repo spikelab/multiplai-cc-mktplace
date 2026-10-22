@@ -40,11 +40,14 @@ def _init_repo(path):
 # Edge cases
 # ---------------------------------------------------------------------------
 
+
 class TestEdgeCases:
     def test_empty_cwd_returns_none(self):
         assert resolve_project("", config={}) is None
 
-    @pytest.mark.parametrize("val", ["unknown", "UNKNOWN", "none", "null", "  ", "unknown "])
+    @pytest.mark.parametrize(
+        "val", ["unknown", "UNKNOWN", "none", "null", "  ", "unknown "]
+    )
     def test_null_placeholder_cwds_return_none(self, val):
         # Placeholder cwds written when the real dir was unavailable name no
         # project — must never become a bucket.
@@ -63,6 +66,7 @@ class TestEdgeCases:
 # project_roots
 # ---------------------------------------------------------------------------
 
+
 class TestProjectRoots:
     def test_direct_child_is_project(self):
         cfg = {"project_roots": ["/work/PROJECTS"]}
@@ -70,9 +74,7 @@ class TestProjectRoots:
 
     def test_deep_subdir_resolves_to_first_segment(self):
         cfg = {"project_roots": ["/work/PROJECTS"]}
-        assert (
-            resolve_project("/work/PROJECTS/foo/sub/deep", config=cfg) == "foo"
-        )
+        assert resolve_project("/work/PROJECTS/foo/sub/deep", config=cfg) == "foo"
 
     def test_root_itself_is_not_a_project(self):
         # cwd == root has no segment beneath it; with no umbrella + detection
@@ -99,14 +101,14 @@ class TestProjectRoots:
 
         home = Path.home()
         assert (
-            resolve_project(str(home / "PROJECTS" / "bar" / "x"), config=cfg)
-            == "bar"
+            resolve_project(str(home / "PROJECTS" / "bar" / "x"), config=cfg) == "bar"
         )
 
 
 # ---------------------------------------------------------------------------
 # umbrella_roots
 # ---------------------------------------------------------------------------
+
 
 class TestUmbrellaRoots:
     def test_umbrella_root_itself_is_workspace(self):
@@ -122,9 +124,7 @@ class TestUmbrellaRoots:
             "project_roots": ["/work/PROJECTS"],
             "umbrella_roots": ["/work"],
         }
-        assert (
-            resolve_project("/work/PROJECTS/foo/sub", config=cfg) == "foo"
-        )
+        assert resolve_project("/work/PROJECTS/foo/sub", config=cfg) == "foo"
         assert resolve_project("/work/INBOX", config=cfg) == WORKSPACE_PROJECT
         assert resolve_project("/work", config=cfg) == WORKSPACE_PROJECT
 
@@ -132,6 +132,7 @@ class TestUmbrellaRoots:
 # ---------------------------------------------------------------------------
 # git (default strategy)
 # ---------------------------------------------------------------------------
+
 
 @requires_git
 class TestGitDetection:
@@ -164,6 +165,7 @@ class TestGitDetection:
 # config loading from disk
 # ---------------------------------------------------------------------------
 
+
 class TestConfigLoading:
     def test_load_project_map_reads_workspace_file(
         self, monkeypatch, reset_paths_cache, tmp_path
@@ -180,9 +182,7 @@ class TestConfigLoading:
         cfg = load_project_map()
         assert cfg.get("project_roots") == ["/work/PROJECTS"]
 
-    def test_missing_map_returns_empty(
-        self, monkeypatch, reset_paths_cache, tmp_path
-    ):
+    def test_missing_map_returns_empty(self, monkeypatch, reset_paths_cache, tmp_path):
         ws = tmp_path / "ws2"
         ws.mkdir()
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_WORKSPACE_DIR", str(ws))

@@ -26,7 +26,7 @@ _CHARS_PER_TOKEN = 4
 # Tool result stubs
 _ELIDED_STUB = "[{tool}: {size}B elided]"
 _LONG_INPUT_THRESHOLD = 2_000  # chars; truncate tool_use inputs longer than this
-_B64_RE = re.compile(r'^[A-Za-z0-9+/]{100,}={0,2}$')
+_B64_RE = re.compile(r"^[A-Za-z0-9+/]{100,}={0,2}$")
 
 
 def _is_base64(text: str) -> bool:
@@ -174,13 +174,16 @@ def iter_distilled_turns(
             continue
 
         # Skip Claude Code hook/meta noise
-        msg_type = record.get("message", {}).get("type") if isinstance(record.get("message"), dict) else None
+        msg_type = (
+            record.get("message", {}).get("type")
+            if isinstance(record.get("message"), dict)
+            else None
+        )
         if msg_type in ("system", "tool"):
             continue
 
-        content = (
-            record.get("content")
-            or (record.get("message", {}) or {}).get("content")
+        content = record.get("content") or (record.get("message", {}) or {}).get(
+            "content"
         )
         if content is None:
             continue

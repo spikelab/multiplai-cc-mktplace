@@ -68,22 +68,32 @@ class TestHappyPath:
 class TestCatchesRealDefects:
     def test_script_that_rejects_help_fails(self, tmp_path):
         """The defect this gate was written for: usage text, exit 1."""
-        skill = make_skill(tmp_path, scripts={"go.sh": """\
+        skill = make_skill(
+            tmp_path,
+            scripts={
+                "go.sh": """\
             #!/usr/bin/env bash
             echo "usage: go.sh <file>" >&2
             exit 1
-            """})
+            """
+            },
+        )
         report = promote(skill, run_contract=False)
         assert not report.ok
         assert "--help exited 1" in report.render()
 
     def test_syntax_error_fails(self, tmp_path):
-        skill = make_skill(tmp_path, scripts={"go.py": """\
+        skill = make_skill(
+            tmp_path,
+            scripts={
+                "go.py": """\
             def main(:
                 pass
             if __name__ == "__main__":
                 main()
-            """})
+            """
+            },
+        )
         assert not promote(skill, run_contract=False).ok
 
     def test_bad_frontmatter_fails(self, tmp_path):
@@ -103,10 +113,13 @@ class TestScriptCollectionCalibration:
 
     def test_vendored_venv_is_skipped(self, tmp_path):
         """Two skills vendor a .venv; walking it found 70+ irrelevant modules."""
-        skill = make_skill(tmp_path, scripts={
-            "go.py": GOOD_PY,
-            ".venv/lib/python3.12/site-packages/pygments/__main__.py": "raise SystemExit(1)\n",
-        })
+        skill = make_skill(
+            tmp_path,
+            scripts={
+                "go.py": GOOD_PY,
+                ".venv/lib/python3.12/site-packages/pygments/__main__.py": "raise SystemExit(1)\n",
+            },
+        )
         found = {p.name for p in _bundled_scripts(skill)}
         assert found == {"go.py"}
 
@@ -116,10 +129,13 @@ class TestScriptCollectionCalibration:
         Run directly it raises "attempted relative import with no known parent
         package" — a fact about how it was invoked, not about the skill.
         """
-        skill = make_skill(tmp_path, scripts={
-            "pkg/__init__.py": "",
-            "pkg/mod.py": GOOD_PY,
-        })
+        skill = make_skill(
+            tmp_path,
+            scripts={
+                "pkg/__init__.py": "",
+                "pkg/mod.py": GOOD_PY,
+            },
+        )
         assert _bundled_scripts(skill) == []
 
     def test_library_module_without_main_is_skipped(self, tmp_path):
@@ -135,11 +151,16 @@ class TestMissingDependencyIsAWarning:
     def test_undeclared_import_warns_but_does_not_block(self, tmp_path):
         """The script never reached its own argv handling, so this says nothing
         about its CLI shape — it says the gate's interpreter lacks a dep."""
-        skill = make_skill(tmp_path, scripts={"go.py": """\
+        skill = make_skill(
+            tmp_path,
+            scripts={
+                "go.py": """\
             import definitely_not_installed_xyz
             if __name__ == "__main__":
                 pass
-            """})
+            """
+            },
+        )
         report = promote(skill, run_contract=False)
         assert report.ok, report.render()
         assert any("definitely_not_installed_xyz" in w for w in report.warnings)
@@ -189,10 +210,12 @@ class TestContract:
     def test_prose_between_heading_and_fence_is_not_part_of_the_name(self):
         """The first parser used DOTALL on the name group, so a case that
         explained itself had the whole paragraph absorbed into its title."""
-        text = ("### short name\n\n"
-                "Some prose explaining why this assertion exists,\n"
-                "over two lines.\n\n"
-                "```sh\necho hi\n```\n\nExpect: hi\n")
+        text = (
+            "### short name\n\n"
+            "Some prose explaining why this assertion exists,\n"
+            "over two lines.\n\n"
+            "```sh\necho hi\n```\n\nExpect: hi\n"
+        )
         cases = parse_contract(text)
         assert [c[0] for c in cases] == ["short name"]
         assert cases[0][1] == "echo hi"
@@ -209,7 +232,8 @@ class TestContract:
     def test_violated_contract_fails(self, tmp_path):
         skill = make_skill(tmp_path, scripts={"go.sh": GOOD_SH})
         (skill / "CONTRACT.md").write_text(
-            "### wrong\n```sh\necho hello\n```\nExpect: goodbye\n")
+            "### wrong\n```sh\necho hello\n```\nExpect: goodbye\n"
+        )
         report = promote(skill, run_contract=True)
         assert not report.ok
         assert "goodbye" in report.render()
@@ -241,14 +265,14 @@ class TestRealSkills:
         skills = sorted((repo / "plugins").glob("*/skills/*/"))
         if not skills:
             pytest.skip("not running inside the marketplace repo")
-        blocked = [s.name for s in skills
-                   if not promote(s, run_contract=False).ok]
+        blocked = [s.name for s in skills if not promote(s, run_contract=False).ok]
         assert blocked == []
 
 
 # ---------------------------------------------------------------------------
 # The two budgets (#114)
 # ---------------------------------------------------------------------------
+
 
 class TestTheResolutionBudgetIsSpentOnce:
     """A cold uv cache is not a hung script, and must not be reported as one."""
@@ -260,24 +284,37 @@ class TestTheResolutionBudgetIsSpentOnce:
         promote_skill._resolution_budget_spent = False
 
     def test_the_first_uv_command_may_pay_for_the_clone(self):
-        assert promote_skill.timeout_for(
-            "uv run --project ../../scripts ../../scripts/costs_report.py --help"
-        ) == promote_skill.RESOLVE_TIMEOUT_SECONDS
+        assert (
+            promote_skill.timeout_for(
+                "uv run --project ../../scripts ../../scripts/costs_report.py --help"
+            )
+            == promote_skill.RESOLVE_TIMEOUT_SECONDS
+        )
 
     def test_every_later_command_is_held_to_the_tight_budget(self):
         promote_skill.timeout_for(["uv", "run", "x.py"])
-        assert promote_skill.timeout_for(["uv", "run", "y.py"]) == \
-            promote_skill.TIMEOUT_SECONDS
-        assert promote_skill.timeout_for(
-            "uv run --project . z.py --help") == promote_skill.TIMEOUT_SECONDS
+        assert (
+            promote_skill.timeout_for(["uv", "run", "y.py"])
+            == promote_skill.TIMEOUT_SECONDS
+        )
+        assert (
+            promote_skill.timeout_for("uv run --project . z.py --help")
+            == promote_skill.TIMEOUT_SECONDS
+        )
 
     def test_a_plain_command_never_gets_the_allowance(self):
         """A hang in `python3 script.py --help` is a hang, not a cache miss —
         and it must not consume the allowance the uv command needs."""
-        assert promote_skill.timeout_for(["python3", "x.py", "--help"]) == \
-            promote_skill.TIMEOUT_SECONDS
-        assert promote_skill.timeout_for(["bash", "x.sh", "--help"]) == \
-            promote_skill.TIMEOUT_SECONDS
+        assert (
+            promote_skill.timeout_for(["python3", "x.py", "--help"])
+            == promote_skill.TIMEOUT_SECONDS
+        )
+        assert (
+            promote_skill.timeout_for(["bash", "x.sh", "--help"])
+            == promote_skill.TIMEOUT_SECONDS
+        )
         # …and the uv command that follows still gets it.
-        assert promote_skill.timeout_for(["uv", "run", "x.py"]) == \
-            promote_skill.RESOLVE_TIMEOUT_SECONDS
+        assert (
+            promote_skill.timeout_for(["uv", "run", "x.py"])
+            == promote_skill.RESOLVE_TIMEOUT_SECONDS
+        )

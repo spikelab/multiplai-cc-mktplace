@@ -22,8 +22,13 @@ LINES = ["OLD_1 = 1", "OLD_2 = 2", "FIX_3 = 3", "FIX_4 = 4"]
 
 def _git(repo: Path, *args: str, date: str = "2026-10-01T10:00:00Z") -> str:
     env = dict(os.environ, **_ENV, GIT_AUTHOR_DATE=date, GIT_COMMITTER_DATE=date)
-    return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True,
-                          text=True, env=env).stdout.strip()
+    return subprocess.run(
+        ["git", "-C", str(repo), *args],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    ).stdout.strip()
 
 
 def _commit(repo: Path, lines: list[str], message: str, date: str) -> str:
@@ -50,11 +55,25 @@ def _cite(line: int, path: str = "app.py") -> dict:
     return {"path": path, "line_start": line, "line_end": line, "quote": "x"}
 
 
-def _finding(fid: str, line: int, *, status: str = "confirmed", label: str = "", impact: str = "",
-             citations: list[dict] | None = None) -> dict:
-    f = {"id": fid, "file": "app.py", "line_start": line, "line_end": line, "claim": fid,
-         "severity": "MEDIUM", "status": status,
-         "citations": citations if citations is not None else [_cite(line)]}
+def _finding(
+    fid: str,
+    line: int,
+    *,
+    status: str = "confirmed",
+    label: str = "",
+    impact: str = "",
+    citations: list[dict] | None = None,
+) -> dict:
+    f = {
+        "id": fid,
+        "file": "app.py",
+        "line_start": line,
+        "line_end": line,
+        "claim": fid,
+        "severity": "MEDIUM",
+        "status": status,
+        "citations": citations if citations is not None else [_cite(line)],
+    }
     if label:
         f["assessment"] = {"label": label, "reason": "r"}
     if impact:
@@ -62,11 +81,23 @@ def _finding(fid: str, line: int, *, status: str = "confirmed", label: str = "",
     return f
 
 
-def _round(head: str, at: str, findings: list[dict], repo: Path | str, mode: str = "full") -> dict:
-    return {"schema_version": 1, "generated_at": at, "mode": mode, "run": {"started_at": at},
-            "target": {"slug": "example-app--pr", "repo_path": str(repo), "remote_url": REMOTE,
-                       "base_sha": "0" * 40, "head_sha": head},
-            "findings": findings}
+def _round(
+    head: str, at: str, findings: list[dict], repo: Path | str, mode: str = "full"
+) -> dict:
+    return {
+        "schema_version": 1,
+        "generated_at": at,
+        "mode": mode,
+        "run": {"started_at": at},
+        "target": {
+            "slug": "example-app--pr",
+            "repo_path": str(repo),
+            "remote_url": REMOTE,
+            "base_sha": "0" * 40,
+            "head_sha": head,
+        },
+        "findings": findings,
+    }
 
 
 def _write(path: Path, data: dict) -> None:
@@ -86,34 +117,78 @@ def reviews(tmp_path, history):
     repo, (h1, h2, h3) = history
     out = tmp_path / "reviews"
 
-    one = _round(h1, "2026-10-01T10:30:00Z", [_finding("c1", 1, impact="breaks-users"),
-                                             _finding("c2", 2, impact="correctness-only")], repo, "critical")
+    one = _round(
+        h1,
+        "2026-10-01T10:30:00Z",
+        [
+            _finding("c1", 1, impact="breaks-users"),
+            _finding("c2", 2, impact="correctness-only"),
+        ],
+        repo,
+        "critical",
+    )
     _write(out / "app" / "pr-1" / "findings.json", one)
     _write(out / "app" / "pr-1" / "rounds" / f"01-{h1[:12]}" / "findings.json", one)
 
     pr2 = out / "app" / "pr-2"
-    _write(pr2 / "rounds" / f"99-{h1[:12]}" / "findings.json",
-           _round(h1, "2026-10-01T10:30:00Z", [_finding("r1a", 1), _finding("r1b", 2)], repo))
-    _write(pr2 / "rounds" / f"01-{h2[:12]}" / "findings.json", _round(h2, "2026-10-01T11:30:00Z", [
-        _finding("old", 1),                                   # present at first review
-        _finding("new", 3),                                   # written since
-        _finding("still", 2, label="still-open"),             # present at first review
-        _finding("rep", 3, label="repeat"),                   # not listed
-        _finding("low", 3, label="low-value"),                # not listed
-        _finding("refuted", 3, status="refuted"),             # not listed
-        _finding("web", 1, citations=[{"path": "https://example.com/doc", "line_start": 1,
-                                       "line_end": 1, "quote": "x"}]),  # no repo citation
-        _finding("dep", 3, citations=[_cite(9, ".review-deps/lib@abc/x.py"), _cite(3)]),  # written since
-    ], repo))
+    _write(
+        pr2 / "rounds" / f"99-{h1[:12]}" / "findings.json",
+        _round(
+            h1, "2026-10-01T10:30:00Z", [_finding("r1a", 1), _finding("r1b", 2)], repo
+        ),
+    )
+    _write(
+        pr2 / "rounds" / f"01-{h2[:12]}" / "findings.json",
+        _round(
+            h2,
+            "2026-10-01T11:30:00Z",
+            [
+                _finding("old", 1),  # present at first review
+                _finding("new", 3),  # written since
+                _finding("still", 2, label="still-open"),  # present at first review
+                _finding("rep", 3, label="repeat"),  # not listed
+                _finding("low", 3, label="low-value"),  # not listed
+                _finding("refuted", 3, status="refuted"),  # not listed
+                _finding(
+                    "web",
+                    1,
+                    citations=[
+                        {
+                            "path": "https://example.com/doc",
+                            "line_start": 1,
+                            "line_end": 1,
+                            "quote": "x",
+                        }
+                    ],
+                ),  # no repo citation
+                _finding(
+                    "dep",
+                    3,
+                    citations=[_cite(9, ".review-deps/lib@abc/x.py"), _cite(3)],
+                ),  # written since
+            ],
+            repo,
+        ),
+    )
     (pr2 / "rounds" / f"02-{h2[:12]}").mkdir(parents=True)
-    (pr2 / "rounds" / f"02-{h2[:12]}" / "review-state.json").write_text("{}", encoding="utf-8")
-    _write(pr2 / "findings.json", _round(h3, "2026-10-01T12:30:00Z", [_finding("late", 4)], repo))
+    (pr2 / "rounds" / f"02-{h2[:12]}" / "review-state.json").write_text(
+        "{}", encoding="utf-8"
+    )
+    _write(
+        pr2 / "findings.json",
+        _round(h3, "2026-10-01T12:30:00Z", [_finding("late", 4)], repo),
+    )
 
     gone = out / "gone" / "pr-3"
     missing = tmp_path / "deleted-worktree"
-    _write(gone / "rounds" / f"01-{h1[:12]}" / "findings.json",
-           _round(h1, "2026-10-01T10:30:00Z", [_finding("g1", 1)], missing))
-    _write(gone / "findings.json", _round(h2, "2026-10-01T11:30:00Z", [_finding("g2", 3)], missing))
+    _write(
+        gone / "rounds" / f"01-{h1[:12]}" / "findings.json",
+        _round(h1, "2026-10-01T10:30:00Z", [_finding("g1", 1)], missing),
+    )
+    _write(
+        gone / "findings.json",
+        _round(h2, "2026-10-01T11:30:00Z", [_finding("g2", 3)], missing),
+    )
     return out, repo
 
 
@@ -125,11 +200,18 @@ def test_rounds_are_read_once_and_sorted_by_generated_at(reviews):
     out, _ = reviews
     targets = _by_name(round_metrics.measure(out))
     assert sorted(targets) == ["app/pr-1", "app/pr-2", "gone/pr-3"]
-    assert len(targets["app/pr-1"].rounds) == 1  # the top-level copy of a kept round counts once
+    assert (
+        len(targets["app/pr-1"].rounds) == 1
+    )  # the top-level copy of a kept round counts once
     pr2 = targets["app/pr-2"]
     assert [r.generated_at for r in pr2.rounds] == [
-        "2026-10-01T10:30:00Z", "2026-10-01T11:30:00Z", "2026-10-01T12:30:00Z"]
-    assert pr2.stopped == 1  # the kept run with no findings.json is left out, and counted
+        "2026-10-01T10:30:00Z",
+        "2026-10-01T11:30:00Z",
+        "2026-10-01T12:30:00Z",
+    ]
+    assert (
+        pr2.stopped == 1
+    )  # the kept run with no findings.json is left out, and counted
 
 
 def test_labels_per_round_use_the_rounds_own_mode(reviews):
@@ -156,7 +238,9 @@ def test_a_missing_repository_gives_unknown(reviews):
     assert pr3.rounds[1].origins == {UNKNOWN: 1}
 
 
-def test_a_checkout_of_the_same_remote_stands_in_for_a_missing_repository(reviews, tmp_path):
+def test_a_checkout_of_the_same_remote_stands_in_for_a_missing_repository(
+    reviews, tmp_path
+):
     out, repo = reviews
     other = tmp_path / "other"
     other.mkdir()
@@ -174,10 +258,17 @@ def test_line_origin_reads_blame_then_ancestry(history):
     repo, (h1, h2, h3) = history
     assert round_metrics.line_origin(repo, "app.py", 1, h3, h1) == PRESENT
     assert round_metrics.line_origin(repo, "app.py", 3, h3, h1) == WRITTEN
-    assert round_metrics.line_origin(repo, "app.py", 99, h3, h1) == UNKNOWN  # past the file's end
+    assert (
+        round_metrics.line_origin(repo, "app.py", 99, h3, h1) == UNKNOWN
+    )  # past the file's end
     assert round_metrics.line_origin(repo, "nope.py", 1, h3, h1) == UNKNOWN
-    assert round_metrics.line_origin(repo, "app.py", 1, h3, "f" * 40) == UNKNOWN  # an unknown first head
-    assert round_metrics.line_origin(repo.parent / "absent", "app.py", 1, h3, h1) == UNKNOWN
+    assert (
+        round_metrics.line_origin(repo, "app.py", 1, h3, "f" * 40) == UNKNOWN
+    )  # an unknown first head
+    assert (
+        round_metrics.line_origin(repo.parent / "absent", "app.py", 1, h3, h1)
+        == UNKNOWN
+    )
     assert round_metrics.line_origin(None, "app.py", 1, h3, h1) == UNKNOWN
 
 
@@ -202,8 +293,10 @@ def test_render_with_nothing_found(tmp_path):
 
 
 def _tree_state(root: Path) -> dict[str, tuple[int, int]]:
-    return {str(p.relative_to(root)): (p.stat().st_mtime_ns, p.stat().st_size)
-            for p in sorted(root.rglob("*"))}
+    return {
+        str(p.relative_to(root)): (p.stat().st_mtime_ns, p.stat().st_size)
+        for p in sorted(root.rglob("*"))
+    }
 
 
 def test_cli_prints_the_report_and_writes_nothing(reviews, tmp_path, capsys):
@@ -216,7 +309,9 @@ def test_cli_prints_the_report_and_writes_nothing(reviews, tmp_path, capsys):
     text = capsys.readouterr().out
     assert text.startswith("# Review round metrics")
     assert "**Totals** (3 targets, 6 rounds)" in text
-    assert "present at first review: 2 of 6 (33%) with a known origin" in text  # pr-3 traced via --repo
+    assert (
+        "present at first review: 2 of 6 (33%) with a known origin" in text
+    )  # pr-3 traced via --repo
 
 
 def test_cli_defaults_to_the_reviews_root(reviews, monkeypatch, capsys):

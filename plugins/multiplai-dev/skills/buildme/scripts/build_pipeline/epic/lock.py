@@ -74,8 +74,11 @@ def hold(epic_dir: Path, name: str) -> None:
             raise EpicLocked(name, holder) from None
         log.warning("cannot lock %s, running unlocked: %s", epic_dir / LOCK_FILE, e)
     else:
-        info = {"pid": os.getpid(), "host": socket.gethostname(),
-                "since": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")}
+        info = {
+            "pid": os.getpid(),
+            "host": socket.gethostname(),
+            "since": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
         try:
             os.ftruncate(fd, 0)
             os.pwrite(fd, json.dumps(info).encode("utf-8"), 0)

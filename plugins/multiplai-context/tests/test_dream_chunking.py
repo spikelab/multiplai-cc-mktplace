@@ -126,7 +126,9 @@ class TestPlanChunks:
 
     def test_every_block_appears_exactly_once(self):
         blocks = parse_blocks("f.md", make_learnings(30))
-        packed = [b for c in plan_chunks(blocks, 300, throughput=85.0) for b in c.blocks]
+        packed = [
+            b for c in plan_chunks(blocks, 300, throughput=85.0) for b in c.blocks
+        ]
         assert [b.key for b in packed] == [b.key for b in blocks]
 
     def test_indices_are_one_based_and_contiguous(self):
@@ -163,7 +165,9 @@ class TestPlanChunks:
 
     def test_normal_chunks_carry_the_caller_timeout(self):
         blocks = parse_blocks("f.md", make_learnings(10))
-        assert all(c.timeout_s == 900.0 for c in plan_chunks(blocks, 900, throughput=85.0))
+        assert all(
+            c.timeout_s == 900.0 for c in plan_chunks(blocks, 900, throughput=85.0)
+        )
         assert not any(c.oversized for c in plan_chunks(blocks, 900, throughput=85.0))
 
     def test_empty_input_plans_nothing(self):
@@ -195,7 +199,9 @@ class TestOversizedBlock:
 
     def test_it_is_never_split_or_dropped(self):
         blocks = self._oversized()
-        packed = [b for c in plan_chunks(blocks, 900, throughput=85.0) for b in c.blocks]
+        packed = [
+            b for c in plan_chunks(blocks, 900, throughput=85.0) for b in c.blocks
+        ]
         assert [b.key for b in packed] == [b.key for b in blocks]
 
     def test_surrounding_blocks_keep_the_normal_timeout(self):
@@ -250,7 +256,9 @@ class TestRenderChunk:
 
 class TestPlanLine:
     def _chunks(self):
-        return plan_chunks(parse_blocks("f.md", make_learnings(200)), 300, throughput=85.0)
+        return plan_chunks(
+            parse_blocks("f.md", make_learnings(200)), 300, throughput=85.0
+        )
 
     def test_concurrency_beats_serial(self):
         chunks = self._chunks()
@@ -269,8 +277,11 @@ class TestPlanLine:
     def test_line_names_everything_a_reader_needs_before_spending(self):
         chunks = self._chunks()
         line = format_plan_line(
-            new_bytes=12_345, total_bytes=254_000, chunks=chunks,
-            concurrency=4, throughput=85.0,
+            new_bytes=12_345,
+            total_bytes=254_000,
+            chunks=chunks,
+            concurrency=4,
+            throughput=85.0,
         )
         assert "12,345" in line and "254,000" in line
         assert f"{len(chunks)} chunk(s)" in line
@@ -288,8 +299,11 @@ class TestPlanLine:
             + "\n".join(f"- {'z' * 200}" for _ in range(300)),
         )
         line = format_plan_line(
-            new_bytes=1, total_bytes=1, chunks=plan_chunks(big, 900, throughput=85.0),
-            concurrency=4, throughput=85.0,
+            new_bytes=1,
+            total_bytes=1,
+            chunks=plan_chunks(big, 900, throughput=85.0),
+            concurrency=4,
+            throughput=85.0,
         )
         assert "oversized" in line
 
@@ -318,10 +332,25 @@ class TestWallClockMatchesRealRuns:
     # default is close enough. Chunk phase 21:13:30 -> 21:41:15 = 1,665 s at
     # concurrency 4.
     MEASURED = [
-        (16832, 296), (17291, 309), (17975, 325), (17611, 361), (6006, 136),
-        (13382, 348), (17968, 318), (17955, 416), (17542, 274), (15219, 241),
-        (17802, 247), (17454, 329), (1722, 52), (17358, 373), (17950, 320),
-        (17393, 403), (4887, 176), (17404, 395), (17728, 556),
+        (16832, 296),
+        (17291, 309),
+        (17975, 325),
+        (17611, 361),
+        (6006, 136),
+        (13382, 348),
+        (17968, 318),
+        (17955, 416),
+        (17542, 274),
+        (15219, 241),
+        (17802, 247),
+        (17454, 329),
+        (1722, 52),
+        (17358, 373),
+        (17950, 320),
+        (17393, 403),
+        (4887, 176),
+        (17404, 395),
+        (17728, 556),
     ]
     ACTUAL_WALL_CLOCK_S = 1665
 

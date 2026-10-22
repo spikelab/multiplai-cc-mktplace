@@ -53,9 +53,7 @@ def _imports(module: str) -> set[str]:
 def test_hook_path_module_does_not_load_the_collectors(module):
     loaded = _imports(module)
     leaked = sorted(
-        name
-        for name in loaded
-        if any(name.startswith(p) for p in FORBIDDEN_PREFIXES)
+        name for name in loaded if any(name.startswith(p) for p in FORBIDDEN_PREFIXES)
     )
     assert not leaked, (
         f"{module} pulled the expensive fleet collectors onto the hook path: "

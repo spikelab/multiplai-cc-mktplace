@@ -61,7 +61,9 @@ class GitResult:
         return self.ok
 
 
-def _run(argv: Sequence[str], *, cwd: Path | None = None, timeout: int = DEFAULT_TIMEOUT) -> GitResult:
+def _run(
+    argv: Sequence[str], *, cwd: Path | None = None, timeout: int = DEFAULT_TIMEOUT
+) -> GitResult:
     exe = shutil.which(argv[0])
     if exe is None:
         return GitResult(False, "", f"{argv[0]} is not installed")
@@ -85,7 +87,9 @@ def _run(argv: Sequence[str], *, cwd: Path | None = None, timeout: int = DEFAULT
     return GitResult(True, out, err)
 
 
-def run_git(args: Sequence[str], *, cwd: Path, timeout: int = DEFAULT_TIMEOUT) -> GitResult:
+def run_git(
+    args: Sequence[str], *, cwd: Path, timeout: int = DEFAULT_TIMEOUT
+) -> GitResult:
     """``git -C <cwd> <args…>``, never raising."""
     return _run(["git", "-C", str(cwd), *args], timeout=timeout)
 
@@ -175,11 +179,17 @@ def open_pull_request(
         )
     return _run(
         [
-            "gh", "pr", "create",
-            "--title", title,
-            "--body", body,
-            "--base", base,
-            "--head", head,
+            "gh",
+            "pr",
+            "create",
+            "--title",
+            title,
+            "--body",
+            body,
+            "--base",
+            base,
+            "--head",
+            head,
         ],
         cwd=path,
         timeout=120,

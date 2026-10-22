@@ -87,7 +87,9 @@ class _DiskAnswers(MutableMapping[str, Any]):
 
 def purge_failed(answers: _DiskAnswers) -> None:
     """Delete every stored call failure, so the next ask of its key goes out again."""
-    for key in [k for k, v in answers.items() if isinstance(v, Mapping) and CALL_ERROR in v]:
+    for key in [
+        k for k, v in answers.items() if isinstance(v, Mapping) and CALL_ERROR in v
+    ]:
         del answers[key]
 
 

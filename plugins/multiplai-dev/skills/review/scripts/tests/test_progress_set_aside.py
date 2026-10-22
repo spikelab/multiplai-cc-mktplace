@@ -31,7 +31,10 @@ def test_no_log_is_a_no_op(tmp_path):
 
 def test_a_kept_round_does_not_copy_set_aside_logs(tmp_path):
     h = "e" * 40
-    state = {"target": {"head_sha": h, "slug": "t"}, "timings": {"run": [{"started_at": "2026-01-01T00:00:00.100Z"}]}}
+    state = {
+        "target": {"head_sha": h, "slug": "t"},
+        "timings": {"run": [{"started_at": "2026-01-01T00:00:00.100Z"}]},
+    }
     (tmp_path / "review-state.json").write_text(json.dumps(state))
     (tmp_path / "progress.log").write_text("stopped\n")
     (tmp_path / "progress-20260101T000000Z.log").write_text("earlier\n")

@@ -35,6 +35,7 @@ def agents(monkeypatch):
         fake = FakeAgents(**kwargs)
         monkeypatch.setattr(sdk, "agent_call_structured", fake)
         return fake
+
     return install
 
 
@@ -48,7 +49,9 @@ def _ledger_lines(tmp_path: Path, event: str | None = None) -> list[dict]:
 
 def _clone(fixture_repo, dest: Path, origin: str = ORIGIN) -> Path:
     src, _, _ = fixture_repo
-    subprocess.run(["git", "clone", "-q", str(src), str(dest)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "clone", "-q", str(src), str(dest)], check=True, capture_output=True
+    )
     fixture_git(dest, "remote", "set-url", "origin", origin)
     return dest
 
@@ -56,11 +59,17 @@ def _clone(fixture_repo, dest: Path, origin: str = ORIGIN) -> Path:
 # --- 1. the default output directory ---------------------------------------------
 
 
-def test_default_out_is_the_data_dirs_reviews_never_the_inbox_or_cwd(tmp_path, monkeypatch):
+def test_default_out_is_the_data_dirs_reviews_never_the_inbox_or_cwd(
+    tmp_path, monkeypatch
+):
     import multiplai_core.paths
 
     monkeypatch.setattr(ledger, "data_dir", REAL_DATA_DIR)
-    monkeypatch.setattr(multiplai_core.paths, "get_paths", lambda: SimpleNamespace(data_dir=tmp_path / "d"))
+    monkeypatch.setattr(
+        multiplai_core.paths,
+        "get_paths",
+        lambda: SimpleNamespace(data_dir=tmp_path / "d"),
+    )
     cfg, ws, ran_from = tmp_path / "cfg", tmp_path / "ws", tmp_path / "repo"
     (ws / "INBOX").mkdir(parents=True)
     cfg.mkdir()
@@ -71,26 +80,45 @@ def test_default_out_is_the_data_dirs_reviews_never_the_inbox_or_cwd(tmp_path, m
     assert default_out() == tmp_path / "d" / "reviews"
 
 
-def test_a_review_without_out_writes_under_the_data_dir(fixture_repo, tmp_path, agents, capsys):
+def test_a_review_without_out_writes_under_the_data_dir(
+    fixture_repo, tmp_path, agents, capsys
+):
     repo, base, head = fixture_repo
     agents()
-    assert main(["review", "--repo", str(repo), "--range", f"{base}..{head}", "--trust-repo"]) == 0
+    assert (
+        main(
+            [
+                "review",
+                "--repo",
+                str(repo),
+                "--range",
+                f"{base}..{head}",
+                "--trust-repo",
+            ]
+        )
+        == 0
+    )
     stdout = capsys.readouterr().out
     reviews = tmp_path / "data" / "reviews"
     assert stdout.splitlines()[0] == f"out: {reviews}"
-    assert (reviews / "booking-engine" / f"range-{base}..{head}" / "findings.json").is_file()
+    assert (
+        reviews / "booking-engine" / f"range-{base}..{head}" / "findings.json"
+    ).is_file()
 
 
 # --- 2. the slug comes from the origin remote --------------------------------------
 
 
-@pytest.mark.parametrize("url", [
-    "https://github.com/spikelab/github-tests.git",
-    "https://github.com/spikelab/github-tests",
-    "git@github.com:spikelab/github-tests.git",
-    "ssh://git@github.com/spikelab/github-tests.git/",
-    "https://token@github.com/spikelab/github-tests.git",
-])
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://github.com/spikelab/github-tests.git",
+        "https://github.com/spikelab/github-tests",
+        "git@github.com:spikelab/github-tests.git",
+        "ssh://git@github.com/spikelab/github-tests.git/",
+        "https://token@github.com/spikelab/github-tests.git",
+    ],
+)
 def test_origin_name_is_owner_dash_repo(url):
     assert target.origin_name(url) == SLUG_REPO
 
@@ -101,7 +129,9 @@ def test_origin_name_needs_an_owner_and_a_repo():
     assert target.origin_name("repo.git") is None
 
 
-def test_two_checkouts_with_one_origin_and_different_names_give_one_slug(fixture_repo, tmp_path, monkeypatch):
+def test_two_checkouts_with_one_origin_and_different_names_give_one_slug(
+    fixture_repo, tmp_path, monkeypatch
+):
     _, base, head = fixture_repo
     a = _clone(fixture_repo, tmp_path / "multiplai-cc-mktplace")
     b = tmp_path / "buildme-mutation-testing"
@@ -110,20 +140,35 @@ def test_two_checkouts_with_one_origin_and_different_names_give_one_slug(fixture
     def slug(repo: Path, **kw) -> str:
         return target.build_target(target.resolve(repo, **kw)).slug
 
-    assert slug(a, range_=f"{base}..{head}") == slug(b, range_=f"{base}..{head}") == f"{SLUG_REPO}--{base}..{head}"
+    assert (
+        slug(a, range_=f"{base}..{head}")
+        == slug(b, range_=f"{base}..{head}")
+        == f"{SLUG_REPO}--{base}..{head}"
+    )
     assert slug(a, tree=head) == slug(b, tree=head) == f"{SLUG_REPO}--tree"
 
     def fake_view(repo_path, number):
-        return {"headRefOid": head, "baseRefOid": base, "headRefName": "feature", "baseRefName": "main",
-                "title": "t", "body": ""}
+        return {
+            "headRefOid": head,
+            "baseRefOid": base,
+            "headRefName": "feature",
+            "baseRefName": "main",
+            "title": "t",
+            "body": "",
+        }
 
     monkeypatch.setattr(target, "_pr_view", fake_view)
     assert slug(a, pr=283) == slug(b, pr=283) == f"{SLUG_REPO}--pr-283"
     # The label keeps the short directory name.
-    assert target.build_target(target.resolve(b, pr=283)).label == "buildme-mutation-testing PR #283"
+    assert (
+        target.build_target(target.resolve(b, pr=283)).label
+        == "buildme-mutation-testing PR #283"
+    )
 
 
-def test_no_origin_falls_back_to_the_directory_name_and_logs_it(fixture_repo, tmp_path, caplog):
+def test_no_origin_falls_back_to_the_directory_name_and_logs_it(
+    fixture_repo, tmp_path, caplog
+):
     _, base, head = fixture_repo
     repo = _clone(fixture_repo, tmp_path / "local-only")
     fixture_git(repo, "remote", "remove", "origin")
@@ -150,10 +195,21 @@ def branch_clone(fixture_repo, tmp_path):
     return repo, head, fixture_git(repo, "rev-parse", "HEAD")
 
 
-def test_four_runs_on_two_heads_keep_three_numbered_rounds_in_full(branch_clone, tmp_path, agents):
+def test_four_runs_on_two_heads_keep_three_numbered_rounds_in_full(
+    branch_clone, tmp_path, agents
+):
     repo, head1, head2 = branch_clone
     out = tmp_path / "out"
-    args = ["--out", str(out), "review", "--repo", str(repo), "--branch", "feature/x", "--trust-repo"]
+    args = [
+        "--out",
+        str(out),
+        "review",
+        "--repo",
+        str(repo),
+        "--branch",
+        "feature/x",
+        "--trust-repo",
+    ]
     target_dir = out / "github-tests" / "branch-feature_x"
     agents()
     assert main(args) == 0
@@ -169,20 +225,39 @@ def test_four_runs_on_two_heads_keep_three_numbered_rounds_in_full(branch_clone,
     logs = []
     for name in names:
         kept = target_dir / "rounds" / name
-        for f in ("progress.log", "review-state.json", "diff.patch", "commits.txt", "files.txt", "findings.json",
-                  "checks.json"):
+        for f in (
+            "progress.log",
+            "review-state.json",
+            "diff.patch",
+            "commits.txt",
+            "files.txt",
+            "findings.json",
+            "checks.json",
+        ):
             assert (kept / f).is_file(), (name, f)
         for d in ("viewer", "tree", "rounds"):
             assert not (kept / d).exists(), (name, d)
         state = json.loads((kept / "review-state.json").read_text())
-        assert state["target"]["head_sha"] == json.loads((kept / "findings.json").read_text())["target"]["head_sha"]
+        assert (
+            state["target"]["head_sha"]
+            == json.loads((kept / "findings.json").read_text())["target"]["head_sha"]
+        )
         logs.append((kept / "progress.log").read_text())
-    assert len(set(logs)) == 3  # each round keeps its own run's progress, not the next one's
+    assert (
+        len(set(logs)) == 3
+    )  # each round keeps its own run's progress, not the next one's
     # The ledger numbers the runs the same way.
-    assert [e["round"] for e in _ledger_lines(tmp_path, "finished")] == ["01", "02", "03", "04"]
+    assert [e["round"] for e in _ledger_lines(tmp_path, "finished")] == [
+        "01",
+        "02",
+        "03",
+        "04",
+    ]
 
 
-def test_a_run_stopped_before_export_is_kept_as_its_own_round(fixture_repo, tmp_path, agents):
+def test_a_run_stopped_before_export_is_kept_as_its_own_round(
+    fixture_repo, tmp_path, agents
+):
     """A budget stop writes no findings.json; the next run still keeps that run's files, not its own."""
     repo, base, head = fixture_repo
     out = tmp_path / "out"
@@ -190,11 +265,15 @@ def test_a_run_stopped_before_export_is_kept_as_its_own_round(fixture_repo, tmp_
     agents()
     assert main(_review_args(repo, base, head, out)) == 0  # round 01 finishes
     agents(budget_stop_at=2)
-    assert main(_review_args(repo, base, head, out)) == 4  # round 02 stops before export
+    assert (
+        main(_review_args(repo, base, head, out)) == 4
+    )  # round 02 stops before export
     stopped_log = (target_dir / "progress.log").read_text()
     stopped_state = (target_dir / "review-state.json").read_text()
     agents()
-    assert main(_review_args(repo, base, head, out)) == 0  # round 03 must not write over round 02
+    assert (
+        main(_review_args(repo, base, head, out)) == 0
+    )  # round 03 must not write over round 02
     names = sorted(p.name for p in (target_dir / "rounds").iterdir())
     assert names == [f"01-{head[:12]}", f"02-{head[:12]}"]
     second = target_dir / "rounds" / names[1]
@@ -202,10 +281,17 @@ def test_a_run_stopped_before_export_is_kept_as_its_own_round(fixture_repo, tmp_
     assert (second / "review-state.json").read_text() == stopped_state
     assert (second / "diff.patch").is_file()
     # The stopped run exported nothing: round 01's findings are not copied in as round 02's.
-    assert not (second / "findings.json").exists() and not (second / "checks.json").exists()
+    assert (
+        not (second / "findings.json").exists()
+        and not (second / "checks.json").exists()
+    )
     assert not list(second.glob("review-*.md"))
     # Its ledger number is the round it is kept as; the finished run after it is 03.
-    assert [e["round"] for e in _ledger_lines(tmp_path, "finished")] == ["01", "02", "03"]
+    assert [e["round"] for e in _ledger_lines(tmp_path, "finished")] == [
+        "01",
+        "02",
+        "03",
+    ]
     # A fourth run keeps round 03 once, and round 02 is not copied again.
     assert main(_review_args(repo, base, head, out)) == 0
     names = sorted(p.name for p in (target_dir / "rounds").iterdir())
@@ -216,7 +302,10 @@ def test_a_run_stopped_before_export_is_kept_as_its_own_round(fixture_repo, tmp_
 def test_keep_round_keeps_a_stopped_run_once(tmp_path):
     """A stopped run (state, no findings.json of its own) is kept once, and not again on a second start."""
     h = "e" * 40
-    state = {"target": {"head_sha": h, "slug": "t"}, "timings": {"run": [{"started_at": "2026-01-01T00:00:00.100Z"}]}}
+    state = {
+        "target": {"head_sha": h, "slug": "t"},
+        "timings": {"run": [{"started_at": "2026-01-01T00:00:00.100Z"}]},
+    }
     (tmp_path / "review-state.json").write_text(json.dumps(state))
     (tmp_path / "progress.log").write_text("stopped\n")
     first = rounds.keep_round(tmp_path, "t", h)
@@ -226,11 +315,19 @@ def test_keep_round_keeps_a_stopped_run_once(tmp_path):
     assert len(list((tmp_path / "rounds").iterdir())) == 1
 
 
-def _write_findings(d: Path, head: str, generated_at: str, claim: str = "", run: dict | None = None) -> None:
+def _write_findings(
+    d: Path, head: str, generated_at: str, claim: str = "", run: dict | None = None
+) -> None:
     d.mkdir(parents=True, exist_ok=True)
-    data = {"schema_version": 1, "generated_at": generated_at, "producer": "test",
-            "target": {"head_sha": head, "slug": "t", "label": "t"},
-            "findings": [{"id": "abcdef0123", "status": "confirmed", "claim": claim}] if claim else []}
+    data = {
+        "schema_version": 1,
+        "generated_at": generated_at,
+        "producer": "test",
+        "target": {"head_sha": head, "slug": "t", "label": "t"},
+        "findings": [{"id": "abcdef0123", "status": "confirmed", "claim": claim}]
+        if claim
+        else [],
+    }
     if run is not None:
         data["run"] = run
     (d / "findings.json").write_text(json.dumps(data))
@@ -239,13 +336,17 @@ def _write_findings(d: Path, head: str, generated_at: str, claim: str = "", run:
 def test_keep_round_numbers_after_legacy_names_and_load_rounds_reads_them_all(tmp_path):
     a, b = "a" * 40, "b" * 40
     _write_findings(tmp_path / "rounds" / a[:12], a, "2026-01-01T00:00:00Z", "first")
-    _write_findings(tmp_path / "rounds" / f"{a[:12]}-2", a, "2026-01-02T00:00:00Z", "second")
+    _write_findings(
+        tmp_path / "rounds" / f"{a[:12]}-2", a, "2026-01-02T00:00:00Z", "second"
+    )
     _write_findings(tmp_path, b, "2026-01-03T00:00:00Z", "third")
     (tmp_path / "progress.log").write_text("the third run\n")
     kept = rounds.keep_round(tmp_path, "t", b)
     assert kept == tmp_path / "rounds" / f"03-{b[:12]}"
     assert (kept / "progress.log").read_text() == "the third run\n"
-    assert rounds.keep_round(tmp_path, "t", b) == kept  # started again before it finished: one copy
+    assert (
+        rounds.keep_round(tmp_path, "t", b) == kept
+    )  # started again before it finished: one copy
     assert len(list((tmp_path / "rounds").iterdir())) == 3
     (e,) = rounds.load_rounds(tmp_path)
     assert e.finding["claim"] == "third" and e.head_sha == b
@@ -254,9 +355,21 @@ def test_keep_round_numbers_after_legacy_names_and_load_rounds_reads_them_all(tm
 def test_two_runs_in_one_second_are_two_rounds(tmp_path):
     """`generated_at` has whole seconds; the run's start time (milliseconds) tells two quick runs apart."""
     h = "c" * 40
-    _write_findings(tmp_path, h, "2026-01-01T00:00:00Z", "x", run={"started_at": "2026-01-01T00:00:00.100Z"})
+    _write_findings(
+        tmp_path,
+        h,
+        "2026-01-01T00:00:00Z",
+        "x",
+        run={"started_at": "2026-01-01T00:00:00.100Z"},
+    )
     first = rounds.keep_round(tmp_path, "t", h)
-    _write_findings(tmp_path, h, "2026-01-01T00:00:00Z", "x", run={"started_at": "2026-01-01T00:00:00.700Z"})
+    _write_findings(
+        tmp_path,
+        h,
+        "2026-01-01T00:00:00Z",
+        "x",
+        run={"started_at": "2026-01-01T00:00:00.700Z"},
+    )
     second = rounds.keep_round(tmp_path, "t", h)
     assert (first.name, second.name) == (f"01-{h[:12]}", f"02-{h[:12]}")
 
@@ -270,13 +383,20 @@ def test_the_marker_round_id_stays_the_head_sha_with_a_count(tmp_path):
     rounds.keep_round(tmp_path, "t", h)
     assert rounds.round_name(tmp_path, first) == h[:12]  # the kept copy keeps its id
     _write_findings(tmp_path, h, "2026-01-02T00:00:00Z", "x")
-    assert rounds.round_name(tmp_path, json.loads((tmp_path / "findings.json").read_text())) == f"{h[:12]}-2"
+    assert (
+        rounds.round_name(
+            tmp_path, json.loads((tmp_path / "findings.json").read_text())
+        )
+        == f"{h[:12]}-2"
+    )
 
 
 # --- 4. the append-only ledger ------------------------------------------------------
 
 
-def test_two_runs_give_two_ledger_lines_and_a_deleted_target_dir_a_third(fixture_repo, tmp_path, agents):
+def test_two_runs_give_two_ledger_lines_and_a_deleted_target_dir_a_third(
+    fixture_repo, tmp_path, agents
+):
     repo, base, head = fixture_repo
     out = tmp_path / "out"
     target_dir = out / "booking-engine" / f"range-{base}..{head}"
@@ -286,10 +406,30 @@ def test_two_runs_give_two_ledger_lines_and_a_deleted_target_dir_a_third(fixture
     finished = _ledger_lines(tmp_path, "finished")
     assert len(finished) == 2
     first = finished[0]
-    assert {k: first[k] for k in ("slug", "target_dir", "round", "head_sha", "base_sha", "kind", "pr", "stopped",
-                                  "session_id")} == {
-        "slug": f"example-booking-engine--{base}..{head}", "target_dir": str(target_dir), "round": "01", "head_sha": head, "base_sha": base,
-        "kind": "range", "pr": None, "stopped": None, "session_id": "sess-test"}
+    assert {
+        k: first[k]
+        for k in (
+            "slug",
+            "target_dir",
+            "round",
+            "head_sha",
+            "base_sha",
+            "kind",
+            "pr",
+            "stopped",
+            "session_id",
+        )
+    } == {
+        "slug": f"example-booking-engine--{base}..{head}",
+        "target_dir": str(target_dir),
+        "round": "01",
+        "head_sha": head,
+        "base_sha": base,
+        "kind": "range",
+        "pr": None,
+        "stopped": None,
+        "session_id": "sess-test",
+    }
     assert first["producer"].startswith("multiplai-dev:review ")
     assert "cost_usd" in first["run"] and first["generated_at"]
     assert finished[1]["round"] == "02"
@@ -302,7 +442,9 @@ def test_two_runs_give_two_ledger_lines_and_a_deleted_target_dir_a_third(fixture
     assert events == ["started", "finished"] * 3
 
 
-def test_a_budget_stop_and_its_resume_each_end_with_a_ledger_line(fixture_repo, tmp_path, agents):
+def test_a_budget_stop_and_its_resume_each_end_with_a_ledger_line(
+    fixture_repo, tmp_path, agents
+):
     repo, base, head = fixture_repo
     out = tmp_path / "out"
     agents(budget_stop_at=3)
@@ -311,10 +453,16 @@ def test_a_budget_stop_and_its_resume_each_end_with_a_ledger_line(fixture_repo, 
     target_dir = out / "booking-engine" / f"range-{base}..{head}"
     assert main(["resume", str(target_dir), "--trust-repo"]) == 0
     finished = _ledger_lines(tmp_path, "finished")
-    assert len(finished) == 2 and finished[-1]["stopped"] is None and finished[-1]["round"] == "01"
+    assert (
+        len(finished) == 2
+        and finished[-1]["stopped"] is None
+        and finished[-1]["round"] == "01"
+    )
 
 
-def test_a_usage_limit_stop_ends_with_a_ledger_line_naming_it(fixture_repo, tmp_path, agents):
+def test_a_usage_limit_stop_ends_with_a_ledger_line_naming_it(
+    fixture_repo, tmp_path, agents
+):
     repo, base, head = fixture_repo
     out = tmp_path / "out"
     agents(limit_at=3)
@@ -326,28 +474,43 @@ def test_each_target_of_a_batch_gets_a_ledger_line(fixture_repo, tmp_path, agent
     repo, base, head = fixture_repo
     out = tmp_path / "out"
     batch_file = tmp_path / "targets.yaml"
-    batch_file.write_text(f"- repo: {repo}\n  range: {base}..{head}\n- repo: {repo}\n  branch: feature/db-2038\n")
+    batch_file.write_text(
+        f"- repo: {repo}\n  range: {base}..{head}\n- repo: {repo}\n  branch: feature/db-2038\n"
+    )
     agents()
     assert main(["--out", str(out), "batch", str(batch_file), "--trust-repo"]) == 0
     assert sorted(e["slug"] for e in _ledger_lines(tmp_path, "finished")) == sorted(
-        [f"example-booking-engine--{base}..{head}", "example-booking-engine--feature_db-2038"])
+        [
+            f"example-booking-engine--{base}..{head}",
+            "example-booking-engine--feature_db-2038",
+        ]
+    )
 
 
 def test_a_started_line_with_no_end_makes_a_plain_run_exit_4_and_restart_starts_over(
-        fixture_repo, tmp_path, agents, capsys):
+    fixture_repo, tmp_path, agents, capsys
+):
     repo, base, head = fixture_repo
     out = tmp_path / "out"
     target_dir = out / "booking-engine" / f"range-{base}..{head}"
     agents()
     assert main(_review_args(repo, base, head, out)) == 0
     # A rerun on this head saved its state, wrote its `started` line, then died.
-    ledger.started(slug=target_dir.name, target_dir=target_dir, head_sha=head, session_id="a run that died")
+    ledger.started(
+        slug=target_dir.name,
+        target_dir=target_dir,
+        head_sha=head,
+        session_id="a run that died",
+    )
     state = (target_dir / "review-state.json").read_bytes()
     fake = agents()
     capsys.readouterr()
     assert main(_review_args(repo, base, head, out)) == 4
     err = capsys.readouterr().err
-    assert f"interrupted run found; continue with: python -m review_pipeline resume {target_dir}" in err
+    assert (
+        f"interrupted run found; continue with: python -m review_pipeline resume {target_dir}"
+        in err
+    )
     assert fake.calls == [] and (target_dir / "review-state.json").read_bytes() == state
     assert main(_review_args(repo, base, head, out, "--restart")) == 0
     assert _ledger_lines(tmp_path, "finished")[-1]["stopped"] is None
@@ -364,42 +527,70 @@ def _break_state(target_dir: Path, how: str) -> None:
 
 @pytest.mark.parametrize("how", ["dir-deleted", "state-deleted", "state-unreadable"])
 def test_a_started_line_with_no_saved_state_left_starts_a_fresh_run_that_closes_it(
-        fixture_repo, tmp_path, agents, how):
+    fixture_repo, tmp_path, agents, how
+):
     """`resume` could only fail there (no readable review-state.json), so a plain run starts over instead."""
     repo, base, head = fixture_repo
     out = tmp_path / "out"
     target_dir = out / "booking-engine" / f"range-{base}..{head}"
     agents()
     assert main(_review_args(repo, base, head, out)) == 0
-    ledger.started(slug=target_dir.name, target_dir=target_dir, head_sha=head, session_id="a run that died")
+    ledger.started(
+        slug=target_dir.name,
+        target_dir=target_dir,
+        head_sha=head,
+        session_id="a run that died",
+    )
     _break_state(target_dir, how)
     fake = agents()
     assert main(_review_args(repo, base, head, out)) == 0
     assert fake.calls
-    assert _ledger_lines(tmp_path)[-1]["event"] == "finished" and not ledger.interrupted(target_dir, head)
+    assert _ledger_lines(tmp_path)[-1][
+        "event"
+    ] == "finished" and not ledger.interrupted(target_dir, head)
     assert main(_review_args(repo, base, head, out)) == 0
 
 
-def test_a_started_line_for_a_head_the_saved_state_is_not_on_starts_a_fresh_run(branch_clone, tmp_path, agents):
+def test_a_started_line_for_a_head_the_saved_state_is_not_on_starts_a_fresh_run(
+    branch_clone, tmp_path, agents
+):
     """The directory's state is another head's: resuming it would finish a review of the wrong commit."""
     repo, _, head2 = branch_clone
     out = tmp_path / "out"
-    args = ["--out", str(out), "review", "--repo", str(repo), "--branch", "feature/x", "--trust-repo"]
+    args = [
+        "--out",
+        str(out),
+        "review",
+        "--repo",
+        str(repo),
+        "--branch",
+        "feature/x",
+        "--trust-repo",
+    ]
     target_dir = out / "github-tests" / "branch-feature_x"
     agents()
     assert main(args) == 0
     # A run on head2 died earlier; the directory now holds head1's finished run.
-    ledger.started(slug=target_dir.name, target_dir=target_dir, head_sha=head2, session_id="a run that died")
+    ledger.started(
+        slug=target_dir.name,
+        target_dir=target_dir,
+        head_sha=head2,
+        session_id="a run that died",
+    )
     fixture_git(repo, "update-ref", "refs/remotes/origin/feature/x", head2)
     fake = agents()
     assert main(args) == 0
     assert fake.calls
-    assert json.loads((target_dir / "findings.json").read_text())["target"]["head_sha"] == head2
+    assert (
+        json.loads((target_dir / "findings.json").read_text())["target"]["head_sha"]
+        == head2
+    )
     assert not ledger.interrupted(target_dir, head2)
 
 
 def test_a_review_running_now_is_not_read_as_interrupted_and_nothing_starts_a_second_run_in_its_directory(
-        fixture_repo, tmp_path, agents, capsys):
+    fixture_repo, tmp_path, agents, capsys
+):
     """A running review leaves the same `started` line as a killed one. While a
     process holds the target's run lock, `review`, `review --restart` and
     `resume` all refuse (exit 2) and write nothing; once it lets go, the same
@@ -412,26 +603,42 @@ def test_a_review_running_now_is_not_read_as_interrupted_and_nothing_starts_a_se
     agents()
     assert main(_review_args(repo, base, head, out)) == 0
     # A rerun on this head has saved its state and written its `started` line, and is still going.
-    ledger.started(slug=target_dir.name, target_dir=target_dir, head_sha=head, session_id="a run still going")
+    ledger.started(
+        slug=target_dir.name,
+        target_dir=target_dir,
+        head_sha=head,
+        session_id="a run still going",
+    )
     state = (target_dir / "review-state.json").read_bytes()
     fake = agents()
     with runlock.hold(target_dir):
-        for argv in (_review_args(repo, base, head, out), _review_args(repo, base, head, out, "--restart"),
-                     ["resume", str(target_dir), "--trust-repo"]):
+        for argv in (
+            _review_args(repo, base, head, out),
+            _review_args(repo, base, head, out, "--restart"),
+            ["resume", str(target_dir), "--trust-repo"],
+        ):
             capsys.readouterr()
             assert main(argv) == 2, argv
             err = capsys.readouterr().err
-            assert f"a review of {target_dir} is running now (pid {os.getpid()} on " in err, err
+            assert (
+                f"a review of {target_dir} is running now (pid {os.getpid()} on " in err
+            ), err
             assert "interrupted run found" not in err
     assert fake.calls == [] and (target_dir / "review-state.json").read_bytes() == state
-    assert [e["event"] for e in _ledger_lines(tmp_path)] == ["started", "finished", "started"]
+    assert [e["event"] for e in _ledger_lines(tmp_path)] == [
+        "started",
+        "finished",
+        "started",
+    ]
 
     capsys.readouterr()
     assert main(_review_args(repo, base, head, out)) == 4
     assert "interrupted run found" in capsys.readouterr().err
 
 
-def test_two_targets_of_a_batch_in_one_directory_do_not_run_at_once(fixture_repo, tmp_path, agents, capsys):
+def test_two_targets_of_a_batch_in_one_directory_do_not_run_at_once(
+    fixture_repo, tmp_path, agents, capsys
+):
     """The second of two batch entries naming the same target fails while the first holds its
     directory, and says it is running, not that it was interrupted."""
     repo, base, head = fixture_repo
@@ -441,15 +648,35 @@ def test_two_targets_of_a_batch_in_one_directory_do_not_run_at_once(fixture_repo
     entry = {"repo": str(repo), "range": f"{base}..{head}"}
     batch_file.write_text(json.dumps([entry, entry]))
     agents()
-    assert main(["--out", str(out), "batch", str(batch_file), "--trust-repo", "--parallel", "2"]) == 1
+    assert (
+        main(
+            [
+                "--out",
+                str(out),
+                "batch",
+                str(batch_file),
+                "--trust-repo",
+                "--parallel",
+                "2",
+            ]
+        )
+        == 1
+    )
     printed = capsys.readouterr().out
-    assert "is running now" in printed and "interrupted run found" not in printed, printed
+    assert "is running now" in printed and "interrupted run found" not in printed, (
+        printed
+    )
     assert len(_ledger_lines(tmp_path, "started")) == 1
 
 
-@pytest.mark.parametrize("stop", [KeyboardInterrupt, asyncio.CancelledError, SystemExit],
-                         ids=["KeyboardInterrupt", "CancelledError", "SystemExit"])
-def test_a_run_stopped_by_the_user_or_the_process_writes_no_end_line(fixture_repo, tmp_path, monkeypatch, stop):
+@pytest.mark.parametrize(
+    "stop",
+    [KeyboardInterrupt, asyncio.CancelledError, SystemExit],
+    ids=["KeyboardInterrupt", "CancelledError", "SystemExit"],
+)
+def test_a_run_stopped_by_the_user_or_the_process_writes_no_end_line(
+    fixture_repo, tmp_path, monkeypatch, stop
+):
     """Ctrl-C, a cancelled task or an exiting process is an interrupted run, not a finished one."""
     from conftest import high_finding
     from review_pipeline.models import FinderOutput
@@ -472,7 +699,9 @@ def test_a_run_stopped_by_the_user_or_the_process_writes_no_end_line(fixture_rep
     assert ledger.interrupted(target_dir, head)
 
 
-def test_the_started_line_comes_after_the_runs_state_is_saved(fixture_repo, tmp_path, agents, monkeypatch):
+def test_the_started_line_comes_after_the_runs_state_is_saved(
+    fixture_repo, tmp_path, agents, monkeypatch
+):
     """A run killed right after its `started` line must not leave the last round's state for `resume`."""
     from review_pipeline import orchestrator
 
@@ -486,7 +715,9 @@ def test_the_started_line_comes_after_the_runs_state_is_saved(fixture_repo, tmp_
         raise KeyboardInterrupt
 
     agents()
-    assert main(_review_args(repo, base, head, out)) == 0  # the last round: its state says "done"
+    assert (
+        main(_review_args(repo, base, head, out)) == 0
+    )  # the last round: its state says "done"
     monkeypatch.setattr(orchestrator.review_ledger, "started", started)
     with pytest.raises(KeyboardInterrupt):
         main(_review_args(repo, base, head, out))
@@ -523,9 +754,12 @@ sys.exit(main(sys.argv[3:]))
 """
 
 
-@pytest.mark.parametrize("sig", [signal.SIGTERM, signal.SIGINT], ids=["SIGTERM", "SIGINT"])
-def test_a_run_killed_after_find_leaves_a_started_line_and_resume_skips_find(fixture_repo, tmp_path, agents, capsys,
-                                                                             sig):
+@pytest.mark.parametrize(
+    "sig", [signal.SIGTERM, signal.SIGINT], ids=["SIGTERM", "SIGINT"]
+)
+def test_a_run_killed_after_find_leaves_a_started_line_and_resume_skips_find(
+    fixture_repo, tmp_path, agents, capsys, sig
+):
     """Done means 8: SIGTERM once progress.log shows find finished; a plain run exits 4; resume skips find.
 
     SIGINT (Ctrl-C) cancels the run's task instead of killing the process: it
@@ -536,12 +770,19 @@ def test_a_run_killed_after_find_leaves_a_started_line_and_resume_skips_find(fix
     driver = tmp_path / "driver.py"
     driver.write_text(DRIVER)
     args = _review_args(repo, base, head, out)
-    proc = subprocess.Popen([sys.executable, str(driver), str(TESTS), str(tmp_path / "data"), *args],
-                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, env=dict(os.environ))
+    proc = subprocess.Popen(
+        [sys.executable, str(driver), str(TESTS), str(tmp_path / "data"), *args],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=dict(os.environ),
+    )
     try:
         deadline = time.monotonic() + 120
         progress = target_dir / "progress.log"
-        while not (progress.is_file() and "STAGE find: find done" in progress.read_text()):
+        while not (
+            progress.is_file() and "STAGE find: find done" in progress.read_text()
+        ):
             assert proc.poll() is None, proc.stderr.read()
             assert time.monotonic() < deadline, "find never finished"
             time.sleep(0.1)
@@ -556,15 +797,24 @@ def test_a_run_killed_after_find_leaves_a_started_line_and_resume_skips_find(fix
     fake = agents()
     capsys.readouterr()
     assert main(args) == 4
-    assert (f"interrupted run found; continue with: python -m review_pipeline resume {target_dir}"
-            in capsys.readouterr().err)
+    assert (
+        f"interrupted run found; continue with: python -m review_pipeline resume {target_dir}"
+        in capsys.readouterr().err
+    )
     assert fake.calls == []
 
     assert main(["resume", str(target_dir), "--trust-repo"]) == 0
     assert fake.calls and not [c for c in fake.calls if c.startswith("find")]
     log = progress.read_text()
-    assert "RESUMED after find" in log and "STAGE find" not in log.split("RESUMED after find", 1)[1]
-    assert [e["event"] for e in _ledger_lines(tmp_path)] == ["started", "started", "finished"]
+    assert (
+        "RESUMED after find" in log
+        and "STAGE find" not in log.split("RESUMED after find", 1)[1]
+    )
+    assert [e["event"] for e in _ledger_lines(tmp_path)] == [
+        "started",
+        "started",
+        "finished",
+    ]
     assert not ledger.interrupted(target_dir, head)
 
 
@@ -574,22 +824,44 @@ def test_a_run_killed_after_find_leaves_a_started_line_and_resume_skips_find(fix
 def test_write_runs_lists_earlier_rounds_sorted_by_generated_at(tmp_path):
     out = tmp_path / "out"
     run = {"cost_usd": 1.0, "started_at": "x"}
-    _write_findings(out / "t", "a" * 40, "2026-01-03T00:00:00Z", run=dict(run, started_at="3"))
-    _write_findings(out / "t" / "rounds" / "02-aaaaaaaaaaaa", "a" * 40, "2026-01-02T00:00:00Z",
-                    run=dict(run, started_at="2"))
-    _write_findings(out / "t" / "rounds" / "aaaaaaaaaaaa", "a" * 40, "2026-01-01T00:00:00Z",
-                    run=dict(run, started_at="1"))
-    _write_findings(out / "u", "b" * 40, "2026-01-02T12:00:00Z", run=dict(run, started_at="4"))
-    _write_findings(out / "t" / "rounds" / "03-aaaaaaaaaaaa", "a" * 40, "2026-01-03T00:00:00Z",
-                    run=dict(run, started_at="3"))  # the top-level round, kept by a run that then died
+    _write_findings(
+        out / "t", "a" * 40, "2026-01-03T00:00:00Z", run=dict(run, started_at="3")
+    )
+    _write_findings(
+        out / "t" / "rounds" / "02-aaaaaaaaaaaa",
+        "a" * 40,
+        "2026-01-02T00:00:00Z",
+        run=dict(run, started_at="2"),
+    )
+    _write_findings(
+        out / "t" / "rounds" / "aaaaaaaaaaaa",
+        "a" * 40,
+        "2026-01-01T00:00:00Z",
+        run=dict(run, started_at="1"),
+    )
+    _write_findings(
+        out / "u", "b" * 40, "2026-01-02T12:00:00Z", run=dict(run, started_at="4")
+    )
+    _write_findings(
+        out / "t" / "rounds" / "03-aaaaaaaaaaaa",
+        "a" * 40,
+        "2026-01-03T00:00:00Z",
+        run=dict(run, started_at="3"),
+    )  # the top-level round, kept by a run that then died
     path, n, skipped = render.write_runs(out)
     lines = [json.loads(line) for line in path.read_text().splitlines()]
     assert n == 4 and skipped == 0
     assert [line["generated_at"] for line in lines] == [
-        "2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z", "2026-01-02T12:00:00Z", "2026-01-03T00:00:00Z"]
+        "2026-01-01T00:00:00Z",
+        "2026-01-02T00:00:00Z",
+        "2026-01-02T12:00:00Z",
+        "2026-01-03T00:00:00Z",
+    ]
 
 
-def test_runs_jsonl_lists_every_run_of_a_target_through_the_cli(fixture_repo, tmp_path, agents):
+def test_runs_jsonl_lists_every_run_of_a_target_through_the_cli(
+    fixture_repo, tmp_path, agents
+):
     repo, base, head = fixture_repo
     out = tmp_path / "out"
     agents()
@@ -604,30 +876,61 @@ def test_runs_jsonl_lists_every_run_of_a_target_through_the_cli(fixture_repo, tm
 
 def _legacy_reviews(root: Path) -> None:
     run = {"cost_usd": 2.5}
-    t = {"slug": "repo--pr-1", "label": "repo PR #1", "head_sha": "e" * 40, "base_sha": "f" * 40, "kind": "pr",
-         "pr": 1}
+    t = {
+        "slug": "repo--pr-1",
+        "label": "repo PR #1",
+        "head_sha": "e" * 40,
+        "base_sha": "f" * 40,
+        "kind": "pr",
+        "pr": 1,
+    }
     d = root / "repo--pr-1"
     (d / "rounds" / "eeeeeeeeeeee").mkdir(parents=True)
     (d / "viewer").mkdir()
-    (d / "findings.json").write_text(json.dumps({"generated_at": "2026-02-02T00:00:00Z", "producer": "p",
-                                                  "target": t, "findings": [], "run": run}))
-    (d / "rounds" / "eeeeeeeeeeee" / "findings.json").write_text(json.dumps(
-        {"generated_at": "2026-02-01T00:00:00Z", "producer": "p", "target": t, "findings": []}))
+    (d / "findings.json").write_text(
+        json.dumps(
+            {
+                "generated_at": "2026-02-02T00:00:00Z",
+                "producer": "p",
+                "target": t,
+                "findings": [],
+                "run": run,
+            }
+        )
+    )
+    (d / "rounds" / "eeeeeeeeeeee" / "findings.json").write_text(
+        json.dumps(
+            {
+                "generated_at": "2026-02-01T00:00:00Z",
+                "producer": "p",
+                "target": t,
+                "findings": [],
+            }
+        )
+    )
     (d / "viewer" / "decisions.json").write_text("{}")
     (d / "progress.log").write_text("DONE\n")
     archived = root / "r2__repo--pr-1" / "1791-abc"
     archived.mkdir(parents=True)
-    (archived / "findings.json").write_text(json.dumps({"generated_at": "2026-02-03T00:00:00Z", "target": t,
-                                                         "findings": []}))
+    (archived / "findings.json").write_text(
+        json.dumps(
+            {"generated_at": "2026-02-03T00:00:00Z", "target": t, "findings": []}
+        )
+    )
     (root / "HIGH-only.md").write_text("a rollup, not a review\n")
 
 
 def _snapshot(root: Path) -> dict[str, tuple[bytes, float]]:
-    return {str(p.relative_to(root)): (p.read_bytes(), p.stat().st_mtime) for p in sorted(root.rglob("*"))
-            if p.is_file()}
+    return {
+        str(p.relative_to(root)): (p.read_bytes(), p.stat().st_mtime)
+        for p in sorted(root.rglob("*"))
+        if p.is_file()
+    }
 
 
-def test_migrate_copies_appends_ledger_lines_leaves_the_source_and_skips_on_a_second_run(tmp_path, capsys):
+def test_migrate_copies_appends_ledger_lines_leaves_the_source_and_skips_on_a_second_run(
+    tmp_path, capsys
+):
     src = tmp_path / "INBOX" / "reviews"
     _legacy_reviews(src)
     before = _snapshot(src)
@@ -635,21 +938,50 @@ def test_migrate_copies_appends_ledger_lines_leaves_the_source_and_skips_on_a_se
 
     assert main(["migrate", "--from", str(src)]) == 0
     legacy = tmp_path / "data" / "reviews" / "legacy"
-    assert sorted(p.name for p in legacy.iterdir() if p.is_dir()) == ["r2__repo--pr-1", "repo--pr-1"]
-    for rel in ("findings.json", "rounds/eeeeeeeeeeee/findings.json", "viewer/decisions.json", "progress.log"):
-        assert (legacy / "repo--pr-1" / rel).read_bytes() == (src / "repo--pr-1" / rel).read_bytes()
+    assert sorted(p.name for p in legacy.iterdir() if p.is_dir()) == [
+        "r2__repo--pr-1",
+        "repo--pr-1",
+    ]
+    for rel in (
+        "findings.json",
+        "rounds/eeeeeeeeeeee/findings.json",
+        "viewer/decisions.json",
+        "progress.log",
+    ):
+        assert (legacy / "repo--pr-1" / rel).read_bytes() == (
+            src / "repo--pr-1" / rel
+        ).read_bytes()
     assert (legacy / "r2__repo--pr-1" / "1791-abc" / "findings.json").is_file()
     assert not (legacy / "HIGH-only.md").exists()
 
     migrated = _ledger_lines(tmp_path, "migrated")
     assert len(migrated) == 3
     by_from = {e["migrated_from"]: e for e in migrated}
-    assert set(by_from) == {str(src / "repo--pr-1"), str(src / "repo--pr-1" / "rounds" / "eeeeeeeeeeee"),
-                            str(src / "r2__repo--pr-1" / "1791-abc")}
+    assert set(by_from) == {
+        str(src / "repo--pr-1"),
+        str(src / "repo--pr-1" / "rounds" / "eeeeeeeeeeee"),
+        str(src / "r2__repo--pr-1" / "1791-abc"),
+    }
     top = by_from[str(src / "repo--pr-1")]
-    assert (top["slug"], top["head_sha"], top["kind"], top["pr"], top["run"], top["target_dir"]) == (
-        "repo--pr-1", "e" * 40, "pr", 1, {"cost_usd": 2.5}, str(legacy / "repo--pr-1"))
-    assert by_from[str(src / "repo--pr-1" / "rounds" / "eeeeeeeeeeee")]["round"] == "eeeeeeeeeeee"
+    assert (
+        top["slug"],
+        top["head_sha"],
+        top["kind"],
+        top["pr"],
+        top["run"],
+        top["target_dir"],
+    ) == (
+        "repo--pr-1",
+        "e" * 40,
+        "pr",
+        1,
+        {"cost_usd": 2.5},
+        str(legacy / "repo--pr-1"),
+    )
+    assert (
+        by_from[str(src / "repo--pr-1" / "rounds" / "eeeeeeeeeeee")]["round"]
+        == "eeeeeeeeeeee"
+    )
     assert _snapshot(src) == before and sorted(p.name for p in src.iterdir()) == listing
 
     capsys.readouterr()
@@ -685,8 +1017,12 @@ class _Killed(BaseException):
     """A migrate run killed between two writes."""
 
 
-@pytest.mark.parametrize("at", [1, 2, 3], ids=["before-any-line", "after-one-dir", "mid-dir"])
-def test_migrate_stopped_part_way_finishes_on_a_rerun_without_a_second_copy(tmp_path, monkeypatch, at):
+@pytest.mark.parametrize(
+    "at", [1, 2, 3], ids=["before-any-line", "after-one-dir", "mid-dir"]
+)
+def test_migrate_stopped_part_way_finishes_on_a_rerun_without_a_second_copy(
+    tmp_path, monkeypatch, at
+):
     """A run stopped after a copy was renamed into place, at any ledger line, is completed by the
     next run: no `<name>~<hash>` copy, and every findings.json gets exactly one ledger line."""
     from review_pipeline import migrate as migrate_mod
@@ -708,13 +1044,24 @@ def test_migrate_stopped_part_way_finishes_on_a_rerun_without_a_second_copy(tmp_
 
     assert main(["migrate", "--from", str(src)]) == 0
     legacy = tmp_path / "data" / "reviews" / "legacy"
-    assert sorted(p.name for p in legacy.iterdir() if p.is_dir()) == ["r2__repo--pr-1", "repo--pr-1"]
+    assert sorted(p.name for p in legacy.iterdir() if p.is_dir()) == [
+        "r2__repo--pr-1",
+        "repo--pr-1",
+    ]
     froms = sorted(e["migrated_from"] for e in _ledger_lines(tmp_path, "migrated"))
-    assert froms == sorted([str(src / "repo--pr-1"), str(src / "repo--pr-1" / "rounds" / "eeeeeeeeeeee"),
-                            str(src / "r2__repo--pr-1" / "1791-abc")])
+    assert froms == sorted(
+        [
+            str(src / "repo--pr-1"),
+            str(src / "repo--pr-1" / "rounds" / "eeeeeeeeeeee"),
+            str(src / "r2__repo--pr-1" / "1791-abc"),
+        ]
+    )
     assert main(["migrate", "--from", str(src)]) == 0
     assert len(_ledger_lines(tmp_path, "migrated")) == 3
-    assert sorted(p.name for p in legacy.iterdir() if p.is_dir()) == ["r2__repo--pr-1", "repo--pr-1"]
+    assert sorted(p.name for p in legacy.iterdir() if p.is_dir()) == [
+        "r2__repo--pr-1",
+        "repo--pr-1",
+    ]
 
 
 def test_migrate_refuses_a_source_that_is_not_a_directory(tmp_path, capsys):
@@ -724,7 +1071,9 @@ def test_migrate_refuses_a_source_that_is_not_a_directory(tmp_path, capsys):
 # --- review.yaml written in the old default directory ------------------------------
 
 
-def _old_workspace(tmp_path: Path, monkeypatch, yaml_text: str = "effort: low\n") -> Path:
+def _old_workspace(
+    tmp_path: Path, monkeypatch, yaml_text: str = "effort: low\n"
+) -> Path:
     """A workspace whose INBOX/reviews (the default before 0.45) holds a review.yaml."""
     ws = tmp_path / "ws"
     old = ws / "INBOX" / "reviews"
@@ -738,8 +1087,11 @@ def _old_workspace(tmp_path: Path, monkeypatch, yaml_text: str = "effort: low\n"
     return old
 
 
-def test_the_default_out_still_reads_a_review_yaml_left_in_the_old_default(tmp_path, monkeypatch, caplog):
+def test_the_default_out_still_reads_a_review_yaml_left_in_the_old_default(
+    tmp_path, monkeypatch, caplog
+):
     from review_pipeline.config import load_config
+
     old = _old_workspace(tmp_path, monkeypatch)
     with caplog.at_level(logging.WARNING):
         assert load_config(default_out()).effort == "low"
@@ -752,17 +1104,22 @@ def test_the_default_out_still_reads_a_review_yaml_left_in_the_old_default(tmp_p
 
 def test_an_explicit_out_never_reads_the_old_default_review_yaml(tmp_path, monkeypatch):
     from review_pipeline.config import load_config
+
     _old_workspace(tmp_path, monkeypatch)
     other = tmp_path / "elsewhere"
     other.mkdir()
     assert load_config(other).effort != "low"
 
 
-def test_migrate_copies_the_sources_review_yaml_but_never_over_one_already_there(tmp_path, monkeypatch, capsys):
+def test_migrate_copies_the_sources_review_yaml_but_never_over_one_already_there(
+    tmp_path, monkeypatch, capsys
+):
     old = _old_workspace(tmp_path, monkeypatch)
     assert main(["migrate", "--from", str(old)]) == 0
     assert (default_out() / "review.yaml").read_text() == "effort: low\n"
-    assert (old / "review.yaml").read_text() == "effort: low\n"  # the source is left as it was
+    assert (
+        old / "review.yaml"
+    ).read_text() == "effort: low\n"  # the source is left as it was
     (old / "review.yaml").write_text("effort: medium\n")
     (default_out() / "review.yaml").write_text("effort: high\n")
     assert main(["migrate", "--from", str(old)]) == 0
@@ -772,40 +1129,111 @@ def test_migrate_copies_the_sources_review_yaml_but_never_over_one_already_there
 # --- the first review after the upgrade sees the PR's history under its old name ---
 
 
-def _old_round(d: Path, head: str, generated_at: str, finding_id: str, remote: str = ORIGIN,
-               slug: str = "checkout-x--pr-7") -> None:
+def _old_round(
+    d: Path,
+    head: str,
+    generated_at: str,
+    finding_id: str,
+    remote: str = ORIGIN,
+    slug: str = "checkout-x--pr-7",
+) -> None:
     d.mkdir(parents=True, exist_ok=True)
-    (d / "findings.json").write_text(json.dumps({
-        "schema_version": 1, "generated_at": generated_at, "producer": "multiplai-dev:review 0.32.0",
-        "target": {"head_sha": head, "slug": slug, "label": slug, "remote_url": remote},
-        "findings": [{"id": finding_id, "status": "confirmed", "claim": f"claim {finding_id}"}]}))
+    (d / "findings.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "generated_at": generated_at,
+                "producer": "multiplai-dev:review 0.32.0",
+                "target": {
+                    "head_sha": head,
+                    "slug": slug,
+                    "label": slug,
+                    "remote_url": remote,
+                },
+                "findings": [
+                    {
+                        "id": finding_id,
+                        "status": "confirmed",
+                        "claim": f"claim {finding_id}",
+                    }
+                ],
+            }
+        )
+    )
 
 
 def _new_state(slug: str = f"{SLUG_REPO}--pr-7", head: str = "f" * 40):
     from review_pipeline.models import ReviewState, TargetInfo
-    return ReviewState(target=TargetInfo(repo_path="/r", remote_url=ORIGIN, base_sha="0" * 40, head_sha=head,
-                                         slug=slug, kind="pr", ref="7", pr=7))
+
+    return ReviewState(
+        target=TargetInfo(
+            repo_path="/r",
+            remote_url=ORIGIN,
+            base_sha="0" * 40,
+            head_sha=head,
+            slug=slug,
+            kind="pr",
+            ref="7",
+            pr=7,
+        )
+    )
 
 
 def test_a_prs_first_review_in_the_data_dir_reads_its_rounds_and_rejections_under_the_old_name(
-        tmp_path, monkeypatch):
+    tmp_path, monkeypatch
+):
     from review_pipeline.stages import RunContext
     from review_pipeline.stages.repeats import earlier_findings
+
     old = _old_workspace(tmp_path, monkeypatch)
     a, b = "a" * 40, "b" * 40
     # The old directory: one kept round and its last (top-level) round, and the person's rejection.
-    _old_round(old / "checkout-x--pr-7" / "rounds" / a[:12], a, "2026-01-01T00:00:00Z", "1111111111")
+    _old_round(
+        old / "checkout-x--pr-7" / "rounds" / a[:12],
+        a,
+        "2026-01-01T00:00:00Z",
+        "1111111111",
+    )
     _old_round(old / "checkout-x--pr-7", b, "2026-01-02T00:00:00Z", "2222222222")
     (old / "checkout-x--pr-7" / "viewer").mkdir()
-    (old / "checkout-x--pr-7" / "viewer" / "decisions.json").write_text(json.dumps(
-        {"2222222222": {"decision": "reject", "note": "by design", "ts": "2026-01-02T01:00:00Z"}}))
+    (old / "checkout-x--pr-7" / "viewer" / "decisions.json").write_text(
+        json.dumps(
+            {
+                "2222222222": {
+                    "decision": "reject",
+                    "note": "by design",
+                    "ts": "2026-01-02T01:00:00Z",
+                }
+            }
+        )
+    )
     # Another worktree's name for the same PR; migrate's copy of the first (read once, not twice).
-    _old_round(old / "other-worktree--pr-7", a, "2026-01-01T12:00:00Z", "3333333333", slug="other-worktree--pr-7")
-    shutil.copytree(old / "checkout-x--pr-7", default_out() / "legacy" / "checkout-x--pr-7")
+    _old_round(
+        old / "other-worktree--pr-7",
+        a,
+        "2026-01-01T12:00:00Z",
+        "3333333333",
+        slug="other-worktree--pr-7",
+    )
+    shutil.copytree(
+        old / "checkout-x--pr-7", default_out() / "legacy" / "checkout-x--pr-7"
+    )
     # Not this PR: another repository's PR 7, and this repository's PR 70.
-    _old_round(old / "elsewhere--pr-7", a, "2026-01-01T00:00:00Z", "4444444444",
-               remote="https://github.com/someone/else", slug="elsewhere--pr-7")
-    _old_round(old / "checkout-x--pr-70", a, "2026-01-01T00:00:00Z", "5555555555", slug="checkout-x--pr-70")
+    _old_round(
+        old / "elsewhere--pr-7",
+        a,
+        "2026-01-01T00:00:00Z",
+        "4444444444",
+        remote="https://github.com/someone/else",
+        slug="elsewhere--pr-7",
+    )
+    _old_round(
+        old / "checkout-x--pr-70",
+        a,
+        "2026-01-01T00:00:00Z",
+        "5555555555",
+        slug="checkout-x--pr-70",
+    )
 
     target_dir = default_out() / f"{SLUG_REPO}--pr-7"
     target_dir.mkdir(parents=True)
@@ -813,13 +1241,17 @@ def test_a_prs_first_review_in_the_data_dir_reads_its_rounds_and_rejections_unde
     earlier = earlier_findings(_new_state(), ctx)
     assert sorted(e.id for e in earlier) == ["1111111111", "2222222222", "3333333333"]
     by_id = {e.id: e for e in earlier}
-    assert (by_id["2222222222"].decision, by_id["2222222222"].note) == ("reject", "by design")
+    assert (by_id["2222222222"].decision, by_id["2222222222"].note) == (
+        "reject",
+        "by design",
+    )
     assert by_id["2222222222"].head_sha == b
 
 
 def test_a_slug_with_no_origin_has_no_history_under_other_names(tmp_path, monkeypatch):
     from review_pipeline.stages import RunContext
     from review_pipeline.stages.repeats import earlier_findings
+
     old = _old_workspace(tmp_path, monkeypatch)
     _old_round(old / "checkout-x--pr-7", "a" * 40, "2026-01-01T00:00:00Z", "1111111111")
     target_dir = default_out() / "checkout-y--pr-7"
@@ -835,8 +1267,15 @@ def test_a_slug_with_no_origin_has_no_history_under_other_names(tmp_path, monkey
 
 def _fake_pr(monkeypatch, base: str, head: str) -> None:
     def fake_view(repo_path, number):
-        return {"headRefOid": head, "baseRefOid": base, "headRefName": "feature", "baseRefName": "main",
-                "title": "t", "body": ""}
+        return {
+            "headRefOid": head,
+            "baseRefOid": base,
+            "headRefName": "feature",
+            "baseRefName": "main",
+            "title": "t",
+            "body": "",
+        }
+
     monkeypatch.setattr(target, "_pr_view", fake_view)
 
 
@@ -861,6 +1300,7 @@ def layout_clone(fixture_repo, tmp_path, monkeypatch):
 def _plan(out: Path, *argv: str) -> Path:
     """Run `review --plan-only` and return the folder its `plan:` line names."""
     from review_pipeline import config, orchestrator
+
     spec = orchestrator.TargetSpec(**{k: v for k, v in zip(argv[::2], argv[1::2])})
     _, path = orchestrator.plan_only(spec, out, config.load_config(out))
     return path.parent
@@ -868,66 +1308,136 @@ def _plan(out: Path, *argv: str) -> Path:
 
 def _hex6(text: str) -> str:
     import hashlib
+
     return hashlib.sha256(text.encode()).hexdigest()[:6]
 
 
-def test_each_kind_of_target_gets_its_own_object_folder_under_the_repo(layout_clone, tmp_path, agents):
+def test_each_kind_of_target_gets_its_own_object_folder_under_the_repo(
+    layout_clone, tmp_path, agents
+):
     """Done means 4. A folder records whose it is in its saved state, so feat/x is a full review."""
     repo, base, head = layout_clone
     out = tmp_path / "out"
     r = str(repo)
     assert _plan(out, "repo", r, "pr", 7) == out / "github-tests" / "pr-7"
     agents()
-    assert main(["--out", str(out), "review", "--repo", r, "--branch", "feat/x", "--trust-repo"]) == 0
+    assert (
+        main(
+            [
+                "--out",
+                str(out),
+                "review",
+                "--repo",
+                r,
+                "--branch",
+                "feat/x",
+                "--trust-repo",
+            ]
+        )
+        == 0
+    )
     assert (out / "github-tests" / "branch-feat_x" / "findings.json").is_file()
-    assert _plan(out, "repo", r, "branch", "feat_x") == out / "github-tests" / f"branch-feat_x-{_hex6('feat_x')}"
-    assert _plan(out, "repo", r, "branch", "feat/x") == out / "github-tests" / "branch-feat_x"  # again: its own
-    assert _plan(out, "repo", r, "range", f"{base}..{head}") == out / "github-tests" / f"range-{base}..{head}"
+    assert (
+        _plan(out, "repo", r, "branch", "feat_x")
+        == out / "github-tests" / f"branch-feat_x-{_hex6('feat_x')}"
+    )
+    assert (
+        _plan(out, "repo", r, "branch", "feat/x")
+        == out / "github-tests" / "branch-feat_x"
+    )  # again: its own
+    assert (
+        _plan(out, "repo", r, "range", f"{base}..{head}")
+        == out / "github-tests" / f"range-{base}..{head}"
+    )
     assert _plan(out, "repo", r, "tree", "HEAD") == out / "github-tests" / "tree"
-    assert _plan(out, "repo", r, "tree", "HEAD", "path", "src") == out / "github-tests" / "tree-src"
+    assert (
+        _plan(out, "repo", r, "tree", "HEAD", "path", "src")
+        == out / "github-tests" / "tree-src"
+    )
     for name, repo_name in (("proj", "proj"), ("legacy", "legacy@local")):
         src = tmp_path / name
         src.mkdir()
         (src / "m.py").write_text("X = 1\n")
-        assert _plan(out, "repo", "", "dir", str(src)) == out / repo_name / f"dir-{name}-{_hex6(str(src))}"
+        assert (
+            _plan(out, "repo", "", "dir", str(src))
+            == out / repo_name / f"dir-{name}-{_hex6(str(src))}"
+        )
 
 
 def _state_file(folder: Path, remote: str, ref: str, slug: str) -> None:
     folder.mkdir(parents=True, exist_ok=True)
-    (folder / "review-state.json").write_text(json.dumps(
-        {"target": {"remote_url": remote, "ref": ref, "slug": slug, "head_sha": "e" * 40}, "stage": "done"}))
+    (folder / "review-state.json").write_text(
+        json.dumps(
+            {
+                "target": {
+                    "remote_url": remote,
+                    "ref": ref,
+                    "slug": slug,
+                    "head_sha": "e" * 40,
+                },
+                "stage": "done",
+            }
+        )
+    )
 
 
-def test_a_folder_another_remote_wrote_is_left_alone_and_the_fork_gets_owner_folders(layout_clone, tmp_path):
+def test_a_folder_another_remote_wrote_is_left_alone_and_the_fork_gets_owner_folders(
+    layout_clone, tmp_path
+):
     """Done means 5."""
     repo, _, _ = layout_clone
     out = tmp_path / "out"
     upstream = out / "github-tests" / "pr-7"
     _state_file(upstream, ORIGIN, "7", f"{SLUG_REPO}--pr-7")
     before = _snapshot(upstream)
-    fixture_git(repo, "remote", "set-url", "origin", "git@github.com:someone/github-tests.git")
-    assert _plan(out, "repo", str(repo), "pr", 7) == out / "github-tests@someone" / "pr-7"
+    fixture_git(
+        repo, "remote", "set-url", "origin", "git@github.com:someone/github-tests.git"
+    )
+    assert (
+        _plan(out, "repo", str(repo), "pr", 7) == out / "github-tests@someone" / "pr-7"
+    )
     assert _snapshot(upstream) == before
 
     # spikelab's feat/x holds branch-feat_x; the fork's feat/x holds its own; the fork's feat_x gets a hash.
-    _state_file(out / "github-tests" / "branch-feat_x", ORIGIN, "feat/x", f"{SLUG_REPO}--feat_x")
+    _state_file(
+        out / "github-tests" / "branch-feat_x", ORIGIN, "feat/x", f"{SLUG_REPO}--feat_x"
+    )
     fork = "https://github.com/someone/github-tests"
-    _state_file(out / "github-tests@someone" / "branch-feat_x", fork, "feat/x", "someone-github-tests--feat_x")
-    assert (_plan(out, "repo", str(repo), "branch", "feat_x")
-            == out / "github-tests@someone" / f"branch-feat_x-{_hex6('feat_x')}")
+    _state_file(
+        out / "github-tests@someone" / "branch-feat_x",
+        fork,
+        "feat/x",
+        "someone-github-tests--feat_x",
+    )
+    assert (
+        _plan(out, "repo", str(repo), "branch", "feat_x")
+        == out / "github-tests@someone" / f"branch-feat_x-{_hex6('feat_x')}"
+    )
     # The same remote in its other URL form and case is the same remote.
-    fixture_git(repo, "remote", "set-url", "origin", "https://github.com/SpikeLab/github-tests")
+    fixture_git(
+        repo, "remote", "set-url", "origin", "https://github.com/SpikeLab/github-tests"
+    )
     assert _plan(out, "repo", str(repo), "pr", 7) == upstream
 
 
-def test_a_folder_no_choice_can_use_is_an_error_that_suggests_out(layout_clone, tmp_path):
+def test_a_folder_no_choice_can_use_is_an_error_that_suggests_out(
+    layout_clone, tmp_path
+):
     from review_pipeline import orchestrator
+
     repo, _, _ = layout_clone
     out = tmp_path / "out"
     _state_file(out / "github-tests" / "pr-7", ORIGIN, "7", "x")
-    fixture_git(repo, "remote", "set-url", "origin", "https://github.com/someone/github-tests")
+    fixture_git(
+        repo, "remote", "set-url", "origin", "https://github.com/someone/github-tests"
+    )
     # Not a folder any run writes: only a hand-made one names a third owner under `@someone`.
-    _state_file(out / "github-tests@someone" / "pr-7", "https://github.com/third/github-tests", "7", "x")
+    _state_file(
+        out / "github-tests@someone" / "pr-7",
+        "https://github.com/third/github-tests",
+        "7",
+        "x",
+    )
     with pytest.raises(orchestrator.ReviewError, match="--out"):
         _plan(out, "repo", str(repo), "pr", 7)
 
@@ -940,49 +1450,98 @@ def test_a_dir_review_with_no_repo_folder_yet_runs_locked(tmp_path, agents, capl
     out = tmp_path / "out"
     agents()
     with caplog.at_level(logging.WARNING, logger="review_pipeline.runlock"):
-        assert main(["--out", str(out), "review", "--dir", str(src), "--trust-repo"]) == 0
+        assert (
+            main(["--out", str(out), "review", "--dir", str(src), "--trust-repo"]) == 0
+        )
     assert not [r for r in caplog.records if "running unlocked" in r.getMessage()]
     assert (out / "proj" / ".locks" / f"dir-proj-{_hex6(str(src))}.lock").is_file()
     assert (out / "proj" / f"dir-proj-{_hex6(str(src))}" / "findings.json").is_file()
 
 
-def _layout_review(folder: Path, slug: str, remote: str, head: str = "a" * 40, rounds_kept: int = 0) -> Path:
+def _layout_review(
+    folder: Path, slug: str, remote: str, head: str = "a" * 40, rounds_kept: int = 0
+) -> Path:
     """A finished review in *folder*, with *rounds_kept* kept rounds, as a run writes them."""
     run = {"cost_usd": 1.0, "started_at": "1"}
-    t = {"slug": slug, "label": slug, "head_sha": head, "base_sha": "b" * 40, "remote_url": remote}
+    t = {
+        "slug": slug,
+        "label": slug,
+        "head_sha": head,
+        "base_sha": "b" * 40,
+        "remote_url": remote,
+    }
     for i in range(rounds_kept):
-        _write_findings(folder / "rounds" / f"{i + 1:02d}-{head[:12]}", head, f"2026-01-0{i + 1}T00:00:00Z",
-                        run=dict(run, started_at=str(i)))
-        data = json.loads((folder / "rounds" / f"{i + 1:02d}-{head[:12]}" / "findings.json").read_text())
+        _write_findings(
+            folder / "rounds" / f"{i + 1:02d}-{head[:12]}",
+            head,
+            f"2026-01-0{i + 1}T00:00:00Z",
+            run=dict(run, started_at=str(i)),
+        )
+        data = json.loads(
+            (
+                folder / "rounds" / f"{i + 1:02d}-{head[:12]}" / "findings.json"
+            ).read_text()
+        )
         data["target"] = t
-        (folder / "rounds" / f"{i + 1:02d}-{head[:12]}" / "findings.json").write_text(json.dumps(data))
+        (folder / "rounds" / f"{i + 1:02d}-{head[:12]}" / "findings.json").write_text(
+            json.dumps(data)
+        )
     folder.mkdir(parents=True, exist_ok=True)
-    (folder / "findings.json").write_text(json.dumps({
-        "schema_version": 1, "generated_at": "2026-01-09T00:00:00Z", "producer": "p", "target": t,
-        "findings": [], "run": dict(run, started_at="9")}))
+    (folder / "findings.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "generated_at": "2026-01-09T00:00:00Z",
+                "producer": "p",
+                "target": t,
+                "findings": [],
+                "run": dict(run, started_at="9"),
+            }
+        )
+    )
     (folder / "files.txt").write_text("")
     return folder
 
 
-@pytest.mark.parametrize("repo_name", ["tree", "source", "viewer", "rounds", "github-tests"])
-def test_rollups_list_new_layout_reviews_whatever_the_repo_is_called(tmp_path, repo_name):
+@pytest.mark.parametrize(
+    "repo_name", ["tree", "source", "viewer", "rounds", "github-tests"]
+)
+def test_rollups_list_new_layout_reviews_whatever_the_repo_is_called(
+    tmp_path, repo_name
+):
     """Done means 9 (the pipeline's half): repos named like a snapshot, and a whole-tree review."""
     out = tmp_path / "out"
     remote = f"https://github.com/spikelab/{repo_name}.git"
-    new = _layout_review(out / repo_name / "pr-7", f"spikelab-{repo_name}--pr-7", remote, rounds_kept=1)
-    whole = _layout_review(out / repo_name / "tree", f"spikelab-{repo_name}--tree", remote, head="c" * 40)
-    flat = _layout_review(out / "spikelab-other--pr-1", "spikelab-other--pr-1", remote, head="d" * 40)
+    new = _layout_review(
+        out / repo_name / "pr-7", f"spikelab-{repo_name}--pr-7", remote, rounds_kept=1
+    )
+    whole = _layout_review(
+        out / repo_name / "tree", f"spikelab-{repo_name}--tree", remote, head="c" * 40
+    )
+    flat = _layout_review(
+        out / "spikelab-other--pr-1", "spikelab-other--pr-1", remote, head="d" * 40
+    )
     (out / repo_name / ".DS_Store").write_text("finder")
     (out / ".DS_Store").write_text("finder")
     # Never a review: legacy/, locks, partial copies, and a 0.42 review nested under a new-layout one.
-    _layout_review(out / "legacy" / "x" / "pr-1", "legacy-x--pr-1", remote, head="e" * 40)
-    _layout_review(out / repo_name / "pr-7" / "checkout--pr-7", "checkout--pr-7", remote, head="f" * 40)
+    _layout_review(
+        out / "legacy" / "x" / "pr-1", "legacy-x--pr-1", remote, head="e" * 40
+    )
+    _layout_review(
+        out / repo_name / "pr-7" / "checkout--pr-7",
+        "checkout--pr-7",
+        remote,
+        head="f" * 40,
+    )
     (out / repo_name / ".locks").mkdir()
     render.write_rollups(out)
     _, lines, _ = render.write_runs(out)
     high = (out / "HIGH-only.md").read_text()
     assert "across 0 of 3 targets" in high, high
-    heads = sorted(json.loads(line)["target"]["head_sha"][0] for line in (out / "runs.jsonl").read_text().splitlines())
+    heads = sorted(
+        json.loads(line)["target"]["head_sha"][0]
+        for line in (out / "runs.jsonl").read_text().splitlines()
+    )
     assert heads == ["a", "a", "c", "d"] and lines == 4
     assert new.is_dir() and whole.is_dir() and flat.is_dir()
 
@@ -990,13 +1549,25 @@ def test_rollups_list_new_layout_reviews_whatever_the_repo_is_called(tmp_path, r
 def _with_high(folder: Path, claim: str) -> None:
     """Give *folder*'s latest round one listed HIGH finding with *claim*."""
     data = json.loads((folder / "findings.json").read_text())
-    data["findings"] = [{"id": "1234567890", "status": "confirmed", "severity": "HIGH", "claim": claim,
-                         "file": "f.py", "line_start": 1, "line_end": 1, "citations": [],
-                         "failure_scenario": "it breaks"}]
+    data["findings"] = [
+        {
+            "id": "1234567890",
+            "status": "confirmed",
+            "severity": "HIGH",
+            "claim": claim,
+            "file": "f.py",
+            "line_start": 1,
+            "line_end": 1,
+            "citations": [],
+            "failure_scenario": "it breaks",
+        }
+    ]
     (folder / "findings.json").write_text(json.dumps(data))
 
 
-def test_rollups_list_a_target_once_and_prefer_its_new_layout_folder_over_its_046_folder(tmp_path):
+def test_rollups_list_a_target_once_and_prefer_its_new_layout_folder_over_its_046_folder(
+    tmp_path,
+):
     """U1: after the first new-layout review of a target that has a 0.46 folder named by the slug alone, the
     severity rollups list that slug once, from the new-layout folder. A 0.46 folder no new-layout
     folder replaces is still listed, and runs.jsonl keeps one line per run from both layouts."""
@@ -1007,7 +1578,9 @@ def test_rollups_list_a_target_once_and_prefer_its_new_layout_folder_over_its_04
     _with_high(old, "stale finding from the last 0.46 round")
     new = _layout_review(out / "github-tests" / "pr-2", slug, remote, head="b" * 40)
     _with_high(new, "finding of the new-layout round")
-    other = _layout_review(out / "spikelab-other--pr-1", "spikelab-other--pr-1", remote, head="c" * 40)
+    other = _layout_review(
+        out / "spikelab-other--pr-1", "spikelab-other--pr-1", remote, head="c" * 40
+    )
     _with_high(other, "finding of a 0.46 target with no new-layout folder")
     before = _snapshot(old)
     render.write_rollups(out)
@@ -1017,108 +1590,194 @@ def test_rollups_list_a_target_once_and_prefer_its_new_layout_folder_over_its_04
     assert "finding of the new-layout round" in high and "stale finding" not in high
     assert "finding of a 0.46 target with no new-layout folder" in high
     _, lines, _ = render.write_runs(out)
-    heads = sorted(json.loads(line)["target"]["head_sha"][0] for line in (out / "runs.jsonl").read_text().splitlines())
+    heads = sorted(
+        json.loads(line)["target"]["head_sha"][0]
+        for line in (out / "runs.jsonl").read_text().splitlines()
+    )
     assert heads == ["a", "a", "b", "c"] and lines == 4
     assert _snapshot(old) == before
 
 
-def test_rollups_in_a_new_layout_folder_used_as_out_by_042_list_only_the_nested_review(tmp_path):
+def test_rollups_in_a_new_layout_folder_used_as_out_by_042_list_only_the_nested_review(
+    tmp_path,
+):
     """U5: `resume`, `assess-only` or `rollup` of a 0.42 review nested in a new-layout folder
     write the rollups to that folder (`out_root`). They list the nested review alone, as 0.42
     did: the folder's own `rounds/`, `viewer/` and snapshots are never read as repos or reviews."""
     out = tmp_path / "out"
     remote = "https://github.com/spikelab/github-tests.git"
-    folder = _layout_review(out / "github-tests" / "pr-7", "spikelab-github-tests--pr-7", remote, rounds_kept=2)
+    folder = _layout_review(
+        out / "github-tests" / "pr-7",
+        "spikelab-github-tests--pr-7",
+        remote,
+        rounds_kept=2,
+    )
     for kept in (folder / "rounds").iterdir():
         _with_high(kept, "finding of a kept new-layout round")
     for snapshot in ("tree", "source", "viewer", "base-tree"):
         # A reviewed repository may hold a findings.json of its own.
-        _layout_review(folder / snapshot, f"spikelab-{snapshot}--pr-1", remote, head="e" * 40)
+        _layout_review(
+            folder / snapshot, f"spikelab-{snapshot}--pr-1", remote, head="e" * 40
+        )
         _with_high(folder / snapshot, f"finding in the {snapshot} snapshot")
-    nested = _layout_review(folder / "checkout--pr-7", "checkout--pr-7", remote, head="f" * 40, rounds_kept=1)
+    nested = _layout_review(
+        folder / "checkout--pr-7",
+        "checkout--pr-7",
+        remote,
+        head="f" * 40,
+        rounds_kept=1,
+    )
     _with_high(nested, "finding of the nested 0.42 review")
     # A new-layout review given this folder as --out is still listed.
-    inner = _layout_review(folder / "github-tests" / "pr-1", "spikelab-github-tests--pr-1", remote, head="d" * 40)
+    inner = _layout_review(
+        folder / "github-tests" / "pr-1",
+        "spikelab-github-tests--pr-1",
+        remote,
+        head="d" * 40,
+    )
     _with_high(inner, "finding of a review written under this folder")
     assert rounds.out_root(nested) == folder
     render.write_rollups(rounds.out_root(nested))
     high = (folder / "HIGH-only.md").read_text()
     assert "# HIGH findings — 2 across 2 of 2 targets" in high, high
-    assert "finding of the nested 0.42 review" in high and "written under this folder" in high
+    assert (
+        "finding of the nested 0.42 review" in high
+        and "written under this folder" in high
+    )
     assert "kept new-layout round" not in high and "snapshot" not in high, high
     _, lines, _ = render.write_runs(folder)
-    heads = sorted(json.loads(line)["target"]["head_sha"][0] for line in (folder / "runs.jsonl").read_text().splitlines())
+    heads = sorted(
+        json.loads(line)["target"]["head_sha"][0]
+        for line in (folder / "runs.jsonl").read_text().splitlines()
+    )
     assert heads == ["d", "f", "f"] and lines == 3
 
 
 # --- history across layouts -------------------------------------------------------
 
 
-def _decide(folder: Path, finding_id: str, decision: str = "reject", ts: str = "2026-01-01T06:00:00Z") -> None:
+def _decide(
+    folder: Path,
+    finding_id: str,
+    decision: str = "reject",
+    ts: str = "2026-01-01T06:00:00Z",
+) -> None:
     (folder / "viewer").mkdir(parents=True, exist_ok=True)
-    (folder / "viewer" / "decisions.json").write_text(json.dumps(
-        {finding_id: {"decision": decision, "note": f"note on {finding_id}", "ts": ts}}))
+    (folder / "viewer" / "decisions.json").write_text(
+        json.dumps(
+            {
+                finding_id: {
+                    "decision": decision,
+                    "note": f"note on {finding_id}",
+                    "ts": ts,
+                }
+            }
+        )
+    )
 
 
 def _three_old_layouts(out: Path) -> dict[str, Path]:
     """A 0.46 folder with 2 kept rounds, a 0.42 folder nested in the new one, and a legacy/ copy:
     each holds one finding the person rejected."""
     flat = out / f"{SLUG_REPO}--pr-7"
-    for i, (name, fid) in enumerate((("01-aaaaaaaaaaaa", "1000000001"), ("02-aaaaaaaaaaaa", "1000000002"))):
-        _old_round(flat / "rounds" / name, "a" * 40, f"2026-01-0{i + 1}T00:00:00Z", fid, slug=f"{SLUG_REPO}--pr-7")
-    _old_round(flat, "a" * 40, "2026-01-03T00:00:00Z", "1000000003", slug=f"{SLUG_REPO}--pr-7")
+    for i, (name, fid) in enumerate(
+        (("01-aaaaaaaaaaaa", "1000000001"), ("02-aaaaaaaaaaaa", "1000000002"))
+    ):
+        _old_round(
+            flat / "rounds" / name,
+            "a" * 40,
+            f"2026-01-0{i + 1}T00:00:00Z",
+            fid,
+            slug=f"{SLUG_REPO}--pr-7",
+        )
+    _old_round(
+        flat, "a" * 40, "2026-01-03T00:00:00Z", "1000000003", slug=f"{SLUG_REPO}--pr-7"
+    )
     _decide(flat, "1000000003")
     nested = out / "github-tests" / "pr-7" / "checkout--pr-7"
-    _old_round(nested / "rounds" / "bbbbbbbbbbbb", "b" * 40, "2026-01-04T00:00:00Z", "2000000001",
-               slug="checkout--pr-7")
-    _old_round(nested, "b" * 40, "2026-01-05T00:00:00Z", "2000000002", slug="checkout--pr-7")
+    _old_round(
+        nested / "rounds" / "bbbbbbbbbbbb",
+        "b" * 40,
+        "2026-01-04T00:00:00Z",
+        "2000000001",
+        slug="checkout--pr-7",
+    )
+    _old_round(
+        nested, "b" * 40, "2026-01-05T00:00:00Z", "2000000002", slug="checkout--pr-7"
+    )
     _decide(nested, "2000000002")
     copy = out / "legacy" / "old-checkout--pr-7"
-    _old_round(copy, "c" * 40, "2026-01-06T00:00:00Z", "3000000001", slug="old-checkout--pr-7")
+    _old_round(
+        copy, "c" * 40, "2026-01-06T00:00:00Z", "3000000001", slug="old-checkout--pr-7"
+    )
     _decide(copy, "3000000001", ts="2026-01-06T06:00:00Z")
     for name in ("HIGH-only.md", "MEDIUM-only.md", "LOW-only.md", "runs.jsonl"):
         (out / "github-tests" / "pr-7" / name).write_text(f"0.42 {name}\n")
     return {"flat": flat, "nested": nested, "copy": copy}
 
 
-def test_a_first_new_layout_review_reads_the_rounds_and_decisions_of_every_older_layout(tmp_path):
+def test_a_first_new_layout_review_reads_the_rounds_and_decisions_of_every_older_layout(
+    tmp_path,
+):
     """Done means 6."""
     from review_pipeline.stages import RunContext
     from review_pipeline.stages.repeats import earlier_findings
+
     out = default_out()
     folders = _three_old_layouts(out)
     before = {k: _snapshot(v) for k, v in folders.items()}
     target_dir = out / "github-tests" / "pr-7"
     ctx = RunContext(config=None, snapshot=None, diff="", target_dir=target_dir)
     earlier = {e.id: e for e in earlier_findings(_new_state(), ctx)}
-    assert sorted(earlier) == ["1000000001", "1000000002", "1000000003", "2000000001", "2000000002", "3000000001"]
-    assert {i for i, e in earlier.items() if e.decision == "reject"} == {"1000000003", "2000000002", "3000000001"}
+    assert sorted(earlier) == [
+        "1000000001",
+        "1000000002",
+        "1000000003",
+        "2000000001",
+        "2000000002",
+        "3000000001",
+    ]
+    assert {i for i, e in earlier.items() if e.decision == "reject"} == {
+        "1000000003",
+        "2000000002",
+        "3000000001",
+    }
     assert {k: _snapshot(v) for k, v in folders.items()} == before
 
 
-def test_out_is_the_parent_of_a_046_folder_and_the_grandparent_of_a_new_one(tmp_path, agents, fixture_repo):
+def test_out_is_the_parent_of_a_046_folder_and_the_grandparent_of_a_new_one(
+    tmp_path, agents, fixture_repo
+):
     """Done means 7."""
     out = tmp_path / "work" / "out"
     flat = out / f"{SLUG_REPO}--pr-7"
     new = out / "github-tests" / "pr-7"
-    _old_round(flat, "a" * 40, "2026-01-01T00:00:00Z", "1000000001", slug=f"{SLUG_REPO}--pr-7")
+    _old_round(
+        flat, "a" * 40, "2026-01-01T00:00:00Z", "1000000001", slug=f"{SLUG_REPO}--pr-7"
+    )
     assert rounds.out_root(flat) == out
     assert rounds.out_root(new, f"{SLUG_REPO}--pr-7") == out
     _state_file(new, ORIGIN, "7", f"{SLUG_REPO}--pr-7")
     assert rounds.out_root(new) == out
-    assert rounds.out_root(tmp_path / "nothing-here") == tmp_path  # no readable slug: its parent
+    assert (
+        rounds.out_root(tmp_path / "nothing-here") == tmp_path
+    )  # no readable slug: its parent
     # A matching round one level above <out> is never read as this target's history.
     above = tmp_path / "work" / "x--pr-7"
     _old_round(above, "a" * 40, "2026-01-01T00:00:00Z", "9999999999", slug="x--pr-7")
     for folder in (flat, new):
         found = rounds.history_elsewhere(folder, f"{SLUG_REPO}--pr-7", ORIGIN)
-        assert above / "findings.json" not in found and not any("9999" in p.read_text() for p in found)
+        assert above / "findings.json" not in found and not any(
+            "9999" in p.read_text() for p in found
+        )
 
 
 def test_resume_of_a_new_layout_folder_writes_rollups_to_out_and_reads_its_review_yaml(
-        fixture_repo, tmp_path, agents, capsys):
+    fixture_repo, tmp_path, agents, capsys
+):
     """Done means 7: `resume` uses the `<out>` the review used, not `<out>/<repo>/`."""
     from review_pipeline.models import ReviewState
+
     repo, base, head = fixture_repo
     out = tmp_path / "out"
     target_dir = out / "booking-engine" / f"range-{base}..{head}"
@@ -1132,22 +1791,33 @@ def test_resume_of_a_new_layout_folder_writes_rollups_to_out_and_reads_its_revie
     assert (out / "HIGH-only.md").is_file() and (out / "runs.jsonl").is_file()
     assert not (out / "booking-engine" / "HIGH-only.md").exists()
     assert not (out / "booking-engine" / "runs.jsonl").exists()
-    state = ReviewState.model_validate_json((target_dir / "review-state.json").read_text())
+    state = ReviewState.model_validate_json(
+        (target_dir / "review-state.json").read_text()
+    )
     assert state.run_config["stages"]["verify"]["model"] == "claude-resume"
 
 
-def test_assess_only_reads_the_review_yaml_of_the_out_the_review_used(tmp_path, monkeypatch, capsys):
+def test_assess_only_reads_the_review_yaml_of_the_out_the_review_used(
+    tmp_path, monkeypatch, capsys
+):
     """Done means 7, for `assess-only`: `<out>/review.yaml` for a new-layout folder and for a
     0.46 folder, never `<out>/<repo>/review.yaml`."""
     from review_pipeline import orchestrator
+
     out = tmp_path / "out"
     remote = "https://github.com/spikelab/github-tests.git"
-    new = _layout_review(out / "github-tests" / "pr-7", "spikelab-github-tests--pr-7", remote)
-    flat = _layout_review(out / "spikelab-github-tests--pr-2", "spikelab-github-tests--pr-2", remote)
+    new = _layout_review(
+        out / "github-tests" / "pr-7", "spikelab-github-tests--pr-7", remote
+    )
+    flat = _layout_review(
+        out / "spikelab-github-tests--pr-2", "spikelab-github-tests--pr-2", remote
+    )
     for folder in (new, flat):
         _decide(folder, "1000000001", decision="accept")
     (out / "review.yaml").write_text("verifier_model: claude-out\n")
-    (out / "github-tests" / "review.yaml").write_text("verifier_model: claude-repo-folder\n")
+    (out / "github-tests" / "review.yaml").write_text(
+        "verifier_model: claude-repo-folder\n"
+    )
     seen = {}
 
     async def assess_only(target_dir, config):
@@ -1156,7 +1826,19 @@ def test_assess_only_reads_the_review_yaml_of_the_out_the_review_used(tmp_path, 
 
     monkeypatch.setattr(orchestrator, "assess_only", assess_only)
     report = tmp_path / "report.md"
-    assert main(["assess-only", str(new), str(flat), "--report", str(report), "--trust-repo"]) == 0
+    assert (
+        main(
+            [
+                "assess-only",
+                str(new),
+                str(flat),
+                "--report",
+                str(report),
+                "--trust-repo",
+            ]
+        )
+        == 0
+    )
     assert seen == {new: "claude-out", flat: "claude-out"}
 
 
@@ -1165,9 +1847,18 @@ def test_history_finds_a_042_folder_nested_under_a_repo_called_tree(tmp_path):
     out = tmp_path / "out"
     remote = "https://github.com/spikelab/tree.git"
     nested = out / "tree" / "pr-7" / "checkout--pr-7"
-    _old_round(nested, "a" * 40, "2026-01-01T00:00:00Z", "1000000001", remote=remote, slug="checkout--pr-7")
+    _old_round(
+        nested,
+        "a" * 40,
+        "2026-01-01T00:00:00Z",
+        "1000000001",
+        remote=remote,
+        slug="checkout--pr-7",
+    )
     (out / "tree" / ".DS_Store").write_text("finder")
-    found = rounds.history_elsewhere(out / "tree" / "pr-7", "spikelab-tree--pr-7", remote)
+    found = rounds.history_elsewhere(
+        out / "tree" / "pr-7", "spikelab-tree--pr-7", remote
+    )
     assert found == [nested / "findings.json"]
 
 
@@ -1248,51 +1939,104 @@ def _stop(tmp_path: Path, base: str, head: str, where: str, *argv: str) -> int:
     """Run `main(argv)` in a child process that exits (137) at *where* (`<point>:<nth call>`)."""
     driver = tmp_path / "stop_driver.py"
     driver.write_text(STOP_DRIVER)
-    proc = subprocess.run([sys.executable, str(driver), str(TESTS), str(tmp_path / "data"), where, base, head,
-                           *argv], capture_output=True, text=True, env=dict(os.environ), timeout=120)
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(driver),
+            str(TESTS),
+            str(tmp_path / "data"),
+            where,
+            base,
+            head,
+            *argv,
+        ],
+        capture_output=True,
+        text=True,
+        env=dict(os.environ),
+        timeout=120,
+    )
     return proc.returncode
 
 
 def _pr_args(repo: Path, out: Path, *extra: str) -> list[str]:
-    return ["--out", str(out), "review", "--repo", str(repo), "--pr", "7", "--trust-repo", *extra]
+    return [
+        "--out",
+        str(out),
+        "review",
+        "--repo",
+        str(repo),
+        "--pr",
+        "7",
+        "--trust-repo",
+        *extra,
+    ]
 
 
 def _result(tmp_path: Path, folder: Path) -> dict:
     data = json.loads((folder / "findings.json").read_text())
     kept = folder / "rounds"
-    return {"ids": sorted(f["id"] for f in data["findings"]),
-            "rounds": sorted(p.name for p in kept.iterdir()) if kept.is_dir() else [],
-            "events": [e["event"] for e in _ledger_lines(tmp_path) if e.get("target_dir") == str(folder)]}
+    return {
+        "ids": sorted(f["id"] for f in data["findings"]),
+        "rounds": sorted(p.name for p in kept.iterdir()) if kept.is_dir() else [],
+        "events": [
+            e["event"]
+            for e in _ledger_lines(tmp_path)
+            if e.get("target_dir") == str(folder)
+        ],
+    }
 
 
 PR7 = ("github-tests", "pr-7")
 
 
-def test_row_U1_a_046_folder_with_finished_rounds_is_read_as_history_and_left_alone(layout_clone, tmp_path, agents):
+def test_row_U1_a_046_folder_with_finished_rounds_is_read_as_history_and_left_alone(
+    layout_clone, tmp_path, agents
+):
     repo, _, _ = layout_clone
     out, never, gen = tmp_path / "out", tmp_path / "never-stopped", tmp_path / "gen"
     agents()
     assert main(_pr_args(repo, gen)) == 0
-    assert main(_pr_args(repo, gen)) == 0  # a top-level round and one kept round, as 0.46 writes them
+    assert (
+        main(_pr_args(repo, gen)) == 0
+    )  # a top-level round and one kept round, as 0.46 writes them
     flat = out / f"{SLUG_REPO}--pr-7"
     shutil.copytree(gen.joinpath(*PR7), flat)
     _decide(flat, json.loads((flat / "findings.json").read_text())["findings"][0]["id"])
     for _ in range(2):
-        ledger.started(slug=flat.name, target_dir=flat, head_sha="a" * 40, session_id="0.46")
-        ledger.finished(producer="multiplai-dev:review 0.46.0", session_id="0.46", slug=flat.name,
-                        target_dir=flat, round_="01", head_sha="a" * 40, base_sha="b" * 40, kind="pr", pr=7,
-                        stopped=None, run={})
+        ledger.started(
+            slug=flat.name, target_dir=flat, head_sha="a" * 40, session_id="0.46"
+        )
+        ledger.finished(
+            producer="multiplai-dev:review 0.46.0",
+            session_id="0.46",
+            slug=flat.name,
+            target_dir=flat,
+            round_="01",
+            head_sha="a" * 40,
+            base_sha="b" * 40,
+            kind="pr",
+            pr=7,
+            stopped=None,
+            run={},
+        )
     before = _snapshot(flat)
     assert main(_pr_args(repo, out)) == 0
     state = json.loads((out.joinpath(*PR7) / "review-state.json").read_text())
     assert state["repeats"]  # the old folder's rejection was read
-    assert len(rounds.history_elsewhere(out.joinpath(*PR7), f"{SLUG_REPO}--pr-7", ORIGIN)) == 2
+    assert (
+        len(rounds.history_elsewhere(out.joinpath(*PR7), f"{SLUG_REPO}--pr-7", ORIGIN))
+        == 2
+    )
     assert _snapshot(flat) == before
     assert main(_pr_args(repo, never)) == 0
-    assert _result(tmp_path, out.joinpath(*PR7)) == _result(tmp_path, never.joinpath(*PR7))
+    assert _result(tmp_path, out.joinpath(*PR7)) == _result(
+        tmp_path, never.joinpath(*PR7)
+    )
 
 
-def _unfinished_046(tmp_path: Path, repo: Path, base: str, head: str, out: Path) -> Path:
+def _unfinished_046(
+    tmp_path: Path, repo: Path, base: str, head: str, out: Path
+) -> Path:
     """A 0.46 folder `<out>/<its slug>/` holding a run stopped after its `started` line on *head*."""
     gen = tmp_path / "gen"
     assert _stop(tmp_path, base, head, "started:1", *_pr_args(repo, gen)) == 137
@@ -1300,12 +2044,15 @@ def _unfinished_046(tmp_path: Path, repo: Path, base: str, head: str, out: Path)
     shutil.copytree(gen.joinpath(*PR7), flat)
     state = flat / "review-state.json"
     state.write_text(state.read_text().replace(str(gen.joinpath(*PR7)), str(flat)))
-    ledger.started(slug=flat.name, target_dir=flat, head_sha=head, session_id="0.46 run that died")
+    ledger.started(
+        slug=flat.name, target_dir=flat, head_sha=head, session_id="0.46 run that died"
+    )
     return flat
 
 
 def test_row_U2_an_unfinished_046_run_exits_4_naming_the_old_folder_and_resume_finishes_it_there(
-        layout_clone, tmp_path, agents, capsys):
+    layout_clone, tmp_path, agents, capsys
+):
     repo, base, head = layout_clone
     out, never = tmp_path / "out", tmp_path / "never-stopped"
     flat = _unfinished_046(tmp_path, repo, base, head, out)
@@ -1314,16 +2061,24 @@ def test_row_U2_an_unfinished_046_run_exits_4_naming_the_old_folder_and_resume_f
     fake = agents()
     capsys.readouterr()
     assert main(_pr_args(repo, out)) == 4
-    assert f"continue with: python -m review_pipeline resume {flat}" in capsys.readouterr().err
+    assert (
+        f"continue with: python -m review_pipeline resume {flat}"
+        in capsys.readouterr().err
+    )
     assert fake.calls == [] and not out.joinpath(*PR7).exists()
     assert main(["resume", str(flat), "--trust-repo"]) == 0
     expected = _result(tmp_path, never.joinpath(*PR7))
-    assert _result(tmp_path, flat) == dict(expected, events=["started", "started", "finished"])
-    assert (out / "HIGH-only.md").is_file() and not (out / "github-tests" / "HIGH-only.md").exists()
+    assert _result(tmp_path, flat) == dict(
+        expected, events=["started", "started", "finished"]
+    )
+    assert (out / "HIGH-only.md").is_file() and not (
+        out / "github-tests" / "HIGH-only.md"
+    ).exists()
 
 
 def test_row_U2_restart_starts_in_the_new_folder_and_leaves_the_046_one_as_it_is(
-        layout_clone, tmp_path, agents):
+    layout_clone, tmp_path, agents
+):
     repo, base, head = layout_clone
     out, never = tmp_path / "out", tmp_path / "never-stopped"
     flat = _unfinished_046(tmp_path, repo, base, head, out)
@@ -1331,11 +2086,15 @@ def test_row_U2_restart_starts_in_the_new_folder_and_leaves_the_046_one_as_it_is
     agents()
     assert main(_pr_args(repo, never)) == 0
     assert main(_pr_args(repo, out, "--restart")) == 0
-    assert _result(tmp_path, out.joinpath(*PR7)) == _result(tmp_path, never.joinpath(*PR7))
+    assert _result(tmp_path, out.joinpath(*PR7)) == _result(
+        tmp_path, never.joinpath(*PR7)
+    )
     assert _snapshot(flat) == before
 
 
-def test_row_U3_once_the_new_folder_has_state_the_046_folder_is_history_only(layout_clone, tmp_path, agents):
+def test_row_U3_once_the_new_folder_has_state_the_046_folder_is_history_only(
+    layout_clone, tmp_path, agents
+):
     repo, base, head = layout_clone
     out, never = tmp_path / "out", tmp_path / "never-stopped"
     flat = _unfinished_046(tmp_path, repo, base, head, out)
@@ -1345,13 +2104,17 @@ def test_row_U3_once_the_new_folder_has_state_the_046_folder_is_history_only(lay
     assert main(_pr_args(repo, out)) == 0  # not exit 4: the old folder is not checked
     assert main(_pr_args(repo, never)) == 0
     assert main(_pr_args(repo, never)) == 0
-    assert _result(tmp_path, out.joinpath(*PR7)) == _result(tmp_path, never.joinpath(*PR7))
+    assert _result(tmp_path, out.joinpath(*PR7)) == _result(
+        tmp_path, never.joinpath(*PR7)
+    )
     assert _snapshot(flat) == before
 
 
 def test_row_U4_a_run_still_going_in_the_046_folder_exits_2_until_the_new_folder_has_state(
-        layout_clone, tmp_path, agents, capsys):
+    layout_clone, tmp_path, agents, capsys
+):
     from review_pipeline import runlock
+
     repo, base, head = layout_clone
     out, never = tmp_path / "out", tmp_path / "never-stopped"
     flat = _unfinished_046(tmp_path, repo, base, head, out)
@@ -1362,21 +2125,40 @@ def test_row_U4_a_run_still_going_in_the_046_folder_exits_2_until_the_new_folder
         assert main(_pr_args(repo, out)) == 2
         assert f"a review of {flat} is running now" in capsys.readouterr().err
         assert fake.calls == []
-        assert main(_pr_args(repo, out, "--restart")) == 0  # the new folder now has state
-        assert main(_pr_args(repo, out)) == 0  # two folders: neither run waits for the other
+        assert (
+            main(_pr_args(repo, out, "--restart")) == 0
+        )  # the new folder now has state
+        assert (
+            main(_pr_args(repo, out)) == 0
+        )  # two folders: neither run waits for the other
     assert _snapshot(flat) == before
     assert main(_pr_args(repo, never)) == 0
     assert main(_pr_args(repo, never)) == 0
-    assert _result(tmp_path, out.joinpath(*PR7)) == _result(tmp_path, never.joinpath(*PR7))
+    assert _result(tmp_path, out.joinpath(*PR7)) == _result(
+        tmp_path, never.joinpath(*PR7)
+    )
 
 
 def _nested_042(folder: Path, remote: str = ORIGIN) -> Path:
     """What multiplai-dev 0.42 leaves in a new-layout folder given to it as `--out`: its own
     `<checkout>--pr-7/` with a kept round and a rejection, and its four rollups."""
     nested = folder / "checkout--pr-7"
-    _old_round(nested / "rounds" / "aaaaaaaaaaaa", "a" * 40, "2026-01-01T00:00:00Z", "4000000001",
-               remote=remote, slug="checkout--pr-7")
-    _old_round(nested, "a" * 40, "2026-01-02T00:00:00Z", "4000000002", remote=remote, slug="checkout--pr-7")
+    _old_round(
+        nested / "rounds" / "aaaaaaaaaaaa",
+        "a" * 40,
+        "2026-01-01T00:00:00Z",
+        "4000000001",
+        remote=remote,
+        slug="checkout--pr-7",
+    )
+    _old_round(
+        nested,
+        "a" * 40,
+        "2026-01-02T00:00:00Z",
+        "4000000002",
+        remote=remote,
+        slug="checkout--pr-7",
+    )
     _decide(nested, "4000000002")
     for name in rounds.ROLLUP_FILES:
         (folder / name).write_text(f"0.42 {name}\n")
@@ -1384,12 +2166,15 @@ def _nested_042(folder: Path, remote: str = ORIGIN) -> Path:
 
 
 def _042_snapshot(folder: Path) -> dict:
-    return {"nested": _snapshot(folder / "checkout--pr-7"),
-            "rollups": {n: (folder / n).read_bytes() for n in sorted(rounds.ROLLUP_FILES)}}
+    return {
+        "nested": _snapshot(folder / "checkout--pr-7"),
+        "rollups": {n: (folder / n).read_bytes() for n in sorted(rounds.ROLLUP_FILES)},
+    }
 
 
 def test_row_U5_a_042_folder_is_used_its_nested_review_is_history_and_never_copied_into_a_round(
-        layout_clone, tmp_path, agents):
+    layout_clone, tmp_path, agents
+):
     """Also Done means 8, first test."""
     repo, _, _ = layout_clone
     out, never = tmp_path / "out", tmp_path / "never-stopped"
@@ -1398,7 +2183,9 @@ def test_row_U5_a_042_folder_is_used_its_nested_review_is_history_and_never_copi
     before = _042_snapshot(folder)
     fake = agents()
     assert main(_pr_args(repo, out)) == 0
-    assert [c for c in fake.calls if c.startswith("repeats")]  # the nested rejection was read
+    assert [
+        c for c in fake.calls if c.startswith("repeats")
+    ]  # the nested rejection was read
     assert main(_pr_args(repo, out)) == 0
     (kept,) = (folder / "rounds").iterdir()
     assert not [p for p in kept.iterdir() if p.is_dir()]
@@ -1413,28 +2200,42 @@ def test_row_U5_a_042_folder_is_used_its_nested_review_is_history_and_never_copi
 
 
 def test_row_U6_legacy_and_the_old_inbox_reviews_are_read_and_never_written(
-        layout_clone, tmp_path, agents, monkeypatch):
+    layout_clone, tmp_path, agents, monkeypatch
+):
     repo, _, _ = layout_clone
     out, never = default_out(), tmp_path / "never-stopped"
     copy = out / "legacy" / "old-checkout--pr-7"
-    _old_round(copy, "c" * 40, "2026-01-06T00:00:00Z", "3000000001", slug="old-checkout--pr-7")
+    _old_round(
+        copy, "c" * 40, "2026-01-06T00:00:00Z", "3000000001", slug="old-checkout--pr-7"
+    )
     _decide(copy, "3000000001")
     inbox = tmp_path / "no-legacy-reviews"
-    _old_round(inbox / "inbox-checkout--pr-7", "d" * 40, "2026-01-07T00:00:00Z", "3000000002",
-               slug="inbox-checkout--pr-7")
+    _old_round(
+        inbox / "inbox-checkout--pr-7",
+        "d" * 40,
+        "2026-01-07T00:00:00Z",
+        "3000000002",
+        slug="inbox-checkout--pr-7",
+    )
     before = (_snapshot(out / "legacy"), _snapshot(inbox))
     fake = agents()
     assert main(["review", "--repo", str(repo), "--pr", "7", "--trust-repo"]) == 0
     assert [c for c in fake.calls if c.startswith("repeats")]
     assert (_snapshot(out / "legacy"), _snapshot(inbox)) == before
-    assert sorted(p.name for p in out.iterdir() if p.is_dir()) == ["github-tests", "legacy"]
+    assert sorted(p.name for p in out.iterdir() if p.is_dir()) == [
+        "github-tests",
+        "legacy",
+    ]
     agents()
     assert main(_pr_args(repo, never)) == 0
-    assert _result(tmp_path, out.joinpath(*PR7)) == _result(tmp_path, never.joinpath(*PR7))
+    assert _result(tmp_path, out.joinpath(*PR7)) == _result(
+        tmp_path, never.joinpath(*PR7)
+    )
 
 
 def test_row_U7_a_042_process_writing_its_nested_folder_now_does_not_stop_or_leak_into_the_new_run(
-        layout_clone, tmp_path, agents, monkeypatch):
+    layout_clone, tmp_path, agents, monkeypatch
+):
     repo, _, _ = layout_clone
     out, never = tmp_path / "out", tmp_path / "never-stopped"
     folder = out.joinpath(*PR7)
@@ -1454,7 +2255,9 @@ def test_row_U7_a_042_process_writing_its_nested_folder_now_does_not_stop_or_lea
     assert main(_pr_args(repo, out)) == 0
     (kept,) = (folder / "rounds").iterdir()
     assert not [p for p in kept.iterdir() if p.is_dir()]
-    assert (nested / "findings.json").read_text() == '{"schema_version": 1, "find'  # never written by us
+    assert (
+        nested / "findings.json"
+    ).read_text() == '{"schema_version": 1, "find'  # never written by us
     monkeypatch.setattr(rounds, "keep_round", real_keep)
     agents()
     assert main(_pr_args(repo, never)) == 0
@@ -1462,7 +2265,9 @@ def test_row_U7_a_042_process_writing_its_nested_folder_now_does_not_stop_or_lea
     assert _result(tmp_path, folder) == _result(tmp_path, never.joinpath(*PR7))
 
 
-def test_row_R1_stopped_after_creating_the_repo_folder_before_the_lock(layout_clone, tmp_path, agents):
+def test_row_R1_stopped_after_creating_the_repo_folder_before_the_lock(
+    layout_clone, tmp_path, agents
+):
     repo, base, head = layout_clone
     out, never = tmp_path / "out", tmp_path / "never-stopped"
     assert _stop(tmp_path, base, head, "hold:1", *_pr_args(repo, out)) == 137
@@ -1470,10 +2275,14 @@ def test_row_R1_stopped_after_creating_the_repo_folder_before_the_lock(layout_cl
     agents()
     assert main(_pr_args(repo, out)) == 0
     assert main(_pr_args(repo, never)) == 0
-    assert _result(tmp_path, out.joinpath(*PR7)) == _result(tmp_path, never.joinpath(*PR7))
+    assert _result(tmp_path, out.joinpath(*PR7)) == _result(
+        tmp_path, never.joinpath(*PR7)
+    )
 
 
-def test_row_R2_stopped_holding_another_remotes_folder_before_switching_to_owner(layout_clone, tmp_path, agents):
+def test_row_R2_stopped_holding_another_remotes_folder_before_switching_to_owner(
+    layout_clone, tmp_path, agents
+):
     repo, base, head = layout_clone
     other = "https://github.com/someone/github-tests"
     results = []
@@ -1483,7 +2292,9 @@ def test_row_R2_stopped_holding_another_remotes_folder_before_switching_to_owner
         before = _snapshot(theirs)
         if stop:
             assert _stop(tmp_path, base, head, "folder:1", *_pr_args(repo, out)) == 137
-            assert json.loads((out / "github-tests" / ".locks" / "pr-7.lock").read_text())["pid"]
+            assert json.loads(
+                (out / "github-tests" / ".locks" / "pr-7.lock").read_text()
+            )["pid"]
             assert not (out / "github-tests@spikelab").exists()
         agents()
         assert main(_pr_args(repo, out)) == 0
@@ -1492,26 +2303,49 @@ def test_row_R2_stopped_holding_another_remotes_folder_before_switching_to_owner
     assert results[0] == results[1]
 
 
-@pytest.mark.parametrize("fork", [False, True], ids=["same-remote", "after-the-fork-step"])
+@pytest.mark.parametrize(
+    "fork", [False, True], ids=["same-remote", "after-the-fork-step"]
+)
 def test_row_R3_stopped_holding_another_refs_folder_before_switching_to_the_hash(
-        layout_clone, tmp_path, agents, fork):
+    layout_clone, tmp_path, agents, fork
+):
     repo, base, head = layout_clone
     other = "https://github.com/someone/github-tests"
     part = "github-tests@spikelab" if fork else "github-tests"
     results = []
     for out, stop in ((tmp_path / "out", True), (tmp_path / "never-stopped", False)):
         if fork:
-            _state_file(out / "github-tests" / "branch-feat_x", other, "feat/x", "someone-github-tests--feat_x")
-        _state_file(out / part / "branch-feat_x", ORIGIN, "feat/x", f"{SLUG_REPO}--feat_x")
+            _state_file(
+                out / "github-tests" / "branch-feat_x",
+                other,
+                "feat/x",
+                "someone-github-tests--feat_x",
+            )
+        _state_file(
+            out / part / "branch-feat_x", ORIGIN, "feat/x", f"{SLUG_REPO}--feat_x"
+        )
         before = _snapshot(out)
-        argv = ["--out", str(out), "review", "--repo", str(repo), "--branch", "feat_x", "--trust-repo"]
+        argv = [
+            "--out",
+            str(out),
+            "review",
+            "--repo",
+            str(repo),
+            "--branch",
+            "feat_x",
+            "--trust-repo",
+        ]
         if stop:
-            assert _stop(tmp_path, base, head, f"folder:{2 if fork else 1}", *argv) == 137
+            assert (
+                _stop(tmp_path, base, head, f"folder:{2 if fork else 1}", *argv) == 137
+            )
             assert (out / part / ".locks" / "branch-feat_x.lock").is_file()
         agents()
         assert main(argv) == 0
         assert {k: v for k, v in _snapshot(out).items() if k in before} == before
-        results.append(_result(tmp_path, out / part / f"branch-feat_x-{_hex6('feat_x')}"))
+        results.append(
+            _result(tmp_path, out / part / f"branch-feat_x-{_hex6('feat_x')}")
+        )
     assert results[0] == results[1]
 
 
@@ -1525,12 +2359,18 @@ def test_row_R4_stopped_part_way_through_the_dir_copy(tmp_path, agents):
     assert _stop(tmp_path, "-", "-", "copy:0", *argv) == 137
     folder = out / "proj" / f"dir-proj-{_hex6(str(src))}"
     assert (out / "proj" / ".locks" / f"{folder.name}.lock").is_file()
-    assert len(list((folder / "source").iterdir())) == 1  # a partial copy, never committed
+    assert (
+        len(list((folder / "source").iterdir())) == 1
+    )  # a partial copy, never committed
     agents()
     assert main(argv) == 0
     assert main(["--out", str(never), "review", "--dir", str(src), "--trust-repo"]) == 0
     assert _result(tmp_path, folder) == _result(tmp_path, never / "proj" / folder.name)
-    git_files = subprocess.run(["git", "-C", str(folder / "source"), "ls-files"], capture_output=True, text=True)
+    git_files = subprocess.run(
+        ["git", "-C", str(folder / "source"), "ls-files"],
+        capture_output=True,
+        text=True,
+    )
     assert git_files.stdout.split() == ["a.py", "b.py", "c.py"]
 
 
@@ -1540,19 +2380,29 @@ def test_row_R5_stopped_during_keep_rounds_copy(layout_clone, tmp_path, agents):
     agents()
     assert main(_pr_args(repo, out)) == 0
     assert _stop(tmp_path, base, head, "copy:0", *_pr_args(repo, out)) == 137
-    assert [p.name for p in (out.joinpath(*PR7) / "rounds").iterdir()][0].startswith(".partial-")
+    assert [p.name for p in (out.joinpath(*PR7) / "rounds").iterdir()][0].startswith(
+        ".partial-"
+    )
     assert main(_pr_args(repo, out)) == 0
     assert main(_pr_args(repo, never)) == 0
     assert main(_pr_args(repo, never)) == 0
-    assert _result(tmp_path, out.joinpath(*PR7)) == _result(tmp_path, never.joinpath(*PR7))
+    assert _result(tmp_path, out.joinpath(*PR7)) == _result(
+        tmp_path, never.joinpath(*PR7)
+    )
 
 
-def test_row_R6_stopped_after_the_target_files_before_the_state(layout_clone, tmp_path, agents):
+def test_row_R6_stopped_after_the_target_files_before_the_state(
+    layout_clone, tmp_path, agents
+):
     repo, base, head = layout_clone
     out, never = tmp_path / "out", tmp_path / "never-stopped"
     assert _stop(tmp_path, base, head, "write:1", *_pr_args(repo, out)) == 137
     folder = out.joinpath(*PR7)
-    assert sorted(p.name for p in folder.iterdir()) == ["commits.txt", "diff.patch", "files.txt"]
+    assert sorted(p.name for p in folder.iterdir()) == [
+        "commits.txt",
+        "diff.patch",
+        "files.txt",
+    ]
     assert rounds.folder_target(folder) == {}  # names no remote: the next run uses it
     agents()
     assert main(_pr_args(repo, out)) == 0
@@ -1561,7 +2411,8 @@ def test_row_R6_stopped_after_the_target_files_before_the_state(layout_clone, tm
 
 
 def test_row_R7_stopped_after_the_state_is_saved_exits_4_and_resume_finishes(
-        layout_clone, tmp_path, agents, capsys):
+    layout_clone, tmp_path, agents, capsys
+):
     repo, base, head = layout_clone
     out, never = tmp_path / "out", tmp_path / "never-stopped"
     folder = out.joinpath(*PR7)
@@ -1569,34 +2420,52 @@ def test_row_R7_stopped_after_the_state_is_saved_exits_4_and_resume_finishes(
     fake = agents()
     capsys.readouterr()
     assert main(_pr_args(repo, out)) == 4
-    assert f"continue with: python -m review_pipeline resume {folder}" in capsys.readouterr().err
+    assert (
+        f"continue with: python -m review_pipeline resume {folder}"
+        in capsys.readouterr().err
+    )
     assert fake.calls == []
     assert main(["resume", str(folder), "--trust-repo"]) == 0
-    assert (out / "HIGH-only.md").is_file() and not (out / "github-tests" / "HIGH-only.md").exists()
+    assert (out / "HIGH-only.md").is_file() and not (
+        out / "github-tests" / "HIGH-only.md"
+    ).exists()
     assert main(_pr_args(repo, never)) == 0
-    assert _result(tmp_path, folder) == dict(_result(tmp_path, never.joinpath(*PR7)),
-                                             events=["started", "started", "finished"])
+    assert _result(tmp_path, folder) == dict(
+        _result(tmp_path, never.joinpath(*PR7)),
+        events=["started", "started", "finished"],
+    )
 
 
 def test_row_R8_stopped_twice_at_the_same_point_one_resume_finishes_and_the_state_is_kept_once(
-        layout_clone, tmp_path, agents):
+    layout_clone, tmp_path, agents
+):
     repo, base, head = layout_clone
     out, never = tmp_path / "out", tmp_path / "never-stopped"
     folder = out.joinpath(*PR7)
     assert _stop(tmp_path, base, head, "started:1", *_pr_args(repo, out)) == 137
-    assert _stop(tmp_path, base, head, "started:1", "resume", str(folder), "--trust-repo") == 137
-    assert [e["event"] for e in _ledger_lines(tmp_path) if e["target_dir"] == str(folder)] == ["started"] * 2
+    assert (
+        _stop(tmp_path, base, head, "started:1", "resume", str(folder), "--trust-repo")
+        == 137
+    )
+    assert [
+        e["event"] for e in _ledger_lines(tmp_path) if e["target_dir"] == str(folder)
+    ] == ["started"] * 2
     agents()
     assert main(["resume", str(folder), "--trust-repo"]) == 0
     assert main(_pr_args(repo, out)) == 0  # keeps the finished round once
     assert main(_pr_args(repo, never)) == 0
     assert main(_pr_args(repo, never)) == 0
     expected = _result(tmp_path, never.joinpath(*PR7))
-    assert _result(tmp_path, folder) == dict(expected, events=["started"] * 3 + ["finished", "started", "finished"])
+    assert _result(tmp_path, folder) == dict(
+        expected, events=["started"] * 3 + ["finished", "started", "finished"]
+    )
 
 
-def test_row_R9_a_run_of_the_same_folder_still_alive_exits_2(layout_clone, tmp_path, agents, capsys):
+def test_row_R9_a_run_of_the_same_folder_still_alive_exits_2(
+    layout_clone, tmp_path, agents, capsys
+):
     from review_pipeline import runlock
+
     repo, _, _ = layout_clone
     out, never = tmp_path / "out", tmp_path / "never-stopped"
     folder = out.joinpath(*PR7)
@@ -1615,10 +2484,17 @@ def test_row_R9_a_run_of_the_same_folder_still_alive_exits_2(layout_clone, tmp_p
 @contextlib.contextmanager
 def _held_by_another_process(folder: Path):
     """Hold *folder*'s run lock in a child process until the body ends."""
-    code = ("import sys; from pathlib import Path; from review_pipeline import runlock\n"
-            "with runlock.hold(Path(sys.argv[1])):\n    print('held', flush=True); sys.stdin.read()\n")
-    proc = subprocess.Popen([sys.executable, "-c", code, str(folder)], cwd=str(TESTS.parent),
-                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    code = (
+        "import sys; from pathlib import Path; from review_pipeline import runlock\n"
+        "with runlock.hold(Path(sys.argv[1])):\n    print('held', flush=True); sys.stdin.read()\n"
+    )
+    proc = subprocess.Popen(
+        [sys.executable, "-c", code, str(folder)],
+        cwd=str(TESTS.parent),
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
     try:
         assert proc.stdout.readline().strip() == "held"
         yield
@@ -1627,20 +2503,37 @@ def _held_by_another_process(folder: Path):
         proc.wait(timeout=30)
 
 
-@pytest.mark.parametrize("case", ["another-remote", "another-ref", "this-remote-and-ref"])
+@pytest.mark.parametrize(
+    "case", ["another-remote", "another-ref", "this-remote-and-ref"]
+)
 def test_a_busy_folder_of_another_remote_or_ref_is_passed_over_and_one_of_this_target_exits_2(
-        layout_clone, tmp_path, agents, capsys, case):
+    layout_clone, tmp_path, agents, capsys, case
+):
     """A run in another remote's (or, for a branch, another ref's) folder does not stop this
     one: the busy folder is read without its lock. A busy folder of this target still exits 2 (R9)."""
     repo, _, _ = layout_clone
     out = tmp_path / "out"
     if case == "another-remote":
         busy, argv = out.joinpath(*PR7), _pr_args(repo, out)
-        _state_file(busy, "https://github.com/someone/github-tests", "7", "someone-github-tests--pr-7")
+        _state_file(
+            busy,
+            "https://github.com/someone/github-tests",
+            "7",
+            "someone-github-tests--pr-7",
+        )
         chosen = out / "github-tests@spikelab" / "pr-7"
     elif case == "another-ref":
         busy = out / "github-tests" / "branch-feat_x"
-        argv = ["--out", str(out), "review", "--repo", str(repo), "--branch", "feat_x", "--trust-repo"]
+        argv = [
+            "--out",
+            str(out),
+            "review",
+            "--repo",
+            str(repo),
+            "--branch",
+            "feat_x",
+            "--trust-repo",
+        ]
         _state_file(busy, ORIGIN, "feat/x", f"{SLUG_REPO}--feat_x")
         chosen = out / "github-tests" / f"branch-feat_x-{_hex6('feat_x')}"
     else:
@@ -1661,26 +2554,40 @@ def test_a_busy_folder_of_another_remote_or_ref_is_passed_over_and_one_of_this_t
 
 
 def test_row_R10_origin_changed_between_rounds_uses_the_owner_folder_and_not_the_old_history(
-        layout_clone, tmp_path, agents):
+    layout_clone, tmp_path, agents
+):
     repo, _, _ = layout_clone
     out, never = tmp_path / "out", tmp_path / "never-stopped"
     agents()
     assert main(_pr_args(repo, out)) == 0
     first = out.joinpath(*PR7)
-    _decide(first, json.loads((first / "findings.json").read_text())["findings"][0]["id"])
+    _decide(
+        first, json.loads((first / "findings.json").read_text())["findings"][0]["id"]
+    )
     before = _snapshot(first)
-    fixture_git(repo, "remote", "set-url", "origin", "https://github.com/someone/github-tests.git")
+    fixture_git(
+        repo,
+        "remote",
+        "set-url",
+        "origin",
+        "https://github.com/someone/github-tests.git",
+    )
     agents()
     assert main(_pr_args(repo, out)) == 0
-    state = json.loads((out / "github-tests@someone" / "pr-7" / "review-state.json").read_text())
+    state = json.loads(
+        (out / "github-tests@someone" / "pr-7" / "review-state.json").read_text()
+    )
     assert not state["repeats"]  # the old origin's rejection is not read
     assert _snapshot(first) == before
     assert main(_pr_args(repo, never)) == 0
-    assert (_result(tmp_path, out / "github-tests@someone" / "pr-7")
-            == _result(tmp_path, never.joinpath(*PR7)))
+    assert _result(tmp_path, out / "github-tests@someone" / "pr-7") == _result(
+        tmp_path, never.joinpath(*PR7)
+    )
 
 
-def test_row_R11_edits_to_the_working_tree_or_to_decisions_between_runs(layout_clone, tmp_path, agents):
+def test_row_R11_edits_to_the_working_tree_or_to_decisions_between_runs(
+    layout_clone, tmp_path, agents
+):
     repo, _, _ = layout_clone
     out, never = tmp_path / "out", tmp_path / "never-stopped"
     folder = out.joinpath(*PR7)
@@ -1688,7 +2595,9 @@ def test_row_R11_edits_to_the_working_tree_or_to_decisions_between_runs(layout_c
     assert main(_pr_args(repo, out)) == 0
     (repo / "settings.py").write_text("edited by the person\n")
     (repo / "scratch.txt").write_text("not committed\n")
-    _decide(folder, json.loads((folder / "findings.json").read_text())["findings"][0]["id"])
+    _decide(
+        folder, json.loads((folder / "findings.json").read_text())["findings"][0]["id"]
+    )
     decisions = (folder / "viewer" / "decisions.json").read_bytes()
     agents()
     assert main(_pr_args(repo, out)) == 0
@@ -1701,7 +2610,8 @@ def test_row_R11_edits_to_the_working_tree_or_to_decisions_between_runs(layout_c
 
 
 def test_row_R12_stopped_holding_the_046_folders_lock_during_the_interrupted_run_check(
-        layout_clone, tmp_path, agents):
+    layout_clone, tmp_path, agents
+):
     """A row this change adds: the check takes the 0.46 lock `.locks/<its slug>.lock` under `<out>`, which stays on disk."""
     repo, base, head = layout_clone
     out, never, gen = tmp_path / "out", tmp_path / "never-stopped", tmp_path / "gen"
@@ -1716,12 +2626,17 @@ def test_row_R12_stopped_holding_the_046_folders_lock_during_the_interrupted_run
     assert main(_pr_args(repo, out)) == 0
     assert lock.is_file() and _snapshot(flat) == before
     assert main(_pr_args(repo, never)) == 0
-    assert _result(tmp_path, out.joinpath(*PR7)) == _result(tmp_path, never.joinpath(*PR7))
+    assert _result(tmp_path, out.joinpath(*PR7)) == _result(
+        tmp_path, never.joinpath(*PR7)
+    )
 
 
-def test_every_top_level_directory_a_review_writes_is_in_not_kept(layout_clone, tmp_path, agents, monkeypatch):
+def test_every_top_level_directory_a_review_writes_is_in_not_kept(
+    layout_clone, tmp_path, agents, monkeypatch
+):
     """Done means 8, second test: a later directory the pipeline adds fails this and forces a decision."""
     from review_pipeline import orchestrator
+
     repo, _, _ = layout_clone
     out = tmp_path / "out"
     folder = out.joinpath(*PR7)

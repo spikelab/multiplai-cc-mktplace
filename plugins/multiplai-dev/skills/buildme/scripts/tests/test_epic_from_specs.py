@@ -45,7 +45,9 @@ def _release_locks():
 
 
 def _git(cwd: Path, *a: str) -> str:
-    return subprocess.run(["git", *a], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+    return subprocess.run(
+        ["git", *a], cwd=cwd, check=True, capture_output=True, text=True
+    ).stdout.strip()
 
 
 def _commit_all(project: Path, msg: str) -> str:
@@ -79,7 +81,11 @@ class Epic:
         return json.loads((self.dir / "epic.json").read_text())["child_status"]
 
     def build_records(self, cid: str) -> list:
-        return [a for a in records.attempts(self.dir) if a.child == cid and a.kind == "build"]
+        return [
+            a
+            for a in records.attempts(self.dir)
+            if a.child == cid and a.kind == "build"
+        ]
 
 
 def _assert_nothing_written(e: Epic) -> None:
@@ -89,6 +95,7 @@ def _assert_nothing_written(e: Epic) -> None:
 
 
 # --- which change is an epic -------------------------------------------------------
+
 
 def test_is_epic_reads_the_parents_children(tmp_path, monkeypatch):
     use_workspace(monkeypatch, tmp_path)
@@ -102,7 +109,9 @@ def test_is_epic_reads_the_parents_children(tmp_path, monkeypatch):
     assert not phase.is_epic(config)
 
 
-def test_a_child_that_names_the_parent_but_is_not_listed_is_not_built(tmp_path, monkeypatch):
+def test_a_child_that_names_the_parent_but_is_not_listed_is_not_built(
+    tmp_path, monkeypatch
+):
     """The list, not a scan for `parent`, says which children the epic has."""
     e = Epic(tmp_path, monkeypatch, answer=CHAIN)
     stray = e.changes / "e-old"
@@ -111,24 +120,31 @@ def test_a_child_that_names_the_parent_but_is_not_listed_is_not_built(tmp_path, 
     _commit_all(e.project, "a dropped child")
     assert e.run() == 3 and merge_waiting() == [pr_url("e-a")]
     assert set(e.status()) == {"a", "b"}
-    assert [json.loads(x)["argv"][json.loads(x)["argv"].index("--change") + 1]
-            for x in (tmp_path / "calls.log").read_text().splitlines()] == ["e-a"]
+    assert [
+        json.loads(x)["argv"][json.loads(x)["argv"].index("--change") + 1]
+        for x in (tmp_path / "calls.log").read_text().splitlines()
+    ] == ["e-a"]
 
 
 # --- refusals: SPEC:NOT_READY, exit 2, nothing written -----------------------------
+
 
 def test_a_listed_child_not_ready_is_refused(tmp_path, monkeypatch, capsys):
     """(a) A requirement edited after `mark_ready`, and committed: the child's
     specs are no longer the ones marked ready."""
     e = Epic(tmp_path, monkeypatch)
     req = e.changes / "e-ui" / "requirements" / "cap-ui.md"
-    req.write_text(req.read_text() + "\n### Requirement: More\nThe system SHALL do more.\n\n"
-                   "#### Scenario: more\n- **WHEN** it runs\n- **THEN** more is done\n")
+    req.write_text(
+        req.read_text() + "\n### Requirement: More\nThe system SHALL do more.\n\n"
+        "#### Scenario: more\n- **WHEN** it runs\n- **THEN** more is done\n"
+    )
     _commit_all(e.project, "edit after ready")
     rc, out = e.refused(capsys)
     assert rc == 2
     lines = out.splitlines()
-    assert lines[0].startswith("SPEC:NOT_READY:child e-ui: the specs changed after they were marked ready")
+    assert lines[0].startswith(
+        "SPEC:NOT_READY:child e-ui: the specs changed after they were marked ready"
+    )
     assert lines[1] == "Run /multiplai-pm:pm-spec e-ui first"
     _assert_nothing_written(e)
 
@@ -139,8 +155,10 @@ def test_the_parent_dir_uncommitted_is_refused(tmp_path, monkeypatch, capsys):
     (e.config.change_dir / "notes.md").write_text("not committed\n")
     rc, out = e.refused(capsys)
     assert rc == 2
-    assert out.startswith(f"SPEC:NOT_READY:{e.config.change_dir} has uncommitted changes (specs/changes/e/notes.md); "
-                          "the children branch from the commit that holds the specs")
+    assert out.startswith(
+        f"SPEC:NOT_READY:{e.config.change_dir} has uncommitted changes (specs/changes/e/notes.md); "
+        "the children branch from the commit that holds the specs"
+    )
     assert "Run /multiplai-pm:pm-spec e first" in out
     _assert_nothing_written(e)
 
@@ -153,8 +171,13 @@ def test_a_child_dir_uncommitted_is_refused(tmp_path, monkeypatch, capsys):
     mark_ready(e.changes / "e-api", now=READY_AT)
     rc, out = e.refused(capsys)
     assert rc == 2
-    assert out.startswith(f"SPEC:NOT_READY:{e.changes / 'e-api'} has uncommitted changes (")
-    assert "specs/changes/e-api/use-cases.md" in out and "Run /multiplai-pm:pm-spec e-api first" in out
+    assert out.startswith(
+        f"SPEC:NOT_READY:{e.changes / 'e-api'} has uncommitted changes ("
+    )
+    assert (
+        "specs/changes/e-api/use-cases.md" in out
+        and "Run /multiplai-pm:pm-spec e-api first" in out
+    )
     _assert_nothing_written(e)
 
 
@@ -165,20 +188,40 @@ def test_depends_on_naming_an_unlisted_child_is_refused(tmp_path, monkeypatch, c
     _commit_all(e.project, "a ghost dependency")
     rc, out = e.refused(capsys)
     assert rc == 2
-    assert out.splitlines()[0] == ("SPEC:NOT_READY:child e-docs depends on e-ghost, which the parent e does "
-                                   "not list as a child")
+    assert out.splitlines()[0] == (
+        "SPEC:NOT_READY:child e-docs depends on e-ghost, which the parent e does "
+        "not list as a child"
+    )
     _assert_nothing_written(e)
 
 
-@pytest.mark.parametrize("damage, reason", [
-    (lambda e: write_change_meta(e.config.change_dir, {"children": ["e-api", "other-ui"]}),
-     "the parent e's children list names 'other-ui', which is not e-<id>"),
-    (lambda e: write_change_meta(e.config.change_dir, {"children": ["e-api", "e-ui", "e-gone"]}),
-     "child e-gone: its change dir"),
-    (lambda e: (write_change_meta(e.changes / "e-api", {"depends_on": ["e-docs"]})),
-     "the children's depends_on have a cycle: "),
-], ids=["name", "missing-dir", "cycle"])
-def test_a_split_buildme_cannot_build_from_is_refused(tmp_path, monkeypatch, capsys, damage, reason):
+@pytest.mark.parametrize(
+    "damage, reason",
+    [
+        (
+            lambda e: write_change_meta(
+                e.config.change_dir, {"children": ["e-api", "other-ui"]}
+            ),
+            "the parent e's children list names 'other-ui', which is not e-<id>",
+        ),
+        (
+            lambda e: write_change_meta(
+                e.config.change_dir, {"children": ["e-api", "e-ui", "e-gone"]}
+            ),
+            "child e-gone: its change dir",
+        ),
+        (
+            lambda e: write_change_meta(
+                e.changes / "e-api", {"depends_on": ["e-docs"]}
+            ),
+            "the children's depends_on have a cycle: ",
+        ),
+    ],
+    ids=["name", "missing-dir", "cycle"],
+)
+def test_a_split_buildme_cannot_build_from_is_refused(
+    tmp_path, monkeypatch, capsys, damage, reason
+):
     e = Epic(tmp_path, monkeypatch)
     damage(e)
     _commit_all(e.project, "damage")
@@ -190,7 +233,10 @@ def test_a_split_buildme_cannot_build_from_is_refused(tmp_path, monkeypatch, cap
 
 # --- the bases ---------------------------------------------------------------------
 
-def test_a_dependant_branches_from_origin_after_its_dependency_merged(tmp_path, monkeypatch):
+
+def test_a_dependant_branches_from_origin_after_its_dependency_merged(
+    tmp_path, monkeypatch
+):
     """(f) b waits for a; once a's PR merged (carrying the specs commit to
     origin), b branches from origin's default branch, which holds its change
     dir as the specs commit does. The parent's change dir is left committed."""
@@ -204,7 +250,9 @@ def test_a_dependant_branches_from_origin_after_its_dependency_merged(tmp_path, 
     assert argv[argv.index("--base-ref") + 1] == origin_main != e.specs
     assert (tmp_path / "bases" / "b").read_text() == origin_main
     rel = "specs/changes/e-b"
-    assert _git(e.project, "rev-parse", f"{origin_main}:{rel}") == _git(e.project, "rev-parse", f"{e.specs}:{rel}")
+    assert _git(e.project, "rev-parse", f"{origin_main}:{rel}") == _git(
+        e.project, "rev-parse", f"{e.specs}:{rel}"
+    )
     assert _git(e.project, "status", "--porcelain", "--", "specs") == ""
 
 
@@ -223,11 +271,16 @@ def test_a_dependant_whose_base_lacks_its_specs_is_not_launched(tmp_path, monkey
     assert e.build_records("b") == []
     b = e.status()["b"]
     assert b["status"] == "failed"
-    assert "does not hold specs/changes/e-b as the commit with the ready specs" in b["reason"]
+    assert (
+        "does not hold specs/changes/e-b as the commit with the ready specs"
+        in b["reason"]
+    )
     assert revised[:12] in b["reason"]
 
 
-def test_a_first_wave_child_never_carries_unrelated_local_commits(tmp_path, monkeypatch):
+def test_a_first_wave_child_never_carries_unrelated_local_commits(
+    tmp_path, monkeypatch
+):
     """(i) A local commit not on origin touches a path outside the epic's
     change dirs: a child with no dependency, which branches from the specs
     commit, would carry it into its PR. It is not launched; it is `failed`
@@ -235,26 +288,54 @@ def test_a_first_wave_child_never_carries_unrelated_local_commits(tmp_path, monk
     e = Epic(tmp_path, monkeypatch, answer=CHAIN)
     (e.project / "notes.txt").write_text("local work\n")
     _git(e.project, "add", "notes.txt")
-    _git(e.project, "-c", "commit.gpgsign=false", "commit", "-qm", "unrelated local work")
+    _git(
+        e.project, "-c", "commit.gpgsign=false", "commit", "-qm", "unrelated local work"
+    )
     assert e.run() == 1
     assert e.build_records("a") == []
     a = e.status()["a"]
     assert a["status"] == "failed"
-    assert "notes.txt" in a["reason"] and "outside the epic's change dirs" in a["reason"]
+    assert (
+        "notes.txt" in a["reason"] and "outside the epic's change dirs" in a["reason"]
+    )
 
 
 @pytest.mark.parametrize("interrupted", [False, True], ids=["failed", "stopped"])
-def test_a_saved_child_command_from_buildmes_own_split_is_rebuilt(tmp_path, monkeypatch, interrupted):
+def test_a_saved_child_command_from_buildmes_own_split_is_rebuilt(
+    tmp_path, monkeypatch, interrupted
+):
     """(j) An epic buildme once split saved its child's command with flags
     this version removed (`--mode brief --plan-file ...`), which argparse
     would refuse (exit 2) on every relaunch. The relaunch builds a new
     command instead."""
     e = Epic(tmp_path, monkeypatch, answer=CHAIN)
-    old = ["python", "-m", "build_pipeline", "--session-id", "", "build", "--mode", "brief",
-           "--change", "e-a", "--plan-file", str(e.dir / "plans" / "a.md"), "--skip-research",
-           "--auto", "--trust-repo", "--no-epic-split", "--epic-child", "--pr-ready",
-           "--project-dir", str(e.project)]
-    records.finish(records.start(e.dir, "build", "a", old), None if interrupted else 1, interrupted=interrupted)
+    old = [
+        "python",
+        "-m",
+        "build_pipeline",
+        "--session-id",
+        "",
+        "build",
+        "--mode",
+        "brief",
+        "--change",
+        "e-a",
+        "--plan-file",
+        str(e.dir / "plans" / "a.md"),
+        "--skip-research",
+        "--auto",
+        "--trust-repo",
+        "--no-epic-split",
+        "--epic-child",
+        "--pr-ready",
+        "--project-dir",
+        str(e.project),
+    ]
+    records.finish(
+        records.start(e.dir, "build", "a", old),
+        None if interrupted else 1,
+        interrupted=interrupted,
+    )
     assert e.run() == 3 and merge_waiting() == [pr_url("e-a")]
     relaunch = e.build_records("a")[-1].started["argv"]
     assert relaunch == e_new_argv(e, "a")
@@ -264,7 +345,10 @@ def test_a_saved_child_command_from_buildmes_own_split_is_rebuilt(tmp_path, monk
 
 def e_new_argv(e: Epic, cid: str) -> list[str]:
     from build_pipeline.epic import coordinator
-    coord = coordinator.Coordinator(e.config, args_for(e.config), e.dir, store.load_epic(e.dir), e.specs)
+
+    coord = coordinator.Coordinator(
+        e.config, args_for(e.config), e.dir, store.load_epic(e.dir), e.specs
+    )
     return coord.new_argv(cid, e.specs)
 
 
@@ -278,7 +362,9 @@ def _archive(e: Epic, child: str) -> Path:
     return dest
 
 
-def test_a_merged_childs_archived_change_dir_does_not_stop_the_resume(tmp_path, monkeypatch):
+def test_a_merged_childs_archived_change_dir_does_not_stop_the_resume(
+    tmp_path, monkeypatch
+):
     """(h) a merged and its change dir moved to specs/archive/ (children run
     with --auto): the next run takes a as merged and launches b."""
     e = Epic(tmp_path, monkeypatch, answer=CHAIN)
@@ -290,7 +376,9 @@ def test_a_merged_childs_archived_change_dir_does_not_stop_the_resume(tmp_path, 
     assert len(e.build_records("b")) == 1 and len(e.build_records("a")) == 1
 
 
-def test_a_listed_child_gone_and_never_merged_is_still_refused(tmp_path, monkeypatch, capsys):
+def test_a_listed_child_gone_and_never_merged_is_still_refused(
+    tmp_path, monkeypatch, capsys
+):
     """A listed child whose change dir is gone, with no archive and no
     merged status saved, is refused as before."""
     e = Epic(tmp_path, monkeypatch, answer=CHAIN)
@@ -318,20 +406,46 @@ def test_a_child_saved_as_merged_whose_dir_is_gone_is_accepted(tmp_path, monkeyp
 
 # --- epic.json -----------------------------------------------------------------------
 
+
 def test_an_epic_json_from_before_pm_spec_loads(tmp_path):
     """A file buildme's own split saved (state, hashes, plans, a child's repo,
     and a status with repo_park and slug) still loads; the extra keys are dropped."""
-    old = {"name": "e", "state": "approved", "reason": "Three parts.", "hashes": {"split.md": "x"},
-           "approved_at": "2026-10-13T12:00:00+00:00", "created_at": "2026-10-13T11:00:00+00:00",
-           "children": [{"id": "a", "title": "A", "depends_on": [], "repo": "../other", "plan": "# Plan: A\n"},
-                        {"id": "b", "title": "B", "depends_on": ["a"], "repo": None, "plan": ""}],
-           "child_status": {"a": {"status": "merged", "pr": "https://x/pull/1", "repo_park": "", "slug": "o-r"}},
-           "spent_usd": 1.5, "spend_complete": True}
+    old = {
+        "name": "e",
+        "state": "approved",
+        "reason": "Three parts.",
+        "hashes": {"split.md": "x"},
+        "approved_at": "2026-10-13T12:00:00+00:00",
+        "created_at": "2026-10-13T11:00:00+00:00",
+        "children": [
+            {
+                "id": "a",
+                "title": "A",
+                "depends_on": [],
+                "repo": "../other",
+                "plan": "# Plan: A\n",
+            },
+            {"id": "b", "title": "B", "depends_on": ["a"], "repo": None, "plan": ""},
+        ],
+        "child_status": {
+            "a": {
+                "status": "merged",
+                "pr": "https://x/pull/1",
+                "repo_park": "",
+                "slug": "o-r",
+            }
+        },
+        "spent_usd": 1.5,
+        "spend_complete": True,
+    }
     (tmp_path / "epic.json").write_text(json.dumps(old))
     epic = store.load_epic(tmp_path)
     assert [(c.id, c.depends_on) for c in epic.children] == [("a", []), ("b", ["a"])]
     assert epic.child_status["a"].status == "merged" and epic.spent_usd == 1.5
-    assert "repo" not in epic.children[0].model_dump() and "slug" not in epic.child_status["a"].model_dump()
+    assert (
+        "repo" not in epic.children[0].model_dump()
+        and "slug" not in epic.child_status["a"].model_dump()
+    )
 
 
 def test_the_children_come_from_the_change_dirs_on_every_run(tmp_path, monkeypatch):
@@ -340,15 +454,26 @@ def test_the_children_come_from_the_change_dirs_on_every_run(tmp_path, monkeypat
     (here the merge step's park, which keeps a parked and so b skipped)."""
     e = Epic(tmp_path, monkeypatch, answer=CHAIN)
     e.dir.mkdir(parents=True)
-    saved = store.Epic(name="e", children=[store.EpicChild(id="a"), store.EpicChild(id="gone")],
-                       child_status={"a": store.ChildStatus(status="parked", reason="kept", merge_park="kept"),
-                                     "gone": store.ChildStatus(status="built")})
+    saved = store.Epic(
+        name="e",
+        children=[store.EpicChild(id="a"), store.EpicChild(id="gone")],
+        child_status={
+            "a": store.ChildStatus(status="parked", reason="kept", merge_park="kept"),
+            "gone": store.ChildStatus(status="built"),
+        },
+    )
     store.save_epic(e.dir, saved)
     assert e.run() == 0
     data = json.loads((e.dir / "epic.json").read_text())
-    assert data["children"] == [{"id": "a", "depends_on": []}, {"id": "b", "depends_on": ["a"]}]
+    assert data["children"] == [
+        {"id": "a", "depends_on": []},
+        {"id": "b", "depends_on": ["a"]},
+    ]
     assert set(data["child_status"]) == {"a", "b"}
-    assert data["child_status"]["a"]["status"] == "parked" and data["child_status"]["b"]["status"] == "skipped"
+    assert (
+        data["child_status"]["a"]["status"] == "parked"
+        and data["child_status"]["b"]["status"] == "skipped"
+    )
 
 
 def test_a_build_of_the_same_change_in_another_project_is_not_this_child(tmp_path):
@@ -363,20 +488,32 @@ def test_a_build_of_the_same_change_in_another_project_is_not_this_child(tmp_pat
     from build_pipeline.epic import coordinator
 
     def spawn(*argv: str) -> subprocess.Popen:
-        stub = tmp_path / "build_pipeline"      # first on `-m`'s path, so no real build runs
+        stub = (
+            tmp_path / "build_pipeline"
+        )  # first on `-m`'s path, so no real build runs
         stub.mkdir(exist_ok=True)
         (stub / "__init__.py").write_text("")
         (stub / "__main__.py").write_text("import time\ntime.sleep(60)\n")
-        return subprocess.Popen([sys.executable, "-m", "build_pipeline", *argv], cwd=tmp_path,
-                                start_new_session=True)
+        return subprocess.Popen(
+            [sys.executable, "-m", "build_pipeline", *argv],
+            cwd=tmp_path,
+            start_new_session=True,
+        )
 
     here, there = tmp_path / "p", tmp_path / "q"
-    other = spawn("--session-id", "s", "build", "--change", "e-a", "--project-dir", str(there))
-    fixer = spawn("--session-id", "s", "findings", "--change", "e-a", "--project-dir", str(here))
+    other = spawn(
+        "--session-id", "s", "build", "--change", "e-a", "--project-dir", str(there)
+    )
+    fixer = spawn(
+        "--session-id", "s", "findings", "--change", "e-a", "--project-dir", str(here)
+    )
     try:
         for _ in range(250):
-            if (coordinator.build_pid("e-a", str(there)) == other.pid
-                    and coordinator._ps_pid("findings", f"--project-dir {here}") == fixer.pid):
+            if (
+                coordinator.build_pid("e-a", str(there)) == other.pid
+                and coordinator._ps_pid("findings", f"--project-dir {here}")
+                == fixer.pid
+            ):
                 break
             time.sleep(0.02)
         assert coordinator.build_pid("e-a", str(there)) == other.pid

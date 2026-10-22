@@ -34,16 +34,28 @@ def eligible(key: str, answers: dict[str, dict], attempts: dict[str, int]) -> bo
     return not has_answer and attempts.get(key, 0) < MAX_ATTEMPTS
 
 
-async def ask_one(key: str, prompt: str, schema: type[BaseModel], label: str, call: CallFn,
-                  answers: dict[str, dict], attempts: dict[str, int], ledger: SpendLedger,
-                  save: Callable[[], None], *, call_kwargs: dict[str, Any]) -> Exception | None:
+async def ask_one(
+    key: str,
+    prompt: str,
+    schema: type[BaseModel],
+    label: str,
+    call: CallFn,
+    answers: dict[str, dict],
+    attempts: dict[str, int],
+    ledger: SpendLedger,
+    save: Callable[[], None],
+    *,
+    call_kwargs: dict[str, Any],
+) -> Exception | None:
     """Ask *key* once. None when the call returned (its answer or error is saved);
     otherwise the exception that stopped it, with the attempt taken back and saved."""
     try:
         ledger.check(label)
     except BudgetExceededError as e:
         return e
-    answers.pop(key, None)  # only an error answer can be here: an answered key is not eligible
+    answers.pop(
+        key, None
+    )  # only an error answer can be here: an answered key is not eligible
     before = attempts.get(key)
     attempts[key] = (before or 0) + 1
     save()
@@ -63,18 +75,37 @@ async def ask_one(key: str, prompt: str, schema: type[BaseModel], label: str, ca
     return None
 
 
-async def dispatch(tasks: list[tuple[str, str, str]], schema: type[BaseModel], call: CallFn,
-                   answers: dict[str, dict], attempts: dict[str, int], ledger: SpendLedger,
-                   save: Callable[[], None], *, call_kwargs: dict[str, Any]) -> None:
+async def dispatch(
+    tasks: list[tuple[str, str, str]],
+    schema: type[BaseModel],
+    call: CallFn,
+    answers: dict[str, dict],
+    attempts: dict[str, int],
+    ledger: SpendLedger,
+    save: Callable[[], None],
+    *,
+    call_kwargs: dict[str, Any],
+) -> None:
     """Ask every `(key, prompt, label)` the rule allows, in at most two rounds.
 
     Raises the first `BackendUnavailable` or `RepoTrustError`, else `BudgetStopped`
     when a task was stopped by the budget, after the round's calls in flight finish.
     """
+
     async def one(task: tuple[str, str, str]) -> Exception | None:
         key, prompt, label = task
-        return await ask_one(key, prompt, schema, label, call, answers, attempts, ledger, save,
-                             call_kwargs=call_kwargs)
+        return await ask_one(
+            key,
+            prompt,
+            schema,
+            label,
+            call,
+            answers,
+            attempts,
+            ledger,
+            save,
+            call_kwargs=call_kwargs,
+        )
 
     for _ in range(MAX_ATTEMPTS):
         todo = [t for t in tasks if eligible(t[0], answers, attempts)]
@@ -88,5 +119,7 @@ async def dispatch(tasks: list[tuple[str, str, str]], schema: type[BaseModel], c
             raise BudgetStopped(str(stops[0]))
 
 
-def any_eligible(keys: list[str], answers: dict[str, dict], attempts: dict[str, int]) -> bool:
+def any_eligible(
+    keys: list[str], answers: dict[str, dict], attempts: dict[str, int]
+) -> bool:
     return any(eligible(k, answers, attempts) for k in keys)

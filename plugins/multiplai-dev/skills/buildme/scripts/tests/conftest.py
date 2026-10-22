@@ -11,7 +11,9 @@ def no_real_pr_skill(monkeypatch):
     `git_ops._run_pr_skill` itself."""
 
     def refuse(argv, cwd=None, timeout=None):
-        raise AssertionError(f"a test ran the real pr skill without stubbing it: {argv}")
+        raise AssertionError(
+            f"a test ran the real pr skill without stubbing it: {argv}"
+        )
 
     monkeypatch.setattr(git_ops, "_run_pr_skill", refuse)
 
@@ -25,9 +27,18 @@ def no_real_walkthrough_run(monkeypatch):
     real = git_ops._run_walkthrough_skill
 
     def guarded(argv, cwd=None, timeout=None):
-        if "walkthrough_pipeline" in argv and argv[argv.index("walkthrough_pipeline") + 1] != "check":
-            raise AssertionError(f"a test ran a real walkthrough without stubbing it: {argv}")
-        return real(argv, cwd=cwd) if timeout is None else real(argv, cwd=cwd, timeout=timeout)
+        if (
+            "walkthrough_pipeline" in argv
+            and argv[argv.index("walkthrough_pipeline") + 1] != "check"
+        ):
+            raise AssertionError(
+                f"a test ran a real walkthrough without stubbing it: {argv}"
+            )
+        return (
+            real(argv, cwd=cwd)
+            if timeout is None
+            else real(argv, cwd=cwd, timeout=timeout)
+        )
 
     monkeypatch.setattr(git_ops, "_run_walkthrough_skill", guarded)
 
@@ -41,8 +52,14 @@ def no_real_spec_extract(monkeypatch):
 
     def guarded(argv, cwd=None, timeout=None):
         if "spec_extract_pipeline" in argv:
-            raise AssertionError(f"a test ran a real spec-extract without stubbing it: {argv}")
-        return real(argv, cwd=cwd) if timeout is None else real(argv, cwd=cwd, timeout=timeout)
+            raise AssertionError(
+                f"a test ran a real spec-extract without stubbing it: {argv}"
+            )
+        return (
+            real(argv, cwd=cwd)
+            if timeout is None
+            else real(argv, cwd=cwd, timeout=timeout)
+        )
 
     monkeypatch.setattr(git_ops, "_run_spec_extract_skill", guarded)
 
@@ -91,21 +108,25 @@ _SESSION_DEFAULT_VARS = (
 def _no_session_defaults(monkeypatch):
     for key in _SESSION_DEFAULT_VARS:
         monkeypatch.delenv(key, raising=False)
-    monkeypatch.setattr("multiplai_core.session.load_multiplai_conf",
-                        lambda: {"_sections": {}})
+    monkeypatch.setattr(
+        "multiplai_core.session.load_multiplai_conf", lambda: {"_sections": {}}
+    )
 
 
 @pytest.fixture(autouse=True)
 def no_real_model_provider(monkeypatch):
     """Correctness tests must never dispatch paid model calls."""
+
     async def refuse(*args, **kwargs):
         raise AssertionError("Test attempted an unstubbed model provider call")
+
     monkeypatch.setattr("build_pipeline.sdk.run_agent", refuse)
 
 
 @pytest.fixture(autouse=True)
 def isolated_budget():
     from build_pipeline import budget
+
     budget.reset()
     yield
     budget.reset()
@@ -113,8 +134,10 @@ def isolated_budget():
 
 def pytest_configure(config):
     config.addinivalue_line(
-        "markers", "no_handoff: the build sees the change dir as the test left it; "
-                   "pm_spec_handoff does not mark its specs ready")
+        "markers",
+        "no_handoff: the build sees the change dir as the test left it; "
+        "pm_spec_handoff does not mark its specs ready",
+    )
 
 
 @pytest.fixture(autouse=True)

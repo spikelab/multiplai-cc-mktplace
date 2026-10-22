@@ -74,25 +74,33 @@ from google.cloud import firestore
 db = firestore.Client()
 
 # Create document with auto-generated ID
-users_ref = db.collection('users')
-new_user = users_ref.add({
-    'name': 'Alice Johnson',
-    'email': 'alice@example.com',
-    'created_at': firestore.SERVER_TIMESTAMP,
-    'roles': ['admin', 'editor']
-})
+users_ref = db.collection("users")
+new_user = users_ref.add(
+    {
+        "name": "Alice Johnson",
+        "email": "alice@example.com",
+        "created_at": firestore.SERVER_TIMESTAMP,
+        "roles": ["admin", "editor"],
+    }
+)
 
 # Query documents
-active_users = users_ref.where('status', '==', 'active').where('roles', 'array_contains', 'admin').stream()
+active_users = (
+    users_ref.where("status", "==", "active")
+    .where("roles", "array_contains", "admin")
+    .stream()
+)
 
 for user in active_users:
-    print(f'{user.id} => {user.to_dict()}')
+    print(f"{user.id} => {user.to_dict()}")
+
 
 # Real-time listener for changes
 def on_snapshot(collection_snapshot, changes, read_time):
     for change in changes:
-        if change.type.name == 'ADDED':
-            print(f'New user: {change.document.id}')
+        if change.type.name == "ADDED":
+            print(f"New user: {change.document.id}")
+
 
 users_ref.on_snapshot(on_snapshot)
 ```
@@ -110,30 +118,28 @@ from google.cloud import bigtable
 from google.cloud.bigtable import column_family, row_filters
 
 # Create Bigtable instance and table
-client = bigtable.Client(project='my-project', admin=True)
-instance = client.instance('analytics-instance')
+client = bigtable.Client(project="my-project", admin=True)
+instance = client.instance("analytics-instance")
 
 # Create table with column family
-table = instance.table('events')
-cf = table.column_family('metrics', max_age=timedelta(days=30))
+table = instance.table("events")
+cf = table.column_family("metrics", max_age=timedelta(days=30))
 cf.create()
 
 # Row key design for time-series: reverse timestamp + user_id (avoid hotspots)
 import time
+
 reverse_timestamp = str(2**63 - int(time.time() * 1000))
 row_key = f"{reverse_timestamp}#{user_id}".encode()
 
 # Write data
 row = table.direct_row(row_key)
-row.set_cell('metrics', 'page_views', str(125), timestamp=datetime.utcnow())
-row.set_cell('metrics', 'session_duration', str(450), timestamp=datetime.utcnow())
+row.set_cell("metrics", "page_views", str(125), timestamp=datetime.utcnow())
+row.set_cell("metrics", "session_duration", str(450), timestamp=datetime.utcnow())
 row.commit()
 
 # Read data with prefix scan
-rows = table.read_rows(
-    start_key=f"{reverse_timestamp}#".encode(),
-    limit=100
-)
+rows = table.read_rows(start_key=f"{reverse_timestamp}#".encode(), limit=100)
 ```
 
 ### Concept 4: Spanner Global Distribution
@@ -150,23 +156,27 @@ from google.cloud import spanner
 # Create Spanner instance with multi-region configuration
 spanner_client = spanner.Client()
 instance = spanner_client.instance(
-    'global-instance',
-    configuration_name='nam-eur-asia1',  # Multi-region
-    node_count=3
+    "global-instance",
+    configuration_name="nam-eur-asia1",  # Multi-region
+    node_count=3,
 )
 
-database = instance.database('orders')
+database = instance.database("orders")
+
 
 # Insert with transaction
 def insert_order(transaction):
     transaction.execute_update(
         """INSERT INTO Orders (OrderId, CustomerId, Amount, CreatedAt)
            VALUES (@order_id, @customer_id, @amount, CURRENT_TIMESTAMP())""",
-        params={'order_id': 'ORD-123', 'customer_id': 'CUST-456', 'amount': 99.99},
-        param_types={'order_id': spanner.param_types.STRING,
-                     'customer_id': spanner.param_types.STRING,
-                     'amount': spanner.param_types.FLOAT64}
+        params={"order_id": "ORD-123", "customer_id": "CUST-456", "amount": 99.99},
+        param_types={
+            "order_id": spanner.param_types.STRING,
+            "customer_id": spanner.param_types.STRING,
+            "amount": spanner.param_types.FLOAT64,
+        },
     )
+
 
 database.run_in_transaction(insert_order)
 
@@ -255,6 +265,7 @@ row_key = f"{sensor_id}#{timestamp}".encode()
 # ✅ Good: Hash prefix distributes writes, reverse timestamp for recent scans
 import hashlib
 
+
 def create_row_key(sensor_id, timestamp):
     # Hash prefix (first 2 hex chars) distributes writes across tablets
     prefix = hashlib.md5(sensor_id.encode()).hexdigest()[:2]
@@ -262,17 +273,18 @@ def create_row_key(sensor_id, timestamp):
     reverse_ts = str(2**63 - int(timestamp * 1000))
     return f"{prefix}#{sensor_id}#{reverse_ts}".encode()
 
+
 # Write to Bigtable
-row = table.direct_row(create_row_key('sensor-42', time.time()))
-row.set_cell('data', 'temperature', '72.5')
+row = table.direct_row(create_row_key("sensor-42", time.time()))
+row.set_cell("data", "temperature", "72.5")
 row.commit()
 
 # Read recent data for sensor with prefix scan
-prefix = hashlib.md5('sensor-42'.encode()).hexdigest()[:2]
+prefix = hashlib.md5("sensor-42".encode()).hexdigest()[:2]
 rows = table.read_rows(
     start_key=f"{prefix}#sensor-42#".encode(),
     end_key=f"{prefix}#sensor-42#~".encode(),
-    limit=100
+    limit=100,
 )
 ```
 
@@ -321,29 +333,32 @@ WHERE c.CustomerId = 'CUST-123';  -- Efficient, single node
 import sqlalchemy
 from sqlalchemy import create_engine
 
+
 # ❌ Bad: Create new connection per request (connection exhaustion)
 def query_database():
-    engine = create_engine('postgresql://user:pass@host/db')
+    engine = create_engine("postgresql://user:pass@host/db")
     with engine.connect() as conn:
         result = conn.execute("SELECT * FROM users")
     return result
 
+
 # ✅ Good: Reuse connection pool across requests
 # Cloud SQL Proxy handles connection pooling
 connection_pool = create_engine(
-    'postgresql+pg8000://',
+    "postgresql+pg8000://",
     creator=lambda: connector.connect(
-        'project:region:instance',
-        'pg8000',
-        user='appuser',
-        password='SECRET',
-        db='appdb'
+        "project:region:instance",
+        "pg8000",
+        user="appuser",
+        password="SECRET",
+        db="appdb",
     ),
     pool_size=5,  # Max 5 concurrent connections
     max_overflow=2,
     pool_timeout=30,
-    pool_recycle=1800  # Recycle connections every 30 min
+    pool_recycle=1800,  # Recycle connections every 30 min
 )
+
 
 def query_database():
     with connection_pool.connect() as conn:
@@ -357,10 +372,12 @@ def query_database():
 
 ```python
 # Query requiring composite index
-users_ref = db.collection('users')
-query = users_ref.where('status', '==', 'active') \
-                 .where('country', '==', 'US') \
-                 .order_by('created_at', direction=firestore.Query.DESCENDING)
+users_ref = db.collection("users")
+query = (
+    users_ref.where("status", "==", "active")
+    .where("country", "==", "US")
+    .order_by("created_at", direction=firestore.Query.DESCENDING)
+)
 
 # Firestore automatically prompts to create index via error message
 # Or create via index configuration:
@@ -392,10 +409,11 @@ from google.cloud import secretmanager
 
 # Connect to Memorystore Redis
 redis_client = redis.Redis(
-    host='10.0.0.3',  # Memorystore instance IP
+    host="10.0.0.3",  # Memorystore instance IP
     port=6379,
-    decode_responses=True
+    decode_responses=True,
 )
+
 
 def get_user(user_id):
     # Try cache first
@@ -408,8 +426,7 @@ def get_user(user_id):
     # Cache miss - query database
     with connection_pool.connect() as conn:
         result = conn.execute(
-            sqlalchemy.text("SELECT * FROM users WHERE id = :id"),
-            {"id": user_id}
+            sqlalchemy.text("SELECT * FROM users WHERE id = :id"), {"id": user_id}
         )
         user = dict(result.fetchone())
 
@@ -512,24 +529,25 @@ gcloud spanner databases create DB --instance=INSTANCE
 
 ```python
 # ❌ NEVER: Store large files in Firestore documents
-db.collection('users').document('user-123').set({
-    'name': 'Alice',
-    'profile_image': base64_encode(image_data)  # 10MB image - FAILS!
-})
+db.collection("users").document("user-123").set(
+    {
+        "name": "Alice",
+        "profile_image": base64_encode(image_data),  # 10MB image - FAILS!
+    }
+)
 # Firestore has 1MB document size limit
 
 # ✅ CORRECT: Store files in Cloud Storage, reference in Firestore
 from google.cloud import storage
 
 storage_client = storage.Client()
-bucket = storage_client.bucket('user-uploads')
-blob = bucket.blob(f'profiles/{user_id}.jpg')
+bucket = storage_client.bucket("user-uploads")
+blob = bucket.blob(f"profiles/{user_id}.jpg")
 blob.upload_from_filename(image_path)
 
-db.collection('users').document('user-123').set({
-    'name': 'Alice',
-    'profile_image_url': f'gs://user-uploads/profiles/{user_id}.jpg'
-})
+db.collection("users").document("user-123").set(
+    {"name": "Alice", "profile_image_url": f"gs://user-uploads/profiles/{user_id}.jpg"}
+)
 ```
 
 ❌ **Large documents in Firestore**: Documents are limited to 1MB. Storing large files causes write failures.
@@ -544,6 +562,7 @@ row_key = f"{timestamp}#{sensor_id}".encode()
 
 # ✅ Correct: Distribute writes with hash prefix or reverse timestamp
 import hashlib
+
 prefix = hashlib.md5(sensor_id.encode()).hexdigest()[:2]
 reverse_ts = str(2**63 - int(timestamp * 1000))
 row_key = f"{prefix}#{sensor_id}#{reverse_ts}".encode()
@@ -570,8 +589,8 @@ gcloud sql instances create small-app-db \
 ```python
 # ❌ Don't: Perform analytics queries on Firestore
 # Query all orders from last year (millions of documents)
-orders = db.collection('orders').where('created_at', '>', last_year).stream()
-total_revenue = sum(order.to_dict()['amount'] for order in orders)
+orders = db.collection("orders").where("created_at", ">", last_year).stream()
+total_revenue = sum(order.to_dict()["amount"] for order in orders)
 # Slow, expensive, and hits quota limits
 
 # ✅ Correct: Export to BigQuery for analytics

@@ -34,12 +34,29 @@ from . import intake
 
 FILE = "tickets.json"
 PRIORITIES = ("none", "low", "medium", "high", "urgent")
-_PRIORITY_RE = re.compile(r"^[\s>*_#-]*priority[*_\s]*[:=][\s*_`]*([A-Za-z0-9-]+)", re.IGNORECASE | re.MULTILINE)
+_PRIORITY_RE = re.compile(
+    r"^[\s>*_#-]*priority[*_\s]*[:=][\s*_`]*([A-Za-z0-9-]+)",
+    re.IGNORECASE | re.MULTILINE,
+)
 _PRIORITY_WORDS = {
-    "none": "none", "low": "low", "lowest": "low", "minor": "low", "p3": "low", "p4": "low",
-    "medium": "medium", "normal": "medium", "moderate": "medium", "p2": "medium",
-    "high": "high", "major": "high", "p1": "high",
-    "urgent": "urgent", "critical": "urgent", "highest": "urgent", "blocker": "urgent", "p0": "urgent",
+    "none": "none",
+    "low": "low",
+    "lowest": "low",
+    "minor": "low",
+    "p3": "low",
+    "p4": "low",
+    "medium": "medium",
+    "normal": "medium",
+    "moderate": "medium",
+    "p2": "medium",
+    "high": "high",
+    "major": "high",
+    "p1": "high",
+    "urgent": "urgent",
+    "critical": "urgent",
+    "highest": "urgent",
+    "blocker": "urgent",
+    "p0": "urgent",
 }
 
 
@@ -67,7 +84,11 @@ def _title(proposal: str, fallback: str) -> str:
 
 
 def _section(text: str, heading: str) -> str:
-    m = re.search(rf"^##\s+{re.escape(heading)}\s*$(.*?)(?=^##\s|\Z)", text, re.MULTILINE | re.DOTALL)
+    m = re.search(
+        rf"^##\s+{re.escape(heading)}\s*$(.*?)(?=^##\s|\Z)",
+        text,
+        re.MULTILINE | re.DOTALL,
+    )
     body = re.sub(r"<!--.*?-->", "", m.group(1), flags=re.DOTALL).strip() if m else ""
     return body
 
@@ -88,11 +109,20 @@ def build(change_dir: Path, project_dir: Path) -> list[dict]:
     refs = intake.ticket_refs(change_dir)
     priority = change_priority(change_dir)
     epic = {
-        "id": change, "type": "epic", "title": _title(proposal, change),
+        "id": change,
+        "type": "epic",
+        "title": _title(proposal, change),
         "description": _section(proposal, "Why") or _section(proposal, "What Changes"),
-        "priority": priority, "labels": [change], "parent": None, "acceptance": [],
-        "links": [f"{rel_dir}/proposal.md"] + ([f"{rel_dir}/use-cases.md"]
-                                               if (change_dir / "use-cases.md").is_file() else []),
+        "priority": priority,
+        "labels": [change],
+        "parent": None,
+        "acceptance": [],
+        "links": [f"{rel_dir}/proposal.md"]
+        + (
+            [f"{rel_dir}/use-cases.md"]
+            if (change_dir / "use-cases.md").is_file()
+            else []
+        ),
     }
     if refs["epic"]:
         epic["ref"] = refs["epic"]
@@ -102,10 +132,16 @@ def build(change_dir: Path, project_dir: Path) -> list[dict]:
         text = path.read_text() if path.is_file() else ""
         names = [r.name for r in parse_requirements(text)]
         task = {
-            "id": f"{change}/{cap}", "type": "task", "title": cap,
-            "description": f"Requirements of `{cap}`: " + ("; ".join(names) if names else "(none)"),
-            "priority": priority, "labels": [change, cap], "parent": change,
-            "acceptance": acceptance(text), "links": [f"{rel_dir}/requirements/{cap}.md"],
+            "id": f"{change}/{cap}",
+            "type": "task",
+            "title": cap,
+            "description": f"Requirements of `{cap}`: "
+            + ("; ".join(names) if names else "(none)"),
+            "priority": priority,
+            "labels": [change, cap],
+            "parent": change,
+            "acceptance": acceptance(text),
+            "links": [f"{rel_dir}/requirements/{cap}.md"],
         }
         items.append(task)
     return items
@@ -113,6 +149,7 @@ def build(change_dir: Path, project_dir: Path) -> list[dict]:
 
 def write(change_dir: Path, project_dir: Path) -> Path:
     from .publish import atomic_write
+
     path = change_dir / FILE
     atomic_write(path, json.dumps(build(change_dir, project_dir), indent=2) + "\n")
     return path

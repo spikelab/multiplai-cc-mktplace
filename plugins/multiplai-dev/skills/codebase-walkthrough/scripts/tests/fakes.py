@@ -49,10 +49,18 @@ def _def_line(cwd: str, path: str, symbol: str) -> int:
 
 
 class FakeAgents:
-    def __init__(self, *, cost: float = 0.0, invent_path: bool = False, fail_on: str | None = None,
-                 trace_plan: dict[str, list] | None = None, span_declaration: bool = False,
-                 stop_trace_after: int | None = None, plant: set[str] | None = None,
-                 stop_write_after: int | None = None):
+    def __init__(
+        self,
+        *,
+        cost: float = 0.0,
+        invent_path: bool = False,
+        fail_on: str | None = None,
+        trace_plan: dict[str, list] | None = None,
+        span_declaration: bool = False,
+        stop_trace_after: int | None = None,
+        plant: set[str] | None = None,
+        stop_write_after: int | None = None,
+    ):
         self.calls: list[dict] = []
         self.cost = cost
         self.invent_path = invent_path
@@ -75,11 +83,14 @@ class FakeAgents:
 
     async def __call__(self, prompt: str, schema, **kw):
         from walkthrough_pipeline import sdk
+
         sdk.require_trusted_repo()
         budget.check(stage=kw.get("budget_label", ""))
         self.calls.append({"schema": schema.__name__, "prompt": prompt, **kw})
-        budget.record(SimpleNamespace(input_tokens=10, output_tokens=5, cost_usd=self.cost),
-                      label=kw.get("budget_label", ""))
+        budget.record(
+            SimpleNamespace(input_tokens=10, output_tokens=5, cost_usd=self.cost),
+            label=kw.get("budget_label", ""),
+        )
         if self.fail_on and self.fail_on in prompt:
             raise sdk.AgentCallError("planted failure")
         cwd = kw.get("cwd") or ""
@@ -89,18 +100,41 @@ class FakeAgents:
             return self.docs(prompt, cwd)
         if schema.__name__ == "TraceAnswer":
             self.trace_calls += 1
-            if self.stop_trace_after is not None and self.trace_calls > self.stop_trace_after:
-                raise budget.BudgetExceededError("circuit breaker: planted stop during trace")
+            if (
+                self.stop_trace_after is not None
+                and self.trace_calls > self.stop_trace_after
+            ):
+                raise budget.BudgetExceededError(
+                    "circuit breaker: planted stop during trace"
+                )
             return schema.model_validate(self.trace(prompt, cwd))
         if schema.__name__ == "FallbackAnswer":
             return schema.model_validate(self.fallback(prompt, cwd))
-        if schema in (SectionOutput, SummaryOutput, UseCasesOutput, FlowOutput, OutputsOutput, ConfigOutput):
+        if schema in (
+            SectionOutput,
+            SummaryOutput,
+            UseCasesOutput,
+            FlowOutput,
+            OutputsOutput,
+            ConfigOutput,
+        ):
             self.write_calls += 1
-            if self.stop_write_after is not None and self.write_calls > self.stop_write_after:
-                raise budget.BudgetExceededError("circuit breaker: planted stop during write")
+            if (
+                self.stop_write_after is not None
+                and self.write_calls > self.stop_write_after
+            ):
+                raise budget.BudgetExceededError(
+                    "circuit breaker: planted stop during write"
+                )
         if schema is SectionOutput:
             return self.write(prompt)
-        if schema in (SummaryOutput, UseCasesOutput, FlowOutput, OutputsOutput, ConfigOutput):
+        if schema in (
+            SummaryOutput,
+            UseCasesOutput,
+            FlowOutput,
+            OutputsOutput,
+            ConfigOutput,
+        ):
             return schema.model_validate(self.explain(schema, prompt))
         if schema.__name__ == "TraceOutput":
             # The trace stage from before map_paths: an empty answer, so suites that do not test
@@ -113,64 +147,157 @@ class FakeAgents:
         if "Files in your part of the module:" in prompt:
             for path in re.findall(r"^- (\S+) \(\d+ lines\)$", prompt, re.MULTILINE):
                 n = _first_code_line(cwd, path)
-                cit = {"path": path, "line_start": n, "line_end": n, "quote": _line(cwd, path, n)}
+                cit = {
+                    "path": path,
+                    "line_start": n,
+                    "line_end": n,
+                    "quote": _line(cwd, path, n),
+                }
                 facts.append({"claim": f"{path} starts here", "citations": [cit]})
-                files.append({"path": path, "purpose": "part of bookings", "citation": cit})
+                files.append(
+                    {"path": path, "purpose": "part of bookings", "citation": cit}
+                )
                 if path.endswith("models.py"):
                     k = _find(cwd, path, "ospite_count")
-                    terms.append({"term": "ospite", "meaning": "guest (Italian)",
-                                  "citation": {"path": path, "line_start": k, "line_end": k,
-                                               "quote": "ospite_count"}})
-                    gotchas.append({"claim": "guest is free text", "citations": [
-                        {"path": path, "line_start": k - 1, "line_end": k - 1, "quote": "guest = models.CharField"}]})
-            facts.append({"claim": "an invented claim", "citations": [
-                {"path": "engine/bookings/nowhere.py", "line_start": 1, "line_end": 1, "quote": "nothing"}]})
+                    terms.append(
+                        {
+                            "term": "ospite",
+                            "meaning": "guest (Italian)",
+                            "citation": {
+                                "path": path,
+                                "line_start": k,
+                                "line_end": k,
+                                "quote": "ospite_count",
+                            },
+                        }
+                    )
+                    gotchas.append(
+                        {
+                            "claim": "guest is free text",
+                            "citations": [
+                                {
+                                    "path": path,
+                                    "line_start": k - 1,
+                                    "line_end": k - 1,
+                                    "quote": "guest = models.CharField",
+                                }
+                            ],
+                        }
+                    )
+            facts.append(
+                {
+                    "claim": "an invented claim",
+                    "citations": [
+                        {
+                            "path": "engine/bookings/nowhere.py",
+                            "line_start": 1,
+                            "line_end": 1,
+                            "quote": "nothing",
+                        }
+                    ],
+                }
+            )
         else:
             for path, line in re.findall(r"^\[(\S+?):(\d+)\] ", prompt, re.MULTILINE):
                 n = int(line)
-                facts.append({"claim": f"{path} uses bookings",
-                              "citations": [{"path": path, "line_start": n, "line_end": n,
-                                             "quote": _line(cwd, path, n)}]})
-        return ExploreOutput.model_validate({"facts": facts, "files": files, "terms": terms, "gotchas": gotchas})
+                facts.append(
+                    {
+                        "claim": f"{path} uses bookings",
+                        "citations": [
+                            {
+                                "path": path,
+                                "line_start": n,
+                                "line_end": n,
+                                "quote": _line(cwd, path, n),
+                            }
+                        ],
+                    }
+                )
+        return ExploreOutput.model_validate(
+            {"facts": facts, "files": files, "terms": terms, "gotchas": gotchas}
+        )
 
     def docs(self, prompt: str, cwd: str) -> DocsOutput:
         pages = re.findall(r"^- (https://\S+) -> file `(\S+)`", prompt, re.MULTILINE)
-        paths = re.search(r"The code calls these API paths: (.*)\.$", prompt, re.MULTILINE).group(1).split(", ")
+        paths = (
+            re.search(r"The code calls these API paths: (.*)\.$", prompt, re.MULTILINE)
+            .group(1)
+            .split(", ")
+        )
         claims, mappings = [], []
         for url, name in pages:
             text = (Path(cwd) / name).read_text(encoding="utf-8").split("\n")
             quote = next(l for l in text[1:] if l.strip() and not l.startswith("#"))
-            claims.append({"claim": f"the page {url} documents it", "url": url, "doc_quote": quote})
+            claims.append(
+                {
+                    "claim": f"the page {url} documents it",
+                    "url": url,
+                    "doc_quote": quote,
+                }
+            )
             for p in paths:
                 if p.strip("/").split("/")[0] in url:
                     mappings.append({"api_path": p, "url": url, "doc_quote": quote})
-        claims.append({"claim": "made up", "url": pages[0][0] if pages else "https://x.test", "doc_quote":
-                       "this sentence is not on the page"})
+        claims.append(
+            {
+                "claim": "made up",
+                "url": pages[0][0] if pages else "https://x.test",
+                "doc_quote": "this sentence is not on the page",
+            }
+        )
         return DocsOutput.model_validate({"claims": claims, "mappings": mappings})
 
     def trace(self, prompt: str, cwd: str) -> dict:
         """A `TraceAnswer`: hop 1 at the entry, then the hops `trace_plan` gives for its name."""
         name = re.search(r"^- name: (.+)$", prompt, re.MULTILINE).group(1).strip()
-        decl_path, decl_line = re.search(r"^- declared at: (\S+):(\d+)$", prompt, re.MULTILINE).groups()
+        decl_path, decl_line = re.search(
+            r"^- declared at: (\S+):(\d+)$", prompt, re.MULTILINE
+        ).groups()
         handler = re.search(r"^- handler: (\S+) at (\S+):(\d+)$", prompt, re.MULTILINE)
         if handler:
             path, line = handler.group(2), int(handler.group(3))
-            start = int(decl_line) if self.span_declaration and decl_path == path else line
+            start = (
+                int(decl_line) if self.span_declaration and decl_path == path else line
+            )
         else:
             path, line = decl_path, int(decl_line)
             start = line
-        hops = [{"symbol_called": name, "path": path, "line_start": min(start, line), "line_end": line,
-                 "quote": _line(cwd, path, line), "note": "the entry"}]
+        hops = [
+            {
+                "symbol_called": name,
+                "path": path,
+                "line_start": min(start, line),
+                "line_end": line,
+                "quote": _line(cwd, path, line),
+                "note": "the entry",
+            }
+        ]
         for step in self.trace_plan.get(name, []):
             if len(step) == 2:
                 p, symbol = step
                 n = _def_line(cwd, p, symbol)
-                hops.append({"symbol_called": symbol, "path": p, "line_start": n, "line_end": n,
-                             "quote": _line(cwd, p, n), "note": f"calls {symbol}"})
+                hops.append(
+                    {
+                        "symbol_called": symbol,
+                        "path": p,
+                        "line_start": n,
+                        "line_end": n,
+                        "quote": _line(cwd, p, n),
+                        "note": f"calls {symbol}",
+                    }
+                )
             else:
                 p, a, b, called, quote = step
-                hops.append({"symbol_called": called, "path": p, "line_start": a, "line_end": b,
-                             "quote": quote, "note": f"runs {called}"})
+                hops.append(
+                    {
+                        "symbol_called": called,
+                        "path": p,
+                        "line_start": a,
+                        "line_end": b,
+                        "quote": quote,
+                        "note": f"runs {called}",
+                    }
+                )
         return {"hops": hops}
 
     def fallback(self, prompt: str, cwd: str) -> dict:
@@ -179,60 +306,140 @@ class FakeAgents:
 
     def write(self, prompt: str) -> SectionOutput:
         ids = re.findall(r"^- \[([a-z0-9]+)\]", prompt, re.MULTILINE)
-        paragraphs = [{"text": f"This part is explained by [[{ids[0]}]] and `Reservation`." if ids
-                       else "Nothing passed the checks here."}]
+        paragraphs = [
+            {
+                "text": f"This part is explained by [[{ids[0]}]] and `Reservation`."
+                if ids
+                else "Nothing passed the checks here."
+            }
+        ]
         if self.invent_path:
-            paragraphs.append({"text": "See engine/bookings/nowhere.py:99 for the retry."})
-        questions = ["Who owns `poll_task`?"] if "questions" in prompt and "Gotchas" in prompt else []
-        return SectionOutput.model_validate({"paragraphs": paragraphs, "questions": questions})
+            paragraphs.append(
+                {"text": "See engine/bookings/nowhere.py:99 for the retry."}
+            )
+        questions = (
+            ["Who owns `poll_task`?"]
+            if "questions" in prompt and "Gotchas" in prompt
+            else []
+        )
+        return SectionOutput.model_validate(
+            {"paragraphs": paragraphs, "questions": questions}
+        )
 
     def explain(self, schema, prompt: str) -> dict:
         """An answer for one of the explainer's structured sections, citing the first ids of its material."""
         ids = re.findall(r"^- \[([a-z0-9]+)\]", prompt, re.MULTILINE) or ["c1"]
         a, b, c = (ids + ids + ids)[:3]
         if schema is SummaryOutput:
-            return {"tagline": f"Bookings takes reservations from Acme. [[{a}]]",
-                    "paragraphs": [{"text": f"It keeps each `Reservation` in the database. [[{a}]]"},
-                                   {"text": f"Other code calls it over HTTP and on a timer. [[{b}]]"}]}
+            return {
+                "tagline": f"Bookings takes reservations from Acme. [[{a}]]",
+                "paragraphs": [
+                    {"text": f"It keeps each `Reservation` in the database. [[{a}]]"},
+                    {"text": f"Other code calls it over HTTP and on a timer. [[{b}]]"},
+                ],
+            }
         if schema is UseCasesOutput:
             cases = [
-                {"title": "Poll for new bookings", "who": "The scheduler", "when": "Every minute",
-                 "example": {"kind": "command", "text": "bookings poll"},
-                 "what_happens": f"It asks Acme for new bookings. [[{a}]]", "result": "New reservations.",
-                 "cites": [a]},
-                {"title": "Receive a webhook", "who": "Acme", "when": "When a booking changes",
-                 "example": {"kind": "call", "text": "Reservation(guest=\"Ada\")"},
-                 "what_happens": f"It stores the booking. [[{b}]]", "result": "One reservation row.",
-                 "cites": [f"[[{b}]]"]},
+                {
+                    "title": "Poll for new bookings",
+                    "who": "The scheduler",
+                    "when": "Every minute",
+                    "example": {"kind": "command", "text": "bookings poll"},
+                    "what_happens": f"It asks Acme for new bookings. [[{a}]]",
+                    "result": "New reservations.",
+                    "cites": [a],
+                },
+                {
+                    "title": "Receive a webhook",
+                    "who": "Acme",
+                    "when": "When a booking changes",
+                    "example": {"kind": "call", "text": 'Reservation(guest="Ada")'},
+                    "what_happens": f"It stores the booking. [[{b}]]",
+                    "result": "One reservation row.",
+                    "cites": [f"[[{b}]]"],
+                },
             ]
             if "usecase_flag" in self.plant:
-                cases.append({"title": "Poll in a hurry", "who": "An engineer", "when": "Debugging",
-                              "example": {"kind": "command", "text": "bookings poll --no-such-flag"},
-                              "what_happens": f"It polls. [[{a}]]", "result": "", "cites": [a]})
+                cases.append(
+                    {
+                        "title": "Poll in a hurry",
+                        "who": "An engineer",
+                        "when": "Debugging",
+                        "example": {
+                            "kind": "command",
+                            "text": "bookings poll --no-such-flag",
+                        },
+                        "what_happens": f"It polls. [[{a}]]",
+                        "result": "",
+                        "cites": [a],
+                    }
+                )
             return {"cases": cases}
         if schema is FlowOutput:
-            nodes = [{"id": "n1", "label": "Acme sends a booking", "cite": a},
-                     {"id": "n2", "label": "The view stores it", "cite": f"[[{b}]]"},
-                     {"id": "n3", "label": "The task acknowledges it", "cite": c}]
-            edges = [{"from": "n1", "to": "n2", "label": "webhook"}, {"from": "n2", "to": "n3"}]
+            nodes = [
+                {"id": "n1", "label": "Acme sends a booking", "cite": a},
+                {"id": "n2", "label": "The view stores it", "cite": f"[[{b}]]"},
+                {"id": "n3", "label": "The task acknowledges it", "cite": c},
+            ]
+            edges = [
+                {"from": "n1", "to": "n2", "label": "webhook"},
+                {"from": "n2", "to": "n3"},
+            ]
             if "flow_node" in self.plant:
-                nodes.append({"id": "n4", "label": "A box with no source", "cite": "c999"})
+                nodes.append(
+                    {"id": "n4", "label": "A box with no source", "cite": "c999"}
+                )
                 edges.append({"from": "n3", "to": "n4"})
             if "flow_disconnected" in self.plant:
                 edges = []
-            steps = [{"title": "Receive", "summary": f"A booking arrives. [[{a}]]",
-                      "details_paragraphs": [f"The handler reads the body. [[{b}]]"], "snippet_cites": [a]},
-                     {"title": "Store", "summary": f"It is saved. [[{c}]]", "details_paragraphs": [],
-                      "snippet_cites": []}]
+            steps = [
+                {
+                    "title": "Receive",
+                    "summary": f"A booking arrives. [[{a}]]",
+                    "details_paragraphs": [f"The handler reads the body. [[{b}]]"],
+                    "snippet_cites": [a],
+                },
+                {
+                    "title": "Store",
+                    "summary": f"It is saved. [[{c}]]",
+                    "details_paragraphs": [],
+                    "snippet_cites": [],
+                },
+            ]
             return {"nodes": nodes, "edges": edges, "steps": steps}
         if schema is OutputsOutput:
             key = "zz_not_in_the_code" if "output_key" in self.plant else "ospite_count"
-            return {"items": [
-                {"name": "Reservation row", "what": f"One row per booking. [[{a}]]", "written_by_cite": a,
-                 "example": {"format": "json", "text": '{"guest": "Ada", "' + key + '": 2}'}},
-                {"name": "Acknowledgement", "what": f"What it sends back to Acme. [[{b}]]", "written_by_cite": b,
-                 "example": {"format": "text", "text": "ok"}},
-                {"name": "Poll log", "what": f"A line per poll. [[{c}]]", "written_by_cite": c},
-            ]}
-        return {"rows": [{"name": "ACME_ENV", "effect": f"Picks the staging or production key. [[{a}]]",
-                          "default": "production", "cite": a}]}
+            return {
+                "items": [
+                    {
+                        "name": "Reservation row",
+                        "what": f"One row per booking. [[{a}]]",
+                        "written_by_cite": a,
+                        "example": {
+                            "format": "json",
+                            "text": '{"guest": "Ada", "' + key + '": 2}',
+                        },
+                    },
+                    {
+                        "name": "Acknowledgement",
+                        "what": f"What it sends back to Acme. [[{b}]]",
+                        "written_by_cite": b,
+                        "example": {"format": "text", "text": "ok"},
+                    },
+                    {
+                        "name": "Poll log",
+                        "what": f"A line per poll. [[{c}]]",
+                        "written_by_cite": c,
+                    },
+                ]
+            }
+        return {
+            "rows": [
+                {
+                    "name": "ACME_ENV",
+                    "effect": f"Picks the staging or production key. [[{a}]]",
+                    "default": "production",
+                    "cite": a,
+                }
+            ]
+        }

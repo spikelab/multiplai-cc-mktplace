@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, field_validator
 
 # --- Build phases ---
 
+
 class BuildPhase(str, Enum):
     INIT = "init"
     BOOTSTRAP = "bootstrap"
@@ -93,6 +94,7 @@ class BoardColumn(str, Enum):
     pipeline drives. `board.column_for` is the only mapping, and `board.py`'s
     module docstring states which of these columns the pipeline ever sets.
     """
+
     BACKLOG = "Backlog"
     ACCEPTED = "Accepted"
     SHAPING = "Shaping"
@@ -113,6 +115,7 @@ class ArtifactStatus(str, Enum):
 
 
 # --- Quality evaluation ---
+
 
 class ReviewGatePolicy(BaseModel):
     """Thresholds the review gate applies. THE single source of these numbers.
@@ -250,7 +253,9 @@ class FindingAdjudication(BaseModel):
         a real defect — an unreviewed finding stays in play.
         """
         judged = {v.index for v in self.verdicts if 0 <= v.index < total}
-        rejected = {v.index for v in self.verdicts if not v.accepted and 0 <= v.index < total}
+        rejected = {
+            v.index for v in self.verdicts if not v.accepted and 0 <= v.index < total
+        }
         unjudged = set(range(total)) - judged
         return (judged - rejected) | unjudged
 
@@ -307,9 +312,10 @@ class ReviewResult(BaseModel):
         total_weight = sum(s.weight for s in self.scores)
         if total_weight == 0:
             return 0.0
-        return sum(
-            s.effective_score(pol.neutral_score) * s.weight for s in self.scores
-        ) / total_weight
+        return (
+            sum(s.effective_score(pol.neutral_score) * s.weight for s in self.scores)
+            / total_weight
+        )
 
     @property
     def weighted_average(self) -> float:
@@ -350,7 +356,9 @@ class ReviewResult(BaseModel):
         """
         return self.passed_with(None)
 
-    def failing_dimensions_with(self, policy: ReviewGatePolicy | None = None) -> list[str]:
+    def failing_dimensions_with(
+        self, policy: ReviewGatePolicy | None = None
+    ) -> list[str]:
         pol = policy or ReviewGatePolicy()
         return [
             s.dimension
@@ -416,6 +424,7 @@ def class_line(f: ReviewFinding) -> str:
 
 class WeakTestFinding(BaseModel):
     """One weak test flagged by the LLM test-quality auditor."""
+
     file: str = ""
     test_name: str = ""
     pattern: str = ""
@@ -429,6 +438,7 @@ class TestQualityAudit(BaseModel):
     coarse, so its failures are confirmed or overturned by this audit before
     the pipeline fails a block over test quality.
     """
+
     passed: bool
     weak_tests: list[WeakTestFinding] = Field(default_factory=list)
     total_tests: int = 0
@@ -444,6 +454,7 @@ class TestQualityAudit(BaseModel):
 # --- Gates ---
 
 # --- Plan review (the PLAN_REVIEW phase) ---
+
 
 class PlanReviewCut(BaseModel):
     """One ticket in a proposed split of an oversized plan.
@@ -502,6 +513,7 @@ class GateResult(BaseModel):
 
 # --- Agent results ---
 
+
 class AgentResult(BaseModel):
     success: bool
     output: str = ""
@@ -519,8 +531,10 @@ class AgentResult(BaseModel):
 
 # --- Mutation testing (the MUTATION sub-step of the TDD engine) ---
 
+
 class SurvivingMutant(BaseModel):
     """One mutant the suite did not kill, as `cosmic-ray dump` reports it."""
+
     path: str
     line: int
     operator: str
@@ -539,6 +553,7 @@ class MutationResult(BaseModel):
     timed-out test runs counted as killed (and reported in `timeouts`); it is
     None when no mutant ran, because a ratio over nothing is not evidence.
     """
+
     ok: bool
     error: str | None = None
     tool_version: str = ""
@@ -581,6 +596,7 @@ class ImplementationNote(BaseModel):
     survive resume) and are appended to implementation-notes.md as the build
     runs, which is what the respec step reads at the end of the build.
     """
+
     block_number: int
     block_name: str
     role: str  # test_writer | implementer | refactorer
@@ -595,6 +611,7 @@ class ImplementationNote(BaseModel):
 
 
 # --- Block state ---
+
 
 class FixOnPassState(BaseModel):
     """A block's fix-on-pass, in flight: what a resume needs to undo it.
@@ -630,6 +647,7 @@ class FixOnPassState(BaseModel):
 
 class BlockInfo(BaseModel):
     """Parsed from tasks.md — represents one implementation block."""
+
     number: int
     name: str
     description: str
@@ -694,6 +712,7 @@ class BlockInfo(BaseModel):
 
 
 # --- Change artifacts ---
+
 
 class ArtifactInfo(BaseModel):
     id: str

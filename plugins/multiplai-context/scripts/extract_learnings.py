@@ -145,13 +145,15 @@ def _retire_checkpoint(
     if not fully_extracted:
         logger.info(
             "Extraction for %s was incomplete; keeping its checkpoint "
-            "(the diary does not fully supersede it)", session_id,
+            "(the diary does not fully supersede it)",
+            session_id,
         )
         return
     if trigger == "pre_compact":
         logger.info(
             "Extraction for %s was compaction-deferred and the session is "
-            "still live; keeping its checkpoint", session_id,
+            "still live; keeping its checkpoint",
+            session_id,
         )
         return
     state = (disposition or {}).get("state") or DEFAULT_DISPOSITION
@@ -172,7 +174,8 @@ def _retire_checkpoint(
         # permanent record exists, so its reading bookmark is dead weight too.
         clear_diary_bookmark(data_dir, session_id)
         log_event(
-            "checkpoint", "retire",
+            "checkpoint",
+            "retire",
             "retired checkpoint — superseded by the diary entry",
             session_id=session_id,
         )
@@ -212,7 +215,8 @@ def _record_injected(paths, session_id: str, transcript_path: str) -> list[str]:
                 keys.append(key)
         logger.info(
             "Recorded %d injection(s) across %d section(s) for utilisation",
-            len(injected), len(keys),
+            len(injected),
+            len(keys),
         )
         return keys
     except Exception:
@@ -220,8 +224,9 @@ def _record_injected(paths, session_id: str, transcript_path: str) -> list[str]:
         return []
 
 
-def _record_self_report(paths, session_id: str, claims: list[dict],
-                        injected_keys: list[str]) -> None:
+def _record_self_report(
+    paths, session_id: str, claims: list[dict], injected_keys: list[str]
+) -> None:
     """Persist estimator A's answer, filtered to what was actually injected.
 
     Two filters, both fail-closed. A claim naming something the session never
@@ -235,20 +240,26 @@ def _record_self_report(paths, session_id: str, claims: list[dict],
     try:
         allowed = set(injected_keys)
         entries = [
-            claim for claim in claims
+            claim
+            for claim in claims
             if utilisation.section_key(claim["file"], claim.get("section")) in allowed
         ]
         utilisation.record_self_report(
-            utilisation.utilisation_path(paths.data_dir()), session_id[:8], entries,
+            utilisation.utilisation_path(paths.data_dir()),
+            session_id[:8],
+            entries,
         )
         supported = sum(1 for e in entries if e.get("supported"))
         logger.info(
             "Self-reported utilisation: %d claim(s), %d with evidence, "
             "out of %d injected section(s)",
-            len(entries), supported, len(injected_keys),
+            len(entries),
+            supported,
+            len(injected_keys),
         )
         log_event(
-            "utilisation", "self-report",
+            "utilisation",
+            "self-report",
             f"session claimed {supported} of {len(injected_keys)} injected "
             f"memory section(s) as used (estimated, self-reported)",
             session_id=session_id,
@@ -279,7 +290,8 @@ async def _refresh_now(cwd: str, session_id: str) -> None:
         await synthesize(project_filter=project, session_id=session_id)
         logger.info("Refreshed now/%s.md", project)
         log_event(
-            "now", "refresh",
+            "now",
+            "refresh",
             f"refreshed now/{project}.md after diary write",
             session_id=session_id,
             project=project,
@@ -341,7 +353,9 @@ async def extract() -> bool:
     if since:
         logger.info(
             "Extracting the slice after %s for %s (%d chunk(s))",
-            since.isoformat(), session_id, len(chunks),
+            since.isoformat(),
+            session_id,
+            len(chunks),
         )
 
     # Before the model call, and independent of it: the retrieval half of the
@@ -380,7 +394,8 @@ async def extract() -> bool:
             client = await create_client()
             logger.info(
                 "Extract learnings using %s (%d chunk(s))",
-                type(client).__name__, len(chunks),
+                type(client).__name__,
+                len(chunks),
             )
             for i, chunk in enumerate(chunks):
                 try:
@@ -404,7 +419,8 @@ async def extract() -> bool:
                     else:
                         for claim in chunk_utilisation:
                             utilisation_claims.setdefault(
-                                (claim["file"], claim.get("section")), claim,
+                                (claim["file"], claim.get("section")),
+                                claim,
                             )
                     chunks_ok += 1
                     if i == len(chunks) - 1:
@@ -413,7 +429,8 @@ async def extract() -> bool:
                 except Exception:
                     logger.exception(
                         "LLM call failed during extraction (chunk %d/%d)",
-                        i + 1, len(chunks),
+                        i + 1,
+                        len(chunks),
                     )
                     llm_failed = True
         except Exception:
@@ -435,7 +452,8 @@ async def extract() -> bool:
         if recorded and state != DEFAULT_DISPOSITION:
             logger.info("Session %s recorded as %s", session_id, state)
             log_event(
-                "session", "disposition",
+                "session",
+                "disposition",
                 f"session left {state}: {disposition.get('reason', '')}".strip(),
                 session_id=session_id,
                 disposition=state,
@@ -447,7 +465,8 @@ async def extract() -> bool:
             logger.warning(
                 "Could not record %s disposition for session %s "
                 "(missing registry entry or lock lost); label dropped",
-                state, session_id,
+                state,
+                session_id,
             )
 
     # Recorded only when the whole transcript was actually read AND every chunk
@@ -463,7 +482,10 @@ async def extract() -> bool:
     # false zero puts a live memory section top of the doctor's pruning list.
     if injected_keys and chunks_ok == len(chunks) and not utilisation_missing:
         _record_self_report(
-            paths, session_id, list(utilisation_claims.values()), injected_keys,
+            paths,
+            session_id,
+            list(utilisation_claims.values()),
+            injected_keys,
         )
     elif injected_keys and session_id:
         logger.warning(
@@ -471,7 +493,10 @@ async def extract() -> bool:
             "%d/%d chunk(s) parsed, %d without a <utilisation> block. "
             "Recording a partial answer against a full denominator would "
             "read as 'injected and unused'.",
-            session_id[:8], chunks_ok, len(chunks), utilisation_missing,
+            session_id[:8],
+            chunks_ok,
+            len(chunks),
+            utilisation_missing,
         )
 
     if not units:
@@ -479,7 +504,9 @@ async def extract() -> bool:
             # Distinguish a real failure from a genuinely empty session:
             # keep the marker so the next SessionStart retries instead of
             # silently dropping the session's learnings.
-            logger.warning("Extraction failed and produced nothing; retaining marker for retry")
+            logger.warning(
+                "Extraction failed and produced nothing; retaining marker for retry"
+            )
             return False
         logger.info("No actionable content found, nothing to write")
         _drop_marker(marker_path)
@@ -501,7 +528,8 @@ async def extract() -> bool:
                 save_diary_bookmark(paths.data_dir(), session_id, last_ts)
             logger.info("Wrote diary entry to %s", diary_path)
             log_event(
-                "diary", "write",
+                "diary",
+                "write",
                 f"wrote diary entry ({len(units)} unit(s)) to {Path(diary_path).name}",
                 session_id=session_id,
                 units=len(units),
@@ -509,7 +537,9 @@ async def extract() -> bool:
             )
             await _refresh_now(cwd, session_id)
             _retire_checkpoint(
-                paths.data_dir(), session_id, disposition,
+                paths.data_dir(),
+                session_id,
+                disposition,
                 # Strictest coherent gate: retirement deletes data, so it
                 # requires a FULLY successful extraction — no failed chunks
                 # (a partial diary does not supersede the checkpoint) and a
@@ -525,7 +555,8 @@ async def extract() -> bool:
         logger.info("Appended structured learnings to %s", learnings_file)
         n_learnings = sum(len(u.get("learnings") or []) for u in units)
         log_event(
-            "learnings", "capture",
+            "learnings",
+            "capture",
             f"captured {n_learnings} learning(s) to backlog",
             session_id=session_id,
             learnings=n_learnings,
@@ -533,7 +564,8 @@ async def extract() -> bool:
     elif session_id:
         logger.info("Session %s already in %s, skipping", session_id, learnings_file)
         log_event(
-            "learnings", "skip",
+            "learnings",
+            "skip",
             "session already in learnings backlog — nothing new captured",
             session_id=session_id,
         )

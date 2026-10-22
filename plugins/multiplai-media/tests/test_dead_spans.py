@@ -6,6 +6,7 @@ the spans an EDL author must cut around. These tests lock in the calibrated
 thresholds (static < 0.02, low < 1.0), the minimum span length, black-span
 precedence, and the no-video-frames tail rule.
 """
+
 from __future__ import annotations
 
 import sys
@@ -16,8 +17,8 @@ sys.path.insert(0, str(_SCRIPTS))
 
 from stages.prep import DeadSpan, _dead_spans
 
-ACTIVE = 8.0    # scroll/navigation-level motion
-TYPING = 0.4    # cursor blink / characters landing
+ACTIVE = 8.0  # scroll/navigation-level motion
+TYPING = 0.4  # cursor blink / characters landing
 FROZEN = 0.0
 
 
@@ -71,7 +72,11 @@ def test_no_merge_across_a_black_gap() -> None:
     profile = [ACTIVE] * 3 + [FROZEN] * 4 + [FROZEN] * 2 + [FROZEN] * 4 + [ACTIVE] * 3
     black = [DeadSpan(start=7.0, end=9.0, kind="black")]
     spans = _dead_spans(profile, black, float(len(profile)))
-    assert _kinds(spans) == [(3.0, 7.0, "static"), (7.0, 9.0, "black"), (9.0, 13.0, "static")]
+    assert _kinds(spans) == [
+        (3.0, 7.0, "static"),
+        (7.0, 9.0, "black"),
+        (9.0, 13.0, "static"),
+    ]
 
 
 def test_black_spans_take_precedence_over_motion() -> None:

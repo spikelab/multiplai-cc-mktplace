@@ -1,4 +1,5 @@
 """Contact sheets (stages/contact_sheet.py): frame times and ffmpeg/yt-dlp argv."""
+
 from __future__ import annotations
 
 import sys
@@ -24,10 +25,14 @@ def test_fetch_argv_caps_quality_and_length() -> None:
     assert argv[argv.index("-S") + 1] == "vcodec:h264"
     assert argv[argv.index("--download-sections") + 1] == "*0-600"
     assert argv[argv.index("-o") + 1] == "/out/reference.%(ext)s"
-    assert "--download-sections" not in cs.fetch_argv("https://v.example/x", Path("/out"), None)
+    assert "--download-sections" not in cs.fetch_argv(
+        "https://v.example/x", Path("/out"), None
+    )
 
 
-def test_fetch_replaces_a_reference_left_by_an_earlier_url(tmp_path, monkeypatch) -> None:
+def test_fetch_replaces_a_reference_left_by_an_earlier_url(
+    tmp_path, monkeypatch
+) -> None:
     monkeypatch.setattr(cs.shutil, "which", lambda name: "/usr/bin/yt-dlp")
     (tmp_path / "reference.mkv").write_bytes(b"old video")
     (tmp_path / "reference.mp4.part").write_bytes(b"old partial")
@@ -35,6 +40,7 @@ def test_fetch_replaces_a_reference_left_by_an_earlier_url(tmp_path, monkeypatch
     def fake_yt_dlp(argv, **k):
         assert not list(tmp_path.glob("reference.*")), "earlier reference still present"
         (tmp_path / "reference.webm").write_bytes(b"new video")
+
     got = cs.fetch("https://v.example/new", tmp_path, 600, run=fake_yt_dlp)
     assert got == tmp_path / "reference.webm"
     assert sorted(p.name for p in tmp_path.glob("reference.*")) == ["reference.webm"]
@@ -42,7 +48,14 @@ def test_fetch_replaces_a_reference_left_by_an_earlier_url(tmp_path, monkeypatch
 
 def test_sample_times_merges_scenes_and_interval() -> None:
     # interval 0,5,10,15,20 + scene changes 3.0, 5.4 (too close to 5 → the scene wins), 19.9
-    assert cs.sample_times([3.0, 5.4, 19.9], 21.0, 5.0) == [0.05, 3.05, 5.05, 10.05, 15.05, 19.95]
+    assert cs.sample_times([3.0, 5.4, 19.9], 21.0, 5.0) == [
+        0.05,
+        3.05,
+        5.05,
+        10.05,
+        15.05,
+        19.95,
+    ]
 
 
 def test_sample_times_never_passes_the_end() -> None:
@@ -60,7 +73,9 @@ def test_frame_argv_labels_the_time() -> None:
     assert argv[argv.index("-ss") + 1] == "65.250"
     assert argv[argv.index("-i") + 1] == "/v.mp4"
     vf = argv[argv.index("-vf") + 1]
-    assert vf.startswith(f"scale={cs.THUMB_W}:-2,drawtext=fontfile='/fonts/a.ttf':text='1\\:05.2'")
+    assert vf.startswith(
+        f"scale={cs.THUMB_W}:-2,drawtext=fontfile='/fonts/a.ttf':text='1\\:05.2'"
+    )
     assert argv[-1] == "/f/t_0001.png"
 
 

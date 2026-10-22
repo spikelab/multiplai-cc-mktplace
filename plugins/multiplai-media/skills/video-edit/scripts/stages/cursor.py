@@ -20,19 +20,20 @@ the pointer within 20 px in 11 of 20 frames; the learned arrow found it in 9
 of 9 arrow frames; arrow plus one marked hand, 15 of 19. Clicks themselves
 were not checked, so a person reviews the render.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
 
 FPS = 10
-DIFF_THRESHOLD = 24          # grey levels: smaller changes are encoder noise
-MAX_BLOB_PX = 48             # a pointer blob fits in this square at 720p
-MIN_BLOB_AREA = 12           # pixels: smaller is noise
+DIFF_THRESHOLD = 24  # grey levels: smaller changes are encoder noise
+MAX_BLOB_PX = 48  # a pointer blob fits in this square at 720p
+MIN_BLOB_AREA = 12  # pixels: smaller is noise
 PAGE_CHANGE_FRACTION = 0.02  # more of the frame than this changed: not just the pointer
-REST_S = 0.3                 # the pointer must rest this long before a click
-CLICK_WINDOW_S = 0.6         # the change must come this soon after it stops
-CLICK_RADIUS_PX = 120        # and touch a region this close to it
+REST_S = 0.3  # the pointer must rest this long before a click
+CLICK_WINDOW_S = 0.6  # the change must come this soon after it stops
+CLICK_RADIUS_PX = 120  # and touch a region this close to it
 
 
 @dataclass
@@ -40,7 +41,7 @@ class Sample:
     t: float
     x: float | None
     y: float | None
-    moved: bool               # the pointer was seen moving into this position
+    moved: bool  # the pointer was seen moving into this position
 
 
 @dataclass
@@ -52,6 +53,7 @@ class Click:
 
 def _frames(path: Path, fps: int):
     import cv2
+
     cap = cv2.VideoCapture(str(path))
     src_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     step = max(1, round(src_fps / fps))
@@ -72,12 +74,23 @@ def _frames(path: Path, fps: int):
 def _blobs(prev, cur):
     """Changed regions between two grey frames: (boxes, changed fraction)."""
     import cv2
+
     diff = cv2.absdiff(prev, cur)
     _, mask = cv2.threshold(diff, DIFF_THRESHOLD, 255, cv2.THRESH_BINARY)
     mask = cv2.dilate(mask, None, iterations=2)
     n, _, stats, cents = cv2.connectedComponentsWithStats(mask)
-    boxes = [(int(stats[k, 0]), int(stats[k, 1]), int(stats[k, 2]), int(stats[k, 3]),
-              int(stats[k, 4]), float(cents[k, 0]), float(cents[k, 1])) for k in range(1, n)]
+    boxes = [
+        (
+            int(stats[k, 0]),
+            int(stats[k, 1]),
+            int(stats[k, 2]),
+            int(stats[k, 3]),
+            int(stats[k, 4]),
+            float(cents[k, 0]),
+            float(cents[k, 1]),
+        )
+        for k in range(1, n)
+    ]
     frac = float((mask > 0).mean())
     return boxes, frac
 
@@ -95,7 +108,11 @@ def track(path: Path, fps: int = FPS) -> tuple[list[Sample], list[Click]]:
             samples.append(Sample(t, None, None, False))
             continue
         boxes, frac = _blobs(prev, frame)
-        small = [b for b in boxes if b[2] <= MAX_BLOB_PX and b[3] <= MAX_BLOB_PX and b[4] >= MIN_BLOB_AREA]
+        small = [
+            b
+            for b in boxes
+            if b[2] <= MAX_BLOB_PX and b[3] <= MAX_BLOB_PX and b[4] >= MIN_BLOB_AREA
+        ]
         big = [b for b in boxes if b not in small and b[4] >= MIN_BLOB_AREA]
         moved = False
         if frac < PAGE_CHANGE_FRACTION and small and len(small) <= 3:
@@ -104,7 +121,9 @@ def track(path: Path, fps: int = FPS) -> tuple[list[Sample], list[Click]]:
             if pos is None:
                 best = max(small, key=lambda b: b[4])
             else:
-                best = max(small, key=lambda b: (b[5] - pos[0]) ** 2 + (b[6] - pos[1]) ** 2)
+                best = max(
+                    small, key=lambda b: (b[5] - pos[0]) ** 2 + (b[6] - pos[1]) ** 2
+                )
             new = (best[5], best[6])
             if pos is None or (new[0] - pos[0]) ** 2 + (new[1] - pos[1]) ** 2 > 4:
                 pos, moved = new, True
@@ -112,16 +131,30 @@ def track(path: Path, fps: int = FPS) -> tuple[list[Sample], list[Click]]:
             rest_since, clicked_at_rest = None, False
         elif pos is not None and rest_since is None:
             rest_since = t
-        if (pos is not None and rest_since is not None and not clicked_at_rest
-                and REST_S <= t - rest_since + 1 / fps <= REST_S + CLICK_WINDOW_S):
-            near = [b for b in big + small
-                    if abs(b[5] - pos[0]) < CLICK_RADIUS_PX and abs(b[6] - pos[1]) < CLICK_RADIUS_PX
-                    and b[4] >= 4 * MIN_BLOB_AREA]
+        if (
+            pos is not None
+            and rest_since is not None
+            and not clicked_at_rest
+            and REST_S <= t - rest_since + 1 / fps <= REST_S + CLICK_WINDOW_S
+        ):
+            near = [
+                b
+                for b in big + small
+                if abs(b[5] - pos[0]) < CLICK_RADIUS_PX
+                and abs(b[6] - pos[1]) < CLICK_RADIUS_PX
+                and b[4] >= 4 * MIN_BLOB_AREA
+            ]
             if near or frac >= PAGE_CHANGE_FRACTION:
                 clicks.append(Click(round(t, 3), round(pos[0], 1), round(pos[1], 1)))
                 clicked_at_rest = True
-        samples.append(Sample(round(t, 3), None if pos is None else round(pos[0], 1),
-                              None if pos is None else round(pos[1], 1), moved))
+        samples.append(
+            Sample(
+                round(t, 3),
+                None if pos is None else round(pos[0], 1),
+                None if pos is None else round(pos[1], 1),
+                moved,
+            )
+        )
         prev = frame
     return samples, clicks
 
@@ -129,12 +162,14 @@ def track(path: Path, fps: int = FPS) -> tuple[list[Sample], list[Click]]:
 # --- pictures of the pointer, learned from the recording or marked by the user ---
 
 CERTAIN_MAX_FRACTION = 0.002  # only the pointer moved: almost nothing else changed
-PATCH = 24                    # reference picture size, proxy pixels
-SAME_SHAPE = 0.6              # outline overlap at which two crops show the same pointer
-MIN_GROUP = 5                 # a look seen in fewer separate places is not kept
+PATCH = 24  # reference picture size, proxy pixels
+SAME_SHAPE = 0.6  # outline overlap at which two crops show the same pointer
+MIN_GROUP = 5  # a look seen in fewer separate places is not kept
 MAX_LOOKS = 4
-SEARCH_PX = 60                # refine a click within this distance of the motion position
-MATCH_MAX_ERR = 2500.0        # mean squared grey error over the outline; worse keeps the motion position
+SEARCH_PX = 60  # refine a click within this distance of the motion position
+MATCH_MAX_ERR = (
+    2500.0  # mean squared grey error over the outline; worse keeps the motion position
+)
 
 
 def _crop(frame, x: float, y: float):
@@ -142,7 +177,7 @@ def _crop(frame, x: float, y: float):
     xi, yi = int(round(x)), int(round(y))
     if xi - h < 0 or yi - h < 0 or xi + h > frame.shape[1] or yi + h > frame.shape[0]:
         return None
-    return frame[yi - h:yi + h, xi - h:xi + h]
+    return frame[yi - h : yi + h, xi - h : xi + h]
 
 
 def _outline(crop):
@@ -152,11 +187,16 @@ def _outline(crop):
     shape on a light background."""
     import cv2
     import numpy as np
+
     # darker than the light background by a clear margin; at 720p a thin
     # outline (the hand) breaks into specks, so join every speck near the centre
     dark = (crop < float(np.median(crop)) - 50).astype("uint8")
     n, labels, _, cents = cv2.connectedComponentsWithStats(dark)
-    near = [i for i in range(1, n) if (cents[i, 0] - PATCH / 2) ** 2 + (cents[i, 1] - PATCH / 2) ** 2 <= 81]
+    near = [
+        i
+        for i in range(1, n)
+        if (cents[i, 0] - PATCH / 2) ** 2 + (cents[i, 1] - PATCH / 2) ** 2 <= 81
+    ]
     if not near:
         return None
     fill = np.isin(labels, near).astype("uint8")
@@ -165,7 +205,7 @@ def _outline(crop):
         return None
     mask = cv2.dilate(fill, np.ones((5, 5), "uint8"))
     ring = mask.astype(bool) & ~fill.astype(bool)
-    if crop[ring].mean() < 170:      # the border must be light, or this is text on a page
+    if crop[ring].mean() < 170:  # the border must be light, or this is text on a page
         return None
     return mask
 
@@ -177,22 +217,42 @@ def harvest(path: Path, fps: int = FPS) -> list:
     overlap are grouped; each group seen in at least MIN_GROUP separate
     places gives one picture (the crop that overlaps most others)."""
     import numpy as np
+
     found = []
     prev = None
     last: tuple[float, float] | None = None
     for _, frame in _frames(path, fps):
         if prev is not None:
             boxes, frac = _blobs(prev, frame)
-            small = [b for b in boxes if b[2] <= MAX_BLOB_PX and b[3] <= MAX_BLOB_PX and b[4] >= MIN_BLOB_AREA]
-            if frac < CERTAIN_MAX_FRACTION and len(small) == 2 and len(boxes) == 2 and last is not None:
-                new = max(small, key=lambda b: (b[5] - last[0]) ** 2 + (b[6] - last[1]) ** 2)
+            small = [
+                b
+                for b in boxes
+                if b[2] <= MAX_BLOB_PX and b[3] <= MAX_BLOB_PX and b[4] >= MIN_BLOB_AREA
+            ]
+            if (
+                frac < CERTAIN_MAX_FRACTION
+                and len(small) == 2
+                and len(boxes) == 2
+                and last is not None
+            ):
+                new = max(
+                    small, key=lambda b: (b[5] - last[0]) ** 2 + (b[6] - last[1]) ** 2
+                )
                 c = _crop(frame, new[5], new[6])
                 mask = None if c is None else _outline(c)
                 if mask is not None:
-                    found.append((c.copy(), mask, (round(new[5] / 40), round(new[6] / 40))))
+                    found.append(
+                        (c.copy(), mask, (round(new[5] / 40), round(new[6] / 40)))
+                    )
             if small and frac < PAGE_CHANGE_FRACTION:
-                last = (small[-1][5], small[-1][6]) if last is None else max(
-                    ((b[5], b[6]) for b in small), key=lambda p: (p[0] - last[0]) ** 2 + (p[1] - last[1]) ** 2)
+                last = (
+                    (small[-1][5], small[-1][6])
+                    if last is None
+                    else max(
+                        ((b[5], b[6]) for b in small),
+                        key=lambda p: (p[0] - last[0]) ** 2 + (p[1] - last[1]) ** 2,
+                    )
+                )
         prev = frame
     if not found:
         return []
@@ -206,7 +266,9 @@ def harvest(path: Path, fps: int = FPS) -> list:
         idx = sorted(left)
         # count the separate places a shape was seen: a pointer moves about
         # the screen, an icon that animates in place does not
-        counts = {i: len({found[j][2] for j in idx if iou[i, j] >= SAME_SHAPE}) for i in idx}
+        counts = {
+            i: len({found[j][2] for j in idx if iou[i, j] >= SAME_SHAPE}) for i in idx
+        }
         best = max(idx, key=counts.get)
         if counts[best] < MIN_GROUP:
             break
@@ -220,6 +282,7 @@ def _masked_error(frame, look, mask):
     of the frame, over the outline pixels only. Expands the square so that
     each term is a plain correlation, which OpenCV computes fast."""
     import cv2
+
     f = frame.astype("float32")
     m = mask.astype("float32")
     t = look.astype("float32") * m
@@ -234,6 +297,7 @@ def marked(path: Path, marks: list[tuple[float, float, float]]) -> list:
     centred on the dark shape nearest the click first."""
     import cv2
     import numpy as np
+
     cap = cv2.VideoCapture(str(path))
     looks = []
     for t, x, y in marks:
@@ -262,6 +326,7 @@ def refine(path: Path, clicks: list[Click], looks: list) -> list[tuple[Click, bo
     """Each click, moved onto the best picture match within SEARCH_PX of it
     when one scores under MATCH_MAX_ERR; with whether it matched."""
     import cv2
+
     cap = cv2.VideoCapture(str(path))
     out = []
     for c in clicks:
@@ -271,7 +336,7 @@ def refine(path: Path, clicks: list[Click], looks: list) -> list[tuple[Click, bo
         if ok and looks:
             g = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             x0, y0 = max(0, int(c.x) - SEARCH_PX), max(0, int(c.y) - SEARCH_PX)
-            win = g[y0:int(c.y) + SEARCH_PX, x0:int(c.x) + SEARCH_PX]
+            win = g[y0 : int(c.y) + SEARCH_PX, x0 : int(c.x) + SEARCH_PX]
             for look, mask in looks:
                 if win.shape[0] < PATCH or win.shape[1] < PATCH:
                     break
@@ -289,6 +354,7 @@ def refine(path: Path, clicks: list[Click], looks: list) -> list[tuple[Click, bo
 def find(proxy: Path, marks: list[tuple[float, float, float]] = ()) -> dict:
     """Clicks in the proxy as {t, x, y, sure}, x and y in 0..1."""
     import cv2
+
     cap = cv2.VideoCapture(str(proxy))
     w, h = cap.get(cv2.CAP_PROP_FRAME_WIDTH), cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
     cap.release()
@@ -296,6 +362,8 @@ def find(proxy: Path, marks: list[tuple[float, float, float]] = ()) -> dict:
         raise ValueError(f"cannot read video frames from {proxy}")
     _, clicks = track(proxy)
     looks = harvest(proxy) + marked(proxy, list(marks))
-    rows = [{"t": c.t, "x": round(c.x / w, 4), "y": round(c.y / h, 4), "sure": sure}
-            for c, sure in refine(proxy, clicks, looks)]
+    rows = [
+        {"t": c.t, "x": round(c.x / w, 4), "y": round(c.y / h, 4), "sure": sure}
+        for c, sure in refine(proxy, clicks, looks)
+    ]
     return {"pictures": len(looks), "clicks": rows}

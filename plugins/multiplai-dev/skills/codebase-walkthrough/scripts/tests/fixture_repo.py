@@ -163,8 +163,8 @@ COLLECTION = {
     "opencollection.yml": "info:\n  name: Acme API\n  type: http\n",
     "bookings/ack.yml": (
         "info:\n  name: Acknowledge Booking\n  type: http\n"
-        "http:\n  method: POST\n  url: \"{{server}}/api/{{version}}/bookings/{{booking_id}}/ack\"\n"
-        "  headers:\n    - name: user-api-key\n      value: \"{{user_api_key}}\"\n"
+        'http:\n  method: POST\n  url: "{{server}}/api/{{version}}/bookings/{{booking_id}}/ack"\n'
+        '  headers:\n    - name: user-api-key\n      value: "{{user_api_key}}"\n'
     ),
     "environments/staging.yml": (
         "variables:\n"
@@ -183,11 +183,24 @@ def _write(root: Path, files: dict[str, str]) -> None:
 
 
 def _git(repo: Path, *args: str) -> str:
-    env = {**os.environ, "GIT_AUTHOR_DATE": DATE, "GIT_COMMITTER_DATE": DATE, "GIT_AUTHOR_NAME": "fixture",
-           "GIT_AUTHOR_EMAIL": "fixture@example.com", "GIT_COMMITTER_NAME": "fixture",
-           "GIT_COMMITTER_EMAIL": "fixture@example.com", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull}
-    return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True,
-                          env=env).stdout.strip()
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_DATE": DATE,
+        "GIT_COMMITTER_DATE": DATE,
+        "GIT_AUTHOR_NAME": "fixture",
+        "GIT_AUTHOR_EMAIL": "fixture@example.com",
+        "GIT_COMMITTER_NAME": "fixture",
+        "GIT_COMMITTER_EMAIL": "fixture@example.com",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_SYSTEM": os.devnull,
+    }
+    return subprocess.run(
+        ["git", "-C", str(repo), *args],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    ).stdout.strip()
 
 
 def make_repo(root: Path, files: dict[str, str]) -> str:
@@ -207,9 +220,17 @@ def commit(repo: Path, message: str = "change") -> str:
 def build(ws: Path) -> dict[str, Path]:
     """Create the workspace under *ws*; return {name: path}."""
     ws.mkdir(parents=True, exist_ok=True)
-    paths = {"ws": ws, "engine": ws / "engine", "front": ws / "front", "warehouse": ws / "warehouse",
-             "docs": ws / "acme-docs", "collection": ws / "acme-api-collection"}
-    make_repo(paths["engine"], ENGINE)   # .env is committed here on purpose: snapshots must still leave it out
+    paths = {
+        "ws": ws,
+        "engine": ws / "engine",
+        "front": ws / "front",
+        "warehouse": ws / "warehouse",
+        "docs": ws / "acme-docs",
+        "collection": ws / "acme-api-collection",
+    }
+    make_repo(
+        paths["engine"], ENGINE
+    )  # .env is committed here on purpose: snapshots must still leave it out
     make_repo(paths["front"], FRONT)
     make_repo(paths["warehouse"], WAREHOUSE)
     _write(paths["docs"], DOCS)

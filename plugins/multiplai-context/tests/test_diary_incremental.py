@@ -42,8 +42,13 @@ def _unit(text, ts=None):
         "diary_entry": text,
         "timestamp": (ts or BASE).isoformat(),
         "learnings": [
-            {"trust": "high", "type": "PATTERN", "description": text,
-             "target": "dev.md", "action": "note it"}
+            {
+                "trust": "high",
+                "type": "PATTERN",
+                "description": text,
+                "target": "dev.md",
+                "action": "note it",
+            }
         ],
     }
 
@@ -54,21 +59,34 @@ class _Paths:
     def __init__(self, root):
         self.root = root
 
-    def memory_dir(self): return self.root / "memory"
-    def learnings_file(self): return self.root / "memory" / "learnings.md"
-    def diary_dir(self): return self.root / "diary"
-    def catalogs_dir(self): return self.root / "catalogs"
-    def data_dir(self): return self.root
+    def memory_dir(self):
+        return self.root / "memory"
+
+    def learnings_file(self):
+        return self.root / "memory" / "learnings.md"
+
+    def diary_dir(self):
+        return self.root / "diary"
+
+    def catalogs_dir(self):
+        return self.root / "catalogs"
+
+    def data_dir(self):
+        return self.root
 
 
 @pytest.fixture
 def transcript(tmp_path):
     path = tmp_path / "t.jsonl"
     path.write_text(
-        "\n".join(json.dumps(t) for t in [
-            _turn("first slice turn A", 0),
-            _turn("first slice turn B", 5),
-        ]) + "\n"
+        "\n".join(
+            json.dumps(t)
+            for t in [
+                _turn("first slice turn A", 0),
+                _turn("first slice turn B", 5),
+            ]
+        )
+        + "\n"
     )
     return path
 
@@ -89,18 +107,23 @@ def _run_extract(tmp_path, transcript, *, units, session_id="s1", fail=False):
             raise RuntimeError("model exploded")
         return units, {"state": "active", "reason": ""}, []
 
-    stdin = json.dumps({
-        "session_id": session_id,
-        "cwd": "/work/proj",
-        "transcript_path": str(transcript),
-    })
-    with patch.object(el, "get_paths", lambda: _Paths(tmp_path)), \
-         patch.object(el, "load_target_charters", lambda *a, **k: []), \
-         patch.object(el, "create_client", AsyncMock(return_value=object())), \
-         patch.object(el, "extract_session_signals", _fake_extract), \
-         patch.object(el, "_refresh_now", AsyncMock(return_value=None)), \
-         patch.object(el.sys, "stdin",
-                      type("S", (), {"read": staticmethod(lambda: stdin)})):
+    stdin = json.dumps(
+        {
+            "session_id": session_id,
+            "cwd": "/work/proj",
+            "transcript_path": str(transcript),
+        }
+    )
+    with (
+        patch.object(el, "get_paths", lambda: _Paths(tmp_path)),
+        patch.object(el, "load_target_charters", lambda *a, **k: []),
+        patch.object(el, "create_client", AsyncMock(return_value=object())),
+        patch.object(el, "extract_session_signals", _fake_extract),
+        patch.object(el, "_refresh_now", AsyncMock(return_value=None)),
+        patch.object(
+            el.sys, "stdin", type("S", (), {"read": staticmethod(lambda: stdin)})
+        ),
+    ):
         handled = asyncio.run(el.extract())
     return handled, seen
 
@@ -120,8 +143,10 @@ class TestIncrementalReading:
         _, first = _run_extract(tmp_path, transcript, units=[_unit("pass one")])
         assert "first slice turn A" in "\n".join(first)
 
-        _grow(transcript, [_turn("second slice turn C", 60),
-                           _turn("second slice turn D", 65)])
+        _grow(
+            transcript,
+            [_turn("second slice turn C", 60), _turn("second slice turn D", 65)],
+        )
         _, second = _run_extract(tmp_path, transcript, units=[_unit("pass two")])
 
         joined = "\n".join(second)
@@ -173,9 +198,7 @@ class TestTheBookmarkComesFromTheSamePassAsTheChunks:
 
         assert len(reads) == 1
 
-    def test_a_turn_appended_mid_extraction_is_not_skipped(
-        self, tmp_path, transcript
-    ):
+    def test_a_turn_appended_mid_extraction_is_not_skipped(self, tmp_path, transcript):
         """The bookmark can only ever point at a turn that was in the chunks.
 
         Simulates the race: the transcript grows immediately after distillation
@@ -254,7 +277,6 @@ class TestAppendOnly:
 
 
 class TestBookmarkDiscipline:
-
     def test_a_failed_extraction_leaves_the_bookmark_unmoved(
         self, tmp_path, transcript
     ):
@@ -265,9 +287,7 @@ class TestBookmarkDiscipline:
         assert handled is False  # marker retained for retry
         assert ex.load_diary_bookmark(tmp_path, "s1") is None
 
-    def test_a_failed_pass_then_a_good_one_loses_nothing(
-        self, tmp_path, transcript
-    ):
+    def test_a_failed_pass_then_a_good_one_loses_nothing(self, tmp_path, transcript):
         _run_extract(tmp_path, transcript, units=[_unit("x")], fail=True)
         _, second = _run_extract(tmp_path, transcript, units=[_unit("recovered")])
 
@@ -294,7 +314,6 @@ class TestBookmarkDiscipline:
 
 
 class TestSliceKey:
-
     def test_the_key_names_the_session_and_where_the_slice_ends(self):
         assert ex.slice_key("abc", None) == "abc:start"
         assert ex.slice_key("abc", BASE) == f"abc:{BASE.isoformat()}"
@@ -312,7 +331,11 @@ class TestSliceKey:
         diary = tmp_path / "diary"
         first = ex.slice_key("s1", BASE)
         ex.write_diary_entries(
-            [_unit("pass one")], diary, "s1", "/work", BASE.isoformat(),
+            [_unit("pass one")],
+            diary,
+            "s1",
+            "/work",
+            BASE.isoformat(),
             slice_id=first,
         )
 
@@ -320,7 +343,11 @@ class TestSliceKey:
         # but reads two hours further.
         second = ex.slice_key("s1", BASE + timedelta(hours=2))
         ex.write_diary_entries(
-            [_unit("pass two")], diary, "s1", "/work", BASE.isoformat(),
+            [_unit("pass two")],
+            diary,
+            "s1",
+            "/work",
+            BASE.isoformat(),
             slice_id=second,
         )
 
@@ -335,7 +362,11 @@ class TestSliceKey:
         key = ex.slice_key("s2", BASE + timedelta(hours=2))
         for _ in range(2):
             ex.write_diary_entries(
-                [_unit("exactly once")], diary, "s2", "/work", BASE.isoformat(),
+                [_unit("exactly once")],
+                diary,
+                "s2",
+                "/work",
+                BASE.isoformat(),
                 slice_id=key,
             )
 

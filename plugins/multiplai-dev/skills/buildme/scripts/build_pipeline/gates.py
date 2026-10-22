@@ -34,7 +34,11 @@ def _repo_trusted() -> bool:
     the repo's own test_command / conftest.py must not execute against a repo the
     user has not vouched for — the test command is arbitrary argv and pytest runs
     any conftest.py in the tree at collection time (CWE-94)."""
-    return os.environ.get("BUILDME_TRUST_REPO", "").strip().lower() in ("1", "true", "yes")
+    return os.environ.get("BUILDME_TRUST_REPO", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
 
 
 def wiring_task_gate(tasks_path: Path, project_dir: Path) -> GateResult:
@@ -53,6 +57,7 @@ def wiring_task_gate(tasks_path: Path, project_dir: Path) -> GateResult:
     pkg_json = project_dir / "package.json"
     if pkg_json.exists():
         import json
+
         data = json.loads(pkg_json.read_text())
         if "main" in data or "bin" in data or "scripts" in data.get("scripts", {}):
             is_app = True
@@ -71,7 +76,7 @@ def wiring_task_gate(tasks_path: Path, project_dir: Path) -> GateResult:
     return GateResult(
         passed=False,
         reason="No entry-point wiring task found. TDD agents will build "
-               "mocked units but nothing assembles them into a working app.",
+        "mocked units but nothing assembles them into a working app.",
         action="add_wiring_task",
     )
 
@@ -81,24 +86,32 @@ def _test_invocation(test_command: str, project_dir: Path) -> tuple[list[str], P
     directory = project_dir
     # Tokenize only the leading cd clause as shell syntax. The remaining argv
     # retains literal punctuation, matching the historical shlex.split contract.
-    clause = re.compile(r"""^\s*cd\s+((?:\\.|"(?:\\.|[^"\\])*"|'[^']*'|[^\s&"'\\])+)\s*&&\s*""")
+    clause = re.compile(
+        r"""^\s*cd\s+((?:\\.|"(?:\\.|[^"\\])*"|'[^']*'|[^\s&"'\\])+)\s*&&\s*"""
+    )
     while match := clause.match(test_command):
-        target, = shlex.split(match.group(1), comments=False)
+        (target,) = shlex.split(match.group(1), comments=False)
         if any(char in target for char in "$`~"):
             raise ValueError("Test command cd must name a literal directory")
         directory = (directory / target).resolve()
-        test_command = test_command[match.end():]
+        test_command = test_command[match.end() :]
     return shlex.split(test_command, comments=False), directory
 
 
 def _test_directory(test_command: str, project_dir: Path) -> Path:
     argv, directory = _test_invocation(test_command, project_dir)
-    if len(argv) == 3 and Path(argv[0]).name in {"sh", "bash", "zsh"} and argv[1] == "-c":
+    if (
+        len(argv) == 3
+        and Path(argv[0]).name in {"sh", "bash", "zsh"}
+        and argv[1] == "-c"
+    ):
         return _test_directory(argv[2], directory)
     return directory
 
 
-def run_test_suite(test_command: str, project_dir: Path, timeout: int = 300) -> tuple[int | None, str]:
+def run_test_suite(
+    test_command: str, project_dir: Path, timeout: int = 300
+) -> tuple[int | None, str]:
     """Run the repo's test suite under the trust guard (shared mechanics for
     the integration and RED gates).
 
@@ -115,7 +128,10 @@ def run_test_suite(test_command: str, project_dir: Path, timeout: int = 300) -> 
         argv, directory = _test_invocation(test_command, project_dir)
         result = subprocess.run(
             argv,
-            capture_output=True, text=True, cwd=directory, timeout=timeout,
+            capture_output=True,
+            text=True,
+            cwd=directory,
+            timeout=timeout,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError, ValueError) as e:
         return None, f"Test command failed to run: {e}"
@@ -124,31 +140,41 @@ def run_test_suite(test_command: str, project_dir: Path, timeout: int = 300) -> 
 
 # Wrappers that run their command in the project's own environment, where
 # `<wrapper> python` is the interpreter that runs `<wrapper> pytest`.
-_ENV_RUNNERS = (("uv", "run"), ("poetry", "run"), ("pdm", "run"), ("hatch", "run"),
-                ("pipenv", "run"), ("rye", "run"))
+_ENV_RUNNERS = (
+    ("uv", "run"),
+    ("poetry", "run"),
+    ("pdm", "run"),
+    ("hatch", "run"),
+    ("pipenv", "run"),
+    ("rye", "run"),
+)
 XDIST_PROBE = ("-c", "import xdist")
 XDIST_PROBE_TIMEOUT = 120
 
 
 def _pytest_at(tokens: list[str]) -> int:
-    return next(i for i, t in enumerate(tokens) if Path(t).name in ("pytest", "py.test"))
+    return next(
+        i for i, t in enumerate(tokens) if Path(t).name in ("pytest", "py.test")
+    )
 
 
 def _xdist_probe(tokens: list[str], project_dir: Path) -> list[str] | None:
     """The argv that imports xdist in the environment the pytest command
     *tokens* runs in, or None when this cannot tell which one that is."""
     at = _pytest_at(tokens)
-    if at >= 2 and tokens[at - 1] == "-m":                  # `<python> -m pytest`
-        return [*tokens[:at - 1], *XDIST_PROBE]
+    if at >= 2 and tokens[at - 1] == "-m":  # `<python> -m pytest`
+        return [*tokens[: at - 1], *XDIST_PROBE]
     prefix = tokens[:at]
-    if any(tuple(prefix[:len(r)]) == r for r in _ENV_RUNNERS):
+    if any(tuple(prefix[: len(r)]) == r for r in _ENV_RUNNERS):
         return [*prefix, "python", *XDIST_PROBE]
-    if prefix:                                              # `env X=1 pytest`, an unknown wrapper
+    if prefix:  # `env X=1 pytest`, an unknown wrapper
         return None
     script = tokens[at]
     found = str(project_dir / script) if "/" in script else shutil.which(script)
     python = Path(found).parent / "python" if found else None
-    return [str(python), *XDIST_PROBE] if python is not None and python.is_file() else None
+    return (
+        [str(python), *XDIST_PROBE] if python is not None and python.is_file() else None
+    )
 
 
 def _chose_workers(args: list[str]) -> bool:
@@ -159,7 +185,9 @@ def _chose_workers(args: list[str]) -> bool:
             return True
         if token.startswith(("-n", "--numprocesses", "--dist=", "--tx=")):
             return True
-        if token in ("-p", "-pno:xdist") and (token == "-pno:xdist" or args[i + 1:i + 2] == ["no:xdist"]):
+        if token in ("-p", "-pno:xdist") and (
+            token == "-pno:xdist" or args[i + 1 : i + 2] == ["no:xdist"]
+        ):
             return True
     return False
 
@@ -169,16 +197,26 @@ def _xdist_loads(args: list[str]) -> bool:
     autoloading is off (`PYTEST_DISABLE_PLUGIN_AUTOLOAD` set to any value, or
     `--disable-plugin-autoload`) and neither `-p xdist` / `-p xdist.plugin`
     nor `PYTEST_PLUGINS=xdist.plugin` names it."""
-    if not os.environ.get("PYTEST_DISABLE_PLUGIN_AUTOLOAD") and "--disable-plugin-autoload" not in args:
+    if (
+        not os.environ.get("PYTEST_DISABLE_PLUGIN_AUTOLOAD")
+        and "--disable-plugin-autoload" not in args
+    ):
         return True
-    if "xdist.plugin" in (p.strip() for p in os.environ.get("PYTEST_PLUGINS", "").split(",")):
+    if "xdist.plugin" in (
+        p.strip() for p in os.environ.get("PYTEST_PLUGINS", "").split(",")
+    ):
         return True
-    named = [args[i + 1] if t == "-p" and i + 1 < len(args) else t[2:]
-             for i, t in enumerate(args) if t.startswith("-p")]
+    named = [
+        args[i + 1] if t == "-p" and i + 1 < len(args) else t[2:]
+        for i, t in enumerate(args)
+        if t.startswith("-p")
+    ]
     return any(n in ("xdist", "xdist.plugin") for n in named)
 
 
-def parallel_command(test_command: str, project_dir: Path, parallel: str = "off") -> str:
+def parallel_command(
+    test_command: str, project_dir: Path, parallel: str = "off"
+) -> str:
     """*test_command* with `-n auto` appended when *parallel* is "auto", the
     command runs pytest (`narrow_tests.runner_of`), nothing in it, its
     `addopts` or `PYTEST_ADDOPTS` chose the workers already, pytest loads
@@ -194,42 +232,64 @@ def parallel_command(test_command: str, project_dir: Path, parallel: str = "off"
         tokens = shlex.split(test_command)
         found = _pytest_config(project_dir)
         addopts = _words(found[1].get("addopts"), shell=True) if found else []
-        args = addopts + shlex.split(os.environ.get("PYTEST_ADDOPTS", "")) + tokens[_pytest_at(tokens) + 1:]
+        args = (
+            addopts
+            + shlex.split(os.environ.get("PYTEST_ADDOPTS", ""))
+            + tokens[_pytest_at(tokens) + 1 :]
+        )
     except (_UnreadableConfig, ValueError):
         return test_command
     if _chose_workers(args) or not _xdist_loads(args):
         return test_command
     probe = _xdist_probe(tokens, project_dir)
     if probe is None:
-        log.info("Parallel tests: cannot tell which Python runs %r — running it as written", test_command)
+        log.info(
+            "Parallel tests: cannot tell which Python runs %r — running it as written",
+            test_command,
+        )
         return test_command
     try:
-        proc = subprocess.run(probe, cwd=project_dir, capture_output=True, timeout=XDIST_PROBE_TIMEOUT)
+        proc = subprocess.run(
+            probe, cwd=project_dir, capture_output=True, timeout=XDIST_PROBE_TIMEOUT
+        )
     except (OSError, subprocess.TimeoutExpired):
         return test_command
     if proc.returncode != 0:
         return test_command
-    log.info("Parallel tests: pytest-xdist is installed — running the full suite with -n auto")
+    log.info(
+        "Parallel tests: pytest-xdist is installed — running the full suite with -n auto"
+    )
     return f"{test_command} -n auto"
 
 
 def _full_suite(test_command: str, project_dir: Path, parallel: str) -> str:
-    return parallel_command(test_command, project_dir, parallel) if _repo_trusted() else test_command
+    return (
+        parallel_command(test_command, project_dir, parallel)
+        if _repo_trusted()
+        else test_command
+    )
 
 
-def baseline_test_gate(test_command: str, project_dir: Path, *, parallel: str = "off") -> GateResult:
+def baseline_test_gate(
+    test_command: str, project_dir: Path, *, parallel: str = "off"
+) -> GateResult:
     """Run the test suite and check it passes before TDD starts. *parallel*
     is `tdd.parallel` (`parallel_command`)."""
     if not test_command:
-        return GateResult(passed=True, reason="No test command configured — skipping baseline")
-    exit_code, output = run_test_suite(_full_suite(test_command, project_dir, parallel), project_dir)
+        return GateResult(
+            passed=True, reason="No test command configured — skipping baseline"
+        )
+    exit_code, output = run_test_suite(
+        _full_suite(test_command, project_dir, parallel), project_dir
+    )
     if exit_code is None:
         # Could not verify — untrusted repo, missing binary or timeout. The
         # message run_test_suite returns already names which.
         return GateResult(passed=False, reason=output, action="fix_tests")
     if exit_code == 0:
         return GateResult(
-            passed=True, reason="Baseline tests pass",
+            passed=True,
+            reason="Baseline tests pass",
             metadata={"output": output[-500:]},
         )
     return GateResult(
@@ -240,19 +300,26 @@ def baseline_test_gate(test_command: str, project_dir: Path, *, parallel: str = 
     )
 
 
-def integration_gate(test_command: str, project_dir: Path, *, parallel: str = "off") -> GateResult:
+def integration_gate(
+    test_command: str, project_dir: Path, *, parallel: str = "off"
+) -> GateResult:
     """Run the full test suite after a block completes. *parallel* is
     `tdd.parallel` (`parallel_command`)."""
     if not test_command:
-        return GateResult(passed=True, reason="No test command — skipping integration gate")
-    exit_code, output = run_test_suite(_full_suite(test_command, project_dir, parallel), project_dir)
+        return GateResult(
+            passed=True, reason="No test command — skipping integration gate"
+        )
+    exit_code, output = run_test_suite(
+        _full_suite(test_command, project_dir, parallel), project_dir
+    )
     if exit_code is None:
         # No action: an unverifiable suite is not something a fix agent can
         # repair (the pre-collapse gate returned no action here either).
         return GateResult(passed=False, reason=output)
     if exit_code == 0:
         return GateResult(
-            passed=True, reason="All tests pass",
+            passed=True,
+            reason="All tests pass",
             metadata={"output": output[-2000:]},
         )
     return GateResult(
@@ -267,7 +334,8 @@ def integration_gate(test_command: str, project_dir: Path, *, parallel: str = "o
 # under test is missing or incomplete, not that the test files themselves are
 # broken.
 _RED_RIGHT_REASON = re.compile(
-    r"AssertionError|NotImplementedError|AttributeError:.*has no attribute|^E\s+assert\b", re.MULTILINE,
+    r"AssertionError|NotImplementedError|AttributeError:.*has no attribute|^E\s+assert\b",
+    re.MULTILINE,
 )
 
 # Signatures of broken test files: pytest could not even collect/parse them.
@@ -285,52 +353,78 @@ _RED_BROKEN_TESTS = re.compile(
 
 class _RedFacts(NamedTuple):
     """What the RED gate observed about one run of the block's tests."""
-    ran: bool                    # the command ran (exit code not None)
+
+    ran: bool  # the command ran (exit code not None)
     exit_code: int | None
-    runner: str | None           # as given: `narrow_tests.runner_of`
+    runner: str | None  # as given: `narrow_tests.runner_of`
     # "direct_pytest": the runner, or the executed argv after unwrapping
     # `cd DIR &&` and `sh -c` / `bash -c` / `zsh -c`, is pytest;
     # "pytest_output": the output is pytest's (a `FAILED <path>::` line or a
     # collection or setup error) from some other command; "jest": the runner
     # is jest or the output has Jest's summary; "other": none of these.
     runner_kind: str
-    broken: bool                 # the output matches `_RED_BROKEN_TESTS`
-    failed_paths: frozenset[str]  # `FAILED <path>::` paths, project-relative when resolved
+    broken: bool  # the output matches `_RED_BROKEN_TESTS`
+    failed_paths: frozenset[
+        str
+    ]  # `FAILED <path>::` paths, project-relative when resolved
     failed_ids: tuple[str, ...]  # the node ids on those `FAILED` lines, in order
     # None when not checked (no expected tests given, or no `FAILED` path);
     # "unresolvable" when a path cannot be placed inside the project;
     # "inside" when every path is one of the expected tests; else "outside".
     attribution: str | None
-    right_reason: bool           # the output matches `_RED_RIGHT_REASON`
-    jest_failed: bool            # Jest's `FAIL <file>` and `Tests: N failed` lines, N > 0
-    tail: str                    # the output's last 1000 characters
+    right_reason: bool  # the output matches `_RED_RIGHT_REASON`
+    jest_failed: bool  # Jest's `FAIL <file>` and `Tests: N failed` lines, N > 0
+    tail: str  # the output's last 1000 characters
 
 
 _FAILED_LINE_RE = re.compile(r"^FAILED\s+(.+?)::", re.MULTILINE)
 _FAILED_ID_RE = re.compile(r"^FAILED\s+(.+?::.+?)(?:\s+-\s|\s*$)", re.MULTILINE)
 
 
-def _red_facts(test_output: str, exit_code: int | None, runner: str | None,
-               expected_tests: list[str] | None, test_command: str,
-               project_dir: Path | None) -> _RedFacts:
+def _red_facts(
+    test_output: str,
+    exit_code: int | None,
+    runner: str | None,
+    expected_tests: list[str] | None,
+    test_command: str,
+    project_dir: Path | None,
+) -> _RedFacts:
     """The facts `red_gate` decides on, computed the way the gate always has.
     It decides nothing."""
     direct_pytest = runner == "pytest"
     if project_dir is not None and test_command:
         try:
             argv, directory = _test_invocation(test_command, project_dir)
-            while len(argv) == 3 and Path(argv[0]).name in {"sh", "bash", "zsh"} and argv[1] == "-c":
+            while (
+                len(argv) == 3
+                and Path(argv[0]).name in {"sh", "bash", "zsh"}
+                and argv[1] == "-c"
+            ):
                 argv, directory = _test_invocation(argv[2], directory)
             # The executed argv keeps punctuation literal; runner_of rejects
             # shell-looking text even inside a quoted pytest argument.
             direct_pytest = direct_pytest or _runner_of_tokens(argv) == PYTEST
         except ValueError:
             pass
-    pytest_output = direct_pytest or bool(re.search(
-        r"^FAILED\s+.+?::|ERROR collecting|ERROR at (?:setup|teardown)|errors? during collection", test_output, re.MULTILINE))
-    jest_output = runner == "jest" or bool(re.search(r"^Test Suites:|Test suite failed to run", test_output, re.MULTILINE))
-    kind = ("direct_pytest" if direct_pytest else "pytest_output" if pytest_output
-            else "jest" if jest_output else "other")
+    pytest_output = direct_pytest or bool(
+        re.search(
+            r"^FAILED\s+.+?::|ERROR collecting|ERROR at (?:setup|teardown)|errors? during collection",
+            test_output,
+            re.MULTILINE,
+        )
+    )
+    jest_output = runner == "jest" or bool(
+        re.search(r"^Test Suites:|Test suite failed to run", test_output, re.MULTILINE)
+    )
+    kind = (
+        "direct_pytest"
+        if direct_pytest
+        else "pytest_output"
+        if pytest_output
+        else "jest"
+        if jest_output
+        else "other"
+    )
     failed_paths = set(_FAILED_LINE_RE.findall(test_output))
     attribution = None
     if expected_tests is not None and failed_paths:
@@ -338,11 +432,18 @@ def _red_facts(test_output: str, exit_code: int | None, runner: str | None,
         if project_dir is not None:
             try:
                 directory = _test_directory(test_command, project_dir)
-                failed_paths = {(directory / p).resolve().relative_to(project_dir.resolve()).as_posix()
-                                for p in failed_paths}
+                failed_paths = {
+                    (directory / p)
+                    .resolve()
+                    .relative_to(project_dir.resolve())
+                    .as_posix()
+                    for p in failed_paths
+                }
             except ValueError:
                 attribution = "unresolvable"
-        if attribution == "inside" and (not expected_tests or not failed_paths <= set(expected_tests)):
+        if attribution == "inside" and (
+            not expected_tests or not failed_paths <= set(expected_tests)
+        ):
             attribution = "outside"
     return _RedFacts(
         ran=exit_code is not None,
@@ -354,8 +455,12 @@ def _red_facts(test_output: str, exit_code: int | None, runner: str | None,
         failed_ids=tuple(_FAILED_ID_RE.findall(test_output)),
         attribution=attribution,
         right_reason=bool(_RED_RIGHT_REASON.search(test_output)),
-        jest_failed=bool(re.search(r"^FAIL\s+\S", test_output, re.MULTILINE)
-                         and re.search(r"^Tests:\s+[^\n]*\b[1-9]\d* failed\b", test_output, re.MULTILINE)),
+        jest_failed=bool(
+            re.search(r"^FAIL\s+\S", test_output, re.MULTILINE)
+            and re.search(
+                r"^Tests:\s+[^\n]*\b[1-9]\d* failed\b", test_output, re.MULTILINE
+            )
+        ),
         tail=test_output[-1000:],
     )
 
@@ -383,7 +488,8 @@ def _direct_exit_1_without_paths(f: _RedFacts) -> bool:
 
 def _no_usable_failures(f: _RedFacts) -> bool:
     return _pytest_shaped(f) and (
-        not f.failed_paths or (f.runner_kind == "direct_pytest" and f.exit_code != 1))
+        not f.failed_paths or (f.runner_kind == "direct_pytest" and f.exit_code != 1)
+    )
 
 
 def _paths_unresolvable(f: _RedFacts) -> bool:
@@ -407,7 +513,11 @@ def _other_runner(f: _RedFacts) -> bool:
 
 
 def _right_reason(f: _RedFacts) -> bool:
-    return _pytest_shaped(f) and (f.exit_code == 1 or f.runner != "pytest") and f.right_reason
+    return (
+        _pytest_shaped(f)
+        and (f.exit_code == 1 or f.runner != "pytest")
+        and f.right_reason
+    )
 
 
 def _anything(f: _RedFacts) -> bool:
@@ -417,6 +527,7 @@ def _anything(f: _RedFacts) -> bool:
 class RedRow(NamedTuple):
     """One row of `RED_TABLE`. *verdict* is "reject", "unverified" or
     "behavioral"; *reason* is formatted with `exit_code` and `tail`."""
+
     runner_kind: str
     outcome: Callable[[_RedFacts], bool]
     verdict: str
@@ -429,33 +540,95 @@ class RedRow(NamedTuple):
 # Ordered: the first row whose outcome holds decides. The runner-kind column
 # says which kinds an outcome can match; the predicate itself checks it.
 RED_TABLE: tuple[RedRow, ...] = (
-    RedRow("any", _not_run, "reject", "fix_tests", "RED gate could not run the suite: {tail}"),
-    RedRow("any", _exit_zero, "reject", "rewrite_tests",
-           "RED gate failed: suite passed BEFORE implementation — the new "
-           "tests exercise nothing unimplemented and prove nothing"),
-    RedRow("pytest-shaped or jest", _tests_broken, "reject", "fix_tests",
-           "RED gate failed: tests error instead of failing "
-           "(collection/syntax problem, exit {exit_code}): {tail}"),
-    RedRow("direct_pytest", _direct_exit_1_without_paths, "unverified", None,
-           "Pytest exited 1 without failure paths; RED is unverified"),
-    RedRow("pytest-shaped", _no_usable_failures, "reject", "fix_tests",
-           "RED gate failed: pytest supplied no usable test failures (exit {exit_code}): {tail}"),
-    RedRow("pytest-shaped", _paths_unresolvable, "unverified", None,
-           "Pytest failure paths cannot be resolved; RED is unverified", reports_exit_code=False),
-    RedRow("direct_pytest", _direct_outside_changed_tests, "reject", "fix_tests",
-           "RED gate failed: pytest failures are outside the changed tests"),
-    RedRow("pytest_output", _wrapper_outside_changed_tests, "unverified", None,
-           "RED cannot attribute the wrapper's failure to the changed tests; accepted as unverified",
-           reports_exit_code=False),
-    RedRow("jest", _jest_reported_failures, "unverified", None,
-           "Nonzero test-command exit accepted as unverified RED for this runner"),
-    RedRow("other", _other_runner, "unverified", None,
-           "Nonzero test-command exit accepted as unverified RED for this runner"),
-    RedRow("pytest-shaped", _right_reason, "behavioral", None,
-           "RED confirmed: tests fail for the right reason (exit {exit_code})"),
-    RedRow("any", _anything, "reject", "fix_tests",
-           "RED gate failed: suite exits {exit_code} but with no recognizable "
-           "test-failure signature: {tail}"),
+    RedRow(
+        "any",
+        _not_run,
+        "reject",
+        "fix_tests",
+        "RED gate could not run the suite: {tail}",
+    ),
+    RedRow(
+        "any",
+        _exit_zero,
+        "reject",
+        "rewrite_tests",
+        "RED gate failed: suite passed BEFORE implementation — the new "
+        "tests exercise nothing unimplemented and prove nothing",
+    ),
+    RedRow(
+        "pytest-shaped or jest",
+        _tests_broken,
+        "reject",
+        "fix_tests",
+        "RED gate failed: tests error instead of failing "
+        "(collection/syntax problem, exit {exit_code}): {tail}",
+    ),
+    RedRow(
+        "direct_pytest",
+        _direct_exit_1_without_paths,
+        "unverified",
+        None,
+        "Pytest exited 1 without failure paths; RED is unverified",
+    ),
+    RedRow(
+        "pytest-shaped",
+        _no_usable_failures,
+        "reject",
+        "fix_tests",
+        "RED gate failed: pytest supplied no usable test failures (exit {exit_code}): {tail}",
+    ),
+    RedRow(
+        "pytest-shaped",
+        _paths_unresolvable,
+        "unverified",
+        None,
+        "Pytest failure paths cannot be resolved; RED is unverified",
+        reports_exit_code=False,
+    ),
+    RedRow(
+        "direct_pytest",
+        _direct_outside_changed_tests,
+        "reject",
+        "fix_tests",
+        "RED gate failed: pytest failures are outside the changed tests",
+    ),
+    RedRow(
+        "pytest_output",
+        _wrapper_outside_changed_tests,
+        "unverified",
+        None,
+        "RED cannot attribute the wrapper's failure to the changed tests; accepted as unverified",
+        reports_exit_code=False,
+    ),
+    RedRow(
+        "jest",
+        _jest_reported_failures,
+        "unverified",
+        None,
+        "Nonzero test-command exit accepted as unverified RED for this runner",
+    ),
+    RedRow(
+        "other",
+        _other_runner,
+        "unverified",
+        None,
+        "Nonzero test-command exit accepted as unverified RED for this runner",
+    ),
+    RedRow(
+        "pytest-shaped",
+        _right_reason,
+        "behavioral",
+        None,
+        "RED confirmed: tests fail for the right reason (exit {exit_code})",
+    ),
+    RedRow(
+        "any",
+        _anything,
+        "reject",
+        "fix_tests",
+        "RED gate failed: suite exits {exit_code} but with no recognizable "
+        "test-failure signature: {tail}",
+    ),
 )
 
 
@@ -463,9 +636,15 @@ def _red_row(facts: _RedFacts) -> RedRow:
     return next(row for row in RED_TABLE if row.outcome(facts))
 
 
-def red_gate(test_output: str, exit_code: int | None, *, runner: str | None = "pytest",
-             expected_tests: list[str] | None = None, test_command: str = "",
-             project_dir: Path | None = None) -> GateResult:
+def red_gate(
+    test_output: str,
+    exit_code: int | None,
+    *,
+    runner: str | None = "pytest",
+    expected_tests: list[str] | None = None,
+    test_command: str = "",
+    project_dir: Path | None = None,
+) -> GateResult:
     """RED-phase gate: prove the freshly written tests fail for the right reason.
 
     The verdict is the first row of `RED_TABLE` whose outcome holds for the
@@ -494,14 +673,20 @@ def red_gate(test_output: str, exit_code: int | None, *, runner: str | None = "p
     `metadata` holds `exit_code` (except for rows 6 and 8) and, on a pass,
     `classification` (the row's verdict).
     """
-    facts = _red_facts(test_output, exit_code, runner, expected_tests, test_command, project_dir)
+    facts = _red_facts(
+        test_output, exit_code, runner, expected_tests, test_command, project_dir
+    )
     row = _red_row(facts)
     metadata: dict = {"exit_code": exit_code} if row.reports_exit_code else {}
     passed = row.verdict != "reject"
     if passed:
         metadata["classification"] = row.verdict
-    return GateResult(passed=passed, reason=row.reason.format(exit_code=exit_code, tail=facts.tail),
-                      action=row.action, metadata=metadata)
+    return GateResult(
+        passed=passed,
+        reason=row.reason.format(exit_code=exit_code, tail=facts.tail),
+        action=row.action,
+        metadata=metadata,
+    )
 
 
 _AGENT_STATUS_RE = re.compile(
@@ -547,7 +732,7 @@ def agent_status_gate(output: str, agent_name: str) -> GateResult:
     return GateResult(
         passed=False,
         reason=f"{agent_name} reported STATUS: {status} — it could not complete "
-               f"the work. Agent report:\n{(output or '')[-1500:]}",
+        f"the work. Agent report:\n{(output or '')[-1500:]}",
         action="escalate_to_human",
         metadata={"status": status},
     )
@@ -555,7 +740,18 @@ def agent_status_gate(output: str, agent_name: str) -> GateResult:
 
 # Slot values that say "nothing here". A slot filled with "none" is a real
 # answer (the agent looked and found nothing) but carries no content to act on.
-_EMPTY_SLOT_VALUES = {"", "none", "none.", "n/a", "na", "-", "—", "(none)", "nothing", "tbd"}
+_EMPTY_SLOT_VALUES = {
+    "",
+    "none",
+    "none.",
+    "n/a",
+    "na",
+    "-",
+    "—",
+    "(none)",
+    "nothing",
+    "tbd",
+}
 
 
 # --- Implementation notes (SURPRISES: / SPEC_IMPACT: slots) ---
@@ -598,15 +794,25 @@ _LINE_IN_CODE = r"(?:`(?=[^`\n]*`[ \t]*$))?"
 # prompts put these lines at the end of the report, after the other slots, so
 # the free-text slots stop here too and never read one in.
 _TEST_CHANGE_LINE = (
-    r"^" + _LIST_PREFIX + _HEADING_PREFIX + _LINE_IN_CODE + r"(?:\*\*)?"
-    + re.escape(TEST_CHANGE_MARKER.removesuffix(":")) + _SLOT_COLON
+    r"^"
+    + _LIST_PREFIX
+    + _HEADING_PREFIX
+    + _LINE_IN_CODE
+    + r"(?:\*\*)?"
+    + re.escape(TEST_CHANGE_MARKER.removesuffix(":"))
+    + _SLOT_COLON
 )
 
 _SURPRISES_RE = re.compile(
     r"^\s*(?:[-*]\s*)?(?:\*\*)?SURPRISES" + _SLOT_COLON + r"[ \t]*"
     r"(.*?)"
-    r"(?=^\s*(?:[-*]\s*)?(?:\*\*)?(?:" + _REPORT_SLOT_LABELS + r")"
-    + _SLOT_COLON + r"|" + _TEST_CHANGE_LINE + r"|\Z)",
+    r"(?=^\s*(?:[-*]\s*)?(?:\*\*)?(?:"
+    + _REPORT_SLOT_LABELS
+    + r")"
+    + _SLOT_COLON
+    + r"|"
+    + _TEST_CHANGE_LINE
+    + r"|\Z)",
     re.MULTILINE | re.IGNORECASE | re.DOTALL,
 )
 
@@ -627,7 +833,8 @@ def _clean_surprises(raw: str) -> str:
     """Strip fences and the prompt's own angle-bracket placeholder from the
     free-text SURPRISES slot; return "" when it says nothing."""
     lines = [
-        ln for ln in (raw or "").strip().splitlines()
+        ln
+        for ln in (raw or "").strip().splitlines()
         if not ln.strip().startswith("```")
     ]
     text = "\n".join(lines).strip()
@@ -678,8 +885,13 @@ def parse_implementation_note(
 _SEARCHED_RE = re.compile(
     r"^\s*(?:[-*]\s*)?(?:\*\*)?SEARCHED" + _SLOT_COLON + r"[ \t]*"
     r"(.*?)"
-    r"(?=^\s*(?:[-*]\s*)?(?:\*\*)?(?:" + _REPORT_SLOT_LABELS + r")"
-    + _SLOT_COLON + r"|" + _TEST_CHANGE_LINE + r"|\Z)",
+    r"(?=^\s*(?:[-*]\s*)?(?:\*\*)?(?:"
+    + _REPORT_SLOT_LABELS
+    + r")"
+    + _SLOT_COLON
+    + r"|"
+    + _TEST_CHANGE_LINE
+    + r"|\Z)",
     re.MULTILINE | re.IGNORECASE | re.DOTALL,
 )
 
@@ -735,8 +947,13 @@ def parse_recurring(output: str) -> str | None:
 _RED_EXPECTED_RE = re.compile(
     r"^\s*(?:[-*]\s*)?(?:\*\*)?RED_EXPECTED" + _SLOT_COLON + r"[ \t]*"
     r"(.*?)"
-    r"(?=^\s*(?:[-*]\s*)?(?:\*\*)?(?:" + _REPORT_SLOT_LABELS + r")"
-    + _SLOT_COLON + r"|" + _TEST_CHANGE_LINE + r"|\Z)",
+    r"(?=^\s*(?:[-*]\s*)?(?:\*\*)?(?:"
+    + _REPORT_SLOT_LABELS
+    + r")"
+    + _SLOT_COLON
+    + r"|"
+    + _TEST_CHANGE_LINE
+    + r"|\Z)",
     re.MULTILINE | re.IGNORECASE | re.DOTALL,
 )
 
@@ -767,15 +984,17 @@ def parse_red_expected(report: str) -> tuple[list[str], str] | None:
     matches = _RED_EXPECTED_RE.findall(report or "")
     if not matches:
         return None
-    value = " ".join(line.strip() for line in matches[-1].splitlines()
-                     if line.strip() and not line.strip().startswith("```"))
+    value = " ".join(
+        line.strip()
+        for line in matches[-1].splitlines()
+        if line.strip() and not line.strip().startswith("```")
+    )
     if not value or (value.startswith("<") and value.endswith(">")):
         return None
     dash = _RED_EXPECTED_DASH_RE.search(value)
     if not dash:
         return _split_ids(value), ""
-    return _split_ids(value[:dash.start()]), value[dash.end():].strip()
-
+    return _split_ids(value[: dash.start()]), value[dash.end() :].strip()
 
 
 def _names_node(named: str, node: str) -> bool:
@@ -783,15 +1002,26 @@ def _names_node(named: str, node: str) -> bool:
     the same id, or the same one written relative to another directory, or
     a bare test name, or the id without its parametrize `[...]`."""
     for candidate in {node, node.split("[", 1)[0]}:
-        if (candidate == named or candidate.endswith("/" + named) or named.endswith("/" + candidate)
-                or candidate.endswith("::" + named)):
+        if (
+            candidate == named
+            or candidate.endswith("/" + named)
+            or named.endswith("/" + candidate)
+            or candidate.endswith("::" + named)
+        ):
             return True
     return False
 
 
-def red_expected_note(report: str | None, test_output: str, exit_code: int | None, *,
-                      runner: str | None, expected_tests: list[str] | None = None,
-                      test_command: str = "", project_dir: Path | None = None) -> str:
+def red_expected_note(
+    report: str | None,
+    test_output: str,
+    exit_code: int | None,
+    *,
+    runner: str | None,
+    expected_tests: list[str] | None = None,
+    test_command: str = "",
+    project_dir: Path | None = None,
+) -> str:
     """`BlockInfo.red_expected` for a passed RED gate: the test writer's
     `RED_EXPECTED:` slot and one result line. The result is "named tests
     failed" when the run is direct pytest and every named id is a `FAILED`
@@ -804,15 +1034,22 @@ def red_expected_note(report: str | None, test_output: str, exit_code: int | Non
         return "RED_EXPECTED result: not stated"
     ids, reason = stated
     slot = "RED_EXPECTED: " + ", ".join(ids) + (f" — {reason}" if reason else "")
-    facts = _red_facts(test_output, exit_code, runner, expected_tests, test_command, project_dir)
+    facts = _red_facts(
+        test_output, exit_code, runner, expected_tests, test_command, project_dir
+    )
     if not ids:
         result = "not stated"
     elif facts.runner_kind != "direct_pytest" or not facts.failed_ids:
         result = "cannot check for this runner"
     else:
-        missing = [i for i in ids if not any(_names_node(i, node) for node in facts.failed_ids)]
-        result = ("named tests failed" if not missing
-                  else "named tests not among the failures: " + ", ".join(missing))
+        missing = [
+            i for i in ids if not any(_names_node(i, node) for node in facts.failed_ids)
+        ]
+        result = (
+            "named tests failed"
+            if not missing
+            else "named tests not among the failures: " + ", ".join(missing)
+        )
     return f"{slot}\nRED_EXPECTED result: {result}"
 
 
@@ -901,7 +1138,8 @@ def source_paths_in_diff(diff: str) -> list[str]:
     the code a reader of the README would notice changing.
     """
     return [
-        p for p in parse_diff_paths(diff)
+        p
+        for p in parse_diff_paths(diff)
         if not is_doc_path(p) and not p.startswith("specs/")
     ]
 
@@ -964,8 +1202,7 @@ def docs_freshness_gate(
             f"{len(source)} source file(s) changed and {changelog} exists, but the "
             f"documentation phase reported DOCS_IMPACT: none. The docs may now be "
             f"stale — check {changelog} and the README before merging. "
-            f"Changed: {', '.join(source[:10])}"
-            + (" …" if len(source) > 10 else "")
+            f"Changed: {', '.join(source[:10])}" + (" …" if len(source) > 10 else "")
         ),
         metadata={
             "warning": True,
@@ -1056,8 +1293,13 @@ _IN_CODE_RE = re.compile(r"^" + _LIST_PREFIX + _HEADING_PREFIX + r"`")
 # A line that cannot be the reason of a marker left alone on its line: a slot
 # label, another declaration, or a code fence.
 _NOT_A_REASON_RE = re.compile(
-    r"^\s*(?:[-*]\s*)?(?:\*\*)?(?:" + _REPORT_SLOT_LABELS + r")" + _SLOT_COLON
-    + r"|" + _TEST_CHANGE_LINE + r"|^\s*```",
+    r"^\s*(?:[-*]\s*)?(?:\*\*)?(?:"
+    + _REPORT_SLOT_LABELS
+    + r")"
+    + _SLOT_COLON
+    + r"|"
+    + _TEST_CHANGE_LINE
+    + r"|^\s*```",
     re.IGNORECASE,
 )
 
@@ -1085,7 +1327,7 @@ def parse_test_change_claims(report: str) -> list[str]:
         if _IN_CODE_RE.match(line):
             reason = reason.removesuffix("`").strip()
         if not reason:
-            following = next((ln for ln in lines[i + 1:] if ln.strip()), "")
+            following = next((ln for ln in lines[i + 1 :] if ln.strip()), "")
             if not _NOT_A_REASON_RE.match(following):
                 reason = re.sub(r"^" + _LIST_PREFIX, "", following).strip()
         if reason.startswith("<") and reason.endswith(">"):
@@ -1145,8 +1387,11 @@ def unchanged_tests_gate(
             metadata={"checked": True, "files": len(before)},
         )
 
-    reports = ([implementer_report] if isinstance(implementer_report, str)
-               else implementer_report)
+    reports = (
+        [implementer_report]
+        if isinstance(implementer_report, str)
+        else implementer_report
+    )
     claims = [c for r in reports for c in parse_test_change_claims(r)]
     detail = ", ".join(mutated + [f"{p} (deleted)" for p in deleted])
     if claims:
@@ -1200,7 +1445,7 @@ def _split_sections(text: str, pattern: re.Pattern[str]) -> list[tuple[str, str]
     out: list[tuple[str, str]] = []
     for i, m in enumerate(matches):
         end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
-        out.append((m.group(1).strip(), text[m.end():end]))
+        out.append((m.group(1).strip(), text[m.end() : end]))
     return out
 
 
@@ -1217,10 +1462,13 @@ def _heading_names_dep(heading: str, needle: str) -> bool:
     a `## react-query` heading — while still tolerating decoration around the
     name (backticks, a trailing ``— what it is`` clause).
     """
-    return re.search(
-        r"(?<![A-Za-z0-9._+@/-])" + re.escape(needle) + r"(?![A-Za-z0-9._+@/-])",
-        heading.lower(),
-    ) is not None
+    return (
+        re.search(
+            r"(?<![A-Za-z0-9._+@/-])" + re.escape(needle) + r"(?![A-Za-z0-9._+@/-])",
+            heading.lower(),
+        )
+        is not None
+    )
 
 
 def unknowns_gate(unknowns_text: str, deps) -> GateResult:
@@ -1257,14 +1505,14 @@ def unknowns_gate(unknowns_text: str, deps) -> GateResult:
             continue
 
         subsections = _split_sections(match, _UNKNOWNS_SUBSECTION_RE)
-        edge_body = next(
-            (b for h, b in subsections if _EDGE_CASES_RE.search(h)), None
-        )
+        edge_body = next((b for h, b in subsections if _EDGE_CASES_RE.search(h)), None)
         assum_body = next(
             (b for h, b in subsections if _ASSUMPTIONS_RE.search(h)), None
         )
         if edge_body is None:
-            findings.append(f"`{name}`: missing an 'Edge cases & failure modes' subsection")
+            findings.append(
+                f"`{name}`: missing an 'Edge cases & failure modes' subsection"
+            )
         elif not _has_filled_list(edge_body):
             findings.append(
                 f"`{name}`: 'Edge cases & failure modes' list is empty — needs at "
@@ -1272,7 +1520,9 @@ def unknowns_gate(unknowns_text: str, deps) -> GateResult:
                 f"oversized, concurrent, and offline input"
             )
         if assum_body is None:
-            findings.append(f"`{name}`: missing an 'Assumptions we are making' subsection")
+            findings.append(
+                f"`{name}`: missing an 'Assumptions we are making' subsection"
+            )
         elif not _has_filled_list(assum_body):
             findings.append(
                 f"`{name}`: 'Assumptions we are making' list is empty — needs at "
@@ -1282,7 +1532,8 @@ def unknowns_gate(unknowns_text: str, deps) -> GateResult:
     if findings:
         return GateResult(
             passed=False,
-            reason="Explainer sections incomplete:\n" + "\n".join(f"- {f}" for f in findings),
+            reason="Explainer sections incomplete:\n"
+            + "\n".join(f"- {f}" for f in findings),
             action="regenerate_unknowns",
             metadata={"findings": findings, "dependencies": names},
         )
@@ -1307,8 +1558,14 @@ def review_iteration_gate(iteration: int, max_iterations: int = 3) -> GateResult
     )
 
 
-def verification_inputs(test_command: str, project_dir: Path, *, parallel: str = "off",
-                        plan_revision: str = "", include_files: bool = False) -> dict:
+def verification_inputs(
+    test_command: str,
+    project_dir: Path,
+    *,
+    parallel: str = "off",
+    plan_revision: str = "",
+    include_files: bool = False,
+) -> dict:
     """Exact inputs to the final check; unavailable Git/file evidence raises.
 
     Paths are project-relative. Bookkeeping and untracked interpreter/test caches
@@ -1324,21 +1581,42 @@ def verification_inputs(test_command: str, project_dir: Path, *, parallel: str =
     head = git_ops.rev_parse_head(project_dir)
     index = git_ops.index_entries(project_dir)
     if not head or index is None:
-        raise RuntimeError("Cannot identify the Git revision/index for final verification")
-    result = git_ops._run(["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z",
-                           "--", ".", *git_ops.BOOKKEEPING_EXCLUDES], cwd=project_dir)
+        raise RuntimeError(
+            "Cannot identify the Git revision/index for final verification"
+        )
+    result = git_ops._run(
+        [
+            "git",
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "-z",
+            "--",
+            ".",
+            *git_ops.BOOKKEEPING_EXCLUDES,
+        ],
+        cwd=project_dir,
+    )
     if not result.ok:
         raise RuntimeError("Cannot read final verification inputs: " + result.stderr)
     files = _path_inputs(project_dir, result.stdout.split("\0"), index)
     content = json.dumps({"files": files, "index": index}, sort_keys=True).encode()
-    result = {"head": head, "content": hashlib.sha256(content).hexdigest(),
-              "command": test_command, "parallel": parallel, "plan_revision": plan_revision}
+    result = {
+        "head": head,
+        "content": hashlib.sha256(content).hexdigest(),
+        "command": test_command,
+        "parallel": parallel,
+        "plan_revision": plan_revision,
+    }
     if include_files:
         result.update(files=files, index=index)
     return result
 
 
-def _path_inputs(root: Path, names: Sequence[str], index: dict[str, str]) -> dict[str, str]:
+def _path_inputs(
+    root: Path, names: Sequence[str], index: dict[str, str]
+) -> dict[str, str]:
     """Each listed path under *root* mapped to its content: a symlink's target, a
     file's executable bits and hash, a checkout's `_checkout_input`, or "deleted".
     Untracked interpreter/test caches are left out."""
@@ -1346,8 +1624,10 @@ def _path_inputs(root: Path, names: Sequence[str], index: dict[str, str]) -> dic
 
     files = {}
     for name in sorted(set(filter(None, names))):
-        if name not in index and any(part in {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
-                                     for part in Path(name).parts):
+        if name not in index and any(
+            part in {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
+            for part in Path(name).parts
+        ):
             continue
         path = root / name
         if path.is_symlink():
@@ -1355,7 +1635,10 @@ def _path_inputs(root: Path, names: Sequence[str], index: dict[str, str]) -> dic
         elif path.is_dir():
             files[name] = _checkout_input(path, name, index.get(name, ""))
         elif path.exists():
-            files[name] = f"{path.stat().st_mode & 0o111}:" + hashlib.sha256(path.read_bytes()).hexdigest()
+            files[name] = (
+                f"{path.stat().st_mode & 0o111}:"
+                + hashlib.sha256(path.read_bytes()).hexdigest()
+            )
         else:
             files[name] = "deleted"
     return files
@@ -1376,50 +1659,97 @@ def _checkout_input(path: Path, name: str, index_entry: str) -> str:
     def read(*args: str) -> str:
         result = git_ops._run(["git", "--no-optional-locks", *args], cwd=path)
         if not result.ok:
-            raise RuntimeError(f"{name} is a checkout Git cannot read: {result.stderr.strip()}")
+            raise RuntimeError(
+                f"{name} is a checkout Git cannot read: {result.stderr.strip()}"
+            )
         return result.stdout
 
     top = git_ops._run(["git", "rev-parse", "--show-toplevel"], cwd=path)
     if not (top.ok and Path(top.stdout.strip()).resolve() == path.resolve()):
         if index_entry.startswith("160000 ") and not any(path.iterdir()):
             return "gitlink:uninitialized"
-        raise RuntimeError(f"{name} is a directory holding files but no checkout Git can read")
+        raise RuntimeError(
+            f"{name} is a directory holding files but no checkout Git can read"
+        )
     head = read("rev-parse", "--verify", "HEAD").strip()
     index = git_ops.index_entries(path)
     if index is None:
         raise RuntimeError(f"{name} is a checkout whose index Git cannot read")
-    listed = read("ls-files", "--cached", "--others", "--exclude-standard", "-z",
-                  "--", ".", *git_ops.BOOKKEEPING_EXCLUDES)
+    listed = read(
+        "ls-files",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+        "-z",
+        "--",
+        ".",
+        *git_ops.BOOKKEEPING_EXCLUDES,
+    )
     files = _path_inputs(path, listed.split("\0"), index)
     content = json.dumps({"files": files, "index": index}, sort_keys=True).encode()
     return f"checkout:{head}:" + hashlib.sha256(content).hexdigest()
 
 
-def final_verification(test_command: str, project_dir: Path, *, parallel: str = "off",
-                       plan_revision: str = "") -> GateResult:
+def final_verification(
+    test_command: str,
+    project_dir: Path,
+    *,
+    parallel: str = "off",
+    plan_revision: str = "",
+) -> GateResult:
     """The shared completion gate, after the last writer and before publication."""
     if not test_command.strip():
-        return GateResult(passed=False, reason="Final verification requires a configured test command")
+        return GateResult(
+            passed=False, reason="Final verification requires a configured test command"
+        )
     try:
-        before = verification_inputs(test_command, project_dir, parallel=parallel, plan_revision=plan_revision, include_files=True)
+        before = verification_inputs(
+            test_command,
+            project_dir,
+            parallel=parallel,
+            plan_revision=plan_revision,
+            include_files=True,
+        )
         gate = integration_gate(test_command, project_dir, parallel=parallel)
-        after = verification_inputs(test_command, project_dir, parallel=parallel, plan_revision=plan_revision, include_files=True)
+        after = verification_inputs(
+            test_command,
+            project_dir,
+            parallel=parallel,
+            plan_revision=plan_revision,
+            include_files=True,
+        )
     except (OSError, RuntimeError, ValueError) as error:
-        return GateResult(passed=False, reason=f"Final verification unavailable: {error}")
-    gate.metadata["inputs"] = {k: v for k, v in after.items() if k not in {"files", "index"}}
+        return GateResult(
+            passed=False, reason=f"Final verification unavailable: {error}"
+        )
+    gate.metadata["inputs"] = {
+        k: v for k, v in after.items() if k not in {"files", "index"}
+    }
     if any(before[k] != after[k] for k in before if k != "content"):
-        changed = sorted({name for field in ("files", "index")
-                          for name in before[field].keys() | after[field].keys()
-                          if before[field].get(name) != after[field].get(name)})
+        changed = sorted(
+            {
+                name
+                for field in ("files", "index")
+                for name in before[field].keys() | after[field].keys()
+                if before[field].get(name) != after[field].get(name)
+            }
+        )
         details = ", ".join(changed) or "Git HEAD or verification configuration"
         checkouts = "".join(
             f" {name} is a submodule or nested repository: run git -C {name.rstrip('/')} status "
             "to see what the command changed in it."
             for name in changed
-            if any(side["files"].get(name, "").startswith(("checkout:", "gitlink:")) for side in (before, after)))
-        return GateResult(passed=False, reason=f"Inputs changed during final verification: {details}. "
-                          "If a listed file is a generated report, run git rm --cached <path>, "
-                          "add it to .gitignore, and commit. "
-                          "Inspect changes to tracked files and source inputs." + checkouts,
-                          metadata={**gate.metadata, "changed_files": changed})
+            if any(
+                side["files"].get(name, "").startswith(("checkout:", "gitlink:"))
+                for side in (before, after)
+            )
+        )
+        return GateResult(
+            passed=False,
+            reason=f"Inputs changed during final verification: {details}. "
+            "If a listed file is a generated report, run git rm --cached <path>, "
+            "add it to .gitignore, and commit. "
+            "Inspect changes to tracked files and source inputs." + checkouts,
+            metadata={**gate.metadata, "changed_files": changed},
+        )
     return gate

@@ -78,7 +78,8 @@ def _iter_diary_session_blocks(filepath: Path):
         except (ValueError, TypeError):
             try:
                 timestamp = datetime.fromtimestamp(
-                    filepath.stat().st_mtime, tz=UTC,
+                    filepath.stat().st_mtime,
+                    tz=UTC,
                 )
             except OSError:
                 timestamp = datetime.now(UTC)
@@ -158,8 +159,9 @@ def _extractive_summary(project: str, snippets: list[str]) -> str:
     return "\n".join(lines[:MAX_SUMMARY_LINES])
 
 
-async def _summarize_project(client, project: str, entries: list[dict],
-                             model: str | None = None) -> str:
+async def _summarize_project(
+    client, project: str, entries: list[dict], model: str | None = None
+) -> str:
     """Use the model client to produce a 3–5 line project status summary.
 
     *model* lets an unattended caller (the maintainer) pin a cheap tier. When
@@ -190,9 +192,9 @@ async def _summarize_project(client, project: str, entries: list[dict],
             messages=[{"role": "user", "content": prompt}],
             **kwargs,
         )
-        lines = [
-            line.strip() for line in response.content.split("\n") if line.strip()
-        ][:MAX_SUMMARY_LINES]
+        lines = [line.strip() for line in response.content.split("\n") if line.strip()][
+            :MAX_SUMMARY_LINES
+        ]
         if lines:
             return "\n".join(lines)
     except Exception:
@@ -217,7 +219,9 @@ def _writer_hostname(session_id: str = "") -> str:
         if session_id and "/" not in session_id and session_id not in (".", ".."):
             data_dir = get_paths().plugin_data()
             entry = json.loads(
-                (registry_dir(data_dir) / f"{session_id}.json").read_text(encoding="utf-8")
+                (registry_dir(data_dir) / f"{session_id}.json").read_text(
+                    encoding="utf-8"
+                )
             )
             recorded = str(entry.get("hostname") or "").strip()
             if recorded:
@@ -277,9 +281,9 @@ def _write_summary(
     os.replace(str(tmp), str(target))
 
 
-async def synthesize(project_filter: str | None = None,
-                     model: str | None = None,
-                     session_id: str = "") -> int:
+async def synthesize(
+    project_filter: str | None = None, model: str | None = None, session_id: str = ""
+) -> int:
     """Scan diary, group by project, write per-project status summaries.
 
     When *project_filter* is given, only that project is (re)summarized — used
@@ -314,9 +318,7 @@ async def synthesize(project_filter: str | None = None,
             else:
                 snippets = _extract_body_snippets(entries, project)
                 summary = _extractive_summary(project, snippets)
-            _write_summary(
-                now_dir, project, summary, entries, project_path, session_id
-            )
+            _write_summary(now_dir, project, summary, entries, project_path, session_id)
         except Exception:
             logger.exception("Failed to summarize project %s", project)
             continue

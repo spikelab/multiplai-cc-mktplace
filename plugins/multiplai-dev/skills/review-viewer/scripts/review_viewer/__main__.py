@@ -141,8 +141,13 @@ def _migrated_findings(root: Path) -> list[Path]:
     return found
 
 
-def find_review(target, dirs: list[Path], *, deep_dirs: list[Path] | None = None,
-                slugs: set[str] | None = None) -> tuple[str, Path | None, FindingsFile | None]:
+def find_review(
+    target,
+    dirs: list[Path],
+    *,
+    deep_dirs: list[Path] | None = None,
+    slugs: set[str] | None = None,
+) -> tuple[str, Path | None, FindingsFile | None]:
     """Look for a review of these commits in each of *dirs*
     (`gitdata.review_findings`: `<dir>/<repo>/<object>/`, the 0.46
     `<dir>/<slug>/`, and 0.42 folders nested one level under a new-layout
@@ -176,7 +181,9 @@ def find_review(target, dirs: list[Path], *, deep_dirs: list[Path] | None = None
             log.warning("skipping %s while looking for a review: %s", path, exc)
             continue
         t = ff.target
-        if (t.base_sha, t.head_sha) == (target.base_sha, target.head_sha) and (not tree or t.slug in slugs):
+        if (t.base_sha, t.head_sha) == (target.base_sha, target.head_sha) and (
+            not tree or t.slug in slugs
+        ):
             return "match", path, ff
         if stale is None and t.slug in slugs:
             stale = (path, ff)
@@ -197,7 +204,11 @@ def _resolve_for_serve(args) -> Resolved | int:
             return EXIT_USAGE
         try:
             chosen = gitdata.pick_repo(repo, cwd)
-            path = gitdata.tree_path(repo, chosen, args.path) if repo is not None else args.path
+            path = (
+                gitdata.tree_path(repo, chosen, args.path)
+                if repo is not None
+                else args.path
+            )
             return Resolved(gitdata.tree_target(chosen, args.tree, path))
         except TargetError as exc:
             print(f"cannot resolve the target: {exc}", file=sys.stderr)
@@ -212,17 +223,23 @@ def _resolve_for_serve(args) -> Resolved | int:
             print("--range needs --repo <path>", file=sys.stderr)
             return EXIT_USAGE
         if ".." not in args.range:
-            print(f"cannot read the diff: expected <base>..<head>, got {args.range!r}",
-                  file=sys.stderr)
+            print(
+                f"cannot read the diff: expected <base>..<head>, got {args.range!r}",
+                file=sys.stderr,
+            )
             return EXIT_USAGE
         left, right = args.range.split("..", 1)
-        spec = TargetSpec("range2", args.range, left=left or "HEAD", right=right or "HEAD")
+        spec = TargetSpec(
+            "range2", args.range, left=left or "HEAD", right=right or "HEAD"
+        )
     elif args.target is not None:
         spec = parse_target(args.target, cwd=cwd)
     else:
         spec = parse_target("", cwd=repo or cwd)
     try:
-        return resolve_target(spec, repo, base_branch=args.base, fetch=args.fetch, cwd=cwd)
+        return resolve_target(
+            spec, repo, base_branch=args.base, fetch=args.fetch, cwd=cwd
+        )
     except TargetError as exc:
         print(f"cannot resolve the target: {exc}", file=sys.stderr)
     except (GitError, ValueError) as exc:
@@ -232,8 +249,11 @@ def _resolve_for_serve(args) -> Resolved | int:
 
 def _load_resolved(args, resolved: Resolved):
     target = resolved.target
-    dirs = [invocation_path(d) for d in args.reviews_dir] if args.reviews_dir \
+    dirs = (
+        [invocation_path(d) for d in args.reviews_dir]
+        if args.reviews_dir
         else [default_reviews_dir()]
+    )
     kind, path, review = find_review(target, dirs)
     source_notice = None
     if kind != "match" and not args.reviews_dir:
@@ -243,50 +263,74 @@ def _load_resolved(args, resolved: Resolved):
         old_slug = legacy_slug(target)
         copies = migrated_reviews_dir()
         old_kind, old_path, old_review = find_review(
-            target, [legacy_reviews_dir()], deep_dirs=[copies],
-            slugs={target.slug, old_slug} if old_slug else None)
+            target,
+            [legacy_reviews_dir()],
+            deep_dirs=[copies],
+            slugs={target.slug, old_slug} if old_slug else None,
+        )
         if old_kind == "match" or (kind == "none" and old_kind == "stale"):
             kind, path, review = old_kind, old_path, old_review
             if copies in path.parents:
-                source_notice = (f"This review was loaded from {path.parent}, a copy of a review written "
-                                 f"before multiplai-dev 0.46, not from {default_reviews_dir()}.")
+                source_notice = (
+                    f"This review was loaded from {path.parent}, a copy of a review written "
+                    f"before multiplai-dev 0.46, not from {default_reviews_dir()}."
+                )
             else:
-                source_notice = (f"This review was loaded from the old location {path.parent}, "
-                                 f"not from {default_reviews_dir()}.")
+                source_notice = (
+                    f"This review was loaded from the old location {path.parent}, "
+                    f"not from {default_reviews_dir()}."
+                )
     pr = resolved.pr.to_dict() if resolved.pr else None
     if kind == "match":
         review.target.repo_path = target.repo_path
         box = path.parent / "viewer"
-        meta = {"pr": pr, "notice": source_notice, "review": f"findings: {len(review.findings)}"}
+        meta = {
+            "pr": pr,
+            "notice": source_notice,
+            "review": f"findings: {len(review.findings)}",
+        }
         # Keyed by the review's slug, which the page is keyed by: an old review's differs from the target's.
         return [(review, box)], {review.target.slug: meta}
     notice = None
     status = "none"
     if kind == "stale":
         rt = review.target
-        notice = (f"a review exists for {rt.head_sha[:8]}; this diff is at "
-                  f"{target.head_sha[:8]}. It was not loaded: {path}")
+        notice = (
+            f"a review exists for {rt.head_sha[:8]}; this diff is at "
+            f"{target.head_sha[:8]}. It was not loaded: {path}"
+        )
         status = f"stale {rt.head_sha[:8]}"
     box = output_root() / "review-viewer" / target.slug / "viewer"
-    return [(diff_findings(target), box)], {target.slug: {"pr": pr, "notice": notice,
-                                                          "review": status}}
+    return [(diff_findings(target), box)], {
+        target.slug: {"pr": pr, "notice": notice, "review": status}
+    }
 
 
 def _load_targets(args):
     """([(findings, mailbox)], {slug: {"pr", "notice", "review"}}), or an exit code."""
     loaded: list[tuple[FindingsFile, Path]] = []
-    if args.target is not None or args.range is not None or args.tree is not None or not args.findings:
+    if (
+        args.target is not None
+        or args.range is not None
+        or args.tree is not None
+        or not args.findings
+    ):
         if args.findings:
-            print("give findings.json files, or a target (--target, --tree, or --repo with --range), "
-                  "not both", file=sys.stderr)
+            print(
+                "give findings.json files, or a target (--target, --tree, or --repo with --range), "
+                "not both",
+                file=sys.stderr,
+            )
             return EXIT_USAGE
         resolved = _resolve_for_serve(args)
         if isinstance(resolved, int):
             return resolved
         return _load_resolved(args, resolved)
     if args.repo:
-        print("with findings files, point at the clone with --repo-root, not --repo",
-              file=sys.stderr)
+        print(
+            "with findings files, point at the clone with --repo-root, not --repo",
+            file=sys.stderr,
+        )
         return EXIT_USAGE
     for raw in args.findings:
         path = invocation_path(raw)
@@ -307,11 +351,15 @@ def _load_targets(args):
         return EXIT_USAGE
     boxes = [b.resolve() for _, b in loaded]
     if len(set(boxes)) != len(boxes):
-        print("two findings files share one directory, so they would share one mailbox; "
-              "move one of them", file=sys.stderr)
+        print(
+            "two findings files share one directory, so they would share one mailbox; "
+            "move one of them",
+            file=sys.stderr,
+        )
         return EXIT_USAGE
-    return loaded, {ff.target.slug: {"review": f"findings: {len(ff.findings)}"}
-                    for ff, _ in loaded}
+    return loaded, {
+        ff.target.slug: {"review": f"findings: {len(ff.findings)}"} for ff, _ in loaded
+    }
 
 
 def _monitor_command(boxes: list[Path], label: str) -> str:
@@ -319,18 +367,25 @@ def _monitor_command(boxes: list[Path], label: str) -> str:
     string, so spaces in paths and quotes in labels survive."""
     files = " ".join(shlex.quote(str(b / "inbox.jsonl")) for b in boxes)
     command = json.dumps(f"tail -n 0 -q -F {files}", ensure_ascii=False)
-    description = json.dumps(f"review-viewer questions and decisions for {label}",
-                             ensure_ascii=False)
+    description = json.dumps(
+        f"review-viewer questions and decisions for {label}", ensure_ascii=False
+    )
     return f"Monitor(command={command}, description={description}, timeout_ms={MONITOR_TIMEOUT_MS})"
 
 
 def _pending_command(boxes: list[Path]) -> str:
     return "python -m review_viewer pending " + " ".join(
-        f"--box {shlex.quote(str(b))}" for b in boxes)
+        f"--box {shlex.quote(str(b))}" for b in boxes
+    )
 
 
-def _print_contract(open_html: Path, urls: list[tuple[str, str]], boxes: list[Path],
-                    label: str, reviews: list[str]) -> None:
+def _print_contract(
+    open_html: Path,
+    urls: list[tuple[str, str]],
+    boxes: list[Path],
+    label: str,
+    reviews: list[str],
+) -> None:
     print(f"open: file://{open_html}")
     for url, why in urls:
         print(f"url: {url}  ({why}; reference only, needs the link above to authorise)")
@@ -354,8 +409,9 @@ def _wait_for_cleanup(boxes: list[str], timeout: float = 10.0) -> bool:
     return False
 
 
-def _reuse_or_replace(args, loaded, boxes: list[Path], label: str,
-                      reviews: list[str]) -> int | None:
+def _reuse_or_replace(
+    args, loaded, boxes: list[Path], label: str, reviews: list[str]
+) -> int | None:
     """Deal with a viewer already serving one of these mailboxes.
 
     Returns an exit code when this call is finished (reused, or refused), and
@@ -367,24 +423,33 @@ def _reuse_or_replace(args, loaded, boxes: list[Path], label: str,
         if not live:
             continue
         if live.get("unresponsive"):
-            print(f"a viewer process (pid {live['pid']}) owns {box} but did not answer on port "
-                  f"{live['port']}. Wait a moment and retry, or end that process.",
-                  file=sys.stderr)
+            print(
+                f"a viewer process (pid {live['pid']}) owns {box} but did not answer on port "
+                f"{live['port']}. Wait a moment and retry, or end that process.",
+                file=sys.stderr,
+            )
             return EXIT_USAGE
         owner = live.get("session_id") or ""
         if not args.session_id or owner != args.session_id:
-            who = (f"owned by another session ({owner[:8]})" if owner and args.session_id
-                   else "owned by a session this command cannot identify (no session id)")
-            print(f"a viewer for {box} is already running, {who}: {registry.describe(live)}\n"
-                  f"to take it over: python -m review_viewer stop --box {shlex.quote(str(box))}",
-                  flush=True)
+            who = (
+                f"owned by another session ({owner[:8]})"
+                if owner and args.session_id
+                else "owned by a session this command cannot identify (no session id)"
+            )
+            print(
+                f"a viewer for {box} is already running, {who}: {registry.describe(live)}\n"
+                f"to take it over: python -m review_viewer stop --box {shlex.quote(str(box))}",
+                flush=True,
+            )
             return EXIT_OTHER_SESSION
         served = set(live.get("mailboxes", []))
         missing = [b for b in boxes if str(b) not in served]
         if missing:
-            print(f"a viewer is already running for {box} but not for {missing[0]}; stop it "
-                  f"first: python -m review_viewer stop --box {shlex.quote(str(box))}",
-                  file=sys.stderr)
+            print(
+                f"a viewer is already running for {box} but not for {missing[0]}; stop it "
+                f"first: python -m review_viewer stop --box {shlex.quote(str(box))}",
+                file=sys.stderr,
+            )
             return EXIT_USAGE
         wanted = {str(b.resolve()): findings_digest(ff) for ff, b in loaded}
         served_digests = live.get("digests", {})
@@ -393,23 +458,36 @@ def _reuse_or_replace(args, loaded, boxes: list[Path], label: str,
         # one started without it restarts it, as a changed findings file does.
         slack_added = "slack" in args.share and not live.get("share_slack", False)
         if changed or slack_added:
-            what = "a findings file changed" if changed else "--share slack was asked for"
+            what = (
+                "a findings file changed" if changed else "--share slack was asked for"
+            )
             token = registry.read_token(box)
             reason = "findings_changed" if changed else "share_changed"
-            if not token or not registry.shutdown(live, token, reason=reason) \
-                    or not _wait_for_cleanup(live.get("mailboxes", [])):
-                print(f"{what}, but the running viewer for {box} did not "
-                      f"stop; run: python -m review_viewer stop --box {shlex.quote(str(box))}",
-                      file=sys.stderr)
+            if (
+                not token
+                or not registry.shutdown(live, token, reason=reason)
+                or not _wait_for_cleanup(live.get("mailboxes", []))
+            ):
+                print(
+                    f"{what}, but the running viewer for {box} did not "
+                    f"stop; run: python -m review_viewer stop --box {shlex.quote(str(box))}",
+                    file=sys.stderr,
+                )
                 return EXIT_USAGE
             print(f"{what}; restarted the viewer", flush=True)
             return None
-        log_event(COMPONENT, "reuse", f"viewer already running for {', '.join(live['targets'])}; "
-                  "reused it", session_id=args.session_id, port=live["port"],
-                  owner_session=owner[:8])
+        log_event(
+            COMPONENT,
+            "reuse",
+            f"viewer already running for {', '.join(live['targets'])}; reused it",
+            session_id=args.session_id,
+            port=live["port"],
+            owner_session=owner[:8],
+        )
         print("viewer already running for this session; reusing it", flush=True)
-        _print_contract(box / "open.html", netinfo.display_urls(live["port"]), boxes, label,
-                        reviews)
+        _print_contract(
+            box / "open.html", netinfo.display_urls(live["port"]), boxes, label, reviews
+        )
         return 0
     return None
 
@@ -429,21 +507,36 @@ def cmd_serve(args) -> int:
     if done is not None:
         return done
 
-    viewer = server.build_viewer(loaded, agent=args.agent, session_id=args.session_id,
-                                 idle_minutes=args.idle, meta=meta, share_slack="slack" in args.share)
+    viewer = server.build_viewer(
+        loaded,
+        agent=args.agent,
+        session_id=args.session_id,
+        idle_minutes=args.idle,
+        meta=meta,
+        share_slack="slack" in args.share,
+    )
     host = netinfo.bind_host()
     last = args.port + registry.PORT_SPAN - 1
     if server.bind(viewer, host, args.port, registry.PORT_SPAN) is None:
-        print(f"no free port between {args.port} and {last}. Old viewers may still be "
-              "running: python -m review_viewer stop --all", file=sys.stderr)
+        print(
+            f"no free port between {args.port} and {last}. Old viewers may still be "
+            "running: python -m review_viewer stop --all",
+            file=sys.stderr,
+        )
         return EXIT_USAGE
     urls = netinfo.display_urls(viewer.port)
     server.publish(viewer, urls)
     container = netinfo.detect_container()
-    log_event(COMPONENT, "start",
-              f"viewer started for {', '.join(viewer.targets)} on port {viewer.port}",
-              session_id=args.session_id, port=viewer.port, targets=list(viewer.targets),
-              host=host, container=container)
+    log_event(
+        COMPONENT,
+        "start",
+        f"viewer started for {', '.join(viewer.targets)} on port {viewer.port}",
+        session_id=args.session_id,
+        port=viewer.port,
+        targets=list(viewer.targets),
+        host=host,
+        container=container,
+    )
     _print_contract(boxes[0] / "open.html", urls, boxes, label, reviews)
     signal.signal(signal.SIGTERM, _raise_interrupt)
     server.run(viewer)
@@ -459,9 +552,13 @@ def _raise_interrupt(_signum, _frame):
 
 def _chunks(text: str, limit: int) -> list[str]:
     """Split an answer so every outbox row stays under the row size limit."""
+
     def size(s: str) -> int:
-        return len(OutboxRow(reply_to="x" * 40, ts=utc_now(), text=s, done=False)
-                   .model_dump_json().encode("utf-8"))
+        return len(
+            OutboxRow(reply_to="x" * 40, ts=utc_now(), text=s, done=False)
+            .model_dump_json()
+            .encode("utf-8")
+        )
 
     if size(text) <= limit:
         return [text]
@@ -487,13 +584,17 @@ def _chunks(text: str, limit: int) -> list[str]:
 def cmd_reply(args) -> int:
     box = Mailbox(invocation_path(args.box))
     if not box.dir.is_dir():
-        print(f"no mailbox at {box.dir} (it is the viewer/ directory the server printed)",
-              file=sys.stderr)
+        print(
+            f"no mailbox at {box.dir} (it is the viewer/ directory the server printed)",
+            file=sys.stderr,
+        )
         return EXIT_USAGE
     question = next((r for r in box.read_inbox() if r.get("id") == args.to), None)
     if question is None:
-        print(f"no question {args.to!r} in {box.inbox}; check the id and the --box path",
-              file=sys.stderr)
+        print(
+            f"no question {args.to!r} in {box.inbox}; check the id and the --box path",
+            file=sys.stderr,
+        )
         return EXIT_USAGE
     if args.file:
         text = invocation_path(args.file).read_text(encoding="utf-8")
@@ -506,16 +607,31 @@ def cmd_reply(args) -> int:
     try:
         for i, part in enumerate(parts):
             last = i == len(parts) - 1
-            box.append_outbox(OutboxRow(reply_to=args.to, ts=utc_now(), text=part,
-                                        done=last and not args.more))
+            box.append_outbox(
+                OutboxRow(
+                    reply_to=args.to,
+                    ts=utc_now(),
+                    text=part,
+                    done=last and not args.more,
+                )
+            )
     except MailboxError as exc:
         print(f"could not write the answer: {exc}", file=sys.stderr)
         return EXIT_USAGE
     done = not args.more
-    log_event(COMPONENT, "reply", f"reply to {args.to} ({'final' if done else 'partial'})",
-              session_id=args.session_id, target=question.get("target"), reply_to=args.to,
-              chars=len(text), done=done)
-    print(f"{'final answer' if done else 'partial answer'} for {args.to} -> {box.outbox}")
+    log_event(
+        COMPONENT,
+        "reply",
+        f"reply to {args.to} ({'final' if done else 'partial'})",
+        session_id=args.session_id,
+        target=question.get("target"),
+        reply_to=args.to,
+        chars=len(text),
+        done=done,
+    )
+    print(
+        f"{'final answer' if done else 'partial answer'} for {args.to} -> {box.outbox}"
+    )
     return 0
 
 
@@ -552,8 +668,16 @@ def cmd_stop(args) -> int:
         return 0
     failed = 0
     for who in live:
-        token = next((t for t in (registry.read_token(Path(b)) for b in who.get("mailboxes", []))
-                      if t), None)
+        token = next(
+            (
+                t
+                for t in (
+                    registry.read_token(Path(b)) for b in who.get("mailboxes", [])
+                )
+                if t
+            ),
+            None,
+        )
         if token and registry.shutdown(who, token):
             print("stopped: " + registry.describe(who))
         else:
@@ -588,8 +712,11 @@ def _served(args):
     try:
         return box, walkthrough.load_served(box)
     except FileNotFoundError:
-        print(f"no served target in {box} (it is the mailbox: directory `serve` printed; "
-              "start the viewer first)", file=sys.stderr)
+        print(
+            f"no served target in {box} (it is the mailbox: directory `serve` printed; "
+            "start the viewer first)",
+            file=sys.stderr,
+        )
     except (OSError, ValueError) as exc:
         print(f"cannot read {walkthrough.served_path(box)}: {exc}", file=sys.stderr)
     return box, None
@@ -611,21 +738,31 @@ def cmd_walkthrough_put(args) -> int:
         print(f"cannot check the walkthrough: {exc}", file=sys.stderr)
         return EXIT_USAGE
     if errors:
-        print(f"walkthrough rejected ({len(errors)} problem{'s' if len(errors) > 1 else ''}); "
-              "nothing was published:", file=sys.stderr)
+        print(
+            f"walkthrough rejected ({len(errors)} problem{'s' if len(errors) > 1 else ''}); "
+            "nothing was published:",
+            file=sys.stderr,
+        )
         for e in errors:
             print(f"  - {e}", file=sys.stderr)
         return EXIT_USAGE
     slug = served.findings.target.slug
-    log_event(COMPONENT, "walkthrough",
-              f"walkthrough for {slug}: {len(wt.steps)} steps"
-              f"{' (complete)' if wt.complete else ' (in progress)'}",
-              session_id=args.session_id, target=slug, steps=len(wt.steps),
-              complete=wt.complete)
+    log_event(
+        COMPONENT,
+        "walkthrough",
+        f"walkthrough for {slug}: {len(wt.steps)} steps"
+        f"{' (complete)' if wt.complete else ' (in progress)'}",
+        session_id=args.session_id,
+        target=slug,
+        steps=len(wt.steps),
+        complete=wt.complete,
+    )
     uncovered, unlinked = walkthrough.coverage(wt, served.findings)
-    print(f"published {walkthrough.walkthrough_path(box)}: {len(wt.steps)} steps, "
-          f"{'complete' if wt.complete else 'in progress'}; "
-          f"{len(uncovered)} changed files and {len(unlinked)} findings not covered yet")
+    print(
+        f"published {walkthrough.walkthrough_path(box)}: {len(wt.steps)} steps, "
+        f"{'complete' if wt.complete else 'in progress'}; "
+        f"{len(uncovered)} changed files and {len(unlinked)} findings not covered yet"
+    )
     return 0
 
 
@@ -636,16 +773,23 @@ def cmd_walkthrough_status(args) -> int:
     try:
         wt = walkthrough.load_walkthrough(box)
     except (OSError, ValueError) as exc:
-        print(f"cannot read {walkthrough.walkthrough_path(box)}: {exc}", file=sys.stderr)
+        print(
+            f"cannot read {walkthrough.walkthrough_path(box)}: {exc}", file=sys.stderr
+        )
         return EXIT_USAGE
     ff = served.findings
     t = ff.target
     uncovered, unlinked = walkthrough.coverage(wt, ff)
-    state = "absent" if wt is None else (
-        f"{len(wt.steps)} steps, {'complete' if wt.complete else 'in progress'}")
+    state = (
+        "absent"
+        if wt is None
+        else (f"{len(wt.steps)} steps, {'complete' if wt.complete else 'in progress'}")
+    )
     print(f"walkthrough: {walkthrough.walkthrough_path(box)} ({state})")
-    print(f"target: {t.label}, {len(t.files_changed)} changed files, "
-          f"{len(ff.findings)} findings")
+    print(
+        f"target: {t.label}, {len(t.files_changed)} changed files, "
+        f"{len(ff.findings)} findings"
+    )
     print(f"base_sha: {t.base_sha}")
     print(f"head_sha: {t.head_sha}")
     review_dir = box.parent
@@ -665,26 +809,40 @@ def cmd_walkthrough_status(args) -> int:
     missing = [t for t in walkthrough.must_assess(ff) if t not in have]
     print(f"assessments missing ({len(missing)}): {', '.join(missing)}")
     tree = gitdata.is_tree_review(t)
-    print("risk: " + ("not needed for a tree" if tree and (not wt or wt.risk is None) else
-                      "missing" if not wt or wt.risk is None else
-                      f"tier {wt.risk.tier}, {'revertable' if wt.risk.revertable else 'not revertable'}"))
+    print(
+        "risk: "
+        + (
+            "not needed for a tree"
+            if tree and (not wt or wt.risk is None)
+            else "missing"
+            if not wt or wt.risk is None
+            else f"tier {wt.risk.tier}, {'revertable' if wt.risk.revertable else 'not revertable'}"
+        )
+    )
     st = served.stats or {}
     tiers = st.get("tiers") or {}
     if st.get("tiers_error"):
         print(f"repo tiers: ignored, {st['tiers_error']}")
     elif tiers:
-        print(f"repo tiers ({stats.RISK_FILE} at base) set {len(tiers)} of {len(t.files_changed)} files; "
-              "they can raise your tier, never lower it:")
+        print(
+            f"repo tiers ({stats.RISK_FILE} at base) set {len(tiers)} of {len(t.files_changed)} files; "
+            "they can raise your tier, never lower it:"
+        )
         for path, tier in sorted(tiers.items()):
             print(f"  tier {tier} {path}")
     else:
-        print(f"repo tiers: no {stats.RISK_FILE} at base; judge the tier for every file")
+        print(
+            f"repo tiers: no {stats.RISK_FILE} at base; judge the tier for every file"
+        )
     badges = (served.stats or {}).get("badges") or []
     print(f"measured ({len(badges)}):" if served.stats else "measured: not available")
     for b in badges:
         print(f"  [{b['level']}] {b['label']}: {b['detail']}")
     for c in (served.stats or {}).get("commits") or []:
-        print(f"  commit {c['sha'][:8]} {c['subject']}" + ("" if c["body"] else " (no body)"))
+        print(
+            f"  commit {c['sha'][:8]} {c['subject']}"
+            + ("" if c["body"] else " (no body)")
+        )
     return 0
 
 
@@ -706,10 +864,11 @@ def cmd_validate(args) -> int:
 
 
 def cmd_export_schema(args) -> int:
-    for given, default, text in ((args.out, SCHEMA_PATH, schema_text()),
-                                 (args.walkthrough_out, WALKTHROUGH_SCHEMA_PATH,
-                                  walkthrough_schema_text()),
-                                 (args.checks_out, CHECKS_SCHEMA_PATH, checks_schema_text())):
+    for given, default, text in (
+        (args.out, SCHEMA_PATH, schema_text()),
+        (args.walkthrough_out, WALKTHROUGH_SCHEMA_PATH, walkthrough_schema_text()),
+        (args.checks_out, CHECKS_SCHEMA_PATH, checks_schema_text()),
+    ):
         out = invocation_path(given) if given else default
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(text, encoding="utf-8")
@@ -722,63 +881,119 @@ def cmd_export_schema(args) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--session-id", default=argparse.SUPPRESS,
-                        help="Claude Code session id, for ownership and log correlation")
-    common.add_argument("--agent", default=argparse.SUPPRESS,
-                        help="who answers, shown in the page header (default: Claude)")
+    common.add_argument(
+        "--session-id",
+        default=argparse.SUPPRESS,
+        help="Claude Code session id, for ownership and log correlation",
+    )
+    common.add_argument(
+        "--agent",
+        default=argparse.SUPPRESS,
+        help="who answers, shown in the page header (default: Claude)",
+    )
 
     ap = argparse.ArgumentParser(
-        prog="review_viewer", parents=[common],
+        prog="review_viewer",
+        parents=[common],
         description="Local web viewer for code-review findings; questions from the "
-                    "page reach the Claude Code session that started it.")
+        "page reach the Claude Code session that started it.",
+    )
     sub = ap.add_subparsers(dest="cmd", required=True, metavar="command")
 
     s = sub.add_parser("serve", parents=[common], help="start or reuse the viewer")
     s.add_argument("findings", nargs="*", help="findings.json files (v1)")
-    s.add_argument("--target",
-                   help="a PR (number, URL, owner/repo#N), a branch, a worktree path, "
-                        "<base>..<head> or <a>...<b>; with no target and no findings, the "
-                        "unpushed commits of --repo or the current directory")
-    s.add_argument("--repo", help="the local clone to read (default: the current directory)")
+    s.add_argument(
+        "--target",
+        help="a PR (number, URL, owner/repo#N), a branch, a worktree path, "
+        "<base>..<head> or <a>...<b>; with no target and no findings, the "
+        "unpushed commits of --repo or the current directory",
+    )
+    s.add_argument(
+        "--repo", help="the local clone to read (default: the current directory)"
+    )
     s.add_argument("--range", help="same as --target <base>..<head>; needs --repo")
-    s.add_argument("--tree", nargs="?", const="HEAD", metavar="COMMIT",
-                   help="every file at COMMIT (default HEAD), not a change: the target of a "
-                        "review --tree; with --repo, or the current directory")
+    s.add_argument(
+        "--tree",
+        nargs="?",
+        const="HEAD",
+        metavar="COMMIT",
+        help="every file at COMMIT (default HEAD), not a change: the target of a "
+        "review --tree; with --repo, or the current directory",
+    )
     s.add_argument("--path", help="with --tree: only this directory of the repository")
-    s.add_argument("--base", help="branch targets: the branch to diff against "
-                                  "(default: origin/HEAD's branch, else main)")
-    s.add_argument("--fetch", action="store_true",
-                   help="run `git fetch origin` in the clone before resolving")
-    s.add_argument("--reviews-dir", action="append", default=[],
-                   help="where to look for a review of the same commits (repeatable; "
-                        "default: the review skill's output directory, <data_dir>/reviews, "
-                        "then the old <workspace>/INBOX/reviews)")
+    s.add_argument(
+        "--base",
+        help="branch targets: the branch to diff against "
+        "(default: origin/HEAD's branch, else main)",
+    )
+    s.add_argument(
+        "--fetch",
+        action="store_true",
+        help="run `git fetch origin` in the clone before resolving",
+    )
+    s.add_argument(
+        "--reviews-dir",
+        action="append",
+        default=[],
+        help="where to look for a review of the same commits (repeatable; "
+        "default: the review skill's output directory, <data_dir>/reviews, "
+        "then the old <workspace>/INBOX/reviews)",
+    )
     s.add_argument("--repo-root", help="read git from here instead of target.repo_path")
-    s.add_argument("--port", type=int, default=registry.PORT_START,
-                   help=f"first port to try (default {registry.PORT_START}; 20 are tried)")
-    s.add_argument("--share", action="append", choices=["slack"], default=[],
-                   help="slack: this session has the multiplai-messaging:slack skill, so the page may "
-                        "ask it to send a finding to Slack (GitHub needs no flag: it is offered for a PR)")
-    s.add_argument("--idle", type=float, default=0.0,
-                   help="minutes with no open page before the server exits "
-                        "(default 0 = never; it runs until `stop` or its container ends)")
+    s.add_argument(
+        "--port",
+        type=int,
+        default=registry.PORT_START,
+        help=f"first port to try (default {registry.PORT_START}; 20 are tried)",
+    )
+    s.add_argument(
+        "--share",
+        action="append",
+        choices=["slack"],
+        default=[],
+        help="slack: this session has the multiplai-messaging:slack skill, so the page may "
+        "ask it to send a finding to Slack (GitHub needs no flag: it is offered for a PR)",
+    )
+    s.add_argument(
+        "--idle",
+        type=float,
+        default=0.0,
+        help="minutes with no open page before the server exits "
+        "(default 0 = never; it runs until `stop` or its container ends)",
+    )
     s.set_defaults(func=cmd_serve)
 
-    r = sub.add_parser("reply", parents=[common], help="answer a question from the page")
-    r.add_argument("--box", required=True, help="the mailbox directory the server printed")
+    r = sub.add_parser(
+        "reply", parents=[common], help="answer a question from the page"
+    )
+    r.add_argument(
+        "--box", required=True, help="the mailbox directory the server printed"
+    )
     r.add_argument("--to", required=True, help="the question id")
-    r.add_argument("--more", action="store_true",
-                   help="a partial answer: the page keeps waiting for the rest")
-    r.add_argument("--file", help="read the markdown answer from this file (default: stdin)")
+    r.add_argument(
+        "--more",
+        action="store_true",
+        help="a partial answer: the page keeps waiting for the rest",
+    )
+    r.add_argument(
+        "--file", help="read the markdown answer from this file (default: stdin)"
+    )
     r.set_defaults(func=cmd_reply)
 
     ls = sub.add_parser("list", parents=[common], help="list live viewers")
     ls.set_defaults(func=cmd_list)
 
-    pe = sub.add_parser("pending", parents=[common],
-                        help="print questions and decisions that have no final reply yet")
-    pe.add_argument("--box", required=True, action="append",
-                    help="a mailbox directory (repeat for several)")
+    pe = sub.add_parser(
+        "pending",
+        parents=[common],
+        help="print questions and decisions that have no final reply yet",
+    )
+    pe.add_argument(
+        "--box",
+        required=True,
+        action="append",
+        help="a mailbox directory (repeat for several)",
+    )
     pe.set_defaults(func=cmd_pending)
 
     st = sub.add_parser("stop", parents=[common], help="stop a viewer")
@@ -786,31 +1001,57 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("--all", action="store_true", help="stop every live viewer")
     st.set_defaults(func=cmd_stop)
 
-    w = sub.add_parser("walkthrough", parents=[common],
-                       help="publish or inspect the walkthrough the page shows")
+    w = sub.add_parser(
+        "walkthrough",
+        parents=[common],
+        help="publish or inspect the walkthrough the page shows",
+    )
     wsub = w.add_subparsers(dest="wcmd", required=True, metavar="action")
-    wp = wsub.add_parser("put", parents=[common],
-                         help="check a walkthrough.json and publish it to the page")
-    wp.add_argument("--box", required=True, help="the mailbox directory the server printed")
-    wp.add_argument("--file", required=True, help="the walkthrough.json the session wrote")
+    wp = wsub.add_parser(
+        "put",
+        parents=[common],
+        help="check a walkthrough.json and publish it to the page",
+    )
+    wp.add_argument(
+        "--box", required=True, help="the mailbox directory the server printed"
+    )
+    wp.add_argument(
+        "--file", required=True, help="the walkthrough.json the session wrote"
+    )
     wp.set_defaults(func=cmd_walkthrough_put)
-    ws = wsub.add_parser("status", parents=[common],
-                         help="list changed files and findings the walkthrough does not cover")
-    ws.add_argument("--box", required=True, help="the mailbox directory the server printed")
+    ws = wsub.add_parser(
+        "status",
+        parents=[common],
+        help="list changed files and findings the walkthrough does not cover",
+    )
+    ws.add_argument(
+        "--box", required=True, help="the mailbox directory the server printed"
+    )
     ws.set_defaults(func=cmd_walkthrough_status)
 
-    v = sub.add_parser("validate", parents=[common], help="validate findings.json files")
+    v = sub.add_parser(
+        "validate", parents=[common], help="validate findings.json files"
+    )
     v.add_argument("files", nargs="+")
     v.set_defaults(func=cmd_validate)
 
-    e = sub.add_parser("export-schema", parents=[common],
-                       help="write the findings, checks and walkthrough v1 JSON Schemas")
-    e.add_argument("--out", help=f"findings schema path (default: {SCHEMA_PATH.name} in schema/)")
-    e.add_argument("--walkthrough-out",
-                   help=f"walkthrough schema path (default: {WALKTHROUGH_SCHEMA_PATH.name} in "
-                        "schema/)")
-    e.add_argument("--checks-out",
-                   help=f"checks schema path (default: {CHECKS_SCHEMA_PATH.name} in schema/)")
+    e = sub.add_parser(
+        "export-schema",
+        parents=[common],
+        help="write the findings, checks and walkthrough v1 JSON Schemas",
+    )
+    e.add_argument(
+        "--out", help=f"findings schema path (default: {SCHEMA_PATH.name} in schema/)"
+    )
+    e.add_argument(
+        "--walkthrough-out",
+        help=f"walkthrough schema path (default: {WALKTHROUGH_SCHEMA_PATH.name} in "
+        "schema/)",
+    )
+    e.add_argument(
+        "--checks-out",
+        help=f"checks schema path (default: {CHECKS_SCHEMA_PATH.name} in schema/)",
+    )
     e.set_defaults(func=cmd_export_schema)
     return ap
 
@@ -824,8 +1065,7 @@ def main(argv: list[str] | None = None) -> int:
         # every session shares.
         args.session_id = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
     args.agent = getattr(args, "agent", "Claude")
-    setup_logging(COMPONENT, session_id=args.session_id,
-                  packages=("review_viewer",))
+    setup_logging(COMPONENT, session_id=args.session_id, packages=("review_viewer",))
     return args.func(args)
 
 

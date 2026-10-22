@@ -102,8 +102,10 @@ def corpus_lines(paths) -> list[tuple[str, int, str, frozenset[str]]]:
 
     out: list[tuple[str, int, str, frozenset[str]]] = []
     for label, text in memory_corpus.read_files(labelled).items():
-        out += [(label, lineno, line, words)
-                for lineno, line, words in screenable_lines(text)]
+        out += [
+            (label, lineno, line, words)
+            for lineno, line, words in screenable_lines(text)
+        ]
     return out
 
 
@@ -120,7 +122,9 @@ def pending_items(proposal_text: str, target: str | None) -> list[dict]:
     return [e for e in entries if e["target"] == target]
 
 
-def screen(entry: dict, lines: list[tuple[str, int, str, frozenset[str]]], threshold: float) -> dict:
+def screen(
+    entry: dict, lines: list[tuple[str, int, str, frozenset[str]]], threshold: float
+) -> dict:
     """Score one entry against every corpus line.
 
     Returns ``{"scored": [(score, label, lineno, text)], "flagged": bool,
@@ -146,7 +150,9 @@ def screen(entry: dict, lines: list[tuple[str, int, str, frozenset[str]]], thres
     return {"scored": scored, "flagged": flagged, "unscreenable": False}
 
 
-def report(entries: list[dict], lines, threshold: float, verbose: bool) -> tuple[int, int]:
+def report(
+    entries: list[dict], lines, threshold: float, verbose: bool
+) -> tuple[int, int]:
     """Print the screen; return ``(flagged, unscreenable)`` counts.
 
     Two levels, because this runs *inside* the review whose context window it
@@ -198,8 +204,10 @@ def report_batch_groups(entries: list[dict], threshold: float) -> int:
     print("\nPending items that restate each other (merge, don't apply each):")
     for cluster, score in groups:
         numbers = ", ".join(f"#{e['number']}" for e in cluster)
-        print(f"  [{score:.2f}] {cluster[0]['target']} {numbers}"
-              f"  — {cluster[0]['title'][:70]}")
+        print(
+            f"  [{score:.2f}] {cluster[0]['target']} {numbers}"
+            f"  — {cluster[0]['title'][:70]}"
+        )
     return len(groups)
 
 
@@ -208,19 +216,21 @@ def main() -> int:
     parser.add_argument(
         "target", nargs="?", help="memory filename, e.g. dev.md (or bank/dev.md)"
     )
-    parser.add_argument("--all", action="store_true", help="screen every target in the proposal")
+    parser.add_argument(
+        "--all", action="store_true", help="screen every target in the proposal"
+    )
     parser.add_argument(
         "--proposal",
         type=Path,
         help="proposal path (default: newest pending by mtime — pass the exact "
-             "path you are reviewing, a same-day re-run writes another one)",
+        "path you are reviewing, a same-day re-run writes another one)",
     )
     parser.add_argument(
         "--threshold",
         type=float,
         default=MIN_OVERLAP,
         help=f"score at or above which an item is flagged (default: {MIN_OVERLAP}, "
-             "lib.conflict_edits.MIN_OVERLAP)",
+        "lib.conflict_edits.MIN_OVERLAP)",
     )
     parser.add_argument(
         "--verbose",
@@ -263,8 +273,10 @@ def main() -> int:
 
     lines = corpus_lines(paths)
     labels = sorted({label for label, _, _, _ in lines})
-    print(f"screening {len(entries)} pending item(s) against {len(lines)} lines "
-          f"in {len(labels)} file(s)")
+    print(
+        f"screening {len(entries)} pending item(s) against {len(lines)} lines "
+        f"in {len(labels)} file(s)"
+    )
     if args.verbose:
         print(f"  corpus: {', '.join(labels)}")
 
