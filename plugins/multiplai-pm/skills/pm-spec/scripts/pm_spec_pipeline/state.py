@@ -16,8 +16,8 @@ What each field is for, by the plan's stop-and-resume rows:
   wrote. A record whose `output` is None was started and not finished.
 - `steps`: S4, S5, S9: one `StepOutcome` per step with a one-rewrite rule
   (`prototype`, `consistency`, `revise`).
-- `handoff`: S6, the revision the ready record was written at and whether its
-  commit landed.
+- `handoff`: S6, the revision the ready record was written at, whether its
+  commit landed and whether the branch was pushed.
 """
 
 from __future__ import annotations
@@ -106,6 +106,9 @@ class Handoff(BaseModel):
     revision: str
     committed: bool = False
     commit: str | None = None
+    # The feature branch was pushed after the commit (or there was nothing to
+    # push: a build's worktree). A state saved before pm-spec pushed reads False.
+    pushed: bool = False
 
 
 class RunState(BaseModel):

@@ -10,7 +10,9 @@ from conftest import (
     ready_line,
     requirements,
     run,
+    source_dir,
     state,
+    worktree,
     write,
 )
 from multiplai_core.specs import is_ready, set_spec_issues
@@ -172,13 +174,13 @@ def test_no_issues_file_is_refused(repo, model, capsys):
 
 
 def test_revise_adopts_a_change_pm_spec_did_not_write(repo, model):
-    cdir = change_dir(repo)
+    cdir, hand = change_dir(repo), source_dir(repo)
     from conftest import proposal
 
-    write(cdir / "proposal.md", proposal())
+    write(hand / "proposal.md", proposal())
     for cap in CAPS:
-        write(cdir / "requirements" / f"{cap}.md", requirements(cap))
-    write(cdir / "spec-issues.md", ISSUES)
+        write(hand / "requirements" / f"{cap}.md", requirements(cap))
+    write(hand / "spec-issues.md", ISSUES)
     model["consistency"] = resolved()
     assert run(repo, "revise", "throttle") == 0
     assert is_ready(cdir) == (True, "")
@@ -190,14 +192,15 @@ def test_revise_finds_an_archived_change(repo, model, capsys):
     buildme-findings writes later issues into the archived copy (item 22a):
     with specs/changes/<name>/ gone, revise works on the newest archive."""
     cdir = ready_change(repo, model)
-    git(repo, "add", "-A", "specs")
-    git(repo, "commit", "-qm", "issues")
-    archive = repo / "specs" / "archive"
+    wt = worktree(repo)
+    git(wt, "add", "-A", "specs")
+    git(wt, "commit", "-qm", "issues")
+    archive = wt / "specs" / "archive"
     archive.mkdir(parents=True)
     older = archive / "2026-01-01-throttle"
     older.mkdir()
-    git(repo, "mv", "specs/changes/throttle", "specs/archive/2026-10-22-throttle")
-    git(repo, "commit", "-qm", "archive throttle")
+    git(wt, "mv", "specs/changes/throttle", "specs/archive/2026-10-22-throttle")
+    git(wt, "commit", "-qm", "archive throttle")
     archived = archive / "2026-10-22-throttle"
     capsys.readouterr()
     model["consistency"] = resolved()
@@ -209,4 +212,4 @@ def test_revise_finds_an_archived_change(repo, model, capsys):
     assert meta(archived)["spec_issues"] is None
     assert is_ready(archived) == (True, "")
     assert f"SPEC:READY:{archived}:" in out
-    assert git(repo, "status", "--porcelain", "--", "specs") == ""
+    assert git(wt, "status", "--porcelain", "--", "specs") == ""

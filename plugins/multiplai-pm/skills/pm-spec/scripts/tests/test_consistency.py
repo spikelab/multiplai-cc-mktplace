@@ -127,14 +127,9 @@ def test_a_new_critical_finding_on_the_recheck_blocks_a_new_major_does_not(
         recheck("resolved", finding("gap", "major")),
     ]
     assert run(repo, "new", "throttle", "--auto") == 0
-    other = tmp_path / "other"
-    other.mkdir()
-    from conftest import git, write
+    from conftest import make_repo
 
-    git(other, "init", "-q", "-b", "main")
-    write(other / "a", "a")
-    git(other, "add", "-A")
-    git(other, "commit", "-q", "-m", "i")
+    other = make_repo(tmp_path / "other" / "proj")
     model["consistency"] = [
         {"findings": [finding()]},
         recheck("resolved", finding("gap", "critical")),

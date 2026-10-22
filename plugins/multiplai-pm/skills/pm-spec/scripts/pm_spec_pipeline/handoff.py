@@ -8,16 +8,22 @@ change back to `draft` and returns False, so the caller checks again and no
 files once more, and a revision other than the checked one is treated the
 same way.
 
-In order: `tickets.json` is written; the ready record is written with
+In order: `tickets.json` is written; `.change.yaml` records the feature
+branch (`branch`); the ready record is written with
 `multiplai_core.specs.mark_ready`, and the revision it recorded is saved in
 the run state with `committed: false`; the change dir alone is committed
 (`git_ops.commit_change_dir`, an isolated index); the run state records the
-commit; `SPEC:READY:<change_dir>:<spec_revision>` is printed.
+commit; the feature branch is pushed (`branch.push`, never with force) and the
+run state records that; `SPEC:READY:<change_dir>:<spec_revision>` is printed,
+then `SPEC:BRANCH:<branch>`. In a build's worktree (`branch.Place.push`
+False) nothing is pushed: the revision reaches the feature branch through that
+build's pull request.
 
-Row S6, the commit failed after the ready record was written: a resume
-recomputes the revision (`is_ready`). When it still matches, only the commit
-is retried. When it does not (the files changed since), the change is set back
-to `draft` and the consistency check runs again before a new handoff.
+Row S6, the commit or the push failed after the ready record was written: a
+resume recomputes the revision (`is_ready`). When it still matches, only what
+failed is retried: the commit and then the push, or the push alone. When it
+does not (the files changed since), the change is set back to `draft` and the
+consistency check runs again before a new handoff.
 
 A change with an open `spec_issues` (a `spec-issues.md` buildme wrote) is
 never handed off and never reported ready: `revise` fixes those first.
@@ -35,9 +41,17 @@ from multiplai_core.specs import (
     spec_revision,
 )
 
-from . import consistency, tickets
+from . import branch, consistency, tickets
 from .git_ops import GitError, commit_change_dir
-from .run import EXIT_BLOCKED, EXIT_FAILED, MARKER_BLOCKED, MARKER_READY, Run, Stop
+from .run import (
+    EXIT_BLOCKED,
+    EXIT_FAILED,
+    MARKER_BLOCKED,
+    MARKER_BRANCH,
+    MARKER_READY,
+    Run,
+    Stop,
+)
 from .state import Handoff
 
 log = logging.getLogger(__name__)
@@ -69,7 +83,45 @@ def _commit(run: Run) -> None:
         f"Ready at {handoff.revision}; "
         + (f"committed {sha}" if sha else "nothing to commit"),
     )
-    print(f"{MARKER_READY}:{run.config.change_dir}:{handoff.revision}", flush=True)
+    _push(run)
+
+
+def print_ready(run: Run, revision: str) -> None:
+    """`SPEC:READY:<change_dir>:<revision>`, then the branch the specs are on."""
+    print(f"{MARKER_READY}:{run.config.change_dir}:{revision}", flush=True)
+    where = run.config.place
+    if where is None:
+        return
+    print(f"{MARKER_BRANCH}:{where.branch}", flush=True)
+    if not where.push:
+        print(
+            f"Committed in {where.checkout}, which is not on {where.branch}: the revision reaches "
+            f"{where.branch} through that branch's pull request.",
+            flush=True,
+        )
+
+
+def _push(run: Run) -> None:
+    """Push the feature branch (row S6), then print `SPEC:READY` and the branch.
+    A failed push keeps the ready record and the commit, and stops with exit 1."""
+    handoff = run.state.handoff
+    where = run.config.place
+    if where is not None and where.push:
+        try:
+            branch.push(where)
+        except branch.PushFailed as e:
+            run.progress("HANDOFF_ERROR", f"The push failed: {e}")
+            print(
+                f"ERROR: handoff: the ready record is written and committed, but "
+                f"`git push origin {where.branch}` failed: {e}\n"
+                f"Fix that, then run `resume {run.config.change_name}`: it retries only the push.",
+                flush=True,
+            )
+            raise Stop(EXIT_FAILED, str(e)) from e
+        run.progress("HANDOFF", f"Pushed {where.branch}")
+    handoff.pushed = True
+    run.save()
+    print_ready(run, handoff.revision)
 
 
 MAX_CHECKS = 3
@@ -118,6 +170,8 @@ def handoff(run: Run) -> bool:
         return _stale(run, "the files changed after the check read them")
     path = tickets.write(change_dir, run.config.project_dir)
     log.info("Wrote %s", path)
+    if run.config.place is not None:
+        branch.record(change_dir, run.config.place.branch)
     revision = mark_ready(change_dir)
     if revision != checked:
         return _stale(run, "the files changed while the ready record was written")
@@ -143,11 +197,12 @@ async def check_and_hand_off(run: Run) -> None:
 
 
 def pending_commit(run: Run) -> bool:
-    """Row S6 on resume: True when only the commit is left to do (the commit is
-    then retried by `retry_commit`). A ready record gone stale is set back to
-    draft, the handoff forgotten, and False returned, so the check runs again."""
+    """Row S6 on resume: True when only the commit, or only the push, is left
+    to do (it is then retried by `retry_commit`). A ready record gone stale is
+    set back to draft, the handoff forgotten, and False returned, so the check
+    runs again."""
     handoff_state = run.state.handoff
-    if handoff_state is None or handoff_state.committed:
+    if handoff_state is None or (handoff_state.committed and handoff_state.pushed):
         return False
     ready, reason = is_ready(run.config.change_dir)
     if ready:
@@ -168,5 +223,9 @@ def pending_commit(run: Run) -> bool:
 
 def retry_commit(run: Run) -> None:
     refuse_open_issues(run)
+    if run.state.handoff.committed:
+        log.info("handoff: the ready record matches the files; retrying only the push")
+        _push(run)
+        return
     log.info("handoff: the ready record matches the files; retrying only the commit")
     _commit(run)

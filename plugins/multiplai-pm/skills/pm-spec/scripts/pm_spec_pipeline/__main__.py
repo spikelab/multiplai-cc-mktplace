@@ -1,14 +1,18 @@
 """pm-spec command line.
 
-    python -m pm_spec_pipeline new <change> [--project-dir DIR] [--prd FILE]
+    python -m pm_spec_pipeline new <change> [--project-dir DIR] [--branch NAME] [--prd FILE]
         [--ticket-file FILE [--ticket-ref REF] [--ticket-url URL] [--ticket-child REF ...]]
         [--plan-file FILE] [--context-files FILE ...] [--interview-summary TEXT]
         [--interview-mode self|user|ticket] [--interview-replies FILE] [--auto]
         [--prototype | --no-prototype] [--no-epic-split] [--trust-repo] [--max-usd USD]
-    python -m pm_spec_pipeline resume <change> [--project-dir DIR] [--interview-replies FILE]
+    python -m pm_spec_pipeline resume <change> [--project-dir DIR] [--branch NAME]
+        [--interview-replies FILE] [--trust-repo] [--max-usd USD]
+    python -m pm_spec_pipeline revise <change> [--project-dir DIR] [--branch NAME] [--from-respec]
         [--trust-repo] [--max-usd USD]
-    python -m pm_spec_pipeline revise <change> [--project-dir DIR] [--from-respec]
-        [--trust-repo] [--max-usd USD]
+
+The specs are written on the change's feature branch (`feat/<change>`, or
+`--branch`), in pm-spec's own worktree of it, and pushed to origin
+(`branch.py`).
 
 Exit codes: 0 done (ready, or split into children), 1 failed, 2 refused,
 3 waiting for interview replies, 4 blocked on findings, 5 another run holds
@@ -24,10 +28,11 @@ import logging
 import os
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 
-from . import runlock, sdk
+from . import branch, runlock, sdk
 from . import state as state_mod
-from .config import INTERVIEW_MODES, SpecConfig
+from .config import INTERVIEW_MODES, SpecConfig, read_specs_config
 from .pipeline import NewInputs, cmd_new, cmd_resume, cmd_revise
 from .run import EXIT_FAILED, EXIT_LOCKED, EXIT_REFUSED, Stop
 
@@ -47,6 +52,12 @@ def build_parser() -> argparse.ArgumentParser:
             "--project-dir",
             default=".",
             help="The repository (default: here); relative paths are read from it",
+        )
+        p.add_argument(
+            "--branch",
+            default="",
+            help=f"The feature branch the specs go on (default: the one the change records, else "
+            f"{branch.PREFIX}<change>)",
         )
         p.add_argument(
             "--trust-repo",
@@ -162,21 +173,31 @@ def _path(raw: str, base: str) -> str:
 
 
 async def _dispatch(args: argparse.Namespace) -> int:
+    # The checkout the run writes in is the feature branch's (`branch.place`);
+    # the input files are still read from `--project-dir`.
+    where = branch.place(
+        args.project_dir, args.change, args.branch, command=args.command
+    )
+    branch.prepare(where)
+    branch.adopt(where, args.project_dir, args.change)
     config = SpecConfig(
-        project_dir=args.project_dir,
+        project_dir=where.project_dir,
         change_name=args.change,
         auto=bool(getattr(args, "auto", False)),
+        # `specs/config.yaml` as `--project-dir` holds it, else as the branch does.
+        data=read_specs_config(Path(args.project_dir).expanduser() / "specs"),
+        place=where,
     )
     replies = _path(getattr(args, "interview_replies", ""), args.project_dir)
     if args.command == "new":
         inputs = NewInputs(
-            prd=args.prd,
-            ticket_file=args.ticket_file,
+            prd=_path(args.prd, args.project_dir),
+            ticket_file=_path(args.ticket_file, args.project_dir),
             ticket_ref=args.ticket_ref,
             ticket_url=args.ticket_url,
             ticket_children=args.ticket_child,
-            plan_file=args.plan_file,
-            context_files=args.context_files,
+            plan_file=_path(args.plan_file, args.project_dir),
+            context_files=[_path(f, args.project_dir) for f in args.context_files],
             interview_summary=args.interview_summary,
             interview_mode=args.interview_mode,
             prototype=args.prototype,

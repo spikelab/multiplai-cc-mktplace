@@ -18,10 +18,14 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import yaml
 from multiplai_core import resolve_model_spec
 from multiplai_core.specs import archived_change_dirs, normalize_change_name
+
+if TYPE_CHECKING:
+    from .branch import Place
 
 log = logging.getLogger(__name__)
 
@@ -62,6 +66,9 @@ class SpecConfig:
     # The archived change dir `revise` works on when specs/changes/<name>/ is
     # gone (`use_archive_if_gone`); None: the change dir is specs/changes/<name>/.
     archived: Path | None = None
+    # The feature branch and the checkout the run writes in (`branch.place`);
+    # None: nothing is pushed (a config built without the command line).
+    place: Place | None = None
 
     def __post_init__(self) -> None:
         self.project_dir = Path(self.project_dir).expanduser().resolve()

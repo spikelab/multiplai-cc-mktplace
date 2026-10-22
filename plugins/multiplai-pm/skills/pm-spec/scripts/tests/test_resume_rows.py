@@ -19,12 +19,14 @@ from conftest import (
     change_dir,
     committed,
     git,
+    make_repo,
     meta,
     ready_line,
     requirements,
     run,
     snapshot,
     state,
+    worktree,
     write,
 )
 from multiplai_core.specs import is_ready, set_spec_issues, spec_revision
@@ -43,15 +45,6 @@ def killer(then=None):
     return [kill, then] if then is not None else kill
 
 
-def new_repo(path: Path) -> Path:
-    path.mkdir(parents=True)
-    git(path, "init", "-q", "-b", "main")
-    write(path / "README.md", "# proj\n")
-    git(path, "add", "-A")
-    git(path, "commit", "-q", "-m", "initial")
-    return path
-
-
 def baseline(tmp_path, monkeypatch, configure, *commands) -> tuple[Path, FakeModel]:
     """The same inputs in a fresh repository with a fresh fake model, never stopped.
     The test's own model is put back afterwards."""
@@ -59,7 +52,9 @@ def baseline(tmp_path, monkeypatch, configure, *commands) -> tuple[Path, FakeMod
     fake = FakeModel()
     configure(fake)
     monkeypatch.setattr(sdk, "run_agent", fake)
-    other = new_repo(tmp_path / f"baseline-{len(list(tmp_path.glob('baseline-*')))}")
+    other = make_repo(
+        tmp_path / f"baseline-{len(list(tmp_path.glob('baseline-*')))}" / "proj"
+    )
     try:
         for argv, code in commands:
             argv = [str(a).replace("{tmp}", str(tmp_path)) for a in argv]
@@ -165,7 +160,7 @@ def test_S2_artifacts_killed_part_way_keep_what_is_finished(
     assert snapshot(cdir) == snapshot(change_dir(other))
 
     # A finished artifact a person edited, with its inputs unchanged, is kept.
-    second = new_repo(tmp_path / "second")
+    second = make_repo(tmp_path / "second" / "proj")
     model.count.clear()
     with pytest.raises(Killed):
         run(second, "new", "throttle", "--auto")
@@ -175,7 +170,7 @@ def test_S2_artifacts_killed_part_way_keep_what_is_finished(
     assert (change_dir(second) / "requirements" / "rate-limit.md").read_text() == edited
 
     # A changed proposal regenerates the use cases and every requirements file.
-    third = new_repo(tmp_path / "third")
+    third = make_repo(tmp_path / "third" / "proj")
     model.count.clear()
     with pytest.raises(Killed):
         run(third, "new", "throttle", "--auto")
@@ -232,7 +227,7 @@ def test_S3_split_killed_before_the_child_dirs_exist(
     ).exists()
     # Killed before the list: the parent names no child yet, and nothing is committed.
     assert "children" not in meta(parent)
-    assert git(repo, "log", "-1", "--format=%s") == "initial"
+    assert git(worktree(repo), "log", "-1", "--format=%s") == "initial"
     capsys.readouterr()
 
     assert run(repo, "resume", "throttle") == 0
@@ -242,6 +237,7 @@ def test_S3_split_killed_before_the_child_dirs_exist(
         f"SPEC:SPLIT:{parent}",
         f"SPEC:CHILD:{api}",
         f"SPEC:CHILD:{ui}",
+        "SPEC:BRANCH:feat/throttle",
     ]
 
     other, _ = baseline(
@@ -262,24 +258,24 @@ def test_S3_split_killed_before_the_child_dirs_exist(
     # The resume writes the parent's list and commits the parent once, as the
     # run that never stopped did.
     assert meta(parent)["children"] == ["throttle-api", "throttle-ui"]
-    assert git(repo, "log", "--format=%s").splitlines() == [
+    assert git(worktree(repo), "log", "--format=%s").splitlines() == [
         "specs(throttle): children updated",
         "initial",
     ]
-    assert git(other, "log", "--format=%s").splitlines() == [
+    assert git(worktree(other), "log", "--format=%s").splitlines() == [
         "specs(throttle): children updated",
         "initial",
     ]
 
     # Unchanged inputs: no second split, and no record is written or committed again.
     before = {p: (p / ".change.yaml").stat().st_mtime_ns for p in (parent, api, ui)}
-    head = git(repo, "rev-parse", "HEAD")
+    head = git(worktree(repo), "rev-parse", "HEAD")
     assert run(repo, "resume", "throttle") == 0
     assert model.calls_to("epic_split") == 1
     assert {
         p: (p / ".change.yaml").stat().st_mtime_ns for p in (parent, api, ui)
     } == before
-    assert git(repo, "rev-parse", "HEAD") == head
+    assert git(worktree(repo), "rev-parse", "HEAD") == head
     # Changed parent inputs: split again. The children already created keep
     # their files, and their depends_on follows the new answer.
     from test_epic_split import child
@@ -299,10 +295,13 @@ def test_S3_split_killed_before_the_child_dirs_exist(
     # The parent's list follows the new wave order and is committed with the
     # changed interview; the children, never handed off, are not committed.
     assert meta(parent)["children"] == ["throttle-ui", "throttle-api"]
-    assert git(repo, "log", "--format=%s", f"{head}..HEAD").splitlines() == [
+    assert git(worktree(repo), "log", "--format=%s", f"{head}..HEAD").splitlines() == [
         "specs(throttle): children updated"
     ]
-    assert git(repo, "status", "--porcelain", "--", "specs/changes/throttle") == ""
+    assert (
+        git(worktree(repo), "status", "--porcelain", "--", "specs/changes/throttle")
+        == ""
+    )
 
 
 # --- S4 ---------------------------------------------------------------------------
@@ -333,7 +332,7 @@ def test_S4_prototype_killed_in_the_agent_or_its_rewrite(
 
     # (b) Killed during the rewrite, before it publishes: the agent runs again,
     # with no second rewrite, so its findings stop the run (exit 4).
-    b = new_repo(tmp_path / "b")
+    b = make_repo(tmp_path / "b" / "proj")
     fake = FakeModel()
     _ui(fake)
     fake["prototype:rewrite:proposal"] = killer(lambda *a: ui_proposal())
@@ -356,7 +355,7 @@ def test_S4_prototype_killed_in_the_agent_or_its_rewrite(
 
     # (c) Killed after the rewrite published: on to the consistency check,
     # with no prototype or rewrite call.
-    c = new_repo(tmp_path / "c")
+    c = make_repo(tmp_path / "c" / "proj")
     fake = FakeModel()
     _ui(fake)
     monkeypatch.setattr(sdk, "run_agent", fake)
@@ -377,7 +376,7 @@ def test_S4_prototype_killed_in_the_agent_or_its_rewrite(
 
     # (d) Killed while the published files were being written: the run that
     # finds the journal finishes the publication, then goes on.
-    d = new_repo(tmp_path / "d")
+    d = make_repo(tmp_path / "d" / "proj")
     fake = FakeModel()
     _ui(fake)
     monkeypatch.setattr(sdk, "run_agent", fake)
@@ -460,7 +459,7 @@ def test_S6_ready_record_written_and_the_commit_failed(
     assert meta(cdir)["spec_status"] == "ready"
     assert meta(cdir)["spec_revision"] == spec_revision(cdir)
     assert state(cdir)["handoff"]["committed"] is False
-    assert git(repo, "status", "--porcelain", "--", "specs") != ""
+    assert git(worktree(repo), "status", "--porcelain", "--", "specs") != ""
     capsys.readouterr()
 
     # The revision still matches: only the commit is retried.
@@ -471,7 +470,7 @@ def test_S6_ready_record_written_and_the_commit_failed(
         ready_line(capsys.readouterr().out)
         == f"SPEC:READY:{cdir}:{spec_revision(cdir)}"
     )
-    assert git(repo, "status", "--porcelain", "--", "specs") == ""
+    assert git(worktree(repo), "status", "--porcelain", "--", "specs") == ""
     other, _ = baseline(
         tmp_path, monkeypatch, lambda m: None, (["new", "throttle", "--auto"], 0)
     )
@@ -479,7 +478,7 @@ def test_S6_ready_record_written_and_the_commit_failed(
     assert committed(repo, cdir) == committed(other, change_dir(other))
 
     # The files changed since: back to draft, the check again, then ready.
-    second = new_repo(tmp_path / "second")
+    second = make_repo(tmp_path / "second" / "proj")
     failing["left"] = 1
     assert run(second, "new", "throttle", "--auto") == 1
     cdir2 = change_dir(second)
@@ -521,7 +520,7 @@ def test_S7_an_edit_after_ready_is_checked_and_marked_ready_again(repo, model, c
         new != old and ready_line(capsys.readouterr().out) == f"SPEC:READY:{cdir}:{new}"
     )
     assert is_ready(cdir) == (True, "")
-    assert git(repo, "status", "--porcelain", "--", "specs") == ""
+    assert git(worktree(repo), "status", "--porcelain", "--", "specs") == ""
 
 
 # --- S8 ---------------------------------------------------------------------------

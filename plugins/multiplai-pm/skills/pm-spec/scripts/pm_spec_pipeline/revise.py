@@ -189,7 +189,7 @@ async def run_revise(run: Run, *, from_respec: bool = False) -> None:
         step
         and step.outcome == "passed"
         and run.state.handoff
-        and not run.state.handoff.committed
+        and not (run.state.handoff.committed and run.state.handoff.pushed)
     ):
         if handoff.pending_commit(run):
             handoff.retry_commit(run)

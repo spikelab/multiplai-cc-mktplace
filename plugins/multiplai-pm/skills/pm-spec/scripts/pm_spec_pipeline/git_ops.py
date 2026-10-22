@@ -6,7 +6,7 @@ then brings the real index's entries for those paths up to the new HEAD, so
 anything else the user has staged stays staged and out of the commit. A path
 whose staged and working versions differ is refused rather than guessed at.
 `.pm-spec/` is ignored by its own `.gitignore`, so the run's state is never in
-the commit. `shell=False`, fixed argv; never pushes.
+the commit. `shell=False`, fixed argv; never pushes (`branch.push` does).
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ class GitError(RuntimeError):
 
 
 def _git(
-    args: list[str], cwd: Path, env: dict | None = None
+    args: list[str], cwd: Path, env: dict | None = None, timeout: int = GIT_TIMEOUT_S
 ) -> subprocess.CompletedProcess:
     try:
         return subprocess.run(
@@ -36,7 +36,7 @@ def _git(
             cwd=str(cwd),
             capture_output=True,
             text=True,
-            timeout=GIT_TIMEOUT_S,
+            timeout=timeout,
             env=env,
             check=False,
         )

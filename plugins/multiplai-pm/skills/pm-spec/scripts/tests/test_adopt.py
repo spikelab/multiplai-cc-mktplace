@@ -4,19 +4,29 @@ the handoff only, no other model call, no new spec or interview file."""
 
 from __future__ import annotations
 
-from conftest import CAPS, change_dir, meta, proposal, requirements, run, write
+from conftest import (
+    CAPS,
+    change_dir,
+    meta,
+    proposal,
+    requirements,
+    run,
+    source_dir,
+    write,
+)
 from multiplai_core.specs import is_ready
 from test_epic_split import PLAIN_SPLIT
 
 
 def buildme_era_change(repo):
-    cdir = change_dir(repo)
-    write(cdir / "proposal.md", proposal())
-    write(cdir / "use-cases.md", "# Use cases\n")
+    """Written in the user's checkout; pm-spec runs on its copy in its worktree."""
+    hand = source_dir(repo)
+    write(hand / "proposal.md", proposal())
+    write(hand / "use-cases.md", "# Use cases\n")
     for cap in CAPS:
-        write(cdir / "requirements" / f"{cap}.md", requirements(cap))
-    write(cdir / ".change.yaml", "schema: spec-driven\n")
-    return cdir
+        write(hand / "requirements" / f"{cap}.md", requirements(cap))
+    write(hand / ".change.yaml", "schema: spec-driven\n")
+    return change_dir(repo)
 
 
 def files(cdir):
@@ -29,7 +39,7 @@ def files(cdir):
 
 def test_adopt_runs_only_the_check_then_marks_ready(repo, model, capsys):
     cdir = buildme_era_change(repo)
-    before = files(cdir)
+    before = files(source_dir(repo))
     model["epic_split"] = PLAIN_SPLIT  # would split, if it were asked
     assert run(repo, "resume", "throttle") == 0
     assert model.labels() == ["consistency"]

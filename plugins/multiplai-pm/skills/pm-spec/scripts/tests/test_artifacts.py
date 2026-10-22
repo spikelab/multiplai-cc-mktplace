@@ -5,7 +5,17 @@ requirements moved aside)."""
 
 from __future__ import annotations
 
-from conftest import CAPS, change_dir, proposal, requirements, run, state, write
+from conftest import (
+    CAPS,
+    change_dir,
+    git,
+    proposal,
+    requirements,
+    run,
+    source_dir,
+    state,
+    write,
+)
 
 
 def test_each_capability_gets_its_own_call_and_file(repo, model):
@@ -45,10 +55,11 @@ def test_a_proposal_with_no_capability_is_asked_for_again(repo, model):
 
 
 def test_files_a_person_wrote_before_the_run_are_adopted(repo, model):
-    cdir = change_dir(repo)
-    write(cdir / "proposal.md", proposal(caps=("rate-limit",), title="Hand written"))
+    """Written in the user's checkout: pm-spec copies them into its worktree."""
+    cdir, hand = change_dir(repo), source_dir(repo)
+    write(hand / "proposal.md", proposal(caps=("rate-limit",), title="Hand written"))
     write(
-        cdir / "requirements" / "rate-limit.md",
+        hand / "requirements" / "rate-limit.md",
         requirements("rate-limit", rule="the hand rule"),
     )
     assert run(repo, "new", "throttle", "--auto") == 0
@@ -60,7 +71,7 @@ def test_files_a_person_wrote_before_the_run_are_adopted(repo, model):
 
 def test_requirements_the_proposal_no_longer_names_are_moved_aside(repo, model):
     cdir = change_dir(repo)
-    write(cdir / "requirements" / "old-cap.md", requirements("old-cap"))
+    write(source_dir(repo) / "requirements" / "old-cap.md", requirements("old-cap"))
     assert run(repo, "new", "throttle", "--auto") == 0
     assert not (cdir / "requirements" / "old-cap.md").exists()
     moved = list((cdir / "superseded-requirements").glob("old-cap-*.md"))
@@ -72,6 +83,9 @@ def test_the_registry_text_reaches_the_requirements_prompt(repo, model):
         repo / "specs" / "registry" / "rate-limit.md",
         "### Requirement: Existing limit\nREGISTRY-BODY\n",
     )
+    git(repo, "add", "specs")
+    git(repo, "commit", "-q", "-m", "registry")
+    git(repo, "push", "-q", "origin", "main")
     assert run(repo, "new", "throttle", "--auto") == 0
     assert "REGISTRY-BODY" in model.prompts("spec:requirements:rate-limit")[0]
     assert "REGISTRY-BODY" not in model.prompts("spec:requirements:retry-policy")[0]

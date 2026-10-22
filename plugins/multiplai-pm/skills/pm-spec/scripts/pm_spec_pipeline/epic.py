@@ -34,7 +34,10 @@ HEAD's copy says otherwise: the parent's change dir whole (`specs(<parent>):
 children updated`), and the `.change.yaml` alone of a child HEAD already holds
 (`specs(<child>): dependencies updated`). A child created in this run is
 committed at its own handoff, as before. Unchanged records write and commit
-nothing.
+nothing. Each child's `.change.yaml` records the parent's feature branch
+(`branch`): every child's specs go on that branch. After the commits the
+branch is pushed when origin lacks any of them (`push_split`), and
+`SPEC:BRANCH:<branch>` follows the markers.
 """
 
 from __future__ import annotations
@@ -49,12 +52,12 @@ import yaml
 from multiplai_core.specs import CHANGE_META_FILE, read_change_meta, write_change_meta
 from pydantic import BaseModel, Field
 
-from . import git_ops, intake, sdk
+from . import branch, git_ops, intake, sdk
 from . import state as state_mod
 from .artifacts import sha
 from .prompts import UNTRUSTED_NOTICE
 from .prompts.epic_split import CHILDREN_RULE, EPIC_SPLIT_PROMPT, EPIC_SPLIT_RETRY
-from .run import MARKER_CHILD, MARKER_SPLIT, Run
+from .run import EXIT_FAILED, MARKER_BRANCH, MARKER_CHILD, MARKER_SPLIT, Run, Stop
 from .state import EpicChild, RunState, SplitRecord
 
 log = logging.getLogger(__name__)
@@ -272,6 +275,8 @@ def create_children(run: Run, split: SplitRecord) -> list[str]:
             continue
         intake.create_change(child_dir, parent=run.config.change_name)
         updates: dict = {"depends_on": depends_on}
+        if run.config.place is not None:
+            updates["branch"] = run.config.place.branch
         if child.ticket_ref:
             updates["ticket_refs"] = {"epic": child.ticket_ref, "children": []}
         write_change_meta(child_dir, updates)
@@ -338,7 +343,29 @@ async def run_epic_split(run: Run) -> bool:
     if split.single:
         return False
     names = create_children(run, split)
+    push_split(run)
     print(f"{MARKER_SPLIT}:{run.config.change_dir}", flush=True)
     for name in names:
         print(f"{MARKER_CHILD}:{run.config.change_dir_for(name)}", flush=True)
+    if run.config.place is not None:
+        print(f"{MARKER_BRANCH}:{run.config.place.branch}", flush=True)
     return True
+
+
+def push_split(run: Run) -> None:
+    """Push the feature branch when the split's commits (or any other) are not
+    on origin yet. A failed push stops with exit 1; the next run splits again
+    from the saved answer, commits nothing new and pushes again."""
+    where = run.config.place
+    if where is None or not where.push or not branch.ahead(where):
+        return
+    try:
+        branch.push(where)
+    except branch.PushFailed as e:
+        run.progress("EPIC_SPLIT_ERROR", f"The push failed: {e}")
+        print(
+            f"ERROR: epic split: the children are committed, but `git push origin {where.branch}` "
+            f"failed: {e}\nFix that, then run `resume {run.config.change_name}`.",
+            flush=True,
+        )
+        raise Stop(EXIT_FAILED, str(e)) from e

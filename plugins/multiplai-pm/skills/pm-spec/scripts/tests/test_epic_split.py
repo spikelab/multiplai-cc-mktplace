@@ -5,7 +5,7 @@ errors, `--no-epic-split` making no call)."""
 from __future__ import annotations
 
 import pytest
-from conftest import change_dir, committed, git, meta, run, state, write
+from conftest import change_dir, committed, git, meta, run, state, worktree, write
 from multiplai_core.specs import is_ready
 from pm_spec_pipeline import git_ops
 from pm_spec_pipeline.epic import SplitAnswer, check_answer, waves
@@ -159,12 +159,18 @@ def test_a_split_creates_one_change_dir_per_child_and_stops(
     # The parent lists its children in dependency order, and is committed
     # whole with that list; the new child dirs wait for their own handoff.
     assert meta(parent)["children"] == ["throttle-api", "throttle-ui"]
-    assert git(repo, "log", "-1", "--format=%s") == "specs(throttle): children updated"
+    assert (
+        git(worktree(repo), "log", "-1", "--format=%s")
+        == "specs(throttle): children updated"
+    )
     assert committed(repo, parent) == [
         f"specs/changes/throttle/{n}"
         for n in (".change.yaml", "interview.md", "ticket.md")
     ]
-    assert git(repo, "status", "--porcelain", "--", "specs/changes/throttle") == ""
+    assert (
+        git(worktree(repo), "status", "--porcelain", "--", "specs/changes/throttle")
+        == ""
+    )
     assert all(committed(repo, kid) == [] for kid in kids)
 
 
@@ -279,12 +285,12 @@ def test_a_resplit_commits_the_new_dependencies_of_handed_off_children(repo, mod
         for kid in (api, ui)
         for p in (kid / "requirements").glob("*.md")
     }
-    head = git(repo, "rev-parse", "HEAD")
+    head = git(worktree(repo), "rev-parse", "HEAD")
 
     assert _resplit(repo, model, [child("api", deps=["ui"]), child("ui")]) == 0
     assert meta(api)["depends_on"] == ["throttle-ui"] and meta(ui)["depends_on"] == []
     assert meta(change_dir(repo))["children"] == ["throttle-ui", "throttle-api"]
-    log = git(repo, "log", "--format=%s", f"{head}..HEAD").splitlines()
+    log = git(worktree(repo), "log", "--format=%s", f"{head}..HEAD").splitlines()
     # Both children's dependencies changed, so each gets its own commit of its
     # .change.yaml alone, in the new wave order (ui first); then the parent.
     assert log == [
@@ -293,18 +299,20 @@ def test_a_resplit_commits_the_new_dependencies_of_handed_off_children(repo, mod
         "specs(throttle-ui): dependencies updated",
     ]
     for rev, kid in (("HEAD~1", api), ("HEAD~2", ui)):
-        files = git(repo, "show", "--name-only", "--format=", rev).splitlines()
+        files = git(
+            worktree(repo), "show", "--name-only", "--format=", rev
+        ).splitlines()
         assert files == [f"specs/changes/{kid.name}/.change.yaml"]
-    assert git(repo, "status", "--porcelain", "--", "specs") == ""
+    assert git(worktree(repo), "status", "--porcelain", "--", "specs") == ""
     assert {p: p.read_text() for p in specs_before} == specs_before
     assert (
         is_ready(api)[0] and is_ready(ui)[0]
     )  # the record is not part of the spec revision
 
     # Unchanged inputs: nothing is written or committed.
-    head = git(repo, "rev-parse", "HEAD")
+    head = git(worktree(repo), "rev-parse", "HEAD")
     assert run(repo, "resume", "throttle") == 0
-    assert git(repo, "rev-parse", "HEAD") == head
+    assert git(worktree(repo), "rev-parse", "HEAD") == head
 
 
 def test_a_child_dropped_by_a_resplit_keeps_its_dir_and_leaves_the_list(repo, model):
@@ -316,7 +324,7 @@ def test_a_child_dropped_by_a_resplit_keeps_its_dir_and_leaves_the_list(repo, mo
     assert ui.is_dir() and meta(ui)["parent"] == "throttle"
     assert meta(change_dir(repo, "throttle-web"))["depends_on"] == ["throttle-api"]
     assert (
-        git(repo, "show", "HEAD:specs/changes/throttle/.change.yaml").count(
+        git(worktree(repo), "show", "HEAD:specs/changes/throttle/.change.yaml").count(
             "throttle-web"
         )
         == 1
@@ -335,11 +343,14 @@ def test_a_failed_commit_of_the_records_is_made_by_the_next_run(
     monkeypatch.setattr(git_ops, "commit_change_dir", fail)
     assert run(repo, "new", "throttle", "--auto") == 1
     assert meta(change_dir(repo))["children"] == ["throttle-api", "throttle-ui"]
-    head = git(repo, "rev-parse", "HEAD")
+    head = git(worktree(repo), "rev-parse", "HEAD")
     monkeypatch.setattr(git_ops, "commit_change_dir", real)
     # The record is already right on disk; the run compares with HEAD, not
     # with what it writes, so it commits it now.
     assert run(repo, "resume", "throttle") == 0
-    assert git(repo, "rev-parse", "HEAD~1") == head
-    assert git(repo, "log", "-1", "--format=%s") == "specs(throttle): children updated"
+    assert git(worktree(repo), "rev-parse", "HEAD~1") == head
+    assert (
+        git(worktree(repo), "log", "-1", "--format=%s")
+        == "specs(throttle): children updated"
+    )
     assert model.calls_to("epic_split") == 1

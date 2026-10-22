@@ -18,7 +18,10 @@ A change adopted as it stands (specs pm-spec did not write) runs only 7 and 8.
 While `spec_issues` is set or a revise is blocked, a resume refuses (exit 4)
 and hands nothing off; a revise whose rewrite is admitted is carried on.
 
-The run lock (row S8) is held for the whole command.
+The run lock (row S8) is held for the whole command. Before it, `__main__`
+places the run on the change's feature branch (`branch.place`, `branch.prepare`):
+`config.project_dir` is the checkout pm-spec writes in, its own worktree
+unless `--project-dir` is on that branch or is a build's worktree.
 """
 
 from __future__ import annotations
@@ -31,6 +34,7 @@ from multiplai_core.specs import is_ready, mark_draft, write_change_meta
 
 from . import (
     artifacts,
+    branch,
     epic,
     handoff,
     intake,
@@ -49,7 +53,6 @@ from .run import (
     EXIT_DONE,
     EXIT_REFUSED,
     MARKER_BLOCKED,
-    MARKER_READY,
     Run,
     Stop,
 )
@@ -97,6 +100,8 @@ def intake_new(config: SpecConfig, inputs: NewInputs) -> RunState:
     )
     change_dir = config.change_dir
     intake.create_change(change_dir)
+    if config.place is not None:
+        branch.record(change_dir, config.place.branch)
     if "--prd" in files:
         intake.save_copy(change_dir, files["--prd"], "prd.md")
     if "--plan-file" in files:
@@ -142,14 +147,14 @@ def _ready_again(run: Run) -> bool:
     h = run.state.handoff
     if h is None:
         return False
-    if not h.committed:
+    if not h.committed or not h.pushed:
         if handoff.pending_commit(run):
             handoff.retry_commit(run)
             return True
         return False
     ready, reason = is_ready(run.config.change_dir)
     if ready:
-        print(f"{MARKER_READY}:{run.config.change_dir}:{h.revision}", flush=True)
+        handoff.print_ready(run, h.revision)
         return True
     log.info(
         "The change was ready and its files changed since (%s); checking again", reason
