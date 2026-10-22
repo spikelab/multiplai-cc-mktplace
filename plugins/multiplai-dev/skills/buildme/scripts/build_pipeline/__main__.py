@@ -186,9 +186,10 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument(
         "--branch",
         default="",
-        help="The change's feature branch on origin, where pm-spec pushed its specs "
-        "(default: change/<change> when origin has it, else the branch its "
-        ".change.yaml records); the build starts from it and its PR targets it",
+        help="The change's feature branch on origin, where pm-spec pushed its specs; it "
+        "starts with <TICKET>- (default: the branch its .change.yaml records, else the one "
+        "origin branch named <TICKET>-<change>). A single change builds on it and opens its "
+        "PR to the default branch; an epic's children target it",
     )
     build.add_argument(
         "--force",
@@ -225,7 +226,7 @@ def build_parser() -> argparse.ArgumentParser:
     findings.add_argument(
         "--change",
         default="",
-        help="Change name (default: from the PR's buildme/<name> branch)",
+        help="Change name (default: from the PR's <TICKET>-<name> or buildme/<name> branch)",
     )
     findings.add_argument("--project-dir", default=".", help="Project directory")
     findings.add_argument(

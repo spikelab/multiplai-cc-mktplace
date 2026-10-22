@@ -146,12 +146,13 @@ def pm_spec_handoff(monkeypatch, request):
     when a build starts (or resumes) on a change pm-spec never marked (no
     `spec_status`), write any missing specs, mark them ready and commit
     them; for a worktree build of ready specs, push that commit to
-    `origin/change/<change>` (`spec_fixtures.publish`, which gives a repository
+    `origin/ENG-1-<change>` (`spec_fixtures.publish`, which gives a repository
     with no origin a bare one beside it). Then buildme runs unchanged. A
     change that was marked and then edited is left as it is, so the check
     still refuses it, and so is an epic's parent (its `.change.yaml` lists
-    `children`), which pm-spec never marks. Tests of the refusal itself use
-    `@pytest.mark.no_handoff`."""
+    `children`), which pm-spec never marks. A build's worktree cut with no
+    ticket known gets `ENG-1`, pm-spec's ticket in these fixtures. Tests of
+    the refusal itself use `@pytest.mark.no_handoff`."""
     if request.node.get_closest_marker("no_handoff"):
         return
     from build_pipeline import orchestrator
@@ -182,3 +183,16 @@ def pm_spec_handoff(monkeypatch, request):
         return real(config)
 
     monkeypatch.setattr(orchestrator, "_find_feature_branch", handoff)
+
+    # pm-spec never hands off a change with no ticket ref; a test that cuts
+    # a build's worktree directly (`_setup_worktree`) gets the fixtures' one.
+    from tests.spec_fixtures import TICKET
+
+    setup = orchestrator._setup_worktree
+
+    def with_ticket(config, state):
+        if not config.tickets:
+            config.tickets = (TICKET,)
+        return setup(config, state)
+
+    monkeypatch.setattr(orchestrator, "_setup_worktree", with_ticket)

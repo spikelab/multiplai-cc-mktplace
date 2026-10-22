@@ -527,9 +527,11 @@ def _is_ancestor(cwd: Path, sha: str) -> bool:
 
 
 def _buildme_branches(repo: Path) -> list[str]:
-    return _sh(
-        repo, "for-each-ref", "--format=%(refname:short)", "refs/heads/buildme/"
+    """The repo's local branches but main: the ones builds made."""
+    names = _sh(
+        repo, "for-each-ref", "--format=%(refname:short)", "refs/heads/"
     ).split()
+    return [n for n in names if n != "main"]
 
 
 class TestFailedBuildRetry:

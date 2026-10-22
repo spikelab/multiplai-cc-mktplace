@@ -1,5 +1,5 @@
 """An epic on its feature branch (plan-spec-feature-branch-2026-10-22.md, T5
-and T6): every child starts from origin's `change/<parent>`, its PR targets it
+and T6): every child starts from origin's `ENG-40-<parent>`, its PR targets it
 and, with `epic.merge` unset, merges on buildme's own review. Before the run
 and before each later wave, origin's main is merged into the feature branch
 and pushed; a conflict there launches nothing more and exits 3 with
@@ -127,8 +127,8 @@ def test_children_start_from_the_feature_branch_and_merge_into_it(
     tmp_path, monkeypatch
 ):
     """T5: a and c start from the commit pm-spec pushed; b starts after a
-    merged. Every PR targets change/e and auto-merges with `epic.merge` unset.
-    A commit pushed to main while the run goes on is merged into change/e
+    merged. Every PR targets ENG-40-e and auto-merges with `epic.merge` unset.
+    A commit pushed to main while the run goes on is merged into ENG-40-e
     before b's wave, so b starts from it; origin's main never gets a child."""
     e = Epic(tmp_path, monkeypatch)
     real = feature_branch.merge_default
@@ -150,26 +150,26 @@ def test_children_start_from_the_feature_branch_and_merge_into_it(
         "c": "merged",
     }
     moved = calls[2]
-    assert calls[:2] == ["change/e", "change/e"] and len(calls) == 3
+    assert calls[:2] == ["ENG-40-e", "ENG-40-e"] and len(calls) == 3
     assert e.base("a") == e.base("c") == e.specs
     for cid in ("a", "b", "c"):
         argv = e.started(cid)[0]["argv"]
-        assert argv[argv.index("--base-ref") + 1] == "origin/change/e"
-        assert argv[argv.index("--branch") + 1] == "change/e"
-    assert {p["base"] for p in e.fakes.prs().values()} == {"change/e"}
+        assert argv[argv.index("--base-ref") + 1] == "origin/ENG-40-e"
+        assert argv[argv.index("--branch") + 1] == "ENG-40-e"
+    assert {p["base"] for p in e.fakes.prs().values()} == {"ENG-40-e"}
     # One `gh pr merge` each, and another for a PR whose base moved under it
-    # (the merge of main into change/e can land while c merges: BEHIND, again).
+    # (the merge of main into ENG-40-e can land while c merges: BEHIND, again).
     assert len(e.fakes.merges()) >= 3
-    # b started after a merged into change/e, and after main was merged in.
+    # b started after a merged into ENG-40-e, and after main was merged in.
     assert git(e.origin, "show", f"{e.base('b')}:a.txt") == "a"
     assert git(e.origin, "merge-base", "--is-ancestor", moved, e.base("b")) == ""
     assert (
         git(e.origin, "log", "--format=%s", f"{moved}..{e.base('b')}").count(
-            "Merge origin/main into change/e"
+            "Merge origin/main into ENG-40-e"
         )
         == 1
     )
-    feature = git(e.origin, "ls-tree", "--name-only", "change/e")
+    feature = git(e.origin, "ls-tree", "--name-only", "ENG-40-e")
     assert {"a.txt", "b.txt", "c.txt", "main.txt"} <= set(feature.split())
     on_main = git(e.origin, "ls-tree", "--name-only", "main").split()
     assert not {"a.txt", "b.txt", "c.txt"} & set(on_main)
@@ -188,7 +188,7 @@ def test_an_explicit_manual_merge_wins_over_the_feature_branch_default(
 
 
 def _no_merge_in_progress(root: Path) -> None:
-    w = root / "ws" / ".worktrees" / "buildme-feature-change-e"
+    w = root / "ws" / ".worktrees" / "buildme-feature-ENG-40-e"
     assert w.is_dir()
     assert (
         subprocess.run(
@@ -205,20 +205,20 @@ def _no_merge_in_progress(root: Path) -> None:
 def test_a_conflict_merging_main_at_the_start_launches_nothing(
     tmp_path, monkeypatch, capsys
 ):
-    """T6: main and change/e changed the same line: the run prints the marker
+    """T6: main and ENG-40-e changed the same line: the run prints the marker
     with the file, exits 3, leaves no merge in progress, pushes nothing and
     launches no child."""
     e = Epic(tmp_path, monkeypatch)
     push(tmp_path, "main", {"README.md": "# main\n"}, "main's readme")
-    before = push(tmp_path, "change/e", {"README.md": "# feature\n"}, "feat's readme")
+    before = push(tmp_path, "ENG-40-e", {"README.md": "# feature\n"}, "feat's readme")
     capsys.readouterr()
 
     assert e.run() == 3
 
     out = capsys.readouterr().out
-    assert "FEATURE_BRANCH:CONFLICT:change/e:README.md" in out.splitlines()
+    assert "FEATURE_BRANCH:CONFLICT:ENG-40-e:README.md" in out.splitlines()
     _no_merge_in_progress(tmp_path)
-    assert git(e.origin, "rev-parse", "change/e") == before
+    assert git(e.origin, "rev-parse", "ENG-40-e") == before
     assert e.launched() == []
     assert not e.dir.exists() or not list(records.attempts(e.dir))
 
@@ -244,7 +244,7 @@ def test_a_conflict_merging_main_before_a_later_wave_launches_it_not(
     assert e.run() == 3
 
     out = capsys.readouterr().out
-    assert "FEATURE_BRANCH:CONFLICT:change/e:a.txt" in out.splitlines()
+    assert "FEATURE_BRANCH:CONFLICT:ENG-40-e:a.txt" in out.splitlines()
     assert sorted(e.launched()) == ["e-a", "e-c"]
     status = e.status()
     assert status["a"]["status"] == "merged" and status["b"]["status"] == "pending"

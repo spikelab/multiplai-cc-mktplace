@@ -170,13 +170,30 @@ async def test_publish_retry_rechecks_changed_inputs(accepted_build):
     assert push.call_count == 1
 
 
-def test_a_build_on_a_feature_branch_opens_its_pr_against_it(
-    accepted_build, monkeypatch
+@pytest.mark.parametrize(
+    ("epic_child", "feature", "ticket", "title", "base"),
+    [
+        # A single change on its feature branch: one PR to the default branch.
+        (False, "ENG-42-contract", "ENG-42", "Login times out after 5 min", "staging"),
+        # An epic's child: its PR to the parent's feature branch.
+        (True, "ENG-40-auth-rework", "ENG-40", "Retry the token refresh", None),
+    ],
+)
+def test_the_pr_title_names_its_target_the_ticket_and_the_proposal_title(
+    accepted_build, monkeypatch, epic_child, feature, ticket, title, base
 ):
-    """T4: the PR of a build of a change on a feature branch targets it."""
+    """T12 (and T4's base): `[<target branch>] <TICKET> <title>`, through the
+    pr skill."""
+    from build_pipeline import feature_branch
+
     config, state, _, push = accepted_build
     config.git.pr = "draft"
-    config.feature_branch = "change/contract"
+    config.feature_branch = feature
+    config.epic_child = epic_child
+    config.tickets = (ticket,)
+    proposal = config.change_dir / "proposal.md"
+    proposal.write_text(f"# {title}\n\n" + proposal.read_text())
+    monkeypatch.setattr(feature_branch, "default_name", lambda repo: "staging")
     state.verification = final_verification(
         config.test_command,
         config.project_dir,
@@ -194,7 +211,10 @@ def test_a_build_on_a_feature_branch_opens_its_pr_against_it(
         config, state, ProgressWriter(config.progress_file_path())
     )
     push.assert_called_once()
-    assert opened and opened[0][opened[0].index("--base") + 1] == "change/contract"
+    (argv,) = opened
+    target = base or feature
+    assert argv[argv.index("--base") + 1] == target
+    assert argv[argv.index("--title") + 1] == f"[{target}] {ticket} {title}"
 
 
 def test_push_refuses_stale_verification(accepted_build):

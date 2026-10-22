@@ -138,8 +138,8 @@ async def test_pm_spec_ready_specs_build_to_tdd_and_an_edit_refuses(
     prd = tmp_path / "prd.md"
     prd.write_text(PRD)
 
-    # pm-spec: the specs, checked, marked ready, committed on change/<change>
-    # in its own worktree, and pushed.
+    # pm-spec: the specs, checked, marked ready, committed for
+    # <TICKET>-<change> in its own worktree, and pushed.
     proc = _pm_spec(
         tmp_path,
         repo,
@@ -153,10 +153,12 @@ async def test_pm_spec_ready_specs_build_to_tdd_and_an_edit_refuses(
         "--trust-repo",
         "--no-prototype",
         "--no-epic-split",
+        "--ticket-ref",
+        "ENG-1",
     )
     assert proc.returncode == 0, proc.stdout[-3000:] + proc.stderr[-3000:]
-    branch = f"change/{CHANGE}"
-    spec_tree = tmp_path / ".worktrees" / f"pm-spec-change-{CHANGE}"
+    branch = f"ENG-1-{CHANGE}"
+    spec_tree = tmp_path / ".worktrees" / f"pm-spec-{branch}"
     change_dir = spec_tree / "specs" / "changes" / CHANGE
     assert f"SPEC:READY:{change_dir}:" in proc.stdout
     assert f"SPEC:BRANCH:{branch}" in proc.stdout
@@ -167,8 +169,8 @@ async def test_pm_spec_ready_specs_build_to_tdd_and_an_edit_refuses(
         spec_tree, "rev-parse", "HEAD"
     )
 
-    # buildme: finds the specs on origin's change/<change>, plans from them in
-    # its worktree and starts TDD.
+    # buildme: finds the specs on origin's <TICKET>-<change>, checks that
+    # branch out in its worktree, plans from them and starts TDD.
     models = Models()
     rc, reached = await _build_to_tdd(repo, models)
     assert rc is None, capsys.readouterr().out
@@ -176,6 +178,7 @@ async def test_pm_spec_ready_specs_build_to_tdd_and_an_edit_refuses(
     built = reached["change_dir"]
     assert built == wt / "specs" / "changes" / CHANGE
     assert _git(wt, "merge-base", "--is-ancestor", f"origin/{branch}", "HEAD") == ""
+    assert _git(wt, "branch", "--show-current") == branch
     for name in ("proposal.md", "use-cases.md", "requirements/fixture.md"):
         assert (built / name).read_bytes() == (change_dir / name).read_bytes(), name
     assert (built / "design.md").is_file() and (built / "tasks.md").is_file()
@@ -212,7 +215,7 @@ async def test_an_old_handoff_is_refused_until_pm_spec_resume_moves_it(
 ):
     """T8: specs a pm-spec from before the feature branch handed off (ready
     and committed on the user's main, no feature branch) are refused with
-    `pm-spec resume <name>`; that resume moves them onto `change/<name>` and
+    `pm-spec resume <name>`; that resume moves them onto `<TICKET>-<name>` and
     pushes it, and the build then runs."""
     repo = _setup(tmp_path, monkeypatch)
     old = repo / "specs" / "changes" / CHANGE
@@ -226,10 +229,18 @@ async def test_an_old_handoff_is_refused_until_pm_spec_resume_moves_it(
     models.generate.assert_not_awaited()
 
     proc = _pm_spec(
-        tmp_path, repo, "resume", CHANGE, "--project-dir", str(repo), "--trust-repo"
+        tmp_path,
+        repo,
+        "resume",
+        CHANGE,
+        "--project-dir",
+        str(repo),
+        "--trust-repo",
+        "--ticket-ref",
+        "ENG-1",
     )
     assert proc.returncode == 0, proc.stdout[-3000:] + proc.stderr[-3000:]
-    assert f"SPEC:BRANCH:change/{CHANGE}" in proc.stdout
+    assert f"SPEC:BRANCH:ENG-1-{CHANGE}" in proc.stdout
     assert old.is_dir(), "the original is never deleted"
 
     rc, reached = await _build_to_tdd(repo, Models())

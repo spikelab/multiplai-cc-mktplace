@@ -87,10 +87,15 @@ def change_project(change_dir: Path) -> Path | None:
 
 
 def pm_spec_line(
-    name: str, *, resume: bool = False, project_dir: Path | None = None
+    name: str,
+    *,
+    resume: bool = False,
+    project_dir: Path | None = None,
+    ticket_ref: bool = False,
 ) -> str:
     where = f" --project-dir {project_dir}" if project_dir else ""
-    return f"Run /multiplai-pm:pm-spec {'resume ' if resume else ''}{name}{where} first"
+    ticket = " --ticket-ref <ticket id>" if ticket_ref else ""
+    return f"Run /multiplai-pm:pm-spec {'resume ' if resume else ''}{name}{where}{ticket} first"
 
 
 def refuse_not_ready(
@@ -100,6 +105,7 @@ def refuse_not_ready(
     resume: bool = False,
     project_dir: Path | None = None,
     advice: str | None = None,
+    ticket_ref: bool = False,
 ) -> int:
     """Print `SPEC:NOT_READY:<reason>` and the pm-spec line; the exit code (2).
     *resume* names `pm-spec resume <name>`, which checks specs already on disk
@@ -107,11 +113,16 @@ def refuse_not_ready(
     `--project-dir`: the specs the build reads are in that checkout (a
     worktree build's own worktree), not the one the user runs in. *advice*,
     when given, is printed in place of the pm-spec line: what to do is not a
-    pm-spec run."""
+    pm-spec run. *ticket_ref* adds `--ticket-ref <ticket id>`: the change
+    records no ticket, which pm-spec names its branch after."""
     reason = " ".join(str(reason).split())
     print(f"{MARKER_NOT_READY}:{reason}", flush=True)
     print(
-        advice or pm_spec_line(name, resume=resume, project_dir=project_dir), flush=True
+        advice
+        or pm_spec_line(
+            name, resume=resume, project_dir=project_dir, ticket_ref=ticket_ref
+        ),
+        flush=True,
     )
     return EXIT_NOT_READY
 

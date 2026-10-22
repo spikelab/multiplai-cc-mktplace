@@ -212,10 +212,15 @@ def measure(task: dict, variant: str, repeat: int, root: Path, args) -> dict:
     }
 
 
+EVAL_TICKET = "EVAL-1"
+
+
 def ready_specs(project: Path, change: str, instruction: str) -> None:
     """The pm-spec handoff buildme builds from: a proposal, use cases and one
-    requirement stating the task's instruction, marked ready and committed."""
-    from multiplai_core.specs import mark_ready
+    requirement stating the task's instruction, with a ticket ref, marked
+    ready, committed and pushed to `<EVAL_TICKET>-<change>` on origin (a bare
+    one beside the checkout when it has none), as pm-spec pushes them."""
+    from multiplai_core.specs import mark_ready, write_change_meta
 
     change_dir = project / "specs" / "changes" / change
     (change_dir / "requirements").mkdir(parents=True, exist_ok=True)
@@ -230,11 +235,31 @@ def ready_specs(project: Path, change: str, instruction: str) -> None:
         f"## ADDED Requirements\n\n### Requirement: Task\nThe system SHALL do this: {instruction}\n\n"
         "#### Scenario: Done\n- **WHEN** the task's tests run\n- **THEN** they pass\n"
     )
+    branch = f"{EVAL_TICKET}-{change}"
+    write_change_meta(
+        change_dir,
+        {"ticket_refs": {"epic": EVAL_TICKET, "children": []}, "branch": branch},
+    )
     mark_ready(change_dir)
-    for argv in (
+    steps = [
         ["git", "add", "specs"],
         ["git", "commit", "-qm", f"specs: {change} ready"],
-    ):
+    ]
+    if "origin" not in command(["git", "remote"], project).stdout.split():
+        top = Path(
+            command(["git", "rev-parse", "--show-toplevel"], project).stdout.strip()
+        )
+        bare = top.parent / f"{top.name}.origin.git"
+        steps += [
+            ["git", "init", "-q", "--bare", str(bare)],
+            ["git", "remote", "add", "origin", str(bare)],
+            ["git", "push", "-q", "origin", "HEAD:refs/heads/main"],
+        ]
+    steps += [
+        ["git", "push", "-q", "origin", f"HEAD:refs/heads/{branch}"],
+        ["git", "fetch", "-q", "origin"],
+    ]
+    for argv in steps:
         result = command(argv, project)
         if result.returncode:
             raise RuntimeError(result.stderr)
@@ -337,17 +362,26 @@ async def worker(args) -> int:
     )
     # Exercise one deterministic interruption at an atomic TDD checkpoint in
     # both arms. Resume goes through the same public entry, with saved spend.
-    original_create_worktree = orchestrator.git_ops.create_worktree
+    # A single change's build checks its feature branch out
+    # (`add_worktree_for_branch`); any other cuts a branch (`create_worktree`).
     user_staging_seeded = False
 
-    def create_worktree(repo, *a, **kw):
-        nonlocal user_staging_seeded
-        result = original_create_worktree(repo, *a, **kw)
-        seed_user_staging(repo)
-        user_staging_seeded = True
-        return result
+    def seeding(original):
+        def add(repo, *a, **kw):
+            nonlocal user_staging_seeded
+            result = original(repo, *a, **kw)
+            seed_user_staging(repo)
+            user_staging_seeded = True
+            return result
 
-    orchestrator.git_ops.create_worktree = create_worktree
+        return add
+
+    originals = {
+        name: getattr(orchestrator.git_ops, name)
+        for name in ("create_worktree", "add_worktree_for_branch")
+    }
+    for name, original in originals.items():
+        setattr(orchestrator.git_ops, name, seeding(original))
     original_checkpoint = BuildState.checkpoint
     interrupted = False
 
@@ -366,7 +400,8 @@ async def worker(args) -> int:
             rc = await orchestrator.run_orchestrator(config, run_args)
     finally:
         BuildState.checkpoint = original_checkpoint
-        orchestrator.git_ops.create_worktree = original_create_worktree
+        for name, original in originals.items():
+            setattr(orchestrator.git_ops, name, original)
     paths = [
         config.state_file_path(),
         config.state_file_path().with_name(".build-state.complete.json"),

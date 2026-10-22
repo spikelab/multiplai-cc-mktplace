@@ -19,28 +19,55 @@ time, not derived from a tag.
 
 ### Changed
 - buildme builds from the change's feature branch, where pm-spec 0.8.0
-  pushes the specs: `build --branch <name>`, else `change/<change>` when
-  origin has it, else the branch the change dir's `.change.yaml` records. The
-  build's worktree starts from `origin/<branch>`, the specs are read as that
-  branch holds them (the checkout you run it in need not have them), and its
-  pull request targets that branch. The pull request from the feature branch
-  to your default branch is yours to open; buildme never opens or merges it.
-- Before a build starts, and in an epic at the start of every run and before
-  each later wave of children, buildme merges origin's default branch into
-  the feature branch and pushes it, never forced. A conflict is aborted,
+  pushes the specs: new flag `build --branch <name>`, else the branch the
+  change dir's `.change.yaml` records, else the one branch on origin named
+  `<TICKET>-<change>`. Origin having several is refused with `SPEC:NOT_READY`,
+  asking for `--branch`; a `--branch` that does not start with the change's
+  `<TICKET>-` is refused the same way. The specs are read as that branch
+  holds them, so the checkout you run it in need not have them.
+- Every branch buildme makes is now named `<TICKET>-<change>`, replacing
+  `buildme/<change>`. The ticket is the change's own ticket ref, else its
+  nearest parent's (`ENG-40-auth-rework-a` for a child of `ENG-40`). A ticket
+  id git refuses in a branch name is refused with the reason.
+- A single change (not an epic) builds on its feature branch itself, with no
+  second branch: it pushes that branch, never forced, and opens one pull
+  request from it to origin's default branch, left for you to merge. The
+  build refuses when that branch is checked out in a worktree that is not
+  one of the change's own builds, or when your local copy of it holds
+  commits origin lacks. A `--force` rebuild of a published change builds on
+  `<branch>-2`, cut where the first build started.
+- Pull request titles are `[<target branch>] <TICKET> <title>`, replacing
+  `buildme: <change>`; `<title>` is the proposal's first heading. For
+  example `[main] ENG-42 Login times out after 5 min`, or
+  `[ENG-40-auth-rework] ENG-40 Retry the token refresh` for an epic's child.
+  Every pull request still opens through the pr skill, from the repo's PR
+  template; the `gh pr create` line is only printed, as the manual fallback.
+- Specs whose `.change.yaml` records no ticket ref, of their own or a
+  parent's, refuse with `SPEC:NOT_READY` and
+  `Run /multiplai-pm:pm-spec resume <name> --ticket-ref <ticket id> first`.
+- At the start of every run, buildme merges origin's default branch into the
+  feature branch with a merge commit, never a rebase or a force; in an epic
+  it does so again before each later wave of children. A first run merges in
+  a worktree of its own and pushes; a resume merges in the build's worktree
+  and its own push takes the merge (skipped, with a warning, while that
+  worktree has uncommitted changes to tracked files). A conflict is aborted,
   leaves the branch as it was, builds nothing, and exits `3` with the new
   marker `FEATURE_BRANCH:CONFLICT:<branch>:<files>`: merge by hand, push,
   and run the build again.
-- An epic's children all start from the feature branch and their pull
-  requests target it; a child that depends on others starts after they
-  merged into it, so it builds on their work and on any specs revision
-  pushed there since. With `epic.merge` unset, the children's pull requests
-  now merge automatically (`auto`) when the feature branch is not the
-  default branch; `epic.merge: manual` in `specs/config.yaml` still leaves
-  them to you. A pull request with no checks at all merges once none appear
-  for two minutes after buildme's own push.
+- An epic's children build on their own `<TICKET>-<child>` branches cut from
+  the feature branch, and their pull requests target it; a child that
+  depends on others starts after they merged into it, so it builds on their
+  work and on any specs revision pushed there since. With `epic.merge`
+  unset, the children's pull requests now merge automatically (`auto`) when
+  the feature branch is not the default branch; `epic.merge: manual` in
+  `specs/config.yaml` still leaves them to you. A pull request with no
+  checks at all merges once none appear for two minutes after buildme's own
+  push. The epic's pull request from the feature branch to your default
+  branch is yours to open; buildme never opens or merges it.
 - A resume whose specs were revised on the feature branch since its worktree
   was cut refuses with `SPEC:NOT_READY` and the `git merge` to run.
+- `buildme findings --pr <n>` finds the change from a `<TICKET>-<change>`
+  head branch as well as from `buildme/<change>`.
 
 ### Removed
 - The refusals of a change dir with uncommitted changes, of a first-wave
@@ -51,7 +78,8 @@ time, not derived from a tag.
 ### Migration
 - Specs handed off by a pm-spec before 0.8.0 (ready and committed in your
   checkout, no feature branch on origin) refuse with
-  `Run /multiplai-pm:pm-spec resume <name> first`. Run it, then the build.
+  `Run /multiplai-pm:pm-spec resume <name> first` (with `--ticket-ref
+  <ticket id>` when the change records none). Run it, then the build.
 
 ## [0.99.0] - 2026-10-22
 

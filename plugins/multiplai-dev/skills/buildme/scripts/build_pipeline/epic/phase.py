@@ -227,9 +227,18 @@ async def run_epic_from_specs(config, args) -> int:
         return readiness.refuse_not_ready(
             name,
             f"the epic {name} is ready in {config.change_dir} but on no feature branch "
-            f"(origin has no {feature_branch.PREFIX}{name}); its children start from the branch "
+            f"(origin has no branch <TICKET>-{name}); its children start from the branch "
             "pm-spec pushed the specs to",
             resume=True,
+            ticket_ref=not config.tickets,
+        )
+    if not config.tickets:
+        return readiness.refuse_not_ready(
+            name,
+            f"the epic {name} on {branch} records no ticket ref; buildme names its children's "
+            "branches <TICKET>-<child>",
+            resume=True,
+            ticket_ref=True,
         )
     epic_dir = store.epic_dir_for(repo, name)
     with tempfile.TemporaryDirectory(prefix="buildme-epic-") as tmp:

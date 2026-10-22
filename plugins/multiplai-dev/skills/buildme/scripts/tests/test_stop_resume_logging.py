@@ -40,16 +40,31 @@ _RUN_SECTIONS = ("RESUMED", "INTERRUPTED", "BUDGET")
 class Sandbox:
     """A source repo with an origin, a workspace, and a clean environment."""
 
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, *, proposal: str = ""):
+        """*proposal*, when given, is the change's proposal.md, and the specs
+        reach only the feature branch, as pm-spec's worktree leaves them;
+        else they are committed on main too."""
         self.root = root
         self.repo = make_repo(root / "proj")
-        # pm-spec's handoff: the change's specs, ready and committed.
-        ready_specs(self.repo / "specs" / "changes" / "feat", self.repo)
         make_bare_origin(self.repo, root / "origin.git")
-        subprocess.run(
-            ["git", "push", "-q", "origin", "main"], cwd=self.repo, check=True
-        )
+        change = self.repo / "specs" / "changes" / "feat"
+        if proposal:
+            subprocess.run(
+                ["git", "push", "-q", "origin", "main"], cwd=self.repo, check=True
+            )
+            subprocess.run(["git", "switch", "-qc", "spec"], cwd=self.repo, check=True)
+            change.mkdir(parents=True)
+            (change / "proposal.md").write_text(proposal)
+        # pm-spec's handoff: the change's specs, ready and committed.
+        ready_specs(change, self.repo)
+        if not proposal:
+            subprocess.run(
+                ["git", "push", "-q", "origin", "main"], cwd=self.repo, check=True
+            )
         publish(self.repo, "feat")  # and its push to the feature branch
+        if proposal:
+            for argv in (["switch", "-q", "main"], ["branch", "-qD", "spec"]):
+                subprocess.run(["git", *argv], cwd=self.repo, check=True)
         self.ws = root / "ws"
         for name in ("home", "claude-config", "conf", "data"):
             (root / name).mkdir()
@@ -258,7 +273,7 @@ def test_S4_rerun_of_a_published_build_asks_and_writes_nothing(full):
     )
     assert Path(line.split(":", 2)[2]).parent.parent == path
     assert (
-        "branch buildme/feat" in proc.stderr
+        "branch ENG-1-feat" in proc.stderr
         and "https://github.com/acme/proj/pull/7" in proc.stderr
     )
     assert "ERROR" not in proc.stderr
@@ -277,7 +292,7 @@ def test_S5_force_builds_anew_on_the_next_branch_and_resumes_there(full, force_a
         capture_output=True,
         text=True,
     ).stdout.strip()
-    assert branch == "buildme/feat-2"
+    assert branch == "ENG-1-feat-2"
 
     # The stopped forced build resumes: its .build-state.json wins over the
     # published build's completed one, with or without --force.
@@ -355,7 +370,9 @@ def test_S9_origin_moved_between_stop_and_resume(box, full):
         capture_output=True,
         text=True,
     ).stdout
-    assert "later on main" not in log  # no fetch, no rebase
+    # The resume merged origin's main into the feature branch it builds on
+    # (Decision 5), with a merge commit: no rebase.
+    assert "later on main" in log and "Merge origin/main into ENG-1-feat" in log
     assert_same_progress(box, full)
     assert _usd(box.completed()) == FULL_USD
 

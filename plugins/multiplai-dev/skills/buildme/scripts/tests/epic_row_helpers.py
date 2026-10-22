@@ -15,7 +15,7 @@ them ("How the row tests compare").
   read-only calls.
 - An epic is pm-spec's records (`approve`): each child's ready specs and
   `depends_on`, the parent's `children`, committed and pushed to the epic's
-  feature branch, origin's `change/<parent>`.
+  feature branch, origin's `ENG-40-<parent>`.
 - A kill is a forked child exiting 137 at a named seam (`run_killed`), as
   `row_helpers.run_killed_at` does for git calls.
 """
@@ -223,11 +223,11 @@ def approve(
     it: each child's change dir with ready specs, `parent`, `depends_on`
     (change names) and the feature `branch`, and the parent's `children` (in
     the answer's order); then commit the change dirs in the project and push
-    that commit to origin's `change/<parent>`, as pm-spec does (with the real
+    that commit to origin's `ENG-40-<parent>`, as pm-spec does (with the real
     `git`, so no fake root logs it). Returns that commit's sha. *log* is
     unused, kept so the callers stay as they were."""
     parent = config.change_name
-    branch = f"change/{parent}"
+    branch = f"ENG-40-{parent}"
     changes = config.specs_dir / "changes"
     names = []
     for c in answer.children:
@@ -245,7 +245,14 @@ def approve(
             },
         )
         write_ready_specs(d, c.id)
-    write_change_meta(config.change_dir, {"children": names, "branch": branch})
+    write_change_meta(
+        config.change_dir,
+        {
+            "children": names,
+            "branch": branch,
+            "ticket_refs": {"epic": "ENG-40", "children": []},
+        },
+    )
     project = Path(config.project_dir)
     rels = [
         os.path.relpath(p, project)

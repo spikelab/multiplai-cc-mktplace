@@ -88,7 +88,7 @@ class Epic:
             )
         )
         return coordinator.Coordinator(
-            config or self.config, None, self.dir, epic, "change/e"
+            config or self.config, None, self.dir, epic, "ENG-40-e"
         )
 
     def run(self, **over) -> int:
@@ -364,9 +364,9 @@ def test_the_argv_holds_the_flags_and_absolute_paths(tmp_path, monkeypatch):
         "--project-dir",
         str(e.project),
         "--base-ref",
-        "origin/change/e",
+        "origin/ENG-40-e",
         "--branch",
-        "change/e",
+        "ENG-40-e",
         "--skip-research",
     ]
     for flag in (
@@ -418,13 +418,13 @@ def test_a_parent_that_skipped_research_skips_it_in_each_child(tmp_path, monkeyp
 def test_each_child_starts_from_the_feature_branch_as_origin_holds_it_then(
     tmp_path, monkeypatch
 ):
-    """Every child starts from origin's change/e as it is at its launch: a
-    first, from the commit pm-spec pushed; change/e moves right after a's
+    """Every child starts from origin's ENG-40-e as it is at its launch: a
+    first, from the commit pm-spec pushed; ENG-40-e moves right after a's
     first launch, and b, launched next, starts from where it moved to. a's
     relaunch reuses its first command (item 15)."""
     e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT, steps={"a": [{"exit": 1}, {}]})
     origin = tmp_path / "o" / "r.git"
-    assert e.specs == _sha(origin, "change/e") != _sha(origin, "main")
+    assert e.specs == _sha(origin, "ENG-40-e") != _sha(origin, "main")
     real, moved = coordinator._spawn, []
 
     def spawn(argv, log_path):
@@ -444,21 +444,21 @@ def test_each_child_starts_from_the_feature_branch_as_origin_holds_it_then(
         for a in records.attempts(e.dir)
         if a.child == "a" and a.kind == "build"
     ]
-    assert first[first.index("--base-ref") + 1] == "origin/change/e"
+    assert first[first.index("--base-ref") + 1] == "origin/ENG-40-e"
     assert again == first  # the relaunch is the same command
     assert (tmp_path / "bases" / "b").read_text() == moved[0] != e.specs
     assert _sha(origin, "main") != moved[0]  # nothing went to main
 
 
 def _push_feature(root: Path) -> str:
-    """One more commit on origin's change/e, from another clone; its sha."""
+    """One more commit on origin's ENG-40-e, from another clone; its sha."""
     other = root / "feature-clone"
     subprocess.run(
-        ["git", "clone", "-q", "-b", "change/e", str(root / "o" / "r.git"), str(other)],
+        ["git", "clone", "-q", "-b", "ENG-40-e", str(root / "o" / "r.git"), str(other)],
         check=True,
     )
     _commit(other, "f.txt", "f\n", "feature moved")
-    subprocess.run(["git", "push", "-q", "origin", "change/e"], cwd=other, check=True)
+    subprocess.run(["git", "push", "-q", "origin", "ENG-40-e"], cwd=other, check=True)
     return _sha(other)
 
 
@@ -662,13 +662,13 @@ def test_a_config_yaml_not_on_origin_launches_no_dependant_until_pushed(
             "--no-rebase",
             "--no-edit",
             "origin",
-            "change/e",
+            "ENG-40-e",
         ],
         cwd=e.project,
         check=True,
     )
     subprocess.run(
-        ["git", "push", "-q", "origin", "HEAD:change/e"], cwd=e.project, check=True
+        ["git", "push", "-q", "origin", "HEAD:ENG-40-e"], cwd=e.project, check=True
     )
     assert (
         e.run() == 3
@@ -681,7 +681,7 @@ def test_a_config_yaml_not_on_origin_launches_no_dependant_until_pushed(
     ]
     assert (
         docs[0].started["argv"][docs[0].started["argv"].index("--base-ref") + 1]
-        == "origin/change/e"
+        == "origin/ENG-40-e"
         and docs[0].started["head_sha"] == pushed
     )
 
@@ -1125,8 +1125,8 @@ def test_create_worktree_takes_a_start_point(tmp_path, monkeypatch):
 def test_the_build_branches_from_base_ref_and_counts_an_empty_branch_against_it(
     tmp_path, monkeypatch
 ):
-    """A first attempt killed before its first commit left `buildme/c` at the base
-    ref, which local main has not reached: the next attempt makes `buildme/c-2`."""
+    """A first attempt killed before its first commit left `ENG-1-c` at the base
+    ref, which local main has not reached: the next attempt makes `ENG-1-c-2`."""
     use_workspace(monkeypatch, tmp_path)
     project = make_project(tmp_path)
     other = tmp_path / "other"
@@ -1143,13 +1143,14 @@ def test_the_build_branches_from_base_ref_and_counts_an_empty_branch_against_it(
     subprocess.run(["git", "push", "-q", "origin", "HEAD:main"], cwd=other, check=True)
     subprocess.run(["git", "fetch", "-q", "origin"], cwd=project, check=True)
     base = _sha(project, "origin/main")
-    subprocess.run(["git", "branch", "buildme/c", base], cwd=project, check=True)
+    subprocess.run(["git", "branch", "ENG-1-c", base], cwd=project, check=True)
 
     config = BuildConfig(project_dir=project, change_name="c")
     config.base_ref = base
+    config.tickets = ("ENG-1",)
     state = BuildState(change_name="c", tier="advanced")
     orchestrator._setup_worktree(config, state)
-    assert state.branch == "buildme/c-2"
+    assert state.branch == "ENG-1-c-2"
     assert _sha(Path(state.worktree_path)) == base != _sha(project)
 
 
@@ -1195,6 +1196,7 @@ def test_the_pr_targets_the_branch_its_base_ref_is_on(tmp_path, monkeypatch, on_
     config = BuildConfig(project_dir=project, change_name="c")
     config.specs_dir = project / "specs"
     config.base_ref = base
+    config.tickets = ("ENG-1",)
     state = BuildState(
         change_name="c", tier="advanced", state_file=str(config.state_file_path())
     )

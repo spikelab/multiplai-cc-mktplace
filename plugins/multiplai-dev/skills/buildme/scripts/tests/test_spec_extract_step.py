@@ -799,8 +799,7 @@ class TestSiblingsOpenTheirPrsAgainstMain:
                 cid == "ui"
             ):  # the trap: the one origin branch holding the commit is api's
                 assert (
-                    orchestrator._pr_base_branch(trees["ui"], registry)
-                    == "buildme/e-api"
+                    orchestrator._pr_base_branch(trees["ui"], registry) == "ENG-1-e-api"
                 )
             assert (
                 _prepare_and_publish(
@@ -809,7 +808,7 @@ class TestSiblingsOpenTheirPrsAgainstMain:
                 is True
             )
 
-        assert sorted(opened) == ["buildme/e-api", "buildme/e-ui"]
+        assert sorted(opened) == ["ENG-1-e-api", "ENG-1-e-ui"]
         for argv in opened.values():
             assert "--base" not in argv, argv
 

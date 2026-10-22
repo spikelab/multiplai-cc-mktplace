@@ -1160,15 +1160,15 @@ class TestBootstrapWorktree:
 
         expected_wt = workspace / ".worktrees" / "buildme-my-change"
         assert state.worktree_path == str(expected_wt)
-        assert state.branch == "buildme/my-change"
+        assert state.branch == "ENG-1-my-change"
         assert state.source_repo == str(repo.resolve())
         assert expected_wt.is_dir()
-        assert git_ops.current_branch(expected_wt) == "buildme/my-change"
+        assert git_ops.current_branch(expected_wt) == "ENG-1-my-change"
 
         # Config re-bound: every later phase writes inside the worktree
         assert config.project_dir == expected_wt
         assert config.specs_dir == expected_wt / "specs"
-        assert config.pipeline_branch == "buildme/my-change"
+        assert config.pipeline_branch == "ENG-1-my-change"
         assert (expected_wt / "specs" / "changes" / "my-change").is_dir()
 
         # The caller's checkout was never written to
@@ -1314,7 +1314,7 @@ class TestResumeRebinding:
             "a resume must not create a second worktree"
         )
         assert config2.project_dir == worktree
-        assert config2.pipeline_branch == "buildme/resumed"
+        assert config2.pipeline_branch == "ENG-1-resumed"
 
     @pytest.mark.asyncio
     async def test_a_resume_started_inside_the_worktree_owns_its_branch(
@@ -1342,7 +1342,7 @@ class TestResumeRebinding:
         config2.specs_dir = worktree / "specs"
         _rebind_to_existing_worktree(config2)
         assert config2.project_dir == worktree
-        assert config2.pipeline_branch == "buildme/resumed"
+        assert config2.pipeline_branch == "ENG-1-resumed"
 
 
 class TestPublishFailureIsNonFatal:
@@ -1394,13 +1394,13 @@ class TestPublishFailureIsNonFatal:
 
         # Branch and worktree survive
         assert worktree.is_dir()
-        assert git_ops.branch_exists(repo, "buildme/ghfail")
+        assert git_ops.branch_exists(repo, "ENG-1-ghfail")
 
         # The push half did succeed, so only the PR is outstanding
         progress_text = (worktree / "build-progress.md").read_text()
         assert "gh auth login" in progress_text
-        assert "git push -u origin buildme/ghfail" in progress_text
-        assert "gh pr create --title 'buildme: ghfail'" in progress_text
+        assert "git push -u origin ENG-1-ghfail" in progress_text
+        assert "gh pr create --title '[main] ENG-1 ghfail'" in progress_text
 
     @pytest.mark.asyncio
     async def test_no_remote_reports_manual_commands_and_invents_nothing(
@@ -1427,7 +1427,7 @@ class TestPublishFailureIsNonFatal:
         assert "PHASE:PUBLISH:FAILED:no-remote" in out
         text = (worktree / "build-progress.md").read_text()
         assert "No 'origin' remote" in text
-        assert "git push -u origin buildme/noremote" in text
+        assert "git push -u origin ENG-1-noremote" in text
         assert git_ops.has_remote(worktree) is False
 
     @pytest.mark.asyncio
@@ -1461,7 +1461,7 @@ class TestPublishFailureIsNonFatal:
         assert state.pr_url == "https://github.com/o/r/pull/9"
         out = capsys.readouterr().out
         assert "PR:https://github.com/o/r/pull/9" in out
-        assert "PUSHED:buildme/happy" in out
+        assert "PUSHED:ENG-1-happy" in out
         # The pr skill opens a draft unless told --ready.
         assert "--ready" not in captured["argv"], "PRs are draft by default"
 
@@ -1557,7 +1557,7 @@ class TestPublishFailureIsNonFatal:
         await _run_bootstrap(config, state, cm, config.state_file_path())
         progress = ProgressWriter(config.progress_file_path())
         assert _prepare_and_publish(config, state, progress) is True
-        assert "PHASE:PUBLISH:SKIPPED:buildme/nopush" in capsys.readouterr().out
+        assert "PHASE:PUBLISH:SKIPPED:ENG-1-nopush" in capsys.readouterr().out
 
 
 async def _bootstrapped_auto_build(tmp_path, change: str, why: str):
@@ -1665,7 +1665,7 @@ class TestPublishFailureRecovery:
         assert len(archived_states) == 1
         resumed = BuildState.load(archived_states[0])
         assert resumed.phase == BuildPhase.PUBLISH
-        assert resumed.branch == "buildme/pubfail"
+        assert resumed.branch == "ENG-1-pubfail"
 
         # Re-run with gh healthy: adopts the same worktree, retries, cleans up.
         before = _worktree_count(repo)
@@ -1866,8 +1866,8 @@ class TestPublishHandsOffToThePrSkill:
         assert argv[4:8] == ["python", "-m", "pr_pipeline", "open"]
         assert argv[argv.index("--repo") + 1] == state.worktree_path
         assert argv[argv.index("--change-dir") + 1] == str(config.change_dir)
-        assert argv[argv.index("--head") + 1] == "buildme/handoff"
-        assert argv[argv.index("--title") + 1] == "buildme: handoff"
+        assert argv[argv.index("--head") + 1] == "ENG-1-handoff"
+        assert argv[argv.index("--title") + 1] == "[main] ENG-1 handoff"
         assert "--no-push" in argv, (
             "buildme pushes itself, so PUSHED: and push failures are unchanged"
         )
@@ -1987,7 +1987,7 @@ class TestPublishHandsOffToThePrSkill:
         )
         text = (Path(state.worktree_path) / "build-progress.md").read_text()
         assert "python -m pr_pipeline open" in text
-        assert "gh pr create --title 'buildme: skillfail'" in text
+        assert "gh pr create --title '[main] ENG-1 skillfail'" in text
 
     @pytest.mark.asyncio
     async def test_an_existing_prs_url_from_gh_reaches_the_publish_diagnosis(

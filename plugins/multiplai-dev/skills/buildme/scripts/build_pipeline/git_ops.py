@@ -463,8 +463,10 @@ def resolve_new_branch(
     base: str,
     *,
     taken: tuple[str, ...] = (),
+    name: str | None = None,
 ) -> tuple[str, Path]:
-    """Pick a free ``buildme/<change>`` branch and its matching worktree path.
+    """Pick a free branch, *name* (``<TICKET>-<change>``, which the caller
+    passes; ``buildme/<change>`` without one), and its matching worktree path.
 
     A colliding branch that carries commits not on ``base`` is somebody's
     work — refuse rather than guess. A colliding branch with nothing on it
@@ -472,7 +474,7 @@ def resolve_new_branch(
     A branch in *taken* (a published build's, when the user asked for a new
     build of that change) is skipped the same way, whatever it carries.
     """
-    base_branch = branch_name_for(change_name)
+    base_branch = name or branch_name_for(change_name)
     for suffix in range(1, 51):
         branch = base_branch if suffix == 1 else f"{base_branch}-{suffix}"
         dest = worktree_dest(repo, change_name, suffix)

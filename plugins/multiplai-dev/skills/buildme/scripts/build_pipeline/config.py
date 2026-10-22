@@ -790,9 +790,16 @@ class BuildConfig:
     # change's feature branch sets it to that). Empty: the source HEAD.
     base_ref: str = ""
     # `build --branch`, else the change's feature branch as
-    # `feature_branch.resolve` found it: where pm-spec pushed the specs, what
-    # the build starts from and what its PR targets. Empty: none.
+    # `feature_branch.resolve` found it: where pm-spec pushed the specs. A
+    # single change builds on it and opens its PR to the default branch; an
+    # epic's child builds on `<TICKET>-<child>` cut from it, with its PR
+    # targeting it. Empty: none.
     feature_branch: str = ""
+    # The change's ticket ids, its own first, then each parent's
+    # (`feature_branch.tickets_at`, on the feature branch, else in the
+    # checkout): the first names the branches buildme makes and goes in
+    # the PR title. Empty: none known.
+    tickets: tuple[str, ...] = ()
     # The checkout the build was started in, when a resume re-bound the config
     # to the build's existing worktree (`orchestrator._rebind_to_existing_worktree`);
     # None otherwise. The readiness check compares its specs with the worktree's.
