@@ -21,6 +21,15 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-10-22
+
+### Fixed
+- `pm-spec revise <name>` now finds a change that an `--auto` build archived.
+  When `specs/changes/<name>/` is gone, it works on the newest
+  `specs/archive/<date>-<name>/`, where buildme-findings writes the
+  requirements issues a review raises after the archive. Before, it stopped
+  with "has no pm-spec run".
+
 ## [0.7.1] - 2026-10-22
 
 ### Added

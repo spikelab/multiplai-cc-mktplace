@@ -21,7 +21,7 @@ from pathlib import Path
 
 import yaml
 from multiplai_core import resolve_model_spec
-from multiplai_core.specs import normalize_change_name
+from multiplai_core.specs import archived_change_dirs, normalize_change_name
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +59,9 @@ class SpecConfig:
     specs_dir: Path | None = None
     auto: bool = False
     data: dict = field(default_factory=dict)
+    # The archived change dir `revise` works on when specs/changes/<name>/ is
+    # gone (`use_archive_if_gone`); None: the change dir is specs/changes/<name>/.
+    archived: Path | None = None
 
     def __post_init__(self) -> None:
         self.project_dir = Path(self.project_dir).expanduser().resolve()
@@ -71,7 +74,19 @@ class SpecConfig:
 
     @property
     def change_dir(self) -> Path:
+        if self.archived is not None:
+            return self.archived
         return self.specs_dir / "changes" / self.change_name
+
+    def use_archive_if_gone(self) -> None:
+        """Work on the change's newest archived dir (`specs/archive/<date>-<name>/`,
+        `archived_change_dirs`) when specs/changes/<name>/ does not exist: an
+        `--auto` build archives the change, and buildme-findings writes later
+        requirements issues into that copy."""
+        if not (self.specs_dir / "changes" / self.change_name).is_dir():
+            dirs = archived_change_dirs(self.specs_dir, self.change_name)
+            if dirs:
+                self.archived = dirs[-1]
 
     @property
     def run_dir(self) -> Path:
