@@ -1,6 +1,6 @@
 ---
 name: plan
-description: Author self-contained, executable implementation plans that carry their own completion contract — verifiable "Done means" criteria, explicit constraints/out-of-scope, stop-and-ask gates, and a table of what is on disk and what resume does at every point a step can stop. The resulting plan file can be handed to a fresh session ("implement the plan"), fed to a goal runner, or used as buildme input, with no conversation context needed. Triggers on "write a plan", "make a plan", "implementation plan", "plan this out", "draft a plan for", or explicit /plan invocation.
+description: Author self-contained, executable implementation plans that carry their own completion contract — verifiable "Done means" criteria, explicit constraints/out-of-scope, stop-and-ask gates, and a table of what is on disk and what resume does at every point a step can stop. The resulting plan file can be handed to a fresh session ("implement the plan"), fed to a goal runner, or used as pm-spec input (the specs buildme builds from), with no conversation context needed. Triggers on "write a plan", "make a plan", "implementation plan", "plan this out", "draft a plan for", or explicit /plan invocation.
 ---
 
 # Plan
@@ -200,4 +200,7 @@ It is directly consumable by:
   reporting against Done means.
 - **A goal/autonomous runner** — Outcome + Done means + Constraints are
   the goal contract; Work items are the decomposition.
-- **buildme** (multiplai-dev) — Context + Outcome seed the proposal stage.
+- **pm-spec** (multiplai-pm) — `/multiplai-pm:pm-spec new <name> --plan-file
+  <plan>`: Context + Outcome seed the proposal pm-spec writes. buildme
+  (multiplai-dev) then builds from the specs pm-spec marks ready; it takes no
+  plan file itself.
