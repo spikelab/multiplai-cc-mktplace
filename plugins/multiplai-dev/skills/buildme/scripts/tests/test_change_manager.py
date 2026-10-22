@@ -397,20 +397,6 @@ def test_merges_delta_into_spec_extract_registry_file(cm, specs_dir):
     assert merged.count("### Requirement:") == 1
 
 
-def test_findings_edit_on_spec_extract_registry_file():
-    from build_pipeline.findings.spec import _edit_registry
-
-    text = SPEC_EXTRACT_SAMPLE.read_text()
-    block = ("### Requirement: Subtracts two numbers\nsub SHALL return a minus b, and raise on None.\n\n"
-             "#### Scenario: subtracting None\n- **WHEN** sub(None, 1) is called\n- **THEN** it raises TypeError")
-    edited, why = _edit_registry(text, "MODIFIED", "Subtracts two numbers", block)
-    assert why == ""
-    assert "and raise on None." in edited and "sub SHALL return a minus b.\n" not in edited
-    # The other requirement, with its CITES and EVIDENCE lines, is untouched.
-    adds = text.split("### Requirement: Subtracts two numbers")[0]
-    assert edited.startswith(adds)
-
-
 def test_requirements_need_every_proposed_capability(tmp_path):
     from build_pipeline.change_manager import ChangeManager
     from build_pipeline.models import ArtifactStatus

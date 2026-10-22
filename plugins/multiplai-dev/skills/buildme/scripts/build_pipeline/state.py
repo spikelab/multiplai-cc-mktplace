@@ -17,7 +17,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, model_validator
 
 from . import budget
-from .findings.models import PRComment, SpecChange, Triage
+from .findings.models import PRComment, SpecIssue, Triage
 from .models import BlockInfo, BlockStatus, BuildPhase
 from .stop_record import StepStop  # noqa: F401  (moved; `from .state import StepStop` keeps working)
 from .stop_record import record as record_stop
@@ -152,8 +152,11 @@ class FindingsRound(BaseModel):
     # checkpoints.
     escalated: bool = False
     triaged: dict[int, Triage] = Field(default_factory=dict)  # comment id → verdict
-    delta_path: str | None = None
-    spec_changes: list[SpecChange] = Field(default_factory=list)
+    # The requirements changes the round recorded in spec-issues.md for
+    # `pm-spec revise` (buildme never edits requirements), and the commit
+    # that holds them. Checkpoints written before this kept `delta_path` and
+    # `spec_changes` instead, which load as nothing.
+    spec_issues: list[SpecIssue] = Field(default_factory=list)
     spec_commit: str | None = None
     tasks_path: str | None = None
     engine_state_path: str | None = None

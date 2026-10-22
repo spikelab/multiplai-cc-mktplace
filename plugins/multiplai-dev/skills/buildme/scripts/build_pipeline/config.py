@@ -414,7 +414,6 @@ STEP_STAGES: dict[str, str] = {
     "explainer": "spec",
     "respec": "spec",
     "research": "spec",
-    "findings_spec": "spec",
     "test_writer": "agent",
     "implementer": "agent",
     "refactor": "agent",

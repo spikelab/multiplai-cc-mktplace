@@ -60,8 +60,12 @@ def self_check_file_name(round_n: int) -> str:
 
 
 def code_fixes(records: list[TriageRecord]) -> list[TriageRecord]:
-    """The records fixed with a failing test first, in comment order."""
-    return [r for r in records if r.triage and r.triage.verdict == Verdict.CODE_FIX]
+    """The records fixed with a failing test first this round, in comment
+    order. A `code_fix` whose fix contradicts the current spec
+    (`spec_conflict`) is left out: it waits on the requirements change the
+    spec step recorded for `pm-spec revise`."""
+    return [r for r in records
+            if r.triage and r.triage.verdict == Verdict.CODE_FIX and not r.triage.spec_conflict]
 
 
 def _line(text: str, limit: int = 1200) -> str:

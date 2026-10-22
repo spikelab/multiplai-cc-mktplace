@@ -1,24 +1,26 @@
-"""Change the specs a finding requires, before any code is fixed.
+"""Record the requirements changes review findings ask for; pm-spec makes them.
 
-For every `spec_change` verdict, and every `code_fix` whose fix contradicts the
-current spec (`Triage.spec_conflict`), one toolless `llm_call` per round writes
-a delta in the ADDED/MODIFIED/REMOVED form `multiplai_core.specs.apply_delta` reads,
-saved as `respec-findings-r<N>.md`. The pipeline applies it to the change's
-`requirements/<capability>.md` files with `_edit_change` below, not with
-`apply_delta`, and commits
-`spec(findings-r<N>): <ids>`, with or without `--auto`.
+buildme never edits requirements. For every `spec_change` verdict, and every
+`code_fix` whose fix contradicts the current spec (`Triage.spec_conflict`),
+the spec step appends one `## ` section to `spec-issues.md` in the change
+directory (the archived change's own directory when the change is archived),
+sets `spec_issues` in that directory's `.change.yaml`
+(`multiplai_core.specs.set_spec_issues`), and commits both as
+`spec(findings-r<N>): <ids>`, with or without `--auto`. `pm-spec revise
+<change>` reads the file, one issue per `## ` section, and edits the
+requirements.
 
-A change's `requirements/<capability>.md` is itself a delta, split into
-`## ADDED/MODIFIED/REMOVED Requirements` sections, so each requirement is
-edited inside its section (`multiplai_core.specs.apply_delta` is written for
-registry files and would move later requirements across sections). When the
-change is archived, which an `--auto` build always does, its requirements
-were already merged into `specs/registry/<capability>.md`: the same edit is
-made there too, since that file is the live spec. A requirement counts as
-applied only when its text changed.
+Each section is written from the triage verdict alone, with no model call:
+its heading names the finding, and its body names the requirements file
+(`requirements/<cap>.md`, only when triage named a capability the change has
+a file for), the requirement as triage named it, the reviewer's comment link
+and the change triage asks for. A section already in the file under the same
+heading (an earlier round's, or a resumed step's) is not written again, and
+nothing already in the file is rewritten.
 
-This path writes its own delta file. A build's `run_respec_audit` stays
-propose-only.
+A `code_fix` with `spec_conflict` depends on that change, so it is not fixed
+this round (`code.code_fixes` leaves it out) and its reply says why. Other
+code fixes go ahead in the same round.
 """
 
 from __future__ import annotations
@@ -26,32 +28,29 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from typing import Awaitable, Callable
 
-from .. import git_ops, sdk
+from multiplai_core.specs import CHANGE_META_FILE, normalize_change_name, set_spec_issues
+from multiplai_core.untrusted import defang
+
+from .. import git_ops
 from ..config import BuildConfig
-from ..prompts.findings import SPEC_DELTA_PROMPT
-from .models import SpecChange, TriageRecord, Verdict
+from .models import SpecIssue, TriageRecord, Verdict
 
 log = logging.getLogger(__name__)
 
-LlmCall = Callable[..., Awaitable[str]]
+ISSUES_FILE = "spec-issues.md"
+EARLIER_HEADING = "Issue recorded earlier"
 
-_CAPABILITY_RE = re.compile(r"^# Capability:[ \t]*(.+?)[ \t]*$", re.MULTILINE)
-_DECLINED_RE = re.compile(r"^# Declined[ \t]*$", re.MULTILINE)
-_FINDINGS_LINE_RE = re.compile(r"^Findings:[ \t]*(.*)$", re.MULTILINE)
-_SECTION_RE = re.compile(
-    r"^## (ADDED|MODIFIED|REMOVED) Requirements[ \t]*\n(.*?)(?=^## (?:ADDED|MODIFIED|REMOVED) Requirements|\Z)",
-    re.MULTILINE | re.DOTALL,
-)
-_REQ_RE = re.compile(r"^### Requirement:[ \t]*(.+?)[ \t]*$", re.MULTILINE)
-_NONE_LINE_RE = re.compile(r"^[ \t]*_None(?: proposed)?\._[ \t]*\n?", re.MULTILINE)
-_HEADING2_RE = re.compile(r"^## (.*?)[ \t]*$", re.MULTILINE)
-_SECTION_NAME_RE = re.compile(r"^(ADDED|MODIFIED|REMOVED|RENAMED) Requirements$")
+_H2_RE = re.compile(r"^## ", re.MULTILINE)
+_TITLE_RE = re.compile(r"#[ \t]+.*\n")
 
 
-def delta_path(change_dir: Path, round_n: int) -> Path:
-    return Path(change_dir) / f"respec-findings-r{round_n}.md"
+def issues_path(change_dir: Path) -> Path:
+    return Path(change_dir) / ISSUES_FILE
+
+
+def revise_command(config: BuildConfig) -> str:
+    return f"/multiplai-pm:pm-spec revise {normalize_change_name(config.change_name)}"
 
 
 def short_id(record: TriageRecord) -> str:
@@ -59,264 +58,97 @@ def short_id(record: TriageRecord) -> str:
     return c.finding_id or f"c{c.id}"
 
 
+def defers_fix(record: TriageRecord) -> bool:
+    """A `code_fix` whose fix contradicts the current spec: it waits on the
+    requirements change."""
+    t = record.triage
+    return bool(t and t.verdict == Verdict.CODE_FIX and t.spec_conflict)
+
+
 def needs_spec(records: list[TriageRecord]) -> list[TriageRecord]:
-    """The records whose fix starts with a spec change."""
-    out = []
+    """The records that ask for a requirements change."""
+    return [r for r in records
+            if r.triage and (r.triage.verdict == Verdict.SPEC_CHANGE or defers_fix(r))]
+
+
+def _line(text: str, limit: int) -> str:
+    """Model- or GitHub-written text as one defanged line, so it cannot start
+    a `## ` section of its own."""
+    return " ".join(defang(text or "", limit).split())
+
+
+def heading(record: TriageRecord) -> str:
+    c = record.comment
+    if c.finding_id:
+        return f"Finding {_line(c.finding_id, 80)}"
+    return c.label[:1].upper() + c.label[1:]
+
+
+def requirements_file(change_dir: Path, requirement: str) -> str:
+    """`requirements/<cap>.md` for triage's `<cap>: <name>`, only when the
+    change has that file: the name came from a model."""
+    cap = requirement.partition(":")[0].strip()
+    if not cap or cap != Path(cap).name:
+        return ""
+    rel = f"requirements/{cap}.md"
+    return rel if (Path(change_dir) / rel).is_file() else ""
+
+
+def entry(record: TriageRecord, req_file: str) -> str:
+    """The record's `## ` section of `spec-issues.md`."""
+    t = record.triage
+    c = record.comment
+    assert t is not None
+    link = _line(c.url, 300) or "(no link)"
+    lines = [f"## {heading(record)}", ""]
+    if req_file:
+        lines.append(f"- Requirements file: `{req_file}`")
+    lines.append(f"- Requirement: {_line(t.requirement, 300) or '(not named by the triage)'}")
+    lines.append(f"- Raised in: {link} (by @{_line(c.author, 80)}, "
+                 f"buildme findings round {record.round})")
+    if defers_fix(record):
+        lines.append("- A code fix waits on this change: the fix the comment asks for "
+                     "contradicts this requirement.")
+    label = "Why the fix needs it" if defers_fix(record) else "Requested change"
+    lines += ["", f"{label}: {_line(t.reason, 2000)}"]
+    if defers_fix(record) and t.failing_test:
+        lines.append(f"Once changed, the requirement must allow this: {_line(t.failing_test, 1000)}")
+    return "\n".join(lines) + "\n"
+
+
+def _has_section(text: str, head: str) -> bool:
+    return re.search(rf"^## {re.escape(head)}[ \t]*$", text, re.MULTILINE) is not None
+
+
+def append_issues(change_dir: Path, records: list[TriageRecord]) -> list[str]:
+    """Append each record's section to `spec-issues.md`, skipping one whose
+    heading the file already holds; return the headings appended. Text
+    already in the file is kept as it is, except that a file with no `## `
+    section (which pm-spec reads as one issue) first gets one heading above
+    its text, so it stays one issue next to the new ones."""
+    path = issues_path(change_dir)
+    text = path.read_text() if path.exists() else ""
+    if text.strip() and not _H2_RE.search(text):
+        m = _TITLE_RE.match(text)
+        cut = m.end() if m else 0
+        text = (text[:cut] + ("\n" if cut else "") + f"## {EARLIER_HEADING}\n\n"
+                + text[cut:].lstrip("\n"))
+    if not text.strip():
+        text = ("# Requirements issues\n\n"
+                "Raised by buildme findings. Each `## ` section is one issue for "
+                "`pm-spec revise`, which edits the requirements.\n")
+    added: list[str] = []
     for r in records:
-        t = r.triage
-        if t is None:
+        head = heading(r)
+        if _has_section(text, head) or head in added:
             continue
-        if t.verdict == Verdict.SPEC_CHANGE or (t.verdict == Verdict.CODE_FIX and t.spec_conflict):
-            out.append(r)
-    return out
-
-
-def _requirement_files(change_dir: Path) -> dict[str, Path]:
-    req_dir = Path(change_dir) / "requirements"
-    if not req_dir.is_dir():
-        return {}
-    return {f.stem: f for f in sorted(req_dir.glob("*.md"))}
-
-
-def _findings_block(records: list[TriageRecord]) -> str:
-    parts = []
-    for r in records:
         t = r.triage
         assert t is not None
-        parts.append(
-            f"- [{r.comment.key}] {t.verdict.value}"
-            + (f" — requirement: {t.requirement}" if t.requirement else "")
-            + f"\n  {t.reason}"
-            + (f"\n  A failing test must show: {t.failing_test}" if t.failing_test else "")
-        )
-    return "\n".join(parts)
-
-
-async def write_delta(config: BuildConfig, change_dir: Path, round_n: int,
-                      records: list[TriageRecord], *, call: LlmCall | None = None) -> Path:
-    """One toolless call; writes `respec-findings-r<N>.md` and returns its path.
-    Raises when the call fails: a round never fixes code against a spec it
-    was told is wrong."""
-    call = call or sdk.llm_call
-    files = _requirement_files(change_dir)
-    requirements = "\n\n".join(f"### {name}\n{p.read_text()}" for name, p in files.items())
-    prompt = SPEC_DELTA_PROMPT.format(
-        change_name=config.change_name,
-        findings=_findings_block(records),
-        requirements=requirements or "(no requirements files)",
-    )
-    body = await call(
-        prompt,
-        model=config.model_for('findings_spec'),
-        effort=config.effort_for('findings_spec'),
-        system_prompt=("You are a specification editor writing a delta. Output the delta "
-                       "directly as markdown. Do not use tools; everything you need is in "
-                       "the prompt."),
-        budget_label="findings_spec",
-    )
-    path = delta_path(change_dir, round_n)
-    ids = ", ".join(short_id(r) for r in records)
-    path.write_text(f"# Spec delta from review findings, round {round_n}\n\n"
-                    f"Findings: {ids}\n\n{body.strip()}\n")
-    return path
-
-
-def parse_delta(text: str) -> tuple[list[tuple[str, list[str], str]], dict[str, str]]:
-    """([(capability, finding keys, delta text)], {finding key: declined reason})."""
-    declined: dict[str, str] = {}
-    m = _DECLINED_RE.search(text)
-    body = text
-    if m:
-        body = text[:m.start()]
-        for line in text[m.end():].splitlines():
-            line = line.strip()
-            if line.startswith("- ") and ":" in line:
-                key, _, reason = line[2:].partition(": ")
-                if reason:
-                    declined[key.strip()] = reason.strip()
-    blocks = []
-    heads = list(_CAPABILITY_RE.finditer(body))
-    for i, h in enumerate(heads):
-        end = heads[i + 1].start() if i + 1 < len(heads) else len(body)
-        chunk = body[h.end():end]
-        keys: list[str] = []
-        fm = _FINDINGS_LINE_RE.search(chunk)
-        if fm:
-            keys = [k.strip().strip("[]") for k in fm.group(1).split(",") if k.strip()]
-            chunk = chunk[:fm.start()] + chunk[fm.end():]
-        blocks.append((h.group(1).strip(), keys, _NONE_LINE_RE.sub("", chunk).strip() + "\n"))
-    return blocks, declined
-
-
-def _find_requirement(text: str, name: str) -> re.Match | None:
-    """The block of requirement *name*: its heading up to the next
-    requirement, the next `## ` heading, or the end."""
-    return re.search(rf"^### Requirement:[ \t]*{re.escape(name)}[ \t]*$.*?(?=^### Requirement:|^## |\Z)",
-                     text, re.MULTILINE | re.DOTALL)
-
-
-def _requirement_block(text: str, name: str) -> str:
-    m = _find_requirement(text, name)
-    return m.group(0).strip() if m else ""
-
-
-def _section_at(text: str, pos: int) -> str | None:
-    """ADDED, MODIFIED, REMOVED or RENAMED when *pos* is in that
-    `## <op> Requirements` section; None when it is under no `## ` heading or
-    another one."""
-    op = None
-    for h in _HEADING2_RE.finditer(text, 0, pos):
-        m = _SECTION_NAME_RE.match(h.group(1))
-        op = m.group(1) if m else None
-    return op
-
-
-def _join(head: str, block: str, rest: str) -> str:
-    """*head*, then *block* (may be empty), then *rest*, one blank line
-    between each and one newline at the end. Only the seams are touched."""
-    parts = [x for x in (head.rstrip("\n"), block.strip(), rest.lstrip("\n")) if x]
-    return "\n\n".join(parts).rstrip("\n") + "\n"
-
-
-def _replace(text: str, m: re.Match, block: str) -> str:
-    if m.group(0).strip() == block.strip():
-        return text
-    return _join(text[:m.start()], block, text[m.end():])
-
-
-def _remove(text: str, m: re.Match) -> str:
-    return _join(text[:m.start()], "", text[m.end():])
-
-
-def _insert_in_section(text: str, op: str, block: str) -> str:
-    """*block* at the end of the `## <op> Requirements` section (added at the
-    end of the file when there is none), dropping its `_None._` line."""
-    head = re.search(rf"^## {op} Requirements[ \t]*$", text, re.MULTILINE)
-    if head is None:
-        return _join(text, f"## {op} Requirements\n\n{block.strip()}", "")
-    nxt = re.compile(r"^## ", re.MULTILINE).search(text, head.end())
-    end = nxt.start() if nxt else len(text)
-    section = _NONE_LINE_RE.sub("", text[:end][head.start():])
-    return _join(text[:head.start()] + section, block, text[end:])
-
-
-def _edit_registry(text: str, op: str, name: str, block: str) -> tuple[str, str]:
-    """(*text* with the operation made, "") or (*text*, why it was not) for a
-    registry file, where a requirement is replaced or removed wherever it is."""
-    m = _find_requirement(text, name)
-    if op == "ADDED":
-        if m:
-            return text, f"a requirement named {name!r} already exists"
-        if re.search(r"^## ADDED Requirements[ \t]*$", text, re.MULTILINE):
-            return _insert_in_section(text, "ADDED", block), ""
-        return _join(text, block, ""), ""
-    if m is None:
-        return text, f"no requirement named {name!r}"
-    return (_replace(text, m, block) if op == "MODIFIED" else _remove(text, m)), ""
-
-
-def _edit_change(text: str, op: str, name: str, block: str,
-                 registry: str | None) -> tuple[str, str]:
-    """The same for the change's own requirements file, a delta in sections:
-    the requirement keeps its section, and one the change did not touch yet
-    (it is only in the *registry*) gets an entry in the MODIFIED or REMOVED
-    section, which the archive merges."""
-    m = _find_requirement(text, name)
-    where = _section_at(text, m.start()) if m else None
-    in_registry = bool(registry and _find_requirement(registry, name))
-    if m is not None and where is None:
-        return _edit_registry(text, op, name, block)
-    if op == "ADDED":
-        if m or in_registry:
-            return text, f"a requirement named {name!r} already exists"
-        return _insert_in_section(text, "ADDED", block), ""
-    if m is None:
-        if not in_registry:
-            return text, f"no requirement named {name!r} in the change or the registry"
-        return _insert_in_section(text, op, block), ""
-    if where == "REMOVED":
-        return text, f"the change already removes {name!r}"
-    if op == "MODIFIED":
-        return _replace(text, m, block), ""
-    if where == "MODIFIED":   # the change edits a registry requirement: remove that instead
-        return _insert_in_section(_remove(text, m), "REMOVED", block), ""
-    return _remove(text, m), ""
-
-
-def _section_requirements(delta: str) -> list[tuple[str, str, str]]:
-    """[(operation, requirement name, its block in the delta)]."""
-    out = []
-    for sec in _SECTION_RE.finditer(delta):
-        op, body = sec.group(1), sec.group(2)
-        for req in _REQ_RE.finditer(body):
-            out.append((op, req.group(1).strip(), _requirement_block(body, req.group(1).strip())))
-    return out
-
-
-def is_archived(config: BuildConfig, change_dir: Path) -> bool:
-    return Path(change_dir).resolve().is_relative_to((Path(config.specs_dir) / "archive").resolve())
-
-
-def apply_delta_file(config: BuildConfig, change_dir: Path, delta_file: Path,
-                     records: list[TriageRecord]) -> tuple[list[SpecChange], list[Path]]:
-    """Apply `respec-findings-r<N>.md` to the change's requirements, and to
-    `specs/registry/` when the change is archived. Returns the changes
-    (applied and declined) and the files written. A capability that is not an
-    existing requirements file is declined, never created: the name came
-    from a model. A requirement is applied only when every file it must
-    change did change; otherwise neither is touched for it."""
-    files = _requirement_files(change_dir)
-    blocks, declined = parse_delta(delta_file.read_text())
-    archived = is_archived(config, change_dir)
-    changes: list[SpecChange] = []
-    written: list[Path] = []
-    covered: set[str] = set()
-    for capability, keys, delta in blocks:
-        covered.update(keys)
-        reqs = _section_requirements(delta)
-        target = files.get(capability)
-        if target is None:
-            for op, name, _ in reqs or [("MODIFIED", "(unnamed)", "")]:
-                changes.append(SpecChange(capability=capability, requirement=name, operation=op,
-                                          finding_keys=keys, applied=False,
-                                          declined_reason="no such requirements file in the change"))
-            continue
-        reg_path = Path(config.specs_dir) / "registry" / f"{capability}.md"
-        registry = reg_path.read_text() if reg_path.is_file() else None
-        text, reg_text = target.read_text(), registry
-        for op, name, block in reqs:
-            before = _requirement_block(text, name) or _requirement_block(reg_text or "", name)
-            new_text, why = _edit_change(text, op, name, block, reg_text)
-            new_reg = reg_text
-            if not why and archived:
-                if reg_text is None:
-                    why = f"the change is archived and specs/registry/{capability}.md is missing"
-                else:
-                    new_reg, why = _edit_registry(reg_text, op, name, block)
-            if not why and new_text == text and new_reg == reg_text:
-                why = "the delta's text is the same as the current requirement"
-            if why:
-                changes.append(SpecChange(capability=capability, requirement=name, operation=op,
-                                          before=before, after=block, finding_keys=keys,
-                                          applied=False, declined_reason=why))
-                continue
-            text, reg_text = new_text, new_reg
-            after = _requirement_block(text, name) if op != "REMOVED" else ""
-            changes.append(SpecChange(capability=capability, requirement=name, operation=op,
-                                      before=before, after=after, finding_keys=keys))
-        if text != target.read_text():
-            target.write_text(text)
-            written.append(target)
-        if reg_text != registry:
-            reg_path.write_text(reg_text)
-            written.append(reg_path)
-    for r in records:
-        if r.comment.key in declined and r.comment.key not in covered:
-            t = r.triage
-            changes.append(SpecChange(capability="", requirement=(t.requirement if t else ""),
-                                      operation="MODIFIED", finding_keys=[r.comment.key],
-                                      applied=False, declined_reason=declined[r.comment.key]))
-    return changes, written
+        text = text.rstrip("\n") + "\n\n" + entry(r, requirements_file(change_dir, t.requirement))
+        added.append(head)
+    if added:
+        path.write_text(text)
+    return added
 
 
 def commit_spec(project_dir: Path, round_n: int, records: list[TriageRecord],
@@ -329,20 +161,41 @@ def commit_spec(project_dir: Path, round_n: int, records: list[TriageRecord],
     )
 
 
-async def run_spec_step(config: BuildConfig, change_dir: Path, round_n: int,
-                        records: list[TriageRecord], *, extra_paths: list[Path] | None = None,
-                        call: LlmCall | None = None) -> tuple[list[SpecChange], str | None]:
-    """Write, apply and commit the round's spec delta. Returns the changes and
-    the commit sha (None when no finding needed a spec change, or the delta
-    changed nothing). *extra_paths* (e.g. `findings-r<N>.md`) ride along in
-    the same commit."""
+def _relative(path: Path, project_dir: Path) -> str:
+    try:
+        return path.resolve().relative_to(Path(project_dir).resolve()).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def run_spec_step(config: BuildConfig, change_dir: Path, round_n: int,
+                  records: list[TriageRecord], *,
+                  extra_paths: list[Path] | None = None) -> tuple[list[SpecIssue], str | None]:
+    """Record the round's requirements changes in `spec-issues.md`, set
+    `spec_issues` in `.change.yaml` and commit both. Returns the issues and
+    the commit sha (None when no finding asked for a requirements change).
+    *extra_paths* (e.g. `findings-r<N>.md`) ride along in the same commit."""
     wanted = needs_spec(records)
     if not wanted:
         return [], None
-    delta_file = await write_delta(config, change_dir, round_n, wanted, call=call)
-    changes, written = apply_delta_file(config, change_dir, delta_file, wanted)
-    if not written:
-        log.info("findings round %d: the spec delta changed no requirement", round_n)
+    change_dir = Path(change_dir)
+    added = set(append_issues(change_dir, wanted))
+    if not added:
+        log.info("findings round %d: spec-issues.md already held every requirements issue", round_n)
+    path = issues_path(change_dir)
+    set_spec_issues(change_dir, path)
+    issues_file, command = _relative(path, config.project_dir), revise_command(config)
+    issues = []
+    for r in wanted:
+        t = r.triage
+        assert t is not None
+        head = heading(r)
+        issues.append(SpecIssue(
+            finding_key=r.comment.key, heading=head, issues_file=issues_file,
+            command=command, requirement=t.requirement,
+            requirements_file=requirements_file(change_dir, t.requirement),
+            defers_fix=defers_fix(r), appended=head in added))
+        added.discard(head)   # a second record under the same heading added nothing
     sha = commit_spec(config.project_dir, round_n, wanted,
-                      [delta_file, *written, *(extra_paths or [])])
-    return changes, sha
+                      [path, change_dir / CHANGE_META_FILE, *(extra_paths or [])])
+    return issues, sha

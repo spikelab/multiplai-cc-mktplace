@@ -113,14 +113,16 @@ class TriageRecord(BaseModel):
         return self.triage is not None
 
 
-class SpecChange(BaseModel):
-    """One requirement the findings path changed (or declined to change)."""
+class SpecIssue(BaseModel):
+    """One requirements change a finding asks for, recorded as a `## ` section
+    of the change's `spec-issues.md` for `pm-spec revise`, which makes the
+    edit. buildme never edits requirements."""
 
-    capability: str
-    requirement: str
-    operation: Literal["ADDED", "MODIFIED", "REMOVED"]
-    before: str = ""
-    after: str = ""
-    finding_keys: list[str] = Field(default_factory=list)
-    applied: bool = True
-    declined_reason: str = ""
+    finding_key: str
+    heading: str                    # the section's `## ` heading
+    issues_file: str                # spec-issues.md, relative to the project
+    command: str                    # the pm-spec command that makes the edit
+    requirement: str = ""           # as triage named it: `<capability>: <requirement name>`
+    requirements_file: str = ""     # `requirements/<cap>.md`, when the change has that file
+    defers_fix: bool = False        # a code_fix whose fix waits on this change
+    appended: bool = True           # False: the file already held this finding's section

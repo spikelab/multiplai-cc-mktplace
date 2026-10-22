@@ -110,7 +110,6 @@ class Seams:
     """Injection points for tests; None means the real call."""
 
     triage_call: Callable[..., Awaitable] | None = None
-    spec_call: Callable[..., Awaitable] | None = None
     engine: Callable[..., Awaitable[int]] | None = None
     review: ReviewRunner | None = None
     post: ReviewPoster | None = None
@@ -203,7 +202,7 @@ def recurring_lines(run: FindingsRun, fs: FindingsState) -> list[str]:
 
 
 def _write_findings_file(run: FindingsRun, fs: FindingsState, rnd: FindingsRound) -> Path:
-    return triage.write_findings(run.change_dir, rnd.number, all_records(fs), rnd.spec_changes)
+    return triage.write_findings(run.change_dir, rnd.number, all_records(fs), rnd.spec_issues)
 
 
 # --- wip refs -----------------------------------------------------------------
@@ -456,13 +455,11 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
 
     async def do_spec() -> None:
         findings_file = _write_findings_file(run, fs, rnd)
-        changes, sha = await spec.run_spec_step(
+        issues, sha = spec.run_spec_step(
             run.config, run.change_dir, n, publish.records_of(rnd),
-            extra_paths=[findings_file], call=seams.spec_call)
-        rnd.spec_changes = changes
+            extra_paths=[findings_file])
+        rnd.spec_issues = issues
         rnd.spec_commit = sha
-        if changes:
-            rnd.delta_path = str(spec.delta_path(run.change_dir, n))
         _write_findings_file(run, fs, rnd)
 
     def task_options(records: list[TriageRecord]) -> dict:
