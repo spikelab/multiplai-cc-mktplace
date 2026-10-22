@@ -1400,7 +1400,8 @@ class TestPublishFailureIsNonFatal:
         progress_text = (worktree / "build-progress.md").read_text()
         assert "gh auth login" in progress_text
         assert "git push -u origin ENG-1-ghfail" in progress_text
-        assert "gh pr create --title '[main] ENG-1 ghfail'" in progress_text
+        # The proposal pm_spec_handoff writes is titled "Proposal".
+        assert "gh pr create --title '[main] ENG-1 Proposal'" in progress_text
 
     @pytest.mark.asyncio
     async def test_no_remote_reports_manual_commands_and_invents_nothing(

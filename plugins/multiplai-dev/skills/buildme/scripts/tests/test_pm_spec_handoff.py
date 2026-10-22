@@ -190,7 +190,7 @@ async def test_pm_spec_ready_specs_build_to_tdd_and_an_edit_refuses(
     requirement = change_dir / "requirements" / "fixture.md"
     requirement.write_text(requirement.read_text() + "\nThe value SHALL be 2.\n")
     _git(spec_tree, "commit", "-qam", "edit a requirement")
-    _git(spec_tree, "push", "-q", "origin", branch)
+    _git(spec_tree, "push", "-q", "origin", f"HEAD:refs/heads/{branch}")  # detached
     other = tmp_path / "teammate"
     _git(tmp_path, "clone", "-q", str(tmp_path / "origin.git"), str(other))
     monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws2"))
