@@ -1,19 +1,21 @@
 """Change manager — manages the specs/ directory for buildme.
 
-Handles change directory creation, artifact status tracking (dependency DAG),
-template/context assembly, archiving with delta spec merging, and change listing.
+Handles artifact status tracking (dependency DAG), template/context
+assembly, archiving with delta spec merging, and change listing.
 
 Directory layout:
     specs/
       config.yaml          — project context
       changes/<name>/      — active changes
-        proposal.md
-        use-cases.md       — personas + the use cases they must observe
-        design.md
+        .change.yaml       — pm-spec's record, `spec_status: ready` included
+        proposal.md        — pm-spec's (an input buildme checks for)
+        use-cases.md       — pm-spec's: personas + the use cases they must observe
+        requirements/      — pm-spec's: BDD scenarios (one file per capability)
+          <capability>.md
+        design.md          — buildme's, from here down
+        unknowns.md
         tasks.md
         rubric.md
-        requirements/      — BDD scenarios (one file per capability)
-          <capability>.md
       registry/            — merged main state (one file per capability)
         <capability>.md
       archive/<date>-<name>/ — completed changes
@@ -61,29 +63,29 @@ def extract_global_constraints(design_text: str) -> str:
     return m.group(1).strip() if m else ""
 
 
-# Insertion order is load-bearing: `artifact_status` resolves each node against
-# the statuses it has already computed, so every node must appear AFTER the
-# nodes it requires or it reads its dependency as absent and reports BLOCKED.
+# The "what" documents pm-spec writes and marks ready: buildme reads them as
+# required inputs, checks that they are there, and never generates them.
+INPUTS: dict[str, str] = {
+    "proposal": "proposal.md",
+    "use-cases": "use-cases.md",
+    "requirements": "requirements/*.md",
+}
+
+# buildme's planning artifacts. Insertion order is load-bearing:
+# `artifact_status` resolves each node against the statuses it has already
+# computed, so every node must appear AFTER the nodes it requires or it reads
+# its dependency as absent and reports BLOCKED. A requirement may also name an
+# input (`INPUTS`), done when its file is there.
 ARTIFACT_DAG: dict[str, dict] = {
-    "proposal": {"generates": "proposal.md", "requires": []},
-    # Who the change is for, and what they can observe when it lands. Its own
-    # artifact rather than two more proposal sections: the proposal is about
-    # the change, this is about the people it is for, and keeping the personas
-    # out of proposal.md also keeps their backticked names away from
-    # `_extract_capabilities`, which reads backticked list items out of
-    # proposal.md's `## Capabilities` section.
-    "use-cases": {"generates": "use-cases.md", "requires": ["proposal"]},
-    "requirements": {"generates": "requirements/*.md", "requires": ["proposal"]},
-    "design": {"generates": "design.md", "requires": ["proposal"]},
+    "design": {"generates": "design.md", "requires": ["proposal", "requirements"]},
     # Explainer gate (B1): before the build depends on anything new to this
     # project, write down its contract and edge cases. Sits between design and
     # tasks so the edge cases are on disk while the task breakdown is written —
     # and so the test_writer can turn them into tests.
     "unknowns": {"generates": "unknowns.md", "requires": ["design"]},
     # `tasks` is what carries the use cases: a use case is delivered by a block
-    # or by nothing at all, so the breakdown must be written with the use cases
-    # already on disk — that is also what PLAN_REVIEW checks block coverage
-    # against.
+    # or by nothing at all, so the breakdown is written with the use cases on
+    # disk — that is also what PLAN_REVIEW checks block coverage against.
     "tasks": {
         "generates": "tasks.md",
         "requires": ["proposal", "requirements", "design", "unknowns", "use-cases"],
@@ -91,65 +93,13 @@ ARTIFACT_DAG: dict[str, dict] = {
     "rubric": {"generates": "rubric.md", "requires": ["tasks"]},
 }
 
+
+def _generates(node: str) -> str:
+    return INPUTS[node] if node in INPUTS else ARTIFACT_DAG[node]["generates"]
+
+
 # Templates for each artifact type
 TEMPLATES: dict[str, str] = {
-    "proposal": """\
-## Why
-
-<!-- The problem, and why now. -->
-
-## What Changes
-
-<!-- What will change. Then, explicitly:
-     Goals — what this change aims to achieve.
-     Non-Goals — what is deliberately out of scope. -->
-
-## Capabilities
-
-### New Capabilities
-<!-- kebab-case names only, one per line, no descriptions — use-cases.md
-     already carries the intent. Each creates requirements/<name>.md -->
-- `<capability-name>`
-
-### Modified Capabilities
-<!-- Existing capabilities whose REQUIREMENTS are changing. Leave empty if none. -->
-
-## Impact
-
-<!-- Affected code, APIs, dependencies, systems. Facts about the codebase, not
-     restatements of What Changes. Wrap every dependency name in backticks so
-     the dependency scan can see it. -->
-""",
-    "use-cases": """\
-# Use cases — who this change is for
-
-## Personas
-
-<!-- One block per persona. Real people in a real situation, not job titles. -->
-
-### <persona-name>
-- **Who they are:** <role, and the situation they are in>
-- **The job they are doing:** <the job they are trying to get done>
-- **The constraint they are under:** <time, access, skill, budget, policy>
-
-## Use cases
-
-<!-- One per line, in this exact form:
-     <persona> wants <goal> so that <observable outcome>.
-     The outcome must be observable from OUTSIDE the system — something the
-     persona can see, read, or measure without reading the code. -->
-- <persona> wants <goal> so that <observable outcome>
-""",
-    "requirements": """\
-## ADDED Requirements
-
-### Requirement: <!-- requirement name -->
-<!-- requirement text -->
-
-#### Scenario: <!-- scenario name -->
-- **WHEN** <!-- condition -->
-- **THEN** <!-- expected outcome -->
-""",
     "design": """\
 ## Context
 
@@ -224,36 +174,6 @@ Satisfies: <!-- spec references -->
 
 # Instructions for each artifact type (guidance for LLM generation)
 INSTRUCTIONS: dict[str, str] = {
-    "proposal": (
-        "Create the proposal document that establishes WHY this change is needed. "
-        "Sections: Why; What Changes (which states Goals — what this change aims "
-        "to achieve — and Non-Goals — what is deliberately out of scope — "
-        "explicitly); Capabilities (kebab-case names only, no descriptions, each "
-        "becoming requirements/<name>.md); Impact (facts about the codebase — "
-        "affected code, APIs, dependencies, systems — not a restatement of What "
-        "Changes, with every dependency name in backticks). "
-        "Personas and use cases live in use-cases.md, not here. "
-        "Keep concise (1-2 pages). Focus on the 'why' not the 'how'."
-    ),
-    "use-cases": (
-        "Create the use cases document that establishes WHO this change is for. "
-        "Personas: one block per persona, naming who they are, the job they are "
-        "doing, and the constraint they are under — real people in a real "
-        "situation, not job titles. "
-        "Use cases: one per line, in the form "
-        "'<persona> wants <goal> so that <observable outcome>'. "
-        "Every use case names a persona defined above it, and every outcome is "
-        "observable from OUTSIDE the system — something that persona can see, "
-        "read, or measure without reading the code. An outcome phrased as an "
-        "internal implementation detail is not a use case; rewrite it as what "
-        "the persona observes."
-    ),
-    "requirements": (
-        "Create one requirements file per capability listed in the proposal, "
-        "at requirements/<capability>.md. "
-        "Use WHEN/THEN format for scenarios. Each requirement MUST have at least one scenario. "
-        "Scenarios must be testable — you know when they pass."
-    ),
     "design": (
         "Create the design document explaining HOW to implement the change. "
         "Sections: Context, Decisions (with alternatives), Risks/Trade-offs. "
@@ -322,16 +242,22 @@ class ChangeManager:
     def artifact_status(self, change_dir: Path, stale: list[str] | None = None) -> dict[str, ArtifactStatus]:
         """Check which artifacts are done/ready/blocked."""
         result: dict[str, ArtifactStatus] = {}
+        done = {name for name, generates in INPUTS.items() if self._artifact_exists(change_dir, generates)}
         for artifact_id, spec in ARTIFACT_DAG.items():
-            if not all(result.get(dep) == ArtifactStatus.DONE for dep in spec["requires"]):
+            if not all(dep in done or result.get(dep) == ArtifactStatus.DONE for dep in spec["requires"]):
                 result[artifact_id] = ArtifactStatus.BLOCKED
             elif artifact_id not in (stale or []) and self._artifact_exists(change_dir, spec["generates"]):
                 result[artifact_id] = ArtifactStatus.DONE
-            elif all(result.get(dep) == ArtifactStatus.DONE for dep in spec["requires"]):
-                result[artifact_id] = ArtifactStatus.READY
             else:
-                result[artifact_id] = ArtifactStatus.BLOCKED
+                result[artifact_id] = ArtifactStatus.READY
         return result
+
+    def missing_inputs(self, change_dir: Path) -> list[str]:
+        """The required inputs (`INPUTS`) not on disk, as their file patterns.
+        Requirements count only when every capability the proposal names has
+        a valid file."""
+        return [generates for generates in INPUTS.values()
+                if not self._artifact_exists(change_dir, generates)]
 
     def ready_artifacts(self, change_dir: Path) -> list[str]:
         """Return IDs of artifacts that can be created next."""
@@ -382,7 +308,7 @@ class ChangeManager:
         # Resolve dependency file paths
         dep_paths: dict[str, str] = {}
         for dep_id in spec.get("requires", []):
-            dep_generates = ARTIFACT_DAG[dep_id]["generates"]
+            dep_generates = _generates(dep_id)
             if "*" in dep_generates:
                 matches = list(change_dir.glob(dep_generates))
                 dep_paths[dep_id] = ", ".join(str(m.relative_to(change_dir)) for m in matches)

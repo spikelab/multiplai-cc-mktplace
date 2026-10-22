@@ -1,13 +1,20 @@
-"""Spec generator pipeline — creates all OpenSpec artifacts in dependency order.
+"""Spec generator pipeline — buildme's planning artifacts, in dependency order.
 
 Entry point: run_spec_generator(config, args)
 
-Flow:
-1. Bootstrap change directory
-2. Generate artifacts in dependency order
-   (proposal -> use-cases+requirements+design -> unknowns -> tasks -> rubric)
-3. Run design audit
+The proposal, use cases and requirements are pm-spec's, marked ready in
+`.change.yaml`; buildme checks they are there (`ChangeManager.missing_inputs`)
+and never writes them. Flow:
+1. Check the inputs
+2. Generate design -> unknowns -> tasks -> rubric
+3. Run design audit (standalone)
 4. Return exit code
+
+A design that flags a requirement as infeasible or contradictory
+(`SPEC_ISSUE:` lines, `design_spec_issues`), and a design-audit finding whose
+fix needs a requirements change, raise `readiness.SpecIssuesFound`; the
+orchestrator writes them to spec-issues.md for `pm-spec revise` and stops
+(exit 4).
 """
 
 from __future__ import annotations
@@ -19,18 +26,18 @@ import hashlib
 import json
 import copy
 import shutil
-import os
 import tempfile
 import logging
 import re
 from pathlib import Path
 
 from . import budget
-from .change_manager import ChangeManager, ARTIFACT_DAG, expected_capabilities, valid_requirement, valid_requirement_text
+from .change_manager import ChangeManager, ARTIFACT_DAG
 from .dependencies import NewDependency, design_decisions_text, detect_new_dependencies
 from .gates import unknowns_gate
 from .io_utils import atomic_write
 from .models import ArtifactStatus, BuildPhase, PriorAssessment
+from .readiness import SpecIssuesFound
 from .rubric import generate_rubric
 from .state import BuildState, SpecGenState
 
@@ -45,7 +52,8 @@ async def run_spec_generator(config, args=None, *, standalone: bool = True) -> i
         args: Optional CLI args namespace
 
     Returns:
-        Exit code (0=success, 1=failure)
+        Exit code (0=success, 1=failure, 2=specs not ready, 4=spec issues
+        written; a sub-phase raises `SpecIssuesFound` instead of returning 4)
     """
     print(f"PHASE: spec_generation — {config.change_name}")
 
@@ -53,8 +61,14 @@ async def run_spec_generator(config, args=None, *, standalone: bool = True) -> i
         budget.reset()
         budget.configure(max_tokens=config.budget_max_tokens, max_usd=config.budget_max_usd)
     cm = ChangeManager(config.specs_dir)
-    cm.init_specs()
-    change_dir = cm.create_change(config.change_name)
+    change_dir = config.change_dir
+    if standalone:
+        from multiplai_core.specs import is_ready
+
+        from .readiness import refuse_not_ready
+        ready, reason = is_ready(change_dir)
+        if not ready:
+            return refuse_not_ready(config.change_name, reason)
 
     # Load or create state
     state = _load_or_create_state(config)
@@ -72,7 +86,6 @@ async def run_spec_generator(config, args=None, *, standalone: bool = True) -> i
         await _generate_all_artifacts(cm, change_dir, config, state)
         log.info("DONE phase=ARTIFACT_GENERATION")
 
-        # Full builds prototype first, then audit/review the final plan once.
         if standalone:
             log.info("START phase=DESIGN_AUDIT")
             print("PHASE: design_audit")
@@ -82,6 +95,12 @@ async def run_spec_generator(config, args=None, *, standalone: bool = True) -> i
         print("PHASE: spec_generation_complete")
         return 0
 
+    except SpecIssuesFound as found:
+        state.checkpoint(config.state_file_path())
+        if not standalone:
+            raise
+        from .readiness import stop_on_issues
+        return stop_on_issues(change_dir, found, change=config.change_name)
     except budget.BudgetExceededError:
         state.checkpoint(config.state_file_path())
         raise
@@ -101,7 +120,15 @@ async def _generate_all_artifacts(
     config,
     state: BuildState,
 ) -> None:
-    """Generate all artifacts in dependency order, with resume support."""
+    """Generate all artifacts in dependency order, with resume support.
+
+    Refuses (RuntimeError) when a required input is missing: buildme never
+    writes the proposal, use cases or requirements."""
+    missing = cm.missing_inputs(change_dir)
+    if missing:
+        raise RuntimeError(
+            f"Required inputs missing in {change_dir}: {', '.join(missing)}. pm-spec writes them: "
+            f"Run /multiplai-pm:pm-spec {config.change_name} first")
     reconcile_plan(config, state)
     max_iterations = len(ARTIFACT_DAG) * 2  # safety limit
     iteration = 0
@@ -206,7 +233,7 @@ async def _generate_single_artifact(
     config,
     state: BuildState,
 ) -> None:
-    """Generate a single artifact, handling requirements specially (one per capability)."""
+    """Generate a single artifact: design, unknowns, tasks or rubric."""
     context = cm.artifact_context(change_dir, artifact_id)
 
     # Thread the explainers into the task breakdown: the edge cases are only
@@ -215,11 +242,7 @@ async def _generate_single_artifact(
     if artifact_id == "tasks":
         context["unknowns_content"] = read_unknowns(change_dir)
 
-    if artifact_id == "requirements":
-        await _generate_requirements(cm, change_dir, config, state)
-    elif artifact_id == "use-cases":
-        await _generate_use_cases(change_dir, context, config, state)
-    elif artifact_id == "unknowns":
+    if artifact_id == "unknowns":
         await _generate_unknowns(cm, change_dir, config, state)
     elif artifact_id == "rubric":
         await _generate_rubric(change_dir, config, state)
@@ -230,12 +253,15 @@ async def _generate_single_artifact(
             artifact_id,
             context,
             config,
-            interview_summary=state.interview_summary or "",
             research=read_research(state),
             codebase_analysis=read_codebase_analysis(state),
             reference_docs=config.reference_docs_text(),
         )
 
+        # A design that names a requirement it cannot be built to is not
+        # published: the requirements go back to pm-spec first.
+        if artifact_id == "design":
+            raise_spec_issues(design_spec_issues(content), "design")
         # Write the artifact
         output_path = change_dir / context["output_path"]
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -261,152 +287,13 @@ async def _generate_single_artifact(
         _record_explainer_outcome(config, state)
 
     # Mark completed. `completed_artifacts` is a resume ledger keyed by id, so
-    # a re-generated artifact (the use-cases backfill regenerates tasks and
-    # rubric) must not be entered twice.
+    # a re-generated artifact must not be entered twice.
     if state.spec_gen:
         if artifact_id not in state.spec_gen.completed_artifacts:
             state.spec_gen.completed_artifacts.append(artifact_id)
         state.checkpoint(config.state_file_path())
 
     print(f"PHASE: artifact_{artifact_id}_complete")
-
-
-async def _generate_requirements(
-    cm: ChangeManager,
-    change_dir: Path,
-    config,
-    state: BuildState,
-) -> None:
-    """Generate requirement files — one per capability from the proposal."""
-    from .llm_steps.spec_steps import generate_artifact
-
-    proposal_path = change_dir / "proposal.md"
-    if not proposal_path.exists():
-        raise RuntimeError("Cannot generate requirements: proposal.md missing")
-
-    proposal = proposal_path.read_text()
-    capabilities = expected_capabilities(proposal)
-    if not capabilities:
-        raise ValueError("Proposal must name at least one capability before requirements can complete")
-    source = hashlib.sha256(proposal.encode()).hexdigest()
-    if state.spec_gen is None:
-        state.spec_gen = SpecGenState()
-    changed = state.spec_gen.requirements_source not in ("", source)
-    force_members = "requirements" in state.spec_gen.stale_artifacts
-    state.spec_gen.expected_capabilities = capabilities
-    if changed:
-        state.spec_gen.requirements_members = {}
-    state.spec_gen.requirements_source = source
-    state.checkpoint(config.state_file_path())
-
-    req_dir = change_dir / "requirements"
-    req_dir.mkdir(parents=True, exist_ok=True)
-
-    for cap_name in capabilities:
-        req_file = req_dir / f"{cap_name}.md"
-        if valid_requirement(req_file) and ((not changed and not force_members) or state.spec_gen.requirements_members.get(cap_name) == source):
-            log.info("Requirements for %s already exist, skipping", cap_name)
-            continue
-
-        context = cm.artifact_context(change_dir, "requirements")
-        context["capability_name"] = cap_name
-
-        content = await generate_artifact("requirements", context, config)
-
-        if not valid_requirement_text(content):
-            raise ValueError(f"Invalid requirements for {cap_name}: expected Requirement/Scenario/WHEN/THEN")
-        atomic_write(req_file, content)
-        state.spec_gen.requirements_members[cap_name] = source
-        state.checkpoint(config.state_file_path())
-        log.info("Wrote requirements: %s", req_file)
-
-
-# The use-cases prompt lives here rather than in prompts/spec_generation.py
-# because `spec_steps._build_prompt` dispatches on a fixed set of artifact ids
-# and raises ValueError on anything else — this artifact therefore builds its
-# own prompt and calls llm_call directly. Moving the template into
-# prompts/spec_generation.py and adding the matching `_build_prompt` branch is
-# the tidier home for it, and is a change to files this work item does not own.
-USE_CASES_PROMPT = """\
-You are generating the use cases document for a spec-driven change.
-
-## Project Context
-{project_context}
-
-## Interview Summary
-{interview_summary}
-
-## Proposal
-{proposal_content}
-
-## Instructions
-{instruction}
-
-## Output Format
-Generate the document as markdown following this template structure:
-
-{template}
-
-Rules:
-- Every persona block names who they are, the job they are doing, and the
-  constraint they are under
-- Every use case reads exactly: <persona> wants <goal> so that <observable outcome>
-- Every use case names a persona defined in the Personas section
-- Every outcome is observable from OUTSIDE the system — something the persona
-  can see, read, or measure without reading the code. "The cache is warmed" is
-  not an outcome; "the page loads before they finish reading the heading" is
-- No use case invents a persona, a goal, or an outcome the proposal and the
-  interview do not support
-
-Output ONLY the markdown content. No commentary.
-"""
-
-
-async def _generate_use_cases(
-    change_dir: Path,
-    context: dict,
-    config,
-    state: BuildState,
-) -> None:
-    """Write use-cases.md — the personas and the outcomes they can observe.
-
-    Separate from `generate_artifact` for the reason stated on
-    ``USE_CASES_PROMPT``: that function's prompt builder knows a fixed set of
-    artifact ids. The call is otherwise identical — same model, same effort,
-    same tool-free system prompt, one budget label of its own.
-    """
-    from .sdk import llm_call
-
-    proposal_path = change_dir / "proposal.md"
-    proposal_content = (
-        proposal_path.read_text() if proposal_path.exists() else "(not available)"
-    )
-
-    prompt = USE_CASES_PROMPT.format(
-        project_context=context.get("context", ""),
-        interview_summary=state.interview_summary or "(none provided)",
-        proposal_content=proposal_content,
-        instruction=context.get("instruction", ""),
-        template=context.get("template", ""),
-    )
-
-    content = await llm_call(
-        prompt,
-        model=config.model_for("spec_artifact"),
-        effort=config.effort_for("spec_artifact"),
-        system_prompt=(
-            "You are a technical specification generator. Your ONLY job is to "
-            "generate the requested document content based on the context provided "
-            "in the prompt. Output the document directly — do NOT attempt to use "
-            "tools, explore code, or request more information. All the context you "
-            "need is in the prompt. Output ONLY markdown content."
-        ),
-        budget_label="spec:use-cases",
-    )
-
-    output_path = change_dir / (context.get("output_path") or "use-cases.md")
-    atomic_write(output_path, content)
-    log.info("Wrote artifact: %s", output_path)
 
 
 UNKNOWNS_HEADER = "# Unknowns — what we are about to depend on\n"
@@ -974,7 +861,7 @@ def tasks_findings_text(findings: list[dict]) -> str:
 
 
 # The prefix of each step's finding ids: `<prefix>-F<n>`.
-FINDING_ID_PREFIXES = {"tasks_audit": "TA", "design_audit": "DA", "plan_review": "PR", "prototype": "PT"}
+FINDING_ID_PREFIXES = {"tasks_audit": "TA", "design_audit": "DA", "plan_review": "PR"}
 
 # The evidence a listed finding from the deterministic scans gets when the
 # rewritten tasks pass every scan.
@@ -1115,6 +1002,33 @@ def _blocks_plan(finding: dict, default: str | None = "major") -> bool:
     return finding.get("severity", default) in {"critical", "major"}
 
 
+def design_spec_issues(text: str) -> list[tuple[str, str]]:
+    """The design step's `SPEC_ISSUE:` lines, as `(title, body)` issues for
+    spec-issues.md: the title names the requirements file and requirement the
+    line gives, the body is the line. Empty when there is none."""
+    from .prompts.spec_generation import SPEC_ISSUE_PREFIX
+
+    issues = []
+    for line in text.splitlines():
+        stripped = line.strip().strip("`").strip()
+        if not stripped.startswith(SPEC_ISSUE_PREFIX):
+            continue
+        detail = stripped[len(SPEC_ISSUE_PREFIX):].strip()
+        if not detail:
+            continue
+        parts = [p.strip() for p in detail.split(":", 2)]
+        target = ": ".join(parts[:2]) if len(parts) == 3 else parts[0]
+        issues.append((f"Design: {target}", f"{detail}\n\nRaised by buildme's design step."))
+    return issues
+
+
+def raise_spec_issues(issues: list[tuple[str, str]], step: str) -> None:
+    """Raise `SpecIssuesFound` with *issues*, when there are any."""
+    if issues:
+        log.error("SPEC_ISSUES step=%s count=%d", step, len(issues))
+        raise SpecIssuesFound(issues, step=step)
+
+
 async def _audit_tasks_shape(
     change_dir: Path,
     context: dict,
@@ -1230,6 +1144,22 @@ DESIGN_AUDIT_ACTIONABLE = ("critical", "major")
 def design_audit_actionable(gaps: list[dict]) -> list[dict]:
     """The gaps at critical or major severity: what earns the rewrite."""
     return [g for g in gaps or [] if isinstance(g, dict) and g.get("severity") in DESIGN_AUDIT_ACTIONABLE]
+
+
+def audit_spec_issues(gaps: list[dict]) -> list[tuple[str, str]]:
+    """The critical and major design-audit gaps whose fix needs a
+    requirements change (`needs_requirements_change: true`), as `(title,
+    body)` issues for spec-issues.md."""
+    issues = []
+    for g in design_audit_actionable(gaps):
+        if g.get("needs_requirements_change") is not True:
+            continue
+        target = str(g.get("requirement") or "").strip() or g.get("category", "design-audit")
+        body = f"[{g.get('severity', '?')}] {g.get('description', '').strip()}"
+        if g.get("suggestion"):
+            body += f"\n\nSuggested change: {str(g['suggestion']).strip()}"
+        issues.append((f"Design audit: {target}", body + "\n\nRaised by buildme's design audit."))
+    return issues
 
 
 def design_audit_findings_text(gaps: list[dict]) -> str:
@@ -1376,6 +1306,7 @@ async def run_design_audit_stage(
             gaps = await _run_audit(change_dir, config)
             actionable = design_audit_actionable(gaps)
             _log_design_audit_gaps(gaps)
+            raise_spec_issues(audit_spec_issues(gaps), name)
             if not actionable:
                 sg.record_step(name)
                 state.checkpoint(state_path)
@@ -1393,6 +1324,7 @@ async def run_design_audit_stage(
         listed = sg.steps[name].repair_findings
         gaps = await _run_audit(change_dir, config, prior=listed)
         _log_design_audit_gaps(gaps)
+        raise_spec_issues(audit_spec_issues(gaps), name)
         assessments = getattr(gaps, "prior_assessments", [])
         blocking, advisory = recheck_verdict(listed, assessments, list(gaps), deterministic=[])
         sg.steps[name].repair_findings = saved_findings(assess_listed(listed, assessments))
@@ -1406,6 +1338,11 @@ async def run_design_audit_stage(
         state.checkpoint(state_path)
         return gaps
     except PlanBlocked:
+        raise
+    except SpecIssuesFound as found:
+        # Blocked at this revision: after `pm-spec revise` changes the
+        # requirements, the step gets its one rewrite back (`reopen_if_edited`).
+        record_blocked_review(config, state, state_path, name, str(found), "", final=True)
         raise
     except PlanRepairRejected as rejection:
         record_advisory(config, name, rejection.advisory)
@@ -1462,23 +1399,6 @@ def _log_design_audit_gaps(gaps: list[dict]) -> None:
 
 
 
-def _extract_capabilities(proposal_text: str) -> list[str]:
-    """Extract capability names from proposal markdown.
-
-    Looks for lines like: - `capability-name`: description
-    under the New Capabilities section.
-
-    Scoped to `## Capabilities`, because the template tells the generator to
-    wrap every dependency name in backticks under `## Impact` — and a
-    whole-file scan turned `django-ses` into a capability and wrote
-    `requirements/django-ses.md` for it. A proposal with no `## Capabilities`
-    heading falls back to the whole document minus `## Impact`: the old
-    behaviour, minus the one section known to carry backticked
-    non-capabilities.
-    """
-    return expected_capabilities(proposal_text)
-
-
 def _load_or_create_state(config) -> BuildState:
     """Load existing state or create new one."""
     state_path = config.state_file_path()
@@ -1489,7 +1409,6 @@ def _load_or_create_state(config) -> BuildState:
 
     state = BuildState(
         change_name=config.change_name,
-        mode=config.mode,
         tier=config.tier,
         state_file=str(state_path),
         phase=BuildPhase.SPEC_GENERATION,
@@ -1518,33 +1437,24 @@ def reconcile_plan(config, state: BuildState, *, regenerated: set[str] | None = 
     """Invalidate the explicit planning dependencies and publish their revision.
 
     The state is the only evidence ledger. Existing filenames remain the public
-    interface; their existence alone cannot validate dependent artifacts.
+    interface; their existence alone cannot validate dependent artifacts. The
+    "what" files (proposal, use cases, requirements) are hashed like the rest,
+    so an edit to one marks design and the stages after it stale; they are
+    never regenerated or moved here.
     """
     if state.spec_gen is None:
         state.spec_gen = SpecGenState()
     sg = state.spec_gen
-    prototype_was_current = sg.step_passed("prototype")
     recovered = _finish_plan_publication(config)
-    retired = False
-    proposal = config.change_dir / "proposal.md"
-    expected = set(expected_capabilities(proposal.read_text())) if proposal.exists() else set()
-    if expected:
-        for path in (config.change_dir / "requirements").glob("*.md"):
-            if path.stem not in expected:
-                digest = hashlib.sha256(path.read_bytes()).hexdigest()
-                destination = config.change_dir / "superseded-requirements" / f"{path.stem}-{digest}.md"
-                destination.parent.mkdir(exist_ok=True)
-                os.replace(path, destination)
-                retired = True
     current = _plan_hashes(config)
     previous = sg.artifact_hashes
     changed = {key for key in previous.keys() | current.keys() if previous.get(key) != current.get(key)}
     stale = set(sg.stale_artifacts)
-    if retired:
-        stale.update({"tasks", "rubric"})
     if previous:
+        # The proposal, use cases and requirements are pm-spec's inputs: an
+        # edit to them marks buildme's artifacts stale, never themselves.
         if "proposal.md" in changed:
-            stale.update({"requirements", "use-cases", "design", "unknowns", "tasks", "rubric"})
+            stale.update({"design", "unknowns", "tasks", "rubric"})
         if any(key.startswith("requirements/") for key in changed):
             stale.update({"design", "unknowns", "tasks", "rubric"})
         if "use-cases.md" in changed:
@@ -1566,8 +1476,8 @@ def reconcile_plan(config, state: BuildState, *, regenerated: set[str] | None = 
     sg.stale_artifacts = sorted(stale)
     revision = hashlib.sha256(json.dumps(current, sort_keys=True).encode()).hexdigest()
     if revision != sg.revision:
-        # Evidence for any earlier revision is stale. Prototype and explanation
-        # stages are advisory and do not authorize implementation.
+        # Evidence for any earlier revision is stale. The explanation stage is
+        # advisory and does not authorize implementation.
         sg.revision = revision
         state.verification = None
         state.split_required = False
@@ -1575,10 +1485,6 @@ def reconcile_plan(config, state: BuildState, *, regenerated: set[str] | None = 
     sg.artifact_hashes = current
     if "unknowns" in recovered:
         _record_explainer_outcome(config, state)
-    if "design" in recovered and prototype_was_current:
-        # An owner repair may update design after the prototype. External edits
-        # still invalidate its ordinary revision-bound evidence.
-        sg.steps["prototype"].revision = sg.step_revision("prototype")
     if recovered:
         state.checkpoint(config.state_file_path())
         (config.change_dir / ".plan-publication.json").unlink(missing_ok=True)
@@ -1641,8 +1547,11 @@ async def rewrite_plan(config, state: BuildState, findings_text: str, *, design:
             context = cm.artifact_context(staged.change_dir, name)
             context["unknowns_content"] = read_unknowns(staged.change_dir)
             text = await generate_artifact(name, context, staged, audit_findings=findings_text,
+                                          research=read_research(state),
                                           codebase_analysis=read_codebase_analysis(state),
                                           reference_docs=config.reference_docs_text())
+            if name == "design":
+                raise_spec_issues(design_spec_issues(text), step or "design")
             atomic_write(staged.change_dir / f"{name}.md", text)
         label = step or "tasks_audit"
         listed = list(listed or []) if step == "tasks_audit" else []

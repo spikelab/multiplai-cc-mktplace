@@ -24,7 +24,6 @@ from .models import ReviewGatePolicy
 log = logging.getLogger(__name__)
 
 Tier = Literal["advanced", "standard"]
-Mode = Literal["scratch", "brief", "only"]
 
 # Built-in stack/framework → reference doc names, resolved under
 # $CLAUDE_CONFIG_DIR/reference/dev/. These are DEFAULTS: a `reference_docs:`
@@ -338,27 +337,6 @@ def conf_int(task: str, key: str, default: int) -> int:
         return default
 
 
-def _normalize_prototype_toggle(value) -> str:
-    """Map a config.yaml `prototype.enabled` value to "auto" | "true" | "false".
-
-    YAML turns `enabled: true` into a bool and `enabled: auto` into a string, so
-    both spellings arrive here. Anything unrecognized falls back to "auto" with
-    a warning — an unreadable toggle should leave the applicability rule in
-    charge, not silently disable the stage.
-    """
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    text = str(value).strip().lower()
-    if text in ("auto", "true", "false"):
-        return text
-    if text in ("yes", "on", "1"):
-        return "true"
-    if text in ("no", "off", "0"):
-        return "false"
-    log.warning("Unrecognized prototype.enabled value %r — using 'auto'", value)
-    return "auto"
-
-
 @dataclass
 class GateToggles:
     """Per-gate on/off switches from config.yaml."""
@@ -375,11 +353,6 @@ class GateToggles:
     # and no build has yet produced an entry for a real new dependency. See
     # spikelab/multiplai-cc-mktplace#375 before turning it back on.
     explainers_enabled: bool = False
-    # Prototype-first stage: "auto" (run when gates.prototype_required says the
-    # change has a UI or a user-visible output format), "true" (always), or
-    # "false" (never). Tri-state rather than bool because the useful default is
-    # "decide from the change", not on/off.
-    prototype: str = "auto"
     # `respec: {halt_on_contradiction: true}` in specs/config.yaml. When an
     # agent reports SPEC_IMPACT: contradicts, the build stops with a diagnosis
     # instead of steering around the spec. Default False — the note is always
@@ -418,31 +391,13 @@ def git_toggles(data: dict) -> GitToggles:
     )
 
 
-# Ticket providers buildme can take a ticket from (`intake.provider` in
-# specs/config.yaml). One table, mirrored in SKILL.md Step 0: each value says
-# how the *wrapper session* fetches a ticket, because the pipeline itself never
-# talks to a ticket system (pipeline agents deny the Skill tool, and posting is
-# the wrapper's job). Adding a provider later (e.g. `vikunja`) is one entry
-# here plus one SKILL.md subsection; the loader and the pipeline flags do not
-# change, since every provider hands the pipeline the same --ticket-file.
-INTAKE_PROVIDERS: dict[str, str] = {
-    "none": "No ticket system. A ticket-looking input stops with "
-            "'run `/buildme setup`'.",
-    "plane": "Wrapper invokes multiplai-pm:plane `get <ref>` and "
-             "`comments <ref>`; a BLOCKED refusal is a stop.",
-    "github": "Wrapper runs `gh issue view <n> --json "
-              "title,body,comments,url`.",
-}
-
-INTERVIEW_MODES: tuple[str, ...] = ("self", "ticket", "user")
-
 # The three stages a step falls back to in `models:` (specs/config.yaml).
 MODEL_STAGES: tuple[str, ...] = ("spec", "agent", "review")
 
 # Every buildme step that calls a model, and its stage. A step name is the
-# call's `budget_label`, except: every `spec:<id>` artifact (use-cases
-# included) is `spec_artifact`; the unlabeled explainer, prototype and respec
-# calls are named for what they do; `review_fix` is the fix agent the review
+# call's `budget_label`, except: every `spec:<id>` artifact is
+# `spec_artifact`; the unlabeled explainer and respec calls are named for
+# what they do; `review_fix` is the fix agent the review
 # loop runs (it charges the budget as `implementer`); and
 # `integration_fix_escalated` is the last integration-fix attempt, which has
 # always run on the review model, and `review_fix_escalated` is the review
@@ -455,12 +410,9 @@ STEP_STAGES: dict[str, str] = {
     "design_audit": "spec",
     "tasks_audit": "spec",
     "codebase_analysis": "spec",
-    "epic_split": "spec",
     "explainer": "spec",
     "respec": "spec",
-    "interview": "spec",
     "research": "spec",
-    "findings_spec": "spec",
     "test_writer": "agent",
     "implementer": "agent",
     "refactor": "agent",
@@ -469,7 +421,6 @@ STEP_STAGES: dict[str, str] = {
     "integration_fix": "agent",
     "review_fix": "agent",
     "docs_update": "agent",
-    "prototype": "agent",
     "merge": "agent",
     "review": "review",
     "adjudication": "review",
@@ -525,18 +476,6 @@ def _is_model_spec(value) -> bool:
         model = spec.model.lower()
         return model.startswith("claude-") or any(f in model for f in CURRENT_MODEL)
     return spec.provider == "pi" and "@" in spec.model
-
-
-@dataclass
-class IntakeConfig:
-    """`intake:` block — where a ticket comes from.
-
-    `provider` is a key of INTAKE_PROVIDERS. `options` is the provider's own
-    mapping, passed through untouched (e.g. `plane: {project: DB}`).
-    """
-
-    provider: str = "none"
-    options: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -628,7 +567,7 @@ class MutationSettings:
 
 def _load_mutation_settings(raw) -> MutationSettings:
     """Validate `mutation:`; a bad value keeps its default and logs a warning,
-    like `_normalize_prototype_toggle` — never a crash, never a silent change."""
+    like `git.pr` — never a crash, never a silent change."""
     settings = MutationSettings()
     if raw is None:
         return settings
@@ -708,7 +647,6 @@ class BuildConfig:
     """Complete configuration for a build pipeline run."""
 
     # Core
-    mode: Mode = "scratch"
     project_dir: Path = field(default_factory=lambda: Path.cwd())
     change_name: str = ""
     tier: Tier = "standard"
@@ -726,10 +664,6 @@ class BuildConfig:
     # unknowns.md is still written (recording the skip) so the artifact DAG
     # stays satisfied and the absence is visible rather than silent.
     skip_explainers: bool = False
-    # Prototype-first stage: "auto" | "true" | "false". Resolved from
-    # specs/config.yaml (`prototype: {enabled: ...}`) with --prototype /
-    # --no-prototype winning over it.
-    prototype_mode: str = "auto"
 
     # Project context (from specs/config.yaml)
     project_name: str = ""
@@ -773,14 +707,9 @@ class BuildConfig:
     # MUTATION sub-step settings (`mutation:` in specs/config.yaml)
     mutation: MutationSettings = field(default_factory=MutationSettings)
 
-    # Ticket intake (`intake:`), interview mode (`interview:`) and the stored-only
-    # blocks for later stages (`architecture`, `pr`, `findings`, `models`).
-    # Every default reproduces the behaviour of a repo without the keys.
-    intake: IntakeConfig = field(default_factory=IntakeConfig)
-    # "self" | "ticket" | "user". Under --auto, "user" resolves to "self"
-    # (nobody is there to answer); "ticket" is kept, since asking on the
-    # ticket works without a human present.
-    interview_mode: str = "user"
+    # The stored-only blocks for later stages (`architecture`, `pr`,
+    # `findings`, `models`). Every default reproduces the behaviour of a repo
+    # without the keys.
     architecture: str = ""
     pr: PrSettings = field(default_factory=PrSettings)
     findings: FindingsSettings = field(default_factory=FindingsSettings)
@@ -788,6 +717,10 @@ class BuildConfig:
     # `build --base-ref`: the commit a new worktree branches from (an epic's
     # coordinator passes origin's default branch). Empty: the source HEAD.
     base_ref: str = ""
+    # The checkout the build was started in, when a resume re-bound the config
+    # to the build's existing worktree (`orchestrator._rebind_to_existing_worktree`);
+    # None otherwise. The readiness check compares its specs with the worktree's.
+    source_project_dir: Path | None = None
     # `build --epic-child`: an epic's coordinator started this build (or its
     # saved command was run again). `orchestrator._epic_child` reads it.
     epic_child: bool = False
@@ -1112,7 +1045,6 @@ class BuildConfig:
     def from_cli_args(cls, args: argparse.Namespace) -> BuildConfig:
         tier, model_name = detect_tier()
         config = cls(
-            mode=getattr(args, "mode", "scratch"),
             project_dir=Path(args.project_dir),
             change_name=getattr(args, "change", "") or "",
             tier=tier,
@@ -1132,14 +1064,6 @@ class BuildConfig:
         if default_spec or config.configured_tier:
             config.tier, config.model_name = detect_tier(
                 default_spec, configured_tier=config.configured_tier)
-        # Also covers a repo with no config.yaml, where the loader returns early.
-        config._resolve_auto_interview()
-        # config.yaml supplies the default; the CLI flags override it.
-        config.prototype_mode = config.gates.prototype
-        if getattr(args, "prototype", False):
-            config.prototype_mode = "true"
-        if getattr(args, "no_prototype", False):
-            config.prototype_mode = "false"
         # CLI flags win over the config.yaml `git:` block (same precedence as
         # every other override here). Absent flags leave the config.yaml /
         # dataclass defaults alone.
@@ -1222,21 +1146,19 @@ class BuildConfig:
         test_quality = data.get("test_quality", {})
         e2e_test = data.get("e2e_test", {})
         explainers = data.get("explainers", {}) or {}
-        prototype = data.get("prototype", {}) or {}
         respec = data.get("respec", {}) or {}
         self.gates = GateToggles(
             code_review_per_block=code_review.get("per_block", True),
             test_quality_enabled=test_quality.get("enabled", True),
             e2e_test_entry_point_check=e2e_test.get("entry_point_check", True),
             explainers_enabled=explainers.get("enabled", False),  # off: #375
-            prototype=_normalize_prototype_toggle(prototype.get("enabled", "auto")),
             respec_halt_on_contradiction=respec.get("halt_on_contradiction", False),
         )
         self.mutation = _load_mutation_settings(data.get("mutation"))
 
         self.git = git_toggles(data)
 
-        self._load_intake_and_stage_settings(data)
+        self._load_stage_settings(data)
         self._load_code_facts_settings(data)
 
     def _load_code_facts_settings(self, data: dict) -> None:
@@ -1271,27 +1193,10 @@ class BuildConfig:
             usd = 80.0
         self.spec_extract_max_usd = float(usd)
 
-    def _load_intake_and_stage_settings(self, data: dict) -> None:
-        """`intake`, `interview`, `architecture`, `pr`, `findings` and
-        `models` (`mutation` is `_load_mutation_settings`). An invalid value logs a warning and keeps the default,
-        the same contract as `git.pr`."""
-        intake_cfg = _cfg_mapping(data.get("intake"), "intake")
-        provider = str(intake_cfg.get("provider", "none") or "none").lower()
-        if provider not in INTAKE_PROVIDERS:
-            log.warning("Invalid intake.provider value %r in config.yaml — using 'none' "
-                        "(known: %s)", provider, ", ".join(INTAKE_PROVIDERS))
-            provider = "none"
-        options = _cfg_mapping(intake_cfg.get(provider), f"intake.{provider}") \
-            if provider != "none" else {}
-        self.intake = IntakeConfig(provider=provider, options=dict(options))
-
-        mode = str(data.get("interview", "user") or "user").lower()
-        if mode not in INTERVIEW_MODES:
-            log.warning("Invalid interview value %r in config.yaml — using 'user'", mode)
-            mode = "user"
-        self.interview_mode = mode
-        self._resolve_auto_interview()
-
+    def _load_stage_settings(self, data: dict) -> None:
+        """`architecture`, `pr`, `findings` and `models` (`mutation` is
+        `_load_mutation_settings`). An invalid value logs a warning and keeps
+        the default, the same contract as `git.pr`."""
         arch = data.get("architecture", "") or ""
         if not isinstance(arch, str):
             log.warning("Invalid architecture value %r in config.yaml — using ''", arch)
@@ -1368,12 +1273,6 @@ class BuildConfig:
                         "standard; ignoring it", tier)
             tier = None
         self.configured_tier = tier
-
-    def _resolve_auto_interview(self) -> None:
-        """--auto has nobody to interview: `user` becomes `self` (logged)."""
-        if self.auto and self.interview_mode == "user":
-            log.info("interview: user → self under --auto (no human to answer)")
-            self.interview_mode = "self"
 
     def _apply_git_cli_overrides(self, args: argparse.Namespace) -> None:
         """--no-worktree / --no-push / --no-pr / --pr-ready beat config.yaml."""
@@ -1558,11 +1457,6 @@ class BuildConfig:
         """Whether the B1 explainer pass runs. The CLI flag wins over config.yaml
         (same precedence as every other flag/config pair here)."""
         return self.gates.explainers_enabled and not self.skip_explainers
-
-    @property
-    def prototype_dir(self) -> Path:
-        """The only directory the prototype agent may write to."""
-        return self.change_dir / "prototype"
 
     def state_file_path(self) -> Path:
         return self._file_in_change_dir(self.state_file, "state_file")

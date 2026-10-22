@@ -124,7 +124,7 @@ def _state_with_notes(*notes: ImplementationNote) -> BuildState:
     block = BlockInfo(number=1, name="Uploader", description="Upload block",
                       notes=list(notes))
     return BuildState(
-        change_name="test-change", mode="only", tier="advanced",
+        change_name="test-change", tier="advanced",
         tdd=TDDState(blocks=[block]),
     )
 

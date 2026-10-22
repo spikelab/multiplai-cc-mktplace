@@ -13,14 +13,14 @@ from build_pipeline.models import BuildPhase, BlockInfo, BlockStatus, Implementa
 
 class TestBuildState:
     def test_create_default(self):
-        s = BuildState(change_name="test", mode="scratch", tier="advanced")
+        s = BuildState(change_name="test", tier="advanced")
         assert s.phase == BuildPhase.INIT
         assert not s.bootstrap_done
 
     def test_checkpoint_and_load(self, tmp_path):
         state_file = tmp_path / "state.json"
         s = BuildState(
-            change_name="feat", mode="scratch", tier="advanced",
+            change_name="feat", tier="advanced",
             state_file=str(state_file),
         )
         s.phase = BuildPhase.RESEARCH
@@ -36,7 +36,7 @@ class TestBuildState:
     def test_advance_to(self, tmp_path):
         state_file = tmp_path / "state.json"
         s = BuildState(
-            change_name="test", mode="scratch", tier="standard",
+            change_name="test", tier="standard",
             state_file=str(state_file),
         )
         s.advance_to(BuildPhase.SPEC_GENERATION, state_file)
@@ -46,7 +46,7 @@ class TestBuildState:
     def test_complete_keeps_the_checkpoint_under_its_completed_name(self, tmp_path):
         state_file = tmp_path / ".build-state.json"
         s = BuildState(
-            change_name="test", mode="scratch", tier="standard",
+            change_name="test", tier="standard",
             state_file=str(state_file),
         )
         s.checkpoint(state_file)
@@ -60,7 +60,7 @@ class TestBuildState:
         assert "cost_usd" in kept.budget
 
     def test_is_phase_complete(self):
-        s = BuildState(change_name="t", mode="scratch", tier="advanced")
+        s = BuildState(change_name="t", tier="advanced")
         s.phase = BuildPhase.TDD_BUILD
         assert s.is_phase_complete(BuildPhase.RESEARCH)
         assert s.is_phase_complete(BuildPhase.SPEC_GENERATION)
@@ -73,7 +73,7 @@ class TestAtomicCheckpoint:
 
     def _state(self, state_file):
         return BuildState(
-            change_name="atomic", mode="scratch", tier="advanced",
+            change_name="atomic", tier="advanced",
             state_file=str(state_file),
         )
 
@@ -144,7 +144,7 @@ class TestTDDState:
             BlockInfo(number=2, name="Engine", description="build"),
         ]
         s = BuildState(
-            change_name="test", mode="only", tier="advanced",
+            change_name="test", tier="advanced",
             state_file=str(state_file),
             tdd=TDDState(blocks=blocks),
         )
@@ -164,7 +164,7 @@ class TestTDDState:
             BlockInfo(number=2, name="B", description="b", status=BlockStatus.TESTING),
         ]
         s = BuildState(
-            change_name="test", mode="only", tier="advanced",
+            change_name="test", tier="advanced",
             state_file=str(state_file),
             tdd=TDDState(blocks=blocks, current_block=1),
         )
@@ -186,7 +186,7 @@ class TestBudgetSnapshot:
     def test_checkpoint_snapshots_the_live_budget(self, tmp_path):
         budget.reset()
         budget.record(self._Usage(), label="review")
-        state = BuildState(change_name="c", mode="scratch", tier="standard")
+        state = BuildState(change_name="c", tier="standard")
         path = tmp_path / "state.json"
         state.checkpoint(path)
         budget.reset()
@@ -197,7 +197,7 @@ class TestBudgetSnapshot:
 
     def test_absent_budget_defaults_to_empty(self):
         budget.reset()
-        assert BuildState(change_name="c", mode="scratch", tier="standard").budget == {}
+        assert BuildState(change_name="c", tier="standard").budget == {}
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
@@ -314,7 +314,6 @@ class TestPreCodebaseAnalysisCheckpointResume:
 
         reloaded = BuildState.load(out)
         assert reloaded.phase == BuildPhase.RESEARCH
-        assert reloaded.interview_summary == s.interview_summary
         assert json.loads(out.read_text())["spec_gen"]["codebase_analysis_path"] is None
 
 
@@ -333,7 +332,7 @@ class TestPreEpicSplitCheckpoint:
         s = BuildState.load(FIXTURES / self.FIXTURE)
 
         assert s.phase == BuildPhase.CODEBASE_ANALYSIS
-        assert s.epic_dir is None
+        assert not hasattr(s, "epic_dir")
         assert s.is_phase_complete(BuildPhase.RESEARCH)
         assert not s.is_phase_complete(BuildPhase.EPIC_SPLIT)
         assert not s.is_phase_complete(BuildPhase.SPEC_GENERATION)
@@ -352,7 +351,7 @@ class TestPreEpicSplitCheckpoint:
         s = BuildState.load(FIXTURES / self.FIXTURE)
         out = tmp_path / "state.json"
         s.checkpoint(out)
-        assert json.loads(out.read_text())["epic_dir"] is None
+        assert "epic_dir" not in json.loads(out.read_text())
 
 
 class TestRespecPhaseAndNotes:
@@ -365,13 +364,13 @@ class TestRespecPhaseAndNotes:
         assert order.index(BuildPhase.RESPEC) < order.index(BuildPhase.COMPLETE)
 
     def test_tdd_build_does_not_count_respec_as_complete(self):
-        s = BuildState(change_name="t", mode="only", tier="advanced")
+        s = BuildState(change_name="t", tier="advanced")
         s.phase = BuildPhase.TDD_BUILD
         assert s.is_phase_complete(BuildPhase.REVIEW)
         assert not s.is_phase_complete(BuildPhase.RESPEC)
 
     def test_completed_build_skips_respec_on_resume(self):
-        s = BuildState(change_name="t", mode="only", tier="advanced")
+        s = BuildState(change_name="t", tier="advanced")
         s.phase = BuildPhase.COMPLETE
         assert s.is_phase_complete(BuildPhase.RESPEC)
 
@@ -438,7 +437,7 @@ class TestRespecPhaseAndNotes:
         assert s.tdd.current_block == len(s.tdd.blocks)
 
     def test_mutation_done_survives_checkpoint_and_reload(self, tmp_path):
-        s = BuildState(change_name="c", mode="scratch", tier="advanced")
+        s = BuildState(change_name="c", tier="advanced")
         s.tdd = TDDState(mutation_done=True)
         path = tmp_path / ".build-state.json"
         s.checkpoint(path)
@@ -484,7 +483,7 @@ class TestRespecPhaseAndNotes:
             surprises="The client raises on timeout.", spec_impact="contradicts",
         ))
         s = BuildState(
-            change_name="t", mode="only", tier="advanced",
+            change_name="t", tier="advanced",
             state_file=str(state_file), tdd=TDDState(blocks=[block]),
         )
         s.checkpoint(state_file)
@@ -527,14 +526,25 @@ class TestDocsUpdatePhaseAndImpact:
         assert not s.is_phase_complete(BuildPhase.DOCS_UPDATE)
         assert not s.is_phase_complete(BuildPhase.RESPEC)
 
-    def test_legacy_checkpoint_loads_with_intake_fields_at_defaults(self):
+    def test_legacy_checkpoint_loads_with_size_fields_at_defaults(self):
         s = BuildState.load(FIXTURES / "build-state-pre-docs-update.json")
-        assert s.interview_waiting is False
         assert s.split_required is False
         assert s.size_accepted is False
-        assert s.ticket_ref is None
-        assert s.ticket_url is None
-        assert s.plan_file is None
+
+    def test_a_checkpoint_from_before_pm_spec_loads_and_drops_the_removed_fields(self, tmp_path):
+        """Row S13: the fields of the interview, intake, --mode and the epic
+        split are ignored on load and not written back."""
+        import json
+        removed = {"mode": "scratch", "interview_summary": "S", "ticket_ref": "#1",
+                   "ticket_url": "https://example.invalid/1", "plan_file": "p.md",
+                   "interview_waiting": True, "epic_dir": "/x", "epic_single": True}
+        path = tmp_path / ".build-state.json"
+        path.write_text(json.dumps({"change_name": "c", "tier": "advanced",
+                                    "phase": "spec_generation", **removed}))
+        state = BuildState.load(path)
+        assert state.phase == BuildPhase.SPEC_GENERATION
+        state.checkpoint(path)
+        assert not set(removed) & set(json.loads(path.read_text()))
 
     def test_legacy_checkpoint_past_respec_does_not_go_back_for_docs(self):
         """A build already past RESPEC has its documentation window behind it;
@@ -554,7 +564,7 @@ class TestDocsUpdatePhaseAndImpact:
     def test_docs_impact_round_trips_through_a_checkpoint(self, tmp_path):
         path = tmp_path / ".build-state.json"
         s = BuildState(
-            change_name="c", mode="only", tier="advanced",
+            change_name="c", tier="advanced",
             docs_impact=["README.md", "CHANGELOG.md"],
         )
         s.checkpoint(path)
@@ -567,7 +577,7 @@ class TestGitLifecycleState:
     def test_new_fields_default_to_none(self):
         from build_pipeline.state import BuildState
 
-        state = BuildState(change_name="c", mode="scratch", tier="advanced")
+        state = BuildState(change_name="c", tier="advanced")
         assert state.worktree_path is None
         assert state.branch is None
         assert state.source_repo is None
@@ -578,7 +588,7 @@ class TestGitLifecycleState:
 
         path = tmp_path / ".build-state.json"
         state = BuildState(
-            change_name="c", mode="scratch", tier="advanced",
+            change_name="c", tier="advanced",
             worktree_path="/ws/.worktrees/buildme-c",
             branch="buildme/c",
             source_repo="/proj",
@@ -718,7 +728,7 @@ class TestPreFindingsCheckpoint:
                             comments=[PRComment(id=7, kind="review", author="a")],
                             triaged={7: Triage(verdict=Verdict.QUESTION, reason="why")},
                             blocks={1: "comment:7"})
-        s = BuildState(change_name="c", mode="only", tier="advanced",
+        s = BuildState(change_name="c", tier="advanced",
                        findings=FindingsState(pr=3, repo="o/r", branch="buildme/c",
                                               change_dir="/x", rounds=[rnd]))
         path = tmp_path / ".findings-state.json"
@@ -790,7 +800,7 @@ class TestFailRecordsTheTree:
         repo = make_repo(tmp_path / "proj")
         (repo / "left.txt").write_text("half-written\n")
         path = tmp_path / "state.json"
-        s = BuildState(change_name="c", mode="scratch", tier="advanced", state_file=str(path))
+        s = BuildState(change_name="c", tier="advanced", state_file=str(path))
         s.fail(repo, path)
 
         back = BuildState.load(path)
@@ -802,7 +812,7 @@ class TestFailRecordsTheTree:
 
     def test_fail_outside_a_repo_saves_no_record(self, tmp_path):
         path = tmp_path / "state.json"
-        s = BuildState(change_name="c", mode="scratch", tier="advanced", state_file=str(path))
+        s = BuildState(change_name="c", tier="advanced", state_file=str(path))
         s.fail(tmp_path / "not-a-repo", path)
         back = BuildState.load(path)
         assert back.phase == BuildPhase.FAILED

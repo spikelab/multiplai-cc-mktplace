@@ -53,9 +53,12 @@ def no_inherited_build_env(monkeypatch):
     """`build --trust-repo` sets BUILDME_TRUST_REPO=1 for every subprocess, and an
     epic child build runs with BUILDME_EPIC_CHILD=1, the test command of a build of
     this repo included. A test that wants either sets it itself; none inherits it,
-    so every test runs as in CI."""
+    so every test runs as in CI. WORKSPACE is unset too, as in CI: a build
+    run without it puts its worktree beside the test's temp repo, never in
+    the workspace of whoever runs the suite."""
     monkeypatch.delenv("BUILDME_TRUST_REPO", raising=False)
     monkeypatch.delenv("BUILDME_EPIC_CHILD", raising=False)
+    monkeypatch.delenv("WORKSPACE", raising=False)
 
 
 @pytest.fixture(autouse=True)
@@ -107,3 +110,33 @@ def isolated_budget():
     budget.reset()
     yield
     budget.reset()
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers", "no_handoff: the build sees the change dir as the test left it; "
+                   "pm_spec_handoff does not mark its specs ready")
+
+
+@pytest.fixture(autouse=True)
+def pm_spec_handoff(monkeypatch, request):
+    """Play pm-spec's handoff for tests of what buildme does with ready specs:
+    when a build starts (or resumes) on a change pm-spec never marked (no
+    `spec_status`), write any missing specs, mark them ready and commit
+    them, then run buildme's own readiness check unchanged. A change that
+    was marked and then edited is left as it is, so the check still refuses
+    it. Tests of the refusal itself use `@pytest.mark.no_handoff`."""
+    if request.node.get_closest_marker("no_handoff"):
+        return
+    from build_pipeline import orchestrator
+
+    from tests.spec_fixtures import never_marked, ready_specs
+
+    real = orchestrator._refuse_unless_ready
+
+    def handoff(config, state_path):
+        if config.change_name and never_marked(config.change_dir):
+            ready_specs(config.change_dir, config.project_dir)
+        return real(config, state_path)
+
+    monkeypatch.setattr(orchestrator, "_refuse_unless_ready", handoff)

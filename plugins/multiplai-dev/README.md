@@ -15,8 +15,8 @@ authoring**. Part of the [`multiplai`](../../README.md) marketplace.
 
 | Skill | What it does |
 |-------|--------------|
-| `buildme` | Full bootstrap conductor — from idea to working code via interview, research, spec generation, and autonomous TDD implementation (deterministic Python pipeline). |
-| `plan` | Author self-contained, executable implementation plans with verifiable "Done means" criteria — hand the file to a fresh session, a goal runner, or buildme. |
+| `buildme` | Builds a change from the specs `/multiplai-pm:pm-spec` marked ready — research, design, tasks, audits and autonomous TDD implementation (deterministic Python pipeline), ending in a PR. |
+| `plan` | Author self-contained, executable implementation plans with verifiable "Done means" criteria — hand the file to a fresh session, a goal runner, or `/multiplai-pm:pm-spec` (as its input) before buildme. |
 | `deepen` | Find deepening opportunities — collapse shallow modules into deep ones; idiom packs for Python, Swift, TypeScript, React. |
 | `review` | Code review as a pipeline of separate agents (find, verify, merge duplicates) with gates in code that reject any finding whose cited lines are not at the reviewed commit; each finding says what correct behaviour would be, and no fix is proposed; writes a markdown review, a short summary it pastes into chat, rollups and a `findings.json` (under `.multiplai/data/reviews/<repo>/<object>/`, such as `multiplai-cc-mktplace/pr-283/`, every round kept, every run in `ledger.jsonl`), then opens it in `review-viewer`. |
 | `review-viewer` | Local web page for a PR, a branch, unpushed commits or a commit range: a step-by-step walkthrough the session writes, and a code review's findings beside the code when one exists; questions and accept/reject decisions typed there reach the live session, and its answers appear in the page; files can be ticked off as viewed. |
@@ -31,12 +31,14 @@ authoring**. Part of the [`multiplai`](../../README.md) marketplace.
 
 ## Composition
 
-- `buildme` composes with `deep-research` (multiplai-research) for its research
-  phase — use `--skip-research` if that plugin isn't installed. It takes a
-  ticket (`DB-2267`, `#12`, a Plane or GitHub issue URL), a file, or a prompt;
-  `/buildme setup` picks the ticket system once per repo. Plane tickets go
-  through `plane` (multiplai-pm), GitHub issues through `gh`.
-- `plan` output is designed to be fed to `buildme` or a fresh session unchanged.
+- `buildme` builds from the specs `/multiplai-pm:pm-spec` (multiplai-pm) wrote
+  and marked ready: a ticket, a PRD, a plan or a prompt goes to pm-spec first,
+  and buildme refuses a change whose specs are not ready (`SPEC:NOT_READY`).
+  Requirements problems it finds go back to pm-spec in `spec-issues.md`. It
+  composes with `deep-research` (multiplai-research) for its research phase —
+  use `--skip-research` if that plugin isn't installed.
+- `plan` output is designed to be fed to `/multiplai-pm:pm-spec` (which writes
+  the specs buildme builds from) or a fresh session unchanged.
 - `analyze-context-router` and `propose-skill` operate on `multiplai-context` —
   install it first.
 
@@ -47,7 +49,7 @@ Runs on vanilla Claude Code, any OS, with these exceptions:
 - `devops-gcp` — the knowledge pack works anywhere; real operations need your
   `gcloud` auth.
 - `e2e-test` — frontend mode needs `agent-browser` (npm); backend mode is plain HTTP.
-- `buildme` — needs `uv` + network; `gh` for GitHub-issue intake.
+- `buildme` — needs `uv` + network, and specs from `/multiplai-pm:pm-spec`; `gh` to open its PR.
 - `review` — needs `uv` + network; `gh` for `--pr` and `post`.
 
 Full details: [compatibility matrix](../../README.md#compatibility-matrix) and

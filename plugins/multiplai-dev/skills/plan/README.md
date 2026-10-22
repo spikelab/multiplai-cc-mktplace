@@ -46,8 +46,9 @@ properties the plan itself was missing:
 This skill folds those properties into the plan itself, so **one artifact**
 serves every consumer: a human reviewer, a fresh session told to
 "implement the plan", a goal/autonomous runner (Outcome + Done means +
-Constraints *are* the goal contract), or buildme (Context + Outcome seed
-the proposal stage).
+Constraints *are* the goal contract), or pm-spec (`/multiplai-pm:pm-spec
+new <name> --plan-file <plan>`: Context + Outcome seed its proposal, and
+buildme then builds from the specs pm-spec marks ready).
 
 ## Why every plan has a stop and resume table
 

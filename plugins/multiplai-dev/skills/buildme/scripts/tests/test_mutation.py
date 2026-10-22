@@ -101,14 +101,14 @@ def _setup(project, *, stack="pyproject", test_command="true", min_score=0.8,
            mutation_done=False):
     repo, baseline = project
     config = BuildConfig(
-        project_dir=repo, change_name="feat", tier="advanced", mode="only",
+        project_dir=repo, change_name="feat", tier="advanced",
         test_command=test_command, config_dir=repo / ".cfg",
         core_memory_files=[], stack_memory_files=[], additional_memory_files=[],
     )
     config.specs_dir = repo / "specs"
     config.stack = stack
     config.mutation = MutationSettings(min_score=min_score)
-    state = BuildState(change_name="feat", mode="only", tier="advanced")
+    state = BuildState(change_name="feat", tier="advanced")
     state.tdd = TDDState(
         blocks=[BlockInfo(number=1, name="Clamp", description="clamp",
                           status=BlockStatus.DONE, baseline_commit=baseline)],

@@ -18,7 +18,7 @@ from .. import sdk
 from ..config import BuildConfig
 from ..prompts.findings import TRIAGE_PROMPT
 from .history import earlier_text
-from .models import PRComment, SpecChange, Triage, TriageRecord
+from .models import PRComment, SpecIssue, Triage, TriageRecord
 
 log = logging.getLogger(__name__)
 
@@ -133,7 +133,7 @@ def _cell(text: str, limit: int = 400) -> str:
 
 
 def render_findings(round_n: int, records: list[TriageRecord],
-                    spec_changes: list[SpecChange] | None = None) -> str:
+                    spec_issues: list[SpecIssue] | None = None) -> str:
     """`findings-r<N>.md`: one row per finding id (or comment, when it has no
     id) across rounds 1..N, the latest record first in its history."""
     rows: dict[str, list[TriageRecord]] = {}
@@ -165,22 +165,23 @@ def render_findings(round_n: int, records: list[TriageRecord],
             f"| {_cell(ident, 40)} | {_cell(c.author, 60)} | {link} | "
             f"{'yes' if c.allowed else 'no'} | {verdict} | {_cell(reason)} | {_cell(past, 600)} |"
         )
-    if spec_changes:
-        out += ["", "## Spec changes", "",
-                "| Finding | Requirement | Change | Before | After |",
-                "|---|---|---|---|---|"]
-        for s in spec_changes:
-            change = s.operation if s.applied else f"declined: {s.declined_reason}"
+    if spec_issues:
+        out += ["", "## Requirements issues", "",
+                "Recorded for `pm-spec revise`, which edits the requirements; buildme "
+                "does not.", "",
+                "| Finding | Requirement | Recorded in | Code fix |",
+                "|---|---|---|---|"]
+        for s in spec_issues:
+            where = f"{s.issues_file} ## {s.heading}" + ("" if s.appended else " (already there)")
             out.append(
-                f"| {_cell(', '.join(s.finding_keys), 200)} | "
-                f"{_cell(f'{s.capability}: {s.requirement}', 200)} | {_cell(change, 300)} | "
-                f"{_cell(s.before, 600)} | {_cell(s.after, 600)} |"
+                f"| {_cell(s.finding_key, 200)} | {_cell(s.requirement, 200)} | "
+                f"{_cell(where, 300)} | {'deferred until the change is made' if s.defers_fix else '—'} |"
             )
     return "\n".join(out) + "\n"
 
 
 def write_findings(change_dir: Path, round_n: int, records: list[TriageRecord],
-                   spec_changes: list[SpecChange] | None = None) -> Path:
+                   spec_issues: list[SpecIssue] | None = None) -> Path:
     path = findings_path(change_dir, round_n)
-    path.write_text(render_findings(round_n, records, spec_changes))
+    path.write_text(render_findings(round_n, records, spec_issues))
     return path

@@ -1,68 +1,15 @@
-"""Prompt templates for OpenSpec artifact generation.
+"""Prompt templates for buildme's planning artifacts: design and tasks.
 
 Each template uses {placeholders} for context injection by the spec generator.
+The proposal, use cases and requirements they read are pm-spec's; buildme
+never writes them. A problem the design finds in them goes back to pm-spec as
+a `SPEC_ISSUE:` line (`SPEC_ISSUE_RULE`).
 """
 
-PROPOSAL_PROMPT = """\
-You are generating a proposal document for an spec-driven change.
-
-## Project Context
-{project_context}
-
-## Interview Summary
-{interview_summary}
-
-## Research Findings
-{research}
-
-## Instructions
-{instruction}
-
-## Output Format
-Generate the proposal as markdown following this template structure:
-
-{template}
-
-Rules:
-- Keep concise (1-2 pages)
-- Capability names MUST be kebab-case (e.g., `user-auth`, `data-export`)
-- Each capability listed under "New Capabilities" will become a requirements/<name>.md file
-- Focus on WHY, not HOW — the design doc covers implementation
-- Be specific about what changes — vague proposals create vague specs
-
-Output ONLY the markdown content. No commentary.
-"""
-
-SPEC_PROMPT = """\
-You are generating a requirements file for a single capability in a spec-driven change.
-
-## Project Context
-{project_context}
-
-## Proposal
-{proposal_content}
-
-## Capability to Specify
-{capability_name}
-
-## Instructions
-{instruction}
-
-## Output Format
-Generate the spec as markdown following this template structure:
-
-{template}
-
-Rules:
-- Every requirement MUST have at least one WHEN/THEN scenario
-- Scenarios must be testable — unambiguous pass/fail
-- Use ADDED Requirements section header for new specs
-- Requirements should be atomic — one behavior per requirement
-- Include edge cases and error scenarios, not just happy path
-- Reference the proposal for context but add detail it lacks
-
-Output ONLY the markdown content. No commentary.
-"""
+# The design step's one way to say a requirement cannot be built as written.
+# `spec_generator.design_spec_issues` reads these lines; a design that has any
+# is not published, and the issues go to spec-issues.md for `pm-spec revise`.
+SPEC_ISSUE_PREFIX = "SPEC_ISSUE:"
 
 DESIGN_PROMPT = """\
 You are generating a design document for an spec-driven change.
@@ -78,6 +25,9 @@ You are generating a design document for an spec-driven change.
 
 ## Existing Codebase Analysis
 {codebase_analysis}
+
+## Research Findings
+{research}
 
 ## Reference Docs — the conventions this project builds to
 {reference_docs}
@@ -98,7 +48,14 @@ Rules:
 - Reference specific spec scenarios when explaining how they'll be implemented
 - Integration contracts: define interfaces between components
 - Be explicit about what's new vs what's modified
-- Flag any spec requirements that seem infeasible or contradictory
+- The proposal, use cases and specs are fixed inputs: you cannot change them,
+  and the design must not tell their author what to reword. When a requirement
+  is infeasible, or contradicts another requirement or the codebase, end your
+  output with one line per problem, in exactly this form and nothing after:
+  `SPEC_ISSUE: requirements/<capability>.md: <requirement name>: <what is
+  infeasible or contradictory, and the change to the requirement that would
+  fix it>`. Those lines go back to the requirements' author; write them only
+  for a problem a design cannot solve
 - The Reference Docs above are this project's prescribed practices. Where one
   states a convention that applies (package manager, project layout, error
   handling, test framework, naming), the design follows it and names the doc in

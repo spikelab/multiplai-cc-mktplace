@@ -19,7 +19,7 @@ from build_pipeline.config import EpicSettings
 from build_pipeline.epic import coordinator, records
 from build_pipeline.epic import lock as epic_lock
 from build_pipeline.epic import review
-from build_pipeline.epic.split import EpicSplitAnswer
+from .epic_row_helpers import EpicSplitAnswer
 
 from .epic_row_helpers import (
     CallLog,

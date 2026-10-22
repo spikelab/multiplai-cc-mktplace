@@ -1,14 +1,16 @@
 ---
 name: buildme-findings
-description: Fixes a pull request's review comments through buildme's own process. Reads the PR's unresolved review threads and new top-level comments from allowed authors, sorts each into code fix, spec change, question or not a defect, changes the change's specs where a finding requires it, fixes each code defect with a failing test first under buildme's TDD gates, pushes, refreshes the PR description through /multiplai-dev:pr, replies in each thread, and re-runs /multiplai-dev:review until a round brings nothing new or findings.max_rounds is reached.
+description: Fixes a pull request's review comments through buildme's own process. Reads the PR's unresolved review threads and new top-level comments from allowed authors, sorts each into code fix, spec change, question or not a defect, records each requirements change a finding asks for in spec-issues.md for /multiplai-pm:pm-spec revise (it never edits requirements), fixes each code defect with a failing test first under buildme's TDD gates, pushes, refreshes the PR description through /multiplai-dev:pr, replies in each thread, and re-runs /multiplai-dev:review until a round brings nothing new or findings.max_rounds is reached.
 when_to_use: 'Triggers: fix the review comments, address the PR findings, buildme findings, fix the findings on PR, /multiplai-dev:buildme-findings'
 ---
 
 # buildme findings
 
-Fix what reviewers said on a PR, the same way buildme built it: spec first
-when the spec is wrong, then a failing test, then the fix, with every gate a
-build runs. Each round replies on the PR and re-runs the review.
+Fix what reviewers said on a PR, the same way buildme built it: a failing
+test, then the fix, with every gate a build runs. When a finding says the
+requirements are wrong, it is recorded for `/multiplai-pm:pm-spec revise`,
+which edits them; buildme does not. Each round replies on the PR and re-runs
+the review.
 
 ## Command
 
@@ -85,12 +87,17 @@ never removed. A PR whose branch lives in a fork is refused.
    the same lineage (the review's `lineage` in its `findings.json`), fenced
    as data, as evidence to weigh against the code as it is now. A
    `not_defect` verdict never hides a finding from the next review.
-3. **Spec.** For a `spec_change`, or a fix that contradicts the spec, one
-   model call writes `respec-findings-r<N>.md`; the pipeline applies it to the
-   change's `requirements/*.md` (and, when the change is archived, to
-   `specs/registry/`, which the archive already merged it into) and commits
-   `spec(findings-r<N>): <ids>` before any code changes, with or without
-   `--auto`.
+3. **Spec.** For a `spec_change`, or a fix that contradicts the spec, the
+   pipeline appends one `## ` section to `spec-issues.md` in the change
+   directory (the archived directory, when the change is archived), naming
+   the finding, the requirements file (`requirements/<cap>.md`) and the
+   requirement triage named, the reviewer's comment link and the change
+   asked for. It writes no section twice and keeps what the file already
+   holds. It sets `spec_issues` in that directory's `.change.yaml` and
+   commits both as `spec(findings-r<N>): <ids>` before any code changes,
+   with or without `--auto`. No model is called, and `requirements/*.md` and
+   `specs/registry/` are never written: `/multiplai-pm:pm-spec revise
+   <change>` reads the file and makes the edit.
 4. **Code.** Each `code_fix` is one block in `findings-r<N>-tasks.md`, run
    through buildme's TDD engine: `test(block-<k>)` then `impl(block-<k>)`
    commits, with the RED gate, test hashing, refactor discard and per-block
@@ -99,7 +106,9 @@ never removed. A PR whose branch lives in a fork is refused.
    mistake, fix each one, and end its report with a `SEARCHED:` section; the
    reply quotes it. When the review listed other places with the same defect
    (`other_locations`), the block lists them and asks for every listed
-   location to be fixed and tested.
+   location to be fixed and tested. A fix that contradicts the spec is not
+   made: it waits on the requirements change, and its reply says so. The
+   other fixes are made in the same round.
    On the last round `findings.max_rounds` allows, from round 2 on, every
    block starts with the escalation text of buildme's review fix: every
    finding lineage of the PR's reviews with what each review said about it,
@@ -120,7 +129,9 @@ never removed. A PR whose branch lives in a fork is refused.
 5. **Publish.** Push, then the PR description's "Review rounds" section
    through `/multiplai-dev:pr edit` (it also quotes a problem the check of
    the round's fixes found, and whether that block fixed it), then one reply per acted-on thread (the
-   fixing commit, or why nothing changed) and one reply for the round's
+   fixing commit, or why nothing changed; for a requirements change, the
+   `spec-issues.md` it was recorded in and the `pm-spec revise` command that
+   makes it) and one reply for the round's
    top-level comments and review bodies. Replies go out only after the push succeeded. Threads
    are never resolved.
 6. **Review.** `/multiplai-dev:review --pr <number> --fetch` runs on the new head. `--fetch`
@@ -179,8 +190,8 @@ outside the project.
 
 ## What this skill does on the machine
 
-- **Sends the repository's contents to a model** through the triage, spec,
-  TDD, self-check and review agents (the self-check gets the round's fix
+- **Sends the repository's contents to a model** through the triage, TDD,
+  self-check and review agents (the self-check gets the round's fix
   commits as a diff and reads the project), and the PR comments, fenced as untrusted data.
 - **Runs agents that edit the worktree and run its test command**, as a
   buildme build does (needs `--trust-repo`).
@@ -190,8 +201,9 @@ outside the project.
   skill; posts replies to review comments and one PR comment per round; and,
   under `--auto`, posts the re-review's findings through the review skill.
 - **Writes** `findings-r<N>.md`, `findings-r<N>-tasks.md`,
-  `findings-r<N>-self-check.md`, `respec-findings-r<N>.md` and the state files
-  in the change directory, and commits to the PR's branch. Under `--auto` it
+  `findings-r<N>-self-check.md`, `spec-issues.md` (appended to),
+  `.change.yaml` (its `spec_issues` key) and the state files in the change
+  directory, and commits to the PR's branch. Under `--auto` it
   also writes `buildme-decisions.json` next to the review's `findings.json`.
 
 ## Prerequisites

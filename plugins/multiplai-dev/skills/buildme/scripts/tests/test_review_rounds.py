@@ -114,13 +114,13 @@ def _make_project(base: Path, subdir: bool = False) -> SimpleNamespace:
     block = BlockInfo(number=1, name="Adder", description="add two numbers",
                       status=BlockStatus.IMPLEMENTING, baseline_commit=baseline)
     state = BuildState(
-        change_name="test", mode="only", tier="advanced",
+        change_name="test", tier="advanced",
         state_file=str(config.state_file_path()),
         tdd=TDDState(blocks=[block], baseline_tests_pass=True),
     )
     state.checkpoint(config.state_file_path())
     progress = ProgressWriter(base / "progress.md")
-    progress.initialize("test", "only", "advanced", 1)
+    progress.initialize("test", "advanced", 1)
     return SimpleNamespace(dir=project_dir, root=root, config=config, state=state, block=block,
                            progress=progress, baseline=baseline)
 

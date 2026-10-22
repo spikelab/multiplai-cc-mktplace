@@ -7,7 +7,7 @@ after it) or a real SIGTERM (the handlers `build` installs turn it into
 SystemExit). The spec:
 
 - ``project_dir``, ``change``: the build's ``--project-dir`` and ``--change``.
-- ``mode``, ``spec_only``, ``force``: the CLI flags of the same name.
+- ``spec_only``, ``force``: the CLI flags of the same name.
 - ``stop_at``: where to stop — ``tdd-start`` (after REVIEW, before any block)
   or ``block-<n>-mid`` (block n started and its spend recorded).
 - ``stop_how``: ``kill`` (SIGKILL), ``SIGTERM``, or ``hold`` (write
@@ -115,16 +115,14 @@ def main() -> int:
 
     project = Path(spec["project_dir"])
     config = BuildConfig(project_dir=project, change_name=spec["change"], auto=True,
-                         mode=spec.get("mode", "scratch"), spec_only=spec.get("spec_only", False),
-                         skip_research=True)
+                         spec_only=spec.get("spec_only", False), skip_research=True)
     config.specs_dir = project / "specs"
     config.test_command = "true"
     os.environ["BUILDME_TRUST_REPO"] = "1"
     args = argparse.Namespace(
-        mode=config.mode, change=spec["change"], project_dir=str(project), auto=True,
-        spec_only=config.spec_only, skip_research=True, interview_summary="an idea",
-        research_path="", context_files=[], session_id="", block=None,
-        no_epic_split=True, force=spec.get("force", False),
+        change=spec["change"], project_dir=str(project), auto=True,
+        spec_only=config.spec_only, skip_research=True, research_path="", session_id="", block=None,
+        force=spec.get("force", False),
     )
     with patch("build_pipeline.spec_generator.run_spec_generator", fake_spec_generator), \
          patch("build_pipeline.llm_steps.spec_steps.run_design_audit", fake_design_audit), \

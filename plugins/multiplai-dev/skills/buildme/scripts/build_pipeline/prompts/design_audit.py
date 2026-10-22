@@ -99,6 +99,16 @@ Severity decides what gets rewritten, so calibrate it:
 - **minor** — a clarification that improves the documents without changing
   what gets built.
 
+## Fixes That Need a Requirements Change
+
+The proposal and the specs are fixed inputs here: the rewrite this audit
+drives changes only design.md and tasks.md. When a gap can only be fixed by
+changing a requirement (it is infeasible, or contradicts another requirement
+or the codebase, or a needed behaviour is missing from the specs), set
+`needs_requirements_change` to true and name the requirement in `requirement`
+as `requirements/<capability>.md: <requirement name>`; the build then stops
+and sends it to the requirements' author. Every other gap has false.
+
 ## Output Format
 Return a JSON array of gap objects:
 
@@ -108,7 +118,9 @@ Return a JSON array of gap objects:
     "category": "spec-task-alignment",
     "severity": "critical|major|minor",
     "description": "Specific description of the gap",
-    "suggestion": "How to fix it"
+    "suggestion": "How to fix it",
+    "needs_requirements_change": false,
+    "requirement": ""
   }}
 ]
 ```

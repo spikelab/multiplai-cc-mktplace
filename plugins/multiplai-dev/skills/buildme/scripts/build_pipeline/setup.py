@@ -32,12 +32,6 @@ log = logging.getLogger(__name__)
 def _setup_values(args: argparse.Namespace) -> list[tuple[tuple[str, ...], object]]:
     """``(key path, value)`` for every flag that was passed, in a stable order."""
     values: list[tuple[tuple[str, ...], object]] = []
-    if args.provider is not None:
-        values.append((("intake", "provider"), args.provider))
-    if args.plane_project is not None:
-        values.append((("intake", "plane", "project"), args.plane_project))
-    if args.interview is not None:
-        values.append((("interview",), args.interview))
     if args.architecture is not None:
         values.append((("architecture",), args.architecture))
     if args.pr_template is not None:
@@ -144,8 +138,6 @@ def config_get(args: argparse.Namespace) -> int:
     config.specs_dir = project / "specs"
     config._load_specs_config()
     resolved = {
-        "intake.provider": config.intake.provider,
-        "interview": config.interview_mode,
         "architecture": config.architecture,
         "pr.template": config.pr.template,
         "pr.max_change_lines": config.pr.max_change_lines,
@@ -159,8 +151,6 @@ def config_get(args: argparse.Namespace) -> int:
         "git.push": str(config.git.push).lower(),
         "git.pr": config.git.pr,
     }
-    for name, value in config.intake.options.items():
-        resolved[f"intake.{config.intake.provider}.{name}"] = value
     if args.key not in resolved:
         print(f"ERROR: unknown key {args.key!r}; known: {', '.join(sorted(resolved))}",
               file=sys.stderr)

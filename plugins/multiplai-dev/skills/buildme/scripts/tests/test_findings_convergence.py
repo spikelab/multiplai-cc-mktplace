@@ -202,7 +202,7 @@ def _kill_at_checkpoint(when):
 
 
 def _config(tmp_path: Path) -> BuildConfig:
-    return BuildConfig(project_dir=tmp_path, change_name="calc", tier="advanced", mode="only",
+    return BuildConfig(project_dir=tmp_path, change_name="calc", tier="advanced",
                        test_command="true", config_dir=tmp_path / "config",
                        core_memory_files=[], stack_memory_files=[], additional_memory_files=[])
 
@@ -386,7 +386,7 @@ class TestEscalatedConfig:
 
     def test_findings_convergence_recurring_is_the_fixer_s_own_slot(self, tmp_path):
         state_path = tmp_path / "s.json"
-        state = BuildState(change_name="calc", mode="only", tier="advanced", state_file=str(state_path))
+        state = BuildState(change_name="calc", tier="advanced", state_file=str(state_path))
         own = f"done\n\nRECURRING: {SLOT}"
         later = "\n[review-fix 1]\nfixed\n\nRECURRING: B01-R1-F1 — the block's own review"
         state.tdd = TDDState(blocks=[

@@ -62,15 +62,6 @@ class TestDenyList:
         for tool in ("WebSearch", "WebFetch"):
             assert tool not in denied, tool
 
-    def test_prototype_allowlist_keeps_write_denies_bash(self):
-        """Bash writes would bypass the files_changed-based write-boundary
-        check (only Write/Edit ToolUseBlocks are collected)."""
-        from build_pipeline.llm_steps.prototype_steps import PROTOTYPE_TOOLS
-
-        denied = deny_list(PROTOTYPE_TOOLS)
-        assert "Bash" in denied
-        assert "Write" not in denied
-
 
 class TestLlmCallToolPolicy:
     @pytest.mark.asyncio

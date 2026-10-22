@@ -12,9 +12,9 @@ protocol. The middle field is the normalized change slug (never contains
 
 Driven, end to end, by a real build:
 
-  * **Shaping** — bootstrap → interview → research → codebase analysis →
-    spec generation (proposal, requirements).
-  * **Planning** — design audit → plan review → prototype → the review
+  * **Shaping** — bootstrap → research → codebase analysis → spec
+    generation (design, tasks, from pm-spec's proposal and requirements).
+  * **Planning** — design audit → plan review → the review
     checkpoint (design.md / tasks.md / rubric.md, audited and reviewed).
   * **In Development** — the TDD build, the documentation update, and the
     respec pass.

@@ -5,14 +5,15 @@ Deterministic Python pipeline for the `/buildme` skill. Replaces 4,370 lines of 
 ## Architecture
 
 ```
-SKILL.md (thin wrapper — handles interview, plan review)
+SKILL.md (thin wrapper — the research request, plan review; pm-spec writes the specs first)
   └── python -m build_pipeline build
-        ├── orchestrator.py    — mode detect, phase sequence, bootstrap
-        ├── spec_generator.py  — proposal → specs → design → tasks → rubric
+        ├── orchestrator.py    — readiness check, phase sequence, bootstrap
+        ├── readiness.py       — SPEC:NOT_READY / SPEC:ISSUES, spec-issues.md
+        ├── spec_generator.py  — pm-spec's proposal + requirements → design → unknowns → tasks → rubric
         ├── tdd_engine.py      — per-block TDD with agent spawning
         ├── apply.py           — manual single-agent implementation
         ├── change_manager.py  — manages specs/ directory
-        ├── epic/              — EPIC_SPLIT: one change or several child plans, the approval, running, reviewing and merging the children
+        ├── epic/              — an epic pm-spec split: running, reviewing and merging its children
         └── shared: config, state, models, gates, sdk, logging, env, progress
 ```
 
@@ -22,7 +23,7 @@ SKILL.md (thin wrapper — handles interview, plan review)
 
 ```bash
 # Full build (the main entry point — invoked by SKILL.md wrapper)
-python -m build_pipeline build --mode scratch --change my-feature --project-dir /path
+python -m build_pipeline build --change my-feature --project-dir /path
 
 # Spec generation only (dev/debug)
 python -m build_pipeline spec-generate --change my-feature --project-dir /path
@@ -48,25 +49,26 @@ folder (`build_pipeline/findings/README.md`).
 
 ### Epic mode
 
-After the codebase analysis, `build` decides whether the input is one change or
-several (`BuildPhase.EPIC_SPLIT`, one structured call). Several writes
-`<data_dir>/buildme/epics/<owner>-<repo>--<change>/` — `epic.json`, `split.md`,
-`plans/<id>.md`, `.lock` — prints `EPIC:SPLIT:<split.md>` and exits 3.
-`build ... --approve-split` re-checks `split.md`'s table and the plans as on disk,
-saves `state: approved` with each file's sha256, and prints
-`EPIC:APPROVED:<epic.json>`, then runs the children (`epic/coordinator.py`):
-each is its own `python -m build_pipeline build` subprocess in its own process
-group, launched once its dependencies merged, at most `epic.max_parallel` at
-once, from origin's default branch (`--base-ref`). A child whose `split.md`
-row names a `repo` (a local checkout, absolute or relative to the epic's
-repository root; approval refuses one that is not the top of a checkout with
-an `origin` remote, `store.repo_errors`) builds there instead: its
-`--project-dir`, base fetch, PR lookup, review slug, fixer and merge lock are
-that repository's (`Coordinator._place`), its `specs/config.yaml` gets the same
-`git.worktree`/`git.push` check as the epic's, and a checkout gone later parks
-it for good (`repo_park` in `epic.json`) while its saved review slug keeps its
-reviews in the epic's spend (with none saved, the child predates PR F and
-was built in the epic's repository, so the slug is the epic's). Records go to
+`build --change <parent>` on a change whose `.change.yaml` lists `children`
+(pm-spec's split) goes to `epic.phase.run_epic_from_specs` before anything
+else (`epic.phase.is_epic`). It reads each child's `depends_on` from its own
+`.change.yaml` and refuses with `SPEC:NOT_READY`, exit 2 and nothing written,
+when a child is misnamed, missing, depends on an unlisted child, is in a
+cycle or is not ready, or when the parent's or a child's change dir is
+uncommitted or not in HEAD. Then it reads HEAD's sha once, takes the lock on
+`<data_dir>/buildme/epics/<owner>-<repo>--<change>/` and loads or starts
+`epic.json` with the children as the change dirs list them now, and runs the
+children (`epic/coordinator.py`): each is its own `python -m build_pipeline
+build --change <parent>-<id> --auto --trust-repo --epic-child --pr-ready
+--project-dir <P> [--base-ref <base>] [--skip-research]` subprocess in its own
+process group, launched once its dependencies merged, at most
+`epic.max_parallel` at once. A child with no dependency gets HEAD's sha as
+`--base-ref` (`Coordinator._base`), so its PR carries the specs commit and
+nothing is pushed first; a dependent one gets origin's default branch after a
+fetch, and is failed with a reason instead of launched when that branch does
+not hold its change dir as the specs commit does. A child's build is found by
+`--change` and `--project-dir` (`build_pid`). Every child builds in the
+epic's own repository. Records go to
 `agents/<NNN>-build-<id>.{started.json,result.json,log}` (`epic/records.py`)
 and each run ends with `runs/<NN>/summary.json` (`EPIC:SUMMARY:<path>`). A
 child waiting on an open PR exits 3 with `EPIC:MERGE_WAITING:<urls>`. `build`
@@ -141,7 +143,7 @@ review finished on is waited on only as a dependency's, is named on stderr,
 and makes the run exit 1 when it prints neither `EPIC:MERGE_WAITING` nor
 `EPIC:BUDGET` (`_unreviewed`). Under `epic.merge: auto` the merge step runs
 first (PRs E1 and E2, `epic/merge.py`, `Coordinator._merge`), under one
-`asyncio.Lock` per repository and on the worktree root: a merge commit made
+`asyncio.Lock` (`merge_lock`) and on the worktree root: a merge commit made
 and not pushed, holding only what `merge.merges_onto` accepts, is checked (`stop_record.others_work`), tested and pushed; a
 merge left in progress is aborted only when `others_work` passes against
 `merge_stop`, else it parks with the hint `git -C <W> merge --abort, then
@@ -167,10 +169,9 @@ the step pushed>` (`Coordinator._merge_pr`): merged once `gh pr view` says
 waited on), or refused `BEHIND`, which restarts at `merge.ready` and merges the
 new commit (nothing new to merge parks with the refusal: a refused merge is
 never retried in one run), or any other refusal, which parks with GitHub's
-stderr and `mergeStateStatus` (PR E2). A file
-changed after approval, another process holding the epic's lock, or a
-`specs/config.yaml` turning off `git.worktree` or `git.push`, exits 2.
-`--no-epic-split` skips the decision.
+stderr and `mergeStateStatus` (PR E2). Another process holding the epic's
+lock, or a `specs/config.yaml` turning off `git.worktree` or `git.push`,
+exits 2.
 
 ## Model-Adaptive Behavior
 
@@ -471,8 +472,8 @@ An unknown key or effort name is dropped with a warning.
 
 | Stage | Steps |
 |---|---|
-| `spec` | `spec_artifact` (every spec artifact, use-cases included), `rubric`, `design_audit`, `tasks_audit`, `codebase_analysis`, `explainer`, `respec`, `interview`, `research`, `findings_spec` (the findings stage's spec delta), `epic_split` |
-| `agent` | `test_writer`, `implementer`, `refactor`, `refactor_all`, `mutation_test_writer`, `integration_fix`, `review_fix`, `docs_update`, `prototype`, `merge` |
+| `spec` | `spec_artifact` (design, unknowns and tasks), `rubric`, `design_audit`, `tasks_audit`, `codebase_analysis`, `explainer`, `respec`, `research` |
+| `agent` | `test_writer`, `implementer`, `refactor`, `refactor_all`, `mutation_test_writer`, `integration_fix`, `review_fix`, `docs_update`, `merge` |
 | `review` | `review`, `adjudication`, `test_quality_audit`, `plan_review`, `integration_fix_escalated` (the last integration-fix attempt), `review_fix_escalated` (the review loop's last fix, which questions the block's approach), `findings_triage` (the findings stage's one read-only agent per PR comment), `findings_self_check` (the findings stage's one read-only check of a round's fix commits) |
 
 The tier (advanced or standard) comes from the default model: `models.default`,
@@ -489,7 +490,7 @@ so when `models.default` is a `pi:` spec the tier comes from `BUILDME_TIER`
 | `[buildme]` | `MODEL=` and `EFFORT=` for the whole pipeline |
 | `[buildme.spec]` | `MODEL=` and `EFFORT=` for spec generation, audits, rubric |
 | `[buildme.review]` | `MODEL=` and `EFFORT=` for code review, test-quality audit |
-| `[buildme.agent]` | `MODEL=` and `EFFORT=` for the agent stage (test writer, implementer, refactorers, fixers, docs update, prototype, merge) |
+| `[buildme.agent]` | `MODEL=` and `EFFORT=` for the agent stage (test writer, implementer, refactorers, fixers, docs update, merge) |
 
 ```ini
 [buildme]

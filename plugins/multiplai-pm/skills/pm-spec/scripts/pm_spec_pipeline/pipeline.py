@@ -218,6 +218,7 @@ async def cmd_resume(config: SpecConfig, *, replies_file: str = "",
 
 async def cmd_revise(config: SpecConfig, *, from_respec: bool = False,
                      max_usd: float | None = sdk.DEFAULT_MAX_USD) -> int:
+    config.use_archive_if_gone()
     if _load(config) is None and not _adoptable(config):
         _no_run(config)
     state_mod.ensure_run_dir(config.run_dir)

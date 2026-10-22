@@ -174,7 +174,7 @@ def test_resume_flag_accepts_only_existing_unknown_calls(tmp_path):
     from build_pipeline.__main__ import build_parser
     from build_pipeline.config import BuildConfig
     from build_pipeline import budget
-    args = build_parser().parse_args(['build', '--project-dir', str(tmp_path), '--accept-unknown-spend'])
+    args = build_parser().parse_args(['build', '--change', 'x', '--project-dir', str(tmp_path), '--accept-unknown-spend'])
     config = BuildConfig.from_cli_args(args)
     assert config.accept_unknown_spend
     saved = {'cost_usd': .5, 'unaccounted_calls': ['planning']}

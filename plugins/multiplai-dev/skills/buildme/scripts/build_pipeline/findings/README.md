@@ -7,10 +7,10 @@ again until a round finds nothing new or `findings.max_rounds` is reached.
 
 | Module | What it does |
 |---|---|
-| `models.py` | `PRComment`, `Verdict`, `Triage`, `TriageRecord`, `SpecChange` |
+| `models.py` | `PRComment`, `Verdict`, `Triage`, `TriageRecord`, `SpecIssue` |
 | `fetch.py` | lists unresolved review threads, top-level comments and the findings in review bodies; decides whose comments are acted on; fences every body |
 | `triage.py` | one read-only agent per allowed comment; writes `findings-r<N>.md` |
-| `spec.py` | writes `respec-findings-r<N>.md`, applies it to the change's requirements (and `specs/registry/` when the change is archived), commits `spec(findings-r<N>): …` |
+| `spec.py` | appends one `## ` section per requirements change a finding asks for to the change dir's `spec-issues.md` (the archived dir's, when archived), sets `spec_issues` in its `.change.yaml`, commits `spec(findings-r<N>): …`; never edits `requirements/*.md` or `specs/registry/` (`pm-spec revise` does) and calls no model |
 | `code.py` | writes `findings-r<N>-tasks.md` (each block asks for the same mistake elsewhere and a `SEARCHED:` section, which `searched_text` reads back for the reply) and runs the TDD engine on it against `.findings-r<N>-state.json`, through the `BuildConfig` overrides `change_dir`, `tasks_file` and `state_file`; `run_self_check` is the one read-only check of the round's fix commits, whose problems become one more block (`write_self_check`, `add_block`) |
 | `decisions.py` | under `--auto`, writes `buildme-decisions.json` next to the review's `findings.json`: of the findings the review lists (not a `repeat` or `low-value` one, and in `critical` mode only a breaking one), every Code finding and every Tests finding citing a non-test source file, for `review post --decisions` |
 | `publish.py` | pushes, refreshes the PR body through the pr skill's `edit`, replies in each thread |

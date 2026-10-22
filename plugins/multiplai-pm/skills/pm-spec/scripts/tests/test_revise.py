@@ -156,3 +156,30 @@ def test_revise_adopts_a_change_pm_spec_did_not_write(repo, model):
     assert run(repo, "revise", "throttle") == 0
     assert is_ready(cdir) == (True, "")
     assert model.calls_to("spec:") == 0
+
+
+def test_revise_finds_an_archived_change(repo, model, capsys):
+    """An `--auto` build archives the change when its PR is ready, and
+    buildme-findings writes later issues into the archived copy (item 22a):
+    with specs/changes/<name>/ gone, revise works on the newest archive."""
+    cdir = ready_change(repo, model)
+    git(repo, "add", "-A", "specs")
+    git(repo, "commit", "-qm", "issues")
+    archive = repo / "specs" / "archive"
+    archive.mkdir(parents=True)
+    older = archive / "2026-01-01-throttle"
+    older.mkdir()
+    git(repo, "mv", "specs/changes/throttle", "specs/archive/2026-10-22-throttle")
+    git(repo, "commit", "-qm", "archive throttle")
+    archived = archive / "2026-10-22-throttle"
+    capsys.readouterr()
+    model["consistency"] = resolved()
+
+    assert run(repo, "revise", "throttle") == 0
+
+    out = capsys.readouterr().out
+    assert not cdir.exists() and not (older / ".change.yaml").exists()
+    assert meta(archived)["spec_issues"] is None
+    assert is_ready(archived) == (True, "")
+    assert f"SPEC:READY:{archived}:" in out
+    assert git(repo, "status", "--porcelain", "--", "specs") == ""

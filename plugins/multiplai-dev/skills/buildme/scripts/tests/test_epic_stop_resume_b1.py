@@ -23,18 +23,12 @@ import pytest
 from build_pipeline.config import EpicSettings
 from build_pipeline.epic import coordinator, records
 from build_pipeline.epic import lock as epic_lock
-from build_pipeline.epic import split as epic_split_mod
-from build_pipeline.epic.split import EpicSplitAnswer
-from build_pipeline.models import BuildPhase
-from build_pipeline.state import BuildState
+from .epic_row_helpers import EpicSplitAnswer
 
 from .epic_row_helpers import (
     CallLog,
-    FakeSplit,
     Fakes,
-    SINGLE,
     approve,
-    args_for,
     child,
     commit_names,
     die_at,
@@ -48,11 +42,9 @@ from .epic_row_helpers import (
     merge_waiting,
     pr_url,
     records_snapshot,
-    run_build,
     run_coordinator,
     run_killed,
     run_signalled,
-    state_summary,
     use_workspace,
 )
 
@@ -76,7 +68,7 @@ class Root:
         self.fakes = Fakes(root, monkeypatch, steps)
         self.config = make_build(self.project)
         self.config.epic = EpicSettings(max_parallel=parallel)
-        approve(self.config, answer, CallLog(root / "split.log"))
+        self.specs = approve(self.config, answer, CallLog(root / "split.log"))
         self.dir = self.data / "buildme" / "epics" / "o-r--e"
 
     def use(self) -> None:
@@ -98,18 +90,18 @@ class Root:
         self.mp.setattr(coordinator, "_tick", tick or (lambda coord: None))
         run_killed(lambda: run_coordinator(self.config), setup)
 
-    def plan(self, cid: str) -> Path:
-        return self.dir / "plans" / f"{cid}.md"
+    def change(self, cid: str) -> str:
+        return f"e-{cid}"
 
     def kill_child(self, cid: str) -> None:
-        pid = coordinator.build_pid(self.plan(cid))
+        pid = coordinator.build_pid(self.change(cid), str(self.project.absolute()))
         assert pid, f"{cid} is not running"
         os.killpg(pid, signal.SIGKILL)
         self.wait_gone(cid)
 
     def wait_gone(self, cid: str) -> None:
         for _ in range(500):
-            if coordinator.build_pid(self.plan(cid)) is None:
+            if coordinator.build_pid(self.change(cid), str(self.project.absolute())) is None:
                 return
             time.sleep(0.02)
         raise AssertionError(f"{cid} never exited")
@@ -159,7 +151,7 @@ def _assert_same(stopped: Root, clean: Root, records: dict | None = None,
 
     by_child = {}
     for call in clean.launches():
-        cid = Path(call["argv"][call["argv"].index("--plan-file") + 1]).stem
+        cid = call["argv"][call["argv"].index("--change") + 1].split("-", 1)[1]
         by_child[cid] = call
     assert key(stopped.launches()) == key([*clean.launches(), *(by_child[c] for c in extra_launches)])
 
@@ -176,7 +168,7 @@ def test_B1_S4_coordinator_killed_with_the_child_alive_adopts_it(tmp_path, monke
     steps = {"a": [{"block": True}]}
     stopped, clean = _roots(tmp_path, monkeypatch, steps)
     stopped.killed(die_at(coordinator, "_tick"))
-    assert coordinator.build_pid(stopped.plan("a")) is not None      # the child outlived it
+    assert coordinator.build_pid(stopped.change("a"), str(stopped.project.absolute())) is not None      # the child outlived it
     assert not epic_lock.held(stopped.dir)                           # the resume takes it itself
     assert stopped.run(_release_all(stopped)) == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     assert clean.run(_release_all(clean)) == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
@@ -274,7 +266,8 @@ def test_B1_S10_failed_then_killed_before_the_relaunch(tmp_path, monkeypatch):
 
 def test_B1_S13_user_edit_in_a_stopped_childs_worktree_is_left_alone(tmp_path, monkeypatch):
     """B1.S13: the coordinator touches nothing; the relaunch has the same argv,
-    though origin moved at the same seam (B1.S14: b branches from the new sha);
+    though origin moved at the same seam, and b, with no dependency, branches
+    from the specs commit, not from origin (Decision 11, which replaced B1.S14);
     the edited file is byte-identical. Otherwise as B1.S5 (no PR found)."""
     steps = {"a": [{"block": True}, {}]}
     stopped, clean = _roots(tmp_path, monkeypatch, steps)
@@ -303,7 +296,7 @@ def test_B1_S13_user_edit_in_a_stopped_childs_worktree_is_left_alone(tmp_path, m
         assert (wt(root) / "README.md").read_text() == "# r, edited\n"
     argvs = [a.started["argv"] for a in records.attempts(stopped.dir) if a.child == "a" and a.kind == "build"]
     assert len(argvs) == 2 and argvs[0] == argvs[1]
-    assert moved not in argvs[1] and (stopped.root / "bases" / "b").read_text() == moved
+    assert moved not in argvs[1] and (stopped.root / "bases" / "b").read_text() == stopped.specs
     _assert_same(stopped, clean, {"a": [
         ("build", "<argv>", None, _built("a")[:2], True),
         ("build", "<argv>", 0, [_built("a")[0], _built("a")[2]], False)]}, ["a"])
@@ -393,41 +386,15 @@ def test_B1_S24_a_failed_pr_read_is_not_an_open_pr(tmp_path, monkeypatch, capsys
     _assert_same(stopped, clean)
 
 
-def _die_at_epic_split_skip() -> None:
-    """A setup for `run_killed`: exit 137 as the skip saves EPIC_SPLIT."""
-    real = BuildState.advance_to
-
-    def advance_to(self, phase, path=None):
-        if phase == BuildPhase.EPIC_SPLIT:
-            os._exit(137)
-        return real(self, phase, path)
-
-    BuildState.advance_to = advance_to
-
-
-def test_B1_S18_a_child_stopped_around_epic_split_never_calls_it(tmp_path, monkeypatch):
-    """B1.S18: the relaunch argv carries --no-epic-split, and a child build
-    stopped at its EPIC_SPLIT skip makes no `epic_split` call on resume."""
+def test_B1_S18_a_relaunch_runs_the_same_child_command(tmp_path, monkeypatch):
+    """B1.S18: a failed child is relaunched with its first command, which a
+    build parses as an epic child (`--epic-child`) without the coordinator's
+    environment."""
     from build_pipeline.__main__ import build_parser
+    from build_pipeline.config import BuildConfig
 
     stopped = Root(tmp_path / "coord", monkeypatch, {"a": [{"exit": 1}, {}]})
     assert stopped.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     argvs = [a.started["argv"] for a in records.attempts(stopped.dir) if a.child == "a"]
     assert argvs[0] == argvs[1]
-    args = build_parser().parse_args(argvs[1][3:])
-    assert args.no_epic_split
-
-    results = []
-    for name, stop in (("stopped", True), ("clean", False)):
-        root = tmp_path / name
-        use_workspace(monkeypatch, root)
-        config = make_build(make_project(root), change="e-a", phase=BuildPhase.CODEBASE_ANALYSIS)
-        log = CallLog(root / "calls.log")
-        monkeypatch.setattr(epic_split_mod, "epic_split", FakeSplit(log, SINGLE))
-        child_args = args_for(config, no_epic_split=args.no_epic_split)
-        if stop:
-            run_killed(lambda: run_build(config, child_args), _die_at_epic_split_skip)
-        run_build(config, child_args)
-        assert log.calls() == []
-        results.append(state_summary(config, root))
-    assert results[0] == results[1]
+    assert BuildConfig.from_cli_args(build_parser().parse_args(argvs[1][3:])).epic_child is True

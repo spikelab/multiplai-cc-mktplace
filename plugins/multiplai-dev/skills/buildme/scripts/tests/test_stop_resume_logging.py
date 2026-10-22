@@ -23,6 +23,7 @@ import pytest
 
 from build_pipeline.models import BlockStatus, BuildPhase
 from build_pipeline.state import BuildState
+from tests.spec_fixtures import ready_specs
 from tests.stop_resume_driver import AUDIT_USD, BLOCK_USD, BLOCKS, SPEC_USD
 from tests.test_git_ops import make_bare_origin, make_repo
 
@@ -42,6 +43,8 @@ class Sandbox:
     def __init__(self, root: Path):
         self.root = root
         self.repo = make_repo(root / "proj")
+        # pm-spec's handoff: the change's specs, ready and committed.
+        ready_specs(self.repo / "specs" / "changes" / "feat", self.repo)
         make_bare_origin(self.repo, root / "origin.git")
         subprocess.run(["git", "push", "-q", "origin", "main"], cwd=self.repo, check=True)
         self.ws = root / "ws"
@@ -125,7 +128,7 @@ def _is_subsequence(small: list[str], big: list[str]) -> bool:
 def assert_same_progress(stopped: Sandbox, full: Sandbox, n: int = 1) -> None:
     """Every line of the run that never stopped is in the resumed one, in
     order, and the resumed one has no line that run does not have. The header
-    (title, mode, tier, model and effort) is the same."""
+    (title, tier, model and effort) is the same."""
     a, b = full.progress(), stopped.progress(n)
     assert a.split("\n## ", 1)[0] == b.split("\n## ", 1)[0]
     kept_a, kept_b = _kept_lines(a, full.root), _kept_lines(b, stopped.root)
@@ -242,7 +245,7 @@ def test_S5_force_builds_anew_on_the_next_branch_and_resumes_there(full, force_a
     assert _snapshot(full.worktree()) == first
 
 
-def test_S6_spec_only_keeps_its_checkpoint_and_the_mode_only_handoff_runs(box):
+def test_S6_spec_only_keeps_its_checkpoint_and_the_next_build_resumes_from_it(box):
     proc = box.run(spec_only=True)
     _ok(proc)
     assert "RESULT:SUCCESS:spec-only" in proc.stdout
@@ -251,13 +254,13 @@ def test_S6_spec_only_keeps_its_checkpoint_and_the_mode_only_handoff_runs(box):
     assert done.result.kind == "spec-only"
     specs_progress = box.progress()
 
-    proc = box.run(project=box.worktree(), mode="only")
+    proc = box.run(project=box.worktree())
     _ok(proc)
     assert not any(ln.startswith("BUILD:COMPLETE:") for ln in proc.stdout.splitlines())
     after = box.progress()
     assert after.startswith(specs_progress)
     resumed = after[len(specs_progress):]
-    assert "] RESUMED\nMode: only" in resumed and "Block 2/2: block-2 — done" in resumed
+    assert "] RESUMED\nTier: " in resumed and "Block 2/2: block-2 — done" in resumed
 
 
 def test_S7_a_standalone_tdd_completion_does_not_stop_the_next_build(box):
@@ -265,7 +268,7 @@ def test_S7_a_standalone_tdd_completion_does_not_stop_the_next_build(box):
     (test_tdd_engine.py::test_standalone_run_keeps_its_checkpoint_as_completed);
     such a file is not a published build."""
     change_dir = box.repo / "specs" / "changes" / "feat"
-    tdd_done = BuildState(change_name="feat", mode="only", tier="standard",
+    tdd_done = BuildState(change_name="feat", tier="standard",
                           phase=BuildPhase.TDD_BUILD, state_file=str(change_dir / ".build-state.json"))
     tdd_done.checkpoint()
     tdd_done.complete()

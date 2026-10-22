@@ -18,7 +18,7 @@ import pytest
 
 from build_pipeline import git_ops
 from build_pipeline.config import BuildConfig
-from build_pipeline.findings import code
+from build_pipeline.findings import code, spec
 from build_pipeline.findings.models import PRComment, Triage, TriageRecord, Verdict
 from build_pipeline.models import (
     AgentResult,
@@ -101,7 +101,7 @@ def _make_built(base: Path, subdir: str = "") -> tuple[Path, Path, BuildConfig]:
     _git(root, "add", "-A")
     _git(root, "commit", "-qm", "impl(block-1): Add")
     config = BuildConfig(
-        project_dir=repo, change_name="calc", tier="advanced", mode="only",
+        project_dir=repo, change_name="calc", tier="advanced",
         test_command="true", config_dir=base / "config",
         core_memory_files=[], stack_memory_files=[], additional_memory_files=[],
     )
@@ -230,6 +230,7 @@ class TestCodeStep:
 from build_pipeline.findings import loop, publish  # noqa: E402
 from build_pipeline.findings.fetch import REPLY_MARKER  # noqa: E402
 from build_pipeline.state import BuildState  # noqa: E402
+from multiplai_core.specs import read_change_meta  # noqa: E402
 
 REPO = "acme/widgets"
 PR = 7
@@ -390,7 +391,7 @@ class FakeReview:
         return True, ""
 
 
-def _run(config, change, *, triage_call, review, spec_call=None, engine=None, auto=True,
+def _run(config, change, *, triage_call, review, engine=None, auto=True,
          self_check=..., decisions=..., review_dirs=...):
     """`...` for *self_check* is a check agent that finds nothing, for
     *decisions* the path `write_decisions` would write, with nothing written,
@@ -409,7 +410,7 @@ def _run(config, change, *, triage_call, review, spec_call=None, engine=None, au
     run = loop.FindingsRun(
         config=config, pr=PR, repo=REPO, branch="buildme/calc", change_dir=change,
         auto=auto, trust_repo=True,
-        seams=loop.Seams(triage_call=triage_call, spec_call=spec_call, engine=engine,
+        seams=loop.Seams(triage_call=triage_call, engine=engine,
                          review=review.review, post=review.post,
                          self_check=self_check, decisions=decisions,
                          review_dirs=review_dirs),
@@ -474,72 +475,178 @@ class TestOneRound:
         assert "Question; nothing was changed." in fake_pr.replies()[0][2]
 
 
-SPEC_DELTA = """# Capability: calc
-Findings: finding:5e1
+_REAL_APPEND_ISSUES = spec.append_issues
 
-## ADDED Requirements
 
-_None._
+class SpecStepFault:
+    """Stands in for the spec step's write (`spec.append_issues`), the point
+    a failure or stop of the step is simulated at: while `fail_with` is set,
+    the next call runs `before` (the step's own half-done edit), clears
+    `fail_with` and raises it; otherwise it writes as the step does. `calls`
+    counts every call."""
 
-## MODIFIED Requirements
+    def __init__(self, fail_with: BaseException | None = None, before=None):
+        self.fail_with, self.before, self.calls = fail_with, before, 0
 
-### Requirement: Sum
-The calculator adds two numbers and rejects None.
+    def __call__(self, change_dir, records):
+        self.calls += 1
+        if self.fail_with is not None:
+            exc, self.fail_with = self.fail_with, None
+            if self.before is not None:
+                self.before()
+            raise exc
+        return _REAL_APPEND_ISSUES(change_dir, records)
 
-#### Scenario: None
-- **WHEN** add(None, 3)
-- **THEN** a TypeError
+    def install(self, monkeypatch) -> "SpecStepFault":
+        monkeypatch.setattr(spec, "append_issues", self)
+        return self
 
-## REMOVED Requirements
 
-_None._
-"""
+def _spec_bytes(repo: Path) -> dict[str, bytes]:
+    """Every requirements file of every change, active or archived, and every
+    registry file, by path: what buildme must never edit."""
+    specs = repo / "specs"
+    paths = [*specs.glob("*/*/requirements/*.md"), *specs.glob("changes/*/requirements/*.md"),
+             *(specs / "registry").rglob("*")]
+    return {p.relative_to(repo).as_posix(): p.read_bytes() for p in sorted(set(paths)) if p.is_file()}
+
+
+NONE_SPEC = Triage(verdict=Verdict.SPEC_CHANGE, reason="The spec never says what None does.",
+                   requirement="calc: Sum")
 
 
 class TestSpecChangeRound:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("auto", [True, False])
-    async def test_spec_commit_lands_before_the_fix_and_is_recorded(self, built, fake_pr, auto):
-        """Done means 13, with and without --auto."""
+    async def test_done_means_6a_a_spec_change_is_recorded_for_pm_spec_and_edits_no_requirement(
+            self, built, fake_pr, auto):
+        """Done means 6a, with and without --auto: the spec_change verdict
+        adds its entry to the archived change's spec-issues.md, with the
+        comment's link and the requirement it targets; requirements/*.md and
+        specs/registry/ are byte-identical; `.change.yaml` records the file;
+        the reply names `pm-spec revise`; the independent code fix is still
+        made in the same round."""
         repo, change, config = built
         config.auto = auto
-        fake_pr.add_thread("alice", "None should be refused", fid="5e1")
-        fake_pr.add_thread("alice", "add subtracts", fid="ab12")
-        triage_call = FakeTriage({
-            "None should be refused": Triage(verdict=Verdict.SPEC_CHANGE,
-                                             reason="The spec never says what None does.",
-                                             requirement="calc: Sum"),
-            "add subtracts": FIX,
-        })
-
-        async def spec_call(prompt, **kw):
-            return SPEC_DELTA
+        spec_thread = fake_pr.add_thread("alice", "None should be refused", fid="5e1")
+        fix_thread = fake_pr.add_thread("alice", "add subtracts", fid="ab12")
+        triage_call = FakeTriage({"None should be refused": NONE_SPEC, "add subtracts": FIX})
+        before = _spec_bytes(repo)
+        assert "specs/registry/calc.md" in before and f"specs/{ARCHIVED}/requirements/calc.md" in before
 
         run, lines = _run(config, change, triage_call=triage_call, review=FakeReview(fake_pr),
-                          spec_call=spec_call, auto=auto)
+                          auto=auto)
         with _Stubs(engine_stubs(repo)):
             exit_code = await loop.run_findings(run)
 
         assert exit_code == (0 if auto else loop.EXIT_WAITING), lines
+        assert _spec_bytes(repo) == before
+        assert not (repo / "specs" / "changes").exists()
+        issues = (change / "spec-issues.md").read_text()
+        assert issues.count("\n## ") == 1
+        entry = issues[issues.index("## Finding 5e1"):]
+        assert f"https://github.com/{REPO}/pull/{PR}#discussion_r{spec_thread}" in entry
+        assert "`requirements/calc.md`" in entry and "Requirement: calc: Sum" in entry
+        assert "The spec never says what None does." in entry
+        assert read_change_meta(change)["spec_issues"] == "spec-issues.md"
+
         subjects = _subjects(repo)
         spec_i = next(i for i, s in enumerate(subjects) if s.startswith("spec(findings-r1)"))
-        test_i = subjects.index("test(block-1): Fix finding ab12")
-        assert spec_i > test_i   # log is newest first: the spec commit is older
-        assert "rejects None" in (change / "requirements" / "calc.md").read_text()
-        assert "rejects None" in (repo / "specs" / "registry" / "calc.md").read_text()
+        assert subjects[spec_i] == "spec(findings-r1): 5e1"
+        assert spec_i > subjects.index("test(block-1): Fix finding ab12")   # newest first
+        spec_sha = _git(repo, "log", "--format=%H", "-1", "--grep", "^spec(findings-r1)").strip()
+        committed = _git(repo, "show", "--name-only", "--format=", spec_sha).split()
+        assert sorted(committed) == sorted(f"specs/{ARCHIVED}/{name}" for name in (
+            "spec-issues.md", ".change.yaml", "findings-r1.md"))
+        assert _git(repo, "status", "--porcelain", "--", "specs",
+                    *git_ops.BOOKKEEPING_EXCLUDES).strip() == ""
+
+        replies = {r[1]: r[2] for r in fake_pr.replies()}
+        assert "pm-spec revise" in replies[spec_thread]
+        assert "/multiplai-pm:pm-spec revise calc" in replies[spec_thread]
+        assert f"specs/{ARCHIVED}/spec-issues.md" in replies[spec_thread]
+        assert "Spec changed" not in replies[spec_thread]
+        impl = _git(repo, "log", "--format=%H", "-1", "--grep", "^impl(block-1)").strip()
+        assert impl[:12] in replies[fix_thread]
         findings_md = (change / "findings-r1.md").read_text()
-        assert "## Spec changes" in findings_md and "rejects None" in findings_md
+        assert "## Requirements issues" in findings_md and "finding:5e1" in findings_md
         section = fake_pr.sections[-1]
-        assert "Spec changes" in section and "calc: Sum (MODIFIED)" in section
-        spec_reply = next(r for r in fake_pr.replies() if "Spec changed in" in r[2])
-        assert spec_reply
+        assert "Requirements issues recorded in" in section and "pm-spec revise calc" in section
         if not auto:
             assert lines[-1] == "FINDINGS:REVIEW_READY:/reviews/r1"
+
+    @pytest.mark.asyncio
+    async def test_a_fix_that_contradicts_the_spec_is_deferred_and_an_independent_fix_still_runs(
+            self, built, fake_pr):
+        repo, change, config = built
+        conflict = fake_pr.add_thread("alice", "add should refuse None", fid="c0f1")
+        independent = fake_pr.add_thread("alice", "add subtracts", fid="ab12")
+        triage_call = FakeTriage({
+            "add should refuse None": Triage(
+                verdict=Verdict.CODE_FIX, reason="add accepts None, which the spec allows.",
+                locations=["calc.py:2"], failing_test="add(None, 1) raises TypeError",
+                spec_conflict=True, requirement="calc: Sum"),
+            "add subtracts": FIX})
+        before = _spec_bytes(repo)
+        run, lines = _run(config, change, triage_call=triage_call, review=FakeReview(fake_pr))
+        with _Stubs(engine_stubs(repo)):
+            assert await loop.run_findings(run) == 0, lines
+
+        assert _spec_bytes(repo) == before
+        # One block, for the independent fix only.
+        tasks = (change / "findings-r1-tasks.md").read_text()
+        assert "Fix finding ab12" in tasks and "c0f1" not in tasks
+        subjects = _subjects(repo)
+        assert "impl(block-1): Fix finding ab12" in subjects
+        assert not any("c0f1" in s and not s.startswith("spec(") for s in subjects)
+        entry = (change / "spec-issues.md").read_text().split("## Finding c0f1", 1)[1]
+        assert "A code fix waits on this change" in entry
+        assert "add(None, 1) raises TypeError" in entry
+
+        replies = {r[1]: r[2] for r in fake_pr.replies()}
+        assert "Not fixed this round" in replies[conflict]
+        assert "contradicts calc: Sum" in replies[conflict]
+        assert "pm-spec revise" in replies[conflict]
+        assert "Fixed in" not in replies[conflict]
+        impl = _git(repo, "log", "--format=%H", "-1", "--grep", "^impl(block-1)").strip()
+        assert f"Fixed in `{impl[:12]}`" in replies[independent]
+
+    @pytest.mark.asyncio
+    async def test_a_spec_step_stopped_after_its_write_resumes_with_one_entry(
+            self, built, fake_pr, monkeypatch):
+        """Stopped after spec-issues.md was written and before its commit:
+        the resume keeps that write under the wip ref, discards it, and
+        writes the entry once."""
+        repo, change, config = built
+        fake_pr.add_thread("alice", "None should be refused", fid="5e1")
+        triage_call = FakeTriage({"None should be refused": NONE_SPEC})
+        real_commit = spec.commit_spec
+        stops = {"n": 0}
+
+        def commit_spec(*a, **k):
+            stops["n"] += 1
+            if stops["n"] == 1:
+                raise KeyboardInterrupt
+            return real_commit(*a, **k)
+
+        monkeypatch.setattr(spec, "commit_spec", commit_spec)
+        run, _ = _run(config, change, triage_call=triage_call, review=FakeReview(fake_pr))
+        with pytest.raises(KeyboardInterrupt):
+            await loop.run_findings(run)
+        assert (change / "spec-issues.md").read_text().count("## Finding 5e1") == 1
+
+        run2, lines = _run(config, change, triage_call=triage_call, review=FakeReview(fake_pr))
+        assert await loop.run_findings(run2) == 0, lines
+        assert stops["n"] == 2
+        assert (change / "spec-issues.md").read_text().count("## Finding 5e1") == 1
+        assert _git(repo, "show", f"HEAD:specs/{ARCHIVED}/spec-issues.md").count(
+            "## Finding 5e1") == 1
+        assert len(fake_pr.replies()) == 1
 
 
 class TestResume:
     @pytest.mark.asyncio
-    async def test_a_round_killed_in_the_spec_step_resumes_without_triage(self, built, fake_pr):
+    async def test_a_round_killed_in_the_spec_step_resumes_without_triage(self, built, fake_pr, monkeypatch):
         """Done means 7."""
         repo, change, config = built
         fake_pr.add_thread("alice", "None should be refused", fid="5e1")
@@ -548,32 +655,23 @@ class TestResume:
             "None should be refused": Triage(verdict=Verdict.SPEC_CHANGE, reason="unspecified"),
             "is this right": Triage(verdict=Verdict.QUESTION, reason="yes"),
         })
-        calls = {"n": 0}
-
-        async def spec_call(prompt, **kw):
-            calls["n"] += 1
-            if calls["n"] == 1:
-                raise RuntimeError("killed")
-            return SPEC_DELTA
+        fault = SpecStepFault(RuntimeError("killed")).install(monkeypatch)
 
         review = FakeReview(fake_pr)
-        run, lines = _run(config, change, triage_call=triage_call, review=review,
-                          spec_call=spec_call)
+        run, lines = _run(config, change, triage_call=triage_call, review=review)
         assert await loop.run_findings(run) == 1
         assert lines[-1] == "FINDINGS:FAILED:spec:RuntimeError: killed"
         assert len(triage_call.prompts) == 2
         assert fake_pr.replies() == []
 
-        run2, lines2 = _run(config, change, triage_call=triage_call, review=review,
-                            spec_call=spec_call)
+        run2, lines2 = _run(config, change, triage_call=triage_call, review=review)
         assert await loop.run_findings(run2) == 0, lines2
         assert len(triage_call.prompts) == 2          # triage was not called again
         targets = [r[1] for r in fake_pr.replies()]
         assert sorted(targets) == sorted(set(targets)) and len(targets) == 2
 
         # A third run has nothing new and posts nothing.
-        run3, lines3 = _run(config, change, triage_call=triage_call, review=review,
-                            spec_call=spec_call)
+        run3, lines3 = _run(config, change, triage_call=triage_call, review=review)
         assert await loop.run_findings(run3) == 0
         assert len(fake_pr.replies()) == 2
         assert lines3[-1] == "FINDINGS:DONE:1"
@@ -607,9 +705,9 @@ class TestResume:
         triage_call = FakeTriage({
             "None should be refused": Triage(verdict=Verdict.SPEC_CHANGE, reason="unspecified")})
 
-        async def spec_call(prompt, **kw):
-            (repo / "half-written.txt").write_text("agent edit\n")
-            raise RuntimeError("agent failed mid-turn")
+        SpecStepFault(RuntimeError("agent failed mid-turn"),
+                      before=lambda: (repo / "half-written.txt").write_text("agent edit\n")
+                      ).install(monkeypatch)
 
         ref = "refs/buildme/wip/calc/r1-spec"
         seen: list[bool] = []
@@ -622,8 +720,7 @@ class TestResume:
 
         monkeypatch.setattr(git_ops, "discard_to", discard)
         before = _git(repo, "rev-parse", "HEAD").strip()
-        run, lines = _run(config, change, triage_call=triage_call, review=FakeReview(fake_pr),
-                          spec_call=spec_call)
+        run, lines = _run(config, change, triage_call=triage_call, review=FakeReview(fake_pr))
         assert await loop.run_findings(run) == 1
 
         assert seen == [True]
@@ -642,16 +739,15 @@ class TestResume:
         triage_call = FakeTriage({
             "None should be refused": Triage(verdict=Verdict.SPEC_CHANGE, reason="unspecified")})
 
-        async def spec_call(prompt, **kw):
-            (repo / "half-written.txt").write_text("agent edit\n")
-            raise RuntimeError("agent failed mid-turn")
+        SpecStepFault(RuntimeError("agent failed mid-turn"),
+                      before=lambda: (repo / "half-written.txt").write_text("agent edit\n")
+                      ).install(monkeypatch)
 
         monkeypatch.setattr(git_ops, "save_wip_ref", lambda *a, **k: None)
         discarded: list[str] = []
         monkeypatch.setattr(git_ops, "discard_to",
                             lambda repo_, sha, label="": discarded.append(sha) or True)
-        run, lines = _run(config, change, triage_call=triage_call, review=FakeReview(fake_pr),
-                          spec_call=spec_call)
+        run, lines = _run(config, change, triage_call=triage_call, review=FakeReview(fake_pr))
         assert await loop.run_findings(run) == 1
 
         assert discarded == []
@@ -661,7 +757,7 @@ class TestResume:
 
 
     @pytest.mark.asyncio
-    async def test_a_resumed_step_keeps_the_commits_pulled_from_origin(self, built, fake_pr, tmp_path):
+    async def test_a_resumed_step_keeps_the_commits_pulled_from_origin(self, built, fake_pr, tmp_path, monkeypatch):
         """The CLI fast-forwards from origin before a resume; the rewind of
         the interrupted step must not drop a collaborator's pushed commits."""
         repo, change, config = built
@@ -672,16 +768,9 @@ class TestResume:
         fake_pr.add_thread("alice", "None should be refused", fid="5e1")
         triage_call = FakeTriage({
             "None should be refused": Triage(verdict=Verdict.SPEC_CHANGE, reason="unspecified")})
-        calls = {"n": 0}
+        fault = SpecStepFault(RuntimeError("killed")).install(monkeypatch)
 
-        async def spec_call(prompt, **kw):
-            calls["n"] += 1
-            if calls["n"] == 1:
-                raise RuntimeError("killed")
-            return SPEC_DELTA
-
-        run, _ = _run(config, change, triage_call=triage_call, review=FakeReview(fake_pr),
-                      spec_call=spec_call)
+        run, _ = _run(config, change, triage_call=triage_call, review=FakeReview(fake_pr))
         assert await loop.run_findings(run) == 1
 
         collab = tmp_path / "collab"
@@ -695,8 +784,7 @@ class TestResume:
         assert git_ops.fast_forward_from_origin(repo, "buildme/calc").ok
         pulled = _git(repo, "rev-parse", "HEAD").strip()
 
-        run2, lines2 = _run(config, change, triage_call=triage_call, review=FakeReview(fake_pr),
-                            spec_call=spec_call)
+        run2, lines2 = _run(config, change, triage_call=triage_call, review=FakeReview(fake_pr))
         assert await loop.run_findings(run2) == 0, lines2
         assert subprocess.run(["git", "merge-base", "--is-ancestor", pulled, "HEAD"],
                               cwd=repo).returncode == 0
@@ -1322,64 +1410,48 @@ class TestDirtyTree:
 
     @pytest.mark.asyncio
     async def test_row_R2_a_user_edit_after_a_failed_spec_step_is_refused(
-            self, built, fake_pr):
+            self, built, fake_pr, monkeypatch):
         repo, change, config = built
         fake_pr.add_thread("alice", "None should be refused", fid="5e1")
         triage_call = FakeTriage({
             "None should be refused": Triage(verdict=Verdict.SPEC_CHANGE, reason="unspecified")})
-        calls = {"n": 0}
+        fault = SpecStepFault(RuntimeError("killed")).install(monkeypatch)
 
-        async def spec_call(prompt, **kw):
-            calls["n"] += 1
-            if calls["n"] == 1:
-                raise RuntimeError("killed")
-            return SPEC_DELTA
-
-        run, _ = _run(config, change, triage_call=triage_call, review=FakeReview(fake_pr),
-                      spec_call=spec_call)
+        run, _ = _run(config, change, triage_call=triage_call, review=FakeReview(fake_pr))
         assert await loop.run_findings(run) == 1
         head = _git(repo, "rev-parse", "HEAD").strip()
         wip_before = _wip(repo)
         (repo / "calc.py").write_text("# someone's edit\n")
         before = repo_state(repo)
 
-        run2, lines = _run(config, change, triage_call=triage_call, review=FakeReview(fake_pr),
-                           spec_call=spec_call)
+        run2, lines = _run(config, change, triage_call=triage_call, review=FakeReview(fake_pr))
         assert await loop.run_findings(run2) == 1
         assert repo_state(repo) == before
         assert lines[-1].startswith("FINDINGS:FAILED:spec:") and "uncommitted" in lines[-1]
-        assert calls["n"] == 1
+        assert fault.calls == 1
         assert (repo / "calc.py").read_text() == "# someone's edit\n"
         assert _git(repo, "rev-parse", "HEAD").strip() == head
         assert _wip(repo) == wip_before
 
     @pytest.mark.asyncio
-    async def test_a_round_killed_mid_step_still_resumes_over_its_own_files(self, built, fake_pr):
+    async def test_a_round_killed_mid_step_still_resumes_over_its_own_files(self, built, fake_pr, monkeypatch):
         """A kill leaves the step's own files in the change directory; those
         never block the resume."""
         repo, change, config = built
         fake_pr.add_thread("alice", "None should be refused", fid="5e1")
         triage_call = FakeTriage({
             "None should be refused": Triage(verdict=Verdict.SPEC_CHANGE, reason="unspecified")})
-        calls = {"n": 0}
+        fault = SpecStepFault(KeyboardInterrupt()).install(monkeypatch)
 
-        async def spec_call(prompt, **kw):
-            calls["n"] += 1
-            if calls["n"] == 1:
-                raise KeyboardInterrupt
-            return SPEC_DELTA
-
-        run, _ = _run(config, change, triage_call=triage_call, review=FakeReview(fake_pr),
-                      spec_call=spec_call)
+        run, _ = _run(config, change, triage_call=triage_call, review=FakeReview(fake_pr))
         with pytest.raises(KeyboardInterrupt):
             await loop.run_findings(run)
         assert (change / "findings-r1.md").exists()
         assert _git(repo, "status", "--porcelain").strip()
 
-        run2, lines = _run(config, change, triage_call=triage_call, review=FakeReview(fake_pr),
-                           spec_call=spec_call)
+        run2, lines = _run(config, change, triage_call=triage_call, review=FakeReview(fake_pr))
         assert await loop.run_findings(run2) == 0, lines
-        assert calls["n"] == 2
+        assert fault.calls == 2
 
 
 class TestResumedStepRefusesOthersWork:
@@ -1492,21 +1564,14 @@ class TestResumedStepRefusesOthersWork:
         assert "half done" in (repo / "calc.py").read_text()
 
     @pytest.mark.asyncio
-    async def test_row_R4_a_commit_made_after_the_spec_step_failed_is_refused(self, built, fake_pr):
+    async def test_row_R4_a_commit_made_after_the_spec_step_failed_is_refused(self, built, fake_pr, monkeypatch):
         repo, change, config = built
         fake_pr.add_thread("alice", "None should be refused", fid="5e1")
         triage_call = FakeTriage({
             "None should be refused": Triage(verdict=Verdict.SPEC_CHANGE, reason="unspecified")})
-        calls = {"n": 0}
+        fault = SpecStepFault(RuntimeError("model call failed")).install(monkeypatch)
 
-        async def spec_call(prompt, **kw):
-            calls["n"] += 1
-            if calls["n"] == 1:
-                raise RuntimeError("model call failed")
-            return SPEC_DELTA
-
-        run, _ = _run(config, change, triage_call=triage_call, review=FakeReview(fake_pr),
-                      spec_call=spec_call)
+        run, _ = _run(config, change, triage_call=triage_call, review=FakeReview(fake_pr))
         assert await loop.run_findings(run) == 1
         (repo / "notes.py").write_text("x = 1\n")
         _git(repo, "add", "notes.py")
@@ -1514,12 +1579,11 @@ class TestResumedStepRefusesOthersWork:
         head, wip_before = _git(repo, "rev-parse", "HEAD").strip(), _wip(repo)
         before = repo_state(repo)
 
-        run2, lines = _run(config, change, triage_call=triage_call, review=FakeReview(fake_pr),
-                           spec_call=spec_call)
+        run2, lines = _run(config, change, triage_call=triage_call, review=FakeReview(fake_pr))
         assert await loop.run_findings(run2) == 1
         assert repo_state(repo) == before
         assert lines[-1].startswith("FINDINGS:FAILED:spec:") and "commit" in lines[-1]
-        assert calls["n"] == 1
+        assert fault.calls == 1
         assert _git(repo, "rev-parse", "HEAD").strip() == head
         assert _wip(repo) == wip_before
 
@@ -1599,9 +1663,10 @@ class _Scenario:
             raise self.stop_triage_with
         return await self.triage(prompt, schema, **kw)
 
-    async def spec_call(self, prompt, **kw):
-        """The spec model call. While `stop_with` is set it edits calc.py
-        (after committing a new file, with `commit_first`) and raises it."""
+    def spec_write(self, change_dir, records):
+        """The spec step's write (`spec.append_issues`). While `stop_with` is
+        set it edits calc.py (after committing a new file, with
+        `commit_first`) and raises it."""
         self.spec_calls += 1
         if self.stop_with is not None:
             if self.commit_first:
@@ -1610,12 +1675,14 @@ class _Scenario:
                 _git(self.repo, "commit", "-qm", "the spec step's own commit", "--", "extra.py")
             (self.repo / "calc.py").write_text("# the spec step's own edit\n")
             raise self.stop_with
-        return SPEC_DELTA
+        return _REAL_APPEND_ISSUES(change_dir, records)
 
     async def run(self, stubs=None):
         run, lines = _run(self.config, self.change, triage_call=self.triage_call,
-                          review=FakeReview(self.pr), spec_call=self.spec_call)
-        with _Stubs(stubs if stubs is not None else engine_stubs(self.repo)):
+                          review=FakeReview(self.pr))
+        stubs = list(stubs if stubs is not None else engine_stubs(self.repo))
+        stubs.append(patch.object(spec, "append_issues", side_effect=self.spec_write))
+        with _Stubs(stubs):
             code_ = await loop.run_findings(run)
         self.lines = lines
         return code_

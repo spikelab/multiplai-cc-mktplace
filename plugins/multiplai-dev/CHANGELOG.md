@@ -15,6 +15,97 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.99.0] - 2026-10-22
+
+### Changed
+- **buildme now builds only from specs `/multiplai-pm:pm-spec` marked ready.**
+  Run pm-spec first: it writes the proposal, use cases and requirements, runs
+  the interview, reads a ticket, a PRD or a plan, splits an epic and makes the
+  prototype, then marks the specs ready and commits the change dir. buildme
+  reads those three documents and never writes them. A build whose specs are
+  not marked ready, changed after they were, or (for a build that branches a
+  worktree) are not committed prints `SPEC:NOT_READY:<reason>` and
+  `Run /multiplai-pm:pm-spec <name> first`, and exits `2` with nothing
+  written. When specs pm-spec never marked are on disk (an older buildme
+  build wrote them), the line names `pm-spec resume <name>`, which checks them
+  and marks them ready without rewriting them. The check reads the copy the
+  build reads: with `--base-ref`, the change dir as that ref holds it, before
+  the worktree is cut; on a resume, the copy in the build's worktree, and the
+  pm-spec line then names `--project-dir <worktree>`. A resumed worktree build
+  also refuses when the change dir in the checkout it was cut from was marked
+  ready again since with other specs, and names where they are and how to
+  bring them into the worktree, instead of building its older copy.
+- buildme: `--change` is now required on `build`. The design reads the
+  research directly, and the research decision reads the ready specs.
+- buildme: a requirements problem goes back to pm-spec instead of being
+  worked around. When the design step reports a `SPEC_ISSUE:` line, a design
+  audit finding needs a requirements change to fix, or a TDD agent reports
+  `SPEC_IMPACT: contradicts` under `respec: {halt_on_contradiction: true}`,
+  the build appends the problem to `spec-issues.md` in the change dir, sets
+  `spec_issues` in `.change.yaml`, prints `SPEC:ISSUES:<path>` with the
+  `pm-spec revise <name> --project-dir <repo>` line, and exits `4`. The
+  checkpoint is kept, not failed: every run refuses the same way, at no cost,
+  until `pm-spec revise` clears it; the next build then writes the design and
+  what follows it again. Exit `4` also still means an agent timed out: the
+  `SPEC:ISSUES` marker tells the two apart.
+- buildme-findings: a finding that asks for a requirements change is recorded
+  in `spec-issues.md` for `/multiplai-pm:pm-spec revise`; the findings stage no
+  longer edits `requirements/*.md` or `specs/registry/`, and makes no model call
+  for it. A code fix that contradicts the specs waits for that change, and its
+  reply says so.
+- buildme epics: `/buildme <parent>` on a parent change pm-spec split (its
+  `.change.yaml` lists `children`) builds the children in their `depends_on`
+  order, with the same review, fix and merge loops as before. It refuses with
+  `SPEC:NOT_READY` when any listed child is not ready, or when the parent's or
+  a child's change dir has uncommitted changes. A child with no dependency
+  branches from the local commit that holds the ready specs, so its PR carries
+  that commit and nothing is pushed before the build; a child that waits on a
+  dependency branches from origin's default branch once that dependency merged,
+  and is not launched (it fails, naming the commit to merge) when that branch
+  does not hold its specs as that commit does. A child with no dependency is
+  not launched either (it fails, naming the paths) when a commit between
+  origin's default branch and the specs commit touches a path outside the
+  epic's change dirs, which its PR would carry. A merged child whose change
+  dir its `--auto` build moved to `specs/archive/` stays merged on the next
+  run instead of being refused. Each child runs as
+  `build --change <parent>-<id>`. An epic now runs no spec-extract, so its
+  children build without a `specs/registry` baseline.
+
+### Removed
+- buildme `build` flags: `--mode` (`scratch`, `brief`, `only`),
+  `--interview-summary`, `--context-files`, `--ticket-file`, `--ticket-ref`,
+  `--ticket-url`, `--plan-file`, `--interview-replies`, `--prototype`,
+  `--no-prototype`, `--approve-split` and `--no-epic-split`. A saved command
+  that passes one of them now stops with a usage error (exit `2`). Pass the
+  ticket, PRD, plan or interview to pm-spec instead.
+- buildme `setup` flags `--provider`, `--plane-project` and `--interview`, and
+  the `intake.provider` and `interview` keys of `config-get`: they are
+  pm-spec's settings. buildme ignores `intake`, `interview` and `prototype` in
+  `specs/config.yaml`.
+- buildme's interview (`INTERVIEW:WAITING`), ticket intake, proposal, use-case
+  and requirements generation, prototype stage, and epic split
+  (`EPIC:SPLIT`, `split.md` approval). They are pm-spec's steps now.
+- buildme epics: children in another repository (the `repo` column of
+  `split.md`) are dropped for now. Every child builds in the epic's own
+  repository.
+
+### Upgrading
+- A build stopped before its specs were generated refuses with
+  `Run /multiplai-pm:pm-spec <name> first`. A build stopped later, with a
+  proposal and requirements on disk, refuses with
+  `Run /multiplai-pm:pm-spec resume <name> first`; after pm-spec marks them
+  ready (and they are committed), re-run the same build command and it
+  continues from its checkpoint. Nothing is changed by the refusal.
+- An epic that an earlier buildme split and approved (`split.md`) is not
+  continued: its parent has no `children` list, so it refuses with
+  `SPEC:NOT_READY`. Child PRs already open are kept; split the rest again with
+  pm-spec. A child's saved command from before this release uses removed flags,
+  so re-running it by hand stops with a usage error. Once pm-spec has split the
+  parent again, the epic relaunches such a child with a new command instead of
+  the saved one.
+- A build stopped in its own worktree refuses the same way, and the line names
+  `--project-dir <worktree>`: run pm-spec there, then re-run the build.
+
 ## [0.98.1] - 2026-10-21
 
 ### Changed

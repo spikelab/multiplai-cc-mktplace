@@ -414,7 +414,7 @@ def test_nothing_new_launches_while_running_fixers_hold_what_is_left(tmp_path, m
     ready once b's review ends, is not built until a's fixer has ended, as
     its build would spend what a's fixer was given."""
     from build_pipeline.epic import coordinator
-    from build_pipeline.epic.split import EpicSplitAnswer
+    from .epic_row_helpers import EpicSplitAnswer
 
     answer = EpicSplitAnswer(single=False, reason="Three parts.", children=[child("a"), child("b"), child("c")])
     na, nb = pr_number("e-a"), pr_number("e-b")
@@ -599,8 +599,9 @@ def test_a_running_fixer_holds_its_share_less_its_prs_reviews_since_launch(tmp_p
     url = "https://github.com/o/r/pull/12"
     _ledger(ledger, "o-r--pr-12", "/r/pr-12/1", "h1", 3.0)
     coord = object.__new__(coordinator.Coordinator)
-    coord.children = {"a": coordinator.Child(id="a", depends_on=[], pr=url, slug="o-r"),
-                      "b": coordinator.Child(id="b", depends_on=[], slug="o-r")}
+    coord.slug = "o-r"
+    coord.children = {"a": coordinator.Child(id="a", depends_on=[], pr=url),
+                      "b": coordinator.Child(id="b", depends_on=[])}
     coord.shares = {"a": coordinator.Share(10.0, coord._pr_reviews(coord.children["a"]))}
     assert coord._held("b") == 10.0
     _ledger(ledger, "o-r--pr-12", "/r/pr-12/2", "h2", 2.5)

@@ -56,17 +56,24 @@ def records_of(rnd: FindingsRound) -> list[TriageRecord]:
 
 
 def _spec_lines(rnd: FindingsRound, key: str) -> list[str]:
+    """What the spec step recorded for *key*: buildme never edits
+    requirements, so a requirements change waits on `pm-spec revise`, and so
+    does a code fix that contradicts the current requirement."""
     lines = []
-    for s in rnd.spec_changes:
-        if key not in s.finding_keys:
+    for s in rnd.spec_issues:
+        if s.finding_key != key:
             continue
-        what = f"{s.capability}: {s.requirement}".strip(": ")
-        if s.applied:
-            lines.append(f"Spec changed in `{_short(rnd.spec_commit)}`: {_line(what, 200)} "
-                         f"({s.operation}).")
+        what = _line(s.requirement, 200) or "the requirement"
+        commit = f" (commit `{_short(rnd.spec_commit)}`)" if rnd.spec_commit else ""
+        recorded = (f"{'Recorded' if s.appended else 'Already recorded'} as an issue in "
+                    f"`{_line(s.issues_file, 200)}`{commit}")
+        waits = f"`{_line(s.command, 200)}` makes the edit; buildme does not edit requirements."
+        if s.defers_fix:
+            lines.append(f"Not fixed this round: the fix contradicts {what}, so it waits on "
+                         f"the requirements change. {recorded}; {waits}")
         else:
-            lines.append(f"Spec change declined for {_line(what, 200) or 'this finding'}: "
-                         f"{_line(s.declined_reason, 300)}")
+            lines.append(f"The requirements change for {what} waits on `pm-spec revise`. "
+                         f"{recorded}; {waits}")
     return lines
 
 
@@ -78,7 +85,11 @@ def outcome(rnd: FindingsRound, record: TriageRecord, *, searched: bool = True) 
     assert t is not None
     key = record.comment.key
     parts = _spec_lines(rnd, key)
-    if t.verdict == Verdict.CODE_FIX:
+    if t.verdict == Verdict.CODE_FIX and t.spec_conflict:
+        if not parts:
+            parts.append("Not fixed: the fix contradicts the current requirements, which "
+                         "buildme does not edit, and no requirements issue was recorded.")
+    elif t.verdict == Verdict.CODE_FIX:
         fix = rnd.fixes.get(key)
         if fix and fix.get("impl"):
             test = f" (failing test first in `{_short(fix.get('test'))}`)" if fix.get("test") else ""
@@ -90,7 +101,7 @@ def outcome(rnd: FindingsRound, record: TriageRecord, *, searched: bool = True) 
         else:
             parts.append("Not fixed: the fix did not produce a commit.")
     elif t.verdict == Verdict.SPEC_CHANGE and not parts:
-        parts.append("No spec change was made.")
+        parts.append("No requirements issue was recorded.")
     elif t.verdict == Verdict.QUESTION:
         parts.append("Question; nothing was changed.")
     elif t.verdict == Verdict.NOT_DEFECT:
@@ -117,7 +128,7 @@ def issue_reply_body(rnd: FindingsRound, records: list[TriageRecord]) -> str:
 
 def render_section(fs: FindingsState) -> str:
     """The PR body's "Review rounds" section: every round, each comment's
-    verdict and outcome, and every spec change."""
+    verdict and outcome, and every requirements issue it recorded."""
     out = [SECTION_HEADING, ""]
     for rnd in fs.rounds:
         records = records_of(rnd)
@@ -147,11 +158,14 @@ def render_section(fs: FindingsState) -> str:
         if skipped:
             out += ["", f"{skipped} comment(s) not acted on; `findings-r{rnd.number}.md` "
                         "in the change directory says why."]
-        applied = [s for s in rnd.spec_changes if s.applied]
-        if applied:
-            out += ["", f"Spec changes (commit `{_short(rnd.spec_commit)}`):"]
-            out += [f"- {_line(s.capability, 80)}: {_line(s.requirement, 160)} ({s.operation}), "
-                    f"for {', '.join(s.finding_keys)}" for s in applied]
+        if rnd.spec_issues:
+            first = rnd.spec_issues[0]
+            commit = f" (commit `{_short(rnd.spec_commit)}`)" if rnd.spec_commit else ""
+            out += ["", f"Requirements issues recorded in `{_line(first.issues_file, 200)}`"
+                        f"{commit}, waiting on `{_line(first.command, 200)}`:"]
+            out += [f"- {_line(s.requirement, 160) or '(requirement not named)'}, for "
+                    f"{s.finding_key}" + (" (its code fix is deferred)" if s.defers_fix else "")
+                    for s in rnd.spec_issues]
         out.append("")
     return "\n".join(out).rstrip() + "\n"
 

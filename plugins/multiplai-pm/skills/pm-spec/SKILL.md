@@ -79,7 +79,10 @@ its own rewrite. While `spec_issues` is set or a revise is blocked, `resume`
 refuses with exit 4 and never reports the change ready: run `revise`. In
 `spec-issues.md` each `## ` section is one issue; name the file it concerns as
 `requirements/<capability>.md` or quote the requirement's name (an issue that
-names neither goes to every requirements file).
+names neither goes to every requirements file). When `specs/changes/<name>/`
+is gone because an `--auto` build archived the change, `revise` works on its
+newest archived copy, `specs/archive/<date>-<name>/`, where buildme-findings
+writes later issues.
 
 ## Before you run it
 

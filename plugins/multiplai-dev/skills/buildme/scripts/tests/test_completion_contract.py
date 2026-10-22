@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from multiplai_core.specs import mark_ready
 
 from build_pipeline import git_ops, orchestrator
 from build_pipeline.config import BuildConfig, GitToggles
@@ -30,7 +31,7 @@ def git(root, *args):
 def accepted_build(tmp_path, monkeypatch):
     monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
     git(tmp_path, "init", "-qb", "buildme/contract")
-    config = BuildConfig(project_dir=tmp_path, change_name="contract", mode="only",
+    config = BuildConfig(project_dir=tmp_path, change_name="contract",
                          auto=False, git=GitToggles(worktree=False, push=True, pr="none"),
                          test_command=f'{sys.executable} -c "from app import value; assert value == 1"')
     config.specs_dir = tmp_path / "specs"
@@ -45,10 +46,11 @@ def accepted_build(tmp_path, monkeypatch):
     }.items():
         (root / name).write_text(content)
     (tmp_path / "app.py").write_text("value = 1\n")
+    mark_ready(root)  # pm-spec's handoff
     git(tmp_path, "add", ".")
     git(tmp_path, "commit", "-qm", "accepted implementation")
     config.pipeline_branch = "buildme/contract"
-    state = BuildState(change_name="contract", mode="only", tier="advanced", phase=BuildPhase.PUBLISH,
+    state = BuildState(change_name="contract", tier="advanced", phase=BuildPhase.PUBLISH,
                        branch=config.pipeline_branch, worktree_path=str(tmp_path),
                        state_file=str(config.state_file_path()),
                        tdd=TDDState(blocks=[BlockInfo(number=1, name="Value", description="Return one", status=BlockStatus.DONE)],
@@ -57,8 +59,8 @@ def accepted_build(tmp_path, monkeypatch):
     state.spec_gen.record_step("design_audit", "passed")
     state.spec_gen.record_step("plan_review", "passed")
     state.checkpoint(config.state_file_path())
-    args = argparse.Namespace(mode="only", change="contract", project_dir=str(tmp_path), auto=False,
-                              spec_only=False, skip_research=True, interview_summary="", research_path="", context_files=[], session_id="", block=None)
+    args = argparse.Namespace(change="contract", project_dir=str(tmp_path), auto=False,
+                              spec_only=False, skip_research=True, research_path="", session_id="", block=None)
     monkeypatch.setattr(orchestrator, "PRE_PUBLISH_CONTRIBUTORS", [])
     monkeypatch.setattr(git_ops, "has_remote", lambda *a: True)
     push = Mock(return_value=git_ops.GitResult([], 0, "", ""))
@@ -219,23 +221,6 @@ async def test_plan_review_repair_revalidates_design_before_spec_only_success(ac
 
 
 @pytest.mark.asyncio
-async def test_implementation_resume_does_not_repeat_superseded_prototype(accepted_build, monkeypatch):
-    config, state, args, _ = accepted_build
-    config.spec_only = True
-    config.skip_explainers = True
-    state.phase = BuildPhase.TDD_BUILD
-    state.spec_gen.record_step("prototype")
-    (config.change_dir / "design.md").write_text("# Design after audit repair")
-    reconcile_plan(config, state, regenerated={"design", "unknowns", "tasks", "rubric"})
-    for step in ("design_audit", "plan_review", "tasks_audit", "explainers"):
-        state.spec_gen.record_step(step)
-    state.checkpoint(config.state_file_path())
-    prototype = AsyncMock(side_effect=AssertionError("must not repeat prototype after implementation began"))
-    monkeypatch.setattr(orchestrator, "_run_prototype_phase", prototype)
-    assert await orchestrator.run_orchestrator(config, args) == 0
-    prototype.assert_not_awaited()
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize('fixture', [
     'build-state-pre-prototype-tdd.json', 'build-state-pre-docs-update.json',
     'build-state-pre-refactor-all.json', 'build-state-pre-mutation.json',
@@ -246,7 +231,7 @@ async def test_legacy_implementation_resume_refuses_without_rewriting_code(accep
     from build_pipeline import sdk
     config, _, args, push = accepted_build
     raw = json.loads((Path(__file__).parent / 'fixtures' / fixture).read_text())
-    raw.update(change_name=config.change_name, mode='only', branch=config.pipeline_branch,
+    raw.update(change_name=config.change_name, branch=config.pipeline_branch,
                worktree_path=str(config.project_dir), state_file=str(config.state_file_path()))
     config.state_file_path().write_text(json.dumps(raw))
     head = git(config.project_dir, 'rev-parse', 'HEAD')

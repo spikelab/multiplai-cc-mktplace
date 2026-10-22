@@ -1,6 +1,6 @@
-"""The findings stage: fetch and filter PR comments, triage them, change the
-spec. Every GitHub call is stubbed at `git_ops._run_gh` and every model call
-is a fake passed as `call=`."""
+"""The findings stage: fetch and filter PR comments, triage them, record the
+requirements changes they ask for in spec-issues.md. Every GitHub call is
+stubbed at `git_ops._run_gh` and every model call is a fake passed as `call=`."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from build_pipeline import git_ops
 from build_pipeline.config import BuildConfig, FindingsSettings
 from build_pipeline.findings import fetch, spec, triage
 from build_pipeline.findings.models import PRComment, Triage, TriageRecord, Verdict
+from multiplai_core.specs import read_change_meta
 
 REPO = "acme/widgets"
 MARKER = "<!-- multiplai-review:finding id=0123456789 round=abcdef012345 v=1 -->"
@@ -348,7 +349,7 @@ class TestTriage:
         assert "a \\| b c" in row
 
 
-# --- spec changes ------------------------------------------------------------
+# --- requirements issues ---------------------------------------------------
 
 REQUIREMENTS = """## ADDED Requirements
 
@@ -360,29 +361,7 @@ The calculator adds two numbers.
 - **THEN** 5
 """
 
-DELTA = """# Capability: calc
-Findings: comment:1
-
-## ADDED Requirements
-
-_None._
-
-## MODIFIED Requirements
-
-### Requirement: Sum
-The calculator adds two numbers and rejects None.
-
-#### Scenario: None
-- **WHEN** add(None, 3)
-- **THEN** a TypeError
-
-## REMOVED Requirements
-
-_None._
-
-# Declined
-- comment:2: the requirement already says this.
-"""
+URL = f"https://github.com/{REPO}/pull/7#discussion_r1"
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -390,22 +369,40 @@ def _git(repo: Path, *args: str) -> str:
                           text=True).stdout
 
 
-def _repo_with_change(tmp_path) -> tuple[Path, Path]:
-    repo = tmp_path
+def _init(repo: Path) -> None:
     _git(repo, "init", "-q", "-b", "main")
     _git(repo, "config", "user.email", "t@example.com")
     _git(repo, "config", "user.name", "t")
+
+
+def _repo_with_change(tmp_path) -> tuple[Path, Path]:
+    """A committed active change with one requirements file, and a registry."""
+    repo = tmp_path
+    _init(repo)
     change_dir = _change_dir(repo)
     (change_dir / "requirements" / "calc.md").write_text(REQUIREMENTS)
+    (repo / "specs" / "registry").mkdir(parents=True)
+    (repo / "specs" / "registry" / "calc.md").write_text("# calc\n\n" + REQUIREMENTS)
     _git(repo, "add", ".")
     _git(repo, "commit", "-qm", "build")
     return repo, change_dir
 
 
-def _record(cid, verdict, **kw):
-    return TriageRecord(round=1, comment=PRComment(id=cid, kind="review", author="alice",
-                                                   allowed=True),
-                        triage=Triage(verdict=verdict, reason="r", **kw))
+def _record(cid, verdict, *, finding_id=None, round_n=1, reason="r", **kw):
+    return TriageRecord(round=round_n,
+                        comment=PRComment(id=cid, kind="review", author="alice", allowed=True,
+                                          finding_id=finding_id, url=URL),
+                        triage=Triage(verdict=verdict, reason=reason, **kw))
+
+
+def _spec_bytes(repo: Path) -> dict[str, bytes]:
+    specs = repo / "specs"
+    paths = [*specs.glob("*/*/requirements/*.md"), *(specs / "registry").rglob("*")]
+    return {p.relative_to(repo).as_posix(): p.read_bytes() for p in sorted(paths) if p.is_file()}
+
+
+def _sections(text: str) -> list[str]:
+    return [line[3:] for line in text.splitlines() if line.startswith("## ")]
 
 
 class TestSpecStep:
@@ -414,214 +411,141 @@ class TestSpecStep:
                 _record(3, Verdict.CODE_FIX, spec_conflict=True), _record(4, Verdict.QUESTION)]
         assert [r.comment.id for r in spec.needs_spec(recs)] == [1, 3]
 
-    @pytest.mark.asyncio
-    async def test_a_spec_change_is_applied_and_committed(self, tmp_path):
+    def test_a_spec_change_is_recorded_in_spec_issues_md_and_no_requirement_is_edited(
+            self, tmp_path):
         repo, change_dir = _repo_with_change(tmp_path)
-        records = [_record(1, Verdict.SPEC_CHANGE, requirement="calc: Sum"),
-                   _record(2, Verdict.SPEC_CHANGE)]
-        prompts: list[str] = []
-
-        async def fake_llm(prompt, **kw):
-            assert kw["budget_label"] == "findings_spec"
-            prompts.append(prompt)
-            return DELTA
-
-        config = _config(repo)
+        before = _spec_bytes(repo)
+        records = [_record(1, Verdict.SPEC_CHANGE, finding_id="5e1", requirement="calc: Sum",
+                           reason="The spec never says what None does.")]
         findings_md = triage.findings_path(change_dir, 1)
         findings_md.write_text("placeholder")
-        changes, sha = await spec.run_spec_step(config, change_dir, 1, records,
-                                                extra_paths=[findings_md], call=fake_llm)
-        assert sha
-        assert _git(repo, "log", "-1", "--format=%s").strip() == "spec(findings-r1): c1, c2"
-        req = (change_dir / "requirements" / "calc.md").read_text()
-        assert "rejects None" in req and "_None._" not in req
+
+        issues, sha = spec.run_spec_step(_config(repo), change_dir, 1, records,
+                                         extra_paths=[findings_md])
+
+        assert _spec_bytes(repo) == before
+        text = (change_dir / "spec-issues.md").read_text()
+        assert _sections(text) == ["Finding 5e1"]
+        assert "- Requirements file: `requirements/calc.md`" in text
+        assert "- Requirement: calc: Sum" in text
+        assert URL in text and "The spec never says what None does." in text
+        assert read_change_meta(change_dir)["spec_issues"] == "spec-issues.md"
+        assert sha and _git(repo, "log", "-1", "--format=%s").strip() == "spec(findings-r1): 5e1"
         committed = _git(repo, "show", "--name-only", "--format=", "HEAD").split()
-        assert "specs/changes/calc/requirements/calc.md" in committed
-        assert "specs/changes/calc/respec-findings-r1.md" in committed
-        assert "specs/changes/calc/findings-r1.md" in committed
-        applied = [c for c in changes if c.applied]
-        assert [(c.capability, c.requirement, c.operation) for c in applied] == [
-            ("calc", "Sum", "MODIFIED")]
-        assert "adds two numbers." in applied[0].before and "rejects None" in applied[0].after
-        declined = [c for c in changes if not c.applied]
-        assert declined and declined[0].finding_keys == ["comment:2"]
-        text = triage.render_findings(1, records, changes)
-        assert "## Spec changes" in text and "calc: Sum" in text and "declined" in text
+        assert sorted(committed) == ["specs/changes/calc/.change.yaml",
+                                     "specs/changes/calc/findings-r1.md",
+                                     "specs/changes/calc/spec-issues.md"]
+        assert [(i.finding_key, i.requirements_file, i.appended, i.defers_fix) for i in issues] == [
+            ("finding:5e1", "requirements/calc.md", True, False)]
+        assert issues[0].issues_file == "specs/changes/calc/spec-issues.md"
+        assert issues[0].command == "/multiplai-pm:pm-spec revise calc"
+        rendered = triage.render_findings(1, records, issues)
+        assert "## Requirements issues" in rendered and "calc: Sum" in rendered
 
-    @pytest.mark.asyncio
-    async def test_an_unknown_capability_is_declined_not_created(self, tmp_path):
+    def test_a_capability_the_change_has_no_file_for_names_no_file(self, tmp_path):
         repo, change_dir = _repo_with_change(tmp_path)
-
-        async def fake_llm(prompt, **kw):
-            return DELTA.replace("# Capability: calc", "# Capability: ../../etc")
-
-        changes, _ = await spec.run_spec_step(_config(repo), change_dir, 1,
-                                              [_record(1, Verdict.SPEC_CHANGE)], call=fake_llm)
-        assert all(not c.applied for c in changes)
+        records = [_record(1, Verdict.SPEC_CHANGE, requirement="../../etc: Passwd"),
+                   _record(2, Verdict.SPEC_CHANGE, requirement="other: Thing")]
+        issues, _ = spec.run_spec_step(_config(repo), change_dir, 1, records)
+        text = (change_dir / "spec-issues.md").read_text()
+        assert "requirements/" not in text
+        assert "- Requirement: ../../etc: Passwd" in text and "- Requirement: other: Thing" in text
+        assert [i.requirements_file for i in issues] == ["", ""]
         assert sorted(p.name for p in (change_dir / "requirements").iterdir()) == ["calc.md"]
 
-    @pytest.mark.asyncio
-    async def test_no_spec_finding_means_no_call_and_no_commit(self, tmp_path):
+    def test_no_spec_finding_means_no_file_and_no_commit(self, tmp_path):
         repo, change_dir = _repo_with_change(tmp_path)
+        head = _git(repo, "rev-parse", "HEAD")
+        assert spec.run_spec_step(_config(repo), change_dir, 1,
+                                  [_record(1, Verdict.CODE_FIX)]) == ([], None)
+        assert not (change_dir / "spec-issues.md").exists()
+        assert not (change_dir / ".change.yaml").exists()
+        assert _git(repo, "rev-parse", "HEAD") == head
 
-        async def fail(*a, **k):
-            raise AssertionError("no spec call expected")
-
-        changes, sha = await spec.run_spec_step(_config(repo), change_dir, 1,
-                                                [_record(1, Verdict.CODE_FIX)], call=fail)
-        assert (changes, sha) == ([], None)
-
-
-SECTIONED = """## ADDED Requirements
-
-### Requirement: Sum
-The calculator adds two numbers.
-
-### Requirement: Product
-The calculator multiplies two numbers.
-
-## MODIFIED Requirements
-
-### Requirement: Div
-The calculator divides, refusing zero.
-
-### Requirement: Mod
-The calculator takes a remainder.
-
-## REMOVED Requirements
-
-### Requirement: Legacy
-"""
-
-
-def _section(text: str, op: str) -> str:
-    """The text of one `## <op> Requirements` section."""
-    start = text.index(f"## {op} Requirements")
-    nxt = text.find("\n## ", start + 1)
-    return text[start:nxt if nxt != -1 else len(text)]
-
-
-def _delta(*parts: str, findings="comment:1") -> str:
-    return f"# Capability: calc\nFindings: {findings}\n\n" + "\n".join(parts)
-
-
-class TestSpecDeltaOnTheChangesOwnFile:
-    """The change's requirements/<cap>.md is itself a delta, split into
-    ADDED/MODIFIED/REMOVED sections; an edit keeps every requirement in its
-    section."""
-
-    async def _apply(self, tmp_path, text, delta, records=None):
+    def test_a_deferred_code_fix_says_its_fix_waits_on_the_change(self, tmp_path):
         repo, change_dir = _repo_with_change(tmp_path)
-        (change_dir / "requirements" / "calc.md").write_text(text)
-
-        async def fake_llm(prompt, **kw):
-            return delta
-
-        changes, sha = await spec.run_spec_step(
-            _config(repo), change_dir, 1, records or [_record(1, Verdict.SPEC_CHANGE)],
-            call=fake_llm)
-        return repo, change_dir, changes, sha, (change_dir / "requirements" / "calc.md").read_text()
-
-    @pytest.mark.asyncio
-    async def test_modifying_the_last_requirement_of_a_section_keeps_the_next_heading(self, tmp_path):
-        delta = _delta("## MODIFIED Requirements\n\n### Requirement: Product\n"
-                       "The calculator multiplies two numbers and rejects None.\n")
-        *_, changes, _, req = await self._apply(tmp_path, SECTIONED, delta)
-        assert "rejects None" in _section(req, "ADDED")
-        modified = _section(req, "MODIFIED")
-        assert "### Requirement: Div" in modified and "### Requirement: Mod" in modified
-        assert "### Requirement: Legacy" in _section(req, "REMOVED")
-        assert [(c.requirement, c.applied) for c in changes] == [("Product", True)]
-
-    @pytest.mark.asyncio
-    async def test_removing_the_last_requirement_of_a_section_keeps_the_next_heading(self, tmp_path):
-        delta = _delta("## REMOVED Requirements\n\n### Requirement: Product\n")
-        *_, changes, _, req = await self._apply(tmp_path, SECTIONED, delta)
-        assert "Product" not in req
-        assert "### Requirement: Div" in _section(req, "MODIFIED")
-        assert [(c.requirement, c.applied) for c in changes] == [("Product", True)]
-
-    @pytest.mark.asyncio
-    async def test_removing_a_modified_requirement_moves_it_to_removed(self, tmp_path):
-        delta = _delta("## REMOVED Requirements\n\n### Requirement: Mod\n")
-        *_, changes, _, req = await self._apply(tmp_path, SECTIONED, delta)
-        assert "Mod" not in _section(req, "MODIFIED")
-        assert "### Requirement: Mod" in _section(req, "REMOVED")
-        assert "### Requirement: Legacy" in _section(req, "REMOVED")
-
-    @pytest.mark.asyncio
-    async def test_an_added_requirement_goes_in_the_added_section(self, tmp_path):
-        delta = _delta("## ADDED Requirements\n\n### Requirement: Neg\nThe calculator negates.\n")
-        *_, changes, _, req = await self._apply(tmp_path, SECTIONED, delta)
-        assert "### Requirement: Neg" in _section(req, "ADDED")
-        assert "Neg" not in _section(req, "REMOVED")
-        assert [(c.requirement, c.operation, c.applied) for c in changes] == [
-            ("Neg", "ADDED", True)]
+        records = [_record(1, Verdict.CODE_FIX, spec_conflict=True, requirement="calc: Sum",
+                           failing_test="add(None, 1) raises TypeError")]
+        issues, _ = spec.run_spec_step(_config(repo), change_dir, 1, records)
+        text = (change_dir / "spec-issues.md").read_text()
+        assert _sections(text) == ["Comment 1"]
+        assert "A code fix waits on this change" in text
+        assert "add(None, 1) raises TypeError" in text
+        assert issues[0].defers_fix
 
 
-class TestSpecChangeIsAppliedOnlyWhenItChangedSomething:
-    @pytest.mark.asyncio
-    async def test_a_requirement_the_delta_did_not_change_is_not_applied(self, tmp_path):
+class TestSpecIssuesFile:
+    """spec-issues.md may already hold issues: an earlier round's, or the
+    build's own. Appending keeps every byte of them and never writes a
+    finding's section twice."""
+
+    def test_earlier_sections_are_kept_and_a_finding_already_there_is_not_written_again(
+            self, tmp_path):
         repo, change_dir = _repo_with_change(tmp_path)
-        same = REQUIREMENTS.split("## ADDED Requirements\n\n", 1)[1]
+        earlier = ("# Requirements issues\n\n## Build issue: Sum\n\n"
+                   "The build found `requirements/calc.md` vague.\n")
+        (change_dir / "spec-issues.md").write_text(earlier)
+        r1 = _record(1, Verdict.SPEC_CHANGE, finding_id="5e1", requirement="calc: Sum")
+        spec.run_spec_step(_config(repo), change_dir, 1, [r1])
+        once = (change_dir / "spec-issues.md").read_text()
+        assert once.startswith(earlier.rstrip("\n"))
+        assert _sections(once) == ["Build issue: Sum", "Finding 5e1"]
 
-        async def fake_llm(prompt, **kw):
-            return _delta("## MODIFIED Requirements\n\n" + same + "\n"
-                          "### Requirement: Nope\nThere is no such requirement.\n")
+        # Round 2 raises the same finding again, next to a new one.
+        again = _record(7, Verdict.SPEC_CHANGE, finding_id="5e1", round_n=2)
+        new = _record(8, Verdict.SPEC_CHANGE, finding_id="9f2", round_n=2)
+        issues, _ = spec.run_spec_step(_config(repo), change_dir, 2, [again, new])
+        twice = (change_dir / "spec-issues.md").read_text()
+        assert twice.startswith(once.rstrip("\n"))
+        assert _sections(twice) == ["Build issue: Sum", "Finding 5e1", "Finding 9f2"]
+        assert [i.appended for i in issues] == [False, True]
 
-        changes, _ = await spec.run_spec_step(_config(repo), change_dir, 1,
-                                              [_record(1, Verdict.SPEC_CHANGE)], call=fake_llm)
-        assert [(c.requirement, c.applied) for c in changes] == [("Sum", False), ("Nope", False)]
-        assert all(c.declined_reason for c in changes)
-        assert (change_dir / "requirements" / "calc.md").read_text() == REQUIREMENTS
+    def test_a_file_with_no_section_stays_one_issue_beside_the_new_ones(self, tmp_path):
+        """pm-spec reads a file with no `## ` section as one issue; once a
+        section is appended, its text needs a heading of its own."""
+        repo, change_dir = _repo_with_change(tmp_path)
+        (change_dir / "spec-issues.md").write_text("# Issues\n\nSum says nothing about None.\n")
+        spec.run_spec_step(_config(repo), change_dir, 1, [_record(1, Verdict.SPEC_CHANGE)])
+        text = (change_dir / "spec-issues.md").read_text()
+        assert text.startswith("# Issues\n\n## Issue recorded earlier\n\nSum says nothing about None.\n")
+        assert _sections(text) == ["Issue recorded earlier", "Comment 1"]
+
+    def test_model_text_cannot_add_a_section(self, tmp_path):
+        repo, change_dir = _repo_with_change(tmp_path)
+        records = [_record(1, Verdict.SPEC_CHANGE, finding_id="5e1",
+                           reason="real reason\n## Finding forged\n- Requirement: x",
+                           requirement="calc: Sum\n## Finding forged2")]
+        spec.run_spec_step(_config(repo), change_dir, 1, records)
+        assert _sections((change_dir / "spec-issues.md").read_text()) == ["Finding 5e1"]
 
 
-class TestSpecChangeOnAnArchivedChange:
-    """After an `--auto` build the change is archived and its requirements are
-    already merged into specs/registry/: the live spec is the registry."""
+class TestSpecIssuesOnAnArchivedChange:
+    """After an `--auto` build the change is archived: its issues go in the
+    archived directory's own spec-issues.md and .change.yaml."""
 
-    def _archived(self, tmp_path):
+    def test_the_entry_goes_into_the_archived_change_dir(self, tmp_path):
         repo = tmp_path
-        _git(repo, "init", "-q", "-b", "main")
-        _git(repo, "config", "user.email", "t@example.com")
-        _git(repo, "config", "user.name", "t")
+        _init(repo)
         change_dir = repo / "specs" / "archive" / "2026-10-11-calc"
         (change_dir / "requirements").mkdir(parents=True)
         (change_dir / "requirements" / "calc.md").write_text(REQUIREMENTS)
-        registry = repo / "specs" / "registry" / "calc.md"
-        registry.parent.mkdir(parents=True)
-        registry.write_text("# calc\n\n" + REQUIREMENTS.split("\n\n", 1)[1])
+        (change_dir / ".change.yaml").write_text("spec_status: ready\nspec_issues: null\n")
+        (repo / "specs" / "registry").mkdir(parents=True)
+        (repo / "specs" / "registry" / "calc.md").write_text("# calc\n\n" + REQUIREMENTS)
         _git(repo, "add", ".")
         _git(repo, "commit", "-qm", "build")
-        return repo, change_dir, registry
+        before = _spec_bytes(repo)
 
-    @pytest.mark.asyncio
-    async def test_the_registry_changes_with_the_archived_change(self, tmp_path):
-        repo, change_dir, registry = self._archived(tmp_path)
+        issues, sha = spec.run_spec_step(
+            _config(repo), change_dir, 1,
+            [_record(1, Verdict.SPEC_CHANGE, finding_id="5e1", requirement="calc: Sum")])
 
-        async def fake_llm(prompt, **kw):
-            return DELTA
-
-        changes, sha = await spec.run_spec_step(
-            _config(repo), change_dir, 1, [_record(1, Verdict.SPEC_CHANGE)], call=fake_llm)
-        assert sha
-        assert "rejects None" in registry.read_text()
-        assert registry.read_text().count("### Requirement: Sum") == 1
-        assert "rejects None" in (change_dir / "requirements" / "calc.md").read_text()
+        assert sha and _spec_bytes(repo) == before
+        assert "## Finding 5e1" in (change_dir / "spec-issues.md").read_text()
+        meta = read_change_meta(change_dir)
+        assert meta == {"spec_status": "ready", "spec_issues": "spec-issues.md"}
+        assert not (repo / "specs" / "changes").exists()
         committed = _git(repo, "show", "--name-only", "--format=", "HEAD").split()
-        assert "specs/registry/calc.md" in committed
-        assert [(c.requirement, c.applied) for c in changes if c.applied] == [("Sum", True)]
-
-    @pytest.mark.asyncio
-    async def test_an_active_change_leaves_the_registry_to_its_archive(self, tmp_path):
-        repo, change_dir = _repo_with_change(tmp_path)
-        registry = repo / "specs" / "registry" / "calc.md"
-        registry.parent.mkdir(parents=True)
-        registry.write_text("# calc\n")
-
-        async def fake_llm(prompt, **kw):
-            return DELTA
-
-        await spec.run_spec_step(_config(repo), change_dir, 1,
-                                 [_record(1, Verdict.SPEC_CHANGE)], call=fake_llm)
-        assert registry.read_text() == "# calc\n"
+        assert sorted(committed) == ["specs/archive/2026-10-11-calc/.change.yaml",
+                                     "specs/archive/2026-10-11-calc/spec-issues.md"]
+        assert issues[0].issues_file == "specs/archive/2026-10-11-calc/spec-issues.md"

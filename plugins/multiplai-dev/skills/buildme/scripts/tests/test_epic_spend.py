@@ -19,7 +19,7 @@ from build_pipeline import budget, git_ops
 from build_pipeline.config import EpicSettings
 from build_pipeline.epic import coordinator, records, spend
 from build_pipeline.epic import lock as epic_lock
-from build_pipeline.epic.split import EpicSplitAnswer
+from .epic_row_helpers import EpicSplitAnswer
 
 from .epic_row_helpers import (
     CallLog,
@@ -361,7 +361,7 @@ class Epic:
 
     def launches(self) -> list[str]:
         calls = CallLog(self.root / "calls.log").calls()
-        return [Path(c["argv"][c["argv"].index("--plan-file") + 1]).stem for c in calls]
+        return [c["argv"][c["argv"].index("--change") + 1].split("-", 1)[1] for c in calls]
 
     def epic_json(self) -> dict:
         return json.loads((self.dir / "epic.json").read_text())

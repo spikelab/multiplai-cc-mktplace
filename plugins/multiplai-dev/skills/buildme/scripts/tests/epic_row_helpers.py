@@ -12,7 +12,9 @@ them ("How the row tests compare").
   and the log, with the keys `at`, `since`, `pid`, `host` and `*_at` left out
   of JSON and the root path rewritten.
 - Calls: only launches and writing calls are logged (`CallLog`), never
-  read-only calls. In PR A the one launch is `epic_split`.
+  read-only calls.
+- An epic is pm-spec's records (`approve`): each child's ready specs and
+  `depends_on`, the parent's `children`, committed locally and never pushed.
 - A kill is a forked child exiting 137 at a named seam (`run_killed`), as
   `row_helpers.run_killed_at` does for git calls.
 """
@@ -28,10 +30,12 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+
+from multiplai_core.specs import mark_ready, write_change_meta
+
 from build_pipeline.config import BuildConfig, GitToggles
-from build_pipeline.epic.split import EpicChild, EpicSplitAnswer
-from build_pipeline.models import BuildPhase
-from build_pipeline.state import BuildState
 
 DROP_KEYS = {"at", "since", "pid", "host"}          # and every key ending in "_at"
 NOT_COMPARED = {".lock", "progress.log"}            # the lock and the log: never compared
@@ -94,77 +98,114 @@ def move_origin(root: Path) -> str:
     return _git(other, "rev-parse", "HEAD").strip()
 
 
-def make_build(project: Path, change: str = "e", *, mode: str = "scratch",
-               phase: BuildPhase = BuildPhase.RESEARCH) -> BuildConfig:
-    """A build of *change* whose shaping is done up to *phase*, with a ticket
-    in the change dir and no source files (so the codebase analysis makes no
-    call). No worktree: the epic files live in the data directory, not in it."""
-    from build_pipeline.change_manager import ChangeManager
-
-    config = BuildConfig(
-        project_dir=project, change_name=change, mode=mode, auto=True,
-        spec_only=True, skip_research=True, git=GitToggles(worktree=False),
-    )
+def make_build(project: Path, change: str = "e") -> BuildConfig:
+    """A build of the parent change *change*: its change dir with a
+    `.change.yaml`, not yet committed (`approve` writes the split and commits
+    it). The parent's run writes nothing there."""
+    config = BuildConfig(project_dir=project, change_name=change, auto=True,
+                         skip_research=True, git=GitToggles(worktree=False))
     config.specs_dir = project / "specs"
-    config.prototype_mode = "false"
-    cm = ChangeManager(config.specs_dir)
-    cm.init_specs()
-    cm.create_change(change)
-    (config.change_dir / "ticket.md").write_text("# Ticket #1\n\nBuild the epic.\n")
-    state = BuildState(change_name=change, mode=mode, tier="advanced", phase=phase,
-                       bootstrap_done=True, state_file=str(config.state_file_path()))
-    state.checkpoint(config.state_file_path())
+    config.change_dir.mkdir(parents=True, exist_ok=True)
+    write_change_meta(config.change_dir, {"schema": "spec-driven"})
     return config
 
 
 def args_for(config: BuildConfig, **over) -> Any:
     import argparse
 
-    base = dict(mode=config.mode, change=config.change_name, project_dir=str(config.project_dir),
-                auto=True, spec_only=True, skip_research=True, interview_summary="",
-                research_path="", context_files=[], session_id="s",
-                approve_split=False, no_epic_split=False)
+    base = dict(change=config.change_name, project_dir=str(config.project_dir),
+                auto=True, skip_research=True, session_id="s")
     base.update(over)
     return argparse.Namespace(**base)
 
 
-def run_build(config: BuildConfig, args, spec=None, *, coordinator: bool = False) -> int:
-    """One `build` invocation, in this process. The spec generator is a fake
-    (*spec*, default: one that fails), so a build that goes on past the split
-    stops right there. Unless *coordinator*, an approved epic's coordinator
-    (PR B1) is a stub that returns 0, so PR A's cases launch no child."""
+def run_build(config: BuildConfig, args, *, coordinator: bool = False) -> int:
+    """One `build` invocation, in this process. Unless *coordinator*, the
+    coordinator is a stub that returns 0, so nothing is launched."""
     from contextlib import ExitStack
     from unittest.mock import AsyncMock, patch
 
     from build_pipeline.orchestrator import run_orchestrator
 
-    spec = spec or AsyncMock(return_value=1)
     with ExitStack() as stack:
-        stack.enter_context(patch("build_pipeline.spec_generator.run_spec_generator", spec))
         if not coordinator:
             stack.enter_context(patch("build_pipeline.epic.coordinator.run_epic", AsyncMock(return_value=0)))
         return asyncio.run(run_orchestrator(config, args))
 
 
-def load_state(config: BuildConfig) -> BuildState:
-    return BuildState.load(config.state_file_path())
+# --- the split pm-spec writes ------------------------------------------------------
+
+@dataclass
+class EpicChild:
+    """One child of a split: its id (its change is `<parent>-<id>`) and the
+    ids it depends on. A stand-in for the answer buildme's own split gave
+    before pm-spec wrote the split."""
+    id: str
+    depends_on: list[str] = field(default_factory=list)
 
 
-# --- the fake model call ------------------------------------------------------
-
-PLAN = "# Plan: {title}\n\n**Objective** — {title}.\n\n## Work items\n\n1. Do it.\n\n## Done means\n\n1. It is done.\n"
+@dataclass
+class EpicSplitAnswer:
+    single: bool = False
+    reason: str = ""
+    children: list[EpicChild] = field(default_factory=list)
 
 
 def child(cid: str, deps: tuple[str, ...] = (), title: str | None = None) -> EpicChild:
-    title = title or f"Child {cid}"
-    return EpicChild(id=cid, title=title, depends_on=list(deps), plan=PLAN.format(title=title))
+    return EpicChild(id=cid, depends_on=list(deps))
 
 
 THREE = EpicSplitAnswer(single=False, reason="Three parts.",
                         children=[child("api"), child("ui"), child("docs", ("api", "ui"))])
-CYCLE = EpicSplitAnswer(single=False, reason="Cycle.",
-                        children=[child("a", ("b",)), child("b", ("a",))])
-SINGLE = EpicSplitAnswer(single=True, reason="One change.")
+
+READY_AT = datetime(2026, 10, 13, 12, 0, tzinfo=timezone.utc)    # same in every root, so the commits match
+REQUIREMENT = """## ADDED Requirements
+
+### Requirement: {title}
+The system SHALL do {title}.
+
+#### Scenario: {title} works
+- **WHEN** it runs
+- **THEN** {title} is done
+"""
+
+
+def write_ready_specs(change_dir: Path, cid: str) -> None:
+    """A child's ready specs, as pm-spec's handoff leaves them: a proposal
+    naming one capability, use cases, a valid requirements file, then the
+    ready record (`mark_ready`)."""
+    cap = f"cap-{cid}"
+    (change_dir / "requirements").mkdir(parents=True, exist_ok=True)
+    (change_dir / "proposal.md").write_text(
+        f"# Proposal: {cid}\n\n## Why\n\nPart {cid} of the epic.\n\n## Capabilities\n\n- `{cap}`: {cid}\n")
+    (change_dir / "use-cases.md").write_text(f"# Use cases\n\n## UC-1: {cid}\n\nA user uses {cid}.\n")
+    (change_dir / "requirements" / f"{cap}.md").write_text(REQUIREMENT.format(title=cid))
+    mark_ready(change_dir, now=READY_AT)
+
+
+def approve(config: BuildConfig, answer: EpicSplitAnswer, log: "CallLog | None" = None) -> str:
+    """Write the split pm-spec makes of *config*'s change as *answer* gives
+    it: each child's change dir with ready specs, `parent` and `depends_on`
+    (change names), and the parent's `children` (in the answer's order); then
+    commit the change dirs in the project, locally, pushing nothing. Returns
+    that commit's sha. *log* is unused, kept so the callers stay as they were."""
+    parent = config.change_name
+    changes = config.specs_dir / "changes"
+    names = []
+    for c in answer.children:
+        name = f"{parent}-{c.id}"
+        names.append(name)
+        d = changes / name
+        d.mkdir(parents=True, exist_ok=True)
+        write_change_meta(d, {"schema": "spec-driven", "parent": parent,
+                              "depends_on": [f"{parent}-{dep}" for dep in c.depends_on]})
+        write_ready_specs(d, c.id)
+    write_change_meta(config.change_dir, {"children": names})
+    project = Path(config.project_dir)
+    rels = [os.path.relpath(p, project) for p in (config.change_dir, *(changes / n for n in names))]
+    _git(project, "add", "--", *rels)
+    _git(project, "-c", "commit.gpgsign=false", "commit", "-qm", f"specs({parent}): ready", "--", *rels)
+    return _git(project, "rev-parse", "HEAD").strip()
 
 
 class CallLog:
@@ -181,25 +222,6 @@ class CallLog:
         if not self.path.exists():
             return []
         return [json.loads(line) for line in self.path.read_text().splitlines()]
-
-
-class FakeSplit:
-    """`epic.split.epic_split`, answering from its arguments: the first answer
-    of an invocation is `first`, a retry (errors given) is `retry`. With
-    `die_on_call=n`, the n-th call this process makes is launched and logged,
-    then the process exits 137 as SIGKILL would."""
-
-    def __init__(self, log: CallLog, first: EpicSplitAnswer, retry: EpicSplitAnswer | None = None):
-        self.log, self.first, self.retry = log, first, retry or first
-        self.die_on_call: int | None = None
-        self.n = 0
-
-    async def __call__(self, config, inputs, errors=(), *, call=None):
-        self.n += 1
-        self.log.add("epic_split", retry=bool(errors))
-        if self.die_on_call == self.n:
-            os._exit(137)
-        return (self.retry if errors else self.first).model_copy(deep=True)
 
 
 # --- stopping -----------------------------------------------------------------
@@ -266,15 +288,6 @@ def epic_snapshot(epic_dir: Path, root: Path) -> dict[str, Any] | None:
     return out
 
 
-def state_summary(config: BuildConfig, root: Path) -> dict[str, Any]:
-    """The checkpoint fields the epic step owns; None once a finished build removed it."""
-    if not config.state_file_path().exists():
-        return None
-    s = load_state(config)
-    return {"phase": s.phase, "epic_dir": (s.epic_dir or "").replace(str(root), "<root>"),
-            "epic_single": s.epic_single}
-
-
 # --- PR B1: the coordinator's fakes, seams and records ---------------------------
 
 FAKE_BUILD = r'''#!{python}
@@ -295,9 +308,8 @@ def git(*a, cwd):
     return subprocess.run(["git", *a], cwd=cwd, capture_output=True, text=True)
 
 
-plan = opt("--plan-file")
-cid = pathlib.Path(plan).stem
 change = opt("--change")
+cid = change.split("-", 1)[1]       # `<parent>-<id>`; the tests' parent names have no hyphen
 counts = root / "attempts"
 counts.mkdir(exist_ok=True)
 n = len(list(counts.glob(cid + ".*"))) + 1
@@ -366,7 +378,19 @@ import fcntl
 with (root / "prs.lock").open("a") as held:     # two builds ending at once both keep their PR
     fcntl.flock(held, fcntl.LOCK_EX)
     prs = json.loads(prs_file.read_text()) if prs_file.exists() else {{}}
+    new = url not in prs
     prs.setdefault(url, {{"branch": branch, "state": "OPEN", **step.get("pr", {{}})}})
+    if new and prs[url]["state"] == "MERGED":   # merged on GitHub: origin's main carries the branch, specs and all
+        lander = root / ("lander-" + repo)
+        if not lander.exists():
+            subprocess.run(["{git}", "clone", "-q", str(root / "o" / (repo + ".git")), str(lander)],
+                           check=True, capture_output=True)
+        for cmd in (["fetch", "-q", "origin"], ["checkout", "-q", "-B", "main", "origin/main"],
+                    ["fetch", "-q", top, "refs/heads/" + branch],
+                    ["-c", "commit.gpgsign=false", "merge", "-q", "--no-ff", "-m",
+                     f"Merge pull request {{url}} from {{branch}}", "FETCH_HEAD"],
+                    ["push", "-q", "origin", "main"]):
+            subprocess.run(["{git}", *cmd], cwd=lander, check=True, capture_output=True)
     (root / f"prs.{{os.getpid()}}.tmp").write_text(json.dumps(prs))
     os.replace(root / f"prs.{{os.getpid()}}.tmp", prs_file)     # readers never see half a file
 if step.get("die_before_pr_line"):
@@ -903,7 +927,33 @@ class Fakes:
             os.replace(self.root / "prs.tmp", self.root / "prs.json")
 
     def set_pr(self, url: str, state: str) -> None:
+        """Set a PR's state. `MERGED` also merges its branch into origin's
+        main, as a merge on GitHub does, so a later child's base holds what
+        it carried (the specs commit, for a child that branched from it)."""
+        if state == "MERGED" and self.prs()[url]["state"] != "MERGED":
+            self._land(url)
         self._update_prs(url, state=state)
+
+    def _land(self, url: str) -> None:
+        import fcntl
+
+        git = real_git()
+        repo = url.split("/")[-3]
+        branch = self.prs()[url]["branch"]
+        checkouts = json.loads((self.root / "checkouts.json").read_text())
+        source = self.root / checkouts.get(repo, "p")
+        clone = self.root / f"lander-{repo}"
+        with (self.root / "prs.lock").open("a") as held:     # a fake build lands from this clone too
+            fcntl.flock(held, fcntl.LOCK_EX)
+            if not clone.exists():
+                subprocess.run([git, "clone", "-q", str(self.root / "o" / f"{repo}.git"), str(clone)],
+                               check=True, capture_output=True)
+            for cmd in (["fetch", "-q", "origin"], ["checkout", "-q", "-B", "main", "origin/main"],
+                        ["fetch", "-q", str(source), f"refs/heads/{branch}"],
+                        ["-c", "commit.gpgsign=false", "merge", "-q", "--no-ff", "-m",
+                         f"Merge pull request {url} from {branch}", "FETCH_HEAD"],
+                        ["push", "-q", "origin", "main"]):
+                subprocess.run([git, *cmd], cwd=clone, check=True, capture_output=True)
 
     def attempts(self, cid: str) -> int:
         return len(list((self.root / "attempts").glob(cid + ".*")))
@@ -963,20 +1013,6 @@ class FakeClock:
     async def sleep(self, seconds: float) -> None:
         self.t += seconds
         await asyncio.sleep(0.01)
-
-
-def approve(config: BuildConfig, answer: EpicSplitAnswer, log: CallLog) -> None:
-    """Split *config*'s build with *answer* and approve it, without running the coordinator."""
-    from unittest.mock import AsyncMock, patch
-
-    from build_pipeline.epic import coordinator, lock
-    from build_pipeline.epic import split as split_mod
-
-    with patch.object(split_mod, "epic_split", FakeSplit(log, answer)):
-        assert run_build(config, args_for(config)) == 3
-    with patch.object(coordinator, "run_epic", AsyncMock(return_value=0)):
-        assert run_build(config, args_for(config, approve_split=True)) == 0
-    lock.release_all()
 
 
 _OUT: list[str] = []      # what the last `run_coordinator` printed
