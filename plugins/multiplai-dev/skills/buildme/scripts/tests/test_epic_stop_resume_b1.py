@@ -398,6 +398,7 @@ def test_B1_S13_user_edit_in_a_stopped_childs_worktree_is_left_alone(
             subprocess.run(
                 ["git", "merge-base", "--is-ancestor", held, base],
                 cwd=stopped.root / "o" / "r.git",
+                check=False,
             ).returncode
             == 0
         )

@@ -1,6 +1,6 @@
 ---
 name: pm-spec
-description: Writes the "what" of a change before anyone builds it — an interview, a proposal, use cases and requirements one capability at a time, a UI or output-format prototype when the change has one — then checks with one read-only agent that the specs agree with each other, and hands off a ready record, a tickets.json and a commit of the change dir, pushed on the change's feature branch (change/<name>), for /multiplai-dev:buildme to build from. Takes a PRD and a ticket's text (with its child items) as inputs. revise fixes requirements issues buildme raised later.
+description: Writes the "what" of a change before anyone builds it — an interview, a proposal, use cases and requirements one capability at a time, a UI or output-format prototype when the change has one — then checks with one read-only agent that the specs agree with each other, and hands off a ready record, a tickets.json and a commit of the change dir, pushed on the change's own feature branch (named change/ and the change's name), for /multiplai-dev:buildme to build from. Takes a PRD and a ticket's text (with its child items) as inputs. revise fixes requirements issues buildme raised later.
 when_to_use: 'Triggers: pm-spec, write the spec, spec this change, specify a feature, turn this PRD into specs, spec this ticket, revise the specs, fix spec-issues.md, /multiplai-pm:pm-spec'
 ---
 

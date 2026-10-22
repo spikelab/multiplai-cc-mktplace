@@ -224,7 +224,8 @@ def test_a_change_handed_off_before_branches_is_moved_onto_its_branch(
     assert meta(change_dir(repo))["branch"] == "change/throttle"
     assert is_ready(change_dir(repo)) == (True, "")
     assert (
-        git(wt, "log", "-1", "--format=%s") == "specs(throttle): moved to change/throttle"
+        git(wt, "log", "-1", "--format=%s")
+        == "specs(throttle): moved to change/throttle"
     )
     assert git(origin(repo), "rev-parse", "change/throttle") == git(
         wt, "rev-parse", "HEAD"

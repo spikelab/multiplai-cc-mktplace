@@ -74,6 +74,19 @@ def repo(tmp_path, monkeypatch):
     return path
 
 
+def _merging(w: Path) -> bool:
+    """Whether a merge is in progress in the worktree *w*."""
+    return (
+        subprocess.run(
+            ["git", "rev-parse", "-q", "--verify", "MERGE_HEAD"],
+            cwd=w,
+            capture_output=True,
+            check=False,
+        ).returncode
+        == 0
+    )
+
+
 def _handoff(repo: Path) -> Path:
     """pm-spec's handoff: the specs ready and committed, and pushed to
     `origin/change/<change>`. Returns the checkout's change dir."""
@@ -348,13 +361,7 @@ class TestStartRefusal:
         assert _git(repo, "rev-parse", f"origin/change/{CHANGE}") == before
         merger = tmp_path / "ws" / ".worktrees" / f"buildme-feature-change-{CHANGE}"
         assert _git(merger, "status", "--porcelain") == ""
-        merging = subprocess.run(
-            ["git", "rev-parse", "-q", "--verify", "MERGE_HEAD"],
-            cwd=merger,
-            capture_output=True,
-            check=False,
-        )
-        assert merging.returncode != 0, "no merge in progress"
+        assert not _merging(merger)
         assert not _worktree(tmp_path).exists()
         models.generate.assert_not_awaited()
 
