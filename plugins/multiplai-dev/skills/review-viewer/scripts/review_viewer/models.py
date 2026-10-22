@@ -22,7 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, WithJsonSchema, field_validat
 
 SCHEMA_DIR = Path(__file__).resolve().parents[2] / "schema"
 SCHEMA_PATH = SCHEMA_DIR / "findings.v1.schema.json"
-WALKTHROUGH_SCHEMA_PATH = SCHEMA_DIR / "walkthrough.v1.schema.json"
+SUMMARY_SCHEMA_PATH = SCHEMA_DIR / "summary.v1.schema.json"
 CHECKS_SCHEMA_PATH = SCHEMA_DIR / "checks.v1.schema.json"
 
 SHA_PATTERN = r"^[0-9a-f]{40}$"
@@ -436,58 +436,29 @@ def schema_text() -> str:
     return _schema_text(FindingsFile, "findings.v1.schema.json")
 
 
-# --- walkthrough.json v1 -----------------------------------------------------------
+# --- summary.json v1 --------------------------------------------------------------
 #
 # Written by the Claude Code session that runs the skill (the server never
-# calls a model), checked by `walkthrough put`, rendered by the page.
-
-StepId = Annotated[str, Field(pattern=r"^[a-z0-9-]{1,40}$")]
-FindingId = Annotated[str, Field(pattern=r"^[0-9a-f]{10}$")]
-MAX_DIAGRAM_CHARS = 20000
-
-
-class WalkthroughAnchor(_Strict):
-    path: str
-    side: Literal["head", "base"]
-    line_start: int = Field(ge=1)
-    line_end: int = Field(ge=1)
-
-
-class Diagram(_Strict):
-    kind: Literal["mermaid"]
-    source: str = Field(max_length=MAX_DIAGRAM_CHARS)
-
-
-class Step(_Strict):
-    id: StepId
-    title: str
-    body_md: str
-    anchors: list[WalkthroughAnchor] = Field(min_length=1)
-    diagram: Diagram | None = None
-    finding_ids: list[FindingId] = Field(default_factory=list)
-
-
-class Skipped(_Strict):
-    path: str
-    reason: str
-
+# calls a model), checked by `summary put`, rendered by the page's Summary tab.
+# It holds verdicts and the risk inputs only, never an explanation of the code:
+# that is the codebase-walkthrough page the Full walkthrough row links.
 
 AssessmentTopic = Literal["commits", "tests", "size", "design", "risk", "other"]
 
 
-# A badge shows its title on one line, so `walkthrough put` takes titles up to
+# A badge shows its title on one line, so `summary put` takes titles up to
 # this long. The model still loads the 60 characters files written before 0.22
 # could use; the published schema advertises this limit, the one put enforces.
 ASSESSMENT_TITLE_MAX = 32
 
 
-class WalkthroughAssessment(_Strict):
+class SummaryAssessment(_Strict):
     """The session's judgment on one quality question, shown as a badge beside
     the measured ones. `commits` (does anything say why the change is made?)
     and `tests` (would a test fail if the changed behaviour broke?) are
-    required once the walkthrough is complete, and judged by the rubric in
+    required once the summary is complete, and judged by the rubric in
     SKILL.md. `size` and `risk` are accepted in files written before 0.22 but
-    rejected by `walkthrough put`: size is measured and risk is the header
+    rejected by `summary put`: size is measured and risk is the header
     score."""
 
     topic: AssessmentTopic
@@ -515,22 +486,19 @@ class RiskInput(_Strict):
     revert_why: str = Field(min_length=1)
 
 
-class Walkthrough(_Strict):
+class Summary(_Strict):
     schema_version: Literal[1]
     generated_at: datetime
     base_sha: str = Field(pattern=SHA_PATTERN)
     head_sha: str = Field(pattern=SHA_PATTERN)
-    overview_md: str
-    steps: list[Step]
-    skipped: list[Skipped] = Field(default_factory=list)
-    assessments: list[WalkthroughAssessment] = Field(default_factory=list)
+    assessments: list[SummaryAssessment] = Field(default_factory=list)
     risk: RiskInput | None = None
     complete: bool
 
 
-def walkthrough_schema_text() -> str:
-    """The JSON Schema for Walkthrough, in its committed form."""
-    return _schema_text(Walkthrough, "walkthrough.v1.schema.json")
+def summary_schema_text() -> str:
+    """The JSON Schema for Summary, in its committed form."""
+    return _schema_text(Summary, "summary.v1.schema.json")
 
 
 # --- mailbox rows ------------------------------------------------------------
@@ -563,7 +531,6 @@ class InboxRow(_Strict):
     anchor: Anchor | None = None
     text: str
     decision: Literal["accept", "reject", "defer"] | None = None
-    step_id: StepId | None = None
     # Sent by a block's light-bulb button: explain exactly `anchor`. The page
     # shows the answer in a strip above that block, not in the thread.
     explain: bool = False
@@ -572,6 +539,9 @@ class InboxRow(_Strict):
     # (`where` is the recipient). Pressing Send is the confirmation.
     to: Literal["github", "slack"] | None = None
     where: str | None = Field(default=None, pattern=SHARE_RECIPIENT_RE)
+    # kind "question" only: the Full walkthrough dialog's Confirm. The server
+    # fixes `text`; the session runs the command `summary status` prints.
+    full_walkthrough: bool = False
 
 
 class OutboxRow(_Strict):

@@ -285,7 +285,6 @@ per-file-target-version = { "plugins/multiplai-pm/skills/plane/scripts/**" = "py
 "plugins/multiplai-dev/skills/review-viewer/scripts/tests/test_server.py" = ["PLW1510"]
 "plugins/multiplai-dev/skills/review-viewer/scripts/tests/test_stats.py" = ["PLW1510"]
 "plugins/multiplai-dev/skills/review-viewer/scripts/tests/test_tree_review.py" = ["FURB192"]
-"plugins/multiplai-dev/skills/review-viewer/scripts/tests/test_walkthrough.py" = ["ISC004", "PLW1510"]
 "plugins/multiplai-dev/skills/review/scripts/review_pipeline/__main__.py" = ["G201"]
 "plugins/multiplai-dev/skills/review/scripts/review_pipeline/config.py" = ["BLE001", "RUF100"]
 "plugins/multiplai-dev/skills/review/scripts/review_pipeline/linked_docs.py" = ["PIE810"]
