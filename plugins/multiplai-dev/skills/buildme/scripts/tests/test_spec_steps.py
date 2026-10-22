@@ -367,7 +367,7 @@ class TestRegistryInTheContext:
         for name in ("users", "auth", "billing"):
             (cm.registry_dir / f"{name}.md").write_text("x")
         (cm.registry_dir / "notes.txt").write_text("not a capability")
-        assert cm.artifact_context(change, "requirements")["registry"] == ["auth", "billing", "users"]
+        assert cm.artifact_context(change, "design")["registry"] == ["auth", "billing", "users"]
 
     def test_an_empty_registry_is_an_empty_list(self, tmp_path):
         from build_pipeline.change_manager import ChangeManager
@@ -381,25 +381,6 @@ class TestRegistryInThePrompts:
                 "auth": "### Requirement: AUTH-TODAY-MARKER\n",
                 "users": "### Requirement: USERS-TODAY-MARKER\n"}
 
-    def test_requirements_prompt_carries_the_same_name_file_and_the_modified_rule(self, tmp_path):
-        config = _registry_config(tmp_path, {}, self.REGISTRY)
-        prompt = _build_prompt("requirements", _registry_context(config), config)
-        section = prompt.split("## Current behaviour (specs/registry)", 1)[1]
-        assert "### billing (specs/registry/billing.md)" in section
-        assert "BILLING-TODAY-MARKER" in section
-        assert "AUTH-TODAY-MARKER" not in section and "USERS-TODAY-MARKER" not in section
-        assert "Other capabilities in specs/registry: auth, users" in section
-        for heading in ("## MODIFIED Requirements", "## REMOVED Requirements", "## ADDED Requirements"):
-            assert heading in section
-
-    def test_a_new_capability_still_gets_the_list_and_the_rule(self, tmp_path):
-        config = _registry_config(tmp_path, {}, self.REGISTRY)
-        prompt = _build_prompt("requirements", _registry_context(config, "exports"), config)
-        section = prompt.split("## Current behaviour (specs/registry)", 1)[1]
-        assert "Other capabilities in specs/registry: auth, billing, users" in section
-        assert "TODAY-MARKER" not in section
-        assert "## MODIFIED Requirements" in section
-
     @pytest.mark.parametrize("artifact", ["design", "tasks"])
     def test_design_and_tasks_carry_the_change_capabilities_files(self, artifact, tmp_path):
         config = _registry_config(tmp_path, {"billing": "R", "users": "R"}, self.REGISTRY)
@@ -409,22 +390,17 @@ class TestRegistryInThePrompts:
         assert "AUTH-TODAY-MARKER" not in section
         assert "Other capabilities in specs/registry: auth" in section
 
-    @pytest.mark.parametrize("artifact", ["requirements", "design", "tasks"])
+    @pytest.mark.parametrize("artifact", ["design", "tasks"])
     def test_every_prompt_is_unchanged_with_an_empty_registry(self, artifact, tmp_path):
         """The section is appended, never a template placeholder, so an empty
         registry gives today's prompt byte for byte."""
-        from build_pipeline.prompts.spec_generation import SPEC_PROMPT
-
         config = _registry_config(tmp_path, {"billing": "R"}, {})
         ctx = {**TestBuildPromptGrounding._CONTEXT, "capability_name": "billing"}
         today = {
-            "requirements": SPEC_PROMPT.format(
-                project_context="PROJECT", proposal_content="proposal body", capability_name="billing",
-                instruction="INSTRUCTION", template="TEMPLATE"),
             "design": DESIGN_PROMPT.format(
                 project_context="PROJECT", proposal_content="proposal body",
                 specs_content=_read_specs(config), codebase_analysis="(new project)",
-                reference_docs="(none available)", audit_findings="(none — first pass)",
+                research="(no research conducted)", reference_docs="(none available)", audit_findings="(none — first pass)",
                 instruction="INSTRUCTION", template="TEMPLATE"),
             "tasks": TASKS_PROMPT.format(
                 project_context="PROJECT", proposal_content="proposal body",
@@ -459,33 +435,9 @@ class TestRegistryInThePrompts:
         assert "auth, users" in text
 
 
-class TestRegistryInTheProposal:
-    """The proposal picks the capability names the later prompts look up in the
-    registry, so it is told the registry's names (review round 1 of #345)."""
-
-    def test_the_proposal_prompt_names_the_registry_capabilities(self, tmp_path):
-        config = _registry_config(tmp_path, {}, TestRegistryInThePrompts.REGISTRY)
-        prompt = _build_prompt("proposal", _registry_context(config), config)
-        section = prompt.split("## Current behaviour (specs/registry)", 1)[1]
-        assert "Capabilities in specs/registry: auth, billing, users" in section
-        assert "### Modified Capabilities" in section and "### New Capabilities" in section
-        assert "TODAY-MARKER" not in section
-
-    def test_the_proposal_prompt_is_unchanged_with_an_empty_registry(self, tmp_path):
-        from build_pipeline.prompts.spec_generation import PROPOSAL_PROMPT
-
-        config = _registry_config(tmp_path, {}, {})
-        ctx = TestBuildPromptGrounding._CONTEXT
-        today = PROPOSAL_PROMPT.format(project_context="PROJECT", interview_summary="(none provided)",
-                                       research="(no research conducted)", instruction="INSTRUCTION",
-                                       template="TEMPLATE")
-        assert _build_prompt("proposal", {**ctx, "registry": []}, config) == today
-        assert _build_prompt("proposal", ctx, config) == today
-
-
 def test_a_file_left_out_by_the_cap_still_names_its_requirements(tmp_path):
-    """The requirements prompt tells the model to reuse the registry's requirement
-    names; a same-name file over the cap keeps those names in the prompt."""
+    """pm-spec's requirements reuse the registry's requirement names; a
+    same-name file over the cap keeps those names in the design prompt."""
     from build_pipeline.llm_steps.spec_steps import _read_registry
 
     big = "### Requirement: Billing totals\n" + "x" * 70_000 + "\n### Requirement: Refunds\nBODY-END\n"
@@ -506,17 +458,6 @@ def test_the_cap_holds_when_the_names_alone_are_over_it(tmp_path):
     text = _read_registry(config, _registry_context(config), ["billing"])
     assert len(text) <= REGISTRY_TEXT_LIMIT
     assert text.endswith(f"(cut at {REGISTRY_TEXT_LIMIT:,} characters)")
-
-
-def test_the_proposal_list_of_capabilities_is_capped_too(tmp_path):
-    from build_pipeline.llm_steps.spec_steps import REGISTRY_TEXT_LIMIT
-
-    config = _registry_config(tmp_path, {}, {f"capability-{i:05d}": "x\n" for i in range(5_000)})
-    prompt = _build_prompt("proposal", _registry_context(config), config)
-    section = prompt.split("## Current behaviour (specs/registry)", 1)[1]
-    names = section.split("Capabilities in specs/registry: ", 1)[1]
-    assert len(names) <= REGISTRY_TEXT_LIMIT + 1
-    assert names.rstrip("\n").endswith(f"(cut at {REGISTRY_TEXT_LIMIT:,} characters)")
 
 
 @pytest.mark.asyncio

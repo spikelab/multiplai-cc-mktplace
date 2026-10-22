@@ -245,7 +245,7 @@ class TestSameMistake:
                                                fix_on_pass_kept, searched):
         """A long report with no marker is the fixer's unless the block had a
         review fix or a kept fix on pass, whose long output cuts its marker."""
-        state = BuildState(change_name="calc", mode="only", tier="advanced",
+        state = BuildState(change_name="calc", tier="advanced",
                            state_file=str(tmp_path / "s.json"))
         state.tdd = TDDState(blocks=[BlockInfo(
             number=1, name="Fix finding ab12", description="d", status=BlockStatus.DONE,
@@ -728,7 +728,7 @@ class TestAddBlock:
                                     self_check={"head": "h", "report": PROBLEM, "block": 2})
         tasks.write_text(text)
         state_path = tmp_path / "s.json"
-        state = BuildState(change_name="calc", mode="only", tier="advanced",
+        state = BuildState(change_name="calc", tier="advanced",
                            state_file=str(state_path))
         state.tdd = TDDState(blocks=[BlockInfo(number=1, name="Fix finding ab12", description="d",
                                                status=BlockStatus.DONE)], current_block=1)

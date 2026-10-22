@@ -1,4 +1,4 @@
-"""Requirements interruption, revision publication and budget admission regressions."""
+"""Planning revision publication, input invalidation and budget admission regressions."""
 import json
 from types import SimpleNamespace
 from unittest.mock import Mock, AsyncMock
@@ -6,7 +6,7 @@ from unittest.mock import Mock, AsyncMock
 import pytest
 
 from build_pipeline import budget, sdk, spec_generator as owner
-from build_pipeline.change_manager import ChangeManager, ArtifactStatus
+from build_pipeline.change_manager import ChangeManager
 from build_pipeline.config import BuildConfig
 from build_pipeline.state import BuildState, SpecGenState
 
@@ -25,58 +25,40 @@ def plan(tmp_path):
                         "tasks.md": "## 1. Values\nReturn values", "unknowns.md": "# Unknowns\nNone",
                         "rubric.md": "# Rubric\nCheck values"}.items():
         (root / name).write_text(value)
-    state = BuildState(change_name=config.change_name, mode="only", tier="advanced", spec_gen=SpecGenState(),
+    state = BuildState(change_name=config.change_name, tier="advanced", spec_gen=SpecGenState(),
                        state_file=str(config.state_file_path()))
     return config, cm, state
 
 
-@pytest.mark.asyncio
-async def test_interrupted_capability_generation_resumes_only_missing_member(plan, monkeypatch):
+def test_an_input_edit_marks_buildmes_artifacts_stale_and_never_touches_the_inputs(plan):
+    """Item 19: the proposal, use cases and requirements are hashed, so an
+    edit to one marks design and the stages after it stale; reconcile_plan
+    never regenerates them or moves a requirements file the proposal no
+    longer names."""
     config, cm, state = plan
-    generate = AsyncMock(side_effect=[REQ, RuntimeError("second call interrupted")])
-    monkeypatch.setattr("build_pipeline.llm_steps.spec_steps.generate_artifact", generate)
-    with pytest.raises(RuntimeError):
-        await owner._generate_requirements(cm, config.change_dir, config, state)
-    first = (config.change_dir / "requirements/one.md").read_bytes()
-    assert cm.artifact_status(config.change_dir)["tasks"] == ArtifactStatus.BLOCKED
-    state = BuildState.load(config.state_file_path())
-    generate = AsyncMock(return_value=REQ)
-    monkeypatch.setattr("build_pipeline.llm_steps.spec_steps.generate_artifact", generate)
-    await owner._generate_requirements(cm, config.change_dir, config, state)
-    generate.assert_awaited_once()
-    assert generate.await_args.args[1]["capability_name"] == "two"
-    assert (config.change_dir / "requirements/one.md").read_bytes() == first
-    assert cm.artifact_status(config.change_dir)["requirements"] == ArtifactStatus.DONE
-
-
-@pytest.mark.asyncio
-async def test_invalid_replacement_leaves_prior_capability_file_intact(plan, monkeypatch):
-    config, cm, state = plan
-    path = config.change_dir / "requirements/one.md"
-    path.parent.mkdir(exist_ok=True)
-    path.write_text(REQ)
-    state.spec_gen.stale_artifacts = ["requirements"]
-    monkeypatch.setattr("build_pipeline.llm_steps.spec_steps.generate_artifact", AsyncMock(return_value="# unfinished"))
-    with pytest.raises(ValueError, match="Invalid requirements"):
-        await owner._generate_requirements(cm, config.change_dir, config, state)
-    assert path.read_text() == REQ
-
-
-@pytest.mark.asyncio
-async def test_capability_revision_invalidates_tasks_and_reviews(plan, monkeypatch):
-    config, cm, state = plan
-    generate = AsyncMock(return_value=REQ)
-    monkeypatch.setattr("build_pipeline.llm_steps.spec_steps.generate_artifact", generate)
-    await owner._generate_requirements(cm, config.change_dir, config, state)
+    (config.change_dir / "requirements").mkdir(exist_ok=True)
+    for cap in ("one", "two"):
+        (config.change_dir / f"requirements/{cap}.md").write_text(REQ)
     owner.reconcile_plan(config, state)
     state.spec_gen.record_step("plan_review", "passed")
-    (config.change_dir / "proposal.md").write_text("## Capabilities\n- `one`\n- `three`\n")
+    assert state.spec_gen.stale_artifacts == []
+    (config.change_dir / "proposal.md").write_text("## Capabilities\n- `one`\n")
     owner.reconcile_plan(config, state)
-    assert "tasks" in state.spec_gen.stale_artifacts
+    assert set(state.spec_gen.stale_artifacts) == {"design", "unknowns", "tasks", "rubric"}
     assert not state.spec_gen.step_passed("plan_review")
-    await owner._generate_requirements(cm, config.change_dir, config, state)
-    assert state.spec_gen.expected_capabilities == ["one", "three"]
-    assert (config.change_dir / "requirements/three.md").is_file()
+    assert (config.change_dir / "requirements/two.md").read_text() == REQ
+    assert not (config.change_dir / "superseded-requirements").exists()
+
+
+def test_a_use_cases_edit_marks_only_tasks_and_rubric_stale(plan):
+    config, cm, state = plan
+    (config.change_dir / "requirements").mkdir(exist_ok=True)
+    for cap in ("one", "two"):
+        (config.change_dir / f"requirements/{cap}.md").write_text(REQ)
+    owner.reconcile_plan(config, state)
+    (config.change_dir / "use-cases.md").write_text("# Use cases\nRead two values")
+    owner.reconcile_plan(config, state)
+    assert set(state.spec_gen.stale_artifacts) == {"tasks", "rubric"}
 
 
 @pytest.mark.asyncio
@@ -136,7 +118,9 @@ def test_future_checkpoint_fails_without_rewriting(plan):
 
 @pytest.mark.asyncio
 async def test_spec_generation_and_resume_admit_no_call_after_cap(plan, monkeypatch):
+    from tests.spec_fixtures import ready_specs
     config, _, state = plan
+    ready_specs(config.change_dir)
     config.budget_max_usd = .1
     usage = SimpleNamespace(cost_usd=.2, input_tokens=20, output_tokens=2, cache_read_tokens=0, cache_creation_tokens=0)
     provider = AsyncMock(return_value=SimpleNamespace(text="answer", usage=usage))
@@ -155,7 +139,9 @@ async def test_spec_generation_and_resume_admit_no_call_after_cap(plan, monkeypa
 @pytest.mark.asyncio
 async def test_cancelled_standalone_planning_persists_partial_usage(plan, monkeypatch):
     import asyncio
+    from tests.spec_fixtures import ready_specs
     config, _, _ = plan
+    ready_specs(config.change_dir)
     cancelled = asyncio.CancelledError()
     cancelled.partial = SimpleNamespace(usage=SimpleNamespace(cost_usd=.3, input_tokens=30))
     monkeypatch.setattr(sdk, "run_agent", AsyncMock(side_effect=cancelled))
@@ -285,7 +271,6 @@ async def test_repaired_unknowns_keep_their_accepted_evidence_on_resume(plan, mo
     for cap in ('one', 'two'):
         (config.change_dir / f'requirements/{cap}.md').write_text(REQ)
     owner.reconcile_plan(config, state)
-    state.spec_gen.record_step('prototype', 'skipped', 'no UI')
     monkeypatch.setattr('build_pipeline.llm_steps.spec_steps.generate_artifact', AsyncMock(side_effect=[
         '# New design', '## 1. Values\nReturn two']))
     monkeypatch.setattr('build_pipeline.llm_steps.spec_steps.run_tasks_audit', AsyncMock(return_value=[]))
@@ -294,24 +279,12 @@ async def test_repaired_unknowns_keep_their_accepted_evidence_on_resume(plan, mo
     await owner.rewrite_plan(config, state, 'repair', design=True)
     saved = BuildState.load(config.state_file_path())
     assert saved.spec_gen.step_passed('explainers')
-    assert saved.spec_gen.step_passed('prototype')
     unknowns = (config.change_dir / 'unknowns.md').read_bytes()
     provider = AsyncMock(side_effect=AssertionError('unchanged resume must not call a model'))
     monkeypatch.setattr('build_pipeline.llm_steps.spec_steps.generate_artifact', provider)
     await owner._generate_all_artifacts(cm, config.change_dir, config, saved)
     assert (config.change_dir / 'unknowns.md').read_bytes() == unknowns
     provider.assert_not_awaited()
-
-
-def test_proposal_edit_invalidates_preimplementation_prototype_skip(plan):
-    from build_pipeline.orchestrator import _prototype_finished
-    config, _, state = plan
-    owner.reconcile_plan(config, state)
-    state.spec_gen.record_step('prototype', 'skipped', 'no UI')
-    assert _prototype_finished(state)
-    (config.change_dir / 'proposal.md').write_text('## Capabilities\n- `one`\n- `two`\n## UI\nAdd a dashboard')
-    owner.reconcile_plan(config, state)
-    assert not _prototype_finished(state)
 
 
 @pytest.mark.asyncio
@@ -372,7 +345,7 @@ def test_number_findings_gives_each_step_its_own_ids_and_text():
     assert (numbered[1]['severity'], numbered[1]['category']) == ('?', '')
     assert 'finding_id' not in found[0]
     assert [owner.number_findings(step, found[:1])[0]['finding_id'] for step in
-            ('tasks_audit', 'plan_review', 'prototype')] == ['TA-F1', 'PR-F1', 'PT-F1']
+            ('tasks_audit', 'plan_review')] == ['TA-F1', 'PR-F1']
 
 
 LISTED = [{'finding_id': f'DA-F{n}', 'severity': 'major', 'category': 'coverage', 'text': f'gap {n}'}
@@ -623,7 +596,7 @@ async def _reference_run(plan_dir, monkeypatch, stage):
                         'tasks.md': '## 1. Values\nReturn values', 'unknowns.md': '# Unknowns\nNone',
                         'rubric.md': '# Rubric\nCheck values'}.items():
         (root / name).write_text(value)
-    state = BuildState(change_name=config.change_name, mode='only', tier='advanced', spec_gen=SpecGenState(),
+    state = BuildState(change_name=config.change_name, tier='advanced', spec_gen=SpecGenState(),
                        state_file=str(config.state_file_path()))
     config, cm, state = _ready((config, cm, state))
     run, _ = _install(monkeypatch, stage, [_first(stage, ('critical', 'FIRST-GAP')), _recheck(stage, 'resolved')])
@@ -863,61 +836,3 @@ async def test_S10_an_old_mid_rewrite_checkpoint_rechecks_as_a_first_audit(plan,
     step = BuildState.load(config.state_file_path()).spec_gen.steps[stage]
     assert 'MAJOR-GAP' in step.blocking_findings
     assert step.blocked_revision == saved.spec_gen.step_revision(stage)
-
-
-def _prototype(plan, monkeypatch):
-    from build_pipeline import orchestrator
-    from build_pipeline.llm_steps import prototype_steps
-    from build_pipeline.models import GateResult
-    config, cm, state = _ready(plan)
-    config.prototype_dir.mkdir(parents=True, exist_ok=True)
-    (config.prototype_dir / 'NOTES.md').write_text(
-        'PROVES: one page\nDISPROVES: PROTO-GAP the total needs the tax rate\nOPEN_QUESTIONS: none\nSTATUS: DONE\n')
-    monkeypatch.setattr(orchestrator, 'prototype_decision', lambda config: (True, 'ui'))
-    agent = AsyncMock(return_value=GateResult(passed=True, reason="built"))
-    monkeypatch.setattr(prototype_steps, 'run_prototype', agent)
-    monkeypatch.setattr('build_pipeline.llm_steps.spec_steps.run_tasks_audit', AsyncMock(return_value=[]))
-    progress = Mock()
-
-    async def run(state):
-        await orchestrator._run_prototype_phase(config, state, progress, config.state_file_path())
-    return config, state, run, agent
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize('stop', ['before_publish', 'after_publish'])
-async def test_S11_a_stopped_prototype_rewrite_is_never_repeated(plan, monkeypatch, stop):
-    """S11: stopped after `admit_repair("prototype")`. Before the publication,
-    the resume re-runs the prototype agent but makes no second rewrite and
-    blocks on the saved findings. After it, the step records passed."""
-    config, state, run, agent = _prototype(plan, monkeypatch)
-    writer = _writer(monkeypatch)
-    kill = _Kill(config)
-    if stop == 'before_publish':
-        monkeypatch.setattr(owner, 'rewrite_plan', kill.die)
-    else:
-        original = owner.rewrite_plan
-        async def publish_then_die(*a, **kw):
-            await original(*a, **kw)
-            kill.die()
-        monkeypatch.setattr(owner, 'rewrite_plan', publish_then_die)
-    with pytest.raises(Killed):
-        await run(state)
-    kill.restore()
-    saved = BuildState.load(config.state_file_path())
-    assert saved.spec_gen.repair_attempts('prototype') == 1
-    _no_rewrite(monkeypatch)
-    files = _plan_files(config)
-    if stop == 'before_publish':
-        with pytest.raises(owner.PlanBlocked):
-            await run(saved)
-        assert agent.await_count == 2
-        step = BuildState.load(config.state_file_path()).spec_gen.steps['prototype']
-        assert 'PT-F1' in step.blocking_findings and 'PROTO-GAP' in step.blocking_findings
-        assert step.blocked_revision == saved.spec_gen.step_revision('prototype')
-    else:
-        await run(saved)
-        assert agent.await_count == 1
-        assert BuildState.load(config.state_file_path()).spec_gen.step_passed('prototype')
-        assert writer.await_count  # the stopped run published its rewrite
-    assert _plan_files(config) == files

@@ -58,7 +58,6 @@ def _config(tmp_path, yaml_text: str = "", **fields) -> BuildConfig:
 # What each step's call site passed as `model=` before model_for existed.
 TODAY = {step: (lambda c: c.model) for step in STEP_STAGES}
 TODAY.update({
-    "interview": lambda c: c.spec_model,
     "research": lambda c: c.spec_model,
     "review": lambda c: c.review_model or c.model,
     "plan_review": lambda c: c.plan_review_model or c.review_model,
@@ -93,8 +92,8 @@ class TestSessionDefaults:
     MULTIPLAI_MODEL moves every step's model; `models:` / `efforts:` move only
     the steps they name."""
 
-    def test_there_are_29_steps(self):
-        assert len(STEP_STAGES) == 29
+    def test_there_are_27_steps(self):
+        assert len(STEP_STAGES) == 27
 
     def test_every_step_follows_the_session(self, tmp_path, no_conf):
         with patch.dict(os.environ, SESSION):
@@ -180,7 +179,7 @@ class TestEffortPrecedence:
         conf = Path(os.environ["CLAUDE_MULTIPLAI_HOME"]) / "multiplai.conf"
         conf.write_text("[buildme.agent]\nEFFORT=max\n")
         config = _config(tmp_path)
-        assert config.effort_for("prototype") == "max"
+        assert config.effort_for("implementer") == "max"
         assert config.effort_for("rubric") is None
 
     def test_an_unknown_key_or_effort_is_dropped_with_a_warning(self, tmp_path, no_conf, caplog):
@@ -332,7 +331,7 @@ class TestTier:
         (tmp_path / "specs").mkdir()
         (tmp_path / "specs" / "config.yaml").write_text(
             f"tier: advanced\nmodels:\n  default: '{PI_SPEC}'\n")
-        args = argparse.Namespace(project_dir=str(tmp_path), mode="only", change="feat")
+        args = argparse.Namespace(project_dir=str(tmp_path), change="feat")
         config = BuildConfig.from_cli_args(args)
         assert (config.tier, config.model_name) == ("advanced", PI_SPEC)
 
@@ -357,16 +356,10 @@ CALL_SITES = {
         ("config.model_for('findings_triage')", ("findings_triage",)),
     ("llm_steps/docs_steps.py", "run_docs_update", "agent_call"):
         ("config.model_for('docs_update')", ("docs_update",)),
-    ("llm_steps/interview_steps.py", "ask_questions", "call"):
-        ("config.model_for('interview')", ("interview",)),
-    ("llm_steps/interview_steps.py", "answer_questions", "call"):
-        ("config.model_for('interview')", ("interview",)),
-    ("llm_steps/interview_steps.py", "decide_research", "call"):
-        ("config.model_for('research')", ("research",)),
     ("llm_steps/plan_review_steps.py", "run_plan_review", "agent_call_structured"):
         ("model", ("plan_review",)),  # model = config.model_for("plan_review")
-    ("llm_steps/prototype_steps.py", "run_prototype", "agent_call"):
-        ("config.model_for('prototype')", ("prototype",)),
+    ("llm_steps/research_steps.py", "decide_research", "call"):
+        ("config.model_for('research')", ("research",)),
     ("llm_steps/respec_steps.py", "run_respec_audit", "llm_call"):
         ("config.model_for('respec')", ("respec",)),
     ("llm_steps/review_steps.py", "run_code_review", "agent_call_structured"):
@@ -399,8 +392,6 @@ CALL_SITES = {
         ("model", ("integration_fix", "integration_fix_escalated")),
     ("rubric.py", "generate_rubric", "llm_call"):
         ("config.model_for('rubric')", ("rubric",)),
-    ("spec_generator.py", "_generate_use_cases", "llm_call"):
-        ("config.model_for('spec_artifact')", ("spec_artifact",)),
     ("tdd_engine.py", "_audit_test_quality", "llm_call_structured"):
         ("config.model_for('test_quality_audit')", ("test_quality_audit",)),
     ("tdd_engine.py", "_adjudicate_review_findings", "llm_call_structured"):

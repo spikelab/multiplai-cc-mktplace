@@ -8,19 +8,11 @@ from build_pipeline.orchestrator import _run_publish
 def _plan_fixture(config, state):
     """Coherent planning output for phase-wiring tests (planner tested separately)."""
     from build_pipeline.spec_generator import reconcile_plan
-    from build_pipeline.change_manager import ARTIFACT_DAG, expected_capabilities
+    from build_pipeline.change_manager import ARTIFACT_DAG
+    from tests.spec_fixtures import write_specs
     root = config.change_dir
-    root.mkdir(parents=True, exist_ok=True)
-    proposal = root / "proposal.md"
-    text = proposal.read_text() if proposal.exists() else "# Proposal"
-    if not expected_capabilities(text):
-        proposal.write_text(text + "\n## Capabilities\n- `fixture`\n")
-    for cap in expected_capabilities(proposal.read_text()):
-        path = root / "requirements" / f"{cap}.md"
-        path.parent.mkdir(exist_ok=True)
-        if not path.exists():
-            path.write_text("### Requirement: Behavior\n#### Scenario: Works\nWHEN invoked\nTHEN returns a value\n")
-    for name, text in {"design": "# Design", "use-cases": "# Use cases", "unknowns": "# Unknowns", "tasks": "## 1. Behavior\nReturn a value", "rubric": "# Rubric"}.items():
+    write_specs(root)
+    for name, text in {"design": "# Design", "unknowns": "# Unknowns", "tasks": "## 1. Behavior\nReturn a value", "rubric": "# Rubric"}.items():
         path = root / f"{name}.md"
         if not path.exists():
             path.write_text(text)

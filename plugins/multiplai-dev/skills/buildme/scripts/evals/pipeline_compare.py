@@ -15,7 +15,7 @@ import time
 
 HERE = Path(__file__).resolve().parent
 FIXTURES = HERE / "fixtures" / "tasks.json"
-VARIANTS = ("current", "candidate", "candidate+prototype", "candidate+plan-review", "candidate+mutation")
+VARIANTS = ("current", "candidate", "candidate+plan-review", "candidate+mutation")
 
 
 def command(argv, cwd, timeout=60):
@@ -149,14 +149,37 @@ def measure(task: dict, variant: str, repeat: int, root: Path, args) -> dict:
             "data_loss": not preserved_user_work(checkout)}
 
 
+def ready_specs(project: Path, change: str, instruction: str) -> None:
+    """The pm-spec handoff buildme builds from: a proposal, use cases and one
+    requirement stating the task's instruction, marked ready and committed."""
+    from multiplai_core.specs import mark_ready
+
+    change_dir = project / "specs" / "changes" / change
+    (change_dir / "requirements").mkdir(parents=True, exist_ok=True)
+    (change_dir / "proposal.md").write_text(
+        f"# {change}\n\n## Why\n{instruction}\n\n## Capabilities\n\n### New Capabilities\n- `{change}`\n")
+    (change_dir / "use-cases.md").write_text(
+        f"# Use cases\n\n## Personas\n- Developer: maintains this code\n\n## Use cases\n"
+        f"- Developer wants this so that: {instruction}\n")
+    (change_dir / "requirements" / f"{change}.md").write_text(
+        f"## ADDED Requirements\n\n### Requirement: Task\nThe system SHALL do this: {instruction}\n\n"
+        "#### Scenario: Done\n- **WHEN** the task's tests run\n- **THEN** they pass\n")
+    mark_ready(change_dir)
+    for argv in (["git", "add", "specs"], ["git", "commit", "-qm", f"specs: {change} ready"]):
+        result = command(argv, project)
+        if result.returncode:
+            raise RuntimeError(result.stderr)
+
+
 async def worker(args) -> int:
     sys.path.insert(0, str(HERE.parent))
     from build_pipeline import budget, orchestrator, spec_generator, tdd_engine
     from build_pipeline.config import BuildConfig, GitToggles
     from build_pipeline.state import BuildState
     task = json.loads(args.worker.read_text())
+    ready_specs(args.checkout / task.get("project", "."), "pilot", task["instruction"])
     config = BuildConfig(project_dir=args.checkout / task.get("project", "."), change_name="pilot",
-                         project_description=task["instruction"], mode="brief", auto=True,
+                         project_description=task["instruction"], auto=True,
                          skip_research=True, model=args.model, budget_max_usd=args.per_run_usd,
                          git=GitToggles(push=False, pr="none"))
     config.specs_dir = config.project_dir / "specs"
@@ -165,7 +188,6 @@ async def worker(args) -> int:
     # Evaluation-only composition of existing steps: identical implementation,
     # independent code review, recovery and final verification in both arms.
     if args.variant != "current":
-        config.prototype_mode = "true" if args.variant == "candidate+prototype" else "false"
         config.mutation.enabled = args.variant == "candidate+mutation"
         config.review_panel = []
         async def skip_refactor(*_args):
@@ -201,10 +223,10 @@ async def worker(args) -> int:
         raise AssertionError("Evaluation must never publish")
     orchestrator.git_ops.push_branch = no_publish
     run_args = argparse.Namespace(
-        mode="brief", change="pilot", project_dir=str(config.project_dir), auto=True,
-        spec_only=False, skip_research=True, no_epic_split=True,
-        force=False, accept_size=False, block=None, interview_summary=task["instruction"],
-        research_path="", context_files=[], session_id="")
+        change="pilot", project_dir=str(config.project_dir), auto=True,
+        spec_only=False, skip_research=True,
+        force=False, accept_size=False, block=None,
+        research_path="", session_id="")
     # Exercise one deterministic interruption at an atomic TDD checkpoint in
     # both arms. Resume goes through the same public entry, with saved spend.
     original_create_worktree = orchestrator.git_ops.create_worktree

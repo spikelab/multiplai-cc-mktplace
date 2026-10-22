@@ -254,7 +254,7 @@ class TestNoCommit:
         (project / "node_modules" / "m" / "index.js").write_text("module.exports = 1\n")
         subprocess.run(["git", "init", "-q"], cwd=project, check=True)
         config = _config(project)
-        state = BuildState(change_name="feat", mode="scratch", tier="advanced")
+        state = BuildState(change_name="feat", tier="advanced")
         call = AsyncMock()
         progress = ProgressWriter(tmp_path / "p.md")
         with patch("build_pipeline.llm_steps.spec_steps._codebase_analysis_call", call):
@@ -279,7 +279,7 @@ class TestGreenfield:
         project = _repo(tmp_path / "green", {"README.md": "# new\n"})
         config = _config(project)
         call = AsyncMock()
-        state = BuildState(change_name="feat", mode="scratch", tier="advanced")
+        state = BuildState(change_name="feat", tier="advanced")
         with patch("build_pipeline.llm_steps.spec_steps._codebase_analysis_call", call):
             await _run_codebase_analysis_phase(config, state, ProgressWriter(tmp_path / "p.md"))
         call.assert_not_awaited()
@@ -293,7 +293,7 @@ class TestGreenfield:
         from build_pipeline.state import BuildState
 
         config = _config(project)
-        state = BuildState(change_name="feat", mode="scratch", tier="advanced")
+        state = BuildState(change_name="feat", tier="advanced")
         with patch("build_pipeline.llm_steps.spec_steps._codebase_analysis_call",
                    AsyncMock(side_effect=lambda prompt, schema, **kw: _answer_for(prompt))):
             await _run_codebase_analysis_phase(config, state, ProgressWriter(tmp_path / "p.md"))

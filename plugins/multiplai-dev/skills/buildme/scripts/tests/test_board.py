@@ -161,7 +161,7 @@ def _config(tmp_path: Path, change: str = "card-change") -> BuildConfig:
 
 def _state(config: BuildConfig, **over) -> BuildState:
     base = dict(
-        change_name=config.change_name, mode="scratch", tier="advanced",
+        change_name=config.change_name, tier="advanced",
         state_file=str(config.state_file_path()),
     )
     base.update(over)
@@ -401,9 +401,8 @@ class TestRecordFailure:
 
 def _args(project_dir: Path, change: str, **over) -> argparse.Namespace:
     base = dict(
-        mode="scratch", change=change, project_dir=str(project_dir), auto=True,
-        spec_only=False, skip_research=True, interview_summary="an idea",
-        research_path="", context_files=[], session_id="", block=None,
+        change=change, project_dir=str(project_dir), auto=True,
+        spec_only=False, skip_research=True, research_path="", session_id="", block=None,
     )
     base.update(over)
     return argparse.Namespace(**base)
@@ -514,7 +513,7 @@ class TestFullRunBoardTrail:
         self, tmp_path, monkeypatch, capsys,
     ):
         """A worktree preflight refusal fails BEFORE the first checkpoint and
-        before config is re-bound — the failure path must not create
+        before config is re-bound — the failure path must not write into
         specs/changes/<name>/ (or any card) in the caller's source repo."""
         from build_pipeline.orchestrator import run_orchestrator
 
@@ -530,10 +529,15 @@ class TestFullRunBoardTrail:
                 git_ops.GitLifecycleError("uncommitted changes — refusing")
             ),
         )
+        from tests.spec_fixtures import ready_specs
+        change_dir = repo / "specs" / "changes" / "refused"
+        ready_specs(change_dir, repo)
+        before = sorted(p.name for p in change_dir.iterdir())
         rc = await run_orchestrator(config, _args(repo, "refused"))
 
         assert rc == 1
-        assert not (repo / "specs").exists(), "no specs/ junk in the source repo"
+        assert sorted(p.name for p in change_dir.iterdir()) == before, \
+            "nothing added to the ready change dir in the source repo"
         assert "BOARD:" not in capsys.readouterr().out
 
     @pytest.mark.asyncio

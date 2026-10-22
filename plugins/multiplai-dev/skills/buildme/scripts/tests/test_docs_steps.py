@@ -25,7 +25,7 @@ def make_config(tmp_path, change_name="docs-change"):
 
 
 def make_state():
-    return BuildState(change_name="docs-change", mode="only", tier="advanced")
+    return BuildState(change_name="docs-change", tier="advanced")
 
 
 class TestRunDocsUpdate:

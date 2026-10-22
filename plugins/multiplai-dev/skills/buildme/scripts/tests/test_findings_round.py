@@ -101,7 +101,7 @@ def _make_built(base: Path, subdir: str = "") -> tuple[Path, Path, BuildConfig]:
     _git(root, "add", "-A")
     _git(root, "commit", "-qm", "impl(block-1): Add")
     config = BuildConfig(
-        project_dir=repo, change_name="calc", tier="advanced", mode="only",
+        project_dir=repo, change_name="calc", tier="advanced",
         test_command="true", config_dir=base / "config",
         core_memory_files=[], stack_memory_files=[], additional_memory_files=[],
     )

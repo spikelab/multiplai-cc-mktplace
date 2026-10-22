@@ -58,7 +58,7 @@ def _config(project: Path, *, branch: str | None = "buildme/c", **kw) -> BuildCo
 
 
 def _state(config: BuildConfig) -> BuildState:
-    state = BuildState(change_name="c", mode="scratch", tier="advanced", phase=BuildPhase.RESEARCH,
+    state = BuildState(change_name="c", tier="advanced", phase=BuildPhase.RESEARCH,
                        bootstrap_done=True, state_file=str(config.state_file_path()))
     state.checkpoint(config.state_file_path())
     return state
@@ -210,10 +210,6 @@ class TestSkips:
                    for r in caplog.records)
         assert state.spec_gen is None or state.spec_gen.spec_extract_sha is None
 
-    def test_only_mode(self, tmp_path, monkeypatch, caplog):
-        config = _config(_repo(tmp_path / "p"), mode="only")
-        self._skipped(config, _state(config), tmp_path, monkeypatch, caplog, "only-mode")
-
     def test_switched_off(self, tmp_path, monkeypatch, caplog):
         config = _config(_repo(tmp_path / "p"), spec_extract=False)
         self._skipped(config, _state(config), tmp_path, monkeypatch, caplog, "spec_extract-false")
@@ -323,7 +319,7 @@ class TestInTheBlock:
         from unittest.mock import AsyncMock, patch
 
         project = _repo(tmp_path / "p")
-        config = BuildConfig(project_dir=project, change_name="c", mode="scratch", auto=True,
+        config = BuildConfig(project_dir=project, change_name="c", auto=True,
                              spec_only=True, skip_research=True, git=GitToggles(worktree=False))
         config.specs_dir = project / "specs"
         config.prototype_mode = "false"
@@ -332,9 +328,8 @@ class TestInTheBlock:
         cm.create_change("c")
         (config.change_dir / "proposal.md").write_text("## Why\nA thing.\n")
         _state(config)
-        args = argparse.Namespace(mode="scratch", change="c", project_dir=str(project), auto=True,
-                                  spec_only=True, skip_research=True, interview_summary="",
-                                  research_path="", context_files=[], session_id="")
+        args = argparse.Namespace(change="c", project_dir=str(project), auto=True,
+                                  spec_only=True, skip_research=True, research_path="", session_id="")
         monkeypatch.setattr(git_ops, "_run_spec_extract_skill", fake)
         with patch("build_pipeline.llm_steps.spec_steps.run_codebase_analysis",
                    AsyncMock(return_value="## Architecture\nx")), \
@@ -828,7 +823,7 @@ class TestSiblingsOpenTheirPrsAgainstMain:
             config.specs_dir = project / "specs"
             config.base_ref = registry
             config.epic_child = marked_by == "flag"
-            state = BuildState(change_name=config.change_name, mode="brief", tier="advanced",
+            state = BuildState(change_name=config.change_name, tier="advanced",
                                state_file=str(config.state_file_path()))
             asyncio.run(orchestrator._run_bootstrap(config, state, ChangeManager(config.specs_dir),
                                                     config.state_file_path()))
@@ -851,7 +846,7 @@ class TestTheAnalysisIsNotPaidTwice:
 
     def _setup(self, tmp_path):
         project = _repo(tmp_path / "p")
-        config = BuildConfig(project_dir=project, change_name="c", mode="scratch", auto=True,
+        config = BuildConfig(project_dir=project, change_name="c", auto=True,
                              spec_only=True, skip_research=True, git=GitToggles(worktree=False))
         config.specs_dir = project / "specs"
         config.prototype_mode = "false"
@@ -860,9 +855,8 @@ class TestTheAnalysisIsNotPaidTwice:
         cm.create_change("c")
         (config.change_dir / "proposal.md").write_text("## Why\nA thing.\n")
         _state(config)
-        args = argparse.Namespace(mode="scratch", change="c", project_dir=str(project), auto=True,
-                                  spec_only=True, skip_research=True, interview_summary="",
-                                  research_path="", context_files=[], session_id="")
+        args = argparse.Namespace(change="c", project_dir=str(project), auto=True,
+                                  spec_only=True, skip_research=True, research_path="", session_id="")
         return config, args
 
     def _runs(self, config, args, monkeypatch, analysis, *steps, runs: int = 1) -> list:

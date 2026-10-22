@@ -978,7 +978,6 @@ class TestRunBlockTDD:
         block = BlockInfo(number=1, name="Block1", description="Test block")
         state = BuildState(
             change_name="test",
-            mode="only",
             tier="advanced",
             state_file=str(tmp_path / "state.json"),
             tdd=TDDState(blocks=[block]),
@@ -1223,7 +1222,7 @@ class TestBlockRefactorVerification:
 
         block = BlockInfo(number=1, name="Block1", description="Test block")
         state = BuildState(
-            change_name="test", mode="only", tier="advanced",
+            change_name="test", tier="advanced",
             state_file=str(tmp_path / "state.json"),
             tdd=TDDState(blocks=[block]),
         )
@@ -1457,7 +1456,7 @@ class TestRedGateWiring:
 
         block = BlockInfo(number=1, name="Block1", description="Test block")
         state = BuildState(
-            change_name="test", mode="only", tier="advanced",
+            change_name="test", tier="advanced",
             state_file=str(tmp_path / "state.json"),
             tdd=TDDState(blocks=[block]),
         )
@@ -1585,7 +1584,7 @@ class TestNarrowTestCommandInTheBlockLoop:
         config.specs_dir = project_dir / "specs"
         block = BlockInfo(number=1, name="Block1", description="Test block")
         state = BuildState(
-            change_name="test", mode="only", tier="advanced",
+            change_name="test", tier="advanced",
             state_file=str(tmp_path / "state.json"),
             tdd=TDDState(blocks=[block]),
         )
@@ -1875,7 +1874,7 @@ class TestEvidenceBasedReview:
         baseline = self._init_repo(config.project_dir)
         (config.project_dir / "fresh.py").write_text("FRESH = 1\n")
         block = BlockInfo(number=1, name="B", description="d", baseline_commit=baseline)
-        state = BuildState(change_name="feat", mode="only", tier="advanced",
+        state = BuildState(change_name="feat", tier="advanced",
                            tdd=TDDState(blocks=[block]))
         diff = capture_build_diff(config, state)
         assert "fresh.py" in diff and "+FRESH = 1" in diff
@@ -1907,7 +1906,7 @@ class TestEvidenceBasedReview:
 
         block = BlockInfo(number=1, name="B", description="d")
         state = BuildState(
-            change_name="feat", mode="only", tier="advanced",
+            change_name="feat", tier="advanced",
             state_file=str(tmp_path / "state.json"),
             tdd=TDDState(blocks=[block]),
         )
@@ -1934,7 +1933,7 @@ class TestEvidenceBasedReview:
 
         block = BlockInfo(number=1, name="B", description="d")
         state = BuildState(
-            change_name="feat", mode="only", tier="advanced",
+            change_name="feat", tier="advanced",
             state_file=str(tmp_path / "state.json"),
             tdd=TDDState(blocks=[block]),
         )
@@ -1988,7 +1987,7 @@ class TestEvidenceBasedReview:
         block = BlockInfo(number=1, name="B", description="d", status=resume_status)
         assert block.baseline_commit is None
         state = BuildState(
-            change_name="feat", mode="only", tier="advanced",
+            change_name="feat", tier="advanced",
             state_file=str(tmp_path / "state.json"),
             tdd=TDDState(blocks=[block]),
         )
@@ -2017,7 +2016,7 @@ class TestEvidenceBasedReview:
 
         block = BlockInfo(number=1, name="B", description="d", status=BlockStatus.TESTING)
         state = BuildState(
-            change_name="feat", mode="only", tier="advanced",
+            change_name="feat", tier="advanced",
             state_file=str(tmp_path / "state.json"),
             tdd=TDDState(blocks=[block]),
         )
@@ -2058,7 +2057,6 @@ def tdd_setup(tmp_path):
         change_name="feat",
         tier="advanced",
         test_command="true",  # always passes
-        mode="only",
         config_dir=tmp_path / "config",
         core_memory_files=[],
         stack_memory_files=[],
@@ -2088,7 +2086,6 @@ class TestRunTDDEngineEntryPoint:
         config = BuildConfig(
             project_dir=project_dir,
             change_name="empty",
-            mode="only",
             tier="advanced",
             config_dir=tmp_path / "config",
             core_memory_files=[],
@@ -2199,7 +2196,7 @@ class TestWeakTestEnforcement:
 
         block = BlockInfo(number=1, name="Block1", description="Test block")
         state = BuildState(
-            change_name="test", mode="only", tier="advanced",
+            change_name="test", tier="advanced",
             state_file=str(tmp_path / "state.json"),
             tdd=TDDState(blocks=[block]),
         )
@@ -2318,7 +2315,7 @@ class TestReviewExhaustionEnforcement:
         block = BlockInfo(number=1, name="Block1", description="d",
                           status=BlockStatus.IMPLEMENTING)
         state = BuildState(
-            change_name="test", mode="only", tier="advanced",
+            change_name="test", tier="advanced",
             state_file=str(tmp_path / "state.json"),
             tdd=TDDState(blocks=[block]),
         )
@@ -2532,7 +2529,7 @@ class TestIntegrationFixCircuitBreaker:
         block = BlockInfo(number=1, name="Block1", description="d",
                           status=BlockStatus.IMPLEMENTING)
         state = BuildState(
-            change_name="test", mode="only", tier="advanced",
+            change_name="test", tier="advanced",
             state_file=str(tmp_path / "state.json"),
             tdd=TDDState(blocks=[block]),
         )
@@ -2677,7 +2674,7 @@ class TestAgentStatusEnforcement:
 
         block = BlockInfo(number=1, name="Block1", description="Test block")
         state = BuildState(
-            change_name="test", mode="only", tier="advanced",
+            change_name="test", tier="advanced",
             state_file=str(tmp_path / "state.json"),
             tdd=TDDState(blocks=[block]),
         )
@@ -2899,7 +2896,7 @@ class TestEnforceTestIntegrity:
         block = BlockInfo(number=1, name="B", description="d")
         block.test_file_hashes = before
         block.implementer_report = report
-        state = BuildState(change_name="c", mode="scratch", tier="standard",
+        state = BuildState(change_name="c", tier="standard",
                            tdd=TDDState(blocks=[block]))
         return config, block, state
 
@@ -3086,7 +3083,7 @@ class TestWholeChangeRefactor:
         block = BlockInfo(number=1, name="B", description="d",
                           baseline_commit=baseline, status=BlockStatus.DONE)
         state = BuildState(
-            change_name="feat", mode="only", tier="advanced",
+            change_name="feat", tier="advanced",
             state_file=str(config.state_file_path()),
             tdd=TDDState(blocks=[block], current_block=1),
         )
@@ -3585,7 +3582,7 @@ class TestImplementationNotesLoop:
 
         block = BlockInfo(number=1, name="Uploader", description="Upload block")
         state = BuildState(
-            change_name="test", mode="only", tier="advanced",
+            change_name="test", tier="advanced",
             state_file=str(tmp_path / "state.json"),
             tdd=TDDState(blocks=[block]),
         )
@@ -3851,7 +3848,7 @@ def test_nested_review_diffs_have_project_relative_headers(tmp_path):
     (tmp_path / 'sibling.txt').write_text('sibling secret\n')
     config = BuildConfig(project_dir=project)
     block = BlockInfo(number=1, name='nested', description='change value')
-    state = BuildState(change_name='nested', mode='only', tier='standard', tdd=TDDState(blocks=[block]))
+    state = BuildState(change_name='nested', tier='standard', tdd=TDDState(blocks=[block]))
     for diff in (_capture_block_diff(config, block), capture_build_diff(config, state)):
         assert '--- a/app.py' in diff
         assert '+++ b/app.py' in diff
@@ -3906,7 +3903,7 @@ class TestRedExpected:
                              core_memory_files=[], stack_memory_files=[], additional_memory_files=[])
         config.specs_dir = project / "specs"
         block = BlockInfo(number=1, name="Add", description="Add two numbers.")
-        state = BuildState(change_name="test", mode="only", tier="advanced",
+        state = BuildState(change_name="test", tier="advanced",
                            state_file=str(root / "state.json"), tdd=TDDState(blocks=[block]))
         progress = ProgressWriter(root / "progress.md")
         progress.initialize("test", "advanced", 1)

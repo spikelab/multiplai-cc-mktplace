@@ -1,4 +1,4 @@
-"""Tests for the build orchestrator — mode detection, phase sequencing."""
+"""Tests for the build orchestrator — phase sequencing."""
 
 import argparse
 import subprocess
@@ -17,17 +17,6 @@ from build_pipeline.progress import ProgressWriter
 from build_pipeline.state import BuildState
 from build_pipeline.models import BuildPhase
 from build_pipeline.change_manager import ChangeManager
-
-
-@pytest.fixture(autouse=True)
-def _epic_split_is_one_change(monkeypatch):
-    """Every build here is one change: EPIC_SPLIT's model call answers `single: true`."""
-    from unittest.mock import AsyncMock
-
-    from build_pipeline.epic import split as epic_split
-
-    answer = epic_split.EpicSplitAnswer(single=True, reason="one change")
-    monkeypatch.setattr(epic_split, "epic_split", AsyncMock(return_value=answer))
 
 
 @pytest.fixture(autouse=True)
@@ -114,7 +103,7 @@ class TestBootstrap:
         )
         config.specs_dir = tmp_path / "specs"
         state = BuildState(
-            change_name="test-change", mode="scratch", tier="advanced",
+            change_name="test-change", tier="advanced",
             state_file=str(tmp_path / "state.json"),
         )
         cm = ChangeManager(config.specs_dir)
@@ -127,20 +116,6 @@ class TestBootstrap:
         assert (tmp_path / "specs" / "changes" / "test-change").exists()
         assert state.bootstrap_done
         assert state.phase == BuildPhase.BOOTSTRAP
-
-
-class TestModeDetection:
-    def test_scratch_mode(self):
-        config = BuildConfig(mode="scratch")
-        assert config.mode == "scratch"
-
-    def test_brief_mode(self):
-        config = BuildConfig(mode="brief")
-        assert config.mode == "brief"
-
-    def test_only_mode(self):
-        config = BuildConfig(mode="only")
-        assert config.mode == "only"
 
 
 class TestArchivePhase:
@@ -171,7 +146,6 @@ class TestArchivePhase:
         # Create a state file showing TDD_BUILD complete
         state = BuildState(
             change_name="test-archive",
-            mode="scratch",
             tier="advanced",
             phase=BuildPhase.COMPLETE,
             state_file=str(config.state_file_path()),
@@ -182,15 +156,12 @@ class TestArchivePhase:
         # marks them complete via is_phase_complete, so we only need the
         # orchestrator to reach the final archive block.
         args = argparse.Namespace(
-            mode="only",
             change="test-archive",
             project_dir=str(tmp_path),
             auto=True,
             spec_only=False,
             skip_research=True,
-            interview_summary="",
             research_path="",
-            context_files=[],
             session_id="",
         )
 
@@ -224,7 +195,6 @@ class TestArchivePhase:
 
         state = BuildState(
             change_name="test-manual",
-            mode="scratch",
             tier="advanced",
             phase=BuildPhase.COMPLETE,
             state_file=str(config.state_file_path()),
@@ -232,15 +202,12 @@ class TestArchivePhase:
         state.checkpoint(config.state_file_path())
 
         args = argparse.Namespace(
-            mode="only",
             change="test-manual",
             project_dir=str(tmp_path),
             auto=False,
             spec_only=False,
             skip_research=True,
-            interview_summary="",
             research_path="",
-            context_files=[],
             session_id="",
         )
 
@@ -259,15 +226,12 @@ class TestCodebaseAnalysisPhase:
 
     def _args(self, tmp_path, change):
         return argparse.Namespace(
-            mode="scratch",
             change=change,
             project_dir=str(tmp_path),
             auto=True,
             spec_only=True,
             skip_research=True,
-            interview_summary="",
             research_path="",
-            context_files=[],
             session_id="",
         )
 
@@ -275,12 +239,11 @@ class TestCodebaseAnalysisPhase:
         from build_pipeline.config import GitToggles
 
         config = BuildConfig(
-            project_dir=tmp_path, change_name=change, mode="scratch",
+            project_dir=tmp_path, change_name=change,
             auto=True, spec_only=True, skip_research=True,
             git=GitToggles(worktree=False),
         )
         config.specs_dir = tmp_path / "specs"
-        config.prototype_mode = "false"
         cm = ChangeManager(config.specs_dir)
         cm.init_specs()
         cm.create_change(change)
@@ -288,7 +251,7 @@ class TestCodebaseAnalysisPhase:
         if with_source:
             (tmp_path / "app.py").write_text("def main():\n    return 1\n")
         state = BuildState(
-            change_name=change, mode="scratch", tier="advanced",
+            change_name=change, tier="advanced",
             phase=phase, bootstrap_done=True,
             state_file=str(config.state_file_path()),
         )
@@ -417,23 +380,6 @@ class TestCodebaseAnalysisPhase:
             assert await run_orchestrator(config, self._args(tmp_path, "resumed")) == 0
         mock_analysis.assert_not_awaited()
 
-    @pytest.mark.asyncio
-    async def test_only_mode_skips_the_phase(self, tmp_path, caplog):
-        """`only` mode generates no specs, so there is nothing to ground."""
-        from unittest.mock import AsyncMock
-
-        config = self._config(tmp_path, "only-mode")
-        config.mode = "only"
-        args = self._args(tmp_path, "only-mode")
-        args.mode = "only"
-        mock_analysis = AsyncMock()
-        p1, p2, p3 = self._patches(mock_analysis)
-        with caplog.at_level("INFO"), p1, p2, p3:
-            assert await run_orchestrator(config, args) == 0
-        mock_analysis.assert_not_awaited()
-        assert any("only-mode-generates-no-specs" in r.getMessage() for r in caplog.records)
-
-
 class TestReviewCheckpointPaths:
     """The non-`--auto` review checkpoint prints what the reviewer must read,
     in order — the codebase analysis explains what the design was written
@@ -465,271 +411,6 @@ class TestReviewCheckpointPaths:
         assert "CODEBASE_ANALYSIS" not in capsys.readouterr().out
 
 
-class TestPrototypePhase:
-    """Done-means #5 (orchestrator half): --no-prototype skips the phase and
-    logs the reason; an applicable change runs it."""
-
-    def _args(self, tmp_path, change):
-        import argparse
-        return argparse.Namespace(
-            mode="only",
-            change=change,
-            project_dir=str(tmp_path),
-            auto=True,
-            spec_only=True,
-            skip_research=True,
-            interview_summary="",
-            research_path="",
-            context_files=[],
-            session_id="",
-        )
-
-    def _config(self, tmp_path, change, prototype_mode, proposal):
-        config = BuildConfig(
-            project_dir=tmp_path, change_name=change, mode="only",
-            auto=True, spec_only=True, skip_research=True,
-        )
-        config.specs_dir = tmp_path / "specs"
-        config.prototype_mode = prototype_mode
-        cm = ChangeManager(config.specs_dir)
-        cm.init_specs()
-        cm.create_change(change)
-        (config.change_dir / "proposal.md").write_text(proposal)
-        (config.change_dir / "design.md").write_text("## Decisions\nNone.")
-        state = BuildState(
-            change_name=change, mode="only", tier="advanced",
-            phase=BuildPhase.DESIGN_AUDIT,
-            state_file=str(config.state_file_path()),
-        )
-        state.checkpoint(config.state_file_path())
-        return config
-
-    FRONTEND_PROPOSAL = (
-        "## Why\nUsers need a settings page.\n\n"
-        "## What Changes\nA React component renders the form in the browser "
-        "with CSS; the UI adds a button and a page layout in the DOM.\n"
-    )
-    BACKEND_PROPOSAL = (
-        "## Why\nThe queue drops jobs.\n\n"
-        "## What Changes\nAdd a retry column to the jobs database table, a "
-        "migration, and a celery worker calling the internal API endpoint.\n"
-    )
-
-    @pytest.mark.asyncio
-    async def test_no_prototype_skips_the_phase_and_logs_the_reason(
-        self, tmp_path, caplog, monkeypatch,
-    ):
-        from unittest.mock import AsyncMock, patch
-        from build_pipeline.orchestrator import run_orchestrator
-
-        config = self._config(tmp_path, "skip-proto", "false", self.FRONTEND_PROPOSAL)
-        mock_prototype = AsyncMock()
-        with caplog.at_level("INFO"), \
-                patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
-                      AsyncMock(return_value=[])), \
-                patch("build_pipeline.llm_steps.prototype_steps.run_prototype",
-                      mock_prototype):
-            result = await run_orchestrator(config, self._args(tmp_path, "skip-proto"))
-
-        assert result == 0
-        mock_prototype.assert_not_awaited()
-        assert not config.prototype_dir.exists()
-        skips = [r.getMessage() for r in caplog.records
-                 if "SKIP phase=PROTOTYPE" in r.getMessage()]
-        assert skips, "the skip must be logged with its reason"
-        assert "--no-prototype" in skips[0]
-
-    @pytest.mark.asyncio
-    async def test_applicable_change_runs_the_prototype_and_feedback(self, tmp_path):
-        from unittest.mock import AsyncMock, patch
-        from build_pipeline.models import GateResult
-        from build_pipeline.orchestrator import run_orchestrator
-
-        config = self._config(tmp_path, "run-proto", "auto", self.FRONTEND_PROPOSAL)
-        mock_prototype = AsyncMock(return_value=GateResult(passed=True, reason="ok"))
-        mock_feedback = AsyncMock(return_value=2)
-        with patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
-                   AsyncMock(return_value=[])), \
-                patch("build_pipeline.llm_steps.prototype_steps.run_prototype",
-                      mock_prototype), \
-                patch("build_pipeline.llm_steps.prototype_steps.apply_prototype_findings",
-                      mock_feedback):
-            result = await run_orchestrator(config, self._args(tmp_path, "run-proto"))
-
-        assert result == 0
-        assert mock_prototype.await_count == 1
-        assert mock_feedback.await_count == 1
-
-    @pytest.mark.asyncio
-    async def test_auto_mode_skips_plain_backend_change(self, tmp_path):
-        from unittest.mock import AsyncMock, patch
-        from build_pipeline.orchestrator import run_orchestrator
-
-        config = self._config(tmp_path, "auto-skip", "auto", self.BACKEND_PROPOSAL)
-        mock_prototype = AsyncMock()
-        with patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
-                   AsyncMock(return_value=[])), \
-                patch("build_pipeline.llm_steps.prototype_steps.run_prototype",
-                      mock_prototype):
-            result = await run_orchestrator(config, self._args(tmp_path, "auto-skip"))
-
-        assert result == 0
-        mock_prototype.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_resume_after_feedback_checkpoint_skips_the_rerun(self, tmp_path):
-        """A crash between the prototype_done checkpoint and
-        advance_to(PROTOTYPE) must not re-run the expensive agent on resume —
-        the artifact exists and its findings were already applied."""
-        from unittest.mock import AsyncMock, patch
-        from build_pipeline.orchestrator import run_orchestrator
-        from build_pipeline.state import SpecGenState
-
-        config = self._config(tmp_path, "resume-proto", "true", self.FRONTEND_PROPOSAL)
-        state = BuildState.load(config.state_file_path())
-        _plan_fixture(config, state)
-        state.spec_gen.record_step("prototype", "passed")
-        state.checkpoint(config.state_file_path())
-
-        mock_prototype = AsyncMock()
-        mock_feedback = AsyncMock()
-        with patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
-                   AsyncMock(return_value=[])), \
-                patch("build_pipeline.llm_steps.prototype_steps.run_prototype",
-                      mock_prototype), \
-                patch("build_pipeline.llm_steps.prototype_steps.apply_prototype_findings",
-                      mock_feedback):
-            result = await run_orchestrator(config, self._args(tmp_path, "resume-proto"))
-
-        assert result == 0
-        mock_prototype.assert_not_awaited()
-        mock_feedback.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_design_audit_phase_regenerates_specs_on_critical_gaps(self, tmp_path):
-        """The orchestrator's DESIGN_AUDIT phase used to log its gaps and move
-        on. It now goes through run_design_audit_stage, so a critical gap
-        rewrites design.md and tasks.md once."""
-        from unittest.mock import AsyncMock, patch
-        from build_pipeline.orchestrator import run_orchestrator
-
-        config = self._config(tmp_path, "audit-loop", "false", self.BACKEND_PROPOSAL)
-        (config.change_dir / "tasks.md").write_text("## 1. Block v1")
-        gap = {
-            "category": "spec-task-alignment",
-            "severity": "critical",
-            "description": "Scenario 'retry exhausts' has no task block",
-            "suggestion": "Add a block for the exhausted-retry path",
-        }
-
-        with patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
-                   new_callable=AsyncMock) as mock_audit, \
-                patch("build_pipeline.llm_steps.spec_steps.generate_artifact",
-                      new_callable=AsyncMock) as mock_gen:
-            from build_pipeline.llm_steps.spec_steps import AuditFindings
-            from build_pipeline.models import PriorAssessment
-            mock_audit.side_effect = [[gap], AuditFindings([], [PriorAssessment(finding_id="DA-F1", status="resolved")])]
-            mock_gen.side_effect = ["## Decisions\nv2", "## 1. Block v2"]
-            result = await run_orchestrator(config, self._args(tmp_path, "audit-loop"))
-
-        assert result == 0
-        assert mock_gen.await_count == 2
-        assert [c.args[0] for c in mock_gen.call_args_list] == ["design", "tasks"]
-        assert "retry exhausts" in mock_gen.call_args_list[0].kwargs["audit_findings"]
-        # One report-only re-audit after the pass.
-        assert mock_audit.await_count == 2
-        assert (config.change_dir / "design.md").read_text() == "## Decisions\nv2"
-        assert (config.change_dir / "tasks.md").read_text() == "## 1. Block v2"
-
-    @pytest.mark.asyncio
-    async def test_prototype_failure_does_not_fail_the_build(self, tmp_path):
-        from unittest.mock import AsyncMock, patch
-        from build_pipeline.models import GateResult
-        from build_pipeline.orchestrator import run_orchestrator
-
-        config = self._config(tmp_path, "fail-proto", "true", self.FRONTEND_PROPOSAL)
-        with patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
-                   AsyncMock(return_value=[])), \
-                patch("build_pipeline.llm_steps.prototype_steps.run_prototype",
-                      AsyncMock(return_value=GateResult(
-                          passed=False, reason="no artifact file"))):
-            result = await run_orchestrator(config, self._args(tmp_path, "fail-proto"))
-
-        assert result == 1
-        progress = config.progress_file_path()
-        assert progress.exists()
-        assert "no artifact file" in progress.read_text()
-
-    @pytest.mark.asyncio
-    async def test_review_checkpoint_prints_file_url(self, tmp_path, capsys):
-        """Done-means 2.6: the container cannot serve the user's localhost, so
-        the review checkpoint hands over a file:// path on the shared mount."""
-        from unittest.mock import AsyncMock, patch
-        from build_pipeline.models import GateResult
-        from build_pipeline.orchestrator import run_orchestrator
-
-        config = self._config(tmp_path, "url-proto", "true", self.FRONTEND_PROPOSAL)
-        config.auto = False
-        config.spec_only = False
-        args = self._args(tmp_path, "url-proto")
-        args.auto = False
-        args.spec_only = False
-
-        async def _write_prototype(cfg):
-            cfg.prototype_dir.mkdir(parents=True, exist_ok=True)
-            (cfg.prototype_dir / "mockup.html").write_text("<html></html>")
-            (cfg.prototype_dir / "NOTES.md").write_text("PROVES: x\n")
-            return GateResult(passed=True, reason="ok")
-
-        with patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
-                   AsyncMock(return_value=[])), \
-                patch("build_pipeline.llm_steps.prototype_steps.run_prototype",
-                      AsyncMock(side_effect=_write_prototype)), \
-                patch("build_pipeline.llm_steps.prototype_steps.apply_prototype_findings",
-                      AsyncMock(return_value=0)), \
-                patch("build_pipeline.tdd_engine.run_tdd_engine",
-                      AsyncMock(return_value=0)):
-            result = await run_orchestrator(config, args)
-
-        assert result == 0
-        out = capsys.readouterr().out
-        assert f"PROTOTYPE:file://{config.prototype_dir.resolve()}/mockup.html" in out
-        assert "PROTOTYPE_NOTES:file://" in out
-
-
-class TestPrototypeDecision:
-    def test_flag_off_wins(self, tmp_path):
-        from build_pipeline.orchestrator import prototype_decision
-        config = BuildConfig(project_dir=tmp_path, change_name="c")
-        config.specs_dir = tmp_path / "specs"
-        config.prototype_mode = "false"
-        should, reason = prototype_decision(config)
-        assert should is False
-        assert "--no-prototype" in reason
-
-    def test_flag_on_wins_for_backend_change(self, tmp_path):
-        from build_pipeline.orchestrator import prototype_decision
-        config = BuildConfig(project_dir=tmp_path, change_name="c")
-        config.specs_dir = tmp_path / "specs"
-        config.prototype_mode = "true"
-        should, reason = prototype_decision(config)
-        assert should is True
-        assert "forced on" in reason
-
-    def test_auto_defers_to_the_applicability_rule(self, tmp_path):
-        from build_pipeline.orchestrator import prototype_decision
-        config = BuildConfig(project_dir=tmp_path, change_name="c")
-        config.specs_dir = tmp_path / "specs"
-        config.prototype_mode = "auto"
-        config.change_dir.mkdir(parents=True, exist_ok=True)
-        (config.change_dir / "proposal.md").write_text(
-            "A React UI component with CSS in the browser DOM page layout."
-        )
-        should, reason = prototype_decision(config)
-        assert should is True
-        assert reason.startswith("auto:")
-
-
 class TestSpecGenerationReloadOnlyMovesForward:
     """The orchestrator reloads the state run_spec_generator checkpointed. That
     copy can already sit at a LATER phase than SPEC_GENERATION, so the advance
@@ -740,7 +421,7 @@ class TestSpecGenerationReloadOnlyMovesForward:
     @staticmethod
     def _config(tmp_path):
         config = BuildConfig(
-            project_dir=tmp_path, change_name="reload", mode="scratch",
+            project_dir=tmp_path, change_name="reload",
             auto=True, spec_only=True, skip_research=True,
         )
         config.specs_dir = tmp_path / "specs"
@@ -751,7 +432,7 @@ class TestSpecGenerationReloadOnlyMovesForward:
         (config.change_dir / "design.md").write_text("## Decisions\nNone.")
         (config.change_dir / "tasks.md").write_text("## 1. Block")
         state = BuildState(
-            change_name="reload", mode="scratch", tier="advanced",
+            change_name="reload", tier="advanced",
             phase=BuildPhase.RESEARCH,
             state_file=str(config.state_file_path()),
         )
@@ -762,10 +443,9 @@ class TestSpecGenerationReloadOnlyMovesForward:
     def _args(tmp_path):
         import argparse
         return argparse.Namespace(
-            mode="scratch", change="reload", project_dir=str(tmp_path),
+            change="reload", project_dir=str(tmp_path),
             auto=True, spec_only=True, skip_research=True,
-            interview_summary="", research_path="", context_files=[],
-            session_id="",
+            research_path="", session_id="",
         )
 
     @pytest.mark.asyncio
@@ -835,7 +515,7 @@ class TestRespecPhaseWiring:
         project_dir = tmp_path / "project"
         project_dir.mkdir()
         config = BuildConfig(
-            project_dir=project_dir, change_name="feat", mode="only", auto=False,
+            project_dir=project_dir, change_name="feat", auto=False,
             config_dir=tmp_path / "config",
         )
         config.specs_dir = project_dir / "specs"
@@ -848,7 +528,7 @@ class TestRespecPhaseWiring:
              patch("build_pipeline.llm_steps.respec_steps.run_respec_audit",
                    new_callable=AsyncMock,
                    return_value=config.change_dir / "respec.md") as mock_respec:
-            rc = await run_orchestrator(config, Namespace(interview_summary=""))
+            rc = await run_orchestrator(config, Namespace())
 
         assert rc == 0
         mock_respec.assert_awaited_once()
@@ -862,7 +542,7 @@ class TestRespecPhaseWiring:
         project_dir = tmp_path / "project"
         project_dir.mkdir()
         config = BuildConfig(
-            project_dir=project_dir, change_name="feat", mode="only", auto=False,
+            project_dir=project_dir, change_name="feat", auto=False,
             config_dir=tmp_path / "config",
         )
         config.specs_dir = project_dir / "specs"
@@ -874,7 +554,7 @@ class TestRespecPhaseWiring:
                    new_callable=AsyncMock, return_value=[]), \
              patch("build_pipeline.llm_steps.respec_steps.run_respec_audit",
                    new_callable=AsyncMock, side_effect=RuntimeError("model down")):
-            rc = await run_orchestrator(config, Namespace(interview_summary=""))
+            rc = await run_orchestrator(config, Namespace())
 
         assert rc == 0
 
@@ -894,7 +574,7 @@ class TestTDDSubPhaseWiring:
         project_dir = tmp_path / "project"
         project_dir.mkdir()
         config = BuildConfig(
-            project_dir=project_dir, change_name="feat", mode="only", auto=False,
+            project_dir=project_dir, change_name="feat", auto=False,
             config_dir=tmp_path / "config",
         )
         config.specs_dir = project_dir / "specs"
@@ -909,7 +589,7 @@ class TestTDDSubPhaseWiring:
                    return_value=([], GateResult(passed=True, reason="ok"))), \
              patch("build_pipeline.llm_steps.respec_steps.run_respec_audit",
                    new_callable=AsyncMock, return_value=None):
-            assert await run_orchestrator(config, Namespace(interview_summary="")) == 0
+            assert await run_orchestrator(config, Namespace()) == 0
 
         assert engine.await_args.kwargs.get("standalone") is False
 
@@ -928,7 +608,7 @@ class TestDocsUpdatePhaseWiring:
         project_dir = tmp_path / "project"
         project_dir.mkdir()
         config = BuildConfig(
-            project_dir=project_dir, change_name="feat", mode="only", auto=False,
+            project_dir=project_dir, change_name="feat", auto=False,
             config_dir=tmp_path / "config",
         )
         config.specs_dir = project_dir / "specs"
@@ -962,7 +642,7 @@ class TestDocsUpdatePhaseWiring:
                    side_effect=fake_docs), \
              patch("build_pipeline.llm_steps.respec_steps.run_respec_audit",
                    side_effect=fake_respec):
-            rc = await run_orchestrator(config, Namespace(interview_summary=""))
+            rc = await run_orchestrator(config, Namespace())
 
         assert rc == 0
         assert order == ["docs", "respec"], "docs must run before the respec pass"
@@ -984,7 +664,7 @@ class TestDocsUpdatePhaseWiring:
                    new_callable=AsyncMock, side_effect=RuntimeError("model down")), \
              patch("build_pipeline.llm_steps.respec_steps.run_respec_audit",
                    new_callable=AsyncMock, return_value=None):
-            rc = await run_orchestrator(config, Namespace(interview_summary=""))
+            rc = await run_orchestrator(config, Namespace())
 
         assert rc == 1
 
@@ -1009,7 +689,7 @@ class TestDocsUpdatePhaseWiring:
                    new_callable=AsyncMock, return_value=([], warning)), \
              patch("build_pipeline.llm_steps.respec_steps.run_respec_audit",
                    new_callable=AsyncMock, return_value=None):
-            rc = await run_orchestrator(config, Namespace(interview_summary=""))
+            rc = await run_orchestrator(config, Namespace())
 
         assert rc == 0
         out = capsys.readouterr().out
@@ -1024,7 +704,7 @@ class TestDocsUpdatePhaseWiring:
         from build_pipeline.orchestrator import _run_docs_update_phase
 
         config = self._config(tmp_path)
-        state = BuildState(change_name="feat", mode="only", tier="advanced")
+        state = BuildState(change_name="feat", tier="advanced")
         progress = ProgressWriter(config.progress_file_path())
         warning = GateResult(
             passed=True, action="docs_may_be_stale", reason="CHANGELOG.md may be stale",
@@ -1046,7 +726,7 @@ class TestDocsUpdatePhaseWiring:
 
         config = self._config(tmp_path)
         (config.project_dir / "README.md").write_text("r")
-        state = BuildState(change_name="feat", mode="only", tier="advanced")
+        state = BuildState(change_name="feat", tier="advanced")
         progress = ProgressWriter(config.progress_file_path())
 
         with patch("build_pipeline.llm_steps.docs_steps.run_docs_update",
@@ -1071,7 +751,7 @@ class TestDocsUpdatePhaseWiring:
 
         config = self._config(tmp_path)
         (config.project_dir / "README.md").write_text("r")
-        state = BuildState(change_name="feat", mode="only", tier="advanced")
+        state = BuildState(change_name="feat", tier="advanced")
         progress = ProgressWriter(config.progress_file_path())
 
         with patch("build_pipeline.llm_steps.docs_steps.run_docs_update",
@@ -1100,7 +780,7 @@ class TestDocsUpdatePhaseWiring:
         from build_pipeline.orchestrator import _run_docs_update_phase
 
         config = self._config(tmp_path)
-        state = BuildState(change_name="feat", mode="only", tier="advanced")
+        state = BuildState(change_name="feat", tier="advanced")
         progress = ProgressWriter(config.progress_file_path())
         warning = GateResult(
             passed=True, action="docs_may_be_stale", reason="CHANGELOG.md may be stale",
@@ -1237,15 +917,12 @@ from tests.test_git_ops import _git, make_bare_origin, make_repo
 
 def _args(tmp_path, change, **over):
     base = dict(
-        mode="only",
         change=change,
         project_dir=str(tmp_path),
         auto=False,
         spec_only=False,
         skip_research=True,
-        interview_summary="",
         research_path="",
-        context_files=[],
         session_id="",
     )
     base.update(over)
@@ -1271,7 +948,7 @@ class TestBootstrapWorktree:
         config = BuildConfig(project_dir=repo, change_name="my-change")
         config.specs_dir = repo / "specs"
         state = BuildState(
-            change_name="my-change", mode="scratch", tier="advanced",
+            change_name="my-change", tier="advanced",
             state_file=str(config.state_file_path()),
         )
         cm = ChangeManager(config.specs_dir)
@@ -1306,7 +983,7 @@ class TestBootstrapWorktree:
         project.mkdir()
         config = BuildConfig(project_dir=project, change_name="c")
         config.specs_dir = project / "specs"
-        state = BuildState(change_name="c", mode="scratch", tier="advanced")
+        state = BuildState(change_name="c", tier="advanced")
         cm = ChangeManager(config.specs_dir)
         with pytest.raises(GitLifecycleError) as exc:
             await _run_bootstrap(config, state, cm, config.state_file_path())
@@ -1320,7 +997,7 @@ class TestBootstrapWorktree:
         (repo / "README.md").write_text("uncommitted\n")
         config = BuildConfig(project_dir=repo, change_name="c")
         config.specs_dir = repo / "specs"
-        state = BuildState(change_name="c", mode="scratch", tier="advanced")
+        state = BuildState(change_name="c", tier="advanced")
         cm = ChangeManager(config.specs_dir)
         with pytest.raises(GitLifecycleError) as exc:
             await _run_bootstrap(config, state, cm, config.state_file_path())
@@ -1342,7 +1019,7 @@ class TestNoWorktreeIsUnchangedBehavior:
             git=GitToggles(worktree=False, push=False, pr="none"),
         )
         config.specs_dir = repo / "specs"
-        state = BuildState(change_name="inplace", mode="scratch", tier="advanced",
+        state = BuildState(change_name="inplace", tier="advanced",
                            state_file=str(config.state_file_path()))
         cm = ChangeManager(config.specs_dir)
 
@@ -1376,7 +1053,7 @@ class TestNoWorktreeIsUnchangedBehavior:
             git=GitToggles(worktree=False, push=False, pr="none"),
         )
         config.specs_dir = repo / "specs"
-        state = BuildState(change_name="inplace", mode="scratch", tier="advanced")
+        state = BuildState(change_name="inplace", tier="advanced")
         progress = ProgressWriter(config.progress_file_path())
         assert _prepare_and_publish(config, state, progress) is True
         out = capsys.readouterr().out
@@ -1397,7 +1074,7 @@ class TestResumeRebinding:
         # First run: bootstrap creates the worktree
         config1 = BuildConfig(project_dir=repo, change_name="resumed")
         config1.specs_dir = repo / "specs"
-        state = BuildState(change_name="resumed", mode="scratch", tier="advanced",
+        state = BuildState(change_name="resumed", tier="advanced",
                            state_file=str(config1.state_file_path()))
         cm = ChangeManager(config1.specs_dir)
         await _run_bootstrap(config1, state, cm, config1.state_file_path())
@@ -1413,7 +1090,7 @@ class TestResumeRebinding:
         # Second run: a fresh config pointed at the SOURCE repo, as a resuming
         # session would construct it
         config2 = BuildConfig(
-            project_dir=repo, change_name="resumed", mode="only",
+            project_dir=repo, change_name="resumed",
             git=GitToggles(worktree=True, push=False, pr="none"),
         )
         config2.specs_dir = repo / "specs"
@@ -1434,7 +1111,7 @@ class TestResumeRebinding:
         repo = make_repo(tmp_path / "proj")
         config1 = BuildConfig(project_dir=repo, change_name="resumed")
         config1.specs_dir = repo / "specs"
-        state = BuildState(change_name="resumed", mode="scratch", tier="advanced",
+        state = BuildState(change_name="resumed", tier="advanced",
                            state_file=str(config1.state_file_path()))
         await _run_bootstrap(config1, state, ChangeManager(config1.specs_dir),
                              config1.state_file_path())
@@ -1460,7 +1137,7 @@ class TestPublishFailureIsNonFatal:
 
         config = BuildConfig(project_dir=repo, change_name="ghfail")
         config.specs_dir = repo / "specs"
-        state = BuildState(change_name="ghfail", mode="scratch", tier="advanced",
+        state = BuildState(change_name="ghfail", tier="advanced",
                            state_file=str(config.state_file_path()))
         cm = ChangeManager(config.specs_dir)
         await _run_bootstrap(config, state, cm, config.state_file_path())
@@ -1478,7 +1155,7 @@ class TestPublishFailureIsNonFatal:
             ),
         )
 
-        config2 = BuildConfig(project_dir=repo, change_name="ghfail", mode="only")
+        config2 = BuildConfig(project_dir=repo, change_name="ghfail")
         config2.specs_dir = repo / "specs"
         result = await run_orchestrator(config2, _args(repo, "ghfail"))
 
@@ -1507,7 +1184,7 @@ class TestPublishFailureIsNonFatal:
 
         config = BuildConfig(project_dir=repo, change_name="noremote")
         config.specs_dir = repo / "specs"
-        state = BuildState(change_name="noremote", mode="scratch", tier="advanced",
+        state = BuildState(change_name="noremote", tier="advanced",
                            state_file=str(config.state_file_path()))
         cm = ChangeManager(config.specs_dir)
         await _run_bootstrap(config, state, cm, config.state_file_path())
@@ -1533,7 +1210,7 @@ class TestPublishFailureIsNonFatal:
 
         config = BuildConfig(project_dir=repo, change_name="happy")
         config.specs_dir = repo / "specs"
-        state = BuildState(change_name="happy", mode="scratch", tier="advanced",
+        state = BuildState(change_name="happy", tier="advanced",
                            state_file=str(config.state_file_path()))
         cm = ChangeManager(config.specs_dir)
         await _run_bootstrap(config, state, cm, config.state_file_path())
@@ -1576,7 +1253,7 @@ class TestPublishFailureIsNonFatal:
         make_bare_origin(repo, tmp_path / "origin.git")
         config = BuildConfig(project_dir=repo, change_name="nodiag")
         config.specs_dir = repo / "specs"
-        state = BuildState(change_name="nodiag", mode="scratch", tier="advanced",
+        state = BuildState(change_name="nodiag", tier="advanced",
                            state_file=str(config.state_file_path()))
         cm = ChangeManager(config.specs_dir)
         await _run_bootstrap(config, state, cm, config.state_file_path())
@@ -1605,7 +1282,7 @@ class TestPublishFailureIsNonFatal:
             git=GitToggles(worktree=True, push=False, pr="draft"),
         )
         config.specs_dir = repo / "specs"
-        state = BuildState(change_name="nopush", mode="scratch", tier="advanced",
+        state = BuildState(change_name="nopush", tier="advanced",
                            state_file=str(config.state_file_path()))
         cm = ChangeManager(config.specs_dir)
         await _run_bootstrap(config, state, cm, config.state_file_path())
@@ -1620,7 +1297,7 @@ async def _bootstrapped_auto_build(tmp_path, change: str, why: str):
     make_bare_origin(repo, tmp_path / "origin.git")
     config = BuildConfig(project_dir=repo, change_name=change, auto=True)
     config.specs_dir = repo / "specs"
-    state = BuildState(change_name=change, mode="scratch", tier="advanced",
+    state = BuildState(change_name=change, tier="advanced",
                        state_file=str(config.state_file_path()))
     cm = ChangeManager(config.specs_dir)
     await _run_bootstrap(config, state, cm, config.state_file_path())
@@ -1658,8 +1335,7 @@ class TestAutoPublishPRBody:
             return GitResult(argv, 0, "PR:https://github.com/o/r/pull/3\n", "")
 
         monkeypatch.setattr(git_ops, "_run_pr_skill", fake_pr)
-        config2 = BuildConfig(project_dir=repo, change_name="autobody",
-                              mode="only", auto=True)
+        config2 = BuildConfig(project_dir=repo, change_name="autobody", auto=True)
         config2.specs_dir = repo / "specs"
         result = await run_orchestrator(config2, _args(repo, "autobody", auto=True))
 
@@ -1694,8 +1370,7 @@ class TestPublishFailureRecovery:
             git_ops, "_run_pr_skill",
             lambda argv, cwd=None, timeout=None: GitResult(argv, 2, "PR_DIAGNOSIS:gh: boom\n", ""),
         )
-        config2 = BuildConfig(project_dir=repo, change_name="pubfail",
-                              mode="only", auto=True)
+        config2 = BuildConfig(project_dir=repo, change_name="pubfail", auto=True)
         config2.specs_dir = repo / "specs"
         result = await run_orchestrator(config2, _args(repo, "pubfail", auto=True))
 
@@ -1719,8 +1394,7 @@ class TestPublishFailureRecovery:
                 argv, 0, "PR:https://github.com/o/r/pull/8\n", ""
             ),
         )
-        config3 = BuildConfig(project_dir=repo, change_name="pubfail",
-                              mode="only", auto=True)
+        config3 = BuildConfig(project_dir=repo, change_name="pubfail", auto=True)
         config3.specs_dir = repo / "specs"
         result = await run_orchestrator(config3, _args(repo, "pubfail", auto=True))
 
@@ -1746,7 +1420,7 @@ class TestPublishFailureRecovery:
         make_bare_origin(repo, tmp_path / "origin.git")
         config = BuildConfig(project_dir=repo, change_name="prurl")
         config.specs_dir = repo / "specs"
-        state = BuildState(change_name="prurl", mode="scratch", tier="advanced",
+        state = BuildState(change_name="prurl", tier="advanced",
                            state_file=str(config.state_file_path()))
         cm = ChangeManager(config.specs_dir)
         await _run_bootstrap(config, state, cm, config.state_file_path())
@@ -1787,7 +1461,7 @@ class TestNestedProjectDir:
 
         config = BuildConfig(project_dir=pkg, change_name="nested")
         config.specs_dir = pkg / "specs"
-        state = BuildState(change_name="nested", mode="scratch", tier="advanced",
+        state = BuildState(change_name="nested", tier="advanced",
                            state_file=str(config.state_file_path()))
         cm = ChangeManager(config.specs_dir)
         await _run_bootstrap(config, state, cm, config.state_file_path())
@@ -1807,10 +1481,12 @@ class TestNestedProjectDir:
         workspace = tmp_path / "ws"
         monkeypatch.setenv("WORKSPACE", str(workspace))
         repo, pkg = self._nested_repo(tmp_path)
+        from tests.spec_fixtures import ready_specs
+        ready_specs(pkg / "specs" / "changes" / "nested", pkg)
 
         config1 = BuildConfig(project_dir=pkg, change_name="nested")
         config1.specs_dir = pkg / "specs"
-        state = BuildState(change_name="nested", mode="scratch", tier="advanced",
+        state = BuildState(change_name="nested", tier="advanced",
                            state_file=str(config1.state_file_path()))
         cm = ChangeManager(config1.specs_dir)
         await _run_bootstrap(config1, state, cm, config1.state_file_path())
@@ -1819,7 +1495,7 @@ class TestNestedProjectDir:
         state.checkpoint(config1.state_file_path())
 
         config2 = BuildConfig(
-            project_dir=pkg, change_name="nested", mode="only",
+            project_dir=pkg, change_name="nested",
             git=GitToggles(worktree=True, push=False, pr="none"),
         )
         config2.specs_dir = pkg / "specs"
@@ -1844,7 +1520,7 @@ async def _published_build(tmp_path, change: str, sub: str | None = None):
         _git(repo, "commit", "-m", "chore: nested pkg")
     config = BuildConfig(project_dir=project, change_name=change)
     config.specs_dir = project / "specs"
-    state = BuildState(change_name=change, mode="scratch", tier="advanced",
+    state = BuildState(change_name=change, tier="advanced",
                        state_file=str(config.state_file_path()))
     cm = ChangeManager(config.specs_dir)
     await _run_bootstrap(config, state, cm, config.state_file_path())
@@ -1900,22 +1576,6 @@ class TestPublishHandsOffToThePrSkill:
         argv = captured["argv"]
         assert config.project_dir == Path(state.worktree_path) / "packages" / "api"
         assert argv[argv.index("--repo") + 1] == str(config.project_dir)
-
-    @pytest.mark.asyncio
-    async def test_a_ticket_started_build_passes_its_ticket_url(self, tmp_path, monkeypatch, captured):
-        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
-        config, state, progress = await _published_build(tmp_path, "ticketed")
-        state.ticket_url = "https://plane.example/SPK-7"
-        assert _prepare_and_publish(config, state, progress) is True
-        argv = captured["argv"]
-        assert argv[argv.index("--ticket-url") + 1] == "https://plane.example/SPK-7"
-
-    @pytest.mark.asyncio
-    async def test_a_build_without_a_ticket_passes_no_ticket_url(self, tmp_path, monkeypatch, captured):
-        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
-        config, state, progress = await _published_build(tmp_path, "unticketed")
-        assert _prepare_and_publish(config, state, progress) is True
-        assert "--ticket-url" not in captured["argv"]
 
     @pytest.mark.asyncio
     async def test_ready_pr_passes_ready(self, tmp_path, monkeypatch, captured):
@@ -2026,7 +1686,7 @@ class TestResumeAtPublish:
             return GitResult(argv, 0, "PR:https://github.com/o/r/pull/11\n", "")
 
         monkeypatch.setattr(git_ops, "_run_pr_skill", fake_pr)
-        config = BuildConfig(project_dir=repo, change_name="parked", mode="only", auto=True)
+        config = BuildConfig(project_dir=repo, change_name="parked", auto=True)
         config.specs_dir = repo / "specs"
         result = await run_orchestrator(config, _args(repo, "parked", auto=True))
 
@@ -2039,33 +1699,27 @@ class TestResumeAtPublish:
 
 class TestPlanReviewPhase:
     """W9: the PLAN_REVIEW phase — the second pair of eyes the board's
-    Planning column has always claimed. It runs between DESIGN_AUDIT and
-    PROTOTYPE, is skipped on resume when `plan_review_done` is recorded, and
+    Planning column has always claimed. It runs after DESIGN_AUDIT, before
+    the size gate, is skipped on resume when `plan_review_done` is recorded, and
     never fails the build."""
 
     def _args(self, tmp_path, change):
         return argparse.Namespace(
-            mode="only",
             change=change,
             project_dir=str(tmp_path),
             auto=True,
             spec_only=True,
             skip_research=True,
-            interview_summary="",
             research_path="",
-            context_files=[],
             session_id="",
         )
 
     def _config(self, tmp_path, change):
         config = BuildConfig(
-            project_dir=tmp_path, change_name=change, mode="only",
+            project_dir=tmp_path, change_name=change,
             auto=True, spec_only=True, skip_research=True,
         )
         config.specs_dir = tmp_path / "specs"
-        # --no-prototype: this class is about the plan review, and the
-        # prototype phase sits immediately after it.
-        config.prototype_mode = "false"
         cm = ChangeManager(config.specs_dir)
         cm.init_specs()
         cm.create_change(change)
@@ -2074,7 +1728,7 @@ class TestPlanReviewPhase:
         (config.change_dir / "tasks.md").write_text("## Block 1\n- [ ] do it\n")
         (config.change_dir / "rubric.md").write_text("## Criteria\n- correctness\n")
         state = BuildState(
-            change_name=change, mode="only", tier="advanced",
+            change_name=change, tier="advanced",
             phase=BuildPhase.DESIGN_AUDIT,
             state_file=str(config.state_file_path()),
         )
@@ -2148,16 +1802,13 @@ class TestPlanReviewPhase:
 
         config = self._config(tmp_path, "retry-plan")
         args = self._args(tmp_path, "retry-plan")
-        crash = AsyncMock(side_effect=KeyboardInterrupt)
         with patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
                    AsyncMock(return_value=[])), \
                 patch("build_pipeline.llm_steps.plan_review_steps.run_plan_review",
-                      AsyncMock(side_effect=RuntimeError("model exploded"))), \
-                patch("build_pipeline.orchestrator._run_prototype_phase", crash), \
-                pytest.raises(KeyboardInterrupt):
-            await run_orchestrator(config, args)
+                      AsyncMock(side_effect=RuntimeError("model exploded"))):
+            assert await run_orchestrator(config, args) == 1
 
-        # The build died after the failed review. Nothing recorded the phase.
+        # The build stopped on the failed review. Nothing recorded the phase.
         resumed = BuildState.load(config.state_file_path())
         assert not resumed.is_phase_complete(BuildPhase.PLAN_REVIEW)
         assert not (resumed.spec_gen and resumed.spec_gen.step_passed("plan_review"))

@@ -514,7 +514,7 @@ class TestFindingsText:
 
 def _stage_setup(tmp_path, change="plan-c"):
     config = BuildConfig(
-        project_dir=tmp_path, change_name=change, mode="only",
+        project_dir=tmp_path, change_name=change,
         auto=True, spec_only=True, skip_research=True,
     )
     config.specs_dir = tmp_path / "specs"
@@ -527,7 +527,7 @@ def _stage_setup(tmp_path, change="plan-c"):
     (config.change_dir / "rubric.md").write_text("## Criteria\n- correctness\n")
     state_path = tmp_path / "state.json"
     state = BuildState(
-        change_name=change, mode="only", tier="advanced",
+        change_name=change, tier="advanced",
         phase=BuildPhase.DESIGN_AUDIT, state_file=str(state_path),
     )
     (config.change_dir / "proposal.md").write_text("## Capabilities\n- `cap-a`\n")

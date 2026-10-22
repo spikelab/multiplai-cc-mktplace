@@ -6,6 +6,7 @@ generic language word, the project's own modules, or anything already declared.
 """
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -490,6 +491,18 @@ class TestBuiltinsAndMembersNeverFire:
         assert [d.name for d in detect_new_dependencies(change, project)] == ["st-cache"]
 
 
+def _pm_spec_proposal_template() -> str:
+    """`PROPOSAL_TEMPLATE` from pm-spec's prompts module, read with `ast`."""
+    import ast
+    path = (Path(__file__).resolve().parents[5] / "multiplai-pm" / "skills" / "pm-spec" / "scripts"
+            / "pm_spec_pipeline" / "prompts" / "spec.py")
+    for node in ast.parse(path.read_text()).body:
+        if isinstance(node, ast.Assign) and any(
+                getattr(t, "id", "") == "PROPOSAL_TEMPLATE" for t in node.targets):
+            return ast.literal_eval(node.value)
+    raise AssertionError(f"PROPOSAL_TEMPLATE not found in {path}")
+
+
 class TestTemplateHeadingsFeedTheScan:
     """The scan reads two heading strings out of two spec templates. Reshaping
     either template renames the section the scan looks for and turns dependency
@@ -497,8 +510,9 @@ class TestTemplateHeadingsFeedTheScan:
     shipped templates, not against handwritten markdown."""
 
     def test_proposal_template_still_carries_the_impact_heading(self):
-        from build_pipeline.change_manager import TEMPLATES
-        assert "\n## Impact\n" in TEMPLATES["proposal"]
+        """pm-spec writes the proposal; its template is read as text, never
+        imported (buildme does not import pm_spec_pipeline)."""
+        assert "\n## Impact\n" in _pm_spec_proposal_template()
 
     def test_design_template_still_carries_the_decisions_heading(self):
         from build_pipeline.change_manager import TEMPLATES
@@ -517,7 +531,7 @@ class TestTemplateHeadingsFeedTheScan:
         change = tmp_path / "change"
         change.mkdir(parents=True)
         (change / "proposal.md").write_text(
-            TEMPLATES["proposal"].replace(
+            _pm_spec_proposal_template().replace(
                 "## Impact\n", "## Impact\n\nAudio goes through `mlx-whisper`.\n",
             )
         )

@@ -236,7 +236,7 @@ class TestAfterABuild:
         make_bare_origin(repo, tmp_path / "origin.git")
         config = BuildConfig(project_dir=repo, change_name=change)
         config.specs_dir = repo / "specs"
-        state = BuildState(change_name=change, mode="scratch", tier="advanced",
+        state = BuildState(change_name=change, tier="advanced",
                            state_file=str(config.state_file_path()))
         await _run_bootstrap(config, state, ChangeManager(config.specs_dir), config.state_file_path())
         return config, state, ProgressWriter(config.progress_file_path())

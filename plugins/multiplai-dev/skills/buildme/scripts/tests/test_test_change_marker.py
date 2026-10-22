@@ -127,7 +127,7 @@ def setup(tmp_path, monkeypatch):
     block.implementer_report = "STATUS: DONE\nSURPRISES: none"
     block.test_file_hashes = {TEST_FILE: "at-red"}
     state = BuildState(
-        change_name="test", mode="only", tier="advanced",
+        change_name="test", tier="advanced",
         state_file=str(tmp_path / "state.json"),
         tdd=TDDState(blocks=[block]),
     )

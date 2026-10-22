@@ -29,9 +29,11 @@ accounted budgets. Add `--ablations` only with an envelope covering its extra ru
 
 Both variants use the production orchestrator, isolated worktrees, complete
 requirements, TDD, code review with bounded fixes, recovery and final verification.
-The candidate omits prototype, the whole-change refactor, mutation and the extra
+Each worker first writes the ready specs buildme builds from (pm-spec's handoff:
+a proposal, use cases and one requirement stating the task's instruction).
+The candidate omits the whole-change refactor, mutation and the extra
 model design/plan panels; required deterministic plan validation remains. The
-three ablations add prototype, plan review or mutation back individually. No
+two ablations add plan review or mutation back individually. No
 production configuration flags or defaults were introduced for this experiment.
 Publication is disabled and any attempted push raises an error.
 

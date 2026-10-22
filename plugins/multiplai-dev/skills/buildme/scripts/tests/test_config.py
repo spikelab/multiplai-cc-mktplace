@@ -203,7 +203,7 @@ class TestReviewModel:
         specs = tmp_path / "specs"
         specs.mkdir()
         (specs / "config.yaml").write_text("code_review:\n  model: claude-haiku-4-5\n")
-        args = argparse.Namespace(project_dir=str(tmp_path), mode="only", change="feat")
+        args = argparse.Namespace(project_dir=str(tmp_path), change="feat")
         with patch.dict(os.environ, {"BUILDME_REVIEW_MODEL": "claude-sonnet-4-6"}):
             config = BuildConfig.from_cli_args(args)
         assert config.review_model == "claude-sonnet-4-6"
@@ -937,7 +937,7 @@ class TestSkipExplainersFlag:
 
         parser = build_parser()
         for argv in (
-            ["build", "--skip-explainers"],
+            ["build", "--change", "x", "--skip-explainers"],
             ["spec-generate", "--change", "x", "--skip-explainers"],
         ):
             assert parser.parse_args(argv).skip_explainers is True
@@ -945,80 +945,7 @@ class TestSkipExplainersFlag:
     def test_default_is_false(self):
         from build_pipeline.__main__ import build_parser
 
-        assert build_parser().parse_args(["build"]).skip_explainers is False
-
-
-class TestPrototypeToggle:
-    """`prototype: {enabled: auto|true|false}` in specs/config.yaml, with the
-    --prototype / --no-prototype CLI flags overriding it."""
-
-    def _write_config(self, tmp_path, body):
-        specs = tmp_path / "specs"
-        specs.mkdir(parents=True, exist_ok=True)
-        (specs / "config.yaml").write_text(body)
-        return specs
-
-    def test_defaults_to_auto(self, tmp_path):
-        config = BuildConfig(project_dir=tmp_path)
-        config.specs_dir = tmp_path / "specs"
-        config._load_specs_config()
-        assert config.gates.prototype == "auto"
-
-    def test_reads_auto_from_config_yaml(self, tmp_path):
-        self._write_config(tmp_path, "prototype:\n  enabled: auto\n")
-        config = BuildConfig(project_dir=tmp_path)
-        config.specs_dir = tmp_path / "specs"
-        config._load_specs_config()
-        assert config.gates.prototype == "auto"
-
-    def test_reads_boolean_from_config_yaml(self, tmp_path):
-        self._write_config(tmp_path, "prototype:\n  enabled: false\n")
-        config = BuildConfig(project_dir=tmp_path)
-        config.specs_dir = tmp_path / "specs"
-        config._load_specs_config()
-        assert config.gates.prototype == "false"
-
-    def test_unrecognized_value_falls_back_to_auto(self, tmp_path):
-        self._write_config(tmp_path, "prototype:\n  enabled: sometimes\n")
-        config = BuildConfig(project_dir=tmp_path)
-        config.specs_dir = tmp_path / "specs"
-        config._load_specs_config()
-        assert config.gates.prototype == "auto"
-
-    def test_cli_flag_overrides_config_yaml(self, tmp_path):
-        import argparse
-        self._write_config(tmp_path, "prototype:\n  enabled: true\n")
-        args = argparse.Namespace(
-            mode="scratch", project_dir=str(tmp_path), change="c",
-            auto=False, spec_only=False, skip_research=False,
-            lenient_review=False, prototype=False, no_prototype=True,
-        )
-        config = BuildConfig.from_cli_args(args)
-        assert config.prototype_mode == "false"
-
-    def test_no_flags_takes_the_config_value(self, tmp_path):
-        import argparse
-        self._write_config(tmp_path, "prototype:\n  enabled: true\n")
-        args = argparse.Namespace(
-            mode="scratch", project_dir=str(tmp_path), change="c",
-            auto=False, spec_only=False, skip_research=False,
-            lenient_review=False, prototype=False, no_prototype=False,
-        )
-        config = BuildConfig.from_cli_args(args)
-        assert config.prototype_mode == "true"
-
-    def test_prototype_dir_is_inside_the_change(self, tmp_path):
-        config = BuildConfig(project_dir=tmp_path, change_name="my-change")
-        config.specs_dir = tmp_path / "specs"
-        assert config.prototype_dir == config.change_dir / "prototype"
-
-    def test_cli_parser_exposes_the_flags(self):
-        from build_pipeline.__main__ import build_parser
-        parser = build_parser()
-        assert parser.parse_args(["build", "--no-prototype"]).no_prototype is True
-        assert parser.parse_args(["build", "--prototype"]).prototype is True
-        with pytest.raises(SystemExit):
-            parser.parse_args(["build", "--prototype", "--no-prototype"])
+        assert build_parser().parse_args(["build", "--change", "x"]).skip_explainers is False
 
 
 class TestRespecToggle:
@@ -1119,10 +1046,10 @@ class TestGitToggles:
         from build_pipeline.__main__ import build_parser
 
         args = build_parser().parse_args(
-            ["build", "--no-worktree", "--no-push", "--no-pr", "--pr-ready"]
+            ["build", "--change", "x", "--no-worktree", "--no-push", "--no-pr", "--pr-ready"]
         )
         assert args.no_worktree and args.no_push and args.no_pr and args.pr_ready
-        plain = build_parser().parse_args(["build"])
+        plain = build_parser().parse_args(["build", "--change", "x"])
         assert not plain.no_worktree and not plain.no_push and not plain.no_pr
 
 
@@ -1683,18 +1610,16 @@ class TestConventionFiles:
         assert any("Conventions file unreadable" in r.getMessage() for r in caplog.records)
 
 
-class TestIntakeAndStageKeys:
-    """`intake`, `interview`, `architecture`, `pr`, `findings`, `mutation` and
-    `models` in specs/config.yaml: every default reproduces a repo without the
-    keys, and every invalid value warns and keeps the default."""
+class TestStageKeys:
+    """`architecture`, `pr`, `findings`, `mutation` and `models` in
+    specs/config.yaml: every default reproduces a repo without the keys, and
+    every invalid value warns and keeps the default. `intake` and `interview`
+    are pm-spec's keys now; buildme reads neither."""
 
     def test_defaults_with_no_file(self, tmp_path):
         config = BuildConfig(project_dir=tmp_path)
         config.specs_dir = tmp_path / "specs"
         config._load_specs_config()
-        assert config.intake.provider == "none"
-        assert config.intake.options == {}
-        assert config.interview_mode == "user"
         assert config.architecture == ""
         assert config.pr.template == "auto"
         assert config.pr.max_change_lines == 1000
@@ -1707,11 +1632,6 @@ class TestIntakeAndStageKeys:
 
     def test_each_key_is_read(self, tmp_path):
         config = _config_from_yaml(tmp_path, """
-intake:
-  provider: plane
-  plane:
-    project: DB
-interview: ticket
 architecture: docs/architecture.md
 pr:
   template: .github/pull_request_template.md
@@ -1727,9 +1647,6 @@ models:
   spec: claude:opus
   agent: pi:qwen3-coder@openrouter
 """)
-        assert config.intake.provider == "plane"
-        assert config.intake.options == {"project": "DB"}
-        assert config.interview_mode == "ticket"
         assert config.architecture == "docs/architecture.md"
         assert config.pr.template == ".github/pull_request_template.md"
         assert config.pr.max_change_lines == 400
@@ -1741,15 +1658,15 @@ models:
         assert config.model_specs == {"spec": "claude:opus",
                                       "agent": "pi:qwen3-coder@openrouter"}
 
-    def test_github_provider_and_self_interview(self, tmp_path):
-        config = _config_from_yaml(tmp_path, "intake: {provider: github}\ninterview: self\n")
-        assert config.intake.provider == "github"
-        assert config.interview_mode == "self"
+    def test_pm_specs_intake_and_interview_keys_are_ignored(self, tmp_path, caplog):
+        with caplog.at_level("WARNING"):
+            config = _config_from_yaml(
+                tmp_path, "intake: {provider: github}\ninterview: self\narchitecture: a.md\n")
+        assert config.architecture == "a.md"
+        assert not hasattr(config, "intake") and not hasattr(config, "interview_mode")
+        assert not [r for r in caplog.records if r.levelname == "WARNING"]
 
     @pytest.mark.parametrize("yaml_text, attr, expected", [
-        ("intake: {provider: jira}\n", ("intake", "provider"), "none"),
-        ("intake: [plane]\n", ("intake", "provider"), "none"),
-        ("interview: maybe\n", ("interview_mode",), "user"),
         ("architecture: [a, b]\n", ("architecture",), ""),
         ("pr: {template: 3}\n", ("pr", "template"), "auto"),
         ("pr: {max_change_lines: lots}\n", ("pr", "max_change_lines"), 1000),
@@ -1781,36 +1698,3 @@ models:
         assert config.model_specs == {"spec": "claude:opus"}
         assert any("models.agent" in r.getMessage() for r in caplog.records)
         assert any("models.review" in r.getMessage() for r in caplog.records)
-
-    def test_auto_turns_user_into_self(self, tmp_path, caplog):
-        specs = tmp_path / "specs"
-        specs.mkdir()
-        (specs / "config.yaml").write_text("interview: user\n")
-        config = BuildConfig(project_dir=tmp_path, auto=True)
-        config.specs_dir = specs
-        with caplog.at_level("INFO"):
-            config._load_specs_config()
-        assert config.interview_mode == "self"
-        assert any("user → self" in r.getMessage() for r in caplog.records)
-
-    def test_auto_keeps_ticket(self, tmp_path):
-        specs = tmp_path / "specs"
-        specs.mkdir()
-        (specs / "config.yaml").write_text("interview: ticket\n")
-        config = BuildConfig(project_dir=tmp_path, auto=True)
-        config.specs_dir = specs
-        config._load_specs_config()
-        assert config.interview_mode == "ticket"
-
-    def test_auto_with_no_config_file_still_resolves_to_self(self, tmp_path):
-        from build_pipeline.__main__ import build_parser
-
-        args = build_parser().parse_args(
-            ["build", "--auto", "--project-dir", str(tmp_path)])
-        config = BuildConfig.from_cli_args(args)
-        assert config.interview_mode == "self"
-
-    def test_provider_table_is_the_single_source(self):
-        from build_pipeline.config import INTAKE_PROVIDERS
-
-        assert set(INTAKE_PROVIDERS) == {"none", "plane", "github"}
