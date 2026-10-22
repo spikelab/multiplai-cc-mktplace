@@ -14,12 +14,7 @@ from pathlib import Path
 
 from code_facts import CallFn
 
-from ..prompts.spec_generation import (
-    PROPOSAL_PROMPT,
-    SPEC_PROMPT,
-    DESIGN_PROMPT,
-    TASKS_PROMPT,
-)
+from ..prompts.spec_generation import DESIGN_PROMPT, TASKS_PROMPT
 from ..models import PriorAssessment
 from ..prompts.design_audit import DESIGN_AUDIT_PROMPT, TASKS_AUDIT_PROMPT, prior_findings_section
 from ..prompts.explainer import EXPLAINER_PROMPT, UNKNOWNS_REGEN_PROMPT
@@ -42,18 +37,6 @@ AUDITOR_MAX_TURNS = 30
 # end, and named, to stay under it (judgment).
 REGISTRY_TEXT_LIMIT = 60_000
 REGISTRY_HEADING = "## Current behaviour (specs/registry)"
-REGISTRY_REQUIREMENTS_RULE = (
-    "These files are what the code does today. A requirement this change alters goes under "
-    "`## MODIFIED Requirements` with the same `### Requirement:` name as here; a requirement it "
-    "removes goes under `## REMOVED Requirements` with that name; only new requirements go under "
-    "`## ADDED Requirements`."
-)
-REGISTRY_PROPOSAL_RULE = (
-    "These capabilities are what the code does today, one file each in specs/registry/. A "
-    "capability this change alters goes under `### Modified Capabilities` with exactly the name "
-    "listed here, so its requirements are written against that file; a new capability goes under "
-    "`### New Capabilities` with a name not listed here."
-)
 REGISTRY_PLAN_RULE = (
     "These files are what the code does today, for the capabilities this change's requirements "
     "name. Keep that behaviour unless a requirement above changes it."
@@ -130,7 +113,6 @@ async def generate_artifact(
     context: dict,
     config,  # BuildConfig — avoided import to prevent circular
     *,
-    interview_summary: str = "",
     research: str = "",
     codebase_analysis: str = "",
     reference_docs: str = "",
@@ -139,20 +121,19 @@ async def generate_artifact(
     """Generate a single artifact's content via llm_call.
 
     Args:
-        artifact_id: Which artifact to generate (proposal, specs, design, tasks)
+        artifact_id: Which artifact to generate (design, tasks, or the
+            unknowns regeneration pass)
         context: From change_manager.artifact_context() — template, instruction, deps
         config: BuildConfig for model, project context, tier settings
-        interview_summary: For proposal generation
-        research: Research findings for proposal generation
+        research: Research findings (research.md) for design generation
         codebase_analysis: Existing code analysis for design generation
         reference_docs: Inlined stack/framework reference docs
             (config.reference_docs_text()) for `design` and `tasks`. Inlined
             rather than read on demand because this call's system prompt
             forbids tools — the prompt is the only channel.
         audit_findings: Findings injected on a single regeneration pass —
-            tasks-shape audit findings (run_tasks_audit) or prototype notes
-            (prototype_steps.apply_prototype_findings). Used by `design` and
-            `tasks`.
+            tasks-shape, design-audit or plan-review findings. Used by
+            `design` and `tasks`.
 
     Returns:
         Generated markdown content.
@@ -161,7 +142,6 @@ async def generate_artifact(
         artifact_id,
         context,
         config,
-        interview_summary=interview_summary,
         research=research,
         codebase_analysis=codebase_analysis,
         reference_docs=reference_docs,
@@ -191,7 +171,6 @@ def _build_prompt(
     context: dict,
     config,
     *,
-    interview_summary: str = "",
     research: str = "",
     codebase_analysis: str = "",
     reference_docs: str = "",
@@ -202,28 +181,7 @@ def _build_prompt(
     instruction = context.get("instruction", "")
     project_context = context.get("context", "")
 
-    if artifact_id == "proposal":
-        names = ", ".join(context.get("registry") or [])
-        return PROPOSAL_PROMPT.format(
-            project_context=project_context,
-            interview_summary=interview_summary or "(none provided)",
-            research=research or "(no research conducted)",
-            instruction=instruction,
-            template=template,
-        ) + (f"\n\n{REGISTRY_HEADING}\n\n{REGISTRY_PROPOSAL_RULE}\n\n"
-             f"{_cap(f'Capabilities in specs/registry: {names}')}\n" if names else "")
-    elif artifact_id == "requirements":
-        # Requirements generation needs proposal content
-        proposal_content = _read_dep(context, "proposal", config)
-        return SPEC_PROMPT.format(
-            project_context=project_context,
-            proposal_content=proposal_content,
-            capability_name=context.get("capability_name", "unknown"),
-            instruction=instruction,
-            template=template,
-        ) + _registry_section(config, context, [context.get("capability_name", "unknown")],
-                              REGISTRY_REQUIREMENTS_RULE)
-    elif artifact_id == "design":
+    if artifact_id == "design":
         proposal_content = _read_dep(context, "proposal", config)
         specs_content = _read_specs(config)
         return DESIGN_PROMPT.format(
@@ -231,6 +189,7 @@ def _build_prompt(
             proposal_content=proposal_content,
             specs_content=specs_content,
             codebase_analysis=codebase_analysis or "(new project)",
+            research=research or "(no research conducted)",
             reference_docs=reference_docs or "(none available)",
             audit_findings=audit_findings or "(none — first pass)",
             instruction=instruction,
@@ -283,9 +242,9 @@ def _read_dep(context: dict, dep_id: str, config) -> str:
 def _read_specs(config) -> str:
     """Read all requirement files from the change directory.
 
-    Requirements are written flat as change_dir/requirements/<capability>.md
-    (see spec_generator._generate_requirements). The capability name is the
-    file stem — mirrors tdd_engine.assemble_context.
+    Requirements are flat files, change_dir/requirements/<capability>.md,
+    written by pm-spec. The capability name is the file stem — mirrors
+    tdd_engine.assemble_context.
     """
     req_dir = config.change_dir / "requirements"
     if not req_dir.exists():

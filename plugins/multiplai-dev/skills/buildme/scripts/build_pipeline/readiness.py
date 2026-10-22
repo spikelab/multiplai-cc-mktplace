@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from multiplai_core.specs import read_change_meta
+from multiplai_core.specs import read_change_meta, set_spec_issues
 
 from . import git_ops
 
@@ -28,6 +28,44 @@ EXIT_NOT_READY = 2
 # Shared with `tdd_engine.EXIT_AGENT_TIMEOUT`: the marker on stdout tells the two apart.
 EXIT_SPEC_ISSUES = 4
 ISSUES_FILE = "spec-issues.md"
+
+
+class SpecIssuesFound(Exception):
+    """A build step found a problem in the requirements that only a change to
+    them can fix. *issues* are `(title, body)` pairs, one `## <title>` section
+    each in spec-issues.md; *step* names who found them."""
+
+    def __init__(self, issues: list[tuple[str, str]], *, step: str):
+        self.issues = list(issues)
+        self.step = step
+        super().__init__(f"{step}: {len(self.issues)} requirements issue(s)")
+
+
+def write_issues(change_dir: Path, issues: list[tuple[str, str]], *, change: str) -> Path:
+    """Append *issues* to the change's spec-issues.md, one `## <title>` section
+    each (the form `pm-spec revise` reads: one issue per section), and set
+    `.change.yaml` `spec_issues` to it. A new file gets a header first. A
+    section already in the file, same title and body, is not written twice,
+    so a step that stopped after writing and runs again adds nothing."""
+    path = Path(change_dir) / ISSUES_FILE
+    text = path.read_text() if path.is_file() else (
+        f"# Spec issues: {change}\n\nRequirements problems buildme found. Fix them with "
+        f"`/multiplai-pm:pm-spec revise {change}`, then run the build again.\n")
+    for title, body in issues:
+        section = f"## {' '.join(title.split())}\n\n{body.strip()}\n"
+        if section not in text:
+            text = text.rstrip("\n") + "\n\n" + section
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(text)
+    tmp.replace(path)
+    set_spec_issues(change_dir, path)
+    return path
+
+
+def stop_on_issues(change_dir: Path, found: SpecIssuesFound, *, change: str) -> int:
+    """Write what *found* carries to spec-issues.md and refuse with
+    `SPEC:ISSUES:<path>`; the exit code (4)."""
+    return refuse_issues(write_issues(change_dir, found.issues, change=change))
 
 
 def pm_spec_line(name: str, *, resume: bool = False) -> str:

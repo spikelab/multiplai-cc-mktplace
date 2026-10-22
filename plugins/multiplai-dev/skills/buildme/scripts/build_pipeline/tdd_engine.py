@@ -1216,14 +1216,29 @@ def _record_implementation_note(
     if not config.gates.respec_halt_on_contradiction:
         return True
 
+    # The requirements go back to pm-spec: the issue is written to
+    # spec-issues.md and `.change.yaml` `spec_issues` set, and the build
+    # stops with SPEC:ISSUES (exit 4) once the engine returns (row S12).
+    from .readiness import write_issues
+    satisfies = ", ".join(block.satisfies) or "(no Satisfies line)"
+    try:
+        issues = write_issues(config.change_dir, [(
+            f"Block {block.number} ({block.name}): {role} SPEC_IMPACT: contradicts",
+            f"Satisfies: {satisfies}\n\n{note.surprises.strip()}\n\n"
+            f"Raised by buildme's TDD build, under respec.halt_on_contradiction.")],
+            change=config.change_name)
+    except OSError as e:
+        log.warning("Could not write the spec issue for block %d: %s", block.number, e)
+        issues = None
     diagnosis = (
         f"Build stopped: the {role} reported SPEC_IMPACT: contradicts on block "
         f"{block.number} ({block.name}) and respec.halt_on_contradiction is on.\n"
         f"The block could only be built by doing something the spec/design does "
-        f"not say (or says otherwise), so the spec is decided in conversation "
+        f"not say (or says otherwise), so the spec is decided by pm-spec "
         f"rather than steered around in code.\n\n"
         f"Reported surprise:\n{note.surprises}\n\n"
-        f"Next: reshape the requirements/design for this block, or set "
+        f"Next: `/multiplai-pm:pm-spec revise {config.change_name}` reads "
+        f"{issues or 'spec-issues.md'}, or set "
         f"`respec: {{halt_on_contradiction: false}}` in specs/config.yaml to let "
         f"the build continue and collect the delta into respec.md instead."
     )
@@ -2543,7 +2558,6 @@ async def _run_tdd_engine(config: BuildConfig, args, *, standalone: bool = True)
     else:
         state = BuildState(
             change_name=config.change_name,
-            mode=config.mode,
             tier=config.tier,
             state_file=str(state_path),
             phase=BuildPhase.TDD_BUILD,
@@ -2566,7 +2580,7 @@ async def _run_tdd_engine(config: BuildConfig, args, *, standalone: bool = True)
 
     total_blocks = len(state.tdd.blocks) if state.tdd else 0
     if standalone:
-        progress.initialize(config.change_name, config.mode, config.tier, total_blocks)
+        progress.initialize(config.change_name, config.tier, total_blocks)
     else:
         # The caller started this run's section of the progress file.
         progress.log_phase("TDD_BUILD", f"Blocks: {total_blocks}")
