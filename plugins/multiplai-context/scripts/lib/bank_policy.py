@@ -31,12 +31,12 @@ from __future__ import annotations
 
 import dataclasses
 import re
+from collections.abc import Iterable, Sequence
 from pathlib import Path
-from typing import Iterable, Optional, Sequence
 
 __all__ = [
-    "BankPolicy",
     "DEFAULT_NO_GO",
+    "BankPolicy",
     "check_item",
     "check_text",
     "find_secrets",
@@ -135,7 +135,7 @@ def _bullets(lines: Sequence[str]) -> list[str]:
 def _sections(text: str) -> dict[str, list[str]]:
     """Heading (lowercased) → its lines, for every ATX heading in *text*."""
     out: dict[str, list[str]] = {}
-    current: Optional[str] = None
+    current: str | None = None
     for raw in text.splitlines():
         m = re.match(r"^#{1,6}\s+(.*)$", raw)
         if m:
@@ -207,9 +207,7 @@ def check_text(text: str, policy: BankPolicy) -> list[str]:
     lowered = (text or "").lower()
     hits = sorted({term for term in policy.no_go if term and term in lowered})
     if hits:
-        reasons.append(
-            "names a no-go domain declared by the bank: " + ", ".join(hits)
-        )
+        reasons.append("names a no-go domain declared by the bank: " + ", ".join(hits))
     for label in find_secrets(text):
         reasons.append(f"contains what looks like a {label}")
     return reasons

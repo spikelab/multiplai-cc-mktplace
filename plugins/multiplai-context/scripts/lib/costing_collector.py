@@ -37,9 +37,9 @@ import logging
 import os
 import re
 import shutil
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator
 
 from multiplai_core import costing
 from multiplai_core.costing import (
@@ -70,12 +70,16 @@ def refresh_pricing_table() -> bool:
     """
     refresh = getattr(costing, "refresh_pricing", None)
     if refresh is None:
-        logger.info("multiplai_core.costing has no refresh_pricing(); bundled table only")
+        logger.info(
+            "multiplai_core.costing has no refresh_pricing(); bundled table only"
+        )
         return False
     try:
         return refresh() is not None
     except Exception as exc:  # noqa: BLE001 — pricing refresh must not stop a pass
-        logger.warning("Pricing refresh failed (%s); continuing with the cached/bundled table", exc)
+        logger.warning(
+            "Pricing refresh failed (%s); continuing with the cached/bundled table", exc
+        )
         return False
 
 
@@ -84,14 +88,29 @@ def pricing_age_days() -> int | None:
     fn = getattr(costing, "pricing_age_days", None)
     return fn() if fn is not None else None
 
+
 # tool_use names that open an attribution span. "Task" is the legacy name of
 # the subagent tool; "Agent" the current one.
-_SPAN_KINDS = {"Skill": "skill", "Agent": "agent", "Task": "agent", "Workflow": "workflow"}
+_SPAN_KINDS = {
+    "Skill": "skill",
+    "Agent": "agent",
+    "Task": "agent",
+    "Workflow": "workflow",
+}
 
 _COMMAND_RE = re.compile(r"<command-name>/?([^<]+)</command-name>")
 # Skills invoked as slash commands that are session mechanics, not work — a
 # span for these would swallow the whole conversation that follows.
-_COMMAND_IGNORE = {"model", "goal", "clear", "cost", "config", "login", "logout", "help"}
+_COMMAND_IGNORE = {
+    "model",
+    "goal",
+    "clear",
+    "cost",
+    "config",
+    "login",
+    "logout",
+    "help",
+}
 
 
 def default_config_dir() -> Path:
@@ -124,8 +143,13 @@ def classify_transcript(projects_dir: Path, path: Path) -> dict:
         idx = parts.index("subagents")
         session = parts[idx - 1] if idx >= 1 else path.stem
         project = parts[idx - 2] if idx >= 2 else ""
-        rest = parts[idx + 1:-1]  # dirs between subagents/ and the file
-        if rest and rest[0] == "workflows" and len(rest) > 1 and rest[1].startswith("wf_"):
+        rest = parts[idx + 1 : -1]  # dirs between subagents/ and the file
+        if (
+            rest
+            and rest[0] == "workflows"
+            and len(rest) > 1
+            and rest[1].startswith("wf_")
+        ):
             span = {"kind": "workflow", "name": rest[1]}
         else:
             name = path.stem
@@ -135,15 +159,24 @@ def classify_transcript(projects_dir: Path, path: Path) -> dict:
             except (OSError, json.JSONDecodeError):
                 pass
             span = {"kind": "agent", "name": name}
-        return {"project": project, "session": session,
-                "sidechain": True, "base_span": span}
-    return {"project": parts[-2] if len(parts) >= 2 else "",
-            "session": path.stem, "sidechain": False, "base_span": None}
+        return {
+            "project": project,
+            "session": session,
+            "sidechain": True,
+            "base_span": span,
+        }
+    return {
+        "project": parts[-2] if len(parts) >= 2 else "",
+        "session": path.stem,
+        "sidechain": False,
+        "base_span": None,
+    }
 
 
 # ----------------------------------------------------------------------
 # Span tracking
 # ----------------------------------------------------------------------
+
 
 @dataclass
 class SpanTracker:
@@ -179,7 +212,9 @@ class SpanTracker:
         self.stack.clear()
         m = _COMMAND_RE.search(text)
         if m and m.group(1).strip() not in _COMMAND_IGNORE:
-            self.stack.append({"kind": "skill", "name": m.group(1).strip()[:120], "via": "command"})
+            self.stack.append(
+                {"kind": "skill", "name": m.group(1).strip()[:120], "via": "command"}
+            )
 
     def current(self, *, sidechain: bool) -> dict | None:
         if not self.stack:
@@ -222,6 +257,7 @@ def _user_text(entry: dict) -> str | None:
 # State file
 # ----------------------------------------------------------------------
 
+
 def load_state(path: Path) -> dict:
     try:
         state = json.loads(path.read_text())
@@ -239,6 +275,7 @@ def save_state(path: Path, state: dict) -> None:
 # ----------------------------------------------------------------------
 # Collection
 # ----------------------------------------------------------------------
+
 
 def _iter_entries(fh) -> Iterator[tuple[bytes, dict | None]]:
     """Yield ``(raw_line, entry)`` from a binary JSONL handle.
@@ -358,8 +395,10 @@ def collect_file(
                         prior["tokens"], output=tokens.output
                     )
                 continue
-            span = base_span if base_span is not None else tracker.current(
-                sidechain=entry_sidechain
+            span = (
+                base_span
+                if base_span is not None
+                else tracker.current(sidechain=entry_sidechain)
             )
             pending[msg_id] = {
                 "ts": entry.get("timestamp") or "",
@@ -377,9 +416,15 @@ def collect_file(
         # Stamped here rather than in build_record — the ledger is schemaless
         # JSONL and reports read with .get(), so no multiplai-core change.
         rec = build_record(
-            ts=p["ts"], source="transcript", session=session, project=project,
-            model=p["model"], msg_id=msg_id, sidechain=p["sidechain"],
-            span=p["span"], tokens=p["tokens"],
+            ts=p["ts"],
+            source="transcript",
+            session=session,
+            project=project,
+            model=p["model"],
+            msg_id=msg_id,
+            sidechain=p["sidechain"],
+            span=p["span"],
+            tokens=p["tokens"],
         )
         if p["branch"]:
             rec["branch"] = p["branch"]
@@ -387,8 +432,13 @@ def collect_file(
             rec["cwd"] = p["cwd"]
         records.append(rec)
 
-    return records, {"size": size, "offset": offset, "spans": tracker.stack,
-                     "branch": last_branch, "cwd": last_cwd}
+    return records, {
+        "size": size,
+        "offset": offset,
+        "spans": tracker.stack,
+        "branch": last_branch,
+        "cwd": last_cwd,
+    }
 
 
 def run_collect(
@@ -415,8 +465,12 @@ def run_collect(
     for ids in session_msg_index().values():
         known.update(ids)
     stats = {
-        "files_seen": 0, "files_read": 0, "records": 0, "cost_usd": 0.0,
-        "fallback_records": 0, "fallback_models": [],
+        "files_seen": 0,
+        "files_read": 0,
+        "records": 0,
+        "cost_usd": 0.0,
+        "fallback_records": 0,
+        "fallback_models": [],
     }
     fallback_models: set[str] = set()
 
@@ -461,6 +515,7 @@ def run_collect(
 # ----------------------------------------------------------------------
 # One-time branch backfill
 # ----------------------------------------------------------------------
+
 
 def build_branch_index(config_dir: Path) -> dict[str, tuple[str, str]]:
     """``msg_id -> (branch, cwd)`` from every transcript, read from byte 0.
@@ -535,7 +590,8 @@ def run_backfill_branches(config_dir: Path) -> dict:
                         stats["enriched"] += 1
                         changed = True
                         out_lines.append(
-                            json.dumps(rec, separators=(",", ":")).encode("utf-8") + b"\n"
+                            json.dumps(rec, separators=(",", ":")).encode("utf-8")
+                            + b"\n"
                         )
                         continue
                     stats["unmatched"] += 1

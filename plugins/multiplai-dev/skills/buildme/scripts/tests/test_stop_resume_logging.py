@@ -20,9 +20,9 @@ import time
 from pathlib import Path
 
 import pytest
-
 from build_pipeline.models import BlockStatus, BuildPhase
 from build_pipeline.state import BuildState
+
 from tests.spec_fixtures import ready_specs
 from tests.stop_resume_driver import AUDIT_USD, BLOCK_USD, BLOCKS, SPEC_USD
 from tests.test_git_ops import make_bare_origin, make_repo
@@ -46,23 +46,30 @@ class Sandbox:
         # pm-spec's handoff: the change's specs, ready and committed.
         ready_specs(self.repo / "specs" / "changes" / "feat", self.repo)
         make_bare_origin(self.repo, root / "origin.git")
-        subprocess.run(["git", "push", "-q", "origin", "main"], cwd=self.repo, check=True)
+        subprocess.run(
+            ["git", "push", "-q", "origin", "main"], cwd=self.repo, check=True
+        )
         self.ws = root / "ws"
         for name in ("home", "claude-config", "conf", "data"):
             (root / name).mkdir()
 
     def env(self) -> dict:
-        env = {k: v for k, v in os.environ.items()
-               if not k.startswith(("PYTEST", "CLAUDE", "MULTIPLAI_", "BUILDME_"))
-               and k not in ("WORKSPACE", "HOME")}
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if not k.startswith(("PYTEST", "CLAUDE", "MULTIPLAI_", "BUILDME_"))
+            and k not in ("WORKSPACE", "HOME")
+        }
         env.update(
             HOME=str(self.root / "home"),
             CLAUDE_CONFIG_DIR=str(self.root / "claude-config"),
             CLAUDE_MULTIPLAI_HOME=str(self.root / "conf"),
             CLAUDE_PLUGIN_OPTION_DATA_DIR=str(self.root / "data"),
             WORKSPACE=str(self.ws),
-            GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid",
-            GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid",
+            GIT_AUTHOR_NAME="t",
+            GIT_AUTHOR_EMAIL="t@example.invalid",
+            GIT_COMMITTER_NAME="t",
+            GIT_COMMITTER_EMAIL="t@example.invalid",
         )
         return env
 
@@ -73,23 +80,37 @@ class Sandbox:
         return path
 
     def run(self, project: Path | None = None, **spec) -> subprocess.CompletedProcess:
-        return subprocess.run([sys.executable, str(DRIVER), str(self._spec(project, spec))],
-                              cwd=SCRIPTS_DIR, env=self.env(), capture_output=True,
-                              text=True, timeout=180)
+        return subprocess.run(
+            [sys.executable, str(DRIVER), str(self._spec(project, spec))],
+            cwd=SCRIPTS_DIR,
+            env=self.env(),
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
 
     def start(self, **spec) -> subprocess.Popen:
-        return subprocess.Popen([sys.executable, str(DRIVER), str(self._spec(None, spec))],
-                                cwd=SCRIPTS_DIR, env=self.env(), stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, text=True)
+        return subprocess.Popen(
+            [sys.executable, str(DRIVER), str(self._spec(None, spec))],
+            cwd=SCRIPTS_DIR,
+            env=self.env(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
 
     def worktree(self, n: int = 1) -> Path:
-        return self.ws / ".worktrees" / ("buildme-feat" if n == 1 else f"buildme-feat-{n}")
+        return (
+            self.ws / ".worktrees" / ("buildme-feat" if n == 1 else f"buildme-feat-{n}")
+        )
 
     def progress(self, n: int = 1) -> str:
         return (self.worktree(n) / "build-progress.md").read_text()
 
     def live_state(self, n: int = 1) -> BuildState:
-        return BuildState.load(self.worktree(n) / "specs" / "changes" / "feat" / ".build-state.json")
+        return BuildState.load(
+            self.worktree(n) / "specs" / "changes" / "feat" / ".build-state.json"
+        )
 
     def completed(self, n: int = 1) -> BuildState:
         found = list((self.worktree(n) / "specs").rglob(COMPLETED))
@@ -112,7 +133,9 @@ def _kept_lines(text: str, root: Path) -> list[str]:
     lines, keep = [], False
     for raw in text.replace(str(root), "<root>").splitlines():
         line = _TS.sub("", raw).rstrip()
-        line = re.sub(r"spec-extract at [0-9a-f]{12}", "spec-extract at <revision>", line)
+        line = re.sub(
+            r"spec-extract at [0-9a-f]{12}", "spec-extract at <revision>", line
+        )
         if line.startswith("## "):
             keep = not line[3:].startswith(_RUN_SECTIONS)
         if keep and line:
@@ -141,7 +164,12 @@ def _usd(state: BuildState) -> float:
 
 
 def _snapshot(*roots: Path) -> dict[str, bytes]:
-    return {str(p): p.read_bytes() for root in roots for p in sorted(root.rglob("*")) if p.is_file()}
+    return {
+        str(p): p.read_bytes()
+        for root in roots
+        for p in sorted(root.rglob("*"))
+        if p.is_file()
+    }
 
 
 @pytest.fixture
@@ -166,8 +194,11 @@ def test_full_run_keeps_progress_spend_and_the_completed_checkpoint(full):
     assert progress.count("# Build Progress: feat") == 1
     assert "Model: CLI default | Effort: CLI default" in progress
     budget = progress.rsplit("] BUDGET\n", 1)[1]
-    for label, usd in (("spec_generation", SPEC_USD), ("design_audit", AUDIT_USD),
-                       ("implementer", BLOCKS * BLOCK_USD)):
+    for label, usd in (
+        ("spec_generation", SPEC_USD),
+        ("design_audit", AUDIT_USD),
+        ("implementer", BLOCKS * BLOCK_USD),
+    ):
         assert f"{label}=" in budget and f"/${usd:.2f}" in budget
     assert "COMPLETE\nPublished: https://github.com/acme/proj/pull/7" in progress
 
@@ -219,9 +250,14 @@ def test_S4_rerun_of_a_published_build_asks_and_writes_nothing(full):
     proc = full.run()
     assert proc.returncode == 3, proc.stderr[-2000:]
     path = full.worktree() / "specs" / "archive"
-    line = next(ln for ln in proc.stdout.splitlines() if ln.startswith("BUILD:COMPLETE:"))
+    line = next(
+        ln for ln in proc.stdout.splitlines() if ln.startswith("BUILD:COMPLETE:")
+    )
     assert Path(line.split(":", 2)[2]).parent.parent == path
-    assert "branch buildme/feat" in proc.stderr and "https://github.com/acme/proj/pull/7" in proc.stderr
+    assert (
+        "branch buildme/feat" in proc.stderr
+        and "https://github.com/acme/proj/pull/7" in proc.stderr
+    )
     assert "ERROR" not in proc.stderr
     assert _snapshot(*roots) == before
 
@@ -232,8 +268,12 @@ def test_S5_force_builds_anew_on_the_next_branch_and_resumes_there(full, force_a
 
     _killed(full.run(force=True, stop_at="tdd-start", stop_how="kill"))
     assert full.worktree(2).is_dir()
-    branch = subprocess.run(["git", "branch", "--show-current"], cwd=full.worktree(2),
-                            capture_output=True, text=True).stdout.strip()
+    branch = subprocess.run(
+        ["git", "branch", "--show-current"],
+        cwd=full.worktree(2),
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
     assert branch == "buildme/feat-2"
 
     # The stopped forced build resumes: its .build-state.json wins over the
@@ -259,7 +299,7 @@ def test_S6_spec_only_keeps_its_checkpoint_and_the_next_build_resumes_from_it(bo
     assert not any(ln.startswith("BUILD:COMPLETE:") for ln in proc.stdout.splitlines())
     after = box.progress()
     assert after.startswith(specs_progress)
-    resumed = after[len(specs_progress):]
+    resumed = after[len(specs_progress) :]
     assert "] RESUMED\nTier: " in resumed and "Block 2/2: block-2 — done" in resumed
 
 
@@ -268,8 +308,12 @@ def test_S7_a_standalone_tdd_completion_does_not_stop_the_next_build(box):
     (test_tdd_engine.py::test_standalone_run_keeps_its_checkpoint_as_completed);
     such a file is not a published build."""
     change_dir = box.repo / "specs" / "changes" / "feat"
-    tdd_done = BuildState(change_name="feat", tier="standard",
-                          phase=BuildPhase.TDD_BUILD, state_file=str(change_dir / ".build-state.json"))
+    tdd_done = BuildState(
+        change_name="feat",
+        tier="standard",
+        phase=BuildPhase.TDD_BUILD,
+        state_file=str(change_dir / ".build-state.json"),
+    )
     tdd_done.checkpoint()
     tdd_done.complete()
 
@@ -302,9 +346,13 @@ def test_S9_origin_moved_between_stop_and_resume(box, full):
     subprocess.run(["git", "push", "-q", "origin", "main"], cwd=box.repo, check=True)
 
     _ok(box.run())
-    log = subprocess.run(["git", "log", "--format=%s"], cwd=box.worktree(),
-                         capture_output=True, text=True).stdout
-    assert "later on main" not in log            # no fetch, no rebase
+    log = subprocess.run(
+        ["git", "log", "--format=%s"],
+        cwd=box.worktree(),
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert "later on main" not in log  # no fetch, no rebase
     assert_same_progress(box, full)
     assert _usd(box.completed()) == FULL_USD
 
@@ -321,8 +369,13 @@ def test_S10_stopped_twice_keeps_both_resumes_and_all_spend(box, full):
 def test_S11_resume_while_the_stopped_process_still_runs(box):
     hold = box.root / "hold"
     hold.mkdir()
-    first = box.start(stop_at="block-1-mid", stop_how="hold", hold_dir=str(hold),
-                      tag_pid=True, checkpoint_mid=True)
+    first = box.start(
+        stop_at="block-1-mid",
+        stop_how="hold",
+        hold_dir=str(hold),
+        tag_pid=True,
+        checkpoint_mid=True,
+    )
     try:
         deadline = time.monotonic() + 120
         while not (hold / "held").exists():

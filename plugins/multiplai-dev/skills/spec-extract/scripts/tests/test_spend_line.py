@@ -12,7 +12,6 @@ import pytest
 from multiplai_core import budget as core_budget
 from multiplai_core.agent_runner import AgentRunError
 from pydantic import BaseModel
-
 from spec_extract_pipeline import __main__ as cli
 from spec_extract_pipeline import sdk
 
@@ -24,7 +23,10 @@ class Answer(BaseModel):
 
 
 def _result(text: str, cost: float):
-    return SimpleNamespace(text=text, usage=SimpleNamespace(cost_usd=cost, input_tokens=10, output_tokens=2))
+    return SimpleNamespace(
+        text=text,
+        usage=SimpleNamespace(cost_usd=cost, input_tokens=10, output_tokens=2),
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -33,8 +35,10 @@ def fresh_process_spend(monkeypatch):
 
 
 def test_the_process_counts_each_call_but_not_the_restored_ledger(monkeypatch):
-    outcomes = [_result('{"value": 1}', 0.5),
-                AgentRunError("boom", reason="cli", stderr_tail="", partial=_result("", 0.25))]
+    outcomes = [
+        _result('{"value": 1}', 0.5),
+        AgentRunError("boom", reason="cli", stderr_tail="", partial=_result("", 0.25)),
+    ]
 
     async def run_agent(prompt, **kwargs):
         out = outcomes.pop(0)
@@ -44,11 +48,16 @@ def test_the_process_counts_each_call_but_not_the_restored_ledger(monkeypatch):
 
     monkeypatch.setattr(sdk, "run_agent", run_agent)
     earlier = core_budget.start(80.0, None, ledger_cls=sdk.SpecExtractBudget)
-    earlier.record(SimpleNamespace(cost_usd=7.0, input_tokens=1000, output_tokens=0), label="explore:old")
+    earlier.record(
+        SimpleNamespace(cost_usd=7.0, input_tokens=1000, output_tokens=0),
+        label="explore:old",
+    )
     sdk.start_budget(80.0, earlier.to_state())
 
     async def go():
-        return await _REAL_CALL("prompt", Answer, allowed_tools=["Read"], budget_label="explore:unit")
+        return await _REAL_CALL(
+            "prompt", Answer, allowed_tools=["Read"], budget_label="explore:unit"
+        )
 
     assert asyncio.run(go()) == Answer(value=1)
     with pytest.raises(sdk.CallFailed):
@@ -70,9 +79,14 @@ def test_the_module_entry_point_is_the_command_with_its_spend_line():
     import sys
     from pathlib import Path
 
-    res = subprocess.run([sys.executable, "-m", "spec_extract_pipeline", "run", "--tree", "--dir", "x"],
-                         cwd=Path(cli.__file__).resolve().parents[1], capture_output=True, text=True,
-                         timeout=120, check=False)
+    res = subprocess.run(
+        [sys.executable, "-m", "spec_extract_pipeline", "run", "--tree", "--dir", "x"],
+        cwd=Path(cli.__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
     assert res.returncode == cli.EXIT_REFUSED
     assert res.stdout.splitlines()[-1] == "SPEND:0.000000:0"
 
@@ -81,8 +95,18 @@ def test_cache_tokens_count_and_usage_that_does_not_parse_is_skipped(caplog):
     """`_record` counts cache read and cache creation tokens, and a usage it cannot
     read is logged and left out, never raised into a call that was already paid."""
     sdk.start_budget(80.0, None)
-    sdk._record(SimpleNamespace(cost_usd=0.5, input_tokens=10, output_tokens=2,
-                                cache_read_tokens=50_000, cache_creation_tokens=300), label="explore:a")
-    sdk._record(SimpleNamespace(cost_usd="not a number", input_tokens=1), label="explore:b")
+    sdk._record(
+        SimpleNamespace(
+            cost_usd=0.5,
+            input_tokens=10,
+            output_tokens=2,
+            cache_read_tokens=50_000,
+            cache_creation_tokens=300,
+        ),
+        label="explore:a",
+    )
+    sdk._record(
+        SimpleNamespace(cost_usd="not a number", input_tokens=1), label="explore:b"
+    )
     assert sdk.spend_marker() == "SPEND:0.500000:50312"
     assert "Process spend accounting failed" in caplog.text

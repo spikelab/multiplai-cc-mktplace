@@ -6,7 +6,6 @@ delegations so a broken import is caught."""
 from pathlib import Path
 
 import pytest
-
 from research_pipeline import env as rp_env
 from research_pipeline.env import (
     find_project_root,
@@ -19,6 +18,7 @@ from research_pipeline.env import (
 
 def test_reexports_delegate_to_core():
     import multiplai_core.env as core_env
+
     assert rp_env.find_project_root is core_env.find_project_root
     assert rp_env.load_env is core_env.load_env
     assert rp_env.load_multiplai_conf is core_env.load_multiplai_conf

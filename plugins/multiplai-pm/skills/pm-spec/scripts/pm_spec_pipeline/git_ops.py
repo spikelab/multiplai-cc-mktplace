@@ -27,10 +27,19 @@ class GitError(RuntimeError):
     pass
 
 
-def _git(args: list[str], cwd: Path, env: dict | None = None) -> subprocess.CompletedProcess:
+def _git(
+    args: list[str], cwd: Path, env: dict | None = None
+) -> subprocess.CompletedProcess:
     try:
-        return subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True,
-                              timeout=GIT_TIMEOUT_S, env=env, check=False)
+        return subprocess.run(
+            ["git", *args],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            timeout=GIT_TIMEOUT_S,
+            env=env,
+            check=False,
+        )
     except (OSError, subprocess.SubprocessError) as e:
         raise GitError(f"git {args[0]} could not run: {e}") from e
 
@@ -59,21 +68,37 @@ def commit_change_dir(project_dir: Path, change_dir: Path, message: str) -> str 
         rel = Path(change_dir).resolve().relative_to(project_dir.resolve()).as_posix()
     except ValueError:
         raise GitError(f"{change_dir} is not inside {project_dir}") from None
-    if _git(["rev-parse", "--is-inside-work-tree"], project_dir).stdout.strip() != "true":
+    if (
+        _git(["rev-parse", "--is-inside-work-tree"], project_dir).stdout.strip()
+        != "true"
+    ):
         raise GitError(f"{project_dir} is not in a git work tree")
     if not _git(["rev-parse", "--verify", "-q", "HEAD"], project_dir).stdout.strip():
-        raise GitError(f"{project_dir} has no commit yet; make a first commit, then run again")
-    staged = _git(["diff", "--cached", "--name-only", "-z", "--relative", "--", rel], project_dir)
+        raise GitError(
+            f"{project_dir} has no commit yet; make a first commit, then run again"
+        )
+    staged = _git(
+        ["diff", "--cached", "--name-only", "-z", "--relative", "--", rel], project_dir
+    )
     working = _git(["diff", "--name-only", "-z", "--relative", "--", rel], project_dir)
     if staged.returncode or working.returncode:
-        raise GitError("cannot inspect the change dir's git status: " + (staged.stderr or working.stderr))
-    divergent = (set(staged.stdout.split("\0")) & set(working.stdout.split("\0"))) - {""}
+        raise GitError(
+            "cannot inspect the change dir's git status: "
+            + (staged.stderr or working.stderr)
+        )
+    divergent = (set(staged.stdout.split("\0")) & set(working.stdout.split("\0"))) - {
+        ""
+    }
     if divergent:
-        raise GitError(f"cannot commit {rel}: staged and working versions differ: {', '.join(sorted(divergent))}. "
-                       "git add the paths whose working version should be committed, or git restore --staged "
-                       "the ones that should stay unstaged, then run again")
+        raise GitError(
+            f"cannot commit {rel}: staged and working versions differ: {', '.join(sorted(divergent))}. "
+            "git add the paths whose working version should be committed, or git restore --staged "
+            "the ones that should stay unstaged, then run again"
+        )
     index_path = _git(["rev-parse", "--git-path", "index"], project_dir).stdout.strip()
-    original = Path(index_path) if Path(index_path).is_absolute() else project_dir / index_path
+    original = (
+        Path(index_path) if Path(index_path).is_absolute() else project_dir / index_path
+    )
     before = _index_entries(project_dir, ".")
     with tempfile.TemporaryDirectory(prefix="pm-spec-index-") as directory:
         temporary = Path(directory) / "index"
@@ -87,7 +112,9 @@ def commit_change_dir(project_dir: Path, change_dir: Path, message: str) -> str 
         if diff.returncode == 0:
             return None
         if diff.returncode != 1:
-            raise GitError("cannot compare the change dir with HEAD: " + diff.stderr.strip())
+            raise GitError(
+                "cannot compare the change dir with HEAD: " + diff.stderr.strip()
+            )
         commit = _git(["commit", "-m", message, "--", rel], project_dir, env)
         if commit.returncode:
             raise GitError("commit failed: " + (commit.stderr or commit.stdout).strip())

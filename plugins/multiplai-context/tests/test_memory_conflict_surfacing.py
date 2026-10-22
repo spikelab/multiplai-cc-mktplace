@@ -28,10 +28,11 @@ import shutil
 import subprocess
 from datetime import datetime
 
-import pytest
-
 import context_manager
-from conftest import hook_context, run_context_hook as _run_hook, write_catalog as _write_catalog
+import pytest
+from conftest import hook_context
+from conftest import run_context_hook as _run_hook
+from conftest import write_catalog as _write_catalog
 
 # Stable fragments of the preamble asserted below — if the wording is
 # rephrased, update these sentinels together with the constant.
@@ -51,8 +52,13 @@ class TestConflictPreambleRendering:
         _write_catalog(
             env_setup["catalogs_dir"],
             "memory.json",
-            [{"source": "writing.md", "summary": "guide",
-              "intent_domains": ["writing a blog post"]}],
+            [
+                {
+                    "source": "writing.md",
+                    "summary": "guide",
+                    "intent_domains": ["writing a blog post"],
+                }
+            ],
         )
 
         out = _run_hook(env_setup, prompt="help me write a blog post")
@@ -61,9 +67,17 @@ class TestConflictPreambleRendering:
         assert PREAMBLE_SENTINEL in ctx
         assert STAMP_SENTINEL in ctx
         # Preamble sits between the section header and the first file.
-        assert ctx.index("=== MEMORY ===") < ctx.index(PREAMBLE_SENTINEL) < ctx.index("## writing.md")
+        assert (
+            ctx.index("=== MEMORY ===")
+            < ctx.index(PREAMBLE_SENTINEL)
+            < ctx.index("## writing.md")
+        )
         # Stamp precedes the file body it annotates.
-        assert ctx.index("## writing.md") < ctx.index(STAMP_SENTINEL) < ctx.index("# Writing guide")
+        assert (
+            ctx.index("## writing.md")
+            < ctx.index(STAMP_SENTINEL)
+            < ctx.index("# Writing guide")
+        )
 
     def test_preamble_on_recency_fallback_path(self, env_setup):
         """Memory injected by the no-catalog recency fallback gets the preamble too."""
@@ -90,9 +104,14 @@ class TestConflictPreambleRendering:
         _write_catalog(
             env_setup["catalogs_dir"],
             "skills.json",
-            [{"source": "writing", "name": "writing",
-              "summary": "Drafts and edits blog posts",
-              "intent_domains": ["writing a blog post"]}],
+            [
+                {
+                    "source": "writing",
+                    "name": "writing",
+                    "summary": "Drafts and edits blog posts",
+                    "intent_domains": ["writing a blog post"],
+                }
+            ],
         )
 
         out = _run_hook(
@@ -132,9 +151,7 @@ class TestStampMemoryDates:
         (tmp_path / "infra.md").write_text(
             "# Infrastructure\n\n**Last Updated:** 2025-03-01\n\nfacts"
         )
-        stamped = context_manager._stamp_memory_dates(
-            tmp_path, {"infra.md": "facts"}
-        )
+        stamped = context_manager._stamp_memory_dates(tmp_path, {"infra.md": "facts"})
         assert stamped["infra.md"].startswith("(last updated: 2025-03-01)\n")
 
     def test_mtime_fallback_without_header(self, tmp_path):
@@ -158,9 +175,7 @@ class TestStampMemoryDates:
         assert stamped["big.md#Section"] == "(last updated: 2026-01-15)\nsection slice"
 
     def test_missing_file_skips_stamp(self, tmp_path):
-        stamped = context_manager._stamp_memory_dates(
-            tmp_path, {"gone.md": "content"}
-        )
+        stamped = context_manager._stamp_memory_dates(tmp_path, {"gone.md": "content"})
         assert stamped["gone.md"] == "content"
 
     def test_out_of_range_mtime_fails_open(self, tmp_path):
@@ -223,8 +238,13 @@ def test_e2e_memory_document_disagreement_is_surfaced(env_setup):
     _write_catalog(
         env_setup["catalogs_dir"],
         "memory.json",
-        [{"source": "infrastructure.md", "summary": "infra facts",
-          "intent_domains": ["production database infrastructure"]}],
+        [
+            {
+                "source": "infrastructure.md",
+                "summary": "infra facts",
+                "intent_domains": ["production database infrastructure"],
+            }
+        ],
     )
 
     out = _run_hook(env_setup, prompt="which database engine does production run on?")
@@ -255,6 +275,14 @@ def test_e2e_memory_document_disagreement_is_surfaced(env_setup):
     # ...and explicitly surface that memory and the document disagree.
     assert any(
         marker in reply
-        for marker in ("disagree", "conflict", "contradict", "differs",
-                       "out of date", "outdated", "out-of-date", "stale")
+        for marker in (
+            "disagree",
+            "conflict",
+            "contradict",
+            "differs",
+            "out of date",
+            "outdated",
+            "out-of-date",
+            "stale",
+        )
     ), f"reply did not surface the disagreement:\n{result.stdout}"

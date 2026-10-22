@@ -20,7 +20,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from check_changelog import (  # noqa: E402
+from check_changelog import (
     GateError,
     check,
     collect,
@@ -33,14 +33,19 @@ BASE = {"myplug": "0.1.0", "other": "1.0.0"}
 
 
 def manifest(versions_map: dict[str, str]) -> str:
-    return json.dumps({
-        "name": "test",
-        "plugins": [{"name": n, "source": f"./plugins/{n}", "version": v}
-                    for n, v in versions_map.items()],
-    })
+    return json.dumps(
+        {
+            "name": "test",
+            "plugins": [
+                {"name": n, "source": f"./plugins/{n}", "version": v}
+                for n, v in versions_map.items()
+            ],
+        }
+    )
 
 
 # --- the gate fires ---------------------------------------------------------
+
 
 def test_behaviour_change_with_no_bump_and_no_notes_fails():
     f = check(["plugins/myplug/skills/thing/SKILL.md"], BASE, BASE)
@@ -48,10 +53,10 @@ def test_behaviour_change_with_no_bump_and_no_notes_fails():
     assert len(f.failures) == 1
     msg = f.failures[0]
     assert "myplug" in msg
-    assert "SKILL.md" in msg          # names what changed
+    assert "SKILL.md" in msg  # names what changed
     assert "marketplace.json" in msg  # names the file to edit
     assert "CHANGELOG.md" in msg
-    assert "no-changelog" in msg      # names the escape hatch
+    assert "no-changelog" in msg  # names the escape hatch
 
 
 def test_bump_without_notes_fails():
@@ -63,34 +68,39 @@ def test_bump_without_notes_fails():
 
 def test_notes_without_bump_fails():
     f = check(
-        ["plugins/myplug/skills/thing/SKILL.md",
-         "plugins/myplug/CHANGELOG.md"],
-        BASE, BASE)
+        ["plugins/myplug/skills/thing/SKILL.md", "plugins/myplug/CHANGELOG.md"],
+        BASE,
+        BASE,
+    )
     assert not f.ok
     assert "bump" in f.failures[0]
 
 
 def test_each_offending_plugin_is_reported_separately():
-    f = check(["plugins/myplug/scripts/a.py", "plugins/other/scripts/b.py"],
-              BASE, BASE)
+    f = check(["plugins/myplug/scripts/a.py", "plugins/other/scripts/b.py"], BASE, BASE)
     assert len(f.failures) == 2
     assert {"myplug" in f.failures[0], "other" in f.failures[1]} == {True}
 
 
 # --- the gate stays quiet ---------------------------------------------------
 
+
 def test_bump_plus_notes_passes():
     head = {**BASE, "myplug": "0.2.0"}
     f = check(
-        ["plugins/myplug/skills/thing/SKILL.md",
-         "plugins/myplug/CHANGELOG.md"],
-        BASE, head)
+        ["plugins/myplug/skills/thing/SKILL.md", "plugins/myplug/CHANGELOG.md"],
+        BASE,
+        head,
+    )
     assert f.ok
 
 
 def test_docs_only_change_is_not_gated():
-    f = check(["plugins/myplug/README.md",
-               "plugins/myplug/skills/thing/README.md"], BASE, BASE)
+    f = check(
+        ["plugins/myplug/README.md", "plugins/myplug/skills/thing/README.md"],
+        BASE,
+        BASE,
+    )
     assert f.ok
     assert any("docs-only" in n for n in f.notes)
 
@@ -105,8 +115,14 @@ def test_lockfile_only_change_is_not_gated():
 def test_lockfile_plus_code_is_still_gated():
     """The exemption is `all`, not `any` — a lock riding along with a real
     change must not smuggle that change past the gate."""
-    f = check(["plugins/myplug/skills/thing/scripts/uv.lock",
-               "plugins/myplug/skills/thing/scripts/run.py"], BASE, BASE)
+    f = check(
+        [
+            "plugins/myplug/skills/thing/scripts/uv.lock",
+            "plugins/myplug/skills/thing/scripts/run.py",
+        ],
+        BASE,
+        BASE,
+    )
     assert not f.ok
 
 
@@ -117,28 +133,38 @@ def test_changelog_only_change_is_not_gated():
 
 
 def test_repo_level_change_is_not_gated():
-    f = check([".github/workflows/ci.yml", "scripts/lint_skills.py",
-               "README.md"], BASE, BASE)
+    f = check(
+        [".github/workflows/ci.yml", "scripts/lint_skills.py", "README.md"], BASE, BASE
+    )
     assert f.ok
     assert any("no plugin files" in n for n in f.notes)
 
 
 def test_label_exempts():
-    f = check(["plugins/myplug/skills/thing/SKILL.md"], BASE, BASE,
-              labels=["bug", "no-changelog"])
+    f = check(
+        ["plugins/myplug/skills/thing/SKILL.md"],
+        BASE,
+        BASE,
+        labels=["bug", "no-changelog"],
+    )
     assert f.ok
     assert any("no-changelog" in n for n in f.notes)
 
 
 def test_pr_body_marker_exempts_case_insensitively():
-    f = check(["plugins/myplug/skills/thing/SKILL.md"], BASE, BASE,
-              pr_body="Mechanical rename.\n\n[Skip Changelog]\n")
+    f = check(
+        ["plugins/myplug/skills/thing/SKILL.md"],
+        BASE,
+        BASE,
+        pr_body="Mechanical rename.\n\n[Skip Changelog]\n",
+    )
     assert f.ok
 
 
 def test_unrelated_label_does_not_exempt():
-    f = check(["plugins/myplug/skills/thing/SKILL.md"], BASE, BASE,
-              labels=["documentation"])
+    f = check(
+        ["plugins/myplug/skills/thing/SKILL.md"], BASE, BASE, labels=["documentation"]
+    )
     assert not f.ok
 
 
@@ -146,8 +172,11 @@ def test_a_new_plugin_needs_notes():
     head = {**BASE, "fresh": "0.1.0"}
     f = check(["plugins/fresh/skills/thing/SKILL.md"], BASE, head)
     assert not f.ok
-    f2 = check(["plugins/fresh/skills/thing/SKILL.md",
-                "plugins/fresh/CHANGELOG.md"], BASE, head)
+    f2 = check(
+        ["plugins/fresh/skills/thing/SKILL.md", "plugins/fresh/CHANGELOG.md"],
+        BASE,
+        head,
+    )
     assert f2.ok
 
 
@@ -160,6 +189,7 @@ def test_a_removed_plugin_is_not_gated():
 
 # --- parsing ---------------------------------------------------------------
 
+
 def test_versions_reads_the_manifest():
     assert versions(manifest(BASE)) == BASE
 
@@ -169,18 +199,22 @@ def test_versions_rejects_broken_json():
         versions("{not json")
 
 
-@pytest.mark.parametrize("path,expected", [
-    ("plugins/a/skills/b/SKILL.md", ("a", "skills/b/SKILL.md")),
-    ("plugins/a/CHANGELOG.md", ("a", "CHANGELOG.md")),
-    ("plugins/a", None),
-    ("scripts/x.py", None),
-    ("", None),
-])
+@pytest.mark.parametrize(
+    "path,expected",
+    [
+        ("plugins/a/skills/b/SKILL.md", ("a", "skills/b/SKILL.md")),
+        ("plugins/a/CHANGELOG.md", ("a", "CHANGELOG.md")),
+        ("plugins/a", None),
+        ("scripts/x.py", None),
+        ("", None),
+    ],
+)
 def test_plugin_of(path, expected):
     assert plugin_of(path) == expected
 
 
 # --- end to end over a real repository -------------------------------------
+
 
 def build_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
@@ -189,18 +223,20 @@ def build_repo(tmp_path: Path) -> Path:
     skill.mkdir(parents=True)
 
     def git(*args):
-        subprocess.run(["git", *args], cwd=repo, check=True,
-                       capture_output=True)
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
 
-    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True,
-                   capture_output=True)
+    subprocess.run(
+        ["git", "init", "-q", "-b", "main", str(repo)], check=True, capture_output=True
+    )
     git("config", "user.email", "t@example.com")
     git("config", "user.name", "T")
-    (repo / ".claude-plugin" / "marketplace.json").write_text(manifest(
-        {"myplug": "0.1.0"}))
+    (repo / ".claude-plugin" / "marketplace.json").write_text(
+        manifest({"myplug": "0.1.0"})
+    )
     (skill / "SKILL.md").write_text("---\nname: thing\n---\n")
     (repo / "plugins" / "myplug" / "CHANGELOG.md").write_text(
-        "# Changelog\n\n## [Unreleased]\n")
+        "# Changelog\n\n## [Unreleased]\n"
+    )
     git("add", "-A")
     git("commit", "-qm", "base")
     git("branch", "base-ref")
@@ -214,9 +250,11 @@ def run(repo: Path, *extra: str) -> int:
 def test_collect_sees_the_change_and_both_manifests(tmp_path):
     repo = build_repo(tmp_path)
     (repo / "plugins" / "myplug" / "skills" / "thing" / "SKILL.md").write_text(
-        "---\nname: thing\ndescription: now does more\n---\n")
-    subprocess.run(["git", "commit", "-aqm", "change"], cwd=repo, check=True,
-                   capture_output=True)
+        "---\nname: thing\ndescription: now does more\n---\n"
+    )
+    subprocess.run(
+        ["git", "commit", "-aqm", "change"], cwd=repo, check=True, capture_output=True
+    )
 
     changed, base_v, head_v = collect(repo, "base-ref")
     assert changed == ["plugins/myplug/skills/thing/SKILL.md"]
@@ -230,18 +268,23 @@ def test_cli_both_directions(tmp_path, capsys):
     plug = repo / "plugins" / "myplug"
 
     (plug / "skills" / "thing" / "SKILL.md").write_text(
-        "---\nname: thing\ndescription: now does more\n---\n")
-    subprocess.run(["git", "commit", "-aqm", "change"], cwd=repo, check=True,
-                   capture_output=True)
+        "---\nname: thing\ndescription: now does more\n---\n"
+    )
+    subprocess.run(
+        ["git", "commit", "-aqm", "change"], cwd=repo, check=True, capture_output=True
+    )
     assert run(repo) == 1
     assert "ERROR" in capsys.readouterr().out
 
-    (repo / ".claude-plugin" / "marketplace.json").write_text(manifest(
-        {"myplug": "0.2.0"}))
+    (repo / ".claude-plugin" / "marketplace.json").write_text(
+        manifest({"myplug": "0.2.0"})
+    )
     (plug / "CHANGELOG.md").write_text(
-        "# Changelog\n\n## [Unreleased]\n\n## [0.2.0] - 2026-07-26\n")
-    subprocess.run(["git", "commit", "-aqm", "release"], cwd=repo, check=True,
-                   capture_output=True)
+        "# Changelog\n\n## [Unreleased]\n\n## [0.2.0] - 2026-07-26\n"
+    )
+    subprocess.run(
+        ["git", "commit", "-aqm", "release"], cwd=repo, check=True, capture_output=True
+    )
     assert run(repo) == 0
     assert "clean" in capsys.readouterr().out
 
@@ -249,9 +292,11 @@ def test_cli_both_directions(tmp_path, capsys):
 def test_cli_escape_hatches_over_a_real_repo(tmp_path):
     repo = build_repo(tmp_path)
     (repo / "plugins" / "myplug" / "skills" / "thing" / "SKILL.md").write_text(
-        "---\nname: thing\ndescription: changed\n---\n")
-    subprocess.run(["git", "commit", "-aqm", "change"], cwd=repo, check=True,
-                   capture_output=True)
+        "---\nname: thing\ndescription: changed\n---\n"
+    )
+    subprocess.run(
+        ["git", "commit", "-aqm", "change"], cwd=repo, check=True, capture_output=True
+    )
     assert run(repo) == 1
     assert run(repo, "--labels", "no-changelog") == 0
     assert run(repo, "--pr-body", "why: [skip changelog]") == 0

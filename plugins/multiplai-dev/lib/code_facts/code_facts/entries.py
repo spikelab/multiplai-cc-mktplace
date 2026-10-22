@@ -84,22 +84,56 @@ from typing import Literal
 
 from pydantic import ConfigDict, Field
 
-from .commands import (CommandLine, first_positional, hook_commands, is_hooks_file, looks_like_python_m,
-                       module_search_roots, parse_command_line, python_module, resolve_python_m, shell_commands)
-from .paths import (KIND_RANK, DiscoveredKind, Handler, Invoker, Location, PathDiagnostic, PathEntry, Seed,
-                    _Strict, normalise_rel_path)
+from .commands import (
+    CommandLine,
+    first_positional,
+    hook_commands,
+    is_hooks_file,
+    looks_like_python_m,
+    module_search_roots,
+    parse_command_line,
+    python_module,
+    resolve_python_m,
+    shell_commands,
+)
+from .paths import (
+    KIND_RANK,
+    DiscoveredKind,
+    Handler,
+    Invoker,
+    Location,
+    PathDiagnostic,
+    PathEntry,
+    Seed,
+    _Strict,
+    normalise_rel_path,
+)
 from .paths import EntryKind as OutputKind
 from .pyindex import PyIndex, dotted_reference
 
 log = logging.getLogger(__name__)
 
-EntryKind = Literal["argparse_subcommand", "click_command", "typer_command", "project_script", "main_module",
-                    "skill_command", "hook_command", "seed"]
+EntryKind = Literal[
+    "argparse_subcommand",
+    "click_command",
+    "typer_command",
+    "project_script",
+    "main_module",
+    "skill_command",
+    "hook_command",
+    "seed",
+]
 
 # The kind paths.v1 publishes for each discovery kind.
 OUTPUT_KIND: dict[EntryKind, DiscoveredKind] = {
-    "argparse_subcommand": "argparse", "click_command": "click", "typer_command": "typer", "main_module": "main",
-    "project_script": "script", "skill_command": "skill_command", "hook_command": "hook", "seed": "seed",
+    "argparse_subcommand": "argparse",
+    "click_command": "click",
+    "typer_command": "typer",
+    "main_module": "main",
+    "project_script": "script",
+    "skill_command": "skill_command",
+    "hook_command": "hook",
+    "seed": "seed",
 }
 
 # The kind of an entry the model fallback adds; it is published as is and never merges.
@@ -111,6 +145,7 @@ Diagnostic = PathDiagnostic
 
 class KnownEdge(_Strict):
     """A call edge discovery proved statically: a dispatch line to the `def` it reaches."""
+
     # `from` is a keyword; dump with `by_alias=True` to publish it under that name.
     model_config = ConfigDict(populate_by_name=True)
 
@@ -120,6 +155,7 @@ class KnownEdge(_Strict):
 
 class EntryInvoker(_Strict):
     """An entry merged into another, under its discovery kind; paths.v1 publishes it as an `Invoker`."""
+
     kind: EntryKind
     name: str
     location: Location
@@ -129,6 +165,7 @@ class Entry(_Strict):
     """A discovered entry point, or one the model fallback added. `known_edges` is internal: paths.v1 does not
     publish it.
     """
+
     kind: EntryKind | ModelKind
     name: str = Field(min_length=1)
     location: Location
@@ -146,9 +183,19 @@ def output_kind(entry: Entry) -> OutputKind:
 
 def to_path_entry(entry: Entry) -> PathEntry:
     """The entry as paths.v1 publishes it: output kinds, its invokers' included, and no known edges."""
-    invokers = [Invoker(kind=OUTPUT_KIND[i.kind], name=i.name, location=i.location) for i in entry.also_invoked_by]
-    return PathEntry(kind=output_kind(entry), name=entry.name, location=entry.location, handler=entry.handler,
-                     invocation=entry.invocation, invoked_by=entry.invoked_by, also_invoked_by=invokers)
+    invokers = [
+        Invoker(kind=OUTPUT_KIND[i.kind], name=i.name, location=i.location)
+        for i in entry.also_invoked_by
+    ]
+    return PathEntry(
+        kind=output_kind(entry),
+        name=entry.name,
+        location=entry.location,
+        handler=entry.handler,
+        invocation=entry.invocation,
+        invoked_by=entry.invoked_by,
+        also_invoked_by=invokers,
+    )
 
 
 def invoked_by(kind: EntryKind, name: str, path: str, invocation: str | None) -> str:
@@ -174,7 +221,9 @@ class Discovery(_Strict):
     diagnostics: list[Diagnostic]
 
 
-def discover_entries(root: Path, seeds: Sequence[Seed] = (), *, index: PyIndex | None = None) -> Discovery:
+def discover_entries(
+    root: Path, seeds: Sequence[Seed] = (), *, index: PyIndex | None = None
+) -> Discovery:
     """Every entry point of the snapshot at `root`, plus one entry per valid seed.
 
     `index` is a `PyIndex` already built for `root`. Raises ValueError for a
@@ -183,8 +232,10 @@ def discover_entries(root: Path, seeds: Sequence[Seed] = (), *, index: PyIndex |
     seed_paths = [normalise_rel_path(root, seed.path) for seed in seeds]
     index = index if index is not None else PyIndex.build(root)
     entries: list[Entry] = []
-    diagnostics = [Diagnostic(path=path, line=None, reason="parse_error", detail=detail)
-                   for path, detail in index.parse_errors()]
+    diagnostics = [
+        Diagnostic(path=path, line=None, reason="parse_error", detail=detail)
+        for path, detail in index.parse_errors()
+    ]
     for found, problems in _scans(root, index):
         entries += found
         diagnostics += problems
@@ -198,7 +249,12 @@ def discover_entries(root: Path, seeds: Sequence[Seed] = (), *, index: PyIndex |
     entries = merge_entries(entries)
     entries.sort(key=lambda e: (e.location.path, e.location.line, e.kind, e.name))
     diagnostics.sort(key=lambda d: (d.path, d.line or 0, d.reason, d.detail))
-    log.info("discovered %d entries with %d diagnostics under %s", len(entries), len(diagnostics), root)
+    log.info(
+        "discovered %d entries with %d diagnostics under %s",
+        len(entries),
+        len(diagnostics),
+        root,
+    )
     return Discovery(entries=entries, diagnostics=diagnostics)
 
 
@@ -219,7 +275,14 @@ def _scans(root: Path, index: PyIndex) -> Iterator[_Found]:
 
 def _unreadable(path: str, error: Exception) -> _Found:
     """What a scanner finds in a file it cannot read or parse: no entries, and one file-level `parse_error`."""
-    return [], [Diagnostic(path=path, line=None, reason="parse_error", detail=f"{type(error).__name__}: {error}")]
+    return [], [
+        Diagnostic(
+            path=path,
+            line=None,
+            reason="parse_error",
+            detail=f"{type(error).__name__}: {error}",
+        )
+    ]
 
 
 def _handler_location(handler: Handler) -> Location:
@@ -228,17 +291,33 @@ def _handler_location(handler: Handler) -> Location:
 
 
 def _edge(from_path: str, from_line: int, to: Handler) -> KnownEdge:
-    return KnownEdge(from_=Location(path=from_path, line=from_line), to=_handler_location(to))
+    return KnownEdge(
+        from_=Location(path=from_path, line=from_line), to=_handler_location(to)
+    )
 
 
-def _static_entry(kind: EntryKind, name: str, path: str, line: int, handler: Handler | None,
-                  known_edges: Iterable[KnownEdge] = (), by: str | None = None) -> Entry:
+def _static_entry(
+    kind: EntryKind,
+    name: str,
+    path: str,
+    line: int,
+    handler: Handler | None,
+    known_edges: Iterable[KnownEdge] = (),
+    by: str | None = None,
+) -> Entry:
     """An entry declared at `path:line` of the source: no invocation text, and no invokers until merged. `by`
     overrides who runs it.
     """
-    return Entry(kind=kind, name=name, location=Location(path=path, line=line), handler=handler, invocation=None,
-                 invoked_by=by or invoked_by(kind, name, path, None), known_edges=list(known_edges),
-                 also_invoked_by=[])
+    return Entry(
+        kind=kind,
+        name=name,
+        location=Location(path=path, line=line),
+        handler=handler,
+        invocation=None,
+        invoked_by=by or invoked_by(kind, name, path, None),
+        known_edges=list(known_edges),
+        also_invoked_by=[],
+    )
 
 
 # --- argparse ---------------------------------------------------------------------------------
@@ -247,6 +326,7 @@ def _static_entry(kind: EntryKind, name: str, path: str, line: int, handler: Han
 @dataclass(eq=False)
 class _Subcommand:
     """One literal `add_parser` call; `func` is its last `set_defaults(func=...)` value and that call's line."""
+
     names: tuple[str, ...]
     line: int
     func: tuple[ast.expr, int] | None = None
@@ -259,12 +339,14 @@ class _Subcommand:
 @dataclass(frozen=True)
 class _Parser:
     """A parser value: the subcommand it was added as, or None for a top-level parser."""
+
     command: _Subcommand | None
 
 
 @dataclass(frozen=True)
 class _Subparsers:
     """The value `add_subparsers()` returns on a parser; `parent` as for `_Parser`."""
+
     parent: _Subcommand | None
 
 
@@ -286,7 +368,9 @@ class _ParserScan:
         self.diagnostics: list[Diagnostic] = []
         self._values: dict[int, _Value | None] = {}
         self._helpers: dict[str, int] = {}
-        self._scopes: list[ast.Module | ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef] = []
+        self._scopes: list[
+            ast.Module | ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef
+        ] = []
         self._seeds: dict[int, list[_Env]] = {}
 
     @property
@@ -294,7 +378,10 @@ class _ParserScan:
         return list(self._commands.values())
 
     def scan(self, tree: ast.Module) -> None:
-        self._scopes = [tree, *_in_source_order(n for n in ast.walk(tree) if isinstance(n, _DEF_NODES))]
+        self._scopes = [
+            tree,
+            *_in_source_order(n for n in ast.walk(tree) if isinstance(n, _DEF_NODES)),
+        ]
         self._helpers = _unique_functions(self._scopes)
         for position in _callers_first(self._scopes, self._helpers):
             # A function given parser values at its call sites is scanned once per distinct set of them.
@@ -306,7 +393,9 @@ class _ParserScan:
         for node in _walk_scope(body):
             if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
                 value = self._eval(node.value, env)
-                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                targets = (
+                    node.targets if isinstance(node, ast.Assign) else [node.target]
+                )
                 for target in (t for t in targets if isinstance(t, ast.Name)):
                     if value is None:
                         env.pop(target.id, None)
@@ -318,7 +407,9 @@ class _ParserScan:
 
     def _pass_to_helper(self, call: ast.Call, env: _Env) -> None:
         """Seed the parameters of a same-module function called by name with the parser values it is given."""
-        position = self._helpers.get(call.func.id) if isinstance(call.func, ast.Name) else None
+        position = (
+            self._helpers.get(call.func.id) if isinstance(call.func, ast.Name) else None
+        )
         if position is None:
             return
         arguments = self._scopes[position].args
@@ -331,7 +422,10 @@ class _ParserScan:
                 seed[param] = value
         keyword_params = {*params, *(a.arg for a in arguments.kwonlyargs)}
         for keyword in call.keywords:
-            if keyword.arg in keyword_params and (value := self._eval(keyword.value, env)) is not None:
+            if (
+                keyword.arg in keyword_params
+                and (value := self._eval(keyword.value, env)) is not None
+            ):
                 seed[keyword.arg] = value
         seeds = self._seeds.setdefault(position, [])
         if seed and seed not in seeds:
@@ -344,18 +438,28 @@ class _ParserScan:
             return None
         # A call is reached again as a child of the statement it is in; it is evaluated, and recorded, once.
         if id(expr) not in self._values:
-            self._values[id(expr)] = self._call(expr, expr.func, self._eval(expr.func.value, env))
+            self._values[id(expr)] = self._call(
+                expr, expr.func, self._eval(expr.func.value, env)
+            )
         return self._values[id(expr)]
 
-    def _call(self, call: ast.Call, callee: ast.Attribute, receiver: _Value | None) -> _Value | None:
+    def _call(
+        self, call: ast.Call, callee: ast.Attribute, receiver: _Value | None
+    ) -> _Value | None:
         method = callee.attr
         if method == "add_subparsers":
-            return _Subparsers(receiver.command if isinstance(receiver, _Parser) else None)
+            return _Subparsers(
+                receiver.command if isinstance(receiver, _Parser) else None
+            )
         if method == "add_parser" and isinstance(receiver, _Subparsers):
             return self._add_parser(call, receiver)
         if method == "add_parser" and receiver is None:
             self._untraced_add_parser(call, callee.value)
-        if method == "set_defaults" and isinstance(receiver, _Parser) and receiver.command is not None:
+        if (
+            method == "set_defaults"
+            and isinstance(receiver, _Parser)
+            and receiver.command is not None
+        ):
             for keyword in call.keywords:
                 if keyword.arg == "func":
                     receiver.command.func = (keyword.value, call.lineno)
@@ -363,10 +467,19 @@ class _ParserScan:
 
     def _add_parser(self, call: ast.Call, subparsers: _Subparsers) -> _Parser | None:
         name = _add_parser_name(call)
-        if not (isinstance(name, ast.Constant) and isinstance(name.value, str) and name.value):
-            self.diagnostics.append(Diagnostic(
-                path=self.path, line=call.lineno, reason="dynamic_name",
-                detail=f"add_parser is given {_shown(name)}, not a string literal; the subcommand name is unknown"))
+        if not (
+            isinstance(name, ast.Constant)
+            and isinstance(name.value, str)
+            and name.value
+        ):
+            self.diagnostics.append(
+                Diagnostic(
+                    path=self.path,
+                    line=call.lineno,
+                    reason="dynamic_name",
+                    detail=f"add_parser is given {_shown(name)}, not a string literal; the subcommand name is unknown",
+                )
+            )
             return None
         prefix = subparsers.parent.names if subparsers.parent else ()
         key = ((*prefix, name.value), call.lineno)
@@ -375,14 +488,23 @@ class _ParserScan:
         return _Parser(command)
 
     def _untraced_add_parser(self, call: ast.Call, receiver: ast.expr) -> None:
-        self.diagnostics.append(Diagnostic(
-            path=self.path, line=call.lineno, reason="unresolved_target",
-            detail=f"add_parser({_shown(_add_parser_name(call))}) is called on {ast.unparse(receiver)}, "
-                   "which is not traced to an add_subparsers() value in this module; no subcommand is emitted"))
+        self.diagnostics.append(
+            Diagnostic(
+                path=self.path,
+                line=call.lineno,
+                reason="unresolved_target",
+                detail=f"add_parser({_shown(_add_parser_name(call))}) is called on {ast.unparse(receiver)}, "
+                "which is not traced to an add_subparsers() value in this module; no subcommand is emitted",
+            )
+        )
 
 
 def _add_parser_name(call: ast.Call) -> ast.expr | None:
-    return call.args[0] if call.args else next((k.value for k in call.keywords if k.arg == "name"), None)
+    return (
+        call.args[0]
+        if call.args
+        else next((k.value for k in call.keywords if k.arg == "name"), None)
+    )
 
 
 def _shown(expr: ast.expr | None) -> str:
@@ -391,11 +513,17 @@ def _shown(expr: ast.expr | None) -> str:
 
 def _walk_scope(body: list[ast.stmt]) -> Iterator[ast.AST]:
     """The nodes of one scope in source order, leaving out nested function, class and lambda scopes."""
-    stack: list[ast.AST] = [n for n in reversed(body) if not isinstance(n, _SCOPE_NODES)]
+    stack: list[ast.AST] = [
+        n for n in reversed(body) if not isinstance(n, _SCOPE_NODES)
+    ]
     while stack:
         node = stack.pop()
         yield node
-        stack.extend(c for c in reversed(list(ast.iter_child_nodes(node))) if not isinstance(c, _SCOPE_NODES))
+        stack.extend(
+            c
+            for c in reversed(list(ast.iter_child_nodes(node)))
+            if not isinstance(c, _SCOPE_NODES)
+        )
 
 
 def _unique_functions(scopes: Sequence[ast.AST]) -> dict[str, int]:
@@ -404,18 +532,33 @@ def _unique_functions(scopes: Sequence[ast.AST]) -> dict[str, int]:
     for position, scope in enumerate(scopes):
         if isinstance(scope, _DEF_NODES):
             positions.setdefault(scope.name, []).append(position)
-    return {name: found[0] for name, found in positions.items()
-            if len(found) == 1 and isinstance(scopes[found[0]], _FUNCTION_NODES)}
+    return {
+        name: found[0]
+        for name, found in positions.items()
+        if len(found) == 1 and isinstance(scopes[found[0]], _FUNCTION_NODES)
+    }
 
 
-def _callers_first(scopes: Sequence[ast.Module | ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef],
-                   helpers: dict[str, int]) -> list[int]:
+def _callers_first(
+    scopes: Sequence[
+        ast.Module | ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef
+    ],
+    helpers: dict[str, int],
+) -> list[int]:
     """Scope positions ordered so that each function follows every scope calling it by name, so that its
     call sites are scanned first; source order breaks ties and call cycles.
     """
-    callees = [{helpers[n.func.id] for n in _walk_scope(scope.body)
-                if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in helpers} - {position}
-               for position, scope in enumerate(scopes)]
+    callees = [
+        {
+            helpers[n.func.id]
+            for n in _walk_scope(scope.body)
+            if isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Name)
+            and n.func.id in helpers
+        }
+        - {position}
+        for position, scope in enumerate(scopes)
+    ]
     waiting = [0] * len(scopes)
     for called in callees:
         for position in called:
@@ -439,20 +582,42 @@ def _callers_first(scopes: Sequence[ast.Module | ast.FunctionDef | ast.AsyncFunc
     return order
 
 
-def _argparse_entries(index: PyIndex, dispatch: _DispatchIndex, path: str, tree: ast.Module) -> _Found:
-    if not any(isinstance(n, ast.Attribute) and n.attr == "add_parser" for n in ast.walk(tree)):
+def _argparse_entries(
+    index: PyIndex, dispatch: _DispatchIndex, path: str, tree: ast.Module
+) -> _Found:
+    if not any(
+        isinstance(n, ast.Attribute) and n.attr == "add_parser" for n in ast.walk(tree)
+    ):
         return [], []
     scan = _ParserScan(path)
     scan.scan(tree)
     entries, diagnostics = [], list(scan.diagnostics)
     for command in scan.commands:
-        siblings = frozenset(c.names[-1] for c in scan.commands if c.names[:-1] == command.names[:-1])
-        handler, edge, problem = _resolve_handler(index, dispatch, path, command, siblings)
-        entries.append(_static_entry("argparse_subcommand", command.name, path, command.line, handler,
-                                     [edge] if edge else []))
+        siblings = frozenset(
+            c.names[-1] for c in scan.commands if c.names[:-1] == command.names[:-1]
+        )
+        handler, edge, problem = _resolve_handler(
+            index, dispatch, path, command, siblings
+        )
+        entries.append(
+            _static_entry(
+                "argparse_subcommand",
+                command.name,
+                path,
+                command.line,
+                handler,
+                [edge] if edge else [],
+            )
+        )
         if problem is not None:
-            diagnostics.append(Diagnostic(path=path, line=command.line, reason="unresolved_handler",
-                                          detail=f"subcommand {command.name!r}: {problem}"))
+            diagnostics.append(
+                Diagnostic(
+                    path=path,
+                    line=command.line,
+                    reason="unresolved_handler",
+                    detail=f"subcommand {command.name!r}: {problem}",
+                )
+            )
     return entries, diagnostics
 
 
@@ -460,16 +625,22 @@ def _argparse_entries(index: PyIndex, dispatch: _DispatchIndex, path: str, tree:
 _Resolution = tuple[Handler | None, KnownEdge | None, str | None]
 
 
-def _resolve_handler(index: PyIndex, dispatch: _DispatchIndex, path: str, command: _Subcommand,
-                     siblings: frozenset[str]) -> _Resolution:
+def _resolve_handler(
+    index: PyIndex,
+    dispatch: _DispatchIndex,
+    path: str,
+    command: _Subcommand,
+    siblings: frozenset[str],
+) -> _Resolution:
     """Resolve through `set_defaults(func=...)` when the subparser calls it, else through a dispatch dict."""
     if command.func is not None:
         return _set_defaults_handler(index, dispatch, path, command.func)
     return _dispatch_dict_handler(index, dispatch, path, command, siblings)
 
 
-def _set_defaults_handler(index: PyIndex, dispatch: _DispatchIndex, path: str,
-                          func: tuple[ast.expr, int]) -> _Resolution:
+def _set_defaults_handler(
+    index: PyIndex, dispatch: _DispatchIndex, path: str, func: tuple[ast.expr, int]
+) -> _Resolution:
     """The edge starts at the first `args.func(...)` call of the modules `dispatch.call_modules` names, or at the
     `set_defaults` line when there is none.
     """
@@ -479,13 +650,24 @@ def _set_defaults_handler(index: PyIndex, dispatch: _DispatchIndex, path: str,
         return None, None, None
     handler = _function(index, index.resolve_name(path, line, reference))
     if handler is None:
-        return None, None, _external_problem(index, f"set_defaults at {path}:{line}", path, line, reference)
+        return (
+            None,
+            None,
+            _external_problem(
+                index, f"set_defaults at {path}:{line}", path, line, reference
+            ),
+        )
     start = dispatch.func_call(path) or (path, line)
     return handler, _edge(*start, handler), None
 
 
-def _dispatch_dict_handler(index: PyIndex, dispatch: _DispatchIndex, path: str, command: _Subcommand,
-                           siblings: frozenset[str]) -> _Resolution:
+def _dispatch_dict_handler(
+    index: PyIndex,
+    dispatch: _DispatchIndex,
+    path: str,
+    command: _Subcommand,
+    siblings: frozenset[str],
+) -> _Resolution:
     """The subcommand's item in a dict literal of this module or of a same-repository module it imports.
 
     When some candidate dict is called as `<DICT>[...](...)`, only such dicts count. Of those left, the dict
@@ -494,21 +676,31 @@ def _dispatch_dict_handler(index: PyIndex, dispatch: _DispatchIndex, path: str, 
     or at the item's line when there is none. Comparisons such as `args.command == "x"` never resolve.
     """
     leaf = command.names[-1]
-    candidates = [(module, literal, dispatch.dict_call(path, module, literal.name))
-                  for module in [path, *index.imported_files(path)]
-                  for literal in dispatch.facts(module).dicts if leaf in literal.items]
+    candidates = [
+        (module, literal, dispatch.dict_call(path, module, literal.name))
+        for module in [path, *index.imported_files(path)]
+        for literal in dispatch.facts(module).dicts
+        if leaf in literal.items
+    ]
     if any(start for _, _, start in candidates):
         candidates = [candidate for candidate in candidates if candidate[2]]
     candidates.sort(key=lambda candidate: candidate[1].mismatch(siblings))
     unresolved = None
     for module, literal, start in candidates:
         item = literal.items[leaf]
-        handler = _function(index, index.resolve_name(module, item.value_line, item.value))
+        handler = _function(
+            index, index.resolve_name(module, item.value_line, item.value)
+        )
         if handler is not None:
             return handler, _edge(*(start or (module, item.key_line)), handler), None
         if unresolved is None:
-            unresolved = _external_problem(index, f"dispatch dict entry at {module}:{item.key_line}",
-                                           module, item.value_line, item.value)
+            unresolved = _external_problem(
+                index,
+                f"dispatch dict entry at {module}:{item.key_line}",
+                module,
+                item.value_line,
+                item.value,
+            )
     return None, None, unresolved
 
 
@@ -520,16 +712,21 @@ def _function(index: PyIndex, handler: Handler | None) -> Handler | None:
     return handler if found is not None and not found.is_class else None
 
 
-def _external_problem(index: PyIndex, site: str, path: str, line: int, reference: str) -> str | None:
+def _external_problem(
+    index: PyIndex, site: str, path: str, line: int, reference: str
+) -> str | None:
     """The `unresolved_handler` detail when an unresolved handler reference comes from outside the repository."""
     if not index.is_external(path, line, reference):
         return None
-    return f"{site} maps it to {reference}, which is imported from outside this repository"
+    return (
+        f"{site} maps it to {reference}, which is imported from outside this repository"
+    )
 
 
 @dataclass(frozen=True)
 class _DictItem:
     """`"<key>": <value reference>` in a dict literal."""
+
     value: str
     key_line: int
     value_line: int
@@ -538,6 +735,7 @@ class _DictItem:
 @dataclass(frozen=True)
 class _DictLiteral:
     """A dict literal's string-keyed reference items; `name` is the name it is assigned to, if any."""
+
     name: str | None
     line: int
     items: dict[str, _DictItem]
@@ -553,6 +751,7 @@ class _DispatchFacts:
     """A module's dispatch sites: the first `args.func(...)` line (`args` bound from `.parse_args(...)`), its
     dict literals in source order, and the first `<DICT>[...](...)` line per dict name.
     """
+
     func_call: int | None
     dicts: list[_DictLiteral]
     dict_calls: dict[str, int]
@@ -569,7 +768,9 @@ class _DispatchIndex:
     def facts(self, path: str) -> _DispatchFacts:
         if path not in self._facts:
             tree = self._index.tree(path)
-            self._facts[path] = _dispatch_facts(tree) if tree else _DispatchFacts(None, [], {})
+            self._facts[path] = (
+                _dispatch_facts(tree) if tree else _DispatchFacts(None, [], {})
+            )
         return self._facts[path]
 
     def call_modules(self, path: str) -> list[str]:
@@ -577,7 +778,11 @@ class _DispatchIndex:
         `build_parser()`, say), then the ones it imports: where its dispatch call may be.
         """
         if path not in self._call_modules:
-            found = [path, *self._index.importing_files(path), *self._index.imported_files(path)]
+            found = [
+                path,
+                *self._index.importing_files(path),
+                *self._index.imported_files(path),
+            ]
             self._call_modules[path] = list(dict.fromkeys(found))
         return self._call_modules[path]
 
@@ -589,7 +794,9 @@ class _DispatchIndex:
                 return module, line
         return None
 
-    def dict_call(self, path: str, module: str, name: str | None) -> tuple[str, int] | None:
+    def dict_call(
+        self, path: str, module: str, name: str | None
+    ) -> tuple[str, int] | None:
         """`(module, line)` of the first `<name>[...](...)` call: in the dict's `module`, else wherever the
         parser module `path`'s dispatch calls may be.
         """
@@ -602,8 +809,14 @@ class _DispatchIndex:
         return None
 
 
-_PARSE_METHODS = frozenset({"parse_args", "parse_known_args", "parse_intermixed_args",
-                            "parse_known_intermixed_args"})
+_PARSE_METHODS = frozenset(
+    {
+        "parse_args",
+        "parse_known_args",
+        "parse_intermixed_args",
+        "parse_known_intermixed_args",
+    }
+)
 
 
 def _assigned_dict_names(nodes: list[ast.AST]) -> dict[int, str]:
@@ -623,8 +836,12 @@ def _assigned_dict_names(nodes: list[ast.AST]) -> dict[int, str]:
 
 def _parsed_names(node: ast.AST) -> list[str]:
     """The names an assignment binds to a `.parse_args(...)`-style result (the first of a tuple target)."""
-    if not (isinstance(node, (ast.Assign, ast.AnnAssign)) and isinstance(node.value, ast.Call)
-            and isinstance(node.value.func, ast.Attribute) and node.value.func.attr in _PARSE_METHODS):
+    if not (
+        isinstance(node, (ast.Assign, ast.AnnAssign))
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Attribute)
+        and node.value.func.attr in _PARSE_METHODS
+    ):
         return []
     names = []
     for target in node.targets if isinstance(node, ast.Assign) else [node.target]:
@@ -638,12 +855,20 @@ def _parsed_names(node: ast.AST) -> list[str]:
 def _func_dispatch_line(tree: ast.Module) -> int | None:
     """The first `<name>.func(...)` line whose `<name>` is bound from a `.parse_args(...)` call in the same scope."""
     lines = []
-    for body in [tree.body] + [n.body for n in ast.walk(tree) if isinstance(n, _DEF_NODES)]:
+    for body in [tree.body] + [
+        n.body for n in ast.walk(tree) if isinstance(n, _DEF_NODES)
+    ]:
         nodes = list(_walk_scope(body))
         parsed = {name for node in nodes for name in _parsed_names(node)}
-        lines += [n.lineno for n in nodes
-                  if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "func"
-                  and isinstance(n.func.value, ast.Name) and n.func.value.id in parsed]
+        lines += [
+            n.lineno
+            for n in nodes
+            if isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Attribute)
+            and n.func.attr == "func"
+            and isinstance(n.func.value, ast.Name)
+            and n.func.value.id in parsed
+        ]
     return min(lines, default=None)
 
 
@@ -656,15 +881,24 @@ def _dispatch_facts(tree: ast.Module) -> _DispatchFacts:
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Subscript):
             # `COMMANDS[...](...)`, or `commands.COMMANDS[...](...)` for a dict of another module.
             target = node.func.value
-            name = target.id if isinstance(target, ast.Name) else target.attr if isinstance(
-                target, ast.Attribute) else None
+            name = (
+                target.id
+                if isinstance(target, ast.Name)
+                else target.attr
+                if isinstance(target, ast.Attribute)
+                else None
+            )
             if name is not None:
                 dict_calls[name] = min(dict_calls.get(name, node.lineno), node.lineno)
         elif isinstance(node, ast.Dict):
             items = {}
             for key, value in zip(node.keys, node.values):
                 reference = dotted_reference(value)
-                if isinstance(key, ast.Constant) and isinstance(key.value, str) and reference is not None:
+                if (
+                    isinstance(key, ast.Constant)
+                    and isinstance(key.value, str)
+                    and reference is not None
+                ):
                     items[key.value] = _DictItem(reference, key.lineno, value.lineno)
             if items:
                 dicts.append(_DictLiteral(dict_names.get(id(node)), node.lineno, items))
@@ -680,6 +914,7 @@ class _CommandGroup:
     """What commands are declared on: a click group or a typer app, with the names it puts before theirs.
     `prefix` is None when one of those names is not a literal. `parent` is the app a typer app is mounted on.
     """
+
     kind: EntryKind
     prefix: tuple[str, ...] | None
     parent: str | None = None
@@ -688,6 +923,7 @@ class _CommandGroup:
 @dataclass(frozen=True)
 class _Command:
     """A click or typer command entry, with the group or app it is declared on and the decorator method."""
+
     entry: Entry
     receiver: str
     method: str
@@ -698,6 +934,7 @@ class CliRoute:
     """How a test runner reaches a click or typer command: `<runner>.invoke(<app>, <args>)`, with `app` a name
     of the command's module and `args` holding `words`, in order.
     """
+
     command: str
     app: str
     words: tuple[str, ...]
@@ -718,8 +955,9 @@ def _decorated_command_entries(path: str, tree: ast.Module) -> _Found:
     return [command.entry for command in commands], diagnostics
 
 
-def _decorated_commands(path: str, tree: ast.Module,
-                        typer_apps: dict[str, _CommandGroup]) -> tuple[list[_Command], list[Diagnostic]]:
+def _decorated_commands(
+    path: str, tree: ast.Module, typer_apps: dict[str, _CommandGroup]
+) -> tuple[list[_Command], list[Diagnostic]]:
     """The click and typer commands a module declares on its own groups and apps, in source order.
 
     A click group is known from its decorator on, as click registers it when the
@@ -731,7 +969,9 @@ def _decorated_commands(path: str, tree: ast.Module,
     groups: dict[str, _CommandGroup] = dict(typer_apps)
     commands: list[_Command] = []
     diagnostics: list[Diagnostic] = []
-    functions = _in_source_order(n for n in ast.walk(tree) if isinstance(n, _FUNCTION_NODES))
+    functions = _in_source_order(
+        n for n in ast.walk(tree) if isinstance(n, _FUNCTION_NODES)
+    )
     for func in functions:
         for decorator in func.decorator_list:
             site = _decorator_site(decorator)
@@ -741,21 +981,35 @@ def _decorated_commands(path: str, tree: ast.Module,
             group = _CLICK_ROOT if receiver == "click" else groups.get(receiver)
             if group is None:
                 if method in _ANY_COMMAND_METHOD:
-                    diagnostics.append(Diagnostic(
-                        path=path, line=decorator.lineno, reason="unresolved_target",
-                        detail=f"@{receiver}.{method} on {func.name}: {receiver} is not traced to a click group or "
-                               "typer app of this module; no command is emitted"))
+                    diagnostics.append(
+                        Diagnostic(
+                            path=path,
+                            line=decorator.lineno,
+                            reason="unresolved_target",
+                            detail=f"@{receiver}.{method} on {func.name}: {receiver} is not traced to a click group or "
+                            "typer app of this module; no command is emitted",
+                        )
+                    )
                 continue
             if method not in _COMMAND_METHODS[group.kind]:
                 continue
             names = _command_names(group, receiver, method, call, func)
             if isinstance(names, str):
-                diagnostics.append(Diagnostic(path=path, line=decorator.lineno, reason="dynamic_name", detail=names))
+                diagnostics.append(
+                    Diagnostic(
+                        path=path,
+                        line=decorator.lineno,
+                        reason="dynamic_name",
+                        detail=names,
+                    )
+                )
                 continue
             if group.kind == "click_command" and method == "group":
                 groups[func.name] = _CommandGroup("click_command", names)
             handler = Handler(path=path, line=func.lineno, symbol=func.name)
-            entry = _static_entry(group.kind, " ".join(names), path, decorator.lineno, handler)
+            entry = _static_entry(
+                group.kind, " ".join(names), path, decorator.lineno, handler
+            )
             commands.append(_Command(entry, receiver, method))
     return commands, diagnostics
 
@@ -775,19 +1029,30 @@ def cli_routes(path: str, tree: ast.Module) -> list[CliRoute]:
     typer_apps = _typer_apps(tree)
     commands = _decorated_commands(path, tree, typer_apps)[0]
     routes = _click_routes([c for c in commands if c.entry.kind == "click_command"])
-    routes += _typer_routes(typer_apps, [c for c in commands if c.entry.kind == "typer_command"])
+    routes += _typer_routes(
+        typer_apps, [c for c in commands if c.entry.kind == "typer_command"]
+    )
     return routes
 
 
 def _click_routes(commands: list[_Command]) -> list[CliRoute]:
     """Each click command reached through itself or a group whose name starts its own."""
-    names = [(c.entry.handler.symbol, tuple(c.entry.name.split(" "))) for c in commands
-             if c.entry.handler is not None and c.entry.handler.symbol is not None]
-    return [CliRoute(" ".join(words), app, words[len(supplied):])
-            for _, words in names for app, supplied in names if words[:len(supplied)] == supplied]
+    names = [
+        (c.entry.handler.symbol, tuple(c.entry.name.split(" ")))
+        for c in commands
+        if c.entry.handler is not None and c.entry.handler.symbol is not None
+    ]
+    return [
+        CliRoute(" ".join(words), app, words[len(supplied) :])
+        for _, words in names
+        for app, supplied in names
+        if words[: len(supplied)] == supplied
+    ]
 
 
-def _typer_routes(apps: dict[str, _CommandGroup], commands: list[_Command]) -> list[CliRoute]:
+def _typer_routes(
+    apps: dict[str, _CommandGroup], commands: list[_Command]
+) -> list[CliRoute]:
     """Each typer command reached through the app it is declared on and every app that app is mounted below."""
     mounted_on = {group.parent for group in apps.values()}
     routes = []
@@ -798,7 +1063,11 @@ def _typer_routes(apps: dict[str, _CommandGroup], commands: list[_Command]) -> l
             supplied = len(apps[app].prefix or ())
             if command.method == "callback":
                 words = name[supplied:-1]
-            elif app == command.receiver and app not in mounted_on and _sole_typer_command(commands, app):
+            elif (
+                app == command.receiver
+                and app not in mounted_on
+                and _sole_typer_command(commands, app)
+            ):
                 words = ()
             else:
                 words = name[supplied:]
@@ -809,7 +1078,11 @@ def _typer_routes(apps: dict[str, _CommandGroup], commands: list[_Command]) -> l
 def _typer_ancestors(apps: dict[str, _CommandGroup], app: str) -> list[str]:
     """`app`, then each app it is mounted below, nearest first."""
     chain = [app]
-    while (parent := apps[chain[-1]].parent) is not None and parent in apps and parent not in chain:
+    while (
+        (parent := apps[chain[-1]].parent) is not None
+        and parent in apps
+        and parent not in chain
+    ):
         chain.append(parent)
     return chain
 
@@ -820,8 +1093,13 @@ def _sole_typer_command(commands: list[_Command], app: str) -> bool:
     return declared == ["command"]
 
 
-def _command_names(group: _CommandGroup, receiver: str, method: str, call: ast.Call | None,
-                   func: ast.FunctionDef | ast.AsyncFunctionDef) -> tuple[str, ...] | str:
+def _command_names(
+    group: _CommandGroup,
+    receiver: str,
+    method: str,
+    call: ast.Call | None,
+    func: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> tuple[str, ...] | str:
     """The full name of a command declared by `@<receiver>.<method>(...)` on `group`: the group's prefix, then
     the explicit name or the function name with `_` made `-`. `call` is None for a bare decorator. When a part
     is not a literal, the `dynamic_name` diagnostic's detail instead.
@@ -830,11 +1108,15 @@ def _command_names(group: _CommandGroup, receiver: str, method: str, call: ast.C
     if _is_unset(explicit):
         leaf = func.name.replace("_", "-")
     elif (leaf := _literal_str(explicit)) is None:
-        return (f"@{receiver}.{method} on {func.name} is given {_shown(explicit)}, not a string "
-                "literal; the command name is unknown")
+        return (
+            f"@{receiver}.{method} on {func.name} is given {_shown(explicit)}, not a string "
+            "literal; the command name is unknown"
+        )
     if group.prefix is None:
-        return (f"@{receiver}.{method} on {func.name}: {receiver} is mounted by add_typer under a "
-                "name that is not a string literal; the command name is unknown")
+        return (
+            f"@{receiver}.{method} on {func.name}: {receiver} is mounted by add_typer under a "
+            "name that is not a string literal; the command name is unknown"
+        )
     return (*group.prefix, leaf)
 
 
@@ -846,16 +1128,29 @@ def _typer_apps(tree: ast.Module) -> dict[str, _CommandGroup]:
     """
     created: dict[str, ast.expr | None] = {}
     mounts: dict[str, tuple[str, ast.expr | None]] = {}
-    for node in _in_source_order(n for n in ast.walk(tree) if isinstance(n, (ast.Assign, ast.AnnAssign, ast.Call))):
+    for node in _in_source_order(
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, (ast.Assign, ast.AnnAssign, ast.Call))
+    ):
         if isinstance(node, (ast.Assign, ast.AnnAssign)):
             if node.value is not None and _is_typer_constructor(node.value):
-                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                targets = (
+                    node.targets if isinstance(node, ast.Assign) else [node.target]
+                )
                 for target in (t for t in targets if isinstance(t, ast.Name)):
                     created[target.id] = _keyword(node.value, "name")
-        elif (isinstance(node.func, ast.Attribute) and node.func.attr == "add_typer"
-              and isinstance(node.func.value, ast.Name) and node.args and isinstance(node.args[0], ast.Name)):
+        elif (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr == "add_typer"
+            and isinstance(node.func.value, ast.Name)
+            and node.args
+            and isinstance(node.args[0], ast.Name)
+        ):
             # A sub-app mounted twice keeps its first mount.
-            mounts.setdefault(node.args[0].id, (node.func.value.id, _keyword(node, "name")))
+            mounts.setdefault(
+                node.args[0].id, (node.func.value.id, _keyword(node, "name"))
+            )
 
     def prefix(app: str, seen: frozenset[str]) -> tuple[str, ...] | None:
         if app not in mounts or app in seen:
@@ -868,8 +1163,12 @@ def _typer_apps(tree: ast.Module) -> dict[str, _CommandGroup]:
         literal = _literal_str(segment)
         return None if base is None or literal is None else (*base, literal)
 
-    return {app: _CommandGroup("typer_command", prefix(app, frozenset()), mounts.get(app, (None,))[0])
-            for app in created}
+    return {
+        app: _CommandGroup(
+            "typer_command", prefix(app, frozenset()), mounts.get(app, (None,))[0]
+        )
+        for app in created
+    }
 
 
 def _decorator_site(decorator: ast.expr) -> tuple[str, str, ast.Call | None] | None:
@@ -907,16 +1206,25 @@ def _is_typer_constructor(expr: ast.expr) -> bool:
         return False
     func = expr.func
     return (isinstance(func, ast.Name) and func.id == "Typer") or (
-        isinstance(func, ast.Attribute) and func.attr == "Typer" and isinstance(func.value, ast.Name)
-        and func.value.id == "typer")
+        isinstance(func, ast.Attribute)
+        and func.attr == "Typer"
+        and isinstance(func.value, ast.Name)
+        and func.value.id == "typer"
+    )
 
 
 def _imports_any(tree: ast.Module, packages: set[str]) -> bool:
     """Whether the module imports, at any level, a module of one of the top-level `packages`."""
     for node in ast.walk(tree):
-        if isinstance(node, ast.Import) and any(a.name.split(".")[0] in packages for a in node.names):
+        if isinstance(node, ast.Import) and any(
+            a.name.split(".")[0] in packages for a in node.names
+        ):
             return True
-        if isinstance(node, ast.ImportFrom) and not node.level and (node.module or "").split(".")[0] in packages:
+        if (
+            isinstance(node, ast.ImportFrom)
+            and not node.level
+            and (node.module or "").split(".")[0] in packages
+        ):
             return True
     return False
 
@@ -933,6 +1241,7 @@ class ConsoleScript:
     """A `[project.scripts]` key whose module resolves in its repository: the module-level `attribute` of
     `module_file` it runs, and `handler`, the function `def` that name means, when it means one.
     """
+
     name: str
     module_file: str
     attribute: str
@@ -977,11 +1286,25 @@ def _project_script_entries(root: Path, index: PyIndex, path: str) -> _Found:
         line = _script_key_line(text, name)
         handler = _script_handler(index, path, target) if name else None
         if handler is None:
-            diagnostics.append(Diagnostic(
-                path=path, line=line, reason="unresolved_target",
-                detail=f"[project.scripts] {name!r} = {target!r} does not name a function of this repository"))
+            diagnostics.append(
+                Diagnostic(
+                    path=path,
+                    line=line,
+                    reason="unresolved_target",
+                    detail=f"[project.scripts] {name!r} = {target!r} does not name a function of this repository",
+                )
+            )
             continue
-        entries.append(_static_entry("project_script", name, path, line, handler, [_edge(path, line, handler)]))
+        entries.append(
+            _static_entry(
+                "project_script",
+                name,
+                path,
+                line,
+                handler,
+                [_edge(path, line, handler)],
+            )
+        )
     return entries, diagnostics
 
 
@@ -991,7 +1314,9 @@ def _script_handler(index: PyIndex, pyproject: str, target: object) -> Handler |
     return _function(index, index.resolve_global(*resolved)) if resolved else None
 
 
-def _script_target(index: PyIndex, pyproject: str, target: object) -> tuple[str, str] | None:
+def _script_target(
+    index: PyIndex, pyproject: str, target: object
+) -> tuple[str, str] | None:
     """`(module file, name)` of a `"<module>:<name>"` script target whose module is in the pyproject's
     repository.
     """
@@ -1011,13 +1336,20 @@ def _script_key_line(text: str, key: str) -> int:
     """
     quoted = "|".join(re.escape(form) for form in (key, f'"{key}"', f"'{key}'"))
     in_scripts = re.compile(rf"^\s*(?:{quoted})\s*=")
-    in_project = re.compile(rf"^\s*scripts\s*(?:\.\s*(?:{quoted})\s*=|=\s*\{{(?:[^}}]*,)?\s*(?:{quoted})\s*=)")
+    in_project = re.compile(
+        rf"^\s*scripts\s*(?:\.\s*(?:{quoted})\s*=|=\s*\{{(?:[^}}]*,)?\s*(?:{quoted})\s*=)"
+    )
     table = None
     for number, line in enumerate(text.splitlines(), start=1):
         if header := _TOML_TABLE.match(line):
-            table = re.sub(r"\s*\.\s*", ".", header.group(1)).replace('"', "").replace("'", "")
+            table = (
+                re.sub(r"\s*\.\s*", ".", header.group(1))
+                .replace('"', "")
+                .replace("'", "")
+            )
         elif (table == "project.scripts" and in_scripts.match(line)) or (
-                table == "project" and in_project.match(line)):
+            table == "project" and in_project.match(line)
+        ):
             return number
     # Unreachable for a key tomllib parsed from a table this scan recognises.
     return 1
@@ -1036,13 +1368,25 @@ def _main_module_entries(index: PyIndex, path: str, tree: ast.Module) -> _Found:
     location, callees = _main_callees(index, path, tree)
     module = index.module_name(path) or path
     handler = _sole(callees)
-    entry = _static_entry("main_module", module.removesuffix(".__main__") if package_main else module,
-                          path, location.line, handler, [_edge(path, location.line, handler)] if handler else [])
+    entry = _static_entry(
+        "main_module",
+        module.removesuffix(".__main__") if package_main else module,
+        path,
+        location.line,
+        handler,
+        [_edge(path, location.line, handler)] if handler else [],
+    )
     if len(callees) < 2:
         return [entry], []
     called = ", ".join(f"{h.symbol} ({h.path}:{h.line})" for h in callees)
-    return [entry], [Diagnostic(path=path, line=location.line, reason="unresolved_handler",
-                                detail=f"{module} calls several functions of this repository: {called}")]
+    return [entry], [
+        Diagnostic(
+            path=path,
+            line=location.line,
+            reason="unresolved_handler",
+            detail=f"{module} calls several functions of this repository: {called}",
+        )
+    ]
 
 
 def main_module_handler(index: PyIndex, path: str) -> tuple[Location, Handler | None]:
@@ -1063,7 +1407,9 @@ def _sole(callees: list[Handler]) -> Handler | None:
     return callees[0] if len(callees) == 1 else None
 
 
-def _main_callees(index: PyIndex, path: str, tree: ast.Module) -> tuple[Location, list[Handler]]:
+def _main_callees(
+    index: PyIndex, path: str, tree: ast.Module
+) -> tuple[Location, list[Handler]]:
     """The entry location, and the distinct same-repository functions the guard body (else the module body)
     calls, in source order.
     """
@@ -1071,17 +1417,25 @@ def _main_callees(index: PyIndex, path: str, tree: ast.Module) -> tuple[Location
     callees: dict[tuple[str, int], Handler] = {}
     for call in _entry_calls(guard.body if guard else tree.body):
         reference = dotted_reference(call.func)
-        found = _function(index, index.resolve_name(path, call.lineno, reference)) if reference else None
+        found = (
+            _function(index, index.resolve_name(path, call.lineno, reference))
+            if reference
+            else None
+        )
         if found is not None:
             callees.setdefault((found.path, found.line), found)
-    return Location(path=path, line=guard.lineno if guard else 1), list(callees.values())
+    return Location(path=path, line=guard.lineno if guard else 1), list(
+        callees.values()
+    )
 
 
 def _entry_calls(body: list[ast.stmt]) -> Iterator[ast.Call]:
     """The outermost calls of a scope, outside nested scopes, looking through the transparent wrappers'
     arguments: `sys.exit(main(argv))` yields `main(argv)` alone.
     """
-    stack: list[ast.AST] = [n for n in reversed(body) if not isinstance(n, _SCOPE_NODES)]
+    stack: list[ast.AST] = [
+        n for n in reversed(body) if not isinstance(n, _SCOPE_NODES)
+    ]
     while stack:
         node = stack.pop()
         if isinstance(node, ast.Call):
@@ -1098,10 +1452,17 @@ def _main_guard(tree: ast.Module) -> ast.If | None:
     """The first top-level `if __name__ == "__main__":`, either way round."""
     for node in tree.body:
         test = node.test if isinstance(node, ast.If) else None
-        if isinstance(test, ast.Compare) and len(test.ops) == 1 and isinstance(test.ops[0], ast.Eq):
+        if (
+            isinstance(test, ast.Compare)
+            and len(test.ops) == 1
+            and isinstance(test.ops[0], ast.Eq)
+        ):
             sides = (test.left, test.comparators[0])
-            if (any(isinstance(s, ast.Name) and s.id == "__name__" for s in sides)
-                    and any(isinstance(s, ast.Constant) and s.value == "__main__" for s in sides)):
+            if any(
+                isinstance(s, ast.Name) and s.id == "__name__" for s in sides
+            ) and any(
+                isinstance(s, ast.Constant) and s.value == "__main__" for s in sides
+            ):
                 return node
     return None
 
@@ -1109,8 +1470,12 @@ def _main_guard(tree: ast.Module) -> ast.If | None:
 def _is_test_file(path: str) -> bool:
     """`test_*.py`, `*_test.py`, `conftest.py`, or anything under a `tests/` directory."""
     *directories, name = path.split("/")
-    return ("tests" in directories or name == "conftest.py"
-            or fnmatch.fnmatchcase(name, "test_*.py") or fnmatch.fnmatchcase(name, "*_test.py"))
+    return (
+        "tests" in directories
+        or name == "conftest.py"
+        or fnmatch.fnmatchcase(name, "test_*.py")
+        or fnmatch.fnmatchcase(name, "*_test.py")
+    )
 
 
 # --- seeds ------------------------------------------------------------------------------------
@@ -1118,6 +1483,7 @@ def _is_test_file(path: str) -> bool:
 
 def _seed_entry(index: PyIndex, seed: Seed, path: str) -> Entry | Diagnostic:
     """The seed's entry, or its `seed_not_found` diagnostic. A symbol seed ignores any line it also names."""
+
     def not_found(detail: str) -> Diagnostic:
         line = seed.line if seed.line is not None and seed.line >= 1 else None
         return Diagnostic(path=path, line=line, reason="seed_not_found", detail=detail)
@@ -1130,7 +1496,8 @@ def _seed_entry(index: PyIndex, seed: Seed, path: str) -> Entry | Diagnostic:
     if seed.symbol is not None:
         defs = index.defs(path)
         found = next((d for d in defs if d.qualname == seed.symbol), None) or next(
-            (d for d in defs if d.name == seed.symbol), None)
+            (d for d in defs if d.name == seed.symbol), None
+        )
         if found is None:
             return not_found(f"no def or class {seed.symbol!r} in {path}")
         line = found.start
@@ -1143,7 +1510,14 @@ def _seed_entry(index: PyIndex, seed: Seed, path: str) -> Entry | Diagnostic:
         found = index.enclosing_def(path, line)
     handler = Handler(path=path, line=found.start, symbol=found.name) if found else None
     default_name = f"{path}:{found.name}" if found else f"{path}:{line}"
-    return _static_entry("seed", seed.name or default_name, path, line, handler, by=seed_invoked_by(seed.name))
+    return _static_entry(
+        "seed",
+        seed.name or default_name,
+        path,
+        line,
+        handler,
+        by=seed_invoked_by(seed.name),
+    )
 
 
 # --- SKILL.md and hook commands -----------------------------------------------------------------
@@ -1155,9 +1529,13 @@ class _Subcommands:
     def __init__(self, index: PyIndex, entries: Iterable[Entry]):
         self._index = index
         self._by_file: dict[str, dict[str, Entry]] = {}
-        argparse = (e for e in entries if e.kind == "argparse_subcommand" and " " not in e.name)
+        argparse = (
+            e for e in entries if e.kind == "argparse_subcommand" and " " not in e.name
+        )
         for entry in sorted(argparse, key=lambda e: (e.location.path, e.location.line)):
-            self._by_file.setdefault(entry.location.path, {}).setdefault(entry.name, entry)
+            self._by_file.setdefault(entry.location.path, {}).setdefault(
+                entry.name, entry
+            )
 
     def find(self, module_file: str, name: str) -> Entry | None:
         """Subcommand `name` declared in `module_file`, else in the first same-repository module it imports."""
@@ -1171,6 +1549,7 @@ class _Subcommands:
 @dataclass(frozen=True)
 class _CommandTarget:
     """Where a command lands: the end of its known edge, and the handler its entry takes."""
+
     to: Location
     handler: Handler | None
 
@@ -1180,7 +1559,9 @@ class _CommandTarget:
         return cls(Location(path=path, line=1), Handler(path=path, line=1, symbol=None))
 
 
-def _command_scans(root: Path, index: PyIndex, subcommands: _Subcommands) -> Iterator[_Found]:
+def _command_scans(
+    root: Path, index: PyIndex, subcommands: _Subcommands
+) -> Iterator[_Found]:
     """What each command scanner finds: `SKILL.md` by `SKILL.md`, then hooks file by hooks file, in path order."""
     for path in index.files_named("SKILL.md"):
         yield _skill_command_entries(root, index, subcommands, path)
@@ -1188,7 +1569,9 @@ def _command_scans(root: Path, index: PyIndex, subcommands: _Subcommands) -> Ite
         yield _hook_entries(root, index, subcommands, path)
 
 
-def _skill_command_entries(root: Path, index: PyIndex, subcommands: _Subcommands, path: str) -> _Found:
+def _skill_command_entries(
+    root: Path, index: PyIndex, subcommands: _Subcommands, path: str
+) -> _Found:
     """One entry per `python -m` command in the shell fences of the `SKILL.md` at `path`."""
     try:
         text = (root / path).read_text(encoding="utf-8")
@@ -1199,27 +1582,47 @@ def _skill_command_entries(root: Path, index: PyIndex, subcommands: _Subcommands
     diagnostics: list[Diagnostic] = []
     for line, invocation in shell_commands(text):
         try:
-            command = parse_command_line(invocation, source_file=path, root=root, index=index)
+            command = parse_command_line(
+                invocation, source_file=path, root=root, index=index
+            )
         except ValueError as e:
             if looks_like_python_m(invocation):
-                diagnostics.append(Diagnostic(path=path, line=line, reason="unresolved_target",
-                                              detail=f"{invocation!r} cannot be tokenised: {e}"))
+                diagnostics.append(
+                    Diagnostic(
+                        path=path,
+                        line=line,
+                        reason="unresolved_target",
+                        detail=f"{invocation!r} cannot be tokenised: {e}",
+                    )
+                )
             continue
         module = python_module(command.tokens)
         if module is None:
             continue
         module_name, arguments = module
-        target = _module_target(index, subcommands, command, path, module_name, arguments)
+        target = _module_target(
+            index, subcommands, command, path, module_name, arguments
+        )
         if isinstance(target, str):
-            diagnostics.append(Diagnostic(path=path, line=line, reason="unresolved_target", detail=target))
+            diagnostics.append(
+                Diagnostic(
+                    path=path, line=line, reason="unresolved_target", detail=target
+                )
+            )
             continue
         positional = first_positional(arguments)
-        entry_name = f"{skill}: {module_name}" + (f" {positional}" if positional else "")
-        entries.append(_command_entry("skill_command", entry_name, path, line, invocation, target))
+        entry_name = f"{skill}: {module_name}" + (
+            f" {positional}" if positional else ""
+        )
+        entries.append(
+            _command_entry("skill_command", entry_name, path, line, invocation, target)
+        )
     return entries, diagnostics
 
 
-def _hook_entries(root: Path, index: PyIndex, subcommands: _Subcommands, path: str) -> _Found:
+def _hook_entries(
+    root: Path, index: PyIndex, subcommands: _Subcommands, path: str
+) -> _Found:
     """One entry per command hook of the hooks or settings file at `path` whose target resolves."""
     try:
         hooks = hook_commands((root / path).read_text(encoding="utf-8-sig"))
@@ -1229,21 +1632,34 @@ def _hook_entries(root: Path, index: PyIndex, subcommands: _Subcommands, path: s
     diagnostics: list[Diagnostic] = []
     for hook in hooks:
         try:
-            command = parse_command_line(hook.command, source_file=path, root=root, index=index)
+            command = parse_command_line(
+                hook.command, source_file=path, root=root, index=index
+            )
         except ValueError as e:
             target: _CommandTarget | str = f"the command cannot be tokenised: {e}"
         else:
             target = _hook_target(index, subcommands, command, path)
         if isinstance(target, str):
-            diagnostics.append(Diagnostic(path=path, line=hook.line, reason="unresolved_target",
-                                          detail=f"hook {hook.name} runs {hook.command!r}: {target}"))
+            diagnostics.append(
+                Diagnostic(
+                    path=path,
+                    line=hook.line,
+                    reason="unresolved_target",
+                    detail=f"hook {hook.name} runs {hook.command!r}: {target}",
+                )
+            )
             continue
-        entries.append(_command_entry("hook_command", hook.name, path, hook.line, hook.command, target))
+        entries.append(
+            _command_entry(
+                "hook_command", hook.name, path, hook.line, hook.command, target
+            )
+        )
     return entries, diagnostics
 
 
-def _hook_target(index: PyIndex, subcommands: _Subcommands, command: CommandLine,
-                 source_file: str) -> _CommandTarget | str:
+def _hook_target(
+    index: PyIndex, subcommands: _Subcommands, command: CommandLine, source_file: str
+) -> _CommandTarget | str:
     """What a hook runs past its launchers: its `python -m` module, else the first existing `.py` it names.
     When neither exists, the stripped launcher or else the first existing file it names, at line 1. The
     reason it has no target, when none of them exists.
@@ -1256,7 +1672,11 @@ def _hook_target(index: PyIndex, subcommands: _Subcommands, command: CommandLine
             return target
         missing = target
     else:
-        scripts = [command.snapshot_path(token) for token in command.tokens if token.endswith(".py")]
+        scripts = [
+            command.snapshot_path(token)
+            for token in command.tokens
+            if token.endswith(".py")
+        ]
         script = next((s for s in scripts if s is not None and index.has_file(s)), None)
         if script is not None:
             return _CommandTarget(*main_module_handler(index, script))
@@ -1269,8 +1689,14 @@ def _hook_target(index: PyIndex, subcommands: _Subcommands, command: CommandLine
     return _CommandTarget.at_file(file)
 
 
-def _module_target(index: PyIndex, subcommands: _Subcommands, command: CommandLine, source_file: str,
-                   module: str, arguments: Sequence[str]) -> _CommandTarget | str:
+def _module_target(
+    index: PyIndex,
+    subcommands: _Subcommands,
+    command: CommandLine,
+    source_file: str,
+    module: str,
+    arguments: Sequence[str],
+) -> _CommandTarget | str:
     """Where `python -m <module> <arguments>` lands, or the reason it lands nowhere."""
     roots = module_search_roots(command, source_file, index.repo_root(source_file))
     module_file = resolve_python_m(module, roots, index)
@@ -1285,13 +1711,26 @@ def _module_target(index: PyIndex, subcommands: _Subcommands, command: CommandLi
     return _CommandTarget(_handler_location(subcommand.handler), subcommand.handler)
 
 
-def _command_entry(kind: EntryKind, name: str, path: str, line: int, invocation: str,
-                   target: _CommandTarget) -> Entry:
+def _command_entry(
+    kind: EntryKind,
+    name: str,
+    path: str,
+    line: int,
+    invocation: str,
+    target: _CommandTarget,
+) -> Entry:
     """An entry for the command `invocation` at `path:line`, with one known edge to where it lands."""
     location = Location(path=path, line=line)
-    return Entry(kind=kind, name=name, location=location, handler=target.handler, invocation=invocation,
-                 invoked_by=invoked_by(kind, name, path, invocation),
-                 known_edges=[KnownEdge(from_=location, to=target.to)], also_invoked_by=[])
+    return Entry(
+        kind=kind,
+        name=name,
+        location=location,
+        handler=target.handler,
+        invocation=invocation,
+        invoked_by=invoked_by(kind, name, path, invocation),
+        known_edges=[KnownEdge(from_=location, to=target.to)],
+        also_invoked_by=[],
+    )
 
 
 # --- merging ----------------------------------------------------------------------------------
@@ -1321,14 +1760,30 @@ def _merge_key(entry: Entry) -> tuple[str | int, ...]:
 def _merged(group: list[Entry]) -> Entry:
     if len(group) == 1:
         return group[0]
-    kept, *others = sorted(group, key=lambda e: (KIND_RANK[OUTPUT_KIND[e.kind]], e.location.path,
-                                                 e.location.line, e.name))
+    kept, *others = sorted(
+        group,
+        key=lambda e: (
+            KIND_RANK[OUTPUT_KIND[e.kind]],
+            e.location.path,
+            e.location.line,
+            e.name,
+        ),
+    )
     invokers = set(kept.also_invoked_by)
     for other in others:
-        invokers.add(EntryInvoker(kind=other.kind, name=other.name, location=other.location))
+        invokers.add(
+            EntryInvoker(kind=other.kind, name=other.name, location=other.location)
+        )
         invokers.update(other.also_invoked_by)
     edges = {edge for entry in group for edge in entry.known_edges}
-    return kept.model_copy(update={
-        "also_invoked_by": sorted(invokers, key=lambda i: (i.location.path, i.location.line, i.kind, i.name)),
-        "known_edges": sorted(edges, key=lambda e: (e.from_.path, e.from_.line, e.to.path, e.to.line)),
-    })
+    return kept.model_copy(
+        update={
+            "also_invoked_by": sorted(
+                invokers,
+                key=lambda i: (i.location.path, i.location.line, i.kind, i.name),
+            ),
+            "known_edges": sorted(
+                edges, key=lambda e: (e.from_.path, e.from_.line, e.to.path, e.to.line)
+            ),
+        }
+    )

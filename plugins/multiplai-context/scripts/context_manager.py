@@ -38,14 +38,17 @@ import sys
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from multiplai_core.paths import get_paths
-from multiplai_core.config import read_session_state, write_session_state
-from multiplai_core.log_utils import HookRun, hook_run, setup_logging, log_event
+from generators.base import CATALOG_SCHEMA_VERSION
+from generators.config import (
+    DEFAULT_WHOLE_FILE_MAX_BYTES,
+    load_catalog_config,
+)
+from lib import reference_docs
 from lib.banks import (
     SHARED_BANK_NOTICE,
     bank_ref,
@@ -59,21 +62,20 @@ from lib.hook_input import read_hook_input
 from lib.hook_watchdog import make_on_watchdog
 from lib.memory_router import create_router
 from lib.plugin_skills import plugin_skill_owners, qualify
-from lib import reference_docs
 from lib.routing_logic import expand_picks
 from lib.section_loader import (
     h2_names,
     load_picked_content,
     parse_section_ref,
-    preamble as section_preamble,
     resolve_section_name,
 )
-from lib.transcript_helper import read_last_assistant_response
-from generators.base import CATALOG_SCHEMA_VERSION
-from generators.config import (
-    DEFAULT_WHOLE_FILE_MAX_BYTES,
-    load_catalog_config,
+from lib.section_loader import (
+    preamble as section_preamble,
 )
+from lib.transcript_helper import read_last_assistant_response
+from multiplai_core.config import read_session_state, write_session_state
+from multiplai_core.log_utils import HookRun, hook_run, log_event, setup_logging
+from multiplai_core.paths import get_paths
 
 # Forward the router's (lib.*) and generators.* loggers into the
 # context_manager log; multiplai_core is always included. Without this, every
@@ -82,7 +84,8 @@ from generators.config import (
 # the log never showed why a router call was slow. A script run by path has no
 # package of its own, so it names them.
 logger = setup_logging(
-    "context_manager", packages=("lib", "generators"),
+    "context_manager",
+    packages=("lib", "generators"),
 )
 
 # Seconds into the run at which the watchdog logs the stage still running and
@@ -112,6 +115,7 @@ _WARN_ONCE_WINDOW_S = 24 * 3600
 @dataclass
 class RankedFile:
     """A memory file ranked by metadata."""
+
     path: Path
     score: float
 
@@ -212,7 +216,10 @@ def _read_top_memory_files(
 # Catalog-first read path with fail-open fallback (Decision 8)
 # ---------------------------------------------------------------------------
 
-def _read_catalog_or_scan(catalog_type: str, ttl_hours: float | None = None) -> list[dict]:
+
+def _read_catalog_or_scan(
+    catalog_type: str, ttl_hours: float | None = None
+) -> list[dict]:
     """Try catalog first. On any failure, fall back to an empty list.
 
     Implements the fail-open read path (Design Decision 8): attempt to
@@ -250,7 +257,9 @@ def _read_catalog_or_scan(catalog_type: str, ttl_hours: float | None = None) -> 
         return _validate_catalog(data, catalog_type, warn_key, ttl_hours, sig=sig)
 
     except json.JSONDecodeError as e:
-        _warn_once(warn_key, f"Catalog {catalog_type} contains invalid JSON: {e}", sig=sig)
+        _warn_once(
+            warn_key, f"Catalog {catalog_type} contains invalid JSON: {e}", sig=sig
+        )
         return []
     except OSError as e:
         _warn_once(warn_key, f"Error reading catalog {catalog_type}: {e}", sig=sig)
@@ -295,7 +304,9 @@ def _validate_catalog(
     """
     if not isinstance(data, dict):
         _warn_once(
-            warn_key, f"Catalog {catalog_type} is not a JSON object, falling back", sig=sig
+            warn_key,
+            f"Catalog {catalog_type} is not a JSON object, falling back",
+            sig=sig,
         )
         return []
 
@@ -325,7 +336,9 @@ def _validate_catalog(
         return []
     if not isinstance(entries, list):
         _warn_once(
-            warn_key, f"Catalog {catalog_type} entries is not a list, falling back", sig=sig
+            warn_key,
+            f"Catalog {catalog_type} entries is not a list, falling back",
+            sig=sig,
         )
         return []
 
@@ -352,8 +365,8 @@ def _warn_if_stale(
     except ValueError:
         return
     if gen.tzinfo is None:
-        gen = gen.replace(tzinfo=timezone.utc)
-    age_hours = (datetime.now(timezone.utc) - gen).total_seconds() / 3600.0
+        gen = gen.replace(tzinfo=UTC)
+    age_hours = (datetime.now(UTC) - gen).total_seconds() / 3600.0
     if age_hours > ttl_hours:
         # `--only <type>` and not the bare skill: an explicit --only runs the
         # generator even when its enable_* option is missing from the shell
@@ -385,7 +398,9 @@ def _warn_once(warn_key: str, message: str, *, sig: str = "") -> None:
     if _warned_recently(warn_key, sig):
         logger.debug(
             "Suppressed warning already logged within %dh for %s: %s",
-            _WARN_ONCE_WINDOW_S // 3600, warn_key, message,
+            _WARN_ONCE_WINDOW_S // 3600,
+            warn_key,
+            message,
         )
         return
     logger.warning(message)
@@ -422,7 +437,8 @@ def _warned_recently(warn_key: str, sig: str) -> bool:
         ):
             return True
         state = {
-            k: v for k, v in state.items()
+            k: v
+            for k, v in state.items()
             if isinstance(v, dict)
             and isinstance(v.get("at"), (int, float))
             and now - v["at"] < _WARN_ONCE_WINDOW_S
@@ -445,6 +461,7 @@ def _file_sig(path: Path) -> str:
 # ---------------------------------------------------------------------------
 # Multi-corpus catalog loading
 # ---------------------------------------------------------------------------
+
 
 def _load_corpora(cfg) -> dict[str, list[dict]]:
     """Read all enabled catalogs.
@@ -540,9 +557,7 @@ def _memory_pointer(
     """
     lines = [f"({reason})", f"Path: {path}"]
     if section is not None:
-        lines.append(
-            f"Read the `## {section}` section of that file if it is relevant."
-        )
+        lines.append(f"Read the `## {section}` section of that file if it is relevant.")
         return "\n".join(lines) + "\n"
     head = section_preamble(text).strip()
     if len(head) > _POINTER_PREAMBLE_MAX_CHARS:
@@ -551,9 +566,7 @@ def _memory_pointer(
         lines.append(head)
     names = h2_names(text)
     if names:
-        lines.append(
-            "Sections (Read the file at that path for the ones you need):"
-        )
+        lines.append("Sections (Read the file at that path for the ones you need):")
         lines.extend(f"- {name}" for name in names)
     else:
         lines.append("This file has no sections; Read it at that path if relevant.")
@@ -644,7 +657,7 @@ def _load_memory_content(
         # Settle every fragment against the file's real headings before
         # deciding what to emit, so a dropped one is named even when a bare
         # pick of the same file would have covered it.
-        sections: list[tuple[str, str]] = []   # (pick, real heading)
+        sections: list[tuple[str, str]] = []  # (pick, real heading)
         unresolved: list[str] = []
         if has_sections:
             for p in ref_picks:
@@ -658,7 +671,9 @@ def _load_memory_content(
                 if heading.strip().lower() != frag.strip().lower():
                     logger.info(
                         "ANCHOR_NEAREST %s -> %s#%s",
-                        _loggable(p), whole_ref, _loggable(heading),
+                        _loggable(p),
+                        whole_ref,
+                        _loggable(heading),
                     )
                 sections.append((p, heading))
         if unresolved:
@@ -680,7 +695,9 @@ def _load_memory_content(
             if len(ref_picks) > 1:
                 logger.debug(
                     "Memory pick %s covers %d other pick(s) of the same file — "
-                    "loading the file once", _loggable(bare[0]), len(ref_picks) - 1,
+                    "loading the file once",
+                    _loggable(bare[0]),
+                    len(ref_picks) - 1,
                 )
             # The whole file answers every pick of it, so emit it once — under
             # the canonical **bare** ref, bank prefix intact. Keying it on a
@@ -695,7 +712,9 @@ def _load_memory_content(
             # would pull teammate-written text in unfenced. Neither is right.
             logger.info(
                 "WHOLE_FILE_DROPPED %s bytes=%d limit=%d (shared bank: no pointer)",
-                whole_ref, size, whole_file_max_bytes,
+                whole_ref,
+                size,
+                whole_file_max_bytes,
             )
             continue
 
@@ -708,7 +727,9 @@ def _load_memory_content(
             report.pointers.append(whole_ref)
             logger.info(
                 "WHOLE_FILE_POINTER %s bytes=%d limit=%d",
-                whole_ref, size, whole_file_max_bytes,
+                whole_ref,
+                size,
+                whole_file_max_bytes,
             )
             continue
 
@@ -734,8 +755,10 @@ def _load_memory_content(
             # A large file's bare pick is answered by the sections the router
             # also named; stamp it so the next turn does not re-pick it.
             logger.debug(
-                "Bare pick of large file %s (%d bytes) answered by %d section "
-                "pick(s)", whole_ref, size, len(keys_by_heading),
+                "Bare pick of large file %s (%d bytes) answered by %d section pick(s)",
+                whole_ref,
+                size,
+                len(keys_by_heading),
             )
             first_key = next(iter(keys_by_heading.values()))
             for p in bare:
@@ -826,7 +849,8 @@ def _apply_memory_budget(
     if dropped:
         logger.info(
             "MEMORY_BUDGET budget=%d kept_bytes=%d kept=%s dropped=%s",
-            budget_bytes, total,
+            budget_bytes,
+            total,
             json.dumps([_loggable(k) for k in kept]),
             json.dumps([_loggable(k) for k in dropped]),
         )
@@ -917,8 +941,10 @@ def _cooldown_keys(
     keys = set(content)
     aliases = aliases or {}
     return sorted(
-        keys | {
-            p for p in picks
+        keys
+        | {
+            p
+            for p in picks
             if p in keys or _whole_file_ref(p) in keys or aliases.get(p) in keys
         }
     )
@@ -990,11 +1016,13 @@ def _qmd_resources_entries(cfg, prompt: str, cwd: str) -> list[dict]:
         if entries:
             logger.info(
                 "QMD_RETRIEVAL %s",
-                json.dumps({
-                    "mode": target.mode,
-                    "strategy": target.strategy,
-                    "picked": [[e["path"], round(e["score"], 3)] for e in entries],
-                }),
+                json.dumps(
+                    {
+                        "mode": target.mode,
+                        "strategy": target.strategy,
+                        "picked": [[e["path"], round(e["score"], 3)] for e in entries],
+                    }
+                ),
             )
         return entries
     except Exception:
@@ -1109,7 +1137,10 @@ def _dev_reference_block(
                     # makes that diagnosable rather than merely reported.
                     logger.info(
                         "DEV_REFERENCES project=%s stack=%s wanted=%s resolved=none searched=%s",
-                        project, ",".join(keys), ",".join(names), searched,
+                        project,
+                        ",".join(keys),
+                        ",".join(names),
+                        searched,
                     )
                     continue
                 block = reference_docs.build_block(project, docs)
@@ -1118,13 +1149,16 @@ def _dev_reference_block(
                 reference_docs.record_announced(state, project, turn_index)
                 logger.info(
                     "DEV_REFERENCES project=%s stack=%s docs=%s",
-                    project, ",".join(keys), ",".join(p.name for p, _ in docs),
+                    project,
+                    ",".join(keys),
+                    ",".join(p.name for p, _ in docs),
                 )
                 return block, project
             except Exception:
                 logger.debug(
                     "DEV_REFERENCES project=%s failed; trying the next candidate",
-                    project, exc_info=True,
+                    project,
+                    exc_info=True,
                 )
                 continue
         return "", None
@@ -1313,7 +1347,9 @@ def _render_qmd_resource(entry: dict) -> str:
     return body
 
 
-def _render_corpus_section(label: str, files: dict[str, str], preamble: str = "") -> str:
+def _render_corpus_section(
+    label: str, files: dict[str, str], preamble: str = ""
+) -> str:
     """Render one corpus's loaded files as a labeled markdown block."""
     parts = [f"=== {label} ==="]
     if preamble:
@@ -1426,8 +1462,7 @@ def _routing_score_hint(diag: dict) -> str:
                 " — nothing injected"
             )
         return (
-            f" · no match (best eligible {top_eligible:g} < floor)"
-            " — nothing injected"
+            f" · no match (best eligible {top_eligible:g} < floor) — nothing injected"
         )
     if not picked:
         return ""
@@ -1502,7 +1537,8 @@ def _persist_turn_state(
         for key in content:
             cmap[key] = turn_index
         stale = [
-            k for k, t in cmap.items()
+            k
+            for k, t in cmap.items()
             if not isinstance(t, int) or (turn_index - t) > cooldown
         ]
         for k in stale:
@@ -1533,6 +1569,7 @@ def _persist_turn_state(
 # Main entry point
 # ---------------------------------------------------------------------------
 
+
 def _emit_result(context: str) -> None:
     """Write the hook result to stdout in the shape Claude Code actually reads.
 
@@ -1544,12 +1581,16 @@ def _emit_result(context: str) -> None:
     and at 40KB injections the duplicate context doubled hook stdout on
     every prompt.
     """
-    print(json.dumps({
-        "hookSpecificOutput": {
-            "hookEventName": "UserPromptSubmit",
-            "additionalContext": context,
-        }
-    }))
+    print(
+        json.dumps(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": "UserPromptSubmit",
+                    "additionalContext": context,
+                }
+            }
+        )
+    )
 
 
 def _watchdog_kwargs() -> dict:
@@ -1594,7 +1635,9 @@ def main() -> None:
     session_id = input_data.get("session_id")
     setup_logging("context_manager", session_id=session_id or "")
     with hook_run(
-        "context_manager", logger, session_id=session_id or "",
+        "context_manager",
+        logger,
+        session_id=session_id or "",
         **_watchdog_kwargs(),
     ) as run:
         _assemble_and_emit(input_data, run)
@@ -1638,9 +1681,9 @@ def _assemble_and_emit(input_data: dict, run: HookRun) -> None:
     if prompt.lstrip().startswith("<task-notification>"):
         logger.info("Task notification — routing skipped, nothing injected")
         log_event(
-            "context", "skip",
-            "task notification — context already in conversation, "
-            "nothing injected",
+            "context",
+            "skip",
+            "task notification — context already in conversation, nothing injected",
             session_id=session_id,
         )
         run.note(outcome="task_notification", files=0, bytes=0)
@@ -1675,10 +1718,18 @@ def _assemble_and_emit(input_data: dict, run: HookRun) -> None:
         cfg = load_catalog_config()
 
         # Load all enabled corpora
-        corpora = _load_corpora(cfg) if prompt else {"memory": [], "skills": [], "resources": []}
+        corpora = (
+            _load_corpora(cfg)
+            if prompt
+            else {"memory": [], "skills": [], "resources": []}
+        )
 
     # Multi-corpus router pass
-    picks_by_corpus: dict[str, list[str]] = {"memory": [], "skills": [], "resources": []}
+    picks_by_corpus: dict[str, list[str]] = {
+        "memory": [],
+        "skills": [],
+        "resources": [],
+    }
     router_diag: dict | None = None
     used_fallback = False
     router_ran = False
@@ -1733,17 +1784,19 @@ def _assemble_and_emit(input_data: dict, run: HookRun) -> None:
                     logger.info(
                         "ROUTING_SCORES %s=%s",
                         _ct,
-                        json.dumps({
-                            "picked": [[fn, round(s, 3)] for s, fn in _picked],
-                            "cap": _cap,
-                            "n_candidates": _d.get("n_candidates", len(_scored)),
-                            "n_picked": _np,
-                            "capped": _d.get("capped", False),
-                            "floor_excluded": (
-                                round(max(_excluded), 3) if _excluded else None
-                            ),
-                            "prompt": _plog,
-                        }),
+                        json.dumps(
+                            {
+                                "picked": [[fn, round(s, 3)] for s, fn in _picked],
+                                "cap": _cap,
+                                "n_candidates": _d.get("n_candidates", len(_scored)),
+                                "n_picked": _np,
+                                "capped": _d.get("capped", False),
+                                "floor_excluded": (
+                                    round(max(_excluded), 3) if _excluded else None
+                                ),
+                                "prompt": _plog,
+                            }
+                        ),
                     )
         except NotImplementedError as e:
             logger.warning("Router misconfigured: %s", e)
@@ -1754,7 +1807,9 @@ def _assemble_and_emit(input_data: dict, run: HookRun) -> None:
     for corpus_type in ("memory", "skills"):
         picks = picks_by_corpus.get(corpus_type) or []
         if picks:
-            picks_by_corpus[corpus_type] = expand_picks(picks, corpora.get(corpus_type) or [])
+            picks_by_corpus[corpus_type] = expand_picks(
+                picks, corpora.get(corpus_type) or []
+            )
 
     # Resources retrieval: qmd against its index, never the router. Entry
     # paths become the corpus picks so the cooldown machinery below dedups
@@ -1809,7 +1864,8 @@ def _assemble_and_emit(input_data: dict, run: HookRun) -> None:
             kept, suppressed = _filter_cooldown(
                 picks_by_corpus.get(corpus_type) or [],
                 recent.get(corpus_type) or {},
-                turn_index, cooldown,
+                turn_index,
+                cooldown,
             )
             if suppressed and kept:
                 # Anchor on the injected picks, not the raw ranking:
@@ -1828,13 +1884,15 @@ def _assemble_and_emit(input_data: dict, run: HookRun) -> None:
         if any(cooldown_suppressed.values()):
             logger.info(
                 "COOLDOWN turn=%d window=%d suppressed=%s",
-                turn_index, cooldown,
+                turn_index,
+                cooldown,
                 json.dumps({k: sorted(v) for k, v in cooldown_suppressed.items()}),
             )
         if any(refloor_dropped.values()):
             logger.info(
                 "COOLDOWN_REFLOOR turn=%d ratio=%s dropped=%s",
-                turn_index, POST_COOLDOWN_KEEP_RATIO,
+                turn_index,
+                POST_COOLDOWN_KEEP_RATIO,
                 json.dumps({k: sorted(v) for k, v in refloor_dropped.items()}),
             )
 
@@ -1866,12 +1924,17 @@ def _assemble_and_emit(input_data: dict, run: HookRun) -> None:
     budget_dropped: list[str] = []
     with run.stage("content"):
         memory_content = _load_memory_content(
-            memory_dir, picks_by_corpus.get("memory") or [], banks,
+            memory_dir,
+            picks_by_corpus.get("memory") or [],
+            banks,
             whole_file_max_bytes=cfg.whole_file_max_bytes,
             report=memory_report,
         )
         memory_content, budget_dropped = _apply_memory_budget(
-            memory_dir, memory_content, cfg.memory_budget_bytes, banks,
+            memory_dir,
+            memory_content,
+            cfg.memory_budget_bytes,
+            banks,
             pointers=memory_report.pointers,
         )
         skills_content = _build_skills_recommendations(
@@ -1907,19 +1970,25 @@ def _assemble_and_emit(input_data: dict, run: HookRun) -> None:
         and not memory_content
     )
     if (
-        not memory_content and not router_abstained and not mem_on_cooldown
+        not memory_content
+        and not router_abstained
+        and not mem_on_cooldown
         and not mem_anchor_dropped
     ):
         # Don't re-inject files still within the cooldown window, and cap the
         # payload — the recency fallback fires every prompt when no catalog
         # exists yet, so an unbounded dump would flood each turn.
-        _mem_recent = recent.get("memory") if isinstance(recent.get("memory"), dict) else {}
+        _mem_recent = (
+            recent.get("memory") if isinstance(recent.get("memory"), dict) else {}
+        )
         on_cooldown = {
-            name for name, t in _mem_recent.items()
+            name
+            for name, t in _mem_recent.items()
             if isinstance(t, int) and (turn_index - t) <= cooldown
         }
         memory_content = _read_top_memory_files(
-            memory_dir, exclude=on_cooldown,
+            memory_dir,
+            exclude=on_cooldown,
             max_bytes=cfg.memory_budget_bytes or None,
             whole_file_max_bytes=cfg.whole_file_max_bytes,
         )
@@ -1927,14 +1996,20 @@ def _assemble_and_emit(input_data: dict, run: HookRun) -> None:
             used_fallback = True
             logger.info("FALLBACK memory=%s", json.dumps(sorted(memory_content.keys())))
             log_event(
-                "context", "fallback",
+                "context",
+                "fallback",
                 "router matched nothing — fell back to recency-ranked memory → "
                 + ", ".join(sorted(memory_content.keys())),
                 session_id=session_id,
                 files=sorted(memory_content.keys()),
             )
 
-    if not memory_content and not skills_content and not resources_content and not dev_refs:
+    if (
+        not memory_content
+        and not skills_content
+        and not resources_content
+        and not dev_refs
+    ):
         logger.info("No context to inject")
         # Make abstention visible in the human log: a deliberate
         # "nothing relevant" is the floor/continuation guard working,
@@ -1981,7 +2056,9 @@ def _assemble_and_emit(input_data: dict, run: HookRun) -> None:
             else:
                 _skip_msg = "router abstained — no memory matched, nothing injected"
         log_event(
-            "context", "skip", _skip_msg,
+            "context",
+            "skip",
+            _skip_msg,
             session_id=session_id,
         )
         if cooldown_active:
@@ -1992,16 +2069,24 @@ def _assemble_and_emit(input_data: dict, run: HookRun) -> None:
 
     parts: list[str] = []
     if memory_content:
-        parts.append(_render_memory_section(
-            memory_dir, memory_content, cfg.memory_conflict_preamble, banks,
-        ))
+        parts.append(
+            _render_memory_section(
+                memory_dir,
+                memory_content,
+                cfg.memory_conflict_preamble,
+                banks,
+            )
+        )
     if skills_content:
         parts.append(_render_corpus_section("SKILLS", skills_content))
     if resources_content:
-        parts.append(_render_corpus_section(
-            "RESOURCES", resources_content,
-            preamble=_QMD_RESOURCES_PREAMBLE,
-        ))
+        parts.append(
+            _render_corpus_section(
+                "RESOURCES",
+                resources_content,
+                preamble=_QMD_RESOURCES_PREAMBLE,
+            )
+        )
     if dev_refs:
         parts.append(dev_refs)
 
@@ -2033,7 +2118,11 @@ def _assemble_and_emit(input_data: dict, run: HookRun) -> None:
         "skills": sorted(skills_content),
         "resources": sorted(resources_content),
     }
-    injected = files_by_corpus["memory"] + files_by_corpus["skills"] + files_by_corpus["resources"]
+    injected = (
+        files_by_corpus["memory"]
+        + files_by_corpus["skills"]
+        + files_by_corpus["resources"]
+    )
     # Section-level attribution for the memory corpus — the only corpus
     # whose catalog carries section_anchors. Added alongside `files` and
     # `files_by_corpus` rather than replacing them: the fleet and
@@ -2061,7 +2150,9 @@ def _assemble_and_emit(input_data: dict, run: HookRun) -> None:
         + (f" → {' · '.join(file_groups)}" if file_groups else "")
     )
     log_event(
-        "context", "inject", summary,
+        "context",
+        "inject",
+        summary,
         session_id=session_id,
         memory=corpus_counts["memory"],
         skills=corpus_counts["skills"],
@@ -2085,12 +2176,18 @@ def _assemble_and_emit(input_data: dict, run: HookRun) -> None:
 
     if cooldown_active:
         _persist_turn_state(
-            session_state, turn_index, recent,
-            {"memory": _cooldown_keys(
-                picks_by_corpus.get("memory") or [], memory_content,
-                memory_report.aliases),
-             "skills": skills_content,
-             "resources": resources_content},
+            session_state,
+            turn_index,
+            recent,
+            {
+                "memory": _cooldown_keys(
+                    picks_by_corpus.get("memory") or [],
+                    memory_content,
+                    memory_report.aliases,
+                ),
+                "skills": skills_content,
+                "resources": resources_content,
+            },
             cooldown,
         )
 

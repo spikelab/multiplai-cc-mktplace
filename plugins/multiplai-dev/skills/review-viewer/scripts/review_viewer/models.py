@@ -64,12 +64,15 @@ class Need(_Strict):
     when one command does not get it (a console page, a dashboard, a team);
     files before multiplai-dev 0.32 have none.
     """
+
     what: str
     blocks: str
     cause: Literal["no-access", "lookup-failed", "unreachable"]
     command: str = ""
     where: str = ""
     source: Literal["verifier", "finder", "pipeline"]
+
+
 class Assessment(_Strict):
     """The review's own judgement of a finding against the rest of the review
     and earlier rounds (multiplai-dev 0.27+). Older files have none.
@@ -81,6 +84,7 @@ class Assessment(_Strict):
     `important` (multiplai-dev 0.71+): a trim suggestion about a test that must
     stay, given by the verify stage, not the assess agent.
     `useful`: everything else. A label never removes a finding."""
+
     label: Literal["useful", "still-open", "low-value", "repeat", "important"]
     reason: str = ""
     earlier_id: str | None = None
@@ -91,19 +95,27 @@ class Assessment(_Strict):
 
 class Absorbed(_Strict):
     """A finding the review merged into this one, at its merge or assess stage: its id and claim."""
+
     id: str = Field(pattern=r"^[0-9a-f]{10}$")
     claim: str
 
 
 # `Finding.paths` as the schema states it: optional, but never null when present.
-PATH_IDS_SCHEMA = {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": True}
+PATH_IDS_SCHEMA = {
+    "type": "array",
+    "items": {"type": "string", "minLength": 1},
+    "uniqueItems": True,
+}
 # `Finding.lineage` as the schema states it: optional, but never null when present.
 LINEAGE_SCHEMA = {"type": "string", "pattern": r"^[0-9a-f]{10}$"}
 # `Finding.defect_class` and `Finding.other_locations` as the schema states them: optional, but never
 # null or empty when present. Each location is `path:line` or `path:start-end`.
 DEFECT_CLASS_SCHEMA = {"type": "string", "minLength": 1}
-OTHER_LOCATIONS_SCHEMA = {"type": "array", "minItems": 1,
-                          "items": {"type": "string", "pattern": r"^.+:\d+(-\d+)?$"}}
+OTHER_LOCATIONS_SCHEMA = {
+    "type": "array",
+    "minItems": 1,
+    "items": {"type": "string", "pattern": r"^.+:\d+(-\d+)?$"},
+}
 
 
 class Finding(_Strict):
@@ -129,12 +141,26 @@ class Finding(_Strict):
     assessment: Assessment | None = None
     # What the finding is about, as the verifier labelled it (multiplai-dev
     # 0.32+). Absent in older files; the page then guesses from the path.
-    topic: Literal["code", "tests", "docs", "config", "infra", "data", "security", "performance",
-                   "process"] | None = None
+    topic: (
+        Literal[
+            "code",
+            "tests",
+            "docs",
+            "config",
+            "infra",
+            "data",
+            "security",
+            "performance",
+            "process",
+        ]
+        | None
+    ) = None
     # What breaks in production if the change is merged as is, as the verifier
     # rated it (multiplai-dev 0.32+). Absent on refuted and rejected findings
     # and in older files. A `critical` review lists only the two `breaks-*`.
-    impact: Literal["breaks-users", "breaks-business", "correctness-only", "hygiene"] | None = None
+    impact: (
+        Literal["breaks-users", "breaks-business", "correctness-only", "hygiene"] | None
+    ) = None
     # The section the review lists the finding in (multiplai-dev 0.71+): `trim`
     # for what only the trim finder reported, else from the topic. Absent in
     # older files; readers then use the topic.
@@ -153,7 +179,9 @@ class Finding(_Strict):
     # same defect (multiplai-dev 0.95+). Absent when the finder named none, and in
     # older files.
     defect_class: Annotated[str | None, WithJsonSchema(DEFECT_CLASS_SCHEMA)] = None
-    other_locations: Annotated[list[str] | None, WithJsonSchema(OTHER_LOCATIONS_SCHEMA)] = None
+    other_locations: Annotated[
+        list[str] | None, WithJsonSchema(OTHER_LOCATIONS_SCHEMA)
+    ] = None
 
     @field_validator("paths")
     @classmethod
@@ -185,6 +213,7 @@ class RunTokens(_Strict):
 
 class RunStage(_Strict):
     """One row of the per-stage table: a finder (`find:<dimension>`), `verify` or `merge`."""
+
     name: str
     stage: str
     calls: int = Field(ge=0)
@@ -212,14 +241,19 @@ class Run(_Strict):
     Cost and tokens are what the SDK returned; a call that returned no usage
     counts as 0 and adds a line to the review's errors.
     """
+
     started_at: datetime | None = None
     ended_at: datetime | None = None
-    wall_seconds: float = Field(ge=0)  # running time only: the gap before a resume is left out
+    wall_seconds: float = Field(
+        ge=0
+    )  # running time only: the gap before a resume is left out
     calls: int = Field(ge=0)
     tokens: RunTokens
     cost_usd: float = Field(ge=0)
     max_usd: float | None = None  # the budget ceiling; None = no ceiling
-    stopped_by_budget: bool  # the ceiling stopped the review at least once before it finished
+    stopped_by_budget: (
+        bool  # the ceiling stopped the review at least once before it finished
+    )
     stages: list[RunStage]
     counts: RunCounts
     errors: int = Field(ge=0)  # lines in the review's error list
@@ -234,6 +268,7 @@ class EarlierStatus(_Strict):
     no agent could assess is `cannot_verify`, never `resolved`; `error` says why
     when every recheck call failed.
     """
+
     earlier_id: str = Field(pattern=r"^[0-9a-f]{10}$")
     lineage: str = Field(pattern=r"^[0-9a-f]{10}$")
     round: str
@@ -249,6 +284,7 @@ class FindingsFile(_Strict):
     Additive changes keep the version: a new optional field is added under
     `schema_version` 1, and a file written before it still validates.
     """
+
     schema_version: Literal[1]
     generated_at: datetime
     producer: str
@@ -277,7 +313,9 @@ class MarkedCitation(_Strict):
     line_end: int = Field(ge=1)
     quote: str
     gate: Literal["pass", "fail", "web"]  # citation_gate at head; a URL is not checked
-    seen: Literal["read", "searched", "diff", "prompt", "fetched", "not-seen"]  # how the agent came to the lines
+    seen: Literal[
+        "read", "searched", "diff", "prompt", "fetched", "not-seen"
+    ]  # how the agent came to the lines
 
 
 class ToolCallRecord(_Strict):
@@ -306,9 +344,12 @@ class CheckedVerdict(_Strict):
 
 class ConvertedItemEntry(_Strict):
     """One item of a piece or path finder's converted report (review 0.82+): what kind it was."""
+
     kind: Literal["defect", "advice"]
     severity: Literal["HIGH", "MEDIUM", "LOW"]
-    finding_id: str | None = None  # None when the item had no location to stand a finding on
+    finding_id: str | None = (
+        None  # None when the item had no location to stand a finding on
+    )
 
 
 class AgentEntry(_Strict):
@@ -324,7 +365,9 @@ class AgentEntry(_Strict):
     error: str = ""
     findings: list[CheckedFinding] = Field(default_factory=list)
     verdict: CheckedVerdict | None = None
-    items: list[ConvertedItemEntry] | None = None  # a convert call's (`<key> convert`), review 0.82+
+    items: list[ConvertedItemEntry] | None = (
+        None  # a convert call's (`<key> convert`), review 0.82+
+    )
 
 
 class GateEntry(_Strict):
@@ -336,6 +379,7 @@ class GateEntry(_Strict):
 
 class CoverageEntry(_Strict):
     """What a review stage could not cover, and why (review's `checks.add_coverage`)."""
+
     stage: Literal["paths", "find", "conventions"]
     subject: str
     level: Literal["info", "error"]
@@ -365,11 +409,11 @@ def checks_schema_text() -> str:
 
 def finding_id(file: str, line_start: int, claim: str) -> str:
     """Stable id for a finding: survives re-renders of the same review."""
-    raw = f"{file}\0{line_start}\0{claim}".encode("utf-8")
+    raw = f"{file}\0{line_start}\0{claim}".encode()
     return hashlib.sha1(raw).hexdigest()[:10]
 
 
-def findings_digest(ff: "FindingsFile") -> str:
+def findings_digest(ff: FindingsFile) -> str:
     """Identifies one version of a findings file's content."""
     return hashlib.sha256(ff.model_dump_json().encode("utf-8")).hexdigest()
 
@@ -445,10 +489,14 @@ class WalkthroughAssessment(_Strict):
     SKILL.md. `size` and `risk` are accepted in files written before 0.22 but
     rejected by `walkthrough put`: size is measured and risk is the header
     score."""
+
     topic: AssessmentTopic
     verdict: Literal["good", "note", "concern"]
-    title: str = Field(min_length=1, max_length=60,
-                       json_schema_extra={"maxLength": ASSESSMENT_TITLE_MAX})
+    title: str = Field(
+        min_length=1,
+        max_length=60,
+        json_schema_extra={"maxLength": ASSESSMENT_TITLE_MAX},
+    )
     detail_md: str
 
 
@@ -460,6 +508,7 @@ class RiskInput(_Strict):
     deletion or migration, shared infra, production deploy config. A repo's
     `.review-risk.toml`, read at the base commit, can raise it for the files
     it matches, never lower it."""
+
     tier: int = Field(ge=0, le=3)
     tier_why: str = Field(min_length=1)
     revertable: bool
@@ -490,6 +539,7 @@ def walkthrough_schema_text() -> str:
 class Anchor(_Strict):
     """Lines a question is about. `side: base` numbers lines at base_sha, for
     a question about lines the change deletes; `head` (the default) at head_sha."""
+
     path: str
     side: Literal["head", "base"] = "head"
     line_start: int = Field(ge=1)

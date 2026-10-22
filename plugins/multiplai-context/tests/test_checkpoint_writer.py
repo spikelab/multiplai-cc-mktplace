@@ -2,11 +2,10 @@
 
 import asyncio
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
-
 from conftest import import_script
 from lib import checkpoint as cp
 
@@ -67,16 +66,24 @@ def _payload(session_id, transcript, tokens=110_000, reason="band"):
 
 class TestWriteCheckpoint:
     def test_writes_valid_checkpoint(self, tmp_path, data_env, monkeypatch):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         transcript = tmp_path / "t.jsonl"
         _write_transcript(
             transcript,
             [
                 _turn("user", "please build the widget", now - timedelta(minutes=10)),
                 _turn(
-                    "assistant", "building it", now,
-                    tool_blocks=[{"type": "tool_use", "name": "Write",
-                                  "input": {"file_path": "/work/proj/w.py"}, "id": "t1"}],
+                    "assistant",
+                    "building it",
+                    now,
+                    tool_blocks=[
+                        {
+                            "type": "tool_use",
+                            "name": "Write",
+                            "input": {"file_path": "/work/proj/w.py"},
+                            "id": "t1",
+                        }
+                    ],
                 ),
             ],
         )
@@ -97,20 +104,29 @@ class TestWriteCheckpoint:
         assert state["last_checkpoint_tokens"] == 110_000
 
     def test_incremental_second_write(self, tmp_path, data_env, monkeypatch):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         transcript = tmp_path / "t.jsonl"
         _write_transcript(
             transcript, [_turn("user", "old work item alpha", now - timedelta(hours=2))]
         )
         captured = []
         monkeypatch.setattr(checkpoint_writer, "run_agent", _fake_run_agent(captured))
-        assert asyncio.run(checkpoint_writer.write_checkpoint(_payload("s1", transcript)))
+        assert asyncio.run(
+            checkpoint_writer.write_checkpoint(_payload("s1", transcript))
+        )
 
         # Append newer turns, then write again
         with transcript.open("a") as f:
-            f.write(json.dumps(_turn("user", "new work item beta", now + timedelta(minutes=5))) + "\n")
+            f.write(
+                json.dumps(
+                    _turn("user", "new work item beta", now + timedelta(minutes=5))
+                )
+                + "\n"
+            )
         assert asyncio.run(
-            checkpoint_writer.write_checkpoint(_payload("s1", transcript, tokens=205_000))
+            checkpoint_writer.write_checkpoint(
+                _payload("s1", transcript, tokens=205_000)
+            )
         )
 
         second_prompt = captured[1]["prompt"]
@@ -120,13 +136,15 @@ class TestWriteCheckpoint:
         assert "old work item alpha" not in second_prompt
 
     def test_handoff_writes_pending_marker(self, tmp_path, data_env, monkeypatch):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         transcript = tmp_path / "t.jsonl"
         _write_transcript(transcript, [_turn("user", "work", now)])
         monkeypatch.setattr(checkpoint_writer, "run_agent", _fake_run_agent([]))
 
         assert asyncio.run(
-            checkpoint_writer.write_checkpoint(_payload("s1", transcript, tokens=210_000))
+            checkpoint_writer.write_checkpoint(
+                _payload("s1", transcript, tokens=210_000)
+            )
         )
         payload = cp.consume_pending_marker(
             data_env, "/work/proj", "other-session", cp.load_config()
@@ -141,13 +159,15 @@ class TestWriteCheckpoint:
         checkpoint can be found again. Gating the marker on it meant a clean
         143K-token session left a perfectly good checkpoint that nothing could
         ever restore from."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         transcript = tmp_path / "t.jsonl"
         _write_transcript(transcript, [_turn("user", "work", now)])
         monkeypatch.setattr(checkpoint_writer, "run_agent", _fake_run_agent([]))
 
         assert asyncio.run(
-            checkpoint_writer.write_checkpoint(_payload("s1", transcript, tokens=110_000))
+            checkpoint_writer.write_checkpoint(
+                _payload("s1", transcript, tokens=110_000)
+            )
         )
         payload = cp.consume_pending_marker(
             data_env, "/work/proj", "other", cp.load_config()
@@ -163,7 +183,7 @@ class TestWriteCheckpoint:
         checkpoint survives verbatim as the prefix, and the window the model
         could not summarise is appended raw rather than dropped."""
         cp.write_checkpoint_file(data_env, "s1", VALID_CHECKPOINT)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         transcript = tmp_path / "t.jsonl"
         _write_transcript(transcript, [_turn("user", "work", now)])
 
@@ -179,11 +199,13 @@ class TestWriteCheckpoint:
         assert cp.validate_checkpoint(written)
 
     def test_invalid_output_rejected(self, tmp_path, data_env, monkeypatch):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         transcript = tmp_path / "t.jsonl"
         _write_transcript(transcript, [_turn("user", "work", now)])
         monkeypatch.setattr(
-            checkpoint_writer, "run_agent", _fake_run_agent([], text="I could not comply.")
+            checkpoint_writer,
+            "run_agent",
+            _fake_run_agent([], text="I could not comply."),
         )
         ok = asyncio.run(checkpoint_writer.write_checkpoint(_payload("s1", transcript)))
         assert ok is False
@@ -191,9 +213,7 @@ class TestWriteCheckpoint:
 
     def test_child_session_skipped(self, tmp_path, data_env, monkeypatch):
         transcript = tmp_path / "subagents" / "t.jsonl"
-        _write_transcript(
-            transcript, [_turn("user", "work", datetime.now(timezone.utc))]
-        )
+        _write_transcript(transcript, [_turn("user", "work", datetime.now(UTC))])
         called = []
         monkeypatch.setattr(checkpoint_writer, "run_agent", _fake_run_agent(called))
         ok = asyncio.run(checkpoint_writer.write_checkpoint(_payload("s1", transcript)))
@@ -245,16 +265,12 @@ class TestCheckpointThinking:
         import lib.thinking as th
         from multiplai_core.plugin_options import option_var
 
-        monkeypatch.setattr(
-            th, "core_supports_thinking", lambda target=None: supported
-        )
+        monkeypatch.setattr(th, "core_supports_thinking", lambda target=None: supported)
         monkeypatch.delenv(option_var(th.CHECKPOINT_THINKING_OPTION), raising=False)
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         transcript = tmp_path / "t.jsonl"
-        _write_transcript(
-            transcript, [_turn("user", "please build the widget", now)]
-        )
+        _write_transcript(transcript, [_turn("user", "please build the widget", now)])
         captured = []
         monkeypatch.setattr(checkpoint_writer, "run_agent", _fake_run_agent(captured))
 

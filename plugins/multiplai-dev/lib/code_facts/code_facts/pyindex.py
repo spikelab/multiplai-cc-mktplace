@@ -38,13 +38,25 @@ from .paths import Handler
 
 log = logging.getLogger(__name__)
 
-SKIP_DIRS = frozenset({".git", "node_modules", ".venv", "venv", "__pycache__", "site-packages", "build", "dist"})
+SKIP_DIRS = frozenset(
+    {
+        ".git",
+        "node_modules",
+        ".venv",
+        "venv",
+        "__pycache__",
+        "site-packages",
+        "build",
+        "dist",
+    }
+)
 REPO_MARKERS = (".git", "pyproject.toml")
 
 
 @dataclass(frozen=True)
 class Def:
     """A `def` or `class` statement: `qualname` dots the enclosing definitions' names."""
+
     name: str
     qualname: str
     start: int
@@ -62,12 +74,14 @@ class _DefBinding:
 @dataclass(frozen=True)
 class _ModuleBinding:
     """`import a.b` (binds `a` to module `a`) or `import a.b as c` (binds `c` to `a.b`)."""
+
     module: str
 
 
 @dataclass(frozen=True)
 class _FromBinding:
     """`from <level dots><module> import <attr> [as <name>]`."""
+
     module: str
     level: int
     attr: str
@@ -79,6 +93,7 @@ _Binding = _DefBinding | _ModuleBinding | _FromBinding
 @dataclass(frozen=True)
 class _Import:
     """One import statement's target: `names` is empty for `import <module>`."""
+
     module: str
     level: int
     names: tuple[str, ...]
@@ -89,7 +104,9 @@ class _Import:
         `import a.b` also imports `a`; `from x import y` also names `x.y`, which counts when it is a module.
         """
         if self.names:
-            return [self.module] + [f"{self.module}.{n}" if self.module else n for n in self.names]
+            return [self.module] + [
+                f"{self.module}.{n}" if self.module else n for n in self.names
+            ]
         parts = self.module.split(".")
         return [".".join(parts[:i]) for i in range(1, len(parts) + 1)]
 
@@ -107,7 +124,9 @@ class _File:
     lines: int
     tree: ast.Module | None = None
     defs: list[Def] = field(default_factory=list)
-    scopes: list[_Scope] = field(default_factory=list)  # pre-order: an enclosing scope precedes its inner ones
+    scopes: list[_Scope] = field(
+        default_factory=list
+    )  # pre-order: an enclosing scope precedes its inner ones
     module_bindings: dict[str, list[_Binding]] = field(default_factory=dict)
     imports: list[_Import] = field(default_factory=list)
 
@@ -115,8 +134,13 @@ class _File:
 class PyIndex:
     """The parsed Python files of one snapshot, and the name and import resolution over them."""
 
-    def __init__(self, files: dict[str, _File], repo_roots: frozenset[str], parse_errors: dict[str, str],
-                 all_files: frozenset[str]):
+    def __init__(
+        self,
+        files: dict[str, _File],
+        repo_roots: frozenset[str],
+        parse_errors: dict[str, str],
+        all_files: frozenset[str],
+    ):
         self._files = files
         self._repo_roots = repo_roots
         self._parse_errors = parse_errors
@@ -140,7 +164,12 @@ class PyIndex:
                     files[rel], error = _index_file(root / rel, rel)
                     if error is not None:
                         parse_errors[rel] = error
-        log.debug("indexed %d Python files under %s (%d unparseable)", len(files), root, len(parse_errors))
+        log.debug(
+            "indexed %d Python files under %s (%d unparseable)",
+            len(files),
+            root,
+            len(parse_errors),
+        )
         return cls(files, frozenset(repo_roots), parse_errors, frozenset(all_files))
 
     def including(self, root: Path, paths: Iterable[str]) -> PyIndex:
@@ -182,8 +211,14 @@ class PyIndex:
 
     def handler_def(self, handler: Handler) -> Def | None:
         """The `def` or `class` `handler` names, matched by line and name; None when `handler` names neither."""
-        return next((d for d in self.defs(handler.path) if d.start == handler.line and d.name == handler.symbol),
-                    None)
+        return next(
+            (
+                d
+                for d in self.defs(handler.path)
+                if d.start == handler.line and d.name == handler.symbol
+            ),
+            None,
+        )
 
     def files_named(self, name: str) -> list[str]:
         """Every walked file of the snapshot, of any type, whose base name is `name`, in path order."""
@@ -213,7 +248,7 @@ class PyIndex:
         if path not in self._files:
             return None
         repo = self.repo_root(path)
-        rel = path[len(repo) + 1:] if repo else path
+        rel = path[len(repo) + 1 :] if repo else path
         parts = rel.removeprefix("src/").removesuffix(".py").split("/")
         if parts[-1] == "__init__":
             parts.pop()
@@ -257,7 +292,9 @@ class PyIndex:
         for binding in bindings:
             target = self._bound_module(path, binding, submodule)
             if target is not None:
-                found = self._resolve_bindings(target, self._files[target].module_bindings.get(attr, []), set())
+                found = self._resolve_bindings(
+                    target, self._files[target].module_bindings.get(attr, []), set()
+                )
                 if found is not None:
                     return found
         return None
@@ -267,7 +304,11 @@ class PyIndex:
         `resolve_name`; None when `path` is not indexed or the name does not resolve.
         """
         info = self._files.get(path)
-        return self._resolve_bindings(path, info.module_bindings.get(name, []), set()) if info else None
+        return (
+            self._resolve_bindings(path, info.module_bindings.get(name, []), set())
+            if info
+            else None
+        )
 
     def qualified_name(self, path: str, line: int, name: str) -> str | None:
         """The absolute dotted name `name` means at `line` of `path` through its imports, scopes as for
@@ -287,7 +328,9 @@ class PyIndex:
         """Whether `name` (or the first part of a dotted name) at `line` of `path` is imported from outside the
         repository, directly or through a same-repository re-export.
         """
-        return self._external(path, self._visible(path, line, name.partition(".")[0]), set())
+        return self._external(
+            path, self._visible(path, line, name.partition(".")[0]), set()
+        )
 
     def enclosing_def(self, path: str, line: int) -> Def | None:
         """The innermost `def` or `class` whose span holds `line`."""
@@ -296,7 +339,9 @@ class PyIndex:
 
     def enclosing_function(self, path: str, line: int) -> Def | None:
         """The innermost function `def` whose span holds `line`; classes are skipped."""
-        containing = [d for d in self.defs(path) if not d.is_class and d.start <= line <= d.end]
+        containing = [
+            d for d in self.defs(path) if not d.is_class and d.start <= line <= d.end
+        ]
         return containing[-1] if containing else None
 
     def enclosing_scope(self, path: str, line: int) -> tuple[int, int]:
@@ -315,7 +360,9 @@ class PyIndex:
         `import a.b` also imports `a`; `from x import y` also imports `x/y.py` when that is a module.
         """
         if path not in self._imported:
-            self._imported[path] = sorted(self._import_targets(path, self.resolve_module))
+            self._imported[path] = sorted(
+                self._import_targets(path, self.resolve_module)
+            )
         return list(self._imported[path])
 
     # --- import graph ---------------------------------------------------------------------
@@ -326,7 +373,9 @@ class PyIndex:
         Empty for a file that is not indexed or did not parse.
         """
         if path not in self._edges:
-            self._edges[path] = frozenset(self._import_targets(path, self._resolve_import))
+            self._edges[path] = frozenset(
+                self._import_targets(path, self._resolve_import)
+            )
         return self._edges[path]
 
     def import_distance(self, source: str, targets: frozenset[str]) -> int | None:
@@ -342,12 +391,18 @@ class PyIndex:
 
     # --- internals ------------------------------------------------------------------------
 
-    def _import_targets(self, path: str, resolve: Callable[[str, str, int], str | None]) -> set[str]:
+    def _import_targets(
+        self, path: str, resolve: Callable[[str, str, int], str | None]
+    ) -> set[str]:
         """The files `path`'s imports resolve to through `resolve`, `path` itself left out."""
         info = self._files.get(path)
         imports = info.imports if info else []
-        found = {target for imp in imports for dotted in imp.dotted_targets()
-                 if (target := resolve(path, dotted, imp.level)) is not None}
+        found = {
+            target
+            for imp in imports
+            for dotted in imp.dotted_targets()
+            if (target := resolve(path, dotted, imp.level)) is not None
+        }
         found.discard(path)
         return found
 
@@ -388,11 +443,20 @@ class PyIndex:
         if self.resolve_module(importer, dotted) is not None:
             return True
         repo = self.repo_root(importer)
-        prefixes = tuple(posixpath.join(base, *dotted.split(".")) + "/" for base in self._absolute_bases(importer))
-        return any(f.startswith(prefixes) and self.repo_root(f) == repo for f in self._files)
+        prefixes = tuple(
+            posixpath.join(base, *dotted.split(".")) + "/"
+            for base in self._absolute_bases(importer)
+        )
+        return any(
+            f.startswith(prefixes) and self.repo_root(f) == repo for f in self._files
+        )
 
     def _module_file(self, stem: str) -> str | None:
-        candidates = [f"{stem}.py", posixpath.join(stem, "__init__.py")] if stem else ["__init__.py"]
+        candidates = (
+            [f"{stem}.py", posixpath.join(stem, "__init__.py")]
+            if stem
+            else ["__init__.py"]
+        )
         return next((c for c in candidates if c in self._files), None)
 
     def _visible(self, path: str, line: int, name: str) -> list[_Binding]:
@@ -408,7 +472,9 @@ class PyIndex:
                 return scope.bindings[name]
         return info.module_bindings.get(name, [])
 
-    def _resolve_bindings(self, path: str, bindings: list[_Binding], seen: set[tuple[str, str]]) -> Handler | None:
+    def _resolve_bindings(
+        self, path: str, bindings: list[_Binding], seen: set[tuple[str, str]]
+    ) -> Handler | None:
         for binding in bindings:
             match binding:
                 case _DefBinding(name=name, line=line):
@@ -418,7 +484,9 @@ class PyIndex:
                     if target is None or (target, attr) in seen:
                         continue
                     seen.add((target, attr))
-                    found = self._resolve_bindings(target, self._files[target].module_bindings.get(attr, []), seen)
+                    found = self._resolve_bindings(
+                        target, self._files[target].module_bindings.get(attr, []), seen
+                    )
                     if found is not None:
                         return found
         return None
@@ -432,9 +500,13 @@ class PyIndex:
                 module = f"{module}.{attr}" if module else attr
             case _:
                 return None
-        return self.resolve_module(path, f"{module}.{submodule}" if submodule else module, level)
+        return self.resolve_module(
+            path, f"{module}.{submodule}" if submodule else module, level
+        )
 
-    def _external(self, path: str, bindings: list[_Binding], seen: set[tuple[str, str]]) -> bool:
+    def _external(
+        self, path: str, bindings: list[_Binding], seen: set[tuple[str, str]]
+    ) -> bool:
         for binding in bindings:
             match binding:
                 case _ModuleBinding(module=module):
@@ -448,7 +520,11 @@ class PyIndex:
                             return True
                     elif (target, attr) not in seen:
                         seen.add((target, attr))
-                        if self._external(target, self._files[target].module_bindings.get(attr, []), seen):
+                        if self._external(
+                            target,
+                            self._files[target].module_bindings.get(attr, []),
+                            seen,
+                        ):
                             return True
         return False
 
@@ -472,7 +548,9 @@ def snapshot_files(root: Path, skip_dirs: frozenset[str]) -> Iterator[str]:
         yield from rels
 
 
-def _walk(root: Path, skip_dirs: frozenset[str]) -> Iterator[tuple[str, set[str], list[str]]]:
+def _walk(
+    root: Path, skip_dirs: frozenset[str]
+) -> Iterator[tuple[str, set[str], list[str]]]:
     """Per directory, subdirectories visited in sorted order whatever order the filesystem lists them in: its
     snapshot-relative path, every name it holds (skipped directories included), and the sorted relative paths of
     its regular files inside the snapshot.
@@ -483,8 +561,11 @@ def _walk(root: Path, skip_dirs: frozenset[str]) -> Iterator[tuple[str, set[str]
         rel_dir = "" if rel_dir == "." else rel_dir
         names = {*dirnames, *filenames}
         dirnames[:] = sorted(d for d in dirnames if d not in skip_dirs)
-        rels = [posixpath.join(rel_dir, name) for name in sorted(filenames)
-                if _inside(full := Path(dirpath, name), real_root) and full.is_file()]
+        rels = [
+            posixpath.join(rel_dir, name)
+            for name in sorted(filenames)
+            if _inside(full := Path(dirpath, name), real_root) and full.is_file()
+        ]
         yield rel_dir, names, rels
 
 
@@ -524,7 +605,8 @@ def count_lines(text: str | bytes) -> int:
 
 def _is_type_checking(test: ast.expr) -> bool:
     return (isinstance(test, ast.Name) and test.id == "TYPE_CHECKING") or (
-        isinstance(test, ast.Attribute) and test.attr == "TYPE_CHECKING")
+        isinstance(test, ast.Attribute) and test.attr == "TYPE_CHECKING"
+    )
 
 
 class _Collector:
@@ -533,17 +615,31 @@ class _Collector:
     def __init__(self, info: _File):
         self._info = info
 
-    def body(self, stmts: list[ast.stmt], bindings: dict[str, list[_Binding]], prefix: str) -> None:
+    def body(
+        self, stmts: list[ast.stmt], bindings: dict[str, list[_Binding]], prefix: str
+    ) -> None:
         for stmt in stmts:
             self._node(stmt, bindings, prefix)
 
-    def _node(self, node: ast.AST, bindings: dict[str, list[_Binding]], prefix: str) -> None:
+    def _node(
+        self, node: ast.AST, bindings: dict[str, list[_Binding]], prefix: str
+    ) -> None:
         match node:
             case ast.FunctionDef() | ast.AsyncFunctionDef() | ast.ClassDef():
-                bindings.setdefault(node.name, []).append(_DefBinding(node.name, node.lineno))
+                bindings.setdefault(node.name, []).append(
+                    _DefBinding(node.name, node.lineno)
+                )
                 qualname = prefix + node.name
                 end = node.end_lineno or node.lineno
-                self._info.defs.append(Def(node.name, qualname, node.lineno, end, isinstance(node, ast.ClassDef)))
+                self._info.defs.append(
+                    Def(
+                        node.name,
+                        qualname,
+                        node.lineno,
+                        end,
+                        isinstance(node, ast.ClassDef),
+                    )
+                )
                 scope = _Scope(node.lineno, end, isinstance(node, ast.ClassDef))
                 self._info.scopes.append(scope)
                 self.body(node.body, scope.bindings, qualname + ".")
@@ -551,7 +647,9 @@ class _Collector:
                 for alias in aliases:
                     self._info.imports.append(_Import(alias.name, 0, ()))
                     if alias.asname:
-                        bindings.setdefault(alias.asname, []).append(_ModuleBinding(alias.name))
+                        bindings.setdefault(alias.asname, []).append(
+                            _ModuleBinding(alias.name)
+                        )
                     else:
                         top = alias.name.split(".")[0]
                         bindings.setdefault(top, []).append(_ModuleBinding(top))
@@ -561,7 +659,9 @@ class _Collector:
                 for alias in aliases:
                     if alias.name != "*":
                         binding = _FromBinding(module or "", level, alias.name)
-                        bindings.setdefault(alias.asname or alias.name, []).append(binding)
+                        bindings.setdefault(alias.asname or alias.name, []).append(
+                            binding
+                        )
             case ast.If() if _is_type_checking(node.test):
                 self.body(node.orelse, bindings, prefix)
             case _:

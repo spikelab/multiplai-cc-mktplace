@@ -39,10 +39,19 @@ EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 # A tree review leaves these out of the files under review, each with a reason
 # in skipped.txt: they are large, machine-written, or not text.
 TREE_MAX_CHARS = 200_000
-LOCKFILES = frozenset({
-    "uv.lock", "poetry.lock", "Pipfile.lock", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "Cargo.lock",
-    "Gemfile.lock", "go.sum",
-})
+LOCKFILES = frozenset(
+    {
+        "uv.lock",
+        "poetry.lock",
+        "Pipfile.lock",
+        "package-lock.json",
+        "yarn.lock",
+        "pnpm-lock.yaml",
+        "Cargo.lock",
+        "Gemfile.lock",
+        "go.sum",
+    }
+)
 GENERATED_ATTRS = ("linguist-generated", "linguist-vendored")
 # Directories `--dir` does not copy: installed dependencies and build output.
 IMPORT_EXCLUDES = ("node_modules", ".venv", "venv", "__pycache__", "dist", "build")
@@ -52,12 +61,18 @@ class TargetError(Exception):
     """The target could not be resolved. The message says why."""
 
 
-def git(repo: str | Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
+def git(
+    repo: str | Path, *args: str, check: bool = True
+) -> subprocess.CompletedProcess:
     """Run one git command against *repo*; stdout/stderr as text."""
     proc = subprocess.run(
         [*GIT_ARGV, "-C", str(repo), *args],
-        capture_output=True, text=True, stdin=subprocess.DEVNULL, env=git_env(),
-        shell=False, check=False,
+        capture_output=True,
+        text=True,
+        stdin=subprocess.DEVNULL,
+        env=git_env(),
+        shell=False,
+        check=False,
     )
     if check and proc.returncode != 0:
         raise TargetError(f"git {' '.join(args)} failed: {proc.stderr.strip()}")
@@ -66,7 +81,9 @@ def git(repo: str | Path, *args: str, check: bool = True) -> subprocess.Complete
 
 def rev_parse(repo: str | Path, ref: str) -> str | None:
     """Full 40-hex sha for *ref*, or None when it does not resolve to a commit."""
-    proc = git(repo, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}", check=False)
+    proc = git(
+        repo, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}", check=False
+    )
     sha = proc.stdout.strip()
     return sha if proc.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", sha) else None
 
@@ -82,7 +99,7 @@ def default_branch(repo: str | Path) -> str:
     proc = git(repo, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD", check=False)
     ref = proc.stdout.strip()
     if proc.returncode == 0 and ref.startswith("refs/remotes/origin/"):
-        return ref[len("refs/remotes/origin/"):]
+        return ref[len("refs/remotes/origin/") :]
     return "main"
 
 
@@ -96,8 +113,11 @@ def github_web_base(url: str | None) -> str | None:
     """`https://github.com/<owner>/<repo>` for a GitHub remote, else None."""
     if not url:
         return None
-    m = re.match(r"^(?:https?://(?:[^@/]+@)?github\.com/|git@github\.com:|ssh://git@github\.com/)"
-                 r"([^/]+)/([^/]+?)(?:\.git)?/?$", url)
+    m = re.match(
+        r"^(?:https?://(?:[^@/]+@)?github\.com/|git@github\.com:|ssh://git@github\.com/)"
+        r"([^/]+)/([^/]+?)(?:\.git)?/?$",
+        url,
+    )
     return f"https://github.com/{m.group(1)}/{m.group(2)}" if m else None
 
 
@@ -111,8 +131,7 @@ def origin_owner_repo(url: str | None) -> tuple[str, str] | None:
     if not url:
         return None
     path = url.strip().rstrip("/")
-    if path.endswith(".git"):
-        path = path[:-len(".git")]
+    path = path.removesuffix(".git")
     parts = [p for p in re.split(r"[/:]", path) if p]
     if len(parts) < 2:
         return None
@@ -136,8 +155,11 @@ def slug_repo_name(repo: Path) -> str:
     name = origin_name(remote_url(repo))
     if name:
         return name
-    log.info("no origin remote in %s with an owner and a name: the slug uses the directory name %s",
-             repo, repo.name)
+    log.info(
+        "no origin remote in %s with an owner and a name: the slug uses the directory name %s",
+        repo,
+        repo.name,
+    )
     return repo.name
 
 
@@ -149,6 +171,7 @@ def sanitize_slug(text: str) -> str:
 @dataclass
 class Resolved:
     """A resolved target before the gate: shas may be None."""
+
     repo: Path
     kind: str
     ref: str
@@ -177,17 +200,25 @@ def _pr_view(repo: Path, number: int) -> dict:
     if gh is None:
         raise TargetError(
             "--pr needs the GitHub CLI (`gh`), which is not installed. Install it from "
-            "https://cli.github.com and run `gh auth login`, or pass --range <base>..<head>.")
+            "https://cli.github.com and run `gh auth login`, or pass --range <base>..<head>."
+        )
     proc = subprocess.run(
         [gh, "pr", "view", str(number), "--json", PR_VIEW_FIELDS],
-        cwd=repo, capture_output=True, text=True, stdin=subprocess.DEVNULL, shell=False, check=False,
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        stdin=subprocess.DEVNULL,
+        shell=False,
+        check=False,
     )
     if proc.returncode != 0:
         raise TargetError(f"gh pr view {number} failed: {proc.stderr.strip()}")
     return json.loads(proc.stdout)
 
 
-def branch_rules(repo: Path, branch: str, needs: list[Need] | None = None) -> list[dict] | None:
+def branch_rules(
+    repo: Path, branch: str, needs: list[Need] | None = None
+) -> list[dict] | None:
     """GitHub's rules on *branch* (rulesets and classic protection, merged by GitHub).
 
     `gh api` fills `{owner}` and `{repo}` from the repository's origin. `[]`
@@ -202,7 +233,12 @@ def branch_rules(repo: Path, branch: str, needs: list[Need] | None = None) -> li
     endpoint = f"repos/{{owner}}/{{repo}}/rules/branches/{branch}"
     proc = subprocess.run(
         [gh, "api", endpoint],
-        cwd=repo, capture_output=True, text=True, stdin=subprocess.DEVNULL, shell=False, check=False,
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        stdin=subprocess.DEVNULL,
+        shell=False,
+        check=False,
     )
 
     def need(error: str) -> None:
@@ -210,23 +246,36 @@ def branch_rules(repo: Path, branch: str, needs: list[Need] | None = None) -> li
             # The command is the call made above, placeholders included: gh fills
             # them the same way when it runs in the repository, so a fork clone or
             # `gh repo set-default` resolves to the repository the pipeline asked.
-            needs.append(Need(
-                what=f"GitHub's rules on the base branch `{branch}`, so the review can tell whether CI "
-                     f"blocks a merge. Run the command in `{repo}`. The review went on without them: {error}",
-                cause="lookup-failed", command=f"gh api {endpoint}", source="pipeline"))
+            needs.append(
+                Need(
+                    what=f"GitHub's rules on the base branch `{branch}`, so the review can tell whether CI "
+                    f"blocks a merge. Run the command in `{repo}`. The review went on without them: {error}",
+                    cause="lookup-failed",
+                    command=f"gh api {endpoint}",
+                    source="pipeline",
+                )
+            )
 
     if proc.returncode != 0:
-        log.warning("gh api rules/branches/%s failed; reviewing without branch rules: %s",
-                    branch, proc.stderr.strip()[:300])
+        log.warning(
+            "gh api rules/branches/%s failed; reviewing without branch rules: %s",
+            branch,
+            proc.stderr.strip()[:300],
+        )
         need(_first_line(proc.stderr))
         return None
     try:
         rules = json.loads(proc.stdout)
     except ValueError:
-        log.warning("gh api rules/branches/%s returned no JSON; reviewing without branch rules", branch)
+        log.warning(
+            "gh api rules/branches/%s returned no JSON; reviewing without branch rules",
+            branch,
+        )
         need("gh api returned no JSON")
         return None
-    return [r for r in rules if isinstance(r, dict)] if isinstance(rules, list) else None
+    return (
+        [r for r in rules if isinstance(r, dict)] if isinstance(rules, list) else None
+    )
 
 
 def normalise_path(path: str | None) -> str:
@@ -250,7 +299,9 @@ def tree_root(repo: Path, path: str | None) -> tuple[Path, str]:
     proc = git(repo, "rev-parse", "--show-toplevel", check=False)
     top_text = proc.stdout.strip() if proc.returncode == 0 else ""
     top = Path(top_text).resolve() if top_text else repo
-    prefix = repo.relative_to(top).as_posix() if top != repo and top in repo.parents else ""
+    prefix = (
+        repo.relative_to(top).as_posix() if top != repo and top in repo.parents else ""
+    )
     joined = normalise_path("/".join(p for p in (prefix, normalise_path(path)) if p))
     sub = normalise_path(posixpath.normpath(joined)) if joined else ""
     if sub == ".." or sub.startswith("../"):
@@ -258,9 +309,17 @@ def tree_root(repo: Path, path: str | None) -> tuple[Path, str]:
     return top, sub
 
 
-def resolve(repo: str | Path, *, branch: str | None = None, pr: int | None = None,
-            range_: str | None = None, tree: str | None = None, path: str | None = None,
-            base_branch: str | None = None, fetch: bool = False) -> Resolved:
+def resolve(
+    repo: str | Path,
+    *,
+    branch: str | None = None,
+    pr: int | None = None,
+    range_: str | None = None,
+    tree: str | None = None,
+    path: str | None = None,
+    base_branch: str | None = None,
+    fetch: bool = False,
+) -> Resolved:
     """Turn exactly one of branch / pr / range / tree into base and head shas.
 
     A tree has no base: `base_sha` is `EMPTY_TREE`, `head_sha` the commit *tree*
@@ -274,7 +333,10 @@ def resolve(repo: str | Path, *, branch: str | None = None, pr: int | None = Non
         raise TargetError("pass exactly one of --branch, --pr, --range, --tree")
     if path and not tree:
         raise TargetError("--path goes with --tree")
-    if not (repo / ".git").exists() and git(repo, "rev-parse", "--git-dir", check=False).returncode != 0:
+    if (
+        not (repo / ".git").exists()
+        and git(repo, "rev-parse", "--git-dir", check=False).returncode != 0
+    ):
         raise TargetError(f"{repo} is not a git repository")
     if fetch:
         git(repo, "fetch", "--quiet", "origin")
@@ -283,16 +345,22 @@ def resolve(repo: str | Path, *, branch: str | None = None, pr: int | None = Non
         repo, sub = tree_root(repo, path)
         head = rev_parse(repo, tree)
         problem = "" if head else f"{tree} does not resolve to a commit"
-        return Resolved(repo, "tree", sub or ".", EMPTY_TREE, head, problem=problem, path=sub)
+        return Resolved(
+            repo, "tree", sub or ".", EMPTY_TREE, head, problem=problem, path=sub
+        )
 
     if branch:
         head = rev_parse(repo, f"origin/{branch}")
         default = base_branch or default_branch(repo)
         base = merge_base(repo, f"origin/{default}", head) if head else None
-        problem = "" if head else f"origin/{branch} not found (pass --fetch to fetch it)"
+        problem = (
+            "" if head else f"origin/{branch} not found (pass --fetch to fetch it)"
+        )
         if head and not base:
             problem = f"no merge-base between origin/{default} and origin/{branch}"
-        return Resolved(repo, "branch", branch, base, head, problem=problem, base_ref=default)
+        return Resolved(
+            repo, "branch", branch, base, head, problem=problem, base_ref=default
+        )
 
     if pr is not None and pr != "":
         info = _pr_view(repo, int(pr))
@@ -304,23 +372,41 @@ def resolve(repo: str | Path, *, branch: str | None = None, pr: int | None = Non
             problem = f"PR #{pr} head {info['headRefOid'][:12]} is not in this clone (pass --fetch)"
         elif not base:
             problem = f"PR #{pr} base {info['baseRefOid'][:12]} is not in this clone (pass --fetch)"
-        resolved = Resolved(repo, "pr", str(pr), base, head, pr=int(pr), problem=problem,
-                            title=(info.get("title") or "").strip(),
-                            description=(info.get("body") or "").strip(),
-                            base_ref=info.get("baseRefName") or "")
+        resolved = Resolved(
+            repo,
+            "pr",
+            str(pr),
+            base,
+            head,
+            pr=int(pr),
+            problem=problem,
+            title=(info.get("title") or "").strip(),
+            description=(info.get("body") or "").strip(),
+            base_ref=info.get("baseRefName") or "",
+        )
         # A PR always has a title and a base branch; empty means gh returned less than it should.
         # (An empty body is normal and is not asked for.)
-        missing = [name for name, value in (("title", resolved.title), ("baseRefName", resolved.base_ref))
-                   if not value]
+        missing = [
+            name
+            for name, value in (
+                ("title", resolved.title),
+                ("baseRefName", resolved.base_ref),
+            )
+            if not value
+        ]
         if missing:
             # The same call `_pr_view` made, from the same directory, with no --repo: gh
             # picks the repository the same way it did for the pipeline.
-            resolved.needs.append(Need(
-                what=f"PR #{pr}'s {' and '.join(missing)}: `gh pr view` returned "
-                     f"{'them' if len(missing) > 1 else 'it'} empty, so the review went on without "
-                     f"{'them' if len(missing) > 1 else 'it'}. Run the command in `{repo}`",
-                cause="lookup-failed", command=f"gh pr view {pr} --json {','.join(missing)}",
-                source="pipeline"))
+            resolved.needs.append(
+                Need(
+                    what=f"PR #{pr}'s {' and '.join(missing)}: `gh pr view` returned "
+                    f"{'them' if len(missing) > 1 else 'it'} empty, so the review went on without "
+                    f"{'them' if len(missing) > 1 else 'it'}. Run the command in `{repo}`",
+                    cause="lookup-failed",
+                    command=f"gh pr view {pr} --json {','.join(missing)}",
+                    source="pipeline",
+                )
+            )
         return resolved
 
     range_ = range_ or ""
@@ -328,20 +414,28 @@ def resolve(repo: str | Path, *, branch: str | None = None, pr: int | None = Non
         raise TargetError(f"--range must be <base>..<head>, got {range_!r}")
     a, b = range_.split("..")
     base, head = rev_parse(repo, a), rev_parse(repo, b)
-    problem = "" if base and head else f"{a if not base else b} does not resolve to a commit"
+    problem = (
+        "" if base and head else f"{a if not base else b} does not resolve to a commit"
+    )
     return Resolved(repo, "range", range_, base, head, problem=problem)
 
 
 def tree_paths(repo: str | Path, sha: str) -> frozenset[str]:
     """Every path in the tree of commit *sha* (`git ls-tree -r --name-only`), blobs and links alike."""
-    return frozenset(p for p in git(repo, "ls-tree", "-r", "-z", "--name-only", sha).stdout.split("\0") if p)
+    return frozenset(
+        p
+        for p in git(repo, "ls-tree", "-r", "-z", "--name-only", sha).stdout.split("\0")
+        if p
+    )
 
 
 def diff_text(repo: Path, base: str, head: str) -> str:
     return git(repo, "diff", *_DIFF_FLAGS, f"{base}..{head}").stdout
 
 
-def target_gate(resolved: Resolved, diff: str | None, files: list[str] | None = None) -> GateResult:
+def target_gate(
+    resolved: Resolved, diff: str | None, files: list[str] | None = None
+) -> GateResult:
     """Base found, head found, diff non-empty. A tree target needs one file left to review instead of a diff."""
     if resolved.problem:
         return GateResult(passed=False, reason=resolved.problem, action="exit")
@@ -352,11 +446,19 @@ def target_gate(resolved: Resolved, diff: str | None, files: list[str] | None = 
     if resolved.kind == "tree":
         if not files:
             where = f"under {resolved.path}" if resolved.path else "in the tree"
-            return GateResult(passed=False, reason=f"no file {where} at {resolved.head_sha[:12]} is left to "
-                                                   f"review (see skipped.txt)", action="exit")
+            return GateResult(
+                passed=False,
+                reason=f"no file {where} at {resolved.head_sha[:12]} is left to "
+                f"review (see skipped.txt)",
+                action="exit",
+            )
         return GateResult(passed=True)
     if not diff or not diff.strip():
-        return GateResult(passed=False, reason="the diff between base and head is empty", action="exit")
+        return GateResult(
+            passed=False,
+            reason="the diff between base and head is empty",
+            action="exit",
+        )
     return GateResult(passed=True)
 
 
@@ -369,11 +471,29 @@ def _check_attrs(repo: Path, head: str, paths: list[str]) -> dict[str, str]:
     if not paths:
         return {}
     proc = subprocess.run(
-        [*GIT_ARGV, "-C", str(repo), "check-attr", "-z", "--stdin", "--source", head, *GENERATED_ATTRS],
-        input="\0".join(paths) + "\0", capture_output=True, text=True, env=git_env(), shell=False, check=False,
+        [
+            *GIT_ARGV,
+            "-C",
+            str(repo),
+            "check-attr",
+            "-z",
+            "--stdin",
+            "--source",
+            head,
+            *GENERATED_ATTRS,
+        ],
+        input="\0".join(paths) + "\0",
+        capture_output=True,
+        text=True,
+        env=git_env(),
+        shell=False,
+        check=False,
     )
     if proc.returncode != 0:
-        log.warning("git check-attr --source failed; not skipping generated files: %s", proc.stderr.strip()[:300])
+        log.warning(
+            "git check-attr --source failed; not skipping generated files: %s",
+            proc.stderr.strip()[:300],
+        )
         return {}
     parts = proc.stdout.split("\0")
     out: dict[str, str] = {}
@@ -386,19 +506,33 @@ def _check_attrs(repo: Path, head: str, paths: list[str]) -> dict[str, str]:
 
 def _chars_at(repo: Path, head: str, path: str) -> int:
     """Characters in *path* at *head*, decoded like core `file_at` (bytes that are not UTF-8 count as one each)."""
-    proc = subprocess.run([*GIT_ARGV, "-C", str(repo), "show", f"{head}:{path}"], capture_output=True,
-                          stdin=subprocess.DEVNULL, env=git_env(), shell=False, check=False)
+    proc = subprocess.run(
+        [*GIT_ARGV, "-C", str(repo), "show", f"{head}:{path}"],
+        capture_output=True,
+        stdin=subprocess.DEVNULL,
+        env=git_env(),
+        shell=False,
+        check=False,
+    )
     return len(proc.stdout.decode("utf-8", errors="replace"))
 
 
-def tree_files(repo: Path, head: str, path: str = "") -> tuple[list[str], list[tuple[str, str]]]:
+def tree_files(
+    repo: Path, head: str, path: str = ""
+) -> tuple[list[str], list[tuple[str, str]]]:
     """(files to review, [(file, reason) skipped]) at *head*, under *path*, in path order.
 
     Skipped: binary files, files over TREE_MAX_CHARS characters, lockfiles by
     name, files with linguist-generated or linguist-vendored set, and submodules.
     """
     spec = ["--", path] if path else []
-    listed = [f for f in git(repo, "ls-tree", "-r", "-z", "--name-only", head, *spec).stdout.split("\0") if f]
+    listed = [
+        f
+        for f in git(
+            repo, "ls-tree", "-r", "-z", "--name-only", head, *spec
+        ).stdout.split("\0")
+        if f
+    ]
     sizes: dict[str, int] = {}
     for rec in git(repo, "ls-tree", "-r", "-l", "-z", head, *spec).stdout.split("\0"):
         meta, _, name = rec.partition("\t")
@@ -406,7 +540,9 @@ def tree_files(repo: Path, head: str, path: str = "") -> tuple[list[str], list[t
         if name and len(fields) == 4 and fields[3].isdigit():
             sizes[name] = int(fields[3])
     binary = set()
-    for rec in git(repo, "diff", *_DIFF_FLAGS, "--numstat", "-z", EMPTY_TREE, head, *spec).stdout.split("\0"):
+    for rec in git(
+        repo, "diff", *_DIFF_FLAGS, "--numstat", "-z", EMPTY_TREE, head, *spec
+    ).stdout.split("\0"):
         added, _, rest = rec.partition("\t")
         if added == "-":
             binary.add(rest.partition("\t")[2])
@@ -416,7 +552,10 @@ def tree_files(repo: Path, head: str, path: str = "") -> tuple[list[str], list[t
     for f in sorted(listed):
         if f in binary:
             skipped.append((f, "binary"))
-        elif sizes.get(f, 0) > TREE_MAX_CHARS and _chars_at(repo, head, f) > TREE_MAX_CHARS:
+        elif (
+            sizes.get(f, 0) > TREE_MAX_CHARS
+            and _chars_at(repo, head, f) > TREE_MAX_CHARS
+        ):
             skipped.append((f, f"over {TREE_MAX_CHARS} characters"))
         elif f.rsplit("/", 1)[-1] in LOCKFILES:
             skipped.append((f, "lockfile"))
@@ -429,9 +568,15 @@ def tree_files(repo: Path, head: str, path: str = "") -> tuple[list[str], list[t
     return keep, skipped
 
 
-def build_target(resolved: Resolved, *, tickets: list[str] | None = None,
-                 deployed_in: str | None = None, name: str | None = None,
-                 label: str | None = None, needs: list[Need] | None = None) -> TargetInfo:
+def build_target(
+    resolved: Resolved,
+    *,
+    tickets: list[str] | None = None,
+    deployed_in: str | None = None,
+    name: str | None = None,
+    label: str | None = None,
+    needs: list[Need] | None = None,
+) -> TargetInfo:
     """Everything about the target except files written to disk.
 
     The slug starts with `slug_repo_name()` (`<owner>-<repo>` from origin), the
@@ -447,29 +592,64 @@ def build_target(resolved: Resolved, *, tickets: list[str] | None = None,
         files, skipped = tree_files(repo, head, resolved.path)
         repo_name = name or repo.name
         slug_name = name or slug_repo_name(repo)
-        slug = sanitize_slug(f"{slug_name}--tree" + (f"-{resolved.path}" if resolved.path else ""))
+        slug = sanitize_slug(
+            f"{slug_name}--tree" + (f"-{resolved.path}" if resolved.path else "")
+        )
         what = resolved.path or "whole tree"
         return TargetInfo(
-            repo_path=str(repo), remote_url=remote_url(repo), base_sha=base, head_sha=head,
-            commits=[], files=files, skipped=skipped, slug=slug,
-            label=label or f"{repo_name}: {what} at {head[:8]}", kind="tree", ref=resolved.ref,
-            tickets=list(tickets or []), deployed_in=deployed_in,
+            repo_path=str(repo),
+            remote_url=remote_url(repo),
+            base_sha=base,
+            head_sha=head,
+            commits=[],
+            files=files,
+            skipped=skipped,
+            slug=slug,
+            label=label or f"{repo_name}: {what} at {head[:8]}",
+            kind="tree",
+            ref=resolved.ref,
+            tickets=list(tickets or []),
+            deployed_in=deployed_in,
         )
     commits = []
-    for line in git(repo, "log", "--format=%H%x00%s", f"{base}..{head}").stdout.splitlines():
+    for line in git(
+        repo, "log", "--format=%H%x00%s", f"{base}..{head}"
+    ).stdout.splitlines():
         if "\0" in line:
             sha, subject = line.split("\0", 1)
             commits.append((sha, subject))
-    files = [f for f in git(repo, "diff", *_DIFF_FLAGS, "--name-only", f"{base}..{head}").stdout.splitlines() if f]
+    files = [
+        f
+        for f in git(
+            repo, "diff", *_DIFF_FLAGS, "--name-only", f"{base}..{head}"
+        ).stdout.splitlines()
+        if f
+    ]
     ref = f"pr-{resolved.pr}" if resolved.kind == "pr" else resolved.ref
     slug = sanitize_slug(f"{slug_repo_name(repo)}--{ref}")
-    label = f"{repo.name} {('PR #' + str(resolved.pr)) if resolved.pr else resolved.ref}"
+    label = (
+        f"{repo.name} {('PR #' + str(resolved.pr)) if resolved.pr else resolved.ref}"
+    )
     return TargetInfo(
-        repo_path=str(repo), remote_url=remote_url(repo), base_sha=base, head_sha=head,
-        commits=commits, files=files, slug=slug, label=label, kind=resolved.kind,
-        ref=resolved.ref, pr=resolved.pr, tickets=list(tickets or []), deployed_in=deployed_in,
-        title=resolved.title, description=resolved.description, base_ref=resolved.base_ref,
-        branch_rules=branch_rules(repo, resolved.base_ref, needs) if resolved.base_ref else None,
+        repo_path=str(repo),
+        remote_url=remote_url(repo),
+        base_sha=base,
+        head_sha=head,
+        commits=commits,
+        files=files,
+        slug=slug,
+        label=label,
+        kind=resolved.kind,
+        ref=resolved.ref,
+        pr=resolved.pr,
+        tickets=list(tickets or []),
+        deployed_in=deployed_in,
+        title=resolved.title,
+        description=resolved.description,
+        base_ref=resolved.base_ref,
+        branch_rules=branch_rules(repo, resolved.base_ref, needs)
+        if resolved.base_ref
+        else None,
     )
 
 
@@ -483,18 +663,26 @@ def write_target_files(target: TargetInfo, diff: str, target_dir: Path) -> Targe
     diff_path = target_dir / "diff.patch"
     diff_path.write_text(diff, encoding="utf-8")
     (target_dir / "commits.txt").write_text(
-        "".join(f"{sha} {subject}\n" for sha, subject in target.commits), encoding="utf-8")
-    (target_dir / "files.txt").write_text("".join(f"{f}\n" for f in target.files), encoding="utf-8")
+        "".join(f"{sha} {subject}\n" for sha, subject in target.commits),
+        encoding="utf-8",
+    )
+    (target_dir / "files.txt").write_text(
+        "".join(f"{f}\n" for f in target.files), encoding="utf-8"
+    )
     if target.kind == "tree":
         (target_dir / "skipped.txt").write_text(
-            "".join(f"{f}\t{why}\n" for f, why in target.skipped), encoding="utf-8")
+            "".join(f"{f}\t{why}\n" for f, why in target.skipped), encoding="utf-8"
+        )
     return target.model_copy(update={"diff_path": str(diff_path)})
 
 
 _IMPORT_ENV = {
-    "GIT_AUTHOR_NAME": "review_pipeline", "GIT_AUTHOR_EMAIL": "review@localhost",
-    "GIT_COMMITTER_NAME": "review_pipeline", "GIT_COMMITTER_EMAIL": "review@localhost",
-    "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
+    "GIT_AUTHOR_NAME": "review_pipeline",
+    "GIT_AUTHOR_EMAIL": "review@localhost",
+    "GIT_COMMITTER_NAME": "review_pipeline",
+    "GIT_COMMITTER_EMAIL": "review@localhost",
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_CONFIG_GLOBAL": os.devnull,
 }
 
 
@@ -522,7 +710,9 @@ TAKEN_REPO_NAMES = frozenset({"legacy", ".locks"})
 REVIEW_FILES = ("findings.json", "review-state.json", "files.txt")
 # Children of a repo folder that are never object folders. `tree` is not here: it
 # is the whole-tree object's name.
-NOT_OBJECT_NAMES = frozenset({"rounds", "viewer", "base-tree", "assess-tree", "source", ".git", ".locks"})
+NOT_OBJECT_NAMES = frozenset(
+    {"rounds", "viewer", "base-tree", "assess-tree", "source", ".git", ".locks"}
+)
 # A review folder's own children that never hold another review: its rounds,
 # viewer state and snapshots.
 NOT_NESTED_NAMES = NOT_OBJECT_NAMES | {"tree"}
@@ -574,7 +764,11 @@ def review_children(out_dir: Path) -> list[Path]:
     if not out_dir.is_dir():
         return []
     own = is_review_folder(out_dir)
-    return sorted(p for p in out_dir.iterdir() if p.is_dir() and not (own and p.name in NOT_NESTED_NAMES))
+    return sorted(
+        p
+        for p in out_dir.iterdir()
+        if p.is_dir() and not (own and p.name in NOT_NESTED_NAMES)
+    )
 
 
 def object_folders(out_dir: Path) -> list[Path]:
@@ -591,19 +785,39 @@ def object_folders(out_dir: Path) -> list[Path]:
     """
     found: list[Path] = []
     for repo in review_children(out_dir):
-        if repo.name in TAKEN_REPO_NAMES or repo.name.startswith(".partial-") or is_review_folder(repo):
+        if (
+            repo.name in TAKEN_REPO_NAMES
+            or repo.name.startswith(".partial-")
+            or is_review_folder(repo)
+        ):
             continue
-        found.extend(obj for obj in sorted(repo.iterdir())
-                     if obj.is_dir() and obj.name not in NOT_OBJECT_NAMES and not obj.name.startswith(".partial-"))
+        found.extend(
+            obj
+            for obj in sorted(repo.iterdir())
+            if obj.is_dir()
+            and obj.name not in NOT_OBJECT_NAMES
+            and not obj.name.startswith(".partial-")
+        )
     return found
 
 
 def _import_git(dest: Path, src: Path, *args: str) -> subprocess.CompletedProcess:
-    proc = subprocess.run([*GIT_ARGV, "-C", str(dest), *args], capture_output=True, text=True,
-                          stdin=subprocess.DEVNULL, env=dict(git_env(), **_IMPORT_ENV), shell=False, check=False)
-    ok = proc.returncode == 0 or (args[0] == "diff" and proc.returncode == 1)  # diff --quiet: 1 = changed
+    proc = subprocess.run(
+        [*GIT_ARGV, "-C", str(dest), *args],
+        capture_output=True,
+        text=True,
+        stdin=subprocess.DEVNULL,
+        env=dict(git_env(), **_IMPORT_ENV),
+        shell=False,
+        check=False,
+    )
+    ok = proc.returncode == 0 or (
+        args[0] == "diff" and proc.returncode == 1
+    )  # diff --quiet: 1 = changed
     if not ok:
-        raise TargetError(f"git {args[0]} in the copy of {src} failed: {proc.stderr.strip()}")
+        raise TargetError(
+            f"git {args[0]} in the copy of {src} failed: {proc.stderr.strip()}"
+        )
     return proc
 
 
@@ -611,7 +825,9 @@ def check_out_dir(src: str | Path, out: Path) -> None:
     """Raise TargetError when *out* is *src* or inside it: a `--dir` review never writes to its source."""
     src, out = Path(src).expanduser().resolve(), Path(out).expanduser().resolve()
     if out == src or src in out.parents:
-        raise TargetError(f"the output directory {out} is inside {src}; pass --out somewhere else")
+        raise TargetError(
+            f"the output directory {out} is inside {src}; pass --out somewhere else"
+        )
 
 
 def import_dir(path: str | Path, target_dir: Path) -> Path:
@@ -636,15 +852,19 @@ def import_dir(path: str | Path, target_dir: Path) -> Path:
     if inside.returncode == 0 and inside.stdout.strip():
         top = Path(inside.stdout.strip()).resolve()
         rel = src.relative_to(top).as_posix() if src != top else "."
-        raise TargetError(f"{src} is inside the git repository {top}; review it with "
-                          f"--repo {top} --tree --path {rel}")
+        raise TargetError(
+            f"{src} is inside the git repository {top}; review it with "
+            f"--repo {top} --tree --path {rel}"
+        )
     check_out_dir(src, target_dir)
     dest = (target_dir / "source").resolve()
     kept = (dest / ".git").is_dir()
     try:
         if dest.exists() and not kept:
-            shutil.rmtree(dest)  # a copy that was never committed holds nothing a review names
-        for child in (dest.iterdir() if kept else ()):
+            shutil.rmtree(
+                dest
+            )  # a copy that was never committed holds nothing a review names
+        for child in dest.iterdir() if kept else ():
             if child.name == ".git":
                 continue
             if child.is_dir() and not child.is_symlink():
@@ -652,8 +872,13 @@ def import_dir(path: str | Path, target_dir: Path) -> Path:
             else:
                 child.unlink()
         dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(src, dest, symlinks=True, dirs_exist_ok=True,
-                        ignore=shutil.ignore_patterns(*IMPORT_EXCLUDES, ".git"))
+        shutil.copytree(
+            src,
+            dest,
+            symlinks=True,
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns(*IMPORT_EXCLUDES, ".git"),
+        )
     except OSError as e:  # shutil.Error is an OSError
         raise TargetError(f"cannot copy {src} into {dest}: {e}") from e
     if not kept:
@@ -661,18 +886,33 @@ def import_dir(path: str | Path, target_dir: Path) -> Path:
     _import_git(dest, src, "add", "-A")
     if kept and _import_git(dest, src, "diff", "--cached", "--quiet").returncode == 0:
         return dest  # same contents as the last import: keep its commit
-    _import_git(dest, src, "commit", "-q", "--allow-empty", "-m", f"Import {src.name} for review")
+    _import_git(
+        dest,
+        src,
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        f"Import {src.name} for review",
+    )
     return dest
 
 
 def deployed(target: TargetInfo) -> str | None:
-    """"yes"/"no" for `--deployed-in <name>`: is head an ancestor of origin/<name>?"""
+    """ "yes"/"no" for `--deployed-in <name>`: is head an ancestor of origin/<name>?"""
     if not target.deployed_in:
         return None
     ref = rev_parse(target.repo_path, f"origin/{target.deployed_in}")
     if ref is None:
         return f"unknown (origin/{target.deployed_in} not found)"
-    proc = git(target.repo_path, "merge-base", "--is-ancestor", target.head_sha, ref, check=False)
+    proc = git(
+        target.repo_path,
+        "merge-base",
+        "--is-ancestor",
+        target.head_sha,
+        ref,
+        check=False,
+    )
     return "yes" if proc.returncode == 0 else "no"
 
 
@@ -686,17 +926,26 @@ def snapshot_head(target: TargetInfo, dest: Path) -> Path:
     repo.
     """
     marker = dest / ".review-head"
-    if marker.exists() and marker.read_text(encoding="utf-8").strip() == target.head_sha:
+    if (
+        marker.exists()
+        and marker.read_text(encoding="utf-8").strip() == target.head_sha
+    ):
         return dest
     if dest.exists():
         shutil.rmtree(dest)
     dest.mkdir(parents=True)
     proc = subprocess.run(
         [*GIT_ARGV, "-C", target.repo_path, "archive", "--format=tar", target.head_sha],
-        capture_output=True, stdin=subprocess.DEVNULL, env=git_env(), shell=False, check=False,
+        capture_output=True,
+        stdin=subprocess.DEVNULL,
+        env=git_env(),
+        shell=False,
+        check=False,
     )
     if proc.returncode != 0:
-        raise TargetError(f"git archive {target.head_sha[:12]} failed: {proc.stderr.decode(errors='replace').strip()}")
+        raise TargetError(
+            f"git archive {target.head_sha[:12]} failed: {proc.stderr.decode(errors='replace').strip()}"
+        )
     with tarfile.open(fileobj=io.BytesIO(proc.stdout), mode="r:") as tar:
         tar.extractall(dest, filter="data")
     (dest / ".review-head").write_text(target.head_sha + "\n", encoding="utf-8")
@@ -740,14 +989,29 @@ def snapshot_base(target: TargetInfo, dest: Path, paths: list[str]) -> Path:
     for batch in _archive_batches(paths):
         try:
             proc = subprocess.run(
-                [*GIT_ARGV, "-C", target.repo_path, "archive", "--format=tar", target.base_sha, "--", *batch],
-                capture_output=True, stdin=subprocess.DEVNULL, env=git_env(), shell=False, check=False,
+                [
+                    *GIT_ARGV,
+                    "-C",
+                    target.repo_path,
+                    "archive",
+                    "--format=tar",
+                    target.base_sha,
+                    "--",
+                    *batch,
+                ],
+                capture_output=True,
+                stdin=subprocess.DEVNULL,
+                env=git_env(),
+                shell=False,
+                check=False,
             )
         except OSError as e:
             # E2BIG, or git missing
             raise TargetError(f"git archive {target.base_sha[:12]} failed: {e}") from e
         if proc.returncode != 0:
-            raise TargetError(f"git archive {target.base_sha[:12]} failed: {proc.stderr.decode(errors='replace').strip()}")
+            raise TargetError(
+                f"git archive {target.base_sha[:12]} failed: {proc.stderr.decode(errors='replace').strip()}"
+            )
         try:
             with tarfile.open(fileobj=io.BytesIO(proc.stdout), mode="r:") as tar:
                 tar.extractall(dest, filter="data")
@@ -757,11 +1021,26 @@ def snapshot_base(target: TargetInfo, dest: Path, paths: list[str]) -> Path:
             raise TargetError(f"extracting {target.base_sha[:12]} failed: {e}") from e
     return dest
     proc = subprocess.run(
-        [*GIT_ARGV, "-C", target.repo_path, "archive", "--format=tar", target.base_sha, "--", *paths],
-        capture_output=True, stdin=subprocess.DEVNULL, env=git_env(), shell=False, check=False,
+        [
+            *GIT_ARGV,
+            "-C",
+            target.repo_path,
+            "archive",
+            "--format=tar",
+            target.base_sha,
+            "--",
+            *paths,
+        ],
+        capture_output=True,
+        stdin=subprocess.DEVNULL,
+        env=git_env(),
+        shell=False,
+        check=False,
     )
     if proc.returncode != 0:
-        raise TargetError(f"git archive {target.base_sha[:12]} failed: {proc.stderr.decode(errors='replace').strip()}")
+        raise TargetError(
+            f"git archive {target.base_sha[:12]} failed: {proc.stderr.decode(errors='replace').strip()}"
+        )
     try:
         with tarfile.open(fileobj=io.BytesIO(proc.stdout), mode="r:") as tar:
             tar.extractall(dest, filter="data")

@@ -25,26 +25,26 @@ DEFAULT_TTL_HOURS = 168  # 7 days
 DEFAULT_DIARY_CATALOG_DAYS = 7
 DEFAULT_SKILLS_DIR = "~/.claude/skills"
 DEFAULT_CATALOG_CONCURRENCY = 5  # Anthropic API tolerates this comfortably;
-                                 # raise via the catalog_concurrency option if
-                                 # you have higher quotas.
+# raise via the catalog_concurrency option if
+# you have higher quotas.
 DEFAULT_RECOMMEND_COOLDOWN_TURNS = 4  # Suppress re-recommending a file for
-                                      # this many turns after it was injected
-                                      # (already in conversation context).
-                                      # 0 disables the cooldown.
+# this many turns after it was injected
+# (already in conversation context).
+# 0 disables the cooldown.
 DEFAULT_KEEP_RATIO = 0.30  # token_overlap relative-cutoff: drop memory
-                           # files scoring < ratio × top. Higher = stricter
-                           # (fewer, more-relevant files; less cap saturation).
-                           # See memory_router.DEFAULT_KEEP_RATIO for the
-                           # production-replay calibration. Clamped to (0, 1].
+# files scoring < ratio × top. Higher = stricter
+# (fewer, more-relevant files; less cap saturation).
+# See memory_router.DEFAULT_KEEP_RATIO for the
+# production-replay calibration. Clamped to (0, 1].
 DEFAULT_MEMORY_BUDGET_BYTES = 40_000  # Most memory content one prompt may
-                                      # inject, in UTF-8 bytes. Picks past it
-                                      # are dropped lowest-ranked first. Same
-                                      # figure the recency fallback always
-                                      # capped at. 0 disables the budget.
+# inject, in UTF-8 bytes. Picks past it
+# are dropped lowest-ranked first. Same
+# figure the recency fallback always
+# capped at. 0 disables the budget.
 DEFAULT_WHOLE_FILE_MAX_BYTES = 20_000  # Memory files larger than this load
-                                       # only by section; a bare pick gets a
-                                       # pointer (path + section list). 0
-                                       # disables the limit.
+# only by section; a bare pick gets a
+# pointer (path + section list). 0
+# disables the limit.
 
 # A resources corpus is retrieved through qmd and nothing else
 # (see scripts/qmd_retrieval.py). The catalog+router path that memory,
@@ -61,13 +61,13 @@ VALID_QMD_STRATEGIES = ("fused", "hybrid", "fts")
 DEFAULT_QMD_STRATEGY = "fused"
 # http mode: resident `qmd mcp --http` daemon on the host.
 DEFAULT_QMD_HTTP_URL = "http://host.docker.internal:8181"
-DEFAULT_QMD_CANDIDATE_LIMIT = 10   # docs the daemon reranks (latency dial)
+DEFAULT_QMD_CANDIDATE_LIMIT = 10  # docs the daemon reranks (latency dial)
 # Ceiling for qmd_candidate_limit: the HTTP request timeout scales linearly
 # with this dial (qmd_retrieval.http_timeout: 3 + 0.7s/doc), so an
 # unbounded value would let a config typo stall every prompt for minutes.
 # 50 docs ≈ 38s worst-case — already generous.
 MAX_QMD_CANDIDATE_LIMIT = 50
-DEFAULT_QMD_MIN_SCORE = 0.30       # weak-match cutoff applied to results
+DEFAULT_QMD_MIN_SCORE = 0.30  # weak-match cutoff applied to results
 
 
 @dataclass
@@ -169,14 +169,31 @@ class CatalogConfig:
 # Every option this loader reads, in declaration order. Used only for the
 # fallback log line below — the reads themselves each carry their own default.
 _KNOWN_OPTIONS = (
-    "catalog_model", "catalog_model_diary", "catalog_ttl_hours",
-    "diary_catalog_days", "enable_skills", "skills_dir", "plugins_dir",
-    "enable_resources", "resources_dir", "qmd_mode",
-    "qmd_ssh_host", "qmd_collection", "qmd_strategy", "qmd_http_url",
-    "qmd_candidate_limit", "qmd_min_score", "catalog_concurrency",
-    "recommend_cooldown_turns", "keep_ratio", "enable_costs",
-    "memory_conflict_preamble", "enable_dev_references", "memory_write_mode",
-    "memory_budget_bytes", "whole_file_max_bytes",
+    "catalog_model",
+    "catalog_model_diary",
+    "catalog_ttl_hours",
+    "diary_catalog_days",
+    "enable_skills",
+    "skills_dir",
+    "plugins_dir",
+    "enable_resources",
+    "resources_dir",
+    "qmd_mode",
+    "qmd_ssh_host",
+    "qmd_collection",
+    "qmd_strategy",
+    "qmd_http_url",
+    "qmd_candidate_limit",
+    "qmd_min_score",
+    "catalog_concurrency",
+    "recommend_cooldown_turns",
+    "keep_ratio",
+    "enable_costs",
+    "memory_conflict_preamble",
+    "enable_dev_references",
+    "memory_write_mode",
+    "memory_budget_bytes",
+    "whole_file_max_bytes",
 )
 
 
@@ -197,7 +214,9 @@ def _log_defaulted_options() -> None:
     if defaulted:
         logger.info(
             "Plugin options at default (%d/%d, not set by the user): %s",
-            len(defaulted), len(_KNOWN_OPTIONS), ", ".join(defaulted),
+            len(defaulted),
+            len(_KNOWN_OPTIONS),
+            ", ".join(defaulted),
         )
 
 
@@ -211,9 +230,7 @@ def load_catalog_config() -> CatalogConfig:
     model = option("catalog_model", DEFAULT_MODEL)
     model_diary = option("catalog_model_diary", DEFAULT_MODEL_DIARY)
     ttl_hours = option_int("catalog_ttl_hours", DEFAULT_TTL_HOURS)
-    diary_catalog_days = option_int(
-        "diary_catalog_days", DEFAULT_DIARY_CATALOG_DAYS
-    )
+    diary_catalog_days = option_int("diary_catalog_days", DEFAULT_DIARY_CATALOG_DAYS)
     enable_skills = option_bool("enable_skills", False)
     skills_dir = option("skills_dir", DEFAULT_SKILLS_DIR)
     plugins_dir = option("plugins_dir", "")
@@ -224,20 +241,14 @@ def load_catalog_config() -> CatalogConfig:
     qmd_collection = option("qmd_collection", DEFAULT_QMD_COLLECTION)
     qmd_strategy = option("qmd_strategy", DEFAULT_QMD_STRATEGY)
     qmd_http_url = option("qmd_http_url", DEFAULT_QMD_HTTP_URL)
-    qmd_candidate_limit = option_int(
-        "qmd_candidate_limit", DEFAULT_QMD_CANDIDATE_LIMIT
-    )
+    qmd_candidate_limit = option_int("qmd_candidate_limit", DEFAULT_QMD_CANDIDATE_LIMIT)
     qmd_min_score = option_float("qmd_min_score", DEFAULT_QMD_MIN_SCORE)
-    catalog_concurrency = option_int(
-        "catalog_concurrency", DEFAULT_CATALOG_CONCURRENCY
-    )
+    catalog_concurrency = option_int("catalog_concurrency", DEFAULT_CATALOG_CONCURRENCY)
     recommend_cooldown_turns = option_int(
         "recommend_cooldown_turns", DEFAULT_RECOMMEND_COOLDOWN_TURNS
     )
     keep_ratio = option_float("keep_ratio", DEFAULT_KEEP_RATIO)
-    memory_budget_bytes = option_int(
-        "memory_budget_bytes", DEFAULT_MEMORY_BUDGET_BYTES
-    )
+    memory_budget_bytes = option_int("memory_budget_bytes", DEFAULT_MEMORY_BUDGET_BYTES)
     whole_file_max_bytes = option_int(
         "whole_file_max_bytes", DEFAULT_WHOLE_FILE_MAX_BYTES
     )

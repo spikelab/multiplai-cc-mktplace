@@ -31,7 +31,7 @@ import logging
 import os
 import subprocess
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +54,7 @@ def _norm(p: str) -> Path:
     return Path(os.path.normpath(str(Path(p).expanduser())))
 
 
-def _segment_under(cwd: Path, root: Path) -> Optional[str]:
+def _segment_under(cwd: Path, root: Path) -> str | None:
     """First path segment of *cwd* beneath *root*, or ``None`` if not under it."""
     rparts = root.parts
     cparts = cwd.parts
@@ -70,7 +70,7 @@ def _is_at_or_under(cwd: Path, root: Path) -> bool:
     return len(cparts) >= len(rparts) and cparts[: len(rparts)] == rparts
 
 
-def _run_git(cwd: str, *args: str) -> Optional[str]:
+def _run_git(cwd: str, *args: str) -> str | None:
     """Run ``git -C cwd <args>`` and return stripped stdout, or ``None``."""
     try:
         out = subprocess.run(
@@ -87,7 +87,7 @@ def _run_git(cwd: str, *args: str) -> Optional[str]:
     return val or None
 
 
-def _git_project_name(cwd: str) -> Optional[str]:
+def _git_project_name(cwd: str) -> str | None:
     """Name of the enclosing git repo, collapsing worktrees onto the main repo.
 
     ``--git-common-dir`` points at the *main* repo's ``.git`` even from a linked
@@ -105,7 +105,7 @@ def _git_project_name(cwd: str) -> Optional[str]:
     return None
 
 
-def resolve_project(cwd: str, config: Optional[dict[str, Any]] = None) -> Optional[str]:
+def resolve_project(cwd: str, config: dict[str, Any] | None = None) -> str | None:
     """Map a session working directory onto a stable project name.
 
     Returns ``None`` when *cwd* is empty or cannot be attributed to a project.
@@ -120,7 +120,7 @@ def resolve_project(cwd: str, config: Optional[dict[str, Any]] = None) -> Option
     cwd_path = _norm(cwd)
 
     # 1. project_roots — longest matching root wins.
-    best_name: Optional[str] = None
+    best_name: str | None = None
     best_depth = -1
     for raw_root in config.get("project_roots") or []:
         root = _norm(str(raw_root))
@@ -152,8 +152,8 @@ def resolve_project(cwd: str, config: Optional[dict[str, Any]] = None) -> Option
 def load_project_map() -> dict[str, Any]:
     """Load ``project-map.yaml`` from the workspace root; ``{}`` if absent."""
     try:
-        from multiplai_core.paths import get_paths
         from multiplai_core.config import load_yaml
+        from multiplai_core.paths import get_paths
 
         return load_yaml(get_paths().project_map_file())
     except Exception:

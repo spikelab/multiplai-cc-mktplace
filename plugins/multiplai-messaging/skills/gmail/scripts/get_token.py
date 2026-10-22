@@ -19,6 +19,7 @@ Usage (recommended, via uv — resolves deps automatically):
 Optional: also write a JSON token file (for the GMAIL_TOKEN_FILE fallback path):
   uv run get_token.py client_secret.json --out /abs/path/token.json
 """
+
 from __future__ import annotations
 
 import argparse
@@ -36,24 +37,32 @@ SCOPES = [
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Mint the Gmail read+draft credential.")
-    ap.add_argument("client_secret", help="path to the Desktop OAuth client "
-                    "secret JSON downloaded from Google Cloud Console")
-    ap.add_argument("--out", default=None,
-                    help="also write the credential as a JSON token file at this "
-                    "path (for the GMAIL_TOKEN_FILE fallback); default: env-only")
+    ap.add_argument(
+        "client_secret",
+        help="path to the Desktop OAuth client "
+        "secret JSON downloaded from Google Cloud Console",
+    )
+    ap.add_argument(
+        "--out",
+        default=None,
+        help="also write the credential as a JSON token file at this "
+        "path (for the GMAIL_TOKEN_FILE fallback); default: env-only",
+    )
     args = ap.parse_args()
 
     if not os.path.isfile(args.client_secret):
-        print(f"error: client secret not found: {args.client_secret}",
-              file=sys.stderr)
+        print(f"error: client secret not found: {args.client_secret}", file=sys.stderr)
         return 1
 
     try:
         from google_auth_oauthlib.flow import InstalledAppFlow
     except ImportError:
-        print("error: google-auth-oauthlib is not installed.\n"
-              "Run this script with uv (`uv run get_token.py ...`) or install it:\n"
-              "  pip install google-auth-oauthlib", file=sys.stderr)
+        print(
+            "error: google-auth-oauthlib is not installed.\n"
+            "Run this script with uv (`uv run get_token.py ...`) or install it:\n"
+            "  pip install google-auth-oauthlib",
+            file=sys.stderr,
+        )
         return 1
 
     flow = InstalledAppFlow.from_client_secrets_file(args.client_secret, SCOPES)
@@ -63,25 +72,36 @@ def main() -> int:
     granted = set(creds.scopes or [])
     extra = granted - set(SCOPES)
     if extra:
-        print("warning: Google granted extra scopes beyond compose+readonly: "
-              + ", ".join(sorted(extra)) + "\nThe skill will REFUSE to run with "
-              "these. Re-consent and grant only the two requested scopes.",
-              file=sys.stderr)
+        print(
+            "warning: Google granted extra scopes beyond compose+readonly: "
+            + ", ".join(sorted(extra))
+            + "\nThe skill will REFUSE to run with "
+            "these. Re-consent and grant only the two requested scopes.",
+            file=sys.stderr,
+        )
 
     client_id = flow.client_config["client_id"]
     client_secret = flow.client_config["client_secret"]
     refresh_token = creds.refresh_token
     if not refresh_token:
-        print("error: no refresh_token returned. Revoke the app's access at "
-              "https://myaccount.google.com/permissions and re-run.",
-              file=sys.stderr)
+        print(
+            "error: no refresh_token returned. Revoke the app's access at "
+            "https://myaccount.google.com/permissions and re-run.",
+            file=sys.stderr,
+        )
         return 1
 
     # Audit the mint to the shared activity log (no secret values recorded).
     try:
         from multiplai_core.log_utils import log_event
-        log_event("gmail", "mint", "minted Gmail credential via get_token.py",
-                  scopes=sorted(granted), token_file=bool(args.out))
+
+        log_event(
+            "gmail",
+            "mint",
+            "minted Gmail credential via get_token.py",
+            scopes=sorted(granted),
+            token_file=bool(args.out),
+        )
     except Exception:  # noqa: BLE001 — never let logging block credential output
         pass
 
@@ -104,8 +124,9 @@ def main() -> int:
             "scopes": sorted(granted),
         }
         out.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(str(out), os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
-                     stat.S_IRUSR | stat.S_IWUSR)
+        fd = os.open(
+            str(out), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, stat.S_IRUSR | stat.S_IWUSR
+        )
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(data, fh, indent=2)
             fh.write("\n")

@@ -40,14 +40,25 @@ from pathlib import Path
 from typing import Literal
 
 from multiplai_core.env import load_multiplai_conf
-from multiplai_core.stage_config import check_effort, coerce_int, conf_value, read_yaml_mapping
+from multiplai_core.stage_config import (
+    check_effort,
+    coerce_int,
+    conf_value,
+    read_yaml_mapping,
+)
 
 from . import ledger
 from .budget import DEFAULT_MAX_USD
 
 log = logging.getLogger(__name__)
 
-DIMENSIONS: tuple[str, ...] = ("diff-bugs", "callers", "history", "conventions", "tests")
+DIMENSIONS: tuple[str, ...] = (
+    "diff-bugs",
+    "callers",
+    "history",
+    "conventions",
+    "tests",
+)
 # Not one of DIMENSIONS: `finder_dimensions` adds it when the review runs it.
 TRIM_DIMENSION = "trim"
 DEFAULT_CONCURRENCY = 4
@@ -110,14 +121,24 @@ def _yaml_path(out_dir: Path | None) -> Path | None:
         return path
     old = ledger.legacy_reviews_root() / CONFIG_FILE
     if is_default and old.is_file():
-        log.warning("reading %s: %s is now read from %s; copy it there, or run "
-                    "`python -m review_pipeline migrate --from %s`", old, CONFIG_FILE, path, old.parent)
+        log.warning(
+            "reading %s: %s is now read from %s; copy it there, or run "
+            "`python -m review_pipeline migrate --from %s`",
+            old,
+            CONFIG_FILE,
+            path,
+            old.parent,
+        )
         return old
     return path
 
 
-def load_config(out_dir: Path | None, *, max_cost_usd: float | None = DEFAULT_MAX_USD,
-                max_cost_source: Literal["default", "cli", "config"] = "default") -> ReviewConfig:
+def load_config(
+    out_dir: Path | None,
+    *,
+    max_cost_usd: float | None = DEFAULT_MAX_USD,
+    max_cost_source: Literal["default", "cli", "config"] = "default",
+) -> ReviewConfig:
     cfg = ReviewConfig(max_cost_usd=max_cost_usd, max_cost_source=max_cost_source)
     try:
         conf = load_multiplai_conf()
@@ -128,7 +149,9 @@ def load_config(out_dir: Path | None, *, max_cost_usd: float | None = DEFAULT_MA
     cfg.verifier_model = conf_value(conf, "review_verifier_model")
     cfg.merger_model = cfg.verifier_model
     cfg.effort = conf_value(conf, "review_effort")
-    explain = _flag(conf_value(conf, "review_explain"), "review_explain", "multiplai.conf")
+    explain = _flag(
+        conf_value(conf, "review_explain"), "review_explain", "multiplai.conf"
+    )
     if explain is not None:
         cfg.explain = explain
 
@@ -159,9 +182,15 @@ def load_config(out_dir: Path | None, *, max_cost_usd: float | None = DEFAULT_MA
 
 SESSION_DEFAULT = "session default"
 # The config field that sets each stage's model.
-STAGE_MODELS = {"explain": "finder_model", "find": "finder_model", "verify": "verifier_model",
-                "recheck": "verifier_model", "merge": "merger_model", "repeats": "merger_model",
-                "assess": "merger_model"}
+STAGE_MODELS = {
+    "explain": "finder_model",
+    "find": "finder_model",
+    "verify": "verifier_model",
+    "recheck": "verifier_model",
+    "merge": "merger_model",
+    "repeats": "merger_model",
+    "assess": "merger_model",
+}
 
 
 def run_config(cfg: ReviewConfig) -> dict:
@@ -171,8 +200,13 @@ def run_config(cfg: ReviewConfig) -> dict:
     returned by multiplai-core's `run_agent`, so it is not recorded.
     """
     return {
-        "stages": {stage: {"model": getattr(cfg, attr) or SESSION_DEFAULT, "effort": cfg.effort or SESSION_DEFAULT}
-                   for stage, attr in STAGE_MODELS.items()},
+        "stages": {
+            stage: {
+                "model": getattr(cfg, attr) or SESSION_DEFAULT,
+                "effort": cfg.effort or SESSION_DEFAULT,
+            }
+            for stage, attr in STAGE_MODELS.items()
+        },
         "concurrency": cfg.concurrency,
         "max_turns": cfg.max_turns,
     }

@@ -6,10 +6,10 @@ change_dir/requirements/<capability>.md. Design/tasks/audit must read from
 there — not the empty legacy change_dir/specs/*/spec.md layout.
 """
 
-import pytest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from build_pipeline.config import BuildConfig
 from build_pipeline.llm_steps.spec_steps import (
     _build_prompt,
@@ -112,7 +112,9 @@ class TestReferenceDocsInThePrompts:
         config = _make_config(tmp_path, {"auth": "SCENARIO: x"})
         (config.change_dir / "proposal.md").write_text("proposal body")
         prompt = _build_prompt(
-            "design", self._CONTEXT, config,
+            "design",
+            self._CONTEXT,
+            config,
             reference_docs="### Reference: uv-python.md\nAlways use uv, never pip.",
         )
         assert "Always use uv, never pip." in prompt
@@ -123,7 +125,9 @@ class TestReferenceDocsInThePrompts:
         (config.change_dir / "proposal.md").write_text("proposal body")
         (config.change_dir / "design.md").write_text("design body")
         prompt = _build_prompt(
-            "tasks", self._CONTEXT, config,
+            "tasks",
+            self._CONTEXT,
+            config,
             reference_docs="### Reference: uv-python.md\nAlways use uv, never pip.",
         )
         assert "Always use uv, never pip." in prompt
@@ -137,6 +141,7 @@ class TestReferenceDocsInThePrompts:
     def test_generate_artifact_passes_the_docs_through(self, tmp_path):
         """The parameter has to reach _build_prompt, not stop at the door."""
         import asyncio
+
         from build_pipeline.llm_steps.spec_steps import generate_artifact
 
         config = _make_config(tmp_path, {"auth": "SCENARIO: x"})
@@ -145,10 +150,14 @@ class TestReferenceDocsInThePrompts:
             "build_pipeline.llm_steps.spec_steps.llm_call", new_callable=AsyncMock
         ) as mock_llm:
             mock_llm.return_value = "# design"
-            asyncio.run(generate_artifact(
-                "design", self._CONTEXT, config,
-                reference_docs="### Reference: house.md\nHOUSE-RULE-MARKER",
-            ))
+            asyncio.run(
+                generate_artifact(
+                    "design",
+                    self._CONTEXT,
+                    config,
+                    reference_docs="### Reference: house.md\nHOUSE-RULE-MARKER",
+                )
+            )
         assert "HOUSE-RULE-MARKER" in mock_llm.call_args[0][0]
 
 
@@ -213,7 +222,9 @@ class TestTasksPromptVerticalSlices:
             "dependencies": {"proposal": "proposal.md", "design": "design.md"},
         }
         prompt = _build_prompt(
-            "tasks", context, config,
+            "tasks",
+            context,
+            config,
             audit_findings="LAYERING-FINDING-MARKER",
         )
         assert "LAYERING-FINDING-MARKER" in prompt
@@ -269,24 +280,42 @@ class TestTasksAudit:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("audit", [run_design_audit, run_tasks_audit])
-    @pytest.mark.parametrize("raw", ["not json", '{"findings": []}', '["finding"]',
-                                     '[{}]', '[{"severity": "unknown"}]'])
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "not json",
+            '{"findings": []}',
+            '["finding"]',
+            "[{}]",
+            '[{"severity": "unknown"}]',
+        ],
+    )
     async def test_unavailable_audit_evidence_blocks(self, tmp_path, audit, raw):
         from build_pipeline.sdk import LLMCallError
+
         change_dir = self._change_dir(tmp_path, "## 1. Slice")
-        with patch("build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock) as call:
+        with patch(
+            "build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock
+        ) as call:
             call.return_value = _agent_text(raw)
             with pytest.raises(LLMCallError):
                 await audit(change_dir, MagicMock(model="test-model"))
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("audit", [run_design_audit, run_tasks_audit])
-    async def test_failed_auditor_cannot_supply_passing_partial_output(self, tmp_path, audit):
+    async def test_failed_auditor_cannot_supply_passing_partial_output(
+        self, tmp_path, audit
+    ):
         from build_pipeline.models import AgentResult
         from build_pipeline.sdk import LLMCallError
+
         change_dir = self._change_dir(tmp_path, "## 1. Slice")
-        with patch("build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock) as call:
-            call.return_value = AgentResult(success=False, output="[]", error="timed out")
+        with patch(
+            "build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock
+        ) as call:
+            call.return_value = AgentResult(
+                success=False, output="[]", error="timed out"
+            )
             with pytest.raises(LLMCallError, match="timed out"):
                 await audit(change_dir, MagicMock(model="test-model"))
 
@@ -300,7 +329,9 @@ class TestEveryBlockAddsBehaviour:
         assert "Every block MUST add behaviour" in TASKS_PROMPT
         assert "RED gate" in TASKS_PROMPT
 
-    def test_the_tasks_prompt_puts_confirm_and_verify_criteria_in_the_building_block(self):
+    def test_the_tasks_prompt_puts_confirm_and_verify_criteria_in_the_building_block(
+        self,
+    ):
         assert "Never write a block" not in TASKS_PROMPT
         assert (
             "Put criteria that confirm, verify, pin or re-test what an earlier "
@@ -309,7 +340,8 @@ class TestEveryBlockAddsBehaviour:
 
     @pytest.mark.asyncio
     async def test_the_shape_audit_asks_for_and_returns_no_new_behaviour(
-        self, tmp_path,
+        self,
+        tmp_path,
     ):
         """The audit's prompt carries the rule and its remedy, leaving the
         severity to the model, and a finding the model reports under it comes
@@ -330,8 +362,8 @@ class TestEveryBlockAddsBehaviour:
             findings = await run_tasks_audit(change_dir, config=MagicMock(model="m"))
 
         prompt = mock_llm.call_args[0][0]
-        section = prompt[prompt.index("## Blocks That Add No Behaviour"):]
-        section = section[:section.index("\n## ", 1)]
+        section = prompt[prompt.index("## Blocks That Add No Behaviour") :]
+        section = section[: section.index("\n## ", 1)]
         assert '(category "no-new-behaviour")' in section
         assert "critical" not in section
         assert "tests would pass" in section
@@ -342,7 +374,9 @@ class TestEveryBlockAddsBehaviour:
 # --- PR 4 of the reverse-specs plan: spec generation reads specs/registry --------------
 
 
-def _registry_config(tmp_path, req_files: dict[str, str], registry: dict[str, str]) -> BuildConfig:
+def _registry_config(
+    tmp_path, req_files: dict[str, str], registry: dict[str, str]
+) -> BuildConfig:
     config = _make_config(tmp_path, req_files)
     (config.specs_dir / "registry").mkdir(parents=True, exist_ok=True)
     for name, text in registry.items():
@@ -353,8 +387,13 @@ def _registry_config(tmp_path, req_files: dict[str, str], registry: dict[str, st
 
 
 def _registry_context(config, capability: str = "billing") -> dict:
-    return {**TestBuildPromptGrounding._CONTEXT, "capability_name": capability,
-            "registry": sorted(p.stem for p in (config.specs_dir / "registry").glob("*.md"))}
+    return {
+        **TestBuildPromptGrounding._CONTEXT,
+        "capability_name": capability,
+        "registry": sorted(
+            p.stem for p in (config.specs_dir / "registry").glob("*.md")
+        ),
+    }
 
 
 class TestRegistryInTheContext:
@@ -367,7 +406,11 @@ class TestRegistryInTheContext:
         for name in ("users", "auth", "billing"):
             (cm.registry_dir / f"{name}.md").write_text("x")
         (cm.registry_dir / "notes.txt").write_text("not a capability")
-        assert cm.artifact_context(change, "design")["registry"] == ["auth", "billing", "users"]
+        assert cm.artifact_context(change, "design")["registry"] == [
+            "auth",
+            "billing",
+            "users",
+        ]
 
     def test_an_empty_registry_is_an_empty_list(self, tmp_path):
         from build_pipeline.change_manager import ChangeManager
@@ -377,13 +420,19 @@ class TestRegistryInTheContext:
 
 
 class TestRegistryInThePrompts:
-    REGISTRY = {"billing": "### Requirement: BILLING-TODAY-MARKER\n",
-                "auth": "### Requirement: AUTH-TODAY-MARKER\n",
-                "users": "### Requirement: USERS-TODAY-MARKER\n"}
+    REGISTRY = {
+        "billing": "### Requirement: BILLING-TODAY-MARKER\n",
+        "auth": "### Requirement: AUTH-TODAY-MARKER\n",
+        "users": "### Requirement: USERS-TODAY-MARKER\n",
+    }
 
     @pytest.mark.parametrize("artifact", ["design", "tasks"])
-    def test_design_and_tasks_carry_the_change_capabilities_files(self, artifact, tmp_path):
-        config = _registry_config(tmp_path, {"billing": "R", "users": "R"}, self.REGISTRY)
+    def test_design_and_tasks_carry_the_change_capabilities_files(
+        self, artifact, tmp_path
+    ):
+        config = _registry_config(
+            tmp_path, {"billing": "R", "users": "R"}, self.REGISTRY
+        )
         prompt = _build_prompt(artifact, _registry_context(config), config)
         section = prompt.split("## Current behaviour (specs/registry)", 1)[1]
         assert "BILLING-TODAY-MARKER" in section and "USERS-TODAY-MARKER" in section
@@ -398,32 +447,55 @@ class TestRegistryInThePrompts:
         ctx = {**TestBuildPromptGrounding._CONTEXT, "capability_name": "billing"}
         today = {
             "design": DESIGN_PROMPT.format(
-                project_context="PROJECT", proposal_content="proposal body",
-                specs_content=_read_specs(config), codebase_analysis="(new project)",
-                research="(no research conducted)", reference_docs="(none available)", audit_findings="(none — first pass)",
-                instruction="INSTRUCTION", template="TEMPLATE"),
+                project_context="PROJECT",
+                proposal_content="proposal body",
+                specs_content=_read_specs(config),
+                codebase_analysis="(new project)",
+                research="(no research conducted)",
+                reference_docs="(none available)",
+                audit_findings="(none — first pass)",
+                instruction="INSTRUCTION",
+                template="TEMPLATE",
+            ),
             "tasks": TASKS_PROMPT.format(
-                project_context="PROJECT", proposal_content="proposal body",
-                specs_content=_read_specs(config), design_content="design body",
-                use_cases_content="(not available)", granularity=config.task_granularity, unknowns_content="(none detected)",
-                reference_docs="(none available)", audit_findings="(none — first pass)",
-                instruction="INSTRUCTION", template="TEMPLATE"),
+                project_context="PROJECT",
+                proposal_content="proposal body",
+                specs_content=_read_specs(config),
+                design_content="design body",
+                use_cases_content="(not available)",
+                granularity=config.task_granularity,
+                unknowns_content="(none detected)",
+                reference_docs="(none available)",
+                audit_findings="(none — first pass)",
+                instruction="INSTRUCTION",
+                template="TEMPLATE",
+            ),
         }[artifact]
         assert _build_prompt(artifact, {**ctx, "registry": []}, config) == today
         assert _build_prompt(artifact, ctx, config) == today
 
     def test_the_cap_drops_whole_files_from_the_end_and_names_them(self, tmp_path):
-        from build_pipeline.llm_steps.spec_steps import REGISTRY_TEXT_LIMIT, _read_registry
+        from build_pipeline.llm_steps.spec_steps import (
+            REGISTRY_TEXT_LIMIT,
+            _read_registry,
+        )
 
         assert REGISTRY_TEXT_LIMIT == 60_000
-        big = {name: f"### Requirement: {name.upper()}-START\n" + "x" * 25_000 + f"\n{name.upper()}-END\n"
-               for name in ("aaa", "bbb", "ccc")}
+        big = {
+            name: f"### Requirement: {name.upper()}-START\n"
+            + "x" * 25_000
+            + f"\n{name.upper()}-END\n"
+            for name in ("aaa", "bbb", "ccc")
+        }
         config = _registry_config(tmp_path, {}, big)
         text = _read_registry(config, _registry_context(config), ["aaa", "bbb", "ccc"])
         assert len(text) <= 60_000
         assert "AAA-END" in text and "BBB-END" in text
         assert "CCC-END" not in text
-        assert "ccc (specs/registry/ccc.md; requirements: CCC-START)" in text.split("BBB-END", 1)[1]
+        assert (
+            "ccc (specs/registry/ccc.md; requirements: CCC-START)"
+            in text.split("BBB-END", 1)[1]
+        )
 
     def test_read_registry_skips_names_with_no_file(self, tmp_path):
         from build_pipeline.llm_steps.spec_steps import _read_registry
@@ -440,11 +512,18 @@ def test_a_file_left_out_by_the_cap_still_names_its_requirements(tmp_path):
     same-name file over the cap keeps those names in the design prompt."""
     from build_pipeline.llm_steps.spec_steps import _read_registry
 
-    big = "### Requirement: Billing totals\n" + "x" * 70_000 + "\n### Requirement: Refunds\nBODY-END\n"
+    big = (
+        "### Requirement: Billing totals\n"
+        + "x" * 70_000
+        + "\n### Requirement: Refunds\nBODY-END\n"
+    )
     config = _registry_config(tmp_path, {}, {"billing": big})
     text = _read_registry(config, _registry_context(config), ["billing"])
     assert len(text) <= 60_000 and "BODY-END" not in text
-    assert "billing (specs/registry/billing.md; requirements: Billing totals, Refunds)" in text
+    assert (
+        "billing (specs/registry/billing.md; requirements: Billing totals, Refunds)"
+        in text
+    )
 
 
 def test_the_cap_holds_when_the_names_alone_are_over_it(tmp_path):
@@ -464,27 +543,41 @@ def test_the_cap_holds_when_the_names_alone_are_over_it(tmp_path):
 @pytest.mark.parametrize("audit", [run_design_audit, run_tasks_audit])
 async def test_audit_severity_is_canonical_for_blocking_consumers(tmp_path, audit):
     raw = '[{"category":"coverage","severity":"MAJOR","description":"missing behavior","suggestion":"add behavior"}]'
-    with patch("build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock) as call:
+    with patch(
+        "build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock
+    ) as call:
         call.return_value = _agent_text(raw)
         findings = await audit(tmp_path, MagicMock(model="test-model"))
     assert findings[0]["severity"] == "major"
 
 
-PRIOR = [{"finding_id": "DA-F1", "severity": "major", "category": "coverage", "text": "LISTED-MARKER gap"}]
+PRIOR = [
+    {
+        "finding_id": "DA-F1",
+        "severity": "major",
+        "category": "coverage",
+        "text": "LISTED-MARKER gap",
+    }
+]
 FINDING = '{"category":"coverage","severity":"critical","description":"new gap","suggestion":"fix it"}'
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("audit", [run_design_audit, run_tasks_audit])
 async def test_prior_assessments_are_read_from_the_recheck_object(tmp_path, audit):
-    raw = ('{"findings": [' + FINDING + '], "prior_assessments": '
-           '[{"finding_id": "DA-F1", "status": "still_present", "evidence": "Block 2 still lacks it"}]}')
-    with patch("build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock) as call:
+    raw = (
+        '{"findings": [' + FINDING + '], "prior_assessments": '
+        '[{"finding_id": "DA-F1", "status": "still_present", "evidence": "Block 2 still lacks it"}]}'
+    )
+    with patch(
+        "build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock
+    ) as call:
         call.return_value = _agent_text(raw)
         findings = await audit(tmp_path, MagicMock(model="test-model"), prior=PRIOR)
     assert [f["description"] for f in findings] == ["new gap"]
-    assert [(a.finding_id, a.status, a.evidence) for a in findings.prior_assessments] == [
-        ("DA-F1", "still_present", "Block 2 still lacks it")]
+    assert [
+        (a.finding_id, a.status, a.evidence) for a in findings.prior_assessments
+    ] == [("DA-F1", "still_present", "Block 2 still lacks it")]
     prompt = call.await_args.args[0]
     assert "## Findings the rewrite was asked to fix" in prompt
     assert "DA-F1 [major] (coverage) LISTED-MARKER gap" in prompt
@@ -493,7 +586,9 @@ async def test_prior_assessments_are_read_from_the_recheck_object(tmp_path, audi
 @pytest.mark.asyncio
 @pytest.mark.parametrize("audit", [run_design_audit, run_tasks_audit])
 async def test_prior_assessments_absent_from_a_bare_list_recheck(tmp_path, audit):
-    with patch("build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock) as call:
+    with patch(
+        "build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock
+    ) as call:
         call.return_value = _agent_text("[" + FINDING + "]")
         findings = await audit(tmp_path, MagicMock(model="test-model"), prior=PRIOR)
     assert len(findings) == 1
@@ -504,7 +599,9 @@ async def test_prior_assessments_absent_from_a_bare_list_recheck(tmp_path, audit
 @pytest.mark.parametrize("audit", [run_design_audit, run_tasks_audit])
 async def test_prior_assessments_unknown_status_is_cannot_verify(tmp_path, audit):
     raw = '{"findings": [], "prior_assessments": [{"finding_id": "DA-F1", "status": "fixed, I think"}]}'
-    with patch("build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock) as call:
+    with patch(
+        "build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock
+    ) as call:
         call.return_value = _agent_text(raw)
         findings = await audit(tmp_path, MagicMock(model="test-model"), prior=PRIOR)
     assert findings.prior_assessments[0].status == "cannot_verify"
@@ -513,7 +610,9 @@ async def test_prior_assessments_unknown_status_is_cannot_verify(tmp_path, audit
 @pytest.mark.asyncio
 @pytest.mark.parametrize("audit", [run_design_audit, run_tasks_audit])
 async def test_prior_assessments_section_left_out_of_a_first_audit(tmp_path, audit):
-    with patch("build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock) as call:
+    with patch(
+        "build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock
+    ) as call:
         call.return_value = _agent_text("[]")
         findings = await audit(tmp_path, MagicMock(model="test-model"))
     assert findings.prior_assessments == []

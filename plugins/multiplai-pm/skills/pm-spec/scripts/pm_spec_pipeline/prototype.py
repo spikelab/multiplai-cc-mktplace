@@ -42,30 +42,54 @@ MAX_PROTOTYPE_ATTEMPTS = 2
 
 _FRONTEND_KEYWORDS = re.compile(
     r"\b(react|vue|angular|css|html|component|ui|ux|button|form|page|"
-    r"frontend|browser|dom|tailwind|stylesheet)\b", re.IGNORECASE)
+    r"frontend|browser|dom|tailwind|stylesheet)\b",
+    re.IGNORECASE,
+)
 _BACKEND_KEYWORDS = re.compile(
     r"\b(api|endpoint|database|db|migration|model|schema|server|"
-    r"backend|rest|graphql|queue|worker|celery|cron)\b", re.IGNORECASE)
+    r"backend|rest|graphql|queue|worker|celery|cron)\b",
+    re.IGNORECASE,
+)
 _INFRA_KEYWORDS = re.compile(
     r"\b(terraform|docker|kubernetes|k8s|ci|cd|pipeline|deploy|"
-    r"infra|infrastructure|monitoring|logging|helm|ansible)\b", re.IGNORECASE)
+    r"infra|infrastructure|monitoring|logging|helm|ansible)\b",
+    re.IGNORECASE,
+)
 _OUTPUT_FORMAT_RE = re.compile(
     r"\b(report|reports|export|exports|dashboard|mockup|wireframe|"
     r"screenshot|printout|invoice|receipt|spreadsheet|pdf|"
     r"cli output|command.line output|terminal output|console output|"
     r"stdout|sample output|output format|output schema|response schema|"
     r"json schema|rendered (?:page|view|output|document)|"
-    r"user.visible|user.facing (?:output|format|document))\b", re.IGNORECASE)
+    r"user.visible|user.facing (?:output|format|document))\b",
+    re.IGNORECASE,
+)
 
 PROTOTYPE_SLOTS = ("PROVES", "DISPROVES", "OPEN_QUESTIONS", "STATUS")
 _SLOT_HEADER_RE = re.compile(
     r"^\s*(?:[-*]\s*|#{1,6}\s*|\*\*)?(" + "|".join(PROTOTYPE_SLOTS) + r")\*{0,2}\s*:",
-    re.MULTILINE | re.IGNORECASE)
-_EMPTY_SLOT_VALUES = {"", "none", "none.", "n/a", "na", "-", "—", "(none)", "nothing", "tbd"}
+    re.MULTILINE | re.IGNORECASE,
+)
+_EMPTY_SLOT_VALUES = {
+    "",
+    "none",
+    "none.",
+    "n/a",
+    "na",
+    "-",
+    "—",
+    "(none)",
+    "nothing",
+    "tbd",
+}
 
 
 def _spec_text(change_dir: Path) -> str:
-    parts = [(change_dir / "proposal.md").read_text()] if (change_dir / "proposal.md").is_file() else []
+    parts = (
+        [(change_dir / "proposal.md").read_text()]
+        if (change_dir / "proposal.md").is_file()
+        else []
+    )
     parts += [p.read_text() for p in sorted((change_dir / "requirements").glob("*.md"))]
     return " ".join(parts)
 
@@ -75,7 +99,10 @@ def detect_change_type(change_dir: Path) -> str:
     text = _spec_text(change_dir)
     if not text:
         return "backend"
-    front, back, infra = (len(r.findall(text)) for r in (_FRONTEND_KEYWORDS, _BACKEND_KEYWORDS, _INFRA_KEYWORDS))
+    front, back, infra = (
+        len(r.findall(text))
+        for r in (_FRONTEND_KEYWORDS, _BACKEND_KEYWORDS, _INFRA_KEYWORDS)
+    )
     if infra > front and infra > back:
         return "infra"
     if front > 0 and back > 0:
@@ -111,7 +138,7 @@ def parse_prototype_notes(text: str) -> dict[str, str]:
     matches = list(_SLOT_HEADER_RE.finditer(text or ""))
     for i, match in enumerate(matches):
         end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
-        notes[match.group(1).lower()] = text[match.end():end].strip()
+        notes[match.group(1).lower()] = text[match.end() : end].strip()
     return notes
 
 
@@ -142,18 +169,45 @@ def prototype_gate(prototype_dir: Path) -> Gate:
     status = (notes.get("status") or "").strip().strip("*_` ")
     word = status.split()[0].upper().rstrip(".,;:") if status else ""
     if word in ("BLOCKED", "NEEDS_CONTEXT"):
-        return Gate(False, f"Prototype agent reported STATUS: {word}. Its notes:\n{notes_text[-1500:]}", "blocked")
-    found = [str(p) for p in sorted(prototype_dir.rglob("*")) if p.is_file() and p != notes_path]
+        return Gate(
+            False,
+            f"Prototype agent reported STATUS: {word}. Its notes:\n{notes_text[-1500:]}",
+            "blocked",
+        )
+    found = [
+        str(p)
+        for p in sorted(prototype_dir.rglob("*"))
+        if p.is_file() and p != notes_path
+    ]
     if not found:
-        return Gate(False, "Prototype produced no artifact file besides NOTES.md", "retry")
+        return Gate(
+            False, "Prototype produced no artifact file besides NOTES.md", "retry"
+        )
     missing = [s for s in PROTOTYPE_SLOTS if s.lower() not in notes]
     if missing:
-        return Gate(False, f"Prototype NOTES.md is missing REQUIRED slots: {missing}", "retry", found)
+        return Gate(
+            False,
+            f"Prototype NOTES.md is missing REQUIRED slots: {missing}",
+            "retry",
+            found,
+        )
     if not slot_has_content(notes.get("proves")):
-        return Gate(False, "Prototype NOTES.md has an empty PROVES: slot", "retry", found)
+        return Gate(
+            False, "Prototype NOTES.md has an empty PROVES: slot", "retry", found
+        )
     if not (notes.get("open_questions") or "").strip():
-        return Gate(False, "Prototype NOTES.md has an empty OPEN_QUESTIONS: slot", "retry", found)
-    return Gate(True, f"Prototype produced {len(found)} artifact file(s) with complete NOTES.md", "", found)
+        return Gate(
+            False,
+            "Prototype NOTES.md has an empty OPEN_QUESTIONS: slot",
+            "retry",
+            found,
+        )
+    return Gate(
+        True,
+        f"Prototype produced {len(found)} artifact file(s) with complete NOTES.md",
+        "",
+        found,
+    )
 
 
 def files_outside(files_changed: list[str], prototype_dir: Path) -> list[str]:
@@ -170,13 +224,23 @@ def files_outside(files_changed: list[str], prototype_dir: Path) -> list[str]:
 def prototype_findings(notes: dict[str, str]) -> list[dict]:
     out = []
     if slot_has_content(notes.get("disproves")):
-        out.append({"category": "prototype-disproves", "severity": "major",
-                    "description": f"The prototype disproved part of the specs: {notes['disproves'].strip()}",
-                    "suggestion": "change the proposal and the requirements to match what the prototype showed."})
+        out.append(
+            {
+                "category": "prototype-disproves",
+                "severity": "major",
+                "description": f"The prototype disproved part of the specs: {notes['disproves'].strip()}",
+                "suggestion": "change the proposal and the requirements to match what the prototype showed.",
+            }
+        )
     if slot_has_content(notes.get("open_questions")):
-        out.append({"category": "prototype-open-questions", "severity": "minor",
-                    "description": f"The prototype left open questions: {notes['open_questions'].strip()}",
-                    "suggestion": "decide each one in the requirements rather than leaving it for the builder."})
+        out.append(
+            {
+                "category": "prototype-open-questions",
+                "severity": "minor",
+                "description": f"The prototype left open questions: {notes['open_questions'].strip()}",
+                "suggestion": "decide each one in the requirements rather than leaving it for the builder.",
+            }
+        )
     return out
 
 
@@ -184,20 +248,33 @@ async def run_prototype(run: Run) -> Gate:
     change_dir = run.config.change_dir
     prototype_dir = change_dir / "prototype"
     prototype_dir.mkdir(parents=True, exist_ok=True)
-    prompt = PROTOTYPE_PROMPT.format(notice=UNTRUSTED_NOTICE, change_name=run.config.change_name,
-                                     proposal_content=artifacts.proposal_text(run) or "(not available)",
-                                     requirements_content=artifacts.all_requirements_text(change_dir),
-                                     prototype_dir=prototype_dir)
+    prompt = PROTOTYPE_PROMPT.format(
+        notice=UNTRUSTED_NOTICE,
+        change_name=run.config.change_name,
+        proposal_content=artifacts.proposal_text(run) or "(not available)",
+        requirements_content=artifacts.all_requirements_text(change_dir),
+        prototype_dir=prototype_dir,
+    )
     gate = Gate(False, "Prototype never ran")
     for attempt in range(1, MAX_PROTOTYPE_ATTEMPTS + 1):
         log.info("START step=PROTOTYPE attempt=%d/%d", attempt, MAX_PROTOTYPE_ATTEMPTS)
         try:
-            answer = await sdk.agent_text(prompt, config=run.config, step="prototype", label="prototype",
-                                          tools=PROTOTYPE_TOOLS, cwd=str(prototype_dir))
+            answer = await sdk.agent_text(
+                prompt,
+                config=run.config,
+                step="prototype",
+                label="prototype",
+                tools=PROTOTYPE_TOOLS,
+                cwd=str(prototype_dir),
+            )
         except sdk.CallFailed as e:
             return Gate(False, f"Prototype writer failed: {e}")
         if outside := files_outside(answer.files_changed, prototype_dir):
-            return Gate(False, f"Prototype agent wrote outside {prototype_dir}: {outside}", "boundary")
+            return Gate(
+                False,
+                f"Prototype agent wrote outside {prototype_dir}: {outside}",
+                "boundary",
+            )
         gate = prototype_gate(prototype_dir)
         if gate.passed or gate.action == "blocked":
             return gate
@@ -206,8 +283,15 @@ async def run_prototype(run: Run) -> Gate:
 
 
 def prototype_revision(change_dir: Path) -> str:
-    parts = [(change_dir / "proposal.md").read_text() if (change_dir / "proposal.md").is_file() else ""]
-    parts += [f"{p.name}\0{p.read_text()}" for p in sorted((change_dir / "requirements").glob("*.md"))]
+    parts = [
+        (change_dir / "proposal.md").read_text()
+        if (change_dir / "proposal.md").is_file()
+        else ""
+    ]
+    parts += [
+        f"{p.name}\0{p.read_text()}"
+        for p in sorted((change_dir / "requirements").glob("*.md"))
+    ]
     return artifacts.sha("\0\0".join(parts))
 
 
@@ -242,14 +326,28 @@ async def run_prototype_stage(run: Run) -> None:
     step = run.state.step(NAME)
     if step.repair_attempts:
         # Row S4, stopped before the rewrite published: no second rewrite.
-        F.block_on_findings(run, NAME, revision, "Prototype findings rewrite already attempted",
-                            step.repair_findings or F.number_findings(NAME, found))
+        F.block_on_findings(
+            run,
+            NAME,
+            revision,
+            "Prototype findings rewrite already attempted",
+            step.repair_findings or F.number_findings(NAME, found),
+        )
     numbered = F.number_findings(NAME, found)
     F.admit_repair(run, NAME, revision, numbered)
-    files = await rewrite_proposal_and_requirements(run, run.state.step(NAME).repair_findings, label=NAME)
+    files = await rewrite_proposal_and_requirements(
+        run, run.state.step(NAME).repair_findings, label=NAME
+    )
     if problems := check_texts(run, files):
         blocking, _ = F.recheck_verdict([], [], [], deterministic=problems)
-        F.block_on_findings(run, NAME, revision, "The prototype rewrite broke a spec file", blocking)
+        F.block_on_findings(
+            run, NAME, revision, "The prototype rewrite broke a spec file", blocking
+        )
     publish(run, NAME, files)
-    F.record_passed(run, NAME, prototype_revision(change_dir), "Prototype findings applied")
-    run.progress("PROTOTYPE_PASSED", "Prototype findings applied:\n" + F.findings_report(numbered))
+    F.record_passed(
+        run, NAME, prototype_revision(change_dir), "Prototype findings applied"
+    )
+    run.progress(
+        "PROTOTYPE_PASSED",
+        "Prototype findings applied:\n" + F.findings_report(numbered),
+    )

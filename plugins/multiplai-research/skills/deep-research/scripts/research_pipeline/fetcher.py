@@ -15,13 +15,13 @@ import asyncio
 import logging
 import re
 import time
-from typing import Iterable
+from collections.abc import Iterable
 from urllib.parse import urljoin
 
 import httpx
 
 from .models import FetchError, FetchErrorType, FetchResult
-from .netguard import UnsafeURLError, _assert_safe_url  # noqa: F401 — re-exported
+from .netguard import UnsafeURLError, _assert_safe_url  # re-exported
 
 log = logging.getLogger(__name__)
 
@@ -53,7 +53,8 @@ async def _get_validated(client: httpx.AsyncClient, url: str) -> httpx.Response:
                 if len(body) >= MAX_RESPONSE_BYTES:
                     log.warning(
                         "Truncating oversized body from %s at %d bytes",
-                        current, MAX_RESPONSE_BYTES,
+                        current,
+                        MAX_RESPONSE_BYTES,
                     )
                     break
             # Populate the response's content from the bounded read so callers
@@ -141,7 +142,7 @@ async def fetch_url(
                 ),
                 elapsed_seconds=elapsed,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             elapsed = time.monotonic() - start
             last_error = FetchError(
                 url=url,
@@ -154,7 +155,9 @@ async def fetch_url(
             if attempt < max_retries:
                 await asyncio.sleep(_retry_delay(attempt))
                 continue
-            return FetchResult(url=url, success=False, error=last_error, elapsed_seconds=elapsed)
+            return FetchResult(
+                url=url, success=False, error=last_error, elapsed_seconds=elapsed
+            )
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadError) as e:
             elapsed = time.monotonic() - start
             last_error = FetchError(
@@ -168,7 +171,9 @@ async def fetch_url(
             if attempt < max_retries:
                 await asyncio.sleep(_retry_delay(attempt))
                 continue
-            return FetchResult(url=url, success=False, error=last_error, elapsed_seconds=elapsed)
+            return FetchResult(
+                url=url, success=False, error=last_error, elapsed_seconds=elapsed
+            )
         except Exception as e:  # noqa: BLE001
             elapsed = time.monotonic() - start
             return FetchResult(
@@ -209,7 +214,9 @@ async def fetch_url(
             if attempt < max_retries:
                 await asyncio.sleep(_retry_delay(attempt))
                 continue
-            return FetchResult(url=url, success=False, error=last_error, elapsed_seconds=elapsed)
+            return FetchResult(
+                url=url, success=False, error=last_error, elapsed_seconds=elapsed
+            )
         # 4xx — no retry
         return FetchResult(
             url=url,
@@ -273,8 +280,10 @@ async def extract_content(html: str) -> str:
         return markdown
 
     # Fallback: basic tag stripping
-    log.info("Falling back to basic tag stripping (trafilatura returned %d chars)",
-             len(markdown) if markdown else 0)
+    log.info(
+        "Falling back to basic tag stripping (trafilatura returned %d chars)",
+        len(markdown) if markdown else 0,
+    )
     return basic_tag_strip(html)
 
 
@@ -284,7 +293,9 @@ def basic_tag_strip(html: str) -> str:
     Not ideal — includes boilerplate — but always returns something.
     """
     # Remove script/style blocks entirely
-    html = re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", html, flags=re.DOTALL | re.IGNORECASE)
+    html = re.sub(
+        r"<(script|style)[^>]*>.*?</\1>", " ", html, flags=re.DOTALL | re.IGNORECASE
+    )
     # Replace tags with spaces
     text = re.sub(r"<[^>]+>", " ", html)
     # Collapse whitespace
@@ -307,7 +318,11 @@ def extract_outbound_links(html: str, base_url: str) -> list[str]:
         abs_links: list[str] = []
         seen: set[str] = set()
         for href in raw_links:
-            if href.startswith("#") or href.startswith("javascript:") or href.startswith("mailto:"):
+            if (
+                href.startswith("#")
+                or href.startswith("javascript:")
+                or href.startswith("mailto:")
+            ):
                 continue
             absolute = urljoin(base_url, href)
             parsed = urlparse(absolute)
@@ -437,7 +452,7 @@ async def fetch_batch(
                 asyncio.gather(*tasks, return_exceptions=True),
                 timeout=batch_timeout,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             # Batch exceeded overall timeout — gather what completed, cancel rest
             log.warning("Batch timeout at %.1fs — cancelling remaining", batch_timeout)
             raw_results = []
@@ -484,8 +499,14 @@ async def fetch_batch(
         # Optional: JS fallback for pages where extraction yielded empty content
         if js_fallback:
             for i, r in enumerate(results):
-                if r.success and r.content and len(r.content) < MIN_EXTRACTED_CONTENT_CHARS:
-                    log.info("Retrying %s with Playwright (extraction too short)", r.url)
+                if (
+                    r.success
+                    and r.content
+                    and len(r.content) < MIN_EXTRACTED_CONTENT_CHARS
+                ):
+                    log.info(
+                        "Retrying %s with Playwright (extraction too short)", r.url
+                    )
                     results[i] = await fetch_with_playwright(r.url)
 
         return results

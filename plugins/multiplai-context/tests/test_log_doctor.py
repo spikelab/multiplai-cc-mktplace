@@ -22,7 +22,7 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from log_doctor import (  # noqa: E402
+from log_doctor import (
     SCENARIOS,
     cluster,
     discover,
@@ -144,15 +144,11 @@ class TestScan:
         assert all(c.subsystem == "backfill" for c in clusters)
 
     def test_errors_only(self, logs_dir):
-        clusters, _, _, _ = scan(
-            logs_dir, subsystems=["backfill"], errors_only=True
-        )
+        clusters, _, _, _ = scan(logs_dir, subsystems=["backfill"], errors_only=True)
         assert all(c.level in ("ERROR", "WARNING") for c in clusters)
 
     def test_since_excludes_old_files(self, logs_dir):
-        _, stats, _, _ = scan(
-            logs_dir, subsystems=["backfill"], since=date(2026, 7, 6)
-        )
+        _, stats, _, _ = scan(logs_dir, subsystems=["backfill"], since=date(2026, 7, 6))
         assert sum(s.entries for s in stats) == 0
 
 
@@ -199,7 +195,8 @@ class TestProbe:
         (logs_dir / "session_start.log").write_text(NEW_SESSION_LINES)
         entries = probe_new_entries(logs_dir, snap)
         verdict = probe_check(
-            entries, SCENARIOS["session-start"]["expect"],
+            entries,
+            SCENARIOS["session-start"]["expect"],
             SCENARIOS["session-start"]["subsystems"],
         )
         assert verdict["passed"]
@@ -209,7 +206,8 @@ class TestProbe:
         snap = probe_snapshot(logs_dir)
         entries = probe_new_entries(logs_dir, snap)  # nothing happened
         verdict = probe_check(
-            entries, SCENARIOS["session-start"]["expect"],
+            entries,
+            SCENARIOS["session-start"]["expect"],
             SCENARIOS["session-start"]["subsystems"],
         )
         assert not verdict["passed"]
@@ -236,14 +234,18 @@ class TestProbe:
         entries = probe_new_entries(logs_dir, snap)
         # forbid list names the component; the file-level subsystem is hook-errors
         verdict = probe_check(
-            entries, [("extract_learnings", "ERROR", "model client")],
-            ["extract_learnings"], allow_errors=True,
+            entries,
+            [("extract_learnings", "ERROR", "model client")],
+            ["extract_learnings"],
+            allow_errors=True,
         )
         assert verdict["passed"]
 
     def test_parse_expect_spec(self):
         assert parse_expect_spec("dream:INFO:Dream using") == (
-            "dream", "INFO", "Dream using"
+            "dream",
+            "INFO",
+            "Dream using",
         )
         assert parse_expect_spec("x:*:a:b")[2] == "a:b"  # regex may contain colons
         with pytest.raises(ValueError):
@@ -251,6 +253,7 @@ class TestProbe:
 
     def test_scenario_registry_is_well_formed(self):
         import re as _re
+
         for name, sc in SCENARIOS.items():
             assert sc["trigger"] and sc["subsystems"], name
             for sub, lvl, pat in sc["expect"]:

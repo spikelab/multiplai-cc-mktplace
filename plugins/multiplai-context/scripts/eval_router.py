@@ -34,9 +34,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from multiplai_core.paths import get_paths  # noqa: E402
-from multiplai_core.plugin_options import option, option_var  # noqa: E402
-
+from multiplai_core.paths import get_paths
+from multiplai_core.plugin_options import option, option_var
 
 # ---------------------------------------------------------------------------
 # Case loading + catalog
@@ -133,7 +132,9 @@ def _file_level(name: str) -> str:
     return name.split("#", 1)[0]
 
 
-def _evaluate(metrics: Metrics, case: dict, picked: list[str], n_candidates: int, cap: int) -> bool:
+def _evaluate(
+    metrics: Metrics, case: dict, picked: list[str], n_candidates: int, cap: int
+) -> bool:
     expected = [_file_level(f) for f in case.get("expected_files") or []]
     unexpected = {_file_level(f) for f in case.get("unexpected_files") or []}
     none_expected = bool(case.get("expected_none"))
@@ -168,7 +169,7 @@ def _evaluate(metrics: Metrics, case: dict, picked: list[str], n_candidates: int
     # Rank of first expected file.
     metrics.cand_n += 1
     metrics.cand_sum += n_candidates  # raw matched pool (informative)
-    if len(picked) >= cap:            # saturation = the *returned* set
+    if len(picked) >= cap:  # saturation = the *returned* set
         metrics.capped += 1
     first_rank = 0
     for i, f in enumerate(picked, 1):
@@ -218,7 +219,10 @@ def _summary(m: Metrics, passed: int) -> dict:
 
 
 def run(
-    cases: list[dict], catalog: list[dict], k: int, quiet: bool,
+    cases: list[dict],
+    catalog: list[dict],
+    k: int,
+    quiet: bool,
     keep_ratio: float | None = None,
 ) -> dict:
     from lib.memory_router import create_router
@@ -245,7 +249,7 @@ def run(
             passed += 1
         if not quiet:
             mark = "\033[32mPASS\033[0m" if ok else "\033[31mFAIL\033[0m"
-            print(f"  {mark}  {case['id']}: {case.get('intent','')}")
+            print(f"  {mark}  {case['id']}: {case.get('intent', '')}")
 
     summary = _summary(metrics, passed)
     summary["strategy"] = create_router().name
@@ -273,15 +277,36 @@ def _write_snapshot(summary: dict, case_files: list[Path]) -> Path:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Routing-quality eval for the live memory_router")
-    ap.add_argument("--cases", nargs="*", type=Path, help="Golden JSONL files (default: personal+holdout)")
-    ap.add_argument("--catalog", type=Path, help="memory catalog JSON (default: live memory.json)")
-    ap.add_argument("--k", type=int, default=10, help="max files per corpus (default 10)")
-    ap.add_argument("--keep-ratio", type=float, default=None,
-                    help="override token_overlap relative-cutoff ratio (default: module default)")
-    ap.add_argument("--strategy", choices=["token_overlap", "llm", "llm_hybrid"], help="override router strategy for this run")
+    ap = argparse.ArgumentParser(
+        description="Routing-quality eval for the live memory_router"
+    )
+    ap.add_argument(
+        "--cases",
+        nargs="*",
+        type=Path,
+        help="Golden JSONL files (default: personal+holdout)",
+    )
+    ap.add_argument(
+        "--catalog", type=Path, help="memory catalog JSON (default: live memory.json)"
+    )
+    ap.add_argument(
+        "--k", type=int, default=10, help="max files per corpus (default 10)"
+    )
+    ap.add_argument(
+        "--keep-ratio",
+        type=float,
+        default=None,
+        help="override token_overlap relative-cutoff ratio (default: module default)",
+    )
+    ap.add_argument(
+        "--strategy",
+        choices=["token_overlap", "llm", "llm_hybrid"],
+        help="override router strategy for this run",
+    )
     ap.add_argument("--quiet", action="store_true", help="metrics only")
-    ap.add_argument("--no-write", action="store_true", help="don't write the snapshot file")
+    ap.add_argument(
+        "--no-write", action="store_true", help="don't write the snapshot file"
+    )
     args = ap.parse_args()
 
     if args.strategy:
@@ -314,10 +339,18 @@ def main() -> None:
 
     print("\n" + "=" * 56)
     for key in (
-        "strategy", "total_cases", "pass_rate_pct", "none_accuracy_pct",
-        "recall_pct", "precision_pct", "false_positive_pct",
-        "hit_at_k_pct", "mean_first_rank",
-        "cap_saturation_pct", "mean_candidates", "elapsed_s",
+        "strategy",
+        "total_cases",
+        "pass_rate_pct",
+        "none_accuracy_pct",
+        "recall_pct",
+        "precision_pct",
+        "false_positive_pct",
+        "hit_at_k_pct",
+        "mean_first_rank",
+        "cap_saturation_pct",
+        "mean_candidates",
+        "elapsed_s",
     ):
         print(f"  {key:>22}: {summary[key]}")
     print("=" * 56)

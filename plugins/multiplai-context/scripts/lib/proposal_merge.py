@@ -26,7 +26,7 @@ the ``## Updates for`` header line as part of each section body.
 from __future__ import annotations
 
 import re
-from typing import Iterable, Sequence
+from collections.abc import Iterable, Sequence
 
 # `## Updates for `file`` — the group heading. Length 16 is the offset dream.py
 # uses to look past the opening backtick; keep the two in step.
@@ -45,6 +45,7 @@ SECTION_SEPARATOR = "\n\n---\n\n"
 # Parsing
 # ---------------------------------------------------------------------------
 
+
 def split_by_file(proposal: str) -> dict[str, str]:
     """``{target_file: section_body}`` for each ``## Updates for `file`` section.
 
@@ -62,7 +63,7 @@ def split_by_file(proposal: str) -> dict[str, str]:
             sections[current_file] = "\n".join(buf).strip()
 
     for line in proposal.splitlines():
-        if line.startswith(_UPDATES_PREFIX) and "`" in line[len(_UPDATES_PREFIX):]:
+        if line.startswith(_UPDATES_PREFIX) and "`" in line[len(_UPDATES_PREFIX) :]:
             flush()
             current_file = line.split("`")[1]
             buf = [line]
@@ -85,7 +86,9 @@ def _trim(lines: list[str]) -> list[str]:
     spaced.
     """
     start, end = 0, len(lines)
-    while end > start and (not lines[end - 1].strip() or _RULE_RE.match(lines[end - 1])):
+    while end > start and (
+        not lines[end - 1].strip() or _RULE_RE.match(lines[end - 1])
+    ):
         end -= 1
     while start < end and (not lines[start].strip() or _RULE_RE.match(lines[start])):
         start += 1
@@ -127,11 +130,9 @@ def _entries(body: list[str], pattern: re.Pattern) -> tuple[list[str], list[list
     starts = [i for i, line in enumerate(body) if pattern.match(line)]
     if not starts:
         return _trim(body), []
-    intro = _trim(body[:starts[0]])
+    intro = _trim(body[: starts[0]])
     bounds = starts + [len(body)]
-    blocks = [
-        _trim(body[a:b]) for a, b in zip(bounds, bounds[1:])
-    ]
+    blocks = [_trim(body[a:b]) for a, b in zip(bounds, bounds[1:])]
     return intro, [b for b in blocks if b]
 
 
@@ -149,12 +150,15 @@ def source_lines(text: str) -> list[str]:
     Exposed for the no-loss assertions in the tests and for a caller that wants
     to check a merge against its inputs before recording anything in the ledger.
     """
-    return [line for line in text.splitlines() if line.lstrip().startswith("**Source:**")]
+    return [
+        line for line in text.splitlines() if line.lstrip().startswith("**Source:**")
+    ]
 
 
 # ---------------------------------------------------------------------------
 # Merge
 # ---------------------------------------------------------------------------
+
 
 def merge_drafts(drafts: Sequence[str]) -> str:
     """Concatenate chunk drafts into one proposal, renumbered and deduplicated by section.

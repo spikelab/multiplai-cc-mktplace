@@ -9,7 +9,6 @@ from __future__ import annotations
 import logging
 
 from ..models import AgentResult
-from ..prompts.test_writing import MUTATION_TEST_WRITER_PROMPT, TEST_WRITER_PROMPT
 from ..prompts.implementation import (
     IMPLEMENTER_PROMPT_CLEAN,
     IMPLEMENTER_PROMPT_MINIMUM,
@@ -17,6 +16,7 @@ from ..prompts.implementation import (
     REFACTOR_PROMPT,
     TEST_CHANGE_DECLARATION,
 )
+from ..prompts.test_writing import MUTATION_TEST_WRITER_PROMPT, TEST_WRITER_PROMPT
 from ..sdk import agent_call
 
 log = logging.getLogger(__name__)
@@ -114,6 +114,7 @@ async def run_mutation_test_writer(
         budget_label="mutation_test_writer",
     )
 
+
 async def run_implementer(
     block_name: str,
     block_description: str,
@@ -130,7 +131,11 @@ async def run_implementer(
 
     Uses CLEAN prompt for advanced tier, MINIMUM for standard tier.
     """
-    template = IMPLEMENTER_PROMPT_CLEAN if prompt_style == "clean" else IMPLEMENTER_PROMPT_MINIMUM
+    template = (
+        IMPLEMENTER_PROMPT_CLEAN
+        if prompt_style == "clean"
+        else IMPLEMENTER_PROMPT_MINIMUM
+    )
     prompt = template.format(
         block_name=block_name,
         block_description=block_description,

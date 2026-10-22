@@ -11,7 +11,8 @@ code in the order they pass.
 
 from __future__ import annotations
 
-from typing import Iterable, Literal, Mapping
+from collections.abc import Iterable, Mapping
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -37,9 +38,11 @@ class Citation(_Model):
     side: Side = "head"
 
     @model_validator(mode="after")
-    def _ordered(self) -> "Citation":
+    def _ordered(self) -> Citation:
         if self.line_end < self.line_start:
-            raise ValueError(f"line_end {self.line_end} is before line_start {self.line_start}")
+            raise ValueError(
+                f"line_end {self.line_end} is before line_start {self.line_start}"
+            )
         return self
 
 
@@ -47,7 +50,9 @@ class Fact(_Model):
     claim: str
     citations: list[Citation] = Field(default_factory=list)
     id: str = ""
-    source: str = ""   # which agent produced it: "unit:3", "boundary:inbound:DolceFront:0"
+    source: str = (
+        ""  # which agent produced it: "unit:3", "boundary:inbound:DolceFront:0"
+    )
 
 
 class FilePurpose(_Model):
@@ -78,9 +83,10 @@ class ExploreOutput(_Model):
 
 class Span(BaseModel):
     """Lines `start..end` (1-based, inclusive) of one file at one side of a change."""
+
     path: str
     start: int = Field(default=1, ge=1)
-    end: int = Field(ge=0)          # 0 only for an empty whole file
+    end: int = Field(ge=0)  # 0 only for an empty whole file
     side: Side = "head"
     whole_file: bool = False
 
@@ -89,23 +95,24 @@ class Span(BaseModel):
         return max(0, self.end - self.start + 1)
 
     @classmethod
-    def whole(cls, path: str, lines: int, side: Side = "head") -> "Span":
+    def whole(cls, path: str, lines: int, side: Side = "head") -> Span:
         return cls(path=path, start=1, end=lines, side=side, whole_file=True)
 
 
 class Scope(BaseModel):
     """The line ranges to explain: whole files for a module, hunks for a diff."""
+
     spans: list[Span] = Field(default_factory=list)
 
     @classmethod
-    def whole_files(cls, files: Mapping[str, int] | Iterable[tuple[str, int]]) -> "Scope":
+    def whole_files(cls, files: Mapping[str, int] | Iterable[tuple[str, int]]) -> Scope:
         items = files.items() if isinstance(files, Mapping) else files
         return cls(spans=[Span.whole(p, n) for p, n in items])
 
 
 class Unit(BaseModel):
     id: str
-    files: list[str]         # the distinct paths of its spans, in order
+    files: list[str]  # the distinct paths of its spans, in order
     lines: int
     oversize: bool = False
     spans: list[Span] = Field(default_factory=list)

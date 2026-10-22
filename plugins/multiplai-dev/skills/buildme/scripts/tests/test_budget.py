@@ -3,7 +3,6 @@
 from dataclasses import dataclass
 
 import pytest
-
 from build_pipeline import budget as budget_mod
 from build_pipeline.budget import BudgetExceededError, BuildBudget
 
@@ -27,8 +26,14 @@ def _clean_budget():
 class TestAccounting:
     def test_total_counts_every_tier(self):
         b = BuildBudget()
-        b.record(FakeUsage(input_tokens=10, output_tokens=5,
-                           cache_read_tokens=100, cache_creation_tokens=2))
+        b.record(
+            FakeUsage(
+                input_tokens=10,
+                output_tokens=5,
+                cache_read_tokens=100,
+                cache_creation_tokens=2,
+            )
+        )
         assert b.total_tokens == 117
         assert b.calls == 1
 
@@ -84,7 +89,9 @@ class TestCheck:
             b.check()
         # The useful half of a stop is where the money went.
         assert "review=90" in exc.value.diagnosis
-        assert exc.value.diagnosis.index("review=90") < exc.value.diagnosis.index("rubric=20")
+        assert exc.value.diagnosis.index("review=90") < exc.value.diagnosis.index(
+            "rubric=20"
+        )
 
     def test_the_end_of_run_summary_leaves_out_the_advice_on_cutting_spend(self):
         b = BuildBudget()
@@ -99,14 +106,22 @@ class TestCheck:
         with caplog.at_level("WARNING"):
             b.check()
             b.check()
-        assert sum("used 85% of its budget" in r.getMessage()
-                   for r in caplog.records if r.levelname == "WARNING") == 1
+        assert (
+            sum(
+                "used 85% of its budget" in r.getMessage()
+                for r in caplog.records
+                if r.levelname == "WARNING"
+            )
+            == 1
+        )
 
 
 class TestPersistence:
     def test_round_trip_preserves_spend(self):
         b = BuildBudget(max_tokens=500)
-        b.record(FakeUsage(input_tokens=100, output_tokens=20, cost_usd=0.5), label="review")
+        b.record(
+            FakeUsage(input_tokens=100, output_tokens=20, cost_usd=0.5), label="review"
+        )
 
         restored = BuildBudget(max_tokens=500)
         restored.load_state(b.to_state())
@@ -171,23 +186,33 @@ class TestModuleSingleton:
 
 
 def test_resume_flag_accepts_only_existing_unknown_calls(tmp_path):
+    from build_pipeline import budget
     from build_pipeline.__main__ import build_parser
     from build_pipeline.config import BuildConfig
-    from build_pipeline import budget
-    args = build_parser().parse_args(['build', '--change', 'x', '--project-dir', str(tmp_path), '--accept-unknown-spend'])
+
+    args = build_parser().parse_args(
+        [
+            "build",
+            "--change",
+            "x",
+            "--project-dir",
+            str(tmp_path),
+            "--accept-unknown-spend",
+        ]
+    )
     config = BuildConfig.from_cli_args(args)
     assert config.accept_unknown_spend
-    saved = {'cost_usd': .5, 'unaccounted_calls': ['planning']}
+    saved = {"cost_usd": 0.5, "unaccounted_calls": ["planning"]}
     tracker = budget.BuildBudget(max_usd=2)
     tracker.load_state(saved, accept_unknown_spend=config.accept_unknown_spend)
     tracker.check()
     accepted = tracker.to_state()
-    assert accepted['unaccounted_calls'] == ['planning']
-    assert accepted['accepted_unknown_calls'] == 1
-    assert accepted['cost_usd'] == .5
+    assert accepted["unaccounted_calls"] == ["planning"]
+    assert accepted["accepted_unknown_calls"] == 1
+    assert accepted["cost_usd"] == 0.5
     resumed = budget.BuildBudget(max_usd=2)
     resumed.load_state(accepted)
     resumed.check()
-    resumed.unaccounted_calls.append('implementation')
-    with pytest.raises(budget.BudgetExceededError, match='--accept-unknown-spend'):
+    resumed.unaccounted_calls.append("implementation")
+    with pytest.raises(budget.BudgetExceededError, match="--accept-unknown-spend"):
         resumed.check()

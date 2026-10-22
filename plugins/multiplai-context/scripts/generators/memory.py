@@ -14,9 +14,10 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from multiplai_core.paths import Paths
-from generators.base import GeneratorBase
 from lib.section_loader import h2_names
+from multiplai_core.paths import Paths
+
+from generators.base import GeneratorBase
 
 logger = logging.getLogger(__name__)
 
@@ -211,21 +212,21 @@ class MemoryGenerator(GeneratorBase):
             '- "summary": a concise summary of the file\'s content\n'
             '- "topics": an array of topic strings relevant for routing\n'
             '- "keywords": 5-15 *discriminative* terms that, if they appear '
-            'in a user prompt, specifically point to THIS file — proper '
-            'nouns, project/product/company names, people, and distinctive '
-            'multi-word phrases unique to this file. EXCLUDE generic '
+            "in a user prompt, specifically point to THIS file — proper "
+            "nouns, project/product/company names, people, and distinctive "
+            "multi-word phrases unique to this file. EXCLUDE generic "
             'technology, tool, framework, or skill names (e.g. "Python", '
             '"Docker", "AWS", "API", "DevOps", "product management") that '
-            'recur across many unrelated prompts: e.g. a career bio must '
-            'NOT be keyworded with every technology it mentions. If a term '
-            'would also fit dozens of unrelated files, leave it out — a '
-            'precise short list beats an exhaustive one.\n'
+            "recur across many unrelated prompts: e.g. a career bio must "
+            "NOT be keyworded with every technology it mentions. If a term "
+            "would also fit dozens of unrelated files, leave it out — a "
+            "precise short list beats an exhaustive one.\n"
             '- "intent_domains": an array of short phrases describing task intents '
             'for which this file is relevant (e.g., "writing a blog post", '
             '"debugging python async code"). 3-8 phrases.\n'
             '- "anti_domains": an array of short phrases describing task intents '
-            'for which this file is NOT relevant (use sparingly — most files have '
-            'none). 0-3 phrases.\n'
+            "for which this file is NOT relevant (use sparingly — most files have "
+            "none). 0-3 phrases.\n"
             + (_anchor_prompt_block(sections) if sections else "")
             + "\nRespond with ONLY valid JSON, no explanation.\n\n"
             f"---\n{content}\n---"
@@ -267,7 +268,10 @@ class MemoryGenerator(GeneratorBase):
             merged["section_anchors"] = anchors
             logger.info(
                 "SECTION_ANCHORS %s valid=%d/%d anchorable=%d",
-                key, len(anchors), proposed_count, len(sections),
+                key,
+                len(anchors),
+                proposed_count,
+                len(sections),
             )
         else:
             merged.pop("section_anchors", None)
@@ -281,7 +285,9 @@ class MemoryGenerator(GeneratorBase):
                     "SECTION_ANCHORS %s valid=0/%d — %d anchorable section(s) "
                     "exist but no proposed anchor named one; this entry falls "
                     "back to whole-file loads",
-                    key, proposed_count, len(sections),
+                    key,
+                    proposed_count,
+                    len(sections),
                 )
         return merged
 

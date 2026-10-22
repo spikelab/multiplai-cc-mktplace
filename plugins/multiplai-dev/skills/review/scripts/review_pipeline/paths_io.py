@@ -65,18 +65,29 @@ def entry_subject(drop: PathDrop) -> str:
 
 def classify_drop(drop: PathDrop) -> CoverageRecord:
     level, reason = DROP_CLASSES.get(drop.stage, ("info", "out-of-scope"))
-    return CoverageRecord(stage="paths", subject=entry_subject(drop), level=level, reason=reason,
-                          detail=drop.detail or drop.reason)
+    return CoverageRecord(
+        stage="paths",
+        subject=entry_subject(drop),
+        level=level,
+        reason=reason,
+        detail=drop.detail or drop.reason,
+    )
 
 
 def classify_broken(path: TracedPath) -> CoverageRecord:
     """A kept path whose trace was cut: still mapped, but only up to hop `stops_at`."""
-    return CoverageRecord(stage="paths", subject=path.id, level="error", reason="broken-trace",
-                          detail=f"stops at hop {path.stops_at}")
+    return CoverageRecord(
+        stage="paths",
+        subject=path.id,
+        level="error",
+        reason="broken-trace",
+        detail=f"stops at hop {path.stops_at}",
+    )
 
 
 class Anchor(NamedTuple):
     """The code an entry dispatches to."""
+
     path: str
     line: int | None
     symbol: str | None
@@ -90,6 +101,7 @@ class Hop(NamedTuple):
 
 class E2ETest(NamedTuple):
     """A test listed for a path; `mocked` when it patches hop 2, so it does not count as end to end."""
+
     id: str
     mocked: bool
 
@@ -97,6 +109,7 @@ class E2ETest(NamedTuple):
 @dataclass(frozen=True)
 class PathView:
     """One mapped path as a path finder's prompt shows it."""
+
     id: str
     name: str
     file: str
@@ -123,16 +136,37 @@ def views(result: PathsResult) -> list[PathView]:
             continue
         seen.add(p.id)
         e = p.entry
-        handler = Anchor(e.handler.path, e.handler.line, e.handler.symbol) if e.handler else None
-        invokers = (e.invoked_by, *(f"{i.name} at {i.location.path}:{i.location.line}" for i in e.also_invoked_by))
-        out.append(PathView(
-            id=p.id, name=e.name, file=e.location.path, line=e.location.line, handler=handler,
-            invokers=tuple(invokers),
-            hops=tuple(Hop(h.path, h.line_start, _hop_description(h)) for h in p.hops),
-            changed_lines=tuple((c.path, c.line) for c in p.changed_lines_covered),
-            e2e=tuple([E2ETest(t.node_id, False) for t in p.tests.e2e]
-                      + [E2ETest(t.node_id, True) for t in p.tests.mocks_hop_2]),
-            broken_at=p.stops_at))
+        handler = (
+            Anchor(e.handler.path, e.handler.line, e.handler.symbol)
+            if e.handler
+            else None
+        )
+        invokers = (
+            e.invoked_by,
+            *(
+                f"{i.name} at {i.location.path}:{i.location.line}"
+                for i in e.also_invoked_by
+            ),
+        )
+        out.append(
+            PathView(
+                id=p.id,
+                name=e.name,
+                file=e.location.path,
+                line=e.location.line,
+                handler=handler,
+                invokers=tuple(invokers),
+                hops=tuple(
+                    Hop(h.path, h.line_start, _hop_description(h)) for h in p.hops
+                ),
+                changed_lines=tuple((c.path, c.line) for c in p.changed_lines_covered),
+                e2e=tuple(
+                    [E2ETest(t.node_id, False) for t in p.tests.e2e]
+                    + [E2ETest(t.node_id, True) for t in p.tests.mocks_hop_2]
+                ),
+                broken_at=p.stops_at,
+            )
+        )
     return out
 
 
@@ -176,10 +210,19 @@ def assign_paths(findings: list[Finding], result: PathsResult | None) -> list[Fi
     by_path = [(v.id, anchors(v)) for v in views(result)]
     out = []
     for f in findings:
-        ranges = [(_norm(c.path), c.line_start, c.line_end) for c in f.citations
-                  if not c.is_web and not _norm(c.path).startswith(DEPS_DIR + "/")]
-        ids = [pid for pid, points in by_path
-               if any(file == cfile and start <= line <= end
-                      for file, line in points for cfile, start, end in ranges)]
+        ranges = [
+            (_norm(c.path), c.line_start, c.line_end)
+            for c in f.citations
+            if not c.is_web and not _norm(c.path).startswith(DEPS_DIR + "/")
+        ]
+        ids = [
+            pid
+            for pid, points in by_path
+            if any(
+                file == cfile and start <= line <= end
+                for file, line in points
+                for cfile, start, end in ranges
+            )
+        ]
         out.append(f.model_copy(update={"paths": ids or None}))
     return out

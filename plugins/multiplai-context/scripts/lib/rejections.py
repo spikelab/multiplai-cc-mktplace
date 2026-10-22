@@ -43,19 +43,19 @@ import json
 import os
 import tempfile
 from collections import Counter
-from datetime import datetime, timezone
+from collections.abc import Iterable, Iterator, Mapping
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Iterable, Iterator, Mapping, Optional
 
 __all__ = [
-    "REJECTIONS_FILENAME",
     "MAX_RECORDS",
-    "default_path",
-    "record_for",
-    "append",
-    "rotate",
-    "read",
+    "REJECTIONS_FILENAME",
     "aggregate",
+    "append",
+    "default_path",
+    "read",
+    "record_for",
+    "rotate",
 ]
 
 #: Records kept before the oldest are dropped. "Forever" was the stated design
@@ -83,7 +83,7 @@ def record_for(
     reason: str,
     judge_reason: str = "",
     item_key: str = "",
-    now: Optional[datetime] = None,
+    now: datetime | None = None,
 ) -> dict:
     """Build the record for one dropped *item*.
 
@@ -91,7 +91,7 @@ def record_for(
     ``judge-drop``); *judge_reason* is the judge's own one-line English, which
     is what a human actually reads when deciding to overrule.
     """
-    stamp = (now or datetime.now(timezone.utc)).isoformat(timespec="seconds")
+    stamp = (now or datetime.now(UTC)).isoformat(timespec="seconds")
     return {
         "ts": stamp,
         "item_key": item_key,
@@ -180,7 +180,8 @@ def rotate(path: Path, *, max_records: int = MAX_RECORDS) -> int:
     path = Path(path)
     try:
         lines = [
-            line for line in path.read_text(encoding="utf-8").splitlines()
+            line
+            for line in path.read_text(encoding="utf-8").splitlines()
             if line.strip()
         ]
     except OSError:

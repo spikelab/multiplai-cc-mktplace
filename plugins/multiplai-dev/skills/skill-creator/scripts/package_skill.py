@@ -17,6 +17,7 @@ import argparse
 import sys
 import zipfile
 from pathlib import Path
+
 from quick_validate import validate_skill
 
 
@@ -69,9 +70,9 @@ def package_skill(skill_path, output_dir=None):
 
     # Create the .skill file (zip format)
     try:
-        with zipfile.ZipFile(skill_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        with zipfile.ZipFile(skill_filename, "w", zipfile.ZIP_DEFLATED) as zipf:
             # Walk through the skill directory
-            for file_path in skill_path.rglob('*'):
+            for file_path in skill_path.rglob("*"):
                 if file_path.is_file():
                     # Calculate the relative path within the zip
                     arcname = file_path.relative_to(skill_path.parent)
@@ -90,14 +91,20 @@ def main(argv=None):
     parser = argparse.ArgumentParser(
         prog="package_skill.py",
         description="Create a distributable .skill archive from a skill folder.",
-        epilog=("Examples:\n"
-                "  package_skill.py skills/public/my-skill\n"
-                "  package_skill.py skills/public/my-skill ./dist"),
+        epilog=(
+            "Examples:\n"
+            "  package_skill.py skills/public/my-skill\n"
+            "  package_skill.py skills/public/my-skill ./dist"
+        ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("skill_folder", help="path to the skill directory")
-    parser.add_argument("output_directory", nargs="?", default=None,
-                        help="where to write the archive (default: alongside)")
+    parser.add_argument(
+        "output_directory",
+        nargs="?",
+        default=None,
+        help="where to write the archive (default: alongside)",
+    )
     args = parser.parse_args(argv)
 
     skill_path = args.skill_folder

@@ -74,13 +74,25 @@ BIG_HEAD = BIG_BASE.replace("value_2000 = 2000\n", "value_2000 = 'changed'\n")
 
 
 def _git(repo: Path, *args: str, date: str) -> str:
-    env = dict(os.environ, GIT_AUTHOR_NAME="Fixture", GIT_AUTHOR_EMAIL="fixture@example.com",
-               GIT_COMMITTER_NAME="Fixture", GIT_COMMITTER_EMAIL="fixture@example.com",
-               GIT_AUTHOR_DATE=date, GIT_COMMITTER_DATE=date, GIT_CONFIG_GLOBAL=os.devnull,
-               GIT_CONFIG_NOSYSTEM="1")
-    return subprocess.run(["git", "-C", str(repo), "-c", "commit.gpgsign=false", *args],
-                          check=True, capture_output=True, text=True, env=env,
-                          stdin=subprocess.DEVNULL).stdout.strip()
+    env = dict(
+        os.environ,
+        GIT_AUTHOR_NAME="Fixture",
+        GIT_AUTHOR_EMAIL="fixture@example.com",
+        GIT_COMMITTER_NAME="Fixture",
+        GIT_COMMITTER_EMAIL="fixture@example.com",
+        GIT_AUTHOR_DATE=date,
+        GIT_COMMITTER_DATE=date,
+        GIT_CONFIG_GLOBAL=os.devnull,
+        GIT_CONFIG_NOSYSTEM="1",
+    )
+    return subprocess.run(
+        ["git", "-C", str(repo), "-c", "commit.gpgsign=false", *args],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+        stdin=subprocess.DEVNULL,
+    ).stdout.strip()
 
 
 def _write(repo: Path, rel: str, data: str | bytes) -> None:
@@ -130,13 +142,13 @@ class Widget:
         return helper(2)
 '''
 
-WEB = '''export const thing = 1;
+WEB = """export const thing = 1;
 export function render(el) {
   return el;
 }
 let counter = 0;
 interface Props { name: string }
-'''
+"""
 
 SQL = "CREATE OR REPLACE FUNCTION refresh_totals() RETURNS void AS $$ SELECT 1 $$;\n"
 
@@ -157,7 +169,11 @@ def build_wide(repo: Path) -> tuple[str, str]:
     _git(repo, "add", "-A", date=d1)
     _git(repo, "commit", "-q", "-m", "base", date=d1)
     base = _git(repo, "rev-parse", "HEAD", date=d1)
-    _write(repo, "app/main.py", "from lib.util import helper, Widget\n\nprint(helper(1), Widget().total())\n")
+    _write(
+        repo,
+        "app/main.py",
+        "from lib.util import helper, Widget\n\nprint(helper(1), Widget().total())\n",
+    )
     _git(repo, "add", "-A", date=d2)
     _git(repo, "commit", "-q", "-m", "head", date=d2)
     return base, _git(repo, "rev-parse", "HEAD", date=d2)
@@ -215,9 +231,17 @@ def build_remote(root: Path) -> dict[str, object]:
     _git(work, "checkout", "-q", "feature", date=d4)
 
     _git(root, "clone", "-q", "--no-local", str(origin), str(clone), date=d4)
-    return {"work": work, "origin": origin, "clone": clone, "base": base, "head": head,
-            "feature_pushed": feature_pushed, "feature_local": feature_local,
-            "main_tip": main_tip, "pr_head": pr_head}
+    return {
+        "work": work,
+        "origin": origin,
+        "clone": clone,
+        "base": base,
+        "head": head,
+        "feature_pushed": feature_pushed,
+        "feature_local": feature_local,
+        "main_tip": main_tip,
+        "pr_head": pr_head,
+    }
 
 
 if __name__ == "__main__":

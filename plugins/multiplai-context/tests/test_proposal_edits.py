@@ -94,16 +94,24 @@ def headings(text: str) -> list[str]:
 # Parsing
 # ---------------------------------------------------------------------------
 
+
 class TestParseDirectives:
     def test_replace(self):
-        (d,), rejected = parse_directives("REPLACE dev.md#2 Before making a repo public, scrub secrets.")
+        (d,), rejected = parse_directives(
+            "REPLACE dev.md#2 Before making a repo public, scrub secrets."
+        )
         assert (d.op, d.target_file, d.index) == ("REPLACE", "dev.md", 2)
         assert d.arg == "Before making a repo public, scrub secrets."
         assert rejected == []
 
     def test_move(self):
         (d,), _ = parse_directives("MOVE dev.md#1 -> python.md")
-        assert (d.op, d.target_file, d.index, d.arg) == ("MOVE", "dev.md", 1, "python.md")
+        assert (d.op, d.target_file, d.index, d.arg) == (
+            "MOVE",
+            "dev.md",
+            1,
+            "python.md",
+        )
 
     def test_to_action_is_parsed_as_a_drop(self):
         """TO-ACTION is retired but still parsed — the critic is a model.
@@ -114,7 +122,10 @@ class TestParseDirectives:
         """
         (d,), _ = parse_directives("TO-ACTION dev.md#3")
         assert (d.op, d.target_file, d.index, d.arg) == (
-            "DROP", "dev.md", 3, "toolchain change-request",
+            "DROP",
+            "dev.md",
+            3,
+            "toolchain change-request",
         )
 
     def test_to_action_keeps_an_explicit_reason(self):
@@ -153,7 +164,9 @@ class TestParseDirectives:
         assert parse_directives("") == ([], [])
 
     def test_never_raises_on_arbitrary_text(self):
-        parsed, rejected = parse_directives("### 1.\n> quoted\n**Source:** x.md:1\n\x00\x01")
+        parsed, rejected = parse_directives(
+            "### 1.\n> quoted\n**Source:** x.md:1\n\x00\x01"
+        )
         assert isinstance(parsed, list) and isinstance(rejected, list)
 
 
@@ -161,11 +174,19 @@ class TestParseDirectives:
 # Applying — the five operations
 # ---------------------------------------------------------------------------
 
+
 class TestReplace:
     def test_swaps_the_quoted_text_only(self):
         new, applied, refused = apply_directives(
             PROPOSAL,
-            [Directive("REPLACE", "dev.md", 2, "Before making a repo public, scrub and rotate secrets.")],
+            [
+                Directive(
+                    "REPLACE",
+                    "dev.md",
+                    2,
+                    "Before making a repo public, scrub and rotate secrets.",
+                )
+            ],
         )
         assert applied == ["REPLACE dev.md#2"] and refused == []
         assert "> Before making a repo public, scrub and rotate secrets." in new
@@ -181,7 +202,8 @@ class TestReplace:
 
     def test_text_containing_a_source_line_is_refused(self):
         new, applied, refused = apply_directives(
-            PROPOSAL, [Directive("REPLACE", "dev.md", 2, "A rule. **Source:** made-up.md:1")]
+            PROPOSAL,
+            [Directive("REPLACE", "dev.md", 2, "A rule. **Source:** made-up.md:1")],
         )
         assert new == PROPOSAL and applied == []
         assert "**Source:**" in refused[0]
@@ -204,7 +226,9 @@ class TestMove:
         assert "Split the dream script" in new
 
     def test_source_line_travels_with_the_entry(self):
-        new, _, _ = apply_directives(PROPOSAL, [Directive("MOVE", "dev.md", 3, "python.md")])
+        new, _, _ = apply_directives(
+            PROPOSAL, [Directive("MOVE", "dev.md", 3, "python.md")]
+        )
         assert sorted(sources(new)) == sorted(sources(PROPOSAL))
 
     def test_creates_the_destination_section_when_absent(self):
@@ -212,7 +236,9 @@ class TestMove:
             PROPOSAL, [Directive("MOVE", "dev.md", 3, "claude-code-tools.md")]
         )
         assert applied and "## Updates for `claude-code-tools.md`" in new
-        assert new.index("## Updates for `claude-code-tools.md`") < new.index("## Action Items")
+        assert new.index("## Updates for `claude-code-tools.md`") < new.index(
+            "## Action Items"
+        )
 
     def test_move_to_the_same_file_is_refused(self):
         new, applied, refused = apply_directives(
@@ -224,7 +250,12 @@ class TestMove:
 class TestToAction:
     def test_becomes_an_action_item(self):
         new, applied, refused = apply_directives(
-            PROPOSAL, [Directive("TO-ACTION", "dev.md", 3, "the pipeline is untestable as one file")]
+            PROPOSAL,
+            [
+                Directive(
+                    "TO-ACTION", "dev.md", 3, "the pipeline is untestable as one file"
+                )
+            ],
         )
         assert applied == ["TO-ACTION dev.md#3"] and refused == []
         assert "### A2. Split the dream script" in new
@@ -257,7 +288,9 @@ class TestDrop:
         new, applied, refused = apply_directives(
             PROPOSAL, [Directive("DROP", "dev.md", 2, "past event, no durable rule")]
         )
-        assert refused == [] and applied == ["DROP dev.md#2 (past event, no durable rule)"]
+        assert refused == [] and applied == [
+            "DROP dev.md#2 (past event, no durable rule)"
+        ]
         assert "### 2. Decision (2026-06-15): repos go public" not in new
         assert "> Decision (2026-06-15): make repos A/B/C public" not in new
         assert "**Source:** 2026-07-27.md:40" not in new
@@ -294,9 +327,11 @@ class TestDrop:
         the gap that let per-file numbering survive the first attempt at this.
         """
         new, _, _ = apply_directives(PROPOSAL, [Directive("DROP", "dev.md", 2, "x")])
-        numbers = [int(m.group(1))
-                   for m in (re.match(r"^### (\d+)\.", l) for l in new.splitlines())
-                   if m]
+        numbers = [
+            int(m.group(1))
+            for m in (re.match(r"^### (\d+)\.", l) for l in new.splitlines())
+            if m
+        ]
         # 3 entries left under dev.md, 1 under python.md — continuous, no reuse.
         assert numbers == [1, 2, 3, 4]
         python_section = new.split("## Updates for `python.md`")[1]
@@ -329,7 +364,8 @@ class TestMerge:
 
     def test_merges_across_target_files(self):
         new, applied, refused = apply_directives(
-            PROPOSAL, [Directive("MERGE", "dev.md", 1, src_file="python.md", src_index=1)]
+            PROPOSAL,
+            [Directive("MERGE", "dev.md", 1, src_file="python.md", src_index=1)],
         )
         assert applied and refused == []
         assert sorted(sources(new)) == sorted(sources(PROPOSAL))
@@ -352,6 +388,7 @@ class TestMerge:
 # Ordering, refusals, degenerate input
 # ---------------------------------------------------------------------------
 
+
 class TestOrdering:
     DIRECTIVES = [
         Directive("DROP", "dev.md", 2, "past event"),
@@ -364,22 +401,26 @@ class TestOrdering:
         """A DROP of #2 must not shift what #3 and #4 mean."""
         shuffled = [self.DIRECTIVES[i] for i in (1, 3, 0, 2)]
         sorted_first = sorted(self.DIRECTIVES, key=lambda d: (d.target_file, -d.index))
-        assert apply_directives(PROPOSAL, shuffled)[0] == apply_directives(
-            PROPOSAL, sorted_first
-        )[0]
+        assert (
+            apply_directives(PROPOSAL, shuffled)[0]
+            == apply_directives(PROPOSAL, sorted_first)[0]
+        )
 
     def test_each_directive_hits_the_entry_it_named(self):
         new, applied, refused = apply_directives(PROPOSAL, self.DIRECTIVES)
         assert refused == [] and len(applied) == 4
-        assert "**Source:** 2026-07-27.md:40" not in new    # DROP dev.md#2
+        assert "**Source:** 2026-07-27.md:40" not in new  # DROP dev.md#2
         assert "> Always simulate a clean clone first." in new  # REPLACE dev.md#4
-        assert "### A2. Split the dream script" in new      # TO-ACTION dev.md#3
+        assert "### A2. Split the dream script" in new  # TO-ACTION dev.md#3
         assert "> Write state files temp-then-rename." not in new  # DROP python.md#1
 
     def test_two_directives_on_one_entry_refuse_the_second(self):
         new, applied, refused = apply_directives(
             PROPOSAL,
-            [Directive("DROP", "dev.md", 2, "x"), Directive("REPLACE", "dev.md", 2, "y")],
+            [
+                Directive("DROP", "dev.md", 2, "x"),
+                Directive("REPLACE", "dev.md", 2, "y"),
+            ],
         )
         assert len(applied) == 1 and len(refused) == 1
         assert "already edited" in refused[0]
@@ -404,12 +445,17 @@ class TestRefusalsAndNoOps:
     def test_all_refused_leaves_the_document_untouched(self):
         new, applied, refused = apply_directives(
             PROPOSAL,
-            [Directive("DROP", "nope.md", 1, "x"), Directive("MOVE", "dev.md", 99, "python.md")],
+            [
+                Directive("DROP", "nope.md", 1, "x"),
+                Directive("MOVE", "dev.md", 99, "python.md"),
+            ],
         )
         assert new == PROPOSAL and applied == [] and len(refused) == 2
 
     def test_applying_to_an_empty_document_never_raises(self):
-        new, applied, refused = apply_directives("", [Directive("DROP", "dev.md", 1, "x")])
+        new, applied, refused = apply_directives(
+            "", [Directive("DROP", "dev.md", 1, "x")]
+        )
         assert new == "" and applied == [] and refused
 
     def test_end_to_end_from_raw_critic_output(self):

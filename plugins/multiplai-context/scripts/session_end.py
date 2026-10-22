@@ -29,16 +29,16 @@ because a queued marker survives either way and a killed spawn does not.
 """
 
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from multiplai_core.config import read_session_state
-from multiplai_core.paths import get_paths
-from multiplai_core.log_utils import hook_run, setup_logging, log_event
 from lib.fsio import atomic_write_json
 from lib.hook_input import read_hook_input
+from multiplai_core.config import read_session_state
+from multiplai_core.log_utils import hook_run, log_event, setup_logging
+from multiplai_core.paths import get_paths
 
 logger = setup_logging("session_end", packages=("lib", "generators"))
 
@@ -69,19 +69,22 @@ def _save_deferred_marker(
     # concurrent session's id (last writer wins), so trusting it here would
     # file this session's marker under the wrong id — clobbering the other
     # session's marker and losing this one's diary/learnings extraction.
-    session_id = hook_input.get("session_id") or session_state.get("session_id") or "unknown"
+    session_id = (
+        hook_input.get("session_id") or session_state.get("session_id") or "unknown"
+    )
     marker = {
         "session_id": session_id,
         "transcript_path": hook_input.get("transcript_path", ""),
         "cwd": hook_input.get("cwd", session_state.get("cwd", "")),
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
     }
 
     marker_path = pending_dir / f"{session_id}.json"
     atomic_write_json(marker_path, marker)
     logger.info("Wrote deferred extraction marker: %s", marker_path)
     log_event(
-        "session", "end",
+        "session",
+        "end",
         "session ended — queued deferred extraction for next startup",
         session_id=session_id,
     )
@@ -133,15 +136,20 @@ def _checkpoint_on_end(data_dir: Path, hook_input: dict, reason: str) -> str:
 
     if reason in CONTAINER_SURVIVES_REASONS:
         if cp.writer_inflight(data_dir, session_id):
-            logger.info("Writer already in flight for %s; not spawning again", session_id)
+            logger.info(
+                "Writer already in flight for %s; not spawning again", session_id
+            )
             return "skipped"
         cp.claim_writer(data_dir, session_id)
         if cp.spawn_writer(payload):
             logger.info("Spawned end-of-session checkpoint writer (reason=%s)", reason)
             log_event(
-                "checkpoint", "spawn",
+                "checkpoint",
+                "spawn",
                 f"checkpoint writer launched on session end ({reason})",
-                session_id=session_id, tokens=tokens, reason=reason,
+                session_id=session_id,
+                tokens=tokens,
+                reason=reason,
             )
             return "spawned"
         cp.release_writer(data_dir, session_id)
@@ -152,10 +160,13 @@ def _checkpoint_on_end(data_dir: Path, hook_input: dict, reason: str) -> str:
     queue_pending_checkpoint(data_dir, payload)
     logger.info("Queued end-of-session checkpoint (reason=%s)", reason)
     log_event(
-        "checkpoint", "queue",
+        "checkpoint",
+        "queue",
         f"queued a checkpoint for the host drain ({reason}) — "
         "the container is exiting, so a detached writer would be killed",
-        session_id=session_id, tokens=tokens, reason=reason,
+        session_id=session_id,
+        tokens=tokens,
+        reason=reason,
     )
     return "queued"
 
@@ -221,7 +232,9 @@ def main() -> None:
                 if cp.is_child_session(hook_input.get("transcript_path") or ""):
                     logger.info("Child session — no deferred extraction marker")
                 else:
-                    _save_deferred_marker(paths.plugin_data(), session_state, hook_input)
+                    _save_deferred_marker(
+                        paths.plugin_data(), session_state, hook_input
+                    )
             except Exception:
                 logger.exception("Failed to write deferred extraction marker")
 

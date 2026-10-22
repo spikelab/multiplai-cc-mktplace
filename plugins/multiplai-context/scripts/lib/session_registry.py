@@ -35,7 +35,7 @@ import json
 import logging
 import os
 import socket
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from lib.fsio import atomic_write_json
@@ -72,7 +72,7 @@ def registry_dir(data_dir: Path) -> Path:
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _hostname() -> str:
@@ -144,9 +144,7 @@ def _lock_entry(path: Path) -> int | None:
     holder's own read-merge-write, i.e. milliseconds.
     """
     try:
-        fd = os.open(
-            str(path.with_suffix(".lock")), os.O_CREAT | os.O_RDWR, 0o644
-        )
+        fd = os.open(str(path.with_suffix(".lock")), os.O_CREAT | os.O_RDWR, 0o644)
     except OSError:
         return None
     try:
@@ -266,7 +264,9 @@ def record_event(data_dir: Path, hook_input: dict, kind: str) -> bool:
         return False
 
 
-def record_disposition(data_dir: Path, session_id: str, state: str, reason: str = "") -> bool:
+def record_disposition(
+    data_dir: Path, session_id: str, state: str, reason: str = ""
+) -> bool:
     """Record how a session was left: ``active | parked | done``.
 
     A **new key**, never an overload of ``last_event.kind`` or the hub's
@@ -298,10 +298,13 @@ def record_disposition(data_dir: Path, session_id: str, state: str, reason: str 
             if state != "active":
                 logger.warning(
                     "No registry entry for %s; %s disposition not recorded",
-                    session_id, state,
+                    session_id,
+                    state,
                 )
             else:
-                logger.debug("No registry entry for %s; disposition not recorded", session_id)
+                logger.debug(
+                    "No registry entry for %s; disposition not recorded", session_id
+                )
             return False
 
         lock_fd = _lock_entry(path)
@@ -312,14 +315,18 @@ def record_disposition(data_dir: Path, session_id: str, state: str, reason: str 
                 if state != "active":
                     logger.warning(
                         "Registry entry for %s unreadable under lock; "
-                        "%s disposition not recorded", session_id, state,
+                        "%s disposition not recorded",
+                        session_id,
+                        state,
                     )
                 return False
             if not isinstance(entry, dict):
                 if state != "active":
                     logger.warning(
                         "Registry entry for %s is not an object; "
-                        "%s disposition not recorded", session_id, state,
+                        "%s disposition not recorded",
+                        session_id,
+                        state,
                     )
                 return False
 
@@ -385,7 +392,7 @@ def _entry_is_stale(
         last = entry.get("last_event") or {}
         ts = datetime.fromisoformat(str(last.get("ts") or ""))
         if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=timezone.utc)
+            ts = ts.replace(tzinfo=UTC)
         # Observation beats both clocks. *dead_sids* are entries whose container
         # the host looked for and did not find (`lib.fleet.roster_dead_sids`);
         # the two windows below exist only because nothing used to be able to
@@ -408,7 +415,7 @@ def _entry_is_stale(
     except FileNotFoundError:
         return False
     except (json.JSONDecodeError, ValueError, TypeError, AttributeError):
-        mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+        mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
         return mtime < cutoff_ended
 
 
@@ -472,7 +479,7 @@ def _sweep_orphans(rdir: Path, cutoff: datetime) -> int:
             is_tmp = orphan.name.startswith(".tmp-")
             if not is_tmp and orphan.with_suffix(".json").exists():
                 continue
-            mtime = datetime.fromtimestamp(orphan.stat().st_mtime, tz=timezone.utc)
+            mtime = datetime.fromtimestamp(orphan.stat().st_mtime, tz=UTC)
             if mtime >= cutoff:
                 continue
             if orphan.suffix == ".lock":
@@ -546,7 +553,7 @@ def gc_stale(
         rdir = registry_dir(data_dir)
         if not rdir.is_dir():
             return 0
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         cutoff_ended = now - timedelta(days=days)
         cutoff_live = now - timedelta(days=live_days)
         protected = _pending_extraction_sids(data_dir)
@@ -579,7 +586,8 @@ def gc_stale(
         if removed or orphans:
             logger.info(
                 "GC'd %d stale session registry entr(y/ies), %d orphaned marker/lock file(s)",
-                removed, orphans,
+                removed,
+                orphans,
             )
     except Exception:
         logger.warning("Session registry GC failed", exc_info=True)

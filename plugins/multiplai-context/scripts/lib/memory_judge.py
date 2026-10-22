@@ -50,9 +50,9 @@ import logging
 import os
 import re
 import tempfile
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Mapping, Optional, Sequence
 
 from multiplai_core.untrusted import fence, markdown_notice
 
@@ -62,17 +62,17 @@ from lib.section_loader import extract_section
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "SYSTEM",
-    "ROUTING_FLAG_EVIDENCE",
     "CITATIONS",
+    "ROUTING_FLAG_EVIDENCE",
+    "SYSTEM",
     "VERDICTS",
     "Verdict",
     "batch_labels",
-    "item_key",
-    "render_batch",
-    "parse_verdicts",
     "default_cache_path",
+    "item_key",
     "load_cache",
+    "parse_verdicts",
+    "render_batch",
     "save_cache",
 ]
 
@@ -249,7 +249,7 @@ class Verdict:
         }
 
     @classmethod
-    def from_dict(cls, data: Mapping) -> Optional["Verdict"]:
+    def from_dict(cls, data: Mapping) -> Verdict | None:
         """Rebuild a verdict from cache, or ``None`` if the record is not one.
 
         Strict on the way *in* as well as on the way out: a hand-edited or
@@ -351,9 +351,13 @@ def render_batch(items: Sequence, target_texts: Mapping[str, str]) -> str:
         number = getattr(item, "number", 0)
         section = getattr(item, "section", "") or ""
         out.append(f"### {target}#{number}")
-        out.append(f"- **Would append to:** `{target}`" + (f" § {section}" if section else ""))
+        out.append(
+            f"- **Would append to:** `{target}`" + (f" § {section}" if section else "")
+        )
         pair = getattr(item, "pair", "") or "(none — drafted before the taxonomy)"
-        out.append(f"- **Extractor's labels (a claim to check, not an answer):** {pair}")
+        out.append(
+            f"- **Extractor's labels (a claim to check, not an answer):** {pair}"
+        )
         out.append(f"- **Citation given:** {getattr(item, 'source', '') or '(none)'}")
         if getattr(item, "routing_flagged", False):
             out.append(ROUTING_FLAG_EVIDENCE)
@@ -404,12 +408,14 @@ def batch_labels(items: Sequence) -> list[tuple[str, int]]:
     The one place the batch's identity set is derived, so the renderer and the
     parser cannot disagree about what was asked.
     """
-    return [(str(getattr(item, "target", "")), int(getattr(item, "number", 0)))
-            for item in items]
+    return [
+        (str(getattr(item, "target", "")), int(getattr(item, "number", 0)))
+        for item in items
+    ]
 
 
 def parse_verdicts(
-    raw: str, expected: Optional[Iterable[tuple[str, int]]] = None
+    raw: str, expected: Iterable[tuple[str, int]] | None = None
 ) -> dict[tuple[str, int], Verdict]:
     """Parse a judge reply into ``(target, number) -> Verdict``.
 
@@ -464,7 +470,8 @@ def parse_verdicts(
         if expected_set is not None and key not in expected_set:
             logger.warning(
                 "Judge reply carried a verdict for %r, which was not in this "
-                "batch — discarding it", key,
+                "batch — discarding it",
+                key,
             )
             continue
         if key in verdicts:

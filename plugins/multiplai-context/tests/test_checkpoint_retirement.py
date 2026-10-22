@@ -57,13 +57,17 @@ def make_pending_marker(data_dir, sid, project="alpha"):
     pdir = data_dir / "checkpoints" / "pending"
     pdir.mkdir(parents=True, exist_ok=True)
     marker = pdir / f"{project}.json"
-    marker.write_text(json.dumps({
-        "session_id": sid,
-        "cwd": f"/work/{project}",
-        "tokens": 210_000,
-        "checkpoint_path": str(cp.checkpoint_file(data_dir, sid)),
-        "created_at": "2026-08-01T09:00:00+00:00",
-    }))
+    marker.write_text(
+        json.dumps(
+            {
+                "session_id": sid,
+                "cwd": f"/work/{project}",
+                "tokens": 210_000,
+                "checkpoint_path": str(cp.checkpoint_file(data_dir, sid)),
+                "created_at": "2026-08-01T09:00:00+00:00",
+            }
+        )
+    )
     return marker
 
 
@@ -71,8 +75,8 @@ def make_pending_marker(data_dir, sid, project="alpha"):
 # lib/checkpoint.py — the store's own two guards
 # ---------------------------------------------------------------------------
 
-class TestRetireCheckpoint:
 
+class TestRetireCheckpoint:
     def test_it_removes_the_whole_directory(self, tmp_path):
         sdir = make_checkpoint(tmp_path, "s1")
 
@@ -154,8 +158,9 @@ class TestRetireCheckpoint:
         exception costs the session's diary entry."""
         make_checkpoint(tmp_path, "s1")
 
-        with patch.object(cp, "writer_inflight",
-                          side_effect=ValueError("embedded null byte")):
+        with patch.object(
+            cp, "writer_inflight", side_effect=ValueError("embedded null byte")
+        ):
             removed, reason = cp.retire_checkpoint(tmp_path, "s1")
 
         assert removed is False
@@ -164,7 +169,6 @@ class TestRetireCheckpoint:
 
 
 class TestPendingMarkerOwner:
-
     def test_it_finds_the_marker_for_a_session(self, tmp_path):
         marker = make_pending_marker(tmp_path, "s1", project="alpha")
 
@@ -196,6 +200,7 @@ class TestPendingMarkerOwner:
 # Criterion 11 — the pipeline edge, through extract_learnings.py
 # ---------------------------------------------------------------------------
 
+
 def _unit(text="Did a thing."):
     return {"timestamp": "2026-08-01T10:00:00Z", "diary_entry": text, "learnings": []}
 
@@ -204,8 +209,19 @@ class TestExtractionRetiresCheckpoints:
     """Driven through ``extract()`` so the guard is tested where it lives, not
     re-expressed in the test."""
 
-    def _run(self, tmp_path, *, units, disposition, diary_ok=True, llm_ok=True,
-             session_id="s1", trigger=None, n_chunks=1, fail_chunks=()):
+    def _run(
+        self,
+        tmp_path,
+        *,
+        units,
+        disposition,
+        diary_ok=True,
+        llm_ok=True,
+        session_id="s1",
+        trigger=None,
+        n_chunks=1,
+        fail_chunks=(),
+    ):
         """Drive ``extract()`` with a stubbed pipeline.
 
         ``n_chunks``/``fail_chunks`` model a multi-chunk transcript where
@@ -216,12 +232,23 @@ class TestExtractionRetiresCheckpoints:
         import extract_learnings as el
 
         class _Paths:
-            def memory_dir(self): return tmp_path / "memory"
-            def learnings_file(self): return tmp_path / "memory" / "learnings.md"
-            def diary_dir(self): return tmp_path / "diary"
-            def catalogs_dir(self): return tmp_path / "catalogs"
-            def data_dir(self): return tmp_path
-            def logs_dir(self): return tmp_path / "logs"
+            def memory_dir(self):
+                return tmp_path / "memory"
+
+            def learnings_file(self):
+                return tmp_path / "memory" / "learnings.md"
+
+            def diary_dir(self):
+                return tmp_path / "diary"
+
+            def catalogs_dir(self):
+                return tmp_path / "catalogs"
+
+            def data_dir(self):
+                return tmp_path
+
+            def logs_dir(self):
+                return tmp_path / "logs"
 
         calls = {"n": 0}
 
@@ -246,23 +273,30 @@ class TestExtractionRetiresCheckpoints:
             payload["trigger"] = trigger
         stdin = json.dumps(payload)
         chunks = [f"chunk-{i}" for i in range(n_chunks)]
-        with patch.object(el, "get_paths", _Paths), \
-             patch.object(el, "load_target_charters", lambda *a, **k: []), \
-             patch.object(el, "create_client", AsyncMock(return_value=object())), \
-             patch.object(el, "_distill_transcript", lambda *a: (chunks, None)), \
-             patch.object(el, "extract_session_signals", _fake_extract), \
-             patch.object(el, "write_diary_entries", _fake_diary), \
-             patch.object(el, "append_learnings", lambda *a, **k: True), \
-             patch.object(el, "record_disposition", lambda *a, **k: True), \
-             patch.object(el, "_refresh_now", AsyncMock(return_value=None)), \
-             patch.object(el.sys, "stdin",
-                          type("S", (), {"read": staticmethod(lambda: stdin)})):
+        with (
+            patch.object(el, "get_paths", _Paths),
+            patch.object(el, "load_target_charters", lambda *a, **k: []),
+            patch.object(el, "create_client", AsyncMock(return_value=object())),
+            patch.object(el, "_distill_transcript", lambda *a: (chunks, None)),
+            patch.object(el, "extract_session_signals", _fake_extract),
+            patch.object(el, "write_diary_entries", _fake_diary),
+            patch.object(el, "append_learnings", lambda *a, **k: True),
+            patch.object(el, "record_disposition", lambda *a, **k: True),
+            patch.object(el, "_refresh_now", AsyncMock(return_value=None)),
+            patch.object(
+                el.sys, "stdin", type("S", (), {"read": staticmethod(lambda: stdin)})
+            ),
+        ):
             return asyncio.run(el.extract())
 
     def test_a_successful_diary_write_retires_the_checkpoint(self, tmp_path):
         sdir = make_checkpoint(tmp_path, "s1")
 
-        self._run(tmp_path, units=[_unit()], disposition={"state": "done", "reason": "shipped"})
+        self._run(
+            tmp_path,
+            units=[_unit()],
+            disposition={"state": "done", "reason": "shipped"},
+        )
 
         assert not sdir.exists()
 
@@ -272,7 +306,9 @@ class TestExtractionRetiresCheckpoints:
         entry is over as far as the checkpoint is concerned."""
         sdir = make_checkpoint(tmp_path, "s1")
 
-        self._run(tmp_path, units=[_unit()], disposition={"state": "active", "reason": ""})
+        self._run(
+            tmp_path, units=[_unit()], disposition={"state": "active", "reason": ""}
+        )
 
         assert not sdir.exists()
 
@@ -281,16 +317,23 @@ class TestExtractionRetiresCheckpoints:
     def test_parked_retains_it(self, tmp_path):
         sdir = make_checkpoint(tmp_path, "s1")
 
-        self._run(tmp_path, units=[_unit()],
-                  disposition={"state": "parked", "reason": "back tomorrow"})
+        self._run(
+            tmp_path,
+            units=[_unit()],
+            disposition={"state": "parked", "reason": "back tomorrow"},
+        )
 
         assert (sdir / "checkpoint.md").exists()
 
     def test_a_failed_diary_write_retains_it(self, tmp_path):
         sdir = make_checkpoint(tmp_path, "s1")
 
-        self._run(tmp_path, units=[_unit()],
-                  disposition={"state": "done", "reason": "x"}, diary_ok=False)
+        self._run(
+            tmp_path,
+            units=[_unit()],
+            disposition={"state": "done", "reason": "x"},
+            diary_ok=False,
+        )
 
         assert (sdir / "checkpoint.md").exists()
 
@@ -298,7 +341,9 @@ class TestExtractionRetiresCheckpoints:
         sdir = make_checkpoint(tmp_path, "s1")
         cp.claim_writer(tmp_path, "s1")
 
-        self._run(tmp_path, units=[_unit()], disposition={"state": "done", "reason": "x"})
+        self._run(
+            tmp_path, units=[_unit()], disposition={"state": "done", "reason": "x"}
+        )
 
         assert (sdir / "checkpoint.md").exists()
 
@@ -308,7 +353,9 @@ class TestExtractionRetiresCheckpoints:
         sdir = make_checkpoint(tmp_path, "s1")
         make_pending_marker(tmp_path, "s1", project="alpha")
 
-        self._run(tmp_path, units=[_unit()], disposition={"state": "done", "reason": "x"})
+        self._run(
+            tmp_path, units=[_unit()], disposition={"state": "done", "reason": "x"}
+        )
 
         assert (sdir / "checkpoint.md").exists()
 
@@ -319,8 +366,10 @@ class TestExtractionRetiresCheckpoints:
         retry, so the next attempt still needs whatever state there is."""
         sdir = make_checkpoint(tmp_path, "s1")
 
-        assert self._run(tmp_path, units=[], disposition={"state": "active"},
-                         llm_ok=False) is False
+        assert (
+            self._run(tmp_path, units=[], disposition={"state": "active"}, llm_ok=False)
+            is False
+        )
         assert (sdir / "checkpoint.md").exists()
 
     def test_a_partial_failure_retains_it(self, tmp_path):
@@ -332,9 +381,16 @@ class TestExtractionRetiresCheckpoints:
         sdir = make_checkpoint(tmp_path, "s1")
         diary_file = tmp_path / "diary" / "2026-08-01.md"
 
-        assert self._run(tmp_path, units=[_unit()],
-                         disposition={"state": "done", "reason": "shipped"},
-                         n_chunks=3, fail_chunks={0}) is True
+        assert (
+            self._run(
+                tmp_path,
+                units=[_unit()],
+                disposition={"state": "done", "reason": "shipped"},
+                n_chunks=3,
+                fail_chunks={0},
+            )
+            is True
+        )
         assert diary_file.exists()
         assert (sdir / "checkpoint.md").exists()
 
@@ -347,9 +403,16 @@ class TestExtractionRetiresCheckpoints:
         sdir = make_checkpoint(tmp_path, "s1")
         diary_file = tmp_path / "diary" / "2026-08-01.md"
 
-        assert self._run(tmp_path, units=[_unit()],
-                         disposition={"state": "done", "reason": "shipped"},
-                         n_chunks=3, fail_chunks={2}) is True
+        assert (
+            self._run(
+                tmp_path,
+                units=[_unit()],
+                disposition={"state": "done", "reason": "shipped"},
+                n_chunks=3,
+                fail_chunks={2},
+            )
+            is True
+        )
         assert diary_file.exists()
         assert (sdir / "checkpoint.md").exists()
 
@@ -363,9 +426,15 @@ class TestExtractionRetiresCheckpoints:
         sdir = make_checkpoint(tmp_path, "s1")
         diary_file = tmp_path / "diary" / "2026-08-01.md"
 
-        assert self._run(tmp_path, units=[_unit()],
-                         disposition={"state": "active", "reason": ""},
-                         trigger="pre_compact") is True
+        assert (
+            self._run(
+                tmp_path,
+                units=[_unit()],
+                disposition={"state": "active", "reason": ""},
+                trigger="pre_compact",
+            )
+            is True
+        )
         assert diary_file.exists()
         assert (sdir / "checkpoint.md").exists()
         assert (sdir / "state.json").exists()
@@ -375,8 +444,12 @@ class TestExtractionRetiresCheckpoints:
         session is over, so the successful-extraction path retires."""
         sdir = make_checkpoint(tmp_path, "s1")
 
-        self._run(tmp_path, units=[_unit()],
-                  disposition={"state": "done", "reason": "shipped"}, trigger="")
+        self._run(
+            tmp_path,
+            units=[_unit()],
+            disposition={"state": "done", "reason": "shipped"},
+            trigger="",
+        )
 
         assert not sdir.exists()
 
@@ -393,9 +466,19 @@ class TestExtractionRetiresCheckpoints:
         make_checkpoint(tmp_path, "s1")
 
         with patch.object(cp, "retire_checkpoint", side_effect=OSError("read-only fs")):
-            assert self._run(tmp_path, units=[_unit()],
-                             disposition={"state": "done", "reason": "x"}) is True
+            assert (
+                self._run(
+                    tmp_path,
+                    units=[_unit()],
+                    disposition={"state": "done", "reason": "x"},
+                )
+                is True
+            )
 
     def test_no_checkpoint_is_not_an_error(self, tmp_path):
-        assert self._run(tmp_path, units=[_unit()],
-                         disposition={"state": "done", "reason": "x"}) is True
+        assert (
+            self._run(
+                tmp_path, units=[_unit()], disposition={"state": "done", "reason": "x"}
+            )
+            is True
+        )

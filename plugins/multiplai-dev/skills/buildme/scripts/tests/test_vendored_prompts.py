@@ -10,12 +10,11 @@ import json
 import subprocess
 
 import pytest
-
 from check_vendored_prompts import (
     FetchError,
-    build_parser,
     ManifestError,
     VendoredSource,
+    build_parser,
     check_sources,
     exit_code_for,
     fetch_blob_sha,
@@ -85,7 +84,9 @@ class TestCleanRun:
     def test_every_sha_matching_exits_zero(self, manifest, capsys):
         code = main(
             ["--manifest", str(manifest)],
-            fetch=_fetch_returning({CODE_REVIEWER: SHA_CODE_REVIEWER, HUNTER: SHA_HUNTER}),
+            fetch=_fetch_returning(
+                {CODE_REVIEWER: SHA_CODE_REVIEWER, HUNTER: SHA_HUNTER}
+            ),
         )
         assert code == 0
         out = capsys.readouterr().out
@@ -95,7 +96,9 @@ class TestCleanRun:
     def test_json_mode_reports_clean(self, manifest, capsys):
         code = main(
             ["--manifest", str(manifest), "--json"],
-            fetch=_fetch_returning({CODE_REVIEWER: SHA_CODE_REVIEWER, HUNTER: SHA_HUNTER}),
+            fetch=_fetch_returning(
+                {CODE_REVIEWER: SHA_CODE_REVIEWER, HUNTER: SHA_HUNTER}
+            ),
         )
         assert code == 0
         payload = json.loads(capsys.readouterr().out)
@@ -202,7 +205,11 @@ class TestFetchFailure:
         code = main(
             ["--manifest", str(manifest)],
             fetch=_fetch_failing(
-                {CODE_REVIEWER: FetchError(status=404, message="gh: Not Found (HTTP 404)")},
+                {
+                    CODE_REVIEWER: FetchError(
+                        status=404, message="gh: Not Found (HTTP 404)"
+                    )
+                },
                 {HUNTER: SHA_HUNTER},
             ),
         )
@@ -219,7 +226,11 @@ class TestFetchFailure:
         main(
             ["--manifest", str(manifest), "--json"],
             fetch=_fetch_failing(
-                {CODE_REVIEWER: FetchError(status=403, message="gh: Forbidden (HTTP 403)")},
+                {
+                    CODE_REVIEWER: FetchError(
+                        status=403, message="gh: Forbidden (HTTP 403)"
+                    )
+                },
                 {HUNTER: SHA_HUNTER},
             ),
         )
@@ -241,8 +252,12 @@ class TestFetchFailure:
         assert exit_code_for(results) == 1
 
 
-def _proc(returncode: int, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess:
-    return subprocess.CompletedProcess(args=["gh"], returncode=returncode, stdout=stdout, stderr=stderr)
+def _proc(
+    returncode: int, stdout: str = "", stderr: str = ""
+) -> subprocess.CompletedProcess:
+    return subprocess.CompletedProcess(
+        args=["gh"], returncode=returncode, stdout=stdout, stderr=stderr
+    )
 
 
 class TestFetchMechanics:
@@ -264,7 +279,9 @@ class TestFetchMechanics:
             seen.append(argv)
             return _proc(0, stdout=SHA_CODE_REVIEWER + "\n")
 
-        sha, attempts = fetch_blob_sha(self._source(), runner=runner, sleep=lambda _: None)
+        sha, attempts = fetch_blob_sha(
+            self._source(), runner=runner, sleep=lambda _: None
+        )
         assert sha == SHA_CODE_REVIEWER
         assert attempts == 1
         assert seen[0][0:2] == ["gh", "api"]
@@ -280,7 +297,9 @@ class TestFetchMechanics:
             return _proc(1, stderr="gh: Not Found (HTTP 404)\n")
 
         with pytest.raises(FetchError) as exc:
-            fetch_blob_sha(self._source(), runner=runner, retries=2, sleep=lambda _: None)
+            fetch_blob_sha(
+                self._source(), runner=runner, retries=2, sleep=lambda _: None
+            )
         assert exc.value.status == 404
         assert len(calls) == 1
 
@@ -292,7 +311,9 @@ class TestFetchMechanics:
             return _proc(1, stderr="gh: Forbidden (HTTP 403)\n")
 
         with pytest.raises(FetchError) as exc:
-            fetch_blob_sha(self._source(), runner=runner, retries=2, sleep=lambda _: None)
+            fetch_blob_sha(
+                self._source(), runner=runner, retries=2, sleep=lambda _: None
+            )
         assert exc.value.status == 403
         assert len(calls) == 1
 
@@ -305,7 +326,9 @@ class TestFetchMechanics:
                 return _proc(1, stderr="gh: Server Error (HTTP 503)\n")
             return _proc(0, stdout=SHA_CODE_REVIEWER)
 
-        sha, attempts = fetch_blob_sha(self._source(), runner=runner, retries=2, sleep=lambda _: None)
+        sha, attempts = fetch_blob_sha(
+            self._source(), runner=runner, retries=2, sleep=lambda _: None
+        )
         assert sha == SHA_CODE_REVIEWER
         assert attempts == 3
         assert calls[0] == calls[1] == calls[2]  # verbatim, not reshaped
@@ -318,7 +341,9 @@ class TestFetchMechanics:
             return _proc(1, stderr="dial tcp: lookup api.github.com: no such host\n")
 
         with pytest.raises(FetchError) as exc:
-            fetch_blob_sha(self._source(), runner=runner, retries=2, sleep=lambda _: None)
+            fetch_blob_sha(
+                self._source(), runner=runner, retries=2, sleep=lambda _: None
+            )
         assert exc.value.status is None
         assert len(calls) == 3
 
@@ -332,7 +357,11 @@ class TestFetchMechanics:
 
     def test_empty_sha_is_a_fetch_error_not_a_match(self):
         with pytest.raises(FetchError):
-            fetch_blob_sha(self._source(), runner=lambda argv: _proc(0, stdout="\n"), sleep=lambda _: None)
+            fetch_blob_sha(
+                self._source(),
+                runner=lambda argv: _proc(0, stdout="\n"),
+                sleep=lambda _: None,
+            )
 
 
 class TestRetriesFlag:

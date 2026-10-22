@@ -8,7 +8,6 @@ correctness must not depend on anything a prompt can influence.
 from dataclasses import dataclass
 
 import pytest
-
 from lib.memory_write_floor import (
     ADDITIVE_CHANGES,
     RESERVED_BASENAMES,

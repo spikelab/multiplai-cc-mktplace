@@ -27,7 +27,17 @@ SEVERITIES: tuple[str, ...] = ("HIGH", "MEDIUM", "LOW")
 
 # Stage names in run order. `ReviewState.stage` holds the last one completed.
 STAGES: tuple[str, ...] = (
-    "target", "explain", "paths", "find", "verify", "recheck", "merge", "repeats", "assess", "export", "render",
+    "target",
+    "explain",
+    "paths",
+    "find",
+    "verify",
+    "recheck",
+    "merge",
+    "repeats",
+    "assess",
+    "export",
+    "render",
     "done",
 )
 # Stages a checkpoint written before 0.22 can name. Both ran after verify, so
@@ -41,7 +51,7 @@ def finding_id(file: str, line_start: int, claim: str) -> str:
     Reimplemented rather than imported from the viewer skill; `test_models.py`
     pins both to the same value for a fixed input.
     """
-    return hashlib.sha1(f"{file}\0{line_start}\0{claim}".encode("utf-8")).hexdigest()[:10]
+    return hashlib.sha1(f"{file}\0{line_start}\0{claim}".encode()).hexdigest()[:10]
 
 
 def lower_severity(severity: str) -> str:
@@ -93,9 +103,11 @@ class Citation(_Model):
         return self.path.startswith(DEPS_DIR + "/")
 
     @model_validator(mode="after")
-    def _ordered(self) -> "Citation":
+    def _ordered(self) -> Citation:
         if self.line_end < self.line_start:
-            raise ValueError(f"line_end {self.line_end} is before line_start {self.line_start}")
+            raise ValueError(
+                f"line_end {self.line_end} is before line_start {self.line_start}"
+            )
         return self
 
 
@@ -135,11 +147,11 @@ class Finding(_Model):
         return locations_list(value)
 
     @model_validator(mode="after")
-    def _compute_id(self) -> "Finding":
+    def _compute_id(self) -> Finding:
         self.id = finding_id(self.file, self.line_start, self.claim)
         return self
 
-    def with_location(self, **changes) -> "Finding":
+    def with_location(self, **changes) -> Finding:
         """A copy with changed fields and the id recomputed from them."""
         return Finding.model_validate({**self.model_dump(), **changes})
 
@@ -152,11 +164,25 @@ def is_trim(finding: Finding) -> bool:
 
 NEED_CAUSES: tuple[str, ...] = ("no-access", "lookup-failed", "unreachable")
 # What a finding is about, as the verifier labels it. The page shows it as a badge.
-TOPICS: tuple[str, ...] = ("code", "tests", "docs", "config", "infra", "data", "security", "performance",
-                           "process")
+TOPICS: tuple[str, ...] = (
+    "code",
+    "tests",
+    "docs",
+    "config",
+    "infra",
+    "data",
+    "security",
+    "performance",
+    "process",
+)
 # What goes wrong in production if the change is merged as it is, as the
 # verifier rates it. `--mode critical` lists only CRITICAL_IMPACTS.
-IMPACTS: tuple[str, ...] = ("breaks-users", "breaks-business", "correctness-only", "hygiene")
+IMPACTS: tuple[str, ...] = (
+    "breaks-users",
+    "breaks-business",
+    "correctness-only",
+    "hygiene",
+)
 CRITICAL_IMPACTS: tuple[str, ...] = ("breaks-users", "breaks-business")
 MODES: tuple[str, ...] = ("full", "critical")
 # The section a finding is listed in. `trim` holds what only the trim finder
@@ -177,6 +203,7 @@ class NeedAsk(_Model):
     An unknown `cause` becomes `no-access` rather than failing the parse: a
     need is a request to a person, and losing it over a label would hide it.
     """
+
     what: str
     cause: str = "no-access"
     command: str = ""
@@ -199,6 +226,7 @@ class DepEntry(BaseModel):
     `cache` is the bare clone the gates re-read a citation of it from; `status`
     `ok` means its source is in the snapshot under `folder`.
     """
+
     name: str
     url: str
     commit: str
@@ -221,6 +249,7 @@ class Need(BaseModel):
     does not get it: a console page, a dashboard, a file outside the repo, or
     the team that owns it; "" when the agent named none.
     """
+
     what: str
     blocks: str = "review"
     cause: Literal["no-access", "lookup-failed", "unreachable"] = "no-access"
@@ -233,7 +262,9 @@ class Verdict(_Model):
     finding_id: str = ""
     status: Literal["confirmed", "refuted", "unverifiable"]
     reason: str
-    citations: list[Citation] = Field(default_factory=list)  # the verifier's own re-reads
+    citations: list[Citation] = Field(
+        default_factory=list
+    )  # the verifier's own re-reads
     # What correct behaviour looks like, in one sentence, without proposing a
     # code change. Exported on the finding as `expected_behaviour`.
     expected_behaviour: str = ""
@@ -269,11 +300,15 @@ class VerifierAnswer(Verdict):
     """
 
     @model_validator(mode="after")
-    def _impact_required(self) -> "VerifierAnswer":
+    def _impact_required(self) -> VerifierAnswer:
         if self.status != "refuted" and not self.impact:
-            raise ValueError(f"impact is required unless status is refuted: one of {', '.join(IMPACTS)}")
+            raise ValueError(
+                f"impact is required unless status is refuted: one of {', '.join(IMPACTS)}"
+            )
         if self.status != "refuted" and not self.topic:
-            raise ValueError(f"topic is required unless status is refuted: one of {', '.join(TOPICS)}")
+            raise ValueError(
+                f"topic is required unless status is refuted: one of {', '.join(TOPICS)}"
+            )
         return self
 
 
@@ -285,7 +320,9 @@ class DuplicateSet(_Model):
 class GateResult(BaseModel):
     passed: bool
     reason: str = ""
-    action: str = ""  # "keep" | "reject" | "downgrade" — what the caller does on failure
+    action: str = (
+        ""  # "keep" | "reject" | "downgrade" — what the caller does on failure
+    )
 
 
 class TargetInfo(BaseModel):
@@ -299,7 +336,9 @@ class TargetInfo(BaseModel):
     slug: str
     label: str = ""
     kind: Literal["branch", "pr", "range", "tree"] = "range"
-    ref: str = ""  # the branch name, PR number or range as given; for a tree, the path or "."
+    ref: str = (
+        ""  # the branch name, PR number or range as given; for a tree, the path or "."
+    )
     pr: int | None = None
     tickets: list[str] = Field(default_factory=list)
     deployed_in: str | None = None
@@ -335,6 +374,7 @@ class Rejected(BaseModel):
 
 class FinderResult(BaseModel):
     """One finder's normalised findings, before dedupe and the gates."""
+
     findings: list[Finding] = Field(default_factory=list)
     error: str = ""  # set when the finder failed; its findings are then empty
     needs: list[NeedAsk] = Field(default_factory=list)  # what it could not check
@@ -342,6 +382,7 @@ class FinderResult(BaseModel):
 
 class Merged(BaseModel):
     """A finding folded into another that describes the same defect."""
+
     finding: Finding
     into: str  # the id of the finding it was merged into
     reason: str
@@ -351,8 +392,11 @@ class Merged(BaseModel):
 
 class Interval(BaseModel):
     """One stretch of running time; `ended_at` is empty until it ends."""
+
     started_at: str
     ended_at: str = ""
+
+
 class AgentCheck(BaseModel):
     """What one agent call was given, what it did, and what it concluded.
 
@@ -360,9 +404,12 @@ class AgentCheck(BaseModel):
     never tool results or file contents. `findings` (finders) and `verdict`
     (verifiers) hold the same kinds of agent text `findings.json` holds.
     """
+
     stage: str  # find | verify | merge
     subject: str  # the dimension, the finding id, or the merge group_key
-    given: list[str] = Field(default_factory=list)  # labels of the prompt's input blocks
+    given: list[str] = Field(
+        default_factory=list
+    )  # labels of the prompt's input blocks
     calls: list[dict] = Field(default_factory=list)  # {tool, target, detail}
     outcome: str = ""
     turns: int = 0
@@ -388,11 +435,14 @@ class GateCheck(BaseModel):
 
 class Repeat(BaseModel):
     """A shown finding that describes the same defect as one the person rejected in an earlier round."""
+
     rejected_id: str
     reason: str
     round: str  # head_sha of the earlier round the rejected finding came from
     note: str = ""  # the person's note on that rejection
-    by: Literal["id", "agent"] = "agent"  # matched on the same id in Python, or by the repeats agent
+    by: Literal["id", "agent"] = (
+        "agent"  # matched on the same id in Python, or by the repeats agent
+    )
 
 
 # `important` is not the assess agent's: the verify stage gives it to a
@@ -405,11 +455,14 @@ class Assessment(BaseModel):
 
     Never changes a verdict or a severity, and never removes a finding.
     """
+
     label: AssessLabel
     reason: str = ""
     earlier_id: str = ""  # the earlier round's finding it repeats or is still open from
     earlier_round: str = ""  # head_sha of that round
-    earlier_decision: str = ""  # the person's decision on it: accept, reject, defer, or "" for none
+    earlier_decision: str = (
+        ""  # the person's decision on it: accept, reject, defer, or "" for none
+    )
     earlier_note: str = ""
 
 
@@ -417,8 +470,15 @@ class Assessment(BaseModel):
 # assess stage's reconcile uses to pick the final status. buildme's
 # `PRIOR_STATUSES` holds the same words best first; copied, not imported
 # (buildme does not import this package), and `test_recheck.py` pins the two.
-EARLIER_STATUSES: tuple[str, ...] = ("still_present", "partially_resolved", "cannot_verify", "resolved")
-EarlierStatusWord = Literal["still_present", "partially_resolved", "cannot_verify", "resolved"]
+EARLIER_STATUSES: tuple[str, ...] = (
+    "still_present",
+    "partially_resolved",
+    "cannot_verify",
+    "resolved",
+)
+EarlierStatusWord = Literal[
+    "still_present", "partially_resolved", "cannot_verify", "resolved"
+]
 
 
 class EarlierStatus(BaseModel):
@@ -429,6 +489,7 @@ class EarlierStatus(BaseModel):
     the finding was listed in, the commit its citations are at; `citations` are at
     this round's head. `error` is set when every recheck try failed.
     """
+
     earlier_id: str
     lineage: str
     round: str
@@ -440,6 +501,7 @@ class EarlierStatus(BaseModel):
 
 class ExplainedFacts(BaseModel):
     """The explain stage's checked facts (`code_facts`), as `facts.json` holds them."""
+
     facts: list[Fact] = Field(default_factory=list)
     files: list[FilePurpose] = Field(default_factory=list)
     interfaces: list[Fact] = Field(default_factory=list)
@@ -457,28 +519,41 @@ class Piece(BaseModel):
     finder's diff is rebuilt from the stored `diff.patch` when its prompt is
     built (`chunks.piece_diff_text`), which keeps the state small.
     """
+
     id: int  # 1-based, contiguous
-    group: str  # the package or skill directory, "" for the root, "meta" for a meta piece
+    group: (
+        str  # the package or skill directory, "" for the root, "meta" for a meta piece
+    )
     meta: bool = False
     files: list[str] = Field(default_factory=list)
-    omitted: list[str] = Field(default_factory=list)  # lockfiles, whose text no piece holds (meta only)
-    binary: list[str] = Field(default_factory=list)  # files in `files` whose change is binary
+    omitted: list[str] = Field(
+        default_factory=list
+    )  # lockfiles, whose text no piece holds (meta only)
+    binary: list[str] = Field(
+        default_factory=list
+    )  # files in `files` whose change is binary
     chars: int = 0  # characters of diff, headers included; binary files count 0
 
 
 class ConvertedItem(BaseModel):
     """One item of a converted report, as `checks.json` records it: its kind is recorded nowhere else."""
+
     kind: Literal["defect", "advice"]
     severity: Severity
-    finding_id: str | None = None  # None when the item named no location a finding could stand on
+    finding_id: str | None = (
+        None  # None when the item named no location a finding could stand on
+    )
 
 
 class FinderReport(BaseModel):
     """A piece or path finder's plain-text report, stored as soon as it returns, and what convert made of it."""
+
     key: str  # "piece@3" | "path@p7"
     text: str
     converted: bool = False
-    convert_error: str | None = None  # the last convert call failed; `resume` asks it again
+    convert_error: str | None = (
+        None  # the last convert call failed; `resume` asks it again
+    )
     items: list[ConvertedItem] = Field(default_factory=list)
     findings: list[Finding] = Field(default_factory=list)
 
@@ -489,6 +564,7 @@ class CoverageRecord(BaseModel):
     `error` records also go to `state.errors`; `info` records (normal scoping, a
     doc left out for the budget) only to `checks.json` and the report's gap line.
     """
+
     stage: Literal["paths", "find", "conventions"]
     subject: str  # "p3", "review_cmd at a.py:2", "piece@2", "docs/gone.md"
     level: Literal["info", "error"]
@@ -548,7 +624,7 @@ class ReviewState(BaseModel):
     # agent's answer, stored as it arrives (empty when the call failed), so a
     # resume does not ask twice.
     assessments: dict[str, Assessment] = Field(default_factory=dict)
-    assess_answer: "AssessOutput | None" = None
+    assess_answer: AssessOutput | None = None
     # The recheck stage's status per open earlier finding, by earlier id, stored as
     # each answer arrives (the first one per id stands), so a resume asks only for
     # the rest. `earlier_status` is the final list the assess stage's reconcile
@@ -556,8 +632,12 @@ class ReviewState(BaseModel):
     recheck_answers: dict[str, EarlierStatus] = Field(default_factory=dict)
     earlier_status: list[EarlierStatus] = Field(default_factory=list)
     lineage: dict[str, str] = Field(default_factory=dict)
-    original_severity: dict[str, str] = Field(default_factory=dict)  # lowered findings only
-    errors: list[str] = Field(default_factory=list)  # agent failures, shown in the review header
+    original_severity: dict[str, str] = Field(
+        default_factory=dict
+    )  # lowered findings only
+    errors: list[str] = Field(
+        default_factory=list
+    )  # agent failures, shown in the review header
     # Information the review could not get, each with a command for a person.
     needs: list[Need] = Field(default_factory=list)
     budget: dict = Field(default_factory=dict)
@@ -617,6 +697,7 @@ class ConvertItem(_Model):
 
 class ConvertOutput(_Model):
     """The convert call's answer: one item per defect or advice in the report."""
+
     items: list[ConvertItem] = Field(default_factory=list)
 
 
@@ -641,6 +722,7 @@ def worst_status(*statuses: str) -> str:
 
 class RecheckOutput(_Model):
     """The recheck agent's answer about one earlier finding."""
+
     status: EarlierStatusWord
     reason: str = ""
     citations: list[Citation] = Field(default_factory=list)

@@ -10,17 +10,17 @@ ran and a full auto-apply except the `has_routing_section` refusal.
 import asyncio
 import importlib.util
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
 from conftest import PLUGIN_ROOT, SCRIPTS_DIR
 
 
 def _load_dream_module(alias: str):
     from multiplai_core.paths import _reset_cache
+
     _reset_cache()
     spec = importlib.util.spec_from_file_location(alias, SCRIPTS_DIR / "dream.py")
     mod = importlib.util.module_from_spec(spec)
@@ -70,7 +70,12 @@ class TestAdditiveVerification:
             "- Ruff runs in pre-commit.",
             "- Ruff runs in pre-commit.\n- Pytest runs from the member directory.",
         )
-        assert mod._is_additive_result(ORIGINAL, new, ["Pytest runs from the member directory."]) is None
+        assert (
+            mod._is_additive_result(
+                ORIGINAL, new, ["Pytest runs from the member directory."]
+            )
+            is None
+        )
 
     def test_a_dropped_line_is_refused(self, dream):
         mod, _ = dream
@@ -92,7 +97,10 @@ class TestAdditiveVerification:
         """The case `_is_safe_memory_update` waves through: plausible prose,
         similar length, nothing of the original left."""
         mod, _ = dream
-        new = "# Python\n\n## Python Tooling\n\n- Some entirely different content here.\n" * 2
+        new = (
+            "# Python\n\n## Python Tooling\n\n- Some entirely different content here.\n"
+            * 2
+        )
         assert mod._is_additive_result(ORIGINAL, new, ["something"]) is not None
 
     def test_invented_bulk_is_refused_even_with_every_line_intact(self, dream):
@@ -136,8 +144,18 @@ class TestScopedCommit:
         )
 
         changed = subprocess.run(
-            ["git", "-C", str(memory_dir), "show", "--name-only", "--format=%s", "HEAD"],
-            capture_output=True, text=True, check=True,
+            [
+                "git",
+                "-C",
+                str(memory_dir),
+                "show",
+                "--name-only",
+                "--format=%s",
+                "HEAD",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
         ).stdout
         assert "dream: triage auto-apply" in changed
         assert "python.md" in changed
@@ -272,9 +290,15 @@ class TestDegradation:
         (memory_dir / "dolcebot.md").write_text(MEMORY)
         proposal = _proposal_file(memory_dir)
 
-        with patch.object(mod, "create_client",
-                          new=AsyncMock(return_value=_client_returning(
-                              "Sure! Here is my analysis of these items:"))):
+        with patch.object(
+            mod,
+            "create_client",
+            new=AsyncMock(
+                return_value=_client_returning(
+                    "Sure! Here is my analysis of these items:"
+                )
+            ),
+        ):
             asyncio.run(mod.dream_triage(str(proposal), dry_run=False))
 
         assert (memory_dir / "dolcebot.md").read_text() == MEMORY
@@ -287,8 +311,9 @@ class TestDegradation:
         (memory_dir / "dolcebot.md").write_text(MEMORY)
         proposal = _proposal_file(memory_dir)
 
-        with patch.object(mod, "create_client",
-                          new=AsyncMock(side_effect=RuntimeError("no SDK"))):
+        with patch.object(
+            mod, "create_client", new=AsyncMock(side_effect=RuntimeError("no SDK"))
+        ):
             rc = asyncio.run(mod.dream_triage(str(proposal), dry_run=False))
 
         assert rc == 0
@@ -321,13 +346,16 @@ class TestOnlyLowerEndToEnd:
 
         client = _client_returning(GOOD_VERDICTS)
         applied_text = MEMORY.replace(
-            "- a\n", "- a\n- VM logs are specified and unimplemented.\n")
+            "- a\n", "- a\n- VM logs are specified and unimplemented.\n"
+        )
 
         async def _apply(_client, _path, _slice):
             return applied_text
 
-        with patch.object(mod, "create_client", new=AsyncMock(return_value=client)), \
-                patch.object(mod, "_apply_proposal_to_file", new=_apply):
+        with (
+            patch.object(mod, "create_client", new=AsyncMock(return_value=client)),
+            patch.object(mod, "_apply_proposal_to_file", new=_apply),
+        ):
             asyncio.run(mod.dream_triage(str(proposal), dry_run=False))
 
         written = (memory_dir / "dolcebot.md").read_text()
@@ -357,7 +385,9 @@ class TestVerdictCache:
 
         assert first == second == 0
         assert calls_after_first >= 1
-        assert len(client.calls) == calls_after_first, "the second run must not re-judge"
+        assert len(client.calls) == calls_after_first, (
+            "the second run must not re-judge"
+        )
 
     def test_a_dry_run_leaves_no_cache_behind(self, dream):
         """Requirement: a preview does not change the next real run.
@@ -368,9 +398,8 @@ class TestVerdictCache:
         second run's call count, because two runs in one process share the dream
         run lock and the second would be skipped for an unrelated reason.
         """
-        from multiplai_core.paths import get_paths
-
         from lib import memory_judge
+        from multiplai_core.paths import get_paths
 
         mod, memory_dir = dream
         (memory_dir / "dolcebot.md").write_text(MEMORY)
@@ -389,9 +418,8 @@ class TestVerdictCache:
 
     def test_a_real_run_does_write_the_cache(self, dream):
         """The other half: caching is the point, on a run that is not a preview."""
-        from multiplai_core.paths import get_paths
-
         from lib import memory_judge
+        from multiplai_core.paths import get_paths
 
         mod, memory_dir = dream
         (memory_dir / "dolcebot.md").write_text(MEMORY)
@@ -406,7 +434,7 @@ class TestVerdictCache:
 
     def test_a_dry_run_writes_nothing_at_all(self, dream):
         mod, memory_dir = dream
-        before = (memory_dir / "dolcebot.md")
+        before = memory_dir / "dolcebot.md"
         before.write_text(MEMORY)
         proposal = _proposal_file(memory_dir)
         snapshot = before.read_text()
@@ -430,11 +458,13 @@ class TestRejectionLog:
             "dolcebot.md#2: provenance=CORRECTION kind=RULE citation=none "
             "redundant=no verdict=review reason=a standing rule"
         )
-        with patch.object(mod, "create_client",
-                          new=AsyncMock(return_value=_client_returning(dropped))):
+        with patch.object(
+            mod, "create_client", new=AsyncMock(return_value=_client_returning(dropped))
+        ):
             asyncio.run(mod.dream_triage(str(proposal), dry_run=False))
 
         from lib import rejections
+
         records = rejections.read(rejections.default_path(mod.get_paths().data_dir()))
         assert [r["number"] for r in records] == [1]
         assert records[0]["reason"] == "redundant"
@@ -451,13 +481,16 @@ class TestRejectionLog:
             "dolcebot.md#1: provenance=CORRECTION kind=FACT citation=supported "
             "redundant=yes verdict=drop reason=dupe"
         )
-        with patch.object(mod, "create_client",
-                          new=AsyncMock(return_value=_client_returning(dropped))):
+        with patch.object(
+            mod, "create_client", new=AsyncMock(return_value=_client_returning(dropped))
+        ):
             asyncio.run(mod.dream_triage(str(proposal), dry_run=True))
 
         from lib import rejections
-        assert rejections.read(
-            rejections.default_path(mod.get_paths().data_dir())) == []
+
+        assert (
+            rejections.read(rejections.default_path(mod.get_paths().data_dir())) == []
+        )
 
 
 STAMPED_MEMORY = "# DolceBot\n\n**Last Updated:** 2020-01-01\n\n## DolceEngine\n\n- a\n"
@@ -475,7 +508,7 @@ class TestLastUpdatedStamp:
         assert "Last Updated" in mod._APPLIER_SYSTEM  # told to reproduce it verbatim
 
     def test_the_verbatim_rule_does_not_forbid_update_and_replace(self, dream):
-        """"Reproduce every existing line verbatim" contradicts "update /
+        """ "Reproduce every existing line verbatim" contradicts "update /
         replace at the named sections" in the same paragraph, and `--auto` has
         no additive check to catch the applier resolving that by appending —
         which leaves the stale line beside the new one."""
@@ -489,8 +522,10 @@ class TestLastUpdatedStamp:
         occurrence is prose or a fenced sample — `multiplai.md` documents this
         very marker — and the regex has no fence tracking."""
         mod, _ = dream
-        text = ("# Memory\n\n**Last Updated:** 2020-01-01\n\n## How it works\n\n"
-                "```\n**Last Updated:** 2019-05-05\n```\n")
+        text = (
+            "# Memory\n\n**Last Updated:** 2020-01-01\n\n## How it works\n\n"
+            "```\n**Last Updated:** 2019-05-05\n```\n"
+        )
         out = mod._refresh_last_updated(text, "2026-08-12")
         assert "**Last Updated:** 2026-08-12" in out
         assert "2019-05-05" in out, "a documented example was restamped"
@@ -507,7 +542,8 @@ class TestLastUpdatedStamp:
     def test_trailing_text_on_the_stamp_line_survives(self, dream):
         mod, _ = dream
         out = mod._refresh_last_updated(
-            "**Last Updated:** 2020-01-01 (by hand)\n", "2026-08-12")
+            "**Last Updated:** 2020-01-01 (by hand)\n", "2026-08-12"
+        )
         assert out == "**Last Updated:** 2026-08-12 (by hand)\n"
 
     def test_a_file_without_a_stamp_is_untouched(self, dream):
@@ -523,7 +559,8 @@ class TestLastUpdatedStamp:
         proposal = _proposal_file(memory_dir)
 
         applied_text = STAMPED_MEMORY.replace(
-            "- a\n", "- a\n- VM logs are specified and unimplemented.\n")
+            "- a\n", "- a\n- VM logs are specified and unimplemented.\n"
+        )
 
         async def _apply(_client, _path, _slice):
             return applied_text
@@ -531,17 +568,24 @@ class TestLastUpdatedStamp:
         # Both sides of the UTC-midnight boundary. dream_triage stamps with its
         # own `datetime.now(timezone.utc)`, so a date read *after* the run can be
         # the day after the one written, and the run would fail for no reason.
-        before = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        with patch.object(mod, "create_client",
-                          new=AsyncMock(return_value=_client_returning(GOOD_VERDICTS))), \
-                patch.object(mod, "_apply_proposal_to_file", new=_apply):
+        before = datetime.now(UTC).strftime("%Y-%m-%d")
+        with (
+            patch.object(
+                mod,
+                "create_client",
+                new=AsyncMock(return_value=_client_returning(GOOD_VERDICTS)),
+            ),
+            patch.object(mod, "_apply_proposal_to_file", new=_apply),
+        ):
             asyncio.run(mod.dream_triage(str(proposal), dry_run=False))
-        after = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        after = datetime.now(UTC).strftime("%Y-%m-%d")
 
         written = (memory_dir / "dolcebot.md").read_text()
         assert "VM logs are specified" in written
-        assert (f"**Last Updated:** {before}" in written
-                or f"**Last Updated:** {after}" in written)
+        assert (
+            f"**Last Updated:** {before}" in written
+            or f"**Last Updated:** {after}" in written
+        )
         assert "2020-01-01" not in written
 
     def test_an_applier_that_edits_the_date_itself_is_still_refused(self, dream):
@@ -558,9 +602,14 @@ class TestLastUpdatedStamp:
         async def _apply(_client, _path, _slice):
             return disobedient
 
-        with patch.object(mod, "create_client",
-                          new=AsyncMock(return_value=_client_returning(GOOD_VERDICTS))), \
-                patch.object(mod, "_apply_proposal_to_file", new=_apply):
+        with (
+            patch.object(
+                mod,
+                "create_client",
+                new=AsyncMock(return_value=_client_returning(GOOD_VERDICTS)),
+            ),
+            patch.object(mod, "_apply_proposal_to_file", new=_apply),
+        ):
             asyncio.run(mod.dream_triage(str(proposal), dry_run=False))
 
         assert (memory_dir / "dolcebot.md").read_text() == STAMPED_MEMORY

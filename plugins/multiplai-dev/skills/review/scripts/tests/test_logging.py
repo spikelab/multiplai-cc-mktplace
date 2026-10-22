@@ -23,21 +23,44 @@ def _read_logs(logs, stem, ext):
     return "".join(f.read_text() for f in files)
 
 
-def test_review_logs_events_without_finding_text(fixture_repo, tmp_path, monkeypatch, capsys):
+def test_review_logs_events_without_finding_text(
+    fixture_repo, tmp_path, monkeypatch, capsys
+):
     from review_pipeline import sdk
 
     repo, base, head = fixture_repo
     monkeypatch.setattr(sdk, "agent_call_structured", FakeAgents())
     out = tmp_path / "out"
-    assert main(["--session-id", "sess-logging", "--out", str(out), "review", "--repo", str(repo),
-                 "--range", f"{base}..{head}", "--trust-repo"]) == 0
+    assert (
+        main(
+            [
+                "--session-id",
+                "sess-logging",
+                "--out",
+                str(out),
+                "review",
+                "--repo",
+                str(repo),
+                "--range",
+                f"{base}..{head}",
+                "--trust-repo",
+            ]
+        )
+        == 0
+    )
 
     logs = _get_logs_dir()
     assert _read_logs(logs, "review-pipeline", "log")
 
     slug = f"example-booking-engine--{base}..{head}"
-    records = [json.loads(line) for line in _read_logs(logs, "activity", "jsonl").splitlines() if line.strip()]
-    ours = [r for r in records if r.get("component") == "review" and r.get("target") == slug]
+    records = [
+        json.loads(line)
+        for line in _read_logs(logs, "activity", "jsonl").splitlines()
+        if line.strip()
+    ]
+    ours = [
+        r for r in records if r.get("component") == "review" and r.get("target") == slug
+    ]
     events = {r["event"] for r in ours}
     assert {"start", "stage", "done"} <= events
     done = next(r for r in ours if r["event"] == "done")

@@ -16,17 +16,17 @@ import json
 import os
 import re
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from multiplai_core.paths import get_paths
-from multiplai_core.model_client import create_client
-from multiplai_core.log_utils import setup_logging
-from lib.project_identity import load_project_map, resolve_project
 from lib.job_effort import NOW_EFFORT_OPTION, effort_kwargs
+from lib.project_identity import load_project_map, resolve_project
 from lib.thinking import NOW_THINKING_OPTION, thinking_kwargs
+from multiplai_core.log_utils import setup_logging
+from multiplai_core.model_client import create_client
+from multiplai_core.paths import get_paths
 
 logger = setup_logging("synthesize_now", packages=("lib", "generators"))
 
@@ -78,10 +78,11 @@ def _iter_diary_session_blocks(filepath: Path):
         except (ValueError, TypeError):
             try:
                 timestamp = datetime.fromtimestamp(
-                    filepath.stat().st_mtime, tz=timezone.utc,
+                    filepath.stat().st_mtime,
+                    tz=UTC,
                 )
             except OSError:
-                timestamp = datetime.now(timezone.utc)
+                timestamp = datetime.now(UTC)
 
         yield {
             "working_dir": m.group("cwd").strip(),
@@ -111,14 +112,14 @@ def _scan_diary(
     if config is None:
         config = load_project_map()
 
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
+    cutoff = datetime.now(UTC) - timedelta(hours=lookback_hours)
     entries_by_project: dict[str, list[dict]] = {}
 
     for md_file in sorted(diary_dir.glob("*.md")):
         for entry in _iter_diary_session_blocks(md_file):
             entry_time = entry["timestamp"]
             if entry_time.tzinfo is None:
-                entry_time = entry_time.replace(tzinfo=timezone.utc)
+                entry_time = entry_time.replace(tzinfo=UTC)
             if entry_time < cutoff:
                 continue
 
@@ -158,8 +159,9 @@ def _extractive_summary(project: str, snippets: list[str]) -> str:
     return "\n".join(lines[:MAX_SUMMARY_LINES])
 
 
-async def _summarize_project(client, project: str, entries: list[dict],
-                             model: str | None = None) -> str:
+async def _summarize_project(
+    client, project: str, entries: list[dict], model: str | None = None
+) -> str:
     """Use the model client to produce a 3–5 line project status summary.
 
     *model* lets an unattended caller (the maintainer) pin a cheap tier. When
@@ -190,9 +192,9 @@ async def _summarize_project(client, project: str, entries: list[dict],
             messages=[{"role": "user", "content": prompt}],
             **kwargs,
         )
-        lines = [
-            line.strip() for line in response.content.split("\n") if line.strip()
-        ][:MAX_SUMMARY_LINES]
+        lines = [line.strip() for line in response.content.split("\n") if line.strip()][
+            :MAX_SUMMARY_LINES
+        ]
         if lines:
             return "\n".join(lines)
     except Exception:
@@ -217,7 +219,9 @@ def _writer_hostname(session_id: str = "") -> str:
         if session_id and "/" not in session_id and session_id not in (".", ".."):
             data_dir = get_paths().plugin_data()
             entry = json.loads(
-                (registry_dir(data_dir) / f"{session_id}.json").read_text(encoding="utf-8")
+                (registry_dir(data_dir) / f"{session_id}.json").read_text(
+                    encoding="utf-8"
+                )
             )
             recorded = str(entry.get("hostname") or "").strip()
             if recorded:
@@ -250,7 +254,7 @@ def _write_summary(
     windows; it makes the contamination visible, which is what was missing.
     """
     now_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     header_lines = [f"Generated: {timestamp}"]
     if session_id:
@@ -277,9 +281,9 @@ def _write_summary(
     os.replace(str(tmp), str(target))
 
 
-async def synthesize(project_filter: str | None = None,
-                     model: str | None = None,
-                     session_id: str = "") -> int:
+async def synthesize(
+    project_filter: str | None = None, model: str | None = None, session_id: str = ""
+) -> int:
     """Scan diary, group by project, write per-project status summaries.
 
     When *project_filter* is given, only that project is (re)summarized — used
@@ -314,9 +318,7 @@ async def synthesize(project_filter: str | None = None,
             else:
                 snippets = _extract_body_snippets(entries, project)
                 summary = _extractive_summary(project, snippets)
-            _write_summary(
-                now_dir, project, summary, entries, project_path, session_id
-            )
+            _write_summary(now_dir, project, summary, entries, project_path, session_id)
         except Exception:
             logger.exception("Failed to summarize project %s", project)
             continue

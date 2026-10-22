@@ -55,10 +55,19 @@ class DiffSize:
         return f"DIFF:{self.files} files, +{self.added} -{self.removed}"
 
 
-def _run(argv: list[str], cwd: Path | str | None = None, timeout: int = _GIT_TIMEOUT) -> Result:
+def _run(
+    argv: list[str], cwd: Path | str | None = None, timeout: int = _GIT_TIMEOUT
+) -> Result:
     try:
-        proc = subprocess.run(argv, cwd=str(cwd) if cwd else None, capture_output=True, text=True,
-                              timeout=timeout, shell=False, check=False)
+        proc = subprocess.run(
+            argv,
+            cwd=str(cwd) if cwd else None,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            shell=False,
+            check=False,
+        )
         return Result(argv, proc.returncode, proc.stdout or "", proc.stderr or "")
     except FileNotFoundError as e:
         return Result(argv, 127, "", str(e))
@@ -66,7 +75,9 @@ def _run(argv: list[str], cwd: Path | str | None = None, timeout: int = _GIT_TIM
         return Result(argv, 124, "", f"timed out after {timeout}s")
 
 
-def _run_gh(argv: list[str], cwd: Path | str | None = None, timeout: int = _GH_TIMEOUT) -> Result:
+def _run_gh(
+    argv: list[str], cwd: Path | str | None = None, timeout: int = _GH_TIMEOUT
+) -> Result:
     """Separate seam for `gh` so tests can stub it without stubbing git."""
     return _run(argv, cwd=cwd, timeout=timeout)
 
@@ -85,7 +96,9 @@ def current_branch(repo: Path) -> str:
 
 
 def _ref_exists(repo: Path, ref: str) -> bool:
-    return _run(["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], cwd=repo).ok
+    return _run(
+        ["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], cwd=repo
+    ).ok
 
 
 def local_branch_exists(repo: Path, name: str) -> bool:
@@ -101,7 +114,9 @@ def valid_branch(repo: Path, name: str) -> bool:
     return res.ok and res.stdout.strip() == name
 
 
-_REMOTE_RE = re.compile(r"(?:https://[^/\s]+/|git@[^:\s]+:)([^/\s]+)/([^/\s]+?)(?:\.git)?/?")
+_REMOTE_RE = re.compile(
+    r"(?:https://[^/\s]+/|git@[^:\s]+:)([^/\s]+)/([^/\s]+?)(?:\.git)?/?"
+)
 _URL_REPO_RE = re.compile(r"https://[^/\s]+/([^/\s]+)/([^/\s]+)/pull/\d+/?")
 
 
@@ -164,12 +179,17 @@ def fetch_pr_head(repo: Path, number: str, oid: str) -> tuple[bool, str]:
     (False, why) when it still is not there."""
     if _ref_exists(repo, oid):
         return True, ""
-    res = _run(["git", "fetch", "--quiet", "--no-tags", "origin", f"refs/pull/{number}/head"], cwd=repo)
+    res = _run(
+        ["git", "fetch", "--quiet", "--no-tags", "origin", f"refs/pull/{number}/head"],
+        cwd=repo,
+    )
     if not res.ok:
         return False, f"`{res.command}` failed: {res.why()}"
     if not _ref_exists(repo, oid):
-        return False, (f"origin's refs/pull/{number}/head is not {oid[:12]}: "
-                       "the PR was pushed to since `gh pr view` read it")
+        return False, (
+            f"origin's refs/pull/{number}/head is not {oid[:12]}: "
+            "the PR was pushed to since `gh pr view` read it"
+        )
     return True, ""
 
 
@@ -188,7 +208,10 @@ def shortstat(repo: Path, base: str, head: str) -> tuple[DiffSize | None, str]:
     res = _run(["git", "diff", "--shortstat", f"{base_ref}...{head_ref}"], cwd=repo)
     if not res.ok:
         return None, f"`{res.command}` failed: {res.why()}"
-    nums = {k: int(m.group(1)) if (m := rx.search(res.stdout)) else 0 for k, rx in _SHORTSTAT_RE.items()}
+    nums = {
+        k: int(m.group(1)) if (m := rx.search(res.stdout)) else 0
+        for k, rx in _SHORTSTAT_RE.items()
+    }
     return DiffSize(**nums), ""
 
 
@@ -207,15 +230,34 @@ def changed_files(repo: Path, base: str, head: str, limit: int = 300) -> list[st
 
 
 def gh_default_branch(repo: Path) -> str | None:
-    res = _run_gh(["gh", "repo", "view", "--json", "defaultBranchRef", "--jq", ".defaultBranchRef.name"],
-                  cwd=repo)
+    res = _run_gh(
+        [
+            "gh",
+            "repo",
+            "view",
+            "--json",
+            "defaultBranchRef",
+            "--jq",
+            ".defaultBranchRef.name",
+        ],
+        cwd=repo,
+    )
     name = res.stdout.strip() if res.ok else ""
     return name or None
 
 
 def view_pr(repo: Path, pr: str) -> tuple[dict | None, Result]:
-    res = _run_gh(["gh", "pr", "view", pr, "--json",
-                   "body,author,number,url,baseRefName,headRefName,headRefOid,isCrossRepository"], cwd=repo)
+    res = _run_gh(
+        [
+            "gh",
+            "pr",
+            "view",
+            pr,
+            "--json",
+            "body,author,number,url,baseRefName,headRefName,headRefOid,isCrossRepository",
+        ],
+        cwd=repo,
+    )
     if not res.ok:
         return None, res
     try:
@@ -226,7 +268,18 @@ def view_pr(repo: Path, pr: str) -> tuple[dict | None, Result]:
 
 
 def viewer_permission(repo: Path) -> str:
-    res = _run_gh(["gh", "repo", "view", "--json", "viewerPermission", "--jq", ".viewerPermission"], cwd=repo)
+    res = _run_gh(
+        [
+            "gh",
+            "repo",
+            "view",
+            "--json",
+            "viewerPermission",
+            "--jq",
+            ".viewerPermission",
+        ],
+        cwd=repo,
+    )
     return res.stdout.strip() if res.ok else ""
 
 
@@ -248,8 +301,20 @@ def push(repo: Path, branch: str) -> Result:
     return _run(push_argv(branch), cwd=repo, timeout=_PUSH_TIMEOUT)
 
 
-def create_argv(title: str, body_file: Path, head: str, base: str | None, draft: bool) -> list[str]:
-    argv = ["gh", "pr", "create", "--title", title, "--body-file", str(body_file), "--head", head]
+def create_argv(
+    title: str, body_file: Path, head: str, base: str | None, draft: bool
+) -> list[str]:
+    argv = [
+        "gh",
+        "pr",
+        "create",
+        "--title",
+        title,
+        "--body-file",
+        str(body_file),
+        "--head",
+        head,
+    ]
     if base:
         argv += ["--base", base]
     if draft:

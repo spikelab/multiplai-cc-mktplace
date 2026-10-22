@@ -45,17 +45,30 @@ async def synthesize(config: ResearchConfig, state: ResearchState) -> str:
 
     prompt_bytes = len(single_pass_prompt.encode("utf-8"))
     if prompt_bytes <= MAX_PROMPT_BYTES:
-        log.info("SYNTHESIZE: single-pass (%d bytes, under %d limit)", prompt_bytes, MAX_PROMPT_BYTES)
-        report = await llm_call(single_pass_prompt, model=config.models.get("synthesize"), effort=config.efforts.get("synthesize"), label="synthesize")
+        log.info(
+            "SYNTHESIZE: single-pass (%d bytes, under %d limit)",
+            prompt_bytes,
+            MAX_PROMPT_BYTES,
+        )
+        report = await llm_call(
+            single_pass_prompt,
+            model=config.models.get("synthesize"),
+            effort=config.efforts.get("synthesize"),
+            label="synthesize",
+        )
         log.info("SYNTHESIZE: report generated (%d chars)", len(report))
         return _append_failed_sources(report, state)
 
     # Map-reduce: split findings into chunks, synthesize each, then merge
     log.info(
         "SYNTHESIZE: prompt too large (%d bytes > %d), using map-reduce with %d findings",
-        prompt_bytes, MAX_PROMPT_BYTES, len(state.findings),
+        prompt_bytes,
+        MAX_PROMPT_BYTES,
+        len(state.findings),
     )
-    report = await _map_reduce_synthesize(config, state, sources_text, reassessment_text)
+    report = await _map_reduce_synthesize(
+        config, state, sources_text, reassessment_text
+    )
     return _append_failed_sources(report, state)
 
 
@@ -69,7 +82,9 @@ async def _map_reduce_synthesize(
     # Budget per chunk: leave room for MAP_PROMPT template overhead
     findings_budget = MAX_PROMPT_BYTES - TEMPLATE_OVERHEAD_BYTES
     chunks = _chunk_findings(state.findings, findings_budget)
-    log.info("SYNTHESIZE MAP: %d chunks from %d findings", len(chunks), len(state.findings))
+    log.info(
+        "SYNTHESIZE MAP: %d chunks from %d findings", len(chunks), len(state.findings)
+    )
 
     # MAP phase: produce intermediate syntheses (parallel)
     map_tasks = []
@@ -89,7 +104,14 @@ async def _map_reduce_synthesize(
             findings=chunk_findings_text,
             sources=chunk_sources_text,
         )
-        map_tasks.append(llm_call(prompt, model=config.models.get("synthesize"), effort=config.efforts.get("synthesize"), label=f"synthesize:map{i}"))
+        map_tasks.append(
+            llm_call(
+                prompt,
+                model=config.models.get("synthesize"),
+                effort=config.efforts.get("synthesize"),
+                label=f"synthesize:map{i}",
+            )
+        )
 
     intermediate_results = await asyncio.gather(*map_tasks, return_exceptions=True)
 
@@ -109,7 +131,7 @@ async def _map_reduce_synthesize(
     # Get the output format section from the standard synthesis template
     output_format = _get_output_format(config)
     all_intermediates = "\n\n---\n\n".join(
-        f"### Chunk {i+1}/{len(intermediates)}\n\n{text}"
+        f"### Chunk {i + 1}/{len(intermediates)}\n\n{text}"
         for i, text in enumerate(intermediates)
     )
 
@@ -128,7 +150,11 @@ async def _map_reduce_synthesize(
     )
 
     reduce_bytes = len(reduce_prompt.encode("utf-8"))
-    log.info("SYNTHESIZE REDUCE: prompt %d bytes, %d intermediates", reduce_bytes, len(intermediates))
+    log.info(
+        "SYNTHESIZE REDUCE: prompt %d bytes, %d intermediates",
+        reduce_bytes,
+        len(intermediates),
+    )
 
     # If reduce prompt is also too large, recursively chunk the intermediates
     if reduce_bytes > MAX_PROMPT_BYTES:
@@ -138,11 +164,15 @@ async def _map_reduce_synthesize(
         )
         # Keep trimming the longest intermediate until we fit
         while reduce_bytes > MAX_PROMPT_BYTES and intermediates:
-            longest_idx = max(range(len(intermediates)), key=lambda i: len(intermediates[i]))
+            longest_idx = max(
+                range(len(intermediates)), key=lambda i: len(intermediates[i])
+            )
             # Trim to ~60% of current length
-            intermediates[longest_idx] = intermediates[longest_idx][: len(intermediates[longest_idx]) * 3 // 5]
+            intermediates[longest_idx] = intermediates[longest_idx][
+                : len(intermediates[longest_idx]) * 3 // 5
+            ]
             all_intermediates = "\n\n---\n\n".join(
-                f"### Chunk {i+1}/{len(intermediates)}\n\n{text}"
+                f"### Chunk {i + 1}/{len(intermediates)}\n\n{text}"
                 for i, text in enumerate(intermediates)
             )
             reduce_prompt = REDUCE_PROMPT.format(
@@ -160,7 +190,12 @@ async def _map_reduce_synthesize(
             )
             reduce_bytes = len(reduce_prompt.encode("utf-8"))
 
-    report = await llm_call(reduce_prompt, model=config.models.get("synthesize"), effort=config.efforts.get("synthesize"), label="synthesize:reduce")
+    report = await llm_call(
+        reduce_prompt,
+        model=config.models.get("synthesize"),
+        effort=config.efforts.get("synthesize"),
+        label="synthesize:reduce",
+    )
     log.info("SYNTHESIZE REDUCE: report generated (%d chars)", len(report))
     return report
 
@@ -168,7 +203,9 @@ async def _map_reduce_synthesize(
 def _chunk_findings(findings: list[Finding], budget_bytes: int) -> list[list[Finding]]:
     """Split findings into chunks that each fit within budget_bytes when formatted."""
     _confidence_rank = {"high": 0, "medium": 1, "low": 2}  # matches Confidence enum
-    ranked = sorted(findings, key=lambda f: _confidence_rank.get(f.confidence.value, 99))
+    ranked = sorted(
+        findings, key=lambda f: _confidence_rank.get(f.confidence.value, 99)
+    )
 
     chunks: list[list[Finding]] = []
     current_chunk: list[Finding] = []
@@ -193,7 +230,7 @@ def _chunk_findings(findings: list[Finding], budget_bytes: int) -> list[list[Fin
 def _format_single_finding(f: Finding, index: int) -> str:
     """Format a single finding as a numbered line."""
     line = (
-        f"{index+1}. [{f.confidence.value}|{f.reputation.value}] {f.fact}\n"
+        f"{index + 1}. [{f.confidence.value}|{f.reputation.value}] {f.fact}\n"
         f"   source: {f.source_title} ({f.source_url})"
     )
     if f.quote:
@@ -206,7 +243,9 @@ def _format_single_finding(f: Finding, index: int) -> str:
 def _format_findings(findings: list[Finding]) -> str:
     """Format all findings as numbered lines, sorted by confidence."""
     _confidence_rank = {"high": 0, "medium": 1, "low": 2}  # matches Confidence enum
-    ranked = sorted(findings, key=lambda f: _confidence_rank.get(f.confidence.value, 99))
+    ranked = sorted(
+        findings, key=lambda f: _confidence_rank.get(f.confidence.value, 99)
+    )
     return "\n".join(_format_single_finding(f, i) for i, f in enumerate(ranked))
 
 
@@ -219,7 +258,7 @@ def _format_sources(sources: list[Source]) -> str:
     lines = []
     for i, s in enumerate(sources):
         lines.append(
-            f"{i+1}. [{s.reputation.value}] {s.title} — {s.url}"
+            f"{i + 1}. [{s.reputation.value}] {s.title} — {s.url}"
             + (f" ({s.published_date})" if s.published_date else "")
         )
     return "\n".join(lines)
@@ -296,7 +335,9 @@ def _append_failed_sources(report: str, state: ResearchState) -> str:
     for i, s in enumerate(failed):
         error = (s.error or "unknown").replace("|", "/")
         title = (s.title or "untitled")[:60].replace("|", "/")
-        lines.append(f"| {i+1} | [{title}]({s.url}) | {error} | {s.snippet[:80] if s.snippet else ''} |")
+        lines.append(
+            f"| {i + 1} | [{title}]({s.url}) | {error} | {s.snippet[:80] if s.snippet else ''} |"
+        )
 
     failed_section = "\n".join(lines) + "\n"
 
@@ -403,8 +444,10 @@ def write_incomplete_report(
     # What was found
     lines.append("### What Was Found")
     lines.append("")
-    lines.append(f"- **{len(state.findings)}** findings extracted from "
-                 f"**{len(completed)}** sources")
+    lines.append(
+        f"- **{len(state.findings)}** findings extracted from "
+        f"**{len(completed)}** sources"
+    )
     if confidence_counts:
         parts = [f"{v} {k}" for k, v in sorted(confidence_counts.items())]
         lines.append(f"- By confidence: {', '.join(parts)}")
@@ -425,20 +468,22 @@ def write_incomplete_report(
             error = (s.error or "unknown").replace("|", "/")
             title = (s.title or "untitled")[:60].replace("|", "/")
             lines.append(
-                f"| {i+1} | [{title}]({s.url}) | {s.reputation.value} | {error} |"
+                f"| {i + 1} | [{title}]({s.url}) | {s.reputation.value} | {error} |"
             )
         lines.append("")
 
     # Suggestion
-    lines.extend([
-        "### Suggested Next Steps",
-        "",
-        "1. Retry the research — transient fetch failures (timeouts, rate limits) "
-        "may resolve on a second run",
-        "2. Use `--no-claude-tools` to bypass the SDK fetcher and use httpx directly",
-        "3. Use `--allow-paid-fallback` to enable paid API fallback for search",
-        "4. Manually fetch the failed URLs and provide them as prior knowledge "
-        "via `--prior-knowledge`",
-    ])
+    lines.extend(
+        [
+            "### Suggested Next Steps",
+            "",
+            "1. Retry the research — transient fetch failures (timeouts, rate limits) "
+            "may resolve on a second run",
+            "2. Use `--no-claude-tools` to bypass the SDK fetcher and use httpx directly",
+            "3. Use `--allow-paid-fallback` to enable paid API fallback for search",
+            "4. Manually fetch the failed URLs and provide them as prior knowledge "
+            "via `--prior-knowledge`",
+        ]
+    )
 
     return "\n".join(lines) + "\n"

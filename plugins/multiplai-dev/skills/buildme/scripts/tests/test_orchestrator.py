@@ -5,18 +5,16 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
+from build_pipeline.change_manager import ChangeManager
+from build_pipeline.config import BuildConfig, GitToggles
+from build_pipeline.models import BuildPhase
 from build_pipeline.orchestrator import (
     _rebind_to_existing_worktree,
     _run_bootstrap,
-    _run_publish,
     run_orchestrator,
 )
-from build_pipeline.config import BuildConfig, GitToggles
 from build_pipeline.progress import ProgressWriter
 from build_pipeline.state import BuildState
-from build_pipeline.models import BuildPhase
-from build_pipeline.change_manager import ChangeManager
 
 
 @pytest.fixture(autouse=True)
@@ -24,7 +22,9 @@ def _no_spec_extract(monkeypatch):
     """No build here runs spec-extract: its step inside CODEBASE_ANALYSIS lets the phase complete."""
     from build_pipeline import orchestrator
 
-    monkeypatch.setattr(orchestrator, "_run_spec_extract_step", lambda config, state, progress: None)
+    monkeypatch.setattr(
+        orchestrator, "_run_spec_extract_step", lambda config, state, progress: None
+    )
 
 
 from tests.planning_fakes import _plan_fixture, _prepare_and_publish
@@ -38,9 +38,11 @@ def _phase_wiring_prerequisites(monkeypatch):
     is tested through unwrapped public entry points in test_completion_contract.
     """
     from unittest.mock import AsyncMock
+
     from build_pipeline import orchestrator, spec_generator
-    from build_pipeline.models import PlanReviewResult, GateResult
-    from build_pipeline.llm_steps import spec_steps, plan_review_steps
+    from build_pipeline.llm_steps import plan_review_steps, spec_steps
+    from build_pipeline.models import GateResult, PlanReviewResult
+
     real = orchestrator.run_orchestrator
 
     async def generated(cm, change_dir, config, state):
@@ -54,7 +56,9 @@ def _phase_wiring_prerequisites(monkeypatch):
         path = config.state_file_path()
         if path.exists():
             state = BuildState.load(path)
-            if state.phase == BuildPhase.PUBLISH and not (state.spec_gen and state.spec_gen.revision):
+            if state.phase == BuildPhase.PUBLISH and not (
+                state.spec_gen and state.spec_gen.revision
+            ):
                 _plan_fixture(config, state)
                 state.spec_gen.record_step("design_audit", "passed")
                 state.spec_gen.record_step("plan_review", "passed")
@@ -62,15 +66,27 @@ def _phase_wiring_prerequisites(monkeypatch):
                 git_ops.commit_tree(config.project_dir, "test: accepted plan")
         if not git_ops.rev_parse_head(config.project_dir):
             git_ops._run(["git", "init", "-q"], cwd=config.project_dir)
-            git_ops._run(["git", "commit", "--allow-empty", "-qm", "test baseline"], cwd=config.project_dir)
+            git_ops._run(
+                ["git", "commit", "--allow-empty", "-qm", "test baseline"],
+                cwd=config.project_dir,
+            )
         return await real(config, args)
 
     monkeypatch.setattr(spec_generator, "_generate_all_artifacts", generated)
-    monkeypatch.setattr(spec_generator, "generate_rubric", AsyncMock(return_value="# Current rubric"))
+    monkeypatch.setattr(
+        spec_generator, "generate_rubric", AsyncMock(return_value="# Current rubric")
+    )
     monkeypatch.setattr(spec_steps, "run_tasks_audit", AsyncMock(return_value=[]))
-    monkeypatch.setattr("build_pipeline.llm_steps.docs_steps.run_docs_update", AsyncMock(return_value=([], GateResult(passed=True, reason="unit docs"))))
+    monkeypatch.setattr(
+        "build_pipeline.llm_steps.docs_steps.run_docs_update",
+        AsyncMock(return_value=([], GateResult(passed=True, reason="unit docs"))),
+    )
     monkeypatch.setattr(spec_steps, "run_design_audit", AsyncMock(return_value=[]))
-    monkeypatch.setattr(plan_review_steps, "run_plan_review", AsyncMock(return_value=PlanReviewResult(findings=[])))
+    monkeypatch.setattr(
+        plan_review_steps,
+        "run_plan_review",
+        AsyncMock(return_value=PlanReviewResult(findings=[])),
+    )
     monkeypatch.setattr(orchestrator, "run_orchestrator", run)
     monkeypatch.setitem(globals(), "run_orchestrator", run)
 
@@ -103,7 +119,8 @@ class TestBootstrap:
         )
         config.specs_dir = tmp_path / "specs"
         state = BuildState(
-            change_name="test-change", tier="advanced",
+            change_name="test-change",
+            tier="advanced",
             state_file=str(tmp_path / "state.json"),
         )
         cm = ChangeManager(config.specs_dir)
@@ -126,6 +143,7 @@ class TestArchivePhase:
     async def test_auto_mode_archives_change(self, tmp_path):
         """With --auto, the change directory is moved to archive/ at the end."""
         import argparse
+
         from build_pipeline.orchestrator import run_orchestrator
 
         # Pre-build a minimal completed state so the orchestrator skips straight to archive
@@ -169,7 +187,9 @@ class TestArchivePhase:
 
         assert result == 0
         # Change directory should be moved to archive
-        assert change_dir.exists()  # historical completion never archives or republishes
+        assert (
+            change_dir.exists()
+        )  # historical completion never archives or republishes
         archive_root = config.specs_dir / "archive"
         archived_dirs = list(archive_root.glob("*-test-archive"))
         assert archived_dirs == []
@@ -178,6 +198,7 @@ class TestArchivePhase:
     async def test_non_auto_mode_leaves_change_in_place(self, tmp_path):
         """Without --auto, the change stays in changes/ for manual archive."""
         import argparse
+
         from build_pipeline.orchestrator import run_orchestrator
 
         config = BuildConfig(
@@ -239,8 +260,11 @@ class TestCodebaseAnalysisPhase:
         from build_pipeline.config import GitToggles
 
         config = BuildConfig(
-            project_dir=tmp_path, change_name=change,
-            auto=True, spec_only=True, skip_research=True,
+            project_dir=tmp_path,
+            change_name=change,
+            auto=True,
+            spec_only=True,
+            skip_research=True,
             git=GitToggles(worktree=False),
         )
         config.specs_dir = tmp_path / "specs"
@@ -251,8 +275,10 @@ class TestCodebaseAnalysisPhase:
         if with_source:
             (tmp_path / "app.py").write_text("def main():\n    return 1\n")
         state = BuildState(
-            change_name=change, tier="advanced",
-            phase=phase, bootstrap_done=True,
+            change_name=change,
+            tier="advanced",
+            phase=phase,
+            bootstrap_done=True,
             state_file=str(config.state_file_path()),
         )
         state.checkpoint(config.state_file_path())
@@ -263,10 +289,18 @@ class TestCodebaseAnalysisPhase:
         from unittest.mock import AsyncMock, patch
 
         return (
-            patch("build_pipeline.llm_steps.spec_steps.run_codebase_analysis", analysis_mock),
-            patch("build_pipeline.spec_generator.run_spec_generator", AsyncMock(return_value=0)),
-            patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
-                  AsyncMock(return_value=[])),
+            patch(
+                "build_pipeline.llm_steps.spec_steps.run_codebase_analysis",
+                analysis_mock,
+            ),
+            patch(
+                "build_pipeline.spec_generator.run_spec_generator",
+                AsyncMock(return_value=0),
+            ),
+            patch(
+                "build_pipeline.llm_steps.spec_steps.run_design_audit",
+                AsyncMock(return_value=[]),
+            ),
         )
 
     @pytest.mark.asyncio
@@ -305,15 +339,24 @@ class TestCodebaseAnalysisPhase:
 
         async def _capture(cfg, args=None, **kwargs):
             state = BuildState.load(cfg.state_file_path())
-            seen["path"] = state.spec_gen.codebase_analysis_path if state.spec_gen else None
+            seen["path"] = (
+                state.spec_gen.codebase_analysis_path if state.spec_gen else None
+            )
             return 0
 
         from unittest.mock import patch
-        with patch("build_pipeline.llm_steps.spec_steps.run_codebase_analysis",
-                   AsyncMock(return_value="## Architecture\nstuff")), \
-                patch("build_pipeline.spec_generator.run_spec_generator", _capture), \
-                patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
-                      AsyncMock(return_value=[])):
+
+        with (
+            patch(
+                "build_pipeline.llm_steps.spec_steps.run_codebase_analysis",
+                AsyncMock(return_value="## Architecture\nstuff"),
+            ),
+            patch("build_pipeline.spec_generator.run_spec_generator", _capture),
+            patch(
+                "build_pipeline.llm_steps.spec_steps.run_design_audit",
+                AsyncMock(return_value=[]),
+            ),
+        ):
             result = await run_orchestrator(config, self._args(tmp_path, "record-path"))
 
         assert result == 0
@@ -321,7 +364,10 @@ class TestCodebaseAnalysisPhase:
 
     @pytest.mark.asyncio
     async def test_skipped_with_a_reason_when_there_is_no_source_yet(
-        self, tmp_path, caplog, capsys,
+        self,
+        tmp_path,
+        caplog,
+        capsys,
     ):
         from unittest.mock import AsyncMock
 
@@ -334,8 +380,11 @@ class TestCodebaseAnalysisPhase:
         assert result == 0
         mock_analysis.assert_not_awaited()
         assert not config.codebase_analysis_path.exists()
-        skips = [r.getMessage() for r in caplog.records
-                 if "SKIP phase=CODEBASE_ANALYSIS" in r.getMessage()]
+        skips = [
+            r.getMessage()
+            for r in caplog.records
+            if "SKIP phase=CODEBASE_ANALYSIS" in r.getMessage()
+        ]
         assert skips, "the skip must be logged with its reason"
         assert "no-source-files-yet" in skips[0]
         # The phase still completes — a skip is not a stall.
@@ -352,7 +401,9 @@ class TestCodebaseAnalysisPhase:
         mock_analysis = AsyncMock()
         p1, p2, p3 = self._patches(mock_analysis)
         with p1, p2, p3:
-            assert await run_orchestrator(config, self._args(tmp_path, "specs-only")) == 0
+            assert (
+                await run_orchestrator(config, self._args(tmp_path, "specs-only")) == 0
+            )
         mock_analysis.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -379,6 +430,7 @@ class TestCodebaseAnalysisPhase:
         with p1, p2, p3:
             assert await run_orchestrator(config, self._args(tmp_path, "resumed")) == 0
         mock_analysis.assert_not_awaited()
+
 
 class TestReviewCheckpointPaths:
     """The non-`--auto` review checkpoint prints what the reviewer must read,
@@ -421,8 +473,11 @@ class TestSpecGenerationReloadOnlyMovesForward:
     @staticmethod
     def _config(tmp_path):
         config = BuildConfig(
-            project_dir=tmp_path, change_name="reload",
-            auto=True, spec_only=True, skip_research=True,
+            project_dir=tmp_path,
+            change_name="reload",
+            auto=True,
+            spec_only=True,
+            skip_research=True,
         )
         config.specs_dir = tmp_path / "specs"
         cm = ChangeManager(config.specs_dir)
@@ -432,7 +487,8 @@ class TestSpecGenerationReloadOnlyMovesForward:
         (config.change_dir / "design.md").write_text("## Decisions\nNone.")
         (config.change_dir / "tasks.md").write_text("## 1. Block")
         state = BuildState(
-            change_name="reload", tier="advanced",
+            change_name="reload",
+            tier="advanced",
             phase=BuildPhase.RESEARCH,
             state_file=str(config.state_file_path()),
         )
@@ -442,17 +498,22 @@ class TestSpecGenerationReloadOnlyMovesForward:
     @staticmethod
     def _args(tmp_path):
         import argparse
+
         return argparse.Namespace(
-            change="reload", project_dir=str(tmp_path),
-            auto=True, spec_only=True, skip_research=True,
-            research_path="", session_id="",
+            change="reload",
+            project_dir=str(tmp_path),
+            auto=True,
+            spec_only=True,
+            skip_research=True,
+            research_path="",
+            session_id="",
         )
 
     @pytest.mark.asyncio
     async def test_phase_is_not_rewound_and_the_audit_is_not_re_run(self, tmp_path):
         from unittest.mock import AsyncMock, patch
+
         from build_pipeline.orchestrator import run_orchestrator
-        from build_pipeline.state import SpecGenState
 
         config = self._config(tmp_path)
         state_path = config.state_file_path()
@@ -475,12 +536,17 @@ class TestSpecGenerationReloadOnlyMovesForward:
             advanced.append(phase)
             return real_advance(self, phase, path)
 
-        with patch("build_pipeline.spec_generator.run_spec_generator",
-                   side_effect=fake_spec_generator), \
-                patch("build_pipeline.state.BuildState.advance_to",
-                      recording_advance), \
-                patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
-                      new_callable=AsyncMock) as mock_audit:
+        with (
+            patch(
+                "build_pipeline.spec_generator.run_spec_generator",
+                side_effect=fake_spec_generator,
+            ),
+            patch("build_pipeline.state.BuildState.advance_to", recording_advance),
+            patch(
+                "build_pipeline.llm_steps.spec_steps.run_design_audit",
+                new_callable=AsyncMock,
+            ) as mock_audit,
+        ):
             result = await run_orchestrator(config, self._args(tmp_path))
 
         assert result == 0
@@ -491,7 +557,7 @@ class TestSpecGenerationReloadOnlyMovesForward:
         # SPEC_GENERATION after the spec generator left it at DESIGN_AUDIT.
         order = list(BuildPhase)
         assert BuildPhase.DESIGN_AUDIT in advanced
-        after = advanced[advanced.index(BuildPhase.DESIGN_AUDIT) + 1:]
+        after = advanced[advanced.index(BuildPhase.DESIGN_AUDIT) + 1 :]
         assert all(
             order.index(p) >= order.index(BuildPhase.DESIGN_AUDIT) for p in after
         ), f"phase pointer rewound: {[p.value for p in advanced]}"
@@ -508,26 +574,39 @@ class TestRespecPhaseWiring:
 
     @pytest.mark.asyncio
     async def test_orchestrator_runs_respec_before_archiving(self, tmp_path):
-        from unittest.mock import AsyncMock, patch
         from argparse import Namespace
+        from unittest.mock import AsyncMock, patch
+
         from build_pipeline.orchestrator import run_orchestrator
 
         project_dir = tmp_path / "project"
         project_dir.mkdir()
         config = BuildConfig(
-            project_dir=project_dir, change_name="feat", auto=False,
+            project_dir=project_dir,
+            change_name="feat",
+            auto=False,
             config_dir=tmp_path / "config",
         )
         config.specs_dir = project_dir / "specs"
         config.change_dir.mkdir(parents=True)
 
-        with patch("build_pipeline.tdd_engine.run_tdd_engine",
-                   new_callable=AsyncMock, return_value=0), \
-             patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
-                   new_callable=AsyncMock, return_value=[]), \
-             patch("build_pipeline.llm_steps.respec_steps.run_respec_audit",
-                   new_callable=AsyncMock,
-                   return_value=config.change_dir / "respec.md") as mock_respec:
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_tdd_engine",
+                new_callable=AsyncMock,
+                return_value=0,
+            ),
+            patch(
+                "build_pipeline.llm_steps.spec_steps.run_design_audit",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch(
+                "build_pipeline.llm_steps.respec_steps.run_respec_audit",
+                new_callable=AsyncMock,
+                return_value=config.change_dir / "respec.md",
+            ) as mock_respec,
+        ):
             rc = await run_orchestrator(config, Namespace())
 
         assert rc == 0
@@ -535,25 +614,39 @@ class TestRespecPhaseWiring:
 
     @pytest.mark.asyncio
     async def test_respec_failure_does_not_fail_the_build(self, tmp_path):
-        from unittest.mock import AsyncMock, patch
         from argparse import Namespace
+        from unittest.mock import AsyncMock, patch
+
         from build_pipeline.orchestrator import run_orchestrator
 
         project_dir = tmp_path / "project"
         project_dir.mkdir()
         config = BuildConfig(
-            project_dir=project_dir, change_name="feat", auto=False,
+            project_dir=project_dir,
+            change_name="feat",
+            auto=False,
             config_dir=tmp_path / "config",
         )
         config.specs_dir = project_dir / "specs"
         config.change_dir.mkdir(parents=True)
 
-        with patch("build_pipeline.tdd_engine.run_tdd_engine",
-                   new_callable=AsyncMock, return_value=0), \
-             patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
-                   new_callable=AsyncMock, return_value=[]), \
-             patch("build_pipeline.llm_steps.respec_steps.run_respec_audit",
-                   new_callable=AsyncMock, side_effect=RuntimeError("model down")):
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_tdd_engine",
+                new_callable=AsyncMock,
+                return_value=0,
+            ),
+            patch(
+                "build_pipeline.llm_steps.spec_steps.run_design_audit",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch(
+                "build_pipeline.llm_steps.respec_steps.run_respec_audit",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("model down"),
+            ),
+        ):
             rc = await run_orchestrator(config, Namespace())
 
         assert rc == 0
@@ -566,29 +659,45 @@ class TestTDDSubPhaseWiring:
 
     @pytest.mark.asyncio
     async def test_engine_is_invoked_as_a_sub_phase(self, tmp_path):
-        from unittest.mock import AsyncMock, patch
         from argparse import Namespace
+        from unittest.mock import AsyncMock, patch
+
         from build_pipeline.models import GateResult
         from build_pipeline.orchestrator import run_orchestrator
 
         project_dir = tmp_path / "project"
         project_dir.mkdir()
         config = BuildConfig(
-            project_dir=project_dir, change_name="feat", auto=False,
+            project_dir=project_dir,
+            change_name="feat",
+            auto=False,
             config_dir=tmp_path / "config",
         )
         config.specs_dir = project_dir / "specs"
         config.change_dir.mkdir(parents=True)
 
-        with patch("build_pipeline.tdd_engine.run_tdd_engine",
-                   new_callable=AsyncMock, return_value=0) as engine, \
-             patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
-                   new_callable=AsyncMock, return_value=[]), \
-             patch("build_pipeline.llm_steps.docs_steps.run_docs_update",
-                   new_callable=AsyncMock,
-                   return_value=([], GateResult(passed=True, reason="ok"))), \
-             patch("build_pipeline.llm_steps.respec_steps.run_respec_audit",
-                   new_callable=AsyncMock, return_value=None):
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_tdd_engine",
+                new_callable=AsyncMock,
+                return_value=0,
+            ) as engine,
+            patch(
+                "build_pipeline.llm_steps.spec_steps.run_design_audit",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch(
+                "build_pipeline.llm_steps.docs_steps.run_docs_update",
+                new_callable=AsyncMock,
+                return_value=([], GateResult(passed=True, reason="ok")),
+            ),
+            patch(
+                "build_pipeline.llm_steps.respec_steps.run_respec_audit",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+        ):
             assert await run_orchestrator(config, Namespace()) == 0
 
         assert engine.await_args.kwargs.get("standalone") is False
@@ -608,7 +717,9 @@ class TestDocsUpdatePhaseWiring:
         project_dir = tmp_path / "project"
         project_dir.mkdir()
         config = BuildConfig(
-            project_dir=project_dir, change_name="feat", auto=False,
+            project_dir=project_dir,
+            change_name="feat",
+            auto=False,
             config_dir=tmp_path / "config",
         )
         config.specs_dir = project_dir / "specs"
@@ -617,8 +728,9 @@ class TestDocsUpdatePhaseWiring:
 
     @pytest.mark.asyncio
     async def test_orchestrator_runs_docs_update_before_respec(self, tmp_path, capsys):
-        from unittest.mock import AsyncMock, patch
         from argparse import Namespace
+        from unittest.mock import AsyncMock, patch
+
         from build_pipeline.models import GateResult
         from build_pipeline.orchestrator import run_orchestrator
 
@@ -634,14 +746,26 @@ class TestDocsUpdatePhaseWiring:
             order.append("respec")
             return config.change_dir / "respec.md"
 
-        with patch("build_pipeline.tdd_engine.run_tdd_engine",
-                   new_callable=AsyncMock, return_value=0), \
-             patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
-                   new_callable=AsyncMock, return_value=[]), \
-             patch("build_pipeline.llm_steps.docs_steps.run_docs_update",
-                   side_effect=fake_docs), \
-             patch("build_pipeline.llm_steps.respec_steps.run_respec_audit",
-                   side_effect=fake_respec):
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_tdd_engine",
+                new_callable=AsyncMock,
+                return_value=0,
+            ),
+            patch(
+                "build_pipeline.llm_steps.spec_steps.run_design_audit",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch(
+                "build_pipeline.llm_steps.docs_steps.run_docs_update",
+                side_effect=fake_docs,
+            ),
+            patch(
+                "build_pipeline.llm_steps.respec_steps.run_respec_audit",
+                side_effect=fake_respec,
+            ),
+        ):
             rc = await run_orchestrator(config, Namespace())
 
         assert rc == 0
@@ -650,45 +774,76 @@ class TestDocsUpdatePhaseWiring:
 
     @pytest.mark.asyncio
     async def test_docs_failure_does_not_fail_the_build(self, tmp_path):
-        from unittest.mock import AsyncMock, patch
         from argparse import Namespace
+        from unittest.mock import AsyncMock, patch
+
         from build_pipeline.orchestrator import run_orchestrator
 
         config = self._config(tmp_path)
 
-        with patch("build_pipeline.tdd_engine.run_tdd_engine",
-                   new_callable=AsyncMock, return_value=0), \
-             patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
-                   new_callable=AsyncMock, return_value=[]), \
-             patch("build_pipeline.llm_steps.docs_steps.run_docs_update",
-                   new_callable=AsyncMock, side_effect=RuntimeError("model down")), \
-             patch("build_pipeline.llm_steps.respec_steps.run_respec_audit",
-                   new_callable=AsyncMock, return_value=None):
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_tdd_engine",
+                new_callable=AsyncMock,
+                return_value=0,
+            ),
+            patch(
+                "build_pipeline.llm_steps.spec_steps.run_design_audit",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch(
+                "build_pipeline.llm_steps.docs_steps.run_docs_update",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("model down"),
+            ),
+            patch(
+                "build_pipeline.llm_steps.respec_steps.run_respec_audit",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+        ):
             rc = await run_orchestrator(config, Namespace())
 
         assert rc == 1
 
     @pytest.mark.asyncio
     async def test_warning_reaches_stdout(self, tmp_path, capsys):
-        from unittest.mock import AsyncMock, patch
         from argparse import Namespace
+        from unittest.mock import AsyncMock, patch
+
         from build_pipeline.models import GateResult
         from build_pipeline.orchestrator import run_orchestrator
 
         config = self._config(tmp_path)
         warning = GateResult(
-            passed=True, action="docs_may_be_stale",
+            passed=True,
+            action="docs_may_be_stale",
             reason="1 source file(s) changed and CHANGELOG.md exists",
         )
 
-        with patch("build_pipeline.tdd_engine.run_tdd_engine",
-                   new_callable=AsyncMock, return_value=0), \
-             patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
-                   new_callable=AsyncMock, return_value=[]), \
-             patch("build_pipeline.llm_steps.docs_steps.run_docs_update",
-                   new_callable=AsyncMock, return_value=([], warning)), \
-             patch("build_pipeline.llm_steps.respec_steps.run_respec_audit",
-                   new_callable=AsyncMock, return_value=None):
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_tdd_engine",
+                new_callable=AsyncMock,
+                return_value=0,
+            ),
+            patch(
+                "build_pipeline.llm_steps.spec_steps.run_design_audit",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch(
+                "build_pipeline.llm_steps.docs_steps.run_docs_update",
+                new_callable=AsyncMock,
+                return_value=([], warning),
+            ),
+            patch(
+                "build_pipeline.llm_steps.respec_steps.run_respec_audit",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+        ):
             rc = await run_orchestrator(config, Namespace())
 
         assert rc == 0
@@ -700,6 +855,7 @@ class TestDocsUpdatePhaseWiring:
         """A successful publish deletes the progress file, so the warning is
         asserted against the phase helper rather than a whole run."""
         from unittest.mock import AsyncMock, patch
+
         from build_pipeline.models import GateResult
         from build_pipeline.orchestrator import _run_docs_update_phase
 
@@ -707,11 +863,16 @@ class TestDocsUpdatePhaseWiring:
         state = BuildState(change_name="feat", tier="advanced")
         progress = ProgressWriter(config.progress_file_path())
         warning = GateResult(
-            passed=True, action="docs_may_be_stale", reason="CHANGELOG.md may be stale",
+            passed=True,
+            action="docs_may_be_stale",
+            reason="CHANGELOG.md may be stale",
         )
 
-        with patch("build_pipeline.llm_steps.docs_steps.run_docs_update",
-                   new_callable=AsyncMock, return_value=([], warning)):
+        with patch(
+            "build_pipeline.llm_steps.docs_steps.run_docs_update",
+            new_callable=AsyncMock,
+            return_value=([], warning),
+        ):
             await _run_docs_update_phase(config, state, progress)
 
         text = config.progress_file_path().read_text()
@@ -721,6 +882,7 @@ class TestDocsUpdatePhaseWiring:
     @pytest.mark.asyncio
     async def test_phase_records_what_it_updated_on_the_state(self, tmp_path):
         from unittest.mock import AsyncMock, patch
+
         from build_pipeline.models import GateResult
         from build_pipeline.orchestrator import _run_docs_update_phase
 
@@ -729,9 +891,11 @@ class TestDocsUpdatePhaseWiring:
         state = BuildState(change_name="feat", tier="advanced")
         progress = ProgressWriter(config.progress_file_path())
 
-        with patch("build_pipeline.llm_steps.docs_steps.run_docs_update",
-                   new_callable=AsyncMock,
-                   return_value=(["README.md"], GateResult(passed=True, reason="ok"))):
+        with patch(
+            "build_pipeline.llm_steps.docs_steps.run_docs_update",
+            new_callable=AsyncMock,
+            return_value=(["README.md"], GateResult(passed=True, reason="ok")),
+        ):
             await _run_docs_update_phase(config, state, progress)
 
         assert state.docs_impact == ["README.md"]
@@ -739,13 +903,16 @@ class TestDocsUpdatePhaseWiring:
 
     @pytest.mark.asyncio
     async def test_a_hallucinated_path_never_reaches_the_state_or_the_pr_body(
-        self, tmp_path, capsys,
+        self,
+        tmp_path,
+        capsys,
     ):
         """The DOCS_IMPACT list is agent output: an entry that is not a file in
         the project must not be presented to a reviewer as an updated document.
         It is dropped from state (and so from the PR body) and named back to
         the user as a DOCS_WARNING, on stdout and in the progress file."""
         from unittest.mock import AsyncMock, patch
+
         from build_pipeline.models import GateResult
         from build_pipeline.orchestrator import _run_docs_update_phase
 
@@ -754,10 +921,14 @@ class TestDocsUpdatePhaseWiring:
         state = BuildState(change_name="feat", tier="advanced")
         progress = ProgressWriter(config.progress_file_path())
 
-        with patch("build_pipeline.llm_steps.docs_steps.run_docs_update",
-                   new_callable=AsyncMock,
-                   return_value=(["README.md", "ghost.md"],
-                                 GateResult(passed=True, reason="ok"))):
+        with patch(
+            "build_pipeline.llm_steps.docs_steps.run_docs_update",
+            new_callable=AsyncMock,
+            return_value=(
+                ["README.md", "ghost.md"],
+                GateResult(passed=True, reason="ok"),
+            ),
+        ):
             await _run_docs_update_phase(config, state, progress)
 
         assert state.docs_impact == ["README.md"]
@@ -770,12 +941,15 @@ class TestDocsUpdatePhaseWiring:
 
     @pytest.mark.asyncio
     async def test_all_reported_paths_invalid_leaves_the_state_empty(
-        self, tmp_path, capsys,
+        self,
+        tmp_path,
+        capsys,
     ):
         """Truthy garbage from the report must not suppress the freshness
         warning path either: nothing survives validation, docs_impact stays
         empty, and the gate's own warning still reaches stdout."""
         from unittest.mock import AsyncMock, patch
+
         from build_pipeline.models import GateResult
         from build_pipeline.orchestrator import _run_docs_update_phase
 
@@ -783,19 +957,26 @@ class TestDocsUpdatePhaseWiring:
         state = BuildState(change_name="feat", tier="advanced")
         progress = ProgressWriter(config.progress_file_path())
         warning = GateResult(
-            passed=True, action="docs_may_be_stale", reason="CHANGELOG.md may be stale",
+            passed=True,
+            action="docs_may_be_stale",
+            reason="CHANGELOG.md may be stale",
         )
 
-        with patch("build_pipeline.llm_steps.docs_steps.run_docs_update",
-                   new_callable=AsyncMock,
-                   return_value=(["ghost.md", "phantom.md"], warning)):
+        with patch(
+            "build_pipeline.llm_steps.docs_steps.run_docs_update",
+            new_callable=AsyncMock,
+            return_value=(["ghost.md", "phantom.md"], warning),
+        ):
             await _run_docs_update_phase(config, state, progress)
 
         assert state.docs_impact == []
         out = capsys.readouterr().out
         assert "ghost.md" in out and "phantom.md" in out
         assert "DOCS_WARNING:CHANGELOG.md may be stale" in out
-        assert "No documentation needed updating" in config.progress_file_path().read_text()
+        assert (
+            "No documentation needed updating"
+            in config.progress_file_path().read_text()
+        )
 
     def test_reported_paths_outside_the_project_are_never_staged(self, tmp_path):
         """The DOCS_IMPACT list is agent-supplied and becomes `git add` argv."""
@@ -809,13 +990,17 @@ class TestDocsUpdatePhaseWiring:
         config = BuildConfig(project_dir=project, change_name="c")
 
         assert _docs_paths(config, ["README.md", "docs/usage.md"]) == (
-            ["README.md", "docs/usage.md"], [],
+            ["README.md", "docs/usage.md"],
+            [],
         )
         assert _docs_paths(config, ["../outside.md"]) == ([], ["../outside.md"])
         outside = str(tmp_path / "outside.md")
         assert _docs_paths(config, [outside]) == ([], [outside])
         assert _docs_paths(config, ["does-not-exist.md"]) == ([], ["does-not-exist.md"])
-        assert _docs_paths(config, [":(exclude)README.md"]) == ([], [":(exclude)README.md"])
+        assert _docs_paths(config, [":(exclude)README.md"]) == (
+            [],
+            [":(exclude)README.md"],
+        )
         assert _docs_paths(config, ["README.md", "./README.md"]) == (["README.md"], [])
 
 
@@ -828,6 +1013,7 @@ class TestDocsAgentWritesItDidNotReport:
     @staticmethod
     def _repo(tmp_path):
         import subprocess
+
         project = tmp_path / "project"
         (project / "specs").mkdir(parents=True)
         for cmd in (
@@ -838,21 +1024,29 @@ class TestDocsAgentWritesItDidNotReport:
             subprocess.run(cmd, cwd=project, check=True, capture_output=True)
         (project / "README.md").write_text("v1\n")
         (project / "src.py").write_text("x = 1\n")
-        subprocess.run(["git", "add", "-A"], cwd=project, check=True, capture_output=True)
-        subprocess.run(["git", "commit", "-qm", "init"], cwd=project,
-                       check=True, capture_output=True)
+        subprocess.run(
+            ["git", "add", "-A"], cwd=project, check=True, capture_output=True
+        )
+        subprocess.run(
+            ["git", "commit", "-qm", "init"],
+            cwd=project,
+            check=True,
+            capture_output=True,
+        )
         config = BuildConfig(project_dir=project, change_name="c")
         config.specs_dir = project / "specs"
         return config
 
     def test_an_unreported_edit_is_named_on_stdout_and_in_the_progress_file(
-        self, tmp_path, capsys,
+        self,
+        tmp_path,
+        capsys,
     ):
         from build_pipeline.orchestrator import _warn_on_unreported_writes
 
         config = self._repo(tmp_path)
-        (config.project_dir / "README.md").write_text("v2\n")   # reported
-        (config.project_dir / "src.py").write_text("x = 2\n")   # NOT reported
+        (config.project_dir / "README.md").write_text("v2\n")  # reported
+        (config.project_dir / "src.py").write_text("x = 2\n")  # NOT reported
         progress = ProgressWriter(config.progress_file_path())
 
         _warn_on_unreported_writes(config, ["README.md"], progress)
@@ -875,7 +1069,9 @@ class TestDocsAgentWritesItDidNotReport:
         assert "DOCS_WARNING" not in capsys.readouterr().out
 
     def test_the_pipelines_own_scratch_is_never_reported_as_unreported(
-        self, tmp_path, capsys,
+        self,
+        tmp_path,
+        capsys,
     ):
         """specs/ and build-progress.md are buildme's paperwork, committed by
         other phases on their own schedule."""
@@ -892,9 +1088,14 @@ class TestDocsAgentWritesItDidNotReport:
         assert "DOCS_WARNING" not in capsys.readouterr().out
 
     def test_a_git_failure_is_not_reported_as_the_agent_wrote_nothing(
-        self, tmp_path, capsys,
+        self,
+        tmp_path,
+        capsys,
     ):
-        from build_pipeline.orchestrator import _uncommitted_paths, _warn_on_unreported_writes
+        from build_pipeline.orchestrator import (
+            _uncommitted_paths,
+            _warn_on_unreported_writes,
+        )
 
         config = BuildConfig(project_dir=tmp_path / "not-a-repo", change_name="c")
         progress = ProgressWriter(tmp_path / "progress.md")
@@ -912,6 +1113,7 @@ class TestDocsAgentWritesItDidNotReport:
 
 from build_pipeline import git_ops
 from build_pipeline.git_ops import GitLifecycleError, GitResult
+
 from tests.test_git_ops import _git, make_bare_origin, make_repo
 
 
@@ -948,7 +1150,8 @@ class TestBootstrapWorktree:
         config = BuildConfig(project_dir=repo, change_name="my-change")
         config.specs_dir = repo / "specs"
         state = BuildState(
-            change_name="my-change", tier="advanced",
+            change_name="my-change",
+            tier="advanced",
             state_file=str(config.state_file_path()),
         )
         cm = ChangeManager(config.specs_dir)
@@ -977,7 +1180,9 @@ class TestBootstrapWorktree:
         assert git_ops.current_branch(repo) == "main"
 
     @pytest.mark.asyncio
-    async def test_refuses_non_repo_when_worktree_requested(self, tmp_path, monkeypatch):
+    async def test_refuses_non_repo_when_worktree_requested(
+        self, tmp_path, monkeypatch
+    ):
         monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
         project = tmp_path / "plain"
         project.mkdir()
@@ -1019,8 +1224,11 @@ class TestNoWorktreeIsUnchangedBehavior:
             git=GitToggles(worktree=False, push=False, pr="none"),
         )
         config.specs_dir = repo / "specs"
-        state = BuildState(change_name="inplace", tier="advanced",
-                           state_file=str(config.state_file_path()))
+        state = BuildState(
+            change_name="inplace",
+            tier="advanced",
+            state_file=str(config.state_file_path()),
+        )
         cm = ChangeManager(config.specs_dir)
 
         await _run_bootstrap(config, state, cm, config.state_file_path())
@@ -1049,7 +1257,8 @@ class TestNoWorktreeIsUnchangedBehavior:
     async def test_publish_is_skipped_without_a_pipeline_branch(self, tmp_path, capsys):
         repo = make_repo(tmp_path / "proj")
         config = BuildConfig(
-            project_dir=repo, change_name="inplace",
+            project_dir=repo,
+            change_name="inplace",
             git=GitToggles(worktree=False, push=False, pr="none"),
         )
         config.specs_dir = repo / "specs"
@@ -1074,8 +1283,11 @@ class TestResumeRebinding:
         # First run: bootstrap creates the worktree
         config1 = BuildConfig(project_dir=repo, change_name="resumed")
         config1.specs_dir = repo / "specs"
-        state = BuildState(change_name="resumed", tier="advanced",
-                           state_file=str(config1.state_file_path()))
+        state = BuildState(
+            change_name="resumed",
+            tier="advanced",
+            state_file=str(config1.state_file_path()),
+        )
         cm = ChangeManager(config1.specs_dir)
         await _run_bootstrap(config1, state, cm, config1.state_file_path())
         worktree = Path(state.worktree_path)
@@ -1090,20 +1302,25 @@ class TestResumeRebinding:
         # Second run: a fresh config pointed at the SOURCE repo, as a resuming
         # session would construct it
         config2 = BuildConfig(
-            project_dir=repo, change_name="resumed",
+            project_dir=repo,
+            change_name="resumed",
             git=GitToggles(worktree=True, push=False, pr="none"),
         )
         config2.specs_dir = repo / "specs"
         result = await run_orchestrator(config2, _args(repo, "resumed"))
 
         assert result == 0
-        assert _worktree_count(repo) == before, "a resume must not create a second worktree"
+        assert _worktree_count(repo) == before, (
+            "a resume must not create a second worktree"
+        )
         assert config2.project_dir == worktree
         assert config2.pipeline_branch == "buildme/resumed"
 
     @pytest.mark.asyncio
     async def test_a_resume_started_inside_the_worktree_owns_its_branch(
-        self, tmp_path, monkeypatch,
+        self,
+        tmp_path,
+        monkeypatch,
     ):
         """There the state file is found in place, so nothing re-binds; the
         build still owns the branch, or every spec-stage commit is skipped."""
@@ -1111,10 +1328,14 @@ class TestResumeRebinding:
         repo = make_repo(tmp_path / "proj")
         config1 = BuildConfig(project_dir=repo, change_name="resumed")
         config1.specs_dir = repo / "specs"
-        state = BuildState(change_name="resumed", tier="advanced",
-                           state_file=str(config1.state_file_path()))
-        await _run_bootstrap(config1, state, ChangeManager(config1.specs_dir),
-                             config1.state_file_path())
+        state = BuildState(
+            change_name="resumed",
+            tier="advanced",
+            state_file=str(config1.state_file_path()),
+        )
+        await _run_bootstrap(
+            config1, state, ChangeManager(config1.specs_dir), config1.state_file_path()
+        )
         worktree = Path(state.worktree_path)
 
         config2 = BuildConfig(project_dir=worktree, change_name="resumed")
@@ -1129,7 +1350,9 @@ class TestPublishFailureIsNonFatal:
     and worktree intact, and the exact manual commands in build-progress.md."""
 
     @pytest.mark.asyncio
-    async def test_gh_failure_keeps_build_successful(self, tmp_path, monkeypatch, capsys):
+    async def test_gh_failure_keeps_build_successful(
+        self, tmp_path, monkeypatch, capsys
+    ):
         workspace = tmp_path / "ws"
         monkeypatch.setenv("WORKSPACE", str(workspace))
         repo = make_repo(tmp_path / "proj")
@@ -1137,8 +1360,11 @@ class TestPublishFailureIsNonFatal:
 
         config = BuildConfig(project_dir=repo, change_name="ghfail")
         config.specs_dir = repo / "specs"
-        state = BuildState(change_name="ghfail", tier="advanced",
-                           state_file=str(config.state_file_path()))
+        state = BuildState(
+            change_name="ghfail",
+            tier="advanced",
+            state_file=str(config.state_file_path()),
+        )
         cm = ChangeManager(config.specs_dir)
         await _run_bootstrap(config, state, cm, config.state_file_path())
         worktree = Path(state.worktree_path)
@@ -1146,9 +1372,11 @@ class TestPublishFailureIsNonFatal:
         state.checkpoint(config.state_file_path())
 
         monkeypatch.setattr(
-            git_ops, "_run_pr_skill",
+            git_ops,
+            "_run_pr_skill",
             lambda argv, cwd=None, timeout=None: GitResult(
-                argv, 2,
+                argv,
+                2,
                 "PR_DIAGNOSIS:`gh pr create` failed (exit 1): gh: To get started with "
                 "GitHub CLI, please run: gh auth login\n",
                 "",
@@ -1184,8 +1412,11 @@ class TestPublishFailureIsNonFatal:
 
         config = BuildConfig(project_dir=repo, change_name="noremote")
         config.specs_dir = repo / "specs"
-        state = BuildState(change_name="noremote", tier="advanced",
-                           state_file=str(config.state_file_path()))
+        state = BuildState(
+            change_name="noremote",
+            tier="advanced",
+            state_file=str(config.state_file_path()),
+        )
         cm = ChangeManager(config.specs_dir)
         await _run_bootstrap(config, state, cm, config.state_file_path())
         worktree = Path(state.worktree_path)
@@ -1210,8 +1441,11 @@ class TestPublishFailureIsNonFatal:
 
         config = BuildConfig(project_dir=repo, change_name="happy")
         config.specs_dir = repo / "specs"
-        state = BuildState(change_name="happy", tier="advanced",
-                           state_file=str(config.state_file_path()))
+        state = BuildState(
+            change_name="happy",
+            tier="advanced",
+            state_file=str(config.state_file_path()),
+        )
         cm = ChangeManager(config.specs_dir)
         await _run_bootstrap(config, state, cm, config.state_file_path())
         progress = ProgressWriter(config.progress_file_path())
@@ -1232,19 +1466,42 @@ class TestPublishFailureIsNonFatal:
         assert "--ready" not in captured["argv"], "PRs are draft by default"
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(("stdout", "stderr", "shown", "hidden"), [
-        # The skill died before it could print PR_DIAGNOSIS (an import error, uv failing):
-        # its stderr is the only account of why.
-        ("", "Traceback (most recent call last):\nModuleNotFoundError: No module named 'x'\n",
-         "ModuleNotFoundError: No module named 'x'", None),
-        # Nothing on stderr: stdout is reported instead.
-        ("error: Failed to spawn: `python`\n", "", "Failed to spawn: `python`", None),
-        # stderr wins over stdout when both are there.
-        ("DIFF:2 files, +3 -1\n", "boom on stderr\n", "boom on stderr", "DIFF:2 files"),
-        # A long traceback keeps its end, where the error is, not its first 800 characters.
-        ("", "Traceback (most recent call last):\n" + "  File \"x.py\", line 1, in f\n" * 60
-         + "ValueError: the real reason\n", "ValueError: the real reason", None),
-    ])
+    @pytest.mark.parametrize(
+        ("stdout", "stderr", "shown", "hidden"),
+        [
+            # The skill died before it could print PR_DIAGNOSIS (an import error, uv failing):
+            # its stderr is the only account of why.
+            (
+                "",
+                "Traceback (most recent call last):\nModuleNotFoundError: No module named 'x'\n",
+                "ModuleNotFoundError: No module named 'x'",
+                None,
+            ),
+            # Nothing on stderr: stdout is reported instead.
+            (
+                "error: Failed to spawn: `python`\n",
+                "",
+                "Failed to spawn: `python`",
+                None,
+            ),
+            # stderr wins over stdout when both are there.
+            (
+                "DIFF:2 files, +3 -1\n",
+                "boom on stderr\n",
+                "boom on stderr",
+                "DIFF:2 files",
+            ),
+            # A long traceback keeps its end, where the error is, not its first 800 characters.
+            (
+                "",
+                "Traceback (most recent call last):\n"
+                + '  File "x.py", line 1, in f\n' * 60
+                + "ValueError: the real reason\n",
+                "ValueError: the real reason",
+                None,
+            ),
+        ],
+    )
     async def test_a_pr_skill_failure_without_pr_diagnosis_reports_its_output(
         self, tmp_path, monkeypatch, capsys, stdout, stderr, shown, hidden
     ):
@@ -1253,19 +1510,27 @@ class TestPublishFailureIsNonFatal:
         make_bare_origin(repo, tmp_path / "origin.git")
         config = BuildConfig(project_dir=repo, change_name="nodiag")
         config.specs_dir = repo / "specs"
-        state = BuildState(change_name="nodiag", tier="advanced",
-                           state_file=str(config.state_file_path()))
+        state = BuildState(
+            change_name="nodiag",
+            tier="advanced",
+            state_file=str(config.state_file_path()),
+        )
         cm = ChangeManager(config.specs_dir)
         await _run_bootstrap(config, state, cm, config.state_file_path())
         progress = ProgressWriter(config.progress_file_path())
 
-        monkeypatch.setattr(git_ops, "_run_pr_skill",
-                            lambda argv, cwd=None, timeout=None: GitResult(argv, 1, stdout, stderr))
+        monkeypatch.setattr(
+            git_ops,
+            "_run_pr_skill",
+            lambda argv, cwd=None, timeout=None: GitResult(argv, 1, stdout, stderr),
+        )
         assert _prepare_and_publish(config, state, progress) is False
         out = capsys.readouterr().out
         assert "PHASE:PUBLISH:FAILED:pr" in out
         # PUBLISH_DIAGNOSIS is a one-line marker: the reason must be on that line.
-        diagnosis = next(line for line in out.splitlines() if line.startswith("PUBLISH_DIAGNOSIS:"))
+        diagnosis = next(
+            line for line in out.splitlines() if line.startswith("PUBLISH_DIAGNOSIS:")
+        )
         assert "failed (exit 1): " in diagnosis and shown in diagnosis
         assert diagnosis.endswith("The branch is pushed — only the PR is missing.")
         if hidden:
@@ -1278,12 +1543,16 @@ class TestPublishFailureIsNonFatal:
         monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
         repo = make_repo(tmp_path / "proj")
         config = BuildConfig(
-            project_dir=repo, change_name="nopush",
+            project_dir=repo,
+            change_name="nopush",
             git=GitToggles(worktree=True, push=False, pr="draft"),
         )
         config.specs_dir = repo / "specs"
-        state = BuildState(change_name="nopush", tier="advanced",
-                           state_file=str(config.state_file_path()))
+        state = BuildState(
+            change_name="nopush",
+            tier="advanced",
+            state_file=str(config.state_file_path()),
+        )
         cm = ChangeManager(config.specs_dir)
         await _run_bootstrap(config, state, cm, config.state_file_path())
         progress = ProgressWriter(config.progress_file_path())
@@ -1297,8 +1566,9 @@ async def _bootstrapped_auto_build(tmp_path, change: str, why: str):
     make_bare_origin(repo, tmp_path / "origin.git")
     config = BuildConfig(project_dir=repo, change_name=change, auto=True)
     config.specs_dir = repo / "specs"
-    state = BuildState(change_name=change, tier="advanced",
-                       state_file=str(config.state_file_path()))
+    state = BuildState(
+        change_name=change, tier="advanced", state_file=str(config.state_file_path())
+    )
     cm = ChangeManager(config.specs_dir)
     await _run_bootstrap(config, state, cm, config.state_file_path())
     (config.change_dir / "proposal.md").write_text(
@@ -1343,13 +1613,21 @@ class TestAutoPublishPRBody:
         # The pr skill reads the documents from the dir it is given (its body
         # tests: pr/scripts/tests/test_fill.py); that dir must be the archive.
         change_dir = Path(seen["argv"][seen["argv"].index("--change-dir") + 1])
-        assert "specs/archive/" in str(change_dir), "links must point at the archived layout"
-        assert "Because the queue drops jobs." in (change_dir / "proposal.md").read_text()
+        assert "specs/archive/" in str(change_dir), (
+            "links must point at the archived layout"
+        )
+        assert (
+            "Because the queue drops jobs." in (change_dir / "proposal.md").read_text()
+        )
         assert (change_dir / "respec.md").exists()
-        assert not (config2.specs_dir / "changes" / config2.change_name).exists()  # archived
+        assert not (
+            config2.specs_dir / "changes" / config2.change_name
+        ).exists()  # archived
         # Successful publish keeps the checkpoint, renamed, in its archived home.
         assert list((config2.specs_dir / "archive").glob("*/.build-state.json")) == []
-        kept = list((config2.specs_dir / "archive").glob("*/.build-state.complete.json"))
+        kept = list(
+            (config2.specs_dir / "archive").glob("*/.build-state.complete.json")
+        )
         assert len(kept) == 1 and BuildState.load(kept[0]).phase == BuildPhase.COMPLETE
 
 
@@ -1367,8 +1645,11 @@ class TestPublishFailureRecovery:
         worktree = Path(state.worktree_path)
 
         monkeypatch.setattr(
-            git_ops, "_run_pr_skill",
-            lambda argv, cwd=None, timeout=None: GitResult(argv, 2, "PR_DIAGNOSIS:gh: boom\n", ""),
+            git_ops,
+            "_run_pr_skill",
+            lambda argv, cwd=None, timeout=None: GitResult(
+                argv, 2, "PR_DIAGNOSIS:gh: boom\n", ""
+            ),
         )
         config2 = BuildConfig(project_dir=repo, change_name="pubfail", auto=True)
         config2.specs_dir = repo / "specs"
@@ -1389,7 +1670,8 @@ class TestPublishFailureRecovery:
         # Re-run with gh healthy: adopts the same worktree, retries, cleans up.
         before = _worktree_count(repo)
         monkeypatch.setattr(
-            git_ops, "_run_pr_skill",
+            git_ops,
+            "_run_pr_skill",
             lambda argv, cwd=None, timeout=None: GitResult(
                 argv, 0, "PR:https://github.com/o/r/pull/8\n", ""
             ),
@@ -1401,7 +1683,9 @@ class TestPublishFailureRecovery:
         assert result == 0
         out = capsys.readouterr().out
         assert "PR:https://github.com/o/r/pull/8" in out
-        assert _worktree_count(repo) == before, "the re-run must not mint a second worktree"
+        assert _worktree_count(repo) == before, (
+            "the re-run must not mint a second worktree"
+        )
         assert not archived_states[0].exists(), "checkpoint renamed after success"
         kept = archived_states[0].with_name(".build-state.complete.json")
         assert BuildState.load(kept).phase == BuildPhase.COMPLETE
@@ -1409,7 +1693,9 @@ class TestPublishFailureRecovery:
         # uncommitted deletion left behind by the rename.
         status = subprocess.run(
             ["git", "status", "--porcelain", "--untracked-files=no"],
-            cwd=str(worktree), capture_output=True, text=True,
+            cwd=str(worktree),
+            capture_output=True,
+            text=True,
         )
         assert status.stdout.strip() == ""
 
@@ -1420,20 +1706,26 @@ class TestPublishFailureRecovery:
         make_bare_origin(repo, tmp_path / "origin.git")
         config = BuildConfig(project_dir=repo, change_name="prurl")
         config.specs_dir = repo / "specs"
-        state = BuildState(change_name="prurl", tier="advanced",
-                           state_file=str(config.state_file_path()))
+        state = BuildState(
+            change_name="prurl",
+            tier="advanced",
+            state_file=str(config.state_file_path()),
+        )
         cm = ChangeManager(config.specs_dir)
         await _run_bootstrap(config, state, cm, config.state_file_path())
         progress = ProgressWriter(config.progress_file_path())
 
         monkeypatch.setattr(
-            git_ops, "_run_pr_skill",
+            git_ops,
+            "_run_pr_skill",
             lambda argv, cwd=None, timeout=None: GitResult(
                 argv, 0, "PR:https://github.com/o/r/pull/9\n", ""
             ),
         )
         state_path = config.state_file_path()
-        assert _prepare_and_publish(config, state, progress, state_path=state_path) is True
+        assert (
+            _prepare_and_publish(config, state, progress, state_path=state_path) is True
+        )
         saved = BuildState.load(state_path)
         assert saved.pr_url == "https://github.com/o/r/pull/9"
 
@@ -1461,8 +1753,11 @@ class TestNestedProjectDir:
 
         config = BuildConfig(project_dir=pkg, change_name="nested")
         config.specs_dir = pkg / "specs"
-        state = BuildState(change_name="nested", tier="advanced",
-                           state_file=str(config.state_file_path()))
+        state = BuildState(
+            change_name="nested",
+            tier="advanced",
+            state_file=str(config.state_file_path()),
+        )
         cm = ChangeManager(config.specs_dir)
         await _run_bootstrap(config, state, cm, config.state_file_path())
 
@@ -1482,12 +1777,16 @@ class TestNestedProjectDir:
         monkeypatch.setenv("WORKSPACE", str(workspace))
         repo, pkg = self._nested_repo(tmp_path)
         from tests.spec_fixtures import ready_specs
+
         ready_specs(pkg / "specs" / "changes" / "nested", pkg)
 
         config1 = BuildConfig(project_dir=pkg, change_name="nested")
         config1.specs_dir = pkg / "specs"
-        state = BuildState(change_name="nested", tier="advanced",
-                           state_file=str(config1.state_file_path()))
+        state = BuildState(
+            change_name="nested",
+            tier="advanced",
+            state_file=str(config1.state_file_path()),
+        )
         cm = ChangeManager(config1.specs_dir)
         await _run_bootstrap(config1, state, cm, config1.state_file_path())
         wt = Path(state.worktree_path)
@@ -1495,7 +1794,8 @@ class TestNestedProjectDir:
         state.checkpoint(config1.state_file_path())
 
         config2 = BuildConfig(
-            project_dir=pkg, change_name="nested",
+            project_dir=pkg,
+            change_name="nested",
             git=GitToggles(worktree=True, push=False, pr="none"),
         )
         config2.specs_dir = pkg / "specs"
@@ -1520,8 +1820,9 @@ async def _published_build(tmp_path, change: str, sub: str | None = None):
         _git(repo, "commit", "-m", "chore: nested pkg")
     config = BuildConfig(project_dir=project, change_name=change)
     config.specs_dir = project / "specs"
-    state = BuildState(change_name=change, tier="advanced",
-                       state_file=str(config.state_file_path()))
+    state = BuildState(
+        change_name=change, tier="advanced", state_file=str(config.state_file_path())
+    )
     cm = ChangeManager(config.specs_dir)
     await _run_bootstrap(config, state, cm, config.state_file_path())
     return config, state, ProgressWriter(config.progress_file_path())
@@ -1543,13 +1844,17 @@ class TestPublishHandsOffToThePrSkill:
         def fake_pr(argv, cwd=None, timeout=None):
             seen["argv"] = argv
             seen["sections"] = {p.name: p.read_text() for p in _sections(argv)}
-            return GitResult(argv, 0, "DIFF:1 files, +1 -0\nPR:https://github.com/o/r/pull/5\n", "")
+            return GitResult(
+                argv, 0, "DIFF:1 files, +1 -0\nPR:https://github.com/o/r/pull/5\n", ""
+            )
 
         monkeypatch.setattr(git_ops, "_run_pr_skill", fake_pr)
         return seen
 
     @pytest.mark.asyncio
-    async def test_runs_the_pr_skill_from_the_skills_directory(self, tmp_path, monkeypatch, captured):
+    async def test_runs_the_pr_skill_from_the_skills_directory(
+        self, tmp_path, monkeypatch, captured
+    ):
         monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
         config, state, progress = await _published_build(tmp_path, "handoff")
         assert _prepare_and_publish(config, state, progress) is True
@@ -1563,15 +1868,20 @@ class TestPublishHandsOffToThePrSkill:
         assert argv[argv.index("--change-dir") + 1] == str(config.change_dir)
         assert argv[argv.index("--head") + 1] == "buildme/handoff"
         assert argv[argv.index("--title") + 1] == "buildme: handoff"
-        assert "--no-push" in argv, "buildme pushes itself, so PUSHED: and push failures are unchanged"
+        assert "--no-push" in argv, (
+            "buildme pushes itself, so PUSHED: and push failures are unchanged"
+        )
 
     @pytest.mark.asyncio
     async def test_a_nested_project_passes_its_own_dir_so_its_pr_settings_apply(
-            self, tmp_path, monkeypatch, captured):
+        self, tmp_path, monkeypatch, captured
+    ):
         # buildme setup writes `pr:` to <project_dir>/specs/config.yaml; the pr skill reads
         # specs/config.yaml under --repo, so --repo must be the subproject, not the worktree root.
         monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
-        config, state, progress = await _published_build(tmp_path, "nestedpub", sub="packages/api")
+        config, state, progress = await _published_build(
+            tmp_path, "nestedpub", sub="packages/api"
+        )
         assert _prepare_and_publish(config, state, progress) is True
         argv = captured["argv"]
         assert config.project_dir == Path(state.worktree_path) / "packages" / "api"
@@ -1586,17 +1896,23 @@ class TestPublishHandsOffToThePrSkill:
         assert "--ready" in captured["argv"]
 
     @pytest.mark.asyncio
-    async def test_worktree_note_reaches_the_body_as_a_section(self, tmp_path, monkeypatch, captured):
+    async def test_worktree_note_reaches_the_body_as_a_section(
+        self, tmp_path, monkeypatch, captured
+    ):
         monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
         config, state, progress = await _published_build(tmp_path, "note")
         assert _prepare_and_publish(config, state, progress) is True
         note = captured["sections"]["worktree.md"]
         assert note.startswith("## Worktree\n")
         assert state.worktree_path in note and "calling session's decision" in note
-        assert _sections(captured["argv"])[0].parent == config.change_dir / "pr-sections"
+        assert (
+            _sections(captured["argv"])[0].parent == config.change_dir / "pr-sections"
+        )
 
     @pytest.mark.asyncio
-    async def test_a_contributors_section_reaches_the_section_argv(self, tmp_path, monkeypatch, captured):
+    async def test_a_contributors_section_reaches_the_section_argv(
+        self, tmp_path, monkeypatch, captured
+    ):
         from build_pipeline import orchestrator
 
         monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
@@ -1608,13 +1924,24 @@ class TestPublishHandsOffToThePrSkill:
             path.write_text("## Stale walkthroughs\n\n- docs/walk.md\n")
             return path
 
-        monkeypatch.setattr(orchestrator, "PRE_PUBLISH_CONTRIBUTORS", [stale_walkthroughs, lambda *a: None])
+        monkeypatch.setattr(
+            orchestrator,
+            "PRE_PUBLISH_CONTRIBUTORS",
+            [stale_walkthroughs, lambda *a: None],
+        )
         assert _prepare_and_publish(config, state, progress) is True
-        assert captured["sections"]["walkthroughs.md"].startswith("## Stale walkthroughs")
-        assert [p.name for p in _sections(captured["argv"])] == ["worktree.md", "walkthroughs.md"]
+        assert captured["sections"]["walkthroughs.md"].startswith(
+            "## Stale walkthroughs"
+        )
+        assert [p.name for p in _sections(captured["argv"])] == [
+            "worktree.md",
+            "walkthroughs.md",
+        ]
 
     @pytest.mark.asyncio
-    async def test_a_raising_contributor_does_not_stop_publish(self, tmp_path, monkeypatch, captured, capsys):
+    async def test_a_raising_contributor_does_not_stop_publish(
+        self, tmp_path, monkeypatch, captured, capsys
+    ):
         from build_pipeline import orchestrator
 
         monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
@@ -1626,31 +1953,46 @@ class TestPublishHandsOffToThePrSkill:
         monkeypatch.setattr(orchestrator, "PRE_PUBLISH_CONTRIBUTORS", [broken])
         assert _prepare_and_publish(config, state, progress) is True
         out = capsys.readouterr().out
-        assert "PHASE:PUBLISH:COMPLETE" in out and "PR:https://github.com/o/r/pull/5" in out
+        assert (
+            "PHASE:PUBLISH:COMPLETE" in out
+            and "PR:https://github.com/o/r/pull/5" in out
+        )
         assert [p.name for p in _sections(captured["argv"])] == ["worktree.md"]
 
     def test_section_files_are_never_committed(self):
         assert ":(exclude,glob)**/pr-sections/**" in git_ops.BOOKKEEPING_EXCLUDES
 
     @pytest.mark.asyncio
-    async def test_pr_skill_failure_names_the_skill_and_its_command(self, tmp_path, monkeypatch, capsys):
+    async def test_pr_skill_failure_names_the_skill_and_its_command(
+        self, tmp_path, monkeypatch, capsys
+    ):
         monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
         config, state, progress = await _published_build(tmp_path, "skillfail")
         monkeypatch.setattr(
-            git_ops, "_run_pr_skill",
+            git_ops,
+            "_run_pr_skill",
             lambda argv, cwd=None, timeout=None: GitResult(
-                argv, 1, "PR_DIAGNOSIS:a gate rejected the body; nothing was written: too long\n", ""),
+                argv,
+                1,
+                "PR_DIAGNOSIS:a gate rejected the body; nothing was written: too long\n",
+                "",
+            ),
         )
         assert _prepare_and_publish(config, state, progress) is False
         out = capsys.readouterr().out
         assert "PHASE:PUBLISH:FAILED:pr" in out
-        assert "PUBLISH_DIAGNOSIS:the pr skill (`pr_pipeline open`) failed (exit 1): a gate rejected" in out
+        assert (
+            "PUBLISH_DIAGNOSIS:the pr skill (`pr_pipeline open`) failed (exit 1): a gate rejected"
+            in out
+        )
         text = (Path(state.worktree_path) / "build-progress.md").read_text()
         assert "python -m pr_pipeline open" in text
         assert "gh pr create --title 'buildme: skillfail'" in text
 
     @pytest.mark.asyncio
-    async def test_an_existing_prs_url_from_gh_reaches_the_publish_diagnosis(self, tmp_path, monkeypatch, capsys):
+    async def test_an_existing_prs_url_from_gh_reaches_the_publish_diagnosis(
+        self, tmp_path, monkeypatch, capsys
+    ):
         # gh prints the existing PR's URL on the line after "already exists:"; the pr
         # skill folds that onto its one PR_DIAGNOSIS line (pr tests:
         # test_open_folds_a_multi_line_gh_error_onto_one_diagnosis_line).
@@ -1658,15 +2000,22 @@ class TestPublishHandsOffToThePrSkill:
         config, state, progress = await _published_build(tmp_path, "exists")
         existing = "https://github.com/o/r/pull/9"
         monkeypatch.setattr(
-            git_ops, "_run_pr_skill",
+            git_ops,
+            "_run_pr_skill",
             lambda argv, cwd=None, timeout=None: GitResult(
-                argv, 2,
+                argv,
+                2,
                 "PR_DIAGNOSIS:`gh pr create` failed (exit 1): a pull request for branch "
-                f'"buildme/exists" into branch "main" already exists: {existing}\n', ""),
+                f'"buildme/exists" into branch "main" already exists: {existing}\n',
+                "",
+            ),
         )
         assert _prepare_and_publish(config, state, progress) is False
-        diagnosis = [line for line in capsys.readouterr().out.splitlines()
-                     if line.startswith("PUBLISH_DIAGNOSIS:")]
+        diagnosis = [
+            line
+            for line in capsys.readouterr().out.splitlines()
+            if line.startswith("PUBLISH_DIAGNOSIS:")
+        ]
         assert len(diagnosis) == 1 and f"already exists: {existing}" in diagnosis[0]
 
 
@@ -1675,7 +2024,9 @@ class TestResumeAtPublish:
     the pr skill stubbed, and completes."""
 
     @pytest.mark.asyncio
-    async def test_parked_checkpoint_publishes_once_and_completes(self, tmp_path, monkeypatch, capsys):
+    async def test_parked_checkpoint_publishes_once_and_completes(
+        self, tmp_path, monkeypatch, capsys
+    ):
         monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
         repo, state = await _bootstrapped_auto_build(tmp_path, "parked", "Why text.")
         assert BuildState.load(Path(state.state_file)).phase == BuildPhase.PUBLISH
@@ -1716,8 +2067,11 @@ class TestPlanReviewPhase:
 
     def _config(self, tmp_path, change):
         config = BuildConfig(
-            project_dir=tmp_path, change_name=change,
-            auto=True, spec_only=True, skip_research=True,
+            project_dir=tmp_path,
+            change_name=change,
+            auto=True,
+            spec_only=True,
+            skip_research=True,
         )
         config.specs_dir = tmp_path / "specs"
         cm = ChangeManager(config.specs_dir)
@@ -1728,7 +2082,8 @@ class TestPlanReviewPhase:
         (config.change_dir / "tasks.md").write_text("## Block 1\n- [ ] do it\n")
         (config.change_dir / "rubric.md").write_text("## Criteria\n- correctness\n")
         state = BuildState(
-            change_name=change, tier="advanced",
+            change_name=change,
+            tier="advanced",
             phase=BuildPhase.DESIGN_AUDIT,
             state_file=str(config.state_file_path()),
         )
@@ -1738,14 +2093,21 @@ class TestPlanReviewPhase:
     @pytest.mark.asyncio
     async def test_phase_runs_and_emits_its_stdout_line(self, tmp_path, capsys):
         from unittest.mock import AsyncMock, patch
+
         from build_pipeline.models import PlanReviewResult
 
         config = self._config(tmp_path, "review-plan")
         mock_review = AsyncMock(return_value=PlanReviewResult(findings=[]))
-        with patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
-                   AsyncMock(return_value=[])), \
-                patch("build_pipeline.llm_steps.plan_review_steps.run_plan_review",
-                      mock_review):
+        with (
+            patch(
+                "build_pipeline.llm_steps.spec_steps.run_design_audit",
+                AsyncMock(return_value=[]),
+            ),
+            patch(
+                "build_pipeline.llm_steps.plan_review_steps.run_plan_review",
+                mock_review,
+            ),
+        ):
             result = await run_orchestrator(config, self._args(tmp_path, "review-plan"))
 
         assert result == 0
@@ -1754,14 +2116,14 @@ class TestPlanReviewPhase:
         assert "PHASE:PLAN_REVIEW:COMPLETE" in out
         # ...and it sits between the two phases it was inserted between.
         assert out.index("PHASE:DESIGN_AUDIT:COMPLETE") < out.index(
-            "PHASE:PLAN_REVIEW:COMPLETE")
+            "PHASE:PLAN_REVIEW:COMPLETE"
+        )
 
     @pytest.mark.asyncio
     async def test_recorded_stage_is_skipped_on_resume(self, tmp_path):
         """`plan_review_done` is checked BEFORE the model call, so a resume
         costs nothing at all."""
         from unittest.mock import AsyncMock, patch
-        from build_pipeline.state import SpecGenState
 
         config = self._config(tmp_path, "resume-plan")
         state = BuildState.load(config.state_file_path())
@@ -1770,10 +2132,16 @@ class TestPlanReviewPhase:
         state.checkpoint(config.state_file_path())
 
         mock_review = AsyncMock()
-        with patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
-                   AsyncMock(return_value=[])), \
-                patch("build_pipeline.llm_steps.plan_review_steps.run_plan_review",
-                      mock_review):
+        with (
+            patch(
+                "build_pipeline.llm_steps.spec_steps.run_design_audit",
+                AsyncMock(return_value=[]),
+            ),
+            patch(
+                "build_pipeline.llm_steps.plan_review_steps.run_plan_review",
+                mock_review,
+            ),
+        ):
             result = await run_orchestrator(config, self._args(tmp_path, "resume-plan"))
 
         assert result == 0
@@ -1784,10 +2152,16 @@ class TestPlanReviewPhase:
         from unittest.mock import AsyncMock, patch
 
         config = self._config(tmp_path, "broken-plan")
-        with patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
-                   AsyncMock(return_value=[])), \
-                patch("build_pipeline.llm_steps.plan_review_steps.run_plan_review",
-                      AsyncMock(side_effect=RuntimeError("model exploded"))):
+        with (
+            patch(
+                "build_pipeline.llm_steps.spec_steps.run_design_audit",
+                AsyncMock(return_value=[]),
+            ),
+            patch(
+                "build_pipeline.llm_steps.plan_review_steps.run_plan_review",
+                AsyncMock(side_effect=RuntimeError("model exploded")),
+            ),
+        ):
             result = await run_orchestrator(config, self._args(tmp_path, "broken-plan"))
 
         assert result == 1
@@ -1802,10 +2176,16 @@ class TestPlanReviewPhase:
 
         config = self._config(tmp_path, "retry-plan")
         args = self._args(tmp_path, "retry-plan")
-        with patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
-                   AsyncMock(return_value=[])), \
-                patch("build_pipeline.llm_steps.plan_review_steps.run_plan_review",
-                      AsyncMock(side_effect=RuntimeError("model exploded"))):
+        with (
+            patch(
+                "build_pipeline.llm_steps.spec_steps.run_design_audit",
+                AsyncMock(return_value=[]),
+            ),
+            patch(
+                "build_pipeline.llm_steps.plan_review_steps.run_plan_review",
+                AsyncMock(side_effect=RuntimeError("model exploded")),
+            ),
+        ):
             assert await run_orchestrator(config, args) == 1
 
         # The build stopped on the failed review. Nothing recorded the phase.
@@ -1815,11 +2195,15 @@ class TestPlanReviewPhase:
 
         # The resume runs it again.
         from build_pipeline.models import PlanReviewResult
+
         retry = AsyncMock(return_value=PlanReviewResult(findings=[]))
-        with patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
-                   AsyncMock(return_value=[])), \
-                patch("build_pipeline.llm_steps.plan_review_steps.run_plan_review",
-                      retry):
+        with (
+            patch(
+                "build_pipeline.llm_steps.spec_steps.run_design_audit",
+                AsyncMock(return_value=[]),
+            ),
+            patch("build_pipeline.llm_steps.plan_review_steps.run_plan_review", retry),
+        ):
             assert await run_orchestrator(config, args) == 0
         retry.assert_awaited_once()
 
@@ -1834,11 +2218,18 @@ class TestPlanReviewPhase:
         state.advance_to(BuildPhase.PROTOTYPE, config.state_file_path())
 
         from build_pipeline.models import PlanReviewResult
+
         mock_review = AsyncMock(return_value=PlanReviewResult(findings=[]))
-        with patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
-                   AsyncMock(return_value=[])), \
-                patch("build_pipeline.llm_steps.plan_review_steps.run_plan_review",
-                      mock_review):
+        with (
+            patch(
+                "build_pipeline.llm_steps.spec_steps.run_design_audit",
+                AsyncMock(return_value=[]),
+            ),
+            patch(
+                "build_pipeline.llm_steps.plan_review_steps.run_plan_review",
+                mock_review,
+            ),
+        ):
             result = await run_orchestrator(config, self._args(tmp_path, "past-plan"))
 
         assert result == 0

@@ -2,7 +2,6 @@
 
 import asyncio
 import contextlib
-import json
 import os
 import sys
 from pathlib import Path
@@ -30,6 +29,7 @@ class TestResolveStrategy:
             STRATEGY_TOKEN_OVERLAP,
             resolve_strategy,
         )
+
         monkeypatch.delenv(ROUTER_ENV_VAR, raising=False)
         assert DEFAULT_STRATEGY == STRATEGY_TOKEN_OVERLAP
         assert resolve_strategy() == STRATEGY_TOKEN_OVERLAP
@@ -40,6 +40,7 @@ class TestResolveStrategy:
             STRATEGY_LLM,
             resolve_strategy,
         )
+
         monkeypatch.setenv(ROUTER_ENV_VAR, "llm")
         assert resolve_strategy() == STRATEGY_LLM
 
@@ -49,11 +50,13 @@ class TestResolveStrategy:
             ROUTER_ENV_VAR,
             resolve_strategy,
         )
+
         monkeypatch.setenv(ROUTER_ENV_VAR, "nonsense-strategy")
         assert resolve_strategy() == DEFAULT_STRATEGY
 
     def test_explicit_arg_wins(self, monkeypatch):
         from lib.memory_router import resolve_strategy
+
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_ROUTER", "token_overlap")
         assert resolve_strategy("llm") == "llm"
 
@@ -63,11 +66,13 @@ class TestCreateRouter:
         # Default strategy is token_overlap — returned directly,
         # without consulting the model client.
         import lib.memory_router as mr
+
         monkeypatch.delenv(mr.ROUTER_ENV_VAR, raising=False)
         assert isinstance(mr.create_router(), mr.TokenOverlapRouter)
 
     def test_llm_returns_llm_router_when_client_available(self, monkeypatch):
         import lib.memory_router as mr
+
         monkeypatch.setattr(
             "multiplai_core.model_client.detect_client_type", lambda: "AgentSDKClient"
         )
@@ -75,6 +80,7 @@ class TestCreateRouter:
 
     def test_llm_degrades_to_token_overlap_without_client(self, monkeypatch):
         import lib.memory_router as mr
+
         monkeypatch.setattr(
             "multiplai_core.model_client.detect_client_type",
             lambda: "none (no SDK or API key)",
@@ -83,6 +89,7 @@ class TestCreateRouter:
 
     def test_embeddings_not_implemented(self):
         from lib.memory_router import create_router
+
         with pytest.raises(NotImplementedError):
             create_router("embeddings")
 
@@ -98,6 +105,7 @@ class TestTokenOverlapRouter:
 
     def _pick(self, prompt, catalog, **kw):
         from lib.memory_router import TokenOverlapRouter
+
         return TokenOverlapRouter().select_multi(
             prompt, None, {"memory": catalog, "skills": [], "resources": []}, **kw
         )["memory"]
@@ -172,7 +180,10 @@ class TestTokenOverlapRouter:
     def test_sorts_by_overlap_count(self):
         catalog = [
             {"source": "a.md", "intent_domains": ["debugging python code"]},
-            {"source": "b.md", "intent_domains": ["debugging python async code patterns"]},
+            {
+                "source": "b.md",
+                "intent_domains": ["debugging python async code patterns"],
+            },
         ]
         picks = self._pick("debugging python async code patterns", catalog)
         # b.md matches more tokens, so it ranks first when both survive
@@ -197,16 +208,23 @@ class TestLLMRouter:
 
     def _pick(self, prompt, catalog):
         from lib.memory_router import LLMRouter
+
         return LLMRouter().select_multi(
             prompt, None, {"memory": catalog, "skills": [], "resources": []}
         )["memory"]
 
     def _catalog(self) -> list[dict]:
         return [
-            {"source": "writing.md", "summary": "voice guide",
-             "intent_domains": ["writing"]},
-            {"source": "python.md", "summary": "py patterns",
-             "intent_domains": ["python code"]},
+            {
+                "source": "writing.md",
+                "summary": "voice guide",
+                "intent_domains": ["writing"],
+            },
+            {
+                "source": "python.md",
+                "summary": "py patterns",
+                "intent_domains": ["python code"],
+            },
         ]
 
     def _client(self, content):
@@ -228,7 +246,9 @@ class TestLLMRouter:
 
     def test_select_uses_model_client(self):
         """Successful LLM response returns the parsed filename list (filtered to known)."""
-        client = self._client('{"memory": ["python.md"], "skills": [], "resources": []}')
+        client = self._client(
+            '{"memory": ["python.md"], "skills": [], "resources": []}'
+        )
         with patch("multiplai_core.model_client.create_client", client):
             picks = self._pick("help me debug python", self._catalog())
         assert picks == ["python.md"]
@@ -285,6 +305,7 @@ class TestLLMRouter:
 
     def test_client_exception_degrades_to_token_overlap(self):
         """A raising client is a failure, so the offline router answers instead."""
+
         async def _failing_client():
             raise RuntimeError("no backend configured")
 
@@ -312,24 +333,33 @@ class TestLLMRouterDegradesRatherThanSilencing:
 
     def _catalog(self) -> list[dict]:
         return [
-            {"source": "writing.md", "summary": "voice guide",
-             "intent_domains": ["writing"]},
-            {"source": "python.md", "summary": "py patterns",
-             "intent_domains": ["python code"]},
+            {
+                "source": "writing.md",
+                "summary": "voice guide",
+                "intent_domains": ["writing"],
+            },
+            {
+                "source": "python.md",
+                "summary": "py patterns",
+                "intent_domains": ["python code"],
+            },
         ]
 
     def _router(self, timeout_seconds=0.01):
         from lib.memory_router import LLMRouter
+
         return LLMRouter(timeout_seconds=timeout_seconds)
 
     def _select(self, router, prompt):
         return router.select_multi(
-            prompt, None,
+            prompt,
+            None,
             {"memory": self._catalog(), "skills": [], "resources": []},
         )["memory"]
 
     def test_timeout_returns_token_overlap_picks_not_empty(self):
         """The measured failure: a slow model must not cost the turn's memory."""
+
         async def _slow_client(**kwargs):
             mock_client = MagicMock()
 
@@ -362,12 +392,18 @@ class TestLLMRouterDegradesRatherThanSilencing:
         router = LLMRouter(timeout_seconds=0.01)
         with patch("multiplai_core.model_client.create_client", _slow_client):
             with pytest.raises(RouterCallFailed):
-                asyncio.run(router._bounded_select_multi(
-                    "prompt", None,
-                    {"memory": self._catalog(), "skills": [], "resources": []},
-                    {"memory": {"python.md", "writing.md"},
-                     "skills": set(), "resources": set()},
-                ))
+                asyncio.run(
+                    router._bounded_select_multi(
+                        "prompt",
+                        None,
+                        {"memory": self._catalog(), "skills": [], "resources": []},
+                        {
+                            "memory": {"python.md", "writing.md"},
+                            "skills": set(),
+                            "resources": set(),
+                        },
+                    )
+                )
 
     def test_stalled_client_creation_is_also_bounded(self):
         """M5: the budget covers create_client, not only the query.
@@ -381,14 +417,22 @@ class TestLLMRouterDegradesRatherThanSilencing:
             await asyncio.sleep(5)
 
         router = LLMRouter(timeout_seconds=0.01)
-        with patch("multiplai_core.model_client.create_client", _stalled_create), \
-                pytest.raises(RouterCallFailed):
-            asyncio.run(router._bounded_select_multi(
-                "prompt", None,
-                {"memory": self._catalog(), "skills": [], "resources": []},
-                {"memory": {"python.md", "writing.md"},
-                 "skills": set(), "resources": set()},
-            ))
+        with (
+            patch("multiplai_core.model_client.create_client", _stalled_create),
+            pytest.raises(RouterCallFailed),
+        ):
+            asyncio.run(
+                router._bounded_select_multi(
+                    "prompt",
+                    None,
+                    {"memory": self._catalog(), "skills": [], "resources": []},
+                    {
+                        "memory": {"python.md", "writing.md"},
+                        "skills": set(),
+                        "resources": set(),
+                    },
+                )
+            )
 
     def test_model_that_ran_and_chose_nothing_still_abstains(self):
         """Abstention is preserved — the fallback must not fire on a real answer."""
@@ -401,8 +445,9 @@ class TestLLMRouterDegradesRatherThanSilencing:
             return mock_client
 
         with patch("multiplai_core.model_client.create_client", _create):
-            picks = self._select(self._router(timeout_seconds=30),
-                                 "help me debug python code")
+            picks = self._select(
+                self._router(timeout_seconds=30), "help me debug python code"
+            )
         assert picks == [], (
             "a model that ran and picked nothing is a deliberate NONE; "
             "degrading here would re-inject on every abstention"
@@ -414,8 +459,10 @@ class TestLLMRouterDegradesRatherThanSilencing:
     def test_fallback_inherits_configured_keep_ratio(self):
         """create_router must hand the fallback the user's keep_ratio."""
         from lib.memory_router import create_router
-        with patch("multiplai_core.model_client.detect_client_type",
-                   return_value="agent_sdk"):
+
+        with patch(
+            "multiplai_core.model_client.detect_client_type", return_value="agent_sdk"
+        ):
             router = create_router("llm", keep_ratio=0.42)
         assert router._fallback.keep_ratio == 0.42
 
@@ -428,10 +475,12 @@ class TestLLMRouterDegradesRatherThanSilencing:
 class TestProtocolConformance:
     def test_token_overlap_router_is_corpus_router(self):
         from lib.memory_router import CorpusRouter, TokenOverlapRouter
+
         assert isinstance(TokenOverlapRouter(), CorpusRouter)
 
     def test_llm_router_is_corpus_router(self):
         from lib.memory_router import CorpusRouter, LLMRouter
+
         assert isinstance(LLMRouter(), CorpusRouter)
 
 
@@ -458,6 +507,7 @@ class TestTokenOverlapMultiCorpus:
 
     def test_returns_dict_with_three_corpora(self):
         from lib.memory_router import TokenOverlapRouter
+
         result = TokenOverlapRouter().select_multi(
             "writing a blog post", None, self._corpora()
         )
@@ -465,11 +515,13 @@ class TestTokenOverlapMultiCorpus:
 
     def test_empty_prompt_returns_all_empty(self):
         from lib.memory_router import TokenOverlapRouter
+
         result = TokenOverlapRouter().select_multi("", None, self._corpora())
         assert result == {"memory": [], "skills": [], "resources": []}
 
     def test_routes_to_each_corpus_independently(self):
         from lib.memory_router import TokenOverlapRouter
+
         result = TokenOverlapRouter().select_multi(
             "writing a blog post", None, self._corpora()
         )
@@ -479,6 +531,7 @@ class TestTokenOverlapMultiCorpus:
 
     def test_resources_corpus_matched_by_intent(self):
         from lib.memory_router import TokenOverlapRouter
+
         result = TokenOverlapRouter().select_multi(
             "researching voice AI frameworks", None, self._corpora()
         )
@@ -487,6 +540,7 @@ class TestTokenOverlapMultiCorpus:
     def test_last_response_supplements_tokens(self):
         """Last-response tokens combine with prompt tokens for matching."""
         from lib.memory_router import TokenOverlapRouter
+
         # Prompt alone has zero overlap with python intent
         result = TokenOverlapRouter().select_multi(
             "what next?",
@@ -497,6 +551,7 @@ class TestTokenOverlapMultiCorpus:
 
     def test_missing_corpus_treated_as_empty(self):
         from lib.memory_router import TokenOverlapRouter
+
         # Only memory corpus provided
         # intent_domains rich enough to clear the relevance floor —
         # the mechanism under test is "absent corpora → []", not the
@@ -504,8 +559,7 @@ class TestTokenOverlapMultiCorpus:
         result = TokenOverlapRouter().select_multi(
             "writing a blog post",
             None,
-            {"memory": [{"source": "x.md",
-                         "intent_domains": ["writing a blog post"]}]},
+            {"memory": [{"source": "x.md", "intent_domains": ["writing a blog post"]}]},
         )
         assert result["skills"] == []
         assert result["resources"] == []
@@ -513,9 +567,9 @@ class TestTokenOverlapMultiCorpus:
 
     def test_max_files_per_corpus_caps_each_independently(self):
         from lib.memory_router import TokenOverlapRouter
+
         many = [
-            {"source": f"m{i}.md", "intent_domains": ["python code"]}
-            for i in range(20)
+            {"source": f"m{i}.md", "intent_domains": ["python code"]} for i in range(20)
         ]
         corpora = {"memory": many, "skills": [], "resources": []}
         result = TokenOverlapRouter().select_multi(
@@ -534,27 +588,34 @@ class TestRoutingPolicy:
     def _rich(self) -> list[dict]:
         # One strongly-relevant entry + several weak ones.
         return [
-            {"source": "finances.md",
-             "intent_domains": ["italian taxes and FBAR filing"],
-             "keywords": ["FBAR", "backdoor Roth", "Form 8606"]},
+            {
+                "source": "finances.md",
+                "intent_domains": ["italian taxes and FBAR filing"],
+                "keywords": ["FBAR", "backdoor Roth", "Form 8606"],
+            },
             {"source": "python.md", "intent_domains": ["debugging python"]},
             {"source": "life.md", "intent_domains": ["personal life logistics"]},
         ]
 
     def test_none_floor_returns_empty_when_no_real_match(self):
         from lib.memory_router import TokenOverlapRouter
+
         # Prompt shares at most a faint token with any entry → below
         # MIN_SIGNAL → nothing injected (the abstention the old
         # always-top-N behavior could never do).
         result = TokenOverlapRouter().select_multi(
-            "fix the CSS bug on line 42", None,
+            "fix the CSS bug on line 42",
+            None,
             {"memory": self._rich(), "skills": [], "resources": []},
         )
         assert result["memory"] == []
 
-    @pytest.mark.parametrize("phrase", ["yes", "go ahead", "do it", "thanks", "continue"])
+    @pytest.mark.parametrize(
+        "phrase", ["yes", "go ahead", "do it", "thanks", "continue"]
+    )
     def test_continuation_guard_returns_all_empty(self, phrase):
         from lib.memory_router import TokenOverlapRouter
+
         r = TokenOverlapRouter()
         result = r.select_multi(
             phrase,
@@ -566,6 +627,7 @@ class TestRoutingPolicy:
 
     def test_relative_cutoff_isolates_the_strong_match(self):
         from lib.memory_router import TokenOverlapRouter
+
         result = TokenOverlapRouter().select_multi(
             "help with my FBAR and backdoor Roth for italian taxes",
             None,
@@ -589,6 +651,7 @@ class TestRoutingPolicy:
     def test_apply_policy_ratio_trims_the_tail(self):
         # Direct unit test of the lever: a higher ratio raises the floor.
         from lib.memory_router import _apply_policy
+
         scored = [(10.0, "a"), (6.0, "b"), (3.0, "c"), (2.5, "d"), (2.1, "e")]
         # 0.05×10 = 0.5 < MIN_SIGNAL, so floor = 2.0 → everything ≥ 2.0.
         assert _apply_policy(scored, 10, 0.05) == ["a", "b", "c", "d", "e"]
@@ -597,12 +660,15 @@ class TestRoutingPolicy:
 
     def test_keep_ratio_tightens_the_pick(self):
         from lib.memory_router import TokenOverlapRouter
+
         prompt = "alpha beta gamma delta epsilon"
         cat = self._graded_catalog()
         loose = TokenOverlapRouter(keep_ratio=0.05).select_multi(
-            prompt, None, {"memory": cat, "skills": [], "resources": []})
+            prompt, None, {"memory": cat, "skills": [], "resources": []}
+        )
         strict = TokenOverlapRouter(keep_ratio=0.60).select_multi(
-            prompt, None, {"memory": cat, "skills": [], "resources": []})
+            prompt, None, {"memory": cat, "skills": [], "resources": []}
+        )
         # A higher ratio can only trim the tail, never add files, and the
         # top match survives both.
         assert len(strict["memory"]) < len(loose["memory"])
@@ -610,15 +676,18 @@ class TestRoutingPolicy:
         assert strict["memory"][0] == loose["memory"][0]
 
     def test_create_router_threads_keep_ratio(self):
-        from lib.memory_router import create_router, DEFAULT_KEEP_RATIO
+        from lib.memory_router import DEFAULT_KEEP_RATIO, create_router
+
         assert create_router("token_overlap").keep_ratio == DEFAULT_KEEP_RATIO
         assert create_router("token_overlap", keep_ratio=0.5).keep_ratio == 0.5
 
     def test_diagnostics_exposed_for_logging(self):
         from lib.memory_router import TokenOverlapRouter
+
         r = TokenOverlapRouter()
         r.select_multi(
-            "FBAR and backdoor Roth", None,
+            "FBAR and backdoor Roth",
+            None,
             {"memory": self._rich(), "skills": [], "resources": []},
         )
         mem = r.last_scores["memory"]
@@ -632,29 +701,41 @@ class TestRoutingPolicy:
     # intent_domains can clear MIN_SIGNAL.
     def _glossary_catalog(self) -> list[dict]:
         return [
-            {"source": "career.md",
-             "intent_domains": ["writing or tailoring a resume or CV"],
-             "keywords": ["Python", "Docker", "AWS", "Kubernetes",
-                          "FastAPI", "DevOps", "agentic AI"]},
-            {"source": "python.md",
-             "intent_domains": ["debugging python code"]},
+            {
+                "source": "career.md",
+                "intent_domains": ["writing or tailoring a resume or CV"],
+                "keywords": [
+                    "Python",
+                    "Docker",
+                    "AWS",
+                    "Kubernetes",
+                    "FastAPI",
+                    "DevOps",
+                    "agentic AI",
+                ],
+            },
+            {"source": "python.md", "intent_domains": ["debugging python code"]},
         ]
 
     def test_glossary_keywords_alone_do_not_pick_the_file(self):
         from lib.memory_router import TokenOverlapRouter
+
         # Pure coding prompt: overlaps career.md's generic keywords
         # (python, docker) but none of its resume intent_domain.
         result = TokenOverlapRouter().select_multi(
-            "debug my python docker container", None,
+            "debug my python docker container",
+            None,
             {"memory": self._glossary_catalog(), "skills": [], "resources": []},
         )
         assert "career.md" not in result["memory"]
 
     def test_intent_domain_still_picks_the_file(self):
         from lib.memory_router import TokenOverlapRouter
+
         # The legitimate route: a prompt that hits the resume domain.
         result = TokenOverlapRouter().select_multi(
-            "help writing and tailoring my resume", None,
+            "help writing and tailoring my resume",
+            None,
             {"memory": self._glossary_catalog(), "skills": [], "resources": []},
         )
         assert "career.md" in result["memory"]
@@ -685,13 +766,18 @@ class TestSingleTokenMatchFloor:
             {"source": "ooo.md", "intent_domains": ["out of office"]},
             {"source": "py.md", "intent_domains": ["debugging python segfaults"]},
             {"source": "cook.md", "intent_domains": ["cooking dinner recipes"]},
-            {"source": "infra.md", "intent_domains": ["deploying cloud infrastructure"]},
+            {
+                "source": "infra.md",
+                "intent_domains": ["deploying cloud infrastructure"],
+            },
         ]
 
     def _route(self, prompt: str, catalog: list[dict] | None = None) -> list[str]:
         from lib.memory_router import TokenOverlapRouter
+
         return TokenOverlapRouter().select_multi(
-            prompt, None,
+            prompt,
+            None,
             {"memory": catalog or self._catalog(), "skills": [], "resources": []},
         )["memory"]
 
@@ -736,6 +822,7 @@ class TestSingleTokenMatchFloor:
 
     def test_apply_policy_eligibility_gate(self):
         from lib.memory_router import _apply_policy
+
         scored = [(5.0, "inelig"), (4.0, "elig")]
         # Gate: only eligible entries can be picked; floor/threshold
         # anchor on the best ELIGIBLE score.
@@ -749,6 +836,7 @@ class TestSingleTokenMatchFloor:
 class TestIdfCap:
     def test_lone_df1_term_capped_at_max_term_idf(self):
         from lib.memory_router import MAX_TERM_IDF, _idf_map
+
         # 30-entry catalog, term in exactly one entry: uncapped smoothed
         # IDF is log(31/2)+1 ≈ 3.74 — the inflation that let one token
         # beat MIN_SIGNAL. The cap bounds it.
@@ -813,7 +901,7 @@ class TestLLMRouterMultiCorpus:
     def test_empty_prompt_returns_all_empty_no_call(self):
         from lib.memory_router import LLMRouter
 
-        fake_create, mock_client = self._make_mock_client('{}')
+        fake_create, mock_client = self._make_mock_client("{}")
         with patch("multiplai_core.model_client.create_client", fake_create):
             result = LLMRouter().select_multi("", None, self._corpora())
         assert result == {"memory": [], "skills": [], "resources": []}
@@ -863,7 +951,7 @@ class TestLLMRouterMultiCorpus:
     def test_all_empty_corpora_no_call(self):
         from lib.memory_router import LLMRouter
 
-        fake_create, mock_client = self._make_mock_client('{}')
+        fake_create, mock_client = self._make_mock_client("{}")
         with patch("multiplai_core.model_client.create_client", fake_create):
             result = LLMRouter().select_multi(
                 "prompt",
@@ -931,14 +1019,20 @@ class TestRouterThinking:
 
     def _corpora(self):
         return {
-            "memory": [{"source": "python.md", "summary": "py",
-                        "intent_domains": ["python code"]}],
+            "memory": [
+                {
+                    "source": "python.md",
+                    "summary": "py",
+                    "intent_domains": ["python code"],
+                }
+            ],
             "skills": [],
             "resources": [],
         }
 
     def test_resolve_defaults_to_disabled(self, monkeypatch):
         import lib.memory_router as mr
+
         monkeypatch.delenv(mr.ROUTER_THINKING_ENV_VAR, raising=False)
         assert mr.resolve_router_thinking() == {"type": "disabled"}
 
@@ -952,16 +1046,19 @@ class TestRouterThinking:
         the duplication this option no longer carries.
         """
         import lib.memory_router as mr
+
         monkeypatch.setenv(mr.ROUTER_THINKING_ENV_VAR, value)
         assert mr.resolve_router_thinking() is None
 
     def test_unrecognised_value_stays_disabled(self, monkeypatch):
         import lib.memory_router as mr
+
         monkeypatch.setenv(mr.ROUTER_THINKING_ENV_VAR, "maybe")
         assert mr.resolve_router_thinking() == {"type": "disabled"}
 
     def test_thinking_forwarded_to_client_when_core_supports_it(self, monkeypatch):
         import lib.memory_router as mr
+
         monkeypatch.setattr(mr, "core_supports_thinking", lambda: True)
         fake_create, mock_client = self._client()
         with patch("multiplai_core.model_client.create_client", fake_create):
@@ -978,6 +1075,7 @@ class TestRouterThinking:
         Passing `thinking=None` would not help — the keyword must not be sent.
         """
         import lib.memory_router as mr
+
         monkeypatch.setattr(mr, "core_supports_thinking", lambda: False)
         fake_create, mock_client = self._client()
         with patch("multiplai_core.model_client.create_client", fake_create):
@@ -986,6 +1084,7 @@ class TestRouterThinking:
 
     def test_opt_out_also_omits_the_keyword(self, monkeypatch):
         import lib.memory_router as mr
+
         monkeypatch.setattr(mr, "core_supports_thinking", lambda: True)
         monkeypatch.setenv(mr.ROUTER_THINKING_ENV_VAR, "true")
         fake_create, mock_client = self._client()
@@ -1007,9 +1106,11 @@ class TestRouterThinking:
         by-name monkeypatches above are patching.
         """
         import inspect
+
         import lib.memory_router as mr
         import lib.thinking as th
         from multiplai_core.model_client import ModelClient
+
         expected = "thinking" in inspect.signature(ModelClient.query).parameters
         monkeypatch.setattr(th, "_SUPPORT_CACHE", {})  # bypass the process cache
         assert mr.core_supports_thinking() is expected
@@ -1039,10 +1140,16 @@ class TestHybridRouter:
             # Two distinct domain tokens, so a prompt naming both clears
             # MIN_DOMAIN_MATCHES.
             "memory": [
-                {"source": "python.md", "summary": "py patterns",
-                 "intent_domains": ["python code debugging"]},
-                {"source": "travel.md", "summary": "trips",
-                 "intent_domains": ["flight booking itinerary"]},
+                {
+                    "source": "python.md",
+                    "summary": "py patterns",
+                    "intent_domains": ["python code debugging"],
+                },
+                {
+                    "source": "travel.md",
+                    "summary": "trips",
+                    "intent_domains": ["flight booking itinerary"],
+                },
             ],
             "skills": [],
             "resources": [],
@@ -1050,10 +1157,11 @@ class TestHybridRouter:
 
     def _pick(self, prompt, reply, last_response=None):
         from lib.memory_router import HybridRouter
+
         with patch("multiplai_core.model_client.create_client", self._client(reply)):
-            return HybridRouter().select_multi(
-                prompt, last_response, self._corpora()
-            )["memory"]
+            return HybridRouter().select_multi(prompt, last_response, self._corpora())[
+                "memory"
+            ]
 
     def test_pick_survives_when_it_clears_the_breadth_gate(self):
         picks = self._pick(
@@ -1091,13 +1199,16 @@ class TestHybridRouter:
 
     def test_anti_domains_veto_is_honoured(self):
         from lib.memory_router import HybridRouter
+
         corpora = {
-            "memory": [{
-                "source": "python.md",
-                "summary": "py",
-                "intent_domains": ["python code debugging"],
-                "anti_domains": ["kubernetes cluster"],
-            }],
+            "memory": [
+                {
+                    "source": "python.md",
+                    "summary": "py",
+                    "intent_domains": ["python code debugging"],
+                    "anti_domains": ["kubernetes cluster"],
+                }
+            ],
             "skills": [],
             "resources": [],
         }
@@ -1127,6 +1238,7 @@ class TestHybridRouter:
         """Switching strategy must not silently turn off the quality log that
         the eval harness and /health both read."""
         from lib.memory_router import HybridRouter
+
         reply = '{"memory": ["travel.md"], "skills": [], "resources": []}'
         with patch("multiplai_core.model_client.create_client", self._client(reply)):
             router = HybridRouter()
@@ -1136,6 +1248,7 @@ class TestHybridRouter:
 
     def test_registered_in_the_factory(self, monkeypatch):
         import lib.memory_router as mr
+
         monkeypatch.setattr(
             "multiplai_core.model_client.detect_client_type", lambda: "agent-sdk"
         )
@@ -1145,6 +1258,7 @@ class TestHybridRouter:
 
     def test_degrades_to_token_overlap_without_a_client(self, monkeypatch):
         import lib.memory_router as mr
+
         monkeypatch.setattr(
             "multiplai_core.model_client.detect_client_type", lambda: "none"
         )
@@ -1158,6 +1272,7 @@ class TestHybridRouter:
             "multiplai_core.model_client.detect_client_type", lambda: "agent-sdk"
         )
         import lib.memory_router as mr
+
         router = mr.create_router("llm_hybrid", keep_ratio=0.42)
         assert router._gate is router._llm._fallback
         assert router._gate.keep_ratio == 0.42
@@ -1179,10 +1294,16 @@ class TestLLMRouterReturnsWhenTeardownWedges:
 
     def _catalog(self) -> list[dict]:
         return [
-            {"source": "writing.md", "summary": "voice guide",
-             "intent_domains": ["writing"]},
-            {"source": "python.md", "summary": "py patterns",
-             "intent_domains": ["python code"]},
+            {
+                "source": "writing.md",
+                "summary": "voice guide",
+                "intent_domains": ["writing"],
+            },
+            {
+                "source": "python.md",
+                "summary": "py patterns",
+                "intent_domains": ["python code"],
+            },
         ]
 
     def _wedged_client(self):
@@ -1216,12 +1337,15 @@ class TestLLMRouterReturnsWhenTeardownWedges:
         started = time.monotonic()
         with patch("multiplai_core.model_client.create_client", self._wedged_client()):
             picks = router.select_multi(
-                "help me debug python code", None,
+                "help me debug python code",
+                None,
                 {"memory": self._catalog(), "skills": [], "resources": []},
             )["memory"]
         elapsed = time.monotonic() - started
 
-        assert picks == ["python.md"], "a wedged call must still degrade to token_overlap"
+        assert picks == ["python.md"], (
+            "a wedged call must still degrade to token_overlap"
+        )
         assert elapsed < 0.2 + _LEFTOVER_GRACE_S + 1.0, (
             f"select_multi took {elapsed:.1f}s; it waited on the wedged "
             f"teardown ({self.WEDGE_S}s) instead of returning at the deadline"
@@ -1233,14 +1357,19 @@ class TestLLMRouterReturnsWhenTeardownWedges:
         from lib.memory_router import LLMRouter
 
         router = LLMRouter(timeout_seconds=0.1)
-        with caplog.at_level(logging.WARNING, logger="lib.memory_router"), \
-                patch("multiplai_core.model_client.create_client", self._wedged_client()):
+        with (
+            caplog.at_level(logging.WARNING, logger="lib.memory_router"),
+            patch("multiplai_core.model_client.create_client", self._wedged_client()),
+        ):
             router.select_multi(
-                "help me debug python code", None,
+                "help me debug python code",
+                None,
                 {"memory": self._catalog(), "skills": [], "resources": []},
             )
         messages = [r.getMessage() for r in caplog.records]
-        assert any("timed out after 0.1s; degrading to token_overlap" in m for m in messages)
+        assert any(
+            "timed out after 0.1s; degrading to token_overlap" in m for m in messages
+        )
         assert any("still pending after the call" in m for m in messages)
 
     def test_refuses_to_run_inside_a_running_loop(self):
@@ -1306,7 +1435,10 @@ class TestLLMRouterReturnsWhenTeardownWedges:
         )
         started = time.monotonic()
         proc = subprocess.run(
-            [sys.executable, str(script)], capture_output=True, text=True, timeout=20,
+            [sys.executable, str(script)],
+            capture_output=True,
+            text=True,
+            timeout=20,
         )
         elapsed = time.monotonic() - started
         assert "PICKS ['python.md']" in proc.stdout, proc.stderr[-2000:]

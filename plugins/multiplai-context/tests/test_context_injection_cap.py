@@ -29,7 +29,6 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
-
 from conftest import write_catalog
 
 PLUGIN_ROOT = Path(__file__).parent.parent
@@ -97,7 +96,9 @@ class TestResolveSectionName:
     def test_a_gloss_appended_after_a_dash_is_cut_off(self):
         """Seen in the logs: the router pasted the anchor's gloss into the pick."""
         assert (
-            self._resolve("Distribution — Release chain, marketplace tags, SECURITY.md…")
+            self._resolve(
+                "Distribution — Release chain, marketplace tags, SECURITY.md…"
+            )
             == "Distribution"
         )
         assert (
@@ -213,7 +214,11 @@ class TestAnchorMissIsNeverTheWholeFile:
 
     def test_a_resolved_alias_is_stamped_for_cooldown(self, tmp_path):
         """The router will emit the same misspelt pick next turn; it must match."""
-        from context_manager import MemoryLoadReport, _cooldown_keys, _load_memory_content
+        from context_manager import (
+            MemoryLoadReport,
+            _cooldown_keys,
+            _load_memory_content,
+        )
 
         (tmp_path / "big.md").write_text(_doc("Alpha", "Beta Release", "Gamma"))
         picks = ["big.md#beta release — gloss"]
@@ -224,7 +229,6 @@ class TestAnchorMissIsNeverTheWholeFile:
         assert keys == {"big.md#Beta Release", "big.md#beta release — gloss"}
 
 
-
 class TestRankOrderSurvivesGrouping:
     def test_entries_come_back_in_pick_order_across_files(self, tmp_path):
         """The budget drops from the end, so the end must be the lowest rank."""
@@ -232,9 +236,7 @@ class TestRankOrderSurvivesGrouping:
 
         (tmp_path / "a.md").write_text(_doc("Alpha", "Beta", "Gamma"))
         (tmp_path / "b.md").write_text("# B\n\nsmall b\n")
-        loaded = _load_memory_content(
-            tmp_path, ["a.md#Alpha", "b.md", "a.md#Gamma"]
-        )
+        loaded = _load_memory_content(tmp_path, ["a.md#Alpha", "b.md", "a.md#Gamma"])
         assert list(loaded) == ["a.md#Alpha", "b.md", "a.md#Gamma"]
         # The preamble still rides on the file's first (highest-ranked) slice.
         assert "**Purpose:** test file." in loaded["a.md#Alpha"]
@@ -285,8 +287,10 @@ class TestLargeFilesLoadOnlyBySection:
         report = MemoryLoadReport()
 
         loaded = _load_memory_content(
-            tmp_path, ["big.md", "big.md#Beta"],
-            whole_file_max_bytes=1000, report=report,
+            tmp_path,
+            ["big.md", "big.md#Beta"],
+            whole_file_max_bytes=1000,
+            report=report,
         )
         assert list(loaded) == ["big.md#Beta"]
         assert report.pointers == []
@@ -315,7 +319,11 @@ class TestLargeFilesLoadOnlyBySection:
         assert "Section 0 content." not in loaded["huge.md"]
 
     def test_a_bare_pick_answered_by_sections_is_stamped_for_cooldown(self, tmp_path):
-        from context_manager import MemoryLoadReport, _cooldown_keys, _load_memory_content
+        from context_manager import (
+            MemoryLoadReport,
+            _cooldown_keys,
+            _load_memory_content,
+        )
 
         (tmp_path / "big.md").write_text(_doc("Alpha", "Beta", "Gamma"))
         picks = ["big.md", "big.md#Beta"]
@@ -324,15 +332,14 @@ class TestLargeFilesLoadOnlyBySection:
             tmp_path, picks, whole_file_max_bytes=1000, report=report
         )
         assert set(_cooldown_keys(picks, loaded, report.aliases)) == {
-            "big.md", "big.md#Beta",
+            "big.md",
+            "big.md#Beta",
         }
 
     def test_a_pointer_carries_at_most_a_bounded_preamble(self, tmp_path):
         from context_manager import _POINTER_PREAMBLE_MAX_CHARS, _load_memory_content
 
-        (tmp_path / "big.md").write_text(
-            _doc("Alpha", "Beta", preamble="P" * 10_000)
-        )
+        (tmp_path / "big.md").write_text(_doc("Alpha", "Beta", preamble="P" * 10_000))
         loaded = _load_memory_content(tmp_path, ["big.md"], whole_file_max_bytes=1000)
         assert loaded["big.md"].count("P") <= _POINTER_PREAMBLE_MAX_CHARS + 5
         assert "- Beta" in loaded["big.md"]
@@ -340,15 +347,19 @@ class TestLargeFilesLoadOnlyBySection:
     def test_a_pointer_is_not_attributed_as_a_whole_file_load(self, tmp_path):
         """Utilisation reads ``sections_by_file == []`` as "the whole file"."""
         from context_manager import (
-            MemoryLoadReport, _load_memory_content, _section_attribution,
+            MemoryLoadReport,
+            _load_memory_content,
+            _section_attribution,
         )
 
         (tmp_path / "big.md").write_text(_doc("Alpha", "Beta", "Gamma"))
         (tmp_path / "small.md").write_text("# Small\n\nsmall body\n")
         report = MemoryLoadReport()
         loaded = _load_memory_content(
-            tmp_path, ["big.md", "small.md"],
-            whole_file_max_bytes=1000, report=report,
+            tmp_path,
+            ["big.md", "small.md"],
+            whole_file_max_bytes=1000,
+            report=report,
         )
 
         sections, sizes = _section_attribution(loaded, pointers=report.pointers)
@@ -376,8 +387,11 @@ class TestSharedBankFilesAreNeverPointedAt:
 
         report = MemoryLoadReport()
         loaded = _load_memory_content(
-            tmp_path, ["team/dev.md"], self._banks(tmp_path),
-            whole_file_max_bytes=1000, report=report,
+            tmp_path,
+            ["team/dev.md"],
+            self._banks(tmp_path),
+            whole_file_max_bytes=1000,
+            report=report,
         )
         assert loaded == {} and report.pointers == []
 
@@ -385,7 +399,9 @@ class TestSharedBankFilesAreNeverPointedAt:
         from context_manager import _load_memory_content
 
         loaded = _load_memory_content(
-            tmp_path, ["team/dev.md#Beta"], self._banks(tmp_path),
+            tmp_path,
+            ["team/dev.md#Beta"],
+            self._banks(tmp_path),
             whole_file_max_bytes=1000,
         )
         assert list(loaded) == ["team/dev.md#Beta"]
@@ -438,7 +454,7 @@ class TestMemoryBudget:
             "a.md": "a" * 10_000,
             "b.md": "b" * 10_000,
             "c.md": "c" * 30_000,
-            "d.md": "d" * 1_000,   # fits, but ranks below c: dropped too
+            "d.md": "d" * 1_000,  # fits, but ranks below c: dropped too
         }
         with caplog.at_level(logging.INFO):
             kept, dropped = _apply_memory_budget(tmp_path, content, 25_000)
@@ -583,7 +599,8 @@ def _run_body(monkeypatch, capsys, picks, catalog_sources):
 
     env = context_manager.get_paths()
     write_catalog(
-        env.catalogs_dir(), "memory.json",
+        env.catalogs_dir(),
+        "memory.json",
         [{"source": s, "summary": s} for s in catalog_sources],
     )
     monkeypatch.setattr(
@@ -639,7 +656,8 @@ class TestHookBody:
             raise RuntimeError("router down")
 
         write_catalog(
-            context_manager.get_paths().catalogs_dir(), "memory.json",
+            context_manager.get_paths().catalogs_dir(),
+            "memory.json",
             [{"source": "r0.md", "summary": "r0"}],
         )
         monkeypatch.setattr(context_manager, "create_router", broken_router)
@@ -659,7 +677,9 @@ class TestHookBody:
         (mem / "recent.md").write_text("# Recent\n\nrecency-net content\n")
 
         context, notes = _run_body(
-            monkeypatch, capsys, ["big.md#Ghost", "gone.md"],
+            monkeypatch,
+            capsys,
+            ["big.md#Ghost", "gone.md"],
             ["big.md", "gone.md", "recent.md"],
         )
         assert "recency-net content" in context
@@ -698,7 +718,6 @@ def data_env(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(data_dir))
     _reset_cache()
     import context_manager
-
     from conftest import real_warn_state_path
 
     # The autouse conftest fixture points the state file at a per-test temp
@@ -712,11 +731,15 @@ def _stale_catalog(data_dir: Path, name: str = "skills.json") -> Path:
     from generators.base import CATALOG_SCHEMA_VERSION
 
     path = data_dir / "catalogs" / name
-    path.write_text(json.dumps({
-        "schema_version": CATALOG_SCHEMA_VERSION,
-        "generated_at": "2020-01-01T00:00:00Z",
-        "entries": [{"name": "x", "summary": "x"}],
-    }))
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": CATALOG_SCHEMA_VERSION,
+                "generated_at": "2020-01-01T00:00:00Z",
+                "entries": [{"name": "x", "summary": "x"}],
+            }
+        )
+    )
     return path
 
 
@@ -729,7 +752,8 @@ def _new_process():
 
 def _stale_warnings(caplog):
     return [
-        r.getMessage() for r in caplog.records
+        r.getMessage()
+        for r in caplog.records
         if r.levelno >= logging.WARNING and "stale" in r.getMessage()
     ]
 

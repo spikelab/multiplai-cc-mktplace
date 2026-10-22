@@ -14,14 +14,13 @@ import json
 from pathlib import Path
 
 import pytest
-
 from build_pipeline import budget
 from build_pipeline.config import EpicSettings
 from build_pipeline.epic import lock as epic_lock
-from .epic_row_helpers import EpicSplitAnswer
 
 from .epic_row_helpers import (
     CallLog,
+    EpicSplitAnswer,
     Fakes,
     approve,
     child,
@@ -36,7 +35,9 @@ from .epic_row_helpers import (
     use_workspace,
 )
 
-THREE = EpicSplitAnswer(single=False, reason="Three parts.", children=[child("a"), child("b"), child("c")])
+THREE = EpicSplitAnswer(
+    single=False, reason="Three parts.", children=[child("a"), child("b"), child("c")]
+)
 EACH = [{"spend": 4.0}]
 
 
@@ -65,29 +66,39 @@ class Root:
 
     def snapshot(self) -> dict:
         names = commit_names([self.root / "o" / "r.git", self.project])
-        return name_commits({"epic": epic_snapshot(self.dir, self.root),
-                             "records": records_snapshot(self.dir, self.root),
-                             "summary": last_summary(self.dir, self.root)}, names)
+        return name_commits(
+            {
+                "epic": epic_snapshot(self.dir, self.root),
+                "records": records_snapshot(self.dir, self.root),
+                "summary": last_summary(self.dir, self.root),
+            },
+            names,
+        )
 
     def launches(self) -> list[dict]:
         return CallLog(self.root / "calls.log").calls()
 
 
-def test_b2_s3_still_over_the_ceiling_exits_3_and_launches_nothing(tmp_path, monkeypatch, capsys):
+def test_b2_s3_still_over_the_ceiling_exits_3_and_launches_nothing(
+    tmp_path, monkeypatch, capsys
+):
     stopped = Root(tmp_path / "stopped", monkeypatch)
     clean = Root(tmp_path / "clean", monkeypatch)
 
     assert clean.run() == 3
-    assert stopped.run() == 3                   # the stop: EPIC:BUDGET, exit 3
+    assert stopped.run() == 3  # the stop: EPIC:BUDGET, exit 3
     first = capsys.readouterr().out
     assert first.splitlines().count("EPIC:BUDGET:8.00") == 2
 
-    assert stopped.run() == 3                   # the resume
+    assert stopped.run() == 3  # the resume
     out = capsys.readouterr().out.splitlines()
     assert "EPIC:BUDGET:8.00" in out
-    assert len(stopped.launches()) == 2         # a and b; c never launched
+    assert len(stopped.launches()) == 2  # a and b; c never launched
 
     assert stopped.snapshot() == clean.snapshot()
     assert stopped.launches() == clean.launches()
     saved = json.loads((stopped.dir / "epic.json").read_text())
-    assert saved["spent_usd"] == pytest.approx(8.0) and saved["child_status"]["c"]["status"] == "pending"
+    assert (
+        saved["spent_usd"] == pytest.approx(8.0)
+        and saved["child_status"]["c"]["status"] == "pending"
+    )

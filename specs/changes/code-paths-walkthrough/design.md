@@ -44,15 +44,15 @@ Ordering:
 
 ```python
 result = await code_facts.map_paths(
-    root=ctx.snapshot_dir / state.target.repo_key,   # target repo snapshot
+    root=ctx.snapshot_dir / state.target.repo_key,  # target repo snapshot
     commit=state.target.head_sha,
-    resolve=ctx.repo_resolver,                        # same resolver explore uses
-    call=_trace_call(ctx, latch),                     # D5
-    changed_lines=module_lines(state, root),          # D2
-    seeds=web_seeds(state),                           # D3
-    places=known_places(state),                       # D4
-    cap=state.options.scenarios,                      # D6
-    trace_limit=TRACE_LIMIT,                          # 30
+    resolve=ctx.repo_resolver,  # same resolver explore uses
+    call=_trace_call(ctx, latch),  # D5
+    changed_lines=module_lines(state, root),  # D2
+    seeds=web_seeds(state),  # D3
+    places=known_places(state),  # D4
+    cap=state.options.scenarios,  # D6
+    trace_limit=TRACE_LIMIT,  # 30
     concurrency=ctx.config.concurrency,
     cache_dir=ctx.run_dir / "paths-cache",
 )

@@ -6,9 +6,8 @@ import asyncio
 import logging
 
 import pytest
-from pydantic import BaseModel
-
 from multiplai_core import deny_list
+from pydantic import BaseModel
 from research_pipeline import sdk as sdk_module
 from research_pipeline.sdk import (
     LLMCallTimeoutError,
@@ -72,6 +71,7 @@ class TestLLMCallStructured:
             return '```json\n{"name": "widget", "count": 5}\n```'
 
         from research_pipeline import sdk
+
         monkeypatch.setattr(sdk, "llm_call", fake_llm_call)
 
         result = await llm_call_structured("ignored", Thing)
@@ -79,7 +79,9 @@ class TestLLMCallStructured:
         assert result.count == 5
 
     @pytest.mark.asyncio
-    async def test_retries_on_validation_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_retries_on_validation_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         calls = {"n": 0}
 
         async def fake_llm_call(prompt, **kwargs):  # type: ignore[no-untyped-def]
@@ -89,6 +91,7 @@ class TestLLMCallStructured:
             return '{"name": "widget", "count": 3}'
 
         from research_pipeline import sdk
+
         monkeypatch.setattr(sdk, "llm_call", fake_llm_call)
 
         result = await llm_call_structured("ignored", Thing)
@@ -104,6 +107,7 @@ class TestLLMCallStructured:
 
         from research_pipeline import sdk
         from research_pipeline.sdk import LLMCallError
+
         monkeypatch.setattr(sdk, "llm_call", fake_llm_call)
 
         with pytest.raises(LLMCallError):
@@ -119,6 +123,7 @@ class TestLLMCallStructured:
             raise LLMCallTimeoutError("timed out after 1s")
 
         from research_pipeline import sdk
+
         monkeypatch.setattr(sdk, "llm_call", fake_llm_call)
 
         with pytest.raises(LLMCallTimeoutError):
@@ -168,6 +173,7 @@ class TestLLMCallTimeout:
     async def test_default_timeout_is_ten_minutes(self) -> None:
         """Verify the default timeout constant is 600s (10 minutes)."""
         from research_pipeline.sdk import DEFAULT_LLM_CALL_TIMEOUT_S
+
         assert DEFAULT_LLM_CALL_TIMEOUT_S == 600.0
 
     @pytest.mark.asyncio
@@ -182,6 +188,7 @@ class TestLLMCallTimeout:
             return '{"name": "x", "count": 1}'
 
         from research_pipeline import sdk
+
         monkeypatch.setattr(sdk, "llm_call", fake_llm_call)
 
         await llm_call_structured("ignored", Thing, call_timeout=120.0)
@@ -340,7 +347,9 @@ class TestMaxAttempts:
     """Retry policy: SDK-level retry by default, disabled where callers
     already have their own failover (router chain, per-source fetch handling)."""
 
-    def _patch_run_agent(self, monkeypatch: pytest.MonkeyPatch, text: str = "[]") -> dict:
+    def _patch_run_agent(
+        self, monkeypatch: pytest.MonkeyPatch, text: str = "[]"
+    ) -> dict:
         from types import SimpleNamespace
 
         from research_pipeline import sdk
@@ -352,8 +361,11 @@ class TestMaxAttempts:
             return SimpleNamespace(
                 text=text,
                 usage=SimpleNamespace(
-                    input_tokens=1, output_tokens=1,
-                    cache_creation_tokens=0, cache_read_tokens=0, cost_usd=0.0,
+                    input_tokens=1,
+                    output_tokens=1,
+                    cache_creation_tokens=0,
+                    cache_read_tokens=0,
+                    cost_usd=0.0,
                 ),
             )
 
@@ -407,7 +419,9 @@ class TestToolDenyList:
     tool. llm_call passes only the allow-list; run_agent then denies the
     complement with core's `deny_list`. These pin both halves."""
 
-    def _patch_run_agent(self, monkeypatch: pytest.MonkeyPatch, text: str = "[]") -> dict:
+    def _patch_run_agent(
+        self, monkeypatch: pytest.MonkeyPatch, text: str = "[]"
+    ) -> dict:
         return TestMaxAttempts()._patch_run_agent(monkeypatch, text=text)
 
     @pytest.mark.asyncio
@@ -422,11 +436,20 @@ class TestToolDenyList:
     def test_core_denies_everything_to_a_text_only_call(self) -> None:
         denied = deny_list(None)
         for tool in (
-            "Bash", "REPL",                             # execution
-            "WebFetch", "WebSearch", "Artifact", "SendMessage",  # egress
-            "TaskCreate", "CronCreate", "Workflow",     # deferred execution
-            "Read", "Write", "Edit",                    # local files
-            "ToolSearch", "Skill",                      # loading tools back in
+            "Bash",
+            "REPL",  # execution
+            "WebFetch",
+            "WebSearch",
+            "Artifact",
+            "SendMessage",  # egress
+            "TaskCreate",
+            "CronCreate",
+            "Workflow",  # deferred execution
+            "Read",
+            "Write",
+            "Edit",  # local files
+            "ToolSearch",
+            "Skill",  # loading tools back in
         ):
             assert tool in denied, tool
 
@@ -500,13 +523,28 @@ class TestOversizedPromptCarveOut:
         carry the bytes out. Nothing that can may be opened here."""
         denied = set(deny_list(["Read"]))
         for tool in (
-            "Bash", "BashOutput", "REPL", "Task", "Agent",       # execution
-            "Write", "Edit", "MultiEdit", "NotebookEdit",        # local writes
-            "WebFetch", "WebSearch",                             # network
-            "Artifact", "SendMessage", "PushNotification",       # publish / message
-            "RemoteTrigger", "SendFeedback",
-            "TaskCreate", "Workflow", "CronCreate",              # deferred execution
-            "ToolSearch", "Skill", "SlashCommand",               # loading tools back in
+            "Bash",
+            "BashOutput",
+            "REPL",
+            "Task",
+            "Agent",  # execution
+            "Write",
+            "Edit",
+            "MultiEdit",
+            "NotebookEdit",  # local writes
+            "WebFetch",
+            "WebSearch",  # network
+            "Artifact",
+            "SendMessage",
+            "PushNotification",  # publish / message
+            "RemoteTrigger",
+            "SendFeedback",
+            "TaskCreate",
+            "Workflow",
+            "CronCreate",  # deferred execution
+            "ToolSearch",
+            "Skill",
+            "SlashCommand",  # loading tools back in
         ):
             assert tool in denied, tool
 
@@ -538,8 +576,11 @@ class TestThinkingParameter:
             return SimpleNamespace(
                 text="[]",
                 usage=SimpleNamespace(
-                    input_tokens=1, output_tokens=1,
-                    cache_creation_tokens=0, cache_read_tokens=0, cost_usd=0.0,
+                    input_tokens=1,
+                    output_tokens=1,
+                    cache_creation_tokens=0,
+                    cache_read_tokens=0,
+                    cost_usd=0.0,
                 ),
             )
 
@@ -557,9 +598,7 @@ class TestThinkingParameter:
         assert "thinking" not in captured
 
     @pytest.mark.asyncio
-    async def test_forwarded_when_set(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_forwarded_when_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
         captured = self._patch_run_agent(monkeypatch)
         await llm_call("p", thinking={"type": "disabled"})
         assert captured["thinking"] == {"type": "disabled"}
@@ -589,9 +628,18 @@ class TestThinkingParameter:
         captured: dict = {}
 
         async def old_core_run_agent(
-            prompt, *, system_prompt=None, allowed_tools=None,
-            disallowed_tools=None, max_turns=1, max_attempts=2, model=None,
-            effort=None, timeout_s=600.0, label="", component="",
+            prompt,
+            *,
+            system_prompt=None,
+            allowed_tools=None,
+            disallowed_tools=None,
+            max_turns=1,
+            max_attempts=2,
+            model=None,
+            effort=None,
+            timeout_s=600.0,
+            label="",
+            component="",
         ):
             captured.update(
                 system_prompt=system_prompt, max_turns=max_turns, label=label
@@ -599,8 +647,11 @@ class TestThinkingParameter:
             return SimpleNamespace(
                 text="ok",
                 usage=SimpleNamespace(
-                    input_tokens=1, output_tokens=1,
-                    cache_creation_tokens=0, cache_read_tokens=0, cost_usd=0.0,
+                    input_tokens=1,
+                    output_tokens=1,
+                    cache_creation_tokens=0,
+                    cache_read_tokens=0,
+                    cost_usd=0.0,
                 ),
             )
 
@@ -611,7 +662,8 @@ class TestThinkingParameter:
             assert await llm_call("p", thinking={"type": "disabled"}) == "ok"
 
         warnings = [
-            r for r in caplog.records
+            r
+            for r in caplog.records
             if "run_agent() does not accept thinking=" in r.getMessage()
         ]
         assert len(warnings) == 1  # probe is cached: warn once, not per call
@@ -626,16 +678,29 @@ class TestThinkingParameter:
         from types import SimpleNamespace
 
         async def run_agent(
-            prompt, *, system_prompt=None, allowed_tools=None,
-            disallowed_tools=None, max_turns=1, max_attempts=2, model=None,
-            effort=None, thinking=None, timeout_s=600.0, label="", component="",
+            prompt,
+            *,
+            system_prompt=None,
+            allowed_tools=None,
+            disallowed_tools=None,
+            max_turns=1,
+            max_attempts=2,
+            model=None,
+            effort=None,
+            thinking=None,
+            timeout_s=600.0,
+            label="",
+            component="",
         ):
             captured["thinking"] = thinking
             return SimpleNamespace(
                 text="ok",
                 usage=SimpleNamespace(
-                    input_tokens=1, output_tokens=1,
-                    cache_creation_tokens=0, cache_read_tokens=0, cost_usd=0.0,
+                    input_tokens=1,
+                    output_tokens=1,
+                    cache_creation_tokens=0,
+                    cache_read_tokens=0,
+                    cost_usd=0.0,
                 ),
             )
 
@@ -650,9 +715,7 @@ class TestThinkingParameter:
         an SDK too old to have the field is a hard crash on the first
         mechanical call. Probing only the core boundary would ship that."""
         captured: dict = {}
-        monkeypatch.setattr(
-            sdk_module, "run_agent", self._new_core_run_agent(captured)
-        )
+        monkeypatch.setattr(sdk_module, "run_agent", self._new_core_run_agent(captured))
         monkeypatch.setattr(sdk_module, "_sdk_options_accept_thinking", lambda: False)
 
         with caplog.at_level(logging.WARNING, logger="research_pipeline.sdk"):
@@ -660,10 +723,7 @@ class TestThinkingParameter:
             assert await llm_call("p", thinking={"type": "disabled"}) == "ok"
 
         assert captured["thinking"] is None  # dropped, not forwarded
-        warnings = [
-            r for r in caplog.records
-            if "claude-agent-sdk" in r.getMessage()
-        ]
+        warnings = [r for r in caplog.records if "claude-agent-sdk" in r.getMessage()]
         assert len(warnings) == 1
         assert "reinstall it from the marketplace" in warnings[0].getMessage()
 
@@ -672,9 +732,7 @@ class TestThinkingParameter:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         captured: dict = {}
-        monkeypatch.setattr(
-            sdk_module, "run_agent", self._new_core_run_agent(captured)
-        )
+        monkeypatch.setattr(sdk_module, "run_agent", self._new_core_run_agent(captured))
         monkeypatch.setattr(sdk_module, "_sdk_options_accept_thinking", lambda: True)
 
         await llm_call("p", thinking={"type": "disabled"})
@@ -689,7 +747,8 @@ class TestSdkOptionsThinkingProbe:
         from types import SimpleNamespace
 
         monkeypatch.setitem(
-            sys.modules, "claude_agent_sdk",
+            sys.modules,
+            "claude_agent_sdk",
             SimpleNamespace(ClaudeAgentOptions=options),
         )
 

@@ -12,7 +12,6 @@ because a wrong citation looks wrong and a wrong repair looks right.
 """
 
 import pytest
-
 from lib.citation_repair import render_findings, repair_citations
 from lib.learnings_ledger import parse_blocks
 
@@ -30,7 +29,9 @@ FILES = {
     "2026-07-29.md": (
         "# Learnings\n\n\n"
         + block("2026-07-29T09:00:00+00:00", "- **[trust: verified]** Same-day lesson.")
-        + block("2026-07-28T20:54:22+00:00", "- **[trust: verified]** Past-midnight lesson.")
+        + block(
+            "2026-07-28T20:54:22+00:00", "- **[trust: verified]** Past-midnight lesson."
+        )
     ),
 }
 
@@ -45,10 +46,7 @@ def corpus():
 def past_midnight_line(corpus):
     """The line of the record that lives in 07-29 but is stamped 07-28."""
     blocks, _ = corpus
-    match = [
-        b for b in blocks
-        if b.file == "2026-07-29.md" and "20:54:22" in b.text
-    ]
+    match = [b for b in blocks if b.file == "2026-07-29.md" and "20:54:22" in b.text]
     assert len(match) == 1, "fixture no longer has exactly one past-midnight record"
     return match[0].start_line
 
@@ -227,9 +225,7 @@ class TestAnUnreadableFileIsNotAMissingOne:
 
         assert findings == []
 
-    def test_other_files_are_still_repaired_normally(
-        self, corpus, past_midnight_line
-    ):
+    def test_other_files_are_still_repaired_normally(self, corpus, past_midnight_line):
         """One unreadable file must not disarm the whole pass."""
         blocks, learnings = corpus
         line = past_midnight_line
@@ -363,21 +359,26 @@ class TestAdvisoryVsBrokenFindings:
         dated file whose cited line does not exist IS something to chase."""
         blocks, learnings = corpus
         _, findings = repair_citations(
-            "**Source:** 2026-07-28.md:9999\n", blocks, learnings)
+            "**Source:** 2026-07-28.md:9999\n", blocks, learnings
+        )
         assert findings and not any(f.advisory for f in findings)
 
     def test_a_repair_is_never_advisory(self, corpus, past_midnight_line):
         blocks, learnings = corpus
         _, findings = repair_citations(
-            f"**Source:** 2026-07-28.md:{past_midnight_line}\n", blocks, learnings)
+            f"**Source:** 2026-07-28.md:{past_midnight_line}\n", blocks, learnings
+        )
         assert findings[0].repaired and not findings[0].advisory
 
     def test_an_unreadable_file_finding_is_not_advisory(self, corpus):
         """A skipped check is exactly what the reviewer must be warned about."""
         blocks, learnings = corpus
         _, findings = repair_citations(
-            "**Source:** 2026-07-28.md:1\n", blocks, learnings,
-            unreadable=["2026-07-28.md"])
+            "**Source:** 2026-07-28.md:1\n",
+            blocks,
+            learnings,
+            unreadable=["2026-07-28.md"],
+        )
         assert findings and not any(f.advisory for f in findings)
 
     def test_advisory_findings_are_still_reported_to_the_reviewer(self, corpus):

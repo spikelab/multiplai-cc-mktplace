@@ -54,9 +54,9 @@ import difflib
 import logging
 import re
 from collections import Counter
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Mapping, Sequence
 
 from multiplai_core.untrusted import defang, fence, markdown_notice
 
@@ -66,18 +66,18 @@ from lib.thinking import DUPLICATION_THINKING_OPTION, thinking_kwargs
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "Block",
-    "Pair",
-    "Confirmation",
     "DEFAULT_RATIO",
-    "MIN_BLOCK_CHARS",
     "MAX_LENGTH_RATIO",
-    "split_blocks",
-    "normalize",
-    "shortlist",
-    "render_batch",
-    "parse_confirmations",
+    "MIN_BLOCK_CHARS",
+    "Block",
+    "Confirmation",
+    "Pair",
     "confirm_pairs",
+    "normalize",
+    "parse_confirmations",
+    "render_batch",
+    "shortlist",
+    "split_blocks",
 ]
 
 #: Similarity at or above which a pair is worth a model call. Tuned against the
@@ -178,8 +178,12 @@ def split_blocks(text: str, file: str) -> list[Block]:
         if not line.strip():
             flush()
             continue
-        if (_HEADING_RE.match(line) or _RULE_RE.match(line)
-                or _TABLE_RE.match(line) or _LAST_UPDATED_RE.match(line)):
+        if (
+            _HEADING_RE.match(line)
+            or _RULE_RE.match(line)
+            or _TABLE_RE.match(line)
+            or _LAST_UPDATED_RE.match(line)
+        ):
             flush()
             continue
         if _BULLET_RE.match(line):
@@ -243,6 +247,7 @@ def _tokens(normalized: str) -> list[str]:
 
 # --- stage 1: shortlist -----------------------------------------------------
 
+
 @dataclass(frozen=True)
 class Pair:
     """Two blocks stage 1 thinks might state the same fact."""
@@ -259,10 +264,16 @@ class Pair:
         return {
             "label": self.label,
             "ratio": round(self.ratio, 4),
-            "left": {"file": self.left.file, "line": self.left.lineno,
-                     "text": self.left.text},
-            "right": {"file": self.right.file, "line": self.right.lineno,
-                      "text": self.right.text},
+            "left": {
+                "file": self.left.file,
+                "line": self.left.lineno,
+                "text": self.left.text,
+            },
+            "right": {
+                "file": self.right.file,
+                "line": self.right.lineno,
+                "text": self.right.text,
+            },
         }
 
 
@@ -294,7 +305,7 @@ def _candidate_counts(
         if len(members) < 2:
             continue
         for a_pos, i in enumerate(members):
-            for j in members[a_pos + 1:]:
+            for j in members[a_pos + 1 :]:
                 counts[(i, j)] += 1
     return counts
 
@@ -488,7 +499,7 @@ class BatchResult:
     a clean "ten of these are not duplicates".
     """
 
-    confirmations: list["Confirmation"]
+    confirmations: list[Confirmation]
     answered: set[int]
 
 
@@ -531,11 +542,13 @@ def parse_confirmations(raw: str, pairs: Sequence[Pair]) -> BatchResult:
             # report, and not one we may count as "different" either.
             continue
         answered.add(number)
-        out.append(Confirmation(
-            pair=pairs[number - 1],
-            merged=merged,
-            reason=m.group("reason").strip(),
-        ))
+        out.append(
+            Confirmation(
+                pair=pairs[number - 1],
+                merged=merged,
+                reason=m.group("reason").strip(),
+            )
+        )
     if not seen:
         raise ConfirmParseError("response contained no parseable verdict line")
     return BatchResult(confirmations=out, answered=answered)
@@ -543,7 +556,7 @@ def parse_confirmations(raw: str, pairs: Sequence[Pair]) -> BatchResult:
 
 def _batches(pairs: Sequence[Pair], size: int) -> Iterable[Sequence[Pair]]:
     for start in range(0, len(pairs), size):
-        yield pairs[start:start + size]
+        yield pairs[start : start + size]
 
 
 async def confirm_pairs(
@@ -593,7 +606,9 @@ async def confirm_pairs(
         except Exception:
             logger.exception(
                 "Duplication stage 2 failed for a batch of %d pair(s) "
-                "(fails closed — nothing reported for them)", len(batch))
+                "(fails closed — nothing reported for them)",
+                len(batch),
+            )
             failed_batches += 1
             unconfirmed += len(batch)
     coverage = {
@@ -604,8 +619,11 @@ async def confirm_pairs(
         "confirmed": len(confirmations),
     }
     if unconfirmed:
-        logger.warning("Duplication: %d batch(es) failed; %d pair(s) unconfirmed",
-                       failed_batches, unconfirmed)
+        logger.warning(
+            "Duplication: %d batch(es) failed; %d pair(s) unconfirmed",
+            failed_batches,
+            unconfirmed,
+        )
     confirmations.sort(key=lambda c: (-c.pair.ratio, c.pair.label))
     return confirmations, coverage
 
@@ -633,9 +651,13 @@ async def run_pass(
         "limit": limit,
         "truncated": len(pairs) >= limit,
         "confirmations": [],
-        "coverage": {"shortlisted": len(pairs), "judged": 0,
-                     "unconfirmed": len(pairs), "failed_batches": 0,
-                     "confirmed": 0},
+        "coverage": {
+            "shortlisted": len(pairs),
+            "judged": 0,
+            "unconfirmed": len(pairs),
+            "failed_batches": 0,
+            "confirmed": 0,
+        },
         "degraded": client is None,
     }
     if client is None or not pairs:
@@ -691,7 +713,7 @@ def render_section(result: Mapping, *, limit: int = 40) -> str:
             f"({coverage.get('failed_batches', 0)} whole batch(es) failed; the "
             f"rest were pairs the reply did not answer in the required format). "
             f"They are **not** reported below and were **not** counted as "
-            f"\"not a duplicate\" — an unanswered pair is unknown, not clean."
+            f'"not a duplicate" — an unanswered pair is unknown, not clean.'
         )
     out.append("")
 
@@ -702,9 +724,11 @@ def render_section(result: Mapping, *, limit: int = 40) -> str:
 
     for number, item in enumerate(confirmations[:limit], 1):
         left, right = item["left"], item["right"]
-        out.append(f"### D{number}. `{left['file']}:{left['line']}` "
-                   f"↔ `{right['file']}:{right['line']}` "
-                   f"(ratio {item['ratio']:.2f})")
+        out.append(
+            f"### D{number}. `{left['file']}:{left['line']}` "
+            f"↔ `{right['file']}:{right['line']}` "
+            f"(ratio {item['ratio']:.2f})"
+        )
         out.append("")
         # Defanged on the way out. `reason` and `merged` are model output, and
         # `merged` in particular is a line of attacker-influenceable text the
@@ -713,10 +737,16 @@ def render_section(result: Mapping, *, limit: int = 40) -> str:
         # neutralises the fence markers and code fences that would otherwise let
         # this text break out of its bullet and restructure the report below it.
         out.append(f"- **A** (`{left['file']}:{left['line']}`): {_safe(left['text'])}")
-        out.append(f"- **B** (`{right['file']}:{right['line']}`): {_safe(right['text'])}")
-        out.append(f"- **Why the model called it a duplicate:** {_safe(item['reason'])}")
-        out.append(f"- **Proposed merge (suggestion — nothing was applied):** "
-                   f"{_safe(item['merged'])}")
+        out.append(
+            f"- **B** (`{right['file']}:{right['line']}`): {_safe(right['text'])}"
+        )
+        out.append(
+            f"- **Why the model called it a duplicate:** {_safe(item['reason'])}"
+        )
+        out.append(
+            f"- **Proposed merge (suggestion — nothing was applied):** "
+            f"{_safe(item['merged'])}"
+        )
         out.append("")
     if len(confirmations) > limit:
         out.append(f"… {len(confirmations) - limit} more confirmed pair(s) omitted.")

@@ -1,4 +1,5 @@
 """Sentences from words, and clip edges snapped to sentences and pauses (stages/clips.py)."""
+
 from __future__ import annotations
 
 import sys
@@ -9,8 +10,8 @@ import pytest
 _SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "video-edit" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 
-from stages import clips  # noqa: E402
-from stages.prep import parse_silences  # noqa: E402
+from stages import clips
+from stages.prep import parse_silences
 
 
 def w(text, s, e, spk=None):
@@ -21,10 +22,16 @@ def w(text, s, e, spk=None):
 
 
 WORDS = [
-    w("First", 0.0, 0.4), w("idea.", 0.45, 1.0),
-    w("Second", 1.5, 1.9), w("one", 1.95, 2.2), w("here.", 2.25, 2.9),
-    w("Third", 3.6, 4.0), w("sentence", 4.05, 4.6), w("now?", 4.65, 5.2),
-    w("Fourth", 5.5, 6.0), w("ends.", 6.05, 6.8),
+    w("First", 0.0, 0.4),
+    w("idea.", 0.45, 1.0),
+    w("Second", 1.5, 1.9),
+    w("one", 1.95, 2.2),
+    w("here.", 2.25, 2.9),
+    w("Third", 3.6, 4.0),
+    w("sentence", 4.05, 4.6),
+    w("now?", 4.65, 5.2),
+    w("Fourth", 5.5, 6.0),
+    w("ends.", 6.05, 6.8),
 ]
 # Pauses between sentences (silencedetect intervals).
 SILENCES = [(1.05, 1.45), (2.95, 3.55), (5.25, 5.45)]
@@ -32,25 +39,34 @@ SILENCES = [(1.05, 1.45), (2.95, 3.55), (5.25, 5.45)]
 
 def test_sentences_split_on_punctuation() -> None:
     s = clips.build_sentences(WORDS)
-    assert [x.text for x in s] == ["First idea.", "Second one here.", "Third sentence now?", "Fourth ends."]
+    assert [x.text for x in s] == [
+        "First idea.",
+        "Second one here.",
+        "Third sentence now?",
+        "Fourth ends.",
+    ]
     assert (s[1].start, s[1].end) == (1.5, 2.9)
 
 
 def test_sentences_split_on_a_long_pause_without_punctuation() -> None:
-    s = clips.build_sentences([w("no", 0, 0.3), w("stop", 0.35, 0.7), w("then", 2.5, 2.8)])
+    s = clips.build_sentences(
+        [w("no", 0, 0.3), w("stop", 0.35, 0.7), w("then", 2.5, 2.8)]
+    )
     assert [x.text for x in s] == ["no stop", "then"]
 
 
 def test_long_unpunctuated_run_splits_at_a_comma_after_8s() -> None:
     words = [w(f"w{i}", i * 0.5, i * 0.5 + 0.45) for i in range(30)]
-    words[5]["text"] = "early,"      # at 2.5 s: too soon to split
-    words[20]["text"] = "late,"      # at 10.0 s: splits here
+    words[5]["text"] = "early,"  # at 2.5 s: too soon to split
+    words[20]["text"] = "late,"  # at 10.0 s: splits here
     s = clips.build_sentences(words)
     assert [len(x.text.split()) for x in s] == [21, 9]
 
 
 def test_sentence_takes_the_majority_speaker() -> None:
-    s = clips.build_sentences([w("a", 0, 0.2, "S0"), w("b", 0.3, 0.5, "S0"), w("c.", 0.6, 0.8, "S1")])
+    s = clips.build_sentences(
+        [w("a", 0, 0.2, "S0"), w("b", 0.3, 0.5, "S0"), w("c.", 0.6, 0.8, "S1")]
+    )
     assert s[0].speaker == "S0"
 
 
@@ -76,7 +92,9 @@ def test_snap_never_moves_into_kept_speech() -> None:
 
 
 def test_snap_uses_word_edges_inside_a_long_unpunctuated_stretch() -> None:
-    words = [w(f"w{i}", i * 0.5, i * 0.5 + 0.45) for i in range(60)]   # one 30 s "sentence"
+    words = [
+        w(f"w{i}", i * 0.5, i * 0.5 + 0.45) for i in range(60)
+    ]  # one 30 s "sentence"
     sentences = clips.build_sentences(words)
     assert len(sentences) == 1
     # Without words the clip balloons to the whole stretch...
@@ -91,8 +109,10 @@ def test_snap_rejects_an_empty_clip() -> None:
 
 
 def test_parse_silences_pairs_start_and_end() -> None:
-    stderr = ("[silencedetect @ 0x1] silence_start: 1.05\n"
-              "[silencedetect @ 0x1] silence_end: 1.45 | silence_duration: 0.4\n"
-              "[silencedetect @ 0x1] silence_start: 2.95\n"
-              "[silencedetect @ 0x1] silence_end: 3.55 | silence_duration: 0.6\n")
+    stderr = (
+        "[silencedetect @ 0x1] silence_start: 1.05\n"
+        "[silencedetect @ 0x1] silence_end: 1.45 | silence_duration: 0.4\n"
+        "[silencedetect @ 0x1] silence_start: 2.95\n"
+        "[silencedetect @ 0x1] silence_end: 3.55 | silence_duration: 0.6\n"
+    )
     assert parse_silences(stderr) == [(1.05, 1.45), (2.95, 3.55)]

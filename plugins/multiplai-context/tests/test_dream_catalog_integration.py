@@ -14,18 +14,11 @@ Covers all scenarios from requirements/catalog-dream-integration.md:
 """
 
 import asyncio
-import json
-import os
 import re
-import sys
-from datetime import datetime, timezone
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 from conftest import PLUGIN_ROOT, SCRIPTS_DIR
-
 
 # ---------------------------------------------------------------------------
 # dream.md contains catalog regeneration instructions
@@ -87,9 +80,7 @@ class TestDreamSkillContainsCatalogRegeneration:
         """
         # Check for HTML comment section marker or a dedicated section
         has_comment = "<!-- catalog-regen -->" in self.text
-        has_section = re.search(
-            r"(?i)##?\s+.*catalog", self.text
-        )
+        has_section = re.search(r"(?i)##?\s+.*catalog", self.text)
         assert has_comment or has_section, (
             "dream.md must contain a <!-- catalog-regen --> section "
             "or a dedicated catalog regeneration heading"
@@ -144,8 +135,7 @@ class TestAutodreamTriggersCatalogRegeneration:
             self.source,
         )
         assert has_call, (
-            "dream.py must call generate_catalogs() or equivalent "
-            "dispatcher function"
+            "dream.py must call generate_catalogs() or equivalent dispatcher function"
         )
 
     def test_dream_catalog_generation_after_dream(self):
@@ -240,11 +230,13 @@ class TestAutodreamCatalogGenerationBehavior:
                 )
 
                 from multiplai_core.paths import _reset_cache
+
                 _reset_cache()
 
                 # Import and run dream
                 import importlib
                 import importlib.util
+
                 spec = importlib.util.spec_from_file_location(
                     "dream_test", SCRIPTS_DIR / "dream.py"
                 )
@@ -258,9 +250,12 @@ class TestAutodreamCatalogGenerationBehavior:
                 except Exception:
                     pass  # Allow import/runtime errors
 
-                mock_gen.assert_called(), (
-                    "dream dream() must call generate_catalogs() "
-                    "after completing the consolidation phase"
+                (
+                    mock_gen.assert_called(),
+                    (
+                        "dream dream() must call generate_catalogs() "
+                        "after completing the consolidation phase"
+                    ),
                 )
 
     def test_dream_completes_when_catalog_generation_fails(self, mock_env):
@@ -280,9 +275,11 @@ class TestAutodreamCatalogGenerationBehavior:
                 )
 
                 from multiplai_core.paths import _reset_cache
+
                 _reset_cache()
 
                 import importlib.util
+
                 spec = importlib.util.spec_from_file_location(
                     "dream_fail_test", SCRIPTS_DIR / "dream.py"
                 )
@@ -294,9 +291,12 @@ class TestAutodreamCatalogGenerationBehavior:
                 asyncio.run(mod.dream_auto())
 
                 # Verify generate_catalogs was actually called
-                mock_gen.assert_called(), (
-                    "dream() must call generate_catalogs() even in error test — "
-                    "the integration must exist before we can test error handling"
+                (
+                    mock_gen.assert_called(),
+                    (
+                        "dream() must call generate_catalogs() even in error test — "
+                        "the integration must exist before we can test error handling"
+                    ),
                 )
 
 

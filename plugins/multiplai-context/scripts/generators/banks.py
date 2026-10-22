@@ -35,23 +35,23 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
+from lib.bank_collisions import find_collisions, render_report, to_json
+from lib.banks import CATALOG_FRAGMENT, MemoryBank, shared_banks
+from lib.fsio import atomic_write_json
+from lib.section_loader import h2_names
 from multiplai_core.log_utils import log_event
 from multiplai_core.paths import Paths
 
 from generators.base import CATALOG_SCHEMA_VERSION, GenerationResult
-from lib.fsio import atomic_write_json
 from generators.memory import MemoryGenerator
-from lib.bank_collisions import find_collisions, render_report, to_json
-from lib.banks import CATALOG_FRAGMENT, MemoryBank, shared_banks
-from lib.section_loader import h2_names
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["BANKS_CATALOG", "BanksGenerator", "COLLISION_REPORT", "derive_entry"]
+__all__ = ["BANKS_CATALOG", "COLLISION_REPORT", "BanksGenerator", "derive_entry"]
 
 #: The catalog this generator writes.
 BANKS_CATALOG = "banks.json"
@@ -100,7 +100,8 @@ def derive_entry(bank: MemoryBank, path: Path, text: str) -> dict[str, Any]:
     entry: dict[str, Any] = {
         "source": bank.ref(path.name),
         "bank": bank.name,
-        "summary": _first_paragraph(text) or f"{path.name} from shared bank {bank.name}",
+        "summary": _first_paragraph(text)
+        or f"{path.name} from shared bank {bank.name}",
         "topics": [],
         "keywords": [],
         "derived": True,
@@ -128,7 +129,7 @@ def _bank_files(bank: MemoryBank) -> list[Path]:
     ]
 
 
-def _read_fragment(bank: MemoryBank) -> Optional[list[dict]]:
+def _read_fragment(bank: MemoryBank) -> list[dict] | None:
     """The bank's committed entries, or ``None`` when there is no usable fragment."""
     fragment = bank.path / CATALOG_FRAGMENT
     if not fragment.exists():
@@ -136,18 +137,26 @@ def _read_fragment(bank: MemoryBank) -> Optional[list[dict]]:
     try:
         data = json.loads(fragment.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        logger.warning("Bank %s has an unreadable %s — deriving entries instead",
-                       bank.name, CATALOG_FRAGMENT)
+        logger.warning(
+            "Bank %s has an unreadable %s — deriving entries instead",
+            bank.name,
+            CATALOG_FRAGMENT,
+        )
         return None
     entries = data.get("entries") if isinstance(data, dict) else None
     if not isinstance(entries, list):
-        logger.warning("Bank %s %s has no entries list — deriving instead",
-                       bank.name, CATALOG_FRAGMENT)
+        logger.warning(
+            "Bank %s %s has no entries list — deriving instead",
+            bank.name,
+            CATALOG_FRAGMENT,
+        )
         return None
     return [e for e in entries if isinstance(e, dict)]
 
 
-def _adopt_fragment_entry(bank: MemoryBank, entry: dict, present: set[str]) -> Optional[dict]:
+def _adopt_fragment_entry(
+    bank: MemoryBank, entry: dict, present: set[str]
+) -> dict | None:
     """Re-key one committed entry onto this consumer's bank namespace.
 
     The bank authored ``"source": "dev.md"``; every consumer needs
@@ -155,7 +164,9 @@ def _adopt_fragment_entry(bank: MemoryBank, entry: dict, present: set[str]) -> O
     entry naming a file the bank does not (any longer) contain is dropped —
     the working tree is the authority on what exists, not the fragment.
     """
-    raw = str(entry.get("source") or entry.get("path") or entry.get("file") or "").strip()
+    raw = str(
+        entry.get("source") or entry.get("path") or entry.get("file") or ""
+    ).strip()
     filename = raw.rsplit("/", 1)[-1]
     if not filename or filename not in present:
         return None
@@ -219,8 +230,13 @@ class BanksGenerator:
         banks = shared_banks()
         if not banks:
             return GenerationResult(
-                generator=self.name, total_sources=0, skipped=0, generated=0,
-                pruned=0, errors=[], dry_run=dry_run,
+                generator=self.name,
+                total_sources=0,
+                skipped=0,
+                generated=0,
+                pruned=0,
+                errors=[],
+                dry_run=dry_run,
             )
 
         entries: list[dict] = []
@@ -292,14 +308,17 @@ class BanksGenerator:
 
         if collisions:
             log_event(
-                "catalog", "bank-collisions",
+                "catalog",
+                "bank-collisions",
                 f"{len(collisions)} cross-bank collision(s) — a fact should live "
                 "in exactly one bank",
-                level="WARNING", count=len(collisions),
+                level="WARNING",
+                count=len(collisions),
             )
             logger.warning(
                 "%d cross-bank collision(s); see %s",
-                len(collisions), self._catalogs_dir / COLLISION_REPORT,
+                len(collisions),
+                self._catalogs_dir / COLLISION_REPORT,
             )
 
         return GenerationResult(
@@ -316,7 +335,7 @@ class BanksGenerator:
         self._catalogs_dir.mkdir(parents=True, exist_ok=True)
         catalog = {
             "schema_version": CATALOG_SCHEMA_VERSION,
-            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "generated_at": datetime.now(UTC).isoformat(),
             "entries": entries,
             "collisions": to_json(collisions),
         }

@@ -71,7 +71,16 @@ for skill in plugins/*/skills/*/; do
 done
 
 # and the gates' own self-tests
-uv run --no-project --with pytest python -m pytest scripts/tests/ -q
+uv run --no-project --with pytest --with pytest-xdist python -m pytest scripts/tests/ -q -n auto
+```
+
+Lint and format run ruff 0.17.1 with its default rules; the version is pinned
+in the root `pyproject.toml` (`required-version`), and CI's `lint` job runs the
+same two commands:
+
+```bash
+uvx ruff@0.17.1 check .
+uvx ruff@0.17.1 format --check .
 ```
 
 `--no-project` is the marker for stdlib-only code: the gate scripts and their
@@ -85,19 +94,23 @@ directory:
 
 | Suite | Command |
 |---|---|
-| `multiplai-context` | `cd plugins/multiplai-context && uv run --all-packages --project ../.. --with pytest --with pytest-asyncio --with pytest-timeout python -m pytest tests/ -q` |
+| `multiplai-context` | `cd plugins/multiplai-context && uv run --all-packages --project ../.. --with pytest --with pytest-asyncio --with pytest-timeout --with pytest-xdist python -m pytest tests/ -q -n auto` |
 | `multiplai-media` | `cd plugins/multiplai-media && uv run --no-project --with pytest python -m pytest tests/ -q` |
 | `multiplai-pm` | `cd plugins/multiplai-pm && uv run --no-project --with pytest python -m pytest skills/plane/scripts/tests/ -q` |
-| buildme | `cd plugins/multiplai-dev/skills/buildme/scripts && uv run --project ../../../../.. --package build-pipeline --extra dev python -m pytest tests/ -q` |
-| deep-research | `cd plugins/multiplai-research/skills/deep-research/scripts && uv run --project ../../../../.. --package research-pipeline --extra dev python -m pytest tests/ -q` |
-| codebase-walkthrough | `cd plugins/multiplai-dev/skills/codebase-walkthrough/scripts && uv run --project ../../../../.. --package walkthrough-pipeline --extra dev python -m pytest tests/ -q` |
-| code_facts | `cd plugins/multiplai-dev/lib/code_facts && uv run --project ../../../.. --package walkthrough-pipeline --extra dev python -m pytest tests/ -q` (not a workspace member: it runs in walkthrough-pipeline's environment, which installs it) |
-| review | `cd plugins/multiplai-dev/skills/review/scripts && uv run --project ../../../../.. --package review-pipeline --extra dev python -m pytest tests/ -q` |
-| review-viewer | `cd plugins/multiplai-dev/skills/review-viewer/scripts && uv run --project ../../../../.. --package review-viewer --extra dev python -m pytest tests/ -q` |
-| pr | `cd plugins/multiplai-dev/skills/pr/scripts && uv run --project ../../../../.. --package pr-pipeline --extra dev python -m pytest tests/ -q` |
-| spec-extract | `cd plugins/multiplai-dev/skills/spec-extract/scripts && uv run --project ../../../../.. --package spec-extract-pipeline --extra dev python -m pytest tests/ -q` |
-| pm-spec | `cd plugins/multiplai-pm/skills/pm-spec/scripts && uv run --project ../../../../.. --package pm-spec-pipeline --extra dev python -m pytest tests/ -q` |
+| buildme | `cd plugins/multiplai-dev/skills/buildme/scripts && uv run --project ../../../../.. --package build-pipeline --extra dev python -m pytest tests/ -q -n auto` |
+| deep-research | `cd plugins/multiplai-research/skills/deep-research/scripts && uv run --project ../../../../.. --package research-pipeline --extra dev python -m pytest tests/ -q -n auto` |
+| codebase-walkthrough | `cd plugins/multiplai-dev/skills/codebase-walkthrough/scripts && uv run --project ../../../../.. --package walkthrough-pipeline --extra dev python -m pytest tests/ -q -n auto` |
+| code_facts | `cd plugins/multiplai-dev/lib/code_facts && uv run --project ../../../.. --package walkthrough-pipeline --extra dev python -m pytest tests/ -q -n auto` (not a workspace member: it runs in walkthrough-pipeline's environment, which installs it) |
+| review | `cd plugins/multiplai-dev/skills/review/scripts && uv run --project ../../../../.. --package review-pipeline --extra dev python -m pytest tests/ -q -n auto` |
+| review-viewer | `cd plugins/multiplai-dev/skills/review-viewer/scripts && uv run --project ../../../../.. --package review-viewer --extra dev python -m pytest tests/ -q -n auto` |
+| pr | `cd plugins/multiplai-dev/skills/pr/scripts && uv run --project ../../../../.. --package pr-pipeline --extra dev python -m pytest tests/ -q -n auto` |
+| spec-extract | `cd plugins/multiplai-dev/skills/spec-extract/scripts && uv run --project ../../../../.. --package spec-extract-pipeline --extra dev python -m pytest tests/ -q -n auto` |
+| pm-spec | `cd plugins/multiplai-pm/skills/pm-spec/scripts && uv run --project ../../../../.. --package pm-spec-pipeline --extra dev python -m pytest tests/ -q -n auto` |
 | `multiplai-apple` | `cd plugins/multiplai-apple && uv run --no-project --with pytest python -m pytest tests/ -q` |
+
+Every suite runs in parallel with pytest-xdist (`-n auto`) except media, pm and
+apple, which measured slower in parallel (2026-10). Leave `-n auto` off when
+running a single test.
 
 An extra (`--extra dev`) belongs to a *member*, not to the workspace, so it
 needs `--package <member-name>` alongside `--project`. Without it uv reports

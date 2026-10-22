@@ -88,8 +88,14 @@ with use_db(session, WorkDB.Mode.open) as db:
 # `setup.py` project is "setup"; a `tdd.test_command` in specs/config.yaml
 # skips discovery and leaves stack ""; and `memory_files.stacks` names it
 # freely ("python", "django", ...).
-PYTHON_MARKERS = ("pyproject.toml", "setup.py", "setup.cfg", "pytest.ini",
-                  "tox.ini", "requirements.txt")
+PYTHON_MARKERS = (
+    "pyproject.toml",
+    "setup.py",
+    "setup.cfg",
+    "pytest.ini",
+    "tox.ini",
+    "requirements.txt",
+)
 
 # The discovery markers (`BuildConfig._discover_test_command`) whose test
 # command is pytest. A command discovered from any other marker (`npm test`
@@ -118,9 +124,11 @@ def mutation_applies(config) -> tuple[bool, str]:
         return False, "mutation.enabled is false in specs/config.yaml"
     project_dir = Path(config.project_dir)
     if not any((project_dir / m).is_file() for m in PYTHON_MARKERS):
-        return False, ("no Python project file at the project root ("
-                       + ", ".join(PYTHON_MARKERS)
-                       + ") — mutation testing covers Python projects only")
+        return False, (
+            "no Python project file at the project root ("
+            + ", ".join(PYTHON_MARKERS)
+            + ") — mutation testing covers Python projects only"
+        )
     if not config.test_command:
         return False, "no test command configured"
     discovered_from = config.test_command_discovered_from
@@ -129,10 +137,12 @@ def mutation_applies(config) -> tuple[bool, str]:
         if found and found[0] == config.test_command:
             discovered_from = found[1]
     if discovered_from and discovered_from not in _PYTHON_DISCOVERY_MARKERS:
-        return False, (f"the test command `{config.test_command}` was discovered "
-                       f"from {discovered_from} and does not run Python tests — "
-                       "set tdd.test_command in specs/config.yaml to a command "
-                       "that does, or set mutation.enabled: false")
+        return False, (
+            f"the test command `{config.test_command}` was discovered "
+            f"from {discovered_from} and does not run Python tests — "
+            "set tdd.test_command in specs/config.yaml to a command "
+            "that does, or set mutation.enabled: false"
+        )
     return True, ""
 
 
@@ -160,14 +170,20 @@ def changed_source_files(project_dir: Path, baseline_sha: str) -> list[str] | No
     try:
         proc = subprocess.run(
             ["git", "diff", "--name-only", "--relative", baseline_sha],
-            cwd=str(project_dir), capture_output=True, text=True, timeout=60,
+            cwd=str(project_dir),
+            capture_output=True,
+            text=True,
+            timeout=60,
         )
     except (OSError, subprocess.TimeoutExpired) as e:
         log.warning("Could not list files changed since %s: %s", baseline_sha[:8], e)
         return None
     if proc.returncode != 0:
-        log.warning("Could not list files changed since %s: %s",
-                    baseline_sha[:8], proc.stderr.strip())
+        log.warning(
+            "Could not list files changed since %s: %s",
+            baseline_sha[:8],
+            proc.stderr.strip(),
+        )
         return None
     paths = []
     for name in (n.strip() for n in proc.stdout.splitlines()):
@@ -176,7 +192,9 @@ def changed_source_files(project_dir: Path, baseline_sha: str) -> list[str] | No
         if _TEST_FILE_RE.search(name) or _TEST_PATH_RE.search(name):
             continue
         if _NOT_IMPORTED_RE.search(name):
-            log.info("MUTATION not mutating %s: the test suite does not import it", name)
+            log.info(
+                "MUTATION not mutating %s: the test suite does not import it", name
+            )
             continue
         if (project_dir / name).is_file():
             paths.append(name)
@@ -215,17 +233,22 @@ def parse_dump(text: str) -> MutationResult:
             continue
         survived += 1
         for m in item.get("mutations") or []:
-            survivors.append(SurvivingMutant(
-                path=m.get("module_path", ""),
-                line=int((m.get("start_pos") or [0])[0]),
-                operator=m.get("operator_name", ""),
-                mutant_id=item.get("job_id", ""),
-                diff=result.get("diff") or "",
-            ))
+            survivors.append(
+                SurvivingMutant(
+                    path=m.get("module_path", ""),
+                    line=int((m.get("start_pos") or [0])[0]),
+                    operator=m.get("operator_name", ""),
+                    mutant_id=item.get("job_id", ""),
+                    diff=result.get("diff") or "",
+                )
+            )
     judged = killed + survived
     return MutationResult(
         ok=True,
-        killed=killed, survived=survived, timeouts=timeouts, errors=errors,
+        killed=killed,
+        survived=survived,
+        timeouts=timeouts,
+        errors=errors,
         score=(killed / judged) if judged else None,
         survivors=sorted(survivors, key=lambda s: (s.path, s.line, s.operator)),
     )
@@ -246,11 +269,17 @@ def pending_jobs(text: str) -> list[tuple[str, str]]:
         item, result = json.loads(raw)
         if result:
             continue
-        key = json.dumps([
-            [m.get("module_path"), m.get("operator_name"), m.get("occurrence"),
-             m.get("start_pos")]
-            for m in item.get("mutations") or []
-        ])
+        key = json.dumps(
+            [
+                [
+                    m.get("module_path"),
+                    m.get("operator_name"),
+                    m.get("occurrence"),
+                    m.get("start_pos"),
+                ]
+                for m in item.get("mutations") or []
+            ]
+        )
         jobs.append((item.get("job_id", ""), key))
     return jobs
 
@@ -264,29 +293,40 @@ def sample_out(jobs: list[tuple[str, str]], max_mutants: int) -> list[str]:
     return [job_id for job_id, _ in ranked[max_mutants:]]
 
 
-def cosmic_ray_config(paths: list[str], test_command: str, timeout: float,
-                      baseline_sha: str, *, project_dir: Path = Path(".")) -> str:
+def cosmic_ray_config(
+    paths: list[str],
+    test_command: str,
+    timeout: float,
+    baseline_sha: str,
+    *,
+    project_dir: Path = Path("."),
+) -> str:
     """The cosmic-ray TOML for one run. Every value is JSON-encoded, which is
     valid TOML for strings, numbers and arrays of strings."""
     from .gates import _test_invocation
+
     argv, directory = _test_invocation(test_command, project_dir)
     wrapped = shlex.join(["env", f"PATH={os.environ.get('PATH', '')}", *argv])
     if directory != project_dir:
-        wrapped = shlex.join(["sh", "-c", f"cd {shlex.quote(str(directory))} && exec {wrapped}"])
-    return "\n".join([
-        "[cosmic-ray]",
-        f"module-path = {json.dumps(paths)}",
-        f"timeout = {float(timeout)}",
-        "excluded-modules = []",
-        f"test-command = {json.dumps(wrapped)}",
-        "",
-        "[cosmic-ray.distributor]",
-        'name = "local"',
-        "",
-        "[cosmic-ray.filters.git-filter]",
-        f"branch = {json.dumps(baseline_sha)}",
-        "",
-    ])
+        wrapped = shlex.join(
+            ["sh", "-c", f"cd {shlex.quote(str(directory))} && exec {wrapped}"]
+        )
+    return "\n".join(
+        [
+            "[cosmic-ray]",
+            f"module-path = {json.dumps(paths)}",
+            f"timeout = {float(timeout)}",
+            "excluded-modules = []",
+            f"test-command = {json.dumps(wrapped)}",
+            "",
+            "[cosmic-ray.distributor]",
+            'name = "local"',
+            "",
+            "[cosmic-ray.filters.git-filter]",
+            f"branch = {json.dumps(baseline_sha)}",
+            "",
+        ]
+    )
 
 
 def mutant_timeout(configured: float, baseline_seconds: float) -> float:
@@ -313,8 +353,12 @@ def _run_tool(argv: list[str], cwd: Path, timeout: float) -> str:
     """
     try:
         proc = subprocess.Popen(
-            argv, cwd=str(cwd), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, start_new_session=True,
+            argv,
+            cwd=str(cwd),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
         )
     except OSError as e:
         raise _ToolError(
@@ -326,18 +370,22 @@ def _run_tool(argv: list[str], cwd: Path, timeout: float) -> str:
         out, err = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         _kill_group(proc)
-        raise _ToolError(f"{' '.join(argv[len(_UVX):len(_UVX) + 2])} timed out after "
-                         f"{int(timeout)}s. To build without mutation testing, set "
-                         f"{_TURN_OFF}")
+        raise _ToolError(
+            f"{' '.join(argv[len(_UVX) : len(_UVX) + 2])} timed out after "
+            f"{int(timeout)}s. To build without mutation testing, set "
+            f"{_TURN_OFF}"
+        )
     except BaseException:
         _kill_group(proc)
         raise
     if proc.returncode != 0:
         tail = (err or out or "").strip()[-1500:]
-        raise _ToolError(f"{' '.join(argv[len(_UVX):len(_UVX) + 2])} exited "
-                         f"{proc.returncode}: {tail}\nIf cosmic-ray could not be "
-                         "fetched (offline, no PyPI access, a private index) or "
-                         f"cannot run here, build without it: set {_TURN_OFF}")
+        raise _ToolError(
+            f"{' '.join(argv[len(_UVX) : len(_UVX) + 2])} exited "
+            f"{proc.returncode}: {tail}\nIf cosmic-ray could not be "
+            "fetched (offline, no PyPI access, a private index) or "
+            f"cannot run here, build without it: set {_TURN_OFF}"
+        )
     return out
 
 
@@ -398,12 +446,16 @@ def _process_table() -> list[tuple[int, int, int]]:
             except OSError:
                 continue
             # Fields after the parenthesised command: state, ppid, pgrp, ...
-            fields = stat[stat.rindex(")") + 2:].split()
+            fields = stat[stat.rindex(")") + 2 :].split()
             rows.append((int(entry.name), int(fields[1]), int(fields[2])))
         return rows
     try:
-        out = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,pgid="],
-                             capture_output=True, text=True, timeout=10).stdout
+        out = subprocess.run(
+            ["ps", "-A", "-o", "pid=,ppid=,pgid="],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout
     except (OSError, subprocess.SubprocessError):
         return rows
     for line in out.splitlines():
@@ -430,8 +482,10 @@ def run_mutation(config, baseline_sha: str, paths: list[str]) -> MutationResult:
     base = MutationResult(ok=False, tool_version=COSMIC_RAY_VERSION, files=list(paths))
 
     if not _repo_trusted():
-        base.error = ("repo not trusted — refusing to run its test command "
-                      "(set --trust-repo or BUILDME_TRUST_REPO=1)")
+        base.error = (
+            "repo not trusted — refusing to run its test command "
+            "(set --trust-repo or BUILDME_TRUST_REPO=1)"
+        )
         return base
     if not git_ops.tree_is_clean(project_dir):
         base.error = "tree has uncommitted changes — refusing to mutate it"
@@ -454,8 +508,9 @@ def run_mutation(config, baseline_sha: str, paths: list[str]) -> MutationResult:
     return result
 
 
-def _run_cosmic_ray(config, baseline_sha: str, paths: list[str], project_dir: Path,
-                    base: MutationResult) -> MutationResult:
+def _run_cosmic_ray(
+    config, baseline_sha: str, paths: list[str], project_dir: Path, base: MutationResult
+) -> MutationResult:
     settings = config.mutation
     result = base
     test_timeout = float(settings.timeout)
@@ -463,26 +518,62 @@ def _run_cosmic_ray(config, baseline_sha: str, paths: list[str], project_dir: Pa
         tmp_dir = Path(tmp)
         cfg = tmp_dir / "cosmic-ray.toml"
         session = tmp_dir / "session.sqlite"
-        cfg.write_text(cosmic_ray_config(paths, config.test_command,
-                                         settings.timeout, baseline_sha, project_dir=project_dir))
+        cfg.write_text(
+            cosmic_ray_config(
+                paths,
+                config.test_command,
+                settings.timeout,
+                baseline_sha,
+                project_dir=project_dir,
+            )
+        )
         baseline_cfg = tmp_dir / "baseline.toml"
-        baseline_cfg.write_text(cosmic_ray_config(paths, config.test_command,
-                                                  _SETUP_TIMEOUT, baseline_sha, project_dir=project_dir))
+        baseline_cfg.write_text(
+            cosmic_ray_config(
+                paths,
+                config.test_command,
+                _SETUP_TIMEOUT,
+                baseline_sha,
+                project_dir=project_dir,
+            )
+        )
         try:
-            _run_tool([*_UVX, "cosmic-ray", "init", str(cfg), str(session)],
-                      project_dir, _SETUP_TIMEOUT)
-            _run_tool([*_UVX, "cr-filter-git", "--config", str(cfg), str(session)],
-                      project_dir, _SETUP_TIMEOUT)
-            pending = pending_jobs(_run_tool(
-                [*_UVX, "cosmic-ray", "dump", str(session)], project_dir, _SETUP_TIMEOUT))
+            _run_tool(
+                [*_UVX, "cosmic-ray", "init", str(cfg), str(session)],
+                project_dir,
+                _SETUP_TIMEOUT,
+            )
+            _run_tool(
+                [*_UVX, "cr-filter-git", "--config", str(cfg), str(session)],
+                project_dir,
+                _SETUP_TIMEOUT,
+            )
+            pending = pending_jobs(
+                _run_tool(
+                    [*_UVX, "cosmic-ray", "dump", str(session)],
+                    project_dir,
+                    _SETUP_TIMEOUT,
+                )
+            )
             dropped = sample_out(pending, settings.max_mutants)
             if dropped:
                 ids_file = tmp_dir / "sampled-out.json"
                 ids_file.write_text(json.dumps(dropped))
                 helper = tmp_dir / "skip_jobs.py"
                 helper.write_text(_SKIP_HELPER)
-                _run_tool([*_UVX, "python", "-I", str(helper), str(session),
-                           str(ids_file), _SAMPLED_OUT], project_dir, _SETUP_TIMEOUT)
+                _run_tool(
+                    [
+                        *_UVX,
+                        "python",
+                        "-I",
+                        str(helper),
+                        str(session),
+                        str(ids_file),
+                        _SAMPLED_OUT,
+                    ],
+                    project_dir,
+                    _SETUP_TIMEOUT,
+                )
             to_run = len(pending) - len(dropped)
             if to_run:
                 # Baseline: the unmutated suite must pass under cosmic-ray's
@@ -490,16 +581,31 @@ def _run_cosmic_ray(config, baseline_sha: str, paths: list[str], project_dir: Pa
                 # Its own config: the per-mutant timeout must not apply to
                 # the unmutated run it is derived from.
                 baseline_started = time.monotonic()
-                _run_tool([*_UVX, "cosmic-ray", "baseline", str(baseline_cfg)],
-                          project_dir, _SETUP_TIMEOUT + _EXEC_SLACK)
+                _run_tool(
+                    [*_UVX, "cosmic-ray", "baseline", str(baseline_cfg)],
+                    project_dir,
+                    _SETUP_TIMEOUT + _EXEC_SLACK,
+                )
                 test_timeout = mutant_timeout(
-                    settings.timeout, time.monotonic() - baseline_started)
-                cfg.write_text(cosmic_ray_config(paths, config.test_command,
-                                                 test_timeout, baseline_sha, project_dir=project_dir))
-                _run_tool([*_UVX, "cosmic-ray", "exec", str(cfg), str(session)],
-                          project_dir, test_timeout * (to_run + 1) + _EXEC_SLACK)
-            dump = _run_tool([*_UVX, "cosmic-ray", "dump", str(session)],
-                             project_dir, _SETUP_TIMEOUT)
+                    settings.timeout, time.monotonic() - baseline_started
+                )
+                cfg.write_text(
+                    cosmic_ray_config(
+                        paths,
+                        config.test_command,
+                        test_timeout,
+                        baseline_sha,
+                        project_dir=project_dir,
+                    )
+                )
+                _run_tool(
+                    [*_UVX, "cosmic-ray", "exec", str(cfg), str(session)],
+                    project_dir,
+                    test_timeout * (to_run + 1) + _EXEC_SLACK,
+                )
+            dump = _run_tool(
+                [*_UVX, "cosmic-ray", "dump", str(session)], project_dir, _SETUP_TIMEOUT
+            )
             result = parse_dump(dump)
             result.test_timeout = test_timeout
             result.tool_version = COSMIC_RAY_VERSION
@@ -520,14 +626,17 @@ def _restore_tree(project_dir: Path, restore_to: str, result: MutationResult) ->
     if not git_ops.tree_is_clean(project_dir):
         result.mutant_left_on_disk = True
         if git_ops.discard_to(project_dir, restore_to, "mutation run"):
-            log.warning("Mutation run left a mutated file in the tree — "
-                        "discarded back to %s", restore_to[:8])
+            log.warning(
+                "Mutation run left a mutated file in the tree — discarded back to %s",
+                restore_to[:8],
+            )
         else:
             result.ok = False
             result.discard_failed = True
             result.error = ((result.error + "; ") if result.error else "") + (
                 "a mutated file was left in the tree and could NOT be discarded "
-                f"back to {restore_to[:8]} — inspect the tree before shipping")
+                f"back to {restore_to[:8]} — inspect the tree before shipping"
+            )
 
 
 def score_text(result: MutationResult | None) -> str:
@@ -540,8 +649,12 @@ def score_text(result: MutationResult | None) -> str:
 
 
 def render_report(
-    *, first: MutationResult, final: MutationResult, round_note: str,
-    min_score: float, passed: bool,
+    *,
+    first: MutationResult,
+    final: MutationResult,
+    round_note: str,
+    min_score: float,
+    passed: bool,
 ) -> str:
     """The `specs/changes/<name>/mutation.md` body."""
     lines = [
@@ -560,20 +673,26 @@ def render_report(
         lines.append(
             f"- Time allowed per test run under a mutant: {final.test_timeout:.0f} s "
             f"(`mutation.timeout`, or {_BASELINE_FACTOR:g}× the unmutated suite's "
-            "run when that is longer)")
+            "run when that is longer)"
+        )
     if final.sampled_out:
         lines.append(
             f"- Sampled: {final.candidates - final.sampled_out} of {final.candidates} "
-            "mutants ran (`mutation.max_mutants`); the sample is deterministic")
+            "mutants ran (`mutation.max_mutants`); the sample is deterministic"
+        )
     if first.mutant_left_on_disk or final.mutant_left_on_disk:
-        lines.append("- A run left the tree changed (a mutated file, or files the "
-                     "test command wrote); buildme discarded back to the committed tree")
+        lines.append(
+            "- A run left the tree changed (a mutated file, or files the "
+            "test command wrote); buildme discarded back to the committed tree"
+        )
     lines += ["", "## Files mutated", ""]
     lines += [f"- `{p}`" for p in (final.files or first.files)] or ["- (none)"]
     lines += ["", "## Survivor round", "", round_note, "", "## Surviving mutants", ""]
     if final.survivors:
         lines += ["| File | Line | Operator |", "|---|---|---|"]
-        lines += [f"| `{s.path}` | {s.line} | `{s.operator}` |" for s in final.survivors]
+        lines += [
+            f"| `{s.path}` | {s.line} | `{s.operator}` |" for s in final.survivors
+        ]
     else:
         lines.append("None.")
     return "\n".join(lines) + "\n"

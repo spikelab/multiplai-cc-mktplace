@@ -26,19 +26,30 @@ log = logging.getLogger(__name__)
 # --- classifying files -------------------------------------------------------
 
 LOCK_NAMES = {
-    "uv.lock", "poetry.lock", "Pipfile.lock", "package-lock.json", "yarn.lock",
-    "pnpm-lock.yaml", "bun.lockb", "Cargo.lock", "go.sum", "Gemfile.lock",
-    "composer.lock", "Package.resolved", "flake.lock",
+    "uv.lock",
+    "poetry.lock",
+    "Pipfile.lock",
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "bun.lockb",
+    "Cargo.lock",
+    "go.sum",
+    "Gemfile.lock",
+    "composer.lock",
+    "Package.resolved",
+    "flake.lock",
 }
 DOC_SUFFIXES = {".md", ".rst", ".txt", ".adoc"}
 _TEST_NAME_RE = re.compile(
     r"(^test_.*\.py$|_test\.(py|go|rb)$|\.(test|spec)\.[cm]?[jt]sx?$|Tests?\.swift$|_spec\.rb$|"
-    r"Test\.(java|kt)$)")
+    r"Test\.(java|kt)$)"
+)
 _TEST_DIRS = {"tests", "test", "__tests__", "spec", "specs", "testing"}
 
 
 def classify(path: str) -> str:
-    """"lock", "generated", "test", "docs" or "code"."""
+    """ "lock", "generated", "test", "docs" or "code"."""
     p = PurePosixPath(path)
     if p.name in LOCK_NAMES:
         return "lock"
@@ -165,7 +176,9 @@ def read_commits(repo: str, base: str, head: str) -> list[dict]:
     """
     if base == EMPTY_TREE:
         return []
-    out = git(repo, "log", "--reverse", "--format=%H%x1f%s%x1f%b%x1e", f"{base}..{head}")
+    out = git(
+        repo, "log", "--reverse", "--format=%H%x1f%s%x1f%b%x1e", f"{base}..{head}"
+    )
     commits = []
     for rec in out.split("\x1e"):
         rec = rec.strip("\n")
@@ -177,8 +190,11 @@ def read_commits(repo: str, base: str, head: str) -> list[dict]:
 
 
 def count_todos(diff: str) -> int:
-    return sum(1 for line in diff.split("\n")
-               if line.startswith("+") and not line.startswith("+++") and _TODO_RE.search(line))
+    return sum(
+        1
+        for line in diff.split("\n")
+        if line.startswith("+") and not line.startswith("+++") and _TODO_RE.search(line)
+    )
 
 
 # --- criticality tiers from the repo --------------------------------------------
@@ -216,7 +232,11 @@ def match_tiers(table: dict[str, int], paths: list[str]) -> dict[str, int]:
     """{path: highest matching tier} for the paths any pattern matches."""
     out: dict[str, int] = {}
     for path in paths:
-        hits = [tier for pattern, tier in table.items() if fnmatch.fnmatchcase(path, pattern)]
+        hits = [
+            tier
+            for pattern, tier in table.items()
+            if fnmatch.fnmatchcase(path, pattern)
+        ]
         if hits:
             out[path] = max(hits)
     return out
@@ -244,17 +264,29 @@ def _plural(n: int, word: str) -> str:
 
 
 def size_badge(s: ChangeStats) -> Badge:
-    skip = sum(s.by_kind.get(k, {}).get(x, 0) for k in ("lock", "generated") for x in ("added", "deleted"))
+    skip = sum(
+        s.by_kind.get(k, {}).get(x, 0)
+        for k in ("lock", "generated")
+        for x in ("added", "deleted")
+    )
     counted = s.added + s.deleted - skip
-    level = "good" if counted <= SIZE_SMALL else ("note" if counted <= SIZE_LARGE else "concern")
+    level = (
+        "good"
+        if counted <= SIZE_SMALL
+        else ("note" if counted <= SIZE_LARGE else "concern")
+    )
     if s.files > FILES_MANY and level == "good":
         level = "note"
     word = {"good": "Small", "note": "Medium", "concern": "Large"}[level]
-    return Badge("size", f"{word}: {counted} lines", level,
-                 f"{counted} lines added or deleted outside lock and generated files, in "
-                 f"{_plural(s.files, 'file')}. Up to {SIZE_SMALL} lines is small; over "
-                 f"{SIZE_LARGE}, or over {FILES_MANY} files, is hard to review in one sitting "
-                 "(reviewers find fewer defects per line past a few hundred lines).")
+    return Badge(
+        "size",
+        f"{word}: {counted} lines",
+        level,
+        f"{counted} lines added or deleted outside lock and generated files, in "
+        f"{_plural(s.files, 'file')}. Up to {SIZE_SMALL} lines is small; over "
+        f"{SIZE_LARGE}, or over {FILES_MANY} files, is hard to review in one sitting "
+        "(reviewers find fewer defects per line past a few hundred lines).",
+    )
 
 
 def tests_badge(s: ChangeStats) -> Badge:
@@ -263,23 +295,37 @@ def tests_badge(s: ChangeStats) -> Badge:
     code_added, test_added = code.get("added", 0), test.get("added", 0)
     test_files = test.get("files", 0)
     if not code.get("files"):
-        return Badge("tests", "Tests: no code changed", "good",
-                     "No code files changed, so no test change is expected.")
+        return Badge(
+            "tests",
+            "Tests: no code changed",
+            "good",
+            "No code files changed, so no test change is expected.",
+        )
     if not test_files:
-        return Badge("tests", "Tests: none changed", "concern",
-                     f"{_plural(code['files'], 'code file')} changed and no test file did.")
+        return Badge(
+            "tests",
+            "Tests: none changed",
+            "concern",
+            f"{_plural(code['files'], 'code file')} changed and no test file did.",
+        )
     ratio = test_added / code_added if code_added else 1.0
     level = "good" if ratio >= TEST_RATIO_LOW else "note"
-    return Badge("tests", f"Tests: {_plural(test_files, 'file')}, {ratio:.1f}× code", level,
-                 f"{test_added} test lines added for {code_added} code lines added "
-                 f"(below {TEST_RATIO_LOW:.1f}× is flagged). This counts lines, not "
-                 "coverage: it cannot tell which new code the tests exercise.")
+    return Badge(
+        "tests",
+        f"Tests: {_plural(test_files, 'file')}, {ratio:.1f}× code",
+        level,
+        f"{test_added} test lines added for {code_added} code lines added "
+        f"(below {TEST_RATIO_LOW:.1f}× is flagged). This counts lines, not "
+        "coverage: it cannot tell which new code the tests exercise.",
+    )
 
 
 def commits_badge(s: ChangeStats) -> Badge:
     commits = s.commits
     if not commits:
-        return Badge("commits", "Commits: none", "note", "No commits between base and head.")
+        return Badge(
+            "commits", "Commits: none", "note", "No commits between base and head."
+        )
     long = [c for c in commits if len(c["subject"]) > SUBJECT_MAX]
     fixups = [c for c in commits if _FIXUP_RE.match(c["subject"])]
     bare = [c for c in commits if not c["body"]]
@@ -288,30 +334,46 @@ def commits_badge(s: ChangeStats) -> Badge:
     if fixups:
         problems.append(f"{_plural(len(fixups), 'fixup or WIP commit')} to squash")
     if long:
-        problems.append(f"{_plural(len(long), 'subject')} over {SUBJECT_MAX} characters")
+        problems.append(
+            f"{_plural(len(long), 'subject')} over {SUBJECT_MAX} characters"
+        )
     if bare and len(bare) == len(commits):
         problems.append("no commit has a body")
     level = "concern" if fixups else ("note" if problems else "good")
-    detail = (f"{_plural(len(commits), 'commit')}; {conventional} use a conventional prefix; "
-              f"{len(commits) - len(bare)} have a body. "
-              + ("; ".join(problems).capitalize() + "." if problems else "No mechanical problems."))
+    detail = (
+        f"{_plural(len(commits), 'commit')}; {conventional} use a conventional prefix; "
+        f"{len(commits) - len(bare)} have a body. "
+        + (
+            "; ".join(problems).capitalize() + "."
+            if problems
+            else "No mechanical problems."
+        )
+    )
     return Badge("commits", f"{_plural(len(commits), 'commit')}", level, detail)
 
 
 def todos_badge(s: ChangeStats) -> Badge | None:
     if not s.todos_added:
         return None
-    return Badge("todos", f"{s.todos_added} TODO/FIXME added", "note",
-                 f"{_plural(s.todos_added, 'added line')} contain TODO, FIXME, XXX or HACK.")
+    return Badge(
+        "todos",
+        f"{s.todos_added} TODO/FIXME added",
+        "note",
+        f"{_plural(s.todos_added, 'added line')} contain TODO, FIXME, XXX or HACK.",
+    )
 
 
 def lockfile_badge(s: ChangeStats) -> Badge | None:
     lock = s.by_kind.get("lock", {})
     if not lock.get("files"):
         return None
-    return Badge("lock", f"Lock files: {lock['files']}", "note",
-                 f"{_plural(lock['files'], 'lock file')} changed "
-                 f"(+{lock.get('added', 0)} −{lock.get('deleted', 0)}); dependencies moved.")
+    return Badge(
+        "lock",
+        f"Lock files: {lock['files']}",
+        "note",
+        f"{_plural(lock['files'], 'lock file')} changed "
+        f"(+{lock.get('added', 0)} −{lock.get('deleted', 0)}); dependencies moved.",
+    )
 
 
 # The ids pr_badges() can return, so a refresh can replace exactly those.
@@ -325,28 +387,59 @@ def pr_badges(pr: dict | None) -> list[Badge]:
     out: list[Badge] = []
     body = (pr.get("body") or "").strip()
     if len(body) < 40:
-        out.append(Badge("pr-body", "PR description: " + ("empty" if not body else "very short"),
-                         "concern", "A reviewer has little to go on without a description."))
+        out.append(
+            Badge(
+                "pr-body",
+                "PR description: " + ("empty" if not body else "very short"),
+                "concern",
+                "A reviewer has little to go on without a description.",
+            )
+        )
     checks = pr.get("checks") or {}
     if checks.get("total"):
         failed, pending = checks.get("failed", 0), checks.get("pending", 0)
         level = "concern" if failed else ("note" if pending else "good")
-        label = (f"Checks: {failed} failing" if failed else
-                 f"Checks: {pending} running" if pending else f"Checks: {checks['total']} passing")
-        out.append(Badge("checks", label, level,
-                         f"{checks.get('passed', 0)} passed, {failed} failed, {pending} pending, "
-                         f"of {checks['total']} (GitHub status checks at the PR head)."))
+        label = (
+            f"Checks: {failed} failing"
+            if failed
+            else f"Checks: {pending} running"
+            if pending
+            else f"Checks: {checks['total']} passing"
+        )
+        out.append(
+            Badge(
+                "checks",
+                label,
+                level,
+                f"{checks.get('passed', 0)} passed, {failed} failed, {pending} pending, "
+                f"of {checks['total']} (GitHub status checks at the PR head).",
+            )
+        )
     if pr.get("mergeable") == "CONFLICTING":
-        out.append(Badge("conflicts", "Merge conflicts", "concern",
-                         "GitHub reports this PR conflicts with its base branch."))
+        out.append(
+            Badge(
+                "conflicts",
+                "Merge conflicts",
+                "concern",
+                "GitHub reports this PR conflicts with its base branch.",
+            )
+        )
     if pr.get("draft"):
         out.append(Badge("draft", "Draft", "note", "The PR is marked as a draft."))
     decision = pr.get("review_decision")
     if decision == "APPROVED":
-        out.append(Badge("approval", "Approved", "good", "A required reviewer approved it."))
+        out.append(
+            Badge("approval", "Approved", "good", "A required reviewer approved it.")
+        )
     elif decision == "CHANGES_REQUESTED":
-        out.append(Badge("approval", "Changes requested", "concern",
-                         "A reviewer requested changes."))
+        out.append(
+            Badge(
+                "approval",
+                "Changes requested",
+                "concern",
+                "A reviewer requested changes.",
+            )
+        )
     return out
 
 
@@ -356,8 +449,12 @@ def change_stats(target: Target, pr: dict | None = None) -> ChangeStats:
     s = ChangeStats(files=len(target.files_changed))
     # A tree review of one directory measures that directory, not the whole tree.
     spec = tree_pathspec(target)
-    status = parse_name_status(git(repo, "diff", *_DIFF_FLAGS, "--name-status", "-z", base, head, *spec))
-    for path, a, d in parse_numstat(git(repo, "diff", *_DIFF_FLAGS, "--numstat", "-z", base, head, *spec)):
+    status = parse_name_status(
+        git(repo, "diff", *_DIFF_FLAGS, "--name-status", "-z", base, head, *spec)
+    )
+    for path, a, d in parse_numstat(
+        git(repo, "diff", *_DIFF_FLAGS, "--numstat", "-z", base, head, *spec)
+    ):
         s.per_file[path] = {"status": status.get(path, "M"), "added": a, "deleted": d}
         kind = classify(path)
         k = s.by_kind.setdefault(kind, {"files": 0, "added": 0, "deleted": 0})
@@ -371,12 +468,24 @@ def change_stats(target: Target, pr: dict | None = None) -> ChangeStats:
         s.deleted += d or 0
     s.commits = read_commits(repo, base, head)
     s.tiers, s.tiers_error = repo_tiers(repo, base, list(target.files_changed))
-    s.todos_added = count_todos(git(repo, "diff", *_DIFF_FLAGS, "--unified=0", base, head, *spec))
-    s.badges = [Badge("totals", f"{_plural(s.files, 'file')} · +{s.added} −{s.deleted}", "good",
-                      ", ".join(f"{k} {v['files']} (+{v['added']} −{v['deleted']})"
-                                for k, v in sorted(s.by_kind.items()))
-                      + (f"; {s.binary} binary" if s.binary else "")),
-                size_badge(s), tests_badge(s), commits_badge(s)]
+    s.todos_added = count_todos(
+        git(repo, "diff", *_DIFF_FLAGS, "--unified=0", base, head, *spec)
+    )
+    s.badges = [
+        Badge(
+            "totals",
+            f"{_plural(s.files, 'file')} · +{s.added} −{s.deleted}",
+            "good",
+            ", ".join(
+                f"{k} {v['files']} (+{v['added']} −{v['deleted']})"
+                for k, v in sorted(s.by_kind.items())
+            )
+            + (f"; {s.binary} binary" if s.binary else ""),
+        ),
+        size_badge(s),
+        tests_badge(s),
+        commits_badge(s),
+    ]
     s.badges += [b for b in (todos_badge(s), lockfile_badge(s)) if b]
     s.badges += pr_badges(pr)
     return s

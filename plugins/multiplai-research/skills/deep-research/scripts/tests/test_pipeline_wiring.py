@@ -13,14 +13,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-
 from research_pipeline.config import PRESETS, ResearchConfig
 from research_pipeline.models import (
+    Finding,
     PlanResult,
+    ReputationTier,
     SearchResult,
     Source,
-    ReputationTier,
-    Finding,
 )
 from research_pipeline.state import ResearchState, Stage
 
@@ -150,9 +149,7 @@ class TestStateResume:
             primary_queries=["p1"],
         )
         state.search_results = [
-            SearchResult(
-                url="https://a", title="A", snippet="", source_api="tavily"
-            )
+            SearchResult(url="https://a", title="A", snippet="", source_api="tavily")
         ]
         state.advance_to(Stage.SEARCH_COMPLETE)
 
@@ -162,9 +159,7 @@ class TestStateResume:
         assert not loaded.is_complete(Stage.TRIAGE_COMPLETE)
         assert len(loaded.search_results) == 1
 
-    def test_resume_preserves_findings(
-        self, fake_config: ResearchConfig
-    ) -> None:
+    def test_resume_preserves_findings(self, fake_config: ResearchConfig) -> None:
         state = ResearchState.new(
             query=fake_config.query,
             output_file=fake_config.output_file_path(),

@@ -7,8 +7,8 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
 from build_pipeline import git_ops
+
 from tests.row_helpers import assert_same_as_unstopped, run_killed_at
 
 
@@ -17,7 +17,9 @@ def _repo(path: Path, date: str) -> Path:
     env = {**os.environ, "GIT_COMMITTER_DATE": date, "GIT_AUTHOR_DATE": date}
 
     def git(*argv: str) -> None:
-        subprocess.run(["git", *argv], cwd=path, check=True, capture_output=True, env=env)
+        subprocess.run(
+            ["git", *argv], cwd=path, check=True, capture_output=True, env=env
+        )
 
     git("-c", "init.defaultBranch=main", "init")
     git("config", "user.email", "test@example.com")
@@ -35,8 +37,14 @@ def _repo(path: Path, date: str) -> Path:
 def test_commits_made_at_different_times_compare_equal(tmp_path):
     a = _repo(tmp_path / "a", "2026-10-13T10:00:00")
     b = _repo(tmp_path / "b", "2026-10-13T11:30:05")
-    assert subprocess.run(["git", "rev-parse", "HEAD"], cwd=a, capture_output=True, text=True).stdout \
-        != subprocess.run(["git", "rev-parse", "HEAD"], cwd=b, capture_output=True, text=True).stdout
+    assert (
+        subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=a, capture_output=True, text=True
+        ).stdout
+        != subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=b, capture_output=True, text=True
+        ).stdout
+    )
     assert_same_as_unstopped(a, b)
 
 

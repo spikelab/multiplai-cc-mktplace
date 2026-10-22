@@ -44,8 +44,19 @@ jobs:
 
       - name: Gate self-tests
         run: |
-          python -m pip install --quiet pytest
-          python -m pytest scripts/tests/ -q
+          python -m pip install --quiet pytest pytest-xdist
+          python -m pytest scripts/tests/ -q -n auto
+
+  lint:
+    name: ruff (check + format)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+      - name: ruff check
+        run: uvx ruff@0.17.1 check --output-format=github .
+      - name: ruff format
+        run: uvx ruff@0.17.1 format --check .
 
   changelog-gate:
     name: changelog-gate
@@ -133,8 +144,8 @@ jobs:
 
       - name: Gate self-tests
         run: |
-          uv run --with pytest python -m pytest \
-            plugins/multiplai-dev/skills/skill-creator/scripts/tests/ -q
+          uv run --with pytest --with pytest-xdist python -m pytest \
+            plugins/multiplai-dev/skills/skill-creator/scripts/tests/ -q -n auto
 
       - name: Run the CONTRACT.md pilots
         run: |
@@ -170,7 +181,7 @@ jobs:
         working-directory: plugins/multiplai-context
         run: |
           uv run --all-packages --project ../.. --with pytest --with pytest-asyncio \
-            --with pytest-timeout python -m pytest tests/ -q
+            --with pytest-timeout --with pytest-xdist python -m pytest tests/ -q -n auto
 
   media-tests:
     name: multiplai-media tests
@@ -189,6 +200,7 @@ jobs:
       # skips without it.
       - name: Run tests
         working-directory: plugins/multiplai-media
+        # serial: -n auto measured slower (24.5s vs 26.8s, 2026-10)
         run: uv run --no-project --with pytest python -m pytest tests/ -q
 
   pm-tests:
@@ -204,6 +216,7 @@ jobs:
       # install; every network call is monkeypatched.
       - name: Run tests
         working-directory: plugins/multiplai-pm
+        # serial: -n auto measured slower (1.8s vs 2.7s, 2026-10)
         run: uv run --no-project --with pytest python -m pytest skills/plane/scripts/tests/ -q
 
   buildme-tests:
@@ -236,7 +249,7 @@ jobs:
         working-directory: plugins/multiplai-research/skills/deep-research/scripts
         run: |
           uv run --project ../../../../.. --package research-pipeline \
-            --extra dev python -m pytest tests/ -q
+            --extra dev python -m pytest tests/ -q -n auto
 
   walkthrough-tests:
     name: walkthrough-pipeline tests
@@ -259,7 +272,7 @@ jobs:
         working-directory: plugins/multiplai-dev/skills/codebase-walkthrough/scripts
         run: |
           uv run --project ../../../../.. --package walkthrough-pipeline \
-            --extra dev python -m pytest tests/ -q
+            --extra dev python -m pytest tests/ -q -n auto
 
   code-facts-tests:
     name: code_facts tests
@@ -278,7 +291,7 @@ jobs:
         working-directory: plugins/multiplai-dev/lib/code_facts
         run: |
           uv run --project ../../../.. --package walkthrough-pipeline \
-            --extra dev python -m pytest tests/ -q
+            --extra dev python -m pytest tests/ -q -n auto
 
   review-pipeline-tests:
     name: review pipeline tests
@@ -295,7 +308,7 @@ jobs:
         working-directory: plugins/multiplai-dev/skills/review/scripts
         run: |
           uv run --project ../../../../.. --package review-pipeline \
-            --extra dev python -m pytest tests/ -q
+            --extra dev python -m pytest tests/ -q -n auto
 
   pr-tests:
     name: pr skill tests
@@ -312,7 +325,7 @@ jobs:
         working-directory: plugins/multiplai-dev/skills/pr/scripts
         run: |
           uv run --project ../../../../.. --package pr-pipeline \
-            --extra dev python -m pytest tests/ -q
+            --extra dev python -m pytest tests/ -q -n auto
 
   spec-extract-tests:
     name: spec-extract tests
@@ -329,7 +342,7 @@ jobs:
         working-directory: plugins/multiplai-dev/skills/spec-extract/scripts
         run: |
           uv run --project ../../../../.. --package spec-extract-pipeline \
-            --extra dev python -m pytest tests/ -q
+            --extra dev python -m pytest tests/ -q -n auto
 
   pm-spec-tests:
     name: pm-spec tests
@@ -346,7 +359,7 @@ jobs:
         working-directory: plugins/multiplai-pm/skills/pm-spec/scripts
         run: |
           uv run --project ../../../../.. --package pm-spec-pipeline \
-            --extra dev python -m pytest tests/ -q
+            --extra dev python -m pytest tests/ -q -n auto
 
   review-viewer-tests:
     name: review-viewer tests
@@ -363,7 +376,7 @@ jobs:
         working-directory: plugins/multiplai-dev/skills/review-viewer/scripts
         run: |
           uv run --project ../../../../.. --package review-viewer \
-            --extra dev python -m pytest tests/ -q
+            --extra dev python -m pytest tests/ -q -n auto
 
   apple-tests:
     name: multiplai-apple tests
@@ -380,4 +393,5 @@ jobs:
       # with a scratch HOME — no Xcode, no SSH, no Mac needed.
       - name: Run tests
         working-directory: plugins/multiplai-apple
+        # serial: -n auto measured slower (0.15s vs 0.51s, 2026-10)
         run: uv run --no-project --with pytest python -m pytest tests/ -q

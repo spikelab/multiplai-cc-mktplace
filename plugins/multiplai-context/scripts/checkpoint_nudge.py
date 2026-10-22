@@ -35,11 +35,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from multiplai_core.paths import get_paths
-from multiplai_core.log_utils import hook_run, setup_logging, log_event
 from lib import checkpoint as cp
 from lib.fsio import atomic_write_json
 from lib.hook_input import read_hook_input
+from multiplai_core.log_utils import hook_run, log_event, setup_logging
+from multiplai_core.paths import get_paths
 
 logger = setup_logging("checkpoint_nudge", packages=("lib", "generators"))
 
@@ -108,9 +108,7 @@ def _record_override(data_dir: Path, session_id: str, tokens: int) -> None:
     _write_state(cfile, payload)
 
 
-def _hard_stop(
-    data_dir: Path, session_id: str, prompt: str, tokens: int, cfg
-) -> bool:
+def _hard_stop(data_dir: Path, session_id: str, prompt: str, tokens: int, cfg) -> bool:
     """Block this prompt? Emits the block JSON as a side effect when True.
 
     Only reached above ``handoff_tokens``; returns False whenever the hard
@@ -137,20 +135,26 @@ def _hard_stop(
         else "A checkpoint is being written now and will be restored in the "
         "next session"
     )
-    print(json.dumps({
-        "decision": "block",
-        "reason": (
-            f"Context hard stop: {tokens:,} tokens (limit "
-            f"{cfg.hard_stop_tokens:,}). {state} — run /clear to hand off, or "
-            f"/compact to stay in this session. To continue here anyway, "
-            f"include {_OVERRIDE_TOKEN} in your prompt."
-        ),
-    }))
+    print(
+        json.dumps(
+            {
+                "decision": "block",
+                "reason": (
+                    f"Context hard stop: {tokens:,} tokens (limit "
+                    f"{cfg.hard_stop_tokens:,}). {state} — run /clear to hand off, or "
+                    f"/compact to stay in this session. To continue here anyway, "
+                    f"include {_OVERRIDE_TOKEN} in your prompt."
+                ),
+            }
+        )
+    )
     logger.info("Hard stop blocked a prompt at %d tokens for %s", tokens, session_id)
     log_event(
-        "checkpoint", "hard_stop",
+        "checkpoint",
+        "hard_stop",
         f"prompt blocked at {tokens:,} tokens (limit {cfg.hard_stop_tokens:,})",
-        session_id=session_id, tokens=tokens,
+        session_id=session_id,
+        tokens=tokens,
     )
     return True
 

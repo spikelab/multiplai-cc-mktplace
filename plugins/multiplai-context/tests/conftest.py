@@ -23,6 +23,7 @@ from pathlib import Path
 
 import pytest
 
+
 # --- Import-time workspace isolation ---------------------------------------
 # Plugin scripts configure logging at MODULE IMPORT time (e.g.
 # ``logger = setup_logging("backfill")`` at top level), and pytest imports
@@ -134,12 +135,14 @@ def parse_hooks():
                 # Non-script hooks (run.sh --warm) carry the mode flag in
                 # the script slot; consumers guard with .is_file()/.py.
                 script = m.group(1) if m else ("--warm" if "--warm" in command else "")
-                out.append({
-                    "event": event,
-                    "script": script,
-                    "command": command,
-                    "timeout": entry.get("timeout"),
-                })
+                out.append(
+                    {
+                        "event": event,
+                        "script": script,
+                        "command": command,
+                        "timeout": entry.get("timeout"),
+                    }
+                )
     return out
 
 
@@ -250,11 +253,13 @@ def run_context_hook(
     if extra_env:
         env.update(extra_env)
 
-    stdin = json.dumps({
-        "hook_event_name": "UserPromptSubmit",
-        "prompt": prompt,
-        "cwd": cwd,
-    })
+    stdin = json.dumps(
+        {
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": prompt,
+            "cwd": cwd,
+        }
+    )
     result = subprocess.run(
         [sys.executable, str(CONTEXT_MANAGER)],
         input=stdin,
@@ -270,7 +275,9 @@ def run_context_hook(
     # Stdout may have warning lines from logging; the LAST line is the JSON.
     out = result.stdout.strip().splitlines()
     if not out:
-        raise AssertionError(f"No stdout from context_manager. stderr: {result.stderr[:500]}")
+        raise AssertionError(
+            f"No stdout from context_manager. stderr: {result.stderr[:500]}"
+        )
     return json.loads(out[-1])
 
 
@@ -418,6 +425,7 @@ def plugin_env(monkeypatch):
 @pytest.fixture
 def reset_paths_cache():
     from multiplai_core.paths import _reset_cache
+
     _reset_cache()
     yield
     _reset_cache()
@@ -442,5 +450,6 @@ _SESSION_DEFAULT_VARS = (
 def _no_session_defaults(monkeypatch):
     for key in _SESSION_DEFAULT_VARS:
         monkeypatch.delenv(key, raising=False)
-    monkeypatch.setattr("multiplai_core.session.load_multiplai_conf",
-                        lambda: {"_sections": {}})
+    monkeypatch.setattr(
+        "multiplai_core.session.load_multiplai_conf", lambda: {"_sections": {}}
+    )

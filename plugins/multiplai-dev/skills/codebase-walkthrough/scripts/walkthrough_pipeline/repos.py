@@ -36,8 +36,11 @@ def find_repo_dirs(root: Path, max_depth: int = MAX_DEPTH) -> list[Path]:
         if len(here.parts) - base_depth >= max_depth:
             dirnames[:] = []
             continue
-        dirnames[:] = sorted(d for d in dirnames
-                             if d not in SKIP_DIRS and d != ".worktrees" and not d.startswith("."))
+        dirnames[:] = sorted(
+            d
+            for d in dirnames
+            if d not in SKIP_DIRS and d != ".worktrees" and not d.startswith(".")
+        )
     return sorted(found)
 
 
@@ -66,8 +69,12 @@ def _unique_key(path: Path, root: Path, taken: set[str]) -> str:
     return key
 
 
-def discover(target_repo: RepoInfo, *, search_root: str | None = None,
-             repos: list[str] | None = None) -> tuple[dict[str, RepoInfo], Path, list[str]]:
+def discover(
+    target_repo: RepoInfo,
+    *,
+    search_root: str | None = None,
+    repos: list[str] | None = None,
+) -> tuple[dict[str, RepoInfo], Path, list[str]]:
     """(repos by key, the search root, warnings). The target repo keeps its key."""
     warnings: list[str] = []
     target_path = Path(target_repo.path).resolve()
@@ -75,7 +82,11 @@ def discover(target_repo: RepoInfo, *, search_root: str | None = None,
         dirs = [Path(r).expanduser().resolve() for r in repos]
         root = Path(os.path.commonpath([str(d) for d in dirs + [target_path]]))
     else:
-        root = Path(search_root).expanduser().resolve() if search_root else default_search_root(target_path)
+        root = (
+            Path(search_root).expanduser().resolve()
+            if search_root
+            else default_search_root(target_path)
+        )
         dirs = find_repo_dirs(root)
     if target_path not in dirs:
         dirs.append(target_path)
@@ -93,5 +104,7 @@ def discover(target_repo: RepoInfo, *, search_root: str | None = None,
             continue
         key = _unique_key(d, root, taken)
         taken.add(key)
-        found[key] = RepoInfo(key=key, path=str(d), head_sha=sha, remote_url=remote_url(d))
+        found[key] = RepoInfo(
+            key=key, path=str(d), head_sha=sha, remote_url=remote_url(d)
+        )
     return found, root, warnings

@@ -1,6 +1,5 @@
 """DIVERGE prompt — expands query vocabulary with mechanism-level angles."""
 
-
 DIVERGE_PROMPT = """You are the DIVERGE stage of a research pipeline. Expand the \
 search space with mechanism-level queries that find entities which don't describe \
 themselves using the analyst's vocabulary.

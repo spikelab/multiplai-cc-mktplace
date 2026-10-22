@@ -14,16 +14,20 @@ import logging
 import os
 import shutil
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from multiplai_core.log_utils import log_event
 
-from . import budget, docs as docs_mod, lsp, references, repos as repos_mod, symbols as symbols_mod
+from . import budget, lsp, references
+from . import docs as docs_mod
+from . import repos as repos_mod
+from . import symbols as symbols_mod
 from . import target as target_mod
 from .config import WalkConfig
 from .gates import boundary_gate, partition_gate, target_files_ws
-from .models import STAGES as STAGES_ORDER, Dropped, WalkState
+from .models import STAGES as STAGES_ORDER
+from .models import Dropped, WalkState
 from .partition import partition, ws_lines
 from .progress import ProgressWriter
 from .render import write_outputs
@@ -37,9 +41,17 @@ from .state import STATE_FILE, load_state, save_state
 log = logging.getLogger(__name__)
 
 # Which rule fired, never the reason text (a reason can quote code).
-_REASON_KINDS = ("quote not at cited lines", "path not at commit", "empty quote", "path names no known repo",
-                 "doc quote not in the page", "url not in llms.txt", "doc quote too short",
-                 "url is not a fetched docs page", "not an outbound API path")
+_REASON_KINDS = (
+    "quote not at cited lines",
+    "path not at commit",
+    "empty quote",
+    "path names no known repo",
+    "doc quote not in the page",
+    "url not in llms.txt",
+    "doc quote too short",
+    "url is not a fetched docs page",
+    "not an outbound API path",
+)
 
 
 def reason_kind(reason: str) -> str:
@@ -59,13 +71,15 @@ class RunOptions:
     output: str = "."
     search_root: str | None = None
     repos: list[str] = field(default_factory=list)
-    repo_key: str | None = None  # the module repository's key; default its directory's name
+    repo_key: str | None = (
+        None  # the module repository's key; default its directory's name
+    )
     docs: str | None = None
     docs_dirs: list[str] = field(default_factory=list)
     docs_pages: int = 30
     api_collection: str | None = None
     unit_lines: int = 6000
-    scenarios: int = 21          # the path cap
+    scenarios: int = 21  # the path cap
     scenarios_given: bool = False  # `--scenarios` was passed; else a resume uses the default of its own version
     lsp_timeout: float = 300.0
 
@@ -82,7 +96,9 @@ def _keep_previous_progress(run_dir: Path) -> None:
     """
     log = run_dir / "progress.log"
     try:
-        stamp = datetime.fromtimestamp(log.stat().st_mtime, timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        stamp = datetime.fromtimestamp(log.stat().st_mtime, UTC).strftime(
+            "%Y%m%dT%H%M%SZ"
+        )
         os.link(log, run_dir / f"progress-{stamp}.log")
         log.unlink()
     except OSError:
@@ -95,7 +111,9 @@ def prepare(opts: RunOptions, runs_dir: Path) -> tuple[WalkState, Path]:
         root, sub, sha = target_mod.resolve_target(opts.target)
     except target_mod.TargetError as e:
         raise WalkError(str(e)) from e
-    slug = target_mod.sanitize_slug(f"{root.name}--{sub or 'root'}--{sha[:12]}--{opts.mode}")
+    slug = target_mod.sanitize_slug(
+        f"{root.name}--{sub or 'root'}--{sha[:12]}--{opts.mode}"
+    )
     run_dir = runs_dir / slug
     run_dir.mkdir(parents=True, exist_ok=True)
     for stale in (STATE_FILE, "boundary.json"):
@@ -104,8 +122,9 @@ def prepare(opts: RunOptions, runs_dir: Path) -> tuple[WalkState, Path]:
     shutil.rmtree(run_dir / PATHS_CACHE, ignore_errors=True)
     _keep_previous_progress(run_dir)
     try:
-        info, repo = target_mod.build_target(opts.target, run_dir, name=opts.name, depth=opts.depth,
-                                              key=opts.repo_key)
+        info, repo = target_mod.build_target(
+            opts.target, run_dir, name=opts.name, depth=opts.depth, key=opts.repo_key
+        )
     except target_mod.TargetError as e:
         raise WalkError(str(e)) from e
     gate = target_mod.target_gate(info)
@@ -117,9 +136,15 @@ def prepare(opts: RunOptions, runs_dir: Path) -> tuple[WalkState, Path]:
 
 def _boundary_json(state: WalkState, dropped: list[dict]) -> dict:
     return {
-        "target": {"repo": state.target.repo_key, "subpath": state.target.subpath, "sha": state.target.head_sha,
-                   "package": state.target.package},
-        "repos": {k: {"path": r.path, "sha": r.head_sha} for k, r in state.repos.items()},
+        "target": {
+            "repo": state.target.repo_key,
+            "subpath": state.target.subpath,
+            "sha": state.target.head_sha,
+            "package": state.target.package,
+        },
+        "repos": {
+            k: {"path": r.path, "sha": r.head_sha} for k, r in state.repos.items()
+        },
         "searched_repos": state.searched_repos,
         "symbols": [e.model_dump() for e in state.symbols],
         "references": [r.model_dump() for r in state.references],
@@ -129,7 +154,9 @@ def _boundary_json(state: WalkState, dropped: list[dict]) -> dict:
     }
 
 
-async def _code_stage(name: str, state: WalkState, run_dir: Path, ctx: RunContext) -> WalkState:
+async def _code_stage(
+    name: str, state: WalkState, run_dir: Path, ctx: RunContext
+) -> WalkState:
     opts = state.options
     t = state.target
     agent_mode = opts.get("mode") == "agent"
@@ -138,8 +165,11 @@ async def _code_stage(name: str, state: WalkState, run_dir: Path, ctx: RunContex
         if agent_mode:
             state.searched_repos = [t.repo_key]
         else:
-            found, root, warnings = repos_mod.discover(target_repo, search_root=opts.get("search_root"),
-                                                       repos=opts.get("repos") or None)
+            found, root, warnings = repos_mod.discover(
+                target_repo,
+                search_root=opts.get("search_root"),
+                repos=opts.get("repos") or None,
+            )
             state.repos = found
             state.searched_repos = sorted(found)
             state.warnings += warnings
@@ -153,35 +183,63 @@ async def _code_stage(name: str, state: WalkState, run_dir: Path, ctx: RunContex
         entries += symbols_mod.setting_definitions(t, snap, names)
         state.symbols = entries
         state.warnings += warnings
-        ctx.counts = {"defines": sum(1 for e in entries if e.direction == "defines"),
-                      "calls": sum(1 for e in entries if e.direction == "calls"),
-                      "api_paths": len(symbols_mod.outbound_api_paths(entries))}
+        ctx.counts = {
+            "defines": sum(1 for e in entries if e.direction == "defines"),
+            "calls": sum(1 for e in entries if e.direction == "calls"),
+            "api_paths": len(symbols_mod.outbound_api_paths(entries)),
+        }
     elif name == "references":
         if agent_mode:
             state.references = []
         else:
-            refs = await asyncio.to_thread(references.scan_all, state.repos, t, state.symbols, run_dir / "refscan")
-            lsp_refs, report = await lsp.find_references(t, ctx.snap_root / t.repo_key, state.symbols,
-                                                         timeout_s=float(opts.get("lsp_timeout") or 0))
+            refs = await asyncio.to_thread(
+                references.scan_all, state.repos, t, state.symbols, run_dir / "refscan"
+            )
+            lsp_refs, report = await lsp.find_references(
+                t,
+                ctx.snap_root / t.repo_key,
+                state.symbols,
+                timeout_s=float(opts.get("lsp_timeout") or 0),
+            )
             state.lsp = report
             if report["status"].startswith("timed out"):
-                state.warnings.append(f"pyright references {report['status']}: kept the ast results "
-                                      f"({report['answered']} of {report['symbols']} symbols answered)")
+                state.warnings.append(
+                    f"pyright references {report['status']}: kept the ast results "
+                    f"({report['answered']} of {report['symbols']} symbols answered)"
+                )
             state.references = references.merge_lsp(refs, lsp_refs)
-        ctx.counts = {"references": len(state.references),
-                      "repos_with_references": len({r.repo for r in state.references})}
+        ctx.counts = {
+            "references": len(state.references),
+            "repos_with_references": len({r.repo for r in state.references}),
+        }
     elif name == "boundary":
-        kept_s, kept_r, dropped = boundary_gate(state.repos, state.symbols, state.references)
+        kept_s, kept_r, dropped = boundary_gate(
+            state.repos, state.symbols, state.references
+        )
         state.symbols, state.references = kept_s, kept_r
-        state.dropped += [Dropped(stage="boundary", what=f"{d['entry']['path']}:{d['entry']['line']}",
-                                  reason=d["reason"]) for d in dropped]
+        state.dropped += [
+            Dropped(
+                stage="boundary",
+                what=f"{d['entry']['path']}:{d['entry']['line']}",
+                reason=d["reason"],
+            )
+            for d in dropped
+        ]
         ctx.gate_reasons += [d["reason"] for d in dropped]
         path = run_dir / "boundary.json"
-        path.write_text(json.dumps(_boundary_json(state, dropped), indent=1), encoding="utf-8")
+        path.write_text(
+            json.dumps(_boundary_json(state, dropped), indent=1), encoding="utf-8"
+        )
         state.boundary_path = str(path)
         for key in sorted({r.repo for r in state.references} - {t.repo_key}):
-            await asyncio.to_thread(target_mod.snapshot_repo, state.repos[key], ctx.snap_root / key)
-        ctx.counts = {"symbols": len(kept_s), "references": len(kept_r), "dropped": len(dropped)}
+            await asyncio.to_thread(
+                target_mod.snapshot_repo, state.repos[key], ctx.snap_root / key
+            )
+        ctx.counts = {
+            "symbols": len(kept_s),
+            "references": len(kept_r),
+            "dropped": len(dropped),
+        }
     elif name == "partition":
         limit = int(opts.get("unit_lines") or 6000)
         units = partition(t, limit)
@@ -191,19 +249,30 @@ async def _code_stage(name: str, state: WalkState, run_dir: Path, ctx: RunContex
         state.units = units
         oversize = [u.files[0] for u in units if u.oversize]
         if oversize:
-            state.warnings.append(f"{len(oversize)} file(s) over --unit-lines went alone: {', '.join(oversize)}")
+            state.warnings.append(
+                f"{len(oversize)} file(s) over --unit-lines went alone: {', '.join(oversize)}"
+            )
         ctx.counts = {"units": len(units), "oversize": len(oversize)}
     state.stage = name
     return state
 
 
 STAGES = (
-    ("repos", None), ("symbols", None), ("references", None), ("boundary", None), ("partition", None),
-    ("explore", run_explore), ("docs", run_docs), ("trace", run_trace), ("write", run_write),
+    ("repos", None),
+    ("symbols", None),
+    ("references", None),
+    ("boundary", None),
+    ("partition", None),
+    ("explore", run_explore),
+    ("docs", run_docs),
+    ("trace", run_trace),
+    ("write", run_write),
 )
 
 
-async def run_state(state: WalkState, run_dir: Path, config: WalkConfig, *, session_id: str = "") -> list[Path]:
+async def run_state(
+    state: WalkState, run_dir: Path, config: WalkConfig, *, session_id: str = ""
+) -> list[Path]:
     """Run every stage not yet done; return the files written."""
     try:
         target_mod.require_rg()
@@ -215,16 +284,32 @@ async def run_state(state: WalkState, run_dir: Path, config: WalkConfig, *, sess
     slug = run_dir.name
     if state.stage == "target":
         progress.started(f"{t.repo_key}/{t.subpath}", t.head_sha, len(t.files))
-        log_event("walkthrough", "start", f"walkthrough started for {slug}", session_id=session_id,
-                  target=slug, sha=t.head_sha, files=len(t.files), mode=state.options.get("mode"))
+        log_event(
+            "walkthrough",
+            "start",
+            f"walkthrough started for {slug}",
+            session_id=session_id,
+            target=slug,
+            sha=t.head_sha,
+            files=len(t.files),
+            mode=state.options.get("mode"),
+        )
     else:
         progress.line(f"RESUMED after {state.stage}")
     snap_root = run_dir / "snap"
     for key in {t.repo_key} | {r.repo for r in state.references}:
         if key in state.repos:
-            await asyncio.to_thread(target_mod.snapshot_repo, state.repos[key], snap_root / key)
-    ctx = RunContext(config=config, run_dir=run_dir, snap_root=snap_root, repos=state.repos, progress=progress,
-                     session_id=session_id)
+            await asyncio.to_thread(
+                target_mod.snapshot_repo, state.repos[key], snap_root / key
+            )
+    ctx = RunContext(
+        config=config,
+        run_dir=run_dir,
+        snap_root=snap_root,
+        repos=state.repos,
+        progress=progress,
+        session_id=session_id,
+    )
     save_state(state, run_dir)
 
     for name, fn in STAGES:
@@ -233,33 +318,62 @@ async def run_state(state: WalkState, run_dir: Path, config: WalkConfig, *, sess
         progress.stage(name, "started")
         ctx.counts, ctx.gate_reasons = {}, []
         try:
-            state = await (fn(state, ctx) if fn else _code_stage(name, state, run_dir, ctx))
+            state = await (
+                fn(state, ctx) if fn else _code_stage(name, state, run_dir, ctx)
+            )
         except budget.BudgetExceededError as e:
             state.budget = ledger.to_state()
             save_state(state, run_dir)
             progress.failed(str(e))
-            log_event("walkthrough", "budget_stop", str(e), session_id=session_id, level="WARNING",
-                      target=slug, cost_usd=round(e.cost_usd, 4), stage=name)
+            log_event(
+                "walkthrough",
+                "budget_stop",
+                str(e),
+                session_id=session_id,
+                level="WARNING",
+                target=slug,
+                cost_usd=round(e.cost_usd, 4),
+                stage=name,
+            )
             raise
         except docs_mod.DocsError as e:
             state.budget = ledger.to_state()
             save_state(state, run_dir)
             progress.failed(f"docs gate: {e}")
-            raise WalkError(f"STOP (docs gate): {e}. The run is saved. Resume with a new decision: "
-                            f"`resume {run_dir} --docs <url>` to use other docs, or `--no-docs` to go on "
-                            f"without them.") from e
+            raise WalkError(
+                f"STOP (docs gate): {e}. The run is saved. Resume with a new decision: "
+                f"`resume {run_dir} --docs <url>` to use other docs, or `--no-docs` to go on "
+                f"without them."
+            ) from e
         state.budget = ledger.to_state()
         save_state(state, run_dir)
-        summary = f"{name} done: " + (", ".join(f"{v} {k.replace('_', ' ')}" for k, v in ctx.counts.items())
-                                       or "nothing to do")
+        summary = f"{name} done: " + (
+            ", ".join(f"{v} {k.replace('_', ' ')}" for k, v in ctx.counts.items())
+            or "nothing to do"
+        )
         progress.stage(name, summary)
         print(f"{slug}: {summary}", flush=True)
-        log_event("walkthrough", "stage", summary, session_id=session_id, target=slug, stage=name,
-                  counts=dict(ctx.counts), cost_usd=round(ledger.cost_usd, 4))
+        log_event(
+            "walkthrough",
+            "stage",
+            summary,
+            session_id=session_id,
+            target=slug,
+            stage=name,
+            counts=dict(ctx.counts),
+            cost_usd=round(ledger.cost_usd, 4),
+        )
         if ctx.gate_reasons:
-            log_event("walkthrough", "gate_reject", f"{len(ctx.gate_reasons)} items rejected by gates",
-                      session_id=session_id, target=slug, stage=name, count=len(ctx.gate_reasons),
-                      reasons=sorted({reason_kind(r) for r in ctx.gate_reasons}))
+            log_event(
+                "walkthrough",
+                "gate_reject",
+                f"{len(ctx.gate_reasons)} items rejected by gates",
+                session_id=session_id,
+                target=slug,
+                stage=name,
+                count=len(ctx.gate_reasons),
+                reasons=sorted({reason_kind(r) for r in ctx.gate_reasons}),
+            )
 
     if not state.past("render"):
         state.budget = ledger.to_state()
@@ -272,14 +386,30 @@ async def run_state(state: WalkState, run_dir: Path, config: WalkConfig, *, sess
     shutil.rmtree(snap_root, ignore_errors=True)
     shutil.rmtree(run_dir / "refscan", ignore_errors=True)
 
-    covered = len(t.files) - len([f for f in target_files_ws(t) if f not in {c.path for x in state.facts
-                                                                            for c in x.citations}])
-    message = (f"walkthrough finished: {len(state.facts)} facts, {covered}/{len(t.files)} files with facts, "
-               f"{len(state.paths.paths) if state.paths else 0} paths")
+    covered = len(t.files) - len(
+        [
+            f
+            for f in target_files_ws(t)
+            if f not in {c.path for x in state.facts for c in x.citations}
+        ]
+    )
+    message = (
+        f"walkthrough finished: {len(state.facts)} facts, {covered}/{len(t.files)} files with facts, "
+        f"{len(state.paths.paths) if state.paths else 0} paths"
+    )
     progress.done(f"{message} (${ledger.cost_usd:.2f})")
     print(f"{slug}: {message}; run dir {run_dir}", flush=True)
-    log_event("walkthrough", "done", message, session_id=session_id, target=slug, facts=len(state.facts),
-              files_covered=covered, files=len(t.files), cost_usd=round(ledger.cost_usd, 4))
+    log_event(
+        "walkthrough",
+        "done",
+        message,
+        session_id=session_id,
+        target=slug,
+        facts=len(state.facts),
+        files_covered=covered,
+        files=len(t.files),
+        cost_usd=round(ledger.cost_usd, 4),
+    )
     return [Path(p) for p in state.outputs]
 
 
@@ -300,8 +430,14 @@ def rewind_for_rewrite(state: WalkState, run_dir: Path) -> WalkState:
     return state
 
 
-async def resume(run_dir: Path, config: WalkConfig, *, session_id: str = "",
-                 docs: str | None | object = NO_CHANGE, rewrite: bool = False) -> list[Path]:
+async def resume(
+    run_dir: Path,
+    config: WalkConfig,
+    *,
+    session_id: str = "",
+    docs: str | None | object = NO_CHANGE,
+    rewrite: bool = False,
+) -> list[Path]:
     """Continue a saved run. *docs* replaces the saved `--docs` URL (None drops the docs). *rewrite* runs the
     write and render stages again on a run past its trace stage (`rewind_for_rewrite`)."""
     state = load_state(run_dir / STATE_FILE)
@@ -309,7 +445,9 @@ async def resume(run_dir: Path, config: WalkConfig, *, session_id: str = "",
         raise WalkError(f"no readable {STATE_FILE} in {run_dir}")
     if docs is not NO_CHANGE:
         if state.past("docs"):
-            raise WalkError("the docs stage of this run is already done; --docs/--no-docs can no longer change it")
+            raise WalkError(
+                "the docs stage of this run is already done; --docs/--no-docs can no longer change it"
+            )
         state.options["docs"] = docs
         state.docs = {}
     if rewrite:

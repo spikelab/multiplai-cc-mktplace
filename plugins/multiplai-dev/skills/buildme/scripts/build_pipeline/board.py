@@ -58,7 +58,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -119,7 +119,9 @@ _PHASE_COLUMNS: dict[BuildPhase, BoardColumn] = {
 }
 
 
-def column_for(phase: BuildPhase, block_status: BlockStatus | None = None) -> BoardColumn:
+def column_for(
+    phase: BuildPhase, block_status: BlockStatus | None = None
+) -> BoardColumn:
     """Pure mapping: which column a card is in for a (phase, block status).
 
     `block_status` is accepted for every phase and currently changes nothing —
@@ -148,6 +150,7 @@ class BoardEvent(BaseModel):
 
 class BoardCard(BaseModel):
     """The `.board.json` document."""
+
     card_id: str
     change_name: str
     column: BoardColumn
@@ -174,7 +177,8 @@ def board_path(specs_dir: Path, change_name: str) -> Path:
     # Anchored to exactly YYYY-MM-DD-<slug> (archived_change_dirs) — a loose
     # suffix match would let change `foo` write onto `…-bar-foo`'s card.
     archived = [
-        d for d in archived_change_dirs(specs_dir, change_name)
+        d
+        for d in archived_change_dirs(specs_dir, change_name)
         if (d / BOARD_FILENAME).exists()
     ]
     if archived:
@@ -230,11 +234,12 @@ def _record(config, state, col: BoardColumn, note: str, progress) -> BoardColumn
     if not path.parent.is_dir():
         log.info(
             "No change dir for '%s' — skipping board record of %s",
-            config.change_name, col.value,
+            config.change_name,
+            col.value,
         )
         return None
 
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     card = read_card(path)
     moved = card is None or card.column != col
 
@@ -276,7 +281,9 @@ def _record(config, state, col: BoardColumn, note: str, progress) -> BoardColumn
     return col
 
 
-def record_failure(config, state, reason: str = "", progress=None) -> BoardColumn | None:
+def record_failure(
+    config, state, reason: str = "", progress=None
+) -> BoardColumn | None:
     """Record `Cancelled` only when the run ended unrecoverably.
 
     Unrecoverable means no resumable checkpoint survives — the build's
@@ -299,6 +306,10 @@ def record_failure(config, state, reason: str = "", progress=None) -> BoardColum
         )
         return None
     if completed_state_path(state_file).exists():
-        log.info("Build completed (%s) — never Cancelled", completed_state_path(state_file))
+        log.info(
+            "Build completed (%s) — never Cancelled", completed_state_path(state_file)
+        )
         return None
-    return record(config, state, column=BoardColumn.CANCELLED, note=reason, progress=progress)
+    return record(
+        config, state, column=BoardColumn.CANCELLED, note=reason, progress=progress
+    )

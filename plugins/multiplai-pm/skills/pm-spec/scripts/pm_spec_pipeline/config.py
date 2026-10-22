@@ -68,7 +68,9 @@ class SpecConfig:
         self.change_name = normalize_change_name(self.change_name)
         if not self.change_name:
             raise ValueError("a change name is required")
-        self.specs_dir = Path(self.specs_dir) if self.specs_dir else self.project_dir / "specs"
+        self.specs_dir = (
+            Path(self.specs_dir) if self.specs_dir else self.project_dir / "specs"
+        )
         if not self.data:
             self.data = read_specs_config(self.specs_dir)
 
@@ -126,6 +128,7 @@ class SpecConfig:
         spec = resolve_model_spec([c if isinstance(c, str) else None for c in chain])
         if spec is None:
             from multiplai_core.session import default_model
+
             return default_model()
         return spec.model if spec.is_anthropic else spec.qualified
 

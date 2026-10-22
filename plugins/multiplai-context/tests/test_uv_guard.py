@@ -16,6 +16,7 @@ working environment behind, so a missing uv must fail it. Exiting 0 there
 would pass the Setup gate of ``claude --init-only`` over an install that
 cannot run a single hook.
 """
+
 from __future__ import annotations
 
 import json
@@ -26,7 +27,6 @@ import time
 from pathlib import Path
 
 import pytest
-
 from conftest import HOOKS_JSON, parse_hooks, script_hooks
 
 RUN_SH = HOOKS_JSON.parent / "run.sh"
@@ -63,8 +63,13 @@ def _run(command: str, env: dict[str, str], stdin: str = ""):
     from pytest would make these tests depend on how pytest was launched.
     """
     return subprocess.run(
-        command, shell=True, env=env, input=stdin,
-        capture_output=True, text=True, timeout=30,
+        command,
+        shell=True,
+        env=env,
+        input=stdin,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
 
 
@@ -185,7 +190,7 @@ class TestUvGuard:
         """With a fake `uv` first on PATH, the guard must exec through to it."""
         env = _masked_env(tmp_path)
         fake_uv = Path(env["PATH"]) / "uv"
-        fake_uv.write_text("#!/bin/sh\necho UV_CALLED \"$@\"\nexit 0\n")
+        fake_uv.write_text('#!/bin/sh\necho UV_CALLED "$@"\nexit 0\n')
         fake_uv.chmod(0o755)
         res = _run(_script_hooks()[0]["command"], env)
         assert res.returncode == 0
@@ -199,7 +204,7 @@ class TestUvGuard:
         local_bin = Path(env["HOME"]) / ".local" / "bin"
         local_bin.mkdir(parents=True)
         fake_uv = local_bin / "uv"
-        fake_uv.write_text("#!/bin/sh\necho UV_CALLED \"$@\"\nexit 0\n")
+        fake_uv.write_text('#!/bin/sh\necho UV_CALLED "$@"\nexit 0\n')
         fake_uv.chmod(0o755)
         res = _run(_script_hooks()[0]["command"], env)
         assert res.returncode == 0
@@ -370,9 +375,7 @@ class TestColdStartPrewarm:
         _run(_cmd("context_manager.py"), env)
         assert _wait_for(lambda: _sync_calls(uv_log) == 1)
         warm = root / "scripts" / ".warmup"
-        assert warm.is_dir(), (
-            "failed build keeps the marker: it rate-limits the retry"
-        )
+        assert warm.is_dir(), "failed build keeps the marker: it rate-limits the retry"
         assert _wait_for(lambda: (warm / "status").is_file())
         assert (warm / "status").read_text().strip() == "7", (
             "the marker must record uv's exit code — without it the next fire "
@@ -455,8 +458,7 @@ class TestColdStartPrewarm:
         (warm / "status").write_text("7")
         res = _run(_cmd("context_manager.py"), env)
         assert "UV_CALLED run --project" in res.stdout, (
-            "a usable environment must win over a marker left by an earlier "
-            "failure"
+            "a usable environment must win over a marker left by an earlier failure"
         )
         assert _sync_calls(uv_log) == 0
 
@@ -540,12 +542,10 @@ class TestColdStartLosesNothing:
         res = _run(_cmd("session_end.py"), env, stdin=payload)
         assert res.returncode == 0
         assert time.monotonic() - t0 < 3, "the hook itself must still return at once"
-        assert res.stdout == "", (
-            "only context_manager/session_start narrate the build"
+        assert res.stdout == "", "only context_manager/session_start narrate the build"
+        assert _wait_for(lambda: "session_end.py" in _text(uv_log), timeout=25), (
+            "session_end.py was dropped instead of re-run after the build"
         )
-        assert _wait_for(
-            lambda: "session_end.py" in _text(uv_log), timeout=25
-        ), "session_end.py was dropped instead of re-run after the build"
         assert "sess-abc123" in _text(uv_log), (
             "the replayed hook must receive its original payload"
         )
@@ -557,9 +557,7 @@ class TestColdStartLosesNothing:
         assert res.stdout == "", (
             "PreCompact stdout feeds the compaction summarizer as instructions"
         )
-        assert _wait_for(
-            lambda: "pre_compact.py" in _text(uv_log), timeout=25
-        )
+        assert _wait_for(lambda: "pre_compact.py" in _text(uv_log), timeout=25)
 
     def test_a_dropped_lifecycle_hook_is_recorded(self, tmp_path):
         """When the build never lands there is nothing to re-run — but the
@@ -568,9 +566,9 @@ class TestColdStartLosesNothing:
         env["UV_SYNC_FAIL"] = "1"
         _run(_cmd("session_end.py"), env, stdin="{}")
         log = self._deferred_log(root)
-        assert _wait_for(
-            lambda: "dropped session_end.py" in _text(log), timeout=25
-        ), f"nothing recorded the dropped session: {_text(log)!r}"
+        assert _wait_for(lambda: "dropped session_end.py" in _text(log), timeout=25), (
+            f"nothing recorded the dropped session: {_text(log)!r}"
+        )
 
     def test_the_deferred_log_is_rotated_once_it_passes_the_cap(self, tmp_path):
         """It is the one log outside `data/logs/`, so `_sweep_logs` never sees
@@ -585,8 +583,9 @@ class TestColdStartLosesNothing:
         _run(_cmd("session_end.py"), env, stdin="{}")
 
         rotated = log.with_suffix(".log.1")
-        assert _wait_for(lambda: rotated.is_file(), timeout=25), \
+        assert _wait_for(lambda: rotated.is_file(), timeout=25), (
             "an oversized log was appended to rather than rotated"
+        )
         assert rotated.stat().st_size > 262144, "rotated the wrong file"
         assert log.stat().st_size < 262144, "the live log kept the old bytes"
 
@@ -600,9 +599,7 @@ class TestColdStartLosesNothing:
 
         _run(_cmd("session_end.py"), env, stdin="{}")
 
-        assert _wait_for(
-            lambda: "dropped session_end.py" in _text(log), timeout=25
-        )
+        assert _wait_for(lambda: "dropped session_end.py" in _text(log), timeout=25)
         assert "earlier drop" in _text(log), "history discarded under the cap"
         assert not log.with_suffix(".log.1").exists()
 
@@ -640,7 +637,9 @@ class TestWarmMode:
         env, _root, _uv_log = _prewarm_env(tmp_path)
         env["UV_SYNC_FAIL"] = "1"
         res = _run(self._warm_cmd(), env)
-        assert res.returncode == 7, "Setup is an explicit maintenance flow — report failure"
+        assert res.returncode == 7, (
+            "Setup is an explicit maintenance flow — report failure"
+        )
 
     def test_warm_clears_inflight_marker_on_success(self, tmp_path):
         env, root, _uv_log = _prewarm_env(tmp_path)
@@ -661,9 +660,13 @@ class TestWarmMode:
         env["UV_SYNC_HANG"] = "5"
         warm = root / "scripts" / ".warmup"
         setup = subprocess.Popen(
-            self._warm_cmd(), shell=True, env=env,
-            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, text=True,
+            self._warm_cmd(),
+            shell=True,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
         )
         try:
             assert _wait_for(warm.is_dir), "--warm must claim the in-flight marker"

@@ -33,10 +33,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from multiplai_core.log_utils import setup_logging
 from generators.config import load_catalog_config
-from qmd_retrieval import QmdTarget, target_from_config
 from lib.runtime import lock_path
+from multiplai_core.log_utils import setup_logging
+from qmd_retrieval import QmdTarget, target_from_config
 
 logger = setup_logging("qmd_refresh", packages=("lib", "generators"))
 
@@ -61,19 +61,33 @@ def run_qmd_raw(args: list[str], timeout: int, target: QmdTarget) -> str | None:
         # shell string — a path with spaces/metacharacters must not split
         # or execute. args are internal constants ("status"/"update"/"embed").
         remote = f"cd {shlex.quote(target.workspace)} && qmd {' '.join(args)}"
-        argv = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3",
-                target.ssh_host, remote]
+        argv = [
+            "ssh",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=3",
+            target.ssh_host,
+            remote,
+        ]
     else:
         import shutil
-        qmd = shutil.which("qmd", path=f"{os.path.expanduser('~')}/.bun/bin:"
-                           + os.environ.get("PATH", ""))
+
+        qmd = shutil.which(
+            "qmd",
+            path=f"{os.path.expanduser('~')}/.bun/bin:" + os.environ.get("PATH", ""),
+        )
         if not qmd:
             return None
         argv = [qmd, *args]
     try:
         proc = subprocess.Popen(
-            argv, cwd=target.workspace or None, stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT, text=True, start_new_session=True,
+            argv,
+            cwd=target.workspace or None,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            start_new_session=True,
         )
     except OSError as e:
         logger.warning("qmd %s spawn failed: %s", args[0], type(e).__name__)
@@ -89,7 +103,9 @@ def run_qmd_raw(args: list[str], timeout: int, target: QmdTarget) -> str | None:
         logger.warning("qmd %s timeout after %ds (group killed)", args[0], timeout)
         return None
     if proc.returncode != 0:
-        logger.warning("qmd %s rc=%d: %s", args[0], proc.returncode, (stdout or "")[:300])
+        logger.warning(
+            "qmd %s rc=%d: %s", args[0], proc.returncode, (stdout or "")[:300]
+        )
         return None
     return stdout or ""
 

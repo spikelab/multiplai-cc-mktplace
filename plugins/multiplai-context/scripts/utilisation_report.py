@@ -35,8 +35,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from multiplai_core.paths import get_paths
-
 from lib.utilisation import (
     DISAGREEMENT_MARGIN,
     MIN_OBSERVATIONS,
@@ -46,6 +44,7 @@ from lib.utilisation import (
     render_table,
     utilisation_path,
 )
+from multiplai_core.paths import get_paths
 
 
 def _load_catalog(catalogs_dir: Path) -> dict:
@@ -61,7 +60,9 @@ def _load_catalog(catalogs_dir: Path) -> dict:
 def build(args: argparse.Namespace) -> dict:
     paths = get_paths()
     data_dir = Path(args.data_dir) if args.data_dir else paths.data_dir()
-    catalogs_dir = Path(args.catalogs_dir) if args.catalogs_dir else paths.catalogs_dir()
+    catalogs_dir = (
+        Path(args.catalogs_dir) if args.catalogs_dir else paths.catalogs_dir()
+    )
     records = read_records(utilisation_path(data_dir))
     return build_table(
         records,
@@ -74,24 +75,41 @@ def build(args: argparse.Namespace) -> dict:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Render the ESTIMATED memory utilisation table "
-                    "(retrieved vs estimated-used, from two independent estimators)",
+        "(retrieved vs estimated-used, from two independent estimators)",
     )
-    parser.add_argument("--json", action="store_true",
-                        help="emit the table as JSON (the machine contract) "
-                             "instead of the human table")
-    parser.add_argument("--limit", type=int, default=25,
-                        help="rows to show per section in the human table (default 25)")
-    parser.add_argument("--min-observations", type=int, default=MIN_OBSERVATIONS,
-                        help=f"estimator observations below which a row is not "
-                             f"ranked (default {MIN_OBSERVATIONS})")
-    parser.add_argument("--margin", type=float, default=DISAGREEMENT_MARGIN,
-                        help=f"use-rate gap past which the two estimators are "
-                             f"marked as disagreeing (default {DISAGREEMENT_MARGIN})")
-    parser.add_argument("--data-dir", default="",
-                        help="override the runtime data directory")
-    parser.add_argument("--catalogs-dir", default="",
-                        help="override the catalogs directory (for the "
-                             "never-retrieved list)")
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="emit the table as JSON (the machine contract) instead of the human table",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=25,
+        help="rows to show per section in the human table (default 25)",
+    )
+    parser.add_argument(
+        "--min-observations",
+        type=int,
+        default=MIN_OBSERVATIONS,
+        help=f"estimator observations below which a row is not "
+        f"ranked (default {MIN_OBSERVATIONS})",
+    )
+    parser.add_argument(
+        "--margin",
+        type=float,
+        default=DISAGREEMENT_MARGIN,
+        help=f"use-rate gap past which the two estimators are "
+        f"marked as disagreeing (default {DISAGREEMENT_MARGIN})",
+    )
+    parser.add_argument(
+        "--data-dir", default="", help="override the runtime data directory"
+    )
+    parser.add_argument(
+        "--catalogs-dir",
+        default="",
+        help="override the catalogs directory (for the never-retrieved list)",
+    )
     args = parser.parse_args(argv)
 
     table = build(args)

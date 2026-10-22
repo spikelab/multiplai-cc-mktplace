@@ -27,7 +27,7 @@ dependencies = [
 # Playwright is a fallback fetch strategy (JS-rendered pages), imported lazily.
 # Install with `[browser]` and run `playwright install chromium` to enable it.
 browser = ["playwright>=1.40"]
-dev = ["pytest", "pytest-asyncio"]
+dev = ["pytest", "pytest-asyncio", "pytest-xdist>=3.8"]
 
 [build-system]
 requires = ["hatchling"]

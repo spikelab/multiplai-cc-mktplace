@@ -29,7 +29,7 @@ log = logging.getLogger(__name__)
 class RunContext:
     config: WalkConfig
     run_dir: Path
-    snap_root: Path            # <run>/snap: one directory per repo key; every agent's cwd
+    snap_root: Path  # <run>/snap: one directory per repo key; every agent's cwd
     repos: dict[str, RepoInfo]
     progress: ProgressWriter | None = None
     session_id: str = ""
@@ -44,7 +44,9 @@ def fix_citation(c: Citation, snap_root: Path) -> Citation:
 def context_lines(snap_root: Path, path: str, line: int, around: int = 3) -> str:
     """Lines line-around..line+around of a snapshot file, numbered, for a prompt."""
     try:
-        lines = (snap_root / path).read_text(encoding="utf-8", errors="replace").split("\n")
+        lines = (
+            (snap_root / path).read_text(encoding="utf-8", errors="replace").split("\n")
+        )
     except OSError:
         return ""
     lo, hi = max(1, line - around), min(len(lines), line + around)

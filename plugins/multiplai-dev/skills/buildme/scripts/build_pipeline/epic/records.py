@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .store import _write_atomic
@@ -39,7 +39,7 @@ class Attempt:
     n: int
     kind: str
     child: str
-    path: Path            # agents/<NNN>-<kind>-<child>, without a suffix
+    path: Path  # agents/<NNN>-<kind>-<child>, without a suffix
     started: dict
     result: dict | None
 
@@ -53,7 +53,7 @@ class Attempt:
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _read_json(path: Path) -> dict | None:
@@ -74,25 +74,55 @@ def attempts(epic_dir: Path) -> list[Attempt]:
         if started is None:
             continue
         kind, child = started.get("kind"), started.get("child")
-        if kind not in KINDS or not isinstance(child, str) or m.group(2) != f"{kind}-{child}":
+        if (
+            kind not in KINDS
+            or not isinstance(child, str)
+            or m.group(2) != f"{kind}-{child}"
+        ):
             continue
-        base = p.with_name(p.name[:-len(".started.json")])
-        out.append(Attempt(int(m.group(1)), kind, child, base, started,
-                           _read_json(base.with_name(base.name + ".result.json"))))
-    return sorted(out, key=lambda a: a.n)     # by number: `1000-` sorts before `999-` by name
+        base = p.with_name(p.name[: -len(".started.json")])
+        out.append(
+            Attempt(
+                int(m.group(1)),
+                kind,
+                child,
+                base,
+                started,
+                _read_json(base.with_name(base.name + ".result.json")),
+            )
+        )
+    return sorted(
+        out, key=lambda a: a.n
+    )  # by number: `1000-` sorts before `999-` by name
 
 
-def start(epic_dir: Path, kind: str, child: str, argv: list[str], *,
-          head_sha: str | None = None, pr_round: int | None = None) -> Attempt:
+def start(
+    epic_dir: Path,
+    kind: str,
+    child: str,
+    argv: list[str],
+    *,
+    head_sha: str | None = None,
+    pr_round: int | None = None,
+) -> Attempt:
     """Write the started record (and an empty log) for the next free number."""
     root = Path(epic_dir) / AGENTS_DIR
     root.mkdir(parents=True, exist_ok=True)
     n = max((a.n for a in attempts(epic_dir)), default=0) + 1
     base = root / f"{n:03d}-{kind}-{child}"
-    started = {"kind": kind, "child": child, "argv": list(argv), "pr_round": pr_round,
-               "head_sha": head_sha, "at": _now()}
+    started = {
+        "kind": kind,
+        "child": child,
+        "argv": list(argv),
+        "pr_round": pr_round,
+        "head_sha": head_sha,
+        "at": _now(),
+    }
     base.with_name(base.name + ".log").touch()
-    _write_atomic(base.with_name(base.name + ".started.json"), json.dumps(started, indent=2) + "\n")
+    _write_atomic(
+        base.with_name(base.name + ".started.json"),
+        json.dumps(started, indent=2) + "\n",
+    )
     return Attempt(n, kind, child, base, started, None)
 
 
@@ -114,7 +144,7 @@ def markers(log: Path) -> list[str]:
 
 def marker(found: list[str], name: str) -> list[str]:
     """The values of every `<name>:<value>` marker."""
-    return [m[len(name) + 1:] for m in found if m.startswith(name + ":")]
+    return [m[len(name) + 1 :] for m in found if m.startswith(name + ":")]
 
 
 def spend_of(found: list[str]) -> float | None:
@@ -140,13 +170,26 @@ def spend_incomplete(found: list[str]) -> bool:
     return False
 
 
-def finish(attempt: Attempt, exit_code: int | None, *, interrupted: bool, extra: dict | None = None) -> dict:
+def finish(
+    attempt: Attempt,
+    exit_code: int | None,
+    *,
+    interrupted: bool,
+    extra: dict | None = None,
+) -> dict:
     """Write the result record, markers, PR URL and spend read from the attempt's
     log, plus *extra* (a review's fields, item 22)."""
     found = markers(attempt.log)
     prs = marker(found, "PR")
-    result = {"exit_code": exit_code, "markers": found, "pr": prs[-1] if prs else None,
-              "interrupted": interrupted, "spend": spend_of(found), **(extra or {}), "at": _now()}
+    result = {
+        "exit_code": exit_code,
+        "markers": found,
+        "pr": prs[-1] if prs else None,
+        "interrupted": interrupted,
+        "spend": spend_of(found),
+        **(extra or {}),
+        "at": _now(),
+    }
     _write_atomic(attempt.result_path, json.dumps(result, indent=2) + "\n")
     attempt.result = result
     return result

@@ -23,8 +23,6 @@ import time
 from dataclasses import dataclass
 from typing import TypeVar
 
-from pydantic import BaseModel, ValidationError
-
 from multiplai_core.agent_runner import (
     MAX_PROMPT_BYTES,  # noqa: F401 — re-exported (E2BIG threshold lives in core now)
     AgentRunError,
@@ -32,9 +30,11 @@ from multiplai_core.agent_runner import (
     AgentRunTimeout,
     run_agent,
 )
-from multiplai_core.aio import hard_timeout, swallow_task_result as _swallow_task_result  # noqa: F401
+from multiplai_core.aio import hard_timeout  # noqa: F401
+from multiplai_core.aio import swallow_task_result as _swallow_task_result  # noqa: F401
 from multiplai_core.structured import parse_answer
 from multiplai_core.text import extract_json  # noqa: F401 — re-exported: sdk.extract_json is used by the fetcher and router
+from pydantic import BaseModel, ValidationError
 
 log = logging.getLogger(__name__)
 
@@ -70,7 +70,7 @@ class LLMCallUsage:
     cost_usd: float = 0.0
     num_calls: int = 0
 
-    def accumulate(self, other: "LLMCallUsage") -> None:
+    def accumulate(self, other: LLMCallUsage) -> None:
         self.input_tokens += other.input_tokens
         self.output_tokens += other.output_tokens
         self.cache_creation_tokens += other.cache_creation_tokens
@@ -107,6 +107,7 @@ def _record_usage(usage: LLMCallUsage) -> None:
     with _usage_lock:
         _accumulated_usage.accumulate(usage)
 
+
 # Default per-call timeout: 10 minutes. Synthesis on large finding sets can
 # take 3-5 minutes; REASSESS is lighter. Adjust per-node via call_timeout kwarg.
 DEFAULT_LLM_CALL_TIMEOUT_S = 600.0
@@ -136,8 +137,7 @@ def _track_call_start(label: str) -> None:
     global _sdk_active_calls, _sdk_peak_calls
     with _sdk_active_lock:
         _sdk_active_calls += 1
-        if _sdk_active_calls > _sdk_peak_calls:
-            _sdk_peak_calls = _sdk_active_calls
+        _sdk_peak_calls = max(_sdk_peak_calls, _sdk_active_calls)
         active = _sdk_active_calls
         peak = _sdk_peak_calls
     log.debug("SDK call START [%s] active=%d peak=%d", label, active, peak)
@@ -153,7 +153,11 @@ def _track_call_end(label: str, *, elapsed: float, ok: bool) -> None:
     status = "OK" if ok else "FAIL"
     log.debug(
         "SDK call END   [%s] %s %.1fs active=%d peak=%d",
-        label, status, elapsed, active, peak,
+        label,
+        status,
+        elapsed,
+        active,
+        peak,
     )
 
 
@@ -290,7 +294,10 @@ async def llm_call(
     """
     log.info(
         "SDK call [%s] prompt=%d bytes tools=%s timeout=%.0fs",
-        label, len(prompt.encode("utf-8")), allowed_tools or "none", call_timeout,
+        label,
+        len(prompt.encode("utf-8")),
+        allowed_tools or "none",
+        call_timeout,
     )
 
     def _capture_usage(into: LLMCallUsage, result: AgentRunResult | None) -> None:
@@ -335,7 +342,9 @@ async def llm_call(
             _capture_usage(call_usage, e.partial)
             log.error(
                 "FAIL llm_call [%s] reason=timeout after %.0fs\n--- CLI stderr ---\n%s",
-                label, call_timeout, e.stderr_tail,
+                label,
+                call_timeout,
+                e.stderr_tail,
             )
             raise LLMCallTimeoutError(
                 f"LLM call [{label}] exceeded {call_timeout:.0f}s timeout\n"
@@ -345,7 +354,9 @@ async def llm_call(
             _capture_usage(call_usage, e.partial)
             log.error(
                 "FAIL llm_call [%s] error=%s\n--- CLI stderr ---\n%s",
-                label, e.reason, e.stderr_tail,
+                label,
+                e.reason,
+                e.stderr_tail,
             )
             raise LLMCallError(
                 f"SDK query failed [{label}]: {e.reason}\n"

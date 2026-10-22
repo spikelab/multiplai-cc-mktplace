@@ -11,9 +11,8 @@ import pytest
 TESTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TESTS))
 
-import fixture_repo  # noqa: E402
-
-from walkthrough_pipeline import budget, fetcher  # noqa: E402
+import fixture_repo
+from walkthrough_pipeline import budget, fetcher
 
 
 @pytest.fixture(autouse=True)
@@ -59,7 +58,7 @@ def fake_fetch(monkeypatch, ws):
     async def fetch_url(url, client, *, allowed_host=None, **kw):
         fetched.append(url)
         assert url.startswith("https://docs.acme.test/"), url
-        f = ws["docs"] / url[len("https://docs.acme.test/"):]
+        f = ws["docs"] / url[len("https://docs.acme.test/") :]
         if not f.is_file():
             return fetcher.Fetched(url=url, status=404, error="HTTP 404")
         return fetcher.Fetched(url=url, status=200, text=f.read_text(encoding="utf-8"))
@@ -87,8 +86,9 @@ _SESSION_DEFAULT_VARS = (
 def _no_session_defaults(monkeypatch):
     for key in _SESSION_DEFAULT_VARS:
         monkeypatch.delenv(key, raising=False)
-    monkeypatch.setattr("multiplai_core.session.load_multiplai_conf",
-                        lambda: {"_sections": {}})
+    monkeypatch.setattr(
+        "multiplai_core.session.load_multiplai_conf", lambda: {"_sections": {}}
+    )
 
 
 class MapPathsSpy:
@@ -101,7 +101,9 @@ class MapPathsSpy:
         self.results: list[code_facts.PathsResult] = []
 
     async def __call__(self, **kw):
-        self.calls.append({**kw, "changed_lines": copy.deepcopy(kw.get("changed_lines"))})
+        self.calls.append(
+            {**kw, "changed_lines": copy.deepcopy(kw.get("changed_lines"))}
+        )
         result = await self.real(**kw)
         if self.reorder:
             result = self.reorder(result)
@@ -113,6 +115,7 @@ class MapPathsSpy:
 def spy(monkeypatch):
     """The real `map_paths`, spied on, under every name the trace stage could call it by."""
     from walkthrough_pipeline.stages import trace
+
     s = MapPathsSpy()
     for owner in (code_facts, code_facts.paths, trace):
         monkeypatch.setattr(owner, "map_paths", s, raising=False)

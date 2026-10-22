@@ -49,9 +49,7 @@ def api_host() -> tuple[str, int]:
     return DEFAULT_API_HOST, 443
 
 
-def probe_network(
-    host: str, port: int, timeout_s: float = PROBE_TIMEOUT_S
-) -> str:
+def probe_network(host: str, port: int, timeout_s: float = PROBE_TIMEOUT_S) -> str:
     """``dns=<ms|error> tcp=<ms|error>`` for *host*:*port*, each step bounded.
 
     ``getaddrinfo`` has no timeout of its own, so it runs on a daemon thread
@@ -84,7 +82,7 @@ def probe_network(
             sock.settimeout(timeout_s)
             sock.connect(result["addr"])
         tcp = f"tcp={(time.monotonic() - started) * 1000:.0f}ms"
-    except socket.timeout:
+    except TimeoutError:
         tcp = f"tcp=timeout>{timeout_s:.1f}s"
     except Exception as exc:  # noqa: BLE001
         tcp = f"tcp=error:{_error_name(exc)}"

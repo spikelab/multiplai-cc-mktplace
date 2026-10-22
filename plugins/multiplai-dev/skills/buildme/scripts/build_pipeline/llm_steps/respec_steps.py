@@ -23,10 +23,10 @@ the build still completes.
 
 from __future__ import annotations
 
-from build_pipeline.budget import BudgetExceededError
-
 import logging
 from pathlib import Path
+
+from build_pipeline.budget import BudgetExceededError
 
 from ..models import ImplementationNote
 from ..prompts.respec import RESPEC_PROMPT
@@ -64,9 +64,7 @@ def format_implementation_note(note: ImplementationNote) -> str:
     return (
         f"\n## Block {note.block_number} — {note.block_name} ({note.role})\n"
         f"- SPEC_IMPACT: {note.spec_impact}\n"
-        f"- SURPRISES:\n"
-        + "\n".join(f"  {line}" for line in body.splitlines())
-        + "\n"
+        f"- SURPRISES:\n" + "\n".join(f"  {line}" for line in body.splitlines()) + "\n"
     )
 
 
@@ -84,7 +82,9 @@ def append_implementation_note(change_dir: Path, note: ImplementationNote) -> Pa
         f.write(format_implementation_note(note))
     log.info(
         "Implementation note recorded (block=%d role=%s spec_impact=%s)",
-        note.block_number, note.role, note.spec_impact,
+        note.block_number,
+        note.role,
+        note.spec_impact,
     )
     return path
 
@@ -108,11 +108,14 @@ def merge_state_notes(notes_md: str, state) -> str:
                 continue
             merged = (
                 merged.rstrip() + "\n" + section
-                if merged.strip() else _NOTES_HEADER + section
+                if merged.strip()
+                else _NOTES_HEADER + section
             )
             log.info(
                 "Respec: recovered note from state (block=%d role=%s) missing from %s",
-                note.block_number, note.role, NOTES_FILENAME,
+                note.block_number,
+                note.role,
+                NOTES_FILENAME,
             )
     return merged
 
@@ -139,10 +142,7 @@ def _read_requirements(change_dir: Path) -> str:
     req_dir = change_dir / "requirements"
     if not req_dir.exists():
         return ""
-    parts = [
-        f"### {f.stem}\n{f.read_text()}"
-        for f in sorted(req_dir.glob("*.md"))
-    ]
+    parts = [f"### {f.stem}\n{f.read_text()}" for f in sorted(req_dir.glob("*.md"))]
     return "\n\n".join(parts)
 
 
@@ -157,6 +157,7 @@ def _write_respec(change_dir: Path, change_name: str, body: str) -> Path:
         "change) using the ADDED/MODIFIED/REMOVED delta format.\n\n"
     )
     from ..spec_generator import atomic_write
+
     atomic_write(path, header + ensure_delta_sections(body))
     return path
 
@@ -177,7 +178,8 @@ async def run_respec_audit(config, state=None) -> Path | None:
         # A build with no recorded surprises is itself a finding: record the
         # absence rather than silently skipping the artifact.
         path = _write_respec(
-            change_dir, change_name,
+            change_dir,
+            change_name,
             "_No implementation notes were recorded during this build, so no "
             "spec delta is proposed._\n",
         )

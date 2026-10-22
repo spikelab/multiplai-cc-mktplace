@@ -11,14 +11,14 @@ is killed loses only the time since its last stage.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from .models import Interval, ReviewState
 
 
 def now() -> str:
     """UTC ISO timestamp with milliseconds, `Z`-suffixed. Tests replace this clock."""
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 def parse(stamp: str) -> datetime:

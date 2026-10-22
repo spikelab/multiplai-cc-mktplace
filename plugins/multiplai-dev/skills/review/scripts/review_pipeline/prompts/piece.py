@@ -48,10 +48,19 @@ def _file_line(path: str, piece: Piece) -> str:
 
 def build_piece(piece: Piece, diff_text: str, *, workspace: str) -> str:
     """The prompt of the finder for *piece*; *workspace* is the shared blocks (snapshot, dependencies, change)."""
-    what = "release and repository metadata" if piece.meta else (
-        f"the files of `{piece.group}`" if piece.group else "files at the repository root")
+    what = (
+        "release and repository metadata"
+        if piece.meta
+        else (
+            f"the files of `{piece.group}`"
+            if piece.group
+            else "files at the repository root"
+        )
+    )
     files = "\n".join(_file_line(f, piece) for f in piece.files)
-    omitted = "".join(f"\n- {f} (lockfile: its diff is left out)" for f in piece.omitted)
+    omitted = "".join(
+        f"\n- {f} (lockfile: its diff is left out)" for f in piece.omitted
+    )
     parts = [
         "You are one reviewer of a change. Each reviewer owns one piece of the diff; together the pieces "
         "cover every changed file once.",

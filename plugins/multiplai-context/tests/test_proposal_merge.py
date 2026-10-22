@@ -149,9 +149,11 @@ class TestNoLoss:
 
     def test_entry_bodies_are_copied_verbatim(self):
         merged = merge_drafts([DRAFT_A, DRAFT_B])
-        for text in ("> Write state files temp-then-rename.",
-                     "**Section:** Debugging Methodology",
-                     "> UserPromptSubmit hooks must emit hookSpecificOutput."):
+        for text in (
+            "> Write state files temp-then-rename.",
+            "**Section:** Debugging Methodology",
+            "> UserPromptSubmit hooks must emit hookSpecificOutput.",
+        ):
             assert text in merged
 
     def test_filtered_out_items_all_survive(self):
@@ -173,12 +175,14 @@ class TestRenumbering:
         """
         merged = merge_drafts([DRAFT_A, DRAFT_B])
         by_file = split_by_file(merged)
-        assert [l for l in by_file["claude-code-tools.md"].splitlines()
-                if l.startswith("### ")] == [
+        assert [
+            l
+            for l in by_file["claude-code-tools.md"].splitlines()
+            if l.startswith("### ")
+        ] == [
             "### 1. Hook output protocol",
         ]
-        assert [l for l in by_file["dev.md"].splitlines()
-                if l.startswith("### ")] == [
+        assert [l for l in by_file["dev.md"].splitlines() if l.startswith("### ")] == [
             "### 2. Clean clone before open-sourcing",
             "### 3. Atomic writes for state files",
             "### 4. Worktrees by default",

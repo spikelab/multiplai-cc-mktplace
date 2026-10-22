@@ -15,7 +15,7 @@ and never reaches for `--auto`.
 
 import subprocess
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 import memory_maintainer as mm
 
-NOW = datetime(2026, 7, 26, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 7, 26, 12, 0, tzinfo=UTC)
 
 
 @pytest.fixture
@@ -74,7 +74,8 @@ class TestLintPass:
         memory.mkdir()
         (memory / "dev.md").write_text(
             "- The current best model is Opus 5 (as of 2026-01, review by 2026-02).\n",
-            encoding="utf-8")
+            encoding="utf-8",
+        )
         dreams = tmp_path / "dreams"
 
         result = mm.run_lint(memory, dreams)
@@ -99,7 +100,8 @@ class TestLintPass:
         memory.mkdir()
         (memory / "dev.md").write_text(
             "- The current price is EUR 20/mo (as of 2026-01, review by 2026-02).\n",
-            encoding="utf-8")
+            encoding="utf-8",
+        )
         dreams = tmp_path / "dreams"
 
         assert mm.run_lint(memory, dreams, dry_run=True).ran
@@ -109,7 +111,10 @@ class TestLintPass:
         memory = tmp_path / "memory"
         memory.mkdir()
         import lib.memory_lint as ml
-        monkeypatch.setattr(ml, "lint_dir", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+
+        monkeypatch.setattr(
+            ml, "lint_dir", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
+        )
         result = mm.run_lint(memory, tmp_path / "dreams")
         assert not result.ran and "error" in result.detail
 
@@ -117,16 +122,21 @@ class TestLintPass:
 class TestDreamPass:
     def _spy(self, monkeypatch):
         calls = []
-        monkeypatch.setattr(mm, "run_supervised",
-                            lambda cmd, **kw: calls.append(cmd) or
-                            subprocess.CompletedProcess(cmd, 0, "", ""))
+        monkeypatch.setattr(
+            mm,
+            "run_supervised",
+            lambda cmd, **kw: (
+                calls.append(cmd) or subprocess.CompletedProcess(cmd, 0, "", "")
+            ),
+        )
         return calls
 
     def test_skipped_when_the_dream_gate_is_closed(self, tmp_path, monkeypatch):
         calls = self._spy(monkeypatch)
         dream_state = tmp_path / "dream_state.yaml"
         dream_state.write_text(
-            f"last_run: '{datetime.now(timezone.utc).isoformat()}'\n", encoding="utf-8")
+            f"last_run: '{datetime.now(UTC).isoformat()}'\n", encoding="utf-8"
+        )
         learnings = tmp_path / "learnings"
         learnings.mkdir()
         (learnings / "2026-07-26.md").write_text("- something\n", encoding="utf-8")
@@ -139,7 +149,9 @@ class TestDreamPass:
         calls = self._spy(monkeypatch)
         learnings = tmp_path / "learnings"
         learnings.mkdir()
-        result = mm.run_dream(tmp_path, tmp_path / "absent.yaml", learnings, tmp_path / "dreams")
+        result = mm.run_dream(
+            tmp_path, tmp_path / "absent.yaml", learnings, tmp_path / "dreams"
+        )
         assert not result.ran and "no pending" in result.detail
         assert calls == []
 
@@ -151,22 +163,31 @@ class TestDreamPass:
         learnings.mkdir()
         (learnings / "2026-07-26.md").write_text("- something\n", encoding="utf-8")
 
-        result = mm.run_dream(tmp_path, tmp_path / "absent.yaml", learnings, tmp_path / "dreams")
+        result = mm.run_dream(
+            tmp_path, tmp_path / "absent.yaml", learnings, tmp_path / "dreams"
+        )
         assert result.ran
         assert len(calls) == 1
         assert "--auto" not in calls[0] and "--run" not in calls[0]
         assert calls[0][-1].endswith("dream.py")
 
     def test_nonzero_exit_is_reported_not_raised(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(mm, "run_supervised",
-                            lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", "nope"))
+        monkeypatch.setattr(
+            mm,
+            "run_supervised",
+            lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", "nope"),
+        )
         learnings = tmp_path / "learnings"
         learnings.mkdir()
         (learnings / "2026-07-26.md").write_text("- x\n", encoding="utf-8")
-        result = mm.run_dream(tmp_path, tmp_path / "absent.yaml", learnings, tmp_path / "dreams")
+        result = mm.run_dream(
+            tmp_path, tmp_path / "absent.yaml", learnings, tmp_path / "dreams"
+        )
         assert not result.ran and "exit 1" in result.detail
 
-    def test_skipped_while_a_proposal_is_still_awaiting_review(self, tmp_path, monkeypatch):
+    def test_skipped_while_a_proposal_is_still_awaiting_review(
+        self, tmp_path, monkeypatch
+    ):
         """Generating doesn't stamp the dream gate, so without this check an
         unconsolidated week costs seven proposals and seven pairs of model
         calls, and /dream-remember is handed a pile to choose between."""
@@ -193,7 +214,8 @@ class TestDreamPass:
         dreams = tmp_path / "dreams"
         (dreams / "applied").mkdir(parents=True)
         (dreams / "applied" / "processed-learnings-2026-07-20.md").write_text(
-            "x", encoding="utf-8")
+            "x", encoding="utf-8"
+        )
 
         result = mm.run_dream(tmp_path, tmp_path / "absent.yaml", learnings, dreams)
         assert result.ran
@@ -230,6 +252,7 @@ class TestCatalogPass:
         catalog = tmp_path / "memory.json"
         catalog.write_text("{}", encoding="utf-8")
         import os
+
         os.utime(catalog, (0, (memory / "dev.md").stat().st_mtime + 100))
         assert not mm.catalog_is_stale(memory, catalog)
 
@@ -241,14 +264,19 @@ class TestCatalogPass:
         f = memory / "dev.md"
         f.write_text("x", encoding="utf-8")
         import os
+
         os.utime(f, (0, catalog.stat().st_mtime + 100))
         assert mm.catalog_is_stale(memory, catalog)
 
     def test_current_catalog_skips_the_rebuild(self, tmp_path, monkeypatch):
         calls = []
-        monkeypatch.setattr(mm, "run_supervised",
-                            lambda cmd, **kw: calls.append(cmd) or
-                            subprocess.CompletedProcess(cmd, 0, "", ""))
+        monkeypatch.setattr(
+            mm,
+            "run_supervised",
+            lambda cmd, **kw: (
+                calls.append(cmd) or subprocess.CompletedProcess(cmd, 0, "", "")
+            ),
+        )
         memory = tmp_path / "memory"
         memory.mkdir()
         catalogs = tmp_path / "catalogs"
@@ -265,16 +293,27 @@ class TestSkillsCatalogPass:
     reached it. It now rebuilds when past its TTL or when the installed plugin
     set changed since it was generated."""
 
-    def _setup(self, tmp_path, monkeypatch, *, generated_hours_ago=1.0,
-               manifest_newer=False, catalog=True):
+    def _setup(
+        self,
+        tmp_path,
+        monkeypatch,
+        *,
+        generated_hours_ago=1.0,
+        manifest_newer=False,
+        catalog=True,
+    ):
         import json
         import os
         import time
 
         calls = []
-        monkeypatch.setattr(mm, "run_supervised",
-                            lambda cmd, **kw: calls.append((cmd, kw)) or
-                            subprocess.CompletedProcess(cmd, 0, "", ""))
+        monkeypatch.setattr(
+            mm,
+            "run_supervised",
+            lambda cmd, **kw: (
+                calls.append((cmd, kw)) or subprocess.CompletedProcess(cmd, 0, "", "")
+            ),
+        )
         catalogs = tmp_path / "catalogs"
         catalogs.mkdir()
         plugins = tmp_path / "plugins"
@@ -284,10 +323,12 @@ class TestSkillsCatalogPass:
         now = time.time()
         os.utime(manifest, (now - 7200, now - 7200))
         if catalog:
-            gen = datetime.now(timezone.utc) - timedelta(hours=generated_hours_ago)
+            gen = datetime.now(UTC) - timedelta(hours=generated_hours_ago)
             path = catalogs / "skills.json"
-            path.write_text(json.dumps({"generated_at": gen.isoformat(),
-                                        "entries": []}), encoding="utf-8")
+            path.write_text(
+                json.dumps({"generated_at": gen.isoformat(), "entries": []}),
+                encoding="utf-8",
+            )
             os.utime(path, (now - 3600, now - 3600))
         if manifest_newer:
             os.utime(manifest, (now, now))
@@ -311,17 +352,19 @@ class TestSkillsCatalogPass:
 
     def test_a_catalog_past_its_ttl_rebuilds_skills_only(self, tmp_path, monkeypatch):
         calls, catalogs, plugins = self._setup(
-            tmp_path, monkeypatch, generated_hours_ago=200)
+            tmp_path, monkeypatch, generated_hours_ago=200
+        )
         result = self._run(tmp_path, catalogs, plugins)
         assert result.ran
-        (cmd, kw), = calls
+        ((cmd, kw),) = calls
         assert cmd[-2:] == ["--only", "skills"]
         assert "generate_catalog.py" in " ".join(map(str, cmd))
         assert kw["timeout"] == mm.SHORT_PASS_TIMEOUT_S
 
     def test_a_changed_plugin_set_rebuilds(self, tmp_path, monkeypatch):
         calls, catalogs, plugins = self._setup(
-            tmp_path, monkeypatch, manifest_newer=True)
+            tmp_path, monkeypatch, manifest_newer=True
+        )
         assert self._run(tmp_path, catalogs, plugins).ran
         assert len(calls) == 1
 
@@ -345,34 +388,58 @@ class TestSkillsCatalogPass:
 
     def test_dry_run_runs_nothing(self, tmp_path, monkeypatch):
         calls, catalogs, plugins = self._setup(
-            tmp_path, monkeypatch, generated_hours_ago=200)
+            tmp_path, monkeypatch, generated_hours_ago=200
+        )
         result = self._run(tmp_path, catalogs, plugins, dry_run=True)
         assert result.ran and "dry run" in result.detail and calls == []
 
     def test_a_failed_rebuild_is_reported(self, tmp_path, monkeypatch):
         _, catalogs, plugins = self._setup(
-            tmp_path, monkeypatch, generated_hours_ago=200)
-        monkeypatch.setattr(mm, "run_supervised",
-                            lambda cmd, **kw: subprocess.CompletedProcess(cmd, 2, "", ""))
+            tmp_path, monkeypatch, generated_hours_ago=200
+        )
+        monkeypatch.setattr(
+            mm,
+            "run_supervised",
+            lambda cmd, **kw: subprocess.CompletedProcess(cmd, 2, "", ""),
+        )
         result = self._run(tmp_path, catalogs, plugins)
         assert not result.ran and "exit 2" in result.detail
 
     def test_the_daily_run_includes_the_pass(self, tmp_path, monkeypatch):
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_ENABLE_SKILLS", "true")
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_PLUGINS_DIR", str(tmp_path / "plugins"))
+        monkeypatch.setenv(
+            "CLAUDE_PLUGIN_OPTION_PLUGINS_DIR", str(tmp_path / "plugins")
+        )
         calls = []
-        monkeypatch.setattr(mm, "run_supervised",
-                            lambda cmd, **kw: calls.append(cmd) or
-                            subprocess.CompletedProcess(cmd, 0, "", ""))
+        monkeypatch.setattr(
+            mm,
+            "run_supervised",
+            lambda cmd, **kw: (
+                calls.append(cmd) or subprocess.CompletedProcess(cmd, 0, "", "")
+            ),
+        )
 
         class FakePaths:
-            def data_dir(self): return tmp_path / "data"
-            def memory_dir(self): return tmp_path / "memory"
-            def dreams_dir(self): return tmp_path / "dreams"
-            def learnings_dir(self): return tmp_path / "learnings"
-            def catalogs_dir(self): return tmp_path / "catalogs"
-            def diary_dir(self): return tmp_path / "diary"
-            def dream_state_file(self): return tmp_path / "data" / "dream_state.yaml"
+            def data_dir(self):
+                return tmp_path / "data"
+
+            def memory_dir(self):
+                return tmp_path / "memory"
+
+            def dreams_dir(self):
+                return tmp_path / "dreams"
+
+            def learnings_dir(self):
+                return tmp_path / "learnings"
+
+            def catalogs_dir(self):
+                return tmp_path / "catalogs"
+
+            def diary_dir(self):
+                return tmp_path / "diary"
+
+            def dream_state_file(self):
+                return tmp_path / "data" / "dream_state.yaml"
 
         (tmp_path / "memory").mkdir()
         monkeypatch.setattr(mm, "get_paths", lambda: FakePaths())
@@ -398,9 +465,13 @@ class TestTriagePass:
 
     def _spy(self, monkeypatch):
         calls = []
-        monkeypatch.setattr(mm, "run_supervised",
-                            lambda cmd, **kw: calls.append(cmd) or
-                            subprocess.CompletedProcess(cmd, 0, "", ""))
+        monkeypatch.setattr(
+            mm,
+            "run_supervised",
+            lambda cmd, **kw: (
+                calls.append(cmd) or subprocess.CompletedProcess(cmd, 0, "", "")
+            ),
+        )
         return calls
 
     def _waiting(self, tmp_path) -> Path:
@@ -453,8 +524,11 @@ class TestTriagePass:
 
     def test_nonzero_exit_is_reported_not_raised(self, tmp_path, monkeypatch):
         monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_MEMORY_WRITE_MODE", raising=False)
-        monkeypatch.setattr(mm, "run_supervised",
-                            lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", "no"))
+        monkeypatch.setattr(
+            mm,
+            "run_supervised",
+            lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", "no"),
+        )
         result = mm.run_triage(tmp_path, self._waiting(tmp_path))
         assert not result.ran and "exit 1" in result.detail
 
@@ -468,8 +542,9 @@ class TestMemoryIsNeverModified:
     separate, gated subprocess with a receipt and a git revert behind it."""
 
     def _snapshot(self, d: Path) -> dict:
-        return {p.name: (p.read_bytes(), p.stat().st_mtime)
-                for p in sorted(d.glob("*.md"))}
+        return {
+            p.name: (p.read_bytes(), p.stat().st_mtime) for p in sorted(d.glob("*.md"))
+        }
 
     def test_a_full_run_leaves_memory_byte_identical(self, tmp_path, monkeypatch):
         """Every subprocess pass is stubbed, so what this pins is the
@@ -482,7 +557,8 @@ class TestMemoryIsNeverModified:
         (memory / "dev.md").write_text(
             "- The current best model is Opus 5 (as of 2026-01, review by 2026-02).\n"
             "- Spike works at Multiplai.\n",
-            encoding="utf-8")
+            encoding="utf-8",
+        )
         before = self._snapshot(memory)
 
         learnings = tmp_path / "learnings"
@@ -490,19 +566,35 @@ class TestMemoryIsNeverModified:
         (learnings / "2026-07-26.md").write_text("- x\n", encoding="utf-8")
 
         class FakePaths:
-            def data_dir(self): return tmp_path / "data"
-            def memory_dir(self): return memory
-            def dreams_dir(self): return tmp_path / "dreams"
-            def learnings_dir(self): return learnings
-            def catalogs_dir(self): return tmp_path / "catalogs"
-            def diary_dir(self): return tmp_path / "diary"
-            def dream_state_file(self): return tmp_path / "data" / "dream_state.yaml"
+            def data_dir(self):
+                return tmp_path / "data"
+
+            def memory_dir(self):
+                return memory
+
+            def dreams_dir(self):
+                return tmp_path / "dreams"
+
+            def learnings_dir(self):
+                return learnings
+
+            def catalogs_dir(self):
+                return tmp_path / "catalogs"
+
+            def diary_dir(self):
+                return tmp_path / "diary"
+
+            def dream_state_file(self):
+                return tmp_path / "data" / "dream_state.yaml"
 
         monkeypatch.setattr(mm, "get_paths", lambda: FakePaths())
         # Every subprocess pass is stubbed: this test is about what the
         # maintainer writes, not about running a real dream.
-        monkeypatch.setattr(mm, "run_supervised",
-                            lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, "", ""))
+        monkeypatch.setattr(
+            mm,
+            "run_supervised",
+            lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, "", ""),
+        )
 
         report = mm.run_maintenance(force=True)
         assert report.gate_open
@@ -518,7 +610,8 @@ class TestMemoryIsNeverModified:
         memory.mkdir()
         (memory / "dev.md").write_text(
             "- Currently EUR 20/mo (as of 2026-01, review by 2026-02).\n",
-            encoding="utf-8")
+            encoding="utf-8",
+        )
         mm.run_lint(memory, tmp_path / "dreams")
         assert [p.name for p in memory.iterdir()] == ["dev.md"]
 
@@ -541,14 +634,18 @@ class TestSessionStartWiring:
 
     def test_missing_script_is_a_quiet_no_op(self, tmp_path):
         import session_start
+
         assert not session_start._launch_maintainer(tmp_path, tmp_path)
 
     def test_launch_failure_never_breaks_session_start(self, tmp_path, monkeypatch):
         import session_start
 
         (tmp_path / "memory_maintainer.py").write_text("", encoding="utf-8")
-        monkeypatch.setattr(session_start.subprocess, "Popen",
-                            lambda *a, **k: (_ for _ in ()).throw(OSError("no fork")))
+        monkeypatch.setattr(
+            session_start.subprocess,
+            "Popen",
+            lambda *a, **k: (_ for _ in ()).throw(OSError("no fork")),
+        )
         assert not session_start._launch_maintainer(tmp_path, tmp_path)
 
     def test_a_closed_gate_costs_no_subprocess_at_all(self, tmp_path, monkeypatch):
@@ -560,7 +657,8 @@ class TestSessionStartWiring:
 
         (tmp_path / "memory_maintainer.py").write_text("", encoding="utf-8")
         (tmp_path / mm.STATE_FILENAME).write_text(
-            f"last_run: '{datetime.now(timezone.utc).isoformat()}'\n", encoding="utf-8")
+            f"last_run: '{datetime.now(UTC).isoformat()}'\n", encoding="utf-8"
+        )
 
         def explode(*a, **k):
             raise AssertionError("spawned a child with the gate closed")
@@ -573,10 +671,14 @@ class TestSessionStartWiring:
 
         (tmp_path / "memory_maintainer.py").write_text("", encoding="utf-8")
         (tmp_path / mm.STATE_FILENAME).write_text(
-            f"last_run: '{(datetime.now(timezone.utc) - timedelta(hours=30)).isoformat()}'\n",
-            encoding="utf-8")
-        monkeypatch.setattr(session_start.subprocess, "Popen",
-                            lambda *a, **k: type("P", (), {"stdin": None})())
+            f"last_run: '{(datetime.now(UTC) - timedelta(hours=30)).isoformat()}'\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            session_start.subprocess,
+            "Popen",
+            lambda *a, **k: type("P", (), {"stdin": None})(),
+        )
         assert session_start._launch_maintainer(tmp_path, tmp_path)
 
     def test_the_two_gates_agree_on_hours_and_filename(self):
@@ -607,6 +709,7 @@ class TestCheapTierIsRealNotJustDocumented:
         """The docstring claims pass 4 runs on a cheap tier. Before this,
         `synthesize()` took no model at all and the claim was decoration."""
         import inspect
+
         import synthesize_now
 
         assert "model" in inspect.signature(synthesize_now.synthesize).parameters
@@ -616,9 +719,13 @@ class TestCheapTierIsRealNotJustDocumented:
     def test_no_model_means_the_client_default(self):
         """Interactive callers (`/now`, backfill) must keep their old behavior."""
         import inspect
+
         import synthesize_now
-        assert (inspect.signature(synthesize_now.synthesize)
-                .parameters["model"].default is None)
+
+        assert (
+            inspect.signature(synthesize_now.synthesize).parameters["model"].default
+            is None
+        )
 
 
 class TestDreamPassTimeoutIsDerived:
@@ -649,8 +756,9 @@ class TestDreamPassTimeoutIsDerived:
         assert "timeout=600" not in src
         assert "DREAM_PASS_TIMEOUT_S = 4 * CHUNK_TIMEOUT_S" in src
 
-    def test_the_dream_pass_hands_the_derived_cap_to_the_child(self, tmp_path,
-                                                               monkeypatch):
+    def test_the_dream_pass_hands_the_derived_cap_to_the_child(
+        self, tmp_path, monkeypatch
+    ):
         seen = {}
 
         def spy(cmd, *, timeout, **kw):
@@ -662,8 +770,9 @@ class TestDreamPassTimeoutIsDerived:
         learnings.mkdir()
         (learnings / "2026-07-26.md").write_text("- x\n", encoding="utf-8")
 
-        assert mm.run_dream(tmp_path, tmp_path / "absent.yaml", learnings,
-                            tmp_path / "dreams").ran
+        assert mm.run_dream(
+            tmp_path, tmp_path / "absent.yaml", learnings, tmp_path / "dreams"
+        ).ran
         assert seen["timeout"] == mm.DREAM_PASS_TIMEOUT_S
 
     def test_every_child_pass_is_supervised(self):

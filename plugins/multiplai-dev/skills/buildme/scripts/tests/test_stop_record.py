@@ -7,7 +7,6 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
 from build_pipeline import git_ops, stop_record
 from build_pipeline.stop_record import StepStop
 
@@ -15,8 +14,9 @@ SCRIPTS = Path(__file__).resolve().parent.parent
 
 
 def _git(repo: Path, *argv: str) -> str:
-    return subprocess.run(["git", *argv], cwd=repo, check=True, capture_output=True,
-                          text=True).stdout.strip()
+    return subprocess.run(
+        ["git", *argv], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
 
 
 @pytest.fixture
@@ -48,7 +48,9 @@ def test_bookkeeping_and_the_ignored_dir_are_not_refused(repo):
     (repo / ".build-state.json").write_text("{}\n")
     (repo / "records" / "keep.json").write_text('{"round": 2}\n')
     (repo / "records" / "new.json").write_text("{}\n")
-    assert stop_record.others_work(repo, None, ignore="records", head=_head(repo)) is None
+    assert (
+        stop_record.others_work(repo, None, ignore="records", head=_head(repo)) is None
+    )
 
 
 def test_an_edit_outside_a_subdirectory_project_is_not_refused(repo):
@@ -90,6 +92,7 @@ def test_record_is_none_when_git_fails(tmp_path, repo, monkeypatch):
 def test_record_never_raises(repo, monkeypatch):
     def boom(*_a, **_k):
         raise OSError("disk gone")
+
     monkeypatch.setattr(git_ops, "dirty_files", boom)
     assert stop_record.record(repo) is None
 
@@ -97,6 +100,7 @@ def test_record_never_raises(repo, monkeypatch):
 def test_others_work_never_raises(repo, monkeypatch):
     def boom(*_a, **_k):
         raise OSError("disk gone")
+
     monkeypatch.setattr(git_ops, "dirty_files", boom)
     assert "git could not" in stop_record.others_work(repo, None)
 
@@ -129,7 +133,9 @@ def test_no_record_names_at_most_five_paths(repo):
 def test_the_recorded_edits_pass(repo):
     (repo / "app.py").write_text("x = 2  # the agent's edit\n")
     stop = stop_record.record(repo)
-    assert stop is not None and stop.head == _head(repo) and set(stop.edits) == {"app.py"}
+    assert (
+        stop is not None and stop.head == _head(repo) and set(stop.edits) == {"app.py"}
+    )
     assert stop_record.others_work(repo, stop, head=stop.head) is None
 
 
@@ -172,7 +178,10 @@ def test_head_equal_passes_and_none_is_not_checked(repo):
     (repo / "lib.py").write_text("y = 2\n")
     _git(repo, "commit", "-qam", "the user's commit")
     assert stop_record.others_work(repo, stop, head=None) is None
-    assert stop_record.others_work(repo, stop_record.record(repo), head=_head(repo)) is None
+    assert (
+        stop_record.others_work(repo, stop_record.record(repo), head=_head(repo))
+        is None
+    )
 
 
 def test_a_commit_after_the_stop_is_refused(repo):
@@ -180,7 +189,9 @@ def test_a_commit_after_the_stop_is_refused(repo):
     (repo / "lib.py").write_text("y = 2\n")
     _git(repo, "commit", "-qam", "the user's commit")
     reason = stop_record.others_work(repo, stop, head=stop.head)
-    assert "commit" in reason and stop.head[:12] in reason and "another branch" in reason
+    assert (
+        "commit" in reason and stop.head[:12] in reason and "another branch" in reason
+    )
     assert "\n" not in reason
 
 
@@ -198,7 +209,9 @@ def test_head_wholly_on_origin_passes(repo, tmp_path):
     assert stop_record.others_work(repo, stop, head=stop.head, origin_ref=ref) is None
     (repo / "lib.py").write_text("y = 3\n")
     _git(repo, "commit", "-qam", "not on origin")
-    assert "commit" in stop_record.others_work(repo, stop, head=stop.head, origin_ref=ref)
+    assert "commit" in stop_record.others_work(
+        repo, stop, head=stop.head, origin_ref=ref
+    )
 
 
 # --- one copy ------------------------------------------------------------------
@@ -207,14 +220,17 @@ def test_head_wholly_on_origin_passes(repo, tmp_path):
 def test_only_stop_record_compares_stop_records():
     """`dirty_files(` appears only at its definition and in `stop_record`, so
     no other module grows its own copy of the check."""
-    users = sorted(p.relative_to(SCRIPTS).as_posix()
-                   for p in (SCRIPTS / "build_pipeline").rglob("*.py")
-                   if "dirty_files(" in p.read_text())
+    users = sorted(
+        p.relative_to(SCRIPTS).as_posix()
+        for p in (SCRIPTS / "build_pipeline").rglob("*.py")
+        if "dirty_files(" in p.read_text()
+    )
     assert users == ["build_pipeline/git_ops.py", "build_pipeline/stop_record.py"]
 
 
 def test_state_still_exports_stepstop():
     from build_pipeline.state import StepStop as FromState
+
     assert FromState is StepStop
 
 

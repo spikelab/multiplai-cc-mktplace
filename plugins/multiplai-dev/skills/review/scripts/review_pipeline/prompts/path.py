@@ -29,13 +29,23 @@ def path_data(view: PathView) -> str:
         lines.append(f"Handler: {symbol}{_where(view.handler.path, view.handler.line)}")
     lines.append("Invoked by: " + "; ".join(view.invokers))
     lines.append("Hops, in order:")
-    lines += [f"{i}. {_where(h.file, h.line)} — {h.description}" for i, h in enumerate(view.hops, 1)]
+    lines += [
+        f"{i}. {_where(h.file, h.line)} — {h.description}"
+        for i, h in enumerate(view.hops, 1)
+    ]
     changed = ", ".join(_where(f, n) for f, n in view.changed_lines)
     lines.append(f"Changed lines on this path: {changed or 'none listed'}")
     if view.e2e:
         lines.append("E2E tests:")
-        lines += [f"- {t.id}" + (" (patches hop 2, so it does not count as end to end)" if t.mocked else "")
-                  for t in view.e2e]
+        lines += [
+            f"- {t.id}"
+            + (
+                " (patches hop 2, so it does not count as end to end)"
+                if t.mocked
+                else ""
+            )
+            for t in view.e2e
+        ]
     else:
         lines.append(NO_E2E)
     return "\n".join(lines)
@@ -56,8 +66,11 @@ def build_path(view: PathView, *, workspace: str) -> str:
         "Report a defect when it lies on your path or in how the path uses changed code. Do not report "
         "defects elsewhere in the snapshot that have nothing to do with this path; other reviewers cover them.",
         "When a defect involves a changed line, cite that changed line first.",
-        (f"The trace stops at hop {view.broken_at}; continue from there by reading the code."
-         if view.broken_at is not None else ""),
+        (
+            f"The trace stops at hop {view.broken_at}; continue from there by reading the code."
+            if view.broken_at is not None
+            else ""
+        ),
         REPORT_FORMAT,
         CLASS_AND_PLACES,
     ]

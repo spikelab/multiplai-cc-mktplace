@@ -10,14 +10,17 @@ import json
 from pathlib import Path
 
 import pytest
-
 from walkthrough_pipeline import budget, sdk
 from walkthrough_pipeline.__main__ import main
 from walkthrough_pipeline.state import STATE_FILE
 
 # In the order `write_outputs` returns them, which is the order the `walkthrough:` lines print.
-OUTPUTS = ("bookings-walkthrough.md", "bookings-walkthrough.json", "bookings-walkthrough.html",
-           "bookings-paths.json")
+OUTPUTS = (
+    "bookings-walkthrough.md",
+    "bookings-walkthrough.json",
+    "bookings-walkthrough.html",
+    "bookings-paths.json",
+)
 
 
 def _comparable(name: str, data: bytes):
@@ -31,19 +34,27 @@ def _comparable(name: str, data: bytes):
 
 def assert_same_outputs(out: Path, original: dict[str, bytes]) -> None:
     for name, data in original.items():
-        assert _comparable(name, (out / name).read_bytes()) == _comparable(name, data), name
-    assert (out / OUTPUTS[0]).read_bytes() == original[OUTPUTS[0]]          # the Markdown, byte for byte
+        assert _comparable(name, (out / name).read_bytes()) == _comparable(
+            name, data
+        ), name
+    assert (out / OUTPUTS[0]).read_bytes() == original[
+        OUTPUTS[0]
+    ]  # the Markdown, byte for byte
 
 
 @pytest.fixture
 def no_model(monkeypatch):
     """Every way to reach a model, and the budget ledger, fail the test if called."""
+
     def called(*args, **kwargs):
         raise AssertionError("render reached a model or started a ledger")
+
     for name in ("agent_call_structured", "_run", "run_agent"):
         monkeypatch.setattr(sdk, name, called)
     monkeypatch.setattr(budget, "start", called)
-    monkeypatch.setattr(budget, "_process", budget.ProcessSpend())      # a new process: the fakes' spend is not its
+    monkeypatch.setattr(
+        budget, "_process", budget.ProcessSpend()
+    )  # a new process: the fakes' spend is not its
 
 
 def _edit_state(run_dir: Path, **changes) -> None:
@@ -57,7 +68,9 @@ def _edit_state(run_dir: Path, **changes) -> None:
     (run_dir / STATE_FILE).write_text(json.dumps(state))
 
 
-def test_render_brings_back_deleted_or_truncated_outputs_twice_running(done_run, no_model, capsys):
+def test_render_brings_back_deleted_or_truncated_outputs_twice_running(
+    done_run, no_model, capsys
+):
     """S2, S5: outputs deleted or truncated by a kill mid-write, then `render` run twice: each time the
     same four files as an unbroken render, the Markdown byte-identical; the state file and progress.log
     are left alone, and the last line is a zero spend."""
@@ -71,10 +84,12 @@ def test_render_brings_back_deleted_or_truncated_outputs_twice_running(done_run,
         (out / n).unlink()
     capsys.readouterr()
     assert main(["render", str(run_dir)]) == 0
-    assert capsys.readouterr().out.splitlines() == [f"walkthrough: {out / n}" for n in OUTPUTS] + ["SPEND:0.000000:0"]
+    assert capsys.readouterr().out.splitlines() == [
+        f"walkthrough: {out / n}" for n in OUTPUTS
+    ] + ["SPEND:0.000000:0"]
     assert_same_outputs(out, original)
 
-    (out / OUTPUTS[2]).write_bytes(original[OUTPUTS[2]][:100])                 # a truncated page
+    (out / OUTPUTS[2]).write_bytes(original[OUTPUTS[2]][:100])  # a truncated page
     (out / OUTPUTS[1]).unlink()
     assert main(["render", str(run_dir), "--trust-repo"]) == 0
     assert_same_outputs(out, original)
@@ -98,8 +113,10 @@ def test_render_refuses_a_run_before_its_write_stage(done_run, no_model, capsys)
     capsys.readouterr()
     assert main(["render", str(run_dir)]) == 1
     run_dir = run_dir.resolve()
-    assert (f"render: {run_dir} has not finished its write stage; continue it with resume {run_dir} --trust-repo"
-            in capsys.readouterr().err)
+    assert (
+        f"render: {run_dir} has not finished its write stage; continue it with resume {run_dir} --trust-repo"
+        in capsys.readouterr().err
+    )
     assert not any((md_path.parent / n).exists() for n in OUTPUTS)
 
 
@@ -108,12 +125,16 @@ def test_render_refuses_a_directory_with_no_state(tmp_path, no_model, capsys):
     empty = (tmp_path / "no-run").resolve()
     empty.mkdir()
     assert main(["render", str(empty)]) == 1
-    assert f"render: {empty} has not finished its write stage" in capsys.readouterr().err
+    assert (
+        f"render: {empty} has not finished its write stage" in capsys.readouterr().err
+    )
     assert list(empty.iterdir()) == []
 
 
 @pytest.mark.parametrize("field, value", [("head_sha", "0" * 40), ("path", "gone")])
-def test_render_stops_when_a_cited_commit_cannot_be_read(done_run, no_model, capsys, tmp_path, field, value):
+def test_render_stops_when_a_cited_commit_cannot_be_read(
+    done_run, no_model, capsys, tmp_path, field, value
+):
     """S4: the repo lacks the saved commit, or is gone: exit 1 naming the repo and commit, nothing written."""
     md_path, run_dir, _ = done_run
     state = json.loads((run_dir / STATE_FILE).read_text())
@@ -128,5 +149,5 @@ def test_render_stops_when_a_cited_commit_cannot_be_read(done_run, no_model, cap
     assert main(["render", str(run_dir)]) == 1
     err = capsys.readouterr().err
     assert f"render: cannot read {key} at {sha}: " in err
-    assert len(err.split(f"{sha}: ", 1)[1].strip()) > 0                      # git's own message follows
+    assert len(err.split(f"{sha}: ", 1)[1].strip()) > 0  # git's own message follows
     assert not any((md_path.parent / n).exists() for n in OUTPUTS)

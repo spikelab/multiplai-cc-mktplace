@@ -69,7 +69,9 @@ def spans(body: str) -> dict[str, tuple[int, int]]:
         kind, key = m.group(1), m.group(2)
         if kind == "begin":
             if open_key is not None:
-                raise MarkerError(f"marker `{key}` begins inside `{open_key}`: nested markers are not allowed")
+                raise MarkerError(
+                    f"marker `{key}` begins inside `{open_key}`: nested markers are not allowed"
+                )
             if key in out:
                 raise MarkerError(f"marker `{key}` appears twice")
             open_key, open_at = key, m.end()
@@ -109,9 +111,15 @@ class Tail:
 @dataclass
 class Merge:
     body: str
-    changed: list[str] = field(default_factory=list)  # keys replaced with different content, or appended
-    not_restored: list[str] = field(default_factory=list)  # in the written list, missing from the body
-    not_added: list[str] = field(default_factory=list)  # template keys never written and missing
+    changed: list[str] = field(
+        default_factory=list
+    )  # keys replaced with different content, or appended
+    not_restored: list[str] = field(
+        default_factory=list
+    )  # in the written list, missing from the body
+    not_added: list[str] = field(
+        default_factory=list
+    )  # template keys never written and missing
 
 
 def append_tail(body: str, tails: list[Tail]) -> str:
@@ -121,7 +129,9 @@ def append_tail(body: str, tails: list[Tail]) -> str:
     return out + "\n"
 
 
-def merge(current: str, owned: dict[str, str], template_keys: set[str], tails: list[Tail]) -> Merge:
+def merge(
+    current: str, owned: dict[str, str], template_keys: set[str], tails: list[Tail]
+) -> Merge:
     """Splice *owned* (key → fresh content) into a managed *current* body.
 
     A key with a marker pair in *current* gets its content replaced. A tail
@@ -142,7 +152,9 @@ def merge(current: str, owned: dict[str, str], template_keys: set[str], tails: l
             if current[a:b] != new:
                 replacements.append((a, b, new))
                 result.changed.append(key)
-        elif (written is not None and key in written) or (written is None and key in template_keys):
+        elif (written is not None and key in written) or (
+            written is None and key in template_keys
+        ):
             result.not_restored.append(key)
         elif key in tail_by_key:
             appended.append(tail_by_key[key])

@@ -6,7 +6,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from research_pipeline.gates import critical_source_gate
 from research_pipeline.models import (
     Finding,
@@ -16,7 +15,6 @@ from research_pipeline.models import (
     SourceStatus,
 )
 from research_pipeline.state import ResearchState, Stage
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -64,8 +62,13 @@ class TestCriticalSourceGate:
     def test_passes_when_no_critical_sources_failed(self) -> None:
         sources = [
             _make_source("https://blog.com", "Blog Post", ReputationTier.EMERGING),
-            _make_source("https://other.com", "Other", ReputationTier.EMERGING,
-                         SourceStatus.FAILED, "timeout"),
+            _make_source(
+                "https://other.com",
+                "Other",
+                ReputationTier.EMERGING,
+                SourceStatus.FAILED,
+                "timeout",
+            ),
         ]
         findings = [_make_finding("some fact")]
         result = critical_source_gate(sources, findings, ["What is X?"])
@@ -75,9 +78,16 @@ class TestCriticalSourceGate:
     def test_passes_when_critical_failed_but_credible_coverage_exists(self) -> None:
         """AUTHORITATIVE source failed, but another ESTABLISHED source covers the question."""
         sources = [
-            _make_source("https://docs.gov", "Official Docs", ReputationTier.AUTHORITATIVE,
-                         SourceStatus.FAILED, "timeout"),
-            _make_source("https://github.com/repo", "GitHub Repo", ReputationTier.ESTABLISHED),
+            _make_source(
+                "https://docs.gov",
+                "Official Docs",
+                ReputationTier.AUTHORITATIVE,
+                SourceStatus.FAILED,
+                "timeout",
+            ),
+            _make_source(
+                "https://github.com/repo", "GitHub Repo", ReputationTier.ESTABLISHED
+            ),
         ]
         findings = [
             _make_finding(
@@ -88,7 +98,8 @@ class TestCriticalSourceGate:
             ),
         ]
         result = critical_source_gate(
-            sources, findings,
+            sources,
+            findings,
             ["How to migrate Django to PostgreSQL?"],
         )
         assert result.passed
@@ -98,10 +109,15 @@ class TestCriticalSourceGate:
         """AUTHORITATIVE source failed and only EMERGING sources cover the question."""
         sources = [
             _make_source(
-                "https://docs.cloud.google.com/sql", "Cloud SQL Django Guide",
-                ReputationTier.AUTHORITATIVE, SourceStatus.FAILED, "timeout",
+                "https://docs.cloud.google.com/sql",
+                "Cloud SQL Django Guide",
+                ReputationTier.AUTHORITATIVE,
+                SourceStatus.FAILED,
+                "timeout",
             ),
-            _make_source("https://blog.example.com", "Random Blog", ReputationTier.EMERGING),
+            _make_source(
+                "https://blog.example.com", "Random Blog", ReputationTier.EMERGING
+            ),
         ]
         findings = [
             _make_finding(
@@ -112,7 +128,8 @@ class TestCriticalSourceGate:
             ),
         ]
         result = critical_source_gate(
-            sources, findings,
+            sources,
+            findings,
             ["How to connect Django to Cloud SQL?"],
         )
         assert not result.passed
@@ -123,8 +140,11 @@ class TestCriticalSourceGate:
         """Failed AUTHORITATIVE source must be relevant to the uncovered question."""
         sources = [
             _make_source(
-                "https://arxiv.org/paper", "Quantum Computing Paper",
-                ReputationTier.AUTHORITATIVE, SourceStatus.FAILED, "timeout",
+                "https://arxiv.org/paper",
+                "Quantum Computing Paper",
+                ReputationTier.AUTHORITATIVE,
+                SourceStatus.FAILED,
+                "timeout",
             ),
             _make_source("https://blog.com", "Django Blog", ReputationTier.EMERGING),
         ]
@@ -138,7 +158,8 @@ class TestCriticalSourceGate:
         ]
         # The failed source is about quantum computing, not Django — should pass
         result = critical_source_gate(
-            sources, findings,
+            sources,
+            findings,
             ["How to migrate Django?"],
         )
         assert result.passed
@@ -147,10 +168,15 @@ class TestCriticalSourceGate:
         """Gate fails if ANY sub-question lacks credible coverage due to failed source."""
         sources = [
             _make_source(
-                "https://pgloader.readthedocs.io", "pgloader docs",
-                ReputationTier.ESTABLISHED, SourceStatus.FAILED, "exit code 1",
+                "https://pgloader.readthedocs.io",
+                "pgloader docs",
+                ReputationTier.ESTABLISHED,
+                SourceStatus.FAILED,
+                "exit code 1",
             ),
-            _make_source("https://github.com/django", "Django Repo", ReputationTier.ESTABLISHED),
+            _make_source(
+                "https://github.com/django", "Django Repo", ReputationTier.ESTABLISHED
+            ),
         ]
         findings = [
             _make_finding(
@@ -168,9 +194,12 @@ class TestCriticalSourceGate:
             ),
         ]
         result = critical_source_gate(
-            sources, findings,
-            ["How to configure Django for PostgreSQL?",
-             "How to use pgloader for data migration?"],
+            sources,
+            findings,
+            [
+                "How to configure Django for PostgreSQL?",
+                "How to use pgloader for data migration?",
+            ],
         )
         assert not result.passed
         # Only the pgloader question should be flagged
@@ -192,7 +221,8 @@ class TestQualityCheckResult:
 
     def test_no_go_result(self) -> None:
         r = QualityCheckResult(
-            go=False, confidence=0.3,
+            go=False,
+            confidence=0.3,
             reasoning="Missing official docs",
             critical_gaps=["No Cloud SQL coverage"],
         )
@@ -215,7 +245,9 @@ class TestNewStages:
     @pytest.fixture
     def fresh_state(self, tmp_path: Path) -> ResearchState:
         return ResearchState.new(
-            query="test", output_file=tmp_path / "out.md", state_file=tmp_path / "state.json",
+            query="test",
+            output_file=tmp_path / "out.md",
+            state_file=tmp_path / "state.json",
         )
 
     def test_critical_source_gate_stage_exists(self) -> None:
@@ -282,8 +314,8 @@ class TestNewStages:
 
 class TestWriteIncompleteReport:
     def test_basic_output(self, tmp_path: Path) -> None:
-        from research_pipeline.nodes.synthesize import write_incomplete_report
         from research_pipeline.config import PRESETS, ResearchConfig
+        from research_pipeline.nodes.synthesize import write_incomplete_report
 
         config = ResearchConfig(
             query="Test query",
@@ -296,17 +328,27 @@ class TestWriteIncompleteReport:
             state_file=tmp_path / "state.json",
         )
         state.sources = [
-            _make_source("https://docs.gov", "Official", ReputationTier.AUTHORITATIVE,
-                         SourceStatus.FAILED, "timeout"),
+            _make_source(
+                "https://docs.gov",
+                "Official",
+                ReputationTier.AUTHORITATIVE,
+                SourceStatus.FAILED,
+                "timeout",
+            ),
         ]
         state.findings = [
             _make_finding("Some fact", reputation=ReputationTier.EMERGING),
         ]
 
         report = write_incomplete_report(
-            config, state,
+            config,
+            state,
             "1 sub-question lacks credible coverage",
-            {"uncovered_critical": [{"question": "How?", "failed_sources": ["https://docs.gov"]}]},
+            {
+                "uncovered_critical": [
+                    {"question": "How?", "failed_sources": ["https://docs.gov"]}
+                ]
+            },
         )
 
         assert "INCOMPLETE" in report
@@ -393,6 +435,7 @@ class TestQualityCheckDefaultedGoVisibility:
         """When the quality check errors and fail-opens to GO, the progress
         file says so explicitly instead of looking like a real GO."""
         from research_pipeline import pipeline
+
         from tests.test_pipeline_recovery import (
             StubRouter,
             _as_router,
@@ -431,6 +474,7 @@ class TestQualityCheckDefaultedGoVisibility:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from research_pipeline import pipeline
+
         from tests.test_pipeline_recovery import (
             StubRouter,
             _as_router,

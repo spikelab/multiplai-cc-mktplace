@@ -29,10 +29,12 @@ class Unreadable(Exception):
 
     def __init__(self, path: Path):
         self.path = path
-        super().__init__(f"{path} cannot be read as a spec-extract state; nothing was written. "
-                         "Run the same command with --restart to move this run folder aside "
-                         "(it is renamed, never deleted) and start again. If the folder holds "
-                         "another target's run, do not use --restart: pass --out <another root>")
+        super().__init__(
+            f"{path} cannot be read as a spec-extract state; nothing was written. "
+            "Run the same command with --restart to move this run folder aside "
+            "(it is renamed, never deleted) and start again. If the folder holds "
+            "another target's run, do not use --restart: pass --out <another root>"
+        )
 
 
 class ApplyStop(BaseModel):

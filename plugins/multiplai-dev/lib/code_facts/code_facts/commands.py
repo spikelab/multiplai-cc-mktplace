@@ -38,14 +38,46 @@ log = logging.getLogger(__name__)
 SHELL_FENCE_INFOS = frozenset({"bash", "sh", "shell", "zsh", "console"})
 _LAUNCHERS = frozenset({"sh", "bash", "/bin/sh", "/bin/bash", "exec", "env"})
 # The `uv run` options that take a value; every other option is a flag.
-_UV_RUN_VALUE_OPTIONS = frozenset({
-    "--directory", "--project", "--package", "--with", "--with-editable", "--with-requirements", "--python", "-p",
-    "--extra", "--group", "--only-group", "--no-group", "--env-file", "--index", "--default-index", "--index-url",
-    "--extra-index-url", "--find-links", "-f", "--config-file", "--cache-dir", "--color", "--exclude-newer",
-    "--prerelease", "--resolution", "--index-strategy", "--keyring-provider", "--link-mode", "--refresh-package",
-    "--reinstall-package", "--upgrade-package", "-P", "--no-binary-package", "--no-build-package",
-    "--python-platform", "--no-extra",
-})
+_UV_RUN_VALUE_OPTIONS = frozenset(
+    {
+        "--directory",
+        "--project",
+        "--package",
+        "--with",
+        "--with-editable",
+        "--with-requirements",
+        "--python",
+        "-p",
+        "--extra",
+        "--group",
+        "--only-group",
+        "--no-group",
+        "--env-file",
+        "--index",
+        "--default-index",
+        "--index-url",
+        "--extra-index-url",
+        "--find-links",
+        "-f",
+        "--config-file",
+        "--cache-dir",
+        "--color",
+        "--exclude-newer",
+        "--prerelease",
+        "--resolution",
+        "--index-strategy",
+        "--keyring-provider",
+        "--link-mode",
+        "--refresh-package",
+        "--reinstall-package",
+        "--upgrade-package",
+        "-P",
+        "--no-binary-package",
+        "--no-build-package",
+        "--python-platform",
+        "--no-extra",
+    }
+)
 _PYTHON_VALUE_OPTIONS = frozenset({"-X", "-W", "--check-hash-based-pycs"})
 _INTERPRETER = re.compile(r"(?:.*/)?python(?:3(?:\.\d+)?)?")
 _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
@@ -54,7 +86,9 @@ _MODULE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*")
 _OPERATOR_CHARS = frozenset("();<>|&")
 _FD_NUMBER = re.compile(r"\d+")
 # Whether a command line that failed to tokenise was meant to run `python -m`.
-_PYTHON_M_TEXT = re.compile(r"(?:^|[\s/])(?:python(?:3(?:\.\d+)?)?|uv\s+run)\s(?:.*\s)?-m\s")
+_PYTHON_M_TEXT = re.compile(
+    r"(?:^|[\s/])(?:python(?:3(?:\.\d+)?)?|uv\s+run)\s(?:.*\s)?-m\s"
+)
 _FENCE_OPEN = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
 _FENCE_CLOSE = re.compile(r"^\s*(`{3,}|~{3,})\s*$")
 _JSON_STRING = re.compile(r'"(?:[^"\\\n]|\\.)*"')
@@ -69,6 +103,7 @@ class CommandLine:
     `--project` ones, snapshot-relative; directories outside the snapshot are left out.
     `launcher` is the last `.sh` file stripped, snapshot-relative.
     """
+
     tokens: tuple[str, ...]
     search_dirs: tuple[str, ...]
     launcher: str | None
@@ -87,10 +122,16 @@ def command_tokens(command: str, *, source_file: str, root: Path) -> list[str]:
     Raises ValueError when the command cannot be tokenised (an unclosed quote).
     """
     index = PyIndex.build(root)
-    return list(parse_command_line(command, source_file=source_file, root=root, index=index).tokens)
+    return list(
+        parse_command_line(
+            command, source_file=source_file, root=root, index=index
+        ).tokens
+    )
 
 
-def parse_command_line(command: str, *, source_file: str, root: Path, index: PyIndex) -> CommandLine:
+def parse_command_line(
+    command: str, *, source_file: str, root: Path, index: PyIndex
+) -> CommandLine:
     """`command` as written in `source_file`, a snapshot-relative path, in the snapshot `index` covers.
 
     Raises ValueError as `command_tokens`.
@@ -99,7 +140,10 @@ def parse_command_line(command: str, *, source_file: str, root: Path, index: PyI
     lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
     lexer.whitespace_split = True
     variables = _variables(root, source_file, index)
-    words = [_VARIABLE.sub(lambda m: variables.get(m[1] or m[2], m[0]), word) for word in lexer]
+    words = [
+        _VARIABLE.sub(lambda m: variables.get(m[1] or m[2], m[0]), word)
+        for word in lexer
+    ]
     cwd = root / index.repo_root(source_file)
     moved: list[Path] = []
     for segment, operator in _segments(words):
@@ -136,7 +180,9 @@ def _segments(words: list[str]) -> list[tuple[list[str], str | None]]:
     return segments
 
 
-def _strip_launchers(words: list[str], cwd: Path, moved: list[Path], root: Path, index: PyIndex) -> CommandLine:
+def _strip_launchers(
+    words: list[str], cwd: Path, moved: list[Path], root: Path, index: PyIndex
+) -> CommandLine:
     """The command left once the leading assignments, launchers and `uv run` options of `words` are stripped."""
     pythonpath: list[Path] = []
     launcher = None
@@ -150,7 +196,7 @@ def _strip_launchers(words: list[str], cwd: Path, moved: list[Path], root: Path,
             position += 1
         elif word in _LAUNCHERS:
             position += 1
-        elif word == "uv" and words[position + 1:position + 2] == ["run"]:
+        elif word == "uv" and words[position + 1 : position + 2] == ["run"]:
             position, cwd = _skip_uv_run_options(words, position + 2, cwd, moved)
         elif (script := _existing_shell_script(word, cwd, root, index)) is not None:
             launcher = script
@@ -162,7 +208,9 @@ def _strip_launchers(words: list[str], cwd: Path, moved: list[Path], root: Path,
     return CommandLine(tuple(words[position:]), search_dirs, launcher, cwd, root)
 
 
-def _existing_shell_script(word: str, cwd: Path, root: Path, index: PyIndex) -> str | None:
+def _existing_shell_script(
+    word: str, cwd: Path, root: Path, index: PyIndex
+) -> str | None:
     """The snapshot-relative path of the `.sh` file `word` names, when discovery walked it."""
     if not word.endswith(".sh"):
         return None
@@ -170,17 +218,27 @@ def _existing_shell_script(word: str, cwd: Path, root: Path, index: PyIndex) -> 
     return script if script is not None and index.has_file(script) else None
 
 
-def _skip_uv_run_options(words: list[str], position: int, cwd: Path, moved: list[Path]) -> tuple[int, Path]:
+def _skip_uv_run_options(
+    words: list[str], position: int, cwd: Path, moved: list[Path]
+) -> tuple[int, Path]:
     """The position after `uv run`'s options, and the working directory `--directory` leaves.
 
     `--directory` and `--project` directories are appended to `moved`. `-m` is not
     skipped: `uv run -m pkg` runs a module as `python -m pkg` does.
     """
-    while position < len(words) and words[position].startswith("-") and words[position] != "-m":
+    while (
+        position < len(words)
+        and words[position].startswith("-")
+        and words[position] != "-m"
+    ):
         option, has_value, value = words[position].partition("=")
         if option == "--":
             return position + 1, cwd
-        if not has_value and option in _UV_RUN_VALUE_OPTIONS and position + 1 < len(words):
+        if (
+            not has_value
+            and option in _UV_RUN_VALUE_OPTIONS
+            and position + 1 < len(words)
+        ):
             position += 1
             value, has_value = words[position], "="
         if has_value and option in ("--directory", "--project"):
@@ -194,8 +252,10 @@ def _skip_uv_run_options(words: list[str], position: int, cwd: Path, moved: list
 
 def _variables(root: Path, source_file: str, index: PyIndex) -> dict[str, str]:
     """The Claude Code variables a command in `source_file` may use, as absolute paths."""
-    found = {"CLAUDE_PLUGIN_ROOT": str(root / _plugin_root(index, source_file)),
-             "CLAUDE_PROJECT_DIR": str(root / index.repo_root(source_file))}
+    found = {
+        "CLAUDE_PLUGIN_ROOT": str(root / _plugin_root(index, source_file)),
+        "CLAUDE_PROJECT_DIR": str(root / index.repo_root(source_file)),
+    }
     if posixpath.basename(source_file) == "SKILL.md":
         found["CLAUDE_SKILL_DIR"] = str(root / posixpath.dirname(source_file))
     return found
@@ -266,17 +326,26 @@ def first_positional(arguments: Sequence[str]) -> str | None:
     return next((a for a in arguments if not a.startswith("-")), None)
 
 
-def module_search_roots(command: CommandLine, source_file: str, repo_root: str) -> list[str]:
+def module_search_roots(
+    command: CommandLine, source_file: str, repo_root: str
+) -> list[str]:
     """Where `python -m` in `command` is looked for, in order: its `PYTHONPATH`, `cd`, `--directory` and
     `--project` directories, the source file's directory and its `scripts/`, the repository root and its `src/`.
     """
     source_dir = posixpath.dirname(source_file)
-    roots = [*command.search_dirs, source_dir, posixpath.join(source_dir, "scripts"),
-             repo_root, posixpath.join(repo_root, "src")]
+    roots = [
+        *command.search_dirs,
+        source_dir,
+        posixpath.join(source_dir, "scripts"),
+        repo_root,
+        posixpath.join(repo_root, "src"),
+    ]
     return list(dict.fromkeys(roots))
 
 
-def resolve_python_m(module: str, search_roots: Sequence[str], index: PyIndex) -> str | None:
+def resolve_python_m(
+    module: str, search_roots: Sequence[str], index: PyIndex
+) -> str | None:
     """The file `python -m <module>` runs: `<root>/<module path>/__main__.py` or `<root>/<module path>.py` under
     the first of `search_roots` (snapshot-relative, `""` for the root) that has either; None when none does.
     """
@@ -342,6 +411,7 @@ def shell_commands(markdown: str) -> Iterator[tuple[int, str]]:
 @dataclass(frozen=True)
 class HookCommand:
     """A `"type": "command"` hook: `<event>[:<matcher>]`, its command string and that string's line."""
+
     name: str
     command: str
     line: int
@@ -351,7 +421,10 @@ def is_hooks_file(path: str) -> bool:
     """`hooks.json`, or `.claude/settings*.json`."""
     directory, name = posixpath.split(path)
     return name == "hooks.json" or (
-        posixpath.basename(directory) == ".claude" and name.startswith("settings") and name.endswith(".json"))
+        posixpath.basename(directory) == ".claude"
+        and name.startswith("settings")
+        and name.endswith(".json")
+    )
 
 
 def hook_commands(text: str) -> list[HookCommand]:
@@ -371,9 +444,15 @@ def hook_commands(text: str) -> list[HookCommand]:
             if not isinstance(group, dict) or not isinstance(group.get("hooks"), list):
                 continue
             matcher = group.get("matcher")
-            name = f"{event}:{matcher}" if isinstance(matcher, str) and matcher else event
+            name = (
+                f"{event}:{matcher}" if isinstance(matcher, str) and matcher else event
+            )
             for hook in group["hooks"]:
-                command = hook.get("command") if isinstance(hook, dict) and hook.get("type") == "command" else None
+                command = (
+                    hook.get("command")
+                    if isinstance(hook, dict) and hook.get("type") == "command"
+                    else None
+                )
                 if isinstance(command, str) and command.strip():
                     # json.loads keeps document order, so the occurrences are taken in order.
                     found.append(HookCommand(name, command, lines[command].popleft()))
@@ -385,8 +464,13 @@ def _command_value_lines(text: str) -> dict[str, deque[int]]:
     lines: dict[str, deque[int]] = {}
     previous: re.Match[str] | None = None
     for match in _JSON_STRING.finditer(text):
-        if previous is not None and json.loads(previous[0]) == "command" \
-                and _JSON_COLON.fullmatch(text, previous.end(), match.start()):
-            lines.setdefault(json.loads(match[0]), deque()).append(text.count("\n", 0, match.start()) + 1)
+        if (
+            previous is not None
+            and json.loads(previous[0]) == "command"
+            and _JSON_COLON.fullmatch(text, previous.end(), match.start())
+        ):
+            lines.setdefault(json.loads(match[0]), deque()).append(
+                text.count("\n", 0, match.start()) + 1
+            )
         previous = match
     return lines

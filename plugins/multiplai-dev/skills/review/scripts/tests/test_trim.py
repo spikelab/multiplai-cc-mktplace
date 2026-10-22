@@ -8,14 +8,24 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
 from conftest import SCHEMA, high_finding, medium_finding
 from review_pipeline import budget, post, sdk
+from review_pipeline import target as target_mod
 from review_pipeline.__main__ import main
 from review_pipeline.config import DIMENSIONS, TRIM_DIMENSION, ReviewConfig, load_config
 from review_pipeline.export import to_findings_file
-from review_pipeline.models import (AssessOutput, Citation, DuplicateSet, Finding, FinderOutput, MergeOutput,
-                                    RepeatsOutput, ReviewState, Verdict, section_of)
+from review_pipeline.models import (
+    AssessOutput,
+    Citation,
+    DuplicateSet,
+    FinderOutput,
+    Finding,
+    MergeOutput,
+    RepeatsOutput,
+    ReviewState,
+    Verdict,
+    section_of,
+)
 from review_pipeline.prompts import find as find_prompt
 from review_pipeline.prompts import verify as verify_prompt
 from review_pipeline.render import render_review, render_rollup, section
@@ -24,13 +34,21 @@ from review_pipeline.stages.assess import run_assess
 from review_pipeline.stages.find import critical_paths, finder_dimensions, run_find
 from review_pipeline.stages.merge import linked, run_merge
 from review_pipeline.stages.verify import important_assessments, run_verify
-from review_pipeline import target as target_mod
 
-ENV = dict(os.environ, GIT_AUTHOR_NAME="Fixture", GIT_AUTHOR_EMAIL="fixture@example.com",
-           GIT_COMMITTER_NAME="Fixture", GIT_COMMITTER_EMAIL="fixture@example.com",
-           GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
+ENV = dict(
+    os.environ,
+    GIT_AUTHOR_NAME="Fixture",
+    GIT_AUTHOR_EMAIL="fixture@example.com",
+    GIT_COMMITTER_NAME="Fixture",
+    GIT_COMMITTER_EMAIL="fixture@example.com",
+    GIT_CONFIG_NOSYSTEM="1",
+    GIT_CONFIG_GLOBAL=os.devnull,
+)
 
-COMMENT = [f"    # line {i} of a comment that says what the next line does" for i in range(1, 11)]
+COMMENT = [
+    f"    # line {i} of a comment that says what the next line does"
+    for i in range(1, 11)
+]
 BASE_FILES = {
     "calc.py": "def add(a, b):\n    return a + b\n",
     "billing/charge.py": "def charge(cents):\n    return max(cents, 0)\n",
@@ -40,21 +58,30 @@ BASE_FILES = {
 }
 HEAD_FILES = {
     **BASE_FILES,
-    "calc.py": BASE_FILES["calc.py"] + "\n\ndef double(x):\n" + "\n".join(COMMENT) + "\n    return x * 2\n",
-    "tests/test_calc.py": BASE_FILES["tests/test_calc.py"] + "\n\ndef test_add_again():\n    assert add(1, 2) == 3\n",
+    "calc.py": BASE_FILES["calc.py"]
+    + "\n\ndef double(x):\n"
+    + "\n".join(COMMENT)
+    + "\n    return x * 2\n",
+    "tests/test_calc.py": BASE_FILES["tests/test_calc.py"]
+    + "\n\ndef test_add_again():\n    assert add(1, 2) == 3\n",
     "tests/test_charge.py": BASE_FILES["tests/test_charge.py"]
     + "\n\ndef test_negative_is_zero():\n    assert charge(-5) == 0\n",
 }
 # Line numbers at head.
-ADD_AGAIN_LINE = 8     # tests/test_calc.py: def test_add_again():
-TEST_ADD_LINE = 4      # tests/test_calc.py: def test_add():
-COMMENT_LINE = 6       # calc.py: the first comment line inside double()
-NEGATIVE_LINE = 4      # tests/test_charge.py: def test_negative_is_zero():
+ADD_AGAIN_LINE = 8  # tests/test_calc.py: def test_add_again():
+TEST_ADD_LINE = 4  # tests/test_calc.py: def test_add():
+COMMENT_LINE = 6  # calc.py: the first comment line inside double()
+NEGATIVE_LINE = 4  # tests/test_charge.py: def test_negative_is_zero():
 
 
 def git(repo: Path, *args: str) -> str:
-    return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True,
-                          env=ENV).stdout.strip()
+    return subprocess.run(
+        ["git", "-C", str(repo), *args],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=ENV,
+    ).stdout.strip()
 
 
 def _commit(repo: Path, files: dict[str, str], message: str) -> str:
@@ -86,48 +113,79 @@ def cite(path: str, line: int, quote: str) -> Citation:
 def merge_test_finding() -> Finding:
     return Finding(
         claim="Merge test_add_again into test_add (test_add already checks the same behaviour)",
-        severity="LOW", file="tests/test_calc.py", line_start=ADD_AGAIN_LINE, line_end=ADD_AGAIN_LINE + 1,
+        severity="LOW",
+        file="tests/test_calc.py",
+        line_start=ADD_AGAIN_LINE,
+        line_end=ADD_AGAIN_LINE + 1,
         failure_scenario="nothing: test_add catches every change test_add_again catches",
-        citations=[cite("tests/test_calc.py", ADD_AGAIN_LINE, "def test_add_again():"),
-                   cite("tests/test_calc.py", TEST_ADD_LINE, "def test_add():"),
-                   cite("calc.py", 2, "return a + b")])
+        citations=[
+            cite("tests/test_calc.py", ADD_AGAIN_LINE, "def test_add_again():"),
+            cite("tests/test_calc.py", TEST_ADD_LINE, "def test_add():"),
+            cite("calc.py", 2, "return a + b"),
+        ],
+    )
 
 
 def comment_finding() -> Finding:
     return Finding(
         claim="Shorten the comment at calc.py:6 (10 lines over 1 line of code)",
-        severity="MEDIUM", file="calc.py", line_start=COMMENT_LINE, line_end=COMMENT_LINE + 9,
+        severity="MEDIUM",
+        file="calc.py",
+        line_start=COMMENT_LINE,
+        line_end=COMMENT_LINE + 9,
         failure_scenario="nothing breaks; a reader reads ten lines to learn what one line does",
-        citations=[cite("calc.py", COMMENT_LINE, COMMENT[0].strip())])
+        citations=[cite("calc.py", COMMENT_LINE, COMMENT[0].strip())],
+    )
 
 
 def critical_test_finding() -> Finding:
     return Finding(
         claim="Remove test_negative_is_zero (it checks what max() already guarantees)",
-        severity="LOW", file="tests/test_charge.py", line_start=NEGATIVE_LINE, line_end=NEGATIVE_LINE + 1,
+        severity="LOW",
+        file="tests/test_charge.py",
+        line_start=NEGATIVE_LINE,
+        line_end=NEGATIVE_LINE + 1,
         failure_scenario="nothing: max(cents, 0) cannot return a negative",
-        citations=[cite("tests/test_charge.py", NEGATIVE_LINE, "def test_negative_is_zero():"),
-                   cite("billing/charge.py", 2, "return max(cents, 0)")])
+        citations=[
+            cite("tests/test_charge.py", NEGATIVE_LINE, "def test_negative_is_zero():"),
+            cite("billing/charge.py", 2, "return max(cents, 0)"),
+        ],
+    )
 
 
 def trimmed(finding: Finding) -> Finding:
     """*finding* as the find stage stores a trim finder's result."""
-    return finding.with_location(dimension=TRIM_DIMENSION, finder=TRIM_DIMENSION, finders=[TRIM_DIMENSION])
+    return finding.with_location(
+        dimension=TRIM_DIMENSION, finder=TRIM_DIMENSION, finders=[TRIM_DIMENSION]
+    )
 
 
 def confirmed(topic: str, impact: str, citation: Citation) -> Verdict:
-    return Verdict(status="confirmed", topic=topic, impact=impact, reason="read both tests",
-                   citations=[citation], expected_behaviour="One test per behaviour.")
+    return Verdict(
+        status="confirmed",
+        topic=topic,
+        impact=impact,
+        reason="read both tests",
+        citations=[citation],
+        expected_behaviour="One test per behaviour.",
+    )
 
 
 class TrimAgents:
     """Canned answers by stage label. The trim finder returns *trim*; every other finder nothing."""
 
-    def __init__(self, trim: list[Finding] | None = None, verdicts: dict[str, Verdict] | None = None,
-                 stop_on_trim_call: int | None = None, by_group: bool = False):
+    def __init__(
+        self,
+        trim: list[Finding] | None = None,
+        verdicts: dict[str, Verdict] | None = None,
+        stop_on_trim_call: int | None = None,
+        by_group: bool = False,
+    ):
         self.calls: list[str] = []
         self.prompts: list[tuple[str, str]] = []
-        self.trim = trim if trim is not None else [merge_test_finding(), comment_finding()]
+        self.trim = (
+            trim if trim is not None else [merge_test_finding(), comment_finding()]
+        )
         self.verdicts = verdicts or {}
         self.stop_on_trim_call = stop_on_trim_call
         self.trim_calls = 0
@@ -142,9 +200,13 @@ class TrimAgents:
             self.trim_calls += 1
             if self.trim_calls == self.stop_on_trim_call:
                 self.stop_on_trim_call = None
-                raise budget.BudgetExceededError("circuit breaker stopped the run during find:trim")
+                raise budget.BudgetExceededError(
+                    "circuit breaker stopped the run during find:trim"
+                )
             if self.by_group:
-                return FinderOutput(findings=[f for f in self.trim if f"- {f.file}\n" in prompt])
+                return FinderOutput(
+                    findings=[f for f in self.trim if f"- {f.file}\n" in prompt]
+                )
             return FinderOutput(findings=self.trim)
         if stage == "find":
             return FinderOutput()
@@ -153,9 +215,14 @@ class TrimAgents:
                 if claim in prompt:
                     return verdict
             if "test_add_again" in prompt:
-                return confirmed("tests", "correctness-only", cite("tests/test_calc.py", TEST_ADD_LINE,
-                                                                     "def test_add():"))
-            return confirmed("docs", "hygiene", cite("calc.py", COMMENT_LINE, COMMENT[0].strip()))
+                return confirmed(
+                    "tests",
+                    "correctness-only",
+                    cite("tests/test_calc.py", TEST_ADD_LINE, "def test_add():"),
+                )
+            return confirmed(
+                "docs", "hygiene", cite("calc.py", COMMENT_LINE, COMMENT[0].strip())
+            )
         if stage == "merge":
             return MergeOutput()
         if stage == "assess":
@@ -171,12 +238,26 @@ def agents(monkeypatch):
         fake = TrimAgents(**kwargs)
         monkeypatch.setattr(sdk, "agent_call_structured", fake)
         return fake
+
     return install
 
 
 def _review(repo: Path, base: str, head: str, out: Path, *extra: str) -> int:
-    return main(["--session-id", "sess-test", "--out", str(out), "review", "--repo", str(repo),
-                 "--range", f"{base}..{head}", "--trust-repo", *extra])
+    return main(
+        [
+            "--session-id",
+            "sess-test",
+            "--out",
+            str(out),
+            "review",
+            "--repo",
+            str(repo),
+            "--range",
+            f"{base}..{head}",
+            "--trust-repo",
+            *extra,
+        ]
+    )
 
 
 def _target_dir(out: Path) -> Path:
@@ -187,15 +268,22 @@ def _target_dir(out: Path) -> Path:
 # --- Done means 2: a change review lists trim findings under Trim, LOW, never posted ---------------
 
 
-def test_a_change_review_lists_trim_findings_in_their_own_advisory_section(trim_repo, tmp_path, agents):
+def test_a_change_review_lists_trim_findings_in_their_own_advisory_section(
+    trim_repo, tmp_path, agents
+):
     import jsonschema
 
     repo, base, head = trim_repo
     out = tmp_path / "out"
     # The verifier labels the comment finding `code`: its section still comes from the finder, so it is
     # neither listed under Code nor posted at LOW, as a Code finding would be.
-    fake = agents(verdicts={comment_finding().claim: confirmed("code", "hygiene", cite(
-        "calc.py", COMMENT_LINE, COMMENT[0].strip()))})
+    fake = agents(
+        verdicts={
+            comment_finding().claim: confirmed(
+                "code", "hygiene", cite("calc.py", COMMENT_LINE, COMMENT[0].strip())
+            )
+        }
+    )
     assert _review(repo, base, head, out) == 0
     assert fake.calls.count(f"find:{TRIM_DIMENSION}") == 1
     target_dir = _target_dir(out)
@@ -207,14 +295,20 @@ def test_a_change_review_lists_trim_findings_in_their_own_advisory_section(trim_
         assert rows[claim]["section"] == "trim"
         assert rows[claim]["severity"] == "LOW"  # the comment finding came back MEDIUM
     text = next(target_dir.glob("review-*.md")).read_text()
-    trim_part = text.split("## Trim (advisory: never blocks a merge)", 1)[1].split("## Appendix", 1)[0]
-    assert merge_test_finding().claim in trim_part and comment_finding().claim in trim_part
+    trim_part = text.split("## Trim (advisory: never blocks a merge)", 1)[1].split(
+        "## Appendix", 1
+    )[0]
+    assert (
+        merge_test_finding().claim in trim_part and comment_finding().claim in trim_part
+    )
     assert "## Code" not in text
     assert "Trim 0 HIGH, 0 MEDIUM, 2 LOW" in text
     assert post.select(data["findings"], None) == []
     # Accepted in a decisions file, a trim finding is posted.
     accepted = {rows[merge_test_finding().claim]["id"]: {"decision": "accept"}}
-    assert [f["claim"] for f in post.select(data["findings"], accepted)] == [merge_test_finding().claim]
+    assert [f["claim"] for f in post.select(data["findings"], accepted)] == [
+        merge_test_finding().claim
+    ]
 
 
 def test_review_yaml_trim_false_runs_no_trim_finder(trim_repo, tmp_path, agents):
@@ -238,27 +332,46 @@ def test_load_config_reads_trim(tmp_path):
 # --- Done means 3: an important test is never suggested for removal --------------------------------
 
 
-async def test_a_trim_finding_on_an_important_test_is_labelled_important_and_not_listed(trim_repo, tmp_path,
-                                                                                       monkeypatch):
+async def test_a_trim_finding_on_an_important_test_is_labelled_important_and_not_listed(
+    trim_repo, tmp_path, monkeypatch
+):
     repo, base, head = trim_repo
     info = target_mod.build_target(target_mod.resolve(repo, range_=f"{base}..{head}"))
-    merge, critical, comment = trimmed(merge_test_finding()), trimmed(critical_test_finding()), trimmed(
-        comment_finding())
+    merge, critical, comment = (
+        trimmed(merge_test_finding()),
+        trimmed(critical_test_finding()),
+        trimmed(comment_finding()),
+    )
     state = ReviewState(target=info, findings=[merge, critical, comment])
     answers = {
-        merge.id: confirmed("tests", "breaks-users", cite("tests/test_calc.py", TEST_ADD_LINE, "def test_add():")),
-        critical.id: confirmed("tests", "correctness-only",
-                               cite("billing/charge.py", 2, "return max(cents, 0)")),
-        comment.id: confirmed("docs", "hygiene", cite("calc.py", COMMENT_LINE, COMMENT[0].strip())),
+        merge.id: confirmed(
+            "tests",
+            "breaks-users",
+            cite("tests/test_calc.py", TEST_ADD_LINE, "def test_add():"),
+        ),
+        critical.id: confirmed(
+            "tests",
+            "correctness-only",
+            cite("billing/charge.py", 2, "return max(cents, 0)"),
+        ),
+        comment.id: confirmed(
+            "docs", "hygiene", cite("calc.py", COMMENT_LINE, COMMENT[0].strip())
+        ),
     }
 
     async def verifier(prompt, schema, **kwargs):
-        return next(v for fid, v in answers.items() if
-                    next(f for f in state.findings if f.id == fid).claim in prompt)
+        return next(
+            v
+            for fid, v in answers.items()
+            if next(f for f in state.findings if f.id == fid).claim in prompt
+        )
 
     monkeypatch.setattr(sdk, "agent_call_structured", verifier)
     snapshot = target_mod.snapshot_head(info, tmp_path / "snap")
-    state = await run_verify(state, RunContext(config=ReviewConfig(concurrency=1), snapshot=snapshot, diff=""))
+    state = await run_verify(
+        state,
+        RunContext(config=ReviewConfig(concurrency=1), snapshot=snapshot, diff=""),
+    )
     # A trim finding's breaks-* impact is what removing the test risks: it is kept, not lowered.
     assert state.verdicts[merge.id].impact == "breaks-users"
     assert state.assessments[merge.id].label == "important"
@@ -266,7 +379,9 @@ async def test_a_trim_finding_on_an_important_test_is_labelled_important_and_not
     assert state.assessments[critical.id].label == "important"
     assert "billing/*" in state.assessments[critical.id].reason
     assert comment.id not in state.assessments
-    assert all(state.verdicts[f.id].status == "confirmed" for f in state.findings)  # status stays
+    assert all(
+        state.verdicts[f.id].status == "confirmed" for f in state.findings
+    )  # status stays
 
     text = render_review(state)
     listed_part, appendix = text.split("## Appendix", 1)
@@ -275,42 +390,81 @@ async def test_a_trim_finding_on_an_important_test_is_labelled_important_and_not
     assert merge.claim in appendix and critical.claim in appendix
     assert "**important**" in appendix
     # The label survives the assess stage, which shows the agent no trim finding.
-    state = await run_assess(state, RunContext(config=ReviewConfig(), snapshot=snapshot, diff=""))
+    state = await run_assess(
+        state, RunContext(config=ReviewConfig(), snapshot=snapshot, diff="")
+    )
     assert state.assessments[merge.id].label == "important"
     assert state.assessments[critical.id].label == "important"
     assert comment.id not in state.assessments
 
 
-def test_an_unverifiable_trim_finding_on_an_important_test_is_not_listed_either(target_info):
+def test_an_unverifiable_trim_finding_on_an_important_test_is_not_listed_either(
+    target_info,
+):
     trim = trimmed(high_finding())
-    state = ReviewState(target=target_info, findings=[trim], verdicts={trim.id: Verdict(
-        status="unverifiable", topic="tests", impact="breaks-business", reason="could not read the caller")})
+    state = ReviewState(
+        target=target_info,
+        findings=[trim],
+        verdicts={
+            trim.id: Verdict(
+                status="unverifiable",
+                topic="tests",
+                impact="breaks-business",
+                reason="could not read the caller",
+            )
+        },
+    )
     assert important_assessments(state)[trim.id].label == "important"
-    state.verdicts[trim.id] = state.verdicts[trim.id].model_copy(update={"status": "refuted"})
+    state.verdicts[trim.id] = state.verdicts[trim.id].model_copy(
+        update={"status": "refuted"}
+    )
     assert important_assessments(state) == {}  # refuted is never listed anyway
 
 
-def test_critical_paths_reads_one_backticked_glob_per_bullet_under_the_heading(trim_repo):
+def test_critical_paths_reads_one_backticked_glob_per_bullet_under_the_heading(
+    trim_repo,
+):
     repo, base, head = trim_repo
     info = target_mod.build_target(target_mod.resolve(repo, range_=f"{base}..{head}"))
-    assert critical_paths(info, ["tests/test_charge.py"]) == [("billing/*", "coding-standards.md")]
+    assert critical_paths(info, ["tests/test_charge.py"]) == [
+        ("billing/*", "coding-standards.md")
+    ]
 
 
-def test_a_critical_path_listed_only_in_a_nested_coding_standards_md_still_marks_its_test_important(tmp_path):
+def test_a_critical_path_listed_only_in_a_nested_coding_standards_md_still_marks_its_test_important(
+    tmp_path,
+):
     repo = tmp_path / "nested"
     repo.mkdir()
     git(repo, "init", "-q", "-b", "main")
     nested = {k: v for k, v in BASE_FILES.items() if k != "coding-standards.md"}
     nested["billing/coding-standards.md"] = BASE_FILES["coding-standards.md"]
     base = _commit(repo, nested, "base")
-    head = _commit(repo, {**nested, "tests/test_charge.py": HEAD_FILES["tests/test_charge.py"]}, "add a test")
+    head = _commit(
+        repo,
+        {**nested, "tests/test_charge.py": HEAD_FILES["tests/test_charge.py"]},
+        "add a test",
+    )
     info = target_mod.build_target(target_mod.resolve(repo, range_=f"{base}..{head}"))
-    assert critical_paths(info, ["billing/charge.py"]) == [("billing/*", "billing/coding-standards.md")]
-    assert critical_paths(info, ["tests/test_charge.py"]) == []  # read only for a path under billing/
+    assert critical_paths(info, ["billing/charge.py"]) == [
+        ("billing/*", "billing/coding-standards.md")
+    ]
+    assert (
+        critical_paths(info, ["tests/test_charge.py"]) == []
+    )  # read only for a path under billing/
 
     critical = trimmed(critical_test_finding())
-    state = ReviewState(target=info, findings=[critical], verdicts={critical.id: confirmed(
-        "tests", "correctness-only", cite("billing/charge.py", 2, "return max(cents, 0)"))})
+    state = ReviewState(
+        target=info,
+        findings=[critical],
+        verdicts={
+            critical.id: confirmed(
+                "tests",
+                "correctness-only",
+                cite("billing/charge.py", 2, "return max(cents, 0)"),
+            )
+        },
+    )
     assessment = important_assessments(state)[critical.id]
     assert assessment.label == "important"
     assert "billing/coding-standards.md" in assessment.reason
@@ -325,17 +479,32 @@ def test_the_merge_stage_never_links_a_trim_finding_with_a_non_trim_one():
     assert linked(code, code.with_location(claim="another finding on the same line"))
     assert not linked(code, trim)
     assert not linked(trim, code)
-    assert linked(trim, trimmed(code.with_location(claim="Remove the comment over the keyword")))
+    assert linked(
+        trim, trimmed(code.with_location(claim="Remove the comment over the keyword"))
+    )
 
 
-async def test_the_assess_agent_is_never_shown_a_trim_finding(target_info, tmp_path, monkeypatch):
+async def test_the_assess_agent_is_never_shown_a_trim_finding(
+    target_info, tmp_path, monkeypatch
+):
     code = high_finding()
     other = code.with_location(claim="a second code finding", line_start=1, line_end=1)
     trim = trimmed(code.with_location(claim="Shorten the comment over the keyword"))
-    must_stay = trimmed(medium_finding().with_location(claim="Remove the test of the keyword match"))
-    state = ReviewState(target=target_info, stage="repeats", findings=[code, other, trim, must_stay],
-                        verdicts={f.id: confirmed("code", "hygiene", f.citations[0]) for f in (code, other, trim)})
-    state.verdicts[must_stay.id] = confirmed("tests", "breaks-users", must_stay.citations[0])
+    must_stay = trimmed(
+        medium_finding().with_location(claim="Remove the test of the keyword match")
+    )
+    state = ReviewState(
+        target=target_info,
+        stage="repeats",
+        findings=[code, other, trim, must_stay],
+        verdicts={
+            f.id: confirmed("code", "hygiene", f.citations[0])
+            for f in (code, other, trim)
+        },
+    )
+    state.verdicts[must_stay.id] = confirmed(
+        "tests", "breaks-users", must_stay.citations[0]
+    )
     prompts: list[str] = []
 
     async def assess_agent(prompt, schema, **kwargs):
@@ -345,28 +514,49 @@ async def test_the_assess_agent_is_never_shown_a_trim_finding(target_info, tmp_p
     monkeypatch.setattr(sdk, "agent_call_structured", assess_agent)
     snapshot = tmp_path / "snap"
     snapshot.mkdir()
-    state = await run_assess(state, RunContext(config=ReviewConfig(), snapshot=snapshot, diff=""))
+    state = await run_assess(
+        state, RunContext(config=ReviewConfig(), snapshot=snapshot, diff="")
+    )
     assert len(prompts) == 1
-    assert code.id in prompts[0] and trim.id not in prompts[0] and trim.claim not in prompts[0]
+    assert (
+        code.id in prompts[0]
+        and trim.id not in prompts[0]
+        and trim.claim not in prompts[0]
+    )
     assert trim.id not in state.assessments
-    assert state.assessments[must_stay.id].label == "important"  # kept when the agent labels the others
+    assert (
+        state.assessments[must_stay.id].label == "important"
+    )  # kept when the agent labels the others
 
 
-async def test_a_trim_finding_merged_with_one_on_an_important_test_is_not_listed_either(target_info, tmp_path,
-                                                                                      monkeypatch):
+async def test_a_trim_finding_merged_with_one_on_an_important_test_is_not_listed_either(
+    target_info, tmp_path, monkeypatch
+):
     # Two suggestions on overlapping lines; the first in order survives the merge, the second's test must stay.
-    survivor = trimmed(high_finding().with_location(claim="Merge the keyword test into the title test"))
-    must_stay = trimmed(medium_finding().with_location(claim="Remove the test of the keyword match"))
+    survivor = trimmed(
+        high_finding().with_location(claim="Merge the keyword test into the title test")
+    )
+    must_stay = trimmed(
+        medium_finding().with_location(claim="Remove the test of the keyword match")
+    )
     assert linked(survivor, must_stay)
-    state = ReviewState(target=target_info, stage="verify", findings=[survivor, must_stay], verdicts={
-        survivor.id: confirmed("tests", "hygiene", survivor.citations[0]),
-        must_stay.id: confirmed("tests", "breaks-users", must_stay.citations[0])})
+    state = ReviewState(
+        target=target_info,
+        stage="verify",
+        findings=[survivor, must_stay],
+        verdicts={
+            survivor.id: confirmed("tests", "hygiene", survivor.citations[0]),
+            must_stay.id: confirmed("tests", "breaks-users", must_stay.citations[0]),
+        },
+    )
     state.assessments = important_assessments(state)  # what the verify stage leaves
     assert list(state.assessments) == [must_stay.id]
 
     async def agent(prompt, schema, *, budget_label="", **kwargs):
         assert budget_label == "merge"
-        return MergeOutput(duplicate_sets=[DuplicateSet(finding_ids=[survivor.id, must_stay.id])])
+        return MergeOutput(
+            duplicate_sets=[DuplicateSet(finding_ids=[survivor.id, must_stay.id])]
+        )
 
     monkeypatch.setattr(sdk, "agent_call_structured", agent)
     snapshot = tmp_path / "snap"
@@ -386,18 +576,34 @@ def test_a_comment_finding_is_never_labelled_important_whatever_its_topic(trim_r
     repo, base, head = trim_repo
     info = target_mod.build_target(target_mod.resolve(repo, range_=f"{base}..{head}"))
     # A comment in a file under the `billing/*` critical path, labelled `code` against the verifier's rules.
-    comment = trimmed(Finding(
-        claim="Shorten the comment at billing/charge.py:1", severity="LOW", file="billing/charge.py",
-        line_start=1, line_end=1, failure_scenario="nothing breaks",
-        citations=[cite("billing/charge.py", 1, "def charge(cents):")]))
+    comment = trimmed(
+        Finding(
+            claim="Shorten the comment at billing/charge.py:1",
+            severity="LOW",
+            file="billing/charge.py",
+            line_start=1,
+            line_end=1,
+            failure_scenario="nothing breaks",
+            citations=[cite("billing/charge.py", 1, "def charge(cents):")],
+        )
+    )
     # A test labelled `code`: the code line it exercises, its second citation, is on the critical path.
     test = trimmed(critical_test_finding())
     # Labelled `docs`, it is a comment even when rated breaks-users.
-    docs = trimmed(critical_test_finding().with_location(claim="Remove the comment over test_negative_is_zero"))
-    state = ReviewState(target=info, findings=[comment, test, docs], verdicts={
-        comment.id: confirmed("code", "hygiene", comment.citations[0]),
-        test.id: confirmed("code", "correctness-only", test.citations[1]),
-        docs.id: confirmed("docs", "breaks-users", docs.citations[0])})
+    docs = trimmed(
+        critical_test_finding().with_location(
+            claim="Remove the comment over test_negative_is_zero"
+        )
+    )
+    state = ReviewState(
+        target=info,
+        findings=[comment, test, docs],
+        verdicts={
+            comment.id: confirmed("code", "hygiene", comment.citations[0]),
+            test.id: confirmed("code", "correctness-only", test.citations[1]),
+            docs.id: confirmed("docs", "breaks-users", docs.citations[0]),
+        },
+    )
     labels = important_assessments(state)
     assert list(labels) == [test.id]
     assert "billing/*" in labels[test.id].reason
@@ -406,15 +612,19 @@ def test_a_comment_finding_is_never_labelled_important_whatever_its_topic(trim_r
 # --- the advisory trim finder never stands in for the defect finders ----------------------------------
 
 
-async def test_every_defect_finder_failing_fails_the_find_stage_even_when_trim_returns(target_info, tmp_path,
-                                                                                      monkeypatch):
+async def test_every_defect_finder_failing_fails_the_find_stage_even_when_trim_returns(
+    target_info, tmp_path, monkeypatch
+):
     snapshot = tmp_path / "tree"
     snapshot.mkdir()
     diff = Path(target_info.diff_path).read_text()
 
     def ctx() -> RunContext:
-        return RunContext(config=ReviewConfig(concurrency=1, dimensions=("diff-bugs", "callers")),
-                          snapshot=snapshot, diff=diff)
+        return RunContext(
+            config=ReviewConfig(concurrency=1, dimensions=("diff-bugs", "callers")),
+            snapshot=snapshot,
+            diff=diff,
+        )
 
     trim = high_finding().with_location(claim="Shorten the comment over the keyword")
     failing = {"find:diff-bugs", "find:callers"}
@@ -424,46 +634,73 @@ async def test_every_defect_finder_failing_fails_the_find_stage_even_when_trim_r
         calls.append(budget_label)
         if budget_label in failing:
             raise sdk.AgentCallError("timed out")
-        return FinderOutput(findings=[trim if budget_label == f"find:{TRIM_DIMENSION}" else high_finding()])
+        return FinderOutput(
+            findings=[
+                trim if budget_label == f"find:{TRIM_DIMENSION}" else high_finding()
+            ]
+        )
 
     monkeypatch.setattr(sdk, "agent_call_structured", finder)
     state = ReviewState(target=target_info)
     with pytest.raises(sdk.AgentCallError, match="every finder failed"):
         await run_find(state, ctx())
-    assert state.finder_results == {} and state.findings == []  # a later run asks every finder again
+    assert (
+        state.finder_results == {} and state.findings == []
+    )  # a later run asks every finder again
     # Resumed once the finders answer, it ends as a run that never failed did.
     failing.clear()
     calls.clear()
     state = await run_find(state, ctx())
     resumed, calls[:] = list(calls), []
     whole = await run_find(ReviewState(target=target_info), ctx())
-    assert sorted(resumed) == sorted(calls) == ["find:callers", "find:diff-bugs", f"find:{TRIM_DIMENSION}"]
-    assert [f.id for f in state.findings] == [f.id for f in whole.findings] == [high_finding().id, trim.id]
+    assert (
+        sorted(resumed)
+        == sorted(calls)
+        == ["find:callers", "find:diff-bugs", f"find:{TRIM_DIMENSION}"]
+    )
+    assert (
+        [f.id for f in state.findings]
+        == [f.id for f in whole.findings]
+        == [high_finding().id, trim.id]
+    )
 
 
-async def test_a_trim_finding_word_for_word_another_finders_is_folded_into_it(target_info, tmp_path, monkeypatch):
+async def test_a_trim_finding_word_for_word_another_finders_is_folded_into_it(
+    target_info, tmp_path, monkeypatch
+):
     """Both copies would share one id (file, line and claim), and verdicts are keyed by id."""
     snapshot = tmp_path / "tree"
     snapshot.mkdir()
 
     async def finder(prompt, schema, *, budget_label="", **kwargs):
-        return FinderOutput(findings=[high_finding()] if budget_label in ("find:diff-bugs", f"find:{TRIM_DIMENSION}")
-                            else [])
+        return FinderOutput(
+            findings=[high_finding()]
+            if budget_label in ("find:diff-bugs", f"find:{TRIM_DIMENSION}")
+            else []
+        )
 
     monkeypatch.setattr(sdk, "agent_call_structured", finder)
-    state = await run_find(ReviewState(target=target_info), RunContext(
-        config=ReviewConfig(dimensions=("diff-bugs", "callers")), snapshot=snapshot,
-        diff=Path(target_info.diff_path).read_text()))
+    state = await run_find(
+        ReviewState(target=target_info),
+        RunContext(
+            config=ReviewConfig(dimensions=("diff-bugs", "callers")),
+            snapshot=snapshot,
+            diff=Path(target_info.diff_path).read_text(),
+        ),
+    )
     assert [f.id for f in state.findings] == [high_finding().id]
     assert state.findings[0].finders == ["diff-bugs", TRIM_DIMENSION]
-    assert section_of("code", state.findings[0].finders) == "code"  # a defect finder reported it too
+    assert (
+        section_of("code", state.findings[0].finders) == "code"
+    )  # a defect finder reported it too
 
 
 def test_the_low_rollup_marks_trim_findings_advisory(canned_state):
     trim = trimmed(comment_finding()).with_location(severity="LOW")
     canned_state.findings.append(trim)
-    canned_state.verdicts[trim.id] = confirmed("docs", "hygiene", trim.citations[0]).model_copy(
-        update={"finding_id": trim.id})
+    canned_state.verdicts[trim.id] = confirmed(
+        "docs", "hygiene", trim.citations[0]
+    ).model_copy(update={"finding_id": trim.id})
     text = render_rollup("LOW", [to_findings_file(canned_state)])
     assert "**Trim (advisory: never blocks a merge)**" in text and trim.claim in text
 
@@ -479,11 +716,14 @@ def test_section_of_files_a_finding_only_trim_reported_under_trim():
     assert section_of(None) == "code"
 
 
-def test_findings_json_carries_the_section_and_old_files_fall_back_to_the_topic(canned_state):
+def test_findings_json_carries_the_section_and_old_files_fall_back_to_the_topic(
+    canned_state,
+):
     trim = trimmed(comment_finding())
     canned_state.findings.append(trim)
-    canned_state.verdicts[trim.id] = confirmed("code", "hygiene", trim.citations[0]).model_copy(
-        update={"finding_id": trim.id})
+    canned_state.verdicts[trim.id] = confirmed(
+        "code", "hygiene", trim.citations[0]
+    ).model_copy(update={"finding_id": trim.id})
     rows = to_findings_file(canned_state)["findings"]
     assert all("section" in r for r in rows)
     by_id = {r["id"]: r for r in rows}
@@ -496,8 +736,12 @@ def test_findings_json_carries_the_section_and_old_files_fall_back_to_the_topic(
 
 
 def test_the_verifier_gets_the_trim_rules_only_for_a_trim_finding(target_info):
-    assert verify_prompt.TRIM_RULES in verify_prompt.build(target_info, trimmed(high_finding()))
-    assert verify_prompt.TRIM_RULES not in verify_prompt.build(target_info, high_finding())
+    assert verify_prompt.TRIM_RULES in verify_prompt.build(
+        target_info, trimmed(high_finding())
+    )
+    assert verify_prompt.TRIM_RULES not in verify_prompt.build(
+        target_info, high_finding()
+    )
 
 
 def test_the_trim_finder_has_change_and_tree_wording():
@@ -509,10 +753,14 @@ def test_the_trim_finder_has_change_and_tree_wording():
 # --- finders: which reviews run trim -------------------------------------------------------------------
 
 
-def test_finder_dimensions_runs_trim_on_a_change_by_default_and_on_a_tree_only_when_asked(target_info):
+def test_finder_dimensions_runs_trim_on_a_change_by_default_and_on_a_tree_only_when_asked(
+    target_info,
+):
     tree = target_info.model_copy(update={"kind": "tree"})
     assert finder_dimensions(target_info, ReviewConfig())[-1] == TRIM_DIMENSION
-    assert TRIM_DIMENSION not in finder_dimensions(target_info, ReviewConfig(trim=False))
+    assert TRIM_DIMENSION not in finder_dimensions(
+        target_info, ReviewConfig(trim=False)
+    )
     assert TRIM_DIMENSION not in finder_dimensions(tree, ReviewConfig())
     assert finder_dimensions(tree, ReviewConfig(), tree_trim=True)[-1] == TRIM_DIMENSION
 
@@ -523,7 +771,9 @@ def test_trim_goes_with_tree_or_dir(trim_repo, tmp_path, capsys):
     assert "--trim goes with --tree or --dir" in capsys.readouterr().err
 
 
-def test_plan_only_counts_the_trim_calls_of_a_tree_or_dir_review(trim_repo, tmp_path, capsys):
+def test_plan_only_counts_the_trim_calls_of_a_tree_or_dir_review(
+    trim_repo, tmp_path, capsys
+):
     import re
     import shutil
 
@@ -532,14 +782,21 @@ def test_plan_only_counts_the_trim_calls_of_a_tree_or_dir_review(trim_repo, tmp_
     shutil.copytree(repo, plain, ignore=shutil.ignore_patterns(".git"))
 
     def plan(*args: str) -> tuple[int, int]:
-        assert main(["--out", str(tmp_path / "out"), "review", *args, "--plan-only"]) == 0
+        assert (
+            main(["--out", str(tmp_path / "out"), "review", *args, "--plan-only"]) == 0
+        )
         m = re.search(r"groups: (\d+)  finder calls: (\d+)", capsys.readouterr().out)
         return int(m.group(1)), int(m.group(2))
 
-    per_group = len([d for d in DIMENSIONS if d != "history"])  # history does not run on a tree
+    per_group = len(
+        [d for d in DIMENSIONS if d != "history"]
+    )  # history does not run on a tree
     groups, calls = plan("--repo", str(repo), "--tree")
     assert calls == groups * per_group
-    assert plan("--repo", str(repo), "--tree", "--trim") == (groups, groups * (per_group + 1))
+    assert plan("--repo", str(repo), "--tree", "--trim") == (
+        groups,
+        groups * (per_group + 1),
+    )
     groups, calls = plan("--dir", str(plain), "--trim")
     assert calls == groups * (per_group + 1)
 
@@ -549,12 +806,28 @@ def test_plan_only_counts_the_trim_calls_of_a_tree_or_dir_review(trim_repo, tmp_
 
 def _tree(repo: Path, out: Path, *extra: str) -> int:
     out.mkdir(exist_ok=True)
-    (out / "review.yaml").write_text("concurrency: 1\n")  # one finder at a time: the stop point is exact
-    return main(["--session-id", "sess-test", "--out", str(out), "review", "--repo", str(repo), "--tree",
-                 "--trust-repo", *extra])
+    (out / "review.yaml").write_text(
+        "concurrency: 1\n"
+    )  # one finder at a time: the stop point is exact
+    return main(
+        [
+            "--session-id",
+            "sess-test",
+            "--out",
+            str(out),
+            "review",
+            "--repo",
+            str(repo),
+            "--tree",
+            "--trust-repo",
+            *extra,
+        ]
+    )
 
 
-def test_a_stopped_tree_review_with_trim_resumes_only_the_missing_trim_keys(trim_repo, tmp_path, agents):
+def test_a_stopped_tree_review_with_trim_resumes_only_the_missing_trim_keys(
+    trim_repo, tmp_path, agents
+):
     repo, _, _ = trim_repo
     # Each group's trim call returns the findings on its own files: trim@0 the comment in calc.py, the
     # tests/ group the merge suggestion. A resume that lost a result stored before the stop loses its finding.
@@ -562,30 +835,56 @@ def test_a_stopped_tree_review_with_trim_resumes_only_the_missing_trim_keys(trim
     never_stopped = agents(trim=trim, by_group=True)
     assert _tree(repo, tmp_path / "whole", "--trim") == 0
     whole_dir = _target_dir(tmp_path / "whole")
-    whole = ReviewState.model_validate_json((whole_dir / "review-state.json").read_text())
-    groups = sorted(k for k in whole.finder_results if k.startswith(f"{TRIM_DIMENSION}@"))
-    assert len(groups) >= 2 and never_stopped.calls.count(f"find:{TRIM_DIMENSION}") == len(groups)
+    whole = ReviewState.model_validate_json(
+        (whole_dir / "review-state.json").read_text()
+    )
+    groups = sorted(
+        k for k in whole.finder_results if k.startswith(f"{TRIM_DIMENSION}@")
+    )
+    assert len(groups) >= 2 and never_stopped.calls.count(
+        f"find:{TRIM_DIMENSION}"
+    ) == len(groups)
     assert sorted(f.claim for f in whole.findings) == sorted(f.claim for f in trim)
 
-    fake = agents(trim=trim, by_group=True, stop_on_trim_call=2)  # trim@0 returns, the run stops on trim@1
+    fake = agents(
+        trim=trim, by_group=True, stop_on_trim_call=2
+    )  # trim@0 returns, the run stops on trim@1
     assert _tree(repo, tmp_path / "out", "--trim") == 4
     target_dir = _target_dir_of_state(tmp_path / "out")
-    saved = ReviewState.model_validate_json((target_dir / "review-state.json").read_text())
+    saved = ReviewState.model_validate_json(
+        (target_dir / "review-state.json").read_text()
+    )
     assert saved.trim is True
-    assert f"{TRIM_DIMENSION}@0" in saved.finder_results and f"{TRIM_DIMENSION}@1" not in saved.finder_results
+    assert (
+        f"{TRIM_DIMENSION}@0" in saved.finder_results
+        and f"{TRIM_DIMENSION}@1" not in saved.finder_results
+    )
     missing = [k for k in groups if k not in saved.finder_results]
-    assert missing == [f"{TRIM_DIMENSION}@1"]  # which later finders also finished depends on the task group
+    assert missing == [
+        f"{TRIM_DIMENSION}@1"
+    ]  # which later finders also finished depends on the task group
     first_run = len(fake.calls)
-    assert main(["--session-id", "sess-test", "resume", str(target_dir), "--trust-repo"]) == 0
-    trim_prompts = [p for label, p in fake.prompts[first_run:] if label == f"find:{TRIM_DIMENSION}"]
+    assert (
+        main(["--session-id", "sess-test", "resume", str(target_dir), "--trust-repo"])
+        == 0
+    )
+    trim_prompts = [
+        p for label, p in fake.prompts[first_run:] if label == f"find:{TRIM_DIMENSION}"
+    ]
     assert len(trim_prompts) == len(missing)
     # Group 0 holds the files directly in the repository, group 1 billing/: only group 1 is asked again.
-    assert "- billing/charge.py" in trim_prompts[0] and "- calc.py" not in trim_prompts[0]
-    done = ReviewState.model_validate_json((target_dir / "review-state.json").read_text())
+    assert (
+        "- billing/charge.py" in trim_prompts[0] and "- calc.py" not in trim_prompts[0]
+    )
+    done = ReviewState.model_validate_json(
+        (target_dir / "review-state.json").read_text()
+    )
     assert done.trim is True
     assert sorted(done.finder_results) == sorted(whole.finder_results)
     assert [f.id for f in done.findings] == [f.id for f in whole.findings]
-    assert comment_finding().claim in {f.claim for f in done.findings}  # trim@0's, stored before the stop
+    assert comment_finding().claim in {
+        f.claim for f in done.findings
+    }  # trim@0's, stored before the stop
 
 
 def _target_dir_of_state(out: Path) -> Path:

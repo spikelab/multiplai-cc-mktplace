@@ -6,15 +6,17 @@ Ported from deep-research pipeline with build-specific additions.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 # A session-derived source is shown as "session": which of the session's own
 # records supplied it (a parent's pin, the transcript, CLAUDE_EFFORT) does not
 # change what the user does next.
 _SESSION_SOURCES = {
-    "MULTIPLAI_SESSION_MODEL", "session transcript",
-    "MULTIPLAI_SESSION_EFFORT", "CLAUDE_EFFORT",
+    "MULTIPLAI_SESSION_MODEL",
+    "session transcript",
+    "MULTIPLAI_SESSION_EFFORT",
+    "CLAUDE_EFFORT",
 }
 
 
@@ -33,8 +35,12 @@ def default_settings_line() -> str:
         shown = "session" if source in _SESSION_SOURCES else source
         return f"{label}: {value} ({shown})"
 
-    return " | ".join((part("Model", *default_model_source()),
-                       part("Effort", *default_effort_source())))
+    return " | ".join(
+        (
+            part("Model", *default_model_source()),
+            part("Effort", *default_effort_source()),
+        )
+    )
 
 
 class ProgressWriter:
@@ -44,7 +50,10 @@ class ProgressWriter:
         self.path = path
 
     def initialize(
-        self, change_name: str, tier: str, block_count: int | None = None,
+        self,
+        change_name: str,
+        tier: str,
+        block_count: int | None = None,
     ) -> None:
         """Start this run's section of the progress file. Never truncates.
 
@@ -59,9 +68,7 @@ class ProgressWriter:
         if self.path.exists():
             with self.path.open("a") as f:
                 f.write(
-                    f"\n## [{self._now()}] RESUMED\n"
-                    f"Tier: {tier}\n"
-                    f"{blocks}{settings}\n"
+                    f"\n## [{self._now()}] RESUMED\nTier: {tier}\n{blocks}{settings}\n"
                 )
             return
         self.path.write_text(
@@ -85,7 +92,9 @@ class ProgressWriter:
         with self.path.open("a") as f:
             f.write(f"  - [{self._now()}] {agent_type} ({block_name}): {status}\n")
 
-    def log_review(self, block_name: str, iteration: int, score: float, passed: bool) -> None:
+    def log_review(
+        self, block_name: str, iteration: int, score: float, passed: bool
+    ) -> None:
         verdict = "PASS" if passed else "FAIL"
         with self.path.open("a") as f:
             f.write(
@@ -111,7 +120,11 @@ class ProgressWriter:
                 f.write(f"{line}\n")
 
     def log_spec_impact(
-        self, block_name: str, role: str, spec_impact: str, surprises: str,
+        self,
+        block_name: str,
+        role: str,
+        spec_impact: str,
+        surprises: str,
     ) -> None:
         """Append an agent's spec-impact note. A `contradicts` note is written
         as a WARNING heading so it is visible in the tail of the progress file
@@ -126,7 +139,9 @@ class ProgressWriter:
             for line in (surprises or "").strip().splitlines()[:20]:
                 f.write(f"{line}\n")
 
-    def log_board(self, column: str, owner_agent: str | None = None, note: str = "") -> None:
+    def log_board(
+        self, column: str, owner_agent: str | None = None, note: str = ""
+    ) -> None:
         """Append a board-column transition (the `.board.json` seam's human
         channel). Only called when the card actually moves columns."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -137,4 +152,4 @@ class ProgressWriter:
                 f.write(f"{note}\n")
 
     def _now(self) -> str:
-        return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")

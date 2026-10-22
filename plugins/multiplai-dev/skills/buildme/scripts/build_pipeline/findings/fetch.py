@@ -46,7 +46,8 @@ _PR_NOTICE_UNMARKED = "The pr skill (`/multiplai-dev:pr`) edited this PR's descr
 # (review_pipeline/post.py `review_body`). Its findings are the marked parts
 # that follow; a body with this line and no marker holds no finding.
 _REVIEW_POST_HEAD_RE = re.compile(
-    r"\ACode review: \d+ findings?, \d+ inline, \d+ on lines outside this PR's diff[^\n]*\n?")
+    r"\ACode review: \d+ findings?, \d+ inline, \d+ on lines outside this PR's diff[^\n]*\n?"
+)
 
 # `role_name` values that count as "collaborators with write access".
 WRITE_ROLES = frozenset({"admin", "maintain", "write"})
@@ -87,7 +88,9 @@ def is_pipeline_reply(body: str | None) -> bool:
 
 
 def is_pr_skill_notice(body: str | None) -> bool:
-    return bool(_PR_NOTICE_RE.search(body or "")) or (body or "").startswith(_PR_NOTICE_UNMARKED)
+    return bool(_PR_NOTICE_RE.search(body or "")) or (body or "").startswith(
+        _PR_NOTICE_UNMARKED
+    )
 
 
 def _split_repo(repo: str) -> tuple[str, str]:
@@ -99,24 +102,32 @@ def _split_repo(repo: str) -> tuple[str, str]:
 
 def repo_slug(project_dir: Path) -> str:
     """`owner/name` of the repo's GitHub remote, from `gh repo view`."""
-    res = git_ops._run_gh(["gh", "repo", "view", "--json", "nameWithOwner",
-                           "--jq", ".nameWithOwner"], cwd=project_dir)
+    res = git_ops._run_gh(
+        ["gh", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"],
+        cwd=project_dir,
+    )
     slug = res.stdout.strip()
     if not res.ok or not slug:
-        raise FetchError(f"could not read the repo's GitHub name: {(res.stderr or res.stdout).strip()}")
+        raise FetchError(
+            f"could not read the repo's GitHub name: {(res.stderr or res.stdout).strip()}"
+        )
     return slug
 
 
 def _json(res: git_ops.GitResult, what: str):
     if not res.ok:
-        raise FetchError(f"{what} failed (exit {res.returncode}): {(res.stderr or res.stdout).strip()}")
+        raise FetchError(
+            f"{what} failed (exit {res.returncode}): {(res.stderr or res.stdout).strip()}"
+        )
     try:
         return json.loads(res.stdout)
     except json.JSONDecodeError as e:
         raise FetchError(f"{what} returned something that is not JSON: {e}") from e
 
 
-def _is_bot(login: str, typename: str | None = None, user_type: str | None = None) -> bool:
+def _is_bot(
+    login: str, typename: str | None = None, user_type: str | None = None
+) -> bool:
     return typename == "Bot" or user_type == "Bot" or login.endswith("[bot]")
 
 
@@ -125,15 +136,28 @@ def _review_comments(repo: str, pr: int, cwd: Path | None) -> list[PRComment]:
     out: list[PRComment] = []
     cursor: str | None = None
     for _ in range(_MAX_PAGES):
-        argv = ["gh", "api", "graphql", "-f", f"query={_THREADS_QUERY}",
-                "-f", f"owner={owner}", "-f", f"name={name}", "-F", f"number={pr}"]
+        argv = [
+            "gh",
+            "api",
+            "graphql",
+            "-f",
+            f"query={_THREADS_QUERY}",
+            "-f",
+            f"owner={owner}",
+            "-f",
+            f"name={name}",
+            "-F",
+            f"number={pr}",
+        ]
         if cursor:
             argv += ["-f", f"cursor={cursor}"]
         data = _json(git_ops._run_gh(argv, cwd=cwd), "listing review threads")
         try:
             threads = data["data"]["repository"]["pullRequest"]["reviewThreads"]
         except (KeyError, TypeError) as e:
-            raise FetchError(f"unexpected review-thread response: {str(data)[:300]}") from e
+            raise FetchError(
+                f"unexpected review-thread response: {str(data)[:300]}"
+            ) from e
         for t in threads.get("nodes") or []:
             if t.get("isResolved"):
                 continue
@@ -147,14 +171,23 @@ def _review_comments(repo: str, pr: int, cwd: Path | None) -> list[PRComment]:
                     continue
                 author = c.get("author") or {}
                 login = author.get("login") or "ghost"
-                out.append(PRComment(
-                    id=c["databaseId"], kind="review", author=login,
-                    is_bot=_is_bot(login, typename=author.get("__typename")),
-                    body=body, url=c.get("url") or "", created_at=c.get("createdAt") or "",
-                    path=t.get("path"), line=t.get("line"), thread_id=t.get("id"),
-                    reply_to=first_id, outdated=bool(t.get("isOutdated")),
-                    finding_id=parse_finding_id(body),
-                ))
+                out.append(
+                    PRComment(
+                        id=c["databaseId"],
+                        kind="review",
+                        author=login,
+                        is_bot=_is_bot(login, typename=author.get("__typename")),
+                        body=body,
+                        url=c.get("url") or "",
+                        created_at=c.get("createdAt") or "",
+                        path=t.get("path"),
+                        line=t.get("line"),
+                        thread_id=t.get("id"),
+                        reply_to=first_id,
+                        outdated=bool(t.get("isOutdated")),
+                        finding_id=parse_finding_id(body),
+                    )
+                )
         info = threads.get("pageInfo") or {}
         if not info.get("hasNextPage"):
             return out
@@ -162,12 +195,25 @@ def _review_comments(repo: str, pr: int, cwd: Path | None) -> list[PRComment]:
     raise FetchError(f"more than {_MAX_PAGES} pages of review threads")
 
 
-def _issue_comments(repo: str, pr: int, since: str | None, cwd: Path | None) -> list[PRComment]:
-    res = git_ops._run_gh(["gh", "api", "--paginate", f"repos/{repo}/issues/{pr}/comments",
-                           "--jq", ".[]"], cwd=cwd)
+def _issue_comments(
+    repo: str, pr: int, since: str | None, cwd: Path | None
+) -> list[PRComment]:
+    res = git_ops._run_gh(
+        [
+            "gh",
+            "api",
+            "--paginate",
+            f"repos/{repo}/issues/{pr}/comments",
+            "--jq",
+            ".[]",
+        ],
+        cwd=cwd,
+    )
     if not res.ok:
-        raise FetchError(f"listing PR comments failed (exit {res.returncode}): "
-                         f"{(res.stderr or res.stdout).strip()}")
+        raise FetchError(
+            f"listing PR comments failed (exit {res.returncode}): "
+            f"{(res.stderr or res.stdout).strip()}"
+        )
     out: list[PRComment] = []
     for line in res.stdout.splitlines():
         if not line.strip():
@@ -184,12 +230,18 @@ def _issue_comments(repo: str, pr: int, since: str | None, cwd: Path | None) -> 
             continue
         user = c.get("user") or {}
         login = user.get("login") or "ghost"
-        out.append(PRComment(
-            id=c["id"], kind="issue", author=login,
-            is_bot=_is_bot(login, user_type=user.get("type")),
-            body=body, url=c.get("html_url") or "", created_at=created,
-            finding_id=parse_finding_id(body),
-        ))
+        out.append(
+            PRComment(
+                id=c["id"],
+                kind="issue",
+                author=login,
+                is_bot=_is_bot(login, user_type=user.get("type")),
+                body=body,
+                url=c.get("html_url") or "",
+                created_at=created,
+                finding_id=parse_finding_id(body),
+            )
+        )
     return out
 
 
@@ -212,23 +264,29 @@ def _split_review_body(body: str) -> list[tuple[str, str | None]]:
     marks = list(FINDING_MARKER_RE.finditer(rest))
     if not marks:
         if rest != body:
-            return []   # review post's body for a review with every finding inline
+            return []  # review post's body for a review with every finding inline
         return [(body, None)] if body.strip() else []
     out, start = [], 0
     for m in marks:
-        out.append((rest[start:m.end()].strip(), m["id"]))
+        out.append((rest[start : m.end()].strip(), m["id"]))
         start = m.end()
     return out
 
 
-def _review_bodies(repo: str, pr: int, since: str | None, cwd: Path | None) -> list[PRComment]:
+def _review_bodies(
+    repo: str, pr: int, since: str | None, cwd: Path | None
+) -> list[PRComment]:
     """Comments in the bodies of the PR's reviews submitted after *since*. A
     review's body has no thread, so it is answered like a top-level comment."""
-    res = git_ops._run_gh(["gh", "api", "--paginate", f"repos/{repo}/pulls/{pr}/reviews",
-                           "--jq", ".[]"], cwd=cwd)
+    res = git_ops._run_gh(
+        ["gh", "api", "--paginate", f"repos/{repo}/pulls/{pr}/reviews", "--jq", ".[]"],
+        cwd=cwd,
+    )
     if not res.ok:
-        raise FetchError(f"listing PR reviews failed (exit {res.returncode}): "
-                         f"{(res.stderr or res.stdout).strip()}")
+        raise FetchError(
+            f"listing PR reviews failed (exit {res.returncode}): "
+            f"{(res.stderr or res.stdout).strip()}"
+        )
     out: list[PRComment] = []
     seen: set[int] = set()
     for line in res.stdout.splitlines():
@@ -253,17 +311,25 @@ def _review_bodies(repo: str, pr: int, since: str | None, cwd: Path | None) -> l
             if cid in seen:
                 continue
             seen.add(cid)
-            out.append(PRComment(
-                id=cid, kind="review_body", review_id=r["id"], author=login,
-                is_bot=_is_bot(login, user_type=user.get("type")),
-                body=text, url=r.get("html_url") or "", created_at=submitted,
-                finding_id=finding_id,
-            ))
+            out.append(
+                PRComment(
+                    id=cid,
+                    kind="review_body",
+                    review_id=r["id"],
+                    author=login,
+                    is_bot=_is_bot(login, user_type=user.get("type")),
+                    body=text,
+                    url=r.get("html_url") or "",
+                    created_at=submitted,
+                    finding_id=finding_id,
+                )
+            )
     return out
 
 
-def fetch_comments(repo: str, pr: int, since: str | None, *,
-                   cwd: Path | None = None) -> list[PRComment]:
+def fetch_comments(
+    repo: str, pr: int, since: str | None, *, cwd: Path | None = None
+) -> list[PRComment]:
     """Unresolved review-thread comments (outdated ones kept and marked), plus
     top-level comments and review bodies created after *since* (an ISO-8601
     UTC timestamp, as GitHub writes them; None for every one). A review body
@@ -271,23 +337,39 @@ def fetch_comments(repo: str, pr: int, since: str | None, *,
     puts a finding on lines outside the PR's diff there, not in a thread. The
     pipeline's own replies are left out. Raises `FetchError` when a read
     fails."""
-    return [*_review_comments(repo, pr, cwd), *_issue_comments(repo, pr, since, cwd),
-            *_review_bodies(repo, pr, since, cwd)]
+    return [
+        *_review_comments(repo, pr, cwd),
+        *_issue_comments(repo, pr, since, cwd),
+        *_review_bodies(repo, pr, since, cwd),
+    ]
 
 
 def _bare(login: str) -> str:
     """GraphQL names an app `dependabot`, REST `dependabot[bot]`."""
     login = login.strip().lower()
-    return login[:-5] if login.endswith("[bot]") else login
+    return login.removesuffix("[bot]")
 
 
 def _role_name(repo: str, login: str, cwd: Path | None) -> str:
-    res = git_ops._run_gh(["gh", "api", f"repos/{repo}/collaborators/{login}/permission",
-                           "--jq", ".role_name"], cwd=cwd)
+    res = git_ops._run_gh(
+        [
+            "gh",
+            "api",
+            f"repos/{repo}/collaborators/{login}/permission",
+            "--jq",
+            ".role_name",
+        ],
+        cwd=cwd,
+    )
     if not res.ok:
         # A non-collaborator is a 404 on some repos. Unknown is never "allowed".
-        log.info("No permission for %s on %s (exit %d): %s", login, repo, res.returncode,
-                 (res.stderr or res.stdout).strip()[:200])
+        log.info(
+            "No permission for %s on %s (exit %d): %s",
+            login,
+            repo,
+            res.returncode,
+            (res.stderr or res.stdout).strip()[:200],
+        )
         return ""
     return res.stdout.strip()
 
@@ -295,8 +377,14 @@ def _role_name(repo: str, login: str, cwd: Path | None) -> str:
 _LOGIN_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\[bot\])?$")
 
 
-def is_allowed(comment: PRComment, settings: FindingsSettings, cache: dict[str, bool], *,
-               repo: str, cwd: Path | None = None) -> bool:
+def is_allowed(
+    comment: PRComment,
+    settings: FindingsSettings,
+    cache: dict[str, bool],
+    *,
+    repo: str,
+    cwd: Path | None = None,
+) -> bool:
     """Whether *comment*'s author is one whose comments are acted on.
 
     A bot only when it is in `findings.allow_bots`. Anyone else: with
@@ -319,8 +407,14 @@ def is_allowed(comment: PRComment, settings: FindingsSettings, cache: dict[str, 
     return allowed
 
 
-def prepare(comments: list[PRComment], settings: FindingsSettings, cache: dict[str, bool], *,
-            repo: str, cwd: Path | None = None) -> list[PRComment]:
+def prepare(
+    comments: list[PRComment],
+    settings: FindingsSettings,
+    cache: dict[str, bool],
+    *,
+    repo: str,
+    cwd: Path | None = None,
+) -> list[PRComment]:
     """Set `allowed` and `injection` on each comment, in place; returns them."""
     for c in comments:
         c.allowed = is_allowed(c, settings, cache, repo=repo, cwd=cwd)

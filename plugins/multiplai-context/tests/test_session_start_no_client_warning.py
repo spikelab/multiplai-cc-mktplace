@@ -20,6 +20,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 def test_warning_emitted_on_first_call(tmp_path):
     import session_start
+
     out = io.StringIO()
     with redirect_stdout(out):
         session_start._emit_no_client_warning(tmp_path)
@@ -32,6 +33,7 @@ def test_warning_emitted_on_first_call(tmp_path):
 
 def test_warning_suppressed_when_marker_exists(tmp_path):
     import session_start
+
     (tmp_path / "no_client_warning_emitted").touch()
     out = io.StringIO()
     with redirect_stdout(out):
@@ -41,8 +43,10 @@ def test_warning_suppressed_when_marker_exists(tmp_path):
 
 def test_detect_client_type_none_string_format():
     """The warning trigger relies on client_type.startswith('none')."""
-    from multiplai_core.model_client import detect_client_type
     import os
+
+    from multiplai_core.model_client import detect_client_type
+
     saved_sdk = sys.modules.pop("claude_agent_sdk", None)
     saved_key = os.environ.pop("CLAUDE_PLUGIN_OPTION_ANTHROPIC_API_KEY", None)
     try:

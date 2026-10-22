@@ -17,7 +17,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import lint_workspace  # noqa: E402
+import lint_workspace
 
 
 @pytest.fixture
@@ -37,6 +37,7 @@ def repo(tmp_path, monkeypatch):
 
 
 # --- nested lockfiles -------------------------------------------------------
+
 
 def test_root_lock_alone_is_clean(repo):
     """The root uv.lock is the point — it must not trip its own gate."""
@@ -77,6 +78,7 @@ def test_message_says_what_to_do(repo):
 
 # --- undeclared members ----------------------------------------------------
 
+
 def test_undeclared_member_is_caught(repo):
     stray = repo / "plugins/myplug/skills/other/scripts"
     stray.mkdir(parents=True)
@@ -102,6 +104,7 @@ def test_lib_exemption_is_only_at_plugin_level(repo):
 
 
 # --- the check is wired in --------------------------------------------------
+
 
 def test_nested_lock_check_is_registered():
     """Registration is the difference between a gate and a dead function."""

@@ -94,9 +94,9 @@ This design follows the output shapes the prototype settled: plan lines, cost an
 ```python
 paths_enabled: bool = False
 paths_status: Literal["not-run", "skipped", "ok", "empty", "failed"] = "not-run"
-paths_failure: str | None = None           # reason shown in the report when failed/empty
+paths_failure: str | None = None  # reason shown in the report when failed/empty
 path_ids: list[str] = Field(default_factory=list)
-pieces: list[Piece] | None = None          # None = not yet computed
+pieces: list[Piece] | None = None  # None = not yet computed
 finder_reports: dict[str, FinderReport] = Field(default_factory=dict)
 coverage: list[CoverageRecord] = Field(default_factory=list)
 ```
@@ -105,32 +105,35 @@ The new models are:
 
 ```python
 class Piece(BaseModel):
-    id: int                     # 1-based, contiguous
-    group: str                  # repo-relative dir, "" = root, "meta" for meta pieces
+    id: int  # 1-based, contiguous
+    group: str  # repo-relative dir, "" = root, "meta" for meta pieces
     meta: bool = False
-    files: list[str] = Field(default_factory=list)       # head paths, in piece order
-    omitted: list[str] = Field(default_factory=list)     # lockfiles (meta only)
+    files: list[str] = Field(default_factory=list)  # head paths, in piece order
+    omitted: list[str] = Field(default_factory=list)  # lockfiles (meta only)
     binary: list[str] = Field(default_factory=list)
     chars: int = 0
+
 
 class ConvertedItem(BaseModel):
     kind: Literal["defect", "advice"]
     severity: Literal["HIGH", "MEDIUM", "LOW"]
     finding_id: str | None = None
 
+
 class FinderReport(BaseModel):
-    key: str                    # "piece@3" | "path@p7"
+    key: str  # "piece@3" | "path@p7"
     text: str
     converted: bool = False
     convert_error: str | None = None
     items: list[ConvertedItem] = Field(default_factory=list)
     findings: list[Finding] = Field(default_factory=list)
 
+
 class CoverageRecord(BaseModel):
     stage: Literal["paths", "find", "conventions"]
-    subject: str                # e.g. "p3", "entry review_cmd", "docs/gone.md", "piece@2"
+    subject: str  # e.g. "p3", "entry review_cmd", "docs/gone.md", "piece@2"
     level: Literal["info", "error"]
-    reason: str                 # closed vocabulary per stage, see Global Constraints
+    reason: str  # closed vocabulary per stage, see Global Constraints
     detail: str = ""
 ```
 
@@ -320,6 +323,7 @@ The prompt does not contain "Never read a whole file", any partial-read rule, or
 **Decision.** Add one driver to `stages/find.py`, used only for `piece@*` and `path@*` keys:
 
 ```python
+# fmt: off
 async def run_reported(key: str, prompt: str, state, ctx) -> None:
     rep = state.finder_reports.get(key)
     if rep is None:

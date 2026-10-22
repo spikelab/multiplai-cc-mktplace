@@ -42,7 +42,9 @@ def get_budget() -> WalkthroughBudget:
     return _core.get(ledger_cls=WalkthroughBudget)  # type: ignore[return-value]
 
 
-def start(max_usd: float | None = DEFAULT_MAX_USD, state: dict | None = None) -> WalkthroughBudget:
+def start(
+    max_usd: float | None = DEFAULT_MAX_USD, state: dict | None = None
+) -> WalkthroughBudget:
     """Begin a walk's ledger in the current context, restoring *state* if given."""
     return _core.start(max_usd, state, ledger_cls=WalkthroughBudget)  # type: ignore[return-value]
 
@@ -69,8 +71,15 @@ def record(usage, *, label: str = "") -> None:
     get_budget().record(usage, label=label)
     try:
         cost = float(getattr(usage, "cost_usd", 0.0) or 0.0)
-        tokens = sum(int(getattr(usage, name, 0) or 0) for name in (
-            "input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens"))
+        tokens = sum(
+            int(getattr(usage, name, 0) or 0)
+            for name in (
+                "input_tokens",
+                "output_tokens",
+                "cache_read_tokens",
+                "cache_creation_tokens",
+            )
+        )
     except Exception as e:  # recording never raises, as the ledger's own does not
         log.warning("Process spend accounting failed for a call (ignored): %s", e)
         return

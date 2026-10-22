@@ -44,8 +44,8 @@ from __future__ import annotations
 import dataclasses
 import logging
 import re
-from datetime import datetime, timezone
-from typing import Iterable, Optional, Sequence
+from collections.abc import Iterable, Sequence
+from datetime import UTC, datetime
 
 from lib.bank_git import (
     current_branch,
@@ -73,7 +73,7 @@ __all__ = [
 
 
 def _today() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return datetime.now(UTC).strftime("%Y-%m-%d")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -159,14 +159,16 @@ def append_under_section(text: str, section: str, block: str) -> str:
             return "\n".join(new).rstrip("\n") + "\n"
     body = "\n".join(lines).rstrip("\n")
     if section:
-        return f"{body}\n\n## {section.strip()}\n\n{block}\n" if body else (
-            f"## {section.strip()}\n\n{block}\n"
+        return (
+            f"{body}\n\n## {section.strip()}\n\n{block}\n"
+            if body
+            else (f"## {section.strip()}\n\n{block}\n")
         )
     return f"{body}\n\n{block}\n" if body else f"{block}\n"
 
 
 def plan_contributions(
-    items: Iterable, banks: Optional[Sequence[MemoryBank]] = None
+    items: Iterable, banks: Sequence[MemoryBank] | None = None
 ) -> list[ContributionPlan]:
     """Group shared-bound *items* by bank, applying each bank's own policy.
 
@@ -246,13 +248,17 @@ def plan_contributions(
     for name, targets in sorted(unknown.items()):
         logger.warning(
             "%d item(s) target bank '%s', which is not a subscribed shared bank: %s",
-            len(targets), name, ", ".join(sorted(set(targets))),
+            len(targets),
+            name,
+            ", ".join(sorted(set(targets))),
         )
     for name, targets in sorted(unsafe.items()):
         logger.error(
             "%d item(s) targeting bank '%s' name something that is not a bare "
             "memory filename and were dropped: %s",
-            len(targets), name, ", ".join(sorted(set(targets))),
+            len(targets),
+            name,
+            ", ".join(sorted(set(targets))),
         )
     return plans
 
@@ -304,7 +310,8 @@ def render_contribution_file(plan: ContributionPlan) -> str:
             lines.append(
                 f"- `{c.filename}`"
                 + (f" § {c.section}" if c.section else "")
-                + " — " + "; ".join(c.blocked)
+                + " — "
+                + "; ".join(c.blocked)
             )
         lines += [
             "",
@@ -317,7 +324,7 @@ def render_contribution_file(plan: ContributionPlan) -> str:
 
 
 def submit(
-    plan: ContributionPlan, *, dry_run: bool = True, branch: Optional[str] = None
+    plan: ContributionPlan, *, dry_run: bool = True, branch: str | None = None
 ) -> dict:
     """Write the files, commit, push and open the pull request.
 
@@ -374,13 +381,17 @@ def submit(
         current = updates.get(c.filename)
         if current is None:
             try:
-                current = target.read_text(encoding="utf-8") if target.exists() else (
-                    f"# {c.filename[:-3].replace('-', ' ').title()}\n"
+                current = (
+                    target.read_text(encoding="utf-8")
+                    if target.exists()
+                    else (f"# {c.filename[:-3].replace('-', ' ').title()}\n")
                 )
             except (OSError, UnicodeDecodeError) as e:
                 report["errors"].append(f"cannot read {c.filename}: {e}")
                 return report
-        updates[c.filename] = append_under_section(current, c.section, _as_bullet(c.text))
+        updates[c.filename] = append_under_section(
+            current, c.section, _as_bullet(c.text)
+        )
     report["diff_preview"] = {k: len(v) for k, v in updates.items()}
 
     if dry_run:

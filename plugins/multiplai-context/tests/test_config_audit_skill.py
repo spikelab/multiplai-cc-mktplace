@@ -18,12 +18,12 @@ SKILL_FILE = PLUGIN_ROOT / "skills" / "config-audit" / "SKILL.md"
 
 def _frontmatter() -> dict:
     text = SKILL_FILE.read_text()
-    m = re.match(r'^---\n(.*?)\n---', text, re.DOTALL)
+    m = re.match(r"^---\n(.*?)\n---", text, re.DOTALL)
     fm = {}
     if m:
         for line in m.group(1).splitlines():
-            if ':' in line:
-                k, _, v = line.partition(':')
+            if ":" in line:
+                k, _, v = line.partition(":")
                 fm[k.strip()] = v.strip().strip('"')
     return fm
 
@@ -104,7 +104,7 @@ class TestConfigAuditSkillPrompt:
             if not re.search(r"(?i)\bappl(y|ies|ied|ying)\b", line):
                 continue
             # Sentences can wrap across a line break — check a 3-line window.
-            window = "\n".join(lines[max(0, i - 1):i + 2])
+            window = "\n".join(lines[max(0, i - 1) : i + 2])
             assert any(s in window for s in self.ALLOWED_APPLY_SNIPPETS), (
                 f"unreviewed 'apply' on line {i + 1}: {line.strip()!r} — "
                 "if this is a new propose-only sentence, whitelist it in "
@@ -114,9 +114,9 @@ class TestConfigAuditSkillPrompt:
 
     def test_motivating_examples_present(self):
         """The three canonical decay cases must be in the prompt."""
-        assert re.search(r"(?i)single-file", self.text)      # refactor rule
-        assert re.search(r"(?i)perforce", self.text)          # redundant hook
-        assert "2026-07-08" in self.text                       # kit env-var regression
+        assert re.search(r"(?i)single-file", self.text)  # refactor rule
+        assert re.search(r"(?i)perforce", self.text)  # redundant hook
+        assert "2026-07-08" in self.text  # kit env-var regression
         assert "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE" in self.text
 
     def test_stamps_state_file(self):

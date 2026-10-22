@@ -4,19 +4,19 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import logging
+import os
 import re
 import tomllib
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Literal
+from typing import Literal
 
 import yaml
-
 from multiplai_core import resolve_model_spec
-from multiplai_core.session import default_effort, default_model
 from multiplai_core.env import CURRENT_MODEL, parse_model_spec, pick_model_spec
+from multiplai_core.session import default_effort, default_model
 
 from .env import KNOWN_EFFORTS, load_multiplai_conf, pick_effort, resolve_model
 from .models import ReviewGatePolicy
@@ -173,7 +173,11 @@ def _pyproject_dependency_specs(data: dict) -> list[str]:
             for group in optional.values():
                 if isinstance(group, list):
                     specs.extend(d for d in group if isinstance(d, str))
-    poetry = (data.get("tool") or {}).get("poetry") if isinstance(data.get("tool"), dict) else None
+    poetry = (
+        (data.get("tool") or {}).get("poetry")
+        if isinstance(data.get("tool"), dict)
+        else None
+    )
     if isinstance(poetry, dict):
         for section in ("dependencies", "dev-dependencies"):
             group = poetry.get(section)
@@ -182,8 +186,9 @@ def _pyproject_dependency_specs(data: dict) -> list[str]:
     return specs
 
 
-def detect_tier(default_spec: str | None = None,
-                configured_tier: str | None = None) -> tuple[Tier, str]:
+def detect_tier(
+    default_spec: str | None = None, configured_tier: str | None = None
+) -> tuple[Tier, str]:
     """Detect model tier from the model buildme will actually run.
 
     Returns (tier, model_name). The model is, first set wins: *default_spec*
@@ -201,17 +206,22 @@ def detect_tier(default_spec: str | None = None,
     """
     model = default_spec or conf_model("buildme") or default_model()
     if not model:
-        log.info("tier: standard — no model is configured and no session model "
-                 "was found, so the CLI's default model runs")
+        log.info(
+            "tier: standard — no model is configured and no session model "
+            "was found, so the CLI's default model runs"
+        )
         return "standard", "CLI default"
     spec = parse_model_spec(model)
     if not spec.is_anthropic:
         pinned = os.environ.get("BUILDME_TIER") or configured_tier
         if pinned in ("advanced", "standard"):
             return pinned, spec.qualified
-        log.info("tier: standard — the default model %s is not a Claude model, so "
-                 "its version says nothing about the tier; set BUILDME_TIER or "
-                 "`tier:` in specs/config.yaml to pin it", spec.qualified)
+        log.info(
+            "tier: standard — the default model %s is not a Claude model, so "
+            "its version says nothing about the tier; set BUILDME_TIER or "
+            "`tier:` in specs/config.yaml to pin it",
+            spec.qualified,
+        )
         return "standard", spec.qualified
     model = CURRENT_MODEL.get(spec.model.lower(), spec.model)
     if _is_advanced_model(model):
@@ -276,8 +286,12 @@ def conf_effort(task: str, default: str | None = None) -> str | None:
     if not requested:
         return default
     if requested not in KNOWN_EFFORTS:
-        log.warning("Unknown [%s] EFFORT=%r in multiplai.conf (expected one of %s) "
-                    "— ignoring", task, requested, ", ".join(sorted(KNOWN_EFFORTS)))
+        log.warning(
+            "Unknown [%s] EFFORT=%r in multiplai.conf (expected one of %s) — ignoring",
+            task,
+            requested,
+            ", ".join(sorted(KNOWN_EFFORTS)),
+        )
         return default
     return pick_effort(requested, task=task)
 
@@ -312,8 +326,12 @@ def conf_model(task: str, default_tier: str = "opus") -> str | None:
         return spec.model
     if _is_model_spec(spec.qualified):
         return spec.qualified
-    log.warning("Ignoring [%s] MODEL= in multiplai.conf: %s has no runner in buildme "
-                "(want a Claude model or pi:<model>@<provider>)", task, spec.qualified)
+    log.warning(
+        "Ignoring [%s] MODEL= in multiplai.conf: %s has no runner in buildme "
+        "(want a Claude model or pi:<model>@<provider>)",
+        task,
+        spec.qualified,
+    )
     return None
 
 
@@ -332,14 +350,20 @@ def conf_int(task: str, key: str, default: int) -> int:
     try:
         return int(raw)
     except ValueError:
-        log.warning("Unparseable [%s] %s=%r in multiplai.conf (want an integer) "
-                    "— using %d", task, key, raw, default)
+        log.warning(
+            "Unparseable [%s] %s=%r in multiplai.conf (want an integer) — using %d",
+            task,
+            key,
+            raw,
+            default,
+        )
         return default
 
 
 @dataclass
 class GateToggles:
     """Per-gate on/off switches from config.yaml."""
+
     # RESERVED / not yet wired: no code path consults this toggle. The
     # active per-block review is run_code_review (llm_steps/review_steps.py),
     # called from tdd_engine._run_quality_review; it always runs — there is no
@@ -433,7 +457,9 @@ STEP_STAGES: dict[str, str] = {
 }
 
 # The keys `models:` and `efforts:` accept: a step, a stage, or `default`.
-MODEL_KEYS: frozenset[str] = frozenset(STEP_STAGES) | frozenset(MODEL_STAGES) | {"default"}
+MODEL_KEYS: frozenset[str] = (
+    frozenset(STEP_STAGES) | frozenset(MODEL_STAGES) | {"default"}
+)
 
 # The existing per-stage field each step reads at the third link of
 # `BuildConfig.model_for`'s chain: its stage's field, or its own. Adjudication
@@ -442,7 +468,9 @@ MODEL_KEYS: frozenset[str] = frozenset(STEP_STAGES) | frozenset(MODEL_STAGES) | 
 # a correctness requirement"), so the stronger-reviewer `review_model` must not
 # move it. `models.adjudication` or `models.review` still can.
 _STAGE_MODEL_FIELDS: dict[str, str] = {
-    "spec": "spec_model", "agent": "agent_model", "review": "review_model",
+    "spec": "spec_model",
+    "agent": "agent_model",
+    "review": "review_model",
 }
 _STEP_MODEL_FIELDS: dict[str, str] = {
     "plan_review": "plan_review_model",
@@ -451,7 +479,9 @@ _STEP_MODEL_FIELDS: dict[str, str] = {
 # The same for `effort_for`. Adjudication runs at the review stage's effort,
 # as it always has.
 _STAGE_EFFORT_FIELDS: dict[str, str] = {
-    "spec": "spec_effort", "agent": "agent_effort", "review": "review_effort",
+    "spec": "spec_effort",
+    "agent": "agent_effort",
+    "review": "review_effort",
 }
 _STEP_EFFORT_FIELDS: dict[str, str] = {
     "plan_review": "plan_review_effort",
@@ -521,7 +551,9 @@ class EpicSettings:
 def _cfg_int(value, key: str, default: int) -> int:
     """A positive int from config.yaml, or *default* with a warning."""
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-        log.warning("Invalid %s value %r in config.yaml — using %r", key, value, default)
+        log.warning(
+            "Invalid %s value %r in config.yaml — using %r", key, value, default
+        )
         return default
     return value
 
@@ -559,10 +591,11 @@ class MutationSettings:
     mutation testing on buildme output yet, so the default is a starting point
     to be adjusted from real runs.
     """
+
     enabled: bool = True
     min_score: float = 0.8
-    timeout: float = 30.0      # seconds per test-suite run under a mutant
-    max_mutants: int = 300     # above it, a deterministic sample runs
+    timeout: float = 30.0  # seconds per test-suite run under a mutant
+    max_mutants: int = 300  # above it, a deterministic sample runs
 
 
 def _load_mutation_settings(raw) -> MutationSettings:
@@ -582,31 +615,66 @@ def _load_mutation_settings(raw) -> MutationSettings:
     elif str(enabled).strip().lower() in ("no", "off", "0", "false"):
         settings.enabled = False
     else:
-        log.warning("Unrecognized mutation.enabled value %r in config.yaml — using true", enabled)
+        log.warning(
+            "Unrecognized mutation.enabled value %r in config.yaml — using true",
+            enabled,
+        )
 
     def _number(key, default, *, cast, ok, rule):
         value = raw.get(key, default)
         if isinstance(value, bool):
-            log.warning("Invalid mutation.%s=%r in config.yaml (%s) — using %r", key, value, rule, default)
+            log.warning(
+                "Invalid mutation.%s=%r in config.yaml (%s) — using %r",
+                key,
+                value,
+                rule,
+                default,
+            )
             return default
         try:
             number = cast(value)
         except (TypeError, ValueError):
-            log.warning("Invalid mutation.%s=%r in config.yaml (%s) — using %r", key, value, rule, default)
+            log.warning(
+                "Invalid mutation.%s=%r in config.yaml (%s) — using %r",
+                key,
+                value,
+                rule,
+                default,
+            )
             return default
         if not ok(number) or (cast is int and number != value):
-            log.warning("Invalid mutation.%s=%r in config.yaml (%s) — using %r", key, value, rule, default)
+            log.warning(
+                "Invalid mutation.%s=%r in config.yaml (%s) — using %r",
+                key,
+                value,
+                rule,
+                default,
+            )
             return default
         return number
 
-    settings.min_score = _number("min_score", settings.min_score, cast=float,
-                                 ok=lambda v: 0.0 <= v <= 1.0, rule="a number from 0 to 1")
-    settings.timeout = _number("timeout", settings.timeout, cast=float,
-                               ok=lambda v: v > 0, rule="seconds, above 0")
-    settings.max_mutants = _number("max_mutants", settings.max_mutants, cast=int,
-                                   ok=lambda v: v > 0, rule="a whole number above 0")
+    settings.min_score = _number(
+        "min_score",
+        settings.min_score,
+        cast=float,
+        ok=lambda v: 0.0 <= v <= 1.0,
+        rule="a number from 0 to 1",
+    )
+    settings.timeout = _number(
+        "timeout",
+        settings.timeout,
+        cast=float,
+        ok=lambda v: v > 0,
+        rule="seconds, above 0",
+    )
+    settings.max_mutants = _number(
+        "max_mutants",
+        settings.max_mutants,
+        cast=int,
+        ok=lambda v: v > 0,
+        rule="a whole number above 0",
+    )
     return settings
-
 
 
 # Root file → test command, in the order test-command discovery checks them.
@@ -629,6 +697,7 @@ def discover_test_command(project_dir: Path | str) -> tuple[str, str] | None:
         if (p / marker).exists():
             return cmd, marker
     return None
+
 
 def parse_parallel(value: object) -> str:
     """`tdd.parallel` from config.yaml as "auto" or "off". YAML reads a bare
@@ -773,7 +842,11 @@ class BuildConfig:
     references_announced: bool = field(default=False, repr=False)
 
     # Paths (resolved after config load)
-    config_dir: Path = field(default_factory=lambda: Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser())
+    config_dir: Path = field(
+        default_factory=lambda: Path(
+            os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")
+        ).expanduser()
+    )
     specs_dir: Path = field(default_factory=lambda: Path.cwd() / "specs")
 
     # Overrides the findings stage (`python -m build_pipeline findings`) sets
@@ -818,7 +891,8 @@ class BuildConfig:
     spec_model: str | None = field(default_factory=lambda: conf_model("buildme.spec"))
     agent_model: str | None = field(default_factory=lambda: conf_model("buildme.agent"))
     plan_review_model: str | None = field(
-        default_factory=lambda: conf_model("buildme.plan_review"))
+        default_factory=lambda: conf_model("buildme.plan_review")
+    )
 
     # Reasoning effort, the second axis of the same tuning decision as `model`.
     # None → `effort_for` goes on down its chain. `[buildme] EFFORT=` sets the pipeline-wide value;
@@ -833,13 +907,18 @@ class BuildConfig:
     # pipeline, which per-field conf reads would silently ignore.
     effort: str | None = field(default_factory=lambda: conf_effort("buildme"))
     spec_effort: str | None = field(default_factory=lambda: conf_effort("buildme.spec"))
-    review_effort: str | None = field(default_factory=lambda: conf_effort("buildme.review"))
-    agent_effort: str | None = field(default_factory=lambda: conf_effort("buildme.agent"))
+    review_effort: str | None = field(
+        default_factory=lambda: conf_effort("buildme.review")
+    )
+    agent_effort: str | None = field(
+        default_factory=lambda: conf_effort("buildme.agent")
+    )
     # PLAN_REVIEW is a review, so it inherits the reviewer's effort rather than
     # the pipeline-wide one — `[buildme.review] EFFORT=high` should not have to
     # be repeated to make the plan review think as hard as the code review.
     plan_review_effort: str | None = field(
-        default_factory=lambda: conf_effort("buildme.plan_review"))
+        default_factory=lambda: conf_effort("buildme.plan_review")
+    )
 
     # PLAN_REVIEW's oversized-plan triggers, both read from multiplai.conf
     # (`[buildme.plan_review] PLAN_SPLIT_BLOCK_TRIGGER=` /
@@ -851,14 +930,18 @@ class BuildConfig:
     # source precisely so it can be replaced once the run archive says where
     # per-block review actually starts failing.
     plan_split_block_trigger: int = field(
-        default_factory=lambda: conf_int("buildme.plan_review",
-                                         "PLAN_SPLIT_BLOCK_TRIGGER", 10))
+        default_factory=lambda: conf_int(
+            "buildme.plan_review", "PLAN_SPLIT_BLOCK_TRIGGER", 10
+        )
+    )
     # The second trigger: distinct top-level packages a block set touches. A
     # change spanning several packages is a different risk class from a deep
     # change inside one, at identical block count.
     plan_split_package_trigger: int = field(
-        default_factory=lambda: conf_int("buildme.plan_review",
-                                         "PLAN_SPLIT_PACKAGE_TRIGGER", 5))
+        default_factory=lambda: conf_int(
+            "buildme.plan_review", "PLAN_SPLIT_PACKAGE_TRIGGER", 5
+        )
+    )
 
     # Coding-standards docs pushed into the reviewer's context (paths from
     # `standards_files` in specs/config.yaml). Pull-for-implementer,
@@ -967,10 +1050,13 @@ class BuildConfig:
         """
         step = self.step_aliases.get(step, step)
         stage = STEP_STAGES[step]
-        spec = resolve_model_spec([self.model_specs.get(step), self.model_specs.get(stage)])
+        spec = resolve_model_spec(
+            [self.model_specs.get(step), self.model_specs.get(stage)]
+        )
         if spec is None:
             field_model = self._explicit_field_model(
-                _STEP_MODEL_FIELDS.get(step) or _STAGE_MODEL_FIELDS[stage])
+                _STEP_MODEL_FIELDS.get(step) or _STAGE_MODEL_FIELDS[stage]
+            )
             if field_model:
                 return field_model
             spec = resolve_model_spec([self.model_specs.get("default")])
@@ -1005,7 +1091,8 @@ class BuildConfig:
             if self.effort_specs.get(key):
                 return self.effort_specs[key]
         field_effort = self._explicit_field(
-            _STEP_EFFORT_FIELDS.get(step) or _STAGE_EFFORT_FIELDS[stage], "effort")
+            _STEP_EFFORT_FIELDS.get(step) or _STAGE_EFFORT_FIELDS[stage], "effort"
+        )
         if field_effort:
             return field_effort
         return self.effort_specs.get("default") or self.effort or default_effort()
@@ -1063,7 +1150,8 @@ class BuildConfig:
         default_spec = config.default_model_spec()
         if default_spec or config.configured_tier:
             config.tier, config.model_name = detect_tier(
-                default_spec, configured_tier=config.configured_tier)
+                default_spec, configured_tier=config.configured_tier
+            )
         # CLI flags win over the config.yaml `git:` block (same precedence as
         # every other override here). Absent flags leave the config.yaml /
         # dataclass defaults alone.
@@ -1091,7 +1179,9 @@ class BuildConfig:
             log.warning("Failed to parse %s", config_path)
             return
 
-        self.project_name = data.get("context", "").split("\n")[0] if data.get("context") else ""
+        self.project_name = (
+            data.get("context", "").split("\n")[0] if data.get("context") else ""
+        )
         self.project_description = data.get("context", "")
 
         # Memory files
@@ -1117,7 +1207,10 @@ class BuildConfig:
         elif text in ("no", "off", "0", "false"):
             self.narrow_tests = False
         elif text not in ("yes", "on", "1", "true"):
-            log.warning("Unrecognized tdd.narrow_tests value %r in config.yaml — using true", narrow)
+            log.warning(
+                "Unrecognized tdd.narrow_tests value %r in config.yaml — using true",
+                narrow,
+            )
         self.parallel_tests = parse_parallel(tdd.get("parallel", "auto"))
         for key in ("test_writer_max_turns", "mutation_test_writer_max_turns"):
             if key in tdd:
@@ -1168,28 +1261,41 @@ class BuildConfig:
         `git.pr`. The switches take only a YAML boolean, so a typo never turns one
         on (or, for `spec_extract`, off)."""
         self.codebase_analysis_max_units = _cfg_int(
-            data.get("codebase_analysis_max_units", 12), "codebase_analysis_max_units", 12)
+            data.get("codebase_analysis_max_units", 12),
+            "codebase_analysis_max_units",
+            12,
+        )
         for key in ("block_facts", "regenerate_walkthroughs"):
             value = data.get(key, False)
             if isinstance(value, bool):
                 setattr(self, key, value)
             else:
-                log.warning("Invalid %s value %r in config.yaml — want true | false; using false",
-                            key, value)
+                log.warning(
+                    "Invalid %s value %r in config.yaml — want true | false; using false",
+                    key,
+                    value,
+                )
                 setattr(self, key, False)
         usd = data.get("walkthrough_max_usd", 10.0)
         if isinstance(usd, bool) or not isinstance(usd, (int, float)) or usd <= 0:
-            log.warning("Invalid walkthrough_max_usd value %r in config.yaml — using 10", usd)
+            log.warning(
+                "Invalid walkthrough_max_usd value %r in config.yaml — using 10", usd
+            )
             usd = 10.0
         self.walkthrough_max_usd = float(usd)
         on = data.get("spec_extract", True)
         if not isinstance(on, bool):
-            log.warning("Invalid spec_extract value %r in config.yaml — want true | false; using true", on)
+            log.warning(
+                "Invalid spec_extract value %r in config.yaml — want true | false; using true",
+                on,
+            )
             on = True
         self.spec_extract = on
         usd = data.get("spec_extract_max_usd", 80.0)
         if isinstance(usd, bool) or not isinstance(usd, (int, float)) or usd <= 0:
-            log.warning("Invalid spec_extract_max_usd value %r in config.yaml — using 80", usd)
+            log.warning(
+                "Invalid spec_extract_max_usd value %r in config.yaml — using 80", usd
+            )
             usd = 80.0
         self.spec_extract_max_usd = float(usd)
 
@@ -1206,34 +1312,47 @@ class BuildConfig:
         pr_cfg = _cfg_mapping(data.get("pr"), "pr")
         template = pr_cfg.get("template", "auto") or "auto"
         if not isinstance(template, str):
-            log.warning("Invalid pr.template value %r in config.yaml — using 'auto'", template)
+            log.warning(
+                "Invalid pr.template value %r in config.yaml — using 'auto'", template
+            )
             template = "auto"
         self.pr = PrSettings(
             template=template,
-            max_change_lines=_cfg_int(pr_cfg.get("max_change_lines", 1000),
-                                      "pr.max_change_lines", 1000),
+            max_change_lines=_cfg_int(
+                pr_cfg.get("max_change_lines", 1000), "pr.max_change_lines", 1000
+            ),
         )
 
         findings_cfg = _cfg_mapping(data.get("findings"), "findings")
         authors = findings_cfg.get("authors", "collaborators")
         if authors != "collaborators" and not (
-            isinstance(authors, list) and authors
+            isinstance(authors, list)
+            and authors
             and all(isinstance(a, str) and a.strip() for a in authors)
         ):
-            log.warning("Invalid findings.authors value %r in config.yaml — using "
-                        "'collaborators'", authors)
+            log.warning(
+                "Invalid findings.authors value %r in config.yaml — using "
+                "'collaborators'",
+                authors,
+            )
             authors = "collaborators"
         allow_bots = findings_cfg.get("allow_bots", [])
         if allow_bots is None:
             allow_bots = []
-        if not (isinstance(allow_bots, list)
-                and all(isinstance(b, str) and b.strip() for b in allow_bots)):
-            log.warning("Invalid findings.allow_bots value %r in config.yaml — using []",
-                        allow_bots)
+        if not (
+            isinstance(allow_bots, list)
+            and all(isinstance(b, str) and b.strip() for b in allow_bots)
+        ):
+            log.warning(
+                "Invalid findings.allow_bots value %r in config.yaml — using []",
+                allow_bots,
+            )
             allow_bots = []
         self.findings = FindingsSettings(
             authors=authors,
-            max_rounds=_cfg_int(findings_cfg.get("max_rounds", 3), "findings.max_rounds", 3),
+            max_rounds=_cfg_int(
+                findings_cfg.get("max_rounds", 3), "findings.max_rounds", 3
+            ),
             allow_bots=[b.strip() for b in allow_bots],
         )
 
@@ -1243,14 +1362,22 @@ class BuildConfig:
         for key, spec in _cfg_mapping(data.get("models"), "models").items():
             key = str(key)
             if key not in MODEL_KEYS:
-                log.warning("Dropping models.%s in config.yaml — not a buildme step, "
-                            "a stage (%s) or 'default'", key, ", ".join(MODEL_STAGES))
+                log.warning(
+                    "Dropping models.%s in config.yaml — not a buildme step, "
+                    "a stage (%s) or 'default'",
+                    key,
+                    ", ".join(MODEL_STAGES),
+                )
             elif _is_model_spec(spec):
                 specs[key] = spec.strip()
             else:
-                log.warning("Dropping models.%s value %r in config.yaml — want haiku | "
-                            "sonnet | opus | fable | claude:<name> | "
-                            "pi:<model>@<provider>", key, spec)
+                log.warning(
+                    "Dropping models.%s value %r in config.yaml — want haiku | "
+                    "sonnet | opus | fable | claude:<name> | "
+                    "pi:<model>@<provider>",
+                    key,
+                    spec,
+                )
         self.model_specs = specs
 
         efforts: dict[str, str] = {}
@@ -1258,19 +1385,30 @@ class BuildConfig:
             key = str(key)
             name = str(value).strip().lower() if value is not None else ""
             if key not in MODEL_KEYS:
-                log.warning("Dropping efforts.%s in config.yaml — not a buildme step, "
-                            "a stage (%s) or 'default'", key, ", ".join(MODEL_STAGES))
+                log.warning(
+                    "Dropping efforts.%s in config.yaml — not a buildme step, "
+                    "a stage (%s) or 'default'",
+                    key,
+                    ", ".join(MODEL_STAGES),
+                )
             elif name in KNOWN_EFFORTS:
                 efforts[key] = name
             else:
-                log.warning("Dropping efforts.%s value %r in config.yaml — want one of %s",
-                            key, value, ", ".join(sorted(KNOWN_EFFORTS)))
+                log.warning(
+                    "Dropping efforts.%s value %r in config.yaml — want one of %s",
+                    key,
+                    value,
+                    ", ".join(sorted(KNOWN_EFFORTS)),
+                )
         self.effort_specs = efforts
 
         tier = data.get("tier")
         if tier is not None and tier not in ("advanced", "standard"):
-            log.warning("Invalid tier value %r in config.yaml — want advanced | "
-                        "standard; ignoring it", tier)
+            log.warning(
+                "Invalid tier value %r in config.yaml — want advanced | "
+                "standard; ignoring it",
+                tier,
+            )
             tier = None
         self.configured_tier = tier
 
@@ -1358,7 +1496,9 @@ class BuildConfig:
     def _load_epic(self, epic_cfg: dict) -> None:
         merge = epic_cfg.get("merge", "manual")
         if merge not in ("auto", "manual"):
-            log.warning("Invalid epic.merge value %r in config.yaml — using 'manual'", merge)
+            log.warning(
+                "Invalid epic.merge value %r in config.yaml — using 'manual'", merge
+            )
             merge = "manual"
         raw_usd = epic_cfg.get("max_usd")
         max_usd = None
@@ -1368,11 +1508,18 @@ class BuildConfig:
             log.warning("Invalid epic.max_usd=%r — ignoring", raw_usd)
         worth = epic_cfg.get("round_worth", "breaks")
         if worth not in ("breaks", "any"):
-            log.warning("Invalid epic.round_worth value %r in config.yaml — using 'breaks'", worth)
+            log.warning(
+                "Invalid epic.round_worth value %r in config.yaml — using 'breaks'",
+                worth,
+            )
             worth = "breaks"
         self.epic = EpicSettings(
-            max_parallel=_cfg_int(epic_cfg.get("max_parallel", 2), "epic.max_parallel", 2),
-            max_review_rounds=_cfg_int(epic_cfg.get("max_review_rounds", 3), "epic.max_review_rounds", 3),
+            max_parallel=_cfg_int(
+                epic_cfg.get("max_parallel", 2), "epic.max_parallel", 2
+            ),
+            max_review_rounds=_cfg_int(
+                epic_cfg.get("max_review_rounds", 3), "epic.max_review_rounds", 3
+            ),
             merge=merge,
             max_usd=max_usd,
             round_worth=worth,
@@ -1398,6 +1545,7 @@ class BuildConfig:
         # (e.g. '../../foo') can't escape specs/changes/ — archive() will
         # shutil.move this directory, so an out-of-tree path is dangerous.
         from .change_manager import normalize_change_name
+
         return self.specs_dir / "changes" / normalize_change_name(self.change_name)
 
     @change_dir.setter
@@ -1414,17 +1562,25 @@ class BuildConfig:
         try:
             rel = target.relative_to(specs)
         except ValueError:
-            raise ValueError(f"change_dir {value} is not inside {self.specs_dir}") from None
-        if len(rel.parts) != 2 or rel.parts[0] not in ("changes", "archive") \
-                or rel.parts[1].startswith("."):
+            raise ValueError(
+                f"change_dir {value} is not inside {self.specs_dir}"
+            ) from None
+        if (
+            len(rel.parts) != 2
+            or rel.parts[0] not in ("changes", "archive")
+            or rel.parts[1].startswith(".")
+        ):
             raise ValueError(
                 f"change_dir {value} must be a directory directly under "
-                f"{self.specs_dir / 'changes'} or {self.specs_dir / 'archive'}")
+                f"{self.specs_dir / 'changes'} or {self.specs_dir / 'archive'}"
+            )
         self._change_dir_override = rel.as_posix()
 
     def _file_in_change_dir(self, name: str, what: str) -> Path:
         if not name or name in (".", "..") or "/" in name or "\\" in name:
-            raise ValueError(f"{what} must be a file name inside the change directory, got {name!r}")
+            raise ValueError(
+                f"{what} must be a file name inside the change directory, got {name!r}"
+            )
         return self.change_dir / name
 
     @property
@@ -1464,7 +1620,9 @@ class BuildConfig:
     def progress_file_path(self) -> Path:
         return self.project_dir / "build-progress.md"
 
-    def convention_files(self, changed_paths: Iterable[str] | None = None) -> list[Path]:
+    def convention_files(
+        self, changed_paths: Iterable[str] | None = None
+    ) -> list[Path]:
         """The `CLAUDE.md` chain that governs *changed_paths*, outermost first.
 
         Always the repo-root `CLAUDE.md` (this is the file every contributor is
@@ -1572,7 +1730,11 @@ class BuildConfig:
         p = Path(entry).expanduser()
         if p.is_absolute():
             return p if p.is_file() else None
-        for base in (self.project_dir, self.config_dir / "reference" / "dev", self.config_dir):
+        for base in (
+            self.project_dir,
+            self.config_dir / "reference" / "dev",
+            self.config_dir,
+        ):
             candidate = base / p
             if candidate.is_file():
                 return candidate
@@ -1588,15 +1750,21 @@ class BuildConfig:
         if not raw:
             return
         if not isinstance(raw, dict):
-            log.warning("reference_docs must be a mapping, got %s — ignoring", type(raw).__name__)
+            log.warning(
+                "reference_docs must be a mapping, got %s — ignoring",
+                type(raw).__name__,
+            )
             return
         parsed: dict[str, list[str]] = {}
         for key, value in raw.items():
             if isinstance(value, str):
                 value = [value]
-            if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+            if not isinstance(value, list) or not all(
+                isinstance(v, str) for v in value
+            ):
                 log.warning(
-                    "reference_docs['%s'] must be a list of doc names — ignoring", key,
+                    "reference_docs['%s'] must be a list of doc names — ignoring",
+                    key,
                 )
                 continue
             parsed[str(key)] = list(value)
@@ -1631,7 +1799,9 @@ class BuildConfig:
             try:
                 data = tomllib.loads(pyproject.read_text())
             except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
-                log.warning("Could not parse %s for framework detection: %s", pyproject, e)
+                log.warning(
+                    "Could not parse %s for framework detection: %s", pyproject, e
+                )
                 data = {}
             for spec in _pyproject_dependency_specs(data):
                 if _requirement_name(spec) == package:
@@ -1742,7 +1912,9 @@ class BuildConfig:
             if len(text) > REFERENCE_DOC_CHAR_LIMIT:
                 log.info(
                     "Reference doc %s is %d chars, reducing to fit %d",
-                    doc.name, len(text), REFERENCE_DOC_CHAR_LIMIT,
+                    doc.name,
+                    len(text),
+                    REFERENCE_DOC_CHAR_LIMIT,
                 )
                 text = summarize_reference_doc(doc.name, text, REFERENCE_DOC_CHAR_LIMIT)
             parts.append(f"### Reference: {doc.name}\n{text}")

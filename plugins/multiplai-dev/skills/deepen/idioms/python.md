@@ -38,11 +38,14 @@ def handle_order(payload: dict) -> Order:
     enriched = enrich(validated)
     return persist(enriched)
 
+
 # order/validator.py
 def validate(payload: dict) -> dict: ...
 
+
 # order/enricher.py
 def enrich(payload: dict) -> dict: ...
+
 
 # order/persister.py
 def persist(payload: dict) -> Order: ...
@@ -61,10 +64,10 @@ class OrderIntake:
       - validation errors raise OrderInvalid before any persistence happens
       - enrichment is idempotent across retries
     """
+
     def __init__(self, db: Database) -> None: ...
 
-    def accept(self, payload: dict) -> Order:
-        ...
+    def accept(self, payload: dict) -> Order: ...
 ```
 
 One interface. One test surface. The validator/enricher/persister live as private functions inside `intake.py` if they help; otherwise they're just inlined steps. Tests assert outcomes through `OrderIntake.accept` — no test reaches past it.
@@ -79,10 +82,11 @@ Dependency category: **in-process**. No adapter needed.
 # pricing/client.py — calls internal pricing service over HTTP
 def fetch_price(sku: str) -> Decimal: ...
 
+
 # order/intake.py
 def accept(payload):
     ...
-    price = fetch_price(payload["sku"])   # network in the middle of business logic
+    price = fetch_price(payload["sku"])  # network in the middle of business logic
     ...
 ```
 
@@ -95,15 +99,18 @@ Logic and transport are tangled. Tests have to mock `requests` or hit a live ser
 class PricingPort(Protocol):
     def price_for(self, sku: str) -> Decimal: ...
 
+
 # pricing/adapters/http.py
 class HttpPricingAdapter:
     def __init__(self, base_url: str, client: httpx.AsyncClient) -> None: ...
     def price_for(self, sku: str) -> Decimal: ...
 
+
 # pricing/adapters/in_memory.py
 class InMemoryPricingAdapter:
     def __init__(self, prices: dict[str, Decimal]) -> None: ...
     def price_for(self, sku: str) -> Decimal: ...
+
 
 # order/intake.py
 class OrderIntake:

@@ -19,15 +19,15 @@ import time
 from pathlib import Path
 
 import pytest
-
 from build_pipeline.config import EpicSettings
 from build_pipeline.epic import coordinator, records
 from build_pipeline.epic import lock as epic_lock
-from .epic_row_helpers import EpicSplitAnswer
 
 from .epic_row_helpers import (
     CallLog,
+    EpicSplitAnswer,
     Fakes,
+    alive,
     approve,
     child,
     commit_names,
@@ -36,10 +36,9 @@ from .epic_row_helpers import (
     last_summary,
     make_build,
     make_project,
+    merge_waiting,
     move_origin,
     name_commits,
-    alive,
-    merge_waiting,
     pr_url,
     records_snapshot,
     run_coordinator,
@@ -48,8 +47,12 @@ from .epic_row_helpers import (
     use_workspace,
 )
 
-TWO = EpicSplitAnswer(single=False, reason="Two parts.", children=[child("a"), child("b")])
-CHAIN = EpicSplitAnswer(single=False, reason="Two parts.", children=[child("a"), child("b", ("a",))])
+TWO = EpicSplitAnswer(
+    single=False, reason="Two parts.", children=[child("a"), child("b")]
+)
+CHAIN = EpicSplitAnswer(
+    single=False, reason="Two parts.", children=[child("a"), child("b", ("a",))]
+)
 
 
 @pytest.fixture(autouse=True)
@@ -61,7 +64,9 @@ def _release_locks():
 class Root:
     """One root: project, workspace, fakes, an approved two-child epic."""
 
-    def __init__(self, root: Path, monkeypatch, steps: dict, parallel: int = 1, answer=TWO):
+    def __init__(
+        self, root: Path, monkeypatch, steps: dict, parallel: int = 1, answer=TWO
+    ):
         self.root, self.mp = root, monkeypatch
         self.data = use_workspace(monkeypatch, root)
         self.project = make_project(root)
@@ -83,7 +88,12 @@ class Root:
         return run_coordinator(self.config)
 
     def status(self) -> dict:
-        return {k: v["status"] for k, v in json.loads((self.dir / "epic.json").read_text())["child_status"].items()}
+        return {
+            k: v["status"]
+            for k, v in json.loads((self.dir / "epic.json").read_text())[
+                "child_status"
+            ].items()
+        }
 
     def killed(self, setup, tick=None) -> None:
         self.use()
@@ -101,35 +111,50 @@ class Root:
 
     def wait_gone(self, cid: str) -> None:
         for _ in range(500):
-            if coordinator.build_pid(self.change(cid), str(self.project.absolute())) is None:
+            if (
+                coordinator.build_pid(self.change(cid), str(self.project.absolute()))
+                is None
+            ):
                 return
             time.sleep(0.02)
         raise AssertionError(f"{cid} never exited")
 
     def snapshot(self) -> dict:
         names = commit_names([self.root / "o" / "r.git", self.project])
-        return name_commits({"epic": epic_snapshot(self.dir, self.root),
-                             "records": records_snapshot(self.dir, self.root),
-                             "summary": last_summary(self.dir, self.root)}, names)
+        return name_commits(
+            {
+                "epic": epic_snapshot(self.dir, self.root),
+                "records": records_snapshot(self.dir, self.root),
+                "summary": last_summary(self.dir, self.root),
+            },
+            names,
+        )
 
     def launches(self) -> list[dict]:
         return CallLog(self.root / "calls.log").calls()
 
 
 def _roots(tmp_path, monkeypatch, steps, parallel=1, answer=TWO) -> tuple[Root, Root]:
-    return (Root(tmp_path / "stopped", monkeypatch, steps, parallel, answer),
-            Root(tmp_path / "clean", monkeypatch, steps, parallel, answer))
+    return (
+        Root(tmp_path / "stopped", monkeypatch, steps, parallel, answer),
+        Root(tmp_path / "clean", monkeypatch, steps, parallel, answer),
+    )
 
 
 def _release_all(root: Root):
     def tick(coord):
         for cid in ("a", "b"):
             root.fakes.release(cid)
+
     return tick
 
 
-def _assert_same(stopped: Root, clean: Root, records: dict | None = None,
-                 extra_launches: list[str] = ()) -> None:
+def _assert_same(
+    stopped: Root,
+    clean: Root,
+    records: dict | None = None,
+    extra_launches: list[str] = (),
+) -> None:
     """Same epic files and summary; records equal except the children named in
     *records* (stopped-run build records given whole, with "<argv>" for the
     child's one argv, then the never-stopped run's review records); launches
@@ -140,8 +165,13 @@ def _assert_same(stopped: Root, clean: Root, records: dict | None = None,
     for cid, got in s["records"].items():
         if records and cid in records:
             argv = c["records"][cid][0][1]
-            want = [(k, argv if a == "<argv>" else a, e, m, i) for k, a, e, m, i in records[cid]]
-            want += [r for r in c["records"][cid] if r[0] != "build"]      # PR C's review pair
+            want = [
+                (k, argv if a == "<argv>" else a, e, m, i)
+                for k, a, e, m, i in records[cid]
+            ]
+            want += [
+                r for r in c["records"][cid] if r[0] != "build"
+            ]  # PR C's review pair
             assert got == want, cid
         else:
             assert got == c["records"][cid], cid
@@ -153,13 +183,18 @@ def _assert_same(stopped: Root, clean: Root, records: dict | None = None,
     for call in clean.launches():
         cid = call["argv"][call["argv"].index("--change") + 1].split("-", 1)[1]
         by_child[cid] = call
-    assert key(stopped.launches()) == key([*clean.launches(), *(by_child[c] for c in extra_launches)])
+    assert key(stopped.launches()) == key(
+        [*clean.launches(), *(by_child[c] for c in extra_launches)]
+    )
 
 
 def _built(cid: str, *, branch: bool = True) -> list[str]:
     wt = f"WORKTREE:<root>/ws/.worktrees/buildme-e-{cid}"
-    return [wt, *([f"BRANCH:buildme/e-{cid}"] if branch else []),
-            f"PR:https://example.invalid/o/r/pull/e-{cid}"]
+    return [
+        wt,
+        *([f"BRANCH:buildme/e-{cid}"] if branch else []),
+        f"PR:https://example.invalid/o/r/pull/e-{cid}",
+    ]
 
 
 def test_B1_S4_coordinator_killed_with_the_child_alive_adopts_it(tmp_path, monkeypatch):
@@ -168,10 +203,19 @@ def test_B1_S4_coordinator_killed_with_the_child_alive_adopts_it(tmp_path, monke
     steps = {"a": [{"block": True}]}
     stopped, clean = _roots(tmp_path, monkeypatch, steps)
     stopped.killed(die_at(coordinator, "_tick"))
-    assert coordinator.build_pid(stopped.change("a"), str(stopped.project.absolute())) is not None      # the child outlived it
-    assert not epic_lock.held(stopped.dir)                           # the resume takes it itself
-    assert stopped.run(_release_all(stopped)) == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
-    assert clean.run(_release_all(clean)) == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
+    assert (
+        coordinator.build_pid(stopped.change("a"), str(stopped.project.absolute()))
+        is not None
+    )  # the child outlived it
+    assert not epic_lock.held(stopped.dir)  # the resume takes it itself
+    assert stopped.run(_release_all(stopped)) == 3 and merge_waiting() == [
+        pr_url("e-a"),
+        pr_url("e-b"),
+    ]
+    assert clean.run(_release_all(clean)) == 3 and merge_waiting() == [
+        pr_url("e-a"),
+        pr_url("e-b"),
+    ]
     _assert_same(stopped, clean, {"a": [("build", "<argv>", None, _built("a"), True)]})
 
 
@@ -188,27 +232,44 @@ def test_B1_S5_child_gone_without_a_result(tmp_path, monkeypatch, pr):
         want = [("build", "<argv>", None, _built("a"), True)]
     else:
         stopped.kill_child("a")
-        want = [("build", "<argv>", None, _built("a")[:2], True),
-                ("build", "<argv>", 0, [_built("a")[0], _built("a")[2]], False)]
-    assert stopped.run(_release_all(stopped)) == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
-    assert clean.run(_release_all(clean)) == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
+        want = [
+            ("build", "<argv>", None, _built("a")[:2], True),
+            ("build", "<argv>", 0, [_built("a")[0], _built("a")[2]], False),
+        ]
+    assert stopped.run(_release_all(stopped)) == 3 and merge_waiting() == [
+        pr_url("e-a"),
+        pr_url("e-b"),
+    ]
+    assert clean.run(_release_all(clean)) == 3 and merge_waiting() == [
+        pr_url("e-a"),
+        pr_url("e-b"),
+    ]
     _assert_same(stopped, clean, {"a": want}, [] if pr else ["a"])
 
 
-@pytest.mark.parametrize("sig", [signal.SIGINT, signal.SIGTERM], ids=["SIGINT", "SIGTERM"])
-def test_B1_S6_a_signal_stops_every_childs_group_and_resume_relaunches_each(tmp_path, monkeypatch, sig):
+@pytest.mark.parametrize(
+    "sig", [signal.SIGINT, signal.SIGTERM], ids=["SIGINT", "SIGTERM"]
+)
+def test_B1_S6_a_signal_stops_every_childs_group_and_resume_relaunches_each(
+    tmp_path, monkeypatch, sig
+):
     """B1.S6: the signal sent to the coordinator reaches the whole group of each
     child, the one it launched (b) and the one it adopted from a killed run (a):
     exit 128 + the signal, results `interrupted: true`. The next run relaunches
     each: one more launch and pair each."""
     first = {"block": True, "grandchild": True}
-    stopped, clean = _roots(tmp_path, monkeypatch, {"a": [first, {}], "b": [first, {}]}, parallel=2)
+    stopped, clean = _roots(
+        tmp_path, monkeypatch, {"a": [first, {}], "b": [first, {}]}, parallel=2
+    )
     try:
-        stopped.killed(die_at(coordinator, "_spawn", after=True))     # a runs on
+        stopped.killed(die_at(coordinator, "_spawn", after=True))  # a runs on
         stopped.use()
         monkeypatch.setattr(coordinator, "STOP_WAIT", 3000.0)
-        rc = run_signalled(lambda: run_coordinator(stopped.config),
-                           lambda: len(stopped.fakes.grandchildren()) == 2, sig)
+        rc = run_signalled(
+            lambda: run_coordinator(stopped.config),
+            lambda: len(stopped.fakes.grandchildren()) == 2,
+            sig,
+        )
         assert rc == 128 + sig
         for _ in range(250):
             if not any(alive(p) for p in stopped.fakes.grandchildren()):
@@ -218,12 +279,26 @@ def test_B1_S6_a_signal_stops_every_childs_group_and_resume_relaunches_each(tmp_
         s = records_snapshot(stopped.dir, stopped.root)
         assert s["a"][0][2] is None and s["b"][0][2] not in (0, None)
         assert all(s[cid][0][4] is True for cid in ("a", "b"))
-        assert stopped.run(_release_all(stopped)) == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
-        assert clean.run(_release_all(clean)) == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
-        _assert_same(stopped, clean, {
-            cid: [("build", "<argv>", s[cid][0][2], _built(cid)[:2], True),
-                  ("build", "<argv>", 0, [_built(cid)[0], _built(cid)[2]], False)]
-            for cid in ("a", "b")}, ["a", "b"])
+        assert stopped.run(_release_all(stopped)) == 3 and merge_waiting() == [
+            pr_url("e-a"),
+            pr_url("e-b"),
+        ]
+        assert clean.run(_release_all(clean)) == 3 and merge_waiting() == [
+            pr_url("e-a"),
+            pr_url("e-b"),
+        ]
+        _assert_same(
+            stopped,
+            clean,
+            {
+                cid: [
+                    ("build", "<argv>", s[cid][0][2], _built(cid)[:2], True),
+                    ("build", "<argv>", 0, [_built(cid)[0], _built(cid)[2]], False),
+                ]
+                for cid in ("a", "b")
+            },
+            ["a", "b"],
+        )
     finally:
         for pid in stopped.fakes.grandchildren() + clean.fakes.grandchildren():
             try:
@@ -236,7 +311,12 @@ def test_B1_S7_killed_after_the_result_before_epic_json(tmp_path, monkeypatch):
     """B1.S7: status is rebuilt from the records; the built child is not relaunched."""
     stopped, clean = _roots(tmp_path, monkeypatch, {})
     stopped.killed(die_at(records, "finish", after=True))
-    assert json.loads((stopped.dir / "epic.json").read_text())["child_status"]["a"]["status"] == "running"
+    assert (
+        json.loads((stopped.dir / "epic.json").read_text())["child_status"]["a"][
+            "status"
+        ]
+        == "running"
+    )
     assert stopped.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     assert clean.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     _assert_same(stopped, clean)
@@ -264,7 +344,9 @@ def test_B1_S10_failed_then_killed_before_the_relaunch(tmp_path, monkeypatch):
     _assert_same(stopped, clean)
 
 
-def test_B1_S13_user_edit_in_a_stopped_childs_worktree_is_left_alone(tmp_path, monkeypatch):
+def test_B1_S13_user_edit_in_a_stopped_childs_worktree_is_left_alone(
+    tmp_path, monkeypatch
+):
     """B1.S13: the coordinator touches nothing; the relaunch has the same argv,
     though origin moved at the same seam, and b, with no dependency, branches
     from the specs commit, not from origin (Decision 11, which replaced B1.S14);
@@ -278,7 +360,7 @@ def test_B1_S13_user_edit_in_a_stopped_childs_worktree_is_left_alone(tmp_path, m
 
     stopped.killed(die_at(coordinator, "_tick"))
     stopped.kill_child("a")
-    (wt(stopped) / "notes.txt").write_bytes(edit)                     # at the kill seam
+    (wt(stopped) / "notes.txt").write_bytes(edit)  # at the kill seam
     (wt(stopped) / "README.md").write_text("# r, edited\n")
     moved = move_origin(stopped.root)
 
@@ -289,17 +371,38 @@ def test_B1_S13_user_edit_in_a_stopped_childs_worktree_is_left_alone(tmp_path, m
             move_origin(clean.root)
         _release_all(clean)(coord)
 
-    assert stopped.run(_release_all(stopped)) == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
-    assert clean.run(clean_tick) == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
+    assert stopped.run(_release_all(stopped)) == 3 and merge_waiting() == [
+        pr_url("e-a"),
+        pr_url("e-b"),
+    ]
+    assert clean.run(clean_tick) == 3 and merge_waiting() == [
+        pr_url("e-a"),
+        pr_url("e-b"),
+    ]
     for root in (stopped, clean):
         assert (wt(root) / "notes.txt").read_bytes() == edit
         assert (wt(root) / "README.md").read_text() == "# r, edited\n"
-    argvs = [a.started["argv"] for a in records.attempts(stopped.dir) if a.child == "a" and a.kind == "build"]
+    argvs = [
+        a.started["argv"]
+        for a in records.attempts(stopped.dir)
+        if a.child == "a" and a.kind == "build"
+    ]
     assert len(argvs) == 2 and argvs[0] == argvs[1]
-    assert moved not in argvs[1] and (stopped.root / "bases" / "b").read_text() == stopped.specs
-    _assert_same(stopped, clean, {"a": [
-        ("build", "<argv>", None, _built("a")[:2], True),
-        ("build", "<argv>", 0, [_built("a")[0], _built("a")[2]], False)]}, ["a"])
+    assert (
+        moved not in argvs[1]
+        and (stopped.root / "bases" / "b").read_text() == stopped.specs
+    )
+    _assert_same(
+        stopped,
+        clean,
+        {
+            "a": [
+                ("build", "<argv>", None, _built("a")[:2], True),
+                ("build", "<argv>", 0, [_built("a")[0], _built("a")[2]], False),
+            ]
+        },
+        ["a"],
+    )
 
 
 def test_B1_S15_stopped_twice_the_relaunch_opened_the_pr(tmp_path, monkeypatch):
@@ -308,17 +411,31 @@ def test_B1_S15_stopped_twice_the_relaunch_opened_the_pr(tmp_path, monkeypatch):
     steps = {"a": [{"block": True}, {"block": True, "die_before_pr_line": True}]}
     stopped, clean = _roots(tmp_path, monkeypatch, steps)
     stopped.killed(die_at(coordinator, "_tick"))
-    stopped.kill_child("a")                                         # stopped once
-    stopped.killed(die_at(coordinator, "_tick"))                   # the relaunch runs ...
-    stopped.fakes.release("a")                                      # ... opens the PR, dies before PR:
+    stopped.kill_child("a")  # stopped once
+    stopped.killed(die_at(coordinator, "_tick"))  # the relaunch runs ...
+    stopped.fakes.release("a")  # ... opens the PR, dies before PR:
     stopped.wait_gone("a")
     assert list(stopped.fakes.prs()) == ["https://example.invalid/o/r/pull/e-a"]
-    assert stopped.run(_release_all(stopped)) == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
-    assert clean.run(_release_all(clean)) == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
+    assert stopped.run(_release_all(stopped)) == 3 and merge_waiting() == [
+        pr_url("e-a"),
+        pr_url("e-b"),
+    ]
+    assert clean.run(_release_all(clean)) == 3 and merge_waiting() == [
+        pr_url("e-a"),
+        pr_url("e-b"),
+    ]
     assert stopped.fakes.attempts("a") == 2 and len(stopped.fakes.prs()) == 2
-    _assert_same(stopped, clean, {"a": [
-        ("build", "<argv>", None, _built("a")[:2], True),
-        ("build", "<argv>", None, _built("a")[:1], True)]}, ["a"])
+    _assert_same(
+        stopped,
+        clean,
+        {
+            "a": [
+                ("build", "<argv>", None, _built("a")[:2], True),
+                ("build", "<argv>", None, _built("a")[:1], True),
+            ]
+        },
+        ["a"],
+    )
 
 
 def test_B1_S20_a_failed_pr_lookup_launches_nothing(tmp_path, monkeypatch):
@@ -331,11 +448,25 @@ def test_B1_S20_a_failed_pr_lookup_launches_nothing(tmp_path, monkeypatch):
     assert stopped.run() == 1
     assert stopped.fakes.attempts("a") == 1 and stopped.status()["a"] == "unknown"
     (stopped.root / "gh-fails").unlink()
-    assert stopped.run(_release_all(stopped)) == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
-    assert clean.run(_release_all(clean)) == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
-    _assert_same(stopped, clean, {"a": [
-        ("build", "<argv>", None, _built("a")[:2], True),
-        ("build", "<argv>", 0, [_built("a")[0], _built("a")[2]], False)]}, ["a"])
+    assert stopped.run(_release_all(stopped)) == 3 and merge_waiting() == [
+        pr_url("e-a"),
+        pr_url("e-b"),
+    ]
+    assert clean.run(_release_all(clean)) == 3 and merge_waiting() == [
+        pr_url("e-a"),
+        pr_url("e-b"),
+    ]
+    _assert_same(
+        stopped,
+        clean,
+        {
+            "a": [
+                ("build", "<argv>", None, _built("a")[:2], True),
+                ("build", "<argv>", 0, [_built("a")[0], _built("a")[2]], False),
+            ]
+        },
+        ["a"],
+    )
 
 
 def test_B1_S21_a_failing_ps_never_counts_a_live_child_as_gone(tmp_path, monkeypatch):
@@ -346,8 +477,14 @@ def test_B1_S21_a_failing_ps_never_counts_a_live_child_as_gone(tmp_path, monkeyp
     assert stopped.run(ps_fails=True) == 1
     assert stopped.fakes.attempts("a") == 1 and stopped.status()["a"] == "unknown"
     assert records_snapshot(stopped.dir, stopped.root)["a"][0][2] == "no result"
-    assert stopped.run(_release_all(stopped)) == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
-    assert clean.run(_release_all(clean)) == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
+    assert stopped.run(_release_all(stopped)) == 3 and merge_waiting() == [
+        pr_url("e-a"),
+        pr_url("e-b"),
+    ]
+    assert clean.run(_release_all(clean)) == 3 and merge_waiting() == [
+        pr_url("e-a"),
+        pr_url("e-b"),
+    ]
     _assert_same(stopped, clean, {"a": [("build", "<argv>", None, _built("a"), True)]})
 
 
@@ -359,11 +496,19 @@ def test_B1_S21_a_failing_ps_while_polling_an_adopted_child(tmp_path, monkeypatc
     stopped.killed(die_at(coordinator, "_tick"))
     assert stopped.run(lambda coord: stopped.fakes.ps_fails(monkeypatch)) == 1
     assert stopped.fakes.attempts("a") == 1 and stopped.status()["a"] == "unknown"
-    reason = json.loads((stopped.dir / "epic.json").read_text())["child_status"]["a"]["reason"]
+    reason = json.loads((stopped.dir / "epic.json").read_text())["child_status"]["a"][
+        "reason"
+    ]
     assert reason.startswith("cannot tell whether its build is still running")
     assert records_snapshot(stopped.dir, stopped.root)["a"][0][2] == "no result"
-    assert stopped.run(_release_all(stopped)) == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
-    assert clean.run(_release_all(clean)) == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
+    assert stopped.run(_release_all(stopped)) == 3 and merge_waiting() == [
+        pr_url("e-a"),
+        pr_url("e-b"),
+    ]
+    assert clean.run(_release_all(clean)) == 3 and merge_waiting() == [
+        pr_url("e-a"),
+        pr_url("e-b"),
+    ]
     _assert_same(stopped, clean, {"a": [("build", "<argv>", None, _built("a"), True)]})
 
 
@@ -397,4 +542,7 @@ def test_B1_S18_a_relaunch_runs_the_same_child_command(tmp_path, monkeypatch):
     assert stopped.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     argvs = [a.started["argv"] for a in records.attempts(stopped.dir) if a.child == "a"]
     assert argvs[0] == argvs[1]
-    assert BuildConfig.from_cli_args(build_parser().parse_args(argvs[1][3:])).epic_child is True
+    assert (
+        BuildConfig.from_cli_args(build_parser().parse_args(argvs[1][3:])).epic_child
+        is True
+    )

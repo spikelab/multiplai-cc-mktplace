@@ -13,15 +13,21 @@ filter starts. Moves ease in and out (smoothstep), like the HyperFrames
 
 Standard library only: the media test suite runs without the workspace.
 """
+
 from __future__ import annotations
 
 from stages.layouts import _num
 
-WIDE_AFTER_S = 2.0      # a longer wait between points goes back to the whole frame
+WIDE_AFTER_S = 2.0  # a longer wait between points goes back to the whole frame
 
 
-def keys(targets: list[tuple[float, float, float]], scale: float, lead: float,
-         hold: float, duration: float) -> list[tuple[float, float, float, float]]:
+def keys(
+    targets: list[tuple[float, float, float]],
+    scale: float,
+    lead: float,
+    hold: float,
+    duration: float,
+) -> list[tuple[float, float, float, float]]:
     """Camera keyframes (t, zoom, centre x, centre y) for points (t, x, y),
     with every time in seconds from the start of the segment. A point that
     comes while the camera is still holding on the one before is dropped.
@@ -31,13 +37,13 @@ def keys(targets: list[tuple[float, float, float]], scale: float, lead: float,
     kept: list[tuple[float, float, float]] = []
     for tg in targets:
         if not kept or tg[0] > kept[-1][0] + hold:
-            kept.append(tg)                   # a point inside the last hold: the camera stays put
+            kept.append(tg)  # a point inside the last hold: the camera stays put
     out = [(0.0, *wide)]
     for i, (t, x, y) in enumerate(kept):
         prev_t, pz, px, py = out[-1]
         start = max(prev_t, t - lead)
         if start > prev_t:
-            out.append((start, pz, px, py))   # rest where the camera was until the move
+            out.append((start, pz, px, py))  # rest where the camera was until the move
         out.append((t, scale, x, y))
         end = min(t + hold, duration)
         if end > t:
@@ -69,8 +75,9 @@ def ease_expr(points: list[tuple[float, float]], tv: str) -> str:
     return f"(if(lt({tv}\\,{_num(t0)})\\,{_num(v0)}\\,{expr}))"
 
 
-def zoompan_filter(cam: list[tuple[float, float, float, float]], fps: int,
-                   width: int, height: int) -> str:
+def zoompan_filter(
+    cam: list[tuple[float, float, float, float]], fps: int, width: int, height: int
+) -> str:
     """`zoompan` driving the camera keyframes on a stream already at `fps`,
     keeping the source size. x and y place the window so the camera centre
     is in the middle of it, clamped so the window stays inside the frame."""

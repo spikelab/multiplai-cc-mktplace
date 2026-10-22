@@ -10,13 +10,11 @@ import os
 from pathlib import Path
 
 import pytest
-
+from conftest import import_script
 from lib import memory_corpus
 from lib.conflict_edits import overlap
 from lib.dream_processed import latest_pending_proposal
 from lib.routing_validation import validate_proposal
-
-from conftest import import_script
 
 prescreen = import_script("dream_prescreen", "dream_prescreen.py")
 
@@ -58,12 +56,16 @@ def workspace(tmp_path, monkeypatch):
     (memory_dir / "CLAUDE.md").write_text(
         "## Index\n\nThe index of every memory file and when each one is relevant.\n"
     )
-    (root / "CLAUDE.md").write_text("## Workspace\n\nNew files land in INBOX and nowhere else.\n")
+    (root / "CLAUDE.md").write_text(
+        "## Workspace\n\nNew files land in INBOX and nowhere else.\n"
+    )
     (config_dir / "CLAUDE.md").write_text(
         "## Tool usage\n\nPrefer a bounded probe such as sed -n '40,90p' to reading "
         "an entire file.\n"
     )
-    (bank_dir / "dev.md").write_text("## Team Dev\n\nThe team pins every container image by digest.\n")
+    (bank_dir / "dev.md").write_text(
+        "## Team Dev\n\nThe team pins every container image by digest.\n"
+    )
 
     monkeypatch.setenv("WORKSPACE", str(root))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
@@ -77,6 +79,7 @@ def workspace(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 # Corpus — what gets screened at all
 # ---------------------------------------------------------------------------
+
 
 def test_corpus_includes_the_global_and_workspace_claude_md(workspace):
     """The global file is the largest always-loaded document and was missing.
@@ -97,14 +100,16 @@ def test_prescreen_corpus_spans_memory_claude_md_and_banks(workspace):
     labels = {label for label, _, _, _ in prescreen.corpus_lines(workspace)}
     assert labels == {
         "dev.md",
-        "CLAUDE.md",            # memory/CLAUDE.md, under its own name — once
+        "CLAUDE.md",  # memory/CLAUDE.md, under its own name — once
         "CLAUDE.md (global)",
         "CLAUDE.md (workspace)",
         "teamname/dev.md",
     }
 
 
-def test_workspace_root_refuses_to_guess_when_the_layout_is_not_multiplai(tmp_path, monkeypatch):
+def test_workspace_root_refuses_to_guess_when_the_layout_is_not_multiplai(
+    tmp_path, monkeypatch
+):
     """`memory_dir` is overridable; `parent.parent` would read a stranger's file.
 
     In the pure-standalone layout memory is `~/.multiplai/memory`, so deriving
@@ -121,7 +126,9 @@ def test_workspace_root_refuses_to_guess_when_the_layout_is_not_multiplai(tmp_pa
     assert "CLAUDE.md (workspace)" not in labels
 
 
-def test_workspace_root_derives_from_the_multiplai_base_without_workspace_env(tmp_path, monkeypatch):
+def test_workspace_root_derives_from_the_multiplai_base_without_workspace_env(
+    tmp_path, monkeypatch
+):
     monkeypatch.delenv("WORKSPACE", raising=False)
     root = tmp_path / "ws"
     diary = root / ".multiplai" / "diary"
@@ -135,13 +142,16 @@ def test_unreadable_and_oversized_files_are_skipped_not_fatal(tmp_path):
     big.write_text("x" * (memory_corpus.MAX_FILE_BYTES + 1))
     ok = tmp_path / "ok.md"
     ok.write_text("a normal memory line that is long enough to matter\n")
-    out = memory_corpus.read_files([("big", big), ("ok", ok), ("gone", tmp_path / "nope.md")])
+    out = memory_corpus.read_files(
+        [("big", big), ("ok", ok), ("gone", tmp_path / "nope.md")]
+    )
     assert set(out) == {"ok"}
 
 
 # ---------------------------------------------------------------------------
 # Proposal selection
 # ---------------------------------------------------------------------------
+
 
 def test_latest_pending_proposal_prefers_mtime_over_lexical_order(tmp_path):
     """`-` (0x2D) sorts before `.` (0x2E), so a same-day `-2` sorts FIRST.
@@ -200,22 +210,33 @@ def test_a_suffixed_updates_for_heading_still_yields_its_items():
 
 
 def test_items_under_processed_are_not_pending():
-    assert all(i["title"] != "Already decided" for i in prescreen.pending_items(SUFFIXED, None))
+    assert all(
+        i["title"] != "Already decided" for i in prescreen.pending_items(SUFFIXED, None)
+    )
 
 
 def test_all_mode_returns_every_target():
-    two_targets = SUFFIXED + "\n## Updates for `dev.md`\n\n### 3. Something\n> A line of insert text here.\n"
-    assert {i["target"] for i in prescreen.pending_items(two_targets, None)} == {"python.md", "dev.md"}
+    two_targets = (
+        SUFFIXED
+        + "\n## Updates for `dev.md`\n\n### 3. Something\n> A line of insert text here.\n"
+    )
+    assert {i["target"] for i in prescreen.pending_items(two_targets, None)} == {
+        "python.md",
+        "dev.md",
+    }
 
 
 # ---------------------------------------------------------------------------
 # Scoring
 # ---------------------------------------------------------------------------
 
+
 def test_an_item_with_no_parsed_insert_text_is_unscreenable_not_clean():
     """A 0.00 score on an empty token set is not evidence of anything."""
     entry = {"target": "dev.md", "number": "1", "title": "No blockquote", "text": ""}
-    result = prescreen.screen(entry, [("dev.md", 1, "a" * 60, {"alpha", "beta", "gamma", "delta"})], 0.35)
+    result = prescreen.screen(
+        entry, [("dev.md", 1, "a" * 60, {"alpha", "beta", "gamma", "delta"})], 0.35
+    )
     assert result["unscreenable"] is True
     assert result["flagged"] is False
 
@@ -226,7 +247,9 @@ def test_a_verbose_restatement_of_a_short_rule_still_scores():
     Dream items are full sentences, so the shape that needs catching is the
     verbose restatement — which containment scores lowest of all.
     """
-    existing = "New files land in INBOX only; plans belong in files, not console narration."
+    existing = (
+        "New files land in INBOX only; plans belong in files, not console narration."
+    )
     verbose = (
         "Anything newly created should be placed into the INBOX directory only, and "
         "any plan we produce belongs in a file rather than narrated to the console."
@@ -239,9 +262,12 @@ def test_a_verbose_restatement_of_a_short_rule_still_scores():
 
 def test_flagging_uses_the_shared_threshold_and_is_symmetric():
     from lib.conflict_edits import MIN_OVERLAP
+
     line = "Use uv for every Python project rather than pip or poetry."
     entry = {"target": "dev.md", "number": "1", "title": "uv", "text": line}
-    result = prescreen.screen(entry, [("dev.md", 7, line, prescreen.content_words(line))], MIN_OVERLAP)
+    result = prescreen.screen(
+        entry, [("dev.md", 7, line, prescreen.content_words(line))], MIN_OVERLAP
+    )
     assert result["flagged"] is True
     assert result["scored"][0][0] == pytest.approx(1.0)
 
@@ -250,13 +276,18 @@ def test_flagging_uses_the_shared_threshold_and_is_symmetric():
 # Output volume — the tool must not cost what it saves
 # ---------------------------------------------------------------------------
 
+
 def test_only_flagged_and_unscreenable_items_print(capsys):
     line = "Use uv for every Python project rather than pip or poetry."
     lines = [("dev.md", 7, line, prescreen.content_words(line))]
     entries = [
         {"target": "dev.md", "number": "1", "title": "dupe", "text": line},
-        {"target": "dev.md", "number": "2", "title": "novel",
-         "text": "Fireflies transcripts are pulled over GraphQL with a bearer token."},
+        {
+            "target": "dev.md",
+            "number": "2",
+            "title": "novel",
+            "text": "Fireflies transcripts are pulled over GraphQL with a bearer token.",
+        },
         {"target": "dev.md", "number": "3", "title": "empty", "text": ""},
     ]
     flagged, unscreenable = prescreen.report(entries, lines, 0.35, verbose=False)
@@ -320,7 +351,9 @@ def test_dedup_extra_never_joins_the_section_registry():
     warnings = validate_proposal(
         GATE_PROPOSAL,
         {"dev.md": "## Tool usage\n"},
-        dedup_extra={"CLAUDE.md (global)": "## Tool usage\n\nUnrelated prose entirely.\n"},
+        dedup_extra={
+            "CLAUDE.md (global)": "## Tool usage\n\nUnrelated prose entirely.\n"
+        },
     )
     assert not any("does not exist in" in w for w in warnings)
 

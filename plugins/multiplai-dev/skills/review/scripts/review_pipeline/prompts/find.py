@@ -18,8 +18,18 @@ from __future__ import annotations
 from code_facts import Fact
 
 from ..models import TargetInfo
-from . import (CITATION_RULES, JSON_ONLY, commits_block, deps_block, description_block, diff_block, fence,
-               files_block, settings_block, workspace_block)
+from . import (
+    CITATION_RULES,
+    JSON_ONLY,
+    commits_block,
+    deps_block,
+    description_block,
+    diff_block,
+    fence,
+    files_block,
+    settings_block,
+    workspace_block,
+)
 
 # The same share of the prompt the repository's rules get (stages/find.py CONVENTIONS_MAX_CHARS).
 FACTS_MAX_CHARS = 40_000
@@ -41,8 +51,10 @@ def facts_block(facts: list[Fact] | None) -> str:
     total = 0
     for i, f in enumerate(facts):
         cites = "; ".join(
-            f"{c.id} {c.path}:{c.line_start}-{c.line_end}" + (" (before the change)" if c.side == "base" else "")
-            for c in f.citations)
+            f"{c.id} {c.path}:{c.line_start}-{c.line_end}"
+            + (" (before the change)" if c.side == "base" else "")
+            for c in f.citations
+        )
         line = f"- {f.id}: {' '.join(f.claim.split())} [{cites}]"
         if total + len(line) + 1 > FACTS_MAX_CHARS:
             lines.append(f"[... {len(facts) - i} more facts cut ...]")
@@ -51,17 +63,18 @@ def facts_block(facts: list[Fact] | None) -> str:
         total += len(line) + 1
     return FACTS_INTRO + "\n" + fence("\n".join(lines), "explain stage facts")
 
+
 # The trim finder's rules, shared by its change and tree wording.
 TRIM_RULES = (
     "For each test, work out three things: what breaks if it is removed (the behaviour no other test "
     "would then catch, or nothing), whether another test already covers it, and what it costs to keep "
     "(mocks, fixtures, lines). Report only tests worth removing, merging or shortening. The `claim` "
-    "starts with the verb: \"Remove ...\", \"Merge <test> into <test> ...\" or \"Shorten ...\". The "
-    "`failure_scenario` says what breaks if the test is removed, or \"nothing\". Cite the test, then the "
+    'starts with the verb: "Remove ...", "Merge <test> into <test> ..." or "Shorten ...". The '
+    '`failure_scenario` says what breaks if the test is removed, or "nothing". Cite the test, then the '
     "code line it exercises as a second citation, and cite any other test that already covers it.\n"
     "For comments (docstrings included, module docstrings excluded), report a comment that is longer "
     "than the code it explains, that narrates what the code does instead of why, or that describes "
-    "history (\"previously this...\"). The `claim` starts with \"Shorten ...\" or \"Remove ...\" and "
+    'history ("previously this..."). The `claim` starts with "Shorten ..." or "Remove ..." and '
     "names the comment's length against the code's. Cite the comment.\n"
     "Do not report a test that cannot catch a change in behaviour (a value copied from the "
     "implementation, a source file read as text, the dependency under test mocked away): another "
@@ -93,7 +106,7 @@ DIMENSION_TASKS = {
         "- When the change retires or alters a fact (a thing that 'does not exist yet' now exists, "
         "'nothing runs it' now something does, a number or a date changes), Grep the whole repository "
         "for other statements of the old fact: README, docs, comments, plans. Each one left standing "
-        "is a finding with `dimension` \"pre-existing\", citing the stale line and the rule that says the "
+        'is a finding with `dimension` "pre-existing", citing the stale line and the rule that says the '
         "docs must stay correct.\n"
         "- When a rule says where something must be recorded (an open item in a tracker, a decision in "
         "a log, a check in a checklist) and the change records that kind of thing somewhere else only, "
@@ -203,7 +216,7 @@ FILE_RULE = (
     "without a quote is discarded by a program, not a person. `file` must be one of the changed "
     "files. If the problem is in an unchanged file that the change makes reachable, executes, or "
     "makes wrong (code the change now calls or builds, documentation the change makes stale), set "
-    "`dimension` to \"pre-existing\" and `file` to that file; otherwise leave `dimension` empty. "
+    '`dimension` to "pre-existing" and `file` to that file; otherwise leave `dimension` empty. '
     "Name the kind of defect in a few words in `defect_class`, and list every other place with the "
     "same defect as `path:line` in `other_locations`. "
     "Report only what you can show from the code; an empty list is a valid answer."
@@ -213,7 +226,7 @@ FILE_RULE_TREE = (
     "Every finding cites the lines that show the problem, with the exact quote. A finding "
     "without a quote is discarded by a program, not a person. `file` must be one of the files under "
     "review listed above. If the problem is in any other file (one these files call, build or make "
-    "wrong, including a file the review skipped), set `dimension` to \"pre-existing\" and `file` to "
+    'wrong, including a file the review skipped), set `dimension` to "pre-existing" and `file` to '
     "that file; otherwise leave `dimension` empty. "
     "Name the kind of defect in a few words in `defect_class`, and list every other place with the "
     "same defect as `path:line` in `other_locations`. "
@@ -223,20 +236,33 @@ FILE_RULE_TREE = (
 
 def tree_files_block(files: list[str]) -> str:
     listed = "\n".join(f"- {f}" for f in files)
-    return (f"This is not a change: you are reviewing code as it stands. The files under review in this "
-            f"call ({len(files)}) are below. Open each one with Read; their text is not in this prompt.\n"
-            f"{listed}")
+    return (
+        f"This is not a change: you are reviewing code as it stands. The files under review in this "
+        f"call ({len(files)}) are below. Open each one with Read; their text is not in this prompt.\n"
+        f"{listed}"
+    )
 
 
-def build(target: TargetInfo, dimension: str, diff: str, conventions: str = "",
-          files: list[str] | None = None, facts: list[Fact] | None = None) -> str:
+def build(
+    target: TargetInfo,
+    dimension: str,
+    diff: str,
+    conventions: str = "",
+    files: list[str] | None = None,
+    facts: list[Fact] | None = None,
+) -> str:
     """The finder prompt. For a tree target, *files* is the group this call reviews.
 
     *facts* (the explain stage's, only with `find_with_facts`) are listed after the diff or the files.
     """
     if target.is_tree:
-        return _build_tree(target, dimension, conventions, files if files is not None else list(target.files),
-                           facts)
+        return _build_tree(
+            target,
+            dimension,
+            conventions,
+            files if files is not None else list(target.files),
+            facts,
+        )
     parts = [
         f"You are one reviewer in a code review, looking at one aspect: {dimension}. Your final "
         f"message is one JSON object listing defects (schema at the end), read by a program; it is "
@@ -253,7 +279,10 @@ def build(target: TargetInfo, dimension: str, diff: str, conventions: str = "",
     ]
     parts = [p for p in parts if p]
     if dimension == "conventions":
-        parts.append("The repository's rules:\n\n" + (conventions or "(no coding-standards.md or CLAUDE.md files found)"))
+        parts.append(
+            "The repository's rules:\n\n"
+            + (conventions or "(no coding-standards.md or CLAUDE.md files found)")
+        )
     parts += [
         SEVERITY_GUIDE,
         CITATION_RULES,
@@ -265,8 +294,13 @@ def build(target: TargetInfo, dimension: str, diff: str, conventions: str = "",
     return "\n\n".join(parts)
 
 
-def _build_tree(target: TargetInfo, dimension: str, conventions: str, files: list[str],
-                facts: list[Fact] | None = None) -> str:
+def _build_tree(
+    target: TargetInfo,
+    dimension: str,
+    conventions: str,
+    files: list[str],
+    facts: list[Fact] | None = None,
+) -> str:
     parts = [
         f"You are one reviewer in a code review, looking at one aspect: {dimension}. Your final "
         f"message is one JSON object listing defects (schema at the end), read by a program; it is "
@@ -279,14 +313,20 @@ def _build_tree(target: TargetInfo, dimension: str, conventions: str, files: lis
     if facts:
         parts.append(facts_block(facts))
     if dimension == "conventions":
-        parts.append("The repository's rules:\n\n" + (conventions or "(no coding-standards.md or CLAUDE.md files found)"))
+        parts.append(
+            "The repository's rules:\n\n"
+            + (conventions or "(no coding-standards.md or CLAUDE.md files found)")
+        )
     parts += [
         SEVERITY_GUIDE,
         CITATION_RULES,
         FILE_RULE_TREE,
         NEEDS_RULES,
-        "Schema:\n" + SCHEMA.replace("path of the changed file the bug is in", "path of the file under review the bug is in"),
+        "Schema:\n"
+        + SCHEMA.replace(
+            "path of the changed file the bug is in",
+            "path of the file under review the bug is in",
+        ),
         JSON_ONLY,
     ]
     return "\n\n".join(p for p in parts if p)
-

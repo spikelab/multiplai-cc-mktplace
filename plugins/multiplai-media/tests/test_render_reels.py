@@ -7,6 +7,7 @@ and the background. subprocess.run and ffprobe are replaced, so no ffmpeg
 runs, and the font lookups are pinned so the tests do not depend on the
 machine's fonts.
 """
+
 from __future__ import annotations
 
 import json
@@ -18,8 +19,8 @@ import pytest
 _SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "video-edit" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 
-from stages import captions, composite  # noqa: E402
-from stages.edl import EDL  # noqa: E402
+from stages import captions, composite
+from stages.edl import EDL
 
 _LOGO = Path(__file__).resolve().parent / "fixtures" / "brand" / "logo.png"
 _FONT = "/fonts/Caption-Bold.ttf"
@@ -32,8 +33,11 @@ class _Done:
 @pytest.fixture
 def calls(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
     got: list[list[str]] = []
-    monkeypatch.setattr(composite.subprocess, "run",
-                        lambda cmd, *a, **k: got.append([str(c) for c in cmd]) or _Done())
+    monkeypatch.setattr(
+        composite.subprocess,
+        "run",
+        lambda cmd, *a, **k: got.append([str(c) for c in cmd]) or _Done(),
+    )
     monkeypatch.setattr(composite, "probe_size", lambda path: (1920, 1080))
     monkeypatch.setattr(composite, "_find_font", lambda bold: _FONT)
     monkeypatch.setattr(captions, "font_family", lambda font_file: "Caption")
@@ -43,16 +47,21 @@ def calls(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
 
 
 def _transcript(tmp_path: Path, texts: list[str]) -> str:
-    words = [{"text": t, "start": 1.0 + i * 0.4, "end": 1.3 + i * 0.4} for i, t in enumerate(texts)]
+    words = [
+        {"text": t, "start": 1.0 + i * 0.4, "end": 1.3 + i * 0.4}
+        for i, t in enumerate(texts)
+    ]
     p = tmp_path / "transcript.json"
     p.write_text(json.dumps({"language": "it", "engine": "test", "words": words}))
     return str(p)
 
 
 def _reel(tmp_path: Path, **extra) -> EDL:
-    d = {"source": "/rec/interview.mp4",
-         "segments": [{"src_start": 0, "src_end": 5}, {"src_start": 10, "src_end": 15}],
-         "output": {"width": 1080, "height": 1920, "fit": "blur"}}
+    d = {
+        "source": "/rec/interview.mp4",
+        "segments": [{"src_start": 0, "src_end": 5}, {"src_start": 10, "src_end": 15}],
+        "output": {"width": 1080, "height": 1920, "fit": "blur"},
+    }
     d.update(extra)
     return EDL.from_dict(d)
 
@@ -67,15 +76,21 @@ def _maps(cmd: list[str]) -> list[str]:
 
 
 def test_captions_and_headline_burn_into_the_mapped_video(tmp_path, calls) -> None:
-    edl = _reel(tmp_path, transcript=_transcript(tmp_path, ["Ciao", "a", "tutti."]),
-                captions={}, headline={"text": "Hook"})
+    edl = _reel(
+        tmp_path,
+        transcript=_transcript(tmp_path, ["Ciao", "a", "tutti."]),
+        captions={},
+        headline={"text": "Hook"},
+    )
     work = tmp_path / "work"
     composite.render(edl, Path("<OUT>/reel.mp4"), work_dir=work)
 
     final = _final(calls)
     fc = final[final.index("-filter_complex") + 1]
     # Two segments, no title: build_filter_complex's video ends at [vx1].
-    assert fc.endswith(f"; [vx1]subtitles=filename='{work}/subs.ass':fontsdir='/fonts'[vsub]")
+    assert fc.endswith(
+        f"; [vx1]subtitles=filename='{work}/subs.ass':fontsdir='/fonts'[vsub]"
+    )
     assert _maps(final)[0] == "[vsub]"
     ass = (work / "subs.ass").read_text()
     assert "Ciao" in ass and "tutti." in ass
@@ -83,17 +98,21 @@ def test_captions_and_headline_burn_into_the_mapped_video(tmp_path, calls) -> No
 
 
 def test_without_captions_or_headline_no_subtitles_filter(tmp_path, calls) -> None:
-    composite.render(_reel(tmp_path), Path("<OUT>/reel.mp4"), work_dir=tmp_path / "work")
+    composite.render(
+        _reel(tmp_path), Path("<OUT>/reel.mp4"), work_dir=tmp_path / "work"
+    )
     final = _final(calls)
     assert "subtitles=" not in final[final.index("-filter_complex") + 1]
     assert _maps(final)[0] == "[vx1]"
 
 
 def test_caption_glyph_the_font_lacks_stops_the_render(tmp_path, calls) -> None:
-    edl = _reel(tmp_path, transcript=_transcript(tmp_path, ["你好", "Ciao"]), captions={})
+    edl = _reel(
+        tmp_path, transcript=_transcript(tmp_path, ["你好", "Ciao"]), captions={}
+    )
     with pytest.raises(ValueError, match="no glyph for: 你 好"):
         composite.render(edl, Path("<OUT>/reel.mp4"), work_dir=tmp_path / "work")
-    assert calls == []          # nothing was cut or encoded
+    assert calls == []  # nothing was cut or encoded
 
 
 def test_headline_glyph_the_font_lacks_stops_the_render(tmp_path, calls) -> None:
@@ -113,26 +132,45 @@ def test_audio_rate_resamples_the_final_audio(tmp_path, calls) -> None:
 
 
 def test_no_audio_rate_leaves_the_sample_rate_alone(tmp_path, calls) -> None:
-    composite.render(_reel(tmp_path), Path("<OUT>/reel.mp4"), work_dir=tmp_path / "work")
+    composite.render(
+        _reel(tmp_path), Path("<OUT>/reel.mp4"), work_dir=tmp_path / "work"
+    )
     assert "-ar" not in _final(calls)
 
 
 def test_brand_supplies_the_logo_and_the_stack_background(tmp_path, calls) -> None:
     brand_file = tmp_path / "brand.json"
-    brand_file.write_text(json.dumps({
-        "background": "#1B2A41",
-        "logo": {"path": str(_LOGO), "position": "tl", "scale": 0.18},
-    }))
-    edl = _reel(tmp_path, brand=str(brand_file),
-                layout={"panels": {"A": {"x": 36, "y": 200, "w": 920, "h": 744},
-                                   "B": {"x": 966, "y": 200, "w": 918, "h": 744}}},
-                segments=[{"src_start": 0, "src_end": 5, "frame": "stack"},
-                          {"src_start": 10, "src_end": 15}])
+    brand_file.write_text(
+        json.dumps(
+            {
+                "background": "#1B2A41",
+                "logo": {"path": str(_LOGO), "position": "tl", "scale": 0.18},
+            }
+        )
+    )
+    edl = _reel(
+        tmp_path,
+        brand=str(brand_file),
+        layout={
+            "panels": {
+                "A": {"x": 36, "y": 200, "w": 920, "h": 744},
+                "B": {"x": 966, "y": 200, "w": 918, "h": 744},
+            }
+        },
+        segments=[
+            {"src_start": 0, "src_end": 5, "frame": "stack"},
+            {"src_start": 10, "src_end": 15},
+        ],
+    )
     composite.render(edl, Path("<OUT>/reel.mp4"), work_dir=tmp_path / "work")
 
     seg0_fc = calls[0][calls[0].index("-filter_complex") + 1]
     assert "vstack=inputs=2,pad=1080:1920:" in seg0_fc
-    assert seg0_fc.split("vstack=inputs=2,")[1].split("[vfit]")[0].endswith("color=#1B2A41,setsar=1")
+    assert (
+        seg0_fc.split("vstack=inputs=2,")[1]
+        .split("[vfit]")[0]
+        .endswith("color=#1B2A41,setsar=1")
+    )
     final = _final(calls)
     inputs = [final[i + 1] for i, c in enumerate(final) if c == "-i"]
     assert inputs[-1] == str(_LOGO.resolve())
@@ -157,9 +195,20 @@ def test_an_edl_logo_wins_over_the_brand_logo(tmp_path, calls) -> None:
 
 def test_a_reel_split_at_a_shot_cut_renders_a_hard_cut(tmp_path, calls) -> None:
     # One take split at a shot change: blur the slide, crop the speaker.
-    edl = _reel(tmp_path, transcript=_transcript(tmp_path, ["Ciao", "a", "tutti."]), captions={},
-                segments=[{"src_start": 0, "src_end": 1.8, "fit": "blur"},
-                          {"src_start": 1.8, "src_end": 5, "fit": "crop", "focus": {"x": 0.3, "y": 0.4}}])
+    edl = _reel(
+        tmp_path,
+        transcript=_transcript(tmp_path, ["Ciao", "a", "tutti."]),
+        captions={},
+        segments=[
+            {"src_start": 0, "src_end": 1.8, "fit": "blur"},
+            {
+                "src_start": 1.8,
+                "src_end": 5,
+                "fit": "crop",
+                "focus": {"x": 0.3, "y": 0.4},
+            },
+        ],
+    )
     work = tmp_path / "work"
     composite.render(edl, Path("<OUT>/reel.mp4"), work_dir=work)
     seg0 = calls[0][calls[0].index("-filter_complex") + 1]
@@ -174,18 +223,34 @@ def test_a_reel_split_at_a_shot_cut_renders_a_hard_cut(tmp_path, calls) -> None:
     assert "Dialogue: 0,0:00:01.80," in ass
 
 
-def test_render_fills_audio_dropouts_only_in_segments_that_have_one(tmp_path, monkeypatch) -> None:
+def test_render_fills_audio_dropouts_only_in_segments_that_have_one(
+    tmp_path, monkeypatch
+) -> None:
     src = tmp_path / "call.mp4"
     src.write_bytes(b"")
     cache = tmp_path / "cache"
     cache.mkdir()
-    (cache / "audio_gaps.json").write_text(json.dumps({"gaps": [{"at": 12.0, "length": 2.0}]}))
+    (cache / "audio_gaps.json").write_text(
+        json.dumps({"gaps": [{"at": 12.0, "length": 2.0}]})
+    )
     from stages import prep
+
     monkeypatch.setattr(prep, "cache_dir_for", lambda source: cache)
     calls: list[list[str]] = []
-    monkeypatch.setattr(composite.subprocess, "run", lambda cmd, *a, **k: calls.append([str(c) for c in cmd]))
-    edl = EDL.from_dict({"source": str(src), "segments": [{"src_start": 0, "src_end": 10},
-                                                          {"src_start": 10, "src_end": 20}]})
+    monkeypatch.setattr(
+        composite.subprocess,
+        "run",
+        lambda cmd, *a, **k: calls.append([str(c) for c in cmd]),
+    )
+    edl = EDL.from_dict(
+        {
+            "source": str(src),
+            "segments": [
+                {"src_start": 0, "src_end": 10},
+                {"src_start": 10, "src_end": 20},
+            ],
+        }
+    )
     composite._cut_segments(edl, tmp_path)
     fc = [c[c.index("-filter_complex") + 1] for c in calls]
     assert composite.AUDIO_GAP_FILL not in fc[0]
@@ -194,7 +259,18 @@ def test_render_fills_audio_dropouts_only_in_segments_that_have_one(tmp_path, mo
 
 def test_render_leaves_audio_alone_without_a_prep_cache(tmp_path, monkeypatch) -> None:
     calls: list[list[str]] = []
-    monkeypatch.setattr(composite.subprocess, "run", lambda cmd, *a, **k: calls.append([str(c) for c in cmd]))
-    edl = EDL.from_dict({"source": str(tmp_path / "missing.mp4"), "segments": [{"src_start": 0, "src_end": 5}]})
+    monkeypatch.setattr(
+        composite.subprocess,
+        "run",
+        lambda cmd, *a, **k: calls.append([str(c) for c in cmd]),
+    )
+    edl = EDL.from_dict(
+        {
+            "source": str(tmp_path / "missing.mp4"),
+            "segments": [{"src_start": 0, "src_end": 5}],
+        }
+    )
     composite._cut_segments(edl, tmp_path)
-    assert composite.AUDIO_GAP_FILL not in calls[0][calls[0].index("-filter_complex") + 1]
+    assert (
+        composite.AUDIO_GAP_FILL not in calls[0][calls[0].index("-filter_complex") + 1]
+    )

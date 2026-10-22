@@ -5,6 +5,7 @@ loaded here by file path rather than as an installed package. ``multiplai-core``
 must be importable in the test environment (install the local checkout, e.g.
 ``uv pip install -e ../multiplai-core``).
 """
+
 from __future__ import annotations
 
 import importlib.util

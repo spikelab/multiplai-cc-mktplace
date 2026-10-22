@@ -41,8 +41,8 @@ from typing import Protocol, runtime_checkable
 
 from multiplai_core.plugin_options import option, option_var
 
-from lib.router_prompt import SYSTEM_PROMPT, FEW_SHOT_EXAMPLES, build_user_message
 from lib.job_effort import ROUTER_EFFORT_OPTION, effort_kwargs
+from lib.router_prompt import FEW_SHOT_EXAMPLES, SYSTEM_PROMPT, build_user_message
 from lib.thinking import (
     core_supports_thinking,
     resolve_thinking_option,
@@ -137,16 +137,21 @@ def resolve_router_timeout(raw: str | float | None = None) -> float:
     except (TypeError, ValueError):
         logger.warning(
             "Ignoring %s=%r — not a number; using %.1fs",
-            ROUTER_TIMEOUT_ENV_VAR, value, DEFAULT_ROUTER_TIMEOUT_SECONDS,
+            ROUTER_TIMEOUT_ENV_VAR,
+            value,
+            DEFAULT_ROUTER_TIMEOUT_SECONDS,
         )
         return DEFAULT_ROUTER_TIMEOUT_SECONDS
     if seconds <= 0:
         logger.warning(
             "Ignoring %s=%r — must be positive; using %.1fs",
-            ROUTER_TIMEOUT_ENV_VAR, value, DEFAULT_ROUTER_TIMEOUT_SECONDS,
+            ROUTER_TIMEOUT_ENV_VAR,
+            value,
+            DEFAULT_ROUTER_TIMEOUT_SECONDS,
         )
         return DEFAULT_ROUTER_TIMEOUT_SECONDS
     return seconds
+
 
 STRATEGY_TOKEN_OVERLAP = "token_overlap"
 STRATEGY_LLM = "llm"
@@ -192,12 +197,14 @@ STRATEGY_EMBEDDINGS = "embeddings"
 # create_router() degrades an explicit llm choice to token_overlap when no model
 # client is available.
 DEFAULT_STRATEGY = STRATEGY_TOKEN_OVERLAP
-KNOWN_STRATEGIES = frozenset({
-    STRATEGY_TOKEN_OVERLAP,
-    STRATEGY_LLM,
-    STRATEGY_LLM_HYBRID,
-    STRATEGY_EMBEDDINGS,
-})
+KNOWN_STRATEGIES = frozenset(
+    {
+        STRATEGY_TOKEN_OVERLAP,
+        STRATEGY_LLM,
+        STRATEGY_LLM_HYBRID,
+        STRATEGY_EMBEDDINGS,
+    }
+)
 
 CORPUS_TYPES = ("memory", "skills", "resources")
 
@@ -233,16 +240,77 @@ class CorpusRouter(Protocol):
 # Genuine function words only. Domain-meaningful gerunds (writing,
 # managing, configuring…) are deliberately NOT here — IDF down-weights
 # them corpus-adaptively, which is more robust than a hand list.
-STOPWORDS = frozenset({
-    "the", "and", "for", "with", "how", "you", "are", "not", "but",
-    "that", "this", "what", "when", "where", "your", "from", "have",
-    "has", "had", "was", "were", "will", "would", "can", "could",
-    "should", "did", "does", "doing", "done", "into", "out", "about",
-    "any", "all", "some", "its", "our", "his", "her", "their", "them",
-    "they", "who", "why", "which", "while", "than", "then", "there",
-    "here", "such", "via", "per", "etc", "get", "got", "let", "may",
-    "might", "must", "need", "want", "like", "also", "just", "only",
-})
+STOPWORDS = frozenset(
+    {
+        "the",
+        "and",
+        "for",
+        "with",
+        "how",
+        "you",
+        "are",
+        "not",
+        "but",
+        "that",
+        "this",
+        "what",
+        "when",
+        "where",
+        "your",
+        "from",
+        "have",
+        "has",
+        "had",
+        "was",
+        "were",
+        "will",
+        "would",
+        "can",
+        "could",
+        "should",
+        "did",
+        "does",
+        "doing",
+        "done",
+        "into",
+        "out",
+        "about",
+        "any",
+        "all",
+        "some",
+        "its",
+        "our",
+        "his",
+        "her",
+        "their",
+        "them",
+        "they",
+        "who",
+        "why",
+        "which",
+        "while",
+        "than",
+        "then",
+        "there",
+        "here",
+        "such",
+        "via",
+        "per",
+        "etc",
+        "get",
+        "got",
+        "let",
+        "may",
+        "might",
+        "must",
+        "need",
+        "want",
+        "like",
+        "also",
+        "just",
+        "only",
+    }
+)
 
 # Tunable routing policy (select_multi only — select() stays pure
 # rank+cap so the mechanism contract / unit tests are untouched).
@@ -277,7 +345,7 @@ STOPWORDS = frozenset({
 # now a live-tunable plugin option (`keep_ratio`) so it can be dialed in
 # production without a release while a real golden set is rebuilt.
 DEFAULT_KEEP_RATIO = 0.30  # drop entries scoring < ratio × top
-MIN_SIGNAL = 2.0           # top must clear this or the corpus → []
+MIN_SIGNAL = 2.0  # top must clear this or the corpus → []
 
 # intent_domains are the trusted, well-scoped signal (curated task
 # phrases) and carry the full IDF-weighted score — they alone can
@@ -288,13 +356,13 @@ MIN_SIGNAL = 2.0           # top must clear this or the corpus → []
 # small, capped *boost* that can rank or tie-break a domain-matched
 # entry but, by construction (cap < MIN_SIGNAL), can never pull a file
 # in on keywords alone.
-KEYWORD_UNIT = 0.5         # per distinct keyword TOKEN matched
+KEYWORD_UNIT = 0.5  # per distinct keyword TOKEN matched
 KEYWORD_PHRASE_UNIT = 1.0  # per verbatim multi-word keyword matched
-KEYWORD_CAP = 1.5          # max total keyword contribution per entry
-                           # (< MIN_SIGNAL: keywords can't clear floor;
-                           # eval is flat across [1.5,1.9] — the
-                           # domains-primary split, not this value, is
-                           # what moves precision/recall)
+KEYWORD_CAP = 1.5  # max total keyword contribution per entry
+# (< MIN_SIGNAL: keywords can't clear floor;
+# eval is flat across [1.5,1.9] — the
+# domains-primary split, not this value, is
+# what moves precision/recall)
 
 # A domain match must be BROAD, not merely strong, to clear the NONE
 # floor. Smoothed IDF over a small catalog makes any df=1 term worth
@@ -325,11 +393,31 @@ MAX_TERM_IDF = 2.5
 
 # Short go-aheads: the conversation already has the context (mirrors
 # the LLM router's rule #1).
-_CONTINUATION = frozenset({
-    "yes", "y", "ok", "okay", "go", "sure", "yep", "yeah", "do it",
-    "go ahead", "continue", "next", "proceed", "sounds good", "lgtm",
-    "ship it", "perfect", "thanks", "thank you", "great", "nice",
-})
+_CONTINUATION = frozenset(
+    {
+        "yes",
+        "y",
+        "ok",
+        "okay",
+        "go",
+        "sure",
+        "yep",
+        "yeah",
+        "do it",
+        "go ahead",
+        "continue",
+        "next",
+        "proceed",
+        "sounds good",
+        "lgtm",
+        "ship it",
+        "perfect",
+        "thanks",
+        "thank you",
+        "great",
+        "nice",
+    }
+)
 
 
 def _tokenize(text: str) -> set[str]:
@@ -358,8 +446,7 @@ def _idf_map(per_entry_terms: list[set[str]]) -> dict[str, float]:
         for t in terms:
             df[t] = df.get(t, 0) + 1
     return {
-        t: min(math.log((n + 1) / (c + 1)) + 1.0, MAX_TERM_IDF)
-        for t, c in df.items()
+        t: min(math.log((n + 1) / (c + 1)) + 1.0, MAX_TERM_IDF) for t, c in df.items()
     }
 
 
@@ -466,9 +553,13 @@ class TokenOverlapRouter:
         norm = " ".join(prompt.lower().split()).strip(".,;:!?")
         if norm in _CONTINUATION:
             self.last_scores = {
-                ct: {"scored": [], "cap": max_files_per_corpus,
-                     "n_candidates": 0, "capped": False,
-                     "continuation": True}
+                ct: {
+                    "scored": [],
+                    "cap": max_files_per_corpus,
+                    "n_candidates": 0,
+                    "capped": False,
+                    "continuation": True,
+                }
                 for ct in CORPUS_TYPES
             }
             return {ct: [] for ct in CORPUS_TYPES}
@@ -498,9 +589,7 @@ class TokenOverlapRouter:
                 # ineligible entry scoring above MIN_SIGNAL, so the
                 # activity-line hint needs this to say truthfully
                 # whether the corpus abstained on breadth or on score.
-                "top_eligible": next(
-                    (s for s, fn in scored if fn in eligible), None
-                ),
+                "top_eligible": next((s for s, fn in scored if fn in eligible), None),
                 "cap": max_files_per_corpus,
                 "n_candidates": len(scored),
                 "n_picked": len(picks),
@@ -685,9 +774,7 @@ def _parse_llm_multi_selection(
         raise RouterCallFailed("returned non-JSON") from None
 
     if not isinstance(parsed, dict):
-        raise RouterCallFailed(
-            f"returned JSON {type(parsed).__name__}, not an object"
-        )
+        raise RouterCallFailed(f"returned JSON {type(parsed).__name__}, not an object")
 
     result: dict[str, list[str]] = {}
     for corpus_type in CORPUS_TYPES:
@@ -756,7 +843,8 @@ def _run_without_awaiting_leftovers(coro, grace_s: float = _LEFTOVER_GRACE_S):
                 logger.warning(
                     "LLMRouter: %d task(s) still pending after the call; "
                     "giving them %.1fs to tear down, then leaving them",
-                    len(pending), grace_s,
+                    len(pending),
+                    grace_s,
                 )
                 loop.run_until_complete(asyncio.wait(pending, timeout=grace_s))
         except Exception:
@@ -805,14 +893,12 @@ class LLMRouter:
         *,
         timeout_seconds: float | None = None,
         model: str | None = None,
-        fallback: "TokenOverlapRouter | None" = None,
+        fallback: TokenOverlapRouter | None = None,
         thinking: dict | None = None,
         thinking_set: bool = False,
     ) -> None:
         self._timeout_seconds = (
-            timeout_seconds
-            if timeout_seconds is not None
-            else resolve_router_timeout()
+            timeout_seconds if timeout_seconds is not None else resolve_router_timeout()
         )
         # `None` is a meaningful value here (send no thinking config at all), so
         # it cannot double as "caller did not specify". Hence the explicit flag
@@ -829,11 +915,7 @@ class LLMRouter:
                 self._timeout_seconds,
             )
             self._thinking = None
-        self._model = (
-            model
-            or option(ROUTER_MODEL_OPTION)
-            or DEFAULT_ROUTER_MODEL
-        )
+        self._model = model or option(ROUTER_MODEL_OPTION) or DEFAULT_ROUTER_MODEL
         # Built here, not on demand: constructing it inside the failure path
         # would put a second thing that can throw between the failure and the
         # recovery from it.
@@ -850,11 +932,14 @@ class LLMRouter:
         """Answer with the offline router after a failed model call."""
         logger.warning(
             "LLMRouter %s; degrading to %s for this prompt",
-            reason, self._fallback.name,
+            reason,
+            self._fallback.name,
         )
         try:
             return self._fallback.select_multi(
-                prompt, last_response, corpora,
+                prompt,
+                last_response,
+                corpora,
                 max_files_per_corpus=max_files_per_corpus,
             )
         except Exception:
@@ -891,24 +976,33 @@ class LLMRouter:
 
         try:
             picks = _run_without_awaiting_leftovers(
-                self._bounded_select_multi(prompt, last_response, corpora, known_per_corpus)
+                self._bounded_select_multi(
+                    prompt, last_response, corpora, known_per_corpus
+                )
             )
         except RouterCallFailed as e:
             return self._degrade(
-                str(e), prompt, last_response, corpora, max_files_per_corpus)
+                str(e), prompt, last_response, corpora, max_files_per_corpus
+            )
         except RuntimeError as e:
             return self._degrade(
                 f"could not run event loop: {e}",
-                prompt, last_response, corpora, max_files_per_corpus)
+                prompt,
+                last_response,
+                corpora,
+                max_files_per_corpus,
+            )
         except Exception as e:
             logger.exception("LLMRouter call raised")
             return self._degrade(
                 f"call raised {type(e).__name__}",
-                prompt, last_response, corpora, max_files_per_corpus)
+                prompt,
+                last_response,
+                corpora,
+                max_files_per_corpus,
+            )
 
-        capped = {
-            ct: picks.get(ct, [])[:max_files_per_corpus] for ct in CORPUS_TYPES
-        }
+        capped = {ct: picks.get(ct, [])[:max_files_per_corpus] for ct in CORPUS_TYPES}
         if not any(capped.values()):
             # Make a genuine abstention legible. Three different states used to
             # print the same `picked: memory=0` line downstream — abstained,
@@ -955,7 +1049,7 @@ class LLMRouter:
                 ),
                 self._timeout_seconds,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise RouterCallFailed(
                 f"timed out after {self._timeout_seconds:.1f}s"
             ) from None
@@ -1029,8 +1123,8 @@ class HybridRouter:
     def __init__(
         self,
         *,
-        llm: "LLMRouter | None" = None,
-        gate: "TokenOverlapRouter | None" = None,
+        llm: LLMRouter | None = None,
+        gate: TokenOverlapRouter | None = None,
     ) -> None:
         self._gate = gate if gate is not None else TokenOverlapRouter()
         # The LLM router's own degrade path lands on the same gate instance, so a
@@ -1051,7 +1145,9 @@ class HybridRouter:
         max_files_per_corpus: int = 10,
     ) -> dict[str, list[str]]:
         picks = self._llm.select_multi(
-            prompt, last_response, corpora,
+            prompt,
+            last_response,
+            corpora,
             max_files_per_corpus=max_files_per_corpus,
         )
         # The gate scores against the same text the offline router would see.
@@ -1113,9 +1209,7 @@ class HybridRouter:
                     (score_by_fn.get(p.split("#", 1)[0], 0.0), p) for p in kept
                 ],
                 "n_eligible": len(eligible),
-                "top_eligible": next(
-                    (s for s, fn in scored if fn in eligible), None
-                ),
+                "top_eligible": next((s for s, fn in scored if fn in eligible), None),
                 "cap": max_files_per_corpus,
                 "n_candidates": len(scored),
                 "n_picked": len(kept),
@@ -1150,7 +1244,8 @@ def resolve_strategy(raw: str | None = None) -> str:
     if value not in KNOWN_STRATEGIES:
         logger.warning(
             "Unknown memory router strategy %r; falling back to %s",
-            value, DEFAULT_STRATEGY,
+            value,
+            DEFAULT_STRATEGY,
         )
         return DEFAULT_STRATEGY
     return value
@@ -1180,6 +1275,7 @@ def create_router(
         # silently return empty picks every prompt.
         try:
             from multiplai_core.model_client import detect_client_type
+
             client = detect_client_type()
         except Exception:
             client = "none"
@@ -1187,7 +1283,8 @@ def create_router(
             logger.warning(
                 "memory_router=%s but no model client available (%s); "
                 "degrading to token_overlap for this session",
-                effective, client,
+                effective,
+                client,
             )
             return TokenOverlapRouter(keep_ratio=kr)
         # The fallback carries the same keep_ratio as an explicitly-configured

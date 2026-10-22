@@ -10,7 +10,6 @@ ones (dream's `**Source:**` provenance cites them).
 import json
 
 import pytest
-
 from lib.learnings_ledger import (
     LEDGER_VERSION,
     Block,
@@ -53,7 +52,9 @@ class TestParseBlocks:
         assert lines[blocks[1].start_line - 1].startswith("## Session Learnings")
         # end_line is inclusive and lands on content, not on the separator or a blank.
         assert lines[blocks[0].end_line - 1].startswith("- **[trust: verified]**")
-        assert lines[blocks[1].end_line - 1].startswith("- **[trust: high]** OBSERVATION Third")
+        assert lines[blocks[1].end_line - 1].startswith(
+            "- **[trust: high]** OBSERVATION Third"
+        )
 
     def test_blocks_do_not_overlap_or_include_separator(self):
         blocks = parse_blocks("2026-07-30.md", LEARNINGS)
@@ -69,7 +70,9 @@ class TestParseBlocks:
         assert parse_blocks("f.md", "just some prose\nand more\n") == []
 
     def test_file_name_is_carried(self):
-        assert all(b.file == "2026-07-30.md" for b in parse_blocks("2026-07-30.md", LEARNINGS))
+        assert all(
+            b.file == "2026-07-30.md" for b in parse_blocks("2026-07-30.md", LEARNINGS)
+        )
 
 
 class TestBlockKey:
@@ -210,7 +213,7 @@ class TestBlockRanges:
     def test_text_matches_the_file_at_the_reported_lines(self):
         lines = LEARNINGS.splitlines()
         for b in parse_blocks("f.md", LEARNINGS):
-            assert b.text.splitlines() == lines[b.start_line - 1:b.end_line]
+            assert b.text.splitlines() == lines[b.start_line - 1 : b.end_line]
 
     def test_ranges_are_inside_the_file(self):
         n = len(LEARNINGS.splitlines())
@@ -218,19 +221,16 @@ class TestBlockRanges:
             assert 1 <= b.start_line <= b.end_line <= n
 
     def test_an_internal_rule_stays_inside_its_block(self):
-        text = (
-            "## Session Learnings — x\n"
-            "- one\n"
-            "---\n"
-            "- two\n"
-        )
+        text = "## Session Learnings — x\n- one\n---\n- two\n"
         (block,) = parse_blocks("f.md", text)
         assert block.text.splitlines()[-1] == "- two"
         assert "---" in block.text
 
 
 class TestAtomicity:
-    def test_a_failed_write_leaves_the_previous_ledger_intact(self, tmp_path, monkeypatch):
+    def test_a_failed_write_leaves_the_previous_ledger_intact(
+        self, tmp_path, monkeypatch
+    ):
         """Losing the ledger silently re-consolidates the whole backlog, so the
         write is temp-file + ``os.replace`` rather than truncate-in-place."""
         import lib.learnings_ledger as mod
@@ -252,7 +252,9 @@ class TestAtomicity:
 
         p = tmp_path / "ledger.json"
         save(p, {"version": 1, "processed": {}})
-        monkeypatch.setattr(mod.json, "dump", lambda *_a, **_k: (_ for _ in ()).throw(OSError()))
+        monkeypatch.setattr(
+            mod.json, "dump", lambda *_a, **_k: (_ for _ in ()).throw(OSError())
+        )
         with pytest.raises(OSError):
             save(p, {"version": 1, "processed": {}})
         assert [f.name for f in tmp_path.iterdir()] == ["ledger.json"]

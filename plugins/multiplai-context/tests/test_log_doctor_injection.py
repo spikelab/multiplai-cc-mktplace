@@ -22,7 +22,7 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from log_doctor import (  # noqa: E402
+from log_doctor import (
     UNTRUSTED_NOTICE,
     contains_injection,
     defang,
@@ -83,11 +83,11 @@ class TestDefang:
     def test_strips_control_and_bidi_characters(self):
         """ANSI escapes and bidi overrides let a payload render as something
         else entirely in a terminal or a reviewer's editor."""
-        hidden = "safe\x1b[2Ktext‮reversed​﻿"
+        hidden = "safe\x1b[2Ktext‮reversed\u200b﻿"
         out = defang(hidden)
         assert "\x1b" not in out
         assert "‮" not in out
-        assert "​" not in out
+        assert "\u200b" not in out
         assert "﻿" not in out
         assert "safe" in out and "text" in out
 
@@ -178,18 +178,25 @@ class TestForensicsAndProbeChannels:
     def test_routing_prompt_is_fenced(self, tmp_path):
         """The routing prompt is the most directly attacker-shaped string in
         the whole report — whatever was typed reaches it verbatim."""
-        payload = json.dumps({
-            "picked": [["life.md", 3.3]], "cap": 10, "n_candidates": 3,
-            "n_picked": 1, "capped": False, "floor_excluded": None,
-            "prompt": CANARIES[0],
-        })
+        payload = json.dumps(
+            {
+                "picked": [["life.md", 3.3]],
+                "cap": 10,
+                "n_candidates": 3,
+                "n_picked": 1,
+                "capped": False,
+                "floor_excluded": None,
+                "prompt": CANARIES[0],
+            }
+        )
         (tmp_path / "context_manager.log").write_text(
             "[2026-07-25T10:00:00Z] [context_manager] [session:--------] INFO: "
             f"ROUTING_SCORES memory={payload}\n"
         )
         decisions = load_routing_decisions(tmp_path)
         md = render_injections_markdown(
-            injection_stats(decisions), decisions, None, trace=5)
+            injection_stats(decisions), decisions, None, trace=5
+        )
 
         assert '<untrusted-content source="routing prompt">' in md
         assert "⟪INJECTION?⟫" in md
@@ -200,16 +207,25 @@ class TestForensicsAndProbeChannels:
         verdict = {
             "passed": False,
             "new_entries": 2,
-            "expectations": [{
-                "subsystem": "context_manager", "level": "ERROR",
-                "pattern": "boom", "matched": 1, "ok": True,
-                "sample": CANARIES[0],
-            }],
-            "unexpected_errors": [{
-                "subsystem": "context_manager", "component": "context_manager",
-                "level": "ERROR", "msg": CANARIES[3],
-                "traceback_tail": CANARIES[5],
-            }],
+            "expectations": [
+                {
+                    "subsystem": "context_manager",
+                    "level": "ERROR",
+                    "pattern": "boom",
+                    "matched": 1,
+                    "ok": True,
+                    "sample": CANARIES[0],
+                }
+            ],
+            "unexpected_errors": [
+                {
+                    "subsystem": "context_manager",
+                    "component": "context_manager",
+                    "level": "ERROR",
+                    "msg": CANARIES[3],
+                    "traceback_tail": CANARIES[5],
+                }
+            ],
         }
         md = render_probe_markdown(verdict)
 

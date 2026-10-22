@@ -40,9 +40,13 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from multiplai_core.log_utils import log_event, setup_logging
+from multiplai_core.paths import get_paths
+from multiplai_core.untrusted import bracket_notice
+from multiplai_core.untrusted import defang as _core_defang
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 from slack_sdk.http_retry.builtin_handlers import (
@@ -50,11 +54,6 @@ from slack_sdk.http_retry.builtin_handlers import (
     RateLimitErrorRetryHandler,
     ServerErrorRetryHandler,
 )
-
-from multiplai_core.log_utils import log_event, setup_logging
-from multiplai_core.paths import get_paths
-from multiplai_core.untrusted import bracket_notice
-from multiplai_core.untrusted import defang as _core_defang
 
 # Configured in main() via setup_logging("slack"); until then this is an
 # unconfigured logger, so module-import-time use is a no-op (never crashes).
@@ -74,6 +73,7 @@ def default_data_dir() -> Path:
     mechanism. An explicit ``--data-dir``/``SLACK_DATA_DIR`` overrides it.
     """
     return get_paths().skill_state_dir("slack")
+
 
 # Channels the token owner is a member of, across all conversation kinds.
 MEMBER_CHANNEL_TYPES = "public_channel,private_channel,mpim,im"
@@ -142,7 +142,9 @@ class Store:
         self.db.close()
 
     # -- channels --
-    def upsert_channel(self, cid: str, name: str, is_private: bool, is_im: bool) -> None:
+    def upsert_channel(
+        self, cid: str, name: str, is_private: bool, is_im: bool
+    ) -> None:
         self.db.execute(
             """INSERT INTO channels (id, name, is_private, is_im) VALUES (?,?,?,?)
                ON CONFLICT(id) DO UPDATE SET name=excluded.name,
@@ -152,7 +154,9 @@ class Store:
         self.db.commit()
 
     def get_last_ts(self, cid: str) -> str | None:
-        row = self.db.execute("SELECT last_ts FROM channels WHERE id=?", (cid,)).fetchone()
+        row = self.db.execute(
+            "SELECT last_ts FROM channels WHERE id=?", (cid,)
+        ).fetchone()
         return row["last_ts"] if row and row["last_ts"] else None
 
     def set_marker(self, cid: str, last_ts: str | None) -> None:
@@ -208,7 +212,9 @@ class Store:
         row = self.db.execute("SELECT name FROM channels WHERE id=?", (cid,)).fetchone()
         return row["name"] if row and row["name"] else cid
 
-    def record_file(self, f: dict, cid: str, message_ts: str, local_path: str | None) -> None:
+    def record_file(
+        self, f: dict, cid: str, message_ts: str, local_path: str | None
+    ) -> None:
         self.db.execute(
             """INSERT INTO files
                (id, channel_id, message_ts, name, title, mimetype, filetype, size,
@@ -258,7 +264,9 @@ class Store:
     def user_label(self, uid: str | None) -> str | None:
         if not uid:
             return None
-        row = self.db.execute("SELECT real_name, name FROM users WHERE id=?", (uid,)).fetchone()
+        row = self.db.execute(
+            "SELECT real_name, name FROM users WHERE id=?", (uid,)
+        ).fetchone()
         if not row:
             return None
         return row["real_name"] or row["name"]
@@ -283,7 +291,12 @@ class Store:
         f = self.db.execute(
             "SELECT COUNT(*) n, SUM(local_path IS NOT NULL) d FROM files"
         ).fetchone()
-        return {"channels": c, "messages": m, "files": f["n"], "files_downloaded": f["d"] or 0}
+        return {
+            "channels": c,
+            "messages": m,
+            "files": f["n"],
+            "files_downloaded": f["d"] or 0,
+        }
 
     def channel_rows(self) -> list[sqlite3.Row]:
         return self.db.execute(
@@ -322,7 +335,7 @@ class Store:
         return self.db.execute(
             f"""SELECT m.ts, m.channel_id, m.user, m.text, m.thread_ts, c.name AS chan
                 FROM messages m LEFT JOIN channels c ON c.id = m.channel_id
-                WHERE {' AND '.join(clauses)}
+                WHERE {" AND ".join(clauses)}
                 ORDER BY m.ts DESC LIMIT ?""",
             params,
         ).fetchall()
@@ -362,7 +375,7 @@ class SlackReader:
         """
         if not force:
             last = self.store.users_last_updated()
-            if last is not None and datetime.now(timezone.utc) - last < self.USER_CACHE_TTL:
+            if last is not None and datetime.now(UTC) - last < self.USER_CACHE_TTL:
                 return 0
         count = 0
         cursor = None
@@ -416,19 +429,23 @@ class SlackReader:
                 sys.exit(f"error: could not resolve channel {t!r}")
             return ids[0]
         # treat as a person's name → look up in the cached directory
-        name_q = t[1:] if t.startswith("@") else t
+        name_q = t.removeprefix("@")
         rows = self.store.find_users(name_q)
         if not rows:
             sys.exit(f"error: no user matches {name_q!r} (try: users --refresh)")
         if len(rows) > 1:
-            listing = "\n".join(f"  {r['real_name']}  @{r['name']}  {r['id']}" for r in rows)
+            listing = "\n".join(
+                f"  {r['real_name']}  @{r['name']}  {r['id']}" for r in rows
+            )
             sys.exit(
                 f"error: {len(rows)} users match {name_q!r} — be more specific or pass the ID:\n{listing}"
             )
         return rows[0]["id"]
 
     def post(self, channel: str, text: str, thread_ts: str | None = None) -> dict:
-        return self.client.chat_postMessage(channel=channel, text=text, thread_ts=thread_ts)
+        return self.client.chat_postMessage(
+            channel=channel, text=text, thread_ts=thread_ts
+        )
 
     def search_messages(self, query: str, count: int) -> list[dict]:
         """Server-side workspace search via search.messages (needs `search:read`).
@@ -439,7 +456,9 @@ class SlackReader:
         resp = self.client.search_messages(query=query, count=count, sort="timestamp")
         return ((resp.get("messages") or {}).get("matches")) or []
 
-    def fetch_thread(self, cid: str, parent_ts: str, fetch_files: bool = True) -> list[dict]:
+    def fetch_thread(
+        self, cid: str, parent_ts: str, fetch_files: bool = True
+    ) -> list[dict]:
         """Fetch a whole thread (parent + replies), caching messages and files.
 
         Falls back to fetching the single message when `parent_ts` isn't a thread
@@ -545,7 +564,9 @@ class SlackReader:
             except SlackApiError as e:
                 # Leave `completed` False so the marker is NOT advanced: the
                 # unfetched window is retried next run (INSERT OR IGNORE dedups).
-                log.error("history failed for %s (%s): %s", name, cid, e.response.get("error"))
+                log.error(
+                    "history failed for %s (%s): %s", name, cid, e.response.get("error")
+                )
                 break
 
             for msg in resp.get("messages", []):
@@ -556,7 +577,11 @@ class SlackReader:
                     new_count += 1
                 if fetch_files:
                     file_count += self._handle_files(msg, cid, name)
-                if fetch_threads and msg.get("reply_count") and msg.get("thread_ts") == ts:
+                if (
+                    fetch_threads
+                    and msg.get("reply_count")
+                    and msg.get("thread_ts") == ts
+                ):
                     nf = self._sync_thread(cid, name, ts, fetch_files)
                     file_count += nf
                 if limit and new_count >= limit:
@@ -579,7 +604,11 @@ class SlackReader:
         else:
             log.warning(
                 "%s (%s): sync incomplete — marker not advanced, %d new fetched, "
-                "will refetch on next run", name, cid, new_count)
+                "will refetch on next run",
+                name,
+                cid,
+                new_count,
+            )
         return {
             "new": new_count,
             "files": file_count,
@@ -587,7 +616,9 @@ class SlackReader:
             "completed": completed,
         }
 
-    def _sync_thread(self, cid: str, name: str, thread_ts: str, fetch_files: bool) -> int:
+    def _sync_thread(
+        self, cid: str, name: str, thread_ts: str, fetch_files: bool
+    ) -> int:
         """Fetch replies for one thread. Dedup is handled by INSERT OR IGNORE."""
         file_count = 0
         cursor = None
@@ -597,7 +628,12 @@ class SlackReader:
                     channel=cid, ts=thread_ts, limit=200, cursor=cursor
                 )
             except SlackApiError as e:
-                log.warning("replies failed for %s ts=%s: %s", name, thread_ts, e.response.get("error"))
+                log.warning(
+                    "replies failed for %s ts=%s: %s",
+                    name,
+                    thread_ts,
+                    e.response.get("error"),
+                )
                 break
             for msg in resp.get("messages", []):
                 if msg.get("ts") == thread_ts:
@@ -632,16 +668,23 @@ class SlackReader:
             self.store.record_file(f, cid, msg.get("ts"), local_path)
         return downloaded
 
-    def _download_file(self, f: dict, cid: str, channel_name: str, ts: str | None) -> str | None:
+    def _download_file(
+        self, f: dict, cid: str, channel_name: str, ts: str | None
+    ) -> str | None:
         url = f.get("url_private_download") or f.get("url_private")
         subdir = self.assets_dir / _safe(channel_name or cid)
         subdir.mkdir(parents=True, exist_ok=True)
         fname = f"{ts or f.get('id')}_{_safe(f.get('name') or f.get('id'))}"
         dest = subdir / fname
-        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {self.token}"})
+        req = urllib.request.Request(
+            url, headers={"Authorization": f"Bearer {self.token}"}
+        )
         for attempt in range(1, 4):
             try:
-                with urllib.request.urlopen(req, timeout=90) as resp, open(dest, "wb") as out:
+                with (
+                    urllib.request.urlopen(req, timeout=90) as resp,
+                    open(dest, "wb") as out,
+                ):
                     shutil.copyfileobj(resp, out)
                 # Slack serves an HTML login/error page (HTTP 200) when the token
                 # can't actually access the file — catch that instead of saving a fake file.
@@ -649,13 +692,22 @@ class SlackReader:
                     head = fh.read(64).lstrip().lower()
                 if head.startswith((b"<!doctype html", b"<html")):
                     dest.unlink(missing_ok=True)
-                    log.error("  ✗ %s came back as an HTML page, not a file (check files:read / access)", fname)
+                    log.error(
+                        "  ✗ %s came back as an HTML page, not a file (check files:read / access)",
+                        fname,
+                    )
                     return None
                 log.info("  ↓ %s (%s)", dest.name, _human(f.get("size")))
                 return str(dest)
             except (urllib.error.URLError, TimeoutError) as e:
-                wait = 2 ** attempt
-                log.warning("  download retry %d for %s: %s (waiting %ds)", attempt, fname, e, wait)
+                wait = 2**attempt
+                log.warning(
+                    "  download retry %d for %s: %s (waiting %ds)",
+                    attempt,
+                    fname,
+                    e,
+                    wait,
+                )
                 time.sleep(wait)
         log.error("  ✗ failed to download %s", fname)
         return None
@@ -667,7 +719,7 @@ class SlackReader:
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _safe(s: str) -> str:
@@ -695,7 +747,7 @@ def _fmt_ts(ts: str | None) -> str:
     if not ts:
         return "-"
     try:
-        return datetime.fromtimestamp(float(ts), tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
+        return datetime.fromtimestamp(float(ts), tz=UTC).strftime("%Y-%m-%d %H:%M")
     except (ValueError, TypeError):
         return ts
 
@@ -722,7 +774,9 @@ def get_token() -> str:
     if not token:
         sys.exit("error: set SLACK_TOKEN to your xoxp-... user token")
     if not token.startswith("xoxp-"):
-        log.warning("token does not start with xoxp- ; a user token is expected for reading your channels")
+        log.warning(
+            "token does not start with xoxp- ; a user token is expected for reading your channels"
+        )
     return token
 
 
@@ -739,14 +793,21 @@ def cmd_sync(args, reader: SlackReader, store: Store) -> None:
     else:
         channels = reader.member_channels()
 
-    log.info("syncing %d channel(s)%s", len(channels), " (full)" if args.full else " (incremental)")
+    log.info(
+        "syncing %d channel(s)%s",
+        len(channels),
+        " (full)" if args.full else " (incremental)",
+    )
     totals = {"new": 0, "files": 0}
     for ch in channels:
         cid = ch["id"]
         name = reader.label_for(ch)
-        store.upsert_channel(cid, name, bool(ch.get("is_private")), bool(ch.get("is_im")))
+        store.upsert_channel(
+            cid, name, bool(ch.get("is_private")), bool(ch.get("is_im"))
+        )
         res = reader.sync_channel(
-            cid, name,
+            cid,
+            name,
             full=args.full,
             limit=args.limit,
             fetch_files=not args.no_files,
@@ -756,14 +817,18 @@ def cmd_sync(args, reader: SlackReader, store: Store) -> None:
             log.info("%-28s +%d msg, +%d files", name, res["new"], res["files"])
         totals["new"] += res["new"]
         totals["files"] += res["files"]
-    log.info("done: %d new messages, %d files downloaded", totals["new"], totals["files"])
+    log.info(
+        "done: %d new messages, %d files downloaded", totals["new"], totals["files"]
+    )
 
 
 def cmd_channels(args, reader: SlackReader, store: Store) -> None:
     reader.sync_users(force=args.refresh_users)
     tracked = {r["id"]: r for r in store.channel_rows()}
     print(f"{'CHANNEL':<40} {'ID':<12} {'PRIV':<5} {'MSGS':>6} {'LAST SYNC':<17}")
-    for ch in sorted(reader.member_channels(), key=lambda c: reader.label_for(c).lower()):
+    for ch in sorted(
+        reader.member_channels(), key=lambda c: reader.label_for(c).lower()
+    ):
         cid = ch["id"]
         name = reader.label_for(ch)
         row = tracked.get(cid)
@@ -780,20 +845,28 @@ def cmd_users(args, reader: SlackReader, store: Store) -> None:
     rows = store.user_rows()
     print(f"{'REAL NAME':<28} {'@HANDLE':<24} {'ID':<12}")
     for r in rows:
-        print(f"{(r['real_name'] or ''):<28} {('@' + (r['name'] or '')):<24} {r['id']:<12}")
+        print(
+            f"{(r['real_name'] or ''):<28} {('@' + (r['name'] or '')):<24} {r['id']:<12}"
+        )
 
 
 def cmd_send(args, reader: SlackReader, store: Store) -> None:
     reader.sync_users()  # ensure name lookups work
     channel = reader.resolve_target(args.to)
     resp = reader.post(channel, args.text, args.thread_ts)
-    log.info("sent to %s (channel=%s, ts=%s)", args.to, resp.get("channel"), resp.get("ts"))
+    log.info(
+        "sent to %s (channel=%s, ts=%s)", args.to, resp.get("channel"), resp.get("ts")
+    )
     # Audit the outward-facing action to the shared activity log (mirrors the
     # gmail draft audit) — closes the "gmail audited, slack send not" gap.
     log_event(
-        "slack", "send", f"posted to {args.to}",
-        channel_id=resp.get("channel"), ts=resp.get("ts"),
-        threaded=bool(args.thread_ts))
+        "slack",
+        "send",
+        f"posted to {args.to}",
+        channel_id=resp.get("channel"),
+        ts=resp.get("ts"),
+        threaded=bool(args.thread_ts),
+    )
 
 
 def cmd_files(args, reader: SlackReader, store: Store) -> None:
@@ -813,20 +886,35 @@ def cmd_files(args, reader: SlackReader, store: Store) -> None:
         if not url:
             skipped += 1  # external / non-downloadable
             continue
-        f = {"id": r["id"], "name": r["name"], "size": r["size"], "url_private_download": url}
-        path = reader._download_file(f, r["channel_id"], store.channel_name(r["channel_id"]), r["message_ts"])
+        f = {
+            "id": r["id"],
+            "name": r["name"],
+            "size": r["size"],
+            "url_private_download": url,
+        }
+        path = reader._download_file(
+            f, r["channel_id"], store.channel_name(r["channel_id"]), r["message_ts"]
+        )
         store.set_file_path(r["id"], path)
         if path:
             ok += 1
         else:
             failed += 1
-    log.info("files: %d downloaded, %d already present, %d skipped, %d failed", ok, present, skipped, failed)
+    log.info(
+        "files: %d downloaded, %d already present, %d skipped, %d failed",
+        ok,
+        present,
+        skipped,
+        failed,
+    )
 
 
 def cmd_thread(args, reader: SlackReader, store: Store) -> None:
     parsed = parse_permalink(args.url)
     if not parsed:
-        sys.exit("error: not a Slack message link (expected …/archives/<CID>/p<digits>)")
+        sys.exit(
+            "error: not a Slack message link (expected …/archives/<CID>/p<digits>)"
+        )
     cid, ts, thread_ts = parsed
     reader.sync_users()  # resolve author names
     parent = thread_ts or ts
@@ -895,8 +983,10 @@ def cmd_export(args, reader: SlackReader, store: Store) -> None:
         print(json.dumps(out, ensure_ascii=False, indent=2))
     else:
         for r in rows:
-            print(f"[{_fmt_ts(r['ts'])}] {_defang(r['user'] or '?')}: "
-                  f"{_defang(r['text'] or '')}")
+            print(
+                f"[{_fmt_ts(r['ts'])}] {_defang(r['user'] or '?')}: "
+                f"{_defang(r['text'] or '')}"
+            )
     log.info("exported %d messages from %s", len(rows), args.channel)
 
 
@@ -917,23 +1007,33 @@ def cmd_search(args, reader: SlackReader, store: Store) -> None:
                 sys.exit(f"error: could not resolve channel {args.channel!r}")
             cid = ids[0]
         uid = None
-        if getattr(args, "from_"):
+        if args.from_:
             rows = store.find_users(args.from_)
             if not rows:
-                sys.exit(f"error: no cached user matches {args.from_!r} (try: users --refresh)")
+                sys.exit(
+                    f"error: no cached user matches {args.from_!r} (try: users --refresh)"
+                )
             if len(rows) > 1:
-                listing = "\n".join(f"  {r['real_name']}  @{r['name']}  {r['id']}" for r in rows)
-                sys.exit(f"error: {len(rows)} users match {args.from_!r} — be more specific:\n{listing}")
+                listing = "\n".join(
+                    f"  {r['real_name']}  @{r['name']}  {r['id']}" for r in rows
+                )
+                sys.exit(
+                    f"error: {len(rows)} users match {args.from_!r} — be more specific:\n{listing}"
+                )
             uid = rows[0]["id"]
         matches = store.search_local(args.query, cid, uid, args.limit)
         if not matches:
-            print("no local matches (only synced messages are searched — try `sync` first, or drop --local)")
+            print(
+                "no local matches (only synced messages are searched — try `sync` first, or drop --local)"
+            )
             return
         for r in matches:
             who = store.user_label(r["user"]) or r["user"] or "?"
             chan = ("#" + r["chan"]) if r["chan"] else r["channel_id"]
-            print(f"[{_fmt_ts(r['ts'])}] {chan}  {_defang(who)}: "
-                  f"{_defang(_oneline(r['text']))}")
+            print(
+                f"[{_fmt_ts(r['ts'])}] {chan}  {_defang(who)}: "
+                f"{_defang(_oneline(r['text']))}"
+            )
         log.info("%d local match(es)", len(matches))
         return
 
@@ -943,7 +1043,9 @@ def cmd_search(args, reader: SlackReader, store: Store) -> None:
     if args.channel:
         parts.append(f"in:{args.channel}")
     if args.from_:
-        parts.append(f"from:{args.from_ if args.from_.startswith('@') else '@' + args.from_}")
+        parts.append(
+            f"from:{args.from_ if args.from_.startswith('@') else '@' + args.from_}"
+        )
     matches = reader.search_messages(" ".join(parts), count=args.limit)
     if not matches:
         print("no matches")
@@ -951,9 +1053,13 @@ def cmd_search(args, reader: SlackReader, store: Store) -> None:
     for m in matches:
         ch = m.get("channel") or {}
         chan = ("#" + ch["name"]) if ch.get("name") else (ch.get("id") or "?")
-        who = store.user_label(m.get("user")) or m.get("username") or m.get("user") or "?"
-        print(f"[{_fmt_ts(m.get('ts'))}] {chan}  {_defang(who)}: "
-              f"{_defang(_oneline(m.get('text')))}")
+        who = (
+            store.user_label(m.get("user")) or m.get("username") or m.get("user") or "?"
+        )
+        print(
+            f"[{_fmt_ts(m.get('ts'))}] {chan}  {_defang(who)}: "
+            f"{_defang(_oneline(m.get('text')))}"
+        )
         if m.get("permalink"):
             print(f"    {m['permalink']}")
     log.info("%d match(es)", len(matches))
@@ -969,38 +1075,74 @@ def build_parser() -> argparse.ArgumentParser:
     # level AND on the `sync` subparser — the latter matters because `sync`
     # is the implicit default command (re-parsed as `sync <argv>` in main()).
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--data-dir", default=os.environ.get("SLACK_DATA_DIR"), help="override data dir")
+    common.add_argument(
+        "--data-dir", default=os.environ.get("SLACK_DATA_DIR"), help="override data dir"
+    )
 
     p = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
-        parents=[common])
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        parents=[common],
+    )
     sub = p.add_subparsers(dest="cmd")
 
-    sync = sub.add_parser("sync", parents=[common], help="fetch new messages for member channels (default command)")
-    sync.add_argument("--channels", help="comma list of #names or IDs (default: all you're in)")
-    sync.add_argument("--full", action="store_true", help="ignore read-since marker, refetch history")
+    sync = sub.add_parser(
+        "sync",
+        parents=[common],
+        help="fetch new messages for member channels (default command)",
+    )
+    sync.add_argument(
+        "--channels", help="comma list of #names or IDs (default: all you're in)"
+    )
+    sync.add_argument(
+        "--full", action="store_true", help="ignore read-since marker, refetch history"
+    )
     sync.add_argument("--limit", type=int, help="cap new messages per channel this run")
-    sync.add_argument("--no-files", action="store_true", help="don't download attachments")
-    sync.add_argument("--no-threads", action="store_true", help="don't fetch thread replies")
+    sync.add_argument(
+        "--no-files", action="store_true", help="don't download attachments"
+    )
+    sync.add_argument(
+        "--no-threads", action="store_true", help="don't fetch thread replies"
+    )
 
     chans = sub.add_parser("channels", help="list channels you're in + tracked state")
-    chans.add_argument("--refresh-users", action="store_true", help="refresh the user-name cache")
+    chans.add_argument(
+        "--refresh-users", action="store_true", help="refresh the user-name cache"
+    )
 
     usr = sub.add_parser("users", help="list cached workspace users (id ↔ name)")
-    usr.add_argument("--refresh", action="store_true", help="re-pull the directory from Slack")
+    usr.add_argument(
+        "--refresh", action="store_true", help="re-pull the directory from Slack"
+    )
 
-    snd = sub.add_parser("send", help="post a message to a channel, a person, or yourself")
-    snd.add_argument("--to", required=True, help="'me', '#channel', a person's name, or a C/D/U id")
+    snd = sub.add_parser(
+        "send", help="post a message to a channel, a person, or yourself"
+    )
+    snd.add_argument(
+        "--to", required=True, help="'me', '#channel', a person's name, or a C/D/U id"
+    )
     snd.add_argument("--text", required=True, help="message text (Slack mrkdwn)")
     snd.add_argument("--thread-ts", help="reply within a thread (parent message ts)")
 
-    thr = sub.add_parser("thread", help="read a thread/message from a pasted Slack link")
-    thr.add_argument("url", help="a Slack message permalink (…/archives/<CID>/p<digits>)")
-    thr.add_argument("--no-files", action="store_true", help="don't download attachments")
+    thr = sub.add_parser(
+        "thread", help="read a thread/message from a pasted Slack link"
+    )
+    thr.add_argument(
+        "url", help="a Slack message permalink (…/archives/<CID>/p<digits>)"
+    )
+    thr.add_argument(
+        "--no-files", action="store_true", help="don't download attachments"
+    )
 
-    fls = sub.add_parser("files", help="re-download attachments (e.g. after deleting local copies)")
+    fls = sub.add_parser(
+        "files", help="re-download attachments (e.g. after deleting local copies)"
+    )
     fls.add_argument("--channel", help="limit to one #channel or id")
-    fls.add_argument("--redownload", action="store_true", help="re-download even if the local copy exists")
+    fls.add_argument(
+        "--redownload",
+        action="store_true",
+        help="re-download even if the local copy exists",
+    )
 
     sub.add_parser("status", help="show local cache stats")
 
@@ -1009,11 +1151,26 @@ def build_parser() -> argparse.ArgumentParser:
     exp.add_argument("--since", help="only messages with ts greater than this")
     exp.add_argument("--format", choices=["md", "json"], default="md")
 
-    srch = sub.add_parser("search", help="search messages (whole workspace, or --local cache)")
-    srch.add_argument("query", help="text to search for (server-side: Slack search syntax)")
-    srch.add_argument("--local", action="store_true", help="search the local cache only (offline, synced messages)")
-    srch.add_argument("--channel", help="limit to a #channel or ID (server-side: in:<channel>)")
-    srch.add_argument("--from", dest="from_", metavar="WHO", help="limit to a sender (server-side: from:@handle)")
+    srch = sub.add_parser(
+        "search", help="search messages (whole workspace, or --local cache)"
+    )
+    srch.add_argument(
+        "query", help="text to search for (server-side: Slack search syntax)"
+    )
+    srch.add_argument(
+        "--local",
+        action="store_true",
+        help="search the local cache only (offline, synced messages)",
+    )
+    srch.add_argument(
+        "--channel", help="limit to a #channel or ID (server-side: in:<channel>)"
+    )
+    srch.add_argument(
+        "--from",
+        dest="from_",
+        metavar="WHO",
+        help="limit to a sender (server-side: from:@handle)",
+    )
     srch.add_argument("--limit", type=int, default=20, help="max results (default 20)")
     return p
 

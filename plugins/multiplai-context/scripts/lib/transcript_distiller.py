@@ -15,9 +15,9 @@ No LLM calls — pure Python transformation pipeline:
 
 import json
 import re
-from datetime import datetime, timezone
+from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Iterator
 
 # Approximate token budget per chunk (1 token ≈ 4 chars)
 DEFAULT_TOKEN_BUDGET = 32_000
@@ -26,7 +26,7 @@ _CHARS_PER_TOKEN = 4
 # Tool result stubs
 _ELIDED_STUB = "[{tool}: {size}B elided]"
 _LONG_INPUT_THRESHOLD = 2_000  # chars; truncate tool_use inputs longer than this
-_B64_RE = re.compile(r'^[A-Za-z0-9+/]{100,}={0,2}$')
+_B64_RE = re.compile(r"^[A-Za-z0-9+/]{100,}={0,2}$")
 
 
 def _is_base64(text: str) -> bool:
@@ -101,7 +101,7 @@ def _parse_timestamp(record: dict) -> datetime | None:
     try:
         dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
+            dt = dt.replace(tzinfo=UTC)
         return dt
     except (ValueError, TypeError):
         return None
@@ -174,13 +174,16 @@ def iter_distilled_turns(
             continue
 
         # Skip Claude Code hook/meta noise
-        msg_type = record.get("message", {}).get("type") if isinstance(record.get("message"), dict) else None
+        msg_type = (
+            record.get("message", {}).get("type")
+            if isinstance(record.get("message"), dict)
+            else None
+        )
         if msg_type in ("system", "tool"):
             continue
 
-        content = (
-            record.get("content")
-            or (record.get("message", {}) or {}).get("content")
+        content = record.get("content") or (record.get("message", {}) or {}).get(
+            "content"
         )
         if content is None:
             continue

@@ -108,7 +108,9 @@ def bank_paths(paths) -> list[tuple[str, Path]]:
     try:
         banks = paths.memory_banks()
     except Exception:  # a malformed memory-banks.yaml must not break dedup
-        logger.exception("memory_banks() failed — shared banks excluded from the corpus")
+        logger.exception(
+            "memory_banks() failed — shared banks excluded from the corpus"
+        )
         return []
 
     memory_dir = Path(paths.memory_dir)
@@ -129,7 +131,12 @@ def read_files(labelled: list[tuple[str, Path]]) -> dict[str, str]:
     for label, path in labelled:
         try:
             if path.stat().st_size > MAX_FILE_BYTES:
-                logger.info("Corpus: skipping %s (%s) — over %d bytes", label, path, MAX_FILE_BYTES)
+                logger.info(
+                    "Corpus: skipping %s (%s) — over %d bytes",
+                    label,
+                    path,
+                    MAX_FILE_BYTES,
+                )
                 continue
             out[label] = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):

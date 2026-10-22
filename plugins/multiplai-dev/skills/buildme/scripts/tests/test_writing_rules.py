@@ -11,7 +11,6 @@ from __future__ import annotations
 import re
 
 import pytest
-
 from build_pipeline.prompts.implementation import (
     IMPLEMENTER_PROMPT_CLEAN,
     IMPLEMENTER_PROMPT_MINIMUM,
@@ -20,19 +19,37 @@ from build_pipeline.prompts.test_writing import TEST_WRITER_PROMPT
 from build_pipeline.prompts.writing_rules import COMMENT_RULE, TEST_VALUE_RULE
 
 _IMPLEMENTER_FIELDS = dict(
-    block_name="Block", block_description="desc",
-    failing_tests="FAILED test_a", context_bundle="ctx", test_command="pytest",
+    block_name="Block",
+    block_description="desc",
+    failing_tests="FAILED test_a",
+    context_bundle="ctx",
+    test_command="pytest",
 )
 
 CASES = {
     "test writer": (
         TEST_WRITER_PROMPT,
-        dict(block_name="Block", block_description="desc", specs="specs",
-             context_bundle="ctx", test_command="pytest", max_turns=30, half=15),
+        dict(
+            block_name="Block",
+            block_description="desc",
+            specs="specs",
+            context_bundle="ctx",
+            test_command="pytest",
+            max_turns=30,
+            half=15,
+        ),
         (TEST_VALUE_RULE, COMMENT_RULE),
     ),
-    "implementer clean": (IMPLEMENTER_PROMPT_CLEAN, _IMPLEMENTER_FIELDS, (COMMENT_RULE,)),
-    "implementer minimum": (IMPLEMENTER_PROMPT_MINIMUM, _IMPLEMENTER_FIELDS, (COMMENT_RULE,)),
+    "implementer clean": (
+        IMPLEMENTER_PROMPT_CLEAN,
+        _IMPLEMENTER_FIELDS,
+        (COMMENT_RULE,),
+    ),
+    "implementer minimum": (
+        IMPLEMENTER_PROMPT_MINIMUM,
+        _IMPLEMENTER_FIELDS,
+        (COMMENT_RULE,),
+    ),
 }
 
 

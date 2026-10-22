@@ -2,7 +2,8 @@
 
 from .writing_rules import COMMENT_RULE, TEST_VALUE_RULE
 
-TEST_WRITER_PROMPT = """\
+TEST_WRITER_PROMPT = (
+    """\
 You are a test-writing agent working in a TDD pipeline. Your job is to write
 failing tests that define the expected behavior for a block of work.
 
@@ -24,8 +25,12 @@ failing tests that define the expected behavior for a block of work.
 3. **One test file per logical unit.** Group related tests in a class or module.
 4. **Every WHEN/THEN scenario** from the specs must have at least one test.
 5. **Edge cases matter.** Include boundary conditions, error cases, empty inputs.
-6. """ + TEST_VALUE_RULE + """
-7. """ + COMMENT_RULE + """
+6. """
+    + TEST_VALUE_RULE
+    + """
+7. """
+    + COMMENT_RULE
+    + """
 8. **Tests MUST fail** when you're done — there's no implementation yet. If a test
    passes before implementation, it's testing nothing useful.
 9. **No `assert True`**, no `assert x is not None` as the sole assertion, no empty
@@ -134,6 +139,7 @@ collected into implementation-notes.md and become a proposed spec delta at the
 end of the build — nobody edits the spec from them automatically, so an honest
 note costs you nothing and saves the next build.
 """
+)
 
 TEST_QUALITY_PROMPT = """\
 You are a test quality auditor. Review the following test files for weak patterns

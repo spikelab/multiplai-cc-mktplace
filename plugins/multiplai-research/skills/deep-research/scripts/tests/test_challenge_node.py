@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
-
 from research_pipeline.config import PRESETS, ResearchConfig
 from research_pipeline.models import Confidence, Finding
 from research_pipeline.nodes import challenge as challenge_node

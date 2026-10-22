@@ -31,13 +31,18 @@ import contextvars
 import json
 import logging
 import os
+from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Iterator, TypeVar
+from typing import TypeVar
 
-from pydantic import BaseModel, ValidationError
-
-from multiplai_core.agent_runner import AgentRunError, AgentRunTimeout, is_usage_limit, run_agent
+from multiplai_core.agent_runner import (
+    AgentRunError,
+    AgentRunTimeout,
+    is_usage_limit,
+    run_agent,
+)
 from multiplai_core.structured import parse_answer, reformat_prompt
+from pydantic import BaseModel, ValidationError
 
 from . import budget
 
@@ -64,12 +69,15 @@ MERGER_TOOLS = READ_ONLY_TOOLS  # deciding whether two findings are one needs no
 class CallRecord:
     """What the agent runs inside one `recording()` block did: every attempt's
     tool calls in order (`multiplai_core.ToolCall`), turns and cost."""
+
     tool_calls: list = field(default_factory=list)
     turns: int = 0
     cost_usd: float = 0.0
 
 
-_recorder: contextvars.ContextVar[CallRecord | None] = contextvars.ContextVar("review_call_record", default=None)
+_recorder: contextvars.ContextVar[CallRecord | None] = contextvars.ContextVar(
+    "review_call_record", default=None
+)
 
 
 @contextlib.contextmanager
@@ -94,7 +102,9 @@ def _note(result) -> None:
         return
     record.tool_calls.extend(getattr(result, "tool_calls", ()) or ())
     record.turns += int(getattr(result, "turns", 0) or 0)
-    record.cost_usd += float(getattr(getattr(result, "usage", None), "cost_usd", 0.0) or 0.0)
+    record.cost_usd += float(
+        getattr(getattr(result, "usage", None), "cost_usd", 0.0) or 0.0
+    )
 
 
 class AgentCallError(Exception):
@@ -119,11 +129,19 @@ class UsageLimitError(AgentCallError):
 def _usage_limit(e: AgentRunError) -> UsageLimitError:
     limit, resets = getattr(e, "limit", "") or "", getattr(e, "resets", "") or ""
     message = f"the Claude {limit + ' ' if limit else ''}usage limit was hit"
-    return UsageLimitError(message + (f"; it resets {resets}" if resets else ""), limit=limit, resets=resets)
+    return UsageLimitError(
+        message + (f"; it resets {resets}" if resets else ""),
+        limit=limit,
+        resets=resets,
+    )
 
 
 def repo_is_trusted() -> bool:
-    return os.environ.get("REVIEW_TRUST_REPO", "").strip().lower() in ("1", "true", "yes")
+    return os.environ.get("REVIEW_TRUST_REPO", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
 
 
 def require_trusted_repo() -> None:
@@ -140,9 +158,18 @@ def require_trusted_repo() -> None:
         )
 
 
-async def _run(prompt: str, *, allowed_tools: list[str], model: str | None, effort: str | None,
-               max_turns: int, cwd: str | None, call_timeout: float, budget_label: str,
-               run_label: str = "") -> str:
+async def _run(
+    prompt: str,
+    *,
+    allowed_tools: list[str],
+    model: str | None,
+    effort: str | None,
+    max_turns: int,
+    cwd: str | None,
+    call_timeout: float,
+    budget_label: str,
+    run_label: str = "",
+) -> str:
     require_trusted_repo()
     budget.check(stage=budget_label)
     try:
@@ -185,8 +212,16 @@ async def agent_call_text(
     call_timeout: float = DEFAULT_CALL_TIMEOUT_S,
 ) -> str:
     """Run an agent and return its final message as it is. A failed run raises `AgentCallError`."""
-    return await _run(prompt, allowed_tools=allowed_tools, model=model, effort=effort, max_turns=max_turns,
-                      cwd=None if cwd is None else str(cwd), call_timeout=call_timeout, budget_label=budget_label)
+    return await _run(
+        prompt,
+        allowed_tools=allowed_tools,
+        model=model,
+        effort=effort,
+        max_turns=max_turns,
+        cwd=None if cwd is None else str(cwd),
+        call_timeout=call_timeout,
+        budget_label=budget_label,
+    )
 
 
 async def agent_call_structured(
@@ -210,10 +245,18 @@ async def agent_call_structured(
     error appended.
     """
     name = budget_label or "agent"
-    common = dict(model=model, effort=effort, cwd=cwd, call_timeout=call_timeout, budget_label=budget_label)
+    common = dict(
+        model=model,
+        effort=effort,
+        cwd=cwd,
+        call_timeout=call_timeout,
+        budget_label=budget_label,
+    )
     text: str | None = None
     try:
-        text = await _run(prompt, allowed_tools=allowed_tools, max_turns=max_turns, **common)
+        text = await _run(
+            prompt, allowed_tools=allowed_tools, max_turns=max_turns, **common
+        )
         return parse_answer(text, schema)
     except (RepoTrustError, UsageLimitError):
         raise
@@ -228,10 +271,17 @@ async def agent_call_structured(
                 f"Return ONLY one JSON object matching this schema:\n"
                 f"{json.dumps(schema.model_json_schema(), indent=1)}\n"
             )
-            text = await _run(retry, allowed_tools=allowed_tools, max_turns=max_turns, **common)
+            text = await _run(
+                retry, allowed_tools=allowed_tools, max_turns=max_turns, **common
+            )
         else:
-            text = await _run(reformat_prompt(text, schema, first_error), allowed_tools=[],
-                              max_turns=REFORMAT_MAX_TURNS, run_label=f"{name}:reformat", **common)
+            text = await _run(
+                reformat_prompt(text, schema, first_error),
+                allowed_tools=[],
+                max_turns=REFORMAT_MAX_TURNS,
+                run_label=f"{name}:reformat",
+                **common,
+            )
         return parse_answer(text, schema)
     except (RepoTrustError, UsageLimitError):
         raise

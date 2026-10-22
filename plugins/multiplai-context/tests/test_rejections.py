@@ -27,8 +27,10 @@ class Stub:
 class TestRecordShape:
     def test_it_carries_everything_needed_to_overrule_a_drop(self):
         record = rejections.record_for(
-            Stub(), proposal="processed-learnings-2026-08-05.md",
-            reason="redundant", judge_reason="already in § Python Tooling",
+            Stub(),
+            proposal="processed-learnings-2026-08-05.md",
+            reason="redundant",
+            judge_reason="already in § Python Tooling",
             item_key="deadbeefdeadbeef",
         )
         # Reading a rejection must not require going back to the proposal.
@@ -46,8 +48,9 @@ class TestRecordShape:
         # `drop` means "not promoted to memory", never "erased" — the hash is
         # what makes the original findable through the ledger.
         key = "0123456789abcdef"  # gitleaks:allow - a 16-hex content hash, not a secret
-        record = rejections.record_for(Stub(), proposal="p.md", reason="judge-drop",
-                                       item_key=key)
+        record = rejections.record_for(
+            Stub(), proposal="p.md", reason="judge-drop", item_key=key
+        )
         assert record["item_key"] == key
 
     def test_it_is_timestamped(self):
@@ -56,7 +59,8 @@ class TestRecordShape:
 
     def test_a_pathological_body_is_bounded(self):
         record = rejections.record_for(
-            Stub(text="x" * 100_000), proposal="p.md", reason="judge-drop")
+            Stub(text="x" * 100_000), proposal="p.md", reason="judge-drop"
+        )
         assert len(record["text"]) <= 4000
 
 
@@ -69,16 +73,29 @@ class TestAppendAndRead:
 
     def test_it_appends_rather_than_rewrites(self, tmp_path):
         path = rejections.default_path(tmp_path)
-        rejections.append(path, [rejections.record_for(
-            Stub(number=1), proposal="p.md", reason="redundant")])
-        rejections.append(path, [rejections.record_for(
-            Stub(number=2), proposal="p.md", reason="judge-drop")])
+        rejections.append(
+            path,
+            [
+                rejections.record_for(
+                    Stub(number=1), proposal="p.md", reason="redundant"
+                )
+            ],
+        )
+        rejections.append(
+            path,
+            [
+                rejections.record_for(
+                    Stub(number=2), proposal="p.md", reason="judge-drop"
+                )
+            ],
+        )
         assert [r["number"] for r in rejections.read(path)] == [1, 2]
 
     def test_it_creates_the_directory(self, tmp_path):
         path = tmp_path / "data" / "rejections.jsonl"
-        rejections.append(path, [rejections.record_for(
-            Stub(), proposal="p.md", reason="redundant")])
+        rejections.append(
+            path, [rejections.record_for(Stub(), proposal="p.md", reason="redundant")]
+        )
         assert path.is_file()
 
     def test_writing_nothing_writes_nothing(self, tmp_path):
@@ -92,8 +109,14 @@ class TestAppendAndRead:
     def test_a_torn_final_line_costs_only_that_record(self, tmp_path):
         # The one failure mode an append-only log actually has.
         path = rejections.default_path(tmp_path)
-        rejections.append(path, [rejections.record_for(
-            Stub(number=1), proposal="p.md", reason="redundant")])
+        rejections.append(
+            path,
+            [
+                rejections.record_for(
+                    Stub(number=1), proposal="p.md", reason="redundant"
+                )
+            ],
+        )
         with open(path, "a") as f:
             f.write('{"target": "dev.md", "num')
         records = rejections.read(path)
@@ -102,22 +125,39 @@ class TestAppendAndRead:
 
     def test_non_ascii_survives(self, tmp_path):
         path = rejections.default_path(tmp_path)
-        rejections.append(path, [rejections.record_for(
-            Stub(text="§ Python Tooling — uv résolves it"), proposal="p.md",
-            reason="redundant")])
+        rejections.append(
+            path,
+            [
+                rejections.record_for(
+                    Stub(text="§ Python Tooling — uv résolves it"),
+                    proposal="p.md",
+                    reason="redundant",
+                )
+            ],
+        )
         assert "résolves" in rejections.read(path)[0]["text"]
 
 
 class TestAggregate:
     def test_counts_by_reason(self, tmp_path):
         path = rejections.default_path(tmp_path)
-        rejections.append(path, [
-            rejections.record_for(Stub(number=1), proposal="p.md", reason="redundant"),
-            rejections.record_for(Stub(number=2), proposal="p.md", reason="redundant"),
-            rejections.record_for(Stub(number=3), proposal="p.md", reason="judge-drop"),
-        ])
+        rejections.append(
+            path,
+            [
+                rejections.record_for(
+                    Stub(number=1), proposal="p.md", reason="redundant"
+                ),
+                rejections.record_for(
+                    Stub(number=2), proposal="p.md", reason="redundant"
+                ),
+                rejections.record_for(
+                    Stub(number=3), proposal="p.md", reason="judge-drop"
+                ),
+            ],
+        )
         assert rejections.aggregate(rejections.read(path)) == {
-            "redundant": 2, "judge-drop": 1,
+            "redundant": 2,
+            "judge-drop": 1,
         }
 
     def test_an_empty_log_aggregates_to_nothing(self):

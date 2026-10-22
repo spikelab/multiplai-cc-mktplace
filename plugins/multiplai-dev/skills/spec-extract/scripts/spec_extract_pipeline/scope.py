@@ -79,6 +79,7 @@ class Skipped(_Model):
 
 class TargetScope(_Model):
     """What the run reads. Every list is in path order; `units` in `partition`'s order."""
+
     files: list[str]  # the Python files the agents read, test files included
     symbols: list[Symbol]  # public symbols of the files that are not tests
     skipped: list[Skipped]  # left out by review's rules, or a symbolic link
@@ -88,7 +89,11 @@ class TargetScope(_Model):
 
 def is_test_file(path: str) -> bool:
     p = PurePosixPath(path)
-    return p.name.startswith("test_") or p.name.endswith("_test.py") or "tests" in p.parts[:-1]
+    return (
+        p.name.startswith("test_")
+        or p.name.endswith("_test.py")
+        or "tests" in p.parts[:-1]
+    )
 
 
 def line_count(data: bytes) -> int:
@@ -100,14 +105,28 @@ def line_count(data: bytes) -> int:
 def public_symbols(path: str, tree: ast.Module) -> list[Symbol]:
     out: list[Symbol] = []
     for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and not node.name.startswith("_"):
-            out.append(Symbol(path=path, name=node.name, kind="function", line=node.lineno))
+        if isinstance(
+            node, (ast.FunctionDef, ast.AsyncFunctionDef)
+        ) and not node.name.startswith("_"):
+            out.append(
+                Symbol(path=path, name=node.name, kind="function", line=node.lineno)
+            )
         elif isinstance(node, ast.ClassDef) and not node.name.startswith("_"):
-            out.append(Symbol(path=path, name=node.name, kind="class", line=node.lineno))
+            out.append(
+                Symbol(path=path, name=node.name, kind="class", line=node.lineno)
+            )
             for item in node.body:
-                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and not item.name.startswith("_"):
-                    out.append(Symbol(path=path, name=f"{node.name}.{item.name}", kind="method",
-                                      line=item.lineno))
+                if isinstance(
+                    item, (ast.FunctionDef, ast.AsyncFunctionDef)
+                ) and not item.name.startswith("_"):
+                    out.append(
+                        Symbol(
+                            path=path,
+                            name=f"{node.name}.{item.name}",
+                            kind="method",
+                            line=item.lineno,
+                        )
+                    )
     return out
 
 
@@ -115,7 +134,9 @@ def _parse(data: bytes) -> ast.Module | str:
     """The module, or why `ast` could not parse it."""
     try:
         with warnings.catch_warnings():
-            warnings.simplefilter("ignore")  # SyntaxWarning for odd escapes is not our business
+            warnings.simplefilter(
+                "ignore"
+            )  # SyntaxWarning for odd escapes is not our business
             return ast.parse(data)
     except (SyntaxError, ValueError, UnicodeDecodeError) as e:
         where = f" (line {e.lineno})" if isinstance(e, SyntaxError) and e.lineno else ""
@@ -129,11 +150,29 @@ def _check_attrs(repo: str, head: str, paths: list[str]) -> dict[str, str]:
     if not paths:
         return {}
     proc = subprocess.run(
-        [*GIT_ARGV, "-C", repo, "check-attr", "-z", "--stdin", "--source", head, *GENERATED_ATTRS],
-        input="\0".join(paths) + "\0", capture_output=True, text=True, env=git_env(), shell=False, check=False,
+        [
+            *GIT_ARGV,
+            "-C",
+            repo,
+            "check-attr",
+            "-z",
+            "--stdin",
+            "--source",
+            head,
+            *GENERATED_ATTRS,
+        ],
+        input="\0".join(paths) + "\0",
+        capture_output=True,
+        text=True,
+        env=git_env(),
+        shell=False,
+        check=False,
     )
     if proc.returncode != 0:
-        log.warning("git check-attr --source failed; not skipping generated files: %s", proc.stderr.strip()[:300])
+        log.warning(
+            "git check-attr --source failed; not skipping generated files: %s",
+            proc.stderr.strip()[:300],
+        )
         return {}
     parts = proc.stdout.split("\0")
     out: dict[str, str] = {}
@@ -146,8 +185,17 @@ def _check_attrs(repo: str, head: str, paths: list[str]) -> dict[str, str]:
 
 def changed_files(repo: str, base_sha: str, head_sha: str) -> set[str]:
     """The paths `git diff --name-only --no-renames` names between the PR's base and head."""
-    raw = target_mod._git_bytes(repo, "diff", "--no-color", "--no-ext-diff", "--name-only", "--no-renames",
-                                "-z", base_sha, head_sha)
+    raw = target_mod._git_bytes(
+        repo,
+        "diff",
+        "--no-color",
+        "--no-ext-diff",
+        "--name-only",
+        "--no-renames",
+        "-z",
+        base_sha,
+        head_sha,
+    )
     return {os.fsdecode(p) for p in raw.split(b"\0") if p}
 
 
@@ -158,8 +206,11 @@ def _under(path: str, top: str) -> bool:
 def compute(target: Target) -> TargetScope:
     """The scope of *target* at its head commit. Reads git only."""
     repo, head = target.repo, str(target.head_sha)
-    entries = [(mode, oid, path) for mode, _kind, oid, path in target_mod._tree_entries(repo, head)
-               if path.endswith(".py")]
+    entries = [
+        (mode, oid, path)
+        for mode, _kind, oid, path in target_mod._tree_entries(repo, head)
+        if path.endswith(".py")
+    ]
     if target.kind == "tree" and target.path:
         entries = [e for e in entries if _under(e[2], target.path)]
     elif target.kind == "pr":
@@ -187,7 +238,10 @@ def compute(target: Target) -> TargetScope:
         data = blobs[oid]
         if b"\0" in data[:BINARY_PROBE]:
             skipped.append(Skipped(path=path, reason="binary"))
-        elif len(data) > MAX_CHARS and len(data.decode("utf-8", errors="replace")) > MAX_CHARS:
+        elif (
+            len(data) > MAX_CHARS
+            and len(data.decode("utf-8", errors="replace")) > MAX_CHARS
+        ):
             skipped.append(Skipped(path=path, reason=f"over {MAX_CHARS} characters"))
         elif path in generated:
             skipped.append(Skipped(path=path, reason=f"{generated[path]} is set"))
@@ -202,7 +256,9 @@ def compute(target: Target) -> TargetScope:
                 symbols.extend(public_symbols(path, parsed))
     skipped.sort(key=lambda s: s.path)
     units = partition(Scope.whole_files([(p, lines[p]) for p in files]), UNIT_LINES)
-    return TargetScope(files=files, symbols=symbols, skipped=skipped, unparsed=unparsed, units=units)
+    return TargetScope(
+        files=files, symbols=symbols, skipped=skipped, unparsed=unparsed, units=units
+    )
 
 
 def check(scope: TargetScope, max_units: int) -> None:
@@ -210,27 +266,39 @@ def check(scope: TargetScope, max_units: int) -> None:
     if not scope.units:
         raise ScopeRefused(
             f"no Python file to read in this target ({len(scope.skipped)} skipped, "
-            f"{len(scope.unparsed)} that ast could not parse)", line="SPEC_EXTRACT:NO_PYTHON")
+            f"{len(scope.unparsed)} that ast could not parse)",
+            line="SPEC_EXTRACT:NO_PYTHON",
+        )
     if len(scope.units) > max_units:
         raise ScopeRefused(
             f"this target splits into {len(scope.units)} explore units, more than --max-units "
-            f"{max_units}. Narrow it with --path <dir>, or raise --max-units")
+            f"{max_units}. Narrow it with --path <dir>, or raise --max-units"
+        )
 
 
 def plan_text(target: Target, scope: TargetScope, describe: str) -> str:
     """`plan.txt`: the units and the number of calls a run would make. No timestamp."""
     n = len(scope.units)
-    s = len({(x.path, x.name) for x in scope.symbols})  # a name defined twice is one symbol
-    lines = [f"spec-extract plan: {describe}", "",
-             f"Explore: {n} unit(s), one agent run each (a unit whose run fails is asked once more, "
-             f"so at most {2 * n} agent runs; an answer that does not parse is sent back once to be "
-             f"reformatted, in one turn with no tools)."]
+    s = len(
+        {(x.path, x.name) for x in scope.symbols}
+    )  # a name defined twice is one symbol
+    lines = [
+        f"spec-extract plan: {describe}",
+        "",
+        f"Explore: {n} unit(s), one agent run each (a unit whose run fails is asked once more, "
+        f"so at most {2 * n} agent runs; an answer that does not parse is sent back once to be "
+        f"reformatted, in one turn with no tools).",
+    ]
     for u in scope.units:
-        lines.append(f"- {u.id}: {len(u.files)} file(s), {u.lines} lines: {', '.join(u.files)}")
-    lines += ["",
-              f"Public symbols to specify: {s}.",
-              f"Write: one call per capability; the group step (one call) decides the capabilities, "
-              f"at most 40 symbols each, so at least {-(-s // 40)} write call(s).",
-              f"Skipped: {len(scope.skipped)} file(s). Not analysed (ast could not parse): "
-              f"{len(scope.unparsed)} file(s)."]
+        lines.append(
+            f"- {u.id}: {len(u.files)} file(s), {u.lines} lines: {', '.join(u.files)}"
+        )
+    lines += [
+        "",
+        f"Public symbols to specify: {s}.",
+        f"Write: one call per capability; the group step (one call) decides the capabilities, "
+        f"at most 40 symbols each, so at least {-(-s // 40)} write call(s).",
+        f"Skipped: {len(scope.skipped)} file(s). Not analysed (ast could not parse): "
+        f"{len(scope.unparsed)} file(s).",
+    ]
     return "\n".join(lines) + "\n"

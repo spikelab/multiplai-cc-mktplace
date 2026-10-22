@@ -17,6 +17,7 @@ exists.
 
 Standard library only, like review_server.py, which imports this.
 """
+
 from __future__ import annotations
 
 import json
@@ -25,18 +26,38 @@ from pathlib import Path
 from typing import Any
 
 SCHEMA_DIR = Path(__file__).resolve().parents[2] / "schema"
-INPUTS = {"job": "job.json", "candidates": "candidates.json", "looks": "looks.json", "music": "music.json"}
+INPUTS = {
+    "job": "job.json",
+    "candidates": "candidates.json",
+    "looks": "looks.json",
+    "music": "music.json",
+}
 MAX_ERRORS = 5
 
 _ANNOTATIONS = {"$schema", "$id", "$defs", "title", "description"}
-_KNOWN = _ANNOTATIONS | {"type", "properties", "required", "additionalProperties", "items", "enum",
-                         "minimum", "maximum", "minLength", "maxLength", "minItems", "format", "$ref"}
+_KNOWN = _ANNOTATIONS | {
+    "type",
+    "properties",
+    "required",
+    "additionalProperties",
+    "items",
+    "enum",
+    "minimum",
+    "maximum",
+    "minLength",
+    "maxLength",
+    "minItems",
+    "format",
+    "$ref",
+}
 _schemas: dict[str, dict] = {}
 
 
 def schema(name: str) -> dict:
     if name not in _schemas:
-        _schemas[name] = json.loads((SCHEMA_DIR / f"{name}.schema.json").read_text(encoding="utf-8"))
+        _schemas[name] = json.loads(
+            (SCHEMA_DIR / f"{name}.schema.json").read_text(encoding="utf-8")
+        )
     return _schemas[name]
 
 
@@ -49,15 +70,25 @@ def _type_ok(value: Any, kind: str) -> bool:
         return isinstance(value, str)
     if kind == "boolean":
         return isinstance(value, bool)
-    if kind == "integer":     # bool is an int subclass in Python, never in JSON
+    if kind == "integer":  # bool is an int subclass in Python, never in JSON
         return isinstance(value, int) and not isinstance(value, bool)
     if kind == "number":
-        return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+        return (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and math.isfinite(value)
+        )
     raise ValueError(f"checker does not support type {kind!r}")
 
 
-def check(value: Any, node: dict, root: dict | None = None, where: str = "$",
-          errors: list[str] | None = None, paths: list[str] | None = None) -> list[str]:
+def check(
+    value: Any,
+    node: dict,
+    root: dict | None = None,
+    where: str = "$",
+    errors: list[str] | None = None,
+    paths: list[str] | None = None,
+) -> list[str]:
     """Errors for `value` against schema `node`, as `<json path>: <problem>` lines.
 
     Strings checked by `format: absolute-path` are appended to `paths`.
@@ -66,17 +97,25 @@ def check(value: Any, node: dict, root: dict | None = None, where: str = "$",
     errors = errors if errors is not None else []
     unknown = set(node) - _KNOWN
     if unknown:
-        raise ValueError(f"checker does not support schema keyword(s) {sorted(unknown)}")
+        raise ValueError(
+            f"checker does not support schema keyword(s) {sorted(unknown)}"
+        )
     if "$ref" in node:
         ref = node["$ref"]
         if not ref.startswith("#/$defs/"):
-            raise ValueError(f"checker supports only local $defs references, not {ref!r}")
-        return check(value, root["$defs"][ref[len("#/$defs/"):]], root, where, errors, paths)
+            raise ValueError(
+                f"checker supports only local $defs references, not {ref!r}"
+            )
+        return check(
+            value, root["$defs"][ref[len("#/$defs/") :]], root, where, errors, paths
+        )
     if "type" in node and not _type_ok(value, node["type"]):
         errors.append(f"{where}: expected {node['type']}")
         return errors
     if "enum" in node and value not in node["enum"]:
-        errors.append(f"{where}: must be one of {', '.join(json.dumps(v) for v in node['enum'])}")
+        errors.append(
+            f"{where}: must be one of {', '.join(json.dumps(v) for v in node['enum'])}"
+        )
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         if "minimum" in node and value < node["minimum"]:
             errors.append(f"{where}: must be >= {node['minimum']}")
@@ -84,8 +123,11 @@ def check(value: Any, node: dict, root: dict | None = None, where: str = "$",
             errors.append(f"{where}: must be <= {node['maximum']}")
     if isinstance(value, str):
         if "minLength" in node and len(value) < node["minLength"]:
-            errors.append(f"{where}: must not be empty" if node["minLength"] == 1
-                          else f"{where}: shorter than {node['minLength']} characters")
+            errors.append(
+                f"{where}: must not be empty"
+                if node["minLength"] == 1
+                else f"{where}: shorter than {node['minLength']} characters"
+            )
         if "maxLength" in node and len(value) > node["maxLength"]:
             errors.append(f"{where}: longer than {node['maxLength']} characters")
         if node.get("format") == "absolute-path":
@@ -165,7 +207,11 @@ def load(outdir: Path, name: str) -> dict:
     try:
         data = json.loads(text)
     except json.JSONDecodeError as e:
-        return {**out, "status": "invalid", "error": f"{path.name} is not valid JSON: {e}"}
+        return {
+            **out,
+            "status": "invalid",
+            "error": f"{path.name} is not valid JSON: {e}",
+        }
     errors, _paths = validate(name, data)
     if errors:
         more = len(errors) - MAX_ERRORS
@@ -192,5 +238,7 @@ def named_files(outdir: Path) -> dict[str, set[Path]]:
             out["audio"].update(Path(f).resolve() for f in s["files"])
     looks = load(outdir, "looks")
     if looks["status"] == "ok":
-        out["sample"].update(Path(s["sample_html"]).resolve() for s in looks["data"].get("styles", []))
+        out["sample"].update(
+            Path(s["sample_html"]).resolve() for s in looks["data"].get("styles", [])
+        )
     return out

@@ -51,12 +51,16 @@ class MigrateResult:
     dest: Path
     copied: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
-    finished: list[str] = field(default_factory=list)  # copied by a run that stopped before recording it
+    finished: list[str] = field(
+        default_factory=list
+    )  # copied by a run that stopped before recording it
     lines: int = 0
     config: Path | None = None  # the review.yaml copied to <out>, if one was
 
 
-def _ledger_line(findings: Path, source_dir: Path, copy_dir: Path, session_id: str) -> dict | None:
+def _ledger_line(
+    findings: Path, source_dir: Path, copy_dir: Path, session_id: str
+) -> dict | None:
     try:
         data = json.loads(findings.read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
@@ -67,11 +71,20 @@ def _ledger_line(findings: Path, source_dir: Path, copy_dir: Path, session_id: s
     t = data.get("target") if isinstance(data.get("target"), dict) else {}
     in_rounds = findings.parent.parent.name == "rounds"
     return {
-        "event": "migrated", "generated_at": data.get("generated_at"), "producer": data.get("producer"),
-        "session_id": session_id, "slug": t.get("slug"), "target_dir": str(copy_dir),
-        "round": findings.parent.name if in_rounds else None, "head_sha": t.get("head_sha"),
-        "base_sha": t.get("base_sha"), "kind": t.get("kind"), "pr": t.get("pr"), "stopped": None,
-        "run": data.get("run"), "migrated_from": str(source_dir),
+        "event": "migrated",
+        "generated_at": data.get("generated_at"),
+        "producer": data.get("producer"),
+        "session_id": session_id,
+        "slug": t.get("slug"),
+        "target_dir": str(copy_dir),
+        "round": findings.parent.name if in_rounds else None,
+        "head_sha": t.get("head_sha"),
+        "base_sha": t.get("base_sha"),
+        "kind": t.get("kind"),
+        "pr": t.get("pr"),
+        "stopped": None,
+        "run": data.get("run"),
+        "migrated_from": str(source_dir),
     }
 
 
@@ -90,8 +103,10 @@ def _sources(dest_root: Path) -> dict[str, dict]:
         except ValueError:
             continue
         if isinstance(entry, dict) and entry.get("source") and entry.get("dest"):
-            sources[str(entry["source"])] = {"dest": str(entry["dest"]),
-                                             "done": entry.get("state", "done") == "done"}
+            sources[str(entry["source"])] = {
+                "dest": str(entry["dest"]),
+                "done": entry.get("state", "done") == "done",
+            }
     return sources
 
 
@@ -102,8 +117,11 @@ def _record(dest_root: Path, src: Path, name: str, state: str) -> None:
 
 def _logged() -> set[tuple[str, str]]:
     """(migrated_from, target_dir) of every `migrated` line already in the ledger."""
-    return {(str(e.get("migrated_from")), str(e.get("target_dir"))) for e in ledger.read()
-            if e.get("event") == "migrated"}
+    return {
+        (str(e.get("migrated_from")), str(e.get("target_dir")))
+        for e in ledger.read()
+        if e.get("event") == "migrated"
+    }
 
 
 def _copy_config(source: Path, out: Path) -> Path | None:
@@ -125,8 +143,14 @@ def migrate(source: Path, out: Path, *, session_id: str = "") -> MigrateResult:
     if not source.is_dir():
         raise MigrateError(f"{source} is not a directory")
     dest_root = out / ledger.LEGACY_DIR
-    if dest_root == source or source in dest_root.parents or dest_root in source.parents:
-        raise MigrateError(f"{source} and the copy's directory {dest_root} overlap; pass another --out")
+    if (
+        dest_root == source
+        or source in dest_root.parents
+        or dest_root in source.parents
+    ):
+        raise MigrateError(
+            f"{source} and the copy's directory {dest_root} overlap; pass another --out"
+        )
     result = MigrateResult(dest=dest_root)
     sources = _sources(dest_root)
     claimed = {e["dest"] for e in sources.values()}
@@ -137,17 +161,23 @@ def migrate(source: Path, out: Path, *, session_id: str = "") -> MigrateResult:
         if entry and entry["done"]:
             result.skipped.append(src.name)
             continue
-        if entry:  # a run stopped part way through this source: finish it under the same name
+        if (
+            entry
+        ):  # a run stopped part way through this source: finish it under the same name
             name = entry["dest"]
         else:
             name = src.name
-            if (dest_root / name).exists() or name in claimed:  # another source's directory of the same name
+            if (
+                (dest_root / name).exists() or name in claimed
+            ):  # another source's directory of the same name
                 name = f"{src.name}~{hashlib.sha256(str(src).encode()).hexdigest()[:6]}"
             dest_root.mkdir(parents=True, exist_ok=True)
             _record(dest_root, src, name, "copying")
             claimed.add(name)
         dest = dest_root / name
-        if dest.exists():  # renamed into place by a run that stopped before its `done` line
+        if (
+            dest.exists()
+        ):  # renamed into place by a run that stopped before its `done` line
             result.finished.append(src.name)
         else:
             partial = dest_root / f"{PARTIAL_PREFIX}{name}"

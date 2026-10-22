@@ -103,49 +103,52 @@ gcloud compute firewall-rules create deny-malicious-ip \
 ```python
 from google.cloud import compute_v1
 
+
 def create_https_load_balancer(project_id):
     # Create backend service
     backend_client = compute_v1.BackendServicesClient()
     backend_service = compute_v1.BackendService(
-        name='web-backend',
-        protocol='HTTP',
-        port_name='http',
+        name="web-backend",
+        protocol="HTTP",
+        port_name="http",
         timeout_sec=30,
-        health_checks=[f'projects/{project_id}/global/healthChecks/web-health-check'],
+        health_checks=[f"projects/{project_id}/global/healthChecks/web-health-check"],
         backends=[
             compute_v1.Backend(
-                group=f'projects/{project_id}/zones/us-central1-a/instanceGroups/web-mig'
+                group=f"projects/{project_id}/zones/us-central1-a/instanceGroups/web-mig"
             )
-        ]
+        ],
     )
     backend_client.insert(project=project_id, backend_service_resource=backend_service)
 
     # Create URL map (routing rules)
     url_maps_client = compute_v1.UrlMapsClient()
     url_map = compute_v1.UrlMap(
-        name='web-url-map',
-        default_service=f'projects/{project_id}/global/backendServices/web-backend'
+        name="web-url-map",
+        default_service=f"projects/{project_id}/global/backendServices/web-backend",
     )
     url_maps_client.insert(project=project_id, url_map_resource=url_map)
 
     # Create HTTPS proxy
     proxy_client = compute_v1.TargetHttpsProxiesClient()
     https_proxy = compute_v1.TargetHttpsProxy(
-        name='web-https-proxy',
-        url_map=f'projects/{project_id}/global/urlMaps/web-url-map',
-        ssl_certificates=[f'projects/{project_id}/global/sslCertificates/web-cert']
+        name="web-https-proxy",
+        url_map=f"projects/{project_id}/global/urlMaps/web-url-map",
+        ssl_certificates=[f"projects/{project_id}/global/sslCertificates/web-cert"],
     )
     proxy_client.insert(project=project_id, target_https_proxy_resource=https_proxy)
 
     # Create forwarding rule (external IP + port)
     forwarding_client = compute_v1.GlobalForwardingRulesClient()
     forwarding_rule = compute_v1.ForwardingRule(
-        name='web-forwarding-rule',
-        ip_protocol='TCP',
-        port_range='443',
-        target=f'projects/{project_id}/global/targetHttpsProxies/web-https-proxy'
+        name="web-forwarding-rule",
+        ip_protocol="TCP",
+        port_range="443",
+        target=f"projects/{project_id}/global/targetHttpsProxies/web-https-proxy",
     )
-    forwarding_client.insert(project=project_id, forwarding_rule_resource=forwarding_rule)
+    forwarding_client.insert(
+        project=project_id, forwarding_rule_resource=forwarding_rule
+    )
 ```
 
 ### Concept 4: Cloud CDN
@@ -397,7 +400,8 @@ from flask import Flask, jsonify
 
 app = Flask(__name__)
 
-@app.route('/health')
+
+@app.route("/health")
 def health_check():
     # Check database connectivity, dependencies, etc.
     try:

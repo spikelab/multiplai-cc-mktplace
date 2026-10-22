@@ -14,14 +14,13 @@ import time
 from pathlib import Path
 
 import pytest
-
 from build_pipeline.config import EpicSettings
-from build_pipeline.epic import records
 from build_pipeline.epic import lock as epic_lock
-from .epic_row_helpers import EpicSplitAnswer
+from build_pipeline.epic import records
 
 from .epic_row_helpers import (
     CallLog,
+    EpicSplitAnswer,
     Fakes,
     alive,
     approve,
@@ -37,14 +36,24 @@ from .epic_row_helpers import (
     use_workspace,
 )
 
-TWO = EpicSplitAnswer(single=False, reason="Two parts.", children=[child("a"), child("b")])
-CHAIN = EpicSplitAnswer(single=False, reason="Two parts.", children=[child("a"), child("b", ("a",))])
+TWO = EpicSplitAnswer(
+    single=False, reason="Two parts.", children=[child("a"), child("b")]
+)
+CHAIN = EpicSplitAnswer(
+    single=False, reason="Two parts.", children=[child("a"), child("b", ("a",))]
+)
 N = pr_number("e-a")
 
 
 def high(fid: str = "f1", severity: str = "HIGH") -> dict:
-    return {"id": fid, "severity": severity, "status": "confirmed", "claim": f"{fid} is wrong",
-            "file": "src/app.py", "line_start": 3}
+    return {
+        "id": fid,
+        "severity": severity,
+        "status": "confirmed",
+        "claim": f"{fid} is wrong",
+        "file": "src/app.py",
+        "line_start": 3,
+    }
 
 
 BLOCKED = {str(N): [{"findings": [high()]}]}
@@ -57,13 +66,26 @@ def _release_locks():
 
 
 class Epic:
-    def __init__(self, root: Path, monkeypatch, answer=TWO, reviews=None, fixes=None, rounds=6, max_usd=None):
+    def __init__(
+        self,
+        root: Path,
+        monkeypatch,
+        answer=TWO,
+        reviews=None,
+        fixes=None,
+        rounds=6,
+        max_usd=None,
+    ):
         self.root = root
         self.data = use_workspace(monkeypatch, root)
         self.project = make_project(root)
-        self.fakes = Fakes(root, monkeypatch, {}, BLOCKED if reviews is None else reviews, fixes)
+        self.fakes = Fakes(
+            root, monkeypatch, {}, BLOCKED if reviews is None else reviews, fixes
+        )
         self.config = make_build(self.project)
-        self.config.epic = EpicSettings(max_parallel=2, max_review_rounds=rounds, max_usd=max_usd)
+        self.config.epic = EpicSettings(
+            max_parallel=2, max_review_rounds=rounds, max_usd=max_usd
+        )
         approve(self.config, answer, CallLog(root / "split.log"))
         self.dir = self.data / "buildme" / "epics" / "o-r--e"
         self.target = self.data / "reviews" / "o-r" / f"pr-{N}"
@@ -85,47 +107,118 @@ class Epic:
         return [a for a in self.tries() if a.kind == "fix"]
 
     def head(self) -> str:
-        return subprocess.run(["git", "rev-parse", "refs/heads/buildme/e-a"], cwd=self.project,
-                              capture_output=True, text=True, check=True).stdout.strip()
+        return subprocess.run(
+            ["git", "rev-parse", "refs/heads/buildme/e-a"],
+            cwd=self.project,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
 
     def posted(self) -> list[dict]:
-        return [json.loads(p.read_text()) for p in sorted((self.root / "posted").glob("post.*.json"))]
+        return [
+            json.loads(p.read_text())
+            for p in sorted((self.root / "posted").glob("post.*.json"))
+        ]
 
 
 def _rounds(arg: list[str]) -> int:
     return int(arg[arg.index("--max-rounds") + 1])
 
 
-def test_blockers_lead_to_a_post_then_a_fix_and_round_counts_add_up(tmp_path, monkeypatch):
+def test_blockers_lead_to_a_post_then_a_fix_and_round_counts_add_up(
+    tmp_path, monkeypatch
+):
     """32.1-32.3: the review's blockers are posted, then the fixer runs with
     `--max-rounds` = every round in its state + 1 (one round per launch); back at the review
     step, the fixer's last review is reused, and blockers on it start one
     more post and fix."""
-    fixes = {str(N): [{"rounds": [{"findings": [high("f2")]}, {"findings": [high("f3", "MEDIUM")]}]},
-                      {"rounds": [{}]}]}
+    fixes = {
+        str(N): [
+            {
+                "rounds": [
+                    {"findings": [high("f2")]},
+                    {"findings": [high("f3", "MEDIUM")]},
+                ]
+            },
+            {"rounds": [{}]},
+        ]
+    }
     e = Epic(tmp_path, monkeypatch, fixes=fixes)
     assert e.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
-    assert e.kinds() == ["build", "review", "post", "fix", "review", "post", "fix", "review"]
-    assert [x["kind"] for x in e.fakes.review_launches()] == ["review", "review"]      # a's first, b's
+    assert e.kinds() == [
+        "build",
+        "review",
+        "post",
+        "fix",
+        "review",
+        "post",
+        "fix",
+        "review",
+    ]
+    assert [x["kind"] for x in e.fakes.review_launches()] == [
+        "review",
+        "review",
+    ]  # a's first, b's
     first, second = (a.started["argv"] for a in e.fixes())
-    session = e.tries()[0].started["argv"][4]           # the build's own --session-id
-    assert first == ["python", "-m", "build_pipeline", "--session-id", session, "findings", "--pr", str(N),
-                     "--change", "e-a", "--project-dir", str(e.worktree), "--auto", "--trust-repo",
-                     "--max-rounds", "1", "--severities", "HIGH,MEDIUM", "--code-only", "--no-escalation"]
+    session = e.tries()[0].started["argv"][4]  # the build's own --session-id
+    assert first == [
+        "python",
+        "-m",
+        "build_pipeline",
+        "--session-id",
+        session,
+        "findings",
+        "--pr",
+        str(N),
+        "--change",
+        "e-a",
+        "--project-dir",
+        str(e.worktree),
+        "--auto",
+        "--trust-repo",
+        "--max-rounds",
+        "1",
+        "--severities",
+        "HIGH,MEDIUM",
+        "--code-only",
+        "--no-escalation",
+    ]
     assert (_rounds(first), _rounds(second)) == (0 + 1, 2 + 1)
-    assert [x["cwd"] for x in e.fakes.fix_launches()] == ["<root>/ws/.worktrees/buildme-e-a"] * 2
+    assert [x["cwd"] for x in e.fakes.fix_launches()] == [
+        "<root>/ws/.worktrees/buildme-e-a"
+    ] * 2
     posts = [a for a in e.tries() if a.kind == "post"]
     decisions = e.target / "buildme-decisions.json"
-    assert all(a.started["argv"][6:] == ["review_pipeline", "post", str(e.target), "--decisions", str(decisions)]
-               for a in posts)
-    assert [x["cwd"] for x in e.fakes.post_launches()] == ["<root>/ws/.worktrees/buildme-e-a"] * 2
-    assert e.posted() == [{"f1": {"decision": "accept"}}, {"f3": {"decision": "accept"}}]
-    assert [a.result["exit_code"] for a in e.tries() if a.kind in ("post", "fix")] == [0, 0, 0, 0]
+    assert all(
+        a.started["argv"][6:]
+        == ["review_pipeline", "post", str(e.target), "--decisions", str(decisions)]
+        for a in posts
+    )
+    assert [x["cwd"] for x in e.fakes.post_launches()] == [
+        "<root>/ws/.worktrees/buildme-e-a"
+    ] * 2
+    assert e.posted() == [
+        {"f1": {"decision": "accept"}},
+        {"f3": {"decision": "accept"}},
+    ]
+    assert [a.result["exit_code"] for a in e.tries() if a.kind in ("post", "fix")] == [
+        0,
+        0,
+        0,
+        0,
+    ]
     last = e.tries()[-1]
-    assert (last.started["head_sha"], last.result["reused"], last.result["blocking"]) == (e.head(), True, [])
+    assert (
+        last.started["head_sha"],
+        last.result["reused"],
+        last.result["blocking"],
+    ) == (e.head(), True, [])
     st = e.status()
     assert (st["status"], st["pr_round"]) == ("built", 4)
-    summary = json.loads(sorted((e.dir / "runs").glob("*/summary.json"))[-1].read_text())
+    summary = json.loads(
+        sorted((e.dir / "runs").glob("*/summary.json"))[-1].read_text()
+    )
     assert next(c for c in summary["children"] if c["id"] == "a")["rounds"] == 4
 
 
@@ -139,12 +232,18 @@ def test_a_clean_review_runs_no_post_and_no_fix(tmp_path, monkeypatch):
 def test_at_the_cap_the_child_parks(tmp_path, monkeypatch):
     """Item 23 after the fix: the fixer's reviews count, and at the cap with
     blockers the child parks with them; a later run launches nothing."""
-    fixes = {str(N): [{"rounds": [{"findings": [high("f2")]}, {"findings": [high("f3")]}]}]}
+    fixes = {
+        str(N): [{"rounds": [{"findings": [high("f2")]}, {"findings": [high("f3")]}]}]
+    }
     e = Epic(tmp_path, monkeypatch, answer=CHAIN, fixes=fixes, rounds=3)
     assert e.run() == 0
     assert [_rounds(a.started["argv"]) for a in e.fixes()] == [1]
     st = e.status()
-    assert st["status"] == "parked" and "review round 3 of 3" in st["reason"] and "f3" in st["reason"]
+    assert (
+        st["status"] == "parked"
+        and "review round 3 of 3" in st["reason"]
+        and "f3" in st["reason"]
+    )
     assert e.status("b")["status"] == "skipped"
     assert e.run() == 0
     assert len(e.fakes.fix_launches()) == 1 and len(e.fakes.post_launches()) == 1
@@ -153,12 +252,22 @@ def test_at_the_cap_the_child_parks(tmp_path, monkeypatch):
 
 def test_findings_failed_parks_with_the_reason_and_stays_parked(tmp_path, monkeypatch):
     """D2.S6: `FINDINGS:FAILED:<step>:<reason>` parks the child with the reason."""
-    failed = "FINDINGS:FAILED:fetch:/w has uncommitted changes; commit or stash them first"
-    e = Epic(tmp_path, monkeypatch, answer=CHAIN, fixes={str(N): [{"exit": 1, "stdout": failed}]})
+    failed = (
+        "FINDINGS:FAILED:fetch:/w has uncommitted changes; commit or stash them first"
+    )
+    e = Epic(
+        tmp_path,
+        monkeypatch,
+        answer=CHAIN,
+        fixes={str(N): [{"exit": 1, "stdout": failed}]},
+    )
     assert e.run() == 0
     st = e.status()
     assert st["status"] == "parked"
-    assert st["reason"] == "the fixer failed at fetch: /w has uncommitted changes; commit or stash them first"
+    assert (
+        st["reason"]
+        == "the fixer failed at fetch: /w has uncommitted changes; commit or stash them first"
+    )
     assert e.fixes()[0].result["parked"] == st["reason"]
     assert e.status("b")["status"] == "skipped"
     assert e.run() == 0
@@ -166,7 +275,11 @@ def test_findings_failed_parks_with_the_reason_and_stays_parked(tmp_path, monkey
 
 
 def test_a_fixer_that_fails_otherwise_parks_with_its_output_tail(tmp_path, monkeypatch):
-    e = Epic(tmp_path, monkeypatch, fixes={str(N): [{"exit": 2, "stdout": "ERROR: PR 1 has no head branch"}]})
+    e = Epic(
+        tmp_path,
+        monkeypatch,
+        fixes={str(N): [{"exit": 2, "stdout": "ERROR: PR 1 has no head branch"}]},
+    )
     assert e.run() == 3 and merge_waiting() == [pr_url("e-b")]
     st = e.status()
     assert st["status"] == "parked" and st["reason"].startswith("the fixer exited 2: ")
@@ -174,11 +287,16 @@ def test_a_fixer_that_fails_otherwise_parks_with_its_output_tail(tmp_path, monke
 
 
 def test_a_failed_post_parks_and_runs_no_fixer(tmp_path, monkeypatch):
-    reviews = {**BLOCKED, "post": [{"exit": 1, "stderr": "ERROR: gh api failed: HTTP 502"}]}
+    reviews = {
+        **BLOCKED,
+        "post": [{"exit": 1, "stderr": "ERROR: gh api failed: HTTP 502"}],
+    }
     e = Epic(tmp_path, monkeypatch, reviews=reviews)
     assert e.run() == 3 and merge_waiting() == [pr_url("e-b")]
     st = e.status()
-    assert st["status"] == "parked" and st["reason"].startswith("posting the review exited 1: ")
+    assert st["status"] == "parked" and st["reason"].startswith(
+        "posting the review exited 1: "
+    )
     assert "HTTP 502" in st["reason"]
     assert e.fakes.fix_launches() == []
     assert e.run() == 3 and merge_waiting() == [pr_url("e-b")]
@@ -200,13 +318,20 @@ def test_a_review_folder_without_findings_parks_before_posting(tmp_path, monkeyp
     monkeypatch.setattr(coordinator.Coordinator, "_post", post)
     assert e.run() == 3 and merge_waiting() == [pr_url("e-b")]
     st = e.status()
-    assert st["status"] == "parked" and st["reason"].startswith("cannot choose what to post: no findings.json at ")
+    assert st["status"] == "parked" and st["reason"].startswith(
+        "cannot choose what to post: no findings.json at "
+    )
     assert e.fakes.post_launches() == [] and e.fakes.fix_launches() == []
 
 
-@pytest.mark.parametrize("step,end", [({}, "FINDINGS:DONE:0"), ({"max_rounds": True}, "FINDINGS:MAX_ROUNDS:0")],
-                         ids=["done", "max-rounds"])
-def test_a_fixer_that_ends_without_moving_the_head_parks_the_child(tmp_path, monkeypatch, step, end):
+@pytest.mark.parametrize(
+    "step,end",
+    [({}, "FINDINGS:DONE:0"), ({"max_rounds": True}, "FINDINGS:MAX_ROUNDS:0")],
+    ids=["done", "max-rounds"],
+)
+def test_a_fixer_that_ends_without_moving_the_head_parks_the_child(
+    tmp_path, monkeypatch, step, end
+):
     """D2.S15: `findings` exited 0 saying it is done (or at its own cap) and
     the PR's head is the one reviewed with blockers: nothing will fix them,
     so the child parks with its blockers. Item 33: a head with a `fix` after
@@ -219,8 +344,10 @@ def test_a_fixer_that_ends_without_moving_the_head_parks_the_child(tmp_path, mon
     assert e.tries()[1].started["head_sha"] == head
     st = e.status()
     assert st["status"] == "parked"
-    assert st["reason"] == (f"the fixer ended ({end}) and left {head[:12]} with 1 blocker(s): "
-                            + "; ".join(e.tries()[1].result["blocking"]))
+    assert st["reason"] == (
+        f"the fixer ended ({end}) and left {head[:12]} with 1 blocker(s): "
+        + "; ".join(e.tries()[1].result["blocking"])
+    )
     assert e.status("b")["status"] == "skipped"
     assert e.run() == 0
     assert e.kinds() == ["build", "review", "post", "fix"]
@@ -235,8 +362,14 @@ def test_a_fix_is_a_launch_the_epic_budget_stops(tmp_path, monkeypatch, capsys):
     from build_pipeline.epic import coordinator
 
     e = Epic(tmp_path, monkeypatch, max_usd=5.0)
-    monkeypatch.setattr(coordinator.Coordinator, "spent",
-                        lambda self: (6.0 if any(a.result for a in e.tries() if a.kind == "review") else 0.0, True))
+    monkeypatch.setattr(
+        coordinator.Coordinator,
+        "spent",
+        lambda self: (
+            6.0 if any(a.result for a in e.tries() if a.kind == "review") else 0.0,
+            True,
+        ),
+    )
     assert e.run() == 3
     assert "EPIC:BUDGET:6.00" in capsys.readouterr().out.splitlines()
     assert e.kinds() == ["build", "review"]
@@ -251,7 +384,10 @@ def test_a_fixer_killed_alone_is_relaunched_by_the_next_run(tmp_path, monkeypatc
     e = Epic(tmp_path, monkeypatch, fixes={str(N): [{"die": True}, {"rounds": [{}]}]})
     assert e.run() == 3 and merge_waiting() == [pr_url("e-b")]
     [fix] = e.fixes()
-    assert (fix.result["exit_code"], fix.result["interrupted"]) == (-signal.SIGKILL, True)
+    assert (fix.result["exit_code"], fix.result["interrupted"]) == (
+        -signal.SIGKILL,
+        True,
+    )
     assert e.status()["status"] == "built"
     assert e.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     assert e.kinds() == ["build", "review", "post", "fix", "fix", "review"]
@@ -274,11 +410,21 @@ def test_a_signal_stops_the_fixer_and_the_next_run_relaunches_it(tmp_path, monke
 
 # --- resumes that must not repeat a paid step, and the round count -----------------
 
+
 def _state(project: Path, name: str, rounds: list[list[str]]) -> None:
     path = project / "specs" / "changes" / name / ".findings-state.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"findings": {"rounds": [{"number": i + 1, "finished": f}
-                                                        for i, f in enumerate(rounds)]}}))
+    path.write_text(
+        json.dumps(
+            {
+                "findings": {
+                    "rounds": [
+                        {"number": i + 1, "finished": f} for i, f in enumerate(rounds)
+                    ]
+                }
+            }
+        )
+    )
 
 
 ALL = ["fetch", "triage", "spec", "code", "publish", "review"]
@@ -294,8 +440,15 @@ def test_rounds_done_counts_reviewed_rounds_under_the_name_findings_uses(tmp_pat
     assert fix.rounds_done(tmp_path, "spk-12-a") == 2
 
 
-@pytest.mark.parametrize("text", ["[]", '{"findings": {"rounds": null}}', "{not json",
-                                  '{"findings": {"rounds": [1, null]}}'])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "[]",
+        '{"findings": {"rounds": null}}',
+        "{not json",
+        '{"findings": {"rounds": [1, null]}}',
+    ],
+)
 def test_rounds_done_reads_a_malformed_state_as_no_rounds(tmp_path, text):
     from build_pipeline.epic import fix
 
@@ -303,63 +456,92 @@ def test_rounds_done_reads_a_malformed_state_as_no_rounds(tmp_path, text):
     path.parent.mkdir(parents=True)
     path.write_text(text)
     assert fix.rounds_done(tmp_path, "e-a") == 0
-    assert fix.rounds_done(tmp_path, "e-b") == 0          # no change directory
+    assert fix.rounds_done(tmp_path, "e-b") == 0  # no change directory
 
 
-def test_a_fixer_killed_part_way_through_a_round_is_relaunched_within_the_cap(tmp_path, monkeypatch):
+def test_a_fixer_killed_part_way_through_a_round_is_relaunched_within_the_cap(
+    tmp_path, monkeypatch
+):
     """D2.S5/S11 with a round open: the killed fixer had finished round 1 and
     started round 2, whose review is not in the ledger yet. The relaunch gets
     the same `--max-rounds` as the first launch, so `findings` finishing round
     2 and running on stops where a fixer that never stopped would."""
-    fixes = {str(N): [{"rounds": [{"findings": [high("f2")]}, {"stop": "fetch"}]}, {"rounds": [{}]}]}
+    fixes = {
+        str(N): [
+            {"rounds": [{"findings": [high("f2")]}, {"stop": "fetch"}]},
+            {"rounds": [{}]},
+        ]
+    }
     e = Epic(tmp_path, monkeypatch, fixes=fixes)
     assert e.run() == 3 and merge_waiting() == [pr_url("e-b")]
-    assert e.status()["status"] == "built" and e.fixes()[0].result["interrupted"] is True
+    assert (
+        e.status()["status"] == "built" and e.fixes()[0].result["interrupted"] is True
+    )
     assert e.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     assert [_rounds(a.started["argv"]) for a in e.fixes()] == [1, 1]
     st = e.status()
     assert (st["status"], st["pr_round"]) == ("built", 3)
 
 
-def test_a_fixer_killed_after_its_last_allowed_review_is_not_relaunched(tmp_path, monkeypatch):
+def test_a_fixer_killed_after_its_last_allowed_review_is_not_relaunched(
+    tmp_path, monkeypatch
+):
     """The fixer's review of round 1 reached the cap, then it was killed before
     the round recorded it. No review round is left, so no fixer runs again:
     the review step reuses that review and parks at the cap."""
     fixes = {str(N): [{"rounds": [{"findings": [high("f2")], "stop": "review"}]}]}
     e = Epic(tmp_path, monkeypatch, answer=CHAIN, fixes=fixes, rounds=2)
-    assert e.run() == 3                                  # b waits for a's merge
+    assert e.run() == 3  # b waits for a's merge
     assert [_rounds(a.started["argv"]) for a in e.fixes()] == [1]
     assert e.status()["status"] == "built"
     assert e.run() == 0
     assert len(e.fakes.fix_launches()) == 1
     st = e.status()
-    assert st["status"] == "parked" and "review round 2 of 2" in st["reason"] and "f2" in st["reason"]
+    assert (
+        st["status"] == "parked"
+        and "review round 2 of 2" in st["reason"]
+        and "f2" in st["reason"]
+    )
 
 
 @pytest.mark.parametrize("left", ["no result", "interrupted"])
-def test_a_failed_fixer_whose_result_was_not_recorded_parks_on_resume(tmp_path, monkeypatch, left):
+def test_a_failed_fixer_whose_result_was_not_recorded_parks_on_resume(
+    tmp_path, monkeypatch, left
+):
     """D2.S6 after a stop: `findings` printed `FINDINGS:FAILED` and exited,
     and the coordinator stopped before recording that (or recorded it as
     interrupted). The resume parks with the reason from the log and does not
     run `findings` again, which would repeat the failed step."""
     failed = "FINDINGS:FAILED:code:block 2 failed"
-    e = Epic(tmp_path, monkeypatch, answer=CHAIN, fixes={str(N): [{"exit": 1, "stdout": failed}, {"rounds": [{}]}]})
+    e = Epic(
+        tmp_path,
+        monkeypatch,
+        answer=CHAIN,
+        fixes={str(N): [{"exit": 1, "stdout": failed}, {"rounds": [{}]}]},
+    )
     assert e.run() == 0
     [fx] = e.fixes()
     if left == "no result":
         fx.result_path.unlink()
     else:
-        fx.result_path.write_text(json.dumps({**fx.result, "interrupted": True, "parked": None}))
+        fx.result_path.write_text(
+            json.dumps({**fx.result, "interrupted": True, "parked": None})
+        )
     assert e.run() == 0
     assert len(e.fakes.fix_launches()) == 1
     st = e.status()
-    assert (st["status"], st["reason"]) == ("parked", "the fixer failed at code: block 2 failed")
+    assert (st["status"], st["reason"]) == (
+        "parked",
+        "the fixer failed at code: block 2 failed",
+    )
     assert e.run() == 0
     assert len(e.fakes.fix_launches()) == 1 and e.status()["status"] == "parked"
 
 
 @pytest.mark.parametrize("sig", [signal.SIGTERM, signal.SIGHUP])
-def test_a_fixer_stopped_alone_by_sigterm_or_sighup_is_relaunched(tmp_path, monkeypatch, sig):
+def test_a_fixer_stopped_alone_by_sigterm_or_sighup_is_relaunched(
+    tmp_path, monkeypatch, sig
+):
     """D2.S5: `findings` turns SIGTERM and SIGHUP into exit 128 + signal. That
     is a stop, not a failure: the result is `interrupted`, the child stays
     `built`, and the next run relaunches it."""
@@ -386,14 +568,20 @@ def test_a_fixer_stopped_alone_by_sigterm_or_sighup_is_relaunched(tmp_path, monk
     assert e.status()["status"] == "built"
 
 
-def test_a_post_still_running_after_its_coordinator_died_is_waited_for(tmp_path, monkeypatch):
+def test_a_post_still_running_after_its_coordinator_died_is_waited_for(
+    tmp_path, monkeypatch
+):
     """D2.S2 with the post alive: the coordinator died while `post` ran in its
     own session. The resume launches nothing while it lives, then writes its
     result and posts again; two posts never run at once."""
     from build_pipeline.epic import coordinator
 
-    e = Epic(tmp_path, monkeypatch, reviews={**BLOCKED, "post": [{"block": True}, {}]},
-             fixes={str(N): [{"rounds": [{}]}]})
+    e = Epic(
+        tmp_path,
+        monkeypatch,
+        reviews={**BLOCKED, "post": [{"block": True}, {}]},
+        fixes={str(N): [{"rounds": [{}]}]},
+    )
 
     def setup():
         def die_while_posting(coord):
@@ -419,7 +607,7 @@ def test_a_post_still_running_after_its_coordinator_died_is_waited_for(tmp_path,
     def tick(coord):
         if alive(pid):
             looks.append(1)
-            assert len(e.fakes.post_launches()) == 1          # never a second post
+            assert len(e.fakes.post_launches()) == 1  # never a second post
             if len(looks) == 5:
                 (e.root / "release" / "post-1").write_text("")
                 for _ in range(500):
@@ -431,44 +619,74 @@ def test_a_post_still_running_after_its_coordinator_died_is_waited_for(tmp_path,
     assert e.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     assert len(looks) == 5
     posts = [a for a in e.tries() if a.kind == "post"]
-    assert [(a.result["exit_code"], a.result["interrupted"]) for a in posts] == [(None, True), (0, False)]
+    assert [(a.result["exit_code"], a.result["interrupted"]) for a in posts] == [
+        (None, True),
+        (0, False),
+    ]
     assert len(e.fakes.post_launches()) == 2 and len(e.fakes.fix_launches()) == 1
     assert e.status()["status"] == "built"
 
 
-def test_a_post_killed_by_a_signal_is_posted_again_by_the_next_run(tmp_path, monkeypatch):
-    e = Epic(tmp_path, monkeypatch, reviews={**BLOCKED, "post": [{"die": True}, {}]},
-             fixes={str(N): [{"rounds": [{}]}]})
+def test_a_post_killed_by_a_signal_is_posted_again_by_the_next_run(
+    tmp_path, monkeypatch
+):
+    e = Epic(
+        tmp_path,
+        monkeypatch,
+        reviews={**BLOCKED, "post": [{"die": True}, {}]},
+        fixes={str(N): [{"rounds": [{}]}]},
+    )
     assert e.run() == 3 and merge_waiting() == [pr_url("e-b")]
     [post] = [a for a in e.tries() if a.kind == "post"]
-    assert (post.result["exit_code"], post.result["interrupted"]) == (-signal.SIGKILL, True)
+    assert (post.result["exit_code"], post.result["interrupted"]) == (
+        -signal.SIGKILL,
+        True,
+    )
     assert e.status()["status"] == "built" and e.fakes.fix_launches() == []
     assert e.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     assert len(e.fakes.post_launches()) == 2 and len(e.fakes.fix_launches()) == 1
     assert e.status()["status"] == "built"
 
 
-@pytest.mark.parametrize("code", [128 + signal.SIGKILL, 128 + signal.SIGTERM, 128 + signal.SIGHUP],
-                         ids=["137", "143", "129"])
-def test_a_post_that_uv_reports_stopped_by_a_signal_is_posted_again_by_the_next_run(tmp_path, monkeypatch, code):
+@pytest.mark.parametrize(
+    "code",
+    [128 + signal.SIGKILL, 128 + signal.SIGTERM, 128 + signal.SIGHUP],
+    ids=["137", "143", "129"],
+)
+def test_a_post_that_uv_reports_stopped_by_a_signal_is_posted_again_by_the_next_run(
+    tmp_path, monkeypatch, code
+):
     """D2.S12: the post runs under `uv run`, which reports a child killed by a
     signal as 128 + signal, not as a negative code. That is a stop, not a
     failure: the result is `interrupted`, the child stays `built`, and the
     next run posts again and runs the fixer."""
-    e = Epic(tmp_path, monkeypatch, reviews={**BLOCKED, "post": [{"exit": code}, {}]},
-             fixes={str(N): [{"rounds": [{}]}]})
+    e = Epic(
+        tmp_path,
+        monkeypatch,
+        reviews={**BLOCKED, "post": [{"exit": code}, {}]},
+        fixes={str(N): [{"rounds": [{}]}]},
+    )
     assert e.run() == 3 and merge_waiting() == [pr_url("e-b")]
     [post] = [a for a in e.tries() if a.kind == "post"]
-    assert (post.result["exit_code"], post.result["interrupted"], post.result.get("parked")) == (code, True, None)
+    assert (
+        post.result["exit_code"],
+        post.result["interrupted"],
+        post.result.get("parked"),
+    ) == (code, True, None)
     assert e.status()["status"] == "built" and e.fakes.fix_launches() == []
     assert e.run() == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     assert len(e.fakes.post_launches()) == 2 and len(e.fakes.fix_launches()) == 1
     assert e.status()["status"] == "built"
 
 
-@pytest.mark.parametrize("step", [{"die": True}, {"exit": 128 + signal.SIGKILL}, {"exit": 128 + signal.SIGTERM}],
-                         ids=["killed", "137", "143"])
-def test_a_review_stopped_by_a_signal_is_not_parked_and_the_next_run_reviews_again(tmp_path, monkeypatch, step):
+@pytest.mark.parametrize(
+    "step",
+    [{"die": True}, {"exit": 128 + signal.SIGKILL}, {"exit": 128 + signal.SIGTERM}],
+    ids=["killed", "137", "143"],
+)
+def test_a_review_stopped_by_a_signal_is_not_parked_and_the_next_run_reviews_again(
+    tmp_path, monkeypatch, step
+):
     """C.S3 with the coordinator alive, the same rule as the post's: a review
     killed by a signal (negative, or 128 + signal as `uv run` reports it) gets
     an `interrupted` result and the child stays `built`; the next run asks the
@@ -487,15 +705,39 @@ def test_a_review_stopped_by_a_signal_is_not_parked_and_the_next_run_reviews_aga
 def _hand_fixer(pr: int, *extra: str) -> subprocess.Popen:
     """A process whose command line reads as `findings` started by hand, as
     buildme-findings' SKILL.md shows it: no `--change`."""
-    return subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)", "-m", "build_pipeline",
-                             "findings", *extra])
+    return subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import time; time.sleep(120)",
+            "-m",
+            "build_pipeline",
+            "findings",
+            *extra,
+        ]
+    )
 
 
 def _git_init(path: Path) -> Path:
     path.mkdir(parents=True)
     subprocess.run(["git", "init", "-q", str(path)], check=True)
-    subprocess.run(["git", "-C", str(path), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q",
-                    "--allow-empty", "-m", "init"], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(path),
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "init",
+        ],
+        check=True,
+    )
     return path
 
 
@@ -507,7 +749,10 @@ def test_fix_pid_sees_a_findings_started_by_hand_on_the_same_pr_and_repo(tmp_pat
 
     repo, other = _git_init(tmp_path / "repo"), _git_init(tmp_path / "other")
     tree = tmp_path / "tree"
-    subprocess.run(["git", "-C", str(repo), "worktree", "add", "-q", "-b", "x", str(tree)], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "worktree", "add", "-q", "-b", "x", str(tree)],
+        check=True,
+    )
     procs = []
     try:
         procs.append(_hand_fixer(4321, "--pr", "4321", "--project-dir", str(tree)))
@@ -518,7 +763,9 @@ def test_fix_pid_sees_a_findings_started_by_hand_on_the_same_pr_and_repo(tmp_pat
         assert coordinator.fix_pid(4321, repo) == procs[0].pid
         assert coordinator.fix_pid(4321, other) is None
         assert coordinator.fix_pid(432, repo) is None
-        procs.append(_hand_fixer(4321, "--pr=4321"))          # no --project-dir: it may be any repo
+        procs.append(
+            _hand_fixer(4321, "--pr=4321")
+        )  # no --project-dir: it may be any repo
         for _ in range(250):
             if coordinator.fix_pid(4321, other):
                 break
@@ -544,7 +791,7 @@ def test_a_fixer_started_by_hand_on_the_pr_is_waited_for(tmp_path, monkeypatch):
         posted = [a for a in e.tries() if a.kind == "post" and a.result is not None]
         if posted and hand.poll() is None:
             looks.append(1)
-            assert e.fakes.fix_launches() == []                # never a second fixer
+            assert e.fakes.fix_launches() == []  # never a second fixer
             if len(looks) == 5:
                 hand.terminate()
                 hand.wait()
@@ -565,13 +812,17 @@ def test_a_decisions_file_that_cannot_be_written_parks_the_child(tmp_path, monke
     from build_pipeline.epic import coordinator
 
     def refuse(review_dir):
-        raise PermissionError(f"[Errno 13] Permission denied: '{review_dir}/buildme-decisions.json'")
+        raise PermissionError(
+            f"[Errno 13] Permission denied: '{review_dir}/buildme-decisions.json'"
+        )
 
     monkeypatch.setattr(coordinator, "write_decisions", refuse)
     e = Epic(tmp_path, monkeypatch)
     assert e.run() == 3 and merge_waiting() == [pr_url("e-b")]
     st = e.status()
-    assert st["status"] == "parked" and st["reason"].startswith("cannot choose what to post: [Errno 13]")
+    assert st["status"] == "parked" and st["reason"].startswith(
+        "cannot choose what to post: [Errno 13]"
+    )
     assert [a.result["parked"] for a in e.tries() if a.kind == "post"] == [st["reason"]]
     assert e.fakes.post_launches() == [] and e.fakes.fix_launches() == []
 
@@ -586,8 +837,13 @@ def test_the_fixer_runs_in_the_worktree_joined_with_the_projects_offset(tmp_path
     repo = tmp_path / "repo"
     (repo / "services" / "api").mkdir(parents=True)
     worktree = tmp_path / "wt"
-    me = SimpleNamespace(project_dir=repo / "services" / "api", repo=repo, _worktree=lambda c: worktree)
-    assert coordinator.Coordinator._child_project(me, None) == (worktree / "services" / "api").absolute()
+    me = SimpleNamespace(
+        project_dir=repo / "services" / "api", repo=repo, _worktree=lambda c: worktree
+    )
+    assert (
+        coordinator.Coordinator._child_project(me, None)
+        == (worktree / "services" / "api").absolute()
+    )
     me.project_dir = repo
     assert coordinator.Coordinator._child_project(me, None) == worktree.absolute()
 
@@ -602,7 +858,9 @@ def test_ps_failing_while_a_fixer_may_still_run_launches_nothing(tmp_path, monke
     assert e.run() == 1
     assert len(e.fakes.fix_launches()) == 1
     st = e.status()
-    assert st["status"] == "unknown" and st["reason"].startswith("cannot tell whether its fixer is still running")
+    assert st["status"] == "unknown" and st["reason"].startswith(
+        "cannot tell whether its fixer is still running"
+    )
 
 
 def test_an_unparsable_findings_file_parks_before_posting(tmp_path, monkeypatch):
@@ -618,5 +876,7 @@ def test_an_unparsable_findings_file_parks_before_posting(tmp_path, monkeypatch)
     monkeypatch.setattr(coordinator.Coordinator, "_post", post)
     assert e.run() == 3 and merge_waiting() == [pr_url("e-b")]
     st = e.status()
-    assert st["status"] == "parked" and st["reason"].startswith("cannot choose what to post: ")
+    assert st["status"] == "parked" and st["reason"].startswith(
+        "cannot choose what to post: "
+    )
     assert e.fakes.post_launches() == [] and e.fakes.fix_launches() == []

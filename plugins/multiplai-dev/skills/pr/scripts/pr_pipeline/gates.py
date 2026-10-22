@@ -67,7 +67,9 @@ def check_headings(sections: list[Section], body: str) -> list[str]:
         want = headings.count(h)
         if len(found[h]) != want:
             expected = "once" if want == 1 else str(want)
-            errors.append(f"template heading {h!r} appears {len(found[h])} times, expected {expected}")
+            errors.append(
+                f"template heading {h!r} appears {len(found[h])} times, expected {expected}"
+            )
     last = -1
     used: dict[str, int] = {}
     for h in headings:
@@ -97,20 +99,30 @@ def check_filled(model_text: dict[str, str], model_keys: list[str]) -> list[str]
     for key in model_keys:
         text = (model_text.get(key) or "").strip()
         if not text:
-            errors.append(f"section `{key}` is empty; write it, or answer `_Not applicable to this change._`")
+            errors.append(
+                f"section `{key}` is empty; write it, or answer `_Not applicable to this change._`"
+            )
         elif markers.has_pr_token(text):
-            errors.append(f"section `{key}` contains a `<!-- pr:` marker, which only code may write")
+            errors.append(
+                f"section `{key}` contains a `<!-- pr:` marker, which only code may write"
+            )
     return errors
 
 
-def check_words(counted: dict[str, str], limit: int = MAX_WORDS, what: str = "the body") -> list[str]:
+def check_words(
+    counted: dict[str, str], limit: int = MAX_WORDS, what: str = "the body"
+) -> list[str]:
     """*counted* maps a label to its text; fails when their words add up past *limit*."""
     counts = {label: word_count(text) for label, text in counted.items()}
     total = sum(counts.values())
     if total <= limit:
         return []
-    per = ", ".join(f"{label}: {n}" for label, n in sorted(counts.items(), key=lambda kv: -kv[1]))
-    return [f"{what} is {total} words, over the {limit}-word limit; words per section: {per}"]
+    per = ", ".join(
+        f"{label}: {n}" for label, n in sorted(counts.items(), key=lambda kv: -kv[1])
+    )
+    return [
+        f"{what} is {total} words, over the {limit}-word limit; words per section: {per}"
+    ]
 
 
 def open_word_counts(body: str, owned: dict[str, str]) -> dict[str, str]:
@@ -125,11 +137,21 @@ def open_word_counts(body: str, owned: dict[str, str]) -> dict[str, str]:
 
 def edit_word_counts(body: str) -> dict[str, str]:
     """For `edit`: the content of each marker pair in the final body; nothing outside markers."""
-    return {key: body[a:b] for key, (a, b) in markers.spans(body).items() if key != markers.WRITTEN}
+    return {
+        key: body[a:b]
+        for key, (a, b) in markers.spans(body).items()
+        if key != markers.WRITTEN
+    }
 
 
-def run_open_gates(sections: list[Section], body: str, owned: dict[str, str], ticks: set[str],
-                   model_text: dict[str, str], model_keys: list[str]) -> GateResult:
+def run_open_gates(
+    sections: list[Section],
+    body: str,
+    owned: dict[str, str],
+    ticks: set[str],
+    model_text: dict[str, str],
+    model_keys: list[str],
+) -> GateResult:
     errors = check_headings(sections, body)
     errors += check_checkboxes(sections, body, ticks)
     errors += check_filled(model_text, model_keys)

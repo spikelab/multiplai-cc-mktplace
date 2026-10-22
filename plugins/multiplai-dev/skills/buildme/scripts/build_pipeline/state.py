@@ -6,20 +6,21 @@ Serialized to JSON after every significant transition.
 
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import logging
 import os
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
+
 from pydantic import BaseModel, Field, model_validator
 
 from . import budget
 from .findings.models import PRComment, SpecIssue, Triage
 from .models import BlockInfo, BlockStatus, BuildPhase
-from .stop_record import StepStop  # noqa: F401  (moved; `from .state import StepStop` keeps working)
+from .stop_record import StepStop  # moved; `from .state import StepStop` keeps working
 from .stop_record import record as record_stop
 
 log = logging.getLogger(__name__)
@@ -41,6 +42,7 @@ class StepOutcome(BaseModel):
 
 class SpecGenState(BaseModel):
     """State for the spec generator sub-pipeline."""
+
     revision: str = ""
     artifact_hashes: dict[str, str] = Field(default_factory=dict)
     stale_artifacts: list[str] = Field(default_factory=list)
@@ -55,6 +57,7 @@ class SpecGenState(BaseModel):
     # resume reaches the same spec-extract run folder (the plan's rows S1, S5)
     # and runs even when the registry now holds the files that run applied (S3).
     spec_extract_sha: str | None = None
+
     @model_validator(mode="before")
     @classmethod
     def migrate_repair_admission(cls, value):
@@ -66,10 +69,18 @@ class SpecGenState(BaseModel):
             for name in ("tasks_audit", "design_audit", "plan_review"):
                 if value.pop(name + "_regen_done", False):
                     existing = steps.get(name)
-                    step = existing.model_dump() if isinstance(existing, StepOutcome) else dict(existing or {})
-                    steps[name] = {"revision": "", "outcome": "blocked",
-                                   "reason": "Legacy repair already admitted; validation required",
-                                   **step, "repair_attempts": max(1, step.get("repair_attempts", 0))}
+                    step = (
+                        existing.model_dump()
+                        if isinstance(existing, StepOutcome)
+                        else dict(existing or {})
+                    )
+                    steps[name] = {
+                        "revision": "",
+                        "outcome": "blocked",
+                        "reason": "Legacy repair already admitted; validation required",
+                        **step,
+                        "repair_attempts": max(1, step.get("repair_attempts", 0)),
+                    }
             value["steps"] = steps
         return value
 
@@ -79,7 +90,9 @@ class SpecGenState(BaseModel):
 
     def admit_repair(self, name: str, findings: list[dict] | None = None) -> None:
         if self.repair_attempts(name):
-            raise RuntimeError(f"{name} repair already attempted; resolve blocking findings before resuming")
+            raise RuntimeError(
+                f"{name} repair already attempted; resolve blocking findings before resuming"
+            )
         self.record_step(name, "blocked", "Repair admitted; validation pending")
         self.steps[name].repair_attempts = 1
         self.steps[name].repair_findings = [dict(f) for f in findings or []]
@@ -87,31 +100,69 @@ class SpecGenState(BaseModel):
     def step_revision(self, name: str) -> str:
         keys = {
             "explainers": {"proposal.md", "design.md", "config.yaml", "references"},
-            "tasks_audit": {"tasks.md", "design.md", "proposal.md", "use-cases.md", "unknowns.md", "config.yaml", "references", "granularity"},
-            "design_audit": {"proposal.md", "design.md", "tasks.md", "config.yaml", "references"},
+            "tasks_audit": {
+                "tasks.md",
+                "design.md",
+                "proposal.md",
+                "use-cases.md",
+                "unknowns.md",
+                "config.yaml",
+                "references",
+                "granularity",
+            },
+            "design_audit": {
+                "proposal.md",
+                "design.md",
+                "tasks.md",
+                "config.yaml",
+                "references",
+            },
         }.get(name)
         if keys is None:
             return self.revision
-        inputs = {k: v for k, v in self.artifact_hashes.items() if k in keys or k.startswith("requirements/")}
+        inputs = {
+            k: v
+            for k, v in self.artifact_hashes.items()
+            if k in keys or k.startswith("requirements/")
+        }
         return hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
 
     def step_passed(self, name: str) -> bool:
         step = self.steps.get(name)
-        accepted = {"passed", "skipped", "advisory"} if name == "explainers" else {"passed"}
-        return bool(step and step.revision == self.step_revision(name) and step.outcome in accepted)
+        accepted = (
+            {"passed", "skipped", "advisory"} if name == "explainers" else {"passed"}
+        )
+        return bool(
+            step
+            and step.revision == self.step_revision(name)
+            and step.outcome in accepted
+        )
 
-    def record_step(self, name: str, outcome: Literal["passed", "blocked", "advisory", "skipped"] = "passed", reason: str = "", *, blocking_findings: str = "",
-                    blocked_revision: str | None = None, revision: str | None = None) -> None:
+    def record_step(
+        self,
+        name: str,
+        outcome: Literal["passed", "blocked", "advisory", "skipped"] = "passed",
+        reason: str = "",
+        *,
+        blocking_findings: str = "",
+        blocked_revision: str | None = None,
+        revision: str | None = None,
+    ) -> None:
         previous = self.steps.get(name)
-        self.steps[name] = StepOutcome(revision=revision or self.step_revision(name), outcome=outcome, reason=reason,
-                                       repair_attempts=self.repair_attempts(name), blocking_findings=blocking_findings,
-                                       repair_findings=previous.repair_findings if previous else [],
-                                       blocked_revision=blocked_revision)
-
+        self.steps[name] = StepOutcome(
+            revision=revision or self.step_revision(name),
+            outcome=outcome,
+            reason=reason,
+            repair_attempts=self.repair_attempts(name),
+            blocking_findings=blocking_findings,
+            repair_findings=previous.repair_findings if previous else [],
+            blocked_revision=blocked_revision,
+        )
 
 
 class TDDState(BaseModel):
     """State for the TDD engine sub-pipeline."""
+
     blocks: list[BlockInfo] = Field(default_factory=list)
     current_block: int = 0
     baseline_tests_pass: bool = False
@@ -139,12 +190,18 @@ class FindingsRound(BaseModel):
     after, so a resume restarts at the first unfinished step."""
 
     number: int
-    since: str | None = None                   # top-level comments after this are new
-    fetched_at: str | None = None              # when this round's fetch started: the next round's `since`
+    since: str | None = None  # top-level comments after this are new
+    fetched_at: str | None = (
+        None  # when this round's fetch started: the next round's `since`
+    )
     started: list[str] = Field(default_factory=list)
     finished: list[str] = Field(default_factory=list)
-    step_heads: dict[str, str] = Field(default_factory=dict)  # step → HEAD when it started
-    comments: list[PRComment] = Field(default_factory=list)   # new this round, as fetched
+    step_heads: dict[str, str] = Field(
+        default_factory=dict
+    )  # step → HEAD when it started
+    comments: list[PRComment] = Field(
+        default_factory=list
+    )  # new this round, as fetched
     # Saved once, when the round starts: it is the last round `max_rounds`
     # allows and not the first. Its tasks file starts every block with the
     # escalation text and its implementer runs as `review_fix_escalated`. A
@@ -160,7 +217,7 @@ class FindingsRound(BaseModel):
     spec_commit: str | None = None
     tasks_path: str | None = None
     engine_state_path: str | None = None
-    blocks: dict[int, str] = Field(default_factory=dict)      # block number → row key
+    blocks: dict[int, str] = Field(default_factory=dict)  # block number → row key
     fixes: dict[str, dict[str, str]] = Field(default_factory=dict)  # row key → commits
     # An escalated round's `RECURRING:` answers: block number → the fixer's
     # slot (`gates.parse_recurring`), for each block whose fixer gave one.
@@ -179,9 +236,9 @@ class FindingsRound(BaseModel):
     self_check: dict | None = None
     pushed_head: str | None = None
     body_updated: bool = False
-    replies_sent: list[str] = Field(default_factory=list)     # reply keys, in order sent
+    replies_sent: list[str] = Field(default_factory=list)  # reply keys, in order sent
     review_run_dir: str | None = None
-    review_waiting: bool = False               # told the human to accept and post
+    review_waiting: bool = False  # told the human to accept and post
     review_finished_at: str | None = None
     # step → what the tree held when that step last stopped. Removed when
     # the step starts again, so a step killed before it could record its
@@ -217,7 +274,7 @@ COMPLETED_SUFFIX = ".complete.json"
 def completed_state_path(state_path: Path) -> Path:
     """Where a succeeded run keeps *state_path*: ``.build-state.json`` →
     ``.build-state.complete.json``."""
-    stem = state_path.name[:-len(".json")] if state_path.name.endswith(".json") else state_path.name
+    stem = state_path.name.removesuffix(".json")
     return state_path.with_name(stem + COMPLETED_SUFFIX)
 
 
@@ -239,10 +296,20 @@ class BuildState(BaseModel):
     @property
     def result(self) -> BuildResult:
         verified = bool(self.verification and self.verification.get("passed"))
-        kind = "verified-code" if verified else (
-            "spec-only" if self.completion_kind == "spec-only"
-            else "historical" if self.phase == BuildPhase.COMPLETE else "pending")
-        return BuildResult(kind=kind, verification=self.verification, publication=self.publication)
+        kind = (
+            "verified-code"
+            if verified
+            else (
+                "spec-only"
+                if self.completion_kind == "spec-only"
+                else "historical"
+                if self.phase == BuildPhase.COMPLETE
+                else "pending"
+            )
+        )
+        return BuildResult(
+            kind=kind, verification=self.verification, publication=self.publication
+        )
 
     # Identity
     change_name: str
@@ -311,10 +378,12 @@ class BuildState(BaseModel):
 
     # Checkpointing
     state_file: str = ""
-    started_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-    updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    started_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
+    updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
-    def checkpoint(self, path: Path | None = None, *, keep_budget: bool = False) -> None:
+    def checkpoint(
+        self, path: Path | None = None, *, keep_budget: bool = False
+    ) -> None:
         """Serialize state to disk, atomically.
 
         The `budget` field is replaced with this process's spend, unless
@@ -336,10 +405,12 @@ class BuildState(BaseModel):
             return
         if not keep_budget:
             self.budget = budget.get_budget().to_state()
-        self.updated_at = datetime.now(timezone.utc).isoformat()
+        self.updated_at = datetime.now(UTC).isoformat()
         target.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp_name = tempfile.mkstemp(
-            dir=target.parent, prefix=f".{target.name}.", suffix=".tmp",
+            dir=target.parent,
+            prefix=f".{target.name}.",
+            suffix=".tmp",
         )
         tmp = Path(tmp_name)
         try:
@@ -358,7 +429,9 @@ class BuildState(BaseModel):
         """Load state from a JSON file."""
         data = json.loads(path.read_text())
         if data.get("schema_version", 0) > 1:
-            raise ValueError("Checkpoint version is newer than this Buildme; upgrade before resuming")
+            raise ValueError(
+                "Checkpoint version is newer than this Buildme; upgrade before resuming"
+            )
         state = cls.model_validate(data)
         log.info("Resumed state from %s (phase=%s)", path, state.phase)
         return state
@@ -415,7 +488,9 @@ class BuildState(BaseModel):
             self.tdd.current_block += 1
             self.checkpoint(path)
 
-    def mark_block_status(self, block_idx: int, status: BlockStatus, path: Path | None = None) -> None:
+    def mark_block_status(
+        self, block_idx: int, status: BlockStatus, path: Path | None = None
+    ) -> None:
         if self.tdd and block_idx < len(self.tdd.blocks):
             self.tdd.blocks[block_idx].status = status
             self.checkpoint(path)

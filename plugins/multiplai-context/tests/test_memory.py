@@ -16,13 +16,12 @@ Covers all scenarios from requirements/memory-catalog-generator.md:
 - discover_sources(), hash_source(), build_prompt(), parse_response(), merge_entry()
 """
 
-import asyncio
 import hashlib
 import json
 import os
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -38,7 +37,9 @@ if str(SCRIPTS_DIR) not in sys.path:
 # ---------------------------------------------------------------------------
 
 
-def _make_mock_client(response_content='{"summary": "test summary", "topics": ["topic1"]}'):
+def _make_mock_client(
+    response_content='{"summary": "test summary", "topics": ["topic1"]}',
+):
     """Create an AsyncMock model client that returns the given content."""
     from multiplai_core.model_client import ModelResponse
 
@@ -74,7 +75,9 @@ def _make_memory_generator(tmp_path, *, client=None, config=None):
     return gen, catalogs_dir, memory_dir
 
 
-def _write_memory_file(memory_dir, filename="memory.md", content="# My Memory\nSome content here."):
+def _write_memory_file(
+    memory_dir, filename="memory.md", content="# My Memory\nSome content here."
+):
     """Write a memory file to the memory directory."""
     path = memory_dir / filename
     path.write_text(content, encoding="utf-8")
@@ -144,8 +147,8 @@ class TestMemoryGeneratorIdentity:
         """Generator name must be 'memory' for state namespacing."""
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(tmp_path / "mem"))
-        from generators.memory import MemoryGenerator
         from generators.config import CatalogConfig
+        from generators.memory import MemoryGenerator
 
         gen = MemoryGenerator(config=CatalogConfig(), model_client=_make_mock_client())
         assert gen.name == "memory"
@@ -154,8 +157,8 @@ class TestMemoryGeneratorIdentity:
         """Catalog output must be named memory.json."""
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(tmp_path / "mem"))
-        from generators.memory import MemoryGenerator
         from generators.config import CatalogConfig
+        from generators.memory import MemoryGenerator
 
         gen = MemoryGenerator(config=CatalogConfig(), model_client=_make_mock_client())
         assert gen.catalog_filename == "memory.json"
@@ -283,6 +286,7 @@ class TestHashSource:
 
         # Touch the file (change mtime) without changing content
         import time
+
         time.sleep(0.01)
         os.utime(path, None)
         hash2 = gen.hash_source(path)
@@ -995,13 +999,16 @@ class TestLLMFailureHandling:
         assert result.generated >= 1
 
     @pytest.mark.asyncio
-    async def test_all_llm_failures_preserves_prior_entries(self, tmp_path, monkeypatch):
+    async def test_all_llm_failures_preserves_prior_entries(
+        self, tmp_path, monkeypatch
+    ):
         """When all LLM calls fail, prior catalog entries are preserved."""
-        from multiplai_core.model_client import ModelResponse
 
         # First run succeeds
         success_client = _make_mock_client()
-        gen, catalogs_dir, memory_dir = _make_memory_generator(tmp_path, client=success_client)
+        gen, catalogs_dir, memory_dir = _make_memory_generator(
+            tmp_path, client=success_client
+        )
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
         _write_memory_file(memory_dir, "file.md", "initial content")
@@ -1057,8 +1064,9 @@ class TestConfigurableModelAndEffort:
         # Verify model param in the LLM call
         assert client.query.call_count >= 1
         call_kwargs = client.query.call_args
-        assert call_kwargs.kwargs.get("model") == "claude-haiku-4-5" or \
-            (len(call_kwargs.args) > 2 and call_kwargs.args[2] == "claude-haiku-4-5")
+        assert call_kwargs.kwargs.get("model") == "claude-haiku-4-5" or (
+            len(call_kwargs.args) > 2 and call_kwargs.args[2] == "claude-haiku-4-5"
+        )
 
     @pytest.mark.asyncio
     async def test_default_model_when_no_config(self, tmp_path, monkeypatch):
@@ -1110,7 +1118,9 @@ class TestCatalogContentForRouting:
             assert len(entry["summary"]) > 0
 
     @pytest.mark.asyncio
-    async def test_multiple_sources_produce_multiple_entries(self, tmp_path, monkeypatch):
+    async def test_multiple_sources_produce_multiple_entries(
+        self, tmp_path, monkeypatch
+    ):
         """Three memory files produce three catalog entries."""
         gen, catalogs_dir, memory_dir = _make_memory_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
@@ -1203,7 +1213,9 @@ class TestMergePreservationDuringFullRun:
     """
 
     @pytest.mark.asyncio
-    async def test_hand_authored_fields_survive_regeneration_cycle(self, tmp_path, monkeypatch):
+    async def test_hand_authored_fields_survive_regeneration_cycle(
+        self, tmp_path, monkeypatch
+    ):
         """Full cycle: generate → hand-edit catalog → modify source → re-run preserves edits."""
         gen, catalogs_dir, memory_dir = _make_memory_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))

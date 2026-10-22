@@ -12,12 +12,10 @@ import contextlib
 import io
 from html.parser import HTMLParser
 
-import pytest
-
 import plane
+import pytest
 from conftest import BAD, CFG, OK
 from conftest import Args as _Args
-
 
 # --- F1: search must fail closed, not open ----------------------------------
 
@@ -75,7 +73,7 @@ def test_f1_search_still_withholds_when_the_project_key_is_renamed(monkeypatch, 
 
 
 def test_f1_stderr_distinguishes_out_of_scope_from_unattributable(monkeypatch, capsys):
-    """"0 results" must not read the same as "the filter stopped working".
+    """ "0 results" must not read the same as "the filter stopped working".
 
     Withholding silently is how a broken read filter looks exactly like an empty
     board, so the reason is asserted, not just the count (WORKFLOW 7bis-R q.5).
@@ -85,8 +83,12 @@ def test_f1_stderr_distinguishes_out_of_scope_from_unattributable(monkeypatch, c
         "_request",
         lambda *a, **k: {
             "issues": [
-                {"id": "1", "sequence_id": 1, "name": "out of scope",
-                 "project_id": BAD},
+                {
+                    "id": "1",
+                    "sequence_id": 1,
+                    "name": "out of scope",
+                    "project_id": BAD,
+                },
                 {"id": "2", "sequence_id": 2, "name": "unattributable"},
             ]
         },
@@ -135,16 +137,29 @@ HOSTILE = [
     '[click](" onmouseover="alert(1))',
     "[x](javascript:alert(1))",
     '<img src=x onerror="alert(1)">',
-    '**bold** with " quote and \' apostrophe',
-    "[a](http://ok) and [b](\" onfocus=\"x)",
+    "**bold** with \" quote and ' apostrophe",
+    '[a](http://ok) and [b](" onfocus="x)',
     '`code with " quote`',
-    "# heading with \" quote",
+    '# heading with " quote',
     '- item with " quote',
-    '```\n<script>alert(1)</script>\n```',
+    "```\n<script>alert(1)</script>\n```",
 ]
 
-ALLOWED_TAGS = {"p", "h3", "h4", "h5", "h6", "ul", "ol", "li", "pre", "code",
-                "strong", "em", "a"}
+ALLOWED_TAGS = {
+    "p",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "ul",
+    "ol",
+    "li",
+    "pre",
+    "code",
+    "strong",
+    "em",
+    "a",
+}
 
 
 @pytest.mark.parametrize("payload", HOSTILE)
@@ -216,13 +231,12 @@ def test_f4_limit_stops_paginating_once_enough_rows_are_collected(monkeypatch):
     monkeypatch.setattr(
         plane,
         "list_projects",
-        lambda cfg: [
-            {"id": OK, "identifier": "SPK", "name": "Mine", "_allowed": True}
-        ],
+        lambda cfg: [{"id": OK, "identifier": "SPK", "name": "Mine", "_allowed": True}],
     )
     with contextlib.redirect_stdout(io.StringIO()):
-        plane.cmd_issues(CFG, _Args(json=True, project=None, state=None, limit=3,
-                                    full=False))
+        plane.cmd_issues(
+            CFG, _Args(json=True, project=None, state=None, limit=3, full=False)
+        )
     assert calls["n"] == 1, f"fetched {calls['n']} pages to show 3 rows"
 
 
@@ -241,9 +255,7 @@ def test_f4_one_get_hits_the_projects_endpoint_once(monkeypatch):
                 "next_page_results": False,
             }
         return {
-            "results": [
-                {"id": "x", "sequence_id": 12, "name": "Thing", "project": OK}
-            ],
+            "results": [{"id": "x", "sequence_id": 12, "name": "Thing", "project": OK}],
             "next_page_results": False,
         }
 
@@ -286,7 +298,10 @@ def test_f6_empty_env_var_does_not_shadow_the_env_file(monkeypatch, tmp_path):
 
 
 def test_f6_html_to_text_does_not_double_decode_entities():
-    assert plane.html_to_text("<p>literal &amp;lt;tag&amp;gt;</p>") == "literal &lt;tag&gt;"
+    assert (
+        plane.html_to_text("<p>literal &amp;lt;tag&amp;gt;</p>")
+        == "literal &lt;tag&gt;"
+    )
 
 
 def test_f6_members_are_paginated(monkeypatch):
@@ -321,6 +336,7 @@ def test_gap_guard_runs_after_params_are_merged_into_the_path(monkeypatch):
     the ?project_id= protection. This test pins the ordering. It PASSES on this
     commit — it documents a missing test, not a defect.
     """
+
     def boom(*a, **k):  # network must never be reached
         raise AssertionError("request left the guard")
 

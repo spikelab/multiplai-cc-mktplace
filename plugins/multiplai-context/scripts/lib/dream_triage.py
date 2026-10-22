@@ -66,8 +66,8 @@ agreed to. Every ambiguity below resolves toward the human.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from typing import Mapping, Optional
 
 from multiplai_core.plugin_options import option
 
@@ -84,18 +84,18 @@ from lib.routing_validation import parse_proposal_entries
 __all__ = [
     "ADDITIVE_CHANGES",
     "DEFAULT_WRITE_MODE",
-    "Item",
     "REASON_LABELS",
     "REJECTION_DETAIL_LIMIT",
-    "Triage",
     "WRITE_MODES",
+    "Item",
+    "Triage",
     "apply_verdicts",
     "auto_slice",
     "classify",
+    "duplicate_labels",
     "flagged_by_routing",
     "floor_check",
     "has_routing_section",
-    "duplicate_labels",
     "is_reserved_target",
     "is_safe_target",
     "reconciled_pair",
@@ -190,7 +190,7 @@ UNLABELLED_PROVENANCE = "INFERENCE"
 UNLABELLED_KIND = taxonomy.UNCLEAR_KIND
 
 
-def rubric_verdict(provenance: Optional[str], kind: Optional[str]) -> str:
+def rubric_verdict(provenance: str | None, kind: str | None) -> str:
     """``"apply"`` or ``"review"`` for a ``(provenance, kind)`` pair.
 
     Nine cells, no model. ``apply`` here is **permission**, not a decision: the
@@ -207,7 +207,7 @@ def rubric_verdict(provenance: Optional[str], kind: Optional[str]) -> str:
     return "review"  # INFERENCE, or anything unrecognised
 
 
-def rubric_reason(provenance: Optional[str], kind: Optional[str]) -> str:
+def rubric_reason(provenance: str | None, kind: str | None) -> str:
     """The reason code explaining a ``review`` from :func:`rubric_verdict`."""
     k = (kind or UNLABELLED_KIND).upper()
     p = (provenance or UNLABELLED_PROVENANCE).upper()
@@ -411,13 +411,17 @@ class Triage:
         for item in self.review:
             # Bucket by the first (most significant) reason so an item appears
             # once; `item.reasons` still carries the rest for the detail line.
-            out.setdefault(item.reasons[0] if item.reasons else "unjudged", []).append(item)
+            out.setdefault(item.reasons[0] if item.reasons else "unjudged", []).append(
+                item
+            )
         return out
 
     def dropped_by_reason(self) -> dict[str, list[Item]]:
         out: dict[str, list[Item]] = {}
         for item in self.dropped:
-            out.setdefault(item.reasons[0] if item.reasons else "judge-drop", []).append(item)
+            out.setdefault(
+                item.reasons[0] if item.reasons else "judge-drop", []
+            ).append(item)
         return out
 
 
@@ -450,9 +454,7 @@ def has_routing_section(proposal: str) -> bool:
     "never ran" *are* distinguishable — but only if somebody checks, which is
     what this exists for.
     """
-    return any(
-        line.startswith("## Routing Warnings") for line in proposal.splitlines()
-    )
+    return any(line.startswith("## Routing Warnings") for line in proposal.splitlines())
 
 
 def duplicate_labels(proposal: str) -> list[tuple[str, int]]:
@@ -720,9 +722,7 @@ def shared_bank_items(triage: Triage) -> tuple[Item, ...]:
     dropped item must not become a pull request on somebody else's repo just
     because it also happened to be bank-bound.
     """
-    return tuple(
-        item for item in triage.review if "shared-bank-write" in item.reasons
-    )
+    return tuple(item for item in triage.review if "shared-bank-write" in item.reasons)
 
 
 def auto_slice(items: list[Item]) -> str:
@@ -848,7 +848,9 @@ def render_receipt(
             "",
         ]
         for item in triage.dropped:
-            _render_item_detail(out, item, drop_reason=item.reasons[0] if item.reasons else "")
+            _render_item_detail(
+                out, item, drop_reason=item.reasons[0] if item.reasons else ""
+            )
     else:
         out += [
             f"{len(triage.dropped)} items were dropped — too many to read here "

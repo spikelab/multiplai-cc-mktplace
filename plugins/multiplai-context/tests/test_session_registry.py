@@ -14,7 +14,7 @@ import json
 import os
 import subprocess
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -27,7 +27,6 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from lib import session_registry as sr
-
 
 SID = "11111111-2222-3333-4444-555555555555"
 
@@ -48,8 +47,8 @@ def _read_entry(data_dir: Path, sid=SID) -> dict:
 # record_event — creation and contract fields
 # ===========================================================================
 
-class TestRecordEventStart:
 
+class TestRecordEventStart:
     def test_start_creates_entry_with_contract_fields(self, tmp_path):
         assert sr.record_event(tmp_path, _hook_input(), "start") is True
         entry = _read_entry(tmp_path)
@@ -100,16 +99,16 @@ class TestRecordEventStart:
         )
 
     def test_path_traversal_session_id_rejected(self, tmp_path):
-        assert sr.record_event(
-            tmp_path, {"session_id": "../evil", "cwd": "/x"}, "start"
-        ) is False
+        assert (
+            sr.record_event(tmp_path, {"session_id": "../evil", "cwd": "/x"}, "start")
+            is False
+        )
 
     def test_unknown_kind_rejected(self, tmp_path):
         assert sr.record_event(tmp_path, _hook_input(), "reboot") is False
 
 
 class TestRecordEventUpdates:
-
     def test_stop_updates_last_event_and_preserves_identity(self, tmp_path):
         sr.record_event(tmp_path, _hook_input(), "start")
         started_at = _read_entry(tmp_path)["started_at"]
@@ -154,7 +153,6 @@ class TestRecordEventUpdates:
 
 
 class TestRecordEventRobustness:
-
     def test_atomic_no_tmp_left_behind(self, tmp_path):
         sr.record_event(tmp_path, _hook_input(), "start")
         files = sorted(p.name for p in (tmp_path / "sessions").iterdir())
@@ -172,9 +170,7 @@ class TestRecordEventRobustness:
         monkeypatch.setattr(fsio.os, "replace", boom)
         assert sr.record_event(tmp_path, _hook_input(), "start") is False
         assert list((tmp_path / "sessions").glob("*.json")) == []
-        assert [
-            p for p in (tmp_path / "sessions").iterdir() if "tmp" in p.name
-        ] == []
+        assert [p for p in (tmp_path / "sessions").iterdir() if "tmp" in p.name] == []
 
     def test_never_raises_on_unwritable_dir(self, tmp_path):
         target = tmp_path / "blocked"
@@ -198,9 +194,7 @@ class TestRecordEventRobustness:
 
     def test_lock_failure_fails_open(self, tmp_path):
         """Hooks must never crash or skip the write on a flock-less FS."""
-        with patch.object(
-            sr.fcntl, "flock", side_effect=OSError("flock unsupported")
-        ):
+        with patch.object(sr.fcntl, "flock", side_effect=OSError("flock unsupported")):
             assert sr.record_event(tmp_path, _hook_input(), "start") is True
         assert _read_entry(tmp_path)["last_event"]["kind"] == "start"
 
@@ -214,52 +208,56 @@ class TestRecordEventRobustness:
 # gc_stale
 # ===========================================================================
 
+
 def _write_entry(data_dir: Path, sid: str, kind: str, ts: datetime) -> Path:
     rdir = data_dir / "sessions"
     rdir.mkdir(parents=True, exist_ok=True)
     path = rdir / f"{sid}.json"
-    path.write_text(json.dumps({
-        "session_id": sid,
-        "last_event": {"ts": ts.isoformat(), "kind": kind},
-    }))
+    path.write_text(
+        json.dumps(
+            {
+                "session_id": sid,
+                "last_event": {"ts": ts.isoformat(), "kind": kind},
+            }
+        )
+    )
     return path
 
 
 class TestGcStale:
-
     def test_old_ended_entry_removed(self, tmp_path):
-        old = datetime.now(timezone.utc) - timedelta(days=8)
+        old = datetime.now(UTC) - timedelta(days=8)
         _write_entry(tmp_path, "old-ended", "end", old)
         assert sr.gc_stale(tmp_path) == 1
         assert not (tmp_path / "sessions" / "old-ended.json").exists()
 
     def test_recent_ended_entry_kept(self, tmp_path):
-        recent = datetime.now(timezone.utc) - timedelta(days=2)
+        recent = datetime.now(UTC) - timedelta(days=2)
         _write_entry(tmp_path, "new-ended", "end", recent)
         assert sr.gc_stale(tmp_path) == 0
 
     def test_idle_entry_within_live_window_kept(self, tmp_path):
         """A recently-idle session may resume — kept past the ended cutoff."""
-        old = datetime.now(timezone.utc) - timedelta(days=20)
+        old = datetime.now(UTC) - timedelta(days=20)
         _write_entry(tmp_path, "old-idle", "stop", old)
         assert sr.gc_stale(tmp_path) == 0
 
     def test_idle_entry_past_live_window_removed(self, tmp_path):
         """Containers killed without SessionEnd age out after live_days."""
-        old = datetime.now(timezone.utc) - timedelta(days=31)
+        old = datetime.now(UTC) - timedelta(days=31)
         _write_entry(tmp_path, "ghost-idle", "stop", old)
         assert sr.gc_stale(tmp_path) == 1
         assert not (tmp_path / "sessions" / "ghost-idle.json").exists()
 
     def test_orphan_adopt_marker_removed_with_entry(self, tmp_path):
-        old = datetime.now(timezone.utc) - timedelta(days=8)
+        old = datetime.now(UTC) - timedelta(days=8)
         path = _write_entry(tmp_path, "adopted", "end", old)
         path.with_suffix(".adopt").touch()
         sr.gc_stale(tmp_path)
         assert not path.with_suffix(".adopt").exists()
 
     def test_orphan_lock_file_removed_with_entry(self, tmp_path):
-        old = datetime.now(timezone.utc) - timedelta(days=8)
+        old = datetime.now(UTC) - timedelta(days=8)
         path = _write_entry(tmp_path, "locked", "end", old)
         path.with_suffix(".lock").touch()
         sr.gc_stale(tmp_path)
@@ -270,7 +268,7 @@ class TestGcStale:
         rdir.mkdir(parents=True)
         junk = rdir / "junk.json"
         junk.write_text("{not json")
-        old = (datetime.now(timezone.utc) - timedelta(days=8)).timestamp()
+        old = (datetime.now(UTC) - timedelta(days=8)).timestamp()
         os.utime(junk, (old, old))
         assert sr.gc_stale(tmp_path) == 1
 
@@ -291,20 +289,20 @@ class TestGcRosterDead:
     containers, which is why it is passed in."""
 
     def test_a_confirmed_dead_entry_goes_now_not_in_a_month(self, tmp_path):
-        recent = datetime.now(timezone.utc) - timedelta(hours=2)
+        recent = datetime.now(UTC) - timedelta(hours=2)
         _write_entry(tmp_path, "killed", "stop", recent)
 
         assert sr.gc_stale(tmp_path, dead_sids={"killed"}) == 1
         assert not (tmp_path / "sessions" / "killed.json").exists()
 
     def test_an_entry_not_in_the_set_keeps_its_window(self, tmp_path):
-        recent = datetime.now(timezone.utc) - timedelta(hours=2)
+        recent = datetime.now(UTC) - timedelta(hours=2)
         _write_entry(tmp_path, "quiet", "stop", recent)
 
         assert sr.gc_stale(tmp_path, dead_sids={"other"}) == 0
 
     def test_no_set_is_the_behaviour_before_this_existed(self, tmp_path):
-        recent = datetime.now(timezone.utc) - timedelta(hours=2)
+        recent = datetime.now(UTC) - timedelta(hours=2)
         _write_entry(tmp_path, "quiet", "stop", recent)
 
         assert sr.gc_stale(tmp_path) == 0
@@ -312,7 +310,7 @@ class TestGcRosterDead:
     def test_a_parked_entry_survives_being_confirmed_dead(self, tmp_path):
         """Parking says "I am coming back"; the process being gone is the
         normal state of a parked session, not evidence against it."""
-        recent = datetime.now(timezone.utc) - timedelta(hours=2)
+        recent = datetime.now(UTC) - timedelta(hours=2)
         path = _write_entry(tmp_path, "parked", "end", recent)
         raw = json.loads(path.read_text())
         raw["disposition"] = {"state": "parked", "reason": "Monday"}
@@ -325,7 +323,7 @@ class TestGcRosterDead:
         """The drain is what writes `disposition`, and it runs after GC within
         one SessionStart. Collecting first would delete the entry it is about
         to label."""
-        recent = datetime.now(timezone.utc) - timedelta(hours=2)
+        recent = datetime.now(UTC) - timedelta(hours=2)
         _write_entry(tmp_path, "draining", "end", recent)
         pend = tmp_path / "pending_extractions"
         pend.mkdir(parents=True)
@@ -337,7 +335,7 @@ class TestGcRosterDead:
         """The roster reading is from before this pass; an entry whose
         `last_event` is in the future relative to it has come back — a resume,
         or a writer we serialized behind. The set must not outvote that."""
-        future = datetime.now(timezone.utc) + timedelta(minutes=5)
+        future = datetime.now(UTC) + timedelta(minutes=5)
         _write_entry(tmp_path, "resumed", "start", future)
 
         assert sr.gc_stale(tmp_path, dead_sids={"resumed"}) == 0
@@ -347,20 +345,18 @@ class TestGcRosterDead:
 class TestGcConcurrency:
     """GC vs writer races: an entry can't be deleted out from under a writer."""
 
-    def test_recheck_under_lock_keeps_just_refreshed_entry(
-        self, tmp_path, monkeypatch
-    ):
+    def test_recheck_under_lock_keeps_just_refreshed_entry(self, tmp_path, monkeypatch):
         """A writer that refreshed the entry between GC's first staleness
         check and its lock acquisition must win — the re-check under the
         lock keeps the entry."""
-        old = datetime.now(timezone.utc) - timedelta(days=8)
+        old = datetime.now(UTC) - timedelta(days=8)
         path = _write_entry(tmp_path, "racing", "end", old)
         real_lock = sr._lock_entry
 
         def lock_and_refresh(p):
             fd = real_lock(p)
             # Simulate the writer that slipped in just before GC locked.
-            _write_entry(tmp_path, "racing", "stop", datetime.now(timezone.utc))
+            _write_entry(tmp_path, "racing", "stop", datetime.now(UTC))
             return fd
 
         monkeypatch.setattr(sr, "_lock_entry", lock_and_refresh)
@@ -374,14 +370,14 @@ class TestGcConcurrency:
         import threading
         import time as _time
 
-        old = datetime.now(timezone.utc) - timedelta(days=8)
+        old = datetime.now(UTC) - timedelta(days=8)
         path = _write_entry(tmp_path, "held", "end", old)
         fd = sr._lock_entry(path)  # the writer's critical section begins
         assert fd is not None
 
         def writer():
             _time.sleep(0.2)
-            _write_entry(tmp_path, "held", "stop", datetime.now(timezone.utc))
+            _write_entry(tmp_path, "held", "stop", datetime.now(UTC))
             sr._unlock_entry(fd)
 
         t = threading.Thread(target=writer)
@@ -393,7 +389,7 @@ class TestGcConcurrency:
 
     def test_stale_entry_lock_removed_under_held_flock(self, tmp_path):
         """Normal path: GC holds the flock while unlinking entry+lock."""
-        old = datetime.now(timezone.utc) - timedelta(days=8)
+        old = datetime.now(UTC) - timedelta(days=8)
         path = _write_entry(tmp_path, "gone", "end", old)
         path.with_suffix(".lock").touch()
         assert sr.gc_stale(tmp_path) == 1
@@ -404,7 +400,7 @@ class TestGcConcurrency:
         """Fail-open filesystems: without the flock the entry still GCs but
         the lock file is left for the orphan sweep (never unlink a lock we
         don't hold)."""
-        old = datetime.now(timezone.utc) - timedelta(days=8)
+        old = datetime.now(UTC) - timedelta(days=8)
         path = _write_entry(tmp_path, "noflock", "end", old)
         lock = path.with_suffix(".lock")
         lock.touch()
@@ -418,7 +414,7 @@ class TestOrphanSweep:
     """GC sweeps .adopt/.lock files whose .json entry is gone."""
 
     def _age(self, path: Path, days: int) -> None:
-        old = (datetime.now(timezone.utc) - timedelta(days=days)).timestamp()
+        old = (datetime.now(UTC) - timedelta(days=days)).timestamp()
         os.utime(path, (old, old))
 
     def test_old_orphan_adopt_removed(self, tmp_path):
@@ -449,7 +445,7 @@ class TestOrphanSweep:
         assert orphan.exists()
 
     def test_lock_with_live_entry_kept(self, tmp_path):
-        recent = datetime.now(timezone.utc) - timedelta(days=1)
+        recent = datetime.now(UTC) - timedelta(days=1)
         path = _write_entry(tmp_path, "alive", "stop", recent)
         lock = path.with_suffix(".lock")
         lock.touch()
@@ -491,9 +487,7 @@ class TestOrphanSweep:
         def open_and_recreate(path, *a, **k):
             fd = real_open(path, *a, **k)
             if str(path).endswith("reborn.lock"):
-                _write_entry(
-                    tmp_path, "reborn", "start", datetime.now(timezone.utc)
-                )
+                _write_entry(tmp_path, "reborn", "start", datetime.now(UTC))
             return fd
 
         monkeypatch.setattr(sr.os, "open", open_and_recreate)
@@ -506,17 +500,18 @@ class TestOrphanSweep:
 # Hook wiring
 # ===========================================================================
 
-class TestHookWiring:
 
+class TestHookWiring:
     def _hooks(self):
         from conftest import parse_hooks
+
         return parse_hooks()
 
     def test_notification_hook_registered(self):
         hooks = [
-            h for h in self._hooks()
-            if h["event"] == "Notification"
-            and "session_notification" in h["script"]
+            h
+            for h in self._hooks()
+            if h["event"] == "Notification" and "session_notification" in h["script"]
         ]
         assert len(hooks) == 1, (
             "hooks.json must register exactly one Notification hook for "
@@ -526,9 +521,7 @@ class TestHookWiring:
     def test_notification_hook_has_uv_guard_and_timeout(self):
         from conftest import HOOKS_JSON
 
-        hook = next(
-            h for h in self._hooks() if h["event"] == "Notification"
-        )
+        hook = next(h for h in self._hooks() if h["event"] == "Notification")
         # The uv guard lives in the shared hooks/run.sh launcher now; the
         # command must route through it like its siblings.
         assert 'sh "${CLAUDE_PLUGIN_ROOT}/hooks/run.sh"' in hook["command"], (
@@ -546,12 +539,15 @@ class TestHookWiring:
         manifest = (SCRIPTS_DIR / "pyproject.toml").read_text()
         assert "multiplai-core" in manifest
 
-    @pytest.mark.parametrize("script,kind", [
-        ("session_start.py", '"start"'),
-        ("session_stop.py", '"stop"'),
-        ("session_end.py", '"end"'),
-        ("session_notification.py", '"notification"'),
-    ])
+    @pytest.mark.parametrize(
+        "script,kind",
+        [
+            ("session_start.py", '"start"'),
+            ("session_stop.py", '"stop"'),
+            ("session_end.py", '"end"'),
+            ("session_notification.py", '"notification"'),
+        ],
+    )
     def test_lifecycle_scripts_record_registry_events(self, script, kind):
         source = (SCRIPTS_DIR / script).read_text()
         assert "session_registry" in source, (
@@ -568,26 +564,32 @@ class TestHookWiring:
 # End-to-end through the real hook scripts
 # ===========================================================================
 
-class TestLifecycleIntegration:
 
+class TestLifecycleIntegration:
     def test_start_stop_end_lifecycle_via_scripts(self, tmp_path, monkeypatch):
         data_dir = tmp_path / "data"
         data_dir.mkdir()
         hook_json = json.dumps({"session_id": SID, "cwd": str(tmp_path)})
 
-        with patch.dict(os.environ, {
-            "CLAUDE_PLUGIN_DATA": str(data_dir),
-            "HOSTNAME": "claude-e2e-test",
-        }, clear=False):
+        with patch.dict(
+            os.environ,
+            {
+                "CLAUDE_PLUGIN_DATA": str(data_dir),
+                "HOSTNAME": "claude-e2e-test",
+            },
+            clear=False,
+        ):
             from multiplai_core.paths import _reset_cache
+
             _reset_cache()
             try:
                 import importlib
                 import io
 
+                import session_end
                 import session_start
                 import session_stop
-                import session_end
+
                 importlib.reload(session_start)
                 importlib.reload(session_stop)
                 importlib.reload(session_end)
@@ -618,12 +620,14 @@ class TestLifecycleIntegration:
                 del env[k]
         env["CLAUDE_PLUGIN_DATA"] = str(data_dir)
         env["HOSTNAME"] = "claude-e2e-notif"
-        payload = json.dumps({
-            "hook_event_name": "Notification",
-            "session_id": SID,
-            "cwd": str(tmp_path),
-            "message": "Claude is waiting for your input",
-        })
+        payload = json.dumps(
+            {
+                "hook_event_name": "Notification",
+                "session_id": SID,
+                "cwd": str(tmp_path),
+                "message": "Claude is waiting for your input",
+            }
+        )
         result = subprocess.run(
             [sys.executable, str(SCRIPTS_DIR / "session_notification.py")],
             input=payload,

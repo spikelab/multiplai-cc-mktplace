@@ -2,42 +2,13 @@
 
 import os
 import re
-import sys
 import shlex
-import pytest
+import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import subprocess
-
-from build_pipeline.tdd_engine import (
-    parse_blocks,
-    assemble_context,
-    run_block_tdd,
-    run_test_quality_check,
-    run_tdd_engine,
-    _capture_block_diff,
-    capture_build_diff,
-    _detect_entry_point,
-    _read_block_test_files,
-    _git_commit_block_phase,
-    _run_integration_and_review,
-    _run_refactor_all,
-    _snapshot_all_test_files,
-    _run_quality_review,
-    _adjudicate_review_findings,
-    _enforce_test_integrity,
-    _snapshot_test_files,
-    _TEST_FILE_RE,
-    _TEST_PATH_RE,
-    _verify_entry_point,
-    EMPTY_TREE_SHA,
-    WEAK_TEST_PATTERNS,
-    MAX_REVIEW_ITERATIONS,
-    EXIT_SUCCESS,
-    EXIT_BUILD_FAILURE,
-    EXIT_AGENT_TIMEOUT,
-)
+import pytest
 from build_pipeline import budget as budget_mod
 from build_pipeline import git_ops
 from build_pipeline.config import BuildConfig
@@ -54,9 +25,39 @@ from build_pipeline.models import (
     ReviewScore,
     WeakTestFinding,
 )
-from build_pipeline.models import TestQualityAudit as QualityAudit  # Test* name breaks pytest collection
-from build_pipeline.state import BuildState, TDDState
+from build_pipeline.models import (
+    TestQualityAudit as QualityAudit,  # Test* name breaks pytest collection
+)
 from build_pipeline.progress import ProgressWriter
+from build_pipeline.state import BuildState, TDDState
+from build_pipeline.tdd_engine import (
+    _TEST_FILE_RE,
+    _TEST_PATH_RE,
+    EMPTY_TREE_SHA,
+    EXIT_AGENT_TIMEOUT,
+    EXIT_BUILD_FAILURE,
+    EXIT_SUCCESS,
+    MAX_REVIEW_ITERATIONS,
+    WEAK_TEST_PATTERNS,
+    _adjudicate_review_findings,
+    _capture_block_diff,
+    _detect_entry_point,
+    _enforce_test_integrity,
+    _git_commit_block_phase,
+    _read_block_test_files,
+    _run_integration_and_review,
+    _run_quality_review,
+    _run_refactor_all,
+    _snapshot_all_test_files,
+    _snapshot_test_files,
+    _verify_entry_point,
+    assemble_context,
+    capture_build_diff,
+    parse_blocks,
+    run_block_tdd,
+    run_tdd_engine,
+    run_test_quality_check,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -68,10 +69,18 @@ def _no_live_refactorer():
     successful no-op agent here; tests that assert on the refactorer patch it
     again locally, and the inner patch wins.
     """
-    with patch("build_pipeline.tdd_engine.run_refactorer", new_callable=AsyncMock,
-               return_value=AgentResult(success=True, output="nothing to refactor")), \
-         patch("build_pipeline.tdd_engine.run_refactor_all", new_callable=AsyncMock,
-               return_value=AgentResult(success=True, output="already consistent")):
+    with (
+        patch(
+            "build_pipeline.tdd_engine.run_refactorer",
+            new_callable=AsyncMock,
+            return_value=AgentResult(success=True, output="nothing to refactor"),
+        ),
+        patch(
+            "build_pipeline.tdd_engine.run_refactor_all",
+            new_callable=AsyncMock,
+            return_value=AgentResult(success=True, output="already consistent"),
+        ),
+    ):
         yield
 
 
@@ -80,15 +89,33 @@ def _no_live_refactorer():
 # integrity, refactor-verification and nested-project tests below.
 @pytest.fixture(autouse=True)
 def _unit_agent_evidence(request, monkeypatch):
-    classes = {"TestRunBlockTDD", "TestRedGateWiring", "TestWeakTestEnforcement",
-               "TestReviewExhaustionEnforcement", "TestAgentStatusEnforcement",
-               "TestImplementationNotesLoop", "TestEvidenceBasedReview", "TestIntegrationFixCircuitBreaker",
-               "TestRefactorAllOrdering", "TestCheckpointLifecycleOwnership", "TestMutationStepPlacement"}
+    classes = {
+        "TestRunBlockTDD",
+        "TestRedGateWiring",
+        "TestWeakTestEnforcement",
+        "TestReviewExhaustionEnforcement",
+        "TestAgentStatusEnforcement",
+        "TestImplementationNotesLoop",
+        "TestEvidenceBasedReview",
+        "TestIntegrationFixCircuitBreaker",
+        "TestRefactorAllOrdering",
+        "TestCheckpointLifecycleOwnership",
+        "TestMutationStepPlacement",
+    }
     if request.cls and request.cls.__name__ in classes:
         monkeypatch.setattr(git_ops, "commit_tree", lambda *a, **kw: None)
-        monkeypatch.setattr("build_pipeline.tdd_engine._list_block_test_files", lambda *a: ["tests/test_x.py"])
-        monkeypatch.setattr("build_pipeline.tdd_engine._snapshot_test_files", lambda *a: {"tests/test_x.py": "unchanged"})
-        monkeypatch.setattr("build_pipeline.tdd_engine.integration_gate", lambda *a, **kw: GateResult(passed=True, reason="unit suite"))
+        monkeypatch.setattr(
+            "build_pipeline.tdd_engine._list_block_test_files",
+            lambda *a: ["tests/test_x.py"],
+        )
+        monkeypatch.setattr(
+            "build_pipeline.tdd_engine._snapshot_test_files",
+            lambda *a: {"tests/test_x.py": "unchanged"},
+        )
+        monkeypatch.setattr(
+            "build_pipeline.tdd_engine.integration_gate",
+            lambda *a, **kw: GateResult(passed=True, reason="unit suite"),
+        )
     yield
 
 
@@ -210,7 +237,9 @@ class TestParseBlocks:
 
     def test_parse_single_block(self, tmp_path):
         tasks_file = tmp_path / "tasks.md"
-        tasks_file.write_text("## 1. Only Block\n\nJust one block here.\n\nSatisfies: solo\n")
+        tasks_file.write_text(
+            "## 1. Only Block\n\nJust one block here.\n\nSatisfies: solo\n"
+        )
         blocks = parse_blocks(tasks_file)
 
         assert len(blocks) == 1
@@ -273,7 +302,9 @@ class TestParseBlockInterfaces:
 
     def test_absent_section_yields_empty_lists(self, tmp_path):
         tasks_file = tmp_path / "tasks.md"
-        tasks_file.write_text("## 1. Old Format\n\nNo interfaces here.\n\nSatisfies: x\n")
+        tasks_file.write_text(
+            "## 1. Old Format\n\nNo interfaces here.\n\nSatisfies: x\n"
+        )
         blocks = parse_blocks(tasks_file)
         assert blocks[0].produces == []
         assert blocks[0].consumes == []
@@ -307,7 +338,9 @@ class TestAssembleContext:
         # Requirements (BDD scenarios) — flat one file per capability
         req_dir = change_dir / "requirements"
         req_dir.mkdir(parents=True)
-        (req_dir / "auth.md").write_text("# Auth Requirements\nWHEN user logs in THEN token issued.")
+        (req_dir / "auth.md").write_text(
+            "# Auth Requirements\nWHEN user logs in THEN token issued."
+        )
 
         # Rubric
         (change_dir / "rubric.md").write_text("# Rubric\nCode quality criteria.")
@@ -326,7 +359,9 @@ class TestAssembleContext:
 
     def test_includes_block_info(self, tmp_path):
         config = self._make_config(tmp_path)
-        block = BlockInfo(number=1, name="Auth", description="Build auth module", satisfies=["auth"])
+        block = BlockInfo(
+            number=1, name="Auth", description="Build auth module", satisfies=["auth"]
+        )
         ctx = assemble_context(block, config, "test_writer")
         assert "Block 1: Auth" in ctx
         assert "Build auth module" in ctx
@@ -457,7 +492,9 @@ class TestContextConstraintsAndInterfaces:
         assert "Queue name is exactly `dolce-jobs-v2`" in ctx
 
     def test_no_constraints_section_when_design_lacks_one(self, tmp_path):
-        config = self._make_config(tmp_path, "# Design\n\n## Decisions\nNo constraints.\n")
+        config = self._make_config(
+            tmp_path, "# Design\n\n## Decisions\nNo constraints.\n"
+        )
         block = BlockInfo(number=1, name="X", description="desc")
         ctx = assemble_context(block, config, "implementer")
         assert "Global Constraints (project-wide" not in ctx
@@ -480,12 +517,16 @@ class TestContextConstraintsAndInterfaces:
     def test_injects_earlier_block_produces(self, tmp_path):
         config = self._make_config(tmp_path, "# Design\n")
         b1 = BlockInfo(
-            number=1, name="Issuer", description="d",
+            number=1,
+            name="Issuer",
+            description="d",
             produces=["issue_token(user_id: str) -> str"],
         )
         b2 = BlockInfo(number=2, name="Login", description="d")
         b3 = BlockInfo(
-            number=3, name="Later", description="d",
+            number=3,
+            name="Later",
+            description="d",
             produces=["later_only() -> None"],
         )
         ctx = assemble_context(b2, config, "implementer", blocks=[b1, b2, b3])
@@ -593,7 +634,10 @@ def test_c():
 
     def test_low_ratio_passes(self):
         """One weak test out of many is acceptable."""
-        tests = ["def test_real_%d():\n    assert compute(%d) == %d\n" % (i, i, i*2) for i in range(10)]
+        tests = [
+            "def test_real_%d():\n    assert compute(%d) == %d\n" % (i, i, i * 2)
+            for i in range(10)
+        ]
         tests.append("def test_weak():\n    assert True\n")
         content = "\n".join(tests)
         config = BuildConfig(gates=MagicMock(test_quality_enabled=True))
@@ -702,6 +746,7 @@ class TestAntiPatternPrompts:
 
     def test_test_writer_quality_gates(self):
         from build_pipeline.prompts.test_writing import TEST_WRITER_PROMPT
+
         assert "Quality Gates" in TEST_WRITER_PROMPT
         assert "tests real behavior" in TEST_WRITER_PROMPT
         assert "Mocks honor the real contract" in TEST_WRITER_PROMPT
@@ -711,17 +756,20 @@ class TestAntiPatternPrompts:
 
     def test_auditor_prompt_covers_mock_patterns(self):
         from build_pipeline.prompts.test_writing import TEST_QUALITY_PROMPT
+
         assert "Mock-assertion-only" in TEST_QUALITY_PROMPT
         assert "Mock-setup-dominant" in TEST_QUALITY_PROMPT
         assert "sleep" in TEST_QUALITY_PROMPT.lower()
 
     def test_rubric_prompt_scores_anti_patterns(self):
         from build_pipeline.prompts.rubric_prompts import RUBRIC_PROMPT
+
         assert "anti-patterns" in RUBRIC_PROMPT
         assert "assert_called_*" in RUBRIC_PROMPT
 
     def test_rubric_template_scores_anti_patterns(self):
         from build_pipeline.change_manager import TEMPLATES
+
         assert "interrogate mocks" in TEMPLATES["rubric"]
         assert "sleep" in TEMPLATES["rubric"]
 
@@ -749,12 +797,14 @@ class TestReviewLoopCounting:
 
     def test_iterations_within_limit(self):
         from build_pipeline.gates import review_iteration_gate
+
         for i in range(MAX_REVIEW_ITERATIONS):
             result = review_iteration_gate(i, MAX_REVIEW_ITERATIONS)
             assert result.passed
 
     def test_iteration_at_limit_fails(self):
         from build_pipeline.gates import review_iteration_gate
+
         result = review_iteration_gate(MAX_REVIEW_ITERATIONS, MAX_REVIEW_ITERATIONS)
         assert not result.passed
         assert result.action == "halt_build"
@@ -768,6 +818,7 @@ class TestPromptTemplates:
 
     def test_test_writer_prompt_placeholders(self):
         from build_pipeline.prompts.test_writing import TEST_WRITER_PROMPT
+
         placeholders = re.findall(r"\{(\w+)\}", TEST_WRITER_PROMPT)
         assert "block_name" in placeholders
         assert "block_description" in placeholders
@@ -777,6 +828,7 @@ class TestPromptTemplates:
 
     def test_implementer_clean_placeholders(self):
         from build_pipeline.prompts.implementation import IMPLEMENTER_PROMPT_CLEAN
+
         placeholders = re.findall(r"\{(\w+)\}", IMPLEMENTER_PROMPT_CLEAN)
         assert "block_name" in placeholders
         assert "failing_tests" in placeholders
@@ -784,6 +836,7 @@ class TestPromptTemplates:
 
     def test_implementer_minimum_placeholders(self):
         from build_pipeline.prompts.implementation import IMPLEMENTER_PROMPT_MINIMUM
+
         placeholders = re.findall(r"\{(\w+)\}", IMPLEMENTER_PROMPT_MINIMUM)
         assert "failing_tests" in placeholders
         assert "context_bundle" in placeholders
@@ -791,12 +844,14 @@ class TestPromptTemplates:
     def test_clean_prompt_does_not_claim_there_is_no_refactor_phase(self):
         """There is one on every tier now — the prompt said the opposite."""
         from build_pipeline.prompts.implementation import IMPLEMENTER_PROMPT_CLEAN
+
         assert "no refactor phase" not in IMPLEMENTER_PROMPT_CLEAN
         assert "no separate refactoring phase" not in IMPLEMENTER_PROMPT_CLEAN
         assert "refactor pass" in IMPLEMENTER_PROMPT_CLEAN
 
     def test_refactor_prompt_placeholders(self):
         from build_pipeline.prompts.implementation import REFACTOR_PROMPT
+
         placeholders = re.findall(r"\{(\w+)\}", REFACTOR_PROMPT)
         assert "block_name" in placeholders
         assert "context_bundle" in placeholders
@@ -804,48 +859,67 @@ class TestPromptTemplates:
 
     def test_refactor_all_prompt_placeholders(self):
         from build_pipeline.prompts.implementation import REFACTOR_ALL_PROMPT
+
         placeholders = re.findall(r"\{(\w+)\}", REFACTOR_ALL_PROMPT)
         assert {"diff", "design", "rubric", "test_command"} <= set(placeholders)
         REFACTOR_ALL_PROMPT.format(
-            diff="d", design="des", rubric="r", test_command="pytest",
+            diff="d",
+            design="des",
+            rubric="r",
+            test_command="pytest",
         )
 
     def test_refactor_prompts_forbid_touching_tests(self):
         """The gate is the enforcement, but the prompt must not leave the agent
         guessing — and neither prompt offers the TEST CHANGE REQUIRED hatch."""
         from build_pipeline.prompts.implementation import (
-            REFACTOR_ALL_PROMPT, REFACTOR_PROMPT,
+            REFACTOR_ALL_PROMPT,
+            REFACTOR_PROMPT,
         )
+
         for prompt in (REFACTOR_PROMPT, REFACTOR_ALL_PROMPT):
             assert "test file" in prompt.lower()
             assert "TEST CHANGE REQUIRED" not in prompt
 
     def test_prompts_can_be_formatted(self):
         """All prompts format without error when given the right kwargs."""
-        from build_pipeline.prompts.test_writing import TEST_WRITER_PROMPT
         from build_pipeline.prompts.implementation import (
             IMPLEMENTER_PROMPT_CLEAN,
             IMPLEMENTER_PROMPT_MINIMUM,
             REFACTOR_PROMPT,
         )
+        from build_pipeline.prompts.test_writing import TEST_WRITER_PROMPT
+
         result = TEST_WRITER_PROMPT.format(
-            block_name="Test", block_description="desc",
-            specs="specs", context_bundle="ctx", test_command="pytest",
-            max_turns=30, half=15,
+            block_name="Test",
+            block_description="desc",
+            specs="specs",
+            context_bundle="ctx",
+            test_command="pytest",
+            max_turns=30,
+            half=15,
         )
         assert "Test" in result
 
         IMPLEMENTER_PROMPT_CLEAN.format(
-            block_name="Test", block_description="desc",
-            failing_tests="tests", context_bundle="ctx", test_command="pytest",
+            block_name="Test",
+            block_description="desc",
+            failing_tests="tests",
+            context_bundle="ctx",
+            test_command="pytest",
         )
         IMPLEMENTER_PROMPT_MINIMUM.format(
-            block_name="Test", block_description="desc",
-            failing_tests="tests", context_bundle="ctx", test_command="pytest",
+            block_name="Test",
+            block_description="desc",
+            failing_tests="tests",
+            context_bundle="ctx",
+            test_command="pytest",
         )
         REFACTOR_PROMPT.format(
-            block_name="Test", block_description="desc",
-            context_bundle="ctx", test_command="pytest",
+            block_name="Test",
+            block_description="desc",
+            context_bundle="ctx",
+            test_command="pytest",
         )
 
 
@@ -853,12 +927,22 @@ class TestTurnBudget:
     """Each test writer's prompt states its turn cap, and the cap is the one
     the caller passes, which the engine takes from the config."""
 
-    @pytest.mark.parametrize("name", ["TEST_WRITER_PROMPT", "MUTATION_TEST_WRITER_PROMPT"])
+    @pytest.mark.parametrize(
+        "name", ["TEST_WRITER_PROMPT", "MUTATION_TEST_WRITER_PROMPT"]
+    )
     def test_the_prompt_states_the_cap_and_the_turn_to_have_a_draft_by(self, name):
         from build_pipeline.prompts import test_writing
+
         text = getattr(test_writing, name).format(
-            block_name="b", block_description="d", specs="s", context_bundle="c",
-            survivors="m", test_command="pytest", max_turns=25, half=12)
+            block_name="b",
+            block_description="d",
+            specs="s",
+            context_bundle="c",
+            survivors="m",
+            test_command="pytest",
+            max_turns=25,
+            half=12,
+        )
         assert "You have 25 turns" in text
         assert "by turn 12" in text
         assert "kept if you run out of turns" in text
@@ -867,8 +951,13 @@ class TestTurnBudget:
     @pytest.mark.parametrize("step", ["run_test_writer", "run_mutation_test_writer"])
     async def test_the_step_hands_its_cap_to_the_agent_and_the_prompt(self, step):
         from build_pipeline.llm_steps import tdd_steps
+
         call = AsyncMock(return_value=AgentResult(success=True, output="STATUS: DONE"))
-        args = (("b", "d", "specs", "ctx", "pytest") if step == "run_test_writer" else ("m", "pytest"))
+        args = (
+            ("b", "d", "specs", "ctx", "pytest")
+            if step == "run_test_writer"
+            else ("m", "pytest")
+        )
         with patch.object(tdd_steps, "agent_call", call):
             await getattr(tdd_steps, step)(*args, max_turns=25)
         assert call.await_args.kwargs["max_turns"] == 25
@@ -882,7 +971,12 @@ class TestTDDStepToolAllowlists:
     """Verify tool allowlists and timeouts for each agent type."""
 
     def test_test_writer_tools(self):
-        from build_pipeline.llm_steps.tdd_steps import TEST_WRITER_TOOLS, TEST_WRITER_MAX_TURNS, TEST_WRITER_TIMEOUT
+        from build_pipeline.llm_steps.tdd_steps import (
+            TEST_WRITER_MAX_TURNS,
+            TEST_WRITER_TIMEOUT,
+            TEST_WRITER_TOOLS,
+        )
+
         assert "Read" in TEST_WRITER_TOOLS
         assert "Write" in TEST_WRITER_TOOLS
         assert "Bash" in TEST_WRITER_TOOLS
@@ -893,7 +987,12 @@ class TestTDDStepToolAllowlists:
         assert TEST_WRITER_TIMEOUT == 20 * 60
 
     def test_implementer_tools(self):
-        from build_pipeline.llm_steps.tdd_steps import IMPLEMENTER_TOOLS, IMPLEMENTER_MAX_TURNS, IMPLEMENTER_TIMEOUT
+        from build_pipeline.llm_steps.tdd_steps import (
+            IMPLEMENTER_MAX_TURNS,
+            IMPLEMENTER_TIMEOUT,
+            IMPLEMENTER_TOOLS,
+        )
+
         assert "Read" in IMPLEMENTER_TOOLS
         assert "Write" in IMPLEMENTER_TOOLS
         assert "Edit" in IMPLEMENTER_TOOLS  # implementers CAN edit
@@ -902,7 +1001,12 @@ class TestTDDStepToolAllowlists:
         assert IMPLEMENTER_TIMEOUT == 30 * 60
 
     def test_refactorer_tools(self):
-        from build_pipeline.llm_steps.tdd_steps import REFACTORER_TOOLS, REFACTORER_MAX_TURNS, REFACTORER_TIMEOUT
+        from build_pipeline.llm_steps.tdd_steps import (
+            REFACTORER_MAX_TURNS,
+            REFACTORER_TIMEOUT,
+            REFACTORER_TOOLS,
+        )
+
         assert "Read" in REFACTORER_TOOLS
         assert "Edit" in REFACTORER_TOOLS
         assert REFACTORER_MAX_TURNS == 30
@@ -912,6 +1016,7 @@ class TestTDDStepToolAllowlists:
         """Same work, more room: the whole-change pass reads a build-sized diff
         but must not gain any capability the per-block refactorer lacks."""
         import inspect
+
         from build_pipeline.llm_steps import tdd_steps
 
         assert tdd_steps.REFACTOR_ALL_MAX_TURNS > tdd_steps.REFACTORER_MAX_TURNS
@@ -922,14 +1027,19 @@ class TestTDDStepToolAllowlists:
 
 
 # A suite result that satisfies the RED gate: non-zero exit, genuine failure.
-RED_SUITE_RESULT = (1, "FAILED tests/test_x.py::test_a - AssertionError: not implemented")
+RED_SUITE_RESULT = (
+    1,
+    "FAILED tests/test_x.py::test_a - AssertionError: not implemented",
+)
 
 
 @pytest.fixture
 def red_gate_passes():
     """Make the RED gate see a properly failing suite (most engine tests
     exercise other phases and just need RED to be satisfied)."""
-    with patch("build_pipeline.tdd_engine.run_test_suite", return_value=RED_SUITE_RESULT) as run:
+    with patch(
+        "build_pipeline.tdd_engine.run_test_suite", return_value=RED_SUITE_RESULT
+    ) as run:
         yield run
 
 
@@ -939,9 +1049,11 @@ def quality_audit_overturns():
     tests use placeholder agent output with no test code, which the static
     scan flags; the audit path itself is tested separately)."""
     from build_pipeline.models import TestQualityAudit
+
     with patch(
         "build_pipeline.tdd_engine._audit_test_quality",
-        new_callable=AsyncMock, return_value=TestQualityAudit(passed=True),
+        new_callable=AsyncMock,
+        return_value=TestQualityAudit(passed=True),
     ):
         yield
 
@@ -991,10 +1103,22 @@ class TestRunBlockTDD:
     @pytest.mark.asyncio
     async def test_successful_block(self, setup):
         config, state, progress, block = setup
-        ok_result = AgentResult(success=True, output="Tests written", files_changed=["test_x.py"])
+        ok_result = AgentResult(
+            success=True, output="Tests written", files_changed=["test_x.py"]
+        )
 
-        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=ok_result), \
-             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=ok_result):
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                return_value=ok_result,
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                return_value=ok_result,
+            ),
+        ):
             result = await run_block_tdd(block, config, state, progress)
 
         assert result is True
@@ -1004,11 +1128,22 @@ class TestRunBlockTDD:
     async def test_the_test_writer_gets_the_configured_turn_cap(self, setup):
         config, state, progress, block = setup
         config.test_writer_max_turns = 17
-        ok_result = AgentResult(success=True, output="Tests written", files_changed=["test_x.py"])
+        ok_result = AgentResult(
+            success=True, output="Tests written", files_changed=["test_x.py"]
+        )
 
-        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock,
-                   return_value=ok_result) as tw, \
-             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=ok_result):
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                return_value=ok_result,
+            ) as tw,
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                return_value=ok_result,
+            ),
+        ):
             await run_block_tdd(block, config, state, progress)
 
         assert tw.await_args.kwargs["max_turns"] == 17
@@ -1018,7 +1153,11 @@ class TestRunBlockTDD:
         config, state, progress, block = setup
         fail_result = AgentResult(success=False, error="Agent crashed")
 
-        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=fail_result):
+        with patch(
+            "build_pipeline.tdd_engine.run_test_writer",
+            new_callable=AsyncMock,
+            return_value=fail_result,
+        ):
             result = await run_block_tdd(block, config, state, progress)
 
         assert result is False
@@ -1036,7 +1175,11 @@ class TestRunBlockTDD:
             success=False, error="Agent timed out after 1200s", timed_out=True
         )
 
-        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=timeout_result):
+        with patch(
+            "build_pipeline.tdd_engine.run_test_writer",
+            new_callable=AsyncMock,
+            return_value=timeout_result,
+        ):
             result = await run_block_tdd(block, config, state, progress)
 
         assert result is False
@@ -1051,8 +1194,18 @@ class TestRunBlockTDD:
             success=False, error="Agent timed out after 1800s", timed_out=True
         )
 
-        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=ok_result), \
-             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=timeout_result):
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                return_value=ok_result,
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                return_value=timeout_result,
+            ),
+        ):
             result = await run_block_tdd(block, config, state, progress)
 
         assert result is False
@@ -1064,7 +1217,11 @@ class TestRunBlockTDD:
         config, state, progress, block = setup
         fail_result = AgentResult(success=False, error="CLI exited 1")
 
-        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=fail_result):
+        with patch(
+            "build_pipeline.tdd_engine.run_test_writer",
+            new_callable=AsyncMock,
+            return_value=fail_result,
+        ):
             assert await run_block_tdd(block, config, state, progress) is False
 
         assert block.status == BlockStatus.FAILED
@@ -1074,9 +1231,15 @@ class TestRunBlockTDD:
     @pytest.mark.asyncio
     async def test_an_agent_that_reports_blocked_is_not_resumable(self, setup):
         config, state, progress, block = setup
-        blocked = AgentResult(success=True, output="Cannot be done.\n\nSTATUS: BLOCKED\n")
+        blocked = AgentResult(
+            success=True, output="Cannot be done.\n\nSTATUS: BLOCKED\n"
+        )
 
-        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=blocked):
+        with patch(
+            "build_pipeline.tdd_engine.run_test_writer",
+            new_callable=AsyncMock,
+            return_value=blocked,
+        ):
             assert await run_block_tdd(block, config, state, progress) is False
 
         assert block.status == BlockStatus.FAILED
@@ -1088,9 +1251,15 @@ class TestRunBlockTDD:
         block.status = BlockStatus.FAILED
         block.timed_out = True
         block.resumable = True
-        blocked = AgentResult(success=True, output="Cannot be done.\n\nSTATUS: BLOCKED\n")
+        blocked = AgentResult(
+            success=True, output="Cannot be done.\n\nSTATUS: BLOCKED\n"
+        )
 
-        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=blocked):
+        with patch(
+            "build_pipeline.tdd_engine.run_test_writer",
+            new_callable=AsyncMock,
+            return_value=blocked,
+        ):
             assert await run_block_tdd(block, config, state, progress) is False
 
         assert block.timed_out is False
@@ -1102,8 +1271,18 @@ class TestRunBlockTDD:
         ok_result = AgentResult(success=True, output="Tests written")
         fail_result = AgentResult(success=False, error="Impl failed")
 
-        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=ok_result), \
-             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=fail_result):
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                return_value=ok_result,
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                return_value=fail_result,
+            ),
+        ):
             result = await run_block_tdd(block, config, state, progress)
 
         assert result is False
@@ -1123,7 +1302,11 @@ class TestRunBlockTDD:
         state.tdd.current_block = 0
         fail_result = AgentResult(success=False, error="crash")
 
-        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=fail_result):
+        with patch(
+            "build_pipeline.tdd_engine.run_test_writer",
+            new_callable=AsyncMock,
+            return_value=fail_result,
+        ):
             result = await run_block_tdd(block, config, state, progress)
 
         assert result is False
@@ -1135,9 +1318,23 @@ class TestRunBlockTDD:
         config.tier = "standard"
         ok_result = AgentResult(success=True, output="Done")
 
-        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=ok_result), \
-             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=ok_result), \
-             patch("build_pipeline.tdd_engine.run_refactorer", new_callable=AsyncMock, return_value=ok_result) as mock_refactor:
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                return_value=ok_result,
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                return_value=ok_result,
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_refactorer",
+                new_callable=AsyncMock,
+                return_value=ok_result,
+            ) as mock_refactor,
+        ):
             result = await run_block_tdd(block, config, state, progress)
 
         assert result is True
@@ -1151,9 +1348,23 @@ class TestRunBlockTDD:
         config.tier = "advanced"
         ok_result = AgentResult(success=True, output="Done")
 
-        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=ok_result), \
-             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=ok_result), \
-             patch("build_pipeline.tdd_engine.run_refactorer", new_callable=AsyncMock, return_value=ok_result) as mock_refactor:
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                return_value=ok_result,
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                return_value=ok_result,
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_refactorer",
+                new_callable=AsyncMock,
+                return_value=ok_result,
+            ) as mock_refactor,
+        ):
             result = await run_block_tdd(block, config, state, progress)
 
         assert result is True
@@ -1163,18 +1374,28 @@ class TestRunBlockTDD:
 def _git_init_project(project_dir: Path) -> str:
     """A project repo with one commit. Returns its SHA."""
     subprocess.run(["git", "init", "-q"], cwd=project_dir, check=True)
-    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=project_dir, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "t@example.com"], cwd=project_dir, check=True
+    )
     subprocess.run(["git", "config", "user.name", "T"], cwd=project_dir, check=True)
     subprocess.run(["git", "add", "-A"], cwd=project_dir, check=True)
     subprocess.run(["git", "commit", "-qm", "init"], cwd=project_dir, check=True)
-    return subprocess.run(["git", "rev-parse", "HEAD"], cwd=project_dir,
-                          capture_output=True, text=True, check=True).stdout.strip()
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=project_dir,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
 
 
 def _git_log_subjects(project_dir: Path) -> list[str]:
     return subprocess.run(
-        ["git", "log", "--format=%s"], cwd=project_dir,
-        capture_output=True, text=True, check=True,
+        ["git", "log", "--format=%s"],
+        cwd=project_dir,
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout.splitlines()
 
 
@@ -1194,7 +1415,10 @@ class TestBlockRefactorVerification:
 
     @pytest.fixture(autouse=True)
     def _red(self, red_gate_passes, quality_audit_overturns):
-        red_gate_passes.return_value = (1, "FAILED tests/test_thing.py::test_addition - AssertionError\n1 failed")
+        red_gate_passes.return_value = (
+            1,
+            "FAILED tests/test_thing.py::test_addition - AssertionError\n1 failed",
+        )
         yield
 
     @pytest.fixture
@@ -1222,7 +1446,8 @@ class TestBlockRefactorVerification:
 
         block = BlockInfo(number=1, name="Block1", description="Test block")
         state = BuildState(
-            change_name="test", tier="advanced",
+            change_name="test",
+            tier="advanced",
             state_file=str(tmp_path / "state.json"),
             tdd=TDDState(blocks=[block]),
         )
@@ -1233,33 +1458,52 @@ class TestBlockRefactorVerification:
     @staticmethod
     def _agent_writing(project_dir: Path, rel: str, content: str, output: str = "done"):
         """An agent mock whose side effect is writing one file."""
+
         def _run(*_a, **_kw):
             path = project_dir / rel
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content)
             return AgentResult(success=True, output=output)
+
         return _run
 
     async def _run(self, config, state, progress, block, refactorer, implementer=None):
         """Drive one block with a test writer and implementer that produce real
         files, so the refactor step has a committed baseline to rewind to."""
         write_tests = self._agent_writing(
-            config.project_dir, TEST_FILE_REL, ORIGINAL_TEST_SOURCE, "tests written")
+            config.project_dir, TEST_FILE_REL, ORIGINAL_TEST_SOURCE, "tests written"
+        )
         write_impl = implementer or self._agent_writing(
-            config.project_dir, "module.py", "def add(a, b):\n    return a + b\n", "implemented")
-        with patch("build_pipeline.tdd_engine.run_test_writer",
-                   new_callable=AsyncMock, side_effect=write_tests), \
-             patch("build_pipeline.tdd_engine.run_implementer",
-                   new_callable=AsyncMock, side_effect=write_impl), \
-             patch("build_pipeline.tdd_engine.run_refactorer",
-                   new_callable=AsyncMock, side_effect=refactorer):
+            config.project_dir,
+            "module.py",
+            "def add(a, b):\n    return a + b\n",
+            "implemented",
+        )
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                side_effect=write_tests,
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                side_effect=write_impl,
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_refactorer",
+                new_callable=AsyncMock,
+                side_effect=refactorer,
+            ),
+        ):
             return await run_block_tdd(block, config, state, progress)
 
     @pytest.mark.asyncio
     async def test_verified_refactor_is_committed_and_noted(self, setup):
         config, state, progress, block = setup
         refactorer = self._agent_writing(
-            config.project_dir, "module.py",
+            config.project_dir,
+            "module.py",
             "def add(a: int, b: int) -> int:\n    return a + b\n",
             "Tidied add().\nSURPRISES: the design named it sum()\nSPEC_IMPACT: clarify\n",
         )
@@ -1268,7 +1512,9 @@ class TestBlockRefactorVerification:
 
         assert block.refactor_commit is not None
         assert _git_log_subjects(config.project_dir)[0] == "refactor(block-1): Block1"
-        assert (config.project_dir / "module.py").read_text().startswith("def add(a: int")
+        assert (
+            (config.project_dir / "module.py").read_text().startswith("def add(a: int")
+        )
         roles = [n.role for n in block.notes]
         assert "refactorer" in roles
 
@@ -1279,22 +1525,37 @@ class TestBlockRefactorVerification:
         config, state, progress, block = setup
         config.test_command = SUITE_RED_IF_BROKEN
         refactorer = self._agent_writing(
-            config.project_dir, "module.py", "def add(a, b):\n    return a - b  # broken\n")
+            config.project_dir,
+            "module.py",
+            "def add(a, b):\n    return a - b  # broken\n",
+        )
 
         # The block still succeeds...
         assert await self._run(config, state, progress, block, refactorer) is True
         # ...with the implementation restored and no refactor commit.
-        assert (config.project_dir / "module.py").read_text() == "def add(a, b):\n    return a + b\n"
+        assert (
+            config.project_dir / "module.py"
+        ).read_text() == "def add(a, b):\n    return a + b\n"
         assert block.refactor_commit is None
-        assert not any(s.startswith("refactor(") for s in _git_log_subjects(config.project_dir))
+        assert not any(
+            s.startswith("refactor(") for s in _git_log_subjects(config.project_dir)
+        )
 
     @pytest.mark.asyncio
     async def test_refactor_that_creates_files_has_them_cleaned_on_revert(self, setup):
         """`reset --hard` alone leaves new files behind, where the next
         whole-tree commit would sweep reverted work back into the build."""
         config, state, progress, block = setup
-        config.test_command = shlex.join([sys.executable, "-c", "import pathlib,sys; sys.exit(pathlib.Path('extracted.py').exists())"])
-        refactorer = self._agent_writing(config.project_dir, "extracted.py", "# new helper\n")
+        config.test_command = shlex.join(
+            [
+                sys.executable,
+                "-c",
+                "import pathlib,sys; sys.exit(pathlib.Path('extracted.py').exists())",
+            ]
+        )
+        refactorer = self._agent_writing(
+            config.project_dir, "extracted.py", "# new helper\n"
+        )
 
         assert await self._run(config, state, progress, block, refactorer) is True
         assert not (config.project_dir / "extracted.py").exists()
@@ -1305,7 +1566,8 @@ class TestBlockRefactorVerification:
         against — the same failure as a red suite."""
         config, state, progress, block = setup
         refactorer = self._agent_writing(
-            config.project_dir, TEST_FILE_REL,
+            config.project_dir,
+            TEST_FILE_REL,
             "def test_addition():\n    assert True\n",  # gutted
         )
 
@@ -1321,7 +1583,8 @@ class TestBlockRefactorVerification:
         has no case for editing the tests."""
         config, state, progress, block = setup
         refactorer = self._agent_writing(
-            config.project_dir, TEST_FILE_REL,
+            config.project_dir,
+            TEST_FILE_REL,
             "def test_addition():\n    assert True\n",
             output="TEST CHANGE REQUIRED: the test had a typo\n",
         )
@@ -1344,7 +1607,8 @@ class TestBlockRefactorVerification:
 
         def impl_and_fix_test(*_a, **_kw):
             (config.project_dir / "module.py").write_text(
-                "def add(a, b):\n    return a + b\n")
+                "def add(a, b):\n    return a + b\n"
+            )
             (config.project_dir / TEST_FILE_REL).write_text(changed_test)
             return AgentResult(
                 success=True,
@@ -1352,15 +1616,28 @@ class TestBlockRefactorVerification:
             )
 
         refactorer = self._agent_writing(
-            config.project_dir, "module.py",
-            "def add(a: int, b: int) -> int:\n    return a + b\n")
+            config.project_dir,
+            "module.py",
+            "def add(a: int, b: int) -> int:\n    return a + b\n",
+        )
 
-        assert await self._run(config, state, progress, block, refactorer,
-                               implementer=impl_and_fix_test) is True
+        assert (
+            await self._run(
+                config,
+                state,
+                progress,
+                block,
+                refactorer,
+                implementer=impl_and_fix_test,
+            )
+            is True
+        )
 
         assert block.refactor_commit is not None
         assert _git_log_subjects(config.project_dir)[0] == "refactor(block-1): Block1"
-        assert (config.project_dir / "module.py").read_text().startswith("def add(a: int")
+        assert (
+            (config.project_dir / "module.py").read_text().startswith("def add(a: int")
+        )
         # The implementer's test change is untouched by the refactor verdict.
         assert (config.project_dir / TEST_FILE_REL).read_text() == changed_test
 
@@ -1375,7 +1652,9 @@ class TestBlockRefactorVerification:
 
         assert await self._run(config, state, progress, block, _fail) is True
         assert block.refactor_commit is None
-        assert (config.project_dir / "module.py").read_text() == "def add(a, b):\n    return a + b\n"
+        assert (
+            config.project_dir / "module.py"
+        ).read_text() == "def add(a, b):\n    return a + b\n"
 
 
 class TestGitCommitScoping:
@@ -1383,7 +1662,9 @@ class TestGitCommitScoping:
 
     def _init_repo(self, repo: Path):
         subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-        subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "t@example.com"], cwd=repo, check=True
+        )
         subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
         (repo / ".gitkeep").write_text("")
         subprocess.run(["git", "add", ".gitkeep"], cwd=repo, check=True)
@@ -1406,12 +1687,17 @@ class TestGitCommitScoping:
         config.state_file_path().write_text("{}\n")
         (config.change_dir / ".board.json").write_text("{}\n")
 
-        sha = _git_commit_block_phase(config, "impl", BlockInfo(number=1, name="B", description="d"))
+        sha = _git_commit_block_phase(
+            config, "impl", BlockInfo(number=1, name="B", description="d")
+        )
         assert sha is not None
 
         committed = subprocess.run(
             ["git", "show", "--name-only", "--pretty=format:", "HEAD"],
-            cwd=project_dir, capture_output=True, text=True, check=True,
+            cwd=project_dir,
+            capture_output=True,
+            text=True,
+            check=True,
         ).stdout.split()
         assert "module.py" in committed
         assert "build-progress.md" not in committed
@@ -1420,7 +1706,11 @@ class TestGitCommitScoping:
 
         # The bookkeeping files must remain untracked afterward.
         tracked = subprocess.run(
-            ["git", "ls-files"], cwd=project_dir, capture_output=True, text=True, check=True,
+            ["git", "ls-files"],
+            cwd=project_dir,
+            capture_output=True,
+            text=True,
+            check=True,
         ).stdout
         assert "build-progress.md" not in tracked
         assert ".build-state.json" not in tracked
@@ -1456,7 +1746,8 @@ class TestRedGateWiring:
 
         block = BlockInfo(number=1, name="Block1", description="Test block")
         state = BuildState(
-            change_name="test", tier="advanced",
+            change_name="test",
+            tier="advanced",
             state_file=str(tmp_path / "state.json"),
             tdd=TDDState(blocks=[block]),
         )
@@ -1469,9 +1760,22 @@ class TestRedGateWiring:
         config, state, progress, block = setup
         ok = AgentResult(success=True, output="Tests written")
 
-        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=ok), \
-             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=ok), \
-             patch("build_pipeline.tdd_engine.run_test_suite", return_value=RED_SUITE_RESULT):
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                return_value=ok,
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                return_value=ok,
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_test_suite",
+                return_value=RED_SUITE_RESULT,
+            ),
+        ):
             result = await run_block_tdd(block, config, state, progress)
 
         assert result is True
@@ -1487,9 +1791,22 @@ class TestRedGateWiring:
         ok = AgentResult(success=True, output="Tests written")
         suite_results = iter([(0, "5 passed"), RED_SUITE_RESULT])
 
-        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=ok) as tw, \
-             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=ok), \
-             patch("build_pipeline.tdd_engine.run_test_suite", side_effect=lambda *a, **k: next(suite_results)):
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                return_value=ok,
+            ) as tw,
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                return_value=ok,
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_test_suite",
+                side_effect=lambda *a, **k: next(suite_results),
+            ),
+        ):
             result = await run_block_tdd(block, config, state, progress)
 
         assert result is True
@@ -1504,9 +1821,21 @@ class TestRedGateWiring:
         config, state, progress, block = setup
         ok = AgentResult(success=True, output="Tests written")
 
-        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=ok) as tw, \
-             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=ok) as impl, \
-             patch("build_pipeline.tdd_engine.run_test_suite", return_value=(0, "5 passed")):
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                return_value=ok,
+            ) as tw,
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                return_value=ok,
+            ) as impl,
+            patch(
+                "build_pipeline.tdd_engine.run_test_suite", return_value=(0, "5 passed")
+            ),
+        ):
             result = await run_block_tdd(block, config, state, progress)
 
         assert result is False
@@ -1519,14 +1848,29 @@ class TestRedGateWiring:
         """Collection errors drive the fix_tests action into the retry prompt."""
         config, state, progress, block = setup
         ok = AgentResult(success=True, output="Tests written")
-        suite_results = iter([
-            (2, "ERROR collecting tests/test_x.py\nSyntaxError: invalid syntax"),
-            RED_SUITE_RESULT,
-        ])
+        suite_results = iter(
+            [
+                (2, "ERROR collecting tests/test_x.py\nSyntaxError: invalid syntax"),
+                RED_SUITE_RESULT,
+            ]
+        )
 
-        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=ok) as tw, \
-             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=ok), \
-             patch("build_pipeline.tdd_engine.run_test_suite", side_effect=lambda *a, **k: next(suite_results)):
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                return_value=ok,
+            ) as tw,
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                return_value=ok,
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_test_suite",
+                side_effect=lambda *a, **k: next(suite_results),
+            ),
+        ):
             result = await run_block_tdd(block, config, state, progress)
 
         assert result is True
@@ -1538,9 +1882,19 @@ class TestRedGateWiring:
         config.test_command = ""
         ok = AgentResult(success=True, output="Tests written")
 
-        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=ok), \
-             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=ok), \
-             patch("build_pipeline.tdd_engine.run_test_suite") as rts:
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                return_value=ok,
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                return_value=ok,
+            ),
+            patch("build_pipeline.tdd_engine.run_test_suite") as rts,
+        ):
             result = await run_block_tdd(block, config, state, progress)
 
         assert result is True
@@ -1584,7 +1938,8 @@ class TestNarrowTestCommandInTheBlockLoop:
         config.specs_dir = project_dir / "specs"
         block = BlockInfo(number=1, name="Block1", description="Test block")
         state = BuildState(
-            change_name="test", tier="advanced",
+            change_name="test",
+            tier="advanced",
             state_file=str(tmp_path / "state.json"),
             tdd=TDDState(blocks=[block]),
         )
@@ -1597,10 +1952,12 @@ class TestNarrowTestCommandInTheBlockLoop:
         def _run(*_a, **_kw):
             (project_dir / rel).write_text(content)
             return AgentResult(success=True, output="done")
+
         return _run
 
-    async def _run_block(self, config, state, progress, block, suite_results=None,
-                         test_writer=None):
+    async def _run_block(
+        self, config, state, progress, block, suite_results=None, test_writer=None
+    ):
         suite_calls: list[str] = []
         gate_calls: list[str] = []
         results = list(suite_results or [])
@@ -1615,15 +1972,28 @@ class TestNarrowTestCommandInTheBlockLoop:
             return GateResult(passed=True, reason="green")
 
         p = config.project_dir
-        writer = test_writer or self._writes(p, "tests/test_new.py", "def test_n(): assert 0\n")
-        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock,
-                   side_effect=writer) as tw, \
-             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock,
-                   side_effect=self._writes(p, "pkg/widget.py", "x = 2\n")) as impl, \
-             patch("build_pipeline.tdd_engine.run_refactorer", new_callable=AsyncMock,
-                   return_value=AgentResult(success=True, output="nothing")) as ref, \
-             patch("build_pipeline.tdd_engine.run_test_suite", side_effect=_suite), \
-             patch("build_pipeline.tdd_engine.integration_gate", side_effect=_gate):
+        writer = test_writer or self._writes(
+            p, "tests/test_new.py", "def test_n(): assert 0\n"
+        )
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                side_effect=writer,
+            ) as tw,
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                side_effect=self._writes(p, "pkg/widget.py", "x = 2\n"),
+            ) as impl,
+            patch(
+                "build_pipeline.tdd_engine.run_refactorer",
+                new_callable=AsyncMock,
+                return_value=AgentResult(success=True, output="nothing"),
+            ) as ref,
+            patch("build_pipeline.tdd_engine.run_test_suite", side_effect=_suite),
+            patch("build_pipeline.tdd_engine.integration_gate", side_effect=_gate),
+        ):
             ok = await run_block_tdd(block, config, state, progress)
         return ok, tw, impl, ref, suite_calls, gate_calls
 
@@ -1631,7 +2001,8 @@ class TestNarrowTestCommandInTheBlockLoop:
     async def test_red_and_agents_use_the_narrow_command(self, setup):
         config, state, progress, block = setup
         ok, tw, impl, ref, suite_calls, gate_calls = await self._run_block(
-            config, state, progress, block)
+            config, state, progress, block
+        )
 
         assert ok is True
         # RED runs only the block's own new test file.
@@ -1648,17 +2019,25 @@ class TestNarrowTestCommandInTheBlockLoop:
         assert impl_text.splitlines()[0] == f"{self.WHOLE} tests/test_new.py"
         assert "test_<module>.py" in impl_text
         # After pkg/widget.py changed, tests/test_widget.py joins; test_unrelated never does.
-        assert ref.call_args.kwargs["test_command"].splitlines()[0] == \
-            f"{self.WHOLE} tests/test_new.py tests/test_widget.py"
+        assert (
+            ref.call_args.kwargs["test_command"].splitlines()[0]
+            == f"{self.WHOLE} tests/test_new.py tests/test_widget.py"
+        )
         # The refactor's verification is a gate: whole command.
         assert gate_calls == [self.WHOLE]
 
     @pytest.mark.asyncio
-    async def test_red_retry_gets_the_narrow_command_and_reruns_with_its_new_tests(self, setup):
+    async def test_red_retry_gets_the_narrow_command_and_reruns_with_its_new_tests(
+        self, setup
+    ):
         config, state, progress, block = setup
         p = config.project_dir
-        files = iter([("tests/test_new.py", "def test_n(): pass\n"),
-                      ("tests/test_new2.py", "def test_m(): assert 0\n")])
+        files = iter(
+            [
+                ("tests/test_new.py", "def test_n(): pass\n"),
+                ("tests/test_new2.py", "def test_m(): assert 0\n"),
+            ]
+        )
 
         def _writer(*_a, **_kw):
             rel, content = next(files)
@@ -1666,40 +2045,61 @@ class TestNarrowTestCommandInTheBlockLoop:
             return AgentResult(success=True, output="done")
 
         ok, tw, _impl, _ref, suite_calls, _gates = await self._run_block(
-            config, state, progress, block,
+            config,
+            state,
+            progress,
+            block,
             suite_results=[(0, "1 passed in 0.01s"), RED_SUITE_RESULT],
-            test_writer=_writer)
+            test_writer=_writer,
+        )
 
         assert ok is True
         assert len(tw.call_args_list) == 2
         retry_text = tw.call_args_list[1].kwargs["test_command"]
         assert retry_text.splitlines()[0] == f"{self.WHOLE} tests/test_new.py"
-        assert suite_calls == [f"{self.WHOLE} tests/test_new.py",
-                               f"{self.WHOLE} tests/test_new.py tests/test_new2.py"]
+        assert suite_calls == [
+            f"{self.WHOLE} tests/test_new.py",
+            f"{self.WHOLE} tests/test_new.py tests/test_new2.py",
+        ]
 
     @pytest.mark.asyncio
     async def test_test_quality_retry_gets_the_narrow_command(self, setup):
         config, state, progress, block = setup
-        scans = iter([GateResult(passed=False, reason="weak"),
-                      GateResult(passed=True, reason="ok")])
-        with patch("build_pipeline.tdd_engine.run_test_quality_check",
-                   side_effect=lambda *_a, **_k: next(scans)), \
-             patch("build_pipeline.tdd_engine._audit_test_quality", new_callable=AsyncMock,
-                   return_value=QualityAudit(passed=False)):
+        scans = iter(
+            [
+                GateResult(passed=False, reason="weak"),
+                GateResult(passed=True, reason="ok"),
+            ]
+        )
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_quality_check",
+                side_effect=lambda *_a, **_k: next(scans),
+            ),
+            patch(
+                "build_pipeline.tdd_engine._audit_test_quality",
+                new_callable=AsyncMock,
+                return_value=QualityAudit(passed=False),
+            ),
+        ):
             ok, tw, _impl, _ref, _suite, _gates = await self._run_block(
-                config, state, progress, block)
+                config, state, progress, block
+            )
 
         assert ok is True
         assert len(tw.call_args_list) == 2
-        assert tw.call_args_list[1].kwargs["test_command"].splitlines()[0] == \
-            f"{self.WHOLE} tests/test_new.py"
+        assert (
+            tw.call_args_list[1].kwargs["test_command"].splitlines()[0]
+            == f"{self.WHOLE} tests/test_new.py"
+        )
 
     @pytest.mark.asyncio
     async def test_narrow_tests_false_keeps_the_whole_command(self, setup):
         config, state, progress, block = setup
         config.narrow_tests = False
         ok, _tw, impl, ref, suite_calls, _gates = await self._run_block(
-            config, state, progress, block)
+            config, state, progress, block
+        )
 
         assert ok is True
         assert suite_calls == [self.WHOLE]
@@ -1710,16 +2110,25 @@ class TestNarrowTestCommandInTheBlockLoop:
     async def test_integration_gate_and_its_fixer_use_the_whole_command(self, setup):
         config, state, progress, block = setup
         block.baseline_commit = git_ops.rev_parse_head(config.project_dir)
-        (config.project_dir / "tests" / "test_new.py").write_text("def test_n(): pass\n")
+        (config.project_dir / "tests" / "test_new.py").write_text(
+            "def test_n(): pass\n"
+        )
         gate_calls: list[str] = []
 
         def _gate(command, _cwd, **_kw):
             gate_calls.append(command)
-            return GateResult(passed=False, reason="red", metadata={"stdout": "1 failed"})
+            return GateResult(
+                passed=False, reason="red", metadata={"stdout": "1 failed"}
+            )
 
-        with patch("build_pipeline.tdd_engine.integration_gate", side_effect=_gate), \
-             patch("build_pipeline.tdd_engine.run_integration_fix", new_callable=AsyncMock,
-                   return_value=AgentResult(success=True, output="tried")) as fixer:
+        with (
+            patch("build_pipeline.tdd_engine.integration_gate", side_effect=_gate),
+            patch(
+                "build_pipeline.tdd_engine.run_integration_fix",
+                new_callable=AsyncMock,
+                return_value=AgentResult(success=True, output="tried"),
+            ) as fixer,
+        ):
             ok = await _run_integration_and_review(block, config, state, progress)
 
         assert ok is False
@@ -1737,7 +2146,9 @@ class TestEvidenceBasedReview:
     def _init_empty_repo(self, repo: Path) -> None:
         """git init with committer identity but zero commits."""
         subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-        subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "t@example.com"], cwd=repo, check=True
+        )
         subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
 
     def _init_repo(self, repo: Path) -> str:
@@ -1746,8 +2157,11 @@ class TestEvidenceBasedReview:
         subprocess.run(["git", "add", "module.py"], cwd=repo, check=True)
         subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
         return subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=repo,
-            capture_output=True, text=True, check=True,
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            check=True,
         ).stdout.strip()
 
     def _make_config(self, tmp_path) -> BuildConfig:
@@ -1769,16 +2183,26 @@ class TestEvidenceBasedReview:
 
         # Simulate the block's work: a committed impl change on top of baseline.
         (config.project_dir / "module.py").write_text("x = 1\ny = 2  # block change\n")
-        subprocess.run(["git", "commit", "-aqm", "impl(block-1)"], cwd=config.project_dir, check=True)
+        subprocess.run(
+            ["git", "commit", "-aqm", "impl(block-1)"],
+            cwd=config.project_dir,
+            check=True,
+        )
 
         block = BlockInfo(
-            number=1, name="Feature", description="Add y",
-            satisfies=["feat"], baseline_commit=baseline,
+            number=1,
+            name="Feature",
+            description="Add y",
+            satisfies=["feat"],
+            baseline_commit=baseline,
         )
-        review = ReviewResult(scores=[ReviewScore(dimension="Q", weight=2, score=4, evidence="e")])
+        review = ReviewResult(
+            scores=[ReviewScore(dimension="Q", weight=2, score=4, evidence="e")]
+        )
         with patch(
             "build_pipeline.tdd_engine.run_code_review",
-            new_callable=AsyncMock, return_value=review,
+            new_callable=AsyncMock,
+            return_value=review,
         ) as mock_review:
             result = await _run_quality_review(block, config)
 
@@ -1804,15 +2228,21 @@ class TestEvidenceBasedReview:
         )
 
         block = BlockInfo(
-            number=1, name="Feature", description="Add y",
-            satisfies=["feat"], baseline_commit=baseline,
+            number=1,
+            name="Feature",
+            description="Add y",
+            satisfies=["feat"],
+            baseline_commit=baseline,
             red_evidence="FAILED test_y - AssertionError",
             green_evidence="2 passed in 0.1s",
         )
-        review = ReviewResult(scores=[ReviewScore(dimension="Q", weight=2, score=4, evidence="e")])
+        review = ReviewResult(
+            scores=[ReviewScore(dimension="Q", weight=2, score=4, evidence="e")]
+        )
         with patch(
             "build_pipeline.tdd_engine.run_code_review",
-            new_callable=AsyncMock, return_value=review,
+            new_callable=AsyncMock,
+            return_value=review,
         ) as mock_review:
             await _run_quality_review(block, config)
 
@@ -1829,8 +2259,12 @@ class TestEvidenceBasedReview:
         baseline = self._init_repo(config.project_dir)
 
         (config.project_dir / "module.py").write_text("x = 1\ny = 2\n")
-        subprocess.run(["git", "commit", "-aqm", "impl"], cwd=config.project_dir, check=True)
-        (config.project_dir / "module.py").write_text("x = 1\ny = 2\nz = 3  # uncommitted fix\n")
+        subprocess.run(
+            ["git", "commit", "-aqm", "impl"], cwd=config.project_dir, check=True
+        )
+        (config.project_dir / "module.py").write_text(
+            "x = 1\ny = 2\nz = 3  # uncommitted fix\n"
+        )
 
         block = BlockInfo(number=1, name="B", description="d", baseline_commit=baseline)
         diff = _capture_block_diff(config, block)
@@ -1874,8 +2308,9 @@ class TestEvidenceBasedReview:
         baseline = self._init_repo(config.project_dir)
         (config.project_dir / "fresh.py").write_text("FRESH = 1\n")
         block = BlockInfo(number=1, name="B", description="d", baseline_commit=baseline)
-        state = BuildState(change_name="feat", tier="advanced",
-                           tdd=TDDState(blocks=[block]))
+        state = BuildState(
+            change_name="feat", tier="advanced", tdd=TDDState(blocks=[block])
+        )
         diff = capture_build_diff(config, state)
         assert "fresh.py" in diff and "+FRESH = 1" in diff
 
@@ -1906,7 +2341,8 @@ class TestEvidenceBasedReview:
 
         block = BlockInfo(number=1, name="B", description="d")
         state = BuildState(
-            change_name="feat", tier="advanced",
+            change_name="feat",
+            tier="advanced",
             state_file=str(tmp_path / "state.json"),
             tdd=TDDState(blocks=[block]),
         )
@@ -1914,8 +2350,18 @@ class TestEvidenceBasedReview:
         progress.initialize("feat", "advanced", 1)
 
         ok = AgentResult(success=True, output="done")
-        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=ok), \
-             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=ok):
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                return_value=ok,
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                return_value=ok,
+            ),
+        ):
             assert await run_block_tdd(block, config, state, progress)
 
         assert block.baseline_commit == head
@@ -1933,7 +2379,8 @@ class TestEvidenceBasedReview:
 
         block = BlockInfo(number=1, name="B", description="d")
         state = BuildState(
-            change_name="feat", tier="advanced",
+            change_name="feat",
+            tier="advanced",
             state_file=str(tmp_path / "state.json"),
             tdd=TDDState(blocks=[block]),
         )
@@ -1941,8 +2388,18 @@ class TestEvidenceBasedReview:
         progress.initialize("feat", "advanced", 1)
 
         ok = AgentResult(success=True, output="done")
-        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=ok), \
-             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=ok):
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                return_value=ok,
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                return_value=ok,
+            ),
+        ):
             assert await run_block_tdd(block, config, state, progress)
 
         assert block.baseline_commit == EMPTY_TREE_SHA
@@ -1956,14 +2413,22 @@ class TestEvidenceBasedReview:
         # Simulate block 1: first-ever commit lands during the block.
         (config.project_dir / "module.py").write_text("x = 1  # block-1 work\n")
         subprocess.run(["git", "add", "module.py"], cwd=config.project_dir, check=True)
-        subprocess.run(["git", "commit", "-qm", "impl(block-1)"], cwd=config.project_dir, check=True)
+        subprocess.run(
+            ["git", "commit", "-qm", "impl(block-1)"],
+            cwd=config.project_dir,
+            check=True,
+        )
 
-        block = BlockInfo(number=1, name="B", description="d", baseline_commit=EMPTY_TREE_SHA)
+        block = BlockInfo(
+            number=1, name="B", description="d", baseline_commit=EMPTY_TREE_SHA
+        )
         diff = _capture_block_diff(config, block)
         assert "x = 1  # block-1 work" in diff
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("resume_status", [BlockStatus.IMPLEMENTING, BlockStatus.REVIEWING])
+    @pytest.mark.parametrize(
+        "resume_status", [BlockStatus.IMPLEMENTING, BlockStatus.REVIEWING]
+    )
     async def test_run_block_tdd_resumed_midblock_does_not_stamp_baseline(
         self, tmp_path, resume_status, caplog
     ):
@@ -1982,12 +2447,17 @@ class TestEvidenceBasedReview:
         # Simulate the block's own committed work already at HEAD.
         (config.project_dir / "module.py").write_text("x = 1  # block work\n")
         subprocess.run(["git", "add", "module.py"], cwd=config.project_dir, check=True)
-        subprocess.run(["git", "commit", "-qm", "impl(block-1)"], cwd=config.project_dir, check=True)
+        subprocess.run(
+            ["git", "commit", "-qm", "impl(block-1)"],
+            cwd=config.project_dir,
+            check=True,
+        )
 
         block = BlockInfo(number=1, name="B", description="d", status=resume_status)
         assert block.baseline_commit is None
         state = BuildState(
-            change_name="feat", tier="advanced",
+            change_name="feat",
+            tier="advanced",
             state_file=str(tmp_path / "state.json"),
             tdd=TDDState(blocks=[block]),
         )
@@ -1995,9 +2465,19 @@ class TestEvidenceBasedReview:
         progress.initialize("feat", "advanced", 1)
 
         ok = AgentResult(success=True, output="done")
-        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=ok), \
-             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=ok), \
-             caplog.at_level("WARNING"):
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                return_value=ok,
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                return_value=ok,
+            ),
+            caplog.at_level("WARNING"),
+        ):
             assert await run_block_tdd(block, config, state, progress)
 
         assert block.baseline_commit is None
@@ -2014,9 +2494,12 @@ class TestEvidenceBasedReview:
         config.core_memory_files = []
         head = self._init_repo(config.project_dir)
 
-        block = BlockInfo(number=1, name="B", description="d", status=BlockStatus.TESTING)
+        block = BlockInfo(
+            number=1, name="B", description="d", status=BlockStatus.TESTING
+        )
         state = BuildState(
-            change_name="feat", tier="advanced",
+            change_name="feat",
+            tier="advanced",
             state_file=str(tmp_path / "state.json"),
             tdd=TDDState(blocks=[block]),
         )
@@ -2024,8 +2507,18 @@ class TestEvidenceBasedReview:
         progress.initialize("feat", "advanced", 1)
 
         ok = AgentResult(success=True, output="done")
-        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=ok), \
-             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=ok):
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                return_value=ok,
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                return_value=ok,
+            ),
+        ):
             assert await run_block_tdd(block, config, state, progress)
 
         assert block.baseline_commit == head
@@ -2115,7 +2608,11 @@ class TestRunTDDEngineEntryPoint:
 
         # Make baseline pass but block TDD fail immediately
         ok_result = AgentResult(success=False, error="fail")
-        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=ok_result):
+        with patch(
+            "build_pipeline.tdd_engine.run_test_writer",
+            new_callable=AsyncMock,
+            return_value=ok_result,
+        ):
             await run_tdd_engine(config, args)
 
         # State file should exist from the checkpoint
@@ -2129,8 +2626,14 @@ class TestRunTDDEngineEntryPoint:
             success=False, error="Agent timed out after 1200s", timed_out=True
         )
 
-        with patch.dict(os.environ, {"BUILDME_TRUST_REPO": "1"}), \
-             patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=timeout_result):
+        with (
+            patch.dict(os.environ, {"BUILDME_TRUST_REPO": "1"}),
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                return_value=timeout_result,
+            ),
+        ):
             result = await run_tdd_engine(config, args)
 
         assert result == EXIT_AGENT_TIMEOUT
@@ -2141,25 +2644,40 @@ class TestRunTDDEngineEntryPoint:
         config, args = tdd_setup
         fail_result = AgentResult(success=False, error="agent crashed")
 
-        with patch.dict(os.environ, {"BUILDME_TRUST_REPO": "1"}), \
-             patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=fail_result):
+        with (
+            patch.dict(os.environ, {"BUILDME_TRUST_REPO": "1"}),
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                return_value=fail_result,
+            ),
+        ):
             result = await run_tdd_engine(config, args)
 
         assert result == EXIT_BUILD_FAILURE
 
     @pytest.mark.asyncio
-    async def test_a_rerun_after_a_timeout_that_fails_its_block_is_a_build_failure(self, tdd_setup):
+    async def test_a_rerun_after_a_timeout_that_fails_its_block_is_a_build_failure(
+        self, tdd_setup
+    ):
         """A block that timed out once and then fails on its own work when the
         build is re-run is a build failure: the earlier timeout must not stick."""
         config, args = tdd_setup
         timeout_result = AgentResult(
             success=False, error="Agent timed out after 1200s", timed_out=True
         )
-        blocked = AgentResult(success=True, output="Cannot be done.\n\nSTATUS: BLOCKED\n")
+        blocked = AgentResult(
+            success=True, output="Cannot be done.\n\nSTATUS: BLOCKED\n"
+        )
 
-        with patch.dict(os.environ, {"BUILDME_TRUST_REPO": "1"}), \
-             patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock,
-                   side_effect=[timeout_result, blocked]):
+        with (
+            patch.dict(os.environ, {"BUILDME_TRUST_REPO": "1"}),
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                side_effect=[timeout_result, blocked],
+            ),
+        ):
             assert await run_tdd_engine(config, args) == EXIT_AGENT_TIMEOUT
             assert await run_tdd_engine(config, args) == EXIT_BUILD_FAILURE
 
@@ -2188,15 +2706,21 @@ class TestWeakTestEnforcement:
         (specs_root / "changes" / "test").mkdir(parents=True)
 
         config = BuildConfig(
-            project_dir=project_dir, change_name="test", tier="advanced",
-            test_command="pytest -xvs", config_dir=tmp_path / "config",
-            core_memory_files=[], stack_memory_files=[], additional_memory_files=[],
+            project_dir=project_dir,
+            change_name="test",
+            tier="advanced",
+            test_command="pytest -xvs",
+            config_dir=tmp_path / "config",
+            core_memory_files=[],
+            stack_memory_files=[],
+            additional_memory_files=[],
         )
         config.specs_dir = specs_root
 
         block = BlockInfo(number=1, name="Block1", description="Test block")
         state = BuildState(
-            change_name="test", tier="advanced",
+            change_name="test",
+            tier="advanced",
             state_file=str(tmp_path / "state.json"),
             tdd=TDDState(blocks=[block]),
         )
@@ -2209,9 +2733,21 @@ class TestWeakTestEnforcement:
         config, state, progress, block = setup
         ok = AgentResult(success=True, output=GOOD_TESTS_OUTPUT)
 
-        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=ok), \
-             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=ok), \
-             patch("build_pipeline.tdd_engine._audit_test_quality", new_callable=AsyncMock) as audit:
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                return_value=ok,
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                return_value=ok,
+            ),
+            patch(
+                "build_pipeline.tdd_engine._audit_test_quality", new_callable=AsyncMock
+            ) as audit,
+        ):
             result = await run_block_tdd(block, config, state, progress)
 
         assert result is True
@@ -2222,10 +2758,23 @@ class TestWeakTestEnforcement:
         config, state, progress, block = setup
         ok = AgentResult(success=True, output=WEAK_TESTS_OUTPUT)
 
-        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=ok) as tw, \
-             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=ok), \
-             patch("build_pipeline.tdd_engine._audit_test_quality", new_callable=AsyncMock,
-                   return_value=QualityAudit(passed=True)):
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                return_value=ok,
+            ) as tw,
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                return_value=ok,
+            ),
+            patch(
+                "build_pipeline.tdd_engine._audit_test_quality",
+                new_callable=AsyncMock,
+                return_value=QualityAudit(passed=True),
+            ),
+        ):
             result = await run_block_tdd(block, config, state, progress)
 
         assert result is True
@@ -2235,11 +2784,17 @@ class TestWeakTestEnforcement:
     async def test_confirmed_weak_retries_then_passes(self, setup):
         config, state, progress, block = setup
         confirm = QualityAudit(
-            passed=False, weak_count=1, total_tests=1,
-            weak_tests=[WeakTestFinding(
-                file="test_x.py", test_name="test_something",
-                pattern="assert True", suggestion="assert the actual behavior",
-            )],
+            passed=False,
+            weak_count=1,
+            total_tests=1,
+            weak_tests=[
+                WeakTestFinding(
+                    file="test_x.py",
+                    test_name="test_something",
+                    pattern="assert True",
+                    suggestion="assert the actual behavior",
+                )
+            ],
         )
         tw_results = [
             AgentResult(success=True, output=WEAK_TESTS_OUTPUT),
@@ -2247,17 +2802,32 @@ class TestWeakTestEnforcement:
         ]
         ok = AgentResult(success=True, output="done")
 
-        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, side_effect=tw_results) as tw, \
-             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=ok), \
-             patch("build_pipeline.tdd_engine._audit_test_quality", new_callable=AsyncMock,
-                   return_value=confirm) as audit:
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                side_effect=tw_results,
+            ) as tw,
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                return_value=ok,
+            ),
+            patch(
+                "build_pipeline.tdd_engine._audit_test_quality",
+                new_callable=AsyncMock,
+                return_value=confirm,
+            ) as audit,
+        ):
             result = await run_block_tdd(block, config, state, progress)
 
         assert result is True
         assert tw.call_count == 2
         retry_desc = tw.call_args_list[1].kwargs["block_description"]
         assert "Test Quality Failure" in retry_desc
-        assert "assert the actual behavior" in retry_desc  # findings carried into the retry
+        assert (
+            "assert the actual behavior" in retry_desc
+        )  # findings carried into the retry
         audit.assert_called_once()  # rescan passed, no re-audit needed
 
     @pytest.mark.asyncio
@@ -2266,10 +2836,21 @@ class TestWeakTestEnforcement:
         weak = AgentResult(success=True, output=WEAK_TESTS_OUTPUT)
         confirm = QualityAudit(passed=False, weak_count=1, total_tests=1)
 
-        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=weak), \
-             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock) as impl, \
-             patch("build_pipeline.tdd_engine._audit_test_quality", new_callable=AsyncMock,
-                   return_value=confirm) as audit:
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                return_value=weak,
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock
+            ) as impl,
+            patch(
+                "build_pipeline.tdd_engine._audit_test_quality",
+                new_callable=AsyncMock,
+                return_value=confirm,
+            ) as audit,
+        ):
             result = await run_block_tdd(block, config, state, progress)
 
         assert result is False
@@ -2283,10 +2864,21 @@ class TestWeakTestEnforcement:
         config, state, progress, block = setup
         weak = AgentResult(success=True, output=WEAK_TESTS_OUTPUT)
 
-        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=weak), \
-             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock) as impl, \
-             patch("build_pipeline.tdd_engine._audit_test_quality", new_callable=AsyncMock,
-                   side_effect=RuntimeError("SDK down")):
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                return_value=weak,
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock
+            ) as impl,
+            patch(
+                "build_pipeline.tdd_engine._audit_test_quality",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("SDK down"),
+            ),
+        ):
             result = await run_block_tdd(block, config, state, progress)
 
         assert result is False
@@ -2305,17 +2897,23 @@ class TestReviewExhaustionEnforcement:
         (specs_root / "changes" / "test").mkdir(parents=True)
 
         config = BuildConfig(
-            project_dir=project_dir, change_name="test", tier="advanced",
+            project_dir=project_dir,
+            change_name="test",
+            tier="advanced",
             test_command="",  # integration gate skips — review loop is the subject
             config_dir=tmp_path / "config",
-            core_memory_files=[], stack_memory_files=[], additional_memory_files=[],
+            core_memory_files=[],
+            stack_memory_files=[],
+            additional_memory_files=[],
         )
         config.specs_dir = specs_root
 
-        block = BlockInfo(number=1, name="Block1", description="d",
-                          status=BlockStatus.IMPLEMENTING)
+        block = BlockInfo(
+            number=1, name="Block1", description="d", status=BlockStatus.IMPLEMENTING
+        )
         state = BuildState(
-            change_name="test", tier="advanced",
+            change_name="test",
+            tier="advanced",
             state_file=str(tmp_path / "state.json"),
             tdd=TDDState(blocks=[block]),
         )
@@ -2324,20 +2922,32 @@ class TestReviewExhaustionEnforcement:
         return config, state, progress, block
 
     def _failing_review(self):
-        return ReviewResult(scores=[ReviewScore(dimension="Q", weight=2, score=2, evidence="weak")])
+        return ReviewResult(
+            scores=[ReviewScore(dimension="Q", weight=2, score=2, evidence="weak")]
+        )
 
     def _passing_review(self):
-        return ReviewResult(scores=[ReviewScore(dimension="Q", weight=2, score=5, evidence="solid")])
+        return ReviewResult(
+            scores=[ReviewScore(dimension="Q", weight=2, score=5, evidence="solid")]
+        )
 
     @pytest.mark.asyncio
     async def test_exhaustion_fails_block(self, setup, capsys):
         config, state, progress, block = setup
         fix = AgentResult(success=True, output="fixed")
 
-        with patch("build_pipeline.tdd_engine._run_quality_review", new_callable=AsyncMock,
-                   return_value=self._failing_review()), \
-             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock,
-                   return_value=fix) as fixer:
+        with (
+            patch(
+                "build_pipeline.tdd_engine._run_quality_review",
+                new_callable=AsyncMock,
+                return_value=self._failing_review(),
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                return_value=fix,
+            ) as fixer,
+        ):
             result = await _run_integration_and_review(block, config, state, progress)
 
         assert result is False
@@ -2352,9 +2962,18 @@ class TestReviewExhaustionEnforcement:
         config.lenient_review = True
         fix = AgentResult(success=True, output="fixed")
 
-        with patch("build_pipeline.tdd_engine._run_quality_review", new_callable=AsyncMock,
-                   return_value=self._failing_review()), \
-             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=fix):
+        with (
+            patch(
+                "build_pipeline.tdd_engine._run_quality_review",
+                new_callable=AsyncMock,
+                return_value=self._failing_review(),
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                return_value=fix,
+            ),
+        ):
             result = await _run_integration_and_review(block, config, state, progress)
 
         assert result is True
@@ -2366,9 +2985,16 @@ class TestReviewExhaustionEnforcement:
     async def test_passing_review_marks_done(self, setup, capsys):
         config, state, progress, block = setup
 
-        with patch("build_pipeline.tdd_engine._run_quality_review", new_callable=AsyncMock,
-                   return_value=self._passing_review()), \
-             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock) as fixer:
+        with (
+            patch(
+                "build_pipeline.tdd_engine._run_quality_review",
+                new_callable=AsyncMock,
+                return_value=self._passing_review(),
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock
+            ) as fixer,
+        ):
             result = await _run_integration_and_review(block, config, state, progress)
 
         assert result is True
@@ -2383,32 +3009,62 @@ class TestReviewExhaustionEnforcement:
     async def test_review_exhaustion_is_not_resumable(self, setup):
         """The block's own work failed review: a re-run has nothing to get past."""
         config, state, progress, block = setup
-        with patch("build_pipeline.tdd_engine._run_quality_review", new_callable=AsyncMock,
-                   return_value=self._failing_review()), \
-             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock,
-                   return_value=AgentResult(success=True, output="fixed")):
-            assert await _run_integration_and_review(block, config, state, progress) is False
+        with (
+            patch(
+                "build_pipeline.tdd_engine._run_quality_review",
+                new_callable=AsyncMock,
+                return_value=self._failing_review(),
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                return_value=AgentResult(success=True, output="fixed"),
+            ),
+        ):
+            assert (
+                await _run_integration_and_review(block, config, state, progress)
+                is False
+            )
         assert block.status == BlockStatus.FAILED
         assert block.resumable is False
 
     @pytest.mark.asyncio
-    async def test_review_exhaustion_with_no_fix_agent_completing_is_resumable(self, setup):
+    async def test_review_exhaustion_with_no_fix_agent_completing_is_resumable(
+        self, setup
+    ):
         """Review fixes that all errored never tried the fix: a re-run may."""
         config, state, progress, block = setup
-        with patch("build_pipeline.tdd_engine._run_quality_review", new_callable=AsyncMock,
-                   return_value=self._failing_review()), \
-             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock,
-                   return_value=AgentResult(success=False, error="CLI exited 1")):
-            assert await _run_integration_and_review(block, config, state, progress) is False
+        with (
+            patch(
+                "build_pipeline.tdd_engine._run_quality_review",
+                new_callable=AsyncMock,
+                return_value=self._failing_review(),
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                return_value=AgentResult(success=False, error="CLI exited 1"),
+            ),
+        ):
+            assert (
+                await _run_integration_and_review(block, config, state, progress)
+                is False
+            )
         assert block.status == BlockStatus.FAILED
         assert block.resumable is True
 
     @pytest.mark.asyncio
     async def test_a_review_call_that_raises_stops_the_block_resumably(self, setup):
         config, state, progress, block = setup
-        with patch("build_pipeline.tdd_engine._run_quality_review", new_callable=AsyncMock,
-                   side_effect=RuntimeError("model unavailable")):
-            assert await _run_integration_and_review(block, config, state, progress) is False
+        with patch(
+            "build_pipeline.tdd_engine._run_quality_review",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("model unavailable"),
+        ):
+            assert (
+                await _run_integration_and_review(block, config, state, progress)
+                is False
+            )
         assert block.status == BlockStatus.FAILED
         assert block.resumable is True
         assert block.timed_out is False
@@ -2427,9 +3083,13 @@ class TestReviewExhaustionEnforcement:
         try:
             budget_mod.configure(max_tokens=100)
             budget_mod.record(_Usage(), label="spec")
-            with patch("build_pipeline.tdd_engine._run_quality_review",
-                       new_callable=AsyncMock) as review:
-                assert await _run_integration_and_review(block, config, state, progress) is False
+            with patch(
+                "build_pipeline.tdd_engine._run_quality_review", new_callable=AsyncMock
+            ) as review:
+                assert (
+                    await _run_integration_and_review(block, config, state, progress)
+                    is False
+                )
         finally:
             budget_mod.reset()
         review.assert_not_awaited()
@@ -2518,18 +3178,25 @@ class TestIntegrationFixCircuitBreaker:
         (specs_root / "changes" / "test").mkdir(parents=True)
 
         config = BuildConfig(
-            project_dir=project_dir, change_name="test", tier="advanced",
-            test_command="pytest -xvs", config_dir=tmp_path / "config",
-            core_memory_files=[], stack_memory_files=[], additional_memory_files=[],
+            project_dir=project_dir,
+            change_name="test",
+            tier="advanced",
+            test_command="pytest -xvs",
+            config_dir=tmp_path / "config",
+            core_memory_files=[],
+            stack_memory_files=[],
+            additional_memory_files=[],
         )
         config.specs_dir = specs_root
         config.model = "claude-opus-x"
         config.review_model = "claude-stronger-y"
 
-        block = BlockInfo(number=1, name="Block1", description="d",
-                          status=BlockStatus.IMPLEMENTING)
+        block = BlockInfo(
+            number=1, name="Block1", description="d", status=BlockStatus.IMPLEMENTING
+        )
         state = BuildState(
-            change_name="test", tier="advanced",
+            change_name="test",
+            tier="advanced",
             state_file=str(tmp_path / "state.json"),
             tdd=TDDState(blocks=[block]),
         )
@@ -2540,13 +3207,25 @@ class TestIntegrationFixCircuitBreaker:
     @pytest.mark.asyncio
     async def test_exhaustion_escalates_then_fails_with_diagnosis(self, setup):
         config, state, progress, block = setup
-        failing_gate = GateResult(passed=False, reason="2 tests failing",
-                                  metadata={"stdout": "FAILED test_a", "stderr": ""})
-        fix = AgentResult(success=True, output="DIAGNOSIS: circular import between a and b")
+        failing_gate = GateResult(
+            passed=False,
+            reason="2 tests failing",
+            metadata={"stdout": "FAILED test_a", "stderr": ""},
+        )
+        fix = AgentResult(
+            success=True, output="DIAGNOSIS: circular import between a and b"
+        )
 
-        with patch("build_pipeline.tdd_engine.integration_gate", return_value=failing_gate), \
-             patch("build_pipeline.tdd_engine.run_integration_fix", new_callable=AsyncMock,
-                   return_value=fix) as fixer:
+        with (
+            patch(
+                "build_pipeline.tdd_engine.integration_gate", return_value=failing_gate
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_integration_fix",
+                new_callable=AsyncMock,
+                return_value=fix,
+            ) as fixer,
+        ):
             result = await _run_integration_and_review(block, config, state, progress)
 
         assert result is False
@@ -2573,10 +3252,20 @@ class TestIntegrationFixCircuitBreaker:
         failing_gate = GateResult(passed=False, reason="failing", metadata={})
         errored = AgentResult(success=False, error="CLI exited 1")
 
-        with patch("build_pipeline.tdd_engine.integration_gate", return_value=failing_gate), \
-             patch("build_pipeline.tdd_engine.run_integration_fix", new_callable=AsyncMock,
-                   return_value=errored):
-            assert await _run_integration_and_review(block, config, state, progress) is False
+        with (
+            patch(
+                "build_pipeline.tdd_engine.integration_gate", return_value=failing_gate
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_integration_fix",
+                new_callable=AsyncMock,
+                return_value=errored,
+            ),
+        ):
+            assert (
+                await _run_integration_and_review(block, config, state, progress)
+                is False
+            )
 
         assert block.status == BlockStatus.FAILED
         assert block.resumable is True
@@ -2588,9 +3277,16 @@ class TestIntegrationFixCircuitBreaker:
         failing_gate = GateResult(passed=False, reason="failing", metadata={})
         fix = AgentResult(success=True, output="tried")
 
-        with patch("build_pipeline.tdd_engine.integration_gate", return_value=failing_gate), \
-             patch("build_pipeline.tdd_engine.run_integration_fix", new_callable=AsyncMock,
-                   return_value=fix) as fixer:
+        with (
+            patch(
+                "build_pipeline.tdd_engine.integration_gate", return_value=failing_gate
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_integration_fix",
+                new_callable=AsyncMock,
+                return_value=fix,
+            ) as fixer,
+        ):
             result = await _run_integration_and_review(block, config, state, progress)
 
         assert result is False
@@ -2599,18 +3295,37 @@ class TestIntegrationFixCircuitBreaker:
     @pytest.mark.asyncio
     async def test_fix_success_stops_before_escalation(self, setup):
         config, state, progress, block = setup
-        gates = iter([
-            GateResult(passed=False, reason="failing", metadata={"output": "FAILED"}),
-            GateResult(passed=True, reason="all green", metadata={"stdout": "3 passed"}),
-        ])
+        gates = iter(
+            [
+                GateResult(
+                    passed=False, reason="failing", metadata={"output": "FAILED"}
+                ),
+                GateResult(
+                    passed=True, reason="all green", metadata={"stdout": "3 passed"}
+                ),
+            ]
+        )
         fix = AgentResult(success=True, output="fixed the import")
-        review = ReviewResult(scores=[ReviewScore(dimension="Q", weight=2, score=5, evidence="e")])
+        review = ReviewResult(
+            scores=[ReviewScore(dimension="Q", weight=2, score=5, evidence="e")]
+        )
 
-        with patch("build_pipeline.tdd_engine.integration_gate", side_effect=lambda *a, **k: next(gates)), \
-             patch("build_pipeline.tdd_engine.run_integration_fix", new_callable=AsyncMock,
-                   return_value=fix) as fixer, \
-             patch("build_pipeline.tdd_engine._run_quality_review", new_callable=AsyncMock,
-                   return_value=review):
+        with (
+            patch(
+                "build_pipeline.tdd_engine.integration_gate",
+                side_effect=lambda *a, **k: next(gates),
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_integration_fix",
+                new_callable=AsyncMock,
+                return_value=fix,
+            ) as fixer,
+            patch(
+                "build_pipeline.tdd_engine._run_quality_review",
+                new_callable=AsyncMock,
+                return_value=review,
+            ),
+        ):
             result = await _run_integration_and_review(block, config, state, progress)
 
         assert result is True
@@ -2626,9 +3341,13 @@ class TestIntegrationFixPrompts:
     @pytest.mark.asyncio
     async def test_scoped_prompt_has_debug_protocol(self):
         from build_pipeline.llm_steps.tdd_steps import run_integration_fix
+
         ok = AgentResult(success=True, output="done")
-        with patch("build_pipeline.llm_steps.tdd_steps.agent_call", new_callable=AsyncMock,
-                   return_value=ok) as call:
+        with patch(
+            "build_pipeline.llm_steps.tdd_steps.agent_call",
+            new_callable=AsyncMock,
+            return_value=ok,
+        ) as call:
             await run_integration_fix("FAILED test_a", "pytest", "ctx")
         prompt = call.call_args.args[0]
         assert "Debugging Protocol" in prompt
@@ -2640,9 +3359,13 @@ class TestIntegrationFixPrompts:
     @pytest.mark.asyncio
     async def test_escalated_prompt_questions_architecture(self):
         from build_pipeline.llm_steps.tdd_steps import run_integration_fix
+
         ok = AgentResult(success=True, output="done")
-        with patch("build_pipeline.llm_steps.tdd_steps.agent_call", new_callable=AsyncMock,
-                   return_value=ok) as call:
+        with patch(
+            "build_pipeline.llm_steps.tdd_steps.agent_call",
+            new_callable=AsyncMock,
+            return_value=ok,
+        ) as call:
             await run_integration_fix("FAILED test_a", "pytest", "ctx", escalate=True)
         prompt = call.call_args.args[0]
         assert "Debugging Protocol" in prompt  # protocol carries over
@@ -2666,15 +3389,21 @@ class TestAgentStatusEnforcement:
         (specs_root / "changes" / "test").mkdir(parents=True)
 
         config = BuildConfig(
-            project_dir=project_dir, change_name="test", tier="advanced",
-            test_command="pytest -xvs", config_dir=tmp_path / "config",
-            core_memory_files=[], stack_memory_files=[], additional_memory_files=[],
+            project_dir=project_dir,
+            change_name="test",
+            tier="advanced",
+            test_command="pytest -xvs",
+            config_dir=tmp_path / "config",
+            core_memory_files=[],
+            stack_memory_files=[],
+            additional_memory_files=[],
         )
         config.specs_dir = specs_root
 
         block = BlockInfo(number=1, name="Block1", description="Test block")
         state = BuildState(
-            change_name="test", tier="advanced",
+            change_name="test",
+            tier="advanced",
             state_file=str(tmp_path / "state.json"),
             tdd=TDDState(blocks=[block]),
         )
@@ -2691,10 +3420,16 @@ class TestAgentStatusEnforcement:
             output="Spec names Widget.render() which does not exist.\n\nSTATUS: NEEDS_CONTEXT\n",
         )
 
-        with patch("build_pipeline.tdd_engine.run_test_writer",
-                   new_callable=AsyncMock, return_value=blocked), \
-             patch("build_pipeline.tdd_engine.run_implementer",
-                   new_callable=AsyncMock) as impl:
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                return_value=blocked,
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock
+            ) as impl,
+        ):
             result = await run_block_tdd(block, config, state, progress)
 
         assert result is False
@@ -2713,10 +3448,18 @@ class TestAgentStatusEnforcement:
             output="Tests demand a sync API the design forbids.\n\nSTATUS: BLOCKED\n",
         )
 
-        with patch("build_pipeline.tdd_engine.run_test_writer",
-                   new_callable=AsyncMock, return_value=tests_ok), \
-             patch("build_pipeline.tdd_engine.run_implementer",
-                   new_callable=AsyncMock, return_value=blocked):
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                return_value=tests_ok,
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                return_value=blocked,
+            ),
+        ):
             result = await run_block_tdd(block, config, state, progress)
 
         assert result is False
@@ -2732,10 +3475,18 @@ class TestAgentStatusEnforcement:
             output="STATUS: DONE_WITH_CONCERNS\nTESTS_RUN: pytest\nMock is thin.\n",
         )
 
-        with patch("build_pipeline.tdd_engine.run_test_writer",
-                   new_callable=AsyncMock, return_value=ok), \
-             patch("build_pipeline.tdd_engine.run_implementer",
-                   new_callable=AsyncMock, return_value=ok) as impl:
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                return_value=ok,
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                return_value=ok,
+            ) as impl,
+        ):
             result = await run_block_tdd(block, config, state, progress)
 
         assert result is True
@@ -2756,16 +3507,23 @@ class TestReadBlockTestFiles:
         subprocess.run(["git", "add", "-A"], cwd=project, check=True)
         subprocess.run(["git", "commit", "-qm", "init"], cwd=project, check=True)
         baseline = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=project,
-            capture_output=True, text=True, check=True,
+            ["git", "rev-parse", "HEAD"],
+            cwd=project,
+            capture_output=True,
+            text=True,
+            check=True,
         ).stdout.strip()
 
         specs_root = project / "specs"
         (specs_root / "changes" / "c").mkdir(parents=True)
         config = BuildConfig(
-            project_dir=project, change_name="c", tier="advanced",
-            config_dir=tmp_path / "config", core_memory_files=[],
-            stack_memory_files=[], additional_memory_files=[],
+            project_dir=project,
+            change_name="c",
+            tier="advanced",
+            config_dir=tmp_path / "config",
+            core_memory_files=[],
+            stack_memory_files=[],
+            additional_memory_files=[],
         )
         config.specs_dir = specs_root
         block = BlockInfo(number=1, name="B", description="d", baseline_commit=baseline)
@@ -2775,7 +3533,9 @@ class TestReadBlockTestFiles:
         project, config, block = repo
         tests_dir = project / "tests"
         tests_dir.mkdir()
-        (tests_dir / "test_adder.py").write_text("def test_add():\n    assert add(2, 3) == 5\n")
+        (tests_dir / "test_adder.py").write_text(
+            "def test_add():\n    assert add(2, 3) == 5\n"
+        )
         subprocess.run(["git", "add", "-A"], cwd=project, check=True)
         subprocess.run(["git", "commit", "-qm", "tests"], cwd=project, check=True)
 
@@ -2801,9 +3561,13 @@ class TestReadBlockTestFiles:
         specs_root = project / "specs"
         (specs_root / "changes" / "c").mkdir(parents=True)
         config = BuildConfig(
-            project_dir=project, change_name="c", tier="advanced",
-            config_dir=tmp_path / "config", core_memory_files=[],
-            stack_memory_files=[], additional_memory_files=[],
+            project_dir=project,
+            change_name="c",
+            tier="advanced",
+            config_dir=tmp_path / "config",
+            core_memory_files=[],
+            stack_memory_files=[],
+            additional_memory_files=[],
         )
         config.specs_dir = specs_root
         block = BlockInfo(number=1, name="B", description="d")
@@ -2813,7 +3577,9 @@ class TestReadBlockTestFiles:
         """Why this helper exists: a prose report contains no test functions,
         so scanning it fails every block on "No test functions found"."""
         _, config, _ = repo
-        report = "I wrote 18 tests in tests/test_adder.py covering the spec.\nSTATUS: DONE\n"
+        report = (
+            "I wrote 18 tests in tests/test_adder.py covering the spec.\nSTATUS: DONE\n"
+        )
         scan = run_test_quality_check(report, "specs", config)
         assert not scan.passed
         assert scan.metadata["total_tests"] == 0
@@ -2827,8 +3593,10 @@ class TestSnapshotTestFiles:
         f.write_text("def test_x(): assert 1")
         config = BuildConfig(project_dir=tmp_path)
         block = BlockInfo(number=1, name="B", description="d")
-        with patch("build_pipeline.tdd_engine._list_block_test_files",
-                   return_value=["tests/test_a.py"]):
+        with patch(
+            "build_pipeline.tdd_engine._list_block_test_files",
+            return_value=["tests/test_a.py"],
+        ):
             first = _snapshot_test_files(config, block)
             os.utime(f, (0, 0))
             second = _snapshot_test_files(config, block)
@@ -2841,8 +3609,10 @@ class TestSnapshotTestFiles:
         f.write_text("def test_x(): assert 1")
         config = BuildConfig(project_dir=tmp_path)
         block = BlockInfo(number=1, name="B", description="d")
-        with patch("build_pipeline.tdd_engine._list_block_test_files",
-                   return_value=["tests/test_a.py"]):
+        with patch(
+            "build_pipeline.tdd_engine._list_block_test_files",
+            return_value=["tests/test_a.py"],
+        ):
             before = _snapshot_test_files(config, block)
             f.write_text("def test_x(): assert True  # weakened")
             after = _snapshot_test_files(config, block)
@@ -2851,8 +3621,10 @@ class TestSnapshotTestFiles:
     def test_unreadable_file_is_omitted_not_fatal(self, tmp_path):
         config = BuildConfig(project_dir=tmp_path)
         block = BlockInfo(number=1, name="B", description="d")
-        with patch("build_pipeline.tdd_engine._list_block_test_files",
-                   return_value=["tests/gone.py"]):
+        with patch(
+            "build_pipeline.tdd_engine._list_block_test_files",
+            return_value=["tests/gone.py"],
+        ):
             assert _snapshot_test_files(config, block) == {}
 
 
@@ -2863,20 +3635,37 @@ class TestTestPathPatterns:
     zero paths matched → empty snapshot → "not checked" → tests freely editable.
     """
 
-    @pytest.mark.parametrize("path", [
-        "tests/test_a.py", "src/a_test.py", "tests/conftest.py",
-        "internal/foo_test.go",
-        "AppTests/ParserTests.swift", "Sources/ThingTest.swift",
-        "src/a.test.ts", "src/a.spec.tsx", "src/a.test.mjs",
-        "tests/fixtures/data.json", "__tests__/helper.js", "Tests/Support/Stub.swift",
-    ])
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "tests/test_a.py",
+            "src/a_test.py",
+            "tests/conftest.py",
+            "internal/foo_test.go",
+            "AppTests/ParserTests.swift",
+            "Sources/ThingTest.swift",
+            "src/a.test.ts",
+            "src/a.spec.tsx",
+            "src/a.test.mjs",
+            "tests/fixtures/data.json",
+            "__tests__/helper.js",
+            "Tests/Support/Stub.swift",
+        ],
+    )
     def test_matches_test_paths(self, path):
         assert _TEST_PATH_RE.search(path)
 
-    @pytest.mark.parametrize("path", [
-        "src/main.py", "src/latest.py", "Sources/Parser.swift",
-        "src/protest.go", "src/a.ts", "docs/testing.md",
-    ])
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "src/main.py",
+            "src/latest.py",
+            "Sources/Parser.swift",
+            "src/protest.go",
+            "src/a.ts",
+            "docs/testing.md",
+        ],
+    )
     def test_ignores_production_paths(self, path):
         assert not _TEST_PATH_RE.search(path)
 
@@ -2896,8 +3685,9 @@ class TestEnforceTestIntegrity:
         block = BlockInfo(number=1, name="B", description="d")
         block.test_file_hashes = before
         block.implementer_report = report
-        state = BuildState(change_name="c", tier="standard",
-                           tdd=TDDState(blocks=[block]))
+        state = BuildState(
+            change_name="c", tier="standard", tdd=TDDState(blocks=[block])
+        )
         return config, block, state
 
     def _run(self, config, block, state, after, window="implement", report=None):
@@ -2905,10 +3695,17 @@ class TestEnforceTestIntegrity:
         # cases exercise the implement window, where they are the same string.
         if report is None:
             report = block.implementer_report
-        with patch("build_pipeline.tdd_engine._snapshot_test_files", return_value=after):
+        with patch(
+            "build_pipeline.tdd_engine._snapshot_test_files", return_value=after
+        ):
             return _enforce_test_integrity(
-                block, config, state, ProgressWriter(config.progress_file_path()), 0,
-                window, report,
+                block,
+                config,
+                state,
+                ProgressWriter(config.progress_file_path()),
+                0,
+                window,
+                report,
             )
 
     def test_unchanged_tests_pass(self, tmp_path):
@@ -2921,7 +3718,9 @@ class TestEnforceTestIntegrity:
 
     def test_declared_change_passes_and_records_the_claim(self, tmp_path):
         config, block, state = self._fixtures(
-            tmp_path, {"t.py": "h"}, None,
+            tmp_path,
+            {"t.py": "h"},
+            None,
             report="TEST CHANGE REQUIRED: the assertion contradicted the spec",
         )
         assert self._run(config, block, state, {"t.py": "changed"}) is True
@@ -2930,14 +3729,20 @@ class TestEnforceTestIntegrity:
     def test_declaration_rebaselines_so_it_excuses_only_itself(self, tmp_path):
         """One declared change must not excuse every later silent one."""
         config, block, state = self._fixtures(
-            tmp_path, {"t.py": "h"}, None, report="TEST CHANGE REQUIRED: legit",
+            tmp_path,
+            {"t.py": "h"},
+            None,
+            report="TEST CHANGE REQUIRED: legit",
         )
         self._run(config, block, state, {"t.py": "v2"})
         assert block.test_file_hashes == {"t.py": "v2"}
         # A later SILENT change is measured from the re-baselined state. Clear
         # the report so it is no longer declared.
         block.implementer_report = ""
-        assert self._run(config, block, state, {"t.py": "v3"}, window="review-fix 1") is False
+        assert (
+            self._run(config, block, state, {"t.py": "v3"}, window="review-fix 1")
+            is False
+        )
 
     def test_declaration_does_not_carry_across_windows(self, tmp_path):
         """An implement-phase declaration must not authorize a review-fix mutation.
@@ -2947,17 +3752,31 @@ class TestEnforceTestIntegrity:
         silent mutation. Each window sees only its own agent's report.
         """
         config, block, state = self._fixtures(
-            tmp_path, {"t.py": "h"}, None, report="TEST CHANGE REQUIRED: legit",
+            tmp_path,
+            {"t.py": "h"},
+            None,
+            report="TEST CHANGE REQUIRED: legit",
         )
         assert self._run(config, block, state, {"t.py": "v2"}) is True
         # The accumulation still carries the implement-phase declaration...
         block.implementer_report += "\n\n[review-fix 1]\nfixed the thing"
         assert "TEST CHANGE REQUIRED" in block.implementer_report
         # ...but the review-fix window is judged on the fix agent's report only.
-        assert self._run(config, block, state, {"t.py": "v3"},
-                         window="review-fix 1", report="fixed the thing") is False
+        assert (
+            self._run(
+                config,
+                block,
+                state,
+                {"t.py": "v3"},
+                window="review-fix 1",
+                report="fixed the thing",
+            )
+            is False
+        )
 
-    def test_unavailable_snapshot_reports_not_checked_rather_than_failing(self, tmp_path):
+    def test_unavailable_snapshot_reports_not_checked_rather_than_failing(
+        self, tmp_path
+    ):
         """A git hiccup must not read as 'the agent deleted every test file'."""
         config, block, state = self._fixtures(tmp_path, {"t.py": "h"}, None)
         assert self._run(config, block, state, None) is False
@@ -2981,13 +3800,22 @@ class TestAdjudicateReviewFindings:
     async def test_rejected_findings_never_reach_the_fix_loop(self):
         review, block = self._inputs()
         config = BuildConfig(model="m")
-        adj = FindingAdjudication(verdicts=[
-            FindingVerdict(index=0, accepted=True, reason="the diff shows it"),
-            FindingVerdict(index=1, accepted=False, reason="already handled elsewhere"),
-        ])
-        with patch("build_pipeline.tdd_engine.llm_call_structured",
-                   new_callable=AsyncMock, return_value=adj):
-            out = await _adjudicate_review_findings(review, block, config, "diff", "ctx")
+        adj = FindingAdjudication(
+            verdicts=[
+                FindingVerdict(index=0, accepted=True, reason="the diff shows it"),
+                FindingVerdict(
+                    index=1, accepted=False, reason="already handled elsewhere"
+                ),
+            ]
+        )
+        with patch(
+            "build_pipeline.tdd_engine.llm_call_structured",
+            new_callable=AsyncMock,
+            return_value=adj,
+        ):
+            out = await _adjudicate_review_findings(
+                review, block, config, "diff", "ctx"
+            )
         assert [f.claim for f in out.findings] == ["real defect"]
         assert [f.claim for f in out.rejected_findings] == ["reviewer misread it"]
         assert "already handled elsewhere" in out.rejected_findings[0].evidence
@@ -2998,9 +3826,14 @@ class TestAdjudicateReviewFindings:
         exactly when something is already going wrong."""
         review, block = self._inputs()
         config = BuildConfig(model="m")
-        with patch("build_pipeline.tdd_engine.llm_call_structured",
-                   new_callable=AsyncMock, side_effect=RuntimeError("boom")):
-            out = await _adjudicate_review_findings(review, block, config, "diff", "ctx")
+        with patch(
+            "build_pipeline.tdd_engine.llm_call_structured",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("boom"),
+        ):
+            out = await _adjudicate_review_findings(
+                review, block, config, "diff", "ctx"
+            )
         assert len(out.findings) == 2
 
     @pytest.mark.asyncio
@@ -3008,9 +3841,12 @@ class TestAdjudicateReviewFindings:
         review, block = self._inputs()
         config = BuildConfig(model="m")
         config.adjudicate_findings = False
-        with patch("build_pipeline.tdd_engine.llm_call_structured",
-                   new_callable=AsyncMock) as call:
-            out = await _adjudicate_review_findings(review, block, config, "diff", "ctx")
+        with patch(
+            "build_pipeline.tdd_engine.llm_call_structured", new_callable=AsyncMock
+        ) as call:
+            out = await _adjudicate_review_findings(
+                review, block, config, "diff", "ctx"
+            )
         call.assert_not_awaited()
         assert out.findings == []
         assert len(out.rejected_findings) == 2
@@ -3020,9 +3856,12 @@ class TestAdjudicateReviewFindings:
         config = BuildConfig(model="m")
         block = BlockInfo(number=1, name="B", description="d")
         review = ReviewResult(scores=[])
-        with patch("build_pipeline.tdd_engine.llm_call_structured",
-                   new_callable=AsyncMock) as call:
-            out = await _adjudicate_review_findings(review, block, config, "diff", "ctx")
+        with patch(
+            "build_pipeline.tdd_engine.llm_call_structured", new_callable=AsyncMock
+        ) as call:
+            out = await _adjudicate_review_findings(
+                review, block, config, "diff", "ctx"
+            )
         call.assert_not_awaited()
         assert out.findings == []
 
@@ -3066,7 +3905,9 @@ class TestWholeChangeRefactor:
         (project_dir / TEST_FILE_REL).write_text(ORIGINAL_TEST_SOURCE)
         (project_dir / "module.py").write_text("def add(a, b):\n    return a + b\n")
         subprocess.run(["git", "add", "-A"], cwd=project_dir, check=True)
-        subprocess.run(["git", "commit", "-qm", "impl(block-1): B"], cwd=project_dir, check=True)
+        subprocess.run(
+            ["git", "commit", "-qm", "impl(block-1): B"], cwd=project_dir, check=True
+        )
 
         config = BuildConfig(
             project_dir=project_dir,
@@ -3080,10 +3921,16 @@ class TestWholeChangeRefactor:
         )
         config.specs_dir = project_dir / "specs"
 
-        block = BlockInfo(number=1, name="B", description="d",
-                          baseline_commit=baseline, status=BlockStatus.DONE)
+        block = BlockInfo(
+            number=1,
+            name="B",
+            description="d",
+            baseline_commit=baseline,
+            status=BlockStatus.DONE,
+        )
         state = BuildState(
-            change_name="feat", tier="advanced",
+            change_name="feat",
+            tier="advanced",
             state_file=str(config.state_file_path()),
             tdd=TDDState(blocks=[block], current_block=1),
         )
@@ -3098,20 +3945,29 @@ class TestWholeChangeRefactor:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content)
             return AgentResult(success=True, output=output)
+
         return _run
 
     @pytest.mark.asyncio
     async def test_verified_pass_is_committed(self, setup):
         config, state, progress = setup
         agent = self._agent_writing(
-            config.project_dir, "module.py",
-            "def add(a: int, b: int) -> int:\n    return a + b\n")
+            config.project_dir,
+            "module.py",
+            "def add(a: int, b: int) -> int:\n    return a + b\n",
+        )
 
-        with patch("build_pipeline.tdd_engine.run_refactor_all",
-                   new_callable=AsyncMock, side_effect=agent):
+        with patch(
+            "build_pipeline.tdd_engine.run_refactor_all",
+            new_callable=AsyncMock,
+            side_effect=agent,
+        ):
             assert await _run_refactor_all(config, state, progress) is True
 
-        assert _git_log_subjects(config.project_dir)[0] == "refactor: simplify across blocks"
+        assert (
+            _git_log_subjects(config.project_dir)[0]
+            == "refactor: simplify across blocks"
+        )
         assert state.tdd.refactor_all_done is True
 
     @pytest.mark.asyncio
@@ -3119,14 +3975,24 @@ class TestWholeChangeRefactor:
         config, state, progress = setup
         config.test_command = SUITE_RED_IF_BROKEN  # green now, red after the agent
         agent = self._agent_writing(
-            config.project_dir, "module.py", "def add(a, b):\n    return a - b  # broken\n")
+            config.project_dir,
+            "module.py",
+            "def add(a, b):\n    return a - b  # broken\n",
+        )
 
-        with patch("build_pipeline.tdd_engine.run_refactor_all",
-                   new_callable=AsyncMock, side_effect=agent):
+        with patch(
+            "build_pipeline.tdd_engine.run_refactor_all",
+            new_callable=AsyncMock,
+            side_effect=agent,
+        ):
             assert await _run_refactor_all(config, state, progress) is True
 
-        assert (config.project_dir / "module.py").read_text() == "def add(a, b):\n    return a + b\n"
-        assert not any(s.startswith("refactor:") for s in _git_log_subjects(config.project_dir))
+        assert (
+            config.project_dir / "module.py"
+        ).read_text() == "def add(a, b):\n    return a + b\n"
+        assert not any(
+            s.startswith("refactor:") for s in _git_log_subjects(config.project_dir)
+        )
         assert state.tdd.refactor_all_done is True
 
     @pytest.mark.asyncio
@@ -3135,17 +4001,23 @@ class TestWholeChangeRefactor:
         when the agent declares one."""
         config, state, progress = setup
         agent = self._agent_writing(
-            config.project_dir, TEST_FILE_REL,
+            config.project_dir,
+            TEST_FILE_REL,
             "def test_addition():\n    assert True\n",
             output="TEST CHANGE REQUIRED: it was flaky\n",
         )
 
-        with patch("build_pipeline.tdd_engine.run_refactor_all",
-                   new_callable=AsyncMock, side_effect=agent):
+        with patch(
+            "build_pipeline.tdd_engine.run_refactor_all",
+            new_callable=AsyncMock,
+            side_effect=agent,
+        ):
             assert await _run_refactor_all(config, state, progress) is True
 
         assert (config.project_dir / TEST_FILE_REL).read_text() == ORIGINAL_TEST_SOURCE
-        assert not any(s.startswith("refactor:") for s in _git_log_subjects(config.project_dir))
+        assert not any(
+            s.startswith("refactor:") for s in _git_log_subjects(config.project_dir)
+        )
 
     @pytest.mark.asyncio
     async def test_uncommitted_review_fixes_survive_a_revert(self, setup):
@@ -3153,20 +4025,31 @@ class TestWholeChangeRefactor:
         checkpointed before the refactor runs, so discarding a failed refactor
         cannot take the build's own fixes with it."""
         config, state, progress = setup
-        config.test_command = SUITE_RED_IF_BROKEN  # green with the fix, red after the agent
+        config.test_command = (
+            SUITE_RED_IF_BROKEN  # green with the fix, red after the agent
+        )
         (config.project_dir / "module.py").write_text(
-            "def add(a, b):\n    return a + b  # review fix\n")
+            "def add(a, b):\n    return a + b  # review fix\n"
+        )
         agent = self._agent_writing(
-            config.project_dir, "module.py", "def add(a, b):\n    return a - b  # broken\n")
+            config.project_dir,
+            "module.py",
+            "def add(a, b):\n    return a - b  # broken\n",
+        )
 
-        with patch("build_pipeline.tdd_engine.run_refactor_all",
-                   new_callable=AsyncMock, side_effect=agent):
+        with patch(
+            "build_pipeline.tdd_engine.run_refactor_all",
+            new_callable=AsyncMock,
+            side_effect=agent,
+        ):
             assert await _run_refactor_all(config, state, progress) is True
 
         assert "# review fix" in (config.project_dir / "module.py").read_text()
 
     @pytest.mark.asyncio
-    async def test_failed_checkpoint_commit_preserves_work_and_blocks_the_pass(self, setup):
+    async def test_failed_checkpoint_commit_preserves_work_and_blocks_the_pass(
+        self, setup
+    ):
         """`_git_commit_tree` returns None for "commit failed" too (failing
         hook, missing identity) — with the dirty work possibly all staged.
         HEAD is then NOT a faithful snapshot, and trusting it as the rewind
@@ -3175,17 +4058,23 @@ class TestWholeChangeRefactor:
         pass, and nothing is reset."""
         config, state, progress = setup
         (config.project_dir / "module.py").write_text(
-            "def add(a, b):\n    return a + b  # review fix\n")
+            "def add(a, b):\n    return a + b  # review fix\n"
+        )
         hook = config.project_dir / ".git" / "hooks" / "pre-commit"
         hook.parent.mkdir(exist_ok=True)
         hook.write_text("#!/bin/sh\nexit 1\n")
         hook.chmod(0o755)
         head_before = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=config.project_dir,
-            capture_output=True, text=True, check=True).stdout.strip()
+            ["git", "rev-parse", "HEAD"],
+            cwd=config.project_dir,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
 
-        with patch("build_pipeline.tdd_engine.run_refactor_all",
-                   new_callable=AsyncMock) as agent:
+        with patch(
+            "build_pipeline.tdd_engine.run_refactor_all", new_callable=AsyncMock
+        ) as agent:
             with pytest.raises(git_ops.GitLifecycleError, match="Commit failed"):
                 await _run_refactor_all(config, state, progress)
 
@@ -3193,8 +4082,12 @@ class TestWholeChangeRefactor:
         # The uncommitted review fix survived, and HEAD never moved.
         assert "# review fix" in (config.project_dir / "module.py").read_text()
         head_after = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=config.project_dir,
-            capture_output=True, text=True, check=True).stdout.strip()
+            ["git", "rev-parse", "HEAD"],
+            cwd=config.project_dir,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
         assert head_after == head_before
         assert state.tdd.refactor_all_done is False
 
@@ -3209,11 +4102,13 @@ class TestWholeChangeRefactor:
         config, state, progress = setup
         config.test_command = SUITE_RED_IF_BROKEN
         (config.project_dir / "module.py").write_text(
-            "def add(a, b):\n    return a - b  # broken, half-refactored\n")
+            "def add(a, b):\n    return a - b  # broken, half-refactored\n"
+        )
         subjects_before = _git_log_subjects(config.project_dir)
 
-        with patch("build_pipeline.tdd_engine.run_refactor_all",
-                   new_callable=AsyncMock) as agent:
+        with patch(
+            "build_pipeline.tdd_engine.run_refactor_all", new_callable=AsyncMock
+        ) as agent:
             assert await _run_refactor_all(config, state, progress) is False
 
         agent.assert_not_awaited()
@@ -3228,8 +4123,9 @@ class TestWholeChangeRefactor:
         config, state, progress = setup
         state.tdd.refactor_all_done = True
 
-        with patch("build_pipeline.tdd_engine.run_refactor_all",
-                   new_callable=AsyncMock) as agent:
+        with patch(
+            "build_pipeline.tdd_engine.run_refactor_all", new_callable=AsyncMock
+        ) as agent:
             assert await _run_refactor_all(config, state, progress) is True
 
         agent.assert_not_awaited()
@@ -3239,16 +4135,23 @@ class TestWholeChangeRefactor:
         config, state, progress = setup
         fail = AgentResult(success=False, error="crashed")
 
-        with patch("build_pipeline.tdd_engine.run_refactor_all",
-                   new_callable=AsyncMock, return_value=fail):
+        with patch(
+            "build_pipeline.tdd_engine.run_refactor_all",
+            new_callable=AsyncMock,
+            return_value=fail,
+        ):
             assert await _run_refactor_all(config, state, progress) is True
 
         assert state.tdd.refactor_all_done is True
 
-    @pytest.mark.parametrize("fail", [
-        AgentResult(success=False, error="crashed"),
-        AgentResult(success=False, timed_out=True),
-    ], ids=["error", "timeout"])
+    @pytest.mark.parametrize(
+        "fail",
+        [
+            AgentResult(success=False, error="crashed"),
+            AgentResult(success=False, timed_out=True),
+        ],
+        ids=["error", "timeout"],
+    )
     @pytest.mark.asyncio
     async def test_failed_agent_partial_edits_are_rolled_back(self, setup, fail):
         """An agent that wrote files and then failed or timed out leaves
@@ -3259,22 +4162,31 @@ class TestWholeChangeRefactor:
         build's own uncommitted review fixes."""
         config, state, progress = setup
         (config.project_dir / "module.py").write_text(
-            "def add(a, b):\n    return a + b  # review fix\n")
+            "def add(a, b):\n    return a + b  # review fix\n"
+        )
 
         def _partial_then_fail(*_a, **_kw):
-            (config.project_dir / "module.py").write_text("def add(a, b):\n    return (a +\n")
+            (config.project_dir / "module.py").write_text(
+                "def add(a, b):\n    return (a +\n"
+            )
             (config.project_dir / "helpers.py").write_text("# half-written\n")
             return fail
 
-        with patch("build_pipeline.tdd_engine.run_refactor_all",
-                   new_callable=AsyncMock, side_effect=_partial_then_fail):
+        with patch(
+            "build_pipeline.tdd_engine.run_refactor_all",
+            new_callable=AsyncMock,
+            side_effect=_partial_then_fail,
+        ):
             assert await _run_refactor_all(config, state, progress) is True
 
-        assert (config.project_dir / "module.py").read_text() == \
-            "def add(a, b):\n    return a + b  # review fix\n"
+        assert (
+            config.project_dir / "module.py"
+        ).read_text() == "def add(a, b):\n    return a + b  # review fix\n"
         assert not (config.project_dir / "helpers.py").exists()
         assert git_ops.tree_is_clean(config.project_dir)
-        assert not any(s.startswith("refactor:") for s in _git_log_subjects(config.project_dir))
+        assert not any(
+            s.startswith("refactor:") for s in _git_log_subjects(config.project_dir)
+        )
         assert state.tdd.refactor_all_done is True
 
     @pytest.mark.asyncio
@@ -3289,8 +4201,9 @@ class TestWholeChangeRefactor:
         budget_mod.configure(max_tokens=100)
         budget_mod.record(_Usage(), label="spec")
 
-        with patch("build_pipeline.tdd_engine.run_refactor_all",
-                   new_callable=AsyncMock) as agent:
+        with patch(
+            "build_pipeline.tdd_engine.run_refactor_all", new_callable=AsyncMock
+        ) as agent:
             assert await _run_refactor_all(config, state, progress) is False
 
         agent.assert_not_awaited()
@@ -3324,18 +4237,47 @@ class TestRefactorAllOrdering:
             return GateResult(passed=True, reason="ok")
 
         ok = AgentResult(success=True, output="done")
-        with patch.dict(os.environ, {"BUILDME_TRUST_REPO": "1"}), \
-             patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=ok), \
-             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=ok), \
-             patch("build_pipeline.tdd_engine.run_test_suite", return_value=RED_SUITE_RESULT), \
-             patch("build_pipeline.tdd_engine._audit_test_quality", new_callable=AsyncMock,
-                   return_value=QualityAudit(passed=True)), \
-             patch("build_pipeline.tdd_engine._run_quality_review", new_callable=AsyncMock,
-                   return_value=ReviewResult(scores=[ReviewScore(dimension="Q", weight=2, score=5, evidence="e")])), \
-             patch("build_pipeline.tdd_engine._adjudicate_review_findings", new_callable=AsyncMock,
-                   side_effect=lambda review, *a, **k: review), \
-             patch("build_pipeline.tdd_engine._run_refactor_all", side_effect=_refactor_all), \
-             patch("build_pipeline.tdd_engine._verify_entry_point", side_effect=_entry_point):
+        with (
+            patch.dict(os.environ, {"BUILDME_TRUST_REPO": "1"}),
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                return_value=ok,
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                return_value=ok,
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_test_suite",
+                return_value=RED_SUITE_RESULT,
+            ),
+            patch(
+                "build_pipeline.tdd_engine._audit_test_quality",
+                new_callable=AsyncMock,
+                return_value=QualityAudit(passed=True),
+            ),
+            patch(
+                "build_pipeline.tdd_engine._run_quality_review",
+                new_callable=AsyncMock,
+                return_value=ReviewResult(
+                    scores=[ReviewScore(dimension="Q", weight=2, score=5, evidence="e")]
+                ),
+            ),
+            patch(
+                "build_pipeline.tdd_engine._adjudicate_review_findings",
+                new_callable=AsyncMock,
+                side_effect=lambda review, *a, **k: review,
+            ),
+            patch(
+                "build_pipeline.tdd_engine._run_refactor_all", side_effect=_refactor_all
+            ),
+            patch(
+                "build_pipeline.tdd_engine._verify_entry_point",
+                side_effect=_entry_point,
+            ),
+        ):
             result = await run_tdd_engine(config, args)
 
         assert result == EXIT_SUCCESS
@@ -3349,18 +4291,44 @@ class TestRefactorAllOrdering:
         async def _refactor_all(*_a, **_kw):
             return False
 
-        with patch.dict(os.environ, {"BUILDME_TRUST_REPO": "1"}), \
-             patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=ok), \
-             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=ok), \
-             patch("build_pipeline.tdd_engine.run_test_suite", return_value=RED_SUITE_RESULT), \
-             patch("build_pipeline.tdd_engine._audit_test_quality", new_callable=AsyncMock,
-                   return_value=QualityAudit(passed=True)), \
-             patch("build_pipeline.tdd_engine._run_quality_review", new_callable=AsyncMock,
-                   return_value=ReviewResult(scores=[ReviewScore(dimension="Q", weight=2, score=5, evidence="e")])), \
-             patch("build_pipeline.tdd_engine._adjudicate_review_findings", new_callable=AsyncMock,
-                   side_effect=lambda review, *a, **k: review), \
-             patch("build_pipeline.tdd_engine._run_refactor_all", side_effect=_refactor_all), \
-             patch("build_pipeline.tdd_engine._verify_entry_point") as entry_point:
+        with (
+            patch.dict(os.environ, {"BUILDME_TRUST_REPO": "1"}),
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                return_value=ok,
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                return_value=ok,
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_test_suite",
+                return_value=RED_SUITE_RESULT,
+            ),
+            patch(
+                "build_pipeline.tdd_engine._audit_test_quality",
+                new_callable=AsyncMock,
+                return_value=QualityAudit(passed=True),
+            ),
+            patch(
+                "build_pipeline.tdd_engine._run_quality_review",
+                new_callable=AsyncMock,
+                return_value=ReviewResult(
+                    scores=[ReviewScore(dimension="Q", weight=2, score=5, evidence="e")]
+                ),
+            ),
+            patch(
+                "build_pipeline.tdd_engine._adjudicate_review_findings",
+                new_callable=AsyncMock,
+                side_effect=lambda review, *a, **k: review,
+            ),
+            patch(
+                "build_pipeline.tdd_engine._run_refactor_all", side_effect=_refactor_all
+            ),
+            patch("build_pipeline.tdd_engine._verify_entry_point") as entry_point,
+        ):
             result = await run_tdd_engine(config, args)
 
         assert result == EXIT_BUILD_FAILURE
@@ -3383,34 +4351,64 @@ class TestCheckpointLifecycleOwnership:
         ok = AgentResult(success=True, output="done")
         return [
             patch.dict(os.environ, {"BUILDME_TRUST_REPO": "1"}),
-            patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=ok),
-            patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=ok),
-            patch("build_pipeline.tdd_engine.run_test_suite", return_value=RED_SUITE_RESULT),
-            patch("build_pipeline.tdd_engine._audit_test_quality", new_callable=AsyncMock,
-                  return_value=QualityAudit(passed=True)),
-            patch("build_pipeline.tdd_engine._run_quality_review", new_callable=AsyncMock,
-                  return_value=ReviewResult(
-                      scores=[ReviewScore(dimension="Q", weight=2, score=5, evidence="e")])),
-            patch("build_pipeline.tdd_engine._adjudicate_review_findings", new_callable=AsyncMock,
-                  side_effect=lambda review, *a, **k: review),
-            patch("build_pipeline.tdd_engine._run_refactor_all", new_callable=AsyncMock, return_value=True),
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                return_value=ok,
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                return_value=ok,
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_test_suite",
+                return_value=RED_SUITE_RESULT,
+            ),
+            patch(
+                "build_pipeline.tdd_engine._audit_test_quality",
+                new_callable=AsyncMock,
+                return_value=QualityAudit(passed=True),
+            ),
+            patch(
+                "build_pipeline.tdd_engine._run_quality_review",
+                new_callable=AsyncMock,
+                return_value=ReviewResult(
+                    scores=[ReviewScore(dimension="Q", weight=2, score=5, evidence="e")]
+                ),
+            ),
+            patch(
+                "build_pipeline.tdd_engine._adjudicate_review_findings",
+                new_callable=AsyncMock,
+                side_effect=lambda review, *a, **k: review,
+            ),
+            patch(
+                "build_pipeline.tdd_engine._run_refactor_all",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
         ]
 
     async def _run(self, config, args, **kwargs):
         from contextlib import ExitStack
+
         with ExitStack() as stack:
             for p in self._patches():
                 stack.enter_context(p)
             return await run_tdd_engine(config, args, **kwargs)
 
     @pytest.mark.asyncio
-    async def test_sub_phase_run_leaves_the_checkpoint_for_the_orchestrator(self, tdd_setup):
+    async def test_sub_phase_run_leaves_the_checkpoint_for_the_orchestrator(
+        self, tdd_setup
+    ):
         config, args = tdd_setup
         state_path = config.state_file_path()
 
         assert await self._run(config, args, standalone=False) == EXIT_SUCCESS
 
-        assert state_path.exists(), "sub-phase run deleted the orchestrator's checkpoint"
+        assert state_path.exists(), (
+            "sub-phase run deleted the orchestrator's checkpoint"
+        )
         state = BuildState.load(state_path)
         assert state.tdd is not None, "checkpoint lost its TDD sub-state"
         assert all(b.status == BlockStatus.DONE for b in state.tdd.blocks)
@@ -3440,11 +4438,17 @@ class TestCheckpointLifecycleOwnership:
         config, args = tdd_setup
         assert await self._run(config, args, standalone=False) == EXIT_SUCCESS
 
-        with patch.dict(os.environ, {"BUILDME_TRUST_REPO": "1"}), \
-             patch("build_pipeline.tdd_engine.run_test_writer",
-                   new_callable=AsyncMock) as writer, \
-             patch("build_pipeline.tdd_engine._run_refactor_all",
-                   new_callable=AsyncMock, return_value=True):
+        with (
+            patch.dict(os.environ, {"BUILDME_TRUST_REPO": "1"}),
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock
+            ) as writer,
+            patch(
+                "build_pipeline.tdd_engine._run_refactor_all",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+        ):
             assert await run_tdd_engine(config, args, standalone=False) == EXIT_SUCCESS
 
         writer.assert_not_awaited()
@@ -3476,8 +4480,9 @@ class TestBudgetCircuitBreaker:
         budget_mod.configure(max_tokens=100)
         budget_mod.record(_Usage(), label="spec")
 
-        with patch("build_pipeline.tdd_engine.run_test_writer",
-                   new_callable=AsyncMock) as writer:
+        with patch(
+            "build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock
+        ) as writer:
             result = await run_tdd_engine(config, args, standalone=False)
 
         assert result == EXIT_BUILD_FAILURE
@@ -3503,8 +4508,9 @@ class TestBudgetCircuitBreaker:
 
         # Simulate a new process picking the build back up.
         budget_mod.reset()
-        with patch("build_pipeline.tdd_engine.run_test_writer",
-                   new_callable=AsyncMock) as writer:
+        with patch(
+            "build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock
+        ) as writer:
             result = await run_tdd_engine(config, args)
         assert result == EXIT_BUILD_FAILURE
         writer.assert_not_awaited()
@@ -3521,11 +4527,16 @@ class TestBudgetCircuitBreaker:
 
         budget_mod.record(_Usage())
         fail = AgentResult(success=False, error="stop here")
-        with patch("build_pipeline.tdd_engine.run_test_writer",
-                   new_callable=AsyncMock, return_value=fail) as writer:
+        with patch(
+            "build_pipeline.tdd_engine.run_test_writer",
+            new_callable=AsyncMock,
+            return_value=fail,
+        ) as writer:
             await run_tdd_engine(config, args)
         # Reached the block: the budget did not intercept it.
         writer.assert_awaited()
+
+
 CONTRADICTION_REPORT = """\
 Implemented the uploader against the failing tests.
 
@@ -3582,7 +4593,8 @@ class TestImplementationNotesLoop:
 
         block = BlockInfo(number=1, name="Uploader", description="Upload block")
         state = BuildState(
-            change_name="test", tier="advanced",
+            change_name="test",
+            tier="advanced",
             state_file=str(tmp_path / "state.json"),
             tdd=TDDState(blocks=[block]),
         )
@@ -3593,10 +4605,16 @@ class TestImplementationNotesLoop:
     @staticmethod
     def _agents(test_output, impl_output):
         return (
-            patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock,
-                  return_value=AgentResult(success=True, output=test_output)),
-            patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock,
-                  return_value=AgentResult(success=True, output=impl_output)),
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                return_value=AgentResult(success=True, output=test_output),
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                return_value=AgentResult(success=True, output=impl_output),
+            ),
         )
 
     @pytest.mark.asyncio
@@ -3663,10 +4681,18 @@ class TestImplementationNotesLoop:
         implementer failure that ends the block."""
         config, state, progress, block = setup
 
-        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock,
-                   return_value=AgentResult(success=True, output=CLARIFY_TEST_REPORT)), \
-             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock,
-                   return_value=AgentResult(success=False, error="agent crashed")):
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                return_value=AgentResult(success=True, output=CLARIFY_TEST_REPORT),
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                return_value=AgentResult(success=False, error="agent crashed"),
+            ),
+        ):
             result = await run_block_tdd(block, config, state, progress)
 
         assert result is False
@@ -3693,9 +4719,17 @@ class TestImplementationNotesLoop:
 
         config, state, progress, block = setup
         for _ in range(2):
-            assert _record_implementation_note(
-                block, config, state, progress, "implementer", CONTRADICTION_REPORT,
-            ) is True
+            assert (
+                _record_implementation_note(
+                    block,
+                    config,
+                    state,
+                    progress,
+                    "implementer",
+                    CONTRADICTION_REPORT,
+                )
+                is True
+            )
 
         assert len(block.notes) == 1
         notes_text = (config.change_dir / "implementation-notes.md").read_text()
@@ -3706,10 +4740,20 @@ class TestImplementationNotesLoop:
 
         config, state, progress, block = setup
         _record_implementation_note(
-            block, config, state, progress, "test_writer", CLARIFY_TEST_REPORT,
+            block,
+            config,
+            state,
+            progress,
+            "test_writer",
+            CLARIFY_TEST_REPORT,
         )
         _record_implementation_note(
-            block, config, state, progress, "implementer", CONTRADICTION_REPORT,
+            block,
+            config,
+            state,
+            progress,
+            "implementer",
+            CONTRADICTION_REPORT,
         )
         assert len(block.notes) == 2
 
@@ -3721,10 +4765,20 @@ class TestImplementationNotesLoop:
         config, state, progress, block = setup
         config.gates.respec_halt_on_contradiction = True
         first = _record_implementation_note(
-            block, config, state, progress, "implementer", CONTRADICTION_REPORT,
+            block,
+            config,
+            state,
+            progress,
+            "implementer",
+            CONTRADICTION_REPORT,
         )
         second = _record_implementation_note(
-            block, config, state, progress, "implementer", CONTRADICTION_REPORT,
+            block,
+            config,
+            state,
+            progress,
+            "implementer",
+            CONTRADICTION_REPORT,
         )
         assert first is False
         assert second is False
@@ -3736,14 +4790,17 @@ class TestReportContractSlots:
 
     def test_implementer_prompts_declare_both_slots(self):
         from build_pipeline.prompts.implementation import (
-            IMPLEMENTER_PROMPT_CLEAN, IMPLEMENTER_PROMPT_MINIMUM,
+            IMPLEMENTER_PROMPT_CLEAN,
+            IMPLEMENTER_PROMPT_MINIMUM,
         )
+
         for prompt in (IMPLEMENTER_PROMPT_CLEAN, IMPLEMENTER_PROMPT_MINIMUM):
             assert "SURPRISES:" in prompt
             assert "SPEC_IMPACT: <none | clarify | contradicts>" in prompt
 
     def test_test_writer_prompt_declares_both_slots(self):
         from build_pipeline.prompts.test_writing import TEST_WRITER_PROMPT
+
         assert "SURPRISES:" in TEST_WRITER_PROMPT
         assert "SPEC_IMPACT: <none | clarify | contradicts>" in TEST_WRITER_PROMPT
 
@@ -3751,6 +4808,7 @@ class TestReportContractSlots:
         """Positive recipe: the prompt says when to use each value and that
         nothing is auto-applied — no instruction that suppresses a finding."""
         from build_pipeline.prompts.implementation import IMPLEMENTER_PROMPT_CLEAN
+
         assert "contradicts" in IMPLEMENTER_PROMPT_CLEAN
         assert "implementation-notes.md" in IMPLEMENTER_PROMPT_CLEAN
 
@@ -3773,19 +4831,45 @@ class TestMutationStepPlacement:
             return False
 
         ok = AgentResult(success=True, output="done")
-        with patch.dict(os.environ, {"BUILDME_TRUST_REPO": "1"}), \
-             patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=ok), \
-             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=ok), \
-             patch("build_pipeline.tdd_engine.run_test_suite", return_value=RED_SUITE_RESULT), \
-             patch("build_pipeline.tdd_engine._audit_test_quality", new_callable=AsyncMock,
-                   return_value=QualityAudit(passed=True)), \
-             patch("build_pipeline.tdd_engine._run_quality_review", new_callable=AsyncMock,
-                   return_value=ReviewResult(scores=[ReviewScore(dimension="Q", weight=2, score=5, evidence="e")])), \
-             patch("build_pipeline.tdd_engine._adjudicate_review_findings", new_callable=AsyncMock,
-                   side_effect=lambda review, *a, **k: review), \
-             patch("build_pipeline.tdd_engine._run_refactor_all", side_effect=_refactor_all), \
-             patch("build_pipeline.tdd_engine._run_mutation", side_effect=_mutation), \
-             patch("build_pipeline.tdd_engine._verify_entry_point") as e2e:
+        with (
+            patch.dict(os.environ, {"BUILDME_TRUST_REPO": "1"}),
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                return_value=ok,
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                return_value=ok,
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_test_suite",
+                return_value=RED_SUITE_RESULT,
+            ),
+            patch(
+                "build_pipeline.tdd_engine._audit_test_quality",
+                new_callable=AsyncMock,
+                return_value=QualityAudit(passed=True),
+            ),
+            patch(
+                "build_pipeline.tdd_engine._run_quality_review",
+                new_callable=AsyncMock,
+                return_value=ReviewResult(
+                    scores=[ReviewScore(dimension="Q", weight=2, score=5, evidence="e")]
+                ),
+            ),
+            patch(
+                "build_pipeline.tdd_engine._adjudicate_review_findings",
+                new_callable=AsyncMock,
+                side_effect=lambda review, *a, **k: review,
+            ),
+            patch(
+                "build_pipeline.tdd_engine._run_refactor_all", side_effect=_refactor_all
+            ),
+            patch("build_pipeline.tdd_engine._run_mutation", side_effect=_mutation),
+            patch("build_pipeline.tdd_engine._verify_entry_point") as e2e,
+        ):
             result = await run_tdd_engine(config, args)
 
         assert result == EXIT_BUILD_FAILURE
@@ -3793,7 +4877,9 @@ class TestMutationStepPlacement:
         e2e.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_pre_mutation_checkpoint_resumes_into_the_mutation_step(self, tdd_setup):
+    async def test_pre_mutation_checkpoint_resumes_into_the_mutation_step(
+        self, tdd_setup
+    ):
         """A checkpoint written before the MUTATION step existed — every block
         done, refactor_all_done true, no mutation_done key — resumes straight
         into the mutation step: no agent runs, the refactor pass is not
@@ -3807,10 +4893,16 @@ class TestMutationStepPlacement:
             seen.append(state.tdd.mutation_done)
             return False
 
-        with patch.dict(os.environ, {"BUILDME_TRUST_REPO": "1"}), \
-             patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock) as tw, \
-             patch("build_pipeline.tdd_engine.run_refactor_all", new_callable=AsyncMock) as ra, \
-             patch("build_pipeline.tdd_engine._run_mutation", side_effect=_mutation):
+        with (
+            patch.dict(os.environ, {"BUILDME_TRUST_REPO": "1"}),
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock
+            ) as tw,
+            patch(
+                "build_pipeline.tdd_engine.run_refactor_all", new_callable=AsyncMock
+            ) as ra,
+            patch("build_pipeline.tdd_engine._run_mutation", side_effect=_mutation),
+        ):
             result = await run_tdd_engine(config, args)
 
         assert result == EXIT_BUILD_FAILURE
@@ -3828,43 +4920,60 @@ def test_nested_test_evidence_uses_project_relative_paths(tmp_path):
     path.write_text("def test_it():\n    assert False\n")
     subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
     subprocess.run(["git", "commit", "-qm", "baseline"], cwd=tmp_path, check=True)
-    baseline = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+    baseline = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True
+    ).strip()
     path.write_text("def test_it():\n    assert True\n")
     config = BuildConfig(project_dir=project)
-    block = BlockInfo(number=1, name="nested", description="Read nested tests", baseline_commit=baseline)
+    block = BlockInfo(
+        number=1,
+        name="nested",
+        description="Read nested tests",
+        baseline_commit=baseline,
+    )
     assert "assert True" in _read_block_test_files(config, block)
     assert set(_snapshot_test_files(config, block)) == {"tests/test_with spaces.py"}
 
 
 def test_nested_review_diffs_have_project_relative_headers(tmp_path):
-    subprocess.run(['git', 'init', '-q', str(tmp_path)], check=True)
-    project = tmp_path / 'services/api'
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    project = tmp_path / "services/api"
     project.mkdir(parents=True)
-    (project / 'app.py').write_text('value = 1\n')
-    (tmp_path / 'sibling.txt').write_text('untouched\n')
-    subprocess.run(['git', 'add', '.'], cwd=tmp_path, check=True)
-    subprocess.run(['git', 'commit', '-qm', 'base'], cwd=tmp_path, check=True)
-    (project / 'app.py').write_text('value = 2\n')
-    (tmp_path / 'sibling.txt').write_text('sibling secret\n')
+    (project / "app.py").write_text("value = 1\n")
+    (tmp_path / "sibling.txt").write_text("untouched\n")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=tmp_path, check=True)
+    (project / "app.py").write_text("value = 2\n")
+    (tmp_path / "sibling.txt").write_text("sibling secret\n")
     config = BuildConfig(project_dir=project)
-    block = BlockInfo(number=1, name='nested', description='change value')
-    state = BuildState(change_name='nested', tier='standard', tdd=TDDState(blocks=[block]))
+    block = BlockInfo(number=1, name="nested", description="change value")
+    state = BuildState(
+        change_name="nested", tier="standard", tdd=TDDState(blocks=[block])
+    )
     for diff in (_capture_block_diff(config, block), capture_build_diff(config, state)):
-        assert '--- a/app.py' in diff
-        assert '+++ b/app.py' in diff
-        assert 'services/api' not in diff
-        assert 'sibling' not in diff
+        assert "--- a/app.py" in diff
+        assert "+++ b/app.py" in diff
+        assert "services/api" not in diff
+        assert "sibling" not in diff
 
 
 # --- RED_EXPECTED: the test writer's statement of which tests must fail ---
 
 RX_TEST = "def test_add():\n    from module import add\n    assert add(2, 3) == 5\n"
-RX_RED = (1, "FAILED tests/test_new.py::test_add - AssertionError: not implemented\n1 failed")
+RX_RED = (
+    1,
+    "FAILED tests/test_new.py::test_add - AssertionError: not implemented\n1 failed",
+)
 RX_OK = AgentResult(success=True, output="STATUS: DONE")
 
 
 def _rx_report(slot: str | None) -> str:
-    lines = ["STATUS: DONE", "TESTS_RUN: pytest", "FILES: tests/test_new.py", "TEST_COUNT: 1"]
+    lines = [
+        "STATUS: DONE",
+        "TESTS_RUN: pytest",
+        "FILES: tests/test_new.py",
+        "TEST_COUNT: 1",
+    ]
     if slot is not None:
         lines.append(f"RED_EXPECTED: {slot}")
     return "\n".join(lines + ["SURPRISES: none", "SPEC_IMPACT: none"]) + "\n"
@@ -3882,11 +4991,23 @@ class TestRedExpected:
     @pytest.fixture(autouse=True)
     def _agents(self):
         from build_pipeline.models import GateResult
-        with patch("build_pipeline.tdd_engine.integration_gate",
-                   return_value=GateResult(passed=True, reason="fixture checks pass")), \
-             patch("build_pipeline.tdd_engine.run_refactorer", new_callable=AsyncMock, return_value=RX_OK), \
-             patch("build_pipeline.tdd_engine._audit_test_quality", new_callable=AsyncMock,
-                   return_value=QualityAudit(passed=True)):
+
+        with (
+            patch(
+                "build_pipeline.tdd_engine.integration_gate",
+                return_value=GateResult(passed=True, reason="fixture checks pass"),
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_refactorer",
+                new_callable=AsyncMock,
+                return_value=RX_OK,
+            ),
+            patch(
+                "build_pipeline.tdd_engine._audit_test_quality",
+                new_callable=AsyncMock,
+                return_value=QualityAudit(passed=True),
+            ),
+        ):
             yield
 
     @staticmethod
@@ -3895,16 +5016,29 @@ class TestRedExpected:
         project = root / "project"
         (project / "specs" / "changes" / "test").mkdir(parents=True)
         (project / "specs" / "changes" / "test" / "design.md").write_text("# Design")
-        (project / "module.py").write_text("def add(a, b):\n    raise NotImplementedError\n")
+        (project / "module.py").write_text(
+            "def add(a, b):\n    raise NotImplementedError\n"
+        )
         (project / "tests").mkdir()
         _git_init_project(project)
-        config = BuildConfig(project_dir=project, change_name="test", tier="advanced",
-                             test_command=test_command, config_dir=root / "config",
-                             core_memory_files=[], stack_memory_files=[], additional_memory_files=[])
+        config = BuildConfig(
+            project_dir=project,
+            change_name="test",
+            tier="advanced",
+            test_command=test_command,
+            config_dir=root / "config",
+            core_memory_files=[],
+            stack_memory_files=[],
+            additional_memory_files=[],
+        )
         config.specs_dir = project / "specs"
         block = BlockInfo(number=1, name="Add", description="Add two numbers.")
-        state = BuildState(change_name="test", tier="advanced",
-                           state_file=str(root / "state.json"), tdd=TDDState(blocks=[block]))
+        state = BuildState(
+            change_name="test",
+            tier="advanced",
+            state_file=str(root / "state.json"),
+            tdd=TDDState(blocks=[block]),
+        )
         progress = ProgressWriter(root / "progress.md")
         progress.initialize("test", "advanced", 1)
         return config, state, progress, block
@@ -3914,6 +5048,7 @@ class TestRedExpected:
         async def writer(**_kw):
             (project / "tests" / "test_new.py").write_text(RX_TEST)
             return AgentResult(success=True, output=report)
+
         return writer
 
     @staticmethod
@@ -3921,12 +5056,24 @@ class TestRedExpected:
         state = BuildState.load(config.state_file_path())
         return state, state.tdd.blocks[state.tdd.current_block]
 
-    async def _run(self, config, state, progress, block, report, suite=RX_RED, implementer=None):
-        with patch("build_pipeline.tdd_engine.run_test_writer", side_effect=self._writer(config.project_dir, report)), \
-             patch("build_pipeline.tdd_engine.run_test_suite", return_value=suite), \
-             patch("build_pipeline.tdd_engine.run_implementer",
-                   **({"side_effect": implementer} if implementer else
-                      {"new_callable": AsyncMock, "return_value": RX_OK})):
+    async def _run(
+        self, config, state, progress, block, report, suite=RX_RED, implementer=None
+    ):
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                side_effect=self._writer(config.project_dir, report),
+            ),
+            patch("build_pipeline.tdd_engine.run_test_suite", return_value=suite),
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                **(
+                    {"side_effect": implementer}
+                    if implementer
+                    else {"new_callable": AsyncMock, "return_value": RX_OK}
+                ),
+            ),
+        ):
             return await run_block_tdd(block, config, state, progress)
 
     async def _unstopped(self, root: Path, monkeypatch, report: str):
@@ -3935,35 +5082,52 @@ class TestRedExpected:
         return config, block
 
     @staticmethod
-    def _same_apart_from_red_expected(resumed, resumed_config, unstopped, unstopped_config):
+    def _same_apart_from_red_expected(
+        resumed, resumed_config, unstopped, unstopped_config
+    ):
         """Everything a resumed run leaves equals the unstopped run's, except
         `red_expected` and the lines of `red_evidence` it opens."""
         assert resumed.status == unstopped.status
         assert resumed.test_file_hashes == unstopped.test_file_hashes
-        assert (resumed.red_evidence.removeprefix(resumed.red_expected)
-                == unstopped.red_evidence.removeprefix(unstopped.red_expected))
-        assert _git_log_subjects(resumed_config.project_dir) == _git_log_subjects(unstopped_config.project_dir)
+        assert resumed.red_evidence.removeprefix(
+            resumed.red_expected
+        ) == unstopped.red_evidence.removeprefix(unstopped.red_expected)
+        assert _git_log_subjects(resumed_config.project_dir) == _git_log_subjects(
+            unstopped_config.project_dir
+        )
 
     # --- one engine test per result ---
 
     @pytest.mark.asyncio
     async def test_red_expected_named_tests_failed(self, tmp_path, monkeypatch):
         config, state, progress, block = self._project(tmp_path, monkeypatch)
-        report = _rx_report("tests/test_new.py::test_add — add() raises NotImplementedError")
+        report = _rx_report(
+            "tests/test_new.py::test_add — add() raises NotImplementedError"
+        )
         assert await self._run(config, state, progress, block, report) is True
-        assert block.red_expected == ("RED_EXPECTED: tests/test_new.py::test_add — add() raises "
-                                      "NotImplementedError\nRED_EXPECTED result: named tests failed")
+        assert block.red_expected == (
+            "RED_EXPECTED: tests/test_new.py::test_add — add() raises "
+            "NotImplementedError\nRED_EXPECTED result: named tests failed"
+        )
         assert block.red_evidence.startswith(block.red_expected + "\n")
-        assert "RED_EXPECTED result: named tests failed" in (tmp_path / "progress.md").read_text()
+        assert (
+            "RED_EXPECTED result: named tests failed"
+            in (tmp_path / "progress.md").read_text()
+        )
         assert self._reload(config)[1].red_expected == block.red_expected
 
     @pytest.mark.asyncio
-    async def test_red_expected_named_tests_not_among_the_failures(self, tmp_path, monkeypatch):
+    async def test_red_expected_named_tests_not_among_the_failures(
+        self, tmp_path, monkeypatch
+    ):
         config, state, progress, block = self._project(tmp_path, monkeypatch)
-        report = _rx_report("tests/test_new.py::test_add, tests/test_new.py::test_sub — no add() or sub()")
+        report = _rx_report(
+            "tests/test_new.py::test_add, tests/test_new.py::test_sub — no add() or sub()"
+        )
         assert await self._run(config, state, progress, block, report) is True
         assert block.red_expected.splitlines()[-1] == (
-            "RED_EXPECTED result: named tests not among the failures: tests/test_new.py::test_sub")
+            "RED_EXPECTED result: named tests not among the failures: tests/test_new.py::test_sub"
+        )
         assert block.red_evidence.startswith(block.red_expected + "\n")
 
     @pytest.mark.asyncio
@@ -3974,122 +5138,245 @@ class TestRedExpected:
         assert block.red_evidence.startswith(block.red_expected + "\n")
 
     @pytest.mark.asyncio
-    async def test_red_expected_cannot_check_for_this_runner(self, tmp_path, monkeypatch):
-        config, state, progress, block = self._project(tmp_path, monkeypatch, test_command="make test")
-        report = _rx_report("tests/test_new.py::test_add — add() raises NotImplementedError")
-        assert await self._run(config, state, progress, block, report, suite=(2, "make: *** [test] Error 1")) is True
-        assert block.red_expected.splitlines()[-1] == "RED_EXPECTED result: cannot check for this runner"
+    async def test_red_expected_cannot_check_for_this_runner(
+        self, tmp_path, monkeypatch
+    ):
+        config, state, progress, block = self._project(
+            tmp_path, monkeypatch, test_command="make test"
+        )
+        report = _rx_report(
+            "tests/test_new.py::test_add — add() raises NotImplementedError"
+        )
+        assert (
+            await self._run(
+                config,
+                state,
+                progress,
+                block,
+                report,
+                suite=(2, "make: *** [test] Error 1"),
+            )
+            is True
+        )
+        assert (
+            block.red_expected.splitlines()[-1]
+            == "RED_EXPECTED result: cannot check for this runner"
+        )
         assert block.red_evidence.startswith(block.red_expected + "\n")
 
     @pytest.mark.asyncio
-    async def test_red_expected_comes_from_the_retry_after_a_failed_red_gate(self, tmp_path, monkeypatch):
+    async def test_red_expected_comes_from_the_retry_after_a_failed_red_gate(
+        self, tmp_path, monkeypatch
+    ):
         config, state, progress, block = self._project(tmp_path, monkeypatch)
-        first = self._writer(config.project_dir, _rx_report("tests/test_new.py::test_old — stale"))
-        retry = self._writer(config.project_dir, _rx_report("tests/test_new.py::test_add — no add()"))
-        with patch("build_pipeline.tdd_engine.run_test_writer", side_effect=[await first(), await retry()]), \
-             patch("build_pipeline.tdd_engine.run_test_suite", side_effect=[(0, "1 passed"), RX_RED]), \
-             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=RX_OK):
+        first = self._writer(
+            config.project_dir, _rx_report("tests/test_new.py::test_old — stale")
+        )
+        retry = self._writer(
+            config.project_dir, _rx_report("tests/test_new.py::test_add — no add()")
+        )
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                side_effect=[await first(), await retry()],
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_test_suite",
+                side_effect=[(0, "1 passed"), RX_RED],
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                return_value=RX_OK,
+            ),
+        ):
             assert await run_block_tdd(block, config, state, progress) is True
-        assert block.red_expected == ("RED_EXPECTED: tests/test_new.py::test_add — no add()\n"
-                                      "RED_EXPECTED result: named tests failed")
+        assert block.red_expected == (
+            "RED_EXPECTED: tests/test_new.py::test_add — no add()\n"
+            "RED_EXPECTED result: named tests failed"
+        )
 
     # --- stop and resume rows S1-S3 ---
 
     @pytest.mark.asyncio
-    async def test_red_expected_resume_s1_stop_before_red_gate_after_the_test_commit(self, tmp_path, monkeypatch):
+    async def test_red_expected_resume_s1_stop_before_red_gate_after_the_test_commit(
+        self, tmp_path, monkeypatch
+    ):
         """S1: stopped after the test writer returned and its tests were
         committed, before red_gate ran. Resume does not run the test writer
         again, so its report is unavailable: `not stated`."""
         report = _rx_report("tests/test_new.py::test_add — no add()")
-        u_config, unstopped = await self._unstopped(tmp_path / "unstopped", monkeypatch, report)
+        u_config, unstopped = await self._unstopped(
+            tmp_path / "unstopped", monkeypatch, report
+        )
 
-        config, state, progress, block = self._project(tmp_path / "stopped", monkeypatch)
-        with patch("build_pipeline.tdd_engine.run_test_writer", side_effect=self._writer(config.project_dir, report)), \
-             patch("build_pipeline.tdd_engine.run_test_suite", side_effect=_RxStop):
+        config, state, progress, block = self._project(
+            tmp_path / "stopped", monkeypatch
+        )
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                side_effect=self._writer(config.project_dir, report),
+            ),
+            patch("build_pipeline.tdd_engine.run_test_suite", side_effect=_RxStop),
+        ):
             with pytest.raises(_RxStop):
                 await run_block_tdd(block, config, state, progress)
         state, block = self._reload(config)
         assert block.test_commit and not block.red_evidence and not block.red_expected
 
-        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=RX_OK) as tw, \
-             patch("build_pipeline.tdd_engine.run_test_suite", return_value=RX_RED), \
-             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=RX_OK):
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                return_value=RX_OK,
+            ) as tw,
+            patch("build_pipeline.tdd_engine.run_test_suite", return_value=RX_RED),
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                return_value=RX_OK,
+            ),
+        ):
             assert await run_block_tdd(block, config, state, progress) is True
         tw.assert_not_awaited()
         assert block.red_expected == "RED_EXPECTED result: not stated"
-        assert unstopped.red_expected.endswith("RED_EXPECTED result: named tests failed")
+        assert unstopped.red_expected.endswith(
+            "RED_EXPECTED result: named tests failed"
+        )
         self._same_apart_from_red_expected(block, config, unstopped, u_config)
 
     @pytest.mark.asyncio
-    async def test_red_expected_resume_s1_stop_before_the_test_commit(self, tmp_path, monkeypatch):
+    async def test_red_expected_resume_s1_stop_before_the_test_commit(
+        self, tmp_path, monkeypatch
+    ):
         """S1: stopped after the test writer returned, before its tests were
         committed. Resume runs the test writer again, so its report is there
         and `red_expected` equals the unstopped run's."""
         report = _rx_report("tests/test_new.py::test_add — no add()")
-        u_config, unstopped = await self._unstopped(tmp_path / "unstopped", monkeypatch, report)
+        u_config, unstopped = await self._unstopped(
+            tmp_path / "unstopped", monkeypatch, report
+        )
 
-        config, state, progress, block = self._project(tmp_path / "stopped", monkeypatch)
-        with patch("build_pipeline.tdd_engine.run_test_writer", side_effect=self._writer(config.project_dir, report)), \
-             patch("build_pipeline.tdd_engine._git_commit_block_phase", side_effect=_RxStop):
+        config, state, progress, block = self._project(
+            tmp_path / "stopped", monkeypatch
+        )
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                side_effect=self._writer(config.project_dir, report),
+            ),
+            patch(
+                "build_pipeline.tdd_engine._git_commit_block_phase", side_effect=_RxStop
+            ),
+        ):
             with pytest.raises(_RxStop):
                 await run_block_tdd(block, config, state, progress)
         state, block = self._reload(config)
         assert not block.test_commit and not block.red_expected
 
-        with patch("build_pipeline.tdd_engine.run_test_writer",
-                   side_effect=self._writer(config.project_dir, report)) as tw, \
-             patch("build_pipeline.tdd_engine.run_test_suite", return_value=RX_RED), \
-             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=RX_OK):
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                side_effect=self._writer(config.project_dir, report),
+            ) as tw,
+            patch("build_pipeline.tdd_engine.run_test_suite", return_value=RX_RED),
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                return_value=RX_OK,
+            ),
+        ):
             assert await run_block_tdd(block, config, state, progress) is True
         assert tw.call_count == 1
         assert block.red_expected == unstopped.red_expected
         self._same_apart_from_red_expected(block, config, unstopped, u_config)
 
     @pytest.mark.asyncio
-    async def test_red_expected_resume_s2_stop_after_red_gate_before_the_checkpoint(self, tmp_path, monkeypatch):
+    async def test_red_expected_resume_s2_stop_after_red_gate_before_the_checkpoint(
+        self, tmp_path, monkeypatch
+    ):
         """S2: stopped after red_gate passed, before the checkpoint that saves
         red_evidence. Neither red_evidence nor red_expected is on disk; resume
         runs the RED gate again with no report: `not stated`."""
         report = _rx_report("tests/test_new.py::test_add — no add()")
-        u_config, unstopped = await self._unstopped(tmp_path / "unstopped", monkeypatch, report)
+        u_config, unstopped = await self._unstopped(
+            tmp_path / "unstopped", monkeypatch, report
+        )
 
-        config, state, progress, block = self._project(tmp_path / "stopped", monkeypatch)
-        with patch("build_pipeline.tdd_engine.run_test_writer", side_effect=self._writer(config.project_dir, report)), \
-             patch("build_pipeline.tdd_engine.run_test_suite", return_value=RX_RED), \
-             patch("build_pipeline.tdd_engine._snapshot_test_files", side_effect=_RxStop):
+        config, state, progress, block = self._project(
+            tmp_path / "stopped", monkeypatch
+        )
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                side_effect=self._writer(config.project_dir, report),
+            ),
+            patch("build_pipeline.tdd_engine.run_test_suite", return_value=RX_RED),
+            patch(
+                "build_pipeline.tdd_engine._snapshot_test_files", side_effect=_RxStop
+            ),
+        ):
             with pytest.raises(_RxStop):
                 await run_block_tdd(block, config, state, progress)
         assert block.red_expected and block.red_evidence, "the gate passed in memory"
         state, block = self._reload(config)
         assert block.test_commit and not block.red_evidence and not block.red_expected
 
-        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=RX_OK) as tw, \
-             patch("build_pipeline.tdd_engine.run_test_suite", return_value=RX_RED), \
-             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=RX_OK):
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                return_value=RX_OK,
+            ) as tw,
+            patch("build_pipeline.tdd_engine.run_test_suite", return_value=RX_RED),
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                return_value=RX_OK,
+            ),
+        ):
             assert await run_block_tdd(block, config, state, progress) is True
         tw.assert_not_awaited()
         assert block.red_expected == "RED_EXPECTED result: not stated"
         self._same_apart_from_red_expected(block, config, unstopped, u_config)
 
     @pytest.mark.asyncio
-    async def test_red_expected_resume_s3_stop_after_the_checkpoint(self, tmp_path, monkeypatch):
+    async def test_red_expected_resume_s3_stop_after_the_checkpoint(
+        self, tmp_path, monkeypatch
+    ):
         """S3: stopped after the checkpoint. The block skips to the
         implementer and keeps `red_expected`."""
         from build_pipeline.gates import red_gate
-        report = _rx_report("tests/test_new.py::test_add — no add()")
-        u_config, unstopped = await self._unstopped(tmp_path / "unstopped", monkeypatch, report)
 
-        config, state, progress, block = self._project(tmp_path / "stopped", monkeypatch)
+        report = _rx_report("tests/test_new.py::test_add — no add()")
+        u_config, unstopped = await self._unstopped(
+            tmp_path / "unstopped", monkeypatch, report
+        )
+
+        config, state, progress, block = self._project(
+            tmp_path / "stopped", monkeypatch
+        )
         with pytest.raises(_RxStop):
             await self._run(config, state, progress, block, report, implementer=_RxStop)
         state, block = self._reload(config)
         assert block.red_expected == unstopped.red_expected
         assert block.red_evidence.startswith(block.red_expected + "\n")
 
-        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=RX_OK) as tw, \
-             patch("build_pipeline.tdd_engine.run_test_suite", return_value=RX_RED), \
-             patch("build_pipeline.tdd_engine.red_gate", wraps=red_gate) as gate, \
-             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=RX_OK):
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                return_value=RX_OK,
+            ) as tw,
+            patch("build_pipeline.tdd_engine.run_test_suite", return_value=RX_RED),
+            patch("build_pipeline.tdd_engine.red_gate", wraps=red_gate) as gate,
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                return_value=RX_OK,
+            ),
+        ):
             assert await run_block_tdd(block, config, state, progress) is True
         tw.assert_not_awaited()
         gate.assert_not_called()

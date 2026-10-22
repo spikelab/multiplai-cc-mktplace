@@ -4,17 +4,36 @@ import hashlib
 import json
 
 import pytest
-from pydantic import ValidationError
-
 from conftest import TESTS
-from review_pipeline.models import Citation, Finding, ReviewState, finding_id, lower_severity
+from pydantic import ValidationError
+from review_pipeline.models import (
+    Citation,
+    Finding,
+    ReviewState,
+    finding_id,
+    lower_severity,
+)
 
-VIEWER_FIXTURE = TESTS.parents[2] / "review-viewer" / "scripts" / "tests" / "fixtures" / "findings.example.json"
+VIEWER_FIXTURE = (
+    TESTS.parents[2]
+    / "review-viewer"
+    / "scripts"
+    / "tests"
+    / "fixtures"
+    / "findings.example.json"
+)
 
 
 def _finding(**overrides) -> dict:
-    data = {"claim": "x", "severity": "HIGH", "file": "a.py", "line_start": 3, "line_end": 3,
-            "failure_scenario": "boom", "citations": [{"path": "a.py", "line_start": 3, "line_end": 3, "quote": "q"}]}
+    data = {
+        "claim": "x",
+        "severity": "HIGH",
+        "file": "a.py",
+        "line_start": 3,
+        "line_end": 3,
+        "failure_scenario": "boom",
+        "citations": [{"path": "a.py", "line_start": 3, "line_end": 3, "quote": "q"}],
+    }
     data.update(overrides)
     return data
 
@@ -70,7 +89,11 @@ def test_citation_line_order_and_minimum():
 
 
 def test_lower_severity():
-    assert [lower_severity(s) for s in ("HIGH", "MEDIUM", "LOW")] == ["MEDIUM", "LOW", "LOW"]
+    assert [lower_severity(s) for s in ("HIGH", "MEDIUM", "LOW")] == [
+        "MEDIUM",
+        "LOW",
+        "LOW",
+    ]
 
 
 def test_state_round_trips_and_orders_stages(canned_state):
@@ -79,7 +102,9 @@ def test_state_round_trips_and_orders_stages(canned_state):
     assert again.past("verify") and again.past("merge") and not again.past("export")
 
 
-def test_a_checkpoint_from_before_the_fix_stages_were_removed_resumes_at_merge(canned_state):
+def test_a_checkpoint_from_before_the_fix_stages_were_removed_resumes_at_merge(
+    canned_state,
+):
     data = canned_state.model_dump(mode="json")
     data.update(stage="check_fix", fixes={}, fix_checks={})
     old = ReviewState.model_validate(data)

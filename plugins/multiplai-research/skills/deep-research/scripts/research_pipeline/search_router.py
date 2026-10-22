@@ -16,7 +16,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Protocol
 from urllib.parse import urlparse
@@ -105,7 +105,7 @@ class RouterConfig:
         cls,
         quota_file: Path | None = None,
         prefer_claude_tools: bool = True,
-    ) -> "RouterConfig":
+    ) -> RouterConfig:
         if prefer_claude_tools:
             keyword = ["claude_agent", "brave", "tavily", "serper", "you"]
             semantic = ["claude_agent", "exa", "brave", "tavily"]
@@ -166,7 +166,7 @@ class QuotaStore:
         """Write pending state to disk if dirty. Safe to call any time."""
         if not self._dirty:
             return
-        self._state.updated_at = datetime.now(timezone.utc).isoformat()
+        self._state.updated_at = datetime.now(UTC).isoformat()
         # Atomic: this is rewritten throughout a run, and `_load` treats a
         # truncated file as "no quota history", which silently re-grants a
         # month's worth of paid API calls.
@@ -204,7 +204,7 @@ class QuotaStore:
     def available(self, provider: SearchProvider) -> bool:
         """Does this provider have remaining quota and no open circuit?"""
         quota = self.get_or_create(provider)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         self._apply_resets(quota, now)
 
         # Circuit breaker check
@@ -217,11 +217,17 @@ class QuotaStore:
             quota.consecutive_failures = 0
 
         # Monthly quota
-        if quota.monthly_limit is not None and quota.monthly_count >= quota.monthly_limit:
+        if (
+            quota.monthly_limit is not None
+            and quota.monthly_count >= quota.monthly_limit
+        ):
             return False
 
         # One-time quota
-        if quota.one_time_limit is not None and quota.total_count >= quota.one_time_limit:
+        if (
+            quota.one_time_limit is not None
+            and quota.total_count >= quota.one_time_limit
+        ):
             return False
 
         return True
@@ -231,16 +237,20 @@ class QuotaStore:
         quota = self.get_or_create(provider)
         parts = []
         if quota.monthly_limit is not None:
-            parts.append(f"{quota.monthly_limit - quota.monthly_count}/{quota.monthly_limit}/mo")
+            parts.append(
+                f"{quota.monthly_limit - quota.monthly_count}/{quota.monthly_limit}/mo"
+            )
         if quota.one_time_limit is not None:
-            parts.append(f"{quota.one_time_limit - quota.total_count}/{quota.one_time_limit} total")
+            parts.append(
+                f"{quota.one_time_limit - quota.total_count}/{quota.one_time_limit} total"
+            )
         if quota.circuit_open_until:
             parts.append(f"circuit open until {quota.circuit_open_until}")
         return ", ".join(parts) if parts else "no limit"
 
     def record_success(self, provider: SearchProvider) -> None:
         quota = self.get_or_create(provider)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         self._apply_resets(quota, now)
         quota.daily_count += 1
         quota.monthly_count += 1
@@ -255,17 +265,21 @@ class QuotaStore:
             if quota.circuit_open_until or quota.consecutive_failures > 0:
                 log.info(
                     "Resetting circuit breaker for %s (was: %d failures, open_until=%s)",
-                    quota.api_name, quota.consecutive_failures, quota.circuit_open_until,
+                    quota.api_name,
+                    quota.consecutive_failures,
+                    quota.circuit_open_until,
                 )
                 quota.circuit_open_until = None
                 quota.consecutive_failures = 0
         self._save(force=True)
 
-    def record_failure(self, provider: SearchProvider, threshold: int, cooldown_minutes: int) -> None:
+    def record_failure(
+        self, provider: SearchProvider, threshold: int, cooldown_minutes: int
+    ) -> None:
         quota = self.get_or_create(provider)
         quota.consecutive_failures += 1
         if quota.consecutive_failures >= threshold:
-            cooldown_until = datetime.now(timezone.utc) + timedelta(minutes=cooldown_minutes)
+            cooldown_until = datetime.now(UTC) + timedelta(minutes=cooldown_minutes)
             quota.circuit_open_until = cooldown_until.isoformat()
             log.warning(
                 "Circuit breaker opened for %s until %s (%d consecutive failures)",
@@ -311,9 +325,15 @@ class SearchRouter:
         provider would incur cost on the next call.
         """
         quota = self.quotas.get_or_create(provider)
-        if provider.monthly_limit is not None and quota.monthly_count >= provider.monthly_limit:
+        if (
+            provider.monthly_limit is not None
+            and quota.monthly_count >= provider.monthly_limit
+        ):
             return True
-        if provider.one_time_limit is not None and quota.total_count >= provider.one_time_limit:
+        if (
+            provider.one_time_limit is not None
+            and quota.total_count >= provider.one_time_limit
+        ):
             return True
         return False
 
@@ -349,14 +369,20 @@ class SearchRouter:
                 continue
 
             # Gate providers that have exceeded their free tier.
-            if name not in UNLIMITED_FREE_PROVIDERS and self._free_tier_exhausted(provider):
+            if name not in UNLIMITED_FREE_PROVIDERS and self._free_tier_exhausted(
+                provider
+            ):
                 if name in FREE_TIER_ONLY_PROVIDERS:
                     # Never use beyond free tier (too expensive vs Serper)
-                    attempted[name] = f"free tier exhausted, capped ({self.quotas.remaining(provider)})"
+                    attempted[name] = (
+                        f"free tier exhausted, capped ({self.quotas.remaining(provider)})"
+                    )
                     continue
                 if not self.allow_paid_fallback:
                     # Serper/You: allowed with --allow-paid-fallback
-                    attempted[name] = f"free tier exhausted ({self.quotas.remaining(provider)})"
+                    attempted[name] = (
+                        f"free tier exhausted ({self.quotas.remaining(provider)})"
+                    )
                     continue
 
             try:
@@ -374,7 +400,7 @@ class SearchRouter:
                 # this clean empty below (a genuine "no results" answer).
                 got_empty_success = True
                 attempted[name] = "empty result"
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 log.warning("Provider %s timed out for query: %s", name, query[:60])
                 self.quotas.record_failure(
                     provider,
@@ -390,7 +416,7 @@ class SearchRouter:
                         self.config.circuit_cooldown_minutes,
                     )
                 attempted[name] = str(e)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 log.exception("Unexpected error from provider %s", name)
                 self.quotas.record_failure(
                     provider,
@@ -430,9 +456,7 @@ class SearchRouter:
 
         for i in range(0, len(queries), chunk_size):
             chunk = queries[i : i + chunk_size]
-            tasks = [
-                self._safe_single_search(q, max_results, strategy) for q in chunk
-            ]
+            tasks = [self._safe_single_search(q, max_results, strategy) for q in chunk]
             results_per_query = await asyncio.gather(*tasks, return_exceptions=True)
 
             failures = 0
@@ -450,7 +474,10 @@ class SearchRouter:
             total_failures += failures
             log.info(
                 "batch_search chunk %d-%d: %d queries, %d failures",
-                i, i + len(chunk), len(chunk), failures,
+                i,
+                i + len(chunk),
+                len(chunk),
+                failures,
             )
 
         log.info(
@@ -505,7 +532,9 @@ class SearchRouter:
             domain = urlparse(url).netloc
         except Exception:
             domain = ""
-        search_query = f"site:{domain} {title or query}" if domain else f"{title or query}"
+        search_query = (
+            f"site:{domain} {title or query}" if domain else f"{title or query}"
+        )
 
         try:
             results = await asyncio.wait_for(
@@ -522,7 +551,7 @@ class SearchRouter:
                 MAX_TAVILY_FALLBACKS,
             )
             return results if results else None
-        except asyncio.TimeoutError:
+        except TimeoutError:
             log.warning("Tavily fallback timed out for %s", url[:60])
             self._tavily_fallback_count += 1
             return None
@@ -548,7 +577,8 @@ class SearchRouter:
             except Exception as e:  # noqa: BLE001
                 log.warning(
                     "Error closing provider %s: %s",
-                    getattr(provider, "name", "?"), e,
+                    getattr(provider, "name", "?"),
+                    e,
                 )
         self.quotas.flush()
 
@@ -606,7 +636,7 @@ Return up to {max_results} results. Return ONLY the JSON array in a fenced code 
                 max_attempts=1,
                 label=f"search:{query[:50]}",
             )
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             raise ProviderError(self.name, str(e), transient=True) from e
 
         try:
@@ -658,7 +688,7 @@ class TavilyProvider:
             response = await self._client.search(
                 query=query, max_results=max_results, search_depth="basic"
             )
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             raise ProviderError(self.name, str(e), transient=True) from e
 
         results = []
@@ -711,7 +741,7 @@ class ExaProvider:
                 type="auto",
                 highlights={"num_sentences": 3, "highlights_per_url": 1},
             )
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             raise ProviderError(self.name, str(e), transient=True) from e
 
         results = []
@@ -762,7 +792,7 @@ class BraveProvider:
                 params={"q": query, "count": min(max_results, 20)},
             )
             response.raise_for_status()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             raise ProviderError(self.name, str(e), transient=True) from e
 
         data = response.json()
@@ -807,7 +837,7 @@ class SerperProvider:
                 "/search", json={"q": query, "num": max_results}
             )
             response.raise_for_status()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             raise ProviderError(self.name, str(e), transient=True) from e
 
         data = response.json()
@@ -853,7 +883,7 @@ class YouProvider:
                 "/search", params={"query": query, "num_web_results": max_results}
             )
             response.raise_for_status()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             raise ProviderError(self.name, str(e), transient=True) from e
 
         data = response.json()
@@ -863,7 +893,8 @@ class YouProvider:
                 SearchResult(
                     url=item.get("url", ""),
                     title=item.get("title", ""),
-                    snippet=item.get("description", "") or item.get("snippets", [""])[0],
+                    snippet=item.get("description", "")
+                    or item.get("snippets", [""])[0],
                     source_api=self.name,
                 )
             )
@@ -911,7 +942,9 @@ def build_default_router(
     # Claude Agent — primary when preferred (no API key needed)
     if prefer_claude_tools:
         try:
-            providers.append(ClaudeAgentSearchProvider(model=model, effort=effort, thinking=thinking))  # type: ignore[arg-type]
+            providers.append(
+                ClaudeAgentSearchProvider(model=model, effort=effort, thinking=thinking)
+            )  # type: ignore[arg-type]
             log.info("Claude Agent search provider enabled (default)")
         except Exception as e:  # noqa: BLE001
             log.warning("Could not init ClaudeAgentSearchProvider: %s", e)
@@ -937,7 +970,5 @@ def build_default_router(
             "  - Or set at least one of: TAVILY_API_KEY, EXA_API_KEY, SERPER_API_KEY, YOU_API_KEY"
         )
 
-    config = RouterConfig.default(
-        quota_file, prefer_claude_tools=prefer_claude_tools
-    )
+    config = RouterConfig.default(quota_file, prefer_claude_tools=prefer_claude_tools)
     return SearchRouter(providers, config, allow_paid_fallback=allow_paid_fallback)

@@ -19,6 +19,7 @@ The ring arrives when the move ends and holds until the card leaves.
 
 Not stages/proof.py, which tiles a rendered reel's frames for checking it.
 """
+
 from __future__ import annotations
 
 import base64
@@ -32,21 +33,27 @@ from stages.capture import domain, png_size
 
 STYLES_DIR = Path(__file__).resolve().parents[2] / "references" / "styles"
 MOTIONS = ("scroll", "zoom", "none")
-CARD_SHARE = 0.84            # the card fits in this share of the region's width and height
-CARD_MAX_W_SHARE = 0.72      # and is never wider than this share of a landscape region
-WINDOW_ASPECT = 10 / 16      # the window's height to width, the default capture's 1280x800
-BAR_SHARE = 0.045            # the top bar's height, as a share of the card width
-ZOOM_FILL = 0.6              # zoom until the highlight box spans this share of the window width
-ZOOM_MAX = 2.5               # never zoom further than this over the starting scale
-START_S = 0.2                # the card starts arriving this far in (motion.md: never at 0)
-RING_S = 0.4                 # the ring's swipe in
-MIN_READ_S = 2.0             # the highlight should stay this long after the move ends
-RING_PX = 4                  # the ring's width on screen once the move ends, in pixels
-RING_PAD_PX = 8              # space between the box and the ring on screen
-DEFAULTS = {                 # used when the style file leaves a value out
-    "accent": "#3DDC97", "surface": "#111A2E", "text": "#FFFFFF", "muted": "#9AA7BD",
+CARD_SHARE = 0.84  # the card fits in this share of the region's width and height
+CARD_MAX_W_SHARE = 0.72  # and is never wider than this share of a landscape region
+WINDOW_ASPECT = 10 / 16  # the window's height to width, the default capture's 1280x800
+BAR_SHARE = 0.045  # the top bar's height, as a share of the card width
+ZOOM_FILL = 0.6  # zoom until the highlight box spans this share of the window width
+ZOOM_MAX = 2.5  # never zoom further than this over the starting scale
+START_S = 0.2  # the card starts arriving this far in (motion.md: never at 0)
+RING_S = 0.4  # the ring's swipe in
+MIN_READ_S = 2.0  # the highlight should stay this long after the move ends
+RING_PX = 4  # the ring's width on screen once the move ends, in pixels
+RING_PAD_PX = 8  # space between the box and the ring on screen
+DEFAULTS = {  # used when the style file leaves a value out
+    "accent": "#3DDC97",
+    "surface": "#111A2E",
+    "text": "#FFFFFF",
+    "muted": "#9AA7BD",
     "font": "Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif",
-    "radius_px": 18.0, "easing": "cubic-bezier(.2,.8,.2,1)", "enter_s": 0.5, "exit_s": 0.3,
+    "radius_px": 18.0,
+    "easing": "cubic-bezier(.2,.8,.2,1)",
+    "enter_s": 0.5,
+    "exit_s": 0.3,
 }
 
 
@@ -71,10 +78,10 @@ def _frontmatter(text: str) -> dict[str, dict[str, str]]:
     """The two-level `section: {key: value}` mappings of a style file's
     frontmatter, values as strings. Enough for styles/README.md's format;
     flow mappings (`weights: {…}`) and lists are skipped."""
-    m = re.match(r"---\s*\n(.*?)\n---", text, re.S)
+    m = re.match(r"---\s*\n(.*?)\n---", text, re.DOTALL)
     out: dict[str, dict[str, str]] = {}
     section = None
-    for line in (m.group(1).splitlines() if m else []):
+    for line in m.group(1).splitlines() if m else []:
         kv = re.match(r"^(\s*)([\w-]+)\s*:\s*(.*)$", line)
         if not kv:
             continue
@@ -102,8 +109,10 @@ def load_style(name: str) -> Style:
         path = STYLES_DIR / f"{name}.md"
     if not path.is_file():
         shipped = sorted(p.stem for p in STYLES_DIR.glob("*.md") if p.stem != "README")
-        raise ProofCardError(f"no style {name!r}: give one of {', '.join(shipped)} or the path "
-                             "to a style file (.md)")
+        raise ProofCardError(
+            f"no style {name!r}: give one of {', '.join(shipped)} or the path "
+            "to a style file (.md)"
+        )
     fm = _frontmatter(path.read_text(encoding="utf-8"))
     pal, fonts = fm.get("palette", {}), fm.get("fonts", {})
     shape, motion = fm.get("shape", {}), fm.get("motion", {})
@@ -114,12 +123,17 @@ def load_style(name: str) -> Style:
         except (KeyError, ValueError):
             return float(DEFAULTS[key])
 
-    return Style(accent=pal.get("accent", DEFAULTS["accent"]),
-                 surface=pal.get("surface", DEFAULTS["surface"]),
-                 text=pal.get("text", DEFAULTS["text"]), muted=pal.get("muted", DEFAULTS["muted"]),
-                 font=fonts.get("body", DEFAULTS["font"]),
-                 radius_px=num(shape, "radius_px"), easing=motion.get("easing", DEFAULTS["easing"]),
-                 enter_s=num(motion, "enter_s"), exit_s=num(motion, "exit_s"))
+    return Style(
+        accent=pal.get("accent", DEFAULTS["accent"]),
+        surface=pal.get("surface", DEFAULTS["surface"]),
+        text=pal.get("text", DEFAULTS["text"]),
+        muted=pal.get("muted", DEFAULTS["muted"]),
+        font=fonts.get("body", DEFAULTS["font"]),
+        radius_px=num(shape, "radius_px"),
+        easing=motion.get("easing", DEFAULTS["easing"]),
+        enter_s=num(motion, "enter_s"),
+        exit_s=num(motion, "exit_s"),
+    )
 
 
 def _rgba(hex_colour: str, alpha: float) -> str:
@@ -137,7 +151,9 @@ class Layout:
     card_w: float
     bar_h: float
     win_h: float
-    start: tuple[float, float, float]     # translate x, translate y, scale of the page image
+    start: tuple[
+        float, float, float
+    ]  # translate x, translate y, scale of the page image
     end: tuple[float, float, float]
 
 
@@ -145,8 +161,9 @@ def _clamp(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
 
 
-def _centre_on(box: dict, s: float, img_w: int, img_h: int, win_w: float,
-               win_h: float) -> tuple[float, float, float]:
+def _centre_on(
+    box: dict, s: float, img_w: int, img_h: int, win_w: float, win_h: float
+) -> tuple[float, float, float]:
     """The translate that puts the box's centre in the window's centre at scale s,
     kept so the image still covers the window where it is large enough to."""
     cx, cy = box["x"] + box["w"] / 2, box["y"] + box["h"] / 2
@@ -155,8 +172,9 @@ def _centre_on(box: dict, s: float, img_w: int, img_h: int, win_w: float,
     return tx, ty, s
 
 
-def layout(img_w: int, img_h: int, box: dict | None, motion: str, width: int,
-           height: int) -> Layout:
+def layout(
+    img_w: int, img_h: int, box: dict | None, motion: str, width: int, height: int
+) -> Layout:
     card_w = min(width * CARD_SHARE, height * CARD_SHARE / (WINDOW_ASPECT + BAR_SHARE))
     if width > height:
         card_w = min(card_w, width * CARD_MAX_W_SHARE)
@@ -176,7 +194,9 @@ def layout(img_w: int, img_h: int, box: dict | None, motion: str, width: int,
             start, end = in_view, _centre_on(box, s0 * z, img_w, img_h, card_w, win_h)
         else:
             start = end = in_view
-    return Layout((width - card_w) / 2, (height - card_h) / 2, card_w, bar_h, win_h, start, end)
+    return Layout(
+        (width - card_w) / 2, (height - card_h) / 2, card_w, bar_h, win_h, start, end
+    )
 
 
 def timing(duration: float, style: Style) -> tuple[float, float, float]:
@@ -191,8 +211,14 @@ def _transform(t: tuple[float, float, float]) -> str:
     return f"translate({t[0]:.2f}px,{t[1]:.2f}px) scale({t[2]:.5f})"
 
 
-def build(shot_dir: Path, motion: str, style: Style, width: int = 1920, height: int = 1080,
-          duration: float = 6.0) -> tuple[str, list[str]]:
+def build(
+    shot_dir: Path,
+    motion: str,
+    style: Style,
+    width: int = 1920,
+    height: int = 1080,
+    duration: float = 6.0,
+) -> tuple[str, list[str]]:
     """The page, and warnings about timing the session should pass on."""
     if motion not in MOTIONS:
         raise ProofCardError(f"motion {motion!r}: use one of {', '.join(MOTIONS)}")
@@ -201,21 +227,26 @@ def build(shot_dir: Path, motion: str, style: Style, width: int = 1920, height: 
         png = (shot_dir / "shot.png").read_bytes()
         meta = json.loads((shot_dir / "shot.json").read_text(encoding="utf-8"))
     except FileNotFoundError as e:
-        raise ProofCardError(f"{e.filename} is missing; make the shot with `pipeline.py capture` "
-                             "first") from None
+        raise ProofCardError(
+            f"{e.filename} is missing; make the shot with `pipeline.py capture` first"
+        ) from None
     img_w, img_h = png_size(png)
     box = meta.get("highlight")
     if box is None and motion != "none":
-        raise ProofCardError(f"--motion {motion} moves to the highlighted line, and {shot_dir}/shot.json "
-                             "has none. Capture again with --highlight (or --box), or use --motion none.")
+        raise ProofCardError(
+            f"--motion {motion} moves to the highlighted line, and {shot_dir}/shot.json "
+            "has none. Capture again with --highlight (or --box), or use --motion none."
+        )
     lay = layout(img_w, img_h, box, motion, width, height)
     move_from, move_to, leave = timing(duration, style)
     warnings = []
     held = leave - move_to
     if box is not None and held < MIN_READ_S:
-        warnings.append(f"the highlight holds for {held:.1f} s after the move ends; {MIN_READ_S:.0f} s or "
-                        f"more reads well, so make the overlay at least "
-                        f"{2 * (MIN_READ_S + style.exit_s):.1f} s long")
+        warnings.append(
+            f"the highlight holds for {held:.1f} s after the move ends; {MIN_READ_S:.0f} s or "
+            f"more reads well, so make the overlay at least "
+            f"{2 * (MIN_READ_S + style.exit_s):.1f} s long"
+        )
     ring_at = move_to if motion != "none" else move_from
     s_end = lay.end[2]
     ring_w, pad = RING_PX / s_end, RING_PAD_PX / s_end
@@ -225,11 +256,16 @@ def build(shot_dir: Path, motion: str, style: Style, width: int = 1920, height: 
     data = base64.b64encode(png).decode("ascii")
     ring = ""
     if box is not None:
-        ring = (f'<div class="hl" style="left:{box["x"] - pad - ring_w:.2f}px;top:{box["y"] - pad - ring_w:.2f}px;'
-                f'width:{box["w"] + 2 * (pad + ring_w):.2f}px;height:{box["h"] + 2 * (pad + ring_w):.2f}px;'
-                f'border-width:{ring_w:.2f}px;border-radius:{ring_w * 2:.2f}px"></div>')
-    move = (f"animation:move {move_to - move_from:.3f}s ease-in-out {move_from:.3f}s both;"
-            if lay.start != lay.end else "")
+        ring = (
+            f'<div class="hl" style="left:{box["x"] - pad - ring_w:.2f}px;top:{box["y"] - pad - ring_w:.2f}px;'
+            f"width:{box['w'] + 2 * (pad + ring_w):.2f}px;height:{box['h'] + 2 * (pad + ring_w):.2f}px;"
+            f'border-width:{ring_w:.2f}px;border-radius:{ring_w * 2:.2f}px"></div>'
+        )
+    move = (
+        f"animation:move {move_to - move_from:.3f}s ease-in-out {move_from:.3f}s both;"
+        if lay.start != lay.end
+        else ""
+    )
     font_px = round(lay.bar_h * 0.42)
     page = f"""<!doctype html><html><head><meta charset="utf-8"><style>
 html,body{{margin:0;width:{width}px;height:{height}px;overflow:hidden}}

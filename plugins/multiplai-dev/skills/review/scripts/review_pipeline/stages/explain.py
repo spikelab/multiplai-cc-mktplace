@@ -25,10 +25,24 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from code_facts import (Citation, ExploreOutput, Fact, FilePurpose, Scope, citation_keeper, explore_unit, gate_answers,
-                        partition, reask_units, run_tasks, unit_key, ws_path)
+from code_facts import (
+    Citation,
+    ExploreOutput,
+    Fact,
+    FilePurpose,
+    Scope,
+    citation_keeper,
+    explore_unit,
+    gate_answers,
+    partition,
+    reask_units,
+    run_tasks,
+    unit_key,
+    ws_path,
+)
 
-from .. import sdk, target as target_mod
+from .. import sdk
+from .. import target as target_mod
 from ..facts import resolver, scope_for, write_facts_file
 from ..models import ExplainedFacts, ReviewState, TargetInfo
 from . import RunContext
@@ -39,8 +53,10 @@ UNIT_LINES = 6000
 SMALL_FILE_LINES = 30
 BASE_DIR = "base-tree"
 
-PATH_RULE = ("- `path` is the path exactly as listed above, relative to the repository root. For lines before "
-             "the change too: cite the listed path, not the copy you read them from.")
+PATH_RULE = (
+    "- `path` is the path exactly as listed above, relative to the repository root. For lines before "
+    "the change too: cite the listed path, not the copy you read them from."
+)
 
 
 def base_dir(ctx: RunContext) -> Path:
@@ -48,14 +64,20 @@ def base_dir(ctx: RunContext) -> Path:
     return ctx.snapshot.parent / BASE_DIR
 
 
-def _place(path: str, target: TargetInfo, snapshot: Path, base: Path) -> tuple[str, bool]:
+def _place(
+    path: str, target: TargetInfo, snapshot: Path, base: Path
+) -> tuple[str, bool]:
     """(the repo-relative path, whether the agent wrote it under the base copy)."""
     p = path.strip().strip("`")
-    for root, is_base in ((base, True), (snapshot, False), (Path(target.repo_path), False)):
+    for root, is_base in (
+        (base, True),
+        (snapshot, False),
+        (Path(target.repo_path), False),
+    ):
         for r in (str(root.resolve()), str(root)):
             r = r.rstrip("/") + "/"
             if p.startswith(r):
-                return p[len(r):].lstrip("/"), is_base
+                return p[len(r) :].lstrip("/"), is_base
     return ws_path(p, snapshot), False
 
 
@@ -85,7 +107,9 @@ def uncovered(scope: Scope, facts: list[Fact]) -> list[str]:
 
 async def _call(prompt: str, schema, *, budget_label: str = "", **kwargs):
     """Review's call function under one budget label, `explain`, whatever code_facts names the task."""
-    return await sdk.agent_call_structured(prompt, schema, budget_label="explain", **kwargs)
+    return await sdk.agent_call_structured(
+        prompt, schema, budget_label="explain", **kwargs
+    )
 
 
 def _explained(answers: dict[str, dict], keep, scope: Scope) -> ExplainedFacts:
@@ -93,14 +117,24 @@ def _explained(answers: dict[str, dict], keep, scope: Scope) -> ExplainedFacts:
     by_id = {f.id: f for f in g.facts}
     files = []
     for path, purpose in g.purposes.items():
-        cite = next((f.citations[0] for f in g.facts if f.source.endswith("/file") and f.citations[0].path == path),
-                    None)
+        cite = next(
+            (
+                f.citations[0]
+                for f in g.facts
+                if f.source.endswith("/file") and f.citations[0].path == path
+            ),
+            None,
+        )
         files.append(FilePurpose(path=path, purpose=purpose, citation=cite))
     return ExplainedFacts(
-        facts=g.facts, files=files,
-        interfaces=[by_id[i] for i in g.interfaces], gotchas=[by_id[i] for i in g.gotchas],
-        conventions=[by_id[i] for i in g.conventions], terms=g.terms,
-        uncovered=uncovered(scope, g.facts), dropped=g.dropped,
+        facts=g.facts,
+        files=files,
+        interfaces=[by_id[i] for i in g.interfaces],
+        gotchas=[by_id[i] for i in g.gotchas],
+        conventions=[by_id[i] for i in g.conventions],
+        terms=g.terms,
+        uncovered=uncovered(scope, g.facts),
+        dropped=g.dropped,
     )
 
 
@@ -117,32 +151,56 @@ async def run_explain(state: ReviewState, ctx: RunContext) -> ReviewState:
             target_mod.snapshot_base(t, base, base_paths)
         except target_mod.TargetError as e:
             # The head side is still explained; the lines the change removed are left out, and said so.
-            base_error = f"explain base: {e}; the lines the change removed were not explained"
+            base_error = (
+                f"explain base: {e}; the lines the change removed were not explained"
+            )
             scope = Scope(spans=[s for s in scope.spans if s.side != "base"])
     units = partition(scope, UNIT_LINES)
     name = t.label or t.slug
 
     def prompt_for(unit, missing: list[str] | None = None) -> str:
         has_base = any(s.side == "base" for s in unit.spans)
-        return explore_unit(name, unit.spans, ExploreOutput, "standard", missing, path_rule=PATH_RULE,
-                            base_dir=str(base) if has_base else "")
+        return explore_unit(
+            name,
+            unit.spans,
+            ExploreOutput,
+            "standard",
+            missing,
+            path_rule=PATH_RULE,
+            base_dir=str(base) if has_base else "",
+        )
 
     ask = dict(
-        call_kwargs=dict(allowed_tools=sdk.READ_ONLY_TOOLS, model=cfg.finder_model, effort=cfg.effort,
-                         max_turns=cfg.max_turns, cwd=str(ctx.snapshot)),
-        errors=[], recoverable=(sdk.AgentCallError,), fatal=(sdk.RepoTrustError, sdk.UsageLimitError),
+        call_kwargs=dict(
+            allowed_tools=sdk.READ_ONLY_TOOLS,
+            model=cfg.finder_model,
+            effort=cfg.effort,
+            max_turns=cfg.max_turns,
+            cwd=str(ctx.snapshot),
+        ),
+        errors=[],
+        recoverable=(sdk.AgentCallError,),
+        fatal=(sdk.RepoTrustError, sdk.UsageLimitError),
         progress=ctx.progress.line if ctx.progress else None,
     )
     keep = keeper(t, ctx)
     try:
         tasks = [(unit_key(u), prompt_for(u)) for u in units]
-        await run_tasks(tasks, _call, state.explain_answers, concurrency=cfg.concurrency, **ask)
+        await run_tasks(
+            tasks, _call, state.explain_answers, concurrency=cfg.concurrency, **ask
+        )
         explained = _explained(state.explain_answers, keep, scope)
-        retry = reask_units(units, set(explained.uncovered), state.explain_answers, prompt_for)
+        retry = reask_units(
+            units, set(explained.uncovered), state.explain_answers, prompt_for
+        )
         if retry:
             if ctx.progress:
-                ctx.progress.line(f"  explain: re-asking {len(retry)} unit(s) for files with no fact")
-            await run_tasks(retry, _call, state.explain_answers, concurrency=cfg.concurrency, **ask)
+                ctx.progress.line(
+                    f"  explain: re-asking {len(retry)} unit(s) for files with no fact"
+                )
+            await run_tasks(
+                retry, _call, state.explain_answers, concurrency=cfg.concurrency, **ask
+            )
             explained = _explained(state.explain_answers, keep, scope)
     finally:
         shutil.rmtree(base, ignore_errors=True)
@@ -156,7 +214,12 @@ async def run_explain(state: ReviewState, ctx: RunContext) -> ReviewState:
     if base_error:
         state.errors.append(base_error)
     state.errors.extend(f"explain {k}: {err}" for k, err in failed)
-    ctx.counts = {"units": len(units), "facts": len(explained.facts), "dropped": len(explained.dropped),
-                  "uncovered_files": len(explained.uncovered), "failed_units": len(failed)}
+    ctx.counts = {
+        "units": len(units),
+        "facts": len(explained.facts),
+        "dropped": len(explained.dropped),
+        "uncovered_files": len(explained.uncovered),
+        "failed_units": len(failed),
+    }
     state.stage = "explain"
     return state

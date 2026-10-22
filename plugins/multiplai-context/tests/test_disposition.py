@@ -28,7 +28,7 @@ pipeline whose real job is the diary; it may never cost a session its entry.
 import asyncio
 import json
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -39,8 +39,7 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from lib import extraction
-from lib import fleet
+from lib import extraction, fleet
 from lib import session_registry as sr
 from test_fleet import NOW, make_checkpoint, make_session
 
@@ -61,6 +60,7 @@ def _response(units_xml="<no-units/>", disposition=None):
 
 def _client(content):
     from multiplai_core.model_client import ModelResponse
+
     c = AsyncMock()
     c.query = AsyncMock(return_value=ModelResponse(content=content))
     return c
@@ -69,6 +69,7 @@ def _client(content):
 # ---------------------------------------------------------------------------
 # Criterion 8 — the classifier's output contract
 # ---------------------------------------------------------------------------
+
 
 class TestPromptContract:
     """The model is asked for this and nothing looser."""
@@ -94,18 +95,19 @@ class TestPromptContract:
 
 
 class TestParseDisposition:
-
     @pytest.mark.parametrize("state", ["active", "parked", "done"])
     def test_each_state_round_trips(self, state):
         raw = _response(disposition=(state, "because"))
 
         assert extraction.parse_disposition(raw) == {
-            "state": state, "reason": "because",
+            "state": state,
+            "reason": "because",
         }
 
     def test_an_absent_block_is_active(self):
         assert extraction.parse_disposition("<no-units/>") == {
-            "state": "active", "reason": "",
+            "state": "active",
+            "reason": "",
         }
 
     def test_an_unknown_state_is_active(self):
@@ -145,9 +147,13 @@ class TestExtractionPath:
     """Criterion 8, end to end through the LLM call."""
 
     def _extract(self, content):
-        units, disposition, _ = asyncio.run(extraction.extract_session_signals(
-            "t", valid_targets=[], client=_client(content),
-        ))
+        units, disposition, _ = asyncio.run(
+            extraction.extract_session_signals(
+                "t",
+                valid_targets=[],
+                client=_client(content),
+            )
+        )
         return units, disposition
 
     def test_a_session_ending_in_were_done_is_done(self):
@@ -188,17 +194,25 @@ class TestExtractionPath:
 
     def test_extract_units_still_returns_a_bare_list(self):
         """The old entry point has many callers; its signature is unchanged."""
-        result = asyncio.run(extraction.extract_units(
-            "t", valid_targets=[], client=_client(_response(disposition=("done", "x"))),
-        ))
+        result = asyncio.run(
+            extraction.extract_units(
+                "t",
+                valid_targets=[],
+                client=_client(_response(disposition=("done", "x"))),
+            )
+        )
 
         assert isinstance(result, list)
 
     def test_it_costs_no_extra_model_call(self):
         client = _client(_response(disposition=("done", "x")))
-        asyncio.run(extraction.extract_session_signals(
-            "t", valid_targets=[], client=client,
-        ))
+        asyncio.run(
+            extraction.extract_session_signals(
+                "t",
+                valid_targets=[],
+                client=client,
+            )
+        )
 
         client.query.assert_awaited_once()
 
@@ -207,22 +221,26 @@ class TestExtractionPath:
 # Criterion 9 — a NEW registry key, not an overload of `status`
 # ---------------------------------------------------------------------------
 
+
 def _entry(data_dir, sid, kind="end", ago=timedelta(days=1), **extra):
     rdir = data_dir / "sessions"
     rdir.mkdir(parents=True, exist_ok=True)
-    ts = (datetime.now(timezone.utc) - ago).isoformat()
+    ts = (datetime.now(UTC) - ago).isoformat()
     path = rdir / f"{sid}.json"
-    path.write_text(json.dumps({
-        "session_id": sid,
-        "cwd": "/work",
-        "last_event": {"ts": ts, "kind": kind},
-        **extra,
-    }))
+    path.write_text(
+        json.dumps(
+            {
+                "session_id": sid,
+                "cwd": "/work",
+                "last_event": {"ts": ts, "kind": kind},
+                **extra,
+            }
+        )
+    )
     return path
 
 
 class TestRecordDisposition:
-
     def test_it_writes_under_its_own_key(self, tmp_path):
         path = _entry(tmp_path, "s1")
 
@@ -255,7 +273,8 @@ class TestRecordDisposition:
 
         source = (SCRIPTS_DIR / "lib" / "session_registry.py").read_text()
         fn = next(
-            n for n in ast.walk(ast.parse(source))
+            n
+            for n in ast.walk(ast.parse(source))
             if isinstance(n, ast.FunctionDef) and n.name == "record_disposition"
         )
         body = fn.body[1:] if ast.get_docstring(fn) else fn.body
@@ -321,7 +340,6 @@ class TestRecordDisposition:
 
 
 class TestEntryDisposition:
-
     def test_absent_is_active(self):
         assert sr.entry_disposition({}) == "active"
 
@@ -356,13 +374,12 @@ class TestResumeClearsDisposition:
     a resumed done session was invisible entirely)."""
 
     def _resume(self, data_dir, sid):
-        return sr.record_event(
-            data_dir, {"session_id": sid, "cwd": "/work"}, "start"
-        )
+        return sr.record_event(data_dir, {"session_id": sid, "cwd": "/work"}, "start")
 
     def test_a_start_event_clears_the_stale_label(self, tmp_path):
-        path = _entry(tmp_path, "s1",
-                      disposition={"state": "parked", "reason": "tomorrow"})
+        path = _entry(
+            tmp_path, "s1", disposition={"state": "parked", "reason": "tomorrow"}
+        )
 
         assert self._resume(tmp_path, "s1") is True
         assert "disposition" not in json.loads(path.read_text())
@@ -377,7 +394,7 @@ class TestResumeClearsDisposition:
             assert json.loads(path.read_text())["disposition"]["state"] == "parked"
 
     def test_a_resumed_parked_session_groups_by_live_status(self, tmp_path):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         make_session(tmp_path, "p", kind="end", now=now)
         _add_disposition(tmp_path, "p", "parked", "tomorrow")
 
@@ -391,7 +408,7 @@ class TestResumeClearsDisposition:
         assert "## Parked" not in fleet.render_agents_md(f, now)
 
     def test_a_resumed_done_session_is_visible_again(self, tmp_path):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         make_session(tmp_path, "d", kind="end", now=now)
         _add_disposition(tmp_path, "d", "done", "shipped")
 
@@ -407,11 +424,16 @@ class TestResumeClearsDisposition:
 # Criterion 10 — parked survives GC
 # ---------------------------------------------------------------------------
 
-class TestGcExemption:
 
+class TestGcExemption:
     def test_a_parked_entry_survives_past_the_ended_window(self, tmp_path):
-        _entry(tmp_path, "parked", kind="end", ago=timedelta(days=90),
-               disposition={"state": "parked", "reason": "next quarter"})
+        _entry(
+            tmp_path,
+            "parked",
+            kind="end",
+            ago=timedelta(days=90),
+            disposition={"state": "parked", "reason": "next quarter"},
+        )
 
         assert sr.gc_stale(tmp_path) == 0
         assert (tmp_path / "sessions" / "parked.json").exists()
@@ -419,14 +441,24 @@ class TestGcExemption:
     def test_a_parked_entry_survives_past_the_live_window_too(self, tmp_path):
         """`GC_LIVE_AFTER_DAYS` is 30 — a parked tab that was never formally
         ended is exactly the case this exists for."""
-        _entry(tmp_path, "parked", kind="stop", ago=timedelta(days=400),
-               disposition={"state": "parked"})
+        _entry(
+            tmp_path,
+            "parked",
+            kind="stop",
+            ago=timedelta(days=400),
+            disposition={"state": "parked"},
+        )
 
         assert sr.gc_stale(tmp_path) == 0
 
     def test_a_done_entry_still_ages_out(self, tmp_path):
-        _entry(tmp_path, "done", kind="end", ago=timedelta(days=8),
-               disposition={"state": "done", "reason": "shipped"})
+        _entry(
+            tmp_path,
+            "done",
+            kind="end",
+            ago=timedelta(days=8),
+            disposition={"state": "done", "reason": "shipped"},
+        )
 
         assert sr.gc_stale(tmp_path) == 1
         assert not (tmp_path / "sessions" / "done.json").exists()
@@ -437,8 +469,13 @@ class TestGcExemption:
         assert sr.gc_stale(tmp_path) == 1
 
     def test_a_fresh_parked_entry_also_survives(self, tmp_path):
-        _entry(tmp_path, "parked", kind="end", ago=timedelta(hours=1),
-               disposition={"state": "parked"})
+        _entry(
+            tmp_path,
+            "parked",
+            kind="end",
+            ago=timedelta(hours=1),
+            disposition={"state": "parked"},
+        )
 
         assert sr.gc_stale(tmp_path) == 0
 
@@ -448,8 +485,9 @@ class TestGcExemption:
         (tmp_path / "sessions").mkdir()
         path = tmp_path / "sessions" / "junk.json"
         path.write_text("{not json")
-        old = (datetime.now(timezone.utc) - timedelta(days=30)).timestamp()
+        old = (datetime.now(UTC) - timedelta(days=30)).timestamp()
         import os
+
         os.utime(path, (old, old))
 
         assert sr.gc_stale(tmp_path) == 1
@@ -465,9 +503,15 @@ class TestGcVsPendingExtraction:
     def _marker(self, tmp_path, sid, sub="pending_extractions", name=None):
         d = tmp_path / sub
         d.mkdir(parents=True, exist_ok=True)
-        (d / (name or f"{sid}.json")).write_text(json.dumps({
-            "session_id": sid, "cwd": "/work", "transcript_path": "/t.jsonl",
-        }))
+        (d / (name or f"{sid}.json")).write_text(
+            json.dumps(
+                {
+                    "session_id": sid,
+                    "cwd": "/work",
+                    "transcript_path": "/t.jsonl",
+                }
+            )
+        )
 
     def test_a_pending_marker_protects_a_day8_entry(self, tmp_path):
         _entry(tmp_path, "s1", kind="end", ago=timedelta(days=8))
@@ -519,8 +563,8 @@ class TestGcVsPendingExtraction:
 # The wiring — extract_learnings.py, where the three pieces meet
 # ---------------------------------------------------------------------------
 
-class TestExtractLearningsWiring:
 
+class TestExtractLearningsWiring:
     def _run(self, tmp_path, chunk_results, *, session_id="s1"):
         """Drive ``extract()`` with a canned per-chunk extraction result.
 
@@ -530,12 +574,23 @@ class TestExtractLearningsWiring:
         import extract_learnings as el
 
         class _Paths:
-            def memory_dir(self): return tmp_path / "memory"
-            def learnings_file(self): return tmp_path / "memory" / "learnings.md"
-            def diary_dir(self): return tmp_path / "diary"
-            def catalogs_dir(self): return tmp_path / "catalogs"
-            def data_dir(self): return tmp_path
-            def logs_dir(self): return tmp_path / "logs"
+            def memory_dir(self):
+                return tmp_path / "memory"
+
+            def learnings_file(self):
+                return tmp_path / "memory" / "learnings.md"
+
+            def diary_dir(self):
+                return tmp_path / "diary"
+
+            def catalogs_dir(self):
+                return tmp_path / "catalogs"
+
+            def data_dir(self):
+                return tmp_path
+
+            def logs_dir(self):
+                return tmp_path / "logs"
 
         async def _fake_extract(chunk, **kwargs):
             result = chunk_results[int(chunk)]
@@ -546,13 +601,20 @@ class TestExtractLearningsWiring:
             return result[0], result[1], []
 
         stdin = json.dumps({"session_id": session_id, "cwd": "/work"})
-        with patch.object(el, "get_paths", _Paths), \
-             patch.object(el, "load_target_charters", lambda *a, **k: []), \
-             patch.object(el, "create_client", AsyncMock(return_value=object())), \
-             patch.object(el, "_distill_transcript",
-                          lambda *a: ([str(i) for i in range(len(chunk_results))], None)), \
-             patch.object(el, "extract_session_signals", _fake_extract), \
-             patch.object(el.sys, "stdin", type("S", (), {"read": staticmethod(lambda: stdin)})):
+        with (
+            patch.object(el, "get_paths", _Paths),
+            patch.object(el, "load_target_charters", lambda *a, **k: []),
+            patch.object(el, "create_client", AsyncMock(return_value=object())),
+            patch.object(
+                el,
+                "_distill_transcript",
+                lambda *a: ([str(i) for i in range(len(chunk_results))], None),
+            ),
+            patch.object(el, "extract_session_signals", _fake_extract),
+            patch.object(
+                el.sys, "stdin", type("S", (), {"read": staticmethod(lambda: stdin)})
+            ),
+        ):
             return asyncio.run(el.extract())
 
     def _state(self, tmp_path, sid="s1"):
@@ -572,11 +634,14 @@ class TestExtractLearningsWiring:
         and would always say `active`."""
         _entry(tmp_path, "s1")
 
-        self._run(tmp_path, [
-            ([], {"state": "active", "reason": ""}),
-            ([], {"state": "active", "reason": ""}),
-            ([], {"state": "done", "reason": "shipped"}),
-        ])
+        self._run(
+            tmp_path,
+            [
+                ([], {"state": "active", "reason": ""}),
+                ([], {"state": "active", "reason": ""}),
+                ([], {"state": "done", "reason": "shipped"}),
+            ],
+        )
 
         assert self._state(tmp_path) == "done"
 
@@ -605,10 +670,13 @@ class TestExtractLearningsWiring:
         diary was written and the marker consumed, so there was no retry."""
         _entry(tmp_path, "s1")
 
-        self._run(tmp_path, [
-            RuntimeError("boom"),
-            ([], {"state": "parked", "reason": "back tomorrow"}),
-        ])
+        self._run(
+            tmp_path,
+            [
+                RuntimeError("boom"),
+                ([], {"state": "parked", "reason": "back tomorrow"}),
+            ],
+        )
 
         assert self._state(tmp_path) == "parked"
 
@@ -618,10 +686,13 @@ class TestExtractLearningsWiring:
         guess written as a fact."""
         _entry(tmp_path, "s1")
 
-        self._run(tmp_path, [
-            ([], {"state": "active", "reason": ""}),
-            RuntimeError("boom"),
-        ])
+        self._run(
+            tmp_path,
+            [
+                ([], {"state": "active", "reason": ""}),
+                RuntimeError("boom"),
+            ],
+        )
 
         assert self._state(tmp_path) is None
 
@@ -650,8 +721,8 @@ class TestExtractLearningsWiring:
 # 4d — how it reads in AGENTS.md
 # ---------------------------------------------------------------------------
 
-class TestFleetView:
 
+class TestFleetView:
     def test_a_parked_session_reads_as_parked_not_idle(self, tmp_path):
         make_session(tmp_path, "p", kind="stop", ago=timedelta(days=3))
         _add_disposition(tmp_path, "p", "parked", "picking this up after the release")
@@ -687,7 +758,9 @@ class TestFleetView:
         make_session(tmp_path, "a", kind="stop", ago=timedelta(minutes=2))
         _add_disposition(tmp_path, "a", "active", "still going")
 
-        assert "## Working (1)" in fleet.render_agents_md(fleet.collect(tmp_path, NOW), NOW)
+        assert "## Working (1)" in fleet.render_agents_md(
+            fleet.collect(tmp_path, NOW), NOW
+        )
 
     def test_a_parked_session_still_collides(self, tmp_path):
         """Parked work holds its files just as much as running work — arguably
@@ -718,7 +791,9 @@ class TestFleetView:
 
         f = fleet.collect(tmp_path, NOW)
         md = fleet.render_agents_md(f, NOW)
-        listed = sum(len(f.in_group(g)) for g in ("Needs you", "Working", "Parked", "Idle"))
+        listed = sum(
+            len(f.in_group(g)) for g in ("Needs you", "Working", "Parked", "Idle")
+        )
 
         assert listed == len(f.live) == 4
         # Four listed, but the headline counts the three that want something

@@ -53,8 +53,14 @@ def create_change(change_dir: Path, *, parent: str | None = None) -> None:
         write_change_meta(change_dir, updates)
 
 
-def save_ticket(change_dir: Path, ticket_file: Path, *, ref: str = "", url: str = "",
-                children: list[str] | None = None) -> Path:
+def save_ticket(
+    change_dir: Path,
+    ticket_file: Path,
+    *,
+    ref: str = "",
+    url: str = "",
+    children: list[str] | None = None,
+) -> Path:
     """Copy the ticket text to `ticket.md`, fenced as untrusted, and record its refs."""
     source = url or ref or ticket_file.name
     header = [f"# Ticket {ref}".rstrip(), ""]
@@ -65,7 +71,10 @@ def save_ticket(change_dir: Path, ticket_file: Path, *, ref: str = "", url: str 
     dest = change_dir / "ticket.md"
     dest.write_text("\n".join(header) + fenced(ticket_file.read_text(), source) + "\n")
     if ref or children:
-        write_change_meta(change_dir, {"ticket_refs": {"epic": ref or None, "children": list(children or [])}})
+        write_change_meta(
+            change_dir,
+            {"ticket_refs": {"epic": ref or None, "children": list(children or [])}},
+        )
     log.info("Saved ticket %s to %s", ref or ticket_file.name, dest)
     return dest
 
@@ -83,8 +92,10 @@ def ticket_refs(change_dir: Path) -> dict:
     if not isinstance(raw, dict):
         return {"epic": None, "children": []}
     children = raw.get("children") or []
-    return {"epic": raw.get("epic") or None,
-            "children": [str(c) for c in children] if isinstance(children, list) else []}
+    return {
+        "epic": raw.get("epic") or None,
+        "children": [str(c) for c in children] if isinstance(children, list) else [],
+    }
 
 
 def read_context_files(paths: list[str]) -> list[tuple[str, str]]:
@@ -106,10 +117,15 @@ def prd_text(change_dir: Path) -> str:
 
 def prd_headings(text: str) -> list[str]:
     """The text of every markdown heading in a PRD, in order."""
-    return [m.group(1).strip() for m in re.finditer(r"^#{1,6}\s+(.+?)\s*#*\s*$", text, re.M)]
+    return [
+        m.group(1).strip()
+        for m in re.finditer(r"^#{1,6}\s+(.+?)\s*#*\s*$", text, re.MULTILINE)
+    ]
 
 
-def interview_inputs(change_dir: Path, summary: str, contexts: list[tuple[str, str]]) -> str:
+def interview_inputs(
+    change_dir: Path, summary: str, contexts: list[tuple[str, str]]
+) -> str:
     """What the interview is about: PRD (fenced), ticket (already fenced), plan, context, summary."""
     parts = []
     prd = prd_text(change_dir)
@@ -128,9 +144,16 @@ def interview_inputs(change_dir: Path, summary: str, contexts: list[tuple[str, s
     return "\n\n".join(parts)
 
 
-def render_interview(change_dir: Path, *, summary: str = "", contexts: list[tuple[str, str]] | None = None,
-                     questions: list[str] | None = None, answers: list | None = None, replies: str = "",
-                     replies_source: str = "ticket replies") -> str:
+def render_interview(
+    change_dir: Path,
+    *,
+    summary: str = "",
+    contexts: list[tuple[str, str]] | None = None,
+    questions: list[str] | None = None,
+    answers: list | None = None,
+    replies: str = "",
+    replies_source: str = "ticket replies",
+) -> str:
     """The text of `interview.md`.
 
     Sections, each only when it has content: a pointer to `prd.md`, the ticket
@@ -141,7 +164,12 @@ def render_interview(change_dir: Path, *, summary: str = "", contexts: list[tupl
     """
     out = ["# Interview", ""]
     if (change_dir / "prd.md").is_file():
-        out += ["## PRD", "", "The PRD is `prd.md` in this change dir; it is the primary source.", ""]
+        out += [
+            "## PRD",
+            "",
+            "The PRD is `prd.md` in this change dir; it is the primary source.",
+            "",
+        ]
     ticket = change_dir / "ticket.md"
     if ticket.is_file():
         out += ["## Ticket", "", ticket.read_text().rstrip(), ""]
@@ -162,11 +190,21 @@ def render_interview(change_dir: Path, *, summary: str = "", contexts: list[tupl
         if grounded:
             out += ["## Answers", ""]
             for a in grounded:
-                out += [f"**Q: {a.question}**", "", a.answer.rstrip(), "",
-                        f"_Grounded in: {a.grounded_in.strip()}_", ""]
+                out += [
+                    f"**Q: {a.question}**",
+                    "",
+                    a.answer.rstrip(),
+                    "",
+                    f"_Grounded in: {a.grounded_in.strip()}_",
+                    "",
+                ]
         if assumed:
-            out += ["## Assumptions", "",
-                    "Nothing in the inputs decides these; each answer is an assumption to confirm.", ""]
+            out += [
+                "## Assumptions",
+                "",
+                "Nothing in the inputs decides these; each answer is an assumption to confirm.",
+                "",
+            ]
             for a in assumed:
                 out += [f"**Q: {a.question}**", "", a.answer.rstrip(), ""]
     if replies:
@@ -178,12 +216,19 @@ def read_questions(path: Path) -> list[str]:
     """Questions back out of `interview-questions.md` (numbered lines)."""
     if not path.is_file():
         return []
-    return [m.group(1).strip() for m in re.finditer(r"^\d+\.\s+(.+)$", path.read_text(), re.M)]
+    return [
+        m.group(1).strip()
+        for m in re.finditer(r"^\d+\.\s+(.+)$", path.read_text(), re.MULTILINE)
+    ]
 
 
 def write_questions(path: Path, questions: list[str], ref: str = "") -> None:
-    lines = [f"# Questions for {ref}".rstrip() if ref else "# Questions", "",
-             "pm-spec needs these answered before it writes the spec. "
-             "Post them on the ticket; pass the replies to the next run with --interview-replies.", ""]
+    lines = [
+        f"# Questions for {ref}".rstrip() if ref else "# Questions",
+        "",
+        "pm-spec needs these answered before it writes the spec. "
+        "Post them on the ticket; pass the replies to the next run with --interview-replies.",
+        "",
+    ]
     lines += [f"{i}. {q}" for i, q in enumerate(questions, 1)]
     path.write_text("\n".join(lines) + "\n")

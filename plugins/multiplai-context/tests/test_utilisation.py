@@ -16,7 +16,7 @@ import asyncio
 import json
 import logging
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -25,10 +25,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
-from lib import utilisation as util  # noqa: E402
-from lib import utilisation_judge as judge  # noqa: E402
+from lib import utilisation as util
+from lib import utilisation_judge as judge
 
-NOW = datetime(2026, 8, 8, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 8, 8, 12, 0, tzinfo=UTC)
 
 
 def _ts(days_ago: int = 0) -> str:
@@ -36,8 +36,13 @@ def _ts(days_ago: int = 0) -> str:
 
 
 def _inject(file: str, section: str | None, size: int, turn: int = 1) -> dict:
-    return {"file": file, "section": section, "bytes": size,
-            "turn": turn, "co_picks": 1}
+    return {
+        "file": file,
+        "section": section,
+        "bytes": size,
+        "turn": turn,
+        "co_picks": 1,
+    }
 
 
 #: What a judge verdict written today carries. Records without it are the
@@ -78,6 +83,7 @@ def _write(path: Path, records: list[dict]) -> Path:
 
 # --- 1. round-trip and durability -------------------------------------------
 
+
 class TestAppendReadRoundTrip:
     def test_round_trip(self, tmp_path):
         path = util.utilisation_path(tmp_path)
@@ -92,10 +98,18 @@ class TestAppendReadRoundTrip:
     def test_second_write_merges_into_the_same_record(self, tmp_path):
         path = util.utilisation_path(tmp_path)
         util.record_injections(path, "aaaa1111", [_inject("dev.md", "Testing", 900)])
-        util.record_self_report(path, "aaaa1111", [
-            {"file": "dev.md", "section": "Testing",
-             "evidence": "ran the suite", "supported": True},
-        ])
+        util.record_self_report(
+            path,
+            "aaaa1111",
+            [
+                {
+                    "file": "dev.md",
+                    "section": "Testing",
+                    "evidence": "ran the suite",
+                    "supported": True,
+                },
+            ],
+        )
         records = util.read_records(path)
         assert len(records) == 1
         assert records[0]["self_report"][0]["evidence"] == "ran the suite"
@@ -139,13 +153,21 @@ class TestAppendReadRoundTrip:
 
 # --- 2. a record with `injected` only ---------------------------------------
 
+
 class TestInjectedOnly:
     def test_aggregates_with_null_estimators(self):
-        agg = util.aggregate([_session("s1", [
-            _inject("dev.md", "Testing", 900),
-            _inject("dev.md", "Testing", 900, turn=4),
-            _inject("me.md", None, 400),
-        ])])
+        agg = util.aggregate(
+            [
+                _session(
+                    "s1",
+                    [
+                        _inject("dev.md", "Testing", 900),
+                        _inject("dev.md", "Testing", 900, turn=4),
+                        _inject("me.md", None, 400),
+                    ],
+                )
+            ]
+        )
         assert agg.sessions == 1
         stat = agg.sections["dev.md#Testing"]
         assert (stat.retrieved, stat.sessions, stat.bytes) == (2, 1, 1800)
@@ -168,13 +190,17 @@ class TestInjectedOnly:
 
 # --- 3. the failure-mode assertion (contract C4) ----------------------------
 
+
 class TestFailedJudgeIsNotAVerdict:
     def _records(self, judged: bool) -> list[dict]:
         entries = [_inject("dev.md", "Testing", 900)]
         return [
-            _session(f"s{i}", entries,
-                     judge_entries=([] if judged else None),
-                     transcript=f"/transcripts/s{i}.jsonl")
+            _session(
+                f"s{i}",
+                entries,
+                judge_entries=([] if judged else None),
+                transcript=f"/transcripts/s{i}.jsonl",
+            )
             for i in range(6)
         ]
 
@@ -183,7 +209,9 @@ class TestFailedJudgeIsNotAVerdict:
         stat = agg.sections["dev.md#Testing"]
         assert stat.judge_observed == 0
         assert stat.judge_used == 0
-        assert stat.rate("judge") is None, "a missing judgement must not read as 0% used"
+        assert stat.rate("judge") is None, (
+            "a missing judgement must not read as 0% used"
+        )
         assert stat.zero_estimated_use("judge") is False
 
     def test_a_failed_batch_never_marks_a_section_unused(self, tmp_path, monkeypatch):
@@ -205,8 +233,9 @@ class TestFailedJudgeIsNotAVerdict:
             raise RuntimeError("rate limited")
 
         client.query = blow_up
-        report = asyncio.run(judge.judge_sessions(
-            path, client=client, model="m", sample_size=6))
+        report = asyncio.run(
+            judge.judge_sessions(path, client=client, model="m", sample_size=6)
+        )
 
         assert called, "the model was never called — this is not the outage path"
         assert report["judged"] == 0
@@ -237,8 +266,9 @@ class TestFailedJudgeIsNotAVerdict:
             raise AssertionError("should not reach the model")
 
         client.query = never_called
-        report = asyncio.run(judge.judge_sessions(
-            path, client=client, model="m", sample_size=3))
+        report = asyncio.run(
+            judge.judge_sessions(path, client=client, model="m", sample_size=3)
+        )
 
         assert report["kept_default"] == 3
         assert report["not_judgeable"] == 3
@@ -255,8 +285,9 @@ class TestFailedJudgeIsNotAVerdict:
             return SimpleNamespace(content="<verdicts>\n</verdicts>")
 
         client.query = empty
-        report = asyncio.run(judge.judge_sessions(
-            path, client=client, model="m", sample_size=6))
+        report = asyncio.run(
+            judge.judge_sessions(path, client=client, model="m", sample_size=6)
+        )
 
         assert report["judged"] == 0
         assert report["empty_verdicts"] == 6
@@ -266,9 +297,18 @@ class TestFailedJudgeIsNotAVerdict:
 
     def test_an_explicit_unused_verdict_does_count(self):
         records = [
-            _session(f"s{i}", [_inject("dev.md", "Testing", 900)],
-                     judge_entries=[{"file": "dev.md", "section": "Testing",
-                                     "used": False, "evidence": ""}])
+            _session(
+                f"s{i}",
+                [_inject("dev.md", "Testing", 900)],
+                judge_entries=[
+                    {
+                        "file": "dev.md",
+                        "section": "Testing",
+                        "used": False,
+                        "evidence": "",
+                    }
+                ],
+            )
             for i in range(6)
         ]
         stat = util.aggregate(records).sections["dev.md#Testing"]
@@ -278,9 +318,15 @@ class TestFailedJudgeIsNotAVerdict:
         assert stat.bytes_per_estimated_use("judge") is None
 
     def test_a_judge_verdict_for_an_uninjected_section_is_discarded(self):
-        records = [_session("s1", [_inject("dev.md", "Testing", 900)],
-                            judge_entries=[{"file": "other.md", "section": "X",
-                                            "used": True, "evidence": "e"}])]
+        records = [
+            _session(
+                "s1",
+                [_inject("dev.md", "Testing", 900)],
+                judge_entries=[
+                    {"file": "other.md", "section": "X", "used": True, "evidence": "e"}
+                ],
+            )
+        ]
         agg = util.aggregate(records)
         assert "other.md#X" not in agg.sections
         assert agg.sections["dev.md#Testing"].judge_observed == 0
@@ -288,13 +334,22 @@ class TestFailedJudgeIsNotAVerdict:
 
 # --- 4. unsupported self-report claims --------------------------------------
 
+
 class TestSelfReportEvidence:
     def test_claim_without_evidence_is_unsupported_and_uncounted(self):
         records = [
-            _session(f"s{i}", [_inject("dev.md", "Testing", 900)], self_report=[
-                {"file": "dev.md", "section": "Testing",
-                 "evidence": "", "supported": False},
-            ])
+            _session(
+                f"s{i}",
+                [_inject("dev.md", "Testing", 900)],
+                self_report=[
+                    {
+                        "file": "dev.md",
+                        "section": "Testing",
+                        "evidence": "",
+                        "supported": False,
+                    },
+                ],
+            )
             for i in range(6)
         ]
         stat = util.aggregate(records).sections["dev.md#Testing"]
@@ -303,10 +358,18 @@ class TestSelfReportEvidence:
 
     def test_claim_with_evidence_counts(self):
         records = [
-            _session(f"s{i}", [_inject("dev.md", "Testing", 900)], self_report=[
-                {"file": "dev.md", "section": "Testing",
-                 "evidence": "quoted the release steps", "supported": True},
-            ])
+            _session(
+                f"s{i}",
+                [_inject("dev.md", "Testing", 900)],
+                self_report=[
+                    {
+                        "file": "dev.md",
+                        "section": "Testing",
+                        "evidence": "quoted the release steps",
+                        "supported": True,
+                    },
+                ],
+            )
             for i in range(6)
         ]
         stat = util.aggregate(records).sections["dev.md#Testing"]
@@ -314,8 +377,10 @@ class TestSelfReportEvidence:
 
     def test_empty_self_report_is_a_real_answer(self):
         """'None of them' observes every injected section as unused."""
-        records = [_session(f"s{i}", [_inject("dev.md", "Testing", 900)],
-                            self_report=[]) for i in range(6)]
+        records = [
+            _session(f"s{i}", [_inject("dev.md", "Testing", 900)], self_report=[])
+            for i in range(6)
+        ]
         stat = util.aggregate(records).sections["dev.md#Testing"]
         assert (stat.self_report_observed, stat.self_report_used) == (6, 0)
         assert stat.rate("self_report") == 0.0
@@ -330,8 +395,12 @@ class TestSelfReportEvidence:
             "</utilisation>"
         )
         assert entries == [
-            {"file": "dev.md", "section": "Testing",
-             "evidence": "ran the suite", "supported": True},
+            {
+                "file": "dev.md",
+                "section": "Testing",
+                "evidence": "ran the suite",
+                "supported": True,
+            },
             {"file": "me.md", "section": None, "evidence": "", "supported": False},
         ]
 
@@ -354,9 +423,12 @@ class TestSelfReportEvidence:
         assert parse_utilisation("") is None
         assert parse_utilisation(None) is None
         # Truncated mid-response, the real shape of the failure.
-        assert parse_utilisation(
-            "<unit><diary_entry>a</diary_entry></unit>\n<unit>\n<diary_ent"
-        ) is None
+        assert (
+            parse_utilisation(
+                "<unit><diary_entry>a</diary_entry></unit>\n<unit>\n<diary_ent"
+            )
+            is None
+        )
         # An explicit "none of them" IS an answer.
         assert parse_utilisation("<utilisation></utilisation>") == []
         assert parse_utilisation("<utilisation>\n\n</utilisation>") == []
@@ -386,21 +458,42 @@ class TestSelfReportEvidence:
 
 # --- 5. ranking and the low-n flag ------------------------------------------
 
+
 class TestRanking:
     def _corpus(self) -> list[dict]:
         records = []
         # cheap-and-used: 1 KB, judged used 6/6
         for i in range(6):
-            records.append(_session(
-                f"c{i}", [_inject("small.md", "Used", 1000)],
-                judge_entries=[{"file": "small.md", "section": "Used",
-                                "used": True, "evidence": "e"}]))
+            records.append(
+                _session(
+                    f"c{i}",
+                    [_inject("small.md", "Used", 1000)],
+                    judge_entries=[
+                        {
+                            "file": "small.md",
+                            "section": "Used",
+                            "used": True,
+                            "evidence": "e",
+                        }
+                    ],
+                )
+            )
         # expensive-and-rarely-used: 14 KB, judged used 1/6
         for i in range(6):
-            records.append(_session(
-                f"e{i}", [_inject("big.md", "Bloat", 14000)],
-                judge_entries=[{"file": "big.md", "section": "Bloat",
-                                "used": i == 0, "evidence": "e" if i == 0 else ""}]))
+            records.append(
+                _session(
+                    f"e{i}",
+                    [_inject("big.md", "Bloat", 14000)],
+                    judge_entries=[
+                        {
+                            "file": "big.md",
+                            "section": "Bloat",
+                            "used": i == 0,
+                            "evidence": "e" if i == 0 else "",
+                        }
+                    ],
+                )
+            )
         return records
 
     def test_orders_by_bytes_per_estimated_use(self):
@@ -414,10 +507,20 @@ class TestRanking:
     def test_zero_estimated_use_outranks_every_finite_cost(self):
         records = self._corpus()
         for i in range(6):
-            records.append(_session(
-                f"d{i}", [_inject("dead.md", "Never", 500)],
-                judge_entries=[{"file": "dead.md", "section": "Never",
-                                "used": False, "evidence": ""}]))
+            records.append(
+                _session(
+                    f"d{i}",
+                    [_inject("dead.md", "Never", 500)],
+                    judge_entries=[
+                        {
+                            "file": "dead.md",
+                            "section": "Never",
+                            "used": False,
+                            "evidence": "",
+                        }
+                    ],
+                )
+            )
         ranked, _ = util.rank(util.aggregate(records))
         assert ranked[0]["key"] == "dead.md#Never"
         assert ranked[0]["cost_per_use"] is None
@@ -425,10 +528,20 @@ class TestRanking:
 
     def test_low_n_row_is_flagged_and_not_ranked(self):
         records = self._corpus()
-        records.append(_session(
-            "thin1", [_inject("thin.md", "Rare", 50000)],
-            judge_entries=[{"file": "thin.md", "section": "Rare",
-                            "used": False, "evidence": ""}]))
+        records.append(
+            _session(
+                "thin1",
+                [_inject("thin.md", "Rare", 50000)],
+                judge_entries=[
+                    {
+                        "file": "thin.md",
+                        "section": "Rare",
+                        "used": False,
+                        "evidence": "",
+                    }
+                ],
+            )
+        )
         ranked, insufficient = util.rank(util.aggregate(records))
         assert "thin.md#Rare" not in [r["key"] for r in ranked]
         thin = next(r for r in insufficient if r["key"] == "thin.md#Rare")
@@ -438,12 +551,32 @@ class TestRanking:
     def test_self_report_is_the_basis_when_the_judge_is_thin(self):
         records = []
         for i in range(6):
-            records.append(_session(
-                f"s{i}", [_inject("dev.md", "Testing", 1000)],
-                self_report=[{"file": "dev.md", "section": "Testing",
-                              "evidence": "e", "supported": True}],
-                judge_entries=([{"file": "dev.md", "section": "Testing",
-                                 "used": True, "evidence": "e"}] if i == 0 else None)))
+            records.append(
+                _session(
+                    f"s{i}",
+                    [_inject("dev.md", "Testing", 1000)],
+                    self_report=[
+                        {
+                            "file": "dev.md",
+                            "section": "Testing",
+                            "evidence": "e",
+                            "supported": True,
+                        }
+                    ],
+                    judge_entries=(
+                        [
+                            {
+                                "file": "dev.md",
+                                "section": "Testing",
+                                "used": True,
+                                "evidence": "e",
+                            }
+                        ]
+                        if i == 0
+                        else None
+                    ),
+                )
+            )
         ranked, _ = util.rank(util.aggregate(records))
         assert ranked[0]["rank_basis"] == "self_report"
         assert ranked[0]["judge"]["observed"] == 1
@@ -457,14 +590,30 @@ class TestRanking:
 
 # --- 6. estimator disagreement ----------------------------------------------
 
+
 class TestDisagreement:
     def _records(self, judge_used: bool) -> list[dict]:
         return [
-            _session(f"s{i}", [_inject("dev.md", "Testing", 1000)],
-                     self_report=[{"file": "dev.md", "section": "Testing",
-                                   "evidence": "e", "supported": True}],
-                     judge_entries=[{"file": "dev.md", "section": "Testing",
-                                     "used": judge_used, "evidence": "e"}])
+            _session(
+                f"s{i}",
+                [_inject("dev.md", "Testing", 1000)],
+                self_report=[
+                    {
+                        "file": "dev.md",
+                        "section": "Testing",
+                        "evidence": "e",
+                        "supported": True,
+                    }
+                ],
+                judge_entries=[
+                    {
+                        "file": "dev.md",
+                        "section": "Testing",
+                        "used": judge_used,
+                        "evidence": "e",
+                    }
+                ],
+            )
             for i in range(6)
         ]
 
@@ -491,9 +640,13 @@ class TestDisagreement:
         assert set(row["estimated_uses"]) == {"self_report", "judge"}
 
     def test_one_sided_data_never_counts_as_disagreement(self):
-        records = [_session(f"s{i}", [_inject("dev.md", "Testing", 1000)],
-                            self_report=[]) for i in range(6)]
-        assert util.aggregate(records).sections["dev.md#Testing"].disagreement() is False
+        records = [
+            _session(f"s{i}", [_inject("dev.md", "Testing", 1000)], self_report=[])
+            for i in range(6)
+        ]
+        assert (
+            util.aggregate(records).sections["dev.md#Testing"].disagreement() is False
+        )
 
     def test_rendered_table_marks_the_row(self):
         table = util.build_table(self._records(judge_used=False))
@@ -502,21 +655,40 @@ class TestDisagreement:
 
 # --- 7. compaction ----------------------------------------------------------
 
+
 class TestCompaction:
     def _corpus(self) -> list[dict]:
         old = [
-            _session(f"o{i}", [_inject("dev.md", "Testing", 1000),
-                               _inject("me.md", None, 300)],
-                     self_report=[{"file": "dev.md", "section": "Testing",
-                                   "evidence": "e", "supported": True}],
-                     judge_entries=[{"file": "dev.md", "section": "Testing",
-                                     "used": i % 2 == 0, "evidence": "e"}],
-                     days_ago=120)
+            _session(
+                f"o{i}",
+                [_inject("dev.md", "Testing", 1000), _inject("me.md", None, 300)],
+                self_report=[
+                    {
+                        "file": "dev.md",
+                        "section": "Testing",
+                        "evidence": "e",
+                        "supported": True,
+                    }
+                ],
+                judge_entries=[
+                    {
+                        "file": "dev.md",
+                        "section": "Testing",
+                        "used": i % 2 == 0,
+                        "evidence": "e",
+                    }
+                ],
+                days_ago=120,
+            )
             for i in range(5)
         ]
         recent = [
-            _session(f"r{i}", [_inject("dev.md", "Testing", 1000)],
-                     self_report=[], days_ago=1)
+            _session(
+                f"r{i}",
+                [_inject("dev.md", "Testing", 1000)],
+                self_report=[],
+                days_ago=1,
+            )
             for i in range(3)
         ]
         return old + recent
@@ -553,7 +725,9 @@ class TestCompaction:
         util.compact(path, now=NOW)
         first = util.build_table(util.read_records(path))
         assert util.compact(path, now=NOW)["collapsed"] == 0
-        assert util.build_table(util.read_records(path))["sections"] == first["sections"]
+        assert (
+            util.build_table(util.read_records(path))["sections"] == first["sections"]
+        )
 
     def test_a_record_with_no_timestamp_is_kept(self, tmp_path):
         record = _session("x", [_inject("dev.md", "Testing", 100)], days_ago=400)
@@ -567,6 +741,7 @@ class TestCompaction:
 
 
 # --- 8. the extraction pass's primary product is unchanged ------------------
+
 
 class TestDiaryOutputIsNotDegraded:
     """Item 2's guard, in the only form an offline test can take.
@@ -607,10 +782,14 @@ class TestDiaryOutputIsNotDegraded:
             return MagicMock(content=response)
 
         client.query = query
-        return asyncio.run(extract_session_signals(
-            "transcript", valid_targets=["dev.md"], client=client,
-            injected_sections=injected,
-        ))
+        return asyncio.run(
+            extract_session_signals(
+                "transcript",
+                valid_targets=["dev.md"],
+                client=client,
+                injected_sections=injected,
+            )
+        )
 
     def test_diary_text_is_byte_identical_with_and_without_the_new_block(self):
         base_units, _, _ = self._run(self.RESPONSE, None)
@@ -620,8 +799,9 @@ class TestDiaryOutputIsNotDegraded:
             "</utilisation>",
             ["dev.md#Testing"],
         )
-        assert [u["diary_entry"] for u in base_units] == \
-               [u["diary_entry"] for u in with_block]
+        assert [u["diary_entry"] for u in base_units] == [
+            u["diary_entry"] for u in with_block
+        ]
         assert claims and claims[0]["supported"] is True
 
     def test_diary_length_matches_the_pre_change_fixture(self):
@@ -645,12 +825,14 @@ class TestDiaryOutputIsNotDegraded:
             return MagicMock(content=self.RESPONSE)
 
         client.query = query
-        units = asyncio.run(extract_units(
-            "transcript", valid_targets=["dev.md"], client=client))
+        units = asyncio.run(
+            extract_units("transcript", valid_targets=["dev.md"], client=client)
+        )
         assert len(units) == 2
 
 
 # --- prompt shape -----------------------------------------------------------
+
 
 class TestPromptShape:
     def test_the_injected_list_lives_in_the_per_call_half(self):
@@ -683,50 +865,95 @@ class TestPromptShape:
 
 # --- inject-event ingestion (P1's contract) ---------------------------------
 
+
 class TestInjectedFromInjectEvents:
     def test_empty_section_list_means_the_whole_file(self):
-        entries = util.injected_from_inject_events([{
-            "component": "context", "event": "inject", "turn": 2,
-            "sections_by_file": {"me.md": []}, "bytes_by_file": {"me.md": 4321},
-        }])
-        assert entries == [{"file": "me.md", "section": None, "bytes": 4321,
-                            "turn": 2, "co_picks": 1}]
+        entries = util.injected_from_inject_events(
+            [
+                {
+                    "component": "context",
+                    "event": "inject",
+                    "turn": 2,
+                    "sections_by_file": {"me.md": []},
+                    "bytes_by_file": {"me.md": 4321},
+                }
+            ]
+        )
+        assert entries == [
+            {"file": "me.md", "section": None, "bytes": 4321, "turn": 2, "co_picks": 1}
+        ]
 
     def test_a_file_with_no_key_contributes_nothing(self):
-        entries = util.injected_from_inject_events([{
-            "component": "context", "event": "inject",
-            "sections_by_file": {"dev.md": ["Testing"]},
-            "bytes_by_file": {"dev.md": 100},
-        }])
+        entries = util.injected_from_inject_events(
+            [
+                {
+                    "component": "context",
+                    "event": "inject",
+                    "sections_by_file": {"dev.md": ["Testing"]},
+                    "bytes_by_file": {"dev.md": 100},
+                }
+            ]
+        )
         assert [e["file"] for e in entries] == ["dev.md"]
 
     def test_co_picked_sections_split_the_file_bytes_and_say_so(self):
-        entries = util.injected_from_inject_events([{
-            "component": "context", "event": "inject",
-            "sections_by_file": {"dev.md": ["A", "B"]},
-            "bytes_by_file": {"dev.md": 1000},
-        }])
+        entries = util.injected_from_inject_events(
+            [
+                {
+                    "component": "context",
+                    "event": "inject",
+                    "sections_by_file": {"dev.md": ["A", "B"]},
+                    "bytes_by_file": {"dev.md": 1000},
+                }
+            ]
+        )
         assert [(e["section"], e["bytes"], e["co_picks"]) for e in entries] == [
-            ("A", 500, 2), ("B", 500, 2)]
+            ("A", 500, 2),
+            ("B", 500, 2),
+        ]
 
     def test_other_events_are_ignored(self):
-        assert util.injected_from_inject_events([
-            {"component": "context", "event": "skip", "sections_by_file": {"a.md": []}},
-            {"component": "diary", "event": "inject", "sections_by_file": {"b.md": []}},
-        ]) == []
+        assert (
+            util.injected_from_inject_events(
+                [
+                    {
+                        "component": "context",
+                        "event": "skip",
+                        "sections_by_file": {"a.md": []},
+                    },
+                    {
+                        "component": "diary",
+                        "event": "inject",
+                        "sections_by_file": {"b.md": []},
+                    },
+                ]
+            )
+            == []
+        )
 
     def test_reads_the_activity_log_by_session_prefix(self, tmp_path):
         logs = tmp_path / "logs"
         logs.mkdir()
         lines = [
-            {"component": "context", "event": "inject", "session": "aaaa1111",
-             "sections_by_file": {"dev.md": ["Testing"]}, "bytes_by_file": {"dev.md": 10}},
-            {"component": "context", "event": "inject", "session": "bbbb2222",
-             "sections_by_file": {"me.md": []}, "bytes_by_file": {"me.md": 20}},
+            {
+                "component": "context",
+                "event": "inject",
+                "session": "aaaa1111",
+                "sections_by_file": {"dev.md": ["Testing"]},
+                "bytes_by_file": {"dev.md": 10},
+            },
+            {
+                "component": "context",
+                "event": "inject",
+                "session": "bbbb2222",
+                "sections_by_file": {"me.md": []},
+                "bytes_by_file": {"me.md": 20},
+            },
         ]
         (logs / "activity.jsonl").write_text(
             "".join(json.dumps(r) + "\n" for r in lines) + "not json\n",
-            encoding="utf-8")
+            encoding="utf-8",
+        )
         events = util.inject_events_for_session(logs, "aaaa1111-full-uuid-here")
         assert len(events) == 1
         assert events[0]["sections_by_file"] == {"dev.md": ["Testing"]}
@@ -737,15 +964,32 @@ class TestInjectedFromInjectEvents:
 
 # --- never-retrieved --------------------------------------------------------
 
+
 class TestNeverRetrieved:
     def test_splits_never_picked_from_whole_file_only(self):
-        agg = util.aggregate([_session("s1", [
-            _inject("dev.md", "Testing", 100),
-            _inject("me.md", None, 100),
-        ])])
+        agg = util.aggregate(
+            [
+                _session(
+                    "s1",
+                    [
+                        _inject("dev.md", "Testing", 100),
+                        _inject("me.md", None, 100),
+                    ],
+                )
+            ]
+        )
         never, whole_only = util.never_retrieved(
-            agg, ["dev.md", "dev.md#Testing", "dev.md#Other",
-                  "me.md", "me.md#Bio", "cold.md", "cold.md#Section"])
+            agg,
+            [
+                "dev.md",
+                "dev.md#Testing",
+                "dev.md#Other",
+                "me.md",
+                "me.md#Bio",
+                "cold.md",
+                "cold.md#Section",
+            ],
+        )
         # dev.md was only ever picked as a section, so neither the bare file
         # nor its OTHER sections ever reached a prompt.
         assert never == ["cold.md", "cold.md#Section", "dev.md", "dev.md#Other"]
@@ -754,18 +998,28 @@ class TestNeverRetrieved:
         assert whole_only == ["me.md#Bio"]
 
     def test_catalog_keys_uses_p1_section_anchors(self):
-        keys = util.catalog_keys({"entries": [
-            {"source": "big.md", "section_anchors": [
-                {"name": "One", "gloss": "g"}, {"name": "Two", "gloss": "g"}]},
-            {"source": "small.md"},
-            {"source": "", "section_anchors": []},
-        ]})
+        keys = util.catalog_keys(
+            {
+                "entries": [
+                    {
+                        "source": "big.md",
+                        "section_anchors": [
+                            {"name": "One", "gloss": "g"},
+                            {"name": "Two", "gloss": "g"},
+                        ],
+                    },
+                    {"source": "small.md"},
+                    {"source": "", "section_anchors": []},
+                ]
+            }
+        )
         assert keys == ["big.md", "big.md#One", "big.md#Two", "small.md"]
 
     def test_the_table_keeps_the_two_lists_apart(self):
         table = util.build_table(
             [_session("s1", [_inject("me.md", None, 100)])],
-            known_keys=["me.md", "me.md#Bio", "cold.md"])
+            known_keys=["me.md", "me.md#Bio", "cold.md"],
+        )
         assert table["never_retrieved"] == ["cold.md"]
         assert table["only_as_whole_file"] == ["me.md#Bio"]
         rendered = util.render_table(table)
@@ -775,6 +1029,7 @@ class TestNeverRetrieved:
 
 # --- the judge --------------------------------------------------------------
 
+
 class TestJudgeParsing:
     ALLOWED = ["dev.md#Testing", "me.md"]
 
@@ -783,22 +1038,31 @@ class TestJudgeParsing:
             "<verdicts>"
             '<verdict file="dev.md" section="Testing" used="yes">ran it</verdict>'
             '<verdict file="me.md" used="no"></verdict>'
-            "</verdicts>", self.ALLOWED)
+            "</verdicts>",
+            self.ALLOWED,
+        )
         assert entries == [
-            {"file": "dev.md", "section": "Testing", "used": True, "evidence": "ran it"},
+            {
+                "file": "dev.md",
+                "section": "Testing",
+                "used": True,
+                "evidence": "ran it",
+            },
             {"file": "me.md", "section": None, "used": False, "evidence": ""},
         ]
 
     def test_yes_without_evidence_is_downgraded(self):
         entries = judge.parse_verdicts(
             '<verdicts><verdict file="me.md" used="yes"></verdict></verdicts>',
-            self.ALLOWED)
+            self.ALLOWED,
+        )
         assert entries[0]["used"] is False
 
     def test_a_section_that_was_not_injected_is_discarded(self):
         entries = judge.parse_verdicts(
             '<verdicts><verdict file="hallucinated.md" used="yes">x</verdict></verdicts>',
-            self.ALLOWED)
+            self.ALLOWED,
+        )
         assert entries == []
 
     def test_duplicates_keep_the_first_verdict(self):
@@ -806,7 +1070,9 @@ class TestJudgeParsing:
             "<verdicts>"
             '<verdict file="me.md" used="yes">first</verdict>'
             '<verdict file="me.md" used="no"></verdict>'
-            "</verdicts>", self.ALLOWED)
+            "</verdicts>",
+            self.ALLOWED,
+        )
         assert len(entries) == 1 and entries[0]["used"] is True
 
     def test_a_missing_block_raises_so_nothing_is_written(self):
@@ -841,8 +1107,9 @@ class TestJudgeSampling:
             _session(f"s{i}", [_inject("dev.md", "Testing", 100)], days_ago=i)
             for i in range(n)
         ]
-        records.append(_session("judged", [_inject("dev.md", "Testing", 100)],
-                                judge_entries=[]))
+        records.append(
+            _session("judged", [_inject("dev.md", "Testing", 100)], judge_entries=[])
+        )
         return _write(util.utilisation_path(tmp_path), records)
 
     def _client(self, response: str):
@@ -865,9 +1132,11 @@ class TestJudgeSampling:
 
         client = self._client(
             '<verdicts><verdict file="dev.md" section="Testing" used="yes">'
-            "e</verdict></verdicts>")
-        report = asyncio.run(judge.judge_sessions(
-            path, client=client, model="m", sample_size=3))
+            "e</verdict></verdicts>"
+        )
+        report = asyncio.run(
+            judge.judge_sessions(path, client=client, model="m", sample_size=3)
+        )
         assert report["eligible"] == 8
         assert report["sampled"] == 3
         assert report["judged"] == 3
@@ -876,19 +1145,24 @@ class TestJudgeSampling:
         assert report["unavailable"] == 0
         assert report["not_judgeable"] == 0
         assert report["empty_verdicts"] == 0
-        judged = {r["session"] for r in util.read_records(path)
-                  if r.get("judge") is not None}
+        judged = {
+            r["session"] for r in util.read_records(path) if r.get("judge") is not None
+        }
         assert judged == {"judged", "s0", "s1", "s2"}
 
     def test_a_session_without_a_transcript_keeps_its_default(self, tmp_path):
         path = self._path(tmp_path, 2)
         client = self._client("<verdicts></verdicts>")
-        report = asyncio.run(judge.judge_sessions(
-            path, client=client, model="m", sample_size=5))
+        report = asyncio.run(
+            judge.judge_sessions(path, client=client, model="m", sample_size=5)
+        )
         assert report["judged"] == 0
         assert report["kept_default"] == 2
-        assert all(r["judge"] is None for r in util.read_records(path)
-                   if r["session"].startswith("s"))
+        assert all(
+            r["judge"] is None
+            for r in util.read_records(path)
+            if r["session"].startswith("s")
+        )
 
     def test_already_judged_sessions_are_not_eligible(self, tmp_path):
         path = self._path(tmp_path, 0)
@@ -923,15 +1197,17 @@ class TestConcurrentWritersDoNotLoseRecords:
             try:
                 start.wait(timeout=10)
                 util.record_injections(
-                    path, f"s{i:04d}",
+                    path,
+                    f"s{i:04d}",
                     [_inject("dev.md", "Testing", 100)],
                     transcript="",
                 )
             except BaseException as exc:  # pragma: no cover - diagnostic
                 errors.append(exc)
 
-        threads = [threading.Thread(target=write, args=(i,))
-                   for i in range(self.WRITERS)]
+        threads = [
+            threading.Thread(target=write, args=(i,)) for i in range(self.WRITERS)
+        ]
         for t in threads:
             t.start()
         for t in threads:
@@ -951,7 +1227,8 @@ class TestConcurrentWritersDoNotLoseRecords:
 
         def write(i: int) -> None:
             util.record_injections(
-                path, f"s{i:04d}", [_inject("dev.md", None, 10)], transcript="")
+                path, f"s{i:04d}", [_inject("dev.md", None, 10)], transcript=""
+            )
 
         threads = [threading.Thread(target=write, args=(i,)) for i in range(8)]
         for t in threads:
@@ -972,12 +1249,14 @@ class TestConcurrentWritersDoNotLoseRecords:
 
         original = util._write_all
 
-        def boom(p, records):  # noqa: ANN001
+        def boom(p, records):
             raise OSError("disk full")
 
         monkeypatch.setattr(util, "_write_all", boom)
         with pytest.raises(OSError):
-            util.record_injections(path, "s2", [_inject("dev.md", None, 10)], transcript="")
+            util.record_injections(
+                path, "s2", [_inject("dev.md", None, 10)], transcript=""
+            )
         monkeypatch.setattr(util, "_write_all", original)
 
         assert path.read_text(encoding="utf-8") == before
@@ -997,21 +1276,31 @@ class TestCompactionIsLockedToo:
 
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
         path = util.utilisation_path(tmp_path)
-        _write(path, [
-            _session(f"old{i}", [_inject("dev.md", "Testing", 100)],
-                     self_report=[], days_ago=200)
-            for i in range(4)
-        ])
+        _write(
+            path,
+            [
+                _session(
+                    f"old{i}",
+                    [_inject("dev.md", "Testing", 100)],
+                    self_report=[],
+                    days_ago=200,
+                )
+                for i in range(4)
+            ],
+        )
 
         def compacting() -> None:
             util.compact(path, now=NOW)
 
         def writing() -> None:
             util.record_injections(
-                path, "fresh", [_inject("dev.md", "Testing", 100)], transcript="")
+                path, "fresh", [_inject("dev.md", "Testing", 100)], transcript=""
+            )
 
-        threads = [threading.Thread(target=compacting),
-                   threading.Thread(target=writing)]
+        threads = [
+            threading.Thread(target=compacting),
+            threading.Thread(target=writing),
+        ]
         for t in threads:
             t.start()
         for t in threads:
@@ -1024,17 +1313,28 @@ class TestCompactionIsLockedToo:
 
 # --- the machine contract ---------------------------------------------------
 
+
 class TestTableContract:
     def test_shape_is_stable_and_json_serialisable(self):
         table = util.build_table(
             [_session("s1", [_inject("dev.md", "Testing", 100)])],
-            known_keys=["dev.md", "dev.md#Testing", "cold.md"])
+            known_keys=["dev.md", "dev.md#Testing", "cold.md"],
+        )
         json.dumps(table)
         assert set(table) == {
-            "schema_version", "generated_at", "disclaimer", "estimator_notes",
-            "thresholds", "coverage", "sections", "insufficient_data",
-            "never_retrieved", "never_retrieved_sufficient",
-            "never_retrieved_reason", "only_as_whole_file", "judge_instrument",
+            "schema_version",
+            "generated_at",
+            "disclaimer",
+            "estimator_notes",
+            "thresholds",
+            "coverage",
+            "sections",
+            "insufficient_data",
+            "never_retrieved",
+            "never_retrieved_sufficient",
+            "never_retrieved_reason",
+            "only_as_whole_file",
+            "judge_instrument",
         }
         assert table["schema_version"] == util.SCHEMA_VERSION
         assert set(table["estimator_notes"]) == {"self_report", "judge"}
@@ -1048,7 +1348,8 @@ class TestTableContract:
         """
         thin = util.build_table(
             [_session("s1", [_inject("dev.md", "Testing", 100)])],
-            known_keys=["dev.md", "dev.md#Testing", "cold.md"])
+            known_keys=["dev.md", "dev.md#Testing", "cold.md"],
+        )
         # `dev.md` bare is in the list too: only its #Testing section was ever
         # injected, so the whole file genuinely never reached a prompt.
         assert "cold.md" in thin["never_retrieved"]
@@ -1056,34 +1357,56 @@ class TestTableContract:
         assert "1 session" in thin["never_retrieved_reason"]
 
         thick = util.build_table(
-            [_session(f"s{i}", [_inject("dev.md", "Testing", 100)])
-             for i in range(util.MIN_COVERAGE_SESSIONS)],
-            known_keys=["dev.md", "dev.md#Testing", "cold.md"])
+            [
+                _session(f"s{i}", [_inject("dev.md", "Testing", 100)])
+                for i in range(util.MIN_COVERAGE_SESSIONS)
+            ],
+            known_keys=["dev.md", "dev.md#Testing", "cold.md"],
+        )
         assert thick["never_retrieved_sufficient"] is True
         assert thick["never_retrieved_reason"] is None
 
     def test_the_thin_log_caveat_is_rendered_for_a_human_too(self):
         thin = util.build_table(
             [_session("s1", [_inject("dev.md", "Testing", 100)])],
-            known_keys=["dev.md", "cold.md"])
+            known_keys=["dev.md", "cold.md"],
+        )
         assert "Not enough history to read this list" in util.render_table(thin)
 
     def test_row_shape_is_stable(self):
-        table = util.build_table([
-            _session(f"s{i}", [_inject("dev.md", "Testing", 100)], self_report=[])
-            for i in range(6)])
+        table = util.build_table(
+            [
+                _session(f"s{i}", [_inject("dev.md", "Testing", 100)], self_report=[])
+                for i in range(6)
+            ]
+        )
         row = table["sections"][0]
         assert set(row) == {
-            "key", "file", "section", "retrieved", "sessions", "bytes",
-            "bytes_per_injection", "self_report", "judge", "legacy_judge",
+            "key",
+            "file",
+            "section",
+            "retrieved",
+            "sessions",
+            "bytes",
+            "bytes_per_injection",
+            "self_report",
+            "judge",
+            "legacy_judge",
             "estimated_uses",
-            "bytes_per_estimated_use", "zero_estimated_use", "rank_basis",
-            "cost_per_use", "sufficient", "disagreement", "estimate",
+            "bytes_per_estimated_use",
+            "zero_estimated_use",
+            "rank_basis",
+            "cost_per_use",
+            "sufficient",
+            "disagreement",
+            "estimate",
         }
 
     def test_load_table_reads_the_on_disk_log(self, tmp_path):
-        _write(util.utilisation_path(tmp_path),
-               [_session("s1", [_inject("dev.md", "Testing", 100)])])
+        _write(
+            util.utilisation_path(tmp_path),
+            [_session("s1", [_inject("dev.md", "Testing", 100)])],
+        )
         table = util.load_table(tmp_path)
         assert table["coverage"]["sessions"] == 1
 
@@ -1103,8 +1426,9 @@ class TestExtractLearningsWiring:
     events, without a live model.
     """
 
-    def _run(self, tmp_path, response: str, *, session_id="aaaa1111-full-id",
-             activity=True):
+    def _run(
+        self, tmp_path, response: str, *, session_id="aaaa1111-full-id", activity=True
+    ):
         from unittest.mock import AsyncMock, patch
 
         import extract_learnings as el
@@ -1112,30 +1436,60 @@ class TestExtractLearningsWiring:
         logs = tmp_path / "logs"
         logs.mkdir(parents=True, exist_ok=True)
         if activity:
-            (logs / "activity.jsonl").write_text("".join(
-                json.dumps(r) + "\n" for r in [
-                    {"component": "context", "event": "inject",
-                     "session": "aaaa1111", "turn": 1,
-                     "sections_by_file": {"multiplai.md": ["Release Flow"]},
-                     "bytes_by_file": {"multiplai.md": 6123}},
-                    {"component": "context", "event": "inject",
-                     "session": "aaaa1111", "turn": 3,
-                     "sections_by_file": {"multiplai.md": ["Release Flow"],
-                                          "me.md": []},
-                     "bytes_by_file": {"multiplai.md": 6123, "me.md": 900}},
-                    {"component": "context", "event": "inject",
-                     "session": "zzzz9999", "turn": 1,
-                     "sections_by_file": {"other.md": []},
-                     "bytes_by_file": {"other.md": 10}},
-                ]), encoding="utf-8")
+            (logs / "activity.jsonl").write_text(
+                "".join(
+                    json.dumps(r) + "\n"
+                    for r in [
+                        {
+                            "component": "context",
+                            "event": "inject",
+                            "session": "aaaa1111",
+                            "turn": 1,
+                            "sections_by_file": {"multiplai.md": ["Release Flow"]},
+                            "bytes_by_file": {"multiplai.md": 6123},
+                        },
+                        {
+                            "component": "context",
+                            "event": "inject",
+                            "session": "aaaa1111",
+                            "turn": 3,
+                            "sections_by_file": {
+                                "multiplai.md": ["Release Flow"],
+                                "me.md": [],
+                            },
+                            "bytes_by_file": {"multiplai.md": 6123, "me.md": 900},
+                        },
+                        {
+                            "component": "context",
+                            "event": "inject",
+                            "session": "zzzz9999",
+                            "turn": 1,
+                            "sections_by_file": {"other.md": []},
+                            "bytes_by_file": {"other.md": 10},
+                        },
+                    ]
+                ),
+                encoding="utf-8",
+            )
 
         class _Paths:
-            def memory_dir(self): return tmp_path / "memory"
-            def learnings_file(self): return tmp_path / "learnings.md"
-            def diary_dir(self): return tmp_path / "diary"
-            def catalogs_dir(self): return tmp_path / "catalogs"
-            def data_dir(self): return tmp_path
-            def logs_dir(self): return logs
+            def memory_dir(self):
+                return tmp_path / "memory"
+
+            def learnings_file(self):
+                return tmp_path / "learnings.md"
+
+            def diary_dir(self):
+                return tmp_path / "diary"
+
+            def catalogs_dir(self):
+                return tmp_path / "catalogs"
+
+            def data_dir(self):
+                return tmp_path
+
+            def logs_dir(self):
+                return logs
 
         client = MagicMock()
 
@@ -1143,19 +1497,25 @@ class TestExtractLearningsWiring:
             return MagicMock(content=response)
 
         client.query = query
-        stdin = json.dumps({
-            "session_id": session_id, "cwd": "/work",
-            "transcript_path": str(tmp_path / "t.jsonl"),
-        })
-        with patch.object(el, "get_paths", _Paths), \
-             patch.object(el, "load_target_charters", lambda *a, **k: []), \
-             patch.object(el, "create_client", AsyncMock(return_value=client)), \
-             patch.object(el, "_distill_transcript", lambda *a: (["chunk one"], None)), \
-             patch.object(el, "write_diary_entries", lambda *a, **k: None), \
-             patch.object(el, "append_learnings", lambda *a, **k: True), \
-             patch.object(el, "record_disposition", lambda *a, **k: True), \
-             patch.object(el.sys, "stdin",
-                          type("S", (), {"read": staticmethod(lambda: stdin)})):
+        stdin = json.dumps(
+            {
+                "session_id": session_id,
+                "cwd": "/work",
+                "transcript_path": str(tmp_path / "t.jsonl"),
+            }
+        )
+        with (
+            patch.object(el, "get_paths", _Paths),
+            patch.object(el, "load_target_charters", lambda *a, **k: []),
+            patch.object(el, "create_client", AsyncMock(return_value=client)),
+            patch.object(el, "_distill_transcript", lambda *a: (["chunk one"], None)),
+            patch.object(el, "write_diary_entries", lambda *a, **k: None),
+            patch.object(el, "append_learnings", lambda *a, **k: True),
+            patch.object(el, "record_disposition", lambda *a, **k: True),
+            patch.object(
+                el.sys, "stdin", type("S", (), {"read": staticmethod(lambda: stdin)})
+            ),
+        ):
             asyncio.run(el.extract())
         return util.read_records(util.utilisation_path(tmp_path))
 
@@ -1179,8 +1539,7 @@ class TestExtractLearningsWiring:
 
         # Only this session's events, both turns, whole-file me.md included.
         assert sorted(
-            (e["file"], e["section"], e["bytes"], e["turn"])
-            for e in record["injected"]
+            (e["file"], e["section"], e["bytes"], e["turn"]) for e in record["injected"]
         ) == [
             ("me.md", None, 900, 3),
             ("multiplai.md", "Release Flow", 6123, 1),
@@ -1189,14 +1548,22 @@ class TestExtractLearningsWiring:
 
         # The invented section is dropped; the real one survives with evidence.
         assert record["self_report"] == [
-            {"file": "multiplai.md", "section": "Release Flow",
-             "evidence": "followed release.sh", "supported": True},
+            {
+                "file": "multiplai.md",
+                "section": "Release Flow",
+                "evidence": "followed release.sh",
+                "supported": True,
+            },
         ]
         assert record["judge"] is None
 
         agg = util.aggregate(records)
         stat = agg.sections["multiplai.md#Release Flow"]
-        assert (stat.retrieved, stat.self_report_observed, stat.self_report_used) == (2, 1, 1)
+        assert (stat.retrieved, stat.self_report_observed, stat.self_report_used) == (
+            2,
+            1,
+            1,
+        )
         assert agg.sections["me.md"].self_report_used == 0
 
     def test_the_prompt_carried_the_injected_list(self, tmp_path):
@@ -1213,27 +1580,50 @@ class TestExtractLearningsWiring:
 
         logs = tmp_path / "logs"
         logs.mkdir()
-        (logs / "activity.jsonl").write_text(json.dumps({
-            "component": "context", "event": "inject", "session": "aaaa1111",
-            "sections_by_file": {"dev.md": ["Testing"]},
-            "bytes_by_file": {"dev.md": 10}}) + "\n", encoding="utf-8")
+        (logs / "activity.jsonl").write_text(
+            json.dumps(
+                {
+                    "component": "context",
+                    "event": "inject",
+                    "session": "aaaa1111",
+                    "sections_by_file": {"dev.md": ["Testing"]},
+                    "bytes_by_file": {"dev.md": 10},
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
 
         class _Paths:
-            def memory_dir(self): return tmp_path / "memory"
-            def learnings_file(self): return tmp_path / "learnings.md"
-            def diary_dir(self): return tmp_path / "diary"
-            def catalogs_dir(self): return tmp_path / "catalogs"
-            def data_dir(self): return tmp_path
-            def logs_dir(self): return logs
+            def memory_dir(self):
+                return tmp_path / "memory"
+
+            def learnings_file(self):
+                return tmp_path / "learnings.md"
+
+            def diary_dir(self):
+                return tmp_path / "diary"
+
+            def catalogs_dir(self):
+                return tmp_path / "catalogs"
+
+            def data_dir(self):
+                return tmp_path
+
+            def logs_dir(self):
+                return logs
 
         stdin = json.dumps({"session_id": "aaaa1111", "cwd": "/work"})
-        with patch.object(el, "get_paths", _Paths), \
-             patch.object(el, "load_target_charters", lambda *a, **k: []), \
-             patch.object(el, "create_client", AsyncMock(return_value=object())), \
-             patch.object(el, "_distill_transcript", lambda *a: (["c"], None)), \
-             patch.object(el, "extract_session_signals", fake), \
-             patch.object(el.sys, "stdin",
-                          type("S", (), {"read": staticmethod(lambda: stdin)})):
+        with (
+            patch.object(el, "get_paths", _Paths),
+            patch.object(el, "load_target_charters", lambda *a, **k: []),
+            patch.object(el, "create_client", AsyncMock(return_value=object())),
+            patch.object(el, "_distill_transcript", lambda *a: (["c"], None)),
+            patch.object(el, "extract_session_signals", fake),
+            patch.object(
+                el.sys, "stdin", type("S", (), {"read": staticmethod(lambda: stdin)})
+            ),
+        ):
             asyncio.run(el.extract())
         assert seen["injected"] == ["dev.md#Testing"]
 
@@ -1248,34 +1638,59 @@ class TestExtractLearningsWiring:
 
         logs = tmp_path / "logs"
         logs.mkdir()
-        (logs / "activity.jsonl").write_text(json.dumps({
-            "component": "context", "event": "inject", "session": "aaaa1111",
-            "sections_by_file": {"dev.md": ["Testing"]},
-            "bytes_by_file": {"dev.md": 10}}) + "\n", encoding="utf-8")
+        (logs / "activity.jsonl").write_text(
+            json.dumps(
+                {
+                    "component": "context",
+                    "event": "inject",
+                    "session": "aaaa1111",
+                    "sections_by_file": {"dev.md": ["Testing"]},
+                    "bytes_by_file": {"dev.md": 10},
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
 
         class _Paths:
-            def memory_dir(self): return tmp_path / "memory"
-            def learnings_file(self): return tmp_path / "learnings.md"
-            def diary_dir(self): return tmp_path / "diary"
-            def catalogs_dir(self): return tmp_path / "catalogs"
-            def data_dir(self): return tmp_path
-            def logs_dir(self): return logs
+            def memory_dir(self):
+                return tmp_path / "memory"
+
+            def learnings_file(self):
+                return tmp_path / "learnings.md"
+
+            def diary_dir(self):
+                return tmp_path / "diary"
+
+            def catalogs_dir(self):
+                return tmp_path / "catalogs"
+
+            def data_dir(self):
+                return tmp_path
+
+            def logs_dir(self):
+                return logs
 
         stdin = json.dumps({"session_id": "aaaa1111", "cwd": "/work"})
-        with patch.object(el, "get_paths", _Paths), \
-             patch.object(el, "load_target_charters", lambda *a, **k: []), \
-             patch.object(el, "create_client",
-                          AsyncMock(side_effect=RuntimeError("no client"))), \
-             patch.object(el, "_distill_transcript", lambda *a: (["c"], None)), \
-             patch.object(el.sys, "stdin",
-                          type("S", (), {"read": staticmethod(lambda: stdin)})):
+        with (
+            patch.object(el, "get_paths", _Paths),
+            patch.object(el, "load_target_charters", lambda *a, **k: []),
+            patch.object(
+                el, "create_client", AsyncMock(side_effect=RuntimeError("no client"))
+            ),
+            patch.object(el, "_distill_transcript", lambda *a: (["c"], None)),
+            patch.object(
+                el.sys, "stdin", type("S", (), {"read": staticmethod(lambda: stdin)})
+            ),
+        ):
             asyncio.run(el.extract())
 
         records = util.read_records(util.utilisation_path(tmp_path))
         assert len(records) == 1
         assert records[0]["injected"]
-        assert records[0]["self_report"] is None, \
+        assert records[0]["self_report"] is None, (
             "no model means no estimate — never a fabricated empty one"
+        )
 
 
 class TestMaintainerPasses:
@@ -1288,9 +1703,12 @@ class TestMaintainerPasses:
     def test_compaction_pass_collapses_old_records(self, tmp_path):
         import memory_maintainer as mm
 
-        _write(util.utilisation_path(tmp_path), [
-            _session("old", [_inject("dev.md", "Testing", 100)], days_ago=200),
-        ])
+        _write(
+            util.utilisation_path(tmp_path),
+            [
+                _session("old", [_inject("dev.md", "Testing", 100)], days_ago=200),
+            ],
+        )
         result = mm.run_utilisation_compact(tmp_path)
         assert result.ran is True and "collapsed 1" in result.detail
 
@@ -1301,14 +1719,17 @@ class TestMaintainerPasses:
         assert result.ran is False
         assert "awaiting" in result.detail
 
-    def test_judge_pass_degrades_when_no_client_can_be_made(self, tmp_path, monkeypatch):
+    def test_judge_pass_degrades_when_no_client_can_be_made(
+        self, tmp_path, monkeypatch
+    ):
         """Contract C3 — records nothing, never guesses, never crashes."""
+        import memory_maintainer as mm
         import multiplai_core.model_client as mc
 
-        import memory_maintainer as mm
-
-        _write(util.utilisation_path(tmp_path),
-               [_session("s1", [_inject("dev.md", "Testing", 100)])])
+        _write(
+            util.utilisation_path(tmp_path),
+            [_session("s1", [_inject("dev.md", "Testing", 100)])],
+        )
 
         async def boom(**_kw):
             raise RuntimeError("neither Agent SDK nor API key is available")
@@ -1317,13 +1738,14 @@ class TestMaintainerPasses:
         result = mm.run_utilisation_judge(tmp_path)
         assert result.ran is False
         assert "error" in result.detail
-        assert all(r["judge"] is None
-                   for r in util.read_records(util.utilisation_path(tmp_path)))
+        assert all(
+            r["judge"] is None
+            for r in util.read_records(util.utilisation_path(tmp_path))
+        )
 
     def test_judge_pass_can_be_turned_off(self, tmp_path, monkeypatch):
-        from multiplai_core.plugin_options import option_var
-
         import memory_maintainer as mm
+        from multiplai_core.plugin_options import option_var
 
         monkeypatch.setenv(option_var("utilisation_judge_sample"), "0")
         result = mm.run_utilisation_judge(tmp_path)
@@ -1332,9 +1754,12 @@ class TestMaintainerPasses:
     def test_dry_run_writes_nothing(self, tmp_path):
         import memory_maintainer as mm
 
-        path = _write(util.utilisation_path(tmp_path), [
-            _session("old", [_inject("dev.md", "Testing", 100)], days_ago=200),
-        ])
+        path = _write(
+            util.utilisation_path(tmp_path),
+            [
+                _session("old", [_inject("dev.md", "Testing", 100)], days_ago=200),
+            ],
+        )
         before = path.read_text(encoding="utf-8")
         assert mm.run_utilisation_compact(tmp_path, dry_run=True).ran is True
         assert mm.run_utilisation_judge(tmp_path, dry_run=True).ran is True
@@ -1369,9 +1794,16 @@ class TestJudgeInstrument:
         _write(path, [_session("s1", [_inject("dev.md", "Testing", 100)])])
         stamp = {"plugin_version": "9.9.9", "model": "haiku", "thinking": True}
         record = util.record_judge(
-            path, "s1",
-            [{"file": "dev.md", "section": "Testing", "used": True,
-              "evidence": "quote"}],
+            path,
+            "s1",
+            [
+                {
+                    "file": "dev.md",
+                    "section": "Testing",
+                    "used": True,
+                    "evidence": "quote",
+                }
+            ],
             instrument=stamp,
         )
         assert record[util.JUDGE_INSTRUMENT_KEY] == stamp
@@ -1387,12 +1819,20 @@ class TestJudgeInstrument:
         assert instrument["thinking"] is True
 
     def test_unstamped_verdicts_do_not_reach_the_judge_column(self):
-        verdict = [{"file": "dev.md", "section": "Testing", "used": True,
-                    "evidence": "q"}]
-        table = util.build_table([
-            _session(f"s{i}", [_inject("dev.md", "Testing", 100)],
-                     judge_entries=verdict, judge_instrument=None)
-            for i in range(6)])
+        verdict = [
+            {"file": "dev.md", "section": "Testing", "used": True, "evidence": "q"}
+        ]
+        table = util.build_table(
+            [
+                _session(
+                    f"s{i}",
+                    [_inject("dev.md", "Testing", 100)],
+                    judge_entries=verdict,
+                    judge_instrument=None,
+                )
+                for i in range(6)
+            ]
+        )
         row = self._stat(table)
         assert row["judge"]["observed"] == 0
         assert row["judge"]["rate"] is None, "not estimated, never zero"
@@ -1401,27 +1841,46 @@ class TestJudgeInstrument:
         assert row["legacy_judge"]["comparable_to_judge"] is False
 
     def test_stamped_verdicts_do(self):
-        verdict = [{"file": "dev.md", "section": "Testing", "used": True,
-                    "evidence": "q"}]
-        table = util.build_table([
-            _session(f"s{i}", [_inject("dev.md", "Testing", 100)],
-                     judge_entries=verdict)
-            for i in range(6)])
+        verdict = [
+            {"file": "dev.md", "section": "Testing", "used": True, "evidence": "q"}
+        ]
+        table = util.build_table(
+            [
+                _session(
+                    f"s{i}", [_inject("dev.md", "Testing", 100)], judge_entries=verdict
+                )
+                for i in range(6)
+            ]
+        )
         row = self._stat(table)
         assert row["judge"]["observed"] == 6
         assert row["legacy_judge"]["observed"] == 0
 
     def test_the_two_are_never_summed_into_one_number(self):
-        verdict = [{"file": "dev.md", "section": "Testing", "used": True,
-                    "evidence": "q"}]
+        verdict = [
+            {"file": "dev.md", "section": "Testing", "used": True, "evidence": "q"}
+        ]
         records = [
-            _session(f"old{i}", [_inject("dev.md", "Testing", 100)],
-                     judge_entries=verdict, judge_instrument=None)
+            _session(
+                f"old{i}",
+                [_inject("dev.md", "Testing", 100)],
+                judge_entries=verdict,
+                judge_instrument=None,
+            )
             for i in range(6)
         ] + [
-            _session("new1", [_inject("dev.md", "Testing", 100)],
-                     judge_entries=[{"file": "dev.md", "section": "Testing",
-                                     "used": False, "evidence": ""}]),
+            _session(
+                "new1",
+                [_inject("dev.md", "Testing", 100)],
+                judge_entries=[
+                    {
+                        "file": "dev.md",
+                        "section": "Testing",
+                        "used": False,
+                        "evidence": "",
+                    }
+                ],
+            ),
         ]
         table = util.build_table(records)
         row = self._stat(table)
@@ -1431,12 +1890,20 @@ class TestJudgeInstrument:
         assert table["coverage"]["sessions_judged_legacy_instrument"] == 6
 
     def test_the_human_table_warns_instead_of_blending(self):
-        verdict = [{"file": "dev.md", "section": "Testing", "used": True,
-                    "evidence": "q"}]
-        table = util.build_table([
-            _session(f"s{i}", [_inject("dev.md", "Testing", 100)],
-                     judge_entries=verdict, judge_instrument=None)
-            for i in range(6)])
+        verdict = [
+            {"file": "dev.md", "section": "Testing", "used": True, "evidence": "q"}
+        ]
+        table = util.build_table(
+            [
+                _session(
+                    f"s{i}",
+                    [_inject("dev.md", "Testing", 100)],
+                    judge_entries=verdict,
+                    judge_instrument=None,
+                )
+                for i in range(6)
+            ]
+        )
         rendered = util.render_table(table)
         assert "6 judged session(s) are NOT in the judge column" in rendered
         assert util.JUDGE_INSTRUMENT_CHANGED_AT in rendered
@@ -1444,37 +1911,65 @@ class TestJudgeInstrument:
     def test_compaction_keeps_the_two_apart(self, tmp_path):
         """The one path that survives the 90-day window must not merge them."""
         path = util.utilisation_path(tmp_path)
-        verdict = [{"file": "dev.md", "section": "Testing", "used": True,
-                    "evidence": "q"}]
-        _write(path, [
-            _session("old", [_inject("dev.md", "Testing", 100)],
-                     judge_entries=verdict, judge_instrument=None,
-                     days_ago=200),
-            _session("new", [_inject("dev.md", "Testing", 100)],
-                     judge_entries=verdict, days_ago=200),
-        ])
+        verdict = [
+            {"file": "dev.md", "section": "Testing", "used": True, "evidence": "q"}
+        ]
+        _write(
+            path,
+            [
+                _session(
+                    "old",
+                    [_inject("dev.md", "Testing", 100)],
+                    judge_entries=verdict,
+                    judge_instrument=None,
+                    days_ago=200,
+                ),
+                _session(
+                    "new",
+                    [_inject("dev.md", "Testing", 100)],
+                    judge_entries=verdict,
+                    days_ago=200,
+                ),
+            ],
+        )
         before = util.aggregate(util.read_records(path))
         util.compact(path)
         after = util.aggregate(util.read_records(path))
         stat_before = before.sections["dev.md#Testing"]
         stat_after = after.sections["dev.md#Testing"]
-        assert (stat_after.judge_observed, stat_after.judge_used) == \
-            (stat_before.judge_observed, stat_before.judge_used) == (1, 1)
-        assert (stat_after.legacy_judge_observed, stat_after.legacy_judge_used) == \
-            (stat_before.legacy_judge_observed, stat_before.legacy_judge_used) == (1, 1)
+        assert (
+            (stat_after.judge_observed, stat_after.judge_used)
+            == (stat_before.judge_observed, stat_before.judge_used)
+            == (1, 1)
+        )
+        assert (
+            (stat_after.legacy_judge_observed, stat_after.legacy_judge_used)
+            == (stat_before.legacy_judge_observed, stat_before.legacy_judge_used)
+            == (1, 1)
+        )
         assert after.sessions_judged == 1
         assert after.sessions_judged_legacy == 1
 
     def test_a_totals_record_written_before_the_stamp_reads_as_legacy(self):
         """Old totals folded both instruments together and cannot say which."""
         totals = {
-            "v": util.SCHEMA_VERSION, "kind": "totals", "through": "2026-05-01",
-            "sessions": 4, "sessions_self_reported": 4, "sessions_judged": 4,
-            "sections": {"dev.md#Testing": {
-                "retrieved": 4, "sessions": 4, "bytes": 400,
-                "self_report_observed": 4, "self_report_used": 2,
-                "judge_observed": 4, "judge_used": 3,
-            }},
+            "v": util.SCHEMA_VERSION,
+            "kind": "totals",
+            "through": "2026-05-01",
+            "sessions": 4,
+            "sessions_self_reported": 4,
+            "sessions_judged": 4,
+            "sections": {
+                "dev.md#Testing": {
+                    "retrieved": 4,
+                    "sessions": 4,
+                    "bytes": 400,
+                    "self_report_observed": 4,
+                    "self_report_used": 2,
+                    "judge_observed": 4,
+                    "judge_used": 3,
+                }
+            },
         }
         agg = util.aggregate([totals])
         stat = agg.sections["dev.md#Testing"]
@@ -1498,7 +1993,9 @@ class TestDroppedVerdictsAreVisible:
         with caplog.at_level(logging.WARNING, logger="lib.utilisation_judge"):
             out = judge.parse_verdicts(
                 '<verdicts><verdict file="git.md" used="no"></verdict></verdicts>',
-                self.ALLOWED, session="s1")
+                self.ALLOWED,
+                session="s1",
+            )
         assert len(out) == 1
         assert "2 injected section(s) got no verdict" in caplog.text
         assert "dev.md#Testing" in caplog.text
@@ -1507,55 +2004,71 @@ class TestDroppedVerdictsAreVisible:
     def test_a_verdict_for_something_never_injected_is_warned_about(self, caplog):
         with caplog.at_level(logging.WARNING, logger="lib.utilisation_judge"):
             judge.parse_verdicts(
-                '<verdicts>'
+                "<verdicts>"
                 '<verdict file="invented.md" used="yes">q</verdict>'
-                '</verdicts>',
-                ["invented-not.md"], session="s2")
+                "</verdicts>",
+                ["invented-not.md"],
+                session="s2",
+            )
         assert "never injected" in caplog.text
         assert "invented.md" in caplog.text
 
     def test_duplicates_and_malformed_tags_are_warned_about(self, caplog):
         with caplog.at_level(logging.WARNING, logger="lib.utilisation_judge"):
             judge.parse_verdicts(
-                '<verdicts>'
+                "<verdicts>"
                 '<verdict file="git.md" used="yes">q</verdict>'
                 '<verdict file="git.md" used="no"></verdict>'
                 '<verdict used="yes">no file attribute</verdict>'
-                '</verdicts>',
-                ["git.md"], session="s3")
+                "</verdicts>",
+                ["git.md"],
+                session="s3",
+            )
         assert "1 duplicate verdict(s)" in caplog.text
         assert "1 <verdict> tag(s) had no usable file=" in caplog.text
 
     def test_a_fully_compliant_answer_logs_nothing(self, caplog):
         with caplog.at_level(logging.WARNING, logger="lib.utilisation_judge"):
             judge.parse_verdicts(
-                '<verdicts>'
-                '<verdict file="git.md" used="no"></verdict>'
-                '</verdicts>',
-                ["git.md"], session="s4")
+                '<verdicts><verdict file="git.md" used="no"></verdict></verdicts>',
+                ["git.md"],
+                session="s4",
+            )
         assert caplog.text == ""
 
     def test_a_dropped_section_is_not_observed_rather_than_unused(self):
         """The arithmetic must stay honest whatever the model omits."""
-        table = util.build_table([
-            _session(f"s{i}",
-                     [_inject("dev.md", "Testing", 100),
-                      _inject("git.md", None, 100)],
-                     judge_entries=[{"file": "dev.md", "section": "Testing",
-                                     "used": True, "evidence": "q"}])
-            for i in range(6)])
-        rows = {r["key"]: r for r in
-                table["sections"] + table["insufficient_data"]}
+        table = util.build_table(
+            [
+                _session(
+                    f"s{i}",
+                    [_inject("dev.md", "Testing", 100), _inject("git.md", None, 100)],
+                    judge_entries=[
+                        {
+                            "file": "dev.md",
+                            "section": "Testing",
+                            "used": True,
+                            "evidence": "q",
+                        }
+                    ],
+                )
+                for i in range(6)
+            ]
+        )
+        rows = {r["key"]: r for r in table["sections"] + table["insufficient_data"]}
         assert rows["git.md"]["judge"]["observed"] == 0
         assert rows["git.md"]["judge"]["rate"] is None
 
 
 class TestSectionKeys:
-    @pytest.mark.parametrize("file,section,key", [
-        ("dev.md", "Testing", "dev.md#Testing"),
-        ("dev.md", None, "dev.md"),
-        ("dev.md", "", "dev.md"),
-    ])
+    @pytest.mark.parametrize(
+        "file,section,key",
+        [
+            ("dev.md", "Testing", "dev.md#Testing"),
+            ("dev.md", None, "dev.md"),
+            ("dev.md", "", "dev.md"),
+        ],
+    )
     def test_round_trip(self, file, section, key):
         assert util.section_key(file, section) == key
         assert util.split_key(key) == (file, section or None)
@@ -1576,9 +2089,7 @@ class TestJudgeThinking:
         import lib.thinking as th
         from multiplai_core.plugin_options import option_var
 
-        monkeypatch.setattr(
-            th, "core_supports_thinking", lambda target=None: supported
-        )
+        monkeypatch.setattr(th, "core_supports_thinking", lambda target=None: supported)
         var = option_var(th.UTILISATION_THINKING_OPTION)
         if option is None:
             monkeypatch.delenv(var, raising=False)
@@ -1594,8 +2105,11 @@ class TestJudgeThinking:
 
         client = MagicMock()
         client.query = query
-        record = _session("s1", [_inject("dev.md", "Testing", 100)],
-                          transcript="/transcripts/s1.jsonl")
+        record = _session(
+            "s1",
+            [_inject("dev.md", "Testing", 100)],
+            transcript="/transcripts/s1.jsonl",
+        )
         asyncio.run(judge.judge_one_detailed(client, record, model="m"))
         assert captured, "the model path must have been taken"
         return captured
@@ -1609,10 +2123,13 @@ class TestJudgeThinking:
         """Only the judge passes default=True; everything else stays off."""
         import lib.thinking as th
 
-        assert th.resolve_thinking_option(th.EXTRACTION_THINKING_OPTION) == \
-            th.THINKING_DISABLED
-        assert th.resolve_thinking_option(th.NOW_THINKING_OPTION) == \
-            th.THINKING_DISABLED
+        assert (
+            th.resolve_thinking_option(th.EXTRACTION_THINKING_OPTION)
+            == th.THINKING_DISABLED
+        )
+        assert (
+            th.resolve_thinking_option(th.NOW_THINKING_OPTION) == th.THINKING_DISABLED
+        )
 
     def test_the_option_can_still_turn_it_off(self, monkeypatch):
         """A pin is a default, not a lock."""
@@ -1623,5 +2140,4 @@ class TestJudgeThinking:
     def test_keyword_omitted_entirely_when_unsupported(self, monkeypatch):
         """Routed through thinking_kwargs, so an unsupported dependency is
         handed no keyword rather than `thinking=None`."""
-        assert "thinking" not in self._run(
-            monkeypatch, supported=False, option="false")
+        assert "thinking" not in self._run(monkeypatch, supported=False, option="false")

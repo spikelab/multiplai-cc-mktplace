@@ -9,7 +9,6 @@ import sys
 from pathlib import Path
 
 import pytest
-
 from build_pipeline.epic import lock as epic_lock
 from build_pipeline.epic import store
 
@@ -24,16 +23,20 @@ def _release_locks():
 
 # --- item 5: the directory name ------------------------------------------------
 
+
 class TestSlug:
     """Copied from the review skill's slug rule (review_pipeline/target.py,
     `origin_owner_repo` and `slug_repo_name`) and pinned here."""
 
-    @pytest.mark.parametrize("url", [
-        "https://github.com/spikelab/github-tests.git",
-        "git@github.com:spikelab/github-tests.git",
-        "ssh://git@github.com/spikelab/github-tests",
-        "https://github.com/spikelab/github-tests/",
-    ])
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://github.com/spikelab/github-tests.git",
+            "git@github.com:spikelab/github-tests.git",
+            "ssh://git@github.com/spikelab/github-tests",
+            "https://github.com/spikelab/github-tests/",
+        ],
+    )
     def test_owner_and_repo_from_any_remote_form(self, url):
         assert store.origin_owner_repo(url) == ("spikelab", "github-tests")
 
@@ -56,7 +59,9 @@ class TestSlug:
         subprocess.run(["git", "init", "-q", str(repo)], check=True)
         assert store.epic_dir_for(repo, "e") == data / "buildme" / "epics" / "plain--e"
 
-    def test_its_git_calls_go_through_git_ops_run_with_its_timeout(self, tmp_path, monkeypatch):
+    def test_its_git_calls_go_through_git_ops_run_with_its_timeout(
+        self, tmp_path, monkeypatch
+    ):
         """The coordinator and the findings stage read the slug with this; a
         bare `subprocess.run` with no timeout could hang them (#332,
         6314d19ce3). `git_ops._run` gives each call `_GIT_TIMEOUT`."""
@@ -65,7 +70,11 @@ class TestSlug:
         repo = tmp_path / "plain"
         repo.mkdir()
         subprocess.run(["git", "init", "-q", str(repo)], check=True)
-        subprocess.run(["git", "remote", "add", "origin", "git@github.com:o/r.git"], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "remote", "add", "origin", "git@github.com:o/r.git"],
+            cwd=repo,
+            check=True,
+        )
         real, seen = git_ops._run, []
 
         def run(argv, cwd=None, **kw):
@@ -77,7 +86,9 @@ class TestSlug:
         assert seen == [["git", "remote", "get-url"]]
 
     @pytest.mark.parametrize("code", [124, 127])
-    def test_a_git_that_timed_out_or_did_not_start_is_not_read_as_no_origin(self, tmp_path, monkeypatch, code):
+    def test_a_git_that_timed_out_or_did_not_start_is_not_read_as_no_origin(
+        self, tmp_path, monkeypatch, code
+    ):
         """`git_ops._run` gives 124 for a timeout and 127 for a git that did
         not start. Neither says the repo has no origin, so the store raises
         instead of answering with the directory name."""
@@ -85,7 +96,11 @@ class TestSlug:
 
         repo = tmp_path / "plain"
         repo.mkdir()
-        monkeypatch.setattr(git_ops, "_run", lambda argv, cwd=None, **kw: git_ops.GitResult(argv, code, "", "x"))
+        monkeypatch.setattr(
+            git_ops,
+            "_run",
+            lambda argv, cwd=None, **kw: git_ops.GitResult(argv, code, "", "x"),
+        )
         with pytest.raises(store.GitUnreadable):
             store.slug_repo_name(repo)
 
@@ -105,8 +120,12 @@ sys.stdin.read()
 
 def hold_in_other_process(lock_file: Path) -> subprocess.Popen:
     lock_file.parent.mkdir(parents=True, exist_ok=True)
-    proc = subprocess.Popen([sys.executable, "-c", HOLDER, str(lock_file)],
-                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    proc = subprocess.Popen(
+        [sys.executable, "-c", HOLDER, str(lock_file)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
     assert proc.stdout.readline().strip() == "locked"
     return proc
 
@@ -129,7 +148,9 @@ class TestLock:
         try:
             with pytest.raises(epic_lock.EpicLocked) as err:
                 epic_lock.hold(tmp_path / "e", "e")
-            assert str(err.value).startswith(f"epic e is running now (pid {proc.pid} on ")
+            assert str(err.value).startswith(
+                f"epic e is running now (pid {proc.pid} on "
+            )
         finally:
             proc.communicate("")
 
@@ -139,10 +160,16 @@ class TestLock:
         epic_lock.hold(tmp_path / "e", "e")
         assert not os.get_inheritable(epic_lock._held[tmp_path / "e"])
         out = subprocess.run(
-            [sys.executable, "-c",
-             "import fcntl,os,sys\n"
-             "fd=os.open(sys.argv[1],os.O_RDWR)\n"
-             "try:\n fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB);print('got')\n"
-             "except OSError:\n print('held')\n",
-             str(tmp_path / "e" / ".lock")], capture_output=True, text=True)
+            [
+                sys.executable,
+                "-c",
+                "import fcntl,os,sys\n"
+                "fd=os.open(sys.argv[1],os.O_RDWR)\n"
+                "try:\n fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB);print('got')\n"
+                "except OSError:\n print('held')\n",
+                str(tmp_path / "e" / ".lock"),
+            ],
+            capture_output=True,
+            text=True,
+        )
         assert out.stdout.strip() == "held"

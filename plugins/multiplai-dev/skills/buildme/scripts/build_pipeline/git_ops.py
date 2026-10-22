@@ -35,11 +35,11 @@ import json
 import logging
 import os
 import shlex
-import signal
 import shutil
+import signal
 import subprocess
-import threading
 import tempfile
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -85,8 +85,13 @@ class GitResult:
         return " ".join(shlex.quote(a) for a in self.argv)
 
 
-def _run(argv: list[str], cwd: Path | str | None = None, timeout: int = _GIT_TIMEOUT,
-         errors: str | None = None, env: dict[str, str] | None = None) -> GitResult:
+def _run(
+    argv: list[str],
+    cwd: Path | str | None = None,
+    timeout: int = _GIT_TIMEOUT,
+    errors: str | None = None,
+    env: dict[str, str] | None = None,
+) -> GitResult:
     """Run a fixed argv list. shell=False (the default) — never a string.
     *errors* is how undecodable output bytes are decoded (`subprocess.run`);
     None raises `UnicodeDecodeError`."""
@@ -107,7 +112,9 @@ def _run(argv: list[str], cwd: Path | str | None = None, timeout: int = _GIT_TIM
         return GitResult(argv, 124, "", f"timed out after {timeout}s")
 
 
-def _run_gh(argv: list[str], cwd: Path | str | None = None, timeout: int = _GH_TIMEOUT) -> GitResult:
+def _run_gh(
+    argv: list[str], cwd: Path | str | None = None, timeout: int = _GH_TIMEOUT
+) -> GitResult:
     """Separate seam for ``gh`` so tests can mock it without mocking git."""
     return _run(argv, cwd=cwd, timeout=timeout)
 
@@ -194,8 +201,14 @@ def _run_skill(argv: list[str], cwd: Path | str | None, timeout: int) -> GitResu
     """
     with _exit_on_termination():
         try:
-            proc = subprocess.Popen(argv, cwd=str(cwd) if cwd else None, stdout=subprocess.PIPE,
-                                    stderr=subprocess.PIPE, text=True, start_new_session=True)
+            proc = subprocess.Popen(
+                argv,
+                cwd=str(cwd) if cwd else None,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                start_new_session=True,
+            )
         except FileNotFoundError as e:
             return GitResult(argv, 127, "", str(e))
         try:
@@ -215,15 +228,20 @@ def _run_skill(argv: list[str], cwd: Path | str | None, timeout: int) -> GitResu
 # The skill commands that call a model and print their own
 # `SPEND:<usd>:<tokens>` line on exit. The review skill prints none: its
 # spend is in its ledger, which an epic reads.
-SPEND_REPORTING = {"pr_pipeline": ("open", "edit"), "walkthrough_pipeline": ("run", "resume"),
-                   "spec_extract_pipeline": ("run",)}
+SPEND_REPORTING = {
+    "pr_pipeline": ("open", "edit"),
+    "walkthrough_pipeline": ("run", "resume"),
+    "spec_extract_pipeline": ("run",),
+}
 
 
 def _count_skill_spend(argv: list[str], stdout: str | None) -> None:
     """Add a model-calling skill's `SPEND:` line to buildme's process total
     (`budget.spend_marker`), or mark that total incomplete when the skill
     printed none (killed, timed out, or failed before printing it)."""
-    if not any(a in SPEND_REPORTING and b in SPEND_REPORTING[a] for a, b in zip(argv, argv[1:])):
+    if not any(
+        a in SPEND_REPORTING and b in SPEND_REPORTING[a] for a, b in zip(argv, argv[1:])
+    ):
         return
     from . import budget
 
@@ -236,10 +254,13 @@ def _count_skill_spend(argv: list[str], stdout: str | None) -> None:
                 break
             budget.add_process_spend(usd, tokens)
             if parts[3:4] == ["incomplete"]:
-                budget.process_spend_unknown("a skill's own spend is incomplete: " + " ".join(argv[:12]))
+                budget.process_spend_unknown(
+                    "a skill's own spend is incomplete: " + " ".join(argv[:12])
+                )
             return
-    budget.process_spend_unknown("a skill that calls a model printed no SPEND line: "
-                                 + " ".join(argv[:12]))
+    budget.process_spend_unknown(
+        "a skill that calls a model printed no SPEND line: " + " ".join(argv[:12])
+    )
 
 
 def _kill_group(proc: subprocess.Popen) -> None:
@@ -257,27 +278,35 @@ def _kill_group(proc: subprocess.Popen) -> None:
             pipe.close()
 
 
-def _run_pr_skill(argv: list[str], cwd: Path | str | None = None,
-                  timeout: int = _PR_SKILL_TIMEOUT) -> GitResult:
+def _run_pr_skill(
+    argv: list[str], cwd: Path | str | None = None, timeout: int = _PR_SKILL_TIMEOUT
+) -> GitResult:
     """Separate seam for the pr skill's subprocess so tests can stub it."""
     return _run_skill(argv, cwd, timeout)
 
 
-def _run_review_skill(argv: list[str], cwd: Path | str | None = None,
-                      timeout: int = _REVIEW_SKILL_TIMEOUT) -> GitResult:
+def _run_review_skill(
+    argv: list[str], cwd: Path | str | None = None, timeout: int = _REVIEW_SKILL_TIMEOUT
+) -> GitResult:
     """Separate seam for the review skill's subprocess (the findings stage)."""
     return _run_skill(argv, cwd, timeout)
 
 
-def _run_walkthrough_skill(argv: list[str], cwd: Path | str | None = None,
-                           timeout: int = _WALKTHROUGH_SKILL_TIMEOUT) -> GitResult:
+def _run_walkthrough_skill(
+    argv: list[str],
+    cwd: Path | str | None = None,
+    timeout: int = _WALKTHROUGH_SKILL_TIMEOUT,
+) -> GitResult:
     """Separate seam for the codebase-walkthrough skill's subprocess
     (``walkthrough_pipeline check`` and ``run``, after the build)."""
     return _run_skill(argv, cwd, timeout)
 
 
-def _run_spec_extract_skill(argv: list[str], cwd: Path | str | None = None,
-                            timeout: int = _SPEC_EXTRACT_SKILL_TIMEOUT) -> GitResult:
+def _run_spec_extract_skill(
+    argv: list[str],
+    cwd: Path | str | None = None,
+    timeout: int = _SPEC_EXTRACT_SKILL_TIMEOUT,
+) -> GitResult:
     """Separate seam for the spec-extract skill's subprocess
     (``spec_extract_pipeline run ... --apply``, in CODEBASE_ANALYSIS)."""
     return _run_skill(argv, cwd, timeout)
@@ -306,7 +335,10 @@ def path_prefix(path: Path | str) -> str | None:
 def files_at(path: Path | str, sha: str) -> list[str] | None:
     """Every file under ``path`` in commit ``sha``, relative to ``path``
     (``git ls-tree`` lists from the working directory down), or None."""
-    res = _run(["git", "-c", "core.quotepath=off", "ls-tree", "-r", "-z", "--name-only", sha], cwd=path)
+    res = _run(
+        ["git", "-c", "core.quotepath=off", "ls-tree", "-r", "-z", "--name-only", sha],
+        cwd=path,
+    )
     if not res.ok:
         log.warning("git ls-tree %s failed: %s", sha, res.stderr.strip())
         return None
@@ -426,7 +458,11 @@ def worktree_dest(repo: Path, change_name: str, suffix: int = 1) -> Path:
 
 
 def resolve_new_branch(
-    repo: Path, change_name: str, base: str, *, taken: tuple[str, ...] = (),
+    repo: Path,
+    change_name: str,
+    base: str,
+    *,
+    taken: tuple[str, ...] = (),
 ) -> tuple[str, Path]:
     """Pick a free ``buildme/<change>`` branch and its matching worktree path.
 
@@ -497,12 +533,22 @@ def preflight(repo_path: Path, *, worktree_requested: bool) -> Path:
     return root
 
 
-def create_worktree(repo: Path, branch: str, dest: Path, start_point: str | None = None) -> GitResult:
+def create_worktree(
+    repo: Path, branch: str, dest: Path, start_point: str | None = None
+) -> GitResult:
     """``git worktree add -b <branch> <dest> [<start_point>]``. Never forces,
     never reuses. Without a start point the branch starts at the repo's HEAD."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     res = _run(
-        ["git", "worktree", "add", "-b", branch, str(dest), *([start_point] if start_point else [])],
+        [
+            "git",
+            "worktree",
+            "add",
+            "-b",
+            branch,
+            str(dest),
+            *([start_point] if start_point else []),
+        ],
         cwd=repo,
         timeout=_GIT_TIMEOUT,
     )
@@ -538,18 +584,37 @@ def add_worktree_for_branch(repo: Path, branch: str, dest: Path) -> GitResult:
     if branch_exists(repo, branch):
         argv = ["git", "worktree", "add", str(dest), branch]
     else:
-        fetch = _run(["git", "fetch", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}"],
-                     cwd=repo, timeout=_PUSH_TIMEOUT)
+        fetch = _run(
+            [
+                "git",
+                "fetch",
+                "origin",
+                f"+refs/heads/{branch}:refs/remotes/origin/{branch}",
+            ],
+            cwd=repo,
+            timeout=_PUSH_TIMEOUT,
+        )
         if not fetch.ok:
             raise GitLifecycleError(
                 f"Branch '{branch}' is not local and `git fetch origin {branch}` failed: "
-                f"{(fetch.stderr or fetch.stdout).strip()}")
-        argv = ["git", "worktree", "add", "--track", "-b", branch, str(dest), f"origin/{branch}"]
+                f"{(fetch.stderr or fetch.stdout).strip()}"
+            )
+        argv = [
+            "git",
+            "worktree",
+            "add",
+            "--track",
+            "-b",
+            branch,
+            str(dest),
+            f"origin/{branch}",
+        ]
     res = _run(argv, cwd=repo, timeout=_GIT_TIMEOUT)
     if not res.ok:
         raise GitLifecycleError(
             f"Failed to check out {branch} in a worktree at {dest}: "
-            f"{(res.stderr or res.stdout).strip()}")
+            f"{(res.stderr or res.stdout).strip()}"
+        )
     log.info("WORKTREE added path=%s branch=%s repo=%s", dest, branch, repo)
     return res
 
@@ -558,8 +623,16 @@ def fast_forward_from_origin(worktree: Path, branch: str) -> GitResult:
     """Bring *branch* up to ``origin/<branch>`` when that is a fast-forward
     (someone pushed to the PR). Never merges, never resets: a diverged branch
     is left alone and the later push reports it."""
-    fetch = _run(["git", "fetch", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}"],
-                 cwd=worktree, timeout=_PUSH_TIMEOUT)
+    fetch = _run(
+        [
+            "git",
+            "fetch",
+            "origin",
+            f"+refs/heads/{branch}:refs/remotes/origin/{branch}",
+        ],
+        cwd=worktree,
+        timeout=_PUSH_TIMEOUT,
+    )
     if not fetch.ok:
         return fetch
     return _run(["git", "merge", "--ff-only", f"origin/{branch}"], cwd=worktree)
@@ -589,12 +662,17 @@ def _working_identity(path: Path) -> str:
     if path.is_symlink():
         return "link:" + os.readlink(path)
     if path.is_file():
-        return f"mode:{path.stat().st_mode & 0o111}:sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+        return (
+            f"mode:{path.stat().st_mode & 0o111}:sha256:"
+            + hashlib.sha256(path.read_bytes()).hexdigest()
+        )
     return "other" if path.exists() else "deleted"
 
 
 def _agent_index_evidence(repo: Path | str) -> tuple[Path | None, dict]:
-    result = _run(["git", "rev-parse", "--git-path", "buildme-agent-index.json"], cwd=repo)
+    result = _run(
+        ["git", "rev-parse", "--git-path", "buildme-agent-index.json"], cwd=repo
+    )
     if not result.ok:
         return None, {}
     path = Path(result.stdout.strip())
@@ -620,29 +698,58 @@ def agent_write_window(repo: Path | str | None):
         return
     path, evidence = _agent_index_evidence(repo)
     before = index_entries(repo) if path else None
-    staged = _run(["git", "diff", "--cached", "--name-only", "--relative", "-z", "--", "."], cwd=repo) if path else None
+    staged = (
+        _run(
+            ["git", "diff", "--cached", "--name-only", "--relative", "-z", "--", "."],
+            cwd=repo,
+        )
+        if path
+        else None
+    )
     head = rev_parse_head(repo) if path else None
     key = str(Path(repo).resolve())
     prior = evidence.get(key, {})
     entries = prior.get("entries", {}) if prior.get("head") == head else {}
-    owned = {p: item for p, item in entries.items() if isinstance(item, dict)
-             and item.get("index") == (before or {}).get(p)
-             and item.get("working") == _working_identity(Path(repo) / p)}
-    protected = {p for p in (staged.stdout.split("\0") if staged and staged.ok else [])
-                 if p and p not in owned}
+    owned = {
+        p: item
+        for p, item in entries.items()
+        if isinstance(item, dict)
+        and item.get("index") == (before or {}).get(p)
+        and item.get("working") == _working_identity(Path(repo) / p)
+    }
+    protected = {
+        p
+        for p in (staged.stdout.split("\0") if staged and staged.ok else [])
+        if p and p not in owned
+    }
     try:
         yield
     finally:
-        if path and before is not None and staged and staged.ok and head == rev_parse_head(repo):
+        if (
+            path
+            and before is not None
+            and staged
+            and staged.ok
+            and head == rev_parse_head(repo)
+        ):
             after = index_entries(repo)
             if after is not None:
-                names = set(owned) | {p for p in before.keys() | after.keys()
-                                      if p not in protected and before.get(p) != after.get(p)}
-                owned = {p: {"index": after.get(p), "working": _working_identity(Path(repo) / p)}
-                         for p in names}
+                names = set(owned) | {
+                    p
+                    for p in before.keys() | after.keys()
+                    if p not in protected and before.get(p) != after.get(p)
+                }
+                owned = {
+                    p: {
+                        "index": after.get(p),
+                        "working": _working_identity(Path(repo) / p),
+                    }
+                    for p in names
+                }
                 if owned:
                     evidence[key] = {"head": head, "entries": owned}
                     from .io_utils import atomic_write
+
                     atomic_write(path, json.dumps(evidence, sort_keys=True))
 
 
@@ -654,38 +761,70 @@ def commit_paths(worktree: Path | str, message: str, paths: list[str]) -> str | 
     if staging has not changed while hooks ran. Returns SHA, or None only for no changes. Refusals/failures raise
     GitLifecycleError so callers retain their checkpoint without advancing.
     """
-    excludes = [p for p in paths if p.startswith(":(") and "exclude" in p[2:p.find(")")]]
+    excludes = [
+        p for p in paths if p.startswith(":(") and "exclude" in p[2 : p.find(")")]
+    ]
     positives = [p for p in paths if p not in excludes]
     if not positives:
         return None
-    staged_paths = _run(["git", "diff", "--cached", "--name-only", "-z", "--relative",
-                         "--", *paths], cwd=worktree)
-    working_paths = _run(["git", "diff", "--name-only", "-z", "--relative",
-                          "--", *paths], cwd=worktree)
+    staged_paths = _run(
+        ["git", "diff", "--cached", "--name-only", "-z", "--relative", "--", *paths],
+        cwd=worktree,
+    )
+    working_paths = _run(
+        ["git", "diff", "--name-only", "-z", "--relative", "--", *paths], cwd=worktree
+    )
     if not staged_paths.ok or not working_paths.ok:
         raise GitLifecycleError("Cannot inspect commit paths")
     # A staged deletion (including the old side of a rename) can still have
     # a working file. It is now untracked, so plain `git diff` omits it.
-    deleted = _run(["git", "diff", "--cached", "--no-renames", "--diff-filter=D",
-                    "--name-only", "-z", "--relative", "--", *paths], cwd=worktree)
+    deleted = _run(
+        [
+            "git",
+            "diff",
+            "--cached",
+            "--no-renames",
+            "--diff-filter=D",
+            "--name-only",
+            "-z",
+            "--relative",
+            "--",
+            *paths,
+        ],
+        cwd=worktree,
+    )
     if not deleted.ok:
         raise GitLifecycleError("Cannot inspect staged deletions")
-    recreated = {name for name in deleted.stdout.split("\0") if name and os.path.lexists(Path(worktree) / name)}
-    divergent = (set(staged_paths.stdout.split("\0")) & set(working_paths.stdout.split("\0"))) - {""}
+    recreated = {
+        name
+        for name in deleted.stdout.split("\0")
+        if name and os.path.lexists(Path(worktree) / name)
+    }
+    divergent = (
+        set(staged_paths.stdout.split("\0")) & set(working_paths.stdout.split("\0"))
+    ) - {""}
     before_index = index_entries(worktree)
     _, evidence = _agent_index_evidence(worktree)
     record = evidence.get(str(Path(worktree).resolve()), {})
-    owned = record.get("entries", {}) if record.get("head") == rev_parse_head(worktree) else {}
+    owned = (
+        record.get("entries", {})
+        if record.get("head") == rev_parse_head(worktree)
+        else {}
+    )
     conflicts = divergent | recreated
-    if any(not isinstance(owned.get(p), dict)
-           or owned[p].get("index") != (before_index or {}).get(p)
-           or owned[p].get("working") != _working_identity(Path(worktree) / p) for p in conflicts):
+    if any(
+        not isinstance(owned.get(p), dict)
+        or owned[p].get("index") != (before_index or {}).get(p)
+        or owned[p].get("working") != _working_identity(Path(worktree) / p)
+        for p in conflicts
+    ):
         raise GitLifecycleError(
             f"Cannot commit {message}: staged and working versions differ: {', '.join(sorted(conflicts))}. "
             "Inspect git diff and git diff --cached for these paths. Save both versions, then "
             "git add the paths whose working version should be committed, or git restore --staged "
             "the paths whose working version should remain unstaged. Missing agent ownership "
-            "after an interruption cannot be inferred safely.")
+            "after an interruption cannot be inferred safely."
+        )
     index_path = _run(["git", "rev-parse", "--git-path", "index"], cwd=worktree)
     if before_index is None or not index_path.ok:
         raise GitLifecycleError("Cannot inspect active index")
@@ -702,24 +841,48 @@ def commit_paths(worktree: Path | str, message: str, paths: list[str]) -> str | 
         add = _run(["git", "add", "-A", "--", *positives], cwd=worktree, env=env)
         if not add.ok:
             raise GitLifecycleError("Cannot stage commit paths: " + add.stderr)
-        if excludes and not _run(["git", "reset", "-q", "--",
-                                  *(_positive_pathspec(p) for p in excludes)], cwd=worktree, env=env).ok:
+        if (
+            excludes
+            and not _run(
+                [
+                    "git",
+                    "reset",
+                    "-q",
+                    "--",
+                    *(_positive_pathspec(p) for p in excludes),
+                ],
+                cwd=worktree,
+                env=env,
+            ).ok
+        ):
             raise GitLifecycleError("Cannot exclude bookkeeping from commit")
-        staged = _run(["git", "diff", "--cached", "--quiet", "--", *paths], cwd=worktree, env=env)
+        staged = _run(
+            ["git", "diff", "--cached", "--quiet", "--", *paths], cwd=worktree, env=env
+        )
         if staged.returncode == 0:
             return None
         if staged.returncode != 1:
             raise GitLifecycleError("Cannot compare commit index")
-        commit = _run(["git", "commit", "-m", message, "--", *paths], cwd=worktree, env=env)
+        commit = _run(
+            ["git", "commit", "-m", message, "--", *paths], cwd=worktree, env=env
+        )
         if not commit.ok:
-            log.warning("Failed to commit %s: %s", message, commit.stderr.strip() or commit.stdout.strip())
-            raise GitLifecycleError("Commit failed: " + (commit.stderr or commit.stdout))
+            log.warning(
+                "Failed to commit %s: %s",
+                message,
+                commit.stderr.strip() or commit.stdout.strip(),
+            )
+            raise GitLifecycleError(
+                "Commit failed: " + (commit.stderr or commit.stdout)
+            )
     # Only reconcile entries we just committed, and only if no one changed
     # their staging while hooks ran. Other project/sibling entries stay intact.
     if index_entries(worktree) == before_index:
         _run(["git", "reset", "-q", "HEAD", "--", *paths], cwd=worktree)
     else:
-        log.warning("Index changed during commit; retained the caller's index unchanged")
+        log.warning(
+            "Index changed during commit; retained the caller's index unchanged"
+        )
     sha = _run(["git", "rev-parse", "HEAD"], cwd=worktree).stdout.strip()
     if not sha:
         log.warning("Committed %s but could not read HEAD", message)
@@ -770,7 +933,9 @@ def commit_stage(config, message: str, paths: list[str]) -> str | None:
         return None
     if not paths:
         return None
-    return commit_paths(Path(config.project_dir), message, [*paths, *BOOKKEEPING_EXCLUDES])
+    return commit_paths(
+        Path(config.project_dir), message, [*paths, *BOOKKEEPING_EXCLUDES]
+    )
 
 
 # --- Whole-tree operations (the TDD block loop) ---------------------------
@@ -810,8 +975,10 @@ def save_wip_ref(repo: Path | str, ref: str, message: str) -> str | None:
     only for identical snapshots, otherwise a numbered ref preserves both
     attempts. Conflicts or any failed object/ref write refuse recovery.
     """
-    if not ref.startswith("refs/buildme/wip/") or not _run(
-            ["git", "check-ref-format", ref], cwd=repo).ok:
+    if (
+        not ref.startswith("refs/buildme/wip/")
+        or not _run(["git", "check-ref-format", ref], cwd=repo).ok
+    ):
         log.warning("Refusing to write wip ref %r", ref)
         return None
     if _run(["git", "rev-parse", "--verify", "-q", "MERGE_HEAD"], cwd=repo).ok:
@@ -824,23 +991,49 @@ def save_wip_ref(repo: Path | str, ref: str, message: str) -> str | None:
     # Never stage into the caller's index, move HEAD, or run commit hooks.
     index_tree = _run(["git", "write-tree"], cwd=repo)
     if not index_tree.ok:  # An unmerged index cannot be represented by a tree.
-        log.warning("Cannot save WIP with an unmerged/unreadable index; preserve it manually")
+        log.warning(
+            "Cannot save WIP with an unmerged/unreadable index; preserve it manually"
+        )
         return None
-    index_commit = _run(["git", "commit-tree", index_tree.stdout.strip(), "-p", base,
-                         "-m", "buildme: saved index"], cwd=repo)
+    index_commit = _run(
+        [
+            "git",
+            "commit-tree",
+            index_tree.stdout.strip(),
+            "-p",
+            base,
+            "-m",
+            "buildme: saved index",
+        ],
+        cwd=repo,
+    )
     if not index_commit.ok:
         return None
     with tempfile.TemporaryDirectory(prefix="buildme-index-") as directory:
         env = dict(os.environ, GIT_INDEX_FILE=str(Path(directory) / "index"))
-        for argv in (["git", "read-tree", base],
-                     ["git", "add", "-A", "--", ".", *BOOKKEEPING_EXCLUDES]):
+        for argv in (
+            ["git", "read-tree", base],
+            ["git", "add", "-A", "--", ".", *BOOKKEEPING_EXCLUDES],
+        ):
             if not _run(argv, cwd=repo, env=env).ok:
                 return None
         tree = _run(["git", "write-tree"], cwd=repo, env=env)
         if not tree.ok:
             return None
-    saved = _run(["git", "commit-tree", tree.stdout.strip(), "-p", base,
-                  "-p", index_commit.stdout.strip(), "-m", message], cwd=repo)
+    saved = _run(
+        [
+            "git",
+            "commit-tree",
+            tree.stdout.strip(),
+            "-p",
+            base,
+            "-p",
+            index_commit.stdout.strip(),
+            "-m",
+            message,
+        ],
+        cwd=repo,
+    )
     if not saved.ok:
         return None
     head = saved.stdout.strip()
@@ -849,11 +1042,18 @@ def save_wip_ref(repo: Path | str, ref: str, message: str) -> str | None:
         held = _run(["git", "rev-parse", "--verify", "-q", name], cwd=repo)
         if held.ok:
             identical = all(
-                _run(["git", "rev-parse", name + suffix], cwd=repo).stdout.strip() == expected
-                for suffix, expected in (("^{tree}", tree.stdout.strip()), ("^1", base),
-                                         ("^2^{tree}", index_tree.stdout.strip())))
+                _run(["git", "rev-parse", name + suffix], cwd=repo).stdout.strip()
+                == expected
+                for suffix, expected in (
+                    ("^{tree}", tree.stdout.strip()),
+                    ("^1", base),
+                    ("^2^{tree}", index_tree.stdout.strip()),
+                )
+            )
             if identical:
-                log.info("WIP %s already preserves this HEAD, index and working tree", name)
+                log.info(
+                    "WIP %s already preserves this HEAD, index and working tree", name
+                )
                 return name
             continue
         # An empty old value makes update-ref create the ref only if it
@@ -886,7 +1086,9 @@ def merge_base(repo: Path | str, a: str, b: str) -> str | None:
     return res.stdout.strip() or None
 
 
-def diff_range(repo: Path | str, base: str, head: str, exclude: Path | str | None = None) -> str | None:
+def diff_range(
+    repo: Path | str, base: str, head: str, exclude: Path | str | None = None
+) -> str | None:
     """`git diff <base>..<head>` over the project directory, leaving out
     *exclude* (a directory relative to *repo*). None when git could not be
     asked. Bytes that are not UTF-8 (a Latin-1 source file) are shown as
@@ -896,7 +1098,9 @@ def diff_range(repo: Path | str, base: str, head: str, exclude: Path | str | Non
         spec.append(f":(exclude,literal){Path(exclude).as_posix()}")
     res = _run(["git", "diff", f"{base}..{head}", *spec], cwd=repo, errors="replace")
     if not res.ok:
-        log.warning("git diff %s..%s failed: %s", base[:12], head[:12], res.stderr.strip())
+        log.warning(
+            "git diff %s..%s failed: %s", base[:12], head[:12], res.stderr.strip()
+        )
         return None
     return res.stdout
 
@@ -904,8 +1108,17 @@ def diff_range(repo: Path | str, base: str, head: str, exclude: Path | str | Non
 def status_of(repo: Path | str, paths: list[Path | str]) -> str | None:
     """`git status --porcelain -- <paths>`: what git lists for exactly those
     paths, "" when nothing. None when git could not be asked."""
-    res = _run(["git", "status", "--porcelain", "--untracked-files=all", "--",
-                *(str(p) for p in paths)], cwd=repo)
+    res = _run(
+        [
+            "git",
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+            "--",
+            *(str(p) for p in paths),
+        ],
+        cwd=repo,
+    )
     if not res.ok:
         log.warning("git status failed: %s", res.stderr.strip())
         return None
@@ -927,8 +1140,9 @@ def is_ancestor_of_head(repo: Path | str, sha: str) -> bool:
     return res.returncode == 0
 
 
-def tree_is_clean(repo: Path | str, ignore: Path | str | None = None,
-                  every_submodule: bool = False) -> bool:
+def tree_is_clean(
+    repo: Path | str, ignore: Path | str | None = None, every_submodule: bool = False
+) -> bool:
     """True when *repo* holds nothing but buildme's own bookkeeping.
 
     Used only to decide whether HEAD is a faithful snapshot to discard back
@@ -943,14 +1157,18 @@ def tree_is_clean(repo: Path | str, ignore: Path | str | None = None,
     if ignore is not None:
         excludes.append(f":(exclude,literal){Path(ignore).as_posix()}")
     submodules = ["--ignore-submodules=none"] if every_submodule else []
-    res = _run(["git", "status", "--porcelain", *submodules, "--", ".", *excludes], cwd=repo)
+    res = _run(
+        ["git", "status", "--porcelain", *submodules, "--", ".", *excludes], cwd=repo
+    )
     if not res.ok:
         log.warning("git status failed: %s", res.stderr.strip())
         return False
     return not res.stdout.strip()
 
 
-def unchecked_files(repo: Path | str, ignore: Path | str | None = None) -> list[str] | None:
+def unchecked_files(
+    repo: Path | str, ignore: Path | str | None = None
+) -> list[str] | None:
     """The entries under *repo* whose index tells git not to look at them
     (`assume-unchanged` or `skip-worktree`), so `git status` would not show an
     edit to them: files and gitlink entries, in *repo*'s index and in the
@@ -997,7 +1215,9 @@ def _unchecked_in(repo: Path, excludes: list[str], prefix: str) -> list[str] | N
     return found
 
 
-def index_entries(repo: Path | str, ignore: Path | str | None = None) -> dict[str, str] | None:
+def index_entries(
+    repo: Path | str, ignore: Path | str | None = None
+) -> dict[str, str] | None:
     """Project-relative index modes, blob IDs and conflict stages, read only."""
     excludes = list(BOOKKEEPING_EXCLUDES)
     if ignore is not None:
@@ -1012,7 +1232,9 @@ def index_entries(repo: Path | str, ignore: Path | str | None = None) -> dict[st
     return entries
 
 
-def dirty_files(repo: Path | str, ignore: Path | str | None = None) -> dict[str, str] | None:
+def dirty_files(
+    repo: Path | str, ignore: Path | str | None = None
+) -> dict[str, str] | None:
     """Every path under *repo* whose content differs from HEAD (an edit, a
     deletion, a new file git does not ignore), relative to *repo*, mapped to
     a fingerprint of its content now: so two calls give equal maps only when
@@ -1022,18 +1244,60 @@ def dirty_files(repo: Path | str, ignore: Path | str | None = None) -> dict[str,
     excludes = list(BOOKKEEPING_EXCLUDES)
     if ignore is not None:
         excludes.append(f":(exclude,literal){Path(ignore).as_posix()}")
-    changed = _run(["git", "diff", "HEAD", "--name-only", "-z", "--relative", "--no-renames",
-                    "--", ".", *excludes], cwd=repo)
-    staged = _run(["git", "diff", "--cached", "HEAD", "--name-only", "-z", "--relative",
-                   "--no-renames", "--", ".", *excludes], cwd=repo)
-    untracked = _run(["git", "ls-files", "--others", "--exclude-standard", "-z",
-                      "--", ".", *excludes], cwd=repo)
+    changed = _run(
+        [
+            "git",
+            "diff",
+            "HEAD",
+            "--name-only",
+            "-z",
+            "--relative",
+            "--no-renames",
+            "--",
+            ".",
+            *excludes,
+        ],
+        cwd=repo,
+    )
+    staged = _run(
+        [
+            "git",
+            "diff",
+            "--cached",
+            "HEAD",
+            "--name-only",
+            "-z",
+            "--relative",
+            "--no-renames",
+            "--",
+            ".",
+            *excludes,
+        ],
+        cwd=repo,
+    )
+    untracked = _run(
+        [
+            "git",
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "-z",
+            "--",
+            ".",
+            *excludes,
+        ],
+        cwd=repo,
+    )
     if not (changed.ok and staged.ok and untracked.ok):
-        log.warning("git could not list the changed files: %s",
-                    (changed.stderr or untracked.stderr).strip())
+        log.warning(
+            "git could not list the changed files: %s",
+            (changed.stderr or untracked.stderr).strip(),
+        )
         return None
     out: dict[str, str] = {}
-    for rel in filter(None, (changed.stdout + staged.stdout + untracked.stdout).split("\0")):
+    for rel in filter(
+        None, (changed.stdout + staged.stdout + untracked.stdout).split("\0")
+    ):
         path = Path(repo) / rel
         try:
             out[rel] = _working_identity(path)
@@ -1089,43 +1353,84 @@ def discard_to(repo: Path | str, sha: str, label: str = "") -> bool:
         log.warning(
             "Refusing to discard %s: %s is not an ancestor of HEAD — resetting "
             "would throw away history this pass did not create",
-            label, sha[:8],
+            label,
+            sha[:8],
         )
         return False
     prefix = path_prefix(repo)
     if prefix is None:
-        log.warning("Refusing to discard %s: git could not say where %s is in its repo",
-                    label, repo)
+        log.warning(
+            "Refusing to discard %s: git could not say where %s is in its repo",
+            label,
+            repo,
+        )
         return False
     if prefix:
-        outside = _run(["git", "diff", "--name-only", sha, "HEAD", "--", ":/",
-                        f":(top,exclude){prefix}"], cwd=repo)
+        outside = _run(
+            [
+                "git",
+                "diff",
+                "--name-only",
+                sha,
+                "HEAD",
+                "--",
+                ":/",
+                f":(top,exclude){prefix}",
+            ],
+            cwd=repo,
+        )
         if not outside.ok:
-            log.warning("Refusing to discard %s: git could not list the files changed "
-                        "since %s: %s", label, sha[:8], outside.stderr.strip())
+            log.warning(
+                "Refusing to discard %s: git could not list the files changed "
+                "since %s: %s",
+                label,
+                sha[:8],
+                outside.stderr.strip(),
+            )
             return False
         paths = outside.stdout.splitlines()
         if paths:
-            shown = ", ".join(paths[:5]) + (f" and {len(paths) - 5} more" if len(paths) > 5 else "")
-            log.warning("Refusing to discard %s: the commits after %s change files outside "
-                        "the project (%s) — dropping them would drop work that is not "
-                        "this step's", label, sha[:8], shown)
+            shown = ", ".join(paths[:5]) + (
+                f" and {len(paths) - 5} more" if len(paths) > 5 else ""
+            )
+            log.warning(
+                "Refusing to discard %s: the commits after %s change files outside "
+                "the project (%s) — dropping them would drop work that is not "
+                "this step's",
+                label,
+                sha[:8],
+                shown,
+            )
             return False
     reset = _run(["git", "reset", "--soft", sha], cwd=repo)
     if not reset.ok:
-        log.warning("Could not discard %s (soft reset to %s): %s",
-                    label, sha[:8], reset.stderr.strip() or reset.stdout.strip())
+        log.warning(
+            "Could not discard %s (soft reset to %s): %s",
+            label,
+            sha[:8],
+            reset.stderr.strip() or reset.stdout.strip(),
+        )
         return False
-    restore = _run(["git", "restore", f"--source={sha}", "--staged", "--worktree", "--", "."],
-                   cwd=repo)
+    restore = _run(
+        ["git", "restore", f"--source={sha}", "--staged", "--worktree", "--", "."],
+        cwd=repo,
+    )
     if not restore.ok:
-        log.warning("Could not discard %s (restore to %s after the soft reset): %s",
-                    label, sha[:8], restore.stderr.strip() or restore.stdout.strip())
+        log.warning(
+            "Could not discard %s (restore to %s after the soft reset): %s",
+            label,
+            sha[:8],
+            restore.stderr.strip() or restore.stdout.strip(),
+        )
         return False
     clean = _run(["git", "clean", "-fdq", "--", ".", *BOOKKEEPING_EXCLUDES], cwd=repo)
     if not clean.ok:
-        log.warning("Could not discard %s (clean after restoring %s): %s",
-                    label, sha[:8], clean.stderr.strip() or clean.stdout.strip())
+        log.warning(
+            "Could not discard %s (clean after restoring %s): %s",
+            label,
+            sha[:8],
+            clean.stderr.strip() or clean.stdout.strip(),
+        )
         return False
     log.info("DISCARD %s reset to %s", label, sha[:8])
     return True
@@ -1141,13 +1446,18 @@ def unwind_commits_to(repo: Path | str, sha: str, label: str = "") -> bool:
     a warning) when git refused — never raises.
     """
     if not is_ancestor_of_head(repo, sha):
-        log.warning("Refusing to unwind %s: %s is not an ancestor of HEAD",
-                    label, sha[:8])
+        log.warning(
+            "Refusing to unwind %s: %s is not an ancestor of HEAD", label, sha[:8]
+        )
         return False
     reset = _run(["git", "reset", "--soft", sha], cwd=repo)
     if not reset.ok:
-        log.warning("Could not unwind %s (soft reset to %s): %s",
-                    label, sha[:8], reset.stderr.strip() or reset.stdout.strip())
+        log.warning(
+            "Could not unwind %s (soft reset to %s): %s",
+            label,
+            sha[:8],
+            reset.stderr.strip() or reset.stdout.strip(),
+        )
         return False
     log.info("UNWIND %s soft reset to %s", label, sha[:8])
     return True
@@ -1155,10 +1465,14 @@ def unwind_commits_to(repo: Path | str, sha: str, label: str = "") -> bool:
 
 def push_branch(worktree: Path, branch: str) -> GitResult:
     """``git push -u origin <branch>``. Never forces. Never raises."""
-    return _run(["git", "push", "-u", "origin", branch], cwd=worktree, timeout=_PUSH_TIMEOUT)
+    return _run(
+        ["git", "push", "-u", "origin", branch], cwd=worktree, timeout=_PUSH_TIMEOUT
+    )
 
 
-def open_pr_with_skill(worktree: Path, argv: list[str]) -> tuple[str | None, list[str], GitResult]:
+def open_pr_with_skill(
+    worktree: Path, argv: list[str]
+) -> tuple[str | None, list[str], GitResult]:
     """Run the pr skill's ``pr_pipeline open`` (argv from
     ``orchestrator._pr_open_argv``). Returns (pr_url, its PR_DIAGNOSIS lines,
     result). Never raises."""
@@ -1169,7 +1483,7 @@ def open_pr_with_skill(worktree: Path, argv: list[str]) -> tuple[str | None, lis
         if line.startswith("PR:"):
             url = line[3:].strip() or None
         elif line.startswith("PR_DIAGNOSIS:"):
-            diagnoses.append(line[len("PR_DIAGNOSIS:"):].strip())
+            diagnoses.append(line[len("PR_DIAGNOSIS:") :].strip())
     return url, diagnoses, res
 
 
@@ -1177,8 +1491,14 @@ def open_pr_with_skill(worktree: Path, argv: list[str]) -> tuple[str | None, lis
 
 
 def manual_finish_commands(
-    worktree: Path, branch: str, title: str, *, include_pr: bool = True, draft: bool = True,
-    pr_skill_argv: list[str] | None = None, base: str | None = None,
+    worktree: Path,
+    branch: str,
+    title: str,
+    *,
+    include_pr: bool = True,
+    draft: bool = True,
+    pr_skill_argv: list[str] | None = None,
+    base: str | None = None,
 ) -> str:
     """The exact commands a human runs to finish by hand after a push/PR
     failure. Printed into build-progress.md — never executed. With

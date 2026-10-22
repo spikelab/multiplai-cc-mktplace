@@ -19,7 +19,7 @@ import os
 import secrets
 import tempfile
 import threading
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .models import Decision, InboxRow, OutboxRow
@@ -34,11 +34,11 @@ class MailboxError(RuntimeError):
 
 
 def utc_now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def new_question_id() -> str:
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
     return f"q-{stamp}-{secrets.token_hex(2)}"
 
 
@@ -114,7 +114,13 @@ class Mailbox:
         os.chmod(self.dir, 0o700)
         for path in (self.inbox, self.outbox):
             os.close(os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600))
-        for path in (self.inbox, self.outbox, self.decisions, self.viewed, self.server_json):
+        for path in (
+            self.inbox,
+            self.outbox,
+            self.decisions,
+            self.viewed,
+            self.server_json,
+        ):
             if path.exists():  # left by an earlier version with wider modes
                 os.chmod(path, 0o600)
 
@@ -140,12 +146,16 @@ class Mailbox:
             return {}
         return data if isinstance(data, dict) else {}
 
-    def write_decision(self, finding_id: str, decision: str, note: str = "") -> Decision:
+    def write_decision(
+        self, finding_id: str, decision: str, note: str = ""
+    ) -> Decision:
         entry = Decision(decision=decision, note=note, ts=utc_now())
         with self._decisions_lock:
             data = self.read_decisions()
             data[finding_id] = entry.model_dump(mode="json")
-            atomic_write(self.decisions, json.dumps(data, indent=2, sort_keys=True) + "\n")
+            atomic_write(
+                self.decisions, json.dumps(data, indent=2, sort_keys=True) + "\n"
+            )
         return entry
 
     def read_viewed(self) -> dict[str, str]:
@@ -156,7 +166,9 @@ class Mailbox:
             return {}
         if not isinstance(data, dict):
             return {}
-        return {k: v for k, v in data.items() if isinstance(k, str) and isinstance(v, str)}
+        return {
+            k: v for k, v in data.items() if isinstance(k, str) and isinstance(v, str)
+        }
 
     def set_viewed(self, path: str, viewed: bool) -> dict[str, str]:
         """Mark or unmark one file; returns the whole map after the change."""

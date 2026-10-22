@@ -20,7 +20,7 @@ import logging
 import os
 import re
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from multiplai_core import checkpoint
@@ -70,7 +70,7 @@ class ChildStatus(BaseModel):
 class Epic(BaseModel):
     name: str
     children: list[EpicChild] = Field(default_factory=list)
-    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     child_status: dict[str, ChildStatus] = Field(default_factory=dict)
     # PR B2: what the epic has spent, rebuilt from the records and the review
     # ledger at each save; incomplete when a spend could not be read.
@@ -80,13 +80,13 @@ class Epic(BaseModel):
 
 # --- the directory name (copied from review_pipeline/target.py) ---------------
 
+
 def origin_owner_repo(url: str | None) -> tuple[str, str] | None:
     """`(owner, repo)` from a remote URL (the last two path parts, `.git` dropped), else None."""
     if not url:
         return None
     path = url.strip().rstrip("/")
-    if path.endswith(".git"):
-        path = path[:-len(".git")]
+    path = path.removesuffix(".git")
     parts = [p for p in re.split(r"[/:]", path) if p]
     if len(parts) < 2:
         return None
@@ -117,8 +117,12 @@ def slug_repo_name(repo: Path) -> str:
     pair = origin_owner_repo(_remote_url(repo)) if repo.is_dir() else None
     if pair:
         return "-".join(pair)
-    log.info("no origin remote in %s with an owner and a name: the epic directory uses the "
-             "directory name %s", repo, repo.name)
+    log.info(
+        "no origin remote in %s with an owner and a name: the epic directory uses the "
+        "directory name %s",
+        repo,
+        repo.name,
+    )
     return repo.name
 
 
@@ -130,10 +134,16 @@ def sanitize_slug(text: str) -> str:
 def epic_dir_for(repo: Path, change_name: str) -> Path:
     """`<data_dir>/buildme/epics/<owner>-<repo>--<change>/`."""
     repo = Path(repo)
-    return get_paths().data_dir / "buildme" / "epics" / sanitize_slug(f"{slug_repo_name(repo)}--{change_name}")
+    return (
+        get_paths().data_dir
+        / "buildme"
+        / "epics"
+        / sanitize_slug(f"{slug_repo_name(repo)}--{change_name}")
+    )
 
 
 # --- epic.json -----------------------------------------------------------------
+
 
 def load_epic(epic_dir: Path) -> Epic:
     """The saved epic. Raises EpicFileError when epic.json is missing or unparsable;
@@ -144,7 +154,9 @@ def load_epic(epic_dir: Path) -> Epic:
     try:
         return Epic.model_validate_json(path.read_text())
     except (OSError, ValueError) as e:
-        raise EpicFileError(f"{path} cannot be read ({type(e).__name__}); fix or remove it by hand") from None
+        raise EpicFileError(
+            f"{path} cannot be read ({type(e).__name__}); fix or remove it by hand"
+        ) from None
 
 
 def save_epic(epic_dir: Path, epic: Epic) -> Path:

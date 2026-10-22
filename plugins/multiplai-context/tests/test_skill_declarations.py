@@ -14,13 +14,22 @@ The path and SDK checks now cover every skill, not just the original three.
 """
 
 import pytest
-
 from conftest import PLUGIN_ROOT
 
 _EXPECTED_SKILLS = {
-    "setup", "dream", "dream-remember", "health",
-    "refresh-catalogs", "memory-health-audit", "backfill", "now",
-    "log-doctor", "qmd-search", "costs", "config-audit", "fleet-status",
+    "setup",
+    "dream",
+    "dream-remember",
+    "health",
+    "refresh-catalogs",
+    "memory-health-audit",
+    "backfill",
+    "now",
+    "log-doctor",
+    "qmd-search",
+    "costs",
+    "config-audit",
+    "fleet-status",
     "memory-bank",
 }
 

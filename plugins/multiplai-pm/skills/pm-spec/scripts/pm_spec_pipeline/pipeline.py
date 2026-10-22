@@ -29,11 +29,30 @@ from pathlib import Path
 
 from multiplai_core.specs import is_ready, mark_draft, write_change_meta
 
-from . import artifacts, epic, handoff, intake, interview, prototype, publish, revise, runlock, sdk
+from . import (
+    artifacts,
+    epic,
+    handoff,
+    intake,
+    interview,
+    prototype,
+    publish,
+    revise,
+    runlock,
+    sdk,
+)
 from . import findings as F
 from . import state as state_mod
 from .config import SpecConfig
-from .run import EXIT_BLOCKED, EXIT_DONE, EXIT_REFUSED, MARKER_BLOCKED, MARKER_READY, Run, Stop
+from .run import (
+    EXIT_BLOCKED,
+    EXIT_DONE,
+    EXIT_REFUSED,
+    MARKER_BLOCKED,
+    MARKER_READY,
+    Run,
+    Stop,
+)
 from .state import ContextFile, Options, RunState
 
 log = logging.getLogger(__name__)
@@ -63,14 +82,19 @@ def intake_new(config: SpecConfig, inputs: NewInputs) -> RunState:
     """The change dir, the inputs saved into it, and the run state that records them."""
     base = config.project_dir
     files = {}
-    for flag, raw in (("--prd", inputs.prd), ("--ticket-file", inputs.ticket_file),
-                      ("--plan-file", inputs.plan_file)):
+    for flag, raw in (
+        ("--prd", inputs.prd),
+        ("--ticket-file", inputs.ticket_file),
+        ("--plan-file", inputs.plan_file),
+    ):
         if raw:
             path = intake.absolute(raw, base)
             if not path.is_file():
                 _missing(path, flag)
             files[flag] = path
-    contexts = intake.read_context_files([str(intake.absolute(p, base)) for p in inputs.context_files])
+    contexts = intake.read_context_files(
+        [str(intake.absolute(p, base)) for p in inputs.context_files]
+    )
     change_dir = config.change_dir
     intake.create_change(change_dir)
     if "--prd" in files:
@@ -78,11 +102,23 @@ def intake_new(config: SpecConfig, inputs: NewInputs) -> RunState:
     if "--plan-file" in files:
         intake.save_copy(change_dir, files["--plan-file"], "plan.md")
     if "--ticket-file" in files:
-        intake.save_ticket(change_dir, files["--ticket-file"], ref=inputs.ticket_ref, url=inputs.ticket_url,
-                           children=inputs.ticket_children)
+        intake.save_ticket(
+            change_dir,
+            files["--ticket-file"],
+            ref=inputs.ticket_ref,
+            url=inputs.ticket_url,
+            children=inputs.ticket_children,
+        )
     elif inputs.ticket_ref or inputs.ticket_children:
-        write_change_meta(change_dir, {"ticket_refs": {"epic": inputs.ticket_ref or None,
-                                                       "children": list(inputs.ticket_children)}})
+        write_change_meta(
+            change_dir,
+            {
+                "ticket_refs": {
+                    "epic": inputs.ticket_ref or None,
+                    "children": list(inputs.ticket_children),
+                }
+            },
+        )
     options = Options(
         interview_mode=config.interview_mode(inputs.interview_mode),
         auto=config.auto,
@@ -92,9 +128,13 @@ def intake_new(config: SpecConfig, inputs: NewInputs) -> RunState:
         ticket_url=inputs.ticket_url,
         ticket_children=list(inputs.ticket_children),
     )
-    return RunState(change=config.change_name, options=options, intake_done=True,
-                    summary=inputs.interview_summary,
-                    contexts=[ContextFile(name=n, content=c) for n, c in contexts])
+    return RunState(
+        change=config.change_name,
+        options=options,
+        intake_done=True,
+        summary=inputs.interview_summary,
+        contexts=[ContextFile(name=n, content=c) for n, c in contexts],
+    )
 
 
 def _ready_again(run: Run) -> bool:
@@ -111,7 +151,9 @@ def _ready_again(run: Run) -> bool:
     if ready:
         print(f"{MARKER_READY}:{run.config.change_dir}:{h.revision}", flush=True)
         return True
-    log.info("The change was ready and its files changed since (%s); checking again", reason)
+    log.info(
+        "The change was ready and its files changed since (%s); checking again", reason
+    )
     mark_draft(run.config.change_dir)
     run.state.handoff = None
     run.save()
@@ -158,24 +200,37 @@ def _load(config: SpecConfig) -> RunState | None:
         raise Stop(EXIT_REFUSED, str(e)) from e
 
 
-async def cmd_new(config: SpecConfig, inputs: NewInputs, *, replies_file: str = "",
-                  max_usd: float | None = sdk.DEFAULT_MAX_USD) -> int:
+async def cmd_new(
+    config: SpecConfig,
+    inputs: NewInputs,
+    *,
+    replies_file: str = "",
+    max_usd: float | None = sdk.DEFAULT_MAX_USD,
+) -> int:
     if _load(config) is not None:
-        print(f"ERROR: {config.change_name} already has a pm-spec run in {config.run_dir}; "
-              f"continue it with `resume {config.change_name}`", flush=True)
+        print(
+            f"ERROR: {config.change_name} already has a pm-spec run in {config.run_dir}; "
+            f"continue it with `resume {config.change_name}`",
+            flush=True,
+        )
         raise Stop(EXIT_REFUSED, "run exists")
     state_mod.ensure_run_dir(config.run_dir)
     with runlock.hold(config.run_dir):
         sdk.start_budget(max_usd, None)
         run = Run(config, intake_new(config, inputs))
         run.save()
-        run.progress("INTAKE", f"Change {config.change_name} started in {config.change_dir}")
+        run.progress(
+            "INTAKE", f"Change {config.change_name} started in {config.change_dir}"
+        )
         return await advance(run, replies_file=replies_file)
 
 
 def _no_run(config: SpecConfig) -> None:
-    print(f"ERROR: {config.change_name} has no pm-spec run in {config.run_dir}; "
-          f"start one with `new {config.change_name}`", flush=True)
+    print(
+        f"ERROR: {config.change_name} has no pm-spec run in {config.run_dir}; "
+        f"start one with `new {config.change_name}`",
+        flush=True,
+    )
     raise Stop(EXIT_REFUSED, "no run")
 
 
@@ -195,8 +250,16 @@ def _adopt(config: SpecConfig, max_usd: float | None) -> Run:
     only the consistency check and the handoff (`RunState.adopted`), makes no
     other model call and writes no spec or interview file."""
     sdk.start_budget(max_usd, None)
-    run = Run(config, RunState(change=config.change_name, options=Options(epic_split=False),
-                               intake_done=True, interview_done=True, adopted=True))
+    run = Run(
+        config,
+        RunState(
+            change=config.change_name,
+            options=Options(epic_split=False),
+            intake_done=True,
+            interview_done=True,
+            adopted=True,
+        ),
+    )
     run.save()
     run.progress("ADOPT", f"Adopted the specs in {config.change_dir} as they stand")
     return run
@@ -206,24 +269,40 @@ def _adoptable(config: SpecConfig) -> bool:
     return (config.change_dir / "proposal.md").is_file()
 
 
-async def cmd_resume(config: SpecConfig, *, replies_file: str = "",
-                     max_usd: float | None = sdk.DEFAULT_MAX_USD) -> int:
+async def cmd_resume(
+    config: SpecConfig,
+    *,
+    replies_file: str = "",
+    max_usd: float | None = sdk.DEFAULT_MAX_USD,
+) -> int:
     if _load(config) is None and not _adoptable(config):
         _no_run(config)
     state_mod.ensure_run_dir(config.run_dir)
     with runlock.hold(config.run_dir):
-        run = _start(config, max_usd) if _load(config) is not None else _adopt(config, max_usd)
+        run = (
+            _start(config, max_usd)
+            if _load(config) is not None
+            else _adopt(config, max_usd)
+        )
         return await advance(run, replies_file=replies_file)
 
 
-async def cmd_revise(config: SpecConfig, *, from_respec: bool = False,
-                     max_usd: float | None = sdk.DEFAULT_MAX_USD) -> int:
+async def cmd_revise(
+    config: SpecConfig,
+    *,
+    from_respec: bool = False,
+    max_usd: float | None = sdk.DEFAULT_MAX_USD,
+) -> int:
     config.use_archive_if_gone()
     if _load(config) is None and not _adoptable(config):
         _no_run(config)
     state_mod.ensure_run_dir(config.run_dir)
     with runlock.hold(config.run_dir):
-        run = _start(config, max_usd) if _load(config) is not None else _adopt(config, max_usd)
+        run = (
+            _start(config, max_usd)
+            if _load(config) is not None
+            else _adopt(config, max_usd)
+        )
         publish.finish(run)
         await revise.run_revise(run, from_respec=from_respec)
         return EXIT_DONE

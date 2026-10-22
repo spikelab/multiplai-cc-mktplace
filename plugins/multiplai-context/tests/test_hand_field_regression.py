@@ -156,9 +156,9 @@ class TestHandFieldLossDetection:
 
         base = GeneratorBase(config=None, model_client=None)
         assert base.preserved_fields == ()
-        assert base.hand_field_losses(
-            {"a.md": {"bundle": "writing"}}, {"a.md": {}}
-        ) == []
+        assert (
+            base.hand_field_losses({"a.md": {"bundle": "writing"}}, {"a.md": {}}) == []
+        )
 
     def test_the_memory_generator_guards_every_field_it_promises(self, gen):
         """The preserve list and the guard list must not drift apart."""
@@ -271,9 +271,7 @@ class TestGuardFiresOnRegeneration:
             json.dumps(
                 {
                     "schema_version": 1,
-                    "generators": {
-                        "memory": {"source_hashes": {"deleted.md": "abc"}}
-                    },
+                    "generators": {"memory": {"source_hashes": {"deleted.md": "abc"}}},
                 }
             )
         )
@@ -300,9 +298,8 @@ class TestSkillsGeneratorIsGuardedToo:
     def test_skills_declares_what_it_preserves(self):
         from generators import skills as skills_mod
 
-        assert (
-            tuple(skills_mod.SkillsGenerator.preserved_fields)
-            == tuple(skills_mod._HAND_AUTHORED_FIELDS)
+        assert tuple(skills_mod.SkillsGenerator.preserved_fields) == tuple(
+            skills_mod._HAND_AUTHORED_FIELDS
         )
 
     def test_every_generator_that_overrides_merge_entry_declares_its_fields(self):

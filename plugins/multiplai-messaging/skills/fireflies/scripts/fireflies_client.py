@@ -35,6 +35,7 @@ def _setup_logging(session_id: str) -> None:
             sys.path.insert(0, hooks)
     try:
         from log_utils import setup_logging  # shared multiplai logger
+
         log = setup_logging("fireflies", session_id=session_id)
     except Exception:
         log.addHandler(logging.NullHandler())
@@ -49,12 +50,12 @@ def _setup_logging(session_id: str) -> None:
 # closing its own fence or smuggling control/bidi characters into a terminal.
 
 _CONTROL_RE = re.compile(
-    "[\x00-\x08\x0b-\x1f\x7f-\x9f"      # C0/C1 controls (tab and newline kept)
-    "​-‏"                      # zero-width chars + LTR/RTL marks
-    "‪-‮"                      # bidi embedding / override
-    "⁦-⁩"                      # bidi isolates
-    "  "                       # line / paragraph separators
-    "﻿]"                            # BOM / zero-width no-break space
+    "[\x00-\x08\x0b-\x1f\x7f-\x9f"  # C0/C1 controls (tab and newline kept)
+    "\u200b-‏"  # zero-width chars + LTR/RTL marks
+    "‪-‮"  # bidi embedding / override
+    "⁦-⁩"  # bidi isolates
+    "  "  # line / paragraph separators
+    "﻿]"  # BOM / zero-width no-break space
 )
 _ANSI_RE = re.compile("\x1b\\[[0-9;?]*[ -/]*[@-~]")
 
@@ -80,6 +81,7 @@ def defang(text) -> str:
 # GraphQL transport (retry/backoff, errors-on-200 check)
 # --------------------------------------------------------------------------- #
 
+
 class FirefliesError(RuntimeError):
     pass
 
@@ -94,25 +96,25 @@ def graphql(query: str, variables=None, *, max_retries: int = 4) -> dict:
     while True:
         req = urllib.request.Request(API_URL, data=data, method="POST")
         req.add_header("Content-Type", "application/json")
-        req.add_header(
-            "Authorization", f"Bearer {os.environ['FIREFLIES_API_KEY']}"
-        )
+        req.add_header("Authorization", f"Bearer {os.environ['FIREFLIES_API_KEY']}")
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 parsed = json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
-            body = e.read().decode("utf-8", errors="ignore") if hasattr(e, "read") else ""
+            body = (
+                e.read().decode("utf-8", errors="ignore") if hasattr(e, "read") else ""
+            )
             if e.code in (429, 500, 502, 503, 504) and attempt < max_retries:
                 attempt += 1
                 log.warning("SKIP retry=%d reason=http-%d", attempt, e.code)
-                time.sleep(min(2 ** attempt, 30))
+                time.sleep(min(2**attempt, 30))
                 continue
             raise FirefliesError(f"HTTP {e.code}: {body}") from e
         except urllib.error.URLError as e:
             if attempt < max_retries:
                 attempt += 1
                 log.warning("SKIP retry=%d reason=urlerror", attempt)
-                time.sleep(min(2 ** attempt, 30))
+                time.sleep(min(2**attempt, 30))
                 continue
             raise FirefliesError(f"URLError: {e}") from e
 
@@ -122,7 +124,7 @@ def graphql(query: str, variables=None, *, max_retries: int = 4) -> dict:
             if "rate" in msg.lower() and attempt < max_retries:
                 attempt += 1
                 log.warning("SKIP retry=%d reason=rate-limited", attempt)
-                time.sleep(min(2 ** attempt, 30))
+                time.sleep(min(2**attempt, 30))
                 continue
             raise FirefliesError(f"GraphQL errors: {msg}")
         return parsed
@@ -139,6 +141,7 @@ def introspect_type(type_name: str) -> set:
 # formatting helpers
 # --------------------------------------------------------------------------- #
 
+
 def iso_datetime(s: str, *, end: bool = False) -> str:
     """Accept YYYY-MM-DD or a full ISO 8601 string."""
     if "T" in s:
@@ -151,9 +154,9 @@ def fmt_date(v) -> str:
     if v is None:
         return "?"
     try:
-        return datetime.fromtimestamp(
-            float(v) / 1000, tz=timezone.utc
-        ).strftime("%Y-%m-%d %H:%M")
+        return datetime.fromtimestamp(float(v) / 1000, tz=timezone.utc).strftime(
+            "%Y-%m-%d %H:%M"
+        )
     except (TypeError, ValueError, OSError):
         return str(v)
 
@@ -177,6 +180,7 @@ def fmt_ts(seconds) -> str:
 # verbs
 # --------------------------------------------------------------------------- #
 
+
 def cmd_list(ns) -> None:
     limit = max(1, min(ns.limit, MAX_LIMIT))
     if ns.limit > MAX_LIMIT:
@@ -190,18 +194,30 @@ def cmd_list(ns) -> None:
         variables[name] = value
 
     if ns.from_date:
-        add("$fromDate: DateTime", "fromDate: $fromDate", "fromDate",
-            iso_datetime(ns.from_date))
+        add(
+            "$fromDate: DateTime",
+            "fromDate: $fromDate",
+            "fromDate",
+            iso_datetime(ns.from_date),
+        )
     if ns.to_date:
-        add("$toDate: DateTime", "toDate: $toDate", "toDate",
-            iso_datetime(ns.to_date, end=True))
+        add(
+            "$toDate: DateTime",
+            "toDate: $toDate",
+            "toDate",
+            iso_datetime(ns.to_date, end=True),
+        )
     if ns.keyword:
         add("$keyword: String", "keyword: $keyword", "keyword", ns.keyword)
     if ns.mine:
         add("$mine: Boolean", "mine: $mine", "mine", True)
     if ns.participant:
-        add("$participants: [String]", "participants: $participants",
-            "participants", ns.participant)
+        add(
+            "$participants: [String]",
+            "participants: $participants",
+            "participants",
+            ns.participant,
+        )
     add("$limit: Int", "limit: $limit", "limit", limit)
     add("$skip: Int", "skip: $skip", "skip", ns.skip)
 
@@ -212,9 +228,12 @@ def cmd_list(ns) -> None:
         f"  }}"
         f"}}"
     )
-    log.info("START verb=list filters=%s limit=%d skip=%d",
-             sorted(k for k in variables if k not in ("limit", "skip")),
-             limit, ns.skip)
+    log.info(
+        "START verb=list filters=%s limit=%d skip=%d",
+        sorted(k for k in variables if k not in ("limit", "skip")),
+        limit,
+        ns.skip,
+    )
     resp = graphql(query, variables)
     meetings = (resp.get("data") or {}).get("transcripts") or []
     log.info("DONE verb=list results=%d", len(meetings))
@@ -286,15 +305,20 @@ def cmd_pull(ns) -> None:
     log.info("START verb=pull id=%s", ns.transcript_id)
     t = _fetch_transcript(ns.transcript_id)
     if not t:
-        print(f"error: no transcript found for id {ns.transcript_id!r} "
-              f"(tried id: and meeting_id: lookups)", file=sys.stderr)
+        print(
+            f"error: no transcript found for id {ns.transcript_id!r} "
+            f"(tried id: and meeting_id: lookups)",
+            file=sys.stderr,
+        )
         log.error("FAIL verb=pull reason=not-found id=%s", ns.transcript_id)
         sys.exit(1)
 
     sentences = t.get("sentences") or []
     log.info("DONE verb=pull sentences=%d", len(sentences))
 
-    print(f'<untrusted-content source="fireflies transcript {defang(ns.transcript_id)}">')
+    print(
+        f'<untrusted-content source="fireflies transcript {defang(ns.transcript_id)}">'
+    )
     print(f"Title: {defang(t.get('title')) or '(untitled)'}")
     print(f"Date: {fmt_date(t.get('date'))}")
     print(f"Duration: {fmt_duration(t.get('duration'))}")
@@ -320,30 +344,44 @@ def cmd_pull(ns) -> None:
 # CLI
 # --------------------------------------------------------------------------- #
 
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="fireflies_client.py",
         description="List Fireflies meetings and pull full transcripts "
-                    "(read-only, two GraphQL queries, token from "
-                    "FIREFLIES_API_KEY).",
+        "(read-only, two GraphQL queries, token from "
+        "FIREFLIES_API_KEY).",
     )
-    p.add_argument("--session-id", default="", help="Claude session id for log correlation")
+    p.add_argument(
+        "--session-id", default="", help="Claude session id for log correlation"
+    )
     sub = p.add_subparsers(dest="verb", required=True)
 
     lp = sub.add_parser("list", help="list meetings with available transcripts")
-    lp.add_argument("--from", dest="from_date", metavar="DATE",
-                    help="ISO date (YYYY-MM-DD) lower bound")
-    lp.add_argument("--to", dest="to_date", metavar="DATE",
-                    help="ISO date (YYYY-MM-DD) upper bound")
+    lp.add_argument(
+        "--from",
+        dest="from_date",
+        metavar="DATE",
+        help="ISO date (YYYY-MM-DD) lower bound",
+    )
+    lp.add_argument(
+        "--to", dest="to_date", metavar="DATE", help="ISO date (YYYY-MM-DD) upper bound"
+    )
     lp.add_argument("--keyword", help="filter by keyword in title")
-    lp.add_argument("--mine", action="store_true",
-                    help="only meetings I organized")
-    lp.add_argument("--participant", action="append", metavar="EMAIL",
-                    help="filter by participant email (repeatable)")
-    lp.add_argument("--limit", type=int, default=20,
-                    help=f"max results (default 20, cap {MAX_LIMIT})")
-    lp.add_argument("--skip", type=int, default=0,
-                    help="pagination offset")
+    lp.add_argument("--mine", action="store_true", help="only meetings I organized")
+    lp.add_argument(
+        "--participant",
+        action="append",
+        metavar="EMAIL",
+        help="filter by participant email (repeatable)",
+    )
+    lp.add_argument(
+        "--limit",
+        type=int,
+        default=20,
+        help=f"max results (default 20, cap {MAX_LIMIT})",
+    )
+    lp.add_argument("--skip", type=int, default=0, help="pagination offset")
     lp.set_defaults(func=cmd_list)
 
     pp = sub.add_parser("pull", help="pull one full transcript by id")

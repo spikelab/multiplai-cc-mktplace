@@ -48,7 +48,7 @@ ROOT_PYPROJECT = REPO_ROOT / "pyproject.toml"
 # key, and a closing `# ///`. Deliberately stricter than a substring search.
 _PEP723_BLOCK = re.compile(
     r"^# /// script\s*$\n(?:#.*\n)*?^#\s*dependencies\s*=(?:#.*\n|.*\n)*?^# ///\s*$",
-    re.M,
+    re.MULTILINE,
 )
 
 
@@ -62,8 +62,7 @@ def _declared_members() -> set[Path]:
 def _found_pyprojects() -> list[Path]:
     """Every pyproject.toml under plugins/, excluding anything inside a venv."""
     return sorted(
-        p for p in REPO_ROOT.glob("plugins/**/pyproject.toml")
-        if ".venv" not in p.parts
+        p for p in REPO_ROOT.glob("plugins/**/pyproject.toml") if ".venv" not in p.parts
     )
 
 

@@ -17,7 +17,7 @@ from pathlib import Path
 from .. import docs as docs_mod
 from .. import sdk
 from ..gates import citation_gate, doc_quote_gate
-from ..models import Dropped, DocsOutput, WalkState
+from ..models import DocsOutput, Dropped, WalkState
 from ..prompts import docs_resource
 from ..symbols import normalise_api_path, outbound_api_paths
 from . import RunContext, bounded, fix_citation
@@ -32,14 +32,25 @@ def _resource_of(path: str) -> str:
 
 
 def _facts_for(state: WalkState, resource: str, api_paths: list[str]) -> list[str]:
-    places = [(e.path, e.line) for e in state.symbols
-              if e.kind == "http" and _resource_of(e.detail.get("normalised", normalise_api_path(e.name))) == resource]
+    places = [
+        (e.path, e.line)
+        for e in state.symbols
+        if e.kind == "http"
+        and _resource_of(e.detail.get("normalised", normalise_api_path(e.name)))
+        == resource
+    ]
     out = []
     for f in state.facts:
-        hit = any(c.path == p and c.line_start <= ln <= c.line_end for c in f.citations for p, ln in places)
+        hit = any(
+            c.path == p and c.line_start <= ln <= c.line_end
+            for c in f.citations
+            for p, ln in places
+        )
         if hit or resource.replace("_", " ") in f.claim.lower() or resource in f.claim:
             c = f.citations[0]
-            out.append(f"[{c.id}] {f.claim} — {c.path}:{c.line_start}-{c.line_end} quote: {c.quote[:160]!r}")
+            out.append(
+                f"[{c.id}] {f.claim} — {c.path}:{c.line_start}-{c.line_end} quote: {c.quote[:160]!r}"
+            )
         if len(out) >= MAX_FACTS_PER_RESOURCE:
             break
     return out
@@ -64,16 +75,32 @@ async def prepare_docs(state: WalkState, ctx: RunContext) -> None:
         (cache / name).write_text(docs_mod.fence(key, text), encoding="utf-8")
         local_files[key] = name
 
-    coll_dir = Path(opts["api_collection"]).expanduser().resolve() if opts.get("api_collection") else (
-        docs_mod.find_collection(search_root, vendor) if vendor else None)
-    collection: dict = {"dir": str(coll_dir) if coll_dir else "", "mapped": {}, "missing": list(api_paths)}
+    coll_dir = (
+        Path(opts["api_collection"]).expanduser().resolve()
+        if opts.get("api_collection")
+        else (docs_mod.find_collection(search_root, vendor) if vendor else None)
+    )
+    collection: dict = {
+        "dir": str(coll_dir) if coll_dir else "",
+        "mapped": {},
+        "missing": list(api_paths),
+    }
     if coll_dir and coll_dir.is_dir():
         reqs, server = docs_mod.read_collection(coll_dir)
         mapped, missing = docs_mod.map_collection(api_paths, reqs)
-        collection = {"dir": str(coll_dir), "server": server, "requests": len(reqs),
-                      "mapped": {p: [{"file": r["file"], "method": r["method"], "name": r["name"]} for r in rs]
-                                 for p, rs in mapped.items()},
-                      "missing": missing}
+        collection = {
+            "dir": str(coll_dir),
+            "server": server,
+            "requests": len(reqs),
+            "mapped": {
+                p: [
+                    {"file": r["file"], "method": r["method"], "name": r["name"]}
+                    for r in rs
+                ]
+                for p, rs in mapped.items()
+            },
+            "missing": missing,
+        }
 
     pages: dict[str, list[str]] = {}
     texts: dict[str, str] = {}
@@ -81,20 +108,32 @@ async def prepare_docs(state: WalkState, ctx: RunContext) -> None:
     report: dict = {}
     llms_count = 0
     if opts.get("docs"):
-        _, links = await docs_mod.fetch_llms(opts["docs"])   # DocsError -> the orchestrator stops
+        _, links = await docs_mod.fetch_llms(
+            opts["docs"]
+        )  # DocsError -> the orchestrator stops
         llms_count = len(links)
-        pages = docs_mod.choose_pages(links, api_paths, int(opts.get("docs_pages") or 30))
+        pages = docs_mod.choose_pages(
+            links, api_paths, int(opts.get("docs_pages") or 30)
+        )
         wanted = list(dict.fromkeys(u for us in pages.values() for u in us))
         texts, files, report = await docs_mod.fetch_docs(opts["docs"], wanted, cache)
         if ctx.progress:
-            ctx.progress.line(f"  docs: llms.txt lists {llms_count} pages; fetched {len(texts)}, "
-                              f"failed {len(report.get('failed', {}))}")
+            ctx.progress.line(
+                f"  docs: llms.txt lists {llms_count} pages; fetched {len(texts)}, "
+                f"failed {len(report.get('failed', {}))}"
+            )
 
     state.docs = {
-        "api_paths": api_paths, "docs_url": opts.get("docs") or "", "llms_pages": llms_count,
-        "pages": pages, "files": files, "fetch_failed": report.get("failed", {}),
-        "local_dirs": [str(d) for d in local_dirs], "local_files": local_files,
-        "collection": collection, "cache": str(cache),
+        "api_paths": api_paths,
+        "docs_url": opts.get("docs") or "",
+        "llms_pages": llms_count,
+        "pages": pages,
+        "files": files,
+        "fetch_failed": report.get("failed", {}),
+        "local_dirs": [str(d) for d in local_dirs],
+        "local_files": local_files,
+        "collection": collection,
+        "cache": str(cache),
     }
 
 
@@ -102,13 +141,20 @@ def _doc_texts(state: WalkState) -> dict[str, str]:
     """Defanged text by URL or local key, re-read from the cache (fence lines removed)."""
     cache = Path(state.docs["cache"])
     out = {}
-    for key, name in {**state.docs.get("files", {}), **state.docs.get("local_files", {})}.items():
+    for key, name in {
+        **state.docs.get("files", {}),
+        **state.docs.get("local_files", {}),
+    }.items():
         try:
             text = (cache / name).read_text(encoding="utf-8")
         except OSError:
             continue
         lines = text.split("\n")
-        out[key] = "\n".join(lines[1:-2]) if lines and lines[0].startswith("<untrusted-content") else text
+        out[key] = (
+            "\n".join(lines[1:-2])
+            if lines and lines[0].startswith("<untrusted-content")
+            else text
+        )
     return out
 
 
@@ -126,32 +172,65 @@ def gate_docs(state: WalkState, ctx: RunContext) -> None:
         for c in out.claims:
             g = doc_quote_gate(texts, c.url, c.doc_quote)
             if g.passed:
-                claims.append({"resource": key, "claim": c.claim, "url": c.url, "doc_quote": c.doc_quote})
+                claims.append(
+                    {
+                        "resource": key,
+                        "claim": c.claim,
+                        "url": c.url,
+                        "doc_quote": c.doc_quote,
+                    }
+                )
             else:
-                dropped.append(Dropped(stage="docs", what=c.claim[:300], reason=g.reason))
+                dropped.append(
+                    Dropped(stage="docs", what=c.claim[:300], reason=g.reason)
+                )
         for m in out.mappings:
             api = norm_paths.get(normalise_api_path(m.api_path))
             if api is None:
-                dropped.append(Dropped(stage="docs", what=f"mapping {m.api_path}", reason="not an outbound API path"))
+                dropped.append(
+                    Dropped(
+                        stage="docs",
+                        what=f"mapping {m.api_path}",
+                        reason="not an outbound API path",
+                    )
+                )
                 continue
             g = doc_quote_gate(texts, m.url, m.doc_quote)
             if m.url not in fetched:
-                g = g.model_copy(update={"passed": False, "reason": "url is not a fetched docs page"})
+                g = g.model_copy(
+                    update={"passed": False, "reason": "url is not a fetched docs page"}
+                )
             if g.passed:
                 mappings.setdefault(api, [])
                 if m.url not in mappings[api]:
                     mappings[api].append(m.url)
             else:
-                dropped.append(Dropped(stage="docs", what=f"mapping {m.api_path} -> {m.url}", reason=g.reason))
+                dropped.append(
+                    Dropped(
+                        stage="docs",
+                        what=f"mapping {m.api_path} -> {m.url}",
+                        reason=g.reason,
+                    )
+                )
         for d in out.disagreements:
             g = doc_quote_gate(texts, d.url, d.doc_quote)
             cit = fix_citation(d.citation, ctx.snap_root)
             gc = citation_gate(ctx.repos, cit)
             if g.passed and gc.passed:
-                disagreements.append({"summary": d.summary, "url": d.url, "doc_quote": d.doc_quote,
-                                      "citation": cit.model_dump()})
+                disagreements.append(
+                    {
+                        "summary": d.summary,
+                        "url": d.url,
+                        "doc_quote": d.doc_quote,
+                        "citation": cit.model_dump(),
+                    }
+                )
             else:
-                dropped.append(Dropped(stage="docs", what=d.summary[:300], reason=g.reason or gc.reason))
+                dropped.append(
+                    Dropped(
+                        stage="docs", what=d.summary[:300], reason=g.reason or gc.reason
+                    )
+                )
     state.docs["claims"] = claims
     state.docs["mappings"] = mappings
     state.docs["no_doc_page"] = [p for p in api_paths if p not in mappings]
@@ -180,12 +259,25 @@ async def run_docs(state: WalkState, ctx: RunContext) -> WalkState:
         if not page_list:
             return
         paths = [p for p in api_paths if _resource_of(p) == res]
-        prompt = docs_resource(state.target.package, res, paths, _facts_for(state, res, api_paths), page_list,
-                               DocsOutput)
+        prompt = docs_resource(
+            state.target.package,
+            res,
+            paths,
+            _facts_for(state, res, api_paths),
+            page_list,
+            DocsOutput,
+        )
         try:
             out = await sdk.agent_call_structured(
-                prompt, DocsOutput, allowed_tools=sdk.DOCS_TOOLS, model=cfg.docs_model, effort=cfg.effort,
-                max_turns=cfg.max_turns, cwd=str(cache), budget_label="docs")
+                prompt,
+                DocsOutput,
+                allowed_tools=sdk.DOCS_TOOLS,
+                model=cfg.docs_model,
+                effort=cfg.effort,
+                max_turns=cfg.max_turns,
+                cwd=str(cache),
+                budget_label="docs",
+            )
             state.docs_answers[res] = out.model_dump()
         except sdk.RepoTrustError:
             raise
@@ -195,11 +287,18 @@ async def run_docs(state: WalkState, ctx: RunContext) -> WalkState:
             state.errors.append(f"docs {res}: {str(e).splitlines()[0][:200]}")
 
     if opts.get("mode") != "agent":
-        await bounded([r for r in resources if r not in state.docs_answers], one, cfg.concurrency)
+        await bounded(
+            [r for r in resources if r not in state.docs_answers], one, cfg.concurrency
+        )
     gate_docs(state, ctx)
-    ctx.counts = {"api_paths": len(api_paths), "pages": len(files), "claims": len(state.docs.get("claims", [])),
-                  "mapped": len(state.docs.get("mappings", {})), "no_doc_page": len(state.docs.get("no_doc_page", [])),
-                  "not_in_collection": len(state.docs.get("collection", {}).get("missing", [])),
-                  "dropped": len([d for d in state.dropped if d.stage == "docs"])}
+    ctx.counts = {
+        "api_paths": len(api_paths),
+        "pages": len(files),
+        "claims": len(state.docs.get("claims", [])),
+        "mapped": len(state.docs.get("mappings", {})),
+        "no_doc_page": len(state.docs.get("no_doc_page", [])),
+        "not_in_collection": len(state.docs.get("collection", {}).get("missing", [])),
+        "dropped": len([d for d in state.dropped if d.stage == "docs"]),
+    }
     state.stage = "docs"
     return state

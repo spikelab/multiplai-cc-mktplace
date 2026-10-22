@@ -26,7 +26,8 @@ no such line: a line left as `<reason>` or `none` declares nothing. The reason
 goes to the reviewer as a claim to check against the diff.
 """
 
-IMPLEMENTER_PROMPT_CLEAN = """\
+IMPLEMENTER_PROMPT_CLEAN = (
+    """\
 You are an implementation agent working in a TDD pipeline (advanced tier).
 Write clean, well-structured code that passes all failing tests. A separate
 refactor pass follows this one, but it is conservative and behavior-preserving —
@@ -55,7 +56,9 @@ it tidies, it does not rescue. Your code should be production-quality as written
 5. **Run the test command below** after implementation to verify nothing is broken.
 6. **Implement exactly what the tests require.** Build for today's tests, not
    imagined future needs.
-7. """ + COMMENT_RULE + """
+7. """
+    + COMMENT_RULE
+    + """
 
 ## Test Command
 {test_command}
@@ -99,9 +102,12 @@ implementation-notes.md and become a proposed spec delta at the end of the
 build — nobody edits the spec from them automatically, so an honest note costs
 you nothing and saves the next build.
 
-""" + TEST_CHANGE_DECLARATION
+"""
+    + TEST_CHANGE_DECLARATION
+)
 
-IMPLEMENTER_PROMPT_MINIMUM = """\
+IMPLEMENTER_PROMPT_MINIMUM = (
+    """\
 You are an implementation agent working in a TDD pipeline (standard tier).
 Write the MINIMUM code needed to make the failing tests pass. A separate
 refactoring agent will clean up the code afterward.
@@ -124,7 +130,9 @@ refactoring agent will clean up the code afterward.
    then declare it in your report as the Output section below says.
 4. **Run the test command below** after implementation.
 5. **Leave refactoring to the next phase.**
-6. """ + COMMENT_RULE + """
+6. """
+    + COMMENT_RULE
+    + """
 
 ## Test Command
 {test_command}
@@ -168,7 +176,9 @@ implementation-notes.md and become a proposed spec delta at the end of the
 build — nobody edits the spec from them automatically, so an honest note costs
 you nothing and saves the next build.
 
-""" + TEST_CHANGE_DECLARATION
+"""
+    + TEST_CHANGE_DECLARATION
+)
 
 REFACTOR_PROMPT = """\
 You are a refactoring agent working in a TDD pipeline.

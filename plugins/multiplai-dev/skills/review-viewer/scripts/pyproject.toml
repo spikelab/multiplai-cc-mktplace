@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "jsonschema>=4"]
+dev = ["pytest", "jsonschema>=4", "pytest-xdist>=3.8"]
 
 [build-system]
 requires = ["hatchling"]

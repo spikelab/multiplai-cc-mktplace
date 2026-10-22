@@ -29,8 +29,8 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from lib import runtime  # noqa: E402
-from lib.runtime import run_supervised, scripts_dir, uv_run_argv  # noqa: E402
+from lib import runtime
+from lib.runtime import run_supervised, scripts_dir, uv_run_argv
 
 # Assembled rather than written out, so a repo-wide grep for the retired flag
 # stays clean and can itself serve as the coarse check.
@@ -49,7 +49,9 @@ class TestUvRunArgv:
     def test_extra_args_follow_the_script(self):
         argv = uv_run_argv(SCRIPTS_DIR / "generate_catalog.py", "--only", "memory")
         assert argv[-3:] == [
-            str(SCRIPTS_DIR / "generate_catalog.py"), "--only", "memory",
+            str(SCRIPTS_DIR / "generate_catalog.py"),
+            "--only",
+            "memory",
         ]
 
     def test_scripts_dir_resolves_to_the_plugin_scripts_dir(self):
@@ -88,7 +90,8 @@ class TestNoSpawnSiteHandRollsUvArgv:
             if not isinstance(node, (ast.List, ast.Tuple)):
                 continue
             head = [
-                e.value for e in node.elts[:2]
+                e.value
+                for e in node.elts[:2]
                 if isinstance(e, ast.Constant) and isinstance(e.value, str)
             ]
             assert head[:2] != ["uv", "run"], (
@@ -173,7 +176,8 @@ class TestTimeoutKillsTheWholeTree:
                 return "out", "err"
 
         monkeypatch.setattr(
-            runtime.subprocess, "Popen",
+            runtime.subprocess,
+            "Popen",
             lambda argv, **kw: (popen_kwargs.update(kw), FakeProc())[1],
         )
         run_supervised(["true"], timeout=5)
@@ -196,7 +200,8 @@ class TestTimeoutKillsTheWholeTree:
         monkeypatch.setattr(runtime.subprocess, "Popen", lambda argv, **kw: FakeProc())
         monkeypatch.setattr(runtime.os, "getpgid", lambda pid: pid)
         monkeypatch.setattr(
-            runtime.os, "killpg",
+            runtime.os,
+            "killpg",
             lambda pgid, sig: signalled.update(pgid=pgid, sig=sig),
         )
 
@@ -223,21 +228,26 @@ class TestTimeoutKillsTheWholeTree:
         # Guards against a vacuous pass: a grandchild that never ran would also
         # "stop growing".
         assert heartbeat.is_file() and heartbeat.stat().st_size > 0, (
-            "the grandchild never started — this test proves nothing")
+            "the grandchild never started — this test proves nothing"
+        )
 
         time.sleep(0.5)
         settled = heartbeat.stat().st_size
         time.sleep(0.5)
         assert heartbeat.stat().st_size == settled, (
-            "the grandchild is still writing — it outlived the killpg")
+            "the grandchild is still writing — it outlived the killpg"
+        )
 
     def test_the_success_path_matches_subprocess_run(self):
         """Callers were written against `subprocess.run`; the contract has to be
         identical or the swap changes behaviour on the path that works."""
         proc = run_supervised(
-            [sys.executable, "-c",
-             "import sys; sys.stdout.write('hi'); sys.stderr.write('bye');"
-             " sys.exit(3)"],
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.stdout.write('hi'); sys.stderr.write('bye');"
+                " sys.exit(3)",
+            ],
             timeout=60,
         )
         assert (proc.returncode, proc.stdout, proc.stderr) == (3, "hi", "bye")

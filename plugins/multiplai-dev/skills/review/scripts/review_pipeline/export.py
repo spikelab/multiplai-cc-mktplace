@@ -53,14 +53,24 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from . import timings
 from .budget import TOKEN_FIELDS, empty_stage
 from .config import DIMENSIONS
-from .models import (SEVERITIES, STAGES, AgentCheck, Assessment, Citation, EarlierStatus, Finding, Need,
-                     ReviewState, section_of)
+from .models import (
+    SEVERITIES,
+    STAGES,
+    AgentCheck,
+    Assessment,
+    Citation,
+    EarlierStatus,
+    Finding,
+    Need,
+    ReviewState,
+    section_of,
+)
 
 log = logging.getLogger(__name__)
 
@@ -79,7 +89,12 @@ def producer() -> str:
 
 
 def _citation(c: Citation) -> dict:
-    return {"path": c.path, "line_start": c.line_start, "line_end": c.line_end, "quote": c.quote}
+    return {
+        "path": c.path,
+        "line_start": c.line_start,
+        "line_end": c.line_end,
+        "quote": c.quote,
+    }
 
 
 def _finding(f: Finding, status: str, reason: str | None, expected: str | None) -> dict:
@@ -87,7 +102,9 @@ def _finding(f: Finding, status: str, reason: str | None, expected: str | None) 
     on_paths = {"paths": list(f.paths)} if f.paths else {}
     # `defect_class` and `other_locations` (0.95+) only when the finder named them.
     kind = {"defect_class": f.defect_class} if f.defect_class else {}
-    elsewhere = {"other_locations": list(f.other_locations)} if f.other_locations else {}
+    elsewhere = (
+        {"other_locations": list(f.other_locations)} if f.other_locations else {}
+    )
     return {
         "id": f.id,
         "severity": f.severity,
@@ -119,8 +136,14 @@ def absorbed(state: ReviewState) -> dict[str, list[dict]]:
 
 
 def _need(n: Need) -> dict:
-    return {"what": n.what, "blocks": n.blocks, "cause": n.cause, "command": n.command, "where": n.where,
-            "source": n.source}
+    return {
+        "what": n.what,
+        "blocks": n.blocks,
+        "cause": n.cause,
+        "command": n.command,
+        "where": n.where,
+        "source": n.source,
+    }
 
 
 def exported_needs(state: ReviewState) -> list[Need]:
@@ -168,23 +191,29 @@ def run_record(state: ReviewState) -> dict:
     by_stage: dict[str, dict] = ledger.get("by_stage") or {}
     names = set(by_stage) | {k for k in state.timings if k != "run"}
     # `find` has a row per finder; its stage-level interval would repeat them.
-    names -= {n for n in names if ":" not in n and any(m.startswith(n + ":") for m in names)}
+    names -= {
+        n for n in names if ":" not in n and any(m.startswith(n + ":") for m in names)
+    }
     configured = (state.run_config or {}).get("stages", {})
     stages = []
     for name in sorted(names, key=_stage_order):
         rec = by_stage.get(name) or empty_stage()
         stage = name.partition(":")[0]
         cfg = configured.get(stage, {})
-        stages.append({
-            "name": name,
-            "stage": stage,
-            "calls": int(rec.get("calls", 0) or 0),
-            "tokens": _tokens(rec),
-            "cost_usd": round(float(rec.get("cost_usd", 0.0) or 0.0), 6),
-            "wall_seconds": round(timings.wall_seconds(state.timings.get(name, [])), 3),
-            "model": cfg.get("model", "unknown"),
-            "effort": cfg.get("effort", "unknown"),
-        })
+        stages.append(
+            {
+                "name": name,
+                "stage": stage,
+                "calls": int(rec.get("calls", 0) or 0),
+                "tokens": _tokens(rec),
+                "cost_usd": round(float(rec.get("cost_usd", 0.0) or 0.0), 6),
+                "wall_seconds": round(
+                    timings.wall_seconds(state.timings.get(name, [])), 3
+                ),
+                "model": cfg.get("model", "unknown"),
+                "effort": cfg.get("effort", "unknown"),
+            }
+        )
     runs = state.timings.get("run", [])
     ended = [i.ended_at for i in runs if i.ended_at]
     statuses = [getattr(state.verdicts.get(f.id), "status", "") for f in state.findings]
@@ -224,8 +253,15 @@ def _assessment(a: Assessment) -> dict:
 
 
 def _earlier(e: EarlierStatus) -> dict:
-    return {"earlier_id": e.earlier_id, "lineage": e.lineage, "round": e.round, "status": e.status,
-            "reason": e.reason, "citations": [_citation(c) for c in e.citations], "error": e.error}
+    return {
+        "earlier_id": e.earlier_id,
+        "lineage": e.lineage,
+        "round": e.round,
+        "status": e.status,
+        "reason": e.reason,
+        "citations": [_citation(c) for c in e.citations],
+        "error": e.error,
+    }
 
 
 def _target(state: ReviewState) -> dict:
@@ -242,18 +278,24 @@ def _target(state: ReviewState) -> dict:
 
 
 def _timestamp(generated_at: datetime | None) -> str:
-    when = (generated_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    when = (generated_at or datetime.now(UTC)).astimezone(UTC)
     return when.isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def to_findings_file(state: ReviewState, *, generated_at: datetime | None = None) -> dict:
+def to_findings_file(
+    state: ReviewState, *, generated_at: datetime | None = None
+) -> dict:
     rows: list[dict] = []
     merged_into = absorbed(state)
     for f in state.findings:
         verdict = state.verdicts.get(f.id)
         status = verdict.status if verdict else "unverifiable"
         reason = verdict.reason if verdict else "not verified"
-        expected = verdict.expected_behaviour if verdict and status in ("confirmed", "unverifiable") else None
+        expected = (
+            verdict.expected_behaviour
+            if verdict and status in ("confirmed", "unverifiable")
+            else None
+        )
         row = _finding(f, status, reason, expected)
         if verdict:
             row["verifier_citations"] = [_citation(c) for c in verdict.citations]
@@ -274,8 +316,12 @@ def to_findings_file(state: ReviewState, *, generated_at: datetime | None = None
     order = {"confirmed": 0, "unverifiable": 1, "refuted": 2}
     rows.sort(key=lambda r: (order[r["status"]], rank[r["severity"]]))
     for r in state.rejected:
-        rows.append({**_finding(r.finding, "rejected", r.reason, None),
-                     "section": section_of(None, r.finding.finders)})
+        rows.append(
+            {
+                **_finding(r.finding, "rejected", r.reason, None),
+                "section": section_of(None, r.finding.finders),
+            }
+        )
 
     seen, unique = set(), []
     for row in rows:
@@ -308,7 +354,10 @@ def to_findings_file(state: ReviewState, *, generated_at: datetime | None = None
 
 def _write(data: dict, path: Path) -> Path:
     tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8")
+    tmp.write_text(
+        json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
     tmp.replace(path)
     return path
 
@@ -321,45 +370,94 @@ def write_findings_file(state: ReviewState, target_dir: Path) -> Path:
 
 
 def _marked(c: dict) -> dict:
-    return {"path": c["path"], "line_start": c["line_start"], "line_end": c["line_end"],
-            "quote": c["quote"], "gate": c["gate"], "seen": c["seen"]}
+    return {
+        "path": c["path"],
+        "line_start": c["line_start"],
+        "line_end": c["line_end"],
+        "quote": c["quote"],
+        "gate": c["gate"],
+        "seen": c["seen"],
+    }
 
 
 def _checked_finding(e: dict) -> dict:
-    return {"id": e["id"], "claim": e["claim"], "severity": e["severity"],
-            "failure_scenario": e["failure_scenario"], "citations": [_marked(c) for c in e["citations"]],
-            "fate": e["fate"], "into": e.get("into"), "rule": e.get("rule")}
+    return {
+        "id": e["id"],
+        "claim": e["claim"],
+        "severity": e["severity"],
+        "failure_scenario": e["failure_scenario"],
+        "citations": [_marked(c) for c in e["citations"]],
+        "fate": e["fate"],
+        "into": e.get("into"),
+        "rule": e.get("rule"),
+    }
 
 
 def _agent(check: AgentCheck) -> dict:
     verdict = None
     if check.verdict is not None:
         v = check.verdict
-        verdict = {"status": v["status"], "reason": v["reason"],
-                   "citations": [_marked(c) for c in v["citations"]], "lowered": bool(v["lowered"])}
+        verdict = {
+            "status": v["status"],
+            "reason": v["reason"],
+            "citations": [_marked(c) for c in v["citations"]],
+            "lowered": bool(v["lowered"]),
+        }
     # A convert call's items (kind, severity, finding id): the only place an item's kind is written.
-    items = {} if check.items is None else {"items": [
-        {"kind": i["kind"], "severity": i["severity"], "finding_id": i.get("finding_id")} for i in check.items]}
+    items = (
+        {}
+        if check.items is None
+        else {
+            "items": [
+                {
+                    "kind": i["kind"],
+                    "severity": i["severity"],
+                    "finding_id": i.get("finding_id"),
+                }
+                for i in check.items
+            ]
+        }
+    )
     return {
-        "stage": check.stage, "subject": check.subject, "given": list(check.given),
-        "calls": [{"tool": c["tool"], "target": c["target"], "detail": c.get("detail", "")} for c in check.calls],
-        "outcome": check.outcome, "turns": check.turns, "cost_usd": round(check.cost_usd, 6),
-        "started_at": check.started_at, "ended_at": check.ended_at, "error": check.error,
-        "findings": [_checked_finding(e) for e in check.findings], "verdict": verdict, **items,
+        "stage": check.stage,
+        "subject": check.subject,
+        "given": list(check.given),
+        "calls": [
+            {"tool": c["tool"], "target": c["target"], "detail": c.get("detail", "")}
+            for c in check.calls
+        ],
+        "outcome": check.outcome,
+        "turns": check.turns,
+        "cost_usd": round(check.cost_usd, 6),
+        "started_at": check.started_at,
+        "ended_at": check.ended_at,
+        "error": check.error,
+        "findings": [_checked_finding(e) for e in check.findings],
+        "verdict": verdict,
+        **items,
     }
 
 
 def to_checks_file(state: ReviewState, *, generated_at: datetime | None = None) -> dict:
     """The `checks.v1` record: every agent in the order it started, then every gate result."""
-    agents = sorted(state.checks, key=lambda c: c.started_at)  # stable: ties keep return order
+    agents = sorted(
+        state.checks, key=lambda c: c.started_at
+    )  # stable: ties keep return order
     return {
         "schema_version": 1,
         "generated_at": _timestamp(generated_at),
         "producer": producer(),
         "target": _target(state),
         "agents": [_agent(c) for c in agents],
-        "gates": [{"finding_id": g.finding_id, "gate": g.gate, "passed": g.passed, "rule": g.rule}
-                  for g in state.gate_checks],
+        "gates": [
+            {
+                "finding_id": g.finding_id,
+                "gate": g.gate,
+                "passed": g.passed,
+                "rule": g.rule,
+            }
+            for g in state.gate_checks
+        ],
         # What a stage could not cover (`checks.add_coverage`), in the order it was recorded.
         "coverage": [c.model_dump(mode="json") for c in state.coverage],
     }

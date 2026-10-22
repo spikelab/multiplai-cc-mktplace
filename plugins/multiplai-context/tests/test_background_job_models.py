@@ -29,23 +29,21 @@ import io
 import json
 import os
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Callable
 
 import pytest
-
 from conftest import SCRIPTS_DIR, import_script
 
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from multiplai_core.env import CURRENT_MODEL
-from multiplai_core.plugin_options import option_var
-from multiplai_core.model_client import DEFAULT_MODEL as CLIENT_DEFAULT_MODEL
-
 from lib.job_effort import EFFORT_OPTIONS
+from multiplai_core.env import CURRENT_MODEL
+from multiplai_core.model_client import DEFAULT_MODEL as CLIENT_DEFAULT_MODEL
+from multiplai_core.plugin_options import option_var
 
 SESSION_MODEL = "claude-test-session"
 SESSION_EFFORT = "low"
@@ -94,19 +92,22 @@ class SdkRecorder:
         self.reply: Callable[[str], str] = lambda _system: ""
 
     async def fake_safe_query(self, sdk, *, prompt, options):
-        self.calls.append(SdkCall(
-            model=options.model,
-            effort=getattr(options, "effort", None),
-        ))
+        self.calls.append(
+            SdkCall(
+                model=options.model,
+                effort=getattr(options, "effort", None),
+            )
+        )
         text = self.reply(options.system_prompt or "")
         if text:
             yield sdk.AssistantMessage(
-                content=[sdk.TextBlock(text=text)], model=options.model or "")
+                content=[sdk.TextBlock(text=text)], model=options.model or ""
+            )
 
 
 @pytest.fixture
 def sdk(monkeypatch):
-    import multiplai_core.agent_runner as agent_runner
+    from multiplai_core import agent_runner
 
     recorder = SdkRecorder()
     monkeypatch.setattr(agent_runner, "_safe_query", recorder.fake_safe_query)
@@ -122,37 +123,55 @@ def _use_workspace(root: Path, monkeypatch):
     monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_WORKSPACE_DIR", str(root / "ws"))
     _reset_cache()
     paths = get_paths()
-    for d in (paths.memory_dir(), paths.diary_dir(), paths.now_dir(),
-              paths.learnings_dir, paths.dreams_dir(), paths.catalogs_dir()):
+    for d in (
+        paths.memory_dir(),
+        paths.diary_dir(),
+        paths.now_dir(),
+        paths.learnings_dir,
+        paths.dreams_dir(),
+        paths.catalogs_dir(),
+    ):
         d.mkdir(parents=True, exist_ok=True)
     return paths
 
 
 def _transcript(path: Path, cwd: str = "/work/proj") -> Path:
     """A two-turn Claude Code transcript, timestamped just now."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     def turn(role, text, ts):
-        rec = {"type": role, "timestamp": ts.isoformat(), "cwd": cwd,
-               "message": {"role": role,
-                           "content": [{"type": "text", "text": text}]}}
+        rec = {
+            "type": role,
+            "timestamp": ts.isoformat(),
+            "cwd": cwd,
+            "message": {"role": role, "content": [{"type": "text", "text": text}]},
+        }
         if role == "assistant":
             rec["message"]["usage"] = {"input_tokens": 1000, "output_tokens": 10}
         return rec
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(json.dumps(r) for r in (
-        turn("user", "please fix the auth bug", now - timedelta(minutes=5)),
-        turn("assistant", "fixed the auth bug in login.py", now),
-    )) + "\n", encoding="utf-8")
+    path.write_text(
+        "\n".join(
+            json.dumps(r)
+            for r in (
+                turn("user", "please fix the auth bug", now - timedelta(minutes=5)),
+                turn("assistant", "fixed the auth bug in login.py", now),
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     return path
 
 
 def _diary(paths, cwd: str = "/work/proj") -> None:
-    ts = datetime.now(timezone.utc).isoformat()
+    ts = datetime.now(UTC).isoformat()
     (paths.diary_dir() / "today.md").write_text(
         f"# Diary — test\n\n## Session: s1 — {ts} — {cwd}\n\n[{ts}]\n\n"
-        "Fixed the auth bug.\n", encoding="utf-8")
+        "Fixed the auth bug.\n",
+        encoding="utf-8",
+    )
 
 
 UNIT_REPLY = (
@@ -186,11 +205,22 @@ def _maintainer_judge(root, monkeypatch, sdk):
     _use_workspace(root, monkeypatch)
     data = root / "judge-data"
     data.mkdir()
-    util.upsert_session(util.utilisation_path(data), "s1", {
-        "injected": [{"file": "dev.md", "section": "Testing", "bytes": 100,
-                      "turn": 1, "co_picks": 1}],
-        "transcript": str(_transcript(root / "t.jsonl")),
-    })
+    util.upsert_session(
+        util.utilisation_path(data),
+        "s1",
+        {
+            "injected": [
+                {
+                    "file": "dev.md",
+                    "section": "Testing",
+                    "bytes": 100,
+                    "turn": 1,
+                    "co_picks": 1,
+                }
+            ],
+            "transcript": str(_transcript(root / "t.jsonl")),
+        },
+    )
     result = mm.run_utilisation_judge(data)
     assert result.ran, result.detail
 
@@ -204,14 +234,18 @@ def _maintainer_doctor(root, monkeypatch, sdk):
     data = root / "doctor-data"
     memory.mkdir()
     data.mkdir()
-    deploy = ("- Cloud Run rolling deploys health-check the new revision "
-              "first, then shift traffic on success, and roll back "
-              "automatically.\n")
+    deploy = (
+        "- Cloud Run rolling deploys health-check the new revision "
+        "first, then shift traffic on success, and roll back "
+        "automatically.\n"
+    )
     (memory / "alpha.md").write_text("# Alpha\n\n" + deploy, encoding="utf-8")
-    (memory / "beta.md").write_text("# Beta\n\n" + deploy.replace(", and", " and"),
-                                    encoding="utf-8")
+    (memory / "beta.md").write_text(
+        "# Beta\n\n" + deploy.replace(", and", " and"), encoding="utf-8"
+    )
     (memory / "notes.md").write_text(
-        "# Notes\n\n- " + "a note about postgres. " * 40 + "\n", encoding="utf-8")
+        "# Notes\n\n- " + "a note about postgres. " * 40 + "\n", encoding="utf-8"
+    )
     result = mm.run_doctor(memory, data, root / "doctor-dreams")
     assert result.ran, result.detail
 
@@ -225,9 +259,13 @@ def _router(root, monkeypatch, sdk):
     router = create_router()
     assert isinstance(router, LLMRouter), type(router)
     router.select_multi(
-        "how do I deploy to Cloud Run?", None,
-        {"memory": [{"source": "dev.md", "description": "deploy notes"}],
-         "skills": [], "resources": []},
+        "how do I deploy to Cloud Run?",
+        None,
+        {
+            "memory": [{"source": "dev.md", "description": "deploy notes"}],
+            "skills": [],
+            "resources": [],
+        },
     )
 
 
@@ -257,10 +295,17 @@ def _checkpoint(root, monkeypatch, sdk):
 
     _reset_cache()
     checkpoint_writer = import_script("checkpoint_writer", "checkpoint_writer.py")
-    asyncio.run(checkpoint_writer.write_checkpoint({
-        "session_id": "s1", "transcript_path": str(_transcript(root / "t.jsonl")),
-        "cwd": "/work/proj", "tokens": 110_000, "reason": "band",
-    }))
+    asyncio.run(
+        checkpoint_writer.write_checkpoint(
+            {
+                "session_id": "s1",
+                "transcript_path": str(_transcript(root / "t.jsonl")),
+                "cwd": "/work/proj",
+                "tokens": 110_000,
+                "reason": "band",
+            }
+        )
+    )
 
 
 DREAM_DRAFT = """\
@@ -282,17 +327,21 @@ def _dream(root, monkeypatch, sdk):
 
     paths = _use_workspace(root, monkeypatch)
     (paths.memory_dir() / "dev.md").write_text("# Dev\n\n## Tooling\n")
-    (paths.learnings_dir / "2026-07-30.md").write_text("\n".join(
-        f"## Session Learnings — 2026-07-30T0{i}:00:00+00:00\n"
-        f"Session: s{i}\n"
-        f"- **[trust: verified]** PATTERN Lesson {i}. → Target: dev.md\n\n---\n"
-        for i in range(3)
-    ))
-    sdk.reply = lambda system: ("NOOP" if system.startswith("You are a strict editor")
-                                else DREAM_DRAFT)
+    (paths.learnings_dir / "2026-07-30.md").write_text(
+        "\n".join(
+            f"## Session Learnings — 2026-07-30T0{i}:00:00+00:00\n"
+            f"Session: s{i}\n"
+            f"- **[trust: verified]** PATTERN Lesson {i}. → Target: dev.md\n\n---\n"
+            for i in range(3)
+        )
+    )
+    sdk.reply = lambda system: (
+        "NOOP" if system.startswith("You are a strict editor") else DREAM_DRAFT
+    )
     # A fresh module per run: the run lock is module state.
     spec = importlib.util.spec_from_file_location(
-        f"dream_models_{root.name}", SCRIPTS_DIR / "dream.py")
+        f"dream_models_{root.name}", SCRIPTS_DIR / "dream.py"
+    )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     try:
@@ -309,11 +358,21 @@ def _extract_learnings(root, monkeypatch, sdk):
 
     _use_workspace(root, monkeypatch)
     sdk.reply = lambda _system: UNIT_REPLY.format(
-        ts=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
-    monkeypatch.setattr(el.sys, "stdin", io.StringIO(json.dumps({
-        "session_id": "s1", "cwd": "/work/proj",
-        "transcript_path": str(_transcript(root / "t.jsonl")),
-    })))
+        ts=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    )
+    monkeypatch.setattr(
+        el.sys,
+        "stdin",
+        io.StringIO(
+            json.dumps(
+                {
+                    "session_id": "s1",
+                    "cwd": "/work/proj",
+                    "transcript_path": str(_transcript(root / "t.jsonl")),
+                }
+            )
+        ),
+    )
     assert asyncio.run(el.extract()) is True
 
 
@@ -326,11 +385,15 @@ def _backfill(root, monkeypatch, sdk):
     _transcript(config_dir / "projects" / "proj" / "session-b1.jsonl")
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
     sdk.reply = lambda _system: UNIT_REPLY.format(
-        ts=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
-    summary = asyncio.run(backfill(
-        datetime.now(timezone.utc) - timedelta(days=1),
-        run_catalogs=True, run_now=True,
-    ))
+        ts=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    )
+    summary = asyncio.run(
+        backfill(
+            datetime.now(UTC) - timedelta(days=1),
+            run_catalogs=True,
+            run_now=True,
+        )
+    )
     assert summary["scanned"] == 1, summary
 
 
@@ -347,19 +410,45 @@ class Job:
 HAIKU = CURRENT_MODEL["haiku"]
 
 JOBS = [
-    Job("memory_maintainer status", _maintainer_status, frozenset({HAIKU}), ("now_effort",)),
-    Job("memory_maintainer utilisation judge", _maintainer_judge, frozenset({HAIKU}),
-        ("utilisation_judge_effort",)),
-    Job("memory_maintainer doctor", _maintainer_doctor, frozenset({HAIKU}),
-        ("memory_doctor_effort",)),
+    Job(
+        "memory_maintainer status",
+        _maintainer_status,
+        frozenset({HAIKU}),
+        ("now_effort",),
+    ),
+    Job(
+        "memory_maintainer utilisation judge",
+        _maintainer_judge,
+        frozenset({HAIKU}),
+        ("utilisation_judge_effort",),
+    ),
+    Job(
+        "memory_maintainer doctor",
+        _maintainer_doctor,
+        frozenset({HAIKU}),
+        ("memory_doctor_effort",),
+    ),
     Job("memory router", _router, frozenset({"claude-haiku-4-5"}), ("router_effort",)),
     Job("catalogs", _catalogs, frozenset({"claude-sonnet-5"}), ("catalog_effort",)),
-    Job("checkpoint", _checkpoint, frozenset({CLIENT_DEFAULT_MODEL}), ("checkpoint_effort",)),
+    Job(
+        "checkpoint",
+        _checkpoint,
+        frozenset({CLIENT_DEFAULT_MODEL}),
+        ("checkpoint_effort",),
+    ),
     Job("dream", _dream, frozenset({CLIENT_DEFAULT_MODEL}), ("dream_effort",)),
-    Job("extract_learnings", _extract_learnings, frozenset({CLIENT_DEFAULT_MODEL}),
-        ("extraction_effort", "now_effort")),
-    Job("backfill", _backfill, frozenset({CLIENT_DEFAULT_MODEL, "claude-sonnet-5"}),
-        ("extraction_effort", "now_effort", "catalog_effort")),
+    Job(
+        "extract_learnings",
+        _extract_learnings,
+        frozenset({CLIENT_DEFAULT_MODEL}),
+        ("extraction_effort", "now_effort"),
+    ),
+    Job(
+        "backfill",
+        _backfill,
+        frozenset({CLIENT_DEFAULT_MODEL, "claude-sonnet-5"}),
+        ("extraction_effort", "now_effort", "catalog_effort"),
+    ),
 ]
 
 #: The effort an option sets in the tests: neither SESSION_EFFORT nor
@@ -386,17 +475,22 @@ def job(request):
     return request.param
 
 
-def test_job_model_ignores_the_session_and_multiplai_model(job, tmp_path, monkeypatch, sdk):
+def test_job_model_ignores_the_session_and_multiplai_model(
+    job, tmp_path, monkeypatch, sdk
+):
     baseline = _run_in("unset", job, tmp_path, monkeypatch, sdk)
     assert {c.model for c in baseline} == job.models
 
     for state in ("session", "session+configured"):
         calls = _run_in(state, job, tmp_path, monkeypatch, sdk)
         assert {c.model for c in calls} == job.models, (
-            f"{job.name}: with {state} env the SDK got {sorted({c.model for c in calls})}")
+            f"{job.name}: with {state} env the SDK got {sorted({c.model for c in calls})}"
+        )
 
 
-def test_effort_follows_the_session_when_a_job_sets_none(job, tmp_path, monkeypatch, sdk):
+def test_effort_follows_the_session_when_a_job_sets_none(
+    job, tmp_path, monkeypatch, sdk
+):
     """With no ``<job>_effort`` option, each call gets ``default_effort()`` —
     none, then the session's, then ``MULTIPLAI_EFFORT``."""
     for name in EFFORT_OPTIONS:
@@ -427,7 +521,9 @@ def test_an_invalid_job_effort_is_ignored(tmp_path, monkeypatch, sdk):
 
 def test_every_job_effort_option_is_declared():
     """Each option lib/job_effort.py reads is in plugin.json's userConfig."""
-    manifest = json.loads((SCRIPTS_DIR.parent / ".claude-plugin" / "plugin.json").read_text())
+    manifest = json.loads(
+        (SCRIPTS_DIR.parent / ".claude-plugin" / "plugin.json").read_text()
+    )
     declared = manifest["userConfig"]
     for name in EFFORT_OPTIONS:
         entry = declared[name]

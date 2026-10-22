@@ -16,13 +16,13 @@ optional; a missing one keeps the default, which is also what a render with no
 brand file uses: the title-card fonts, white captions, a yellow highlight and
 no logo.
 """
+
 from __future__ import annotations
 
 import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 _HEX = re.compile(r"^#[0-9A-Fa-f]{6}$")
 POSITIONS = ("tl", "tr", "bl", "br")
@@ -32,20 +32,20 @@ POSITIONS = ("tl", "tr", "bl", "br")
 class BrandLogo:
     path: str
     position: str = "tl"
-    scale: float = 0.16         # fraction of output width
+    scale: float = 0.16  # fraction of output width
 
 
 @dataclass
 class Brand:
-    font_file: Optional[str] = None
-    font_bold_file: Optional[str] = None
+    font_file: str | None = None
+    font_bold_file: str | None = None
     primary: str = "#FFFFFF"
     accent: str = "#FFD400"
     background: str = "#0a0a0a"
     caption_outline: str = "#000000"
-    logo: Optional[BrandLogo] = None
+    logo: BrandLogo | None = None
 
-    def caption_font(self) -> Optional[str]:
+    def caption_font(self) -> str | None:
         """The font captions and the headline use, when the brand names one."""
         return self.font_bold_file or self.font_file
 
@@ -59,8 +59,15 @@ def load(path: str | Path) -> Brand:
     if not p.exists():
         raise FileNotFoundError(f"brand file not found: {p}")
     data = json.loads(p.read_text())
-    unknown = set(data) - {"font_file", "font_bold_file", "primary", "accent", "background",
-                           "caption_outline", "logo"}
+    unknown = set(data) - {
+        "font_file",
+        "font_bold_file",
+        "primary",
+        "accent",
+        "background",
+        "caption_outline",
+        "logo",
+    }
     if unknown:
         raise ValueError(f"{p}: unknown brand keys: {', '.join(sorted(unknown))}")
 
@@ -77,14 +84,18 @@ def load(path: str | Path) -> Brand:
     for key in ("primary", "accent", "background", "caption_outline"):
         if key in data:
             if not _HEX.match(str(data[key])):
-                raise ValueError(f"{p}: {key} must be a #RRGGBB colour, got {data[key]!r}")
+                raise ValueError(
+                    f"{p}: {key} must be a #RRGGBB colour, got {data[key]!r}"
+                )
             setattr(b, key, data[key])
     if data.get("logo"):
         lg = dict(data["logo"])
         lg["path"] = resolve(lg["path"], "logo")
         b.logo = BrandLogo(**lg)
         if b.logo.position not in POSITIONS:
-            raise ValueError(f"{p}: logo.position must be one of {', '.join(POSITIONS)}")
+            raise ValueError(
+                f"{p}: logo.position must be one of {', '.join(POSITIONS)}"
+            )
     return b
 
 

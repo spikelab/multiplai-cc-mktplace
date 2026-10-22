@@ -10,7 +10,6 @@ from __future__ import annotations
 from multiplai_core.env import (  # noqa: F401
     EFFORT_TIERS,
     KNOWN_EFFORTS,
-    env_candidates as _env_candidates,
     find_project_root,
     load_env,
     load_multiplai_conf,
@@ -18,4 +17,7 @@ from multiplai_core.env import (  # noqa: F401
     pick_model,
     resolve_effort,
     resolve_model,
+)
+from multiplai_core.env import (  # noqa: F401
+    env_candidates as _env_candidates,
 )

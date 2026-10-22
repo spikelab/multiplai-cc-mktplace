@@ -102,6 +102,7 @@ _TOKEN_RE = re.compile(r"[a-z0-9_]+")
 # Section registry
 # ---------------------------------------------------------------------------
 
+
 def index_sections(contents: dict[str, str]) -> dict[str, list[tuple[str, int]]]:
     """Map each H2–H4 section name to ``[(filename, heading level)]``.
 
@@ -162,6 +163,7 @@ def build_section_registry(memory_dir: Path) -> dict[str, list[str]]:
 # ---------------------------------------------------------------------------
 # Proposal parsing
 # ---------------------------------------------------------------------------
+
 
 def parse_proposal_entries(proposal: str) -> list[dict]:
     """Extract memory-update entries from a drafted proposal.
@@ -265,7 +267,7 @@ def _parse_section_field(value: str) -> tuple[str, bool]:
     value = value.strip()
     m = _NEW_SECTION_RE.match(value)
     if m:
-        return value[m.end():].strip().strip("\"'`"), True
+        return value[m.end() :].strip().strip("\"'`"), True
     return value.strip("\"'`"), False
 
 
@@ -273,12 +275,13 @@ def _parse_section_field(value: str) -> tuple[str, bool]:
 # Cross-file duplicate detection
 # ---------------------------------------------------------------------------
 
+
 def _tokenize(text: str) -> list[str]:
     return _TOKEN_RE.findall(text.lower())
 
 
 def _ngrams(tokens: list[str], n: int = NGRAM_SIZE) -> set[tuple[str, ...]]:
-    return {tuple(tokens[i:i + n]) for i in range(len(tokens) - n + 1)}
+    return {tuple(tokens[i : i + n]) for i in range(len(tokens) - n + 1)}
 
 
 def _file_gram_index(content: str, n: int = NGRAM_SIZE) -> dict[tuple[str, ...], int]:
@@ -296,7 +299,7 @@ def _file_gram_index(content: str, n: int = NGRAM_SIZE) -> dict[tuple[str, ...],
             tokens.append(tok)
             token_lines.append(lineno)
     for i in range(len(tokens) - n + 1):
-        gram = tuple(tokens[i:i + n])
+        gram = tuple(tokens[i : i + n])
         if gram not in index:
             index[gram] = token_lines[i]
     return index
@@ -535,6 +538,7 @@ def find_batch_near_duplicate_groups(
 # Validation
 # ---------------------------------------------------------------------------
 
+
 def validate_proposal(
     proposal: str,
     memory_contents: dict[str, str],
@@ -580,7 +584,7 @@ def validate_proposal(
                 ]
                 if collisions:
                     warnings.append(
-                        f"{label}: proposed new section \"{section}\" collides with an "
+                        f'{label}: proposed new section "{section}" collides with an '
                         f"existing section in `{', '.join(collisions)}` — section names "
                         f"must stay unique across memory files; reroute or rename."
                     )
@@ -602,7 +606,7 @@ def validate_proposal(
                     h2_owners = _owners(found_in, level=2)
                     suggested = h2_owners[0] if h2_owners else owners[0]
                     warnings.append(
-                        f"{label}: section \"{section}\" does not exist in "
+                        f'{label}: section "{section}" does not exist in '
                         f"`{entry['target']}` but does in `{', '.join(owners)}` — "
                         f"suggested reroute to `{suggested}`."
                     )
@@ -653,7 +657,7 @@ def validate_proposal(
             if quoted < NEAR_DUPLICATE_QUOTES:
                 quoted += 1
                 warnings.append(
-                    f"{head} — \"{line_text[:120]}\". Read both lines: if it "
+                    f'{head} — "{line_text[:120]}". Read both lines: if it '
                     f"restates that line, merge or drop it."
                 )
             else:
@@ -664,7 +668,7 @@ def validate_proposal(
         numbers = ", ".join(f"#{e['number']}" for e in cluster)
         warnings.append(
             f"`{cluster[0]['target']}` {numbers} are near-duplicates of each other "
-            f"(up to {score:.0%} word overlap; first is \"{cluster[0]['title']}\") — "
+            f'(up to {score:.0%} word overlap; first is "{cluster[0]["title"]}") — '
             f"merge into one entry rather than applying each."
         )
 

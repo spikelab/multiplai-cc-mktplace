@@ -19,6 +19,7 @@ Modes:
                   (sides trimmed so the pair fills the frame)
   frame "speaker" switch between panels as the transcript's speaker changes
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -42,8 +43,10 @@ def _even(v: float) -> int:
 
 
 def pad_chain(W: int, H: int, bg: str = DEFAULT_BG) -> str:
-    return (f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
-            f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:color={bg},setsar=1")
+    return (
+        f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
+        f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:color={bg},setsar=1"
+    )
 
 
 def crop_chain(W: int, H: int, fx: float | str = 0.5, fy: float | str = 0.5) -> str:
@@ -81,14 +84,18 @@ def blur_graph(W: int, H: int) -> str:
     up: the same look as a full-size blur at a fraction of the cost.
     """
     bw, bh = _even(W / 10), _even(H / 10)
-    return (f"[vin]split=2[bgs][fgs];"
-            f"[bgs]scale={bw}:{bh}:force_original_aspect_ratio=increase,crop={bw}:{bh},"
-            f"boxblur=4:2,scale={W}:{H},setsar=1[bgb];"
-            f"[fgs]scale={W}:{H}:force_original_aspect_ratio=decrease,setsar=1[fgc];"
-            f"[bgb][fgc]overlay=(W-w)/2:(H-h)/2[vfit]")
+    return (
+        f"[vin]split=2[bgs][fgs];"
+        f"[bgs]scale={bw}:{bh}:force_original_aspect_ratio=increase,crop={bw}:{bh},"
+        f"boxblur=4:2,scale={W}:{H},setsar=1[bgb];"
+        f"[fgs]scale={W}:{H}:force_original_aspect_ratio=decrease,setsar=1[fgc];"
+        f"[bgb][fgc]overlay=(W-w)/2:(H-h)/2[vfit]"
+    )
 
 
-def panel_crop_rect(panel: Rect, W: int, H: int, fx: float = 0.5, fy: float = 0.5) -> Rect:
+def panel_crop_rect(
+    panel: Rect, W: int, H: int, fx: float = 0.5, fy: float = 0.5
+) -> Rect:
     """The largest W:H window inside `panel`, centred on (fx, fy) of the panel
     and clamped to its edges. Source pixels; even sizes for yuv420p."""
     if panel.w / panel.h > W / H:
@@ -120,13 +127,13 @@ def panel_chain_moving(panel: Rect, W: int, H: int, fx: str, fy: str) -> str:
 
 @dataclass
 class StackGeometry:
-    crop_a: Rect     # the part of each panel that is shown, source pixels
+    crop_a: Rect  # the part of each panel that is shown, source pixels
     crop_b: Rect
-    width: int       # width of each scaled panel
+    width: int  # width of each scaled panel
     height_a: int
     height_b: int
-    x: int           # left edge of the stack in the output
-    y: int           # top edge of panel A in the output
+    x: int  # left edge of the stack in the output
+    y: int  # top edge of panel A in the output
 
 
 def _stack_crop(panel: Rect, W: int, H: int, fx: float) -> Rect:
@@ -140,8 +147,9 @@ def _stack_crop(panel: Rect, W: int, H: int, fx: float) -> Rect:
     return Rect(cx, panel.y, max_w, panel.h)
 
 
-def stack_geometry(a: Rect, b: Rect, W: int, H: int,
-                   fx_a: float = 0.5, fx_b: float = 0.5) -> StackGeometry:
+def stack_geometry(
+    a: Rect, b: Rect, W: int, H: int, fx_a: float = 0.5, fx_b: float = 0.5
+) -> StackGeometry:
     """Panel A over panel B, each scaled to the output width.
 
     Panels wider than W:(H/2) lose a little of each side, so the two fill the
@@ -153,31 +161,52 @@ def stack_geometry(a: Rect, b: Rect, W: int, H: int,
     if ca != a and cb != b:
         # Both trimmed to W:(H/2): each fills exactly half the frame.
         half = _even(H / 2)
-        return StackGeometry(crop_a=ca, crop_b=cb, width=W, height_a=half,
-                             height_b=H - half, x=0, y=0)
+        return StackGeometry(
+            crop_a=ca, crop_b=cb, width=W, height_a=half, height_b=H - half, x=0, y=0
+        )
     ha, hb = ca.h * W / ca.w, cb.h * W / cb.w
     k = min(1.0, H / (ha + hb))
     width = _even(W * k)
     height_a, height_b = _even(ha * k), _even(hb * k)
-    if height_a + height_b > H:          # rounding up both halves can overshoot by 2
+    if height_a + height_b > H:  # rounding up both halves can overshoot by 2
         height_b -= height_a + height_b - H
-    return StackGeometry(crop_a=ca, crop_b=cb, width=width, height_a=height_a, height_b=height_b,
-                         x=(W - width) // 2, y=(H - height_a - height_b) // 2)
+    return StackGeometry(
+        crop_a=ca,
+        crop_b=cb,
+        width=width,
+        height_a=height_a,
+        height_b=height_b,
+        x=(W - width) // 2,
+        y=(H - height_a - height_b) // 2,
+    )
 
 
-def stack_graph(a: Rect, b: Rect, W: int, H: int, bg: str = DEFAULT_BG,
-                fx_a: float = 0.5, fx_b: float = 0.5) -> str:
+def stack_graph(
+    a: Rect,
+    b: Rect,
+    W: int,
+    H: int,
+    bg: str = DEFAULT_BG,
+    fx_a: float = 0.5,
+    fx_b: float = 0.5,
+) -> str:
     g = stack_geometry(a, b, W, H, fx_a, fx_b)
     ca, cb = g.crop_a, g.crop_b
-    return (f"[vin]split=2[sa][sb];"
-            f"[sa]crop={ca.w}:{ca.h}:{ca.x}:{ca.y},scale={g.width}:{g.height_a},setsar=1[pa];"
-            f"[sb]crop={cb.w}:{cb.h}:{cb.x}:{cb.y},scale={g.width}:{g.height_b},setsar=1[pb];"
-            f"[pa][pb]vstack=inputs=2,pad={W}:{H}:{g.x}:{g.y}:color={bg},setsar=1[vfit]")
+    return (
+        f"[vin]split=2[sa][sb];"
+        f"[sa]crop={ca.w}:{ca.h}:{ca.x}:{ca.y},scale={g.width}:{g.height_a},setsar=1[pa];"
+        f"[sb]crop={cb.w}:{cb.h}:{cb.x}:{cb.y},scale={g.width}:{g.height_b},setsar=1[pb];"
+        f"[pa][pb]vstack=inputs=2,pad={W}:{H}:{g.x}:{g.y}:color={bg},setsar=1[vfit]"
+    )
 
 
-def speaker_runs(words: list[dict], src_start: float, src_end: float,
-                 speakers: dict[str, str], min_run: float = MIN_SPEAKER_RUN_S
-                 ) -> list[tuple[float, float, str]]:
+def speaker_runs(
+    words: list[dict],
+    src_start: float,
+    src_end: float,
+    speakers: dict[str, str],
+    min_run: float = MIN_SPEAKER_RUN_S,
+) -> list[tuple[float, float, str]]:
     """Which panel shows when, in segment-local time (0 = src_start).
 
     Each run of one speaker's words shows that speaker's panel, from its first
@@ -186,7 +215,7 @@ def speaker_runs(words: list[dict], src_start: float, src_end: float,
     end.
     """
     dur = src_end - src_start
-    raw: list[list] = []   # [start, end, panel]
+    raw: list[list] = []  # [start, end, panel]
     for w in words:
         if w["end"] <= src_start or w["start"] >= src_end or "speaker" not in w:
             continue
@@ -216,8 +245,13 @@ def speaker_runs(words: list[dict], src_start: float, src_end: float,
     return out
 
 
-def speaker_graph(runs: list[tuple[float, float, str]], panels: dict[str, Rect],
-                  W: int, H: int, focus: tuple[float, float] = (0.5, 0.5)) -> str:
+def speaker_graph(
+    runs: list[tuple[float, float, str]],
+    panels: dict[str, Rect],
+    W: int,
+    H: int,
+    focus: tuple[float, float] = (0.5, 0.5),
+) -> str:
     """The first run's panel as the base, each other panel overlaid while its
     runs are on screen."""
     order: list[str] = []

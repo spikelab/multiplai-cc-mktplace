@@ -19,24 +19,22 @@ The properties worth breaking a build over:
 """
 
 import json
-import os
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-
 from conftest import SCRIPTS_DIR
 from lib import checkpoint as cp
 from lib import fleet
 
-
-NOW = datetime(2026, 8, 1, 12, 0, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 8, 1, 12, 0, 0, tzinfo=UTC)
 
 
 # ---------------------------------------------------------------------------
 # Fixture builders
 # ---------------------------------------------------------------------------
+
 
 def make_session(
     data_dir,
@@ -53,20 +51,30 @@ def make_session(
     d = data_dir / "sessions"
     d.mkdir(parents=True, exist_ok=True)
     ts = (now - ago).isoformat()
-    (d / f"{sid}.json").write_text(json.dumps({
-        "session_id": sid,
-        "hostname": hostname,
-        "cwd": cwd,
-        "project": project,
-        "workspace": "/work",
-        "started_at": ts,
-        "last_event": {"ts": ts, "kind": kind},
-    }))
+    (d / f"{sid}.json").write_text(
+        json.dumps(
+            {
+                "session_id": sid,
+                "hostname": hostname,
+                "cwd": cwd,
+                "project": project,
+                "workspace": "/work",
+                "started_at": ts,
+                "last_event": {"ts": ts, "kind": kind},
+            }
+        )
+    )
     return d / f"{sid}.json"
 
 
-def make_checkpoint(data_dir, sid, *, intent="Doing a thing", nxt="Do the next thing",
-                    files=("/work/knowhere/src/a.py",)):
+def make_checkpoint(
+    data_dir,
+    sid,
+    *,
+    intent="Doing a thing",
+    nxt="Do the next thing",
+    files=("/work/knowhere/src/a.py",),
+):
     """Write a checkpoint with the three sections the fleet view reads.
 
     ``files`` should be **absolute** paths — that is the format the checkpoint
@@ -78,13 +86,14 @@ def make_checkpoint(data_dir, sid, *, intent="Doing a thing", nxt="Do the next t
     d.mkdir(parents=True, exist_ok=True)
     body = [f"## {s}\n\nplaceholder\n" for s in cp.CHECKPOINT_SECTIONS]
     text = "".join(body)
-    text = text.replace("## Current intent\n\nplaceholder\n",
-                        f"## Current intent\n\n{intent}\n")
-    text = text.replace("## Next action\n\nplaceholder\n",
-                        f"## Next action\n\n{nxt}\n")
+    text = text.replace(
+        "## Current intent\n\nplaceholder\n", f"## Current intent\n\n{intent}\n"
+    )
+    text = text.replace("## Next action\n\nplaceholder\n", f"## Next action\n\n{nxt}\n")
     listing = "\n".join(f"- `{f}` — because reasons" for f in files)
-    text = text.replace("## Involved files\n\nplaceholder\n",
-                        f"## Involved files\n\n{listing}\n")
+    text = text.replace(
+        "## Involved files\n\nplaceholder\n", f"## Involved files\n\n{listing}\n"
+    )
     (d / "checkpoint.md").write_text(text)
     return d / "checkpoint.md"
 
@@ -92,6 +101,7 @@ def make_checkpoint(data_dir, sid, *, intent="Doing a thing", nxt="Do the next t
 # ---------------------------------------------------------------------------
 # The section names this module reads
 # ---------------------------------------------------------------------------
+
 
 def test_the_sections_read_are_sections_the_writer_emits():
     """fleet.py hardcodes three section names rather than importing the tuple,
@@ -119,8 +129,8 @@ def test_the_writer_still_mandates_absolute_involved_files():
 # Criterion 6 — a session with no checkpoint is a valid entry
 # ---------------------------------------------------------------------------
 
-class TestRegistryOnlyEntries:
 
+class TestRegistryOnlyEntries:
     def test_session_without_a_checkpoint_still_renders(self, tmp_path):
         make_session(tmp_path, "sid-nocp", project="lonely")
 
@@ -179,8 +189,8 @@ class TestRegistryOnlyEntries:
 # Status — derived from the registry's contracted vocabulary
 # ---------------------------------------------------------------------------
 
-class TestStatus:
 
+class TestStatus:
     def test_notification_means_needs_you(self, tmp_path):
         make_session(tmp_path, "waiting", kind="notification", project="blocked")
 
@@ -227,18 +237,24 @@ class TestStatus:
     def test_the_four_statuses_are_the_contracted_ones(self):
         """`working | waiting_input | idle | ended` is frozen in the
         multiplai-gui API contract. This view must not coin a fifth."""
-        for kind, ago in (("notification", timedelta(minutes=1)),
-                          ("stop", timedelta(minutes=1)),
-                          ("start", timedelta(days=3)),
-                          ("end", timedelta(minutes=1))):
+        for kind, ago in (
+            ("notification", timedelta(minutes=1)),
+            ("stop", timedelta(minutes=1)),
+            ("start", timedelta(days=3)),
+            ("end", timedelta(minutes=1)),
+        ):
             assert fleet._status_of(kind, NOW - ago, NOW) in {
-                "working", "waiting_input", "idle", "ended"
+                "working",
+                "waiting_input",
+                "idle",
+                "ended",
             }
 
 
 # ---------------------------------------------------------------------------
 # Fronts vs. live — what the one-line reading counts
 # ---------------------------------------------------------------------------
+
 
 class TestFronts:
     """`AGENTS.md` lists everything on the board; `Fleet.fronts` counts only
@@ -302,15 +318,21 @@ class TestFronts:
 # Criterion 5 — collisions
 # ---------------------------------------------------------------------------
 
-class TestCollisions:
 
+class TestCollisions:
     def test_two_sessions_sharing_one_file_produce_exactly_one_line(self, tmp_path):
         make_session(tmp_path, "a", project="alpha")
         make_session(tmp_path, "b", project="beta")
-        make_checkpoint(tmp_path, "a", files=("/work/knowhere/src/shared.py",
-                                              "/work/knowhere/src/only-a.py"))
-        make_checkpoint(tmp_path, "b", files=("/work/knowhere/src/shared.py",
-                                              "/work/knowhere/src/only-b.py"))
+        make_checkpoint(
+            tmp_path,
+            "a",
+            files=("/work/knowhere/src/shared.py", "/work/knowhere/src/only-a.py"),
+        )
+        make_checkpoint(
+            tmp_path,
+            "b",
+            files=("/work/knowhere/src/shared.py", "/work/knowhere/src/only-b.py"),
+        )
 
         f = fleet.collect(tmp_path, NOW)
         md = fleet.render_agents_md(f, NOW)
@@ -401,8 +423,9 @@ class TestCollisions:
 
     def test_one_session_listing_a_file_twice_is_not_a_collision(self, tmp_path):
         make_session(tmp_path, "a")
-        make_checkpoint(tmp_path, "a", files=("/work/knowhere/src/x.py",
-                                              "/work/knowhere/src/x.py"))
+        make_checkpoint(
+            tmp_path, "a", files=("/work/knowhere/src/x.py", "/work/knowhere/src/x.py")
+        )
 
         assert fleet.collect(tmp_path, NOW).collisions == []
 
@@ -450,7 +473,9 @@ class TestCollisions:
 
         assert sorted(labels) == ["workspace@feat-one", "workspace@feat-two"]
 
-    def test_the_same_relative_path_in_unrelated_repos_is_not_a_collision(self, tmp_path):
+    def test_the_same_relative_path_in_unrelated_repos_is_not_a_collision(
+        self, tmp_path
+    ):
         """Repo-relative normalization must not manufacture collisions:
         every Python repo has a ``src/main.py``."""
         for sid, name in (("a", "alpha"), ("b", "beta")):
@@ -484,7 +509,9 @@ class TestCollisions:
         Also asserted in `test_disposition.py::test_a_parked_session_still_collides`,
         from the disposition side."""
         make_session(tmp_path, "working", project="alpha", ago=timedelta(minutes=2))
-        entry = make_session(tmp_path, "parked", project="beta", ago=timedelta(minutes=2))
+        entry = make_session(
+            tmp_path, "parked", project="beta", ago=timedelta(minutes=2)
+        )
         raw = json.loads(entry.read_text())
         raw["disposition"] = {"state": "parked", "reason": "back to it Monday"}
         entry.write_text(json.dumps(raw))
@@ -526,8 +553,9 @@ class TestCollisions:
         (repo / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
         for sid in ("aaaa1111-x", "bbbb2222-y"):
             make_session(tmp_path, sid, project="workspace", cwd=str(repo))
-            make_checkpoint(tmp_path, sid, files=(str(repo) + "/",
-                                                  str(repo / "src" / "hot.py")))
+            make_checkpoint(
+                tmp_path, sid, files=(str(repo) + "/", str(repo / "src" / "hot.py"))
+            )
 
         f = fleet.collect(tmp_path, NOW)
 
@@ -575,15 +603,17 @@ class TestEndedSessions:
     def test_no_ended_sessions_means_no_mention_of_them(self, tmp_path):
         make_session(tmp_path, "live")
 
-        assert "finished" not in fleet.render_agents_md(fleet.collect(tmp_path, NOW), NOW)
+        assert "finished" not in fleet.render_agents_md(
+            fleet.collect(tmp_path, NOW), NOW
+        )
 
 
 # ---------------------------------------------------------------------------
 # Parsing "Involved files"
 # ---------------------------------------------------------------------------
 
-class TestFirstLine:
 
+class TestFirstLine:
     def test_a_bullet_marker_is_stripped(self):
         assert fleet._first_line("- Fix the drain\n") == "Fix the drain"
         assert fleet._first_line("* Fix the drain\n") == "Fix the drain"
@@ -596,7 +626,6 @@ class TestFirstLine:
 
 
 class TestInvolvedFilesParsing:
-
     def test_backticked_paths_with_prose(self):
         body = "- `src/a.py` — the thing\n- `docs/b.md` — the other thing\n"
 
@@ -635,17 +664,23 @@ class TestInvolvedFilesParsing:
 # The container roster — evidence beats the clock
 # ---------------------------------------------------------------------------
 
-def make_roster(data_dir, *names, ago=timedelta(0), kind="container",
-                observer="host", now=NOW):
+
+def make_roster(
+    data_dir, *names, ago=timedelta(0), kind="container", observer="host", now=NOW
+):
     """Write a live-container roster as the kit launcher writes it."""
     data_dir.mkdir(parents=True, exist_ok=True)
-    (data_dir / fleet.ROSTER_FILENAME).write_text(json.dumps({
-        "version": 1,
-        "observed_at": (now - ago).isoformat(),
-        "observer": observer,
-        "kind": kind,
-        "ids": list(names),
-    }))
+    (data_dir / fleet.ROSTER_FILENAME).write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "observed_at": (now - ago).isoformat(),
+                "observer": observer,
+                "kind": kind,
+                "ids": list(names),
+            }
+        )
+    )
 
 
 def make_contained_session(data_dir, sid, *, host, **kw):
@@ -663,8 +698,9 @@ class TestContainerRoster:
     spoke, that reading replaces the quiet heuristic outright."""
 
     def test_a_missing_container_is_proof_the_session_ended(self, tmp_path):
-        make_contained_session(tmp_path, "gone", host="claude-personal-01",
-                               ago=timedelta(minutes=2))
+        make_contained_session(
+            tmp_path, "gone", host="claude-personal-01", ago=timedelta(minutes=2)
+        )
         make_roster(tmp_path, "claude-personal-99")
 
         agent = fleet.collect(tmp_path, NOW).agents[0]
@@ -683,8 +719,9 @@ class TestContainerRoster:
 
     def test_a_live_container_at_a_prompt_still_needs_you(self, tmp_path):
         old = timedelta(hours=fleet.IDLE_AFTER_HOURS + 5)
-        make_contained_session(tmp_path, "ask", host="claude-personal-01",
-                               kind="notification", ago=old)
+        make_contained_session(
+            tmp_path, "ask", host="claude-personal-01", kind="notification", ago=old
+        )
         make_roster(tmp_path, "claude-personal-01")
 
         assert fleet.collect(tmp_path, NOW).agents[0].status == "waiting_input"
@@ -692,8 +729,9 @@ class TestContainerRoster:
     def test_a_roster_older_than_the_entry_decides_nothing(self, tmp_path):
         """It proves nothing: the session may have started in the gap. Falling
         back is what makes a stale roster harmless rather than wrong."""
-        make_contained_session(tmp_path, "new", host="claude-personal-01",
-                               ago=timedelta(minutes=2))
+        make_contained_session(
+            tmp_path, "new", host="claude-personal-01", ago=timedelta(minutes=2)
+        )
         make_roster(tmp_path, ago=timedelta(hours=3))
 
         assert fleet.collect(tmp_path, NOW).agents[0].status == "working"
@@ -701,8 +739,9 @@ class TestContainerRoster:
     def test_no_roster_at_all_changes_nothing(self, tmp_path):
         """Vanilla Claude Code has no launcher to write one. The degradation
         contract is satisfied by the ordinary path, not a special case."""
-        make_contained_session(tmp_path, "quiet", host="claude-personal-01",
-                               ago=timedelta(days=3))
+        make_contained_session(
+            tmp_path, "quiet", host="claude-personal-01", ago=timedelta(days=3)
+        )
 
         assert fleet.collect(tmp_path, NOW).agents[0].status == "idle"
 
@@ -710,8 +749,9 @@ class TestContainerRoster:
         """`--local` mode and claude-wrapped run on the Mac, where `hostname`
         is the machine name. It will never be in `docker ps`, and declaring a
         live session dead is the one direction this must not fail in."""
-        make_session(tmp_path, "bare", hostname="Spikes-MacBook",
-                     ago=timedelta(minutes=2))
+        make_session(
+            tmp_path, "bare", hostname="Spikes-MacBook", ago=timedelta(minutes=2)
+        )
         make_roster(tmp_path, "claude-personal-01")
 
         assert fleet.collect(tmp_path, NOW).agents[0].status == "working"
@@ -719,8 +759,9 @@ class TestContainerRoster:
     def test_an_entry_predating_the_field_falls_back(self, tmp_path):
         """`in_container` absent means "unknown", which must not be read as
         `False` *or* as `True` — hence the explicit tri-state."""
-        make_session(tmp_path, "old", hostname="claude-personal-01",
-                     ago=timedelta(minutes=2))
+        make_session(
+            tmp_path, "old", hostname="claude-personal-01", ago=timedelta(minutes=2)
+        )
         make_roster(tmp_path, "claude-personal-99")
 
         agents = fleet.collect(tmp_path, NOW).agents
@@ -728,8 +769,13 @@ class TestContainerRoster:
         assert agents[0].status == "working"
 
     def test_a_clean_quit_is_still_ended_without_any_roster_reading(self, tmp_path):
-        make_contained_session(tmp_path, "done", host="claude-personal-01",
-                               kind="end", ago=timedelta(minutes=2))
+        make_contained_session(
+            tmp_path,
+            "done",
+            host="claude-personal-01",
+            kind="end",
+            ago=timedelta(minutes=2),
+        )
         make_roster(tmp_path, "claude-personal-01")
 
         assert fleet.collect(tmp_path, NOW).agents[0].status == "ended"
@@ -738,8 +784,9 @@ class TestContainerRoster:
         """The whole point of parking: "I am coming back to this" outlives the
         process. Disposition beats liveness, and a proven death is still
         liveness."""
-        entry = make_contained_session(tmp_path, "parked", host="claude-personal-01",
-                                       ago=timedelta(minutes=2))
+        entry = make_contained_session(
+            tmp_path, "parked", host="claude-personal-01", ago=timedelta(minutes=2)
+        )
         raw = json.loads(entry.read_text())
         raw["disposition"] = {"state": "parked", "reason": "back Monday"}
         entry.write_text(json.dumps(raw))
@@ -757,8 +804,9 @@ class TestContainerRoster:
         moves to a pid under the SDK, a reader expecting containers must refuse
         rather than match — confidently reporting a dead session as running is
         the failure mode `kind`/`observer` exist to prevent."""
-        make_contained_session(tmp_path, "s", host="claude-personal-01",
-                               ago=timedelta(days=3))
+        make_contained_session(
+            tmp_path, "s", host="claude-personal-01", ago=timedelta(days=3)
+        )
         make_roster(tmp_path, "claude-personal-01", kind="pid", observer="local")
 
         assert fleet.collect(tmp_path, NOW).agents[0].status == "idle"
@@ -766,8 +814,9 @@ class TestContainerRoster:
     def test_a_corrupt_roster_is_no_roster(self, tmp_path):
         (tmp_path).mkdir(parents=True, exist_ok=True)
         (tmp_path / fleet.ROSTER_FILENAME).write_text("{not json")
-        make_contained_session(tmp_path, "s", host="claude-personal-01",
-                               ago=timedelta(days=3))
+        make_contained_session(
+            tmp_path, "s", host="claude-personal-01", ago=timedelta(days=3)
+        )
 
         assert fleet.load_roster(tmp_path) is None
         assert fleet.collect(tmp_path, NOW).agents[0].status == "idle"
@@ -779,13 +828,19 @@ class TestContainerRoster:
         for kind in ("start", "stop", "notification", "end"):
             for host in ("claude-personal-01", "claude-personal-99"):
                 assert fleet._status_of(
-                    kind, NOW - timedelta(days=3), NOW, roster, host, True,
+                    kind,
+                    NOW - timedelta(days=3),
+                    NOW,
+                    roster,
+                    host,
+                    True,
                 ) in {"working", "waiting_input", "idle", "ended"}
 
 
 # ---------------------------------------------------------------------------
 # Roster-confirmed-dead sessions, for the registry collector
 # ---------------------------------------------------------------------------
+
 
 class TestRosterDeadSids:
     """The two age windows in the registry GC (7 days ended / 30 days
@@ -837,8 +892,9 @@ class TestRosterDeadSids:
         """The deferred extraction that writes `disposition` runs minutes after
         exit, and only its marker protects an entry. A session killed hard never
         wrote one, so the grace is what stops GC racing the drain."""
-        make_contained_session(tmp_path, "fresh", host="cc-01",
-                               ago=timedelta(minutes=2))
+        make_contained_session(
+            tmp_path, "fresh", host="cc-01", ago=timedelta(minutes=2)
+        )
         make_roster(tmp_path, "cc-99")
 
         assert fleet.roster_dead_sids(tmp_path, NOW) == set()
@@ -846,8 +902,7 @@ class TestRosterDeadSids:
     def test_a_parked_session_is_never_collectable(self, tmp_path):
         """Its container being gone is the normal state of a parked session —
         that is what parking is. Disposition outranks liveness here."""
-        entry = make_contained_session(tmp_path, "parked", host="cc-01",
-                                       ago=self.OLD)
+        entry = make_contained_session(tmp_path, "parked", host="cc-01", ago=self.OLD)
         raw = json.loads(entry.read_text())
         raw["disposition"] = {"state": "parked", "reason": "back on Monday"}
         entry.write_text(json.dumps(raw))
@@ -874,6 +929,7 @@ class TestRosterDeadSids:
 # The involved-files bullet is gone from the render — and only from the render
 # ---------------------------------------------------------------------------
 
+
 class TestFilesAreNotRendered:
     """`AGENTS.md` no longer prints an agent's involved files. The paths
     themselves are load-bearing elsewhere, so what these pin is the seam: the
@@ -881,10 +937,15 @@ class TestFilesAreNotRendered:
 
     def _agent(self, *files):
         return fleet.Agent(
-            session_id="s", project="app", cwd="/work/knowhere",
-            repo_root="/work/knowhere", status="working",
-            files=list(files), has_checkpoint=True,
-            intent="do the thing", next_action="ship it",
+            session_id="s",
+            project="app",
+            cwd="/work/knowhere",
+            repo_root="/work/knowhere",
+            status="working",
+            files=list(files),
+            has_checkpoint=True,
+            intent="do the thing",
+            next_action="ship it",
         )
 
     def test_the_render_has_no_files_bullet(self):
@@ -938,8 +999,8 @@ class TestFilesAreNotRendered:
 # The status-line count is retired — the fronts count survives in `Fleet.fronts`
 # ---------------------------------------------------------------------------
 
-class TestFrontsCount:
 
+class TestFrontsCount:
     def test_idle_is_counted_but_is_not_a_front(self, tmp_path):
         for i in range(4):
             make_session(tmp_path, f"w{i}", ago=timedelta(hours=1))
@@ -961,12 +1022,15 @@ class TestFrontsCount:
         could quietly resurrect."""
         assert not hasattr(fleet, "render_fleet_line")
 
-    @pytest.mark.parametrize("delta,expected", [
-        (timedelta(seconds=5), "just now"),
-        (timedelta(minutes=12), "12m"),
-        (timedelta(hours=5), "5h"),
-        (timedelta(days=3, hours=4), "3d"),
-    ])
+    @pytest.mark.parametrize(
+        "delta,expected",
+        [
+            (timedelta(seconds=5), "just now"),
+            (timedelta(minutes=12), "12m"),
+            (timedelta(hours=5), "5h"),
+            (timedelta(days=3, hours=4), "3d"),
+        ],
+    )
     def test_age_formatting(self, delta, expected):
         assert fleet.format_age(delta) == expected
 
@@ -975,15 +1039,18 @@ class TestFrontsCount:
 # Criterion 4 — the cache property
 # ---------------------------------------------------------------------------
 
-class TestCacheProperty:
 
+class TestCacheProperty:
     def _fleet_dir(self, tmp_path):
         make_session(tmp_path, "a", project="alpha", kind="notification")
         make_session(tmp_path, "b", project="beta", ago=timedelta(hours=30))
         make_session(tmp_path, "c", project="gamma", kind="end")
         make_checkpoint(tmp_path, "a", files=("/work/knowhere/src/shared.py",))
-        make_checkpoint(tmp_path, "b", files=("/work/knowhere/src/shared.py",
-                                              "/work/knowhere/src/b.py"))
+        make_checkpoint(
+            tmp_path,
+            "b",
+            files=("/work/knowhere/src/shared.py", "/work/knowhere/src/b.py"),
+        )
         return tmp_path
 
     def test_delete_the_output_and_it_comes_back_identical(self, tmp_path):
@@ -1042,13 +1109,15 @@ class TestCacheProperty:
 # Rendering shape
 # ---------------------------------------------------------------------------
 
-class TestRendering:
 
+class TestRendering:
     def test_entries_carry_intent_and_next_action(self, tmp_path):
         make_session(tmp_path, "a", project="alpha")
         make_checkpoint(
-            tmp_path, "a",
-            intent="Rewiring the drain", nxt="Run the gates",
+            tmp_path,
+            "a",
+            intent="Rewiring the drain",
+            nxt="Run the gates",
             files=("/work/knowhere/src/x.py",),
         )
 
@@ -1134,8 +1203,8 @@ class TestRendering:
 # Criterion 3 — where the files land
 # ---------------------------------------------------------------------------
 
-class TestOutputLocation:
 
+class TestOutputLocation:
     def test_the_file_lands_in_the_data_dir(self, tmp_path):
         make_session(tmp_path, "a")
 
@@ -1160,6 +1229,7 @@ class TestOutputLocation:
 # ---------------------------------------------------------------------------
 # fleet.json on the hook path — and the clobber that had to be solved first
 # ---------------------------------------------------------------------------
+
 
 class TestFleetJsonIsWrittenOnEveryRender:
     """`write_fleet_view` writes both files.
@@ -1273,17 +1343,25 @@ class TestCarryForward:
     """
 
     def _existing(self, tmp_path, *, prs, stamp, section="prs"):
-        (tmp_path / "fleet.json").write_text(json.dumps({
-            "version": 1,
-            "generated_at": stamp,
-            "counts": {},
-            "agents": [{"session_id": "stale-one"}],
-            "collisions": [],
-            "prs": None, "repos": None, "jobs": None,
-            "backlog": None, "scheduled": None,
-            section: prs,
-            "collected_at": {section: stamp},
-        }, indent=2))
+        (tmp_path / "fleet.json").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "generated_at": stamp,
+                    "counts": {},
+                    "agents": [{"session_id": "stale-one"}],
+                    "collisions": [],
+                    "prs": None,
+                    "repos": None,
+                    "jobs": None,
+                    "backlog": None,
+                    "scheduled": None,
+                    section: prs,
+                    "collected_at": {section: stamp},
+                },
+                indent=2,
+            )
+        )
 
     def test_a_recent_pr_scan_survives_a_session_start(self, tmp_path):
         make_session(tmp_path, "a")
@@ -1302,8 +1380,9 @@ class TestCarryForward:
         """They are what this pass *did* collect. Carrying them would make the
         file a record of every session that ever existed."""
         make_session(tmp_path, "a")
-        self._existing(tmp_path, prs={"open": 3},
-                       stamp=(NOW - timedelta(minutes=1)).isoformat())
+        self._existing(
+            tmp_path, prs={"open": 3}, stamp=(NOW - timedelta(minutes=1)).isoformat()
+        )
 
         fleet.write_fleet_view(tmp_path, NOW)
         payload = json.loads((tmp_path / "fleet.json").read_text())
@@ -1315,8 +1394,11 @@ class TestCarryForward:
         forever while looking confident about it — the exact failure the
         null/empty distinction exists to prevent."""
         make_session(tmp_path, "a")
-        self._existing(tmp_path, prs={"open": 3},
-                       stamp=(NOW - timedelta(hours=1, minutes=1)).isoformat())
+        self._existing(
+            tmp_path,
+            prs={"open": 3},
+            stamp=(NOW - timedelta(hours=1, minutes=1)).isoformat(),
+        )
 
         fleet.write_fleet_view(tmp_path, NOW)
         payload = json.loads((tmp_path / "fleet.json").read_text())
@@ -1325,11 +1407,15 @@ class TestCarryForward:
         assert "prs" not in payload["collected_at"]
 
     def test_an_empty_list_is_carried_as_an_empty_list(self, tmp_path):
-        """"Collected, nothing found" and "I didn't look" must never print the
+        """ "Collected, nothing found" and "I didn't look" must never print the
         same. Turning `[]` into `null` here would erase exactly that."""
         make_session(tmp_path, "a")
-        self._existing(tmp_path, prs=[], stamp=(NOW - timedelta(minutes=5)).isoformat(),
-                       section="repos")
+        self._existing(
+            tmp_path,
+            prs=[],
+            stamp=(NOW - timedelta(minutes=5)).isoformat(),
+            section="repos",
+        )
 
         fleet.write_fleet_view(tmp_path, NOW)
         payload = json.loads((tmp_path / "fleet.json").read_text())
@@ -1341,11 +1427,20 @@ class TestCarryForward:
         """An unknown age cannot be rendered honestly, and showing it undated
         would be the board claiming freshness it cannot support."""
         make_session(tmp_path, "a")
-        (tmp_path / "fleet.json").write_text(json.dumps({
-            "version": 1, "agents": [], "collisions": [],
-            "prs": {"open": 3}, "repos": None, "jobs": None,
-            "backlog": None, "scheduled": None,
-        }))
+        (tmp_path / "fleet.json").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "agents": [],
+                    "collisions": [],
+                    "prs": {"open": 3},
+                    "repos": None,
+                    "jobs": None,
+                    "backlog": None,
+                    "scheduled": None,
+                }
+            )
+        )
 
         fleet.write_fleet_view(tmp_path, NOW)
 
@@ -1365,8 +1460,10 @@ class TestCarryForward:
         """`/fleet-status` stays the deliberate refresh: what it actually
         looked at always wins over what a previous pass remembered."""
         f = fleet.Fleet(agents=[], collisions=[], repos=[])
-        existing = {"repos": ["stale"],
-                    "collected_at": {"repos": (NOW - timedelta(minutes=1)).isoformat()}}
+        existing = {
+            "repos": ["stale"],
+            "collected_at": {"repos": (NOW - timedelta(minutes=1)).isoformat()},
+        }
 
         payload = json.loads(fleet.fleet_json(f, NOW, existing=existing))
 
@@ -1392,17 +1489,18 @@ class TestCarryForward:
         # `main()` takes its own `datetime.now`, so the stamp has to be recent
         # in real time or the one-hour expiry drops it before carry-forward
         # ever gets a say — and the test would pass for the wrong reason.
-        stamp = (datetime.now(timezone.utc) - timedelta(minutes=14)).isoformat()
+        stamp = (datetime.now(UTC) - timedelta(minutes=14)).isoformat()
         self._existing(tmp_path, prs={"open": 3, "red": 1}, stamp=stamp)
 
         spec = importlib.util.spec_from_file_location(
-            "fleet_status_under_test", SCRIPTS_DIR / "fleet_status.py")
+            "fleet_status_under_test", SCRIPTS_DIR / "fleet_status.py"
+        )
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
 
         monkeypatch.setattr(
-            "sys.argv",
-            ["fleet_status.py", "--offline", "--data-dir", str(tmp_path)])
+            "sys.argv", ["fleet_status.py", "--offline", "--data-dir", str(tmp_path)]
+        )
         module.main()
 
         payload = json.loads((tmp_path / "fleet.json").read_text())
@@ -1415,8 +1513,14 @@ class TestCarryForward:
 # The tmux pane map — labelling a session with the tab the user named
 # ---------------------------------------------------------------------------
 
-def make_pane_map(data_dir, *entries, server="/private/tmp/tmux-501/default",
-                  kind="tmux", observer="host"):
+
+def make_pane_map(
+    data_dir,
+    *entries,
+    server="/private/tmp/tmux-501/default",
+    kind="tmux",
+    observer="host",
+):
     """Write `tmux/panes.json` as the kit launcher writes it.
 
     ``entries`` are ``(container, pane, window)`` triples, or
@@ -1429,21 +1533,30 @@ def make_pane_map(data_dir, *entries, server="/private/tmp/tmux-501/default",
     panes = {}
     for entry in entries:
         name, pane, window = entry[:3]
-        body = {"pane": pane, "window": window, "session": "work",
-                "at": NOW.strftime("%Y-%m-%dT%H:%M:%SZ")}
+        body = {
+            "pane": pane,
+            "window": window,
+            "session": "work",
+            "at": NOW.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
         if len(entry) > 3:
             body["server"] = entry[3]
         elif server is not None:
             body["server"] = server
         panes[name] = body
-    (d / "panes.json").write_text(json.dumps({
-        "version": 1,
-        "observed_at": NOW.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "observer": observer,
-        "kind": kind,
-        "server": server,
-        "panes": panes,
-    }, indent=2))
+    (d / "panes.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "observed_at": NOW.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "observer": observer,
+                "kind": kind,
+                "server": server,
+                "panes": panes,
+            },
+            indent=2,
+        )
+    )
     return d / "panes.json"
 
 
@@ -1544,10 +1657,17 @@ class TestPaneMap:
         """The map exists to answer "which pane". An entry that cannot is worse
         than a missing one — it would join to whatever a blank id matched."""
         (tmp_path / "tmux").mkdir()
-        (tmp_path / "tmux" / "panes.json").write_text(json.dumps({
-            "version": 1, "observer": "host", "kind": "tmux", "server": "/s",
-            "panes": {"claude-a-01": {"pane": "", "window": "x"}},
-        }))
+        (tmp_path / "tmux" / "panes.json").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "observer": "host",
+                    "kind": "tmux",
+                    "server": "/s",
+                    "panes": {"claude-a-01": {"pane": "", "window": "x"}},
+                }
+            )
+        )
 
         assert fleet.load_pane_map(tmp_path).panes == {}
 
@@ -1561,7 +1681,6 @@ class TestPaneMap:
 
 
 class TestPaneMapRendering:
-
     def test_agents_md_shows_the_tab_name(self, tmp_path):
         make_session(tmp_path, "a", hostname="claude-a-01", project="mktplace")
         make_pane_map(tmp_path, ("claude-a-01", "%12", "pi-eval"))
@@ -1574,14 +1693,17 @@ class TestPaneMapRendering:
         """The label exists to identify *which tab* to switch to. A name the
         user chose mid-session, once they knew what the work was, beats a
         branch name or a session-id prefix at that job."""
-        agent = fleet.Agent(session_id="abcdef12", project="mktplace",
-                            branch="feat/x", tmux_window="pi-eval")
+        agent = fleet.Agent(
+            session_id="abcdef12",
+            project="mktplace",
+            branch="feat/x",
+            tmux_window="pi-eval",
+        )
 
         assert fleet._label(agent) == "mktplace@pi-eval"
 
     def test_without_a_tab_the_label_is_exactly_what_it_was(self, tmp_path):
-        agent = fleet.Agent(session_id="abcdef12", project="mktplace",
-                            branch="feat/x")
+        agent = fleet.Agent(session_id="abcdef12", project="mktplace", branch="feat/x")
 
         assert fleet._label(agent) == "mktplace@feat/x"
 
@@ -1610,8 +1732,17 @@ class TestPaneMapRendering:
 # The seen/unseen axis
 # ---------------------------------------------------------------------------
 
-def make_viewed(data_dir, pane, *, ago=timedelta(minutes=1), window="pi-eval",
-                server="/private/tmp/tmux-501/default", now=NOW, lines=None):
+
+def make_viewed(
+    data_dir,
+    pane,
+    *,
+    ago=timedelta(minutes=1),
+    window="pi-eval",
+    server="/private/tmp/tmux-501/default",
+    now=NOW,
+    lines=None,
+):
     """Write a `tmux/viewed/<n>` marker as `fleet-viewed.sh` writes it.
 
     Three lines: timestamp, window name, tmux socket. *lines* overrides the
@@ -1619,9 +1750,15 @@ def make_viewed(data_dir, pane, *, ago=timedelta(minutes=1), window="pi-eval",
     """
     d = data_dir / "tmux" / "viewed"
     d.mkdir(parents=True, exist_ok=True)
-    body = lines if lines is not None else [
-        (now - ago).strftime("%Y-%m-%dT%H:%M:%SZ"), window, server,
-    ]
+    body = (
+        lines
+        if lines is not None
+        else [
+            (now - ago).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            window,
+            server,
+        ]
+    )
     path = d / pane.lstrip("%")
     path.write_text("\n".join(body) + "\n", encoding="utf-8")
     return path
@@ -1650,8 +1787,9 @@ class TestSeenAxis:
     """
 
     def test_a_marker_newer_than_the_last_event_is_seen(self, tmp_path):
-        agent = _one(tmp_path, last_ago=timedelta(minutes=5),
-                     viewed_ago=timedelta(minutes=1))
+        agent = _one(
+            tmp_path, last_ago=timedelta(minutes=5), viewed_ago=timedelta(minutes=1)
+        )
 
         assert agent.seen is True
         assert agent.seen_at is not None
@@ -1659,8 +1797,9 @@ class TestSeenAxis:
     def test_a_marker_older_than_the_last_event_is_not_seen(self, tmp_path):
         """The mechanism, stated as a test: the agent did something after you
         looked, so it is unseen again."""
-        agent = _one(tmp_path, last_ago=timedelta(minutes=1),
-                     viewed_ago=timedelta(minutes=5))
+        agent = _one(
+            tmp_path, last_ago=timedelta(minutes=1), viewed_ago=timedelta(minutes=5)
+        )
 
         assert agent.seen is False
         assert agent.seen_at is not None, "we know when you looked; it was just earlier"
@@ -1669,8 +1808,11 @@ class TestSeenAxis:
         """tmux recycles pane ids per server. `%12` on yesterday's server is an
         unrelated pane, and crediting its attention here would make the board
         confidently wrong — worse than saying nothing."""
-        agent = _one(tmp_path, viewed_ago=timedelta(minutes=1),
-                     server="/private/tmp/tmux-501/other")
+        agent = _one(
+            tmp_path,
+            viewed_ago=timedelta(minutes=1),
+            server="/private/tmp/tmux-501/other",
+        )
 
         assert agent.seen is False
         assert agent.seen_at is None
@@ -1682,33 +1824,41 @@ class TestSeenAxis:
         agent sits on a second tmux server and its marker was written by that
         same server, so it *has* been looked at; checking the document value
         would deny it."""
-        make_session(tmp_path, "a", hostname="claude-a-01",
-                     ago=timedelta(minutes=5))
+        make_session(tmp_path, "a", hostname="claude-a-01", ago=timedelta(minutes=5))
         make_pane_map(
             tmp_path,
             ("claude-a-01", "%12", "kit", "/private/tmp/tmux-501/second"),
             server="/private/tmp/tmux-501/default",
         )
-        make_viewed(tmp_path, "%12", ago=timedelta(minutes=1),
-                    server="/private/tmp/tmux-501/second")
+        make_viewed(
+            tmp_path,
+            "%12",
+            ago=timedelta(minutes=1),
+            server="/private/tmp/tmux-501/second",
+        )
 
         agent = fleet.collect(tmp_path, NOW).agents[0]
 
         assert agent.seen is True
 
-    def test_a_marker_matching_only_the_documents_server_is_not_credited(self, tmp_path):
+    def test_a_marker_matching_only_the_documents_server_is_not_credited(
+        self, tmp_path
+    ):
         """The other direction. The pane is on the second server; a marker for
         `%12` on the *default* server is a different pane entirely, and the
         document-level match is a coincidence of who wrote the file last."""
-        make_session(tmp_path, "a", hostname="claude-a-01",
-                     ago=timedelta(minutes=5))
+        make_session(tmp_path, "a", hostname="claude-a-01", ago=timedelta(minutes=5))
         make_pane_map(
             tmp_path,
             ("claude-a-01", "%12", "kit", "/private/tmp/tmux-501/second"),
             server="/private/tmp/tmux-501/default",
         )
-        make_viewed(tmp_path, "%12", ago=timedelta(minutes=1),
-                    server="/private/tmp/tmux-501/default")
+        make_viewed(
+            tmp_path,
+            "%12",
+            ago=timedelta(minutes=1),
+            server="/private/tmp/tmux-501/default",
+        )
 
         agent = fleet.collect(tmp_path, NOW).agents[0]
 
@@ -1736,14 +1886,20 @@ class TestSeenAxis:
     def test_a_marker_with_no_server_line_is_dropped(self, tmp_path):
         """Without line 3 there is nothing to check the pane id against, which
         is precisely the mis-attribution the server field exists to prevent."""
-        agent = _one(tmp_path, viewed_ago=timedelta(minutes=1),
-                     lines=["2026-08-01T11:59:00Z", "pi-eval"])
+        agent = _one(
+            tmp_path,
+            viewed_ago=timedelta(minutes=1),
+            lines=["2026-08-01T11:59:00Z", "pi-eval"],
+        )
 
         assert agent.seen is False
 
     def test_a_marker_with_an_unparseable_timestamp_is_dropped(self, tmp_path):
-        agent = _one(tmp_path, viewed_ago=timedelta(minutes=1),
-                     lines=["not a date", "pi-eval", "/private/tmp/tmux-501/default"])
+        agent = _one(
+            tmp_path,
+            viewed_ago=timedelta(minutes=1),
+            lines=["not a date", "pi-eval", "/private/tmp/tmux-501/default"],
+        )
 
         assert agent.seen is False
 
@@ -1788,8 +1944,12 @@ class TestSeenAxis:
         function."""
         make_session(tmp_path, "a", hostname="claude-a-01")
         make_pane_map(tmp_path, ("claude-a-01", "%12", "from-the-map"))
-        make_viewed(tmp_path, "%12", window="from-another-server",
-                    server="/private/tmp/tmux-501/other")
+        make_viewed(
+            tmp_path,
+            "%12",
+            window="from-another-server",
+            server="/private/tmp/tmux-501/other",
+        )
 
         agent = fleet.collect(tmp_path, NOW).agents[0]
 
@@ -1868,9 +2028,11 @@ class TestSeenIsAnAxisNotAStatus:
         assert after.status == before.status == "waiting_input"
 
     def test_status_is_still_exactly_the_four_contract_values(self, tmp_path):
-        for kind, ago in (("notification", timedelta(minutes=1)),
-                          ("stop", timedelta(minutes=1)),
-                          ("stop", timedelta(days=2))):
+        for kind, ago in (
+            ("notification", timedelta(minutes=1)),
+            ("stop", timedelta(minutes=1)),
+            ("stop", timedelta(days=2)),
+        ):
             d = tmp_path / f"{kind}{ago.days}"
             make_session(d, "a", hostname="claude-a-01", kind=kind, ago=ago)
             make_pane_map(d, ("claude-a-01", "%12", "pi-eval"))
@@ -1894,17 +2056,18 @@ class TestSeenIsAnAxisNotAStatus:
 
 
 class TestSeenOrdersButNeverHides:
-
     def test_unseen_sorts_before_seen_within_a_group(self, tmp_path):
         """Two agents, the *seen* one more recent — so recency alone would put
         it first. Unseen wins."""
-        make_session(tmp_path, "seen-one", hostname="claude-a-01",
-                     ago=timedelta(minutes=1))
-        make_session(tmp_path, "unseen-one", hostname="claude-b-02",
-                     ago=timedelta(minutes=9))
-        make_pane_map(tmp_path,
-                      ("claude-a-01", "%12", "one"),
-                      ("claude-b-02", "%13", "two"))
+        make_session(
+            tmp_path, "seen-one", hostname="claude-a-01", ago=timedelta(minutes=1)
+        )
+        make_session(
+            tmp_path, "unseen-one", hostname="claude-b-02", ago=timedelta(minutes=9)
+        )
+        make_pane_map(
+            tmp_path, ("claude-a-01", "%12", "one"), ("claude-b-02", "%13", "two")
+        )
         make_viewed(tmp_path, "%12", ago=timedelta(seconds=30))
 
         order = [a.session_id for a in fleet.collect(tmp_path, NOW).in_group("Working")]
@@ -1924,10 +2087,12 @@ class TestSeenOrdersButNeverHides:
         assert "mktplace" in fleet.render_agents_md(f, NOW)
 
     def test_recency_still_decides_between_two_unseen_agents(self, tmp_path):
-        make_session(tmp_path, "older", hostname="claude-a-01",
-                     ago=timedelta(minutes=9))
-        make_session(tmp_path, "newer", hostname="claude-b-02",
-                     ago=timedelta(minutes=1))
+        make_session(
+            tmp_path, "older", hostname="claude-a-01", ago=timedelta(minutes=9)
+        )
+        make_session(
+            tmp_path, "newer", hostname="claude-b-02", ago=timedelta(minutes=1)
+        )
 
         order = [a.session_id for a in fleet.collect(tmp_path, NOW).in_group("Working")]
 
@@ -1935,7 +2100,6 @@ class TestSeenOrdersButNeverHides:
 
 
 class TestSeenRendering:
-
     def test_agents_md_marks_a_seen_agent(self, tmp_path):
         make_session(tmp_path, "a", hostname="claude-a-01", project="mktplace")
         make_pane_map(tmp_path, ("claude-a-01", "%12", "pi-eval"))
@@ -1961,7 +2125,7 @@ class TestSeenRendering:
 # Vanilla degradation — no kit, no tmux, no map
 # ---------------------------------------------------------------------------
 
-VANILLA_NOW = datetime(2026, 8, 1, 12, 0, 0, tzinfo=timezone.utc)
+VANILLA_NOW = datetime(2026, 8, 1, 12, 0, 0, tzinfo=UTC)
 VANILLA_STAMP = "2026-08-01T12:00:00+00:00"
 VANILLA_DIR = Path(__file__).resolve().parent / "fixtures" / "fleet_vanilla"
 
@@ -1979,57 +2143,108 @@ def build_vanilla_data_dir(data_dir):
 
     def entry(sid, *, kind, ago_minutes, project, hostname, cwd):
         ts = (VANILLA_NOW - timedelta(minutes=ago_minutes)).isoformat()
-        (sessions / f"{sid}.json").write_text(json.dumps({
-            "session_id": sid,
-            "hostname": hostname,
-            "cwd": cwd,
-            "project": project,
-            "workspace": "/vanilla",
-            "started_at": ts,
-            "in_container": True,
-            "last_event": {"ts": ts, "kind": kind},
-        }, indent=2), encoding="utf-8")
+        (sessions / f"{sid}.json").write_text(
+            json.dumps(
+                {
+                    "session_id": sid,
+                    "hostname": hostname,
+                    "cwd": cwd,
+                    "project": project,
+                    "workspace": "/vanilla",
+                    "started_at": ts,
+                    "in_container": True,
+                    "last_event": {"ts": ts, "kind": kind},
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
 
     def checkpoint(sid, intent, nxt, files):
         d = data_dir / "checkpoints" / sid
         d.mkdir(parents=True, exist_ok=True)
         text = "".join(f"## {s}\n\nplaceholder\n" for s in cp.CHECKPOINT_SECTIONS)
-        text = text.replace("## Current intent\n\nplaceholder\n",
-                            f"## Current intent\n\n{intent}\n")
-        text = text.replace("## Next action\n\nplaceholder\n",
-                            f"## Next action\n\n{nxt}\n")
+        text = text.replace(
+            "## Current intent\n\nplaceholder\n", f"## Current intent\n\n{intent}\n"
+        )
+        text = text.replace(
+            "## Next action\n\nplaceholder\n", f"## Next action\n\n{nxt}\n"
+        )
         listing = "\n".join(f"- `{f}` — because reasons" for f in files)
-        text = text.replace("## Involved files\n\nplaceholder\n",
-                            f"## Involved files\n\n{listing}\n")
+        text = text.replace(
+            "## Involved files\n\nplaceholder\n", f"## Involved files\n\n{listing}\n"
+        )
         (d / "checkpoint.md").write_text(text, encoding="utf-8")
 
-    entry("vanilla-working", kind="stop", ago_minutes=3,
-          project="mktplace", hostname="claude-a-01", cwd="/vanilla/mktplace")
-    checkpoint("vanilla-working", "Wiring fleet.json into the hook path",
-               "Run the mktplace gates", ["/vanilla/mktplace/lib/fleet.py"])
+    entry(
+        "vanilla-working",
+        kind="stop",
+        ago_minutes=3,
+        project="mktplace",
+        hostname="claude-a-01",
+        cwd="/vanilla/mktplace",
+    )
+    checkpoint(
+        "vanilla-working",
+        "Wiring fleet.json into the hook path",
+        "Run the mktplace gates",
+        ["/vanilla/mktplace/lib/fleet.py"],
+    )
 
-    entry("vanilla-waiting", kind="notification", ago_minutes=18,
-          project="kit", hostname="claude-b-02", cwd="/vanilla/kit")
-    checkpoint("vanilla-waiting", "Writing write_pane_map",
-               "Approve the edit to lib/fleet.py",
-               ["/vanilla/kit/lib/fleet.py", "/vanilla/kit/claude.sh"])
+    entry(
+        "vanilla-waiting",
+        kind="notification",
+        ago_minutes=18,
+        project="kit",
+        hostname="claude-b-02",
+        cwd="/vanilla/kit",
+    )
+    checkpoint(
+        "vanilla-waiting",
+        "Writing write_pane_map",
+        "Approve the edit to lib/fleet.py",
+        ["/vanilla/kit/lib/fleet.py", "/vanilla/kit/claude.sh"],
+    )
 
-    entry("vanilla-collide", kind="stop", ago_minutes=9,
-          project="mktplace", hostname="claude-d-04", cwd="/vanilla/mktplace-wt")
-    checkpoint("vanilla-collide", "Adding the seen axis",
-               "Extend fleet_digest", ["/vanilla/mktplace/lib/fleet.py"])
+    entry(
+        "vanilla-collide",
+        kind="stop",
+        ago_minutes=9,
+        project="mktplace",
+        hostname="claude-d-04",
+        cwd="/vanilla/mktplace-wt",
+    )
+    checkpoint(
+        "vanilla-collide",
+        "Adding the seen axis",
+        "Extend fleet_digest",
+        ["/vanilla/mktplace/lib/fleet.py"],
+    )
 
-    entry("vanilla-bare", kind="stop", ago_minutes=41,
-          project="workspace", hostname="claude-c-03", cwd="/vanilla/workspace")
+    entry(
+        "vanilla-bare",
+        kind="stop",
+        ago_minutes=41,
+        project="workspace",
+        hostname="claude-c-03",
+        cwd="/vanilla/workspace",
+    )
 
-    (data_dir / "live_containers.json").write_text(json.dumps({
-        "version": 1,
-        "observed_at": (VANILLA_NOW - timedelta(minutes=1)).strftime(
-            "%Y-%m-%dT%H:%M:%SZ"),
-        "observer": "host",
-        "kind": "container",
-        "ids": ["claude-a-01", "claude-b-02", "claude-c-03", "claude-d-04"],
-    }, indent=2), encoding="utf-8")
+    (data_dir / "live_containers.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "observed_at": (VANILLA_NOW - timedelta(minutes=1)).strftime(
+                    "%Y-%m-%dT%H:%M:%SZ"
+                ),
+                "observer": "host",
+                "kind": "container",
+                "ids": ["claude-a-01", "claude-b-02", "claude-c-03", "claude-d-04"],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
     return data_dir
 
 
@@ -2047,21 +2262,28 @@ class TestVanillaDegradation:
         build_vanilla_data_dir(tmp_path)
 
         rendered = fleet.render_agents_md(
-            fleet.collect(tmp_path, VANILLA_NOW), VANILLA_NOW,
-            generated_at=VANILLA_STAMP)
+            fleet.collect(tmp_path, VANILLA_NOW),
+            VANILLA_NOW,
+            generated_at=VANILLA_STAMP,
+        )
 
         assert rendered == (VANILLA_DIR / "AGENTS.md").read_text(encoding="utf-8")
 
     def test_fleet_json_differs_from_the_pre_change_capture_by_one_added_key(
-            self, tmp_path):
+        self, tmp_path
+    ):
         """`collected_at` is what the previous work item added, deliberately and
         additively. Nothing else may have moved — so this asserts the exact
         shape of the difference rather than allowing any difference at all."""
         build_vanilla_data_dir(tmp_path)
 
-        payload = json.loads(fleet.fleet_json(
-            fleet.collect(tmp_path, VANILLA_NOW), VANILLA_NOW,
-            generated_at=VANILLA_STAMP))
+        payload = json.loads(
+            fleet.fleet_json(
+                fleet.collect(tmp_path, VANILLA_NOW),
+                VANILLA_NOW,
+                generated_at=VANILLA_STAMP,
+            )
+        )
         golden = json.loads((VANILLA_DIR / "fleet.json").read_text(encoding="utf-8"))
 
         assert set(payload) - set(golden) == {"collected_at"}
@@ -2084,12 +2306,16 @@ class TestVanillaDegradation:
         no map at all and rendering with an empty map agree."""
         build_vanilla_data_dir(tmp_path)
         without = fleet.render_agents_md(
-            fleet.collect(tmp_path, VANILLA_NOW), VANILLA_NOW,
-            generated_at=VANILLA_STAMP)
+            fleet.collect(tmp_path, VANILLA_NOW),
+            VANILLA_NOW,
+            generated_at=VANILLA_STAMP,
+        )
         make_pane_map(tmp_path)
 
         with_empty = fleet.render_agents_md(
-            fleet.collect(tmp_path, VANILLA_NOW), VANILLA_NOW,
-            generated_at=VANILLA_STAMP)
+            fleet.collect(tmp_path, VANILLA_NOW),
+            VANILLA_NOW,
+            generated_at=VANILLA_STAMP,
+        )
 
         assert with_empty == without

@@ -10,6 +10,7 @@ environments (PATH shims, scratch HOME) — no network, no SSH.
 The test host is itself a Linux container (/.dockerenv exists), so the
 "plain Linux" scenarios rely on the MULTIPLAI_CONTAINER=0 override.
 """
+
 from __future__ import annotations
 
 import shutil
@@ -55,7 +56,9 @@ def _write_exec(path: Path, body: str) -> None:
     path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
-def _shim_dir(tmp_path: Path, tools: list[str], fakes: dict[str, str] | None = None) -> Path:
+def _shim_dir(
+    tmp_path: Path, tools: list[str], fakes: dict[str, str] | None = None
+) -> Path:
     """Build a bin dir with symlinks to real tools plus fake executables."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
@@ -88,7 +91,11 @@ def _clean_env(tmp_path: Path, path: str, **extra: str) -> dict[str, str]:
 def _run(script: Path, args: list[str], env: dict[str, str], cwd: Path):
     return subprocess.run(
         [_BASH, str(script), *args],
-        env=env, cwd=cwd, capture_output=True, text=True, timeout=60,
+        env=env,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
 
 
@@ -170,7 +177,7 @@ class TestScreenDemoBootstrap:
                     f'exec {real_python} "$@"\n'
                 ),
                 # If bootstrap reaches for uv at all, the test should notice.
-                "uv": "#!/bin/bash\necho UV_INVOKED \"$@\"\nexit 0\n",
+                "uv": '#!/bin/bash\necho UV_INVOKED "$@"\nexit 0\n',
             },
         )
         env = _clean_env(tmp_path, str(bins))
@@ -201,8 +208,21 @@ class TestYtTranscript:
         never created (previously the script mkdir'd $HOME/INBOX)."""
         bins = _shim_dir(
             tmp_path,
-            ["uname", "dirname", "basename", "cat", "grep", "sed", "tr", "head",
-             "find", "wc", "mktemp", "rm", "mkdir"],
+            [
+                "uname",
+                "dirname",
+                "basename",
+                "cat",
+                "grep",
+                "sed",
+                "tr",
+                "head",
+                "find",
+                "wc",
+                "mktemp",
+                "rm",
+                "mkdir",
+            ],
             fakes={
                 "yt-dlp": _FAKE_YTDLP,
                 "python3": self._fake_python3(),
@@ -212,8 +232,10 @@ class TestYtTranscript:
         run_dir = tmp_path / "run"
         run_dir.mkdir()
         env = _clean_env(
-            tmp_path, str(bins),
-            MULTIPLAI_CONTAINER="1", VTT_BODY=_VTT,
+            tmp_path,
+            str(bins),
+            MULTIPLAI_CONTAINER="1",
+            VTT_BODY=_VTT,
         )
         res = _run(_YT, ["https://youtube.com/watch?v=abc12345678"], env, run_dir)
         assert res.returncode == 0, res.stderr
@@ -231,11 +253,38 @@ class TestYtTranscript:
         )
         bins = _shim_dir(
             tmp_path,
-            ["uname", "dirname", "basename", "cat", "grep", "sed", "tr", "head",
-             "find", "wc", "mktemp", "rm", "mkdir", "ffmpeg"]
-            if shutil.which("ffmpeg") else
-            ["uname", "dirname", "basename", "cat", "grep", "sed", "tr", "head",
-             "find", "wc", "mktemp", "rm", "mkdir"],
+            [
+                "uname",
+                "dirname",
+                "basename",
+                "cat",
+                "grep",
+                "sed",
+                "tr",
+                "head",
+                "find",
+                "wc",
+                "mktemp",
+                "rm",
+                "mkdir",
+                "ffmpeg",
+            ]
+            if shutil.which("ffmpeg")
+            else [
+                "uname",
+                "dirname",
+                "basename",
+                "cat",
+                "grep",
+                "sed",
+                "tr",
+                "head",
+                "find",
+                "wc",
+                "mktemp",
+                "rm",
+                "mkdir",
+            ],
             fakes={
                 "yt-dlp": fake_ytdlp_no_subs,
                 "python3": self._fake_python3(),
@@ -247,8 +296,12 @@ class TestYtTranscript:
         run_dir = tmp_path / "run"
         run_dir.mkdir()
         env = _clean_env(tmp_path, str(bins), MULTIPLAI_CONTAINER="0")
-        res = _run(_YT, ["https://youtube.com/watch?v=abc12345678", "--audio-fallback"],
-                   env, run_dir)
+        res = _run(
+            _YT,
+            ["https://youtube.com/watch?v=abc12345678", "--audio-fallback"],
+            env,
+            run_dir,
+        )
         assert res.returncode == 1
         assert "Apple Silicon" in res.stderr
         assert "bridge" not in res.stderr

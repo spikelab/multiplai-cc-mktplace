@@ -6,7 +6,6 @@ import json
 import os
 
 import pytest
-
 from conftest import paths_name
 
 
@@ -15,7 +14,9 @@ def _result(doc):
 
 
 def _expected_text(result) -> str:
-    return json.dumps(result.model_dump(mode="json"), indent=2, ensure_ascii=False) + "\n"
+    return (
+        json.dumps(result.model_dump(mode="json"), indent=2, ensure_ascii=False) + "\n"
+    )
 
 
 def test_writes_byte_stable_json_and_returns_the_path(tmp_path, full_paths_doc):
@@ -33,16 +34,49 @@ def test_keys_are_written_in_declaration_order(tmp_path, full_paths_doc):
     target = tmp_path / "paths.json"
     paths_name("write_paths_file")(_result(full_paths_doc), target)
     doc = json.loads(target.read_text(encoding="utf-8"))
-    assert list(doc) == ["schema_version", "commit", "scoped", "cap", "fallback", "paths", "dropped",
-                         "diagnostics", "test_listing_skips"]
-    assert list(doc["paths"][0]) == ["id", "entry", "hops", "stops_at", "break_reason",
-                                     "changed_lines_covered", "tests"]
-    assert list(doc["paths"][0]["entry"]) == ["kind", "name", "location", "handler", "invocation",
-                                              "invoked_by", "also_invoked_by"]
-    assert list(doc["paths"][0]["hops"][0]) == ["symbol_called", "path", "line_start", "line_end", "quote",
-                                                "note", "side"]
+    assert list(doc) == [
+        "schema_version",
+        "commit",
+        "scoped",
+        "cap",
+        "fallback",
+        "paths",
+        "dropped",
+        "diagnostics",
+        "test_listing_skips",
+    ]
+    assert list(doc["paths"][0]) == [
+        "id",
+        "entry",
+        "hops",
+        "stops_at",
+        "break_reason",
+        "changed_lines_covered",
+        "tests",
+    ]
+    assert list(doc["paths"][0]["entry"]) == [
+        "kind",
+        "name",
+        "location",
+        "handler",
+        "invocation",
+        "invoked_by",
+        "also_invoked_by",
+    ]
+    assert list(doc["paths"][0]["hops"][0]) == [
+        "symbol_called",
+        "path",
+        "line_start",
+        "line_end",
+        "quote",
+        "note",
+        "side",
+    ]
     assert list(doc["dropped"][0]) == ["stage", "reason", "detail", "entry"]
-    assert list(doc["paths"][0]["tests"]["mocks_hop_2"][0])[-2:] == ["patch_file", "patch_line"]
+    assert list(doc["paths"][0]["tests"]["mocks_hop_2"][0])[-2:] == [
+        "patch_file",
+        "patch_line",
+    ]
 
 
 def test_round_trip_through_the_model_is_byte_identical(tmp_path, full_paths_doc):
@@ -90,8 +124,9 @@ def test_existing_file_is_preserved_when_validation_fails(tmp_path, full_paths_d
 
 @pytest.mark.parametrize("step", ["fsync", "replace"])
 @pytest.mark.parametrize("existing", [True, False])
-def test_interrupted_write_leaves_the_target_untouched_and_no_temp_file(tmp_path, full_paths_doc, monkeypatch,
-                                                                        step, existing):
+def test_interrupted_write_leaves_the_target_untouched_and_no_temp_file(
+    tmp_path, full_paths_doc, monkeypatch, step, existing
+):
     write = paths_name("write_paths_file")
     target = tmp_path / "paths.json"
     if existing:

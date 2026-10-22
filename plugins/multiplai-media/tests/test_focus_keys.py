@@ -1,5 +1,6 @@
 """Focus keyframes (Segment.focus as a list): a crop window that follows a
 moving subject, built as a time-varying ffmpeg crop expression."""
+
 from __future__ import annotations
 
 import sys
@@ -10,8 +11,9 @@ import pytest
 _SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "video-edit" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 
-from stages import composite, layouts as L  # noqa: E402
-from stages.edl import EDL, FocusKey  # noqa: E402
+from stages import composite
+from stages import layouts as L
+from stages.edl import EDL, FocusKey
 
 W, H = 1080, 1920
 
@@ -20,13 +22,26 @@ def _eval(expr: str, t: float) -> float:
     """Evaluate the subset of ffmpeg's expression language lerp_expr writes."""
     py = expr.replace("\\,", ",").replace("if(", "IF(").replace("lt(", "LT(")
     py = py.replace("max(", "MAX(").replace("min(", "MIN(")
-    return eval(py, {"IF": lambda c, a, b: a if c else b, "LT": lambda a, b: a < b,
-                     "MAX": max, "MIN": min, "t": t})
+    return eval(
+        py,
+        {
+            "IF": lambda c, a, b: a if c else b,
+            "LT": lambda a, b: a < b,
+            "MAX": max,
+            "MIN": min,
+            "t": t,
+        },
+    )
 
 
 def _edl(focus, **seg):
-    return EDL.from_dict({"source": "/rec/talk.mp4", "output": {"width": W, "height": H, "fit": "crop"},
-                          "segments": [{"src_start": 100, "src_end": 110, "focus": focus, **seg}]})
+    return EDL.from_dict(
+        {
+            "source": "/rec/talk.mp4",
+            "output": {"width": W, "height": H, "fit": "crop"},
+            "segments": [{"src_start": 100, "src_end": 110, "focus": focus, **seg}],
+        }
+    )
 
 
 def test_lerp_moves_in_straight_lines_and_holds_at_the_ends() -> None:
@@ -79,13 +94,16 @@ def test_static_focus_keeps_the_old_crop_string() -> None:
     assert L.crop_chain(W, H, 0.3, 0.5) in v
 
 
-@pytest.mark.parametrize("focus,match", [
-    ([{"t": 99, "x": 0.5}], "outside the segment"),
-    ([{"t": 101, "x": 1.2}], "both must be 0–1"),
-    ([{"t": 105, "x": 0.5}, {"t": 103, "x": 0.5}], "must go up"),
-    ([{"t": 103, "x": 0.5}, {"t": 103, "x": 0.6}], "must go up"),
-    ([], "empty focus list"),
-])
+@pytest.mark.parametrize(
+    "focus,match",
+    [
+        ([{"t": 99, "x": 0.5}], "outside the segment"),
+        ([{"t": 101, "x": 1.2}], "both must be 0–1"),
+        ([{"t": 105, "x": 0.5}, {"t": 103, "x": 0.5}], "must go up"),
+        ([{"t": 103, "x": 0.5}, {"t": 103, "x": 0.6}], "must go up"),
+        ([], "empty focus list"),
+    ],
+)
 def test_bad_keys_are_refused(focus, match) -> None:
     with pytest.raises(ValueError, match=match):
         _edl(focus).validate()
@@ -98,10 +116,21 @@ def test_keys_need_a_crop_window() -> None:
 
 
 def test_a_panel_frame_with_keys_builds_a_moving_window_in_segment_time() -> None:
-    edl = EDL.from_dict({"source": "/rec/call.mp4", "output": {"width": W, "height": H},
-                         "layout": {"panels": {"A": {"x": 100, "y": 0, "w": 1000, "h": 1080}}},
-                         "segments": [{"src_start": 100, "src_end": 110, "frame": "A",
-                                       "focus": [{"t": 100, "x": 0.0}, {"t": 104, "x": 1.0}]}]})
+    edl = EDL.from_dict(
+        {
+            "source": "/rec/call.mp4",
+            "output": {"width": W, "height": H},
+            "layout": {"panels": {"A": {"x": 100, "y": 0, "w": 1000, "h": 1080}}},
+            "segments": [
+                {
+                    "src_start": 100,
+                    "src_end": 110,
+                    "frame": "A",
+                    "focus": [{"t": 100, "x": 0.0}, {"t": 104, "x": 1.0}],
+                }
+            ],
+        }
+    )
     v = composite._segment_video(edl, edl.segments[0], None, L.DEFAULT_BG)
     x = v.split("crop=", 1)[1].split(",scale=")[0].split(":", 3)[2]
     assert _eval(x, 0.0) == pytest.approx(100)

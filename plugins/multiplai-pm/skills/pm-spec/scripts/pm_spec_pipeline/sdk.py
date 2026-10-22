@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from typing import TypeVar
 
 from multiplai_core import budget as core_budget
-from multiplai_core.agent_runner import AgentRunError, AgentRunTimeout, run_agent  # noqa: F401
+from multiplai_core.agent_runner import AgentRunError, AgentRunTimeout, run_agent
 from multiplai_core.budget import BudgetExceededError, SpendLedger
 from multiplai_core.structured import parse_answer, reformat_prompt
 from pydantic import BaseModel, ValidationError
@@ -55,8 +55,19 @@ TRUST_MESSAGE = (
     f"the model acts on. If you trust the repository, re-run with --trust-repo (or set {TRUST_ENV}=1)."
 )
 
-__all__ = ["BudgetExceededError", "CallFailed", "RepoTrustError", "READ_ONLY_TOOLS", "agent_structured",
-           "agent_text", "repo_is_trusted", "spend_marker", "start_budget", "text_call", "text_structured"]
+__all__ = [
+    "READ_ONLY_TOOLS",
+    "BudgetExceededError",
+    "CallFailed",
+    "RepoTrustError",
+    "agent_structured",
+    "agent_text",
+    "repo_is_trusted",
+    "spend_marker",
+    "start_budget",
+    "text_call",
+    "text_structured",
+]
 
 
 class CallFailed(Exception):
@@ -100,8 +111,15 @@ def _record(usage, label: str) -> None:
     ledger().record(usage, label=label)
     try:
         _process.cost_usd += float(getattr(usage, "cost_usd", 0.0) or 0.0)
-        _process.tokens += sum(int(getattr(usage, f, 0) or 0) for f in (
-            "input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens"))
+        _process.tokens += sum(
+            int(getattr(usage, f, 0) or 0)
+            for f in (
+                "input_tokens",
+                "output_tokens",
+                "cache_read_tokens",
+                "cache_creation_tokens",
+            )
+        )
     except Exception as e:  # accounting never breaks a run
         log.warning("Process spend accounting failed (ignored): %s", e)
 
@@ -116,9 +134,18 @@ class Answer:
     files_changed: list[str]
 
 
-async def run(prompt: str, *, label: str, tools: list[str] | None = None, model: str | None = None,
-              effort: str | None = None, cwd: str | None = None, max_turns: int = 1,
-              system_prompt: str | None = None, timeout_s: float = DEFAULT_TIMEOUT_S) -> Answer:
+async def run(
+    prompt: str,
+    *,
+    label: str,
+    tools: list[str] | None = None,
+    model: str | None = None,
+    effort: str | None = None,
+    cwd: str | None = None,
+    max_turns: int = 1,
+    system_prompt: str | None = None,
+    timeout_s: float = DEFAULT_TIMEOUT_S,
+) -> Answer:
     """One model call. Tools need a trusted repository; spend is recorded either way."""
     if tools and not repo_is_trusted():
         raise RepoTrustError(TRUST_MESSAGE)
@@ -155,10 +182,16 @@ async def _structured(prompt: str, schema: type[T], **kwargs) -> T:
         return parse_answer(answer.text, schema)
     except (ValidationError, ValueError) as e:
         first = e
-        log.warning("%s: answer unusable, asking for a reformat: %s", label, str(e)[:300])
+        log.warning(
+            "%s: answer unusable, asking for a reformat: %s", label, str(e)[:300]
+        )
     try:
-        again = await run(reformat_prompt(answer.text, schema, first), label=f"{label}:reformat",
-                          model=kwargs.get("model"), effort=kwargs.get("effort"))
+        again = await run(
+            reformat_prompt(answer.text, schema, first),
+            label=f"{label}:reformat",
+            model=kwargs.get("model"),
+            effort=kwargs.get("effort"),
+        )
         return parse_answer(again.text, schema)
     except (ValidationError, ValueError) as e:
         raise CallFailed(f"{label}: no valid answer after a reformat: {e}") from e
@@ -166,26 +199,55 @@ async def _structured(prompt: str, schema: type[T], **kwargs) -> T:
 
 async def text_call(prompt: str, *, config, step: str, label: str) -> str:
     """A call with no tools that returns a document's text."""
-    answer = await run(prompt, label=label, model=config.model_for(step), effort=config.effort_for(step),
-                       system_prompt=TEXT_SYSTEM_PROMPT)
+    answer = await run(
+        prompt,
+        label=label,
+        model=config.model_for(step),
+        effort=config.effort_for(step),
+        system_prompt=TEXT_SYSTEM_PROMPT,
+    )
     return answer.text
 
 
-async def text_structured(prompt: str, schema: type[T], *, config, step: str, label: str) -> T:
+async def text_structured(
+    prompt: str, schema: type[T], *, config, step: str, label: str
+) -> T:
     """A call with no tools whose answer is JSON of *schema*."""
-    return await _structured(prompt, schema, label=label, model=config.model_for(step),
-                             effort=config.effort_for(step))
+    return await _structured(
+        prompt,
+        schema,
+        label=label,
+        model=config.model_for(step),
+        effort=config.effort_for(step),
+    )
 
 
-async def agent_structured(prompt: str, schema: type[T], *, config, step: str, label: str,
-                           cwd: str) -> T:
+async def agent_structured(
+    prompt: str, schema: type[T], *, config, step: str, label: str, cwd: str
+) -> T:
     """A read-only agent (`READ_ONLY_TOOLS`) whose answer is JSON of *schema*."""
-    return await _structured(prompt, schema, label=label, model=config.model_for(step),
-                             effort=config.effort_for(step), tools=list(READ_ONLY_TOOLS), cwd=cwd,
-                             max_turns=AGENT_MAX_TURNS)
+    return await _structured(
+        prompt,
+        schema,
+        label=label,
+        model=config.model_for(step),
+        effort=config.effort_for(step),
+        tools=list(READ_ONLY_TOOLS),
+        cwd=cwd,
+        max_turns=AGENT_MAX_TURNS,
+    )
 
 
-async def agent_text(prompt: str, *, config, step: str, label: str, tools: list[str], cwd: str) -> Answer:
+async def agent_text(
+    prompt: str, *, config, step: str, label: str, tools: list[str], cwd: str
+) -> Answer:
     """An agent holding *tools*; returns its text and the files it reports writing."""
-    return await run(prompt, label=label, model=config.model_for(step), effort=config.effort_for(step),
-                     tools=tools, cwd=cwd, max_turns=AGENT_MAX_TURNS)
+    return await run(
+        prompt,
+        label=label,
+        model=config.model_for(step),
+        effort=config.effort_for(step),
+        tools=tools,
+        cwd=cwd,
+        max_turns=AGENT_MAX_TURNS,
+    )

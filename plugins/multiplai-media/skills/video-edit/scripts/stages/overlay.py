@@ -39,6 +39,7 @@ transparent capture from engine/src/services/screenshotService.ts:217-222,288-31
 frame interleaving from engine/src/services/parallelCoordinator.ts:422-474,
 colour conversion from engine/src/utils/sdrCaptureColor.ts.
 """
+
 from __future__ import annotations
 
 import base64
@@ -48,8 +49,9 @@ import os
 import subprocess
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Protocol
 
 # The estimate printed before a render. Measured for a 1080x1920 alpha stat
 # card on 10 cores: 0.044 s/frame with one page, 0.025 s with four. Pages do
@@ -58,8 +60,10 @@ from typing import Any, Callable, Protocol
 SEC_PER_FRAME = 0.05
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 SEEK_SHIM = (SCRIPTS_DIR / "static" / "seek-shim.js").read_text(encoding="utf-8")
-TRANSPARENT_CSS = ("html,body{background:transparent!important;"
-                   "background-color:transparent!important;background-image:none!important}")
+TRANSPARENT_CSS = (
+    "html,body{background:transparent!important;"
+    "background-color:transparent!important;background-image:none!important}"
+)
 LAUNCH_ARGS = [
     "--font-render-hinting=none",
     "--force-color-profile=srgb",
@@ -71,10 +75,12 @@ LAUNCH_ARGS = [
 JPEG_QUALITY = 90
 # Chrome's JPEG is BT.601 full range; PNG is RGB. Both become BT.709 limited.
 TO_BT709 = "scale=out_color_matrix=bt709:out_range=tv:flags=neighbor"
-JPEG_TO_BT709 = f"scale=in_color_matrix=bt601:in_range=pc:flags=neighbor,format=gbrp,{TO_BT709}"
-PAGE_URL = "http://overlay.invalid/"   # never resolved: the route below answers it
+JPEG_TO_BT709 = (
+    f"scale=in_color_matrix=bt601:in_range=pc:flags=neighbor,format=gbrp,{TO_BT709}"
+)
+PAGE_URL = "http://overlay.invalid/"  # never resolved: the route below answers it
 WORKERS_ENV = "VIDEO_EDIT_OVERLAY_WORKERS"
-AHEAD_PER_WORKER = 4          # frames a page may run ahead of the encoder
+AHEAD_PER_WORKER = 4  # frames a page may run ahead of the encoder
 
 Runner = Callable[..., Any]
 
@@ -85,6 +91,7 @@ class OverlayError(RuntimeError):
 
 class Page(Protocol):
     """The part of a Playwright page this module uses."""
+
     context: Any
 
     def add_init_script(self, script: str) -> None: ...
@@ -100,7 +107,7 @@ class Browser(Protocol):
 
 
 def _install_hint() -> str:
-    return (f"uv run --project {SCRIPTS_DIR} playwright install chromium-headless-shell")
+    return f"uv run --project {SCRIPTS_DIR} playwright install chromium-headless-shell"
 
 
 class _Chromium:
@@ -114,20 +121,25 @@ class _Chromium:
                 "Motion graphics render in headless Chromium through Playwright, and the "
                 "playwright package is not importable here. Run the pipeline through its "
                 f"project, which declares it: uv run --project {SCRIPTS_DIR} python3 "
-                f"{SCRIPTS_DIR / 'pipeline.py'} …") from None
+                f"{SCRIPTS_DIR / 'pipeline.py'} …"
+            ) from None
         self._pw = sync_playwright().start()
         try:
             self._browser = self._pw.chromium.launch(headless=True, args=LAUNCH_ARGS)
         except Exception as e:
             self._pw.stop()
-            first = str(e).strip().splitlines()[0] if str(e).strip() else type(e).__name__
+            first = (
+                str(e).strip().splitlines()[0] if str(e).strip() else type(e).__name__
+            )
             raise OverlayError(
                 f"Playwright could not start Chromium ({first}). Install the browser it "
-                f"expects with: {_install_hint()}") from None
+                f"expects with: {_install_hint()}"
+            ) from None
 
     def new_page(self, width: int, height: int) -> Page:
-        return self._browser.new_page(viewport={"width": width, "height": height},
-                                      device_scale_factor=1)
+        return self._browser.new_page(
+            viewport={"width": width, "height": height}, device_scale_factor=1
+        )
 
     def close(self) -> None:
         try:
@@ -136,8 +148,9 @@ class _Chromium:
             self._pw.stop()
 
 
-def content_hash(html: str, width: int, height: int, fps: int, duration: float,
-                 mode: str = "keyed") -> str:
+def content_hash(
+    html: str, width: int, height: int, fps: int, duration: float, mode: str = "keyed"
+) -> str:
     h = hashlib.sha256()
     h.update(html.encode("utf-8"))
     h.update(f"|{width}x{height}@{fps}|{duration:.3f}|{mode}".encode())
@@ -154,7 +167,9 @@ def default_workers() -> int:
         try:
             n = int(env)
         except ValueError:
-            raise OverlayError(f"{WORKERS_ENV}={env!r} is not a whole number.") from None
+            raise OverlayError(
+                f"{WORKERS_ENV}={env!r} is not a whole number."
+            ) from None
         if n < 1:
             raise OverlayError(f"{WORKERS_ENV}={env!r} must be 1 or more.")
         return n
@@ -188,18 +203,24 @@ class FrameSource:
             raise OverlayError(f"the overlay page did not load the seek shim: {seek!r}")
         self.cdp = page.context.new_cdp_session(page)
         if mode == "alpha":
-            self.cdp.send("Emulation.setDefaultBackgroundColorOverride",
-                          {"color": {"r": 0, "g": 0, "b": 0, "a": 0}})
+            self.cdp.send(
+                "Emulation.setDefaultBackgroundColorOverride",
+                {"color": {"r": 0, "g": 0, "b": 0, "a": 0}},
+            )
             page.add_style_tag(content=TRANSPARENT_CSS)
         self.params = capture_params(mode)
 
     def frame(self, t: float) -> bytes:
-        r = self.cdp.send("Runtime.evaluate", {"expression": f"__veFrame({t:.6f})",
-                                               "returnByValue": True})
+        r = self.cdp.send(
+            "Runtime.evaluate",
+            {"expression": f"__veFrame({t:.6f})", "returnByValue": True},
+        )
         if r.get("exceptionDetails"):
             d = r["exceptionDetails"]
             msg = (d.get("exception") or {}).get("description") or d.get("text") or d
-            raise OverlayError(f"the overlay page threw while seeking to {t:.3f}s: {msg}")
+            raise OverlayError(
+                f"the overlay page threw while seeking to {t:.3f}s: {msg}"
+            )
         shot = self.cdp.send("Page.captureScreenshot", self.params)
         return base64.b64decode(shot["data"])
 
@@ -251,8 +272,18 @@ class _InOrder:
             return data
 
 
-def _worker(k: int, workers: int, n: int, fps: int, html: str, width: int, height: int,
-            mode: str, launch: Callable[[], Browser], sink: _InOrder) -> None:
+def _worker(
+    k: int,
+    workers: int,
+    n: int,
+    fps: int,
+    html: str,
+    width: int,
+    height: int,
+    mode: str,
+    launch: Callable[[], Browser],
+    sink: _InOrder,
+) -> None:
     browser = None
     try:
         browser = launch()
@@ -274,19 +305,55 @@ def _worker(k: int, workers: int, n: int, fps: int, html: str, width: int, heigh
 def encode_command(mode: str, fps: int, out: Path) -> list[str]:
     codec = "mjpeg" if mode == "panel" else "png"
     convert = JPEG_TO_BT709 if mode == "panel" else TO_BT709
-    return ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-            "-f", "image2pipe", "-framerate", str(fps), "-c:v", codec, "-i", "-",
-            "-vf", f"{convert},format=yuva444p10le",
-            "-c:v", "prores_ks", "-profile:v", "4444", "-vendor", "apl0",
-            "-pix_fmt", "yuva444p10le",
-            "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
-            "-color_range", "tv", str(out)]
+    return [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-f",
+        "image2pipe",
+        "-framerate",
+        str(fps),
+        "-c:v",
+        codec,
+        "-i",
+        "-",
+        "-vf",
+        f"{convert},format=yuva444p10le",
+        "-c:v",
+        "prores_ks",
+        "-profile:v",
+        "4444",
+        "-vendor",
+        "apl0",
+        "-pix_fmt",
+        "yuva444p10le",
+        "-colorspace",
+        "bt709",
+        "-color_primaries",
+        "bt709",
+        "-color_trc",
+        "bt709",
+        "-color_range",
+        "tv",
+        str(out),
+    ]
 
 
-def render_to(html: str, width: int, height: int, fps: int, duration: float, mode: str,
-              out: Path, launch: Callable[[], Browser] = _Chromium,
-              popen: Runner = subprocess.Popen, workers: int | None = None,
-              log: Callable[[str], None] = print) -> int:
+def render_to(
+    html: str,
+    width: int,
+    height: int,
+    fps: int,
+    duration: float,
+    mode: str,
+    out: Path,
+    launch: Callable[[], Browser] = _Chromium,
+    popen: Runner = subprocess.Popen,
+    workers: int | None = None,
+    log: Callable[[str], None] = print,
+) -> int:
     """Capture every frame and encode them to `out`; returns the frame count.
 
     ffmpeg writes a temporary name that is renamed to `out` only once it
@@ -295,17 +362,24 @@ def render_to(html: str, width: int, height: int, fps: int, duration: float, mod
     """
     n = frame_count(duration, fps)
     workers = max(1, min(workers or default_workers(), n))
-    log(f"→ overlay: {n} frames at {width}x{height}, {workers} page(s), "
-        f"about {n * SEC_PER_FRAME / math.sqrt(workers):.0f}s")
+    log(
+        f"→ overlay: {n} frames at {width}x{height}, {workers} page(s), "
+        f"about {n * SEC_PER_FRAME / math.sqrt(workers):.0f}s"
+    )
     partial = out.with_name(f"{out.stem}.partial{out.suffix}")
     partial.unlink(missing_ok=True)
     out.parent.mkdir(parents=True, exist_ok=True)
     cmd = encode_command(mode, fps, partial)
     proc = popen(cmd, stdin=subprocess.PIPE)
     sink = _InOrder(AHEAD_PER_WORKER * workers)
-    threads = [threading.Thread(target=_worker, daemon=True,
-                                args=(k, workers, n, fps, html, width, height, mode, launch, sink))
-               for k in range(workers)]
+    threads = [
+        threading.Thread(
+            target=_worker,
+            daemon=True,
+            args=(k, workers, n, fps, html, width, height, mode, launch, sink),
+        )
+        for k in range(workers)
+    ]
     try:
         for t in threads:
             t.start()
@@ -314,7 +388,7 @@ def render_to(html: str, width: int, height: int, fps: int, duration: float, mod
                 frame = sink.take()
                 try:
                     proc.stdin.write(frame)
-                except BrokenPipeError:     # ffmpeg exited; its own message is on stderr
+                except BrokenPipeError:  # ffmpeg exited; its own message is on stderr
                     raise subprocess.CalledProcessError(proc.wait(), cmd) from None
         finally:
             sink.stop()
@@ -333,10 +407,18 @@ def render_to(html: str, width: int, height: int, fps: int, duration: float, mod
     return n
 
 
-def render_overlay(html_path: Path, width: int, height: int, fps: int, duration: float,
-                   cache_root: Path, mode: str = "keyed",
-                   launch: Callable[[], Browser] = _Chromium, popen: Runner = subprocess.Popen,
-                   log: Callable[[str], None] = print) -> Path:
+def render_overlay(
+    html_path: Path,
+    width: int,
+    height: int,
+    fps: int,
+    duration: float,
+    cache_root: Path,
+    mode: str = "keyed",
+    launch: Callable[[], Browser] = _Chromium,
+    popen: Runner = subprocess.Popen,
+    log: Callable[[str], None] = print,
+) -> Path:
     """The overlay as ProRes 4444, cached by content hash under cache_root/overlays/."""
     html = Path(html_path).read_text(encoding="utf-8")
     key = content_hash(html, width, height, fps, duration, mode)
@@ -347,6 +429,8 @@ def render_overlay(html_path: Path, width: int, height: int, fps: int, duration:
     t0 = time.monotonic()
     render_to(html, width, height, fps, duration, mode, out, launch, popen, log=log)
     took = time.monotonic() - t0
-    log(f"✓ overlay {Path(html_path).name}: {took:.1f}s for {duration:.1f}s "
-        f"({took / max(duration, 1e-6):.1f} render-s per overlay-s)")
+    log(
+        f"✓ overlay {Path(html_path).name}: {took:.1f}s for {duration:.1f}s "
+        f"({took / max(duration, 1e-6):.1f} render-s per overlay-s)"
+    )
     return out

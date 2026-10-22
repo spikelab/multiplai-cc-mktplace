@@ -9,6 +9,7 @@ with PATH shims (fake `uname` to simulate Darwin) — no SSH, no Xcode needed.
 The test host is itself a Linux container (/.dockerenv exists), so the
 "plain Linux" scenario relies on the MULTIPLAI_CONTAINER=0 override.
 """
+
 from __future__ import annotations
 
 import shutil
@@ -19,7 +20,10 @@ from pathlib import Path
 _BASH = shutil.which("bash") or "/bin/bash"
 _SCRIPT = (
     Path(__file__).resolve().parent.parent
-    / "skills" / "swift-build" / "scripts" / "swift-host.sh"
+    / "skills"
+    / "swift-build"
+    / "scripts"
+    / "swift-host.sh"
 )
 
 
@@ -47,7 +51,11 @@ def _run(args, tmp_path: Path, fake_uname: str | None = None, **extra_env):
     env.update(extra_env)
     return subprocess.run(
         [_BASH, str(_SCRIPT), *args],
-        env=env, cwd=tmp_path, capture_output=True, text=True, timeout=60,
+        env=env,
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
 
 

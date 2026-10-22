@@ -26,7 +26,7 @@ import logging
 import os
 import socket
 from collections.abc import Iterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -40,8 +40,10 @@ class Locked(Exception):
     def __init__(self, target_dir: Path, holder: str):
         self.target_dir = target_dir
         self.holder = holder
-        super().__init__(f"a review of {target_dir} is running now ({holder}); "
-                         "wait for it to finish, then run again")
+        super().__init__(
+            f"a review of {target_dir} is running now ({holder}); "
+            "wait for it to finish, then run again"
+        )
 
 
 def lock_path(target_dir: Path) -> Path:
@@ -64,7 +66,9 @@ def hold(target_dir: Path) -> Iterator[None]:
     """Hold the lock on *target_dir* for the body; raise Locked if another process holds it."""
     path = lock_path(target_dir)
     try:
-        path.parent.mkdir(exist_ok=True)  # not its parents: a missing `--out` is not created here
+        path.parent.mkdir(
+            exist_ok=True
+        )  # not its parents: a missing `--out` is not created here
         fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
     except OSError as e:
         log.warning("cannot open the run lock %s, running unlocked: %s", path, e)
@@ -80,8 +84,11 @@ def hold(target_dir: Path) -> Iterator[None]:
                 raise Locked(target_dir, _holder(fd)) from None
             log.warning("cannot lock %s, running unlocked: %s", path, e)
         else:
-            info = {"pid": os.getpid(), "host": socket.gethostname(),
-                    "since": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+            info = {
+                "pid": os.getpid(),
+                "host": socket.gethostname(),
+                "since": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            }
             try:
                 os.ftruncate(fd, 0)
                 os.pwrite(fd, json.dumps(info).encode("utf-8"), 0)

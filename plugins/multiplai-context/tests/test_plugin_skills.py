@@ -18,7 +18,7 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
-from lib.plugin_skills import (  # noqa: E402
+from lib.plugin_skills import (
     plugin_skill_owners,
     plugin_skills,
     qualify,
@@ -82,7 +82,9 @@ class TestPluginSkillOwners:
 class TestQualify:
     def test_plugin_skill_gets_its_prefix(self):
         owners = {"extract-insights": "multiplai-research"}
-        assert qualify("extract-insights", owners) == "multiplai-research:extract-insights"
+        assert (
+            qualify("extract-insights", owners) == "multiplai-research:extract-insights"
+        )
 
     def test_user_local_skill_stays_bare(self):
         # A skill in the user's own skills_dir really is invoked as /<name>.

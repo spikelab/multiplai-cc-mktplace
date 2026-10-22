@@ -5,10 +5,9 @@ import sys
 from types import ModuleType, SimpleNamespace
 
 import pytest
-from pydantic import BaseModel
-
 from multiplai_core import deny_list
 from multiplai_core.agent_runner import AgentRunError
+from pydantic import BaseModel
 from walkthrough_pipeline import budget, sdk
 from walkthrough_pipeline.config import STAGE_MODELS, load_config
 
@@ -18,7 +17,10 @@ class Answer(BaseModel):
 
 
 def _result(text: str, cost: float = 0.5):
-    return SimpleNamespace(text=text, usage=SimpleNamespace(input_tokens=10, output_tokens=5, cost_usd=cost))
+    return SimpleNamespace(
+        text=text,
+        usage=SimpleNamespace(input_tokens=10, output_tokens=5, cost_usd=cost),
+    )
 
 
 @pytest.fixture
@@ -49,28 +51,54 @@ async def test_untrusted_repo_is_refused_before_any_call(fake_run):
     assert calls == []
 
 
-async def test_the_allow_list_reaches_run_agent_and_core_builds_the_deny_list(trusted, fake_run):
+async def test_the_allow_list_reaches_run_agent_and_core_builds_the_deny_list(
+    trusted, fake_run
+):
     calls, replies = fake_run
     replies.append(_result('{"value": 3}'))
-    out = await sdk.agent_call_structured("p", Answer, allowed_tools=sdk.EXPLORE_TOOLS, cwd="/repo",
-                                          budget_label="find:diff-bugs", model="m", effort="high")
+    out = await sdk.agent_call_structured(
+        "p",
+        Answer,
+        allowed_tools=sdk.EXPLORE_TOOLS,
+        cwd="/repo",
+        budget_label="find:diff-bugs",
+        model="m",
+        effort="high",
+    )
     assert out.value == 3
     call = calls[0]
     assert call["allowed_tools"] == ["Read", "Grep", "Glob"]
     assert "disallowed_tools" not in call
-    assert (call["cwd"], call["component"], call["label"], call["model"], call["effort"]) == \
-        ("/repo", "walkthrough", "find:diff-bugs", "m", "high")
+    assert (
+        call["cwd"],
+        call["component"],
+        call["label"],
+        call["model"],
+        call["effort"],
+    ) == ("/repo", "walkthrough", "find:diff-bugs", "m", "high")
 
 
-
-async def test_read_roots_reach_run_agent_on_both_attempts_and_are_absent_unless_given(trusted, fake_run):
+async def test_read_roots_reach_run_agent_on_both_attempts_and_are_absent_unless_given(
+    trusted, fake_run
+):
     calls, replies = fake_run
     replies += [_result("not json"), _result('{"value": 1}'), _result('{"value": 2}')]
-    await sdk.agent_call_structured("p", Answer, allowed_tools=sdk.TRACE_TOOLS, cwd="/snap/repo",
-                                    read_roots=["/snap/repo"])
-    assert [c["read_roots"] for c in calls] == [["/snap/repo"], ["/snap/repo"]]   # the reformat re-ask too
-    await sdk.agent_call_structured("p", Answer, allowed_tools=sdk.EXPLORE_TOOLS, cwd="/snap")
-    assert calls[-1]["read_roots"] is None                                        # run_agent installs no hook
+    await sdk.agent_call_structured(
+        "p",
+        Answer,
+        allowed_tools=sdk.TRACE_TOOLS,
+        cwd="/snap/repo",
+        read_roots=["/snap/repo"],
+    )
+    assert [c["read_roots"] for c in calls] == [
+        ["/snap/repo"],
+        ["/snap/repo"],
+    ]  # the reformat re-ask too
+    await sdk.agent_call_structured(
+        "p", Answer, allowed_tools=sdk.EXPLORE_TOOLS, cwd="/snap"
+    )
+    assert calls[-1]["read_roots"] is None  # run_agent installs no hook
+
 
 def test_every_stage_gets_only_read_grep_glob():
     for tools in (sdk.EXPLORE_TOOLS, sdk.TRACE_TOOLS, sdk.DOCS_TOOLS):
@@ -87,28 +115,49 @@ def test_core_denies_what_each_stage_does_not_allow():
         assert not set(tools) & set(denied)
 
 
-async def test_an_unparsable_answer_is_reformatted_without_tools_not_rerun(trusted, fake_run):
+async def test_an_unparsable_answer_is_reformatted_without_tools_not_rerun(
+    trusted, fake_run
+):
     calls, replies = fake_run
-    replies += [_result('{"value": "not a number"}'), _result('```json\n{"value": 7}\n```')]
-    out = await sdk.agent_call_structured("original", Answer, allowed_tools=sdk.TRACE_TOOLS,
-                                          max_turns=60, budget_label="verify")
+    replies += [
+        _result('{"value": "not a number"}'),
+        _result('```json\n{"value": 7}\n```'),
+    ]
+    out = await sdk.agent_call_structured(
+        "original",
+        Answer,
+        allowed_tools=sdk.TRACE_TOOLS,
+        max_turns=60,
+        budget_label="verify",
+    )
     assert out.value == 7
     assert len(calls) == 2
     reformat = calls[1]
-    assert not reformat["prompt"].startswith("original") and "original" not in reformat["prompt"]
+    assert (
+        not reformat["prompt"].startswith("original")
+        and "original" not in reformat["prompt"]
+    )
     assert '<answer>\n{"value": "not a number"}\n</answer>' in reformat["prompt"]
     assert "rejected" in reformat["prompt"] and '"value"' in reformat["prompt"]
-    assert reformat["allowed_tools"] == [] and reformat["max_turns"] == sdk.REFORMAT_MAX_TURNS
+    assert (
+        reformat["allowed_tools"] == []
+        and reformat["max_turns"] == sdk.REFORMAT_MAX_TURNS
+    )
     assert "disallowed_tools" not in reformat
     assert {"Read", "Grep", "Glob", "Bash"} <= set(deny_list(reformat["allowed_tools"]))
     assert reformat["label"] == "verify:reformat"
 
 
 def test_a_prose_answer_is_reported_as_having_no_json():
-    prose = "## Tests review\n\n| tier | covered |\n`{tier: 1, name: x}` then [\"merge\"]"
-    with pytest.raises(ValueError, match="contains no JSON object with the field.s. value; it starts: '## Tests"):
+    prose = '## Tests review\n\n| tier | covered |\n`{tier: 1, name: x}` then ["merge"]'
+    with pytest.raises(
+        ValueError,
+        match="contains no JSON object with the field.s. value; it starts: '## Tests",
+    ):
         sdk.parse_answer(prose, Answer)
-    with pytest.raises(ValueError) as caught:  # JSON with the field keeps the parser's own error
+    with pytest.raises(
+        ValueError
+    ) as caught:  # JSON with the field keeps the parser's own error
         sdk.parse_answer('{"value": "x"}', Answer)
     assert "no JSON object" not in str(caught.value)
 
@@ -127,7 +176,9 @@ async def test_failed_run_counts_as_a_failure_and_is_reasked(trusted, fake_run):
     RuntimeError.__init__(err, "boom")
     err.reason, err.stderr_tail, err.partial = "boom", "", None
     replies += [err, _result(json.dumps({"value": 1}))]
-    assert (await sdk.agent_call_structured("p", Answer, allowed_tools=sdk.DOCS_TOOLS)).value == 1
+    assert (
+        await sdk.agent_call_structured("p", Answer, allowed_tools=sdk.DOCS_TOOLS)
+    ).value == 1
     assert len(calls) == 2
     # No answer came back, so there is nothing to reformat: the prompt runs again.
     assert calls[1]["prompt"].startswith("p\n\n---\n") and "boom" in calls[1]["prompt"]
@@ -138,8 +189,12 @@ async def test_spend_is_recorded_and_the_breaker_stops_the_next_call(trusted, fa
     calls, replies = fake_run
     ledger = budget.start(1.0)
     replies += [_result('{"value": 1}', cost=1.2)]
-    await sdk.agent_call_structured("p", Answer, allowed_tools=sdk.EXPLORE_TOOLS, budget_label="find:tests")
-    assert ledger.cost_usd == pytest.approx(1.2) and ledger.by_label["find:tests"] == pytest.approx(1.2)
+    await sdk.agent_call_structured(
+        "p", Answer, allowed_tools=sdk.EXPLORE_TOOLS, budget_label="find:tests"
+    )
+    assert ledger.cost_usd == pytest.approx(1.2) and ledger.by_label[
+        "find:tests"
+    ] == pytest.approx(1.2)
     with pytest.raises(budget.BudgetExceededError):
         await sdk.agent_call_structured("p", Answer, allowed_tools=sdk.EXPLORE_TOOLS)
     assert len(calls) == 1
@@ -147,7 +202,9 @@ async def test_spend_is_recorded_and_the_breaker_stops_the_next_call(trusted, fa
 
 def test_budget_state_round_trip():
     a = budget.WalkthroughBudget(max_usd=10)
-    a.record(SimpleNamespace(input_tokens=1, output_tokens=2, cost_usd=0.25), label="verify")
+    a.record(
+        SimpleNamespace(input_tokens=1, output_tokens=2, cost_usd=0.25), label="verify"
+    )
     b = budget.WalkthroughBudget(max_usd=10)
     b.load_state(a.to_state())
     assert (b.cost_usd, b.calls, b.by_label) == (0.25, 1, {"verify": 0.25})
@@ -159,7 +216,9 @@ async def test_write_agents_get_no_tools(trusted, fake_run):
     await sdk.agent_call_structured("p", Answer, allowed_tools=sdk.WRITE_TOOLS)
     assert calls[0]["allowed_tools"] == []
     assert "disallowed_tools" not in calls[0]
-    assert {"Read", "Grep", "Glob", "Bash", "WebFetch", "WebSearch"} <= set(deny_list(calls[0]["allowed_tools"]))
+    assert {"Read", "Grep", "Glob", "Bash", "WebFetch", "WebSearch"} <= set(
+        deny_list(calls[0]["allowed_tools"])
+    )
 
 
 def _fake_sdk(monkeypatch) -> list[dict]:
@@ -177,7 +236,9 @@ def _fake_sdk(monkeypatch) -> list[dict]:
         yield AssistantMessage()
 
     fake = ModuleType("claude_agent_sdk")
-    fake.ClaudeAgentOptions = lambda **kwargs: options.append(kwargs) or SimpleNamespace(**kwargs)
+    fake.ClaudeAgentOptions = lambda **kwargs: (
+        options.append(kwargs) or SimpleNamespace(**kwargs)
+    )
     fake.query = query
     fake.AssistantMessage = AssistantMessage
     fake.TextBlock = TextBlock
@@ -185,16 +246,27 @@ def _fake_sdk(monkeypatch) -> list[dict]:
     return options
 
 
-@pytest.mark.parametrize("env, walkthrough_yaml, sent", [
-    ({}, "", ("claude-test-session", "low")),
-    ({"MULTIPLAI_MODEL": "claude-test-default", "MULTIPLAI_EFFORT": "high"}, "",
-     ("claude-test-default", "high")),
-    ({"MULTIPLAI_MODEL": "claude-test-default", "MULTIPLAI_EFFORT": "high"},
-     "".join(f"{key}: claude-test-explicit\n" for key in STAGE_MODELS) + "effort: medium\n",
-     ("claude-test-explicit", "medium")),
-], ids=["session", "multiplai-defaults", "walkthrough-yaml-wins"])
+@pytest.mark.parametrize(
+    "env, walkthrough_yaml, sent",
+    [
+        ({}, "", ("claude-test-session", "low")),
+        (
+            {"MULTIPLAI_MODEL": "claude-test-default", "MULTIPLAI_EFFORT": "high"},
+            "",
+            ("claude-test-default", "high"),
+        ),
+        (
+            {"MULTIPLAI_MODEL": "claude-test-default", "MULTIPLAI_EFFORT": "high"},
+            "".join(f"{key}: claude-test-explicit\n" for key in STAGE_MODELS)
+            + "effort: medium\n",
+            ("claude-test-explicit", "medium"),
+        ),
+    ],
+    ids=["session", "multiplai-defaults", "walkthrough-yaml-wins"],
+)
 async def test_every_stage_call_gets_the_configured_then_multiplai_then_the_session_model(
-        trusted, monkeypatch, tmp_path, env, walkthrough_yaml, sent):
+    trusted, monkeypatch, tmp_path, env, walkthrough_yaml, sent
+):
     """No model or effort configured passes None, and run_agent's own fallback
     (multiplai-core 0.21) picks MULTIPLAI_MODEL / MULTIPLAI_EFFORT, else the session's."""
     # conftest's _no_session_defaults has cleared MULTIPLAI_* and CLAUDE_CODE_SESSION_ID, so
@@ -208,8 +280,15 @@ async def test_every_stage_call_gets_the_configured_then_multiplai_then_the_sess
     options = _fake_sdk(monkeypatch)
 
     for attr in STAGE_MODELS:
-        out = await sdk.agent_call_structured("p", Answer, allowed_tools=sdk.READ_ONLY_TOOLS,
-                                              model=getattr(cfg, attr), effort=cfg.effort,
-                                              budget_label=attr.removesuffix("_model"))
+        out = await sdk.agent_call_structured(
+            "p",
+            Answer,
+            allowed_tools=sdk.READ_ONLY_TOOLS,
+            model=getattr(cfg, attr),
+            effort=cfg.effort,
+            budget_label=attr.removesuffix("_model"),
+        )
         assert out.value == 1
-    assert [(o["model"], o.get("effort")) for o in options] == [sent] * len(STAGE_MODELS)
+    assert [(o["model"], o.get("effort")) for o in options] == [sent] * len(
+        STAGE_MODELS
+    )

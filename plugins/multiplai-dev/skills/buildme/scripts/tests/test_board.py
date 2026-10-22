@@ -18,10 +18,8 @@ import json
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from tests.planning_fakes import accepted_planning
 import pytest
-
-from build_pipeline import board, git_ops
+from build_pipeline import git_ops
 from build_pipeline.board import (
     BoardCard,
     board_path,
@@ -37,6 +35,8 @@ from build_pipeline.git_ops import GitResult
 from build_pipeline.models import BlockStatus, BoardColumn, BuildPhase
 from build_pipeline.progress import ProgressWriter
 from build_pipeline.state import BuildState
+
+from tests.planning_fakes import accepted_planning  # noqa: F401
 from tests.test_git_ops import make_bare_origin, make_repo
 
 
@@ -45,7 +45,9 @@ def _no_spec_extract(monkeypatch):
     """No build here runs spec-extract: its step inside CODEBASE_ANALYSIS lets the phase complete."""
     from build_pipeline import orchestrator
 
-    monkeypatch.setattr(orchestrator, "_run_spec_extract_step", lambda config, state, progress: None)
+    monkeypatch.setattr(
+        orchestrator, "_run_spec_extract_step", lambda config, state, progress: None
+    )
 
 
 # --- 1. The pure mapping --------------------------------------------------
@@ -103,9 +105,7 @@ class TestColumnFor:
     def test_columns_the_pipeline_never_drives_are_unreachable_from_any_phase(self):
         """Backlog / Testing / Ready for Prod / Deploying / Deployed exist in
         the schema and are reachable from no (phase, block_status) pair."""
-        reachable = {
-            column_for(p, s) for p in BuildPhase for s in ALL_BLOCK_STATES
-        }
+        reachable = {column_for(p, s) for p in BuildPhase for s in ALL_BLOCK_STATES}
         never_driven = {
             BoardColumn.BACKLOG,
             BoardColumn.TESTING,
@@ -138,7 +138,8 @@ class TestColumnFor:
 
 def _config(tmp_path: Path, change: str = "card-change") -> BuildConfig:
     config = BuildConfig(
-        project_dir=tmp_path, change_name=change,
+        project_dir=tmp_path,
+        change_name=change,
         git=GitToggles(worktree=False, push=False, pr="none"),
     )
     config.specs_dir = tmp_path / "specs"
@@ -150,7 +151,8 @@ def _config(tmp_path: Path, change: str = "card-change") -> BuildConfig:
 
 def _state(config: BuildConfig, **over) -> BuildState:
     base = dict(
-        change_name=config.change_name, tier="advanced",
+        change_name=config.change_name,
+        tier="advanced",
         state_file=str(config.state_file_path()),
     )
     base.update(over)
@@ -187,13 +189,19 @@ class TestRecord:
     def test_history_accumulates_across_columns(self, tmp_path):
         config = _config(tmp_path)
         state = _state(config)
-        for phase in (BuildPhase.BOOTSTRAP, BuildPhase.DESIGN_AUDIT, BuildPhase.TDD_BUILD):
+        for phase in (
+            BuildPhase.BOOTSTRAP,
+            BuildPhase.DESIGN_AUDIT,
+            BuildPhase.TDD_BUILD,
+        ):
             record(config, state, phase)
         card = BoardCard.model_validate(
             json.loads((config.change_dir / ".board.json").read_text())
         )
         assert [e.column for e in card.history] == [
-            BoardColumn.SHAPING, BoardColumn.PLANNING, BoardColumn.IN_DEVELOPMENT,
+            BoardColumn.SHAPING,
+            BoardColumn.PLANNING,
+            BoardColumn.IN_DEVELOPMENT,
         ]
         assert card.entered_at == card.history[-1].at
 
@@ -203,7 +211,8 @@ class TestRecord:
         BuildState, not from .build-state.json."""
         config = _config(tmp_path)
         state = _state(
-            config, branch="buildme/card-change",
+            config,
+            branch="buildme/card-change",
             worktree_path="/ws/.worktrees/buildme-card-change",
             pr_url="https://github.com/o/r/pull/7",
         )
@@ -268,14 +277,16 @@ class TestRecord:
             json.loads((config.change_dir / ".board.json").read_text())
         )
         assert [e.column for e in card.history] == [
-            BoardColumn.SHAPING, BoardColumn.IN_DEVELOPMENT,
+            BoardColumn.SHAPING,
+            BoardColumn.IN_DEVELOPMENT,
         ]
 
     def test_no_card_without_a_change_dir(self, tmp_path):
         """A pre-bootstrap failure runs against the caller's SOURCE repo — a
         board write must never manufacture specs/changes/<name>/ there."""
         config = BuildConfig(
-            project_dir=tmp_path, change_name="never-started",
+            project_dir=tmp_path,
+            change_name="never-started",
             git=GitToggles(worktree=False, push=False, pr="none"),
         )
         config.specs_dir = tmp_path / "specs"
@@ -344,7 +355,9 @@ class TestRecordFailure:
         assert not config.state_file_path().exists()
         capsys.readouterr()
 
-        assert record_failure(config, state, "no checkpoint left") is BoardColumn.CANCELLED
+        assert (
+            record_failure(config, state, "no checkpoint left") is BoardColumn.CANCELLED
+        )
         card = BoardCard.model_validate(
             json.loads((config.change_dir / ".board.json").read_text())
         )
@@ -368,12 +381,15 @@ class TestRecordFailure:
         assert card.column is not BoardColumn.CANCELLED
         assert "Cancelled" not in capsys.readouterr().out
 
-    def test_failure_before_the_change_dir_exists_writes_nothing(self, tmp_path, capsys):
+    def test_failure_before_the_change_dir_exists_writes_nothing(
+        self, tmp_path, capsys
+    ):
         """A failure before bootstrap (config still bound to the caller's
         source repo, change dir never created) must not manufacture
         specs/changes/<name>/ just to hold a Cancelled card."""
         config = BuildConfig(
-            project_dir=tmp_path, change_name="refused",
+            project_dir=tmp_path,
+            change_name="refused",
             git=GitToggles(worktree=False, push=False, pr="none"),
         )
         config.specs_dir = tmp_path / "specs"
@@ -390,8 +406,14 @@ class TestRecordFailure:
 
 def _args(project_dir: Path, change: str, **over) -> argparse.Namespace:
     base = dict(
-        change=change, project_dir=str(project_dir), auto=True,
-        spec_only=False, skip_research=True, research_path="", session_id="", block=None,
+        change=change,
+        project_dir=str(project_dir),
+        auto=True,
+        spec_only=False,
+        skip_research=True,
+        research_path="",
+        session_id="",
+        block=None,
     )
     base.update(over)
     return argparse.Namespace(**base)
@@ -415,18 +437,35 @@ class TestFullRunBoardTrail:
 
         pr_url = "https://github.com/acme/proj/pull/42"
         monkeypatch.setattr(
-            git_ops, "_run_pr_skill",
-            lambda argv, cwd=None, timeout=None: GitResult(argv, 0, f"PR:{pr_url}\n", ""),
+            git_ops,
+            "_run_pr_skill",
+            lambda argv, cwd=None, timeout=None: GitResult(
+                argv, 0, f"PR:{pr_url}\n", ""
+            ),
         )
 
-        with patch("build_pipeline.spec_generator.run_spec_generator",
-                   new_callable=AsyncMock, return_value=0), \
-             patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
-                   new_callable=AsyncMock, return_value=[]), \
-             patch("build_pipeline.tdd_engine.run_tdd_engine",
-                   new_callable=AsyncMock, return_value=0), \
-             patch("build_pipeline.llm_steps.respec_steps.run_respec_audit",
-                   new_callable=AsyncMock, return_value=None):
+        with (
+            patch(
+                "build_pipeline.spec_generator.run_spec_generator",
+                new_callable=AsyncMock,
+                return_value=0,
+            ),
+            patch(
+                "build_pipeline.llm_steps.spec_steps.run_design_audit",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_tdd_engine",
+                new_callable=AsyncMock,
+                return_value=0,
+            ),
+            patch(
+                "build_pipeline.llm_steps.respec_steps.run_respec_audit",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+        ):
             rc = await run_orchestrator(config, _args(repo, "boarded"))
 
         assert rc == 0
@@ -458,13 +497,17 @@ class TestFullRunBoardTrail:
         assert card.owner_agent == "reviewer"
         assert card.pr_url == pr_url
         assert card.branch == "buildme/boarded"
-        assert card.worktree_path == str(tmp_path / "ws" / ".worktrees" / "buildme-boarded")
+        assert card.worktree_path == str(
+            tmp_path / "ws" / ".worktrees" / "buildme-boarded"
+        )
         # The change dir the card lives in is the archived one — the write
         # never resurrected specs/changes/boarded/.
         assert not (config.specs_dir / "changes" / "boarded").exists()
 
     @pytest.mark.asyncio
-    async def test_run_without_a_pr_stays_in_development(self, tmp_path, monkeypatch, capsys):
+    async def test_run_without_a_pr_stays_in_development(
+        self, tmp_path, monkeypatch, capsys
+    ):
         """In Review is entered only when the branch is pushed AND a PR is
         open. Reaching COMPLETE with no PR is not a reviewable surface."""
         from build_pipeline.orchestrator import run_orchestrator
@@ -473,19 +516,35 @@ class TestFullRunBoardTrail:
         repo = make_repo(tmp_path / "proj")
 
         config = BuildConfig(
-            project_dir=repo, change_name="nopr", auto=False,
+            project_dir=repo,
+            change_name="nopr",
+            auto=False,
             git=GitToggles(worktree=False, push=False, pr="none"),
         )
         config.specs_dir = repo / "specs"
 
-        with patch("build_pipeline.spec_generator.run_spec_generator",
-                   new_callable=AsyncMock, return_value=0), \
-             patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
-                   new_callable=AsyncMock, return_value=[]), \
-             patch("build_pipeline.tdd_engine.run_tdd_engine",
-                   new_callable=AsyncMock, return_value=0), \
-             patch("build_pipeline.llm_steps.respec_steps.run_respec_audit",
-                   new_callable=AsyncMock, return_value=None):
+        with (
+            patch(
+                "build_pipeline.spec_generator.run_spec_generator",
+                new_callable=AsyncMock,
+                return_value=0,
+            ),
+            patch(
+                "build_pipeline.llm_steps.spec_steps.run_design_audit",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_tdd_engine",
+                new_callable=AsyncMock,
+                return_value=0,
+            ),
+            patch(
+                "build_pipeline.llm_steps.respec_steps.run_respec_audit",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+        ):
             rc = await run_orchestrator(config, _args(repo, "nopr", auto=False))
 
         assert rc == 0
@@ -499,7 +558,10 @@ class TestFullRunBoardTrail:
 
     @pytest.mark.asyncio
     async def test_preflight_refusal_leaves_no_trace_in_the_source_repo(
-        self, tmp_path, monkeypatch, capsys,
+        self,
+        tmp_path,
+        monkeypatch,
+        capsys,
     ):
         """A worktree preflight refusal fails BEFORE the first checkpoint and
         before config is re-bound — the failure path must not write into
@@ -513,25 +575,31 @@ class TestFullRunBoardTrail:
         config.specs_dir = repo / "specs"
 
         monkeypatch.setattr(
-            git_ops, "preflight",
+            git_ops,
+            "preflight",
             lambda repo_path, *, worktree_requested: (_ for _ in ()).throw(
                 git_ops.GitLifecycleError("uncommitted changes — refusing")
             ),
         )
         from tests.spec_fixtures import ready_specs
+
         change_dir = repo / "specs" / "changes" / "refused"
         ready_specs(change_dir, repo)
         before = sorted(p.name for p in change_dir.iterdir())
         rc = await run_orchestrator(config, _args(repo, "refused"))
 
         assert rc == 1
-        assert sorted(p.name for p in change_dir.iterdir()) == before, \
+        assert sorted(p.name for p in change_dir.iterdir()) == before, (
             "nothing added to the ready change dir in the source repo"
+        )
         assert "BOARD:" not in capsys.readouterr().out
 
     @pytest.mark.asyncio
     async def test_crash_after_success_is_not_recorded_as_cancelled(
-        self, tmp_path, monkeypatch, capsys,
+        self,
+        tmp_path,
+        monkeypatch,
+        capsys,
     ):
         """After publish, `.build-state.json` is renamed to
         `.build-state.complete.json`. An exception in the post-success tail
@@ -554,20 +622,38 @@ class TestFullRunBoardTrail:
         config.specs_dir = repo / "specs"
 
         monkeypatch.setattr(
-            git_ops, "_run_pr_skill",
+            git_ops,
+            "_run_pr_skill",
             lambda argv, cwd=None, timeout=None: GitResult(
-                argv, 0, "PR:https://github.com/acme/proj/pull/9\n", "",
+                argv,
+                0,
+                "PR:https://github.com/acme/proj/pull/9\n",
+                "",
             ),
         )
-        with patch("build_pipeline.spec_generator.run_spec_generator",
-                   new_callable=AsyncMock, return_value=0), \
-             patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
-                   new_callable=AsyncMock, return_value=[]), \
-             patch("build_pipeline.tdd_engine.run_tdd_engine",
-                   new_callable=AsyncMock, return_value=0), \
-             patch("build_pipeline.llm_steps.respec_steps.run_respec_audit",
-                   new_callable=AsyncMock, return_value=None), \
-             patch.object(ProgressWriter, "log_phase", crash_on_complete):
+        with (
+            patch(
+                "build_pipeline.spec_generator.run_spec_generator",
+                new_callable=AsyncMock,
+                return_value=0,
+            ),
+            patch(
+                "build_pipeline.llm_steps.spec_steps.run_design_audit",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_tdd_engine",
+                new_callable=AsyncMock,
+                return_value=0,
+            ),
+            patch(
+                "build_pipeline.llm_steps.respec_steps.run_respec_audit",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch.object(ProgressWriter, "log_phase", crash_on_complete),
+        ):
             rc = await run_orchestrator(config, _args(repo, "latecrash"))
 
         assert rc == 1  # the crash is still an error...

@@ -70,7 +70,9 @@ class Record:
 
     def findings(self, key: str) -> list[dict]:
         items = self.data.get(key)
-        return [f for f in items if isinstance(f, dict)] if isinstance(items, list) else []
+        return (
+            [f for f in items if isinstance(f, dict)] if isinstance(items, list) else []
+        )
 
 
 @dataclass
@@ -90,7 +92,11 @@ class BlockMetrics:
     def passed_at(self) -> int | None:
         for r in self.records:
             gate = r.data.get("gate")
-            if r.kind == "review" and isinstance(gate, dict) and gate.get("passed") is True:
+            if (
+                r.kind == "review"
+                and isinstance(gate, dict)
+                and gate.get("passed") is True
+            ):
                 return r.round
         return None
 
@@ -142,21 +148,38 @@ def project_dir_of(change_dir: Path) -> Path | None:
 
 def _git(project: Path, *argv: str) -> subprocess.CompletedProcess | None:
     try:
-        return subprocess.run(["git", "-C", str(project), *argv], capture_output=True,
-                              text=True, timeout=GIT_TIMEOUT_S)
+        return subprocess.run(
+            ["git", "-C", str(project), *argv],
+            capture_output=True,
+            text=True,
+            timeout=GIT_TIMEOUT_S,
+        )
     except (OSError, subprocess.SubprocessError):
         return None
 
 
-def line_origin(project: Path | None, file_path: str, line: int,
-                head_sha: str | None, first_head_sha: str | None) -> str:
+def line_origin(
+    project: Path | None,
+    file_path: str,
+    line: int,
+    head_sha: str | None,
+    first_head_sha: str | None,
+) -> str:
     """Whether *file_path*:*line* at *head_sha* was already in round 1's
     ``head_sha`` (``PRESENT``), was written after it (``BY_FIX``), or cannot
     be told (``UNKNOWN``)."""
     if project is None or head_sha is None or first_head_sha is None:
         return UNKNOWN
-    blame = _git(project, "blame", "-L", f"{line},{line}", "--porcelain", head_sha,
-                 "--", file_path)
+    blame = _git(
+        project,
+        "blame",
+        "-L",
+        f"{line},{line}",
+        "--porcelain",
+        head_sha,
+        "--",
+        file_path,
+    )
     if blame is None or blame.returncode != 0 or not blame.stdout.strip():
         return UNKNOWN
     blamed = blame.stdout.split()[0]
@@ -181,7 +204,9 @@ def _location(finding: dict) -> tuple[str, int] | None:
     return file_path, line
 
 
-def measure_block(block: int, records: list[Record], project: Path | None) -> BlockMetrics:
+def measure_block(
+    block: int, records: list[Record], project: Path | None
+) -> BlockMetrics:
     records = sorted(records, key=lambda r: r.round)
     metrics = BlockMetrics(block=block, records=records)
     first = next((r for r in records if r.round == 1), None)
@@ -191,8 +216,11 @@ def measure_block(block: int, records: list[Record], project: Path | None) -> Bl
             continue
         for finding in record.findings("accepted"):
             where = _location(finding)
-            origin = NO_LINE if where is None else line_origin(
-                project, *where, record.reviewed_sha, first_head)
+            origin = (
+                NO_LINE
+                if where is None
+                else line_origin(project, *where, record.reviewed_sha, first_head)
+            )
             metrics.origins[origin] += 1
             if record.kind == "review":
                 metrics.review_origins[origin] += 1
@@ -221,8 +249,10 @@ def _round_cell(block: BlockMetrics) -> str:
     cells = []
     for r in block.records:
         mark = "" if r.kind == "review" else "†"
-        cells.append(f"r{r.round}{mark} {len(r.findings('accepted'))}/"
-                     f"{len(r.findings('rejected'))}")
+        cells.append(
+            f"r{r.round}{mark} {len(r.findings('accepted'))}/"
+            f"{len(r.findings('rejected'))}"
+        )
     return ", ".join(cells)
 
 
@@ -236,20 +266,35 @@ def render(changes: list[ChangeMetrics], directories: list[Path]) -> str:
     all_blocks: list[BlockMetrics] = []
     for change in changes:
         all_blocks.extend(change.blocks)
-        project = f"`{change.project_dir}`" if change.project_dir else "none found (no `specs/` above it)"
-        out += [f"## `{change.change_dir}`", "",
-                f"{change.record_count} round records, {len(change.blocks)} blocks. "
-                f"Project: {project}.", "",
-                "| Block | Review rounds | Passed at | Accepted/rejected per round "
-                "| Round 2+: present at first review | Round 2+: written by a fix "
-                "| Round 2+: unknown | Round 2+: no line |",
-                "|---|---|---|---|---|---|---|---|"]
+        project = (
+            f"`{change.project_dir}`"
+            if change.project_dir
+            else "none found (no `specs/` above it)"
+        )
+        out += [
+            f"## `{change.change_dir}`",
+            "",
+            f"{change.record_count} round records, {len(change.blocks)} blocks. "
+            f"Project: {project}.",
+            "",
+            "| Block | Review rounds | Passed at | Accepted/rejected per round "
+            "| Round 2+: present at first review | Round 2+: written by a fix "
+            "| Round 2+: unknown | Round 2+: no line |",
+            "|---|---|---|---|---|---|---|---|",
+        ]
         for b in change.blocks:
             passed = str(b.passed_at) if b.passed_at is not None else "none"
-            out.append(f"| {b.block} | {b.rounds} | {passed} | {_round_cell(b)} | "
-                       + " | ".join(str(b.origins[o]) for o in ORIGINS) + " |")
-        out += ["", "† a record whose `kind` is not `review` (for example "
-                "`fix_on_pass_review`): listed, not counted in Review rounds or Passed at.", ""]
+            out.append(
+                f"| {b.block} | {b.rounds} | {passed} | {_round_cell(b)} | "
+                + " | ".join(str(b.origins[o]) for o in ORIGINS)
+                + " |"
+            )
+        out += [
+            "",
+            "† a record whose `kind` is not `review` (for example "
+            "`fix_on_pass_review`): listed, not counted in Review rounds or Passed at.",
+            "",
+        ]
 
     passed = [b.passed_at for b in all_blocks if b.passed_at is not None]
     mean = f"{sum(passed) / len(passed):.2f}" if passed else "n/a"
@@ -280,11 +325,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="review_metrics.py",
         description="Report buildme's per-block review loop from the round records "
-                    "(reviews/block-NN-round-K.json) under the given directories. "
-                    "Prints Markdown; writes nothing.",
+        "(reviews/block-NN-round-K.json) under the given directories. "
+        "Prints Markdown; writes nothing.",
     )
-    parser.add_argument("directories", nargs="+", type=Path, metavar="DIR",
-                        help="a directory to search recursively, such as a project's specs/")
+    parser.add_argument(
+        "directories",
+        nargs="+",
+        type=Path,
+        metavar="DIR",
+        help="a directory to search recursively, such as a project's specs/",
+    )
     return parser
 
 

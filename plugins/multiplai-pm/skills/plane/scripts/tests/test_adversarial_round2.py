@@ -14,13 +14,11 @@ from __future__ import annotations
 import types
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
-
-import pytest
+from datetime import datetime
 
 import plane
+import pytest
 from conftest import ALLOWED, BAD, OK, guard
-
 
 # --- the guardrail after the dot-segment fix ---------------------------------
 
@@ -118,7 +116,7 @@ class _Opener:
     def __init__(self, log, blob=b""):
         self.log, self.blob = log, blob
 
-    def open(self, req, timeout=None):  # noqa: ARG002
+    def open(self, req, timeout=None):
         self.log.append(dict(req.header_items()))
         raise urllib.error.URLError("stopped before the socket")
 
@@ -147,9 +145,14 @@ def test_fetch_asset_does_not_follow_redirects():
     body or a different code.
     """
     opener = urllib.request.build_opener(plane._NoRedirect)
-    handlers = [type(h).__name__ for h in opener.handlers if "Redirect" in type(h).__name__]
+    handlers = [
+        type(h).__name__ for h in opener.handlers if "Redirect" in type(h).__name__
+    ]
     assert handlers == ["_NoRedirect"]
-    assert plane._NoRedirect().redirect_request(None, None, 302, "m", {}, "https://x") is None
+    assert (
+        plane._NoRedirect().redirect_request(None, None, 302, "m", {}, "https://x")
+        is None
+    )
 
 
 def test_fetch_asset_caps_the_download(monkeypatch):
@@ -184,10 +187,16 @@ def test_downloaded_names_cannot_steer_the_write():
 # 21:59:00Z and the next starts at 22:00:01Z on the same calendar day, which is
 # local midnight in Europe/Rome. Plane produces these itself — posting a cycle
 # with `start_date: "2026-09-01"` to DFT came back as 2026-08-31T22:00:01Z.
-S16 = {"name": "S16", "start_date": "2026-07-21T10:31:41.143422Z",
-       "end_date": "2026-08-03T21:59:00Z"}
-S17 = {"name": "S17", "start_date": "2026-08-03T22:00:01Z",
-       "end_date": "2026-08-17T21:59:00Z"}
+S16 = {
+    "name": "S16",
+    "start_date": "2026-07-21T10:31:41.143422Z",
+    "end_date": "2026-08-03T21:59:00Z",
+}
+S17 = {
+    "name": "S17",
+    "start_date": "2026-08-03T22:00:01Z",
+    "end_date": "2026-08-17T21:59:00Z",
+}
 
 
 def _freeze(monkeypatch, when: str) -> None:
@@ -195,20 +204,23 @@ def _freeze(monkeypatch, when: str) -> None:
     real class off the same module attribute."""
     fixed = plane._parse_ts(when)
     monkeypatch.setattr(
-        plane, "datetime",
-        types.SimpleNamespace(now=lambda tz=None: fixed, fromisoformat=datetime.fromisoformat),
+        plane,
+        "datetime",
+        types.SimpleNamespace(
+            now=lambda tz=None: fixed, fromisoformat=datetime.fromisoformat
+        ),
     )
 
 
 @pytest.mark.parametrize(
     "when,live",
     [
-        ("2026-08-03T12:00:00Z", ["S16"]),          # the changeover day itself
+        ("2026-08-03T12:00:00Z", ["S16"]),  # the changeover day itself
         ("2026-08-03T21:58:59Z", ["S16"]),
-        ("2026-08-03T21:59:00Z", ["S16"]),          # inclusive end
-        ("2026-08-03T22:00:01Z", ["S17"]),          # inclusive start
+        ("2026-08-03T21:59:00Z", ["S16"]),  # inclusive end
+        ("2026-08-03T22:00:01Z", ["S17"]),  # inclusive start
         ("2026-08-04T00:00:00Z", ["S17"]),
-        ("2026-08-03T21:59:30Z", []),               # the 61-second seam
+        ("2026-08-03T21:59:30Z", []),  # the 61-second seam
     ],
 )
 def test_cycle_bounds_are_compared_as_instants(when, live):
@@ -232,10 +244,18 @@ def test_the_changeover_seam_refuses_instead_of_guessing(monkeypatch):
 
 
 def test_overlapping_cycles_are_refused_not_ranked(monkeypatch):
-    a = {"id": "a" * 36, "name": "A", "start_date": "2026-08-01T00:00:00Z",
-         "end_date": "2026-08-10T00:00:00Z"}
-    b = {"id": "b" * 36, "name": "B", "start_date": "2026-08-05T00:00:00Z",
-         "end_date": "2026-08-15T00:00:00Z"}
+    a = {
+        "id": "a" * 36,
+        "name": "A",
+        "start_date": "2026-08-01T00:00:00Z",
+        "end_date": "2026-08-10T00:00:00Z",
+    }
+    b = {
+        "id": "b" * 36,
+        "name": "B",
+        "start_date": "2026-08-05T00:00:00Z",
+        "end_date": "2026-08-15T00:00:00Z",
+    }
     monkeypatch.setattr(plane, "list_cycles", lambda cfg, pid: [a, b])
     _freeze(monkeypatch, "2026-08-07T00:00:00Z")
     with pytest.raises(plane.PlaneError, match="2 cycles are active"):
@@ -265,7 +285,7 @@ def test_already_in_cycle_is_read_from_a_field_the_list_endpoint_really_sends():
 def _search(monkeypatch, hits, **kw):
     seen = {}
 
-    def fake_request(method, path, cfg, *, params=None, **_):  # noqa: ARG001
+    def fake_request(method, path, cfg, *, params=None, **_):
         seen["params"] = dict(params or {})
         return {"issues": hits}
 
@@ -363,8 +383,8 @@ def test_fences_are_tracked_by_delimiter_and_length():
         "~~~\na — b\n~~~",
         "```\na — b\n```",
         "```py\na — b\n```",
-        "```\na — b",                      # never closed
-        "````\na — b\n```\n",              # closed only by a longer fence: isn't
+        "```\na — b",  # never closed
+        "````\na — b\n```\n",  # closed only by a longer fence: isn't
         "~~~\na — b\n```\nstill inside — c\n~~~",  # wrong character does not close
     ):
         assert plane._sanitize_prose(src) == src, src
@@ -387,7 +407,8 @@ def test_not_found_says_what_it_checked_rather_than_what_exists(monkeypatch):
     listed" into "does not exist"."""
     monkeypatch.setattr(plane, "_paginate", lambda *a, **k: iter([]))
     monkeypatch.setattr(
-        plane, "resolve_project",
+        plane,
+        "resolve_project",
         lambda cfg, ref: {"id": OK, "identifier": "DB", "name": "Acme"},
     )
     with pytest.raises(plane.PlaneError) as exc:

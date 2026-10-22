@@ -13,9 +13,8 @@ configured one.
 import json
 from types import SimpleNamespace
 
-import pytest
-
 import health_check
+import pytest
 
 
 def _ln(ts, msg, level="INFO"):
@@ -25,8 +24,12 @@ def _ln(ts, msg, level="INFO"):
 def _llm_run(ts, memory, skills=0, abstained=False, degraded=False):
     out = ""
     if degraded:
-        out += _ln(ts, "LLMRouter timed out after 25.0s; degrading to "
-                       "token_overlap for this prompt", "WARNING")
+        out += _ln(
+            ts,
+            "LLMRouter timed out after 25.0s; degrading to "
+            "token_overlap for this prompt",
+            "WARNING",
+        )
     if abstained:
         out += _ln(ts, "LLMRouter abstained: model ran and picked nothing")
     out += _ln(ts, f"Router llm picked: memory={memory} skills={skills}")
@@ -37,12 +40,15 @@ def _llm_run(ts, memory, skills=0, abstained=False, degraded=False):
 def _overlap_run(ts, picked):
     scores = {
         "picked": [[f"f{i}.md", 1.0 - i / 10] for i in range(picked)],
-        "cap": 10, "n_candidates": 20, "n_picked": picked, "capped": False,
-        "floor_excluded": None, "prompt": "x",
+        "cap": 10,
+        "n_candidates": 20,
+        "n_picked": picked,
+        "capped": False,
+        "floor_excluded": None,
+        "prompt": "x",
     }
-    return (
-        _ln(ts, f"Router token_overlap picked: memory={picked} skills=0")
-        + _ln(ts, "ROUTING_SCORES memory=" + json.dumps(scores))
+    return _ln(ts, f"Router token_overlap picked: memory={picked} skills=0") + _ln(
+        ts, "ROUTING_SCORES memory=" + json.dumps(scores)
     )
 
 
@@ -101,9 +107,7 @@ def test_the_strategy_the_hook_last_logged_is_reported(env):
     (env.logs / "context_manager-2026-10-19.log").write_text(
         _overlap_run("09:00:00", 2)
     )
-    (env.logs / "context_manager-2026-10-20.log").write_text(
-        _llm_run("10:00:00", 1)
-    )
+    (env.logs / "context_manager-2026-10-20.log").write_text(_llm_run("10:00:00", 1))
 
     status = health_check._routing_status(env.paths)
 
@@ -119,9 +123,7 @@ def test_the_strategy_the_hook_last_logged_is_reported(env):
 
 def test_no_mismatch_when_the_hook_ran_the_configured_strategy(env):
     env.configure("llm")
-    (env.logs / "context_manager-2026-10-20.log").write_text(
-        _llm_run("10:00:00", 1)
-    )
+    (env.logs / "context_manager-2026-10-20.log").write_text(_llm_run("10:00:00", 1))
 
     status = health_check._routing_status(env.paths)
 
@@ -160,9 +162,7 @@ def test_the_llm_window_is_bounded_to_the_newest_runs(env, monkeypatch):
 
 def test_a_mismatch_becomes_a_recommendation(env):
     env.configure("token_overlap")
-    (env.logs / "context_manager-2026-10-20.log").write_text(
-        _llm_run("10:00:00", 1)
-    )
+    (env.logs / "context_manager-2026-10-20.log").write_text(_llm_run("10:00:00", 1))
     status = health_check._routing_status(env.paths)
 
     recs = health_check._routing_recommendations(status)
@@ -173,8 +173,11 @@ def test_a_mismatch_becomes_a_recommendation(env):
 def _hybrid_run(ts, abstained=False, degraded=False):
     out = ""
     if degraded:
-        out += _ln(ts, "LLMRouter returned non-JSON; degrading to "
-                       "token_overlap for this prompt", "WARNING")
+        out += _ln(
+            ts,
+            "LLMRouter returned non-JSON; degrading to token_overlap for this prompt",
+            "WARNING",
+        )
     if abstained:
         out += _ln(ts, "LLMRouter abstained: model ran and picked nothing")
     out += _ln(ts, "Router llm_hybrid picked: memory=0 skills=0")
@@ -185,8 +188,9 @@ def test_llm_rates_count_only_llm_runs_after_a_switch_from_hybrid(env):
     """llm_hybrid wraps LLMRouter and logs the same abstain/degrade lines."""
     env.configure("llm")
     (env.logs / "context_manager-2026-10-20.log").write_text(
-        "".join(_hybrid_run(f"09:0{i}:00", abstained=True, degraded=True)
-                for i in range(6))
+        "".join(
+            _hybrid_run(f"09:0{i}:00", abstained=True, degraded=True) for i in range(6)
+        )
         + _llm_run("10:00:00", 1)
         + _llm_run("10:01:00", 0, abstained=True)
     )
@@ -201,12 +205,17 @@ def test_llm_rates_count_only_llm_runs_after_a_switch_from_hybrid(env):
 def test_router_text_quoted_in_a_prompt_is_not_a_router_event(env):
     """ROUTING_SCORES lines carry the user's prompt; only real records count."""
     env.configure("token_overlap")
-    skills = json.dumps({"picked": [], "n_picked": 0, "capped": False,
-                         "prompt": "why did it log Router llm picked: "
-                                   "memory=0 skills=0 and LLMRouter abstained"})
+    skills = json.dumps(
+        {
+            "picked": [],
+            "n_picked": 0,
+            "capped": False,
+            "prompt": "why did it log Router llm picked: "
+            "memory=0 skills=0 and LLMRouter abstained",
+        }
+    )
     (env.logs / "context_manager-2026-10-20.log").write_text(
-        _overlap_run("10:00:00", 2)
-        + _ln("10:00:00", "ROUTING_SCORES skills=" + skills)
+        _overlap_run("10:00:00", 2) + _ln("10:00:00", "ROUTING_SCORES skills=" + skills)
     )
 
     status = health_check._routing_status(env.paths)
@@ -218,8 +227,9 @@ def test_router_text_quoted_in_a_prompt_is_not_a_router_event(env):
 
 def test_score_stats_cover_only_the_strategy_they_are_labelled_with(env):
     env.configure("llm_hybrid")
-    hybrid_scores = json.dumps({"picked": [["h.md", 0.5]], "n_picked": 1,
-                                "capped": True})
+    hybrid_scores = json.dumps(
+        {"picked": [["h.md", 0.5]], "n_picked": 1, "capped": True}
+    )
     (env.logs / "context_manager-2026-10-20.log").write_text(
         _overlap_run("09:00:00", 0)
         + _overlap_run("09:01:00", 0)
@@ -267,16 +277,17 @@ def test_run_health_check_carries_the_mismatch_recommendation(
     env, tmp_path, monkeypatch, capsys
 ):
     env.configure("token_overlap")
-    (env.logs / "context_manager-2026-10-20.log").write_text(
-        _llm_run("10:00:00", 1)
-    )
+    (env.logs / "context_manager-2026-10-20.log").write_text(_llm_run("10:00:00", 1))
     memory = tmp_path / "memory"
     memory.mkdir()
     paths = SimpleNamespace(
-        logs_dir=env.paths.logs_dir, data_dir=env.paths.data_dir,
-        memory_dir=lambda: memory, diary_dir=lambda: tmp_path / "diary",
+        logs_dir=env.paths.logs_dir,
+        data_dir=env.paths.data_dir,
+        memory_dir=lambda: memory,
+        diary_dir=lambda: tmp_path / "diary",
         learnings_dir=lambda: tmp_path / "learnings",
-        plugin_data=lambda: tmp_path / "data", venv_dir=lambda: tmp_path / "venv",
+        plugin_data=lambda: tmp_path / "data",
+        venv_dir=lambda: tmp_path / "venv",
     )
     monkeypatch.setattr(health_check, "get_paths", lambda: paths)
 

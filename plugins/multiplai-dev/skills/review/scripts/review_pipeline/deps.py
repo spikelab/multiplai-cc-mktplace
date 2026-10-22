@@ -65,7 +65,15 @@ def _parse_source(value: str) -> tuple[str, str]:
 
 def locked_git_deps(target: TargetInfo) -> list[Dep]:
     """One `Dep` per git-sourced package in every uv.lock at head, by (url, commit) once."""
-    listing = git(target.repo_path, "ls-tree", "-r", "--name-only", "-z", target.head_sha, check=False)
+    listing = git(
+        target.repo_path,
+        "ls-tree",
+        "-r",
+        "--name-only",
+        "-z",
+        target.head_sha,
+        check=False,
+    )
     paths = [p for p in listing.stdout.split("\0") if p.rsplit("/", 1)[-1] == LOCK_FILE]
     seen: set[tuple[str, str]] = set()
     out: list[Dep] = []
@@ -85,7 +93,9 @@ def locked_git_deps(target: TargetInfo) -> list[Dep]:
             url, commit = _parse_source(source["git"])
             name = str(package.get("name") or "")
             if not _COMMIT.fullmatch(commit):
-                log.info("%s: %s pins %r, not a 40-hex commit; skipped", path, name, commit)
+                log.info(
+                    "%s: %s pins %r, not a 40-hex commit; skipped", path, name, commit
+                )
                 continue
             if not name or (url, commit) in seen:
                 continue
@@ -99,6 +109,7 @@ def locked_git_deps(target: TargetInfo) -> list[Dep]:
 
 class Manifest(BaseModel):
     """`<snapshot>/.review-deps/.manifest.json`, written after every dependency is done."""
+
     head_sha: str
     deps: list[DepEntry] = Field(default_factory=list)
 
@@ -136,7 +147,9 @@ def cache_path(url: str) -> Path:
     host, _, path = rest.partition("/")
     host = host.rsplit("@", 1)[-1]  # drop `user:token@`
     parts = [host or "local", *path.split("/")]
-    parts = [re.sub(r"[^A-Za-z0-9._-]", "_", p) for p in parts if p not in ("", ".", "..")]
+    parts = [
+        re.sub(r"[^A-Za-z0-9._-]", "_", p) for p in parts if p not in ("", ".", "..")
+    ]
     name = "/".join(parts) or "local"
     return cache_root() / (name if name.endswith(".git") else name + ".git")
 
@@ -154,11 +167,20 @@ def _git(*args: str, lazy_fetch: bool = True) -> subprocess.CompletedProcess | N
     if not lazy_fetch:
         env["GIT_NO_LAZY_FETCH"] = "1"
     try:
-        return subprocess.run([*GIT_ARGV, *_protocol_argv(), *args], capture_output=True, text=True,
-                              stdin=subprocess.DEVNULL, env=env, shell=False, check=False,
-                              timeout=GIT_TIMEOUT_S)
+        return subprocess.run(
+            [*GIT_ARGV, *_protocol_argv(), *args],
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            env=env,
+            shell=False,
+            check=False,
+            timeout=GIT_TIMEOUT_S,
+        )
     except (subprocess.TimeoutExpired, OSError) as e:
-        log.warning("git %s did not finish: %s", args[2] if args[:1] == ("-C",) else args[0], e)
+        log.warning(
+            "git %s did not finish: %s", args[2] if args[:1] == ("-C",) else args[0], e
+        )
         return None
 
 
@@ -169,20 +191,29 @@ def _ok(proc: subprocess.CompletedProcess | None) -> bool:
 def _error(proc: subprocess.CompletedProcess | None) -> str:
     if proc is None:
         return f"timed out after {GIT_TIMEOUT_S} s"
-    return (proc.stderr or "").strip().splitlines()[-1:][0][:200] if (proc.stderr or "").strip() else \
-        f"exit {proc.returncode}"
+    return (
+        (proc.stderr or "").strip().splitlines()[-1:][0][:200]
+        if (proc.stderr or "").strip()
+        else f"exit {proc.returncode}"
+    )
 
 
 def _has_commit(entry: Path, commit: str) -> bool:
     """Whether the cache holds *commit*. In a partial clone `cat-file` would otherwise fetch a
     missing object from origin by itself, one object at a time."""
-    return _ok(_git("-C", str(entry), "cat-file", "-e", f"{commit}^{{commit}}", lazy_fetch=False))
+    return _ok(
+        _git(
+            "-C", str(entry), "cat-file", "-e", f"{commit}^{{commit}}", lazy_fetch=False
+        )
+    )
 
 
 def _clone(url: str, entry: Path) -> str:
     """Clone *url* bare into *entry*; "" on success, else why (and no half-written entry)."""
     entry.parent.mkdir(parents=True, exist_ok=True)
-    proc = _git("clone", "--bare", "--quiet", "--filter=blob:none", "--", url, str(entry))
+    proc = _git(
+        "clone", "--bare", "--quiet", "--filter=blob:none", "--", url, str(entry)
+    )
     if _ok(proc):
         return ""
     shutil.rmtree(entry, ignore_errors=True)
@@ -262,12 +293,22 @@ def _extract(dep: Dep, entry: Path, root: Path, max_mb: int) -> tuple[str, str]:
     tmp = Path(tempfile.mkdtemp(prefix=f".{folder}.partial-", dir=root))
     try:
         archive = tmp.with_suffix(".tar")
-        proc = _git("-C", str(entry), "archive", "--format=tar", f"--output={archive}", dep.commit)
+        proc = _git(
+            "-C",
+            str(entry),
+            "archive",
+            "--format=tar",
+            f"--output={archive}",
+            dep.commit,
+        )
         if not _ok(proc):
             return "failed", f"git archive failed: {_error(proc)}"
         size = archive.stat().st_size
         if size > max_mb * 1024 * 1024:
-            return "skipped", f"its source is {size / 1024 / 1024:.0f} MB, over the {max_mb} MB limit (deps_max_mb)"
+            return (
+                "skipped",
+                f"its source is {size / 1024 / 1024:.0f} MB, over the {max_mb} MB limit (deps_max_mb)",
+            )
         try:
             with tarfile.open(archive, mode="r:") as tar:
                 tar.extractall(tmp, filter=_inside_only)
@@ -283,19 +324,34 @@ def _extract(dep: Dep, entry: Path, root: Path, max_mb: int) -> tuple[str, str]:
         tmp.with_suffix(".tar").unlink(missing_ok=True)
 
 
-def _materialize_one(dep: Dep, root: Path, max_mb: int, recloned: set[Path]) -> DepEntry:
+def _materialize_one(
+    dep: Dep, root: Path, max_mb: int, recloned: set[Path]
+) -> DepEntry:
     def entry(status: str, reason: str = "", cache: str = "") -> DepEntry:
-        return DepEntry(name=dep.name, url=dep.url, commit=dep.commit, cache=cache, status=status, reason=reason)
+        return DepEntry(
+            name=dep.name,
+            url=dep.url,
+            commit=dep.commit,
+            cache=cache,
+            status=status,
+            reason=reason,
+        )
 
     scheme = url_scheme(dep.url)
     if scheme not in ALLOWED_SCHEMES:
-        return entry("failed", f"its URL scheme ({scheme or 'unknown'}) is not allowed; "
-                               f"only {', '.join(sorted(ALLOWED_SCHEMES))} URLs are cloned")
+        return entry(
+            "failed",
+            f"its URL scheme ({scheme or 'unknown'}) is not allowed; "
+            f"only {', '.join(sorted(ALLOWED_SCHEMES))} URLs are cloned",
+        )
     cache = cache_path(dep.url)
     with _locked(cache) as held:
         if not held:
-            return entry("skipped", f"another process held the clone cache lock for {LOCK_WAIT_S} s",
-                         str(cache))
+            return entry(
+                "skipped",
+                f"another process held the clone cache lock for {LOCK_WAIT_S} s",
+                str(cache),
+            )
         if why := _ensure_commit(dep, cache, recloned):
             return entry("failed", why, str(cache))
         status, reason = _extract(dep, cache, root, max_mb)
@@ -308,7 +364,9 @@ def write_manifest(root: Path, manifest: Manifest) -> None:
     tmp.replace(root / MANIFEST_FILE)
 
 
-def materialize(deps: list[Dep], snapshot: Path, *, head_sha: str, max_mb: int = DEFAULT_MAX_MB) -> Manifest:
+def materialize(
+    deps: list[Dep], snapshot: Path, *, head_sha: str, max_mb: int = DEFAULT_MAX_MB
+) -> Manifest:
     """Extract each of *deps* at its commit into `<snapshot>/.review-deps/`, then write the manifest.
 
     A dependency that cannot be fetched or is too large is recorded as
@@ -317,7 +375,10 @@ def materialize(deps: list[Dep], snapshot: Path, *, head_sha: str, max_mb: int =
     root = snapshot / DEPS_DIR
     root.mkdir(parents=True, exist_ok=True)
     recloned: set[Path] = set()
-    manifest = Manifest(head_sha=head_sha, deps=[_materialize_one(d, root, max_mb, recloned) for d in deps])
+    manifest = Manifest(
+        head_sha=head_sha,
+        deps=[_materialize_one(d, root, max_mb, recloned) for d in deps],
+    )
     write_manifest(root, manifest)
     return manifest
 
@@ -329,20 +390,28 @@ def needs(manifest: Manifest) -> list[Need]:
         if e.status == "ok":
             continue
         allowed = url_scheme(e.url) in ALLOWED_SCHEMES
-        out.append(Need(
-            what=f"The source of {e.folder}, which uv.lock pins, so the review could follow calls into it: "
-                 f"{e.reason}. The review went on without it",
-            blocks="review", cause="unreachable" if e.reason.startswith("git ") else "lookup-failed",
-            # need_gate allows read-only commands only; a clone goes in `where`.
-            command=f"git ls-remote {e.url}" if allowed else "",
-            where=f"a clone of {e.url} checked out at {e.commit}" if allowed else "",
-            source="pipeline"))
+        out.append(
+            Need(
+                what=f"The source of {e.folder}, which uv.lock pins, so the review could follow calls into it: "
+                f"{e.reason}. The review went on without it",
+                blocks="review",
+                cause="unreachable" if e.reason.startswith("git ") else "lookup-failed",
+                # need_gate allows read-only commands only; a clone goes in `where`.
+                command=f"git ls-remote {e.url}" if allowed else "",
+                where=f"a clone of {e.url} checked out at {e.commit}"
+                if allowed
+                else "",
+                source="pipeline",
+            )
+        )
     return out
 
 
 def read_manifest(root: Path) -> Manifest | None:
     try:
-        return Manifest.model_validate_json((root / MANIFEST_FILE).read_text(encoding="utf-8"))
+        return Manifest.model_validate_json(
+            (root / MANIFEST_FILE).read_text(encoding="utf-8")
+        )
     except (OSError, ValueError):
         return None
 
@@ -360,12 +429,18 @@ def ensure(target: TargetInfo, snapshot: Path, config: ReviewConfig) -> Manifest
     wanted = locked_git_deps(target)
     root = snapshot / DEPS_DIR
     saved = read_manifest(root)
-    if (saved is not None and saved.head_sha == target.head_sha
-            and [(e.name, e.url, e.commit) for e in saved.deps] == [(d.name, d.url, d.commit) for d in wanted]
-            and all((root / e.folder).is_dir() for e in saved.ok())):
+    if (
+        saved is not None
+        and saved.head_sha == target.head_sha
+        and [(e.name, e.url, e.commit) for e in saved.deps]
+        == [(d.name, d.url, d.commit) for d in wanted]
+        and all((root / e.folder).is_dir() for e in saved.ok())
+    ):
         return saved
     if root.exists():
         shutil.rmtree(root)
     if not wanted:
         return Manifest(head_sha=target.head_sha)
-    return materialize(wanted, snapshot, head_sha=target.head_sha, max_mb=config.deps_max_mb)
+    return materialize(
+        wanted, snapshot, head_sha=target.head_sha, max_mb=config.deps_max_mb
+    )

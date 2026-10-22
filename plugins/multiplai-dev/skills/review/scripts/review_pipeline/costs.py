@@ -21,12 +21,16 @@ PIECE_REF_USD = 14.0
 PIECE_REF_CHARS = 227_000
 PATH_REF_USD = 24.0
 PATH_REF_COUNT = 21
-OVERHEAD_FACTOR = 1.35  # dimension finders + verification + mapping, not in the estimate
+OVERHEAD_FACTOR = (
+    1.35  # dimension finders + verification + mapping, not in the estimate
+)
 CONVERT_FRACTION = 0.15  # the share of a key's estimate that is its convert call
 
-NOTICE = ("NOTICE: the default 50 USD budget can stop a large change review partway, because dimension finders "
-          "and verification add to the piece and path cost; resume with a higher --max-cost-usd continues without "
-          "losing paid results.")
+NOTICE = (
+    "NOTICE: the default 50 USD budget can stop a large change review partway, because dimension finders "
+    "and verification add to the piece and path cost; resume with a higher --max-cost-usd continues without "
+    "losing paid results."
+)
 
 
 @dataclass(frozen=True)
@@ -63,13 +67,17 @@ def _pieces(state: ReviewState) -> list:
 
 
 def _make(pieces: float, paths: float, count: int) -> Estimate:
-    return Estimate(pieces_usd=pieces, paths_usd=paths, path_count=count, total=pieces + paths)
+    return Estimate(
+        pieces_usd=pieces, paths_usd=paths, path_count=count, total=pieces + paths
+    )
 
 
 def estimate(state: ReviewState) -> Estimate:
     """A whole run's piece and path finders."""
     keys = _path_keys(state)
-    return _make(piece_usd(sum(p.chars for p in _pieces(state))), path_usd(len(keys)), len(keys))
+    return _make(
+        piece_usd(sum(p.chars for p in _pieces(state))), path_usd(len(keys)), len(keys)
+    )
 
 
 def _left(state: ReviewState, key: str, full: float) -> float:
@@ -83,7 +91,9 @@ def remaining(state: ReviewState) -> Estimate:
     """What a resume still pays for: a key with no stored report at full price, one stored but not
     converted at CONVERT_FRACTION, a converted one nothing."""
     keys = _path_keys(state)
-    pieces = sum(_left(state, f"piece@{p.id}", piece_usd(p.chars)) for p in _pieces(state))
+    pieces = sum(
+        _left(state, f"piece@{p.id}", piece_usd(p.chars)) for p in _pieces(state)
+    )
     paths = sum(_left(state, key, path_usd(1)) for key in keys)
     return _make(pieces, paths, len(keys))
 
@@ -92,7 +102,9 @@ def _usd(amount: float) -> str:
     return f"${amount:.0f}"
 
 
-def cost_lines(state: ReviewState, *, budget: float, budget_is_default: bool, resuming: bool) -> list[str]:
+def cost_lines(
+    state: ReviewState, *, budget: float, budget_is_default: bool, resuming: bool
+) -> list[str]:
     """The lines to print on stderr: the estimate, then the WARNING and the NOTICE when they apply.
 
     A tree review without `--paths` runs no piece or path finder and gets
@@ -105,13 +117,17 @@ def cost_lines(state: ReviewState, *, budget: float, budget_is_default: bool, re
     out = []
     if not resuming:
         pieces = "" if state.target.is_tree else f"pieces {_usd(est.pieces_usd)} + "
-        out.append(f"cost (approximate): {pieces}paths {_usd(est.paths_usd)} (up to {est.path_count} paths) = "
-                   f"{_usd(est.total)}; excludes dimension finders, verification and paths mapping")
+        out.append(
+            f"cost (approximate): {pieces}paths {_usd(est.paths_usd)} (up to {est.path_count} paths) = "
+            f"{_usd(est.total)}; excludes dimension finders, verification and paths mapping"
+        )
     left = budget - float((state.budget or {}).get("cost_usd", 0.0)) if budget else 0.0
     if budget and budget > 0 and est.total * OVERHEAD_FACTOR >= left:
-        out.append(f"WARNING: estimated {_usd(est.total)} for piece and path finders, plus dimension finders, "
-                   f"verification and mapping, is expected to exceed the remaining budget of {_usd(max(left, 0))}; "
-                   f"the run will stop partway; continue with resume and a higher --max-cost-usd.")
+        out.append(
+            f"WARNING: estimated {_usd(est.total)} for piece and path finders, plus dimension finders, "
+            f"verification and mapping, is expected to exceed the remaining budget of {_usd(max(left, 0))}; "
+            f"the run will stop partway; continue with resume and a higher --max-cost-usd."
+        )
     if budget_is_default and not resuming and not state.target.is_tree:
         out.append(NOTICE)
     return out
@@ -120,5 +136,7 @@ def cost_lines(state: ReviewState, *, budget: float, budget_is_default: bool, re
 def kept_line(state: ReviewState) -> str:
     """The sentence a budget stop adds: how many finder reports the checkpoint keeps."""
     reports = state.finder_reports.values()
-    return (f"kept {len(reports)} finder reports ({sum(r.converted for r in reports)} converted); resume with a "
-            f"higher --max-cost-usd to continue without paying for them again.")
+    return (
+        f"kept {len(reports)} finder reports ({sum(r.converted for r in reports)} converted); resume with a "
+        f"higher --max-cost-usd to continue without paying for them again."
+    )

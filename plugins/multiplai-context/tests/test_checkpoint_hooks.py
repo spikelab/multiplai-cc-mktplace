@@ -8,10 +8,9 @@ Goal-safety is asserted throughout: the Stop hook must never emit a
 
 import io
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
-
 from conftest import import_script
 from lib import checkpoint as cp
 
@@ -39,7 +38,7 @@ def _transcript(tmp_path, tokens, name="t.jsonl"):
     """Write a transcript whose last assistant record reports *tokens*."""
     rec = {
         "type": "assistant",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "message": {
             "role": "assistant",
             "content": [{"type": "text", "text": "working"}],
@@ -96,14 +95,18 @@ class TestSessionStopCheckpoint:
         # Single-flight marker claimed for the spawned writer
         assert cp.writer_inflight(data_env, "sess-1") is True
 
-    def test_inflight_writer_not_respawned(self, tmp_path, data_env, monkeypatch, capsys):
+    def test_inflight_writer_not_respawned(
+        self, tmp_path, data_env, monkeypatch, capsys
+    ):
         rec = _SpawnRecorder()
         monkeypatch.setattr(session_stop.cp, "spawn_writer", rec)
         cp.claim_writer(data_env, "sess-1")
         _run_stop(monkeypatch, capsys, _stop_payload(tmp_path, 110_000))
         assert rec.payloads == []
 
-    def test_handoff_emits_system_message_only(self, tmp_path, data_env, monkeypatch, capsys):
+    def test_handoff_emits_system_message_only(
+        self, tmp_path, data_env, monkeypatch, capsys
+    ):
         rec = _SpawnRecorder()
         monkeypatch.setattr(session_stop.cp, "spawn_writer", rec)
         out = _run_stop(monkeypatch, capsys, _stop_payload(tmp_path, 210_000))
@@ -151,7 +154,9 @@ class TestSessionStopCheckpoint:
         session_stop.main()  # must not raise
         assert "decision" not in capsys.readouterr().out
 
-    def test_spawn_failure_releases_marker(self, tmp_path, data_env, monkeypatch, capsys):
+    def test_spawn_failure_releases_marker(
+        self, tmp_path, data_env, monkeypatch, capsys
+    ):
         monkeypatch.setattr(session_stop.cp, "spawn_writer", lambda p: False)
         _run_stop(monkeypatch, capsys, _stop_payload(tmp_path, 110_000))
         assert cp.writer_inflight(data_env, "sess-1") is False
@@ -167,7 +172,9 @@ class TestCheckpointNudge:
         out = self._run(monkeypatch, capsys, _stop_payload(tmp_path, 150_000))
         assert out.strip() == ""
 
-    def test_above_threshold_emits_context(self, tmp_path, data_env, monkeypatch, capsys):
+    def test_above_threshold_emits_context(
+        self, tmp_path, data_env, monkeypatch, capsys
+    ):
         out = self._run(monkeypatch, capsys, _stop_payload(tmp_path, 210_000))
         assert "CONTEXT BUDGET" in out
         assert "/clear" in out
@@ -177,9 +184,10 @@ class TestCheckpointNudge:
         assert "CONTEXT BUDGET" in self._run(
             monkeypatch, capsys, _stop_payload(tmp_path, 210_000)
         )
-        assert self._run(
-            monkeypatch, capsys, _stop_payload(tmp_path, 212_000)
-        ).strip() == ""
+        assert (
+            self._run(monkeypatch, capsys, _stop_payload(tmp_path, 212_000)).strip()
+            == ""
+        )
 
     def test_child_session_silent(self, tmp_path, data_env, monkeypatch, capsys):
         sub = tmp_path / "hook-sessions"
@@ -206,9 +214,12 @@ class TestSessionStartRecovery:
         assert "CONTEXT REBUILD" in out
         assert "## Current intent" in out
         # Marker consumed — a second /clear gets nothing
-        assert session_start._inject_checkpoint_recovery(
-            data_env, cwd, "newer", source="clear"
-        ) is False
+        assert (
+            session_start._inject_checkpoint_recovery(
+                data_env, cwd, "newer", source="clear"
+            )
+            is False
+        )
 
     def test_plain_startup_never_inherits(self, tmp_path, data_env, capsys):
         """Decided 2026-07-06: a brand-new session (source=startup) starts
@@ -217,14 +228,20 @@ class TestSessionStartRecovery:
         cp.write_checkpoint_file(data_env, "old-sess", VALID_CHECKPOINT)
         cp.write_pending_marker(data_env, cwd, "old-sess", 214_000)
         for source in ("startup", "resume", ""):
-            assert session_start._inject_checkpoint_recovery(
-                data_env, cwd, "new-sess", source=source
-            ) is False
+            assert (
+                session_start._inject_checkpoint_recovery(
+                    data_env, cwd, "new-sess", source=source
+                )
+                is False
+            )
         assert capsys.readouterr().out.strip() == ""
         # Marker survives for a later deliberate /clear
-        assert session_start._inject_checkpoint_recovery(
-            data_env, cwd, "new-sess", source="clear"
-        ) is True
+        assert (
+            session_start._inject_checkpoint_recovery(
+                data_env, cwd, "new-sess", source="clear"
+            )
+            is True
+        )
 
     def test_no_marker_no_injection(self, tmp_path, data_env, capsys):
         ok = session_start._inject_checkpoint_recovery(
@@ -246,9 +263,12 @@ class TestSessionStartRecovery:
     def test_missing_checkpoint_file(self, tmp_path, data_env, capsys):
         cwd = str(tmp_path / "proj")
         cp.write_pending_marker(data_env, cwd, "old-sess", 214_000)  # no checkpoint.md
-        assert session_start._inject_checkpoint_recovery(
-            data_env, cwd, "new", source="clear"
-        ) is False
+        assert (
+            session_start._inject_checkpoint_recovery(
+                data_env, cwd, "new", source="clear"
+            )
+            is False
+        )
 
     def test_compact_source_injects_same_session(self, tmp_path, data_env, capsys):
         """Automatic rebuild: auto-compaction keeps the session id; the
@@ -256,10 +276,15 @@ class TestSessionStartRecovery:
         cwd = str(tmp_path / "proj")
         cp.write_checkpoint_file(data_env, "sess-a", VALID_CHECKPOINT)
         cp.write_pending_marker(data_env, cwd, "sess-a", 214_000)
-        cp.save_state(data_env, "sess-a", {
-            "last_band_idx": 2, "last_checkpoint_tokens": 214_000,
-            "last_checkpoint_ts": "2026-07-06T12:00:00+00:00",
-        })
+        cp.save_state(
+            data_env,
+            "sess-a",
+            {
+                "last_band_idx": 2,
+                "last_checkpoint_tokens": 214_000,
+                "last_checkpoint_ts": "2026-07-06T12:00:00+00:00",
+            },
+        )
 
         ok = session_start._inject_checkpoint_recovery(
             data_env, cwd, "sess-a", source="compact"
@@ -314,7 +339,9 @@ class TestAutoModeNudgeSuppression:
     """With steered auto-compaction configured, the hooks stay quiet and let
     the automatic rebuild happen — no /clear nagging."""
 
-    def test_stop_hook_silent_in_auto_mode(self, tmp_path, data_env, monkeypatch, capsys):
+    def test_stop_hook_silent_in_auto_mode(
+        self, tmp_path, data_env, monkeypatch, capsys
+    ):
         monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "250000")
         monkeypatch.setenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "90")  # trigger 207K
         monkeypatch.setattr(session_stop.cp, "spawn_writer", _SpawnRecorder())
@@ -332,10 +359,14 @@ class TestAutoModeNudgeSuppression:
         assert "auto-compaction" in frame["systemMessage"]
         assert "decision" not in frame
 
-    def test_claude_nudge_silent_in_auto_mode(self, tmp_path, data_env, monkeypatch, capsys):
+    def test_claude_nudge_silent_in_auto_mode(
+        self, tmp_path, data_env, monkeypatch, capsys
+    ):
         monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "250000")
         monkeypatch.setenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "90")
-        monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(_stop_payload(tmp_path, 210_000))))
+        monkeypatch.setattr(
+            "sys.stdin", io.StringIO(json.dumps(_stop_payload(tmp_path, 210_000)))
+        )
         checkpoint_nudge.main()
         assert capsys.readouterr().out.strip() == ""
 
@@ -385,7 +416,9 @@ class TestHardStop:
         """The wall must have a door: /clear and /compact are the way out."""
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_HARD_STOP_TOKENS", "250000")
         for prompt in ("/clear", "  /compact", "/status"):
-            out = self._run(monkeypatch, capsys, self._payload(tmp_path, 260_000, prompt))
+            out = self._run(
+                monkeypatch, capsys, self._payload(tmp_path, 260_000, prompt)
+            )
             assert "decision" not in out, prompt
 
     def test_override_token_lets_one_prompt_through(
@@ -393,7 +426,9 @@ class TestHardStop:
     ):
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_HARD_STOP_TOKENS", "250000")
         out = self._run(
-            monkeypatch, capsys, self._payload(tmp_path, 260_000, "finish this !keepgoing")
+            monkeypatch,
+            capsys,
+            self._payload(tmp_path, 260_000, "finish this !keepgoing"),
         )
         assert "decision" not in out
 
@@ -425,26 +460,36 @@ class TestHardStop:
         out = self._run(monkeypatch, capsys, self._payload(tmp_path, 260_000))
         assert json.loads(out)["decision"] == "block"
 
-    def test_child_sessions_never_blocked(self, tmp_path, data_env, monkeypatch, capsys):
+    def test_child_sessions_never_blocked(
+        self, tmp_path, data_env, monkeypatch, capsys
+    ):
         """A blocked subagent would strand the parent's task, silently."""
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_HARD_STOP_TOKENS", "250000")
         sub = tmp_path / "subagents"
         sub.mkdir()
-        out = self._run(monkeypatch, capsys, {
-            "session_id": "sub-1",
-            "transcript_path": str(_transcript(sub, 260_000)),
-            "cwd": str(tmp_path),
-            "prompt": "carry on",
-        })
+        out = self._run(
+            monkeypatch,
+            capsys,
+            {
+                "session_id": "sub-1",
+                "transcript_path": str(_transcript(sub, 260_000)),
+                "cwd": str(tmp_path),
+                "prompt": "carry on",
+            },
+        )
         assert out.strip() == ""
 
-    def test_disabled_config_never_blocks(self, tmp_path, data_env, monkeypatch, capsys):
+    def test_disabled_config_never_blocks(
+        self, tmp_path, data_env, monkeypatch, capsys
+    ):
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_ENABLED", "false")
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_HARD_STOP_TOKENS", "250000")
         out = self._run(monkeypatch, capsys, self._payload(tmp_path, 260_000))
         assert out.strip() == ""
 
-    def test_missing_prompt_key_still_blocks(self, tmp_path, data_env, monkeypatch, capsys):
+    def test_missing_prompt_key_still_blocks(
+        self, tmp_path, data_env, monkeypatch, capsys
+    ):
         """No prompt field is not an implicit carve-out."""
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_HARD_STOP_TOKENS", "250000")
         out = self._run(monkeypatch, capsys, _stop_payload(tmp_path, 260_000))

@@ -29,8 +29,9 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
-
-from conftest import hook_context, run_context_hook as _run_hook, write_catalog as _write_catalog
+from conftest import hook_context
+from conftest import run_context_hook as _run_hook
+from conftest import write_catalog as _write_catalog
 
 PLUGIN_ROOT = Path(__file__).parent.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
@@ -83,8 +84,12 @@ def _inject_events(env_setup):
     # One activity-YYYY-MM-DD.jsonl per UTC day (multiplai-core 0.21).
     files = sorted((env_setup["data_dir"] / "logs").glob("activity-*.jsonl"))
     assert files, "context_manager wrote no activity log"
-    records = [json.loads(line) for f in files
-               for line in f.read_text().splitlines() if line.strip()]
+    records = [
+        json.loads(line)
+        for f in files
+        for line in f.read_text().splitlines()
+        if line.strip()
+    ]
     return [r for r in records if r.get("event") == "inject"]
 
 
@@ -105,28 +110,42 @@ class TestAnchorsAreGenerated:
             assert field in _HAND_AUTHORED_FIELDS
 
     @pytest.mark.asyncio
-    async def test_regeneration_overwrites_a_stale_anchor_list(self, tmp_path, monkeypatch):
+    async def test_regeneration_overwrites_a_stale_anchor_list(
+        self, tmp_path, monkeypatch
+    ):
         """A renamed H2 must move the anchors, not leave the old name advertised."""
         gen, memory_dir, catalogs_dir = _make_generator(
-            tmp_path, monkeypatch,
-            {"summary": "s", "section_anchors": [
-                {"name": "Renamed Alpha", "gloss": "a"},
-                {"name": "Beta", "gloss": "b"},
-                {"name": "Gamma", "gloss": "c"},
-            ]},
+            tmp_path,
+            monkeypatch,
+            {
+                "summary": "s",
+                "section_anchors": [
+                    {"name": "Renamed Alpha", "gloss": "a"},
+                    {"name": "Beta", "gloss": "b"},
+                    {"name": "Gamma", "gloss": "c"},
+                ],
+            },
         )
         (memory_dir / "big.md").write_text(_big_doc("Renamed Alpha", "Beta", "Gamma"))
 
         # Seed a catalog holding an anchor list naming the OLD header.
         catalogs_dir.mkdir(parents=True, exist_ok=True)
-        (catalogs_dir / "memory.json").write_text(json.dumps({
-            "schema_version": "1.2.0",
-            "entries": [{
-                "source": "big.md",
-                "summary": "old",
-                "section_anchors": [{"name": "Old Alpha", "gloss": "stale"}],
-            }],
-        }))
+        (catalogs_dir / "memory.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.2.0",
+                    "entries": [
+                        {
+                            "source": "big.md",
+                            "summary": "old",
+                            "section_anchors": [
+                                {"name": "Old Alpha", "gloss": "stale"}
+                            ],
+                        }
+                    ],
+                }
+            )
+        )
 
         await gen.run(force=True)
 
@@ -138,12 +157,16 @@ class TestAnchorsAreGenerated:
     async def test_hallucinated_anchor_name_is_dropped(self, tmp_path, monkeypatch):
         """Only names matching a real H2 survive; the rest never reach the catalog."""
         gen, memory_dir, catalogs_dir = _make_generator(
-            tmp_path, monkeypatch,
-            {"summary": "s", "section_anchors": [
-                {"name": "Alpha", "gloss": "real"},
-                {"name": "A Section That Does Not Exist", "gloss": "invented"},
-                {"name": "beta", "gloss": "case-insensitive match"},
-            ]},
+            tmp_path,
+            monkeypatch,
+            {
+                "summary": "s",
+                "section_anchors": [
+                    {"name": "Alpha", "gloss": "real"},
+                    {"name": "A Section That Does Not Exist", "gloss": "invented"},
+                    {"name": "beta", "gloss": "case-insensitive match"},
+                ],
+            },
         )
         (memory_dir / "big.md").write_text(_big_doc("Alpha", "Beta", "Gamma"))
 
@@ -155,7 +178,9 @@ class TestAnchorsAreGenerated:
         assert [a["name"] for a in anchors] == ["Alpha", "Beta"]
         assert anchors[0]["gloss"] == "real"
 
-    def test_prompt_hands_the_model_a_closed_set_of_real_headers(self, tmp_path, monkeypatch):
+    def test_prompt_hands_the_model_a_closed_set_of_real_headers(
+        self, tmp_path, monkeypatch
+    ):
         """The names come from code, so the model cannot paraphrase a header."""
         gen, memory_dir, _ = _make_generator(tmp_path, monkeypatch, {"summary": "s"})
         path = memory_dir / "big.md"
@@ -219,9 +244,7 @@ class TestStaleAnchors:
         body = _big_doc("Alpha", "Beta", "Gamma")
         (tmp_path / "big.md").write_text(body)
 
-        loaded = _load_memory_content(
-            tmp_path, ["big.md#Gone One", "big.md#Gone Two"]
-        )
+        loaded = _load_memory_content(tmp_path, ["big.md#Gone One", "big.md#Gone Two"])
         assert loaded == {}
 
     def test_a_stale_anchor_does_not_cost_a_good_one(self, tmp_path):
@@ -421,7 +444,9 @@ class TestTheFallbackIsKeyedSoCooldownCanFindIt:
         keyed on the real heading, so only the alias can match it.
         """
         from context_manager import (
-            MemoryLoadReport, _cooldown_keys, _filter_cooldown,
+            MemoryLoadReport,
+            _cooldown_keys,
+            _filter_cooldown,
             _load_memory_content,
         )
 
@@ -519,9 +544,7 @@ class TestOneFileReachesTheMapsUnderOneSpelling:
         from context_manager import _load_memory_content
 
         with caplog.at_level(logging.WARNING):
-            _load_memory_content(
-                tmp_path, ["team/dev.md#Gone"], self._banks(tmp_path)
-            )
+            _load_memory_content(tmp_path, ["team/dev.md#Gone"], self._banks(tmp_path))
         assert "did not resolve in team/dev.md" in caplog.text
 
 
@@ -531,7 +554,9 @@ class TestOneFileReachesTheMapsUnderOneSpelling:
 
 
 class TestInjectLogging:
-    def test_section_pick_loads_one_section_and_is_attributed_to_its_file(self, tmp_path):
+    def test_section_pick_loads_one_section_and_is_attributed_to_its_file(
+        self, tmp_path
+    ):
         """A ``file.md#Section`` pick loads only that section, logged per file.
 
         Exercises the exact chain ``main()`` runs — ``_load_memory_content``
@@ -559,9 +584,15 @@ class TestInjectLogging:
         body = _big_doc("Alpha", "Beta", "Gamma")
         (env_setup["memory_dir"] / "big.md").write_text(body)
         _write_catalog(
-            env_setup["catalogs_dir"], "memory.json",
-            [{"source": "big.md", "summary": "big",
-              "intent_domains": ["software architecture decisions"]}],
+            env_setup["catalogs_dir"],
+            "memory.json",
+            [
+                {
+                    "source": "big.md",
+                    "summary": "big",
+                    "intent_domains": ["software architecture decisions"],
+                }
+            ],
         )
 
         out = _run_hook(env_setup, prompt="software architecture decisions")
@@ -579,11 +610,13 @@ class TestInjectLogging:
     def test_attribution_sums_two_sections_of_one_file(self):
         from context_manager import _section_attribution
 
-        sections, sizes = _section_attribution({
-            "multiplai.md#Release Flow": "a" * 100,
-            "multiplai.md#Container Runtime": "b" * 50,
-            "dev.md": "c" * 10,
-        })
+        sections, sizes = _section_attribution(
+            {
+                "multiplai.md#Release Flow": "a" * 100,
+                "multiplai.md#Container Runtime": "b" * 50,
+                "dev.md": "c" * 10,
+            }
+        )
         assert sections == {
             "multiplai.md": ["Release Flow", "Container Runtime"],
             "dev.md": [],
@@ -600,14 +633,22 @@ class TestRouterPromptRendering:
     def test_object_shape_renders_name_and_gloss(self):
         from lib.router_prompt import format_catalog_for_llm
 
-        text = format_catalog_for_llm("memory", [{
-            "source": "multiplai.md",
-            "summary": "the stack",
-            "section_anchors": [
-                {"name": "Release Flow", "gloss": "dev vs runtime, release.sh"},
-                {"name": "Container Runtime", "gloss": "OrbStack, no-docker rule"},
+        text = format_catalog_for_llm(
+            "memory",
+            [
+                {
+                    "source": "multiplai.md",
+                    "summary": "the stack",
+                    "section_anchors": [
+                        {"name": "Release Flow", "gloss": "dev vs runtime, release.sh"},
+                        {
+                            "name": "Container Runtime",
+                            "gloss": "OrbStack, no-docker rule",
+                        },
+                    ],
+                }
             ],
-        }])
+        )
         assert "Release Flow — dev vs runtime, release.sh" in text
         assert "Container Runtime — OrbStack, no-docker rule" in text
         assert "multiplai.md#<section>" in text
@@ -616,10 +657,15 @@ class TestRouterPromptRendering:
         """A catalog written by an older generator must not break the router."""
         from lib.router_prompt import format_catalog_for_llm
 
-        text = format_catalog_for_llm("memory", [{
-            "source": "legacy.md",
-            "section_anchors": ["Architecture", "Decisions"],
-        }])
+        text = format_catalog_for_llm(
+            "memory",
+            [
+                {
+                    "source": "legacy.md",
+                    "section_anchors": ["Architecture", "Decisions"],
+                }
+            ],
+        )
         assert "- Architecture" in text
         assert "- Decisions" in text
         assert "—" not in text.split("Sections")[1].split("\n\n")[0]
@@ -627,10 +673,19 @@ class TestRouterPromptRendering:
     def test_malformed_anchor_is_skipped_not_stringified(self):
         from lib.router_prompt import format_catalog_for_llm
 
-        text = format_catalog_for_llm("memory", [{
-            "source": "odd.md",
-            "section_anchors": [{"name": "Good", "gloss": "g"}, 42, {"gloss": "no name"}],
-        }])
+        text = format_catalog_for_llm(
+            "memory",
+            [
+                {
+                    "source": "odd.md",
+                    "section_anchors": [
+                        {"name": "Good", "gloss": "g"},
+                        42,
+                        {"gloss": "no name"},
+                    ],
+                }
+            ],
+        )
         assert "Good — g" in text
         assert "42" not in text
 
@@ -643,7 +698,9 @@ class TestRouterPromptRendering:
             ({"name": "Ok", "gloss": ["x"]}, "['x']"),
         ],
     )
-    def test_a_non_string_field_is_never_coerced_into_the_prompt(self, anchor, forbidden):
+    def test_a_non_string_field_is_never_coerced_into_the_prompt(
+        self, anchor, forbidden
+    ):
         """``str()`` on a non-string field is the stringification the docstring
         promises against — it produced real lines like ``- ['a', 'b'] — list name``.
         """
@@ -657,7 +714,9 @@ class TestRouterPromptRendering:
     def test_no_anchors_renders_no_sections_line(self):
         from lib.router_prompt import format_catalog_for_llm
 
-        text = format_catalog_for_llm("memory", [{"source": "plain.md", "summary": "x"}])
+        text = format_catalog_for_llm(
+            "memory", [{"source": "plain.md", "summary": "x"}]
+        )
         assert "Sections" not in text
 
 
@@ -670,8 +729,12 @@ class TestDuplicateH2Lint:
     def test_flags_a_duplicate_across_two_files(self, tmp_path):
         from lib.memory_lint import lint_dir
 
-        (tmp_path / "a.md").write_text("# A\n\n## Overview\n\ntext\n\n## Alpha\n\ntext\n")
-        (tmp_path / "b.md").write_text("# B\n\n## Overview\n\ntext\n\n## Beta\n\ntext\n")
+        (tmp_path / "a.md").write_text(
+            "# A\n\n## Overview\n\ntext\n\n## Alpha\n\ntext\n"
+        )
+        (tmp_path / "b.md").write_text(
+            "# B\n\n## Overview\n\ntext\n\n## Beta\n\ntext\n"
+        )
 
         dupes = [f for f in lint_dir(tmp_path) if f.kind == "duplicate-h2"]
         assert len(dupes) == 2
@@ -723,7 +786,9 @@ class TestDuplicateH2Lint:
         )
         (tmp_path / "b.md").write_text("# B\n\n## Overview\n\ntext\n")
 
-        assert [f for f in lint_dir(tmp_path) if f.kind.startswith("duplicate-h2")] == []
+        assert [
+            f for f in lint_dir(tmp_path) if f.kind.startswith("duplicate-h2")
+        ] == []
 
     def test_findings_still_exit_nonzero(self, tmp_path, capsys):
         from lib.memory_lint import main
@@ -767,7 +832,7 @@ class TestLoaderOnHostileMarkdown:
         section = extract_section(text, "Real Section")
         assert "Before the fence." in section
         assert "After the fence." in section
-        assert "## Fake Heading" in section          # kept, as sample text
+        assert "## Fake Heading" in section  # kept, as sample text
         assert "second body" not in section
 
         # And the phantom is not addressable: an unknown name falls back to
@@ -797,14 +862,14 @@ class TestLoaderOnHostileMarkdown:
     @pytest.mark.parametrize(
         "text",
         [
-            "## Heading\n\nbody\n",                      # first line is the H2
-            "## Heading\n\nbody",                        # no trailing newline
-            "## Heading  \n\nbody\n",                    # trailing spaces
-            "##\tHeading\n\nbody\n",                     # tab after the hashes
-            "## Heading ##\n\nbody\n",                   # closed ATX
-            "pre\r\n\r\n## Heading\r\n\r\nbody\r\n",     # CRLF
-            "## Heading\n\n### Nested\n\nbody\n",        # H3 inside
-            "## A\n\n## B\n\n## C\n",                    # empty sections
+            "## Heading\n\nbody\n",  # first line is the H2
+            "## Heading\n\nbody",  # no trailing newline
+            "## Heading  \n\nbody\n",  # trailing spaces
+            "##\tHeading\n\nbody\n",  # tab after the hashes
+            "## Heading ##\n\nbody\n",  # closed ATX
+            "pre\r\n\r\n## Heading\r\n\r\nbody\r\n",  # CRLF
+            "## Heading\n\n### Nested\n\nbody\n",  # H3 inside
+            "## A\n\n## B\n\n## C\n",  # empty sections
         ],
     )
     def test_the_two_parsers_never_disagree(self, text):
@@ -844,7 +909,7 @@ class TestLoaderOnHostileMarkdown:
 
         assert preamble("## A\n\nx\n") == ""
         assert preamble("") == ""
-        assert preamble("no headings at all\n") == ""   # nothing to be before
+        assert preamble("no headings at all\n") == ""  # nothing to be before
 
 
 class TestPreambleReachesTheInjectedContext:
@@ -925,15 +990,17 @@ class TestMixedPicksForOneFile:
         assert list(loaded) == ["big.md"]
 
         sections, sizes = _section_attribution(loaded)
-        assert sections == {"big.md": []}          # [] means "the whole file"
-        assert sizes["big.md"] == len(body)       # not len(body) + len(section)
+        assert sections == {"big.md": []}  # [] means "the whole file"
+        assert sizes["big.md"] == len(body)  # not len(body) + len(section)
 
     def test_order_does_not_matter(self, tmp_path):
         from context_manager import _load_memory_content
 
         body = _big_doc("Alpha", "Beta", "Gamma")
         (tmp_path / "big.md").write_text(body)
-        assert _load_memory_content(tmp_path, ["big.md#Beta", "big.md"]) == {"big.md": body}
+        assert _load_memory_content(tmp_path, ["big.md#Beta", "big.md"]) == {
+            "big.md": body
+        }
 
     def test_sections_of_different_files_are_untouched(self, tmp_path):
         from context_manager import _load_memory_content
@@ -998,9 +1065,12 @@ class TestExpansionSeesSectionPicks:
 
 class TestAnchoringThresholds:
     @pytest.mark.asyncio
-    async def test_two_section_file_gets_no_anchors_and_no_error(self, tmp_path, monkeypatch):
+    async def test_two_section_file_gets_no_anchors_and_no_error(
+        self, tmp_path, monkeypatch
+    ):
         gen, memory_dir, catalogs_dir = _make_generator(
-            tmp_path, monkeypatch,
+            tmp_path,
+            monkeypatch,
             {"summary": "s", "section_anchors": [{"name": "Alpha", "gloss": "a"}]},
         )
         (memory_dir / "small.md").write_text(_big_doc("Alpha", "Beta"))
@@ -1012,10 +1082,13 @@ class TestAnchoringThresholds:
         assert "section_anchors" not in _entry(catalogs_dir, "small.md")
 
     @pytest.mark.asyncio
-    async def test_tiny_file_with_many_sections_gets_no_anchors(self, tmp_path, monkeypatch):
+    async def test_tiny_file_with_many_sections_gets_no_anchors(
+        self, tmp_path, monkeypatch
+    ):
         """A file smaller than its own anchor block is not worth indexing."""
         gen, memory_dir, catalogs_dir = _make_generator(
-            tmp_path, monkeypatch,
+            tmp_path,
+            monkeypatch,
             {"summary": "s", "section_anchors": [{"name": "One", "gloss": "1"}]},
         )
         (memory_dir / "tiny.md").write_text(
@@ -1027,7 +1100,9 @@ class TestAnchoringThresholds:
         assert result.errors == []
         assert "section_anchors" not in _entry(catalogs_dir, "tiny.md")
 
-    def test_below_threshold_prompt_omits_the_anchor_instruction(self, tmp_path, monkeypatch):
+    def test_below_threshold_prompt_omits_the_anchor_instruction(
+        self, tmp_path, monkeypatch
+    ):
         """No anchor block means no tokens spent asking for anchors we'd drop."""
         gen, memory_dir, _ = _make_generator(tmp_path, monkeypatch, {"summary": "s"})
         path = memory_dir / "tiny.md"
@@ -1085,7 +1160,9 @@ class TestUpgradeIsNotInert:
     async def test_an_anchorable_entry_with_no_anchors_is_regenerated(
         self, tmp_path, monkeypatch
     ):
-        gen, memory_dir, catalogs_dir = _make_generator(tmp_path, monkeypatch, self.ANCHORS)
+        gen, memory_dir, catalogs_dir = _make_generator(
+            tmp_path, monkeypatch, self.ANCHORS
+        )
         (memory_dir / "big.md").write_text(_big_doc("Alpha", "Beta", "Gamma"))
 
         # First run: the pre-upgrade world — an entry and a stored hash, but no
@@ -1109,7 +1186,9 @@ class TestUpgradeIsNotInert:
         self, tmp_path, monkeypatch
     ):
         """The override is one-shot, not a permanent bypass of the hash gate."""
-        gen, memory_dir, catalogs_dir = _make_generator(tmp_path, monkeypatch, self.ANCHORS)
+        gen, memory_dir, catalogs_dir = _make_generator(
+            tmp_path, monkeypatch, self.ANCHORS
+        )
         (memory_dir / "big.md").write_text(_big_doc("Alpha", "Beta", "Gamma"))
 
         await gen.run(force=True)
@@ -1144,7 +1223,8 @@ class TestUpgradeIsNotInert:
         import logging
 
         gen, memory_dir, catalogs_dir = _make_generator(
-            tmp_path, monkeypatch,
+            tmp_path,
+            monkeypatch,
             {"summary": "s", "section_anchors": [{"name": "Invented", "gloss": "x"}]},
         )
         (memory_dir / "big.md").write_text(_big_doc("Alpha", "Beta", "Gamma"))
@@ -1169,7 +1249,9 @@ class TestRouterTimeoutIsConfigurable:
 
     def test_the_default_is_unchanged(self, monkeypatch):
         from lib.memory_router import (
-            DEFAULT_ROUTER_TIMEOUT_SECONDS, LLMRouter, resolve_router_timeout,
+            DEFAULT_ROUTER_TIMEOUT_SECONDS,
+            LLMRouter,
+            resolve_router_timeout,
         )
 
         monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_ROUTER_TIMEOUT_SECONDS", raising=False)
@@ -1214,7 +1296,7 @@ class TestRouterTimeoutIsConfigurable:
 @pytest.mark.skipif(
     not os.environ.get("MULTIPLAI_ANCHOR_CORPUS"),
     reason="set MULTIPLAI_ANCHOR_CORPUS=<copy-of-memory-dir> "
-           "and MULTIPLAI_ANCHOR_CATALOG=<memory.json> to check a real corpus",
+    "and MULTIPLAI_ANCHOR_CATALOG=<memory.json> to check a real corpus",
 )
 def test_every_generated_anchor_matches_a_real_h2():
     """Every ``name`` in a generated catalog resolves to an H2 in its file.

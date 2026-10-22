@@ -12,9 +12,16 @@ from datetime import date
 from pathlib import Path
 
 import pytest
-
-from scripts.lib.memory_lint import (AS_OF_RE, Finding, _parse_stamp, classify,
-                                     lint_dir, lint_text, main, summarize)
+from scripts.lib.memory_lint import (
+    AS_OF_RE,
+    Finding,
+    _parse_stamp,
+    classify,
+    lint_dir,
+    lint_text,
+    main,
+    summarize,
+)
 
 TODAY = date(2026, 7, 26)
 
@@ -75,13 +82,16 @@ class TestExpiry:
         assert kinds("x (as of 2026-01-05, review by 2026-03-04)") == ["expired"]
         assert kinds("x (as of 2026-01-05, review by 2026-12-31)") == []
 
-    @pytest.mark.parametrize("stamp,expected", [
-        ("2026-03", date(2026, 3, 31)),
-        ("2026-12", date(2026, 12, 31)),
-        ("2026-02", date(2026, 2, 28)),
-        ("2024-02", date(2024, 2, 29)),
-        ("2026-03-04", date(2026, 3, 4)),
-    ])
+    @pytest.mark.parametrize(
+        "stamp,expected",
+        [
+            ("2026-03", date(2026, 3, 31)),
+            ("2026-12", date(2026, 12, 31)),
+            ("2026-02", date(2026, 2, 28)),
+            ("2024-02", date(2024, 2, 29)),
+            ("2026-03-04", date(2026, 3, 4)),
+        ],
+    )
     def test_month_stamps_mean_end_of_month(self, stamp, expected):
         """`review by 2026-10` is not overdue on 2026-10-01.
 
@@ -119,19 +129,23 @@ class TestUnmarkedRequiresBothHalves:
         assert kinds("Current rate is $400/hr for advisory work.") == ["unmarked"]
 
     def test_employer_fires_on_its_own_phrase(self):
-        assert kinds("- Works at DRBU at the City of Ten Thousand Buddhas") == ["unmarked"]
+        assert kinds("- Works at DRBU at the City of Ten Thousand Buddhas") == [
+            "unmarked"
+        ]
 
 
 class TestDeadlinesAreTheException:
     def test_dated_deadline_fires_without_currency_language(self):
         """A deadline is volatile by definition and carries its own date."""
-        assert kinds("- Filing deadline 2026-09-30 for the Italian return") == ["unmarked"]
+        assert kinds("- Filing deadline 2026-09-30 for the Italian return") == [
+            "unmarked"
+        ]
 
     def test_iso_and_prose_dates_both_match(self):
         assert kinds("- Renewal on Sep 30, 2026") == ["unmarked"]
 
     def test_deadline_word_without_a_date_is_silent(self):
-        """"Don't automate end-to-end on day one" names no deadline."""
+        """ "Don't automate end-to-end on day one" names no deadline."""
         assert kinds("Progressive trust: don't automate end-to-end on day one.") == []
 
 
@@ -139,12 +153,15 @@ class TestHistoricalFactsAreLeftAlone:
     def test_explicitly_historical_line_is_silent(self):
         """Copied verbatim from life.md — the line disclaims its own currency,
         and the lint was firing on the word "current" inside that disclaimer."""
-        line = ("**US cost base (historical, no longer current):** ~$4,500 USD/month "
-                "expenses in Ukiah.")
+        line = (
+            "**US cost base (historical, no longer current):** ~$4,500 USD/month "
+            "expenses in Ukiah."
+        )
         assert kinds(line) == []
 
-    @pytest.mark.parametrize("marker", [
-        "formerly", "previously", "deprecated", "superseded", "obsolete"])
+    @pytest.mark.parametrize(
+        "marker", ["formerly", "previously", "deprecated", "superseded", "obsolete"]
+    )
     def test_past_tense_markers_suppress(self, marker):
         assert kinds(f"The {marker} current default was v1.2 at $50/mo") == []
 
@@ -156,18 +173,21 @@ class TestRealCorpusFalsePositives:
     conjunction instead of a disjunction; these pin that it stays one.
     """
 
-    @pytest.mark.parametrize("line", [
-        "**Coding agent inflection point:** November 2025 (Claude Opus 4.5 + GPT 5.1)",
-        "- **Swift 6.3 rejects covariant `Self` in stored-property initializers.**",
-        "**Retrieval scaling thresholds:** Grep-over-files wins at <200 files.",
-        "**Example:** Knowledge graph triple extraction from 280 transcripts",
-        "**Sonnet vs Haiku for routing:** For short-output tasks (1-22 tokens)",
-        "**Split memory files by retrieval domain, not topic affinity:**",
-        "**Pre-check for existing entries:** Batch-apply workflows should pre-check.",
-        "OAuth tokens expire hourly (not for long-lived connections).",
-        "- **Royal Roads MGM** — deadline passed, no longer actionable.",
-        "- **Xcode 26.3:** Ships native Claude Agent SDK support.",
-    ])
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "**Coding agent inflection point:** November 2025 (Claude Opus 4.5 + GPT 5.1)",
+            "- **Swift 6.3 rejects covariant `Self` in stored-property initializers.**",
+            "**Retrieval scaling thresholds:** Grep-over-files wins at <200 files.",
+            "**Example:** Knowledge graph triple extraction from 280 transcripts",
+            "**Sonnet vs Haiku for routing:** For short-output tasks (1-22 tokens)",
+            "**Split memory files by retrieval domain, not topic affinity:**",
+            "**Pre-check for existing entries:** Batch-apply workflows should pre-check.",
+            "OAuth tokens expire hourly (not for long-lived connections).",
+            "- **Royal Roads MGM** — deadline passed, no longer actionable.",
+            "- **Xcode 26.3:** Ships native Claude Agent SDK support.",
+        ],
+    )
     def test_stays_quiet(self, line):
         assert findings_for(line) == [], f"false positive on: {line}"
 
@@ -185,8 +205,7 @@ class TestStructureIsNotFacts:
         assert kinds("**Last Updated:** 2026-07-26") == []
 
     def test_fence_reopens_correctly(self):
-        text = ("```\nv1.2 is current\n```\n"
-                "Claude 4.6 is the current generation.\n")
+        text = "```\nv1.2 is current\n```\nClaude 4.6 is the current generation.\n"
         assert [f.lineno for f in lint_text(text, Path("m.md"), TODAY)] == [4]
 
 
@@ -204,7 +223,8 @@ class TestDirectoryAndOutput:
     def test_summary_groups_by_kind(self, tmp_path):
         (tmp_path / "a.md").write_text(
             "x (as of 2026-01, review by 2026-02)\n"
-            "Claude 4.6 is the current generation.\n")
+            "Claude 4.6 is the current generation.\n"
+        )
         out = summarize(lint_dir(tmp_path, TODAY), root=tmp_path)
         assert "## Expired (1)" in out
         assert "## Missing validity annotation (1)" in out
@@ -216,7 +236,8 @@ class TestDirectoryAndOutput:
 
     def test_long_lines_are_truncated_in_output(self, tmp_path):
         (tmp_path / "a.md").write_text(
-            "x " * 200 + "(as of 2026-01, review by 2026-02)\n")
+            "x " * 200 + "(as of 2026-01, review by 2026-02)\n"
+        )
         rendered = lint_dir(tmp_path, TODAY)[0].render()
         assert "..." in rendered and len(rendered.splitlines()[1]) <= 104
 

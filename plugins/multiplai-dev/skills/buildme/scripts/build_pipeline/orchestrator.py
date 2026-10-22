@@ -14,14 +14,14 @@ This module handles the non-interactive pipeline sequencing.
 
 from __future__ import annotations
 
-from build_pipeline.budget import BudgetExceededError
-
 import asyncio
 import logging
 import os
 import sys
 from collections.abc import Callable
 from pathlib import Path
+
+from build_pipeline.budget import BudgetExceededError
 
 from . import board, git_ops, readiness, review_rounds, walkthroughs
 from . import budget as budget_mod
@@ -38,11 +38,14 @@ log = logging.getLogger(__name__)
 async def run_orchestrator(config: BuildConfig, args) -> int:
     """Main entry point for the build orchestrator."""
     budget_mod.reset()
-    budget_mod.configure(max_tokens=config.budget_max_tokens, max_usd=config.budget_max_usd)
+    budget_mod.configure(
+        max_tokens=config.budget_max_tokens, max_usd=config.budget_max_usd
+    )
     # An epic: pm-spec split this change and its `.change.yaml` lists the
     # children. Read in the caller's checkout, before any worktree re-binding:
     # the children build from the commit that holds their ready specs there.
     from .epic import phase as epic_phase
+
     if epic_phase.is_epic(config):
         return await epic_phase.run_epic_from_specs(config, args)
     # Resume re-binding, before anything derives a path from the config: a
@@ -72,9 +75,13 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             return _refuse_published_rerun(config, completed)
         if completed:
             config.published_branches = tuple(
-                st.branch for _, _, st in completed if st.branch)
-            log.info("FORCE new build of published change=%s skipping branches=%s",
-                     config.change_name, ",".join(config.published_branches) or "-")
+                st.branch for _, _, st in completed if st.branch
+            )
+            log.info(
+                "FORCE new build of published change=%s skipping branches=%s",
+                config.change_name,
+                ",".join(config.published_branches) or "-",
+            )
 
     progress = ProgressWriter(config.progress_file_path())
 
@@ -83,10 +90,17 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
     if not state_path.exists() and completed.exists():
         planned = BuildState.load(completed)
         if planned.completion_kind == "spec-only":
-            if planned.branch and git_ops.current_branch(config.project_dir) != planned.branch:
-                raise git_ops.GitLifecycleError("Spec-only handoff must run on its recorded build branch")
+            if (
+                planned.branch
+                and git_ops.current_branch(config.project_dir) != planned.branch
+            ):
+                raise git_ops.GitLifecycleError(
+                    "Spec-only handoff must run on its recorded build branch"
+                )
             config.pipeline_branch = planned.branch or ""
-            budget_mod.get_budget().load_state(planned.budget, accept_unknown_spend=config.accept_unknown_spend)
+            budget_mod.get_budget().load_state(
+                planned.budget, accept_unknown_spend=config.accept_unknown_spend
+            )
             planned.checkpoint(state_path)
 
     # Resume or create state
@@ -94,7 +108,9 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
         state = BuildState.load(state_path)
         # The spend saved so far carries into this run, whatever phase it
         # resumes in; every checkpoint below saves the running total.
-        budget_mod.get_budget().load_state(state.budget, accept_unknown_spend=config.accept_unknown_spend)
+        budget_mod.get_budget().load_state(
+            state.budget, accept_unknown_spend=config.accept_unknown_spend
+        )
         log.info("Resumed build: %s (phase=%s)", config.change_name, state.phase)
     else:
         state = BuildState(
@@ -112,6 +128,7 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
     # phase that reads it is still ahead; a resume uses the change dir's copy.
     if args is not None:
         from .intake import check_input_files
+
         change_dirs = [config.change_dir] if config.change_name else []
         if state_path.exists():
             change_dirs.append(state_path.parent)
@@ -142,8 +159,13 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
     try:
         # Phase: Bootstrap
         if not state.is_phase_complete(BuildPhase.BOOTSTRAP):
-            log.info("START phase=BOOTSTRAP change=%s tier=%s", config.change_name, config.tier)
+            log.info(
+                "START phase=BOOTSTRAP change=%s tier=%s",
+                config.change_name,
+                config.tier,
+            )
             from .intake import ConfigNotCommittedError
+
             try:
                 await _run_bootstrap(config, state, cm, state_path, args=args)
             except ConfigNotCommittedError as e:
@@ -171,6 +193,7 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             else:
                 log.info("START phase=RESEARCH")
                 from .intake import run_research_phase
+
                 rc = await run_research_phase(config, state, args, state_path, progress)
                 if rc is not None:
                     return rc
@@ -205,6 +228,7 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
         if not state.tdd and not state.is_phase_complete(BuildPhase.SPEC_GENERATION):
             log.info("START phase=SPEC_GENERATION")
             from .spec_generator import run_spec_generator
+
             result = await run_spec_generator(config, args, standalone=False)
             if result != 0:
                 log.error("FAIL phase=SPEC_GENERATION exit_code=%d", result)
@@ -214,7 +238,10 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
                     state = BuildState.load(state_path)
                 state.fail(config.project_dir, state_path)
                 board.record_failure(
-                    config, state, "spec generation failed", progress=progress,
+                    config,
+                    state,
+                    "spec generation failed",
+                    progress=progress,
                 )
                 return result
             # Reload state from disk — run_spec_generator loaded its own copy
@@ -241,15 +268,20 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
 
         # Reconcile edited plans before required validation. Completed
         # implementation is kept only while its recorded planning inputs agree.
-        from .spec_generator import reconcile_plan, _generate_all_artifacts
+        from .spec_generator import _generate_all_artifacts, reconcile_plan
+
         if state.phase != BuildPhase.PUBLISH:
             old_revision = state.spec_gen.revision if state.spec_gen else ""
             reconcile_plan(config, state)
             assert state.spec_gen is not None
             if state.tdd and not old_revision:
-                raise RuntimeError("Legacy implementation has no planning revision; preserve it and start a reviewed build in a clean checkout")
+                raise RuntimeError(
+                    "Legacy implementation has no planning revision; preserve it and start a reviewed build in a clean checkout"
+                )
             if state.tdd and old_revision and old_revision != state.spec_gen.revision:
-                raise RuntimeError("Planning inputs changed after implementation; start a new build to preserve completed work")
+                raise RuntimeError(
+                    "Planning inputs changed after implementation; start a new build to preserve completed work"
+                )
             await _generate_all_artifacts(cm, config.change_dir, config, state)
             state.checkpoint(state_path)
 
@@ -257,6 +289,7 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
         # owner returns only once both outcomes describe the final revision.
         if state.phase != BuildPhase.PUBLISH:
             from .spec_generator import validate_plan
+
             await validate_plan(config, state, state_path)
             for phase in (BuildPhase.DESIGN_AUDIT, BuildPhase.PLAN_REVIEW):
                 if not state.is_phase_complete(phase):
@@ -268,7 +301,10 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
         # stops here (exit 3) with split-proposal.md, until --accept-size.
         if state.phase != BuildPhase.PUBLISH:
             rc = _run_size_gate(
-                config, state, state_path, progress,
+                config,
+                state,
+                state_path,
+                progress,
                 accept_size=bool(getattr(args, "accept_size", False)),
             )
             if rc is not None:
@@ -276,6 +312,7 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
 
         if state.phase != BuildPhase.PUBLISH:
             from .spec_generator import assert_plan_current
+
             assert_plan_current(config, state)
 
         # Stop if --spec-only. The checkpoint is kept, renamed, at the last spec
@@ -308,6 +345,7 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             # the whole build, not only once it succeeds.
             board.record(config, state, BuildPhase.TDD_BUILD, progress=progress)
             from .tdd_engine import run_tdd_engine
+
             # standalone=False: this is a sub-phase, so the engine must not
             # complete the checkpoint — the reload below depends on the file
             # still being there.
@@ -324,9 +362,15 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
                 return readiness.refuse_issues(issues)
             if result != 0:
                 log.error("FAIL phase=TDD_BUILD exit_code=%d", result)
-                print(f"ERROR:TDD build failed (exit {result})", file=sys.stderr, flush=True)
+                print(
+                    f"ERROR:TDD build failed (exit {result})",
+                    file=sys.stderr,
+                    flush=True,
+                )
                 state.fail(config.project_dir, state_path)
-                board.record_failure(config, state, "TDD build failed", progress=progress)
+                board.record_failure(
+                    config, state, "TDD build failed", progress=progress
+                )
                 return result
             state.advance_to(BuildPhase.TDD_BUILD, state_path)
             log.info("DONE phase=TDD_BUILD")
@@ -349,12 +393,14 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
         if not state.is_phase_complete(BuildPhase.RESPEC):
             log.info("START phase=RESPEC")
             from .llm_steps.respec_steps import run_respec_audit
+
             try:
                 respec_path = await run_respec_audit(config, state)
                 if respec_path:
                     log.info("DONE phase=RESPEC proposal=%s", respec_path)
                     progress.log_phase(
-                        "RESPEC", f"Proposed spec delta written to {respec_path}",
+                        "RESPEC",
+                        f"Proposed spec delta written to {respec_path}",
                     )
                 else:
                     log.warning("Respec audit produced no proposal (non-fatal)")
@@ -386,6 +432,7 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
         # an uncommitted rename sitting in the worktree.
         if state.phase != BuildPhase.PUBLISH:
             from .spec_generator import assert_plan_current
+
             assert_plan_current(config, state)
         state.advance_to(BuildPhase.PUBLISH, state_path)
         if config.auto:
@@ -394,22 +441,28 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
                 # The checkpoint travels with the move (commit_stage's
                 # bookkeeping excludes keep it out of the archive commit).
                 change_path = config.change_dir
-                registry_paths = [config.specs_dir / "registry" / path.name
-                                  for path in (change_path / "requirements").glob("*.md")]
+                registry_paths = [
+                    config.specs_dir / "registry" / path.name
+                    for path in (change_path / "requirements").glob("*.md")
+                ]
                 archive_dest = cm.archive_change(change_path)
                 log.info("DONE phase=ARCHIVE dest=%s", archive_dest)
                 git_ops.commit_stage(
                     config,
                     f"chore(specs): archive {config.change_name}",
-                    [str(path.relative_to(config.project_dir))
-                     for path in [change_path, archive_dest, *registry_paths]],
+                    [
+                        str(path.relative_to(config.project_dir))
+                        for path in [change_path, archive_dest, *registry_paths]
+                    ],
                 )
                 print("PHASE:ARCHIVE:COMPLETE", flush=True)
             else:
                 # Resumed after a publish failure: a previous attempt already
                 # archived — the checkpoint's location is the archived dir.
                 archive_dest = state_path.parent
-                log.info("SKIP phase=ARCHIVE reason=already-archived dest=%s", archive_dest)
+                log.info(
+                    "SKIP phase=ARCHIVE reason=already-archived dest=%s", archive_dest
+                )
             # Re-point the checkpoint at where the move put it. It stays alive
             # until publish is done — a failed push/PR must leave something a
             # re-run can resume from.
@@ -426,26 +479,45 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
 
         config.change_dir = publish_docs_dir
         from .spec_generator import assert_plan_current
+
         assert_plan_current(config, state, archived=config.auto)
 
         # All content-writing preparation precedes the shared final gate.
         from .gates import final_verification, verification_inputs
+
         revision = state.spec_gen.revision if state.spec_gen else ""
         try:
-            current = verification_inputs(config.test_command, config.project_dir,
-                                          parallel=config.parallel_tests, plan_revision=revision)
+            current = verification_inputs(
+                config.test_command,
+                config.project_dir,
+                parallel=config.parallel_tests,
+                plan_revision=revision,
+            )
         except (OSError, RuntimeError, ValueError):
             current = None
-        verified = (state.verification or {}).get("passed", False) and current is not None and (
-            (state.verification or {}).get("metadata", {}).get("inputs") == current)
+        verified = (
+            (state.verification or {}).get("passed", False)
+            and current is not None
+            and (
+                (state.verification or {}).get("metadata", {}).get("inputs") == current
+            )
+        )
         if not verified:
-            sections = [p for p in [_worktree_section(state, publish_docs_dir)] if p is not None]
+            sections = [
+                p for p in [_worktree_section(state, publish_docs_dir)] if p is not None
+            ]
             sections += _pre_publish_sections(config, state, publish_docs_dir)
             state.publish_sections = [str(p) for p in sections]
             if state.branch and not git_ops.tree_is_clean(config.project_dir):
-                raise RuntimeError("Uncommitted build inputs remain; commit only the intended changes before final verification")
-            gate = final_verification(config.test_command, config.project_dir,
-                                      parallel=config.parallel_tests, plan_revision=revision)
+                raise RuntimeError(
+                    "Uncommitted build inputs remain; commit only the intended changes before final verification"
+                )
+            gate = final_verification(
+                config.test_command,
+                config.project_dir,
+                parallel=config.parallel_tests,
+                plan_revision=revision,
+            )
             state.verification = gate.model_dump()
             state.checkpoint(state_path)
             if not gate.passed:
@@ -460,9 +532,17 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
         # `.build-state.json`, so a re-run adopts this worktree/branch and
         # retries instead of colliding on the branch.
         published = _run_publish(
-            config, state, progress, state_path=state_path, docs_dir=publish_docs_dir,
+            config,
+            state,
+            progress,
+            state_path=state_path,
+            docs_dir=publish_docs_dir,
         )
-        state.publication = "published" if published and state.branch and config.git.push else ("skipped" if published else "failed")
+        state.publication = (
+            "published"
+            if published and state.branch and config.git.push
+            else ("skipped" if published else "failed")
+        )
         state.phase = BuildPhase.COMPLETE
         build_succeeded = True
         if published:
@@ -470,7 +550,8 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             # and a re-run of the change asks first (`_completed_builds`).
             done = state.complete(state_path)
             progress.log_phase(
-                "COMPLETE", f"Published: {state.pr_url or state.branch}. Checkpoint kept at {done}",
+                "COMPLETE",
+                f"Published: {state.pr_url or state.branch}. Checkpoint kept at {done}",
             )
         else:
             # Leave a resumable PUBLISH checkpoint (pr_url and branch already
@@ -485,7 +566,8 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             log.info(
                 "Worktree left in place at %s (branch %s) — deletion is the "
                 "calling session's decision, from the workspace root.",
-                state.worktree_path, state.branch,
+                state.worktree_path,
+                state.branch,
             )
         log.info("DONE pipeline=complete change=%s", config.change_name)
         return 0
@@ -500,20 +582,32 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
         # A requirement the build cannot follow goes back to pm-spec (rows
         # S11, S12): not a failure, so the state is not marked FAILED and a
         # re-run after `pm-spec revise` resumes here.
-        log.error("STOP pipeline change=%s reason=spec_issues step=%s", config.change_name, found.step)
+        log.error(
+            "STOP pipeline change=%s reason=spec_issues step=%s",
+            config.change_name,
+            found.step,
+        )
         if state_path.exists():
             BuildState.load(state_path).checkpoint(state_path)
-        return readiness.stop_on_issues(config.change_dir, found, change=config.change_name)
+        return readiness.stop_on_issues(
+            config.change_dir, found, change=config.change_name
+        )
     except (SystemExit, KeyboardInterrupt, asyncio.CancelledError) as e:
         # A stop (SIGTERM/SIGHUP via git_ops._exit_on_termination, Ctrl-C) is
         # not a failure: write it down, save the spend so far, and let it end
         # the process. The state is not marked FAILED, so resume behaves as
         # after any stop.
-        _record_interrupt(progress if progress_started else None, state_path, e,
-                          completed=build_succeeded)
+        _record_interrupt(
+            progress if progress_started else None,
+            state_path,
+            e,
+            completed=build_succeeded,
+        )
         raise
     except Exception as e:
-        log.error("FAIL pipeline change=%s error=%s", config.change_name, e, exc_info=True)
+        log.error(
+            "FAIL pipeline change=%s error=%s", config.change_name, e, exc_info=True
+        )
         print(f"ERROR:{e}", file=sys.stderr, flush=True)
         if state_path.exists():
             BuildState.load(state_path).checkpoint(state_path)
@@ -523,17 +617,25 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
         # `.build-state.complete.json` — never Cancelled then. A worktree build
         # that failed before bootstrap gave it a worktree is still pointed at
         # the caller's source repo, whose change dir is pm-spec's: no card there.
-        if not build_succeeded and not (config.git.worktree and not state.worktree_path):
-            board.record_failure(config, state, f"pipeline error: {e}", progress=progress)
+        if not build_succeeded and not (
+            config.git.worktree and not state.worktree_path
+        ):
+            board.record_failure(
+                config, state, f"pipeline error: {e}", progress=progress
+            )
         return 1
     finally:
         # What this run spent, by step, at the end of every run that started
         # its progress section (success, failure, a stop, an exit 3).
         if progress_started:
             try:
-                progress.log_phase("BUDGET", budget_mod.get_budget().diagnosis(advice=False))
+                progress.log_phase(
+                    "BUDGET", budget_mod.get_budget().diagnosis(advice=False)
+                )
             except OSError as e:
-                log.warning("Could not write the spend summary to the progress file: %s", e)
+                log.warning(
+                    "Could not write the spend summary to the progress file: %s", e
+                )
 
 
 def _refuse_unless_ready(config: BuildConfig, state_path: Path) -> int | None:
@@ -574,33 +676,59 @@ def _refuse_unless_ready(config: BuildConfig, state_path: Path) -> int | None:
         if prior is not None and prior.phase == BuildPhase.COMPLETE:
             return None
     change_dir = state_path.parent if state_path.exists() else config.change_dir
-    source = _source_change_dir(config, prior, change_dir) if prior is not None else None
+    source = (
+        _source_change_dir(config, prior, change_dir) if prior is not None else None
+    )
     in_worktree = source is not None
     if source is not None:
         newer = _newer_source_reason(prior, change_dir, source)
         if newer:
             source, reason = newer
-            log.error("REFUSED change=%s reason=newer-specs-in-source source=%s", config.change_name, source)
+            log.error(
+                "REFUSED change=%s reason=newer-specs-in-source source=%s",
+                config.change_name,
+                source,
+            )
             return readiness.refuse_not_ready(
-                config.change_name, reason,
-                advice=(f"Copy proposal.md, use-cases.md, requirements/ and .change.yaml from {source} "
-                        f"into {change_dir}, commit them there, then run the build again"))
+                config.change_name,
+                reason,
+                advice=(
+                    f"Copy proposal.md, use-cases.md, requirements/ and .change.yaml from {source} "
+                    f"into {change_dir}, commit them there, then run the build again"
+                ),
+            )
     ready, reason = is_ready(change_dir)
     if not ready:
         try:
-            marked = (change_dir / CHANGE_META_FILE).is_file() and \
-                read_change_meta(change_dir).get("spec_status") is not None
+            marked = (change_dir / CHANGE_META_FILE).is_file() and read_change_meta(
+                change_dir
+            ).get("spec_status") is not None
         except (OSError, UnicodeError, ValueError):
             marked = False
-        on_disk = (change_dir / "proposal.md").is_file() and any((change_dir / "requirements").glob("*.md"))
-        early = prior is not None and prior.tdd is None and not prior.is_phase_complete(BuildPhase.SPEC_GENERATION)
-        log.error("REFUSED change=%s reason=spec-not-ready detail=%s", config.change_name, reason)
+        on_disk = (change_dir / "proposal.md").is_file() and any(
+            (change_dir / "requirements").glob("*.md")
+        )
+        early = (
+            prior is not None
+            and prior.tdd is None
+            and not prior.is_phase_complete(BuildPhase.SPEC_GENERATION)
+        )
+        log.error(
+            "REFUSED change=%s reason=spec-not-ready detail=%s",
+            config.change_name,
+            reason,
+        )
         return readiness.refuse_not_ready(
-            config.change_name, reason, resume=not marked and on_disk and not early,
-            project_dir=readiness.change_project(change_dir) if in_worktree else None)
+            config.change_name,
+            reason,
+            resume=not marked and on_disk and not early,
+            project_dir=readiness.change_project(change_dir) if in_worktree else None,
+        )
     issues = readiness.open_issues(change_dir)
     if issues is not None:
-        log.error("REFUSED change=%s reason=spec-issues file=%s", config.change_name, issues)
+        log.error(
+            "REFUSED change=%s reason=spec-issues file=%s", config.change_name, issues
+        )
         return readiness.refuse_issues(issues)
     if prior is None and config.git.worktree:
         try:
@@ -610,24 +738,37 @@ def _refuse_unless_ready(config: BuildConfig, state_path: Path) -> int | None:
             log.warning("Could not check %s for uncommitted changes: %s", change_dir, e)
             dirty = []
         if dirty:
-            log.error("REFUSED change=%s reason=specs-uncommitted paths=%s", config.change_name, dirty)
+            log.error(
+                "REFUSED change=%s reason=specs-uncommitted paths=%s",
+                config.change_name,
+                dirty,
+            )
             return readiness.refuse_not_ready(
                 config.change_name,
                 f"{change_dir} has uncommitted changes ({', '.join(dirty[:5])}"
                 f"{', ...' if len(dirty) > 5 else ''}); the build's worktree branches from HEAD, "
                 f"which does not hold them",
-                resume=True)
+                resume=True,
+            )
     if prior is None and config.git.worktree and config.base_ref:
         why = _base_ref_reason(config, change_dir)
         if why:
-            log.error("REFUSED change=%s reason=base-ref-specs detail=%s", config.change_name, why)
+            log.error(
+                "REFUSED change=%s reason=base-ref-specs detail=%s",
+                config.change_name,
+                why,
+            )
             return readiness.refuse_not_ready(
-                config.change_name, why,
-                advice=f"Build from a --base-ref that holds the ready specs in {change_dir}, then run the build again")
+                config.change_name,
+                why,
+                advice=f"Build from a --base-ref that holds the ready specs in {change_dir}, then run the build again",
+            )
     return None
 
 
-def _source_change_dir(config: BuildConfig, prior: BuildState, change_dir: Path) -> Path | None:
+def _source_change_dir(
+    config: BuildConfig, prior: BuildState, change_dir: Path
+) -> Path | None:
     """The change dir in the checkout this worktree build was cut from, at the
     same place as *change_dir* (the copy in the build's worktree), or None
     when *change_dir* is not in the build's worktree. The checkout is the one
@@ -636,7 +777,9 @@ def _source_change_dir(config: BuildConfig, prior: BuildState, change_dir: Path)
     change_dir = Path(change_dir)
     if config.source_project_dir is not None:
         try:
-            source = Path(config.source_project_dir) / change_dir.relative_to(config.project_dir)
+            source = Path(config.source_project_dir) / change_dir.relative_to(
+                config.project_dir
+            )
         except ValueError:
             return None
     elif prior.worktree_path and prior.source_repo:
@@ -650,7 +793,9 @@ def _source_change_dir(config: BuildConfig, prior: BuildState, change_dir: Path)
     return None if source.resolve() == change_dir.resolve() else source
 
 
-def _newer_source_reason(prior: BuildState, change_dir: Path, source: Path) -> tuple[Path, str] | None:
+def _newer_source_reason(
+    prior: BuildState, change_dir: Path, source: Path
+) -> tuple[Path, str] | None:
     """`(source, reason)` when *source*, the change dir in the checkout this
     worktree build was cut from, is ready with other specs than it held when
     the worktree was cut (its `.change.yaml` at `base_sha`), and other than
@@ -673,7 +818,11 @@ def _newer_source_reason(prior: BuildState, change_dir: Path, source: Path) -> t
         files = None
     if theirs in (readiness.saved_revision(change_dir), files):
         return None
-    root = Path(prior.worktree_path) if prior.worktree_path else git_ops.repo_root(change_dir)
+    root = (
+        Path(prior.worktree_path)
+        if prior.worktree_path
+        else git_ops.repo_root(change_dir)
+    )
     if prior.base_sha and root is not None:
         try:
             rel = Path(change_dir).resolve().relative_to(root.resolve()).as_posix()
@@ -681,9 +830,11 @@ def _newer_source_reason(prior: BuildState, change_dir: Path, source: Path) -> t
             rel = None
         if rel and readiness.saved_revision_at(root, prior.base_sha, rel) == theirs:
             return None
-    return source, (f"the specs in {source} were marked ready again after this build's worktree was cut, "
-                    f"and differ from the copy the build reads in {change_dir} (spec_revision "
-                    f"{str(theirs)[:12]})")
+    return source, (
+        f"the specs in {source} were marked ready again after this build's worktree was cut, "
+        f"and differ from the copy the build reads in {change_dir} (spec_revision "
+        f"{str(theirs)[:12]})"
+    )
 
 
 def _base_ref_reason(config: BuildConfig, change_dir: Path) -> str | None:
@@ -717,12 +868,16 @@ def _base_ref_reason(config: BuildConfig, change_dir: Path) -> str | None:
         if not ready:
             return f"{rel} at --base-ref {base}, which the build's worktree is cut from: {why}"
         if readiness.saved_revision(copy) != readiness.saved_revision(change_dir):
-            return (f"{rel} at --base-ref {base}, which the build's worktree is cut from, holds other "
-                    f"specs than the ones marked ready in {change_dir}")
+            return (
+                f"{rel} at --base-ref {base}, which the build's worktree is cut from, holds other "
+                f"specs than the ones marked ready in {change_dir}"
+            )
     return None
 
 
-def _record_interrupt(progress, state_path: Path, exc: BaseException, *, completed: bool) -> None:
+def _record_interrupt(
+    progress, state_path: Path, exc: BaseException, *, completed: bool
+) -> None:
     """Write a stop down: `## INTERRUPTED by <SIG>` in the progress file, a
     WARNING log line, and the checkpoint re-saved with the spend so far.
 
@@ -746,7 +901,9 @@ def _record_interrupt(progress, state_path: Path, exc: BaseException, *, complet
 
 
 async def _run_docs_update_phase(
-    config: BuildConfig, state: BuildState, progress: ProgressWriter,
+    config: BuildConfig,
+    state: BuildState,
+    progress: ProgressWriter,
 ) -> None:
     """Run the docs agent, commit what it wrote, and surface the freshness warning.
 
@@ -777,12 +934,17 @@ async def _run_docs_update_phase(
         shown = ", ".join(dropped[:10]) + (" …" if len(dropped) > 10 else "")
         log.warning(
             "DOCS_UPDATE reported %d path(s) that are not files in the project "
-            "and were NOT committed: %s", len(dropped), shown,
+            "and were NOT committed: %s",
+            len(dropped),
+            shown,
         )
-        print(f"DOCS_WARNING:reported paths not found in the project, dropped: {shown}",
-              flush=True)
+        print(
+            f"DOCS_WARNING:reported paths not found in the project, dropped: {shown}",
+            flush=True,
+        )
         _progress_note(
-            progress, "DOCS_UPDATE",
+            progress,
+            "DOCS_UPDATE",
             f"WARNING: {len(dropped)} reported path(s) dropped (not files in the "
             f"project): {shown}",
         )
@@ -809,7 +971,9 @@ async def _run_docs_update_phase(
 
 
 def _warn_on_unreported_writes(
-    config: BuildConfig, staged: list[str], progress: ProgressWriter,
+    config: BuildConfig,
+    staged: list[str],
+    progress: ProgressWriter,
 ) -> None:
     """Name any file the docs agent changed but did not report.
 
@@ -834,11 +998,14 @@ def _warn_on_unreported_writes(
     shown = ", ".join(unreported[:10]) + (" …" if len(unreported) > 10 else "")
     log.warning(
         "DOCS_UPDATE changed %d file(s) it did not report and which were "
-        "therefore NOT committed: %s", len(unreported), shown,
+        "therefore NOT committed: %s",
+        len(unreported),
+        shown,
     )
     print(f"DOCS_WARNING:unreported changes left uncommitted: {shown}", flush=True)
     _progress_note(
-        progress, "DOCS_UPDATE",
+        progress,
+        "DOCS_UPDATE",
         f"WARNING: {len(unreported)} unreported change(s) left uncommitted: {shown}",
     )
 
@@ -863,7 +1030,10 @@ def _uncommitted_paths(config: BuildConfig) -> list[str] | None:
     try:
         proc = subprocess.run(
             ["git", "status", "--porcelain", "--", ".", *excludes],
-            cwd=str(config.project_dir), capture_output=True, text=True, timeout=30,
+            cwd=str(config.project_dir),
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
     except BudgetExceededError:
         raise
@@ -871,7 +1041,9 @@ def _uncommitted_paths(config: BuildConfig) -> list[str] | None:
         log.warning("Could not check for unreported docs writes: %s", e)
         return None
     if proc.returncode != 0:
-        log.warning("Could not check for unreported docs writes: %s", proc.stderr.strip())
+        log.warning(
+            "Could not check for unreported docs writes: %s", proc.stderr.strip()
+        )
         return None
     paths: list[str] = []
     for line in proc.stdout.splitlines():
@@ -901,7 +1073,9 @@ def _docs_paths(config: BuildConfig, files: list[str]) -> tuple[list[str], list[
     dropped: list[str] = []
     for entry in files or []:
         candidate = Path(entry)
-        resolved = (candidate if candidate.is_absolute() else root / candidate).resolve()
+        resolved = (
+            candidate if candidate.is_absolute() else root / candidate
+        ).resolve()
         if not resolved.is_relative_to(root) or not resolved.is_file():
             log.warning(
                 "Ignoring reported docs path (outside the project, or not a file): %s",
@@ -923,18 +1097,58 @@ def _progress_note(progress: ProgressWriter, phase: str, text: str) -> None:
         log.warning("Could not write %s note to progress file: %s", phase, e)
 
 
-_SOURCE_SUFFIXES = frozenset({
-    ".py", ".swift", ".ts", ".tsx", ".js", ".jsx", ".rs", ".go", ".java",
-    ".kt", ".rb", ".php", ".cs", ".c", ".h", ".cc", ".cpp", ".hpp", ".m",
-    ".mm", ".scala", ".ex", ".exs", ".sh", ".sql", ".vue", ".svelte",
-})
+_SOURCE_SUFFIXES = frozenset(
+    {
+        ".py",
+        ".swift",
+        ".ts",
+        ".tsx",
+        ".js",
+        ".jsx",
+        ".rs",
+        ".go",
+        ".java",
+        ".kt",
+        ".rb",
+        ".php",
+        ".cs",
+        ".c",
+        ".h",
+        ".cc",
+        ".cpp",
+        ".hpp",
+        ".m",
+        ".mm",
+        ".scala",
+        ".ex",
+        ".exs",
+        ".sh",
+        ".sql",
+        ".vue",
+        ".svelte",
+    }
+)
 
 # Directories never worth walking when deciding "does this project have code".
-_SOURCE_SCAN_SKIP = frozenset({
-    ".git", ".venv", "venv", "node_modules", "__pycache__", ".worktrees",
-    "specs", ".build", "dist", "build", ".mypy_cache", ".pytest_cache",
-    "target", ".tox", ".next",
-})
+_SOURCE_SCAN_SKIP = frozenset(
+    {
+        ".git",
+        ".venv",
+        "venv",
+        "node_modules",
+        "__pycache__",
+        ".worktrees",
+        "specs",
+        ".build",
+        "dist",
+        "build",
+        ".mypy_cache",
+        ".pytest_cache",
+        "target",
+        ".tox",
+        ".next",
+    }
+)
 
 
 def _has_source_files(project_dir: Path) -> bool:
@@ -947,7 +1161,9 @@ def _has_source_files(project_dir: Path) -> bool:
     if not project_dir.is_dir():
         return False
     for root, dirs, files in os.walk(project_dir):
-        dirs[:] = [d for d in dirs if d not in _SOURCE_SCAN_SKIP and not d.startswith(".")]
+        dirs[:] = [
+            d for d in dirs if d not in _SOURCE_SCAN_SKIP and not d.startswith(".")
+        ]
         for name in files:
             if Path(name).suffix in _SOURCE_SUFFIXES:
                 return True
@@ -955,7 +1171,9 @@ def _has_source_files(project_dir: Path) -> bool:
 
 
 async def _run_codebase_analysis_phase(
-    config: BuildConfig, state: BuildState, progress: ProgressWriter,
+    config: BuildConfig,
+    state: BuildState,
+    progress: ProgressWriter,
 ) -> None:
     """Analyze the existing codebase and record the report for spec generation.
 
@@ -963,27 +1181,41 @@ async def _run_codebase_analysis_phase(
     nothing, which is exactly the pre-phase behavior. Skipped — with the reason
     logged — for a project with no source files yet.
     """
-    if (state.spec_gen is not None and state.spec_gen.spec_extract_sha
-            and state.spec_gen.codebase_analysis_path):
+    if (
+        state.spec_gen is not None
+        and state.spec_gen.spec_extract_sha
+        and state.spec_gen.codebase_analysis_path
+    ):
         # Saved by the spec-extract step, which runs after this analysis: an
         # earlier process already analysed the code and saved where the report is,
         # and a re-run of the step must not pay for the analysis again. One that
         # failed saved no report, and is asked again.
-        log.info("SKIP phase=CODEBASE_ANALYSIS reason=analysed-before-spec-extract report=%s",
-                 state.spec_gen.codebase_analysis_path)
+        log.info(
+            "SKIP phase=CODEBASE_ANALYSIS reason=analysed-before-spec-extract report=%s",
+            state.spec_gen.codebase_analysis_path,
+        )
         return
     from .code_analysis import NOT_ANALYSED_HEADING
 
-    saved = state.spec_gen.codebase_analysis_path if state.spec_gen is not None else None
-    if (saved and Path(saved) == config.codebase_analysis_path and Path(saved).is_file()
-            and not Path(saved).read_text(errors="replace").startswith(NOT_ANALYSED_HEADING)):
+    saved = (
+        state.spec_gen.codebase_analysis_path if state.spec_gen is not None else None
+    )
+    if (
+        saved
+        and Path(saved) == config.codebase_analysis_path
+        and Path(saved).is_file()
+        and not Path(saved).read_text(errors="replace").startswith(NOT_ANALYSED_HEADING)
+    ):
         # A FAILED build re-run in its own worktree keeps the change dir, the
         # report in it and the design written against that report: analysing
         # the tree again, which now holds the failed run's commits, would pay
         # twice for a report the kept design does not match. The not-analysed
         # report analysed nothing and asks for a commit and a re-run, so that
         # re-run analyses.
-        log.info("SKIP phase=CODEBASE_ANALYSIS reason=report-already-written report=%s", saved)
+        log.info(
+            "SKIP phase=CODEBASE_ANALYSIS reason=report-already-written report=%s",
+            saved,
+        )
         return
     if not _has_source_files(config.project_dir):
         log.info(
@@ -991,7 +1223,8 @@ async def _run_codebase_analysis_phase(
             config.project_dir,
         )
         progress.log_phase(
-            "CODEBASE_ANALYSIS", "skipped — no source files yet (new project)",
+            "CODEBASE_ANALYSIS",
+            "skipped — no source files yet (new project)",
         )
         return
 
@@ -1012,9 +1245,16 @@ async def _run_codebase_analysis_phase(
         state.spec_gen = SpecGenState()
     state.spec_gen.codebase_analysis_path = str(output)
     if analysis.startswith(NOT_ANALYSED_HEADING):
-        log.info("SKIP phase=CODEBASE_ANALYSIS reason=no-git-commit dir=%s report=%s", config.project_dir, output)
-        progress.log_phase("CODEBASE_ANALYSIS", "skipped — the project has no git commit to read the code at; "
-                           f"{output} says so and lists its source files")
+        log.info(
+            "SKIP phase=CODEBASE_ANALYSIS reason=no-git-commit dir=%s report=%s",
+            config.project_dir,
+            output,
+        )
+        progress.log_phase(
+            "CODEBASE_ANALYSIS",
+            "skipped — the project has no git commit to read the code at; "
+            f"{output} says so and lists its source files",
+        )
         return
     log.info("Wrote codebase analysis: %s (%d chars)", output, len(analysis))
     progress.log_phase("CODEBASE_ANALYSIS", f"Codebase analysis written to {output}")
@@ -1039,16 +1279,34 @@ def _spec_extract_argv(config: BuildConfig, sha: str) -> list[str]:
     project = Path(config.project_dir).resolve()
     top = git_ops.repo_root(project)
     top = top.resolve() if top else project
-    argv = ["uv", "run", "--directory", str(_spec_extract_skill_dir()), "python", "-m",
-            "spec_extract_pipeline", "run", "--repo", str(top), "--tree", sha]
+    argv = [
+        "uv",
+        "run",
+        "--directory",
+        str(_spec_extract_skill_dir()),
+        "python",
+        "-m",
+        "spec_extract_pipeline",
+        "run",
+        "--repo",
+        str(top),
+        "--tree",
+        sha,
+    ]
     if top != project and top in project.parents:
         argv += ["--path", project.relative_to(top).as_posix()]
     # The cap exactly as configured: `repr` keeps every digit a float holds.
     cap = float(config.spec_extract_max_usd)
     max_usd = str(int(cap)) if cap.is_integer() else repr(cap)
     # Absolute: `uv run --directory` runs spec-extract in its own scripts directory.
-    return argv + ["--max-usd", max_usd, "--trust-repo",
-                   "--apply", "--specs-dir", str(Path(config.specs_dir).resolve())]
+    return argv + [
+        "--max-usd",
+        max_usd,
+        "--trust-repo",
+        "--apply",
+        "--specs-dir",
+        str(Path(config.specs_dir).resolve()),
+    ]
 
 
 def _spec_extract_last_line(res: git_ops.GitResult) -> str:
@@ -1066,7 +1324,9 @@ def _epic_child(config: BuildConfig) -> bool:
 
 
 def _run_spec_extract_step(
-    config: BuildConfig, state: BuildState, progress: ProgressWriter,
+    config: BuildConfig,
+    state: BuildState,
+    progress: ProgressWriter,
 ) -> int | None:
     """Run spec-extract on the project before the plan is written, and commit the
     registry files it applies (inside CODEBASE_ANALYSIS, after the analysis).
@@ -1110,24 +1370,40 @@ def _run_spec_extract_step(
 
     log.info("START phase=CODEBASE_ANALYSIS step=spec-extract sha=%s", saved)
     progress.log_phase("CODEBASE_ANALYSIS", f"spec-extract at {saved[:12]}")
-    res = git_ops._run_spec_extract_skill(_spec_extract_argv(config, saved), cwd=config.project_dir)
+    res = git_ops._run_spec_extract_skill(
+        _spec_extract_argv(config, saved), cwd=config.project_dir
+    )
     if res.returncode == 0:
         rel = Path(os.path.relpath(registry, config.project_dir)).as_posix()
-        git_ops.commit_stage(config, f"docs(specs): baseline registry from spec-extract at {saved[:12]}",
-                             [rel])
-        applied = next((line.split()[1] for line in reversed(res.stdout.splitlines())
-                        if line.startswith("SPEC_EXTRACT:APPLIED ") and len(line.split()) > 1), "0")
+        git_ops.commit_stage(
+            config,
+            f"docs(specs): baseline registry from spec-extract at {saved[:12]}",
+            [rel],
+        )
+        applied = next(
+            (
+                line.split()[1]
+                for line in reversed(res.stdout.splitlines())
+                if line.startswith("SPEC_EXTRACT:APPLIED ") and len(line.split()) > 1
+            ),
+            "0",
+        )
         # `commit_stage` commits nothing without a pipeline branch (`--no-worktree`),
         # and a failed commit is only logged: say when the files are left uncommitted.
         left = stop_record.others_work(registry, None) if registry.is_dir() else None
         if left is None:
             print(f"SPEC_EXTRACT:BASELINE {applied}", flush=True)
-            progress.log_phase("CODEBASE_ANALYSIS", f"spec-extract applied {applied} registry file(s)")
+            progress.log_phase(
+                "CODEBASE_ANALYSIS", f"spec-extract applied {applied} registry file(s)"
+            )
         else:
             print(f"SPEC_EXTRACT:BASELINE {applied} uncommitted", flush=True)
             log.warning("spec-extract's registry files are not committed: %s", left)
-            progress.log_phase("CODEBASE_ANALYSIS", f"spec-extract applied {applied} registry file(s), "
-                               f"left uncommitted in {rel}")
+            progress.log_phase(
+                "CODEBASE_ANALYSIS",
+                f"spec-extract applied {applied} registry file(s), "
+                f"left uncommitted in {rel}",
+            )
         return None
     last = _spec_extract_last_line(res)
     if res.returncode == SPEC_EXTRACT_EXIT_LOCKED:
@@ -1137,11 +1413,18 @@ def _run_spec_extract_step(
     dirty = stop_record.others_work(registry, None) if registry.is_dir() else None
     if dirty is None:
         print(f"SPEC_EXTRACT:NOT_RUN exit={res.returncode} {last}", flush=True)
-        log.warning("spec-extract did not run (exit %s): %s; the build goes on without a baseline",
-                    res.returncode, last)
+        log.warning(
+            "spec-extract did not run (exit %s): %s; the build goes on without a baseline",
+            res.returncode,
+            last,
+        )
         return None
-    print(f"ERROR: spec-extract exited {res.returncode} and {dirty}. Stash or commit them, or set "
-          "`spec_extract: false` in specs/config.yaml, and re-run.", file=sys.stderr, flush=True)
+    print(
+        f"ERROR: spec-extract exited {res.returncode} and {dirty}. Stash or commit them, or set "
+        "`spec_extract: false` in specs/config.yaml, and re-run.",
+        file=sys.stderr,
+        flush=True,
+    )
     return 1
 
 
@@ -1162,8 +1445,12 @@ def _print_review_context_paths(config: BuildConfig) -> None:
 
 
 async def _run_bootstrap(
-    config: BuildConfig, state: BuildState, cm: ChangeManager, state_path: Path,
-    *, args=None,
+    config: BuildConfig,
+    state: BuildState,
+    cm: ChangeManager,
+    state_path: Path,
+    *,
+    args=None,
 ) -> None:
     """Set up the build's worktree/branch, project skeleton, specs/, config.yaml.
 
@@ -1181,11 +1468,15 @@ async def _run_bootstrap(
     # finished (pointer back AT BOOTSTRAP, with the record this bootstrap
     # saves below), keeps its own worktree: its branch may hold commits,
     # which `_setup_worktree` refuses.
-    kept = bool(config.git.worktree
-                and (state.phase == BuildPhase.FAILED
-                     or (state.phase == BuildPhase.BOOTSTRAP and state.failed_stop is not None))
-                and _inside_own_worktree(config, state)
-                and _keeps_failed_worktree(config, state))
+    kept = bool(
+        config.git.worktree
+        and (
+            state.phase == BuildPhase.FAILED
+            or (state.phase == BuildPhase.BOOTSTRAP and state.failed_stop is not None)
+        )
+        and _inside_own_worktree(config, state)
+        and _keeps_failed_worktree(config, state)
+    )
     if kept:
         state_path = config.state_file_path()
         cm = ChangeManager(config.specs_dir)
@@ -1197,13 +1488,17 @@ async def _run_bootstrap(
         # runs bootstrap inside its own worktree after
         # _rebind_to_existing_worktree, where the uncommitted config.yaml is
         # the stub bootstrap wrote itself and the user has nothing to commit.
-        if (not _inside_own_worktree(config, state)
-                and intake.config_yaml_uncommitted(config.project_dir)):
+        if not _inside_own_worktree(config, state) and intake.config_yaml_uncommitted(
+            config.project_dir
+        ):
             raise intake.ConfigNotCommittedError(intake.CONFIG_NOT_COMMITTED)
         # With --base-ref (an epic's child) it branches from that commit
         # instead, where a committed but unpushed config.yaml is missing too.
-        if (config.base_ref and not _inside_own_worktree(config, state)
-                and intake.config_yaml_off_ref(config.project_dir, config.base_ref)):
+        if (
+            config.base_ref
+            and not _inside_own_worktree(config, state)
+            and intake.config_yaml_off_ref(config.project_dir, config.base_ref)
+        ):
             raise intake.ConfigNotCommittedError(intake.CONFIG_NOT_ON_BASE)
         _setup_worktree(config, state)
         state_path = config.state_file_path()
@@ -1213,7 +1508,9 @@ async def _run_bootstrap(
         # for a brand-new project directory.
         project = config.project_dir
         if not (project / ".git").exists():
-            subprocess.run(["git", "init"], cwd=project, check=True, capture_output=True)
+            subprocess.run(
+                ["git", "init"], cwd=project, check=True, capture_output=True
+            )
             log.info("Initialized git repo at %s", project)
 
     # specs/ init if needed
@@ -1231,6 +1528,7 @@ async def _run_bootstrap(
     config_yaml = config.specs_dir / "config.yaml"
     if not config_yaml.exists():
         import yaml
+
         data = {
             "schema": "spec-driven",
             "context": f"Project: {config.project_name}\n{config.project_description}",
@@ -1248,8 +1546,12 @@ async def _run_bootstrap(
 
 
 def _run_size_gate(
-    config: BuildConfig, state: BuildState, state_path: Path,
-    progress: ProgressWriter, *, accept_size: bool,
+    config: BuildConfig,
+    state: BuildState,
+    state_path: Path,
+    progress: ProgressWriter,
+    *,
+    accept_size: bool,
 ) -> int | None:
     """Stop a plan that should be split, after plan review, until --accept-size.
 
@@ -1285,8 +1587,11 @@ def _run_size_gate(
     state.split_required = True
     state.checkpoint(state_path)
     log.info("DONE phase=SIZE_GATE split=true proposal=%s", path)
-    _progress_note(progress, "SIZE_GATE",
-                   f"Plan should be split; proposal in {path}. Re-run with --accept-size to build it as one PR.")
+    _progress_note(
+        progress,
+        "SIZE_GATE",
+        f"Plan should be split; proposal in {path}. Re-run with --accept-size to build it as one PR.",
+    )
     print(f"{MARKER_SPLIT_REQUIRED}:{path}", flush=True)
     return WAITING_EXIT
 
@@ -1331,16 +1636,23 @@ def _keeps_failed_worktree(config: BuildConfig, state: BuildState) -> bool:
         raise git_ops.GitLifecycleError(
             f"Did not re-run the failed build in {worktree}: it is on {where}, not the "
             f"build's branch '{state.branch}', and the re-run commits on what is checked "
-            f"out; switch back (`git -C {worktree} switch {state.branch}`), then re-run")
+            f"out; switch back (`git -C {worktree} switch {state.branch}`), then re-run"
+        )
     left = stop_record.others_work(config.project_dir, state.failed_stop)
     if left and state.failed_stop is None and state.branch:
         base = config.base_ref or git_ops.default_branch(config.project_dir)
         if git_ops.unmerged_commit_count(config.project_dir, state.branch, base) == 0:
-            log.info("RESUME failed build has no failure record and no commit: a new "
-                     "worktree, %s left as it is (%s)", worktree, left)
+            log.info(
+                "RESUME failed build has no failure record and no commit: a new "
+                "worktree, %s left as it is (%s)",
+                worktree,
+                left,
+            )
             return False
     if left:
-        raise git_ops.GitLifecycleError(f"Did not re-run the failed build in {worktree}: {left}")
+        raise git_ops.GitLifecycleError(
+            f"Did not re-run the failed build in {worktree}: {left}"
+        )
     config.pipeline_branch = state.branch or on
     return True
 
@@ -1364,7 +1676,8 @@ def _setup_worktree(config: BuildConfig, state: BuildState) -> None:
     # branch may not have reached: count its commits against the ref.
     base = config.base_ref or git_ops.default_branch(repo)
     branch, dest = git_ops.resolve_new_branch(
-        repo, config.change_name, base, taken=config.published_branches)
+        repo, config.change_name, base, taken=config.published_branches
+    )
     git_ops.create_worktree(repo, branch, dest, start_point=config.base_ref or None)
 
     state.source_repo = str(repo)
@@ -1399,10 +1712,14 @@ def _rebind_to_existing_worktree(config: BuildConfig) -> None:
             try:
                 here = BuildState.load(config.state_file_path())
             except Exception as e:  # corrupt checkpoint — run_orchestrator reports it
-                log.warning("Ignoring unreadable state at %s: %s", config.state_file_path(), e)
+                log.warning(
+                    "Ignoring unreadable state at %s: %s", config.state_file_path(), e
+                )
                 return
             if _inside_own_worktree(config, here):
-                config.pipeline_branch = here.branch or git_ops.current_branch(config.project_dir)
+                config.pipeline_branch = here.branch or git_ops.current_branch(
+                    config.project_dir
+                )
         return
 
     repo = git_ops.repo_root(config.project_dir)
@@ -1415,13 +1732,15 @@ def _rebind_to_existing_worktree(config: BuildConfig) -> None:
 
     prefix = git_ops.worktree_dir_name(config.change_name)
     candidates = sorted(
-        p for p in root.iterdir()
+        p
+        for p in root.iterdir()
         if p.is_dir() and (p.name == prefix or p.name.startswith(f"{prefix}-"))
     )
     found: list[tuple[str, Path, BuildState]] = []
     for dest in candidates:
         probe = BuildConfig(
-            project_dir=dest / offset, change_name=config.change_name,
+            project_dir=dest / offset,
+            change_name=config.change_name,
         )
         probe.specs_dir = dest / offset / "specs"
         probe_state = _existing_state_path(probe)
@@ -1445,7 +1764,8 @@ def _rebind_to_existing_worktree(config: BuildConfig) -> None:
     config.pipeline_branch = prior.branch or git_ops.current_branch(dest)
     log.info(
         "RESUME re-bound to existing worktree %s (branch=%s) — not creating a new one",
-        dest, config.pipeline_branch,
+        dest,
+        config.pipeline_branch,
     )
     print(f"WORKTREE:{dest}", flush=True)
 
@@ -1486,6 +1806,7 @@ def _existing_state_path(config: BuildConfig) -> Path | None:
     if not config.change_name:
         return None
     from .change_manager import archived_change_dirs
+
     # Anchored to exactly YYYY-MM-DD-<slug> — a loose `*-<slug>` glob would
     # also adopt another change's checkpoint (`foo` matching `…-bar-foo`).
     archived = [
@@ -1502,11 +1823,14 @@ def _completed_state_paths(config: BuildConfig) -> list[Path]:
     if not config.change_name:
         return []
     from .change_manager import archived_change_dirs
+
     active = completed_state_path(config.state_file_path())
     paths = [active] if active.exists() else []
-    paths += [d / active.name
-              for d in archived_change_dirs(config.specs_dir, config.change_name)
-              if (d / active.name).exists()]
+    paths += [
+        d / active.name
+        for d in archived_change_dirs(config.specs_dir, config.change_name)
+        if (d / active.name).exists()
+    ]
     return paths
 
 
@@ -1528,10 +1852,14 @@ def _completed_builds(config: BuildConfig) -> list[tuple[str, Path, BuildState]]
         if root.is_dir():
             offset = _project_offset(config.project_dir, repo)
             prefix = git_ops.worktree_dir_name(config.change_name)
-            for dest in sorted(p for p in root.iterdir() if p.is_dir() and (
-                    p.name == prefix or p.name.startswith(f"{prefix}-"))):
-                probe = BuildConfig(project_dir=dest / offset,
-                                    change_name=config.change_name)
+            for dest in sorted(
+                p
+                for p in root.iterdir()
+                if p.is_dir() and (p.name == prefix or p.name.startswith(f"{prefix}-"))
+            ):
+                probe = BuildConfig(
+                    project_dir=dest / offset, change_name=config.change_name
+                )
                 probe.specs_dir = dest / offset / "specs"
                 projects.append(probe)
     found: dict[Path, tuple[str, Path, BuildState]] = {}
@@ -1552,16 +1880,27 @@ def _completed_builds(config: BuildConfig) -> list[tuple[str, Path, BuildState]]
     return sorted(found.values(), key=lambda f: f[0])
 
 
-def _refuse_published_rerun(config: BuildConfig, completed: list[tuple[str, Path, BuildState]]) -> int:
+def _refuse_published_rerun(
+    config: BuildConfig, completed: list[tuple[str, Path, BuildState]]
+) -> int:
     """Exit 3 with `BUILD:COMPLETE:<path>`: the change already published, and
     building it again is the user's call (`--force`). Writes nothing."""
     _, path, done = completed[-1]
-    log.info("REFUSE re-run of published change=%s completed=%s branch=%s pr=%s",
-             config.change_name, path, done.branch, done.pr_url)
+    log.info(
+        "REFUSE re-run of published change=%s completed=%s branch=%s pr=%s",
+        config.change_name,
+        path,
+        done.branch,
+        done.pr_url,
+    )
     print(f"BUILD:COMPLETE:{path}", flush=True)
-    print(f"{config.change_name} already published on branch {done.branch or '(none recorded)'}"
-          f", PR {done.pr_url or '(none recorded)'}. Re-run with --force to start a new build "
-          f"of it on a new branch.", file=sys.stderr, flush=True)
+    print(
+        f"{config.change_name} already published on branch {done.branch or '(none recorded)'}"
+        f", PR {done.pr_url or '(none recorded)'}. Re-run with --force to start a new build "
+        f"of it on a new branch.",
+        file=sys.stderr,
+        flush=True,
+    )
     return 3
 
 
@@ -1569,8 +1908,10 @@ def _spec_paths(config: BuildConfig) -> list[str]:
     """Explicit pathspec for the change's spec directory, relative to the
     worktree root. Never a whole-tree stage."""
     try:
-        return [str(config.change_dir.relative_to(config.project_dir)),
-                str((config.specs_dir / "config.yaml").relative_to(config.project_dir))]
+        return [
+            str(config.change_dir.relative_to(config.project_dir)),
+            str((config.specs_dir / "config.yaml").relative_to(config.project_dir)),
+        ]
     except ValueError:
         return []
 
@@ -1586,7 +1927,9 @@ def _spec_paths(config: BuildConfig) -> list[str]:
 # raises is logged and skipped; publish goes on. `walkthroughs.pr_section`
 # reports the walkthroughs under docs/walkthroughs/ whose cited lines the build
 # moved (and regenerates them when `regenerate_walkthroughs` is on).
-def unfixed_findings_section(config: BuildConfig, state: BuildState, docs_dir: Path) -> Path | None:
+def unfixed_findings_section(
+    config: BuildConfig, state: BuildState, docs_dir: Path
+) -> Path | None:
     """The change's `unfixed-findings.md`, when the TDD engine wrote one: the
     accepted review findings a block that passed kept unfixed (its fix on pass
     was not kept, or not attempted). The file starts with its own heading."""
@@ -1594,7 +1937,9 @@ def unfixed_findings_section(config: BuildConfig, state: BuildState, docs_dir: P
     return path if path.is_file() else None
 
 
-PRE_PUBLISH_CONTRIBUTORS: list[Callable[[BuildConfig, BuildState, Path], Path | None]] = [
+PRE_PUBLISH_CONTRIBUTORS: list[
+    Callable[[BuildConfig, BuildState, Path], Path | None]
+] = [
     walkthroughs.pr_section,
     unfixed_findings_section,
 ]
@@ -1606,13 +1951,16 @@ def _pr_sections_dir(docs_dir: Path) -> Path:
     return docs_dir / "pr-sections"
 
 
-def _pre_publish_sections(config: BuildConfig, state: BuildState, docs_dir: Path) -> list[Path]:
+def _pre_publish_sections(
+    config: BuildConfig, state: BuildState, docs_dir: Path
+) -> list[Path]:
     """Run each of `PRE_PUBLISH_CONTRIBUTORS` and return the section files they
     wrote, in order. See the comment above `PRE_PUBLISH_CONTRIBUTORS`."""
     paths: list[Path] = []
     for contributor in PRE_PUBLISH_CONTRIBUTORS:
         name = getattr(contributor, "__name__", repr(contributor))
         from .gates import verification_inputs
+
         before = verification_inputs(config.test_command, config.project_dir)
         try:
             path = contributor(config, state, docs_dir)
@@ -1621,8 +1969,12 @@ def _pre_publish_sections(config: BuildConfig, state: BuildState, docs_dir: Path
         except Exception as e:
             after = verification_inputs(config.test_command, config.project_dir)
             if before != after:
-                raise RuntimeError(f"Failed contributor {name} changed build inputs") from e
-            log.warning("pre-publish contributor %s failed without changing inputs: %s", name, e)
+                raise RuntimeError(
+                    f"Failed contributor {name} changed build inputs"
+                ) from e
+            log.warning(
+                "pre-publish contributor %s failed without changing inputs: %s", name, e
+            )
             continue
         if path is not None:
             paths.append(Path(path))
@@ -1648,26 +2000,56 @@ def _pr_base_branch(repo: Path, base_ref: str) -> str | None:
         return None
     default = git_ops.default_branch(repo)
     for tip in (f"refs/remotes/origin/{default}", f"refs/heads/{default}"):
-        if git_ops._run(["git", "merge-base", "--is-ancestor", base_ref, tip], cwd=repo).returncode == 0:
+        if (
+            git_ops._run(
+                ["git", "merge-base", "--is-ancestor", base_ref, tip], cwd=repo
+            ).returncode
+            == 0
+        ):
             return None
-    named = git_ops._run(["git", "rev-parse", "--symbolic-full-name", base_ref], cwd=repo).stdout.strip()
+    named = git_ops._run(
+        ["git", "rev-parse", "--symbolic-full-name", base_ref], cwd=repo
+    ).stdout.strip()
     for prefix in ("refs/remotes/origin/", "refs/heads/"):
         if named.startswith(prefix):
-            return named[len(prefix):]
-    held = git_ops._run(["git", "for-each-ref", "--contains", base_ref, "--format=%(refname)",
-                         "refs/remotes/origin/"], cwd=repo)
-    branches = [r[len("refs/remotes/origin/"):] for r in held.stdout.split()
-                if r != "refs/remotes/origin/HEAD"]
+            return named[len(prefix) :]
+    held = git_ops._run(
+        [
+            "git",
+            "for-each-ref",
+            "--contains",
+            base_ref,
+            "--format=%(refname)",
+            "refs/remotes/origin/",
+        ],
+        cwd=repo,
+    )
+    branches = [
+        r[len("refs/remotes/origin/") :]
+        for r in held.stdout.split()
+        if r != "refs/remotes/origin/HEAD"
+    ]
     if len(branches) == 1:
         return branches[0]
-    log.warning("--base-ref %s is not on %s and %s origin branch holds it: the PR targets %s",
-                base_ref, default, "more than one" if branches else "no", default)
+    log.warning(
+        "--base-ref %s is not on %s and %s origin branch holds it: the PR targets %s",
+        base_ref,
+        default,
+        "more than one" if branches else "no",
+        default,
+    )
     return None
 
 
 def _pr_open_argv(
-    project_dir: Path, change_dir: Path, branch: str, title: str, *,
-    draft: bool = True, sections: list[Path] | None = None, base: str | None = None,
+    project_dir: Path,
+    change_dir: Path,
+    branch: str,
+    title: str,
+    *,
+    draft: bool = True,
+    sections: list[Path] | None = None,
+    base: str | None = None,
 ) -> list[str]:
     """``pr_pipeline open`` for a branch this pipeline already pushed.
 
@@ -1680,10 +2062,23 @@ def _pr_open_argv(
     does not depend on uv resolving a path source between two workspace
     members inside an installed copy of the plugin."""
     argv = [
-        "uv", "run", "--directory", str(_pr_skill_dir()),
-        "python", "-m", "pr_pipeline", "open",
-        "--repo", str(project_dir), "--change-dir", str(change_dir),
-        "--head", branch, "--title", title, "--no-push",
+        "uv",
+        "run",
+        "--directory",
+        str(_pr_skill_dir()),
+        "python",
+        "-m",
+        "pr_pipeline",
+        "open",
+        "--repo",
+        str(project_dir),
+        "--change-dir",
+        str(change_dir),
+        "--head",
+        branch,
+        "--title",
+        title,
+        "--no-push",
     ]
     if base:
         argv += ["--base", base]
@@ -1752,12 +2147,22 @@ def _run_publish(
     # default sha.
     base = None if _epic_child(config) else _pr_base_branch(worktree, config.base_ref)
     pr_argv = _pr_open_argv(
-        config.project_dir, docs_dir, state.branch, title, draft=draft, sections=sections,
+        config.project_dir,
+        docs_dir,
+        state.branch,
+        title,
+        draft=draft,
+        sections=sections,
         base=base,
     )
     manual = git_ops.manual_finish_commands(
-        worktree, state.branch, title, include_pr=config.git.pr != "none", draft=draft,
-        pr_skill_argv=pr_argv, base=base,
+        worktree,
+        state.branch,
+        title,
+        include_pr=config.git.pr != "none",
+        draft=draft,
+        pr_skill_argv=pr_argv,
+        base=base,
     )
 
     log.info("START phase=PUBLISH branch=%s", state.branch)
@@ -1773,12 +2178,18 @@ def _run_publish(
         return False
 
     from .gates import verification_inputs
+
     expected = (state.verification or {}).get("metadata", {}).get("inputs")
-    actual = verification_inputs(config.test_command, config.project_dir,
-                                 parallel=config.parallel_tests,
-                                 plan_revision=state.spec_gen.revision if state.spec_gen else "")
+    actual = verification_inputs(
+        config.test_command,
+        config.project_dir,
+        parallel=config.parallel_tests,
+        plan_revision=state.spec_gen.revision if state.spec_gen else "",
+    )
     if not (state.verification or {}).get("passed") or expected != actual:
-        raise RuntimeError("Publication refused: final verification is missing or stale")
+        raise RuntimeError(
+            "Publication refused: final verification is missing or stale"
+        )
     push = git_ops.push_branch(worktree, state.branch)
     if not push.ok:
         _publish_diagnosis(
@@ -1833,7 +2244,9 @@ def _run_publish(
     # LIVE state (which now also carries pr_url in its checkpoint until the
     # post-publish cleanup).
     board.record(
-        config, state, column=BoardColumn.IN_REVIEW,
+        config,
+        state,
+        column=BoardColumn.IN_REVIEW,
         note=f"branch {state.branch} pushed; PR {url or '(url unknown)'}",
         progress=progress,
     )

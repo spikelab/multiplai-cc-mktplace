@@ -43,16 +43,23 @@ class SpecIssuesFound(Exception):
         super().__init__(f"{step}: {len(self.issues)} requirements issue(s)")
 
 
-def write_issues(change_dir: Path, issues: list[tuple[str, str]], *, change: str) -> Path:
+def write_issues(
+    change_dir: Path, issues: list[tuple[str, str]], *, change: str
+) -> Path:
     """Append *issues* to the change's spec-issues.md, one `## <title>` section
     each (the form `pm-spec revise` reads: one issue per section), and set
     `.change.yaml` `spec_issues` to it. A new file gets a header first. A
     section already in the file, same title and body, is not written twice,
     so a step that stopped after writing and runs again adds nothing."""
     path = Path(change_dir) / ISSUES_FILE
-    text = path.read_text() if path.is_file() else (
-        f"# Spec issues: {change}\n\nRequirements problems buildme found. Fix them with "
-        f"`/multiplai-pm:pm-spec revise {change}`, then run the build again.\n")
+    text = (
+        path.read_text()
+        if path.is_file()
+        else (
+            f"# Spec issues: {change}\n\nRequirements problems buildme found. Fix them with "
+            f"`/multiplai-pm:pm-spec revise {change}`, then run the build again.\n"
+        )
+    )
     for title, body in issues:
         section = f"## {' '.join(title.split())}\n\n{body.strip()}\n"
         if section not in text:
@@ -79,13 +86,21 @@ def change_project(change_dir: Path) -> Path | None:
     return None
 
 
-def pm_spec_line(name: str, *, resume: bool = False, project_dir: Path | None = None) -> str:
+def pm_spec_line(
+    name: str, *, resume: bool = False, project_dir: Path | None = None
+) -> str:
     where = f" --project-dir {project_dir}" if project_dir else ""
     return f"Run /multiplai-pm:pm-spec {'resume ' if resume else ''}{name}{where} first"
 
 
-def refuse_not_ready(name: str, reason: str, *, resume: bool = False,
-                     project_dir: Path | None = None, advice: str | None = None) -> int:
+def refuse_not_ready(
+    name: str,
+    reason: str,
+    *,
+    resume: bool = False,
+    project_dir: Path | None = None,
+    advice: str | None = None,
+) -> int:
     """Print `SPEC:NOT_READY:<reason>` and the pm-spec line; the exit code (2).
     *resume* names `pm-spec resume <name>`, which checks specs already on disk
     and marks them ready without rewriting them. *project_dir* adds
@@ -95,7 +110,9 @@ def refuse_not_ready(name: str, reason: str, *, resume: bool = False,
     pm-spec run."""
     reason = " ".join(str(reason).split())
     print(f"{MARKER_NOT_READY}:{reason}", flush=True)
-    print(advice or pm_spec_line(name, resume=resume, project_dir=project_dir), flush=True)
+    print(
+        advice or pm_spec_line(name, resume=resume, project_dir=project_dir), flush=True
+    )
     return EXIT_NOT_READY
 
 
@@ -123,8 +140,10 @@ def refuse_issues(path: Path) -> int:
     change_dir = path.parent
     repo = change_project(change_dir)
     where = f" --project-dir {repo}" if repo else ""
-    print(f"Run /multiplai-pm:pm-spec revise {change_dir.name}{where}, then run the build again",
-          flush=True)
+    print(
+        f"Run /multiplai-pm:pm-spec revise {change_dir.name}{where}, then run the build again",
+        flush=True,
+    )
     return EXIT_SPEC_ISSUES
 
 
@@ -137,12 +156,23 @@ def uncommitted(project_dir: Path, path: Path) -> list[str]:
         rel = Path(path).resolve().relative_to(project_dir.resolve()).as_posix() or "."
     except ValueError:
         raise git_ops.GitLifecycleError(f"{path} is not inside {project_dir}") from None
-    res = git_ops._run(["git", "status", "--porcelain", "--untracked-files=all", "--", rel,
-                        *git_ops.BOOKKEEPING_EXCLUDES], cwd=project_dir)
+    res = git_ops._run(
+        [
+            "git",
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+            "--",
+            rel,
+            *git_ops.BOOKKEEPING_EXCLUDES,
+        ],
+        cwd=project_dir,
+    )
     if not res.ok:
-        raise git_ops.GitLifecycleError(f"{res.command} failed: {res.stderr.strip()[-300:]}")
+        raise git_ops.GitLifecycleError(
+            f"{res.command} failed: {res.stderr.strip()[-300:]}"
+        )
     return [line[3:] for line in res.stdout.splitlines() if line.strip()]
-
 
 
 def saved_revision(change_dir: Path) -> str | None:
@@ -160,10 +190,15 @@ def specs_at(repo: Path, rev: str, rel: str, dest: Path) -> Path | None:
     *rev* holds it to `<dest>/<rel>`, byte for byte, and return that copy:
     what a worktree cut from *rev* would hold. None when *rev* does not hold
     *rel*. Raises `git_ops.GitLifecycleError` when git cannot read *rev*."""
-    res = git_ops._run(["git", "ls-tree", "-r", "-z", rev, "--", f"{rel}/"], cwd=repo,
-                       errors="surrogateescape")
+    res = git_ops._run(
+        ["git", "ls-tree", "-r", "-z", rev, "--", f"{rel}/"],
+        cwd=repo,
+        errors="surrogateescape",
+    )
     if not res.ok:
-        raise git_ops.GitLifecycleError(f"{res.command} failed: {res.stderr.strip()[-300:]}")
+        raise git_ops.GitLifecycleError(
+            f"{res.command} failed: {res.stderr.strip()[-300:]}"
+        )
     entries = [e for e in res.stdout.split("\0") if e]
     if not entries:
         return None
@@ -172,8 +207,12 @@ def specs_at(repo: Path, rev: str, rel: str, dest: Path) -> Path | None:
         _mode, kind, oid = meta.split()
         if kind != "blob":
             continue
-        blob = subprocess.run(["git", "cat-file", "blob", oid], cwd=repo, capture_output=True,
-                              timeout=git_ops._GIT_TIMEOUT)
+        blob = subprocess.run(
+            ["git", "cat-file", "blob", oid],
+            cwd=repo,
+            capture_output=True,
+            timeout=git_ops._GIT_TIMEOUT,
+        )
         if blob.returncode != 0:
             raise git_ops.GitLifecycleError(f"git cat-file blob {oid} failed in {repo}")
         target = Path(dest) / path

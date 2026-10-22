@@ -45,7 +45,12 @@ from typing import TypeVar
 
 from multiplai_core import budget as core_budget
 from multiplai_core import resolve_model_spec
-from multiplai_core.agent_runner import AgentRunError, AgentRunTimeout, UnknownAgentBackendError, run_agent
+from multiplai_core.agent_runner import (
+    AgentRunError,
+    AgentRunTimeout,
+    UnknownAgentBackendError,
+    run_agent,
+)
 from multiplai_core.budget import BudgetExceededError, SpendLedger
 from multiplai_core.env import load_multiplai_conf
 from multiplai_core.stage_config import conf_value
@@ -57,9 +62,13 @@ log = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
 
 TRUST_ENV = "SPEC_EXTRACT_TRUST_REPO"
-DEFAULT_MAX_USD = 80.0  # per run folder, across every invocation that resumes it (plan, Decided 7)
+DEFAULT_MAX_USD = (
+    80.0  # per run folder, across every invocation that resumes it (plan, Decided 7)
+)
 DEFAULT_CALL_TIMEOUT_S = 1200.0
-EXPLORE_MAX_TURNS = 30  # buildme's codebase analysis uses the same (`code_analysis.py`, MAX_TURNS)
+EXPLORE_MAX_TURNS = (
+    30  # buildme's codebase analysis uses the same (`code_analysis.py`, MAX_TURNS)
+)
 REFORMAT_MAX_TURNS = 1
 READ_ONLY_TOOLS = ["Read", "Glob", "Grep"]
 
@@ -68,9 +77,21 @@ TRUST_MESSAGE = (
     f"tree. If you trust the repository, re-run with --trust-repo (or set {TRUST_ENV}=1)."
 )
 
-__all__ = ["BackendUnavailable", "BudgetExceededError", "CallFailed", "DEFAULT_MAX_USD", "RepoTrustError",
-           "SpecExtractBudget", "TRUST_MESSAGE", "agent_call_structured", "model_for", "repo_is_trusted", "require_trusted_repo",
-           "spend_marker", "start_budget"]
+__all__ = [
+    "DEFAULT_MAX_USD",
+    "TRUST_MESSAGE",
+    "BackendUnavailable",
+    "BudgetExceededError",
+    "CallFailed",
+    "RepoTrustError",
+    "SpecExtractBudget",
+    "agent_call_structured",
+    "model_for",
+    "repo_is_trusted",
+    "require_trusted_repo",
+    "spend_marker",
+    "start_budget",
+]
 
 
 class CallFailed(Exception):
@@ -86,8 +107,12 @@ class BackendUnavailable(Exception):
 # `run_agent`'s reasons for a failure no call can get past: the Claude backend's
 # (multiplai_core/agent_runner.py) and the pi backend's (multiplai_core/pi/backend.py).
 _SETUP_REASONS = (
-    "claude-agent-sdk not installed", "ClaudeAgentOptions rejected",
-    "pi binary not found", "pi failed to start", "malformed pi model spec", "pi gating extension not found",
+    "claude-agent-sdk not installed",
+    "ClaudeAgentOptions rejected",
+    "pi binary not found",
+    "pi failed to start",
+    "malformed pi model spec",
+    "pi gating extension not found",
 )
 
 
@@ -133,8 +158,15 @@ def _record(usage, label: str) -> None:
     core_budget.record(usage, label=label)
     try:
         cost = float(getattr(usage, "cost_usd", 0.0) or 0.0)
-        tokens = sum(int(getattr(usage, name, 0) or 0) for name in (
-            "input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens"))
+        tokens = sum(
+            int(getattr(usage, name, 0) or 0)
+            for name in (
+                "input_tokens",
+                "output_tokens",
+                "cache_read_tokens",
+                "cache_creation_tokens",
+            )
+        )
     except Exception as e:  # recording never raises, as the ledger's own does not
         log.warning("Process spend accounting failed for a call (ignored): %s", e)
         return
@@ -153,15 +185,26 @@ def require_trusted_repo() -> None:
 
 def model_for(step: str) -> str | None:
     """`spec_extract_<step>_model` from multiplai.conf, resolved; None means the session's model."""
-    spec = resolve_model_spec([conf_value(load_multiplai_conf(), f"spec_extract_{step}_model")])
+    spec = resolve_model_spec(
+        [conf_value(load_multiplai_conf(), f"spec_extract_{step}_model")]
+    )
     if spec is None:
         return None
     return spec.model if spec.is_anthropic else spec.qualified
 
 
-async def _run(prompt: str, *, allowed_tools: list[str], model: str | None, effort: str | None,
-               max_turns: int, cwd: str | None, call_timeout: float, budget_label: str,
-               run_label: str = "") -> str:
+async def _run(
+    prompt: str,
+    *,
+    allowed_tools: list[str],
+    model: str | None,
+    effort: str | None,
+    max_turns: int,
+    cwd: str | None,
+    call_timeout: float,
+    budget_label: str,
+    run_label: str = "",
+) -> str:
     require_trusted_repo()
     core_budget.check(budget_label)
     try:
@@ -177,7 +220,9 @@ async def _run(prompt: str, *, allowed_tools: list[str], model: str | None, effo
             component="spec-extract",
         )
     except AgentRunError as e:
-        if isinstance(e, UnknownAgentBackendError) or e.reason.startswith(_SETUP_REASONS):
+        if isinstance(e, UnknownAgentBackendError) or e.reason.startswith(
+            _SETUP_REASONS
+        ):
             raise BackendUnavailable(f"no model call can run: {e.reason}") from e
         partial = getattr(e, "partial", None)
         if partial is not None:
@@ -215,20 +260,37 @@ async def agent_call_structured(
     (row R31), and a resume does not pay for that run again.
     """
     name = budget_label or "agent"
-    common = dict(model=model, effort=effort, cwd=cwd, call_timeout=call_timeout, budget_label=budget_label)
-    text = await _run(prompt, allowed_tools=allowed_tools, max_turns=max_turns, **common)
+    common = dict(
+        model=model,
+        effort=effort,
+        cwd=cwd,
+        call_timeout=call_timeout,
+        budget_label=budget_label,
+    )
+    text = await _run(
+        prompt, allowed_tools=allowed_tools, max_turns=max_turns, **common
+    )
     try:
         return parse_answer(text, schema)
     except (ValidationError, ValueError) as e:
         first_error = e
-        log.warning("%s: answer unusable, asking for a reformat: %s", name, str(e)[:500])
+        log.warning(
+            "%s: answer unusable, asking for a reformat: %s", name, str(e)[:500]
+        )
     try:
-        text = await _run(reformat_prompt(text, schema, first_error), allowed_tools=[],
-                          max_turns=REFORMAT_MAX_TURNS, run_label=f"{name}:reformat", **common)
+        text = await _run(
+            reformat_prompt(text, schema, first_error),
+            allowed_tools=[],
+            max_turns=REFORMAT_MAX_TURNS,
+            run_label=f"{name}:reformat",
+            **common,
+        )
         return parse_answer(text, schema)
     except (BudgetExceededError, BackendUnavailable, RepoTrustError) as e:
         log.warning("%s: the reformat could not run: %s", name, str(e)[:500])
-        raise CallFailed(f"{name}: the reformat of a paid answer could not run: {e}") from e
+        raise CallFailed(
+            f"{name}: the reformat of a paid answer could not run: {e}"
+        ) from e
     except (ValidationError, ValueError, CallFailed) as e:
         log.warning("%s: answer unusable after the reformat: %s", name, str(e)[:500])
         raise CallFailed(f"{name}: no valid answer after a reformat: {e}") from e

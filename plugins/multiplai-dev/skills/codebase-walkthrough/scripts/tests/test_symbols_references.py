@@ -5,8 +5,8 @@ from __future__ import annotations
 import shutil
 
 import pytest
-
-from walkthrough_pipeline import lsp, references, repos as repos_mod, symbols, target
+from walkthrough_pipeline import lsp, references, symbols, target
+from walkthrough_pipeline import repos as repos_mod
 from walkthrough_pipeline.partition import partition
 
 
@@ -21,29 +21,40 @@ def test_target_lists_files_and_counts_migrations(built):
     assert info.package == "bookings"
     assert "bookings/migrations/0001_initial.py" not in info.files
     assert info.migrations == 2 and info.latest_migration.endswith("0002_ospite.py")
-    assert not (snap / ".env").exists()          # committed, but never snapshotted
+    assert not (snap / ".env").exists()  # committed, but never snapshotted
 
 
 def test_symbols_defines_and_calls(built):
     info, _, snap = built
     entries, warnings = symbols.collect(info, snap)
     got = {(e.kind, e.name) for e in entries}
-    assert {("url", "hooks/acme/"), ("celery-task", "bookings.poll"), ("model", "Reservation"),
-            ("function", "ack_booking"), ("setting", "ACME_ENV"), ("env", "ACME_API_KEY"),
-            ("http", "/bookings/{booking_id}/ack"), ("http", "/webhooks")} <= got
+    assert {
+        ("url", "hooks/acme/"),
+        ("celery-task", "bookings.poll"),
+        ("model", "Reservation"),
+        ("function", "ack_booking"),
+        ("setting", "ACME_ENV"),
+        ("env", "ACME_API_KEY"),
+        ("http", "/bookings/{booking_id}/ack"),
+        ("http", "/webhooks"),
+    } <= got
     model = next(e for e in entries if e.kind == "model")
     assert model.detail["table"] == "bookings_reservation"
     assert symbols.outbound_api_paths(entries) == ["/bookings/{}/ack", "/webhooks"]
     assert warnings == []
     defs = symbols.setting_definitions(info, snap, {"ACME_ENV"})
-    assert [(d.name, d.path, d.detail["env"]) for d in defs] == [("ACME_ENV", "engine/project/settings.py", "ACME_ENV")]
+    assert [(d.name, d.path, d.detail["env"]) for d in defs] == [
+        ("ACME_ENV", "engine/project/settings.py", "ACME_ENV")
+    ]
 
 
 def test_symbols_warns_for_a_language_without_a_pack(built):
     info, _, snap = built
     ts = info.model_copy(update={"files": info.files + ["bookings/widget.ts"]})
     _, warnings = symbols.collect(ts, snap)
-    assert warnings == ["no symbol pack for TypeScript: 1 file(s) in the target were not parsed for symbols"]
+    assert warnings == [
+        "no symbol pack for TypeScript: 1 file(s) in the target were not parsed for symbols"
+    ]
 
 
 def test_references_find_every_planted_one_and_skip_comments(ws, built, tmp_path):
@@ -62,13 +73,20 @@ def test_references_find_every_planted_one_and_skip_comments(ws, built, tmp_path
     ]
 
 
-@pytest.mark.parametrize("literal, route, hit", [
-    ("`${BASE}/hooks/acme/`", "hooks/acme/", True),
-    ("'/direct-booking/create/'", "api/channex/direct-booking/create/", True),
-    ("`/closures/${id}/`", "api/channex/calendar/closures/list/", False),
-    ("`/calendar/closures/${id}/`", "api/channex/calendar/closures/<int:pk>/", True),
-    ("'/create/'", "api/channex/rate-plans/create/", False),
-])
+@pytest.mark.parametrize(
+    "literal, route, hit",
+    [
+        ("`${BASE}/hooks/acme/`", "hooks/acme/", True),
+        ("'/direct-booking/create/'", "api/channex/direct-booking/create/", True),
+        ("`/closures/${id}/`", "api/channex/calendar/closures/list/", False),
+        (
+            "`/calendar/closures/${id}/`",
+            "api/channex/calendar/closures/<int:pk>/",
+            True,
+        ),
+        ("'/create/'", "api/channex/rate-plans/create/", False),
+    ],
+)
 def test_route_matching(literal, route, hit):
     assert references.route_matches(literal, route) is hit
 
@@ -77,7 +95,10 @@ def test_search_root_is_the_nearest_ancestor_with_several_repos(ws):
     assert repos_mod.default_search_root(ws["engine"]) == ws["ws"].resolve()
 
 
-@pytest.mark.skipif(shutil.which("pyright-langserver") is None, reason="pyright-langserver not installed")
+@pytest.mark.skipif(
+    shutil.which("pyright-langserver") is None,
+    reason="pyright-langserver not installed",
+)
 async def test_lsp_finds_the_import_outside_the_target(built):
     info, _, snap = built
     entries, _ = symbols.collect(info, snap)
@@ -106,6 +127,10 @@ def test_reference_scan_without_rg_names_ripgrep(ws, built, tmp_path, monkeypatc
     entries, _ = symbols.collect(info, snap)
     found, _, _ = repos_mod.discover(repo)
     real_which = shutil.which
-    monkeypatch.setattr(shutil, "which", lambda name, *a, **k: None if name == "rg" else real_which(name, *a, **k))
+    monkeypatch.setattr(
+        shutil,
+        "which",
+        lambda name, *a, **k: None if name == "rg" else real_which(name, *a, **k),
+    )
     with pytest.raises(target.MissingToolError, match="ripgrep"):
         references.scan_all(found, info, entries, tmp_path / "scan")

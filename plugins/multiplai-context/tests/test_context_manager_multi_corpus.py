@@ -23,7 +23,11 @@ from conftest import (
     SCRIPTS_DIR,
     corpus_files,
     hook_context,
+)
+from conftest import (
     run_context_hook as _run_hook,
+)
+from conftest import (
     write_catalog as _write_catalog,
 )
 from generators.base import CATALOG_SCHEMA_VERSION
@@ -45,7 +49,13 @@ class TestMultiCorpusOutput:
         _write_catalog(
             env_setup["catalogs_dir"],
             "memory.json",
-            [{"source": "voice.md", "summary": "voice", "intent_domains": ["writing voice"]}],
+            [
+                {
+                    "source": "voice.md",
+                    "summary": "voice",
+                    "intent_domains": ["writing voice"],
+                }
+            ],
         )
 
         out = _run_hook(env_setup, prompt="help me with writing voice")
@@ -60,7 +70,13 @@ class TestMultiCorpusOutput:
         _write_catalog(
             env_setup["catalogs_dir"],
             "memory.json",
-            [{"source": "writing.md", "summary": "guide", "intent_domains": ["writing a blog post"]}],
+            [
+                {
+                    "source": "writing.md",
+                    "summary": "guide",
+                    "intent_domains": ["writing a blog post"],
+                }
+            ],
         )
 
         out = _run_hook(env_setup, prompt="help me write a blog post")
@@ -76,7 +92,13 @@ class TestMultiCorpusOutput:
         _write_catalog(
             env_setup["catalogs_dir"],
             "memory.json",
-            [{"source": "writing.md", "summary": "guide", "intent_domains": ["writing a blog post"]}],
+            [
+                {
+                    "source": "writing.md",
+                    "summary": "guide",
+                    "intent_domains": ["writing a blog post"],
+                }
+            ],
         )
 
         out = _run_hook(env_setup, prompt="help me write a blog post")
@@ -104,9 +126,14 @@ class TestMultiCorpusOutput:
         _write_catalog(
             env_setup["catalogs_dir"],
             "skills.json",
-            [{"source": "writing", "name": "writing",
-              "summary": "Drafts and edits blog posts",
-              "intent_domains": ["writing a blog post"]}],
+            [
+                {
+                    "source": "writing",
+                    "name": "writing",
+                    "summary": "Drafts and edits blog posts",
+                    "intent_domains": ["writing a blog post"],
+                }
+            ],
         )
 
         out = _run_hook(
@@ -130,7 +157,9 @@ class TestMultiCorpusOutput:
         not a section rebuilt from the stale catalog on disk.
         """
         (env_setup["memory_dir"] / "tech.md").write_text("# Tech prefs")
-        (env_setup["resources_dir"] / "voice-ai.md").write_text("# Voice AI research notes")
+        (env_setup["resources_dir"] / "voice-ai.md").write_text(
+            "# Voice AI research notes"
+        )
         _write_catalog(
             env_setup["catalogs_dir"],
             "memory.json",
@@ -165,7 +194,13 @@ class TestMultiCorpusOutput:
         _write_catalog(
             env_setup["catalogs_dir"],
             "skills.json",
-            [{"source": "writing.md", "name": "writing", "intent_domains": ["writing a blog post"]}],
+            [
+                {
+                    "source": "writing.md",
+                    "name": "writing",
+                    "intent_domains": ["writing a blog post"],
+                }
+            ],
         )
 
         # NO enable_skills env var set
@@ -219,7 +254,12 @@ class TestSectionLoading:
         _write_catalog(
             env_setup["catalogs_dir"],
             "memory.json",
-            [{"source": "big.md", "intent_domains": ["software architecture decisions"]}],
+            [
+                {
+                    "source": "big.md",
+                    "intent_domains": ["software architecture decisions"],
+                }
+            ],
         )
 
         out = _run_hook(env_setup, prompt="software architecture decisions")
@@ -255,16 +295,22 @@ class TestBackwardCompat:
 
         out = _run_hook(env_setup, prompt="any prompt at all")
         # Memory fallback path loaded the file
-        assert "fallback.md" in hook_context(out) or len(corpus_files(out, "MEMORY")) >= 1
+        assert (
+            "fallback.md" in hook_context(out) or len(corpus_files(out, "MEMORY")) >= 1
+        )
 
     def test_stale_schema_falls_back_gracefully(self, env_setup):
         """Old schema_version → invalidate, fall back to scan."""
         (env_setup["memory_dir"] / "fallback.md").write_text("# Fallback")
         # Write a 1.0.0 catalog (stale)
-        (env_setup["catalogs_dir"] / "memory.json").write_text(json.dumps({
-            "schema_version": "1.0.0",
-            "entries": [{"source": "old.md"}],
-        }))
+        (env_setup["catalogs_dir"] / "memory.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0.0",
+                    "entries": [{"source": "old.md"}],
+                }
+            )
+        )
 
         out = _run_hook(env_setup, prompt="any prompt")
         # Should not crash; should fall back to scan
@@ -305,7 +351,12 @@ class TestAbstentionVsFallback:
         _write_catalog(
             env_setup["catalogs_dir"],
             "memory.json",
-            [{"source": "alpha.md", "intent_domains": ["software architecture decisions"]}],
+            [
+                {
+                    "source": "alpha.md",
+                    "intent_domains": ["software architecture decisions"],
+                }
+            ],
         )
 
         out = _run_hook(env_setup, prompt="yes")
@@ -320,7 +371,12 @@ class TestAbstentionVsFallback:
         _write_catalog(
             env_setup["catalogs_dir"],
             "memory.json",
-            [{"source": "alpha.md", "intent_domains": ["software architecture decisions"]}],
+            [
+                {
+                    "source": "alpha.md",
+                    "intent_domains": ["software architecture decisions"],
+                }
+            ],
         )
 
         out = _run_hook(
@@ -346,7 +402,12 @@ class TestAbstentionVsFallback:
         _write_catalog(
             env_setup["catalogs_dir"],
             "memory.json",
-            [{"source": "ghost.md", "intent_domains": ["software architecture decisions"]}],
+            [
+                {
+                    "source": "ghost.md",
+                    "intent_domains": ["software architecture decisions"],
+                }
+            ],
         )
 
         out = _run_hook(env_setup, prompt="software architecture decisions")
@@ -363,7 +424,12 @@ class TestAbstentionVsFallback:
         _write_catalog(
             env_setup["catalogs_dir"],
             "memory.json",
-            [{"source": "ghost.md", "intent_domains": ["software architecture decisions"]}],
+            [
+                {
+                    "source": "ghost.md",
+                    "intent_domains": ["software architecture decisions"],
+                }
+            ],
         )
 
         out = _run_hook(env_setup, prompt="software architecture decisions")
@@ -389,8 +455,10 @@ class TestRoutingScoresEmission:
             env_setup["catalogs_dir"],
             "memory.json",
             [
-                {"source": "strong.md",
-                 "intent_domains": ["italian tax filing and FBAR"]},
+                {
+                    "source": "strong.md",
+                    "intent_domains": ["italian tax filing and FBAR"],
+                },
                 {"source": "w1.md", "intent_domains": ["italian cooking"]},
                 {"source": "w2.md", "intent_domains": ["tax software bugs"]},
                 {"source": "w3.md", "intent_domains": ["filing cabinets"]},
@@ -405,8 +473,11 @@ class TestRoutingScoresEmission:
         logs = list(env_setup["data_dir"].rglob("context_manager-*.log"))
         assert logs, "context_manager log not written"
         line = next(
-            (ln for ln in logs[0].read_text().splitlines()
-             if "ROUTING_SCORES memory=" in ln),
+            (
+                ln
+                for ln in logs[0].read_text().splitlines()
+                if "ROUTING_SCORES memory=" in ln
+            ),
             None,
         )
         assert line, "no ROUTING_SCORES line emitted"
@@ -427,23 +498,30 @@ class TestRoutingScoresEmission:
         _write_catalog(
             env_setup["catalogs_dir"],
             "memory.json",
-            [{"source": "strong.md",
-              "intent_domains": ["italian tax filing and FBAR"]}],
+            [
+                {
+                    "source": "strong.md",
+                    "intent_domains": ["italian tax filing and FBAR"],
+                }
+            ],
         )
 
         long_prompt = (
-            "help with my italian tax filing and FBAR "
-            "plus a very long tail " * 5
+            "help with my italian tax filing and FBAR plus a very long tail " * 5
         )
         _run_hook(
-            env_setup, prompt=long_prompt,
+            env_setup,
+            prompt=long_prompt,
             extra_env={"MULTIPLAI_LOG_LEVEL": "INFO"},
         )
         logs = list(env_setup["data_dir"].rglob("context_manager-*.log"))
         assert logs, "context_manager log not written"
         line = next(
-            (ln for ln in logs[0].read_text().splitlines()
-             if "ROUTING_SCORES memory=" in ln),
+            (
+                ln
+                for ln in logs[0].read_text().splitlines()
+                if "ROUTING_SCORES memory=" in ln
+            ),
             None,
         )
         assert line, "no ROUTING_SCORES line emitted"
@@ -465,14 +543,20 @@ class TestRoutingScoresEmission:
         _write_catalog(
             env_setup["catalogs_dir"],
             "skills.json",
-            [{"source": "writing", "name": "writing",
-              "summary": "Drafts and edits blog posts",
-              "intent_domains": ["writing a blog post"]}],
+            [
+                {
+                    "source": "writing",
+                    "name": "writing",
+                    "summary": "Drafts and edits blog posts",
+                    "intent_domains": ["writing a blog post"],
+                }
+            ],
         )
 
         prompt = "writing a blog post"
         out = _run_hook(
-            env_setup, prompt=prompt,
+            env_setup,
+            prompt=prompt,
             extra_env={
                 "CLAUDE_PLUGIN_OPTION_ENABLE_SKILLS": "true",
                 "MULTIPLAI_LOG_LEVEL": "INFO",
@@ -482,8 +566,11 @@ class TestRoutingScoresEmission:
         logs = list(env_setup["data_dir"].rglob("context_manager-*.log"))
         assert logs, "context_manager log not written"
         line = next(
-            (ln for ln in logs[0].read_text().splitlines()
-             if "ROUTING_SCORES skills=" in ln),
+            (
+                ln
+                for ln in logs[0].read_text().splitlines()
+                if "ROUTING_SCORES skills=" in ln
+            ),
             None,
         )
         assert line, "no ROUTING_SCORES skills= line emitted"
@@ -501,6 +588,7 @@ class TestRoutingScoresEmission:
 class TestRefloorHelper:
     def test_no_change_when_top_pick_survives(self):
         from context_manager import _refloor_after_cooldown
+
         scored = [(10.0, "top.md"), (6.0, "mid.md"), (3.0, "weak.md")]
         kept, dropped = _refloor_after_cooldown(
             ["top.md", "weak.md"], ["mid.md"], scored
@@ -510,6 +598,7 @@ class TestRefloorHelper:
 
     def test_drops_below_bar_when_top_suppressed(self):
         from context_manager import _refloor_after_cooldown
+
         scored = [(10.0, "top.md"), (6.0, "mid.md"), (3.0, "weak.md")]
         kept, dropped = _refloor_after_cooldown(
             ["mid.md", "weak.md"], ["top.md"], scored
@@ -520,6 +609,7 @@ class TestRefloorHelper:
 
     def test_unscored_expansion_picks_are_kept(self):
         from context_manager import _refloor_after_cooldown
+
         scored = [(10.0, "top.md"), (3.0, "weak.md")]
         kept, dropped = _refloor_after_cooldown(
             ["weak.md", "bundle-sibling.md"], ["top.md"], scored
@@ -530,6 +620,7 @@ class TestRefloorHelper:
 
     def test_no_scores_means_no_change(self):
         from context_manager import _refloor_after_cooldown
+
         kept, dropped = _refloor_after_cooldown(["a.md"], ["b.md"], [])
         assert kept == ["a.md"]
         assert dropped == []
@@ -541,6 +632,7 @@ class TestRefloorHelper:
         # ⊆ eligible) and the refloor silently never fires — so the
         # anchor must be the top of the *picked* ranking.
         from context_manager import _picked_ranking, _refloor_after_cooldown
+
         diag = {
             "scored": [(7.0, "inelig.md"), (6.0, "pick.md"), (2.5, "weak.md")],
             "picked_scored": [(6.0, "pick.md"), (2.5, "weak.md")],
@@ -564,6 +656,7 @@ class TestRefloorHelper:
 class TestPickedRanking:
     def test_prefers_picked_scored(self):
         from context_manager import _picked_ranking
+
         diag = {
             "scored": [(7.0, "inelig.md"), (6.0, "pick.md")],
             "picked_scored": [(6.0, "pick.md")],
@@ -573,11 +666,13 @@ class TestPickedRanking:
 
     def test_falls_back_to_prefix_without_picked_scored(self):
         from context_manager import _picked_ranking
+
         diag = {"scored": [(6.0, "a.md"), (3.0, "b.md")], "n_picked": 1}
         assert _picked_ranking(diag) == [(6.0, "a.md")]
 
     def test_empty_diag(self):
         from context_manager import _picked_ranking
+
         assert _picked_ranking({}) == []
 
 
@@ -586,6 +681,7 @@ class TestRoutingScoreHint:
         # Top AND floor must describe injected files: inelig.md (7.0)
         # outranks every pick but never injected.
         from context_manager import _routing_score_hint
+
         diag = {
             "scored": [(7.0, "inelig.md"), (6.0, "pick.md"), (2.5, "weak.md")],
             "picked_scored": [(6.0, "pick.md"), (2.5, "weak.md")],
@@ -600,9 +696,12 @@ class TestRoutingScoreHint:
         # The live trap-probe shape: raw best 2.5 ≥ MIN_SIGNAL, zero
         # eligible entries. "best 2.5 < floor" would be false.
         from context_manager import _routing_score_hint
+
         diag = {
             "scored": [(2.5, "trap.md")],
-            "n_picked": 0, "n_eligible": 0, "top_eligible": None,
+            "n_picked": 0,
+            "n_eligible": 0,
+            "top_eligible": None,
         }
         hint = _routing_score_hint(diag)
         assert "lacks match breadth" in hint
@@ -612,19 +711,24 @@ class TestRoutingScoreHint:
         # An ineligible entry outranks the best eligible one — the
         # abstention message must cite the eligible score, not 2.5.
         from context_manager import _routing_score_hint
+
         diag = {
             "scored": [(2.5, "inelig.md"), (1.8, "elig.md")],
-            "n_picked": 0, "n_eligible": 1, "top_eligible": 1.8,
+            "n_picked": 0,
+            "n_eligible": 1,
+            "top_eligible": 1.8,
         }
         assert "best eligible 1.8 < floor" in _routing_score_hint(diag)
 
     def test_continuation_and_no_candidates(self):
         from context_manager import _routing_score_hint
+
         assert "continuation" in _routing_score_hint({"continuation": True})
         assert "no candidates" in _routing_score_hint({"scored": []})
 
     def test_prompt_for_log_collapses_and_truncates(self):
         from context_manager import _prompt_for_log
+
         assert _prompt_for_log("hello\n  world") == "hello world"
         long = "x" * 200
         out = _prompt_for_log(long)
@@ -658,18 +762,27 @@ class TestRecommendationCooldown:
     def _one_memory_file(self, env_setup):
         (env_setup["memory_dir"] / "python.md").write_text("# Python prefs")
         _write_catalog(
-            env_setup["catalogs_dir"], "memory.json",
-            [{"source": "python.md",
-              "intent_domains": ["debugging python async code"]}],
+            env_setup["catalogs_dir"],
+            "memory.json",
+            [
+                {
+                    "source": "python.md",
+                    "intent_domains": ["debugging python async code"],
+                }
+            ],
         )
 
     def test_injected_file_suppressed_next_turn(self, env_setup):
         self._one_memory_file(env_setup)
         env = {"CLAUDE_PLUGIN_OPTION_RECOMMEND_COOLDOWN_TURNS": "4"}
-        first = _run_hook(env_setup, prompt="debugging python async code", extra_env=env)
+        first = _run_hook(
+            env_setup, prompt="debugging python async code", extra_env=env
+        )
         assert len(corpus_files(first, "MEMORY")) == 1
         assert "python.md" in hook_context(first)
-        second = _run_hook(env_setup, prompt="debugging python async code", extra_env=env)
+        second = _run_hook(
+            env_setup, prompt="debugging python async code", extra_env=env
+        )
         assert len(corpus_files(second, "MEMORY")) == 0
         assert "python.md" not in hook_context(second)
 
@@ -677,14 +790,25 @@ class TestRecommendationCooldown:
         self._one_memory_file(env_setup)
         env = {"CLAUDE_PLUGIN_OPTION_RECOMMEND_COOLDOWN_TURNS": "1"}
         # turn 1: injected
-        assert corpus_files(_run_hook(env_setup, prompt="debugging python async code",
-                            extra_env=env), "MEMORY") == ["python.md"]
+        assert corpus_files(
+            _run_hook(env_setup, prompt="debugging python async code", extra_env=env),
+            "MEMORY",
+        ) == ["python.md"]
         # turn 2: within window (2-1=1 <= 1) → suppressed
-        assert corpus_files(_run_hook(env_setup, prompt="debugging python async code",
-                            extra_env=env), "MEMORY") == []
+        assert (
+            corpus_files(
+                _run_hook(
+                    env_setup, prompt="debugging python async code", extra_env=env
+                ),
+                "MEMORY",
+            )
+            == []
+        )
         # turn 3: window passed (3-1=2 > 1) → re-injected
-        assert corpus_files(_run_hook(env_setup, prompt="debugging python async code",
-                            extra_env=env), "MEMORY") == ["python.md"]
+        assert corpus_files(
+            _run_hook(env_setup, prompt="debugging python async code", extra_env=env),
+            "MEMORY",
+        ) == ["python.md"]
 
     def test_cooldown_zero_disables(self, env_setup):
         self._one_memory_file(env_setup)
@@ -692,15 +816,15 @@ class TestRecommendationCooldown:
         a = _run_hook(env_setup, prompt="debugging python async code", extra_env=env)
         b = _run_hook(env_setup, prompt="debugging python async code", extra_env=env)
         assert len(corpus_files(a, "MEMORY")) == 1
-        assert len(corpus_files(b, "MEMORY")) == 1  # no cooldown → re-injected every turn
+        assert (
+            len(corpus_files(b, "MEMORY")) == 1
+        )  # no cooldown → re-injected every turn
 
     def test_turn_state_persisted_to_session_state(self, env_setup):
         self._one_memory_file(env_setup)
         env = {"CLAUDE_PLUGIN_OPTION_RECOMMEND_COOLDOWN_TURNS": "4"}
         _run_hook(env_setup, prompt="debugging python async code", extra_env=env)
-        state = json.loads(
-            (env_setup["data_dir"] / "session_state.json").read_text()
-        )
+        state = json.loads((env_setup["data_dir"] / "session_state.json").read_text())
         assert state["turn_index"] == 1
         assert "python.md" in state["recently_injected"]["memory"]
         assert state["recently_injected"]["memory"]["python.md"] == 1
@@ -713,15 +837,21 @@ class TestRecommendationCooldown:
         (env_setup["memory_dir"] / "strong.md").write_text("# Strong")
         (env_setup["memory_dir"] / "weak.md").write_text("# Weak")
         _write_catalog(
-            env_setup["catalogs_dir"], "memory.json",
+            env_setup["catalogs_dir"],
+            "memory.json",
             [
-                {"source": "strong.md",
-                 "intent_domains": ["debugging python async concurrency event loop"]},
+                {
+                    "source": "strong.md",
+                    "intent_domains": ["debugging python async concurrency event loop"],
+                },
                 # The keyword boost lifts weak.md over the 0.30×top
                 # relative cutoff (keep_ratio raised in 0.6.16) while
                 # keeping it under the 0.5×top re-floor bar.
-                {"source": "weak.md", "intent_domains": ["python tooling"],
-                 "keywords": ["tooling"]},
+                {
+                    "source": "weak.md",
+                    "intent_domains": ["python tooling"],
+                    "keywords": ["tooling"],
+                },
             ],
         )
         env = {
@@ -730,7 +860,8 @@ class TestRecommendationCooldown:
         }
         # Turn 1: only the strong anchor matches → injected.
         first = _run_hook(
-            env_setup, prompt="debugging async concurrency event loop",
+            env_setup,
+            prompt="debugging async concurrency event loop",
             extra_env=env,
         )
         assert len(corpus_files(first, "MEMORY")) == 1
@@ -759,14 +890,20 @@ class TestRecommendationCooldown:
         (env_setup["memory_dir"] / "strong.md").write_text("# Strong")
         (env_setup["memory_dir"] / "weak.md").write_text("# Weak")
         _write_catalog(
-            env_setup["catalogs_dir"], "memory.json",
+            env_setup["catalogs_dir"],
+            "memory.json",
             [
-                {"source": "strong.md",
-                 "intent_domains": ["debugging python async concurrency event loop"]},
+                {
+                    "source": "strong.md",
+                    "intent_domains": ["debugging python async concurrency event loop"],
+                },
                 # Keyword boost: over the 0.30×top relative cutoff,
                 # under the 0.5×top re-floor bar (see the test above).
-                {"source": "weak.md", "intent_domains": ["python tooling"],
-                 "keywords": ["tooling"]},
+                {
+                    "source": "weak.md",
+                    "intent_domains": ["python tooling"],
+                    "keywords": ["tooling"],
+                },
             ],
         )
         out = _run_hook(
@@ -782,11 +919,19 @@ class TestRecommendationCooldown:
         file is eligible again (the injected content was summarized away)."""
         # Seed a populated cooldown map.
         state_file = env_setup["data_dir"] / "session_state.json"
-        state_file.write_text(json.dumps({
-            "session_id": "abc123",
-            "turn_index": 5,
-            "recently_injected": {"memory": {"python.md": 5}, "skills": {}, "resources": {}},
-        }))
+        state_file.write_text(
+            json.dumps(
+                {
+                    "session_id": "abc123",
+                    "turn_index": 5,
+                    "recently_injected": {
+                        "memory": {"python.md": 5},
+                        "skills": {},
+                        "resources": {},
+                    },
+                }
+            )
+        )
 
         env = os.environ.copy()
         for k in list(env):
@@ -794,15 +939,21 @@ class TestRecommendationCooldown:
                 del env[k]
         env["CLAUDE_PLUGIN_ROOT"] = str(PLUGIN_ROOT)
         env["CLAUDE_PLUGIN_DATA"] = str(env_setup["data_dir"])
-        stdin = json.dumps({
-            "hook_event_name": "PreCompact",
-            "transcript_path": str(env_setup["tmp_path"] / "transcript.jsonl"),
-            "session_id": "abc123",
-            "cwd": "/tmp",
-        })
+        stdin = json.dumps(
+            {
+                "hook_event_name": "PreCompact",
+                "transcript_path": str(env_setup["tmp_path"] / "transcript.jsonl"),
+                "session_id": "abc123",
+                "cwd": "/tmp",
+            }
+        )
         result = subprocess.run(
             [sys.executable, str(SCRIPTS_DIR / "pre_compact.py")],
-            input=stdin, capture_output=True, text=True, env=env, timeout=15,
+            input=stdin,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=15,
         )
         assert result.returncode == 0, result.stderr[:500]
 
@@ -837,14 +988,20 @@ class TestTtlStalenessE2E:
         env["CLAUDE_PLUGIN_OPTION_MEMORY_DIR"] = str(env_setup["memory_dir"])
         if extra_env:
             env.update(extra_env)
-        stdin = json.dumps({
-            "hook_event_name": "UserPromptSubmit",
-            "prompt": prompt,
-            "cwd": "/tmp",
-        })
+        stdin = json.dumps(
+            {
+                "hook_event_name": "UserPromptSubmit",
+                "prompt": prompt,
+                "cwd": "/tmp",
+            }
+        )
         return subprocess.run(
             [sys.executable, str(CONTEXT_MANAGER)],
-            input=stdin, capture_output=True, text=True, env=env, timeout=15,
+            input=stdin,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=15,
         )
 
     def _write_stale_memory_catalog(self, env_setup):
@@ -853,8 +1010,11 @@ class TestTtlStalenessE2E:
             "schema_version": CATALOG_SCHEMA_VERSION,
             "generated_at": "2020-01-01T00:00:00Z",  # far past any TTL
             "entries": [
-                {"source": "voice.md", "summary": "voice",
-                 "intent_domains": ["writing voice"]},
+                {
+                    "source": "voice.md",
+                    "summary": "voice",
+                    "intent_domains": ["writing voice"],
+                },
             ],
         }
         (env_setup["catalogs_dir"] / "memory.json").write_text(json.dumps(payload))

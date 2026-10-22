@@ -2,28 +2,29 @@
 
 import argparse
 import os
-import pytest
 from pathlib import Path
 from unittest.mock import patch
 
-from multiplai_core.env import CURRENT_MODEL
-
+import pytest
 from build_pipeline.config import (
     KNOWN_EFFORTS,
+    BuildConfig,
+    GateToggles,
     conf_effort,
     conf_model,
     detect_tier,
-    BuildConfig,
-    GateToggles,
 )
+from multiplai_core.env import CURRENT_MODEL
 
 
 def _tier_with(model: str | None, **env):
     """detect_tier with MULTIPLAI_MODEL=*model*, or no model set at all."""
     if model:
         env["MULTIPLAI_MODEL"] = model
-    with patch.dict(os.environ, env, clear=True), \
-            patch("build_pipeline.config.conf_model", return_value=None):
+    with (
+        patch.dict(os.environ, env, clear=True),
+        patch("build_pipeline.config.conf_model", return_value=None),
+    ):
         return detect_tier()
 
 
@@ -53,18 +54,25 @@ class TestTierDetection:
         assert (tier, name) == ("standard", "claude-sonnet-5")
 
     def test_multiplai_model_wins_over_the_session(self):
-        tier, name = _tier_with("claude-sonnet-5", MULTIPLAI_SESSION_MODEL="claude-opus-4-8")
+        tier, name = _tier_with(
+            "claude-sonnet-5", MULTIPLAI_SESSION_MODEL="claude-opus-4-8"
+        )
         assert (tier, name) == ("standard", "claude-sonnet-5")
 
     def test_no_model_anywhere_is_standard_on_the_cli_default(self):
         assert _tier_with(None) == ("standard", "CLI default")
 
     def test_claude_model_is_not_read(self):
-        assert _tier_with(None, CLAUDE_MODEL="claude-opus-4-8") == ("standard", "CLI default")
+        assert _tier_with(None, CLAUDE_MODEL="claude-opus-4-8") == (
+            "standard",
+            "CLI default",
+        )
 
     def test_a_buildme_conf_model_wins_over_multiplai_model(self):
-        with patch.dict(os.environ, {"MULTIPLAI_MODEL": "claude-sonnet-5"}, clear=True), \
-                patch("build_pipeline.config.conf_model", return_value="claude-opus-4-8"):
+        with (
+            patch.dict(os.environ, {"MULTIPLAI_MODEL": "claude-sonnet-5"}, clear=True),
+            patch("build_pipeline.config.conf_model", return_value="claude-opus-4-8"),
+        ):
             assert detect_tier() == ("advanced", "claude-opus-4-8")
 
     @pytest.mark.parametrize("alias", ["opus", "fable"])
@@ -200,6 +208,7 @@ class TestReviewModel:
 
     def test_env_override_wins(self, tmp_path):
         import argparse
+
         specs = tmp_path / "specs"
         specs.mkdir()
         (specs / "config.yaml").write_text("code_review:\n  model: claude-haiku-4-5\n")
@@ -325,10 +334,13 @@ class TestReferenceDocs:
 
     def test_builtin_mapping_still_resolves_python_docs(self, tmp_path):
         config = self._config_with_docs(
-            tmp_path, "uv-python-best-practices.md", "python-project-structure.md",
+            tmp_path,
+            "uv-python-best-practices.md",
+            "python-project-structure.md",
         )
         assert [p.name for p in config.stack_reference_docs()] == [
-            "uv-python-best-practices.md", "python-project-structure.md",
+            "uv-python-best-practices.md",
+            "python-project-structure.md",
         ]
 
     def test_missing_doc_is_skipped_not_fatal(self, tmp_path):
@@ -343,7 +355,9 @@ class TestReferenceDocs:
         with caplog.at_level("WARNING"):
             assert config.stack_reference_docs() == []
         # Cargo maps to [] by design — that is not "docs went missing".
-        assert not any("NONE of its reference docs" in r.getMessage() for r in caplog.records)
+        assert not any(
+            "NONE of its reference docs" in r.getMessage() for r in caplog.records
+        )
 
     def test_detected_stack_with_zero_resolved_docs_warns(self, tmp_path, caplog):
         """The visible failure mode: a stack is detected, docs are named, and
@@ -351,7 +365,9 @@ class TestReferenceDocs:
         config = self._config_with_docs(tmp_path)  # ref dir exists but is empty
         with caplog.at_level("WARNING"):
             assert config.stack_reference_docs() == []
-        assert any("NONE of its reference docs" in r.getMessage() for r in caplog.records)
+        assert any(
+            "NONE of its reference docs" in r.getMessage() for r in caplog.records
+        )
 
     def test_references_progress_line_is_emitted_once(self, tmp_path, capsys):
         config = self._config_with_docs(tmp_path, "python-project-structure.md")
@@ -375,7 +391,9 @@ class TestReferenceDocs:
         """The acceptance fact: a `reference_docs:` key in specs/config.yaml
         replaces the built-in list for that stack."""
         config = self._config_with_docs(
-            tmp_path, "uv-python-best-practices.md", "house-python-rules.md",
+            tmp_path,
+            "uv-python-best-practices.md",
+            "house-python-rules.md",
         )
         specs = tmp_path / "specs"
         specs.mkdir()
@@ -389,11 +407,15 @@ class TestReferenceDocs:
         assert config.reference_docs == {"pyproject": ["house-python-rules.md"]}
         # The built-in uv doc exists on disk but is no longer asked for.
         assert config.reference_doc_names() == ["house-python-rules.md"]
-        assert [p.name for p in config.stack_reference_docs()] == ["house-python-rules.md"]
+        assert [p.name for p in config.stack_reference_docs()] == [
+            "house-python-rules.md"
+        ]
 
     def test_config_yaml_override_leaves_other_stacks_alone(self, tmp_path):
         config = self._config_with_docs(
-            tmp_path, "swift-best-practices.md", "swift-testing-strategies.md",
+            tmp_path,
+            "swift-best-practices.md",
+            "swift-testing-strategies.md",
             stack="Package",
         )
         specs = tmp_path / "specs"
@@ -405,10 +427,13 @@ class TestReferenceDocs:
         config._load_specs_config()
         config.stack = "Package"
         assert [p.name for p in config.stack_reference_docs()] == [
-            "swift-best-practices.md", "swift-testing-strategies.md",
+            "swift-best-practices.md",
+            "swift-testing-strategies.md",
         ]
 
-    def test_malformed_reference_docs_entry_is_dropped_not_fatal(self, tmp_path, caplog):
+    def test_malformed_reference_docs_entry_is_dropped_not_fatal(
+        self, tmp_path, caplog
+    ):
         config = self._config_with_docs(tmp_path, "uv-python-best-practices.md")
         specs = tmp_path / "specs"
         specs.mkdir()
@@ -426,7 +451,9 @@ class TestReferenceDocs:
         config = self._config_with_docs(tmp_path, "house-python-rules.md")
         specs = tmp_path / "specs"
         specs.mkdir()
-        (specs / "config.yaml").write_text("reference_docs:\n  pyproject: house-python-rules.md\n")
+        (specs / "config.yaml").write_text(
+            "reference_docs:\n  pyproject: house-python-rules.md\n"
+        )
         config.specs_dir = specs
         config._load_specs_config()
         config.stack = "pyproject"
@@ -464,7 +491,9 @@ class TestReferenceDocs:
 
     def test_react_in_package_json_extends_the_node_docs(self, tmp_path):
         config = self._config_with_docs(
-            tmp_path, "bun-vite-react-best-practices.md", "react-nextjs-best-practices.md",
+            tmp_path,
+            "bun-vite-react-best-practices.md",
+            "react-nextjs-best-practices.md",
             stack="package",
         )
         (config.project_dir / "package.json").write_text(
@@ -472,15 +501,20 @@ class TestReferenceDocs:
         )
         assert config.detect_frameworks() == ["react"]
         assert [p.name for p in config.stack_reference_docs()] == [
-            "bun-vite-react-best-practices.md", "react-nextjs-best-practices.md",
+            "bun-vite-react-best-practices.md",
+            "react-nextjs-best-practices.md",
         ]
 
     def test_node_project_without_react_keeps_only_the_stack_docs(self, tmp_path):
         config = self._config_with_docs(
-            tmp_path, "bun-vite-react-best-practices.md", "react-nextjs-best-practices.md",
+            tmp_path,
+            "bun-vite-react-best-practices.md",
+            "react-nextjs-best-practices.md",
             stack="package",
         )
-        (config.project_dir / "package.json").write_text('{"dependencies": {"express": "^4"}}')
+        (config.project_dir / "package.json").write_text(
+            '{"dependencies": {"express": "^4"}}'
+        )
         assert config.detect_frameworks() == []
         assert [p.name for p in config.stack_reference_docs()] == [
             "bun-vite-react-best-practices.md",
@@ -524,9 +558,12 @@ class TestReferenceDocs:
 
         ref_dir = tmp_path / "claude-config" / "reference" / "dev"
         ref_dir.mkdir(parents=True)
-        (ref_dir / "python-project-structure.md").write_text("x" * (REFERENCE_DOC_CHAR_LIMIT + 5000))
+        (ref_dir / "python-project-structure.md").write_text(
+            "x" * (REFERENCE_DOC_CHAR_LIMIT + 5000)
+        )
         config = BuildConfig(
-            project_dir=tmp_path / "project", config_dir=tmp_path / "claude-config",
+            project_dir=tmp_path / "project",
+            config_dir=tmp_path / "claude-config",
         )
         config.stack = "pyproject"
         text = config.reference_docs_text()
@@ -556,9 +593,13 @@ class TestReferenceDocs:
         """A Next.js app can list only `next` — react arrives transitively.
         Before, that project resolved no frontend standards at all."""
         config = self._config_with_docs(
-            tmp_path, "react-nextjs-best-practices.md", stack="package",
+            tmp_path,
+            "react-nextjs-best-practices.md",
+            stack="package",
         )
-        (config.project_dir / "package.json").write_text('{"dependencies": {"next": "^15.0.0"}}')
+        (config.project_dir / "package.json").write_text(
+            '{"dependencies": {"next": "^15.0.0"}}'
+        )
         assert config.detect_frameworks() == ["react"]
         assert [p.name for p in config.stack_reference_docs()] == [
             "react-nextjs-best-practices.md",
@@ -568,10 +609,14 @@ class TestReferenceDocs:
         """The reduction must never hand the generator half a rule, and must
         always say which sections it dropped — the doc is 60k chars and the
         generator has no tools to go read the rest."""
-        from build_pipeline.config import REFERENCE_DOC_CHAR_LIMIT, summarize_reference_doc
+        from build_pipeline.config import (
+            REFERENCE_DOC_CHAR_LIMIT,
+            summarize_reference_doc,
+        )
 
         body = "\n\n".join(
-            f"## Section {i}\n" + f"rule text for section {i}. " * 400 for i in range(1, 8)
+            f"## Section {i}\n" + f"rule text for section {i}. " * 400
+            for i in range(1, 8)
         )
         text = "# Standards\n\nPreamble line.\n\n" + body
         assert len(text) > REFERENCE_DOC_CHAR_LIMIT
@@ -605,10 +650,13 @@ class TestReferenceDocs:
     def test_unreadable_reference_doc_skipped_not_fatal(self, tmp_path, caplog):
         ref_dir = tmp_path / "claude-config" / "reference" / "dev"
         ref_dir.mkdir(parents=True)
-        (ref_dir / "uv-python-best-practices.md").write_bytes(b"\xff\xfe\x00garbage\x80")
+        (ref_dir / "uv-python-best-practices.md").write_bytes(
+            b"\xff\xfe\x00garbage\x80"
+        )
         (ref_dir / "python-project-structure.md").write_text("Layout rules.")
         config = BuildConfig(
-            project_dir=tmp_path / "project", config_dir=tmp_path / "claude-config",
+            project_dir=tmp_path / "project",
+            config_dir=tmp_path / "claude-config",
         )
         config.stack = "pyproject"
         with caplog.at_level("WARNING"):
@@ -682,14 +730,17 @@ class TestPathOverrides:
         config.change_dir = None
         assert config.change_dir == tmp_path / "specs" / "changes" / "feat"
 
-    @pytest.mark.parametrize("target", [
-        "../outside",
-        "registry/feat",
-        "archive",
-        "archive/2026-10-12-feat/requirements",
-        "changes/../../etc",
-        "archive/.hidden",
-    ])
+    @pytest.mark.parametrize(
+        "target",
+        [
+            "../outside",
+            "registry/feat",
+            "archive",
+            "archive/2026-10-12-feat/requirements",
+            "changes/../../etc",
+            "archive/.hidden",
+        ],
+    )
     def test_an_override_outside_changes_or_archive_is_refused(self, tmp_path, target):
         config = self._config(tmp_path)
         with pytest.raises(ValueError):
@@ -793,7 +844,10 @@ class TestAdjudicationConfig:
 class TestFixOnPassConfig:
     def test_on_by_default(self, tmp_path):
         assert BuildConfig().fix_on_pass is True
-        assert _config_from_yaml(tmp_path, "code_review:\n  model: opus\n").fix_on_pass is True
+        assert (
+            _config_from_yaml(tmp_path, "code_review:\n  model: opus\n").fix_on_pass
+            is True
+        )
 
     def test_can_be_disabled(self, tmp_path):
         config = _config_from_yaml(tmp_path, "code_review:\n  fix_on_pass: false\n")
@@ -803,7 +857,10 @@ class TestFixOnPassConfig:
 class TestNarrowTestsConfig:
     def test_on_by_default(self, tmp_path):
         assert BuildConfig().narrow_tests is True
-        assert _config_from_yaml(tmp_path, "tdd:\n  test_command: pytest\n").narrow_tests is True
+        assert (
+            _config_from_yaml(tmp_path, "tdd:\n  test_command: pytest\n").narrow_tests
+            is True
+        )
 
     def test_can_be_disabled(self, tmp_path):
         config = _config_from_yaml(tmp_path, "tdd:\n  narrow_tests: false\n")
@@ -815,7 +872,10 @@ class TestNarrowTestsConfig:
         assert config.narrow_tests is False
 
     def test_a_quoted_true_keeps_it_on(self, tmp_path):
-        assert _config_from_yaml(tmp_path, 'tdd:\n  narrow_tests: "true"\n').narrow_tests is True
+        assert (
+            _config_from_yaml(tmp_path, 'tdd:\n  narrow_tests: "true"\n').narrow_tests
+            is True
+        )
 
 
 class TestTestWriterTurnsConfig:
@@ -823,20 +883,38 @@ class TestTestWriterTurnsConfig:
     the turn cap of each test writer, 30 unless set."""
 
     def test_both_default_to_30(self, tmp_path):
-        assert (BuildConfig().test_writer_max_turns, BuildConfig().mutation_test_writer_max_turns) == (30, 30)
+        assert (
+            BuildConfig().test_writer_max_turns,
+            BuildConfig().mutation_test_writer_max_turns,
+        ) == (30, 30)
         config = _config_from_yaml(tmp_path, "tdd:\n  test_command: pytest\n")
-        assert (config.test_writer_max_turns, config.mutation_test_writer_max_turns) == (30, 30)
+        assert (
+            config.test_writer_max_turns,
+            config.mutation_test_writer_max_turns,
+        ) == (30, 30)
 
     def test_values_come_from_the_tdd_section(self, tmp_path):
         config = _config_from_yaml(
-            tmp_path, "tdd:\n  test_writer_max_turns: 45\n  mutation_test_writer_max_turns: 12\n")
-        assert (config.test_writer_max_turns, config.mutation_test_writer_max_turns) == (45, 12)
+            tmp_path,
+            "tdd:\n  test_writer_max_turns: 45\n  mutation_test_writer_max_turns: 12\n",
+        )
+        assert (
+            config.test_writer_max_turns,
+            config.mutation_test_writer_max_turns,
+        ) == (45, 12)
 
     @pytest.mark.parametrize("value", ["0", "-3", "'40'", "true", "2.5", "lots"])
-    def test_a_value_that_is_not_a_positive_integer_is_ignored_with_a_warning(self, tmp_path, caplog, value):
+    def test_a_value_that_is_not_a_positive_integer_is_ignored_with_a_warning(
+        self, tmp_path, caplog, value
+    ):
         config = _config_from_yaml(
-            tmp_path, f"tdd:\n  test_writer_max_turns: {value}\n  mutation_test_writer_max_turns: {value}\n")
-        assert (config.test_writer_max_turns, config.mutation_test_writer_max_turns) == (30, 30)
+            tmp_path,
+            f"tdd:\n  test_writer_max_turns: {value}\n  mutation_test_writer_max_turns: {value}\n",
+        )
+        assert (
+            config.test_writer_max_turns,
+            config.mutation_test_writer_max_turns,
+        ) == (30, 30)
         assert "tdd.test_writer_max_turns" in caplog.text
         assert "tdd.mutation_test_writer_max_turns" in caplog.text
 
@@ -847,18 +925,30 @@ class TestParallelTestsConfig:
 
     def test_auto_by_default(self, tmp_path):
         assert BuildConfig().parallel_tests == "auto"
-        assert _config_from_yaml(tmp_path, "tdd:\n  test_command: pytest\n").parallel_tests == "auto"
+        assert (
+            _config_from_yaml(tmp_path, "tdd:\n  test_command: pytest\n").parallel_tests
+            == "auto"
+        )
 
     @pytest.mark.parametrize("value", ["off", '"off"', "false", "no"])
     def test_off_turns_it_off(self, tmp_path, value):
-        assert _config_from_yaml(tmp_path, f"tdd:\n  parallel: {value}\n").parallel_tests == "off"
+        assert (
+            _config_from_yaml(tmp_path, f"tdd:\n  parallel: {value}\n").parallel_tests
+            == "off"
+        )
 
     @pytest.mark.parametrize("value", ["auto", '"auto"', "true", "on"])
     def test_auto_or_true_keeps_it_on(self, tmp_path, value):
-        assert _config_from_yaml(tmp_path, f"tdd:\n  parallel: {value}\n").parallel_tests == "auto"
+        assert (
+            _config_from_yaml(tmp_path, f"tdd:\n  parallel: {value}\n").parallel_tests
+            == "auto"
+        )
 
     def test_an_unknown_value_warns_and_keeps_auto(self, tmp_path, caplog):
-        assert _config_from_yaml(tmp_path, "tdd:\n  parallel: always\n").parallel_tests == "auto"
+        assert (
+            _config_from_yaml(tmp_path, "tdd:\n  parallel: always\n").parallel_tests
+            == "auto"
+        )
         assert "tdd.parallel" in caplog.text
 
 
@@ -869,7 +959,9 @@ class TestBudgetConfig:
         assert config.budget_max_usd is None
 
     def test_ceilings_load_from_yaml(self, tmp_path):
-        config = _config_from_yaml(tmp_path, "budget:\n  max_tokens: 5000000\n  max_usd: 25\n")
+        config = _config_from_yaml(
+            tmp_path, "budget:\n  max_tokens: 5000000\n  max_usd: 25\n"
+        )
         assert config.budget_max_tokens == 5_000_000
         assert config.budget_max_usd == 25.0
 
@@ -880,6 +972,8 @@ class TestBudgetConfig:
     def test_absent_budget_section_is_unlimited(self, tmp_path):
         config = _config_from_yaml(tmp_path, "tdd:\n  test_command: pytest\n")
         assert config.budget_max_tokens is None
+
+
 class TestExplainerToggle:
     """B1 explainers default OFF until #375 is fixed; the CLI flag wins over specs/config.yaml."""
 
@@ -899,6 +993,7 @@ class TestExplainerToggle:
 
     def test_config_yaml_can_disable(self, tmp_path):
         import yaml
+
         specs = tmp_path / "specs"
         specs.mkdir()
         (specs / "config.yaml").write_text(
@@ -912,6 +1007,7 @@ class TestExplainerToggle:
 
     def test_cli_flag_disables_even_when_config_enables(self, tmp_path):
         import yaml
+
         specs = tmp_path / "specs"
         specs.mkdir()
         (specs / "config.yaml").write_text(
@@ -945,7 +1041,10 @@ class TestSkipExplainersFlag:
     def test_default_is_false(self):
         from build_pipeline.__main__ import build_parser
 
-        assert build_parser().parse_args(["build", "--change", "x"]).skip_explainers is False
+        assert (
+            build_parser().parse_args(["build", "--change", "x"]).skip_explainers
+            is False
+        )
 
 
 class TestRespecToggle:
@@ -975,6 +1074,7 @@ class TestRespecToggle:
 
 # --- Git lifecycle toggles (work item 4) ---------------------------------
 
+
 class TestGitToggles:
     def test_defaults_are_worktree_on_push_on_pr_draft(self):
         from build_pipeline.config import BuildConfig, GitToggles
@@ -989,10 +1089,14 @@ class TestGitToggles:
 
         specs = tmp_path / "specs"
         specs.mkdir()
-        (specs / "config.yaml").write_text(yaml.dump({
-            "schema": "spec-driven",
-            "git": {"worktree": False, "push": False, "pr": "ready"},
-        }))
+        (specs / "config.yaml").write_text(
+            yaml.dump(
+                {
+                    "schema": "spec-driven",
+                    "git": {"worktree": False, "push": False, "pr": "ready"},
+                }
+            )
+        )
         config = BuildConfig(project_dir=tmp_path)
         config.specs_dir = specs
         config._load_specs_config()
@@ -1014,28 +1118,41 @@ class TestGitToggles:
 
     def test_cli_flags_beat_config_yaml(self, tmp_path):
         import argparse
+
         from build_pipeline.config import BuildConfig
 
         config = BuildConfig(project_dir=tmp_path)
-        config._apply_git_cli_overrides(argparse.Namespace(
-            no_worktree=True, no_push=True, no_pr=True, pr_ready=False,
-        ))
+        config._apply_git_cli_overrides(
+            argparse.Namespace(
+                no_worktree=True,
+                no_push=True,
+                no_pr=True,
+                pr_ready=False,
+            )
+        )
         assert config.git.worktree is False
         assert config.git.push is False
         assert config.git.pr == "none"
 
     def test_pr_ready_flag(self, tmp_path):
         import argparse
+
         from build_pipeline.config import BuildConfig
 
         config = BuildConfig(project_dir=tmp_path)
-        config._apply_git_cli_overrides(argparse.Namespace(
-            no_worktree=False, no_push=False, no_pr=False, pr_ready=True,
-        ))
+        config._apply_git_cli_overrides(
+            argparse.Namespace(
+                no_worktree=False,
+                no_push=False,
+                no_pr=False,
+                pr_ready=True,
+            )
+        )
         assert config.git.pr == "ready"
 
     def test_absent_flags_leave_defaults(self, tmp_path):
         import argparse
+
         from build_pipeline.config import BuildConfig
 
         config = BuildConfig(project_dir=tmp_path)
@@ -1046,7 +1163,15 @@ class TestGitToggles:
         from build_pipeline.__main__ import build_parser
 
         args = build_parser().parse_args(
-            ["build", "--change", "x", "--no-worktree", "--no-push", "--no-pr", "--pr-ready"]
+            [
+                "build",
+                "--change",
+                "x",
+                "--no-worktree",
+                "--no-push",
+                "--no-pr",
+                "--pr-ready",
+            ]
         )
         assert args.no_worktree and args.no_push and args.no_pr and args.pr_ready
         plain = build_parser().parse_args(["build", "--change", "x"])
@@ -1064,7 +1189,10 @@ class TestRebindProjectDir:
         assert config.project_dir == wt
         assert config.specs_dir == wt / "specs"
         assert config.change_dir == wt / "specs" / "changes" / "c"
-        assert config.state_file_path() == wt / "specs" / "changes" / "c" / ".build-state.json"
+        assert (
+            config.state_file_path()
+            == wt / "specs" / "changes" / "c" / ".build-state.json"
+        )
         assert config.progress_file_path() == wt / "build-progress.md"
 
 
@@ -1083,7 +1211,9 @@ class TestConfEffort:
             assert conf_effort("buildme", "low") == "low"
 
     def test_section_effort_is_returned(self, tmp_path):
-        with patch.dict(os.environ, self._conf(tmp_path, "[buildme]\nEFFORT=medium\n"), clear=True):
+        with patch.dict(
+            os.environ, self._conf(tmp_path, "[buildme]\nEFFORT=medium\n"), clear=True
+        ):
             assert conf_effort("buildme") == "medium"
 
     def test_multiplai_effort_does_not_cap_a_conf_effort(self, tmp_path):
@@ -1100,7 +1230,9 @@ class TestConfEffort:
             assert conf_effort("buildme") == "high"
 
     def test_blank_value_is_treated_as_unset(self, tmp_path):
-        with patch.dict(os.environ, self._conf(tmp_path, "[buildme]\nEFFORT=\n"), clear=True):
+        with patch.dict(
+            os.environ, self._conf(tmp_path, "[buildme]\nEFFORT=\n"), clear=True
+        ):
             assert conf_effort("buildme", "medium") == "medium"
 
     def test_step_section_is_independent_of_the_pipeline_wide_one(self, tmp_path):
@@ -1110,7 +1242,9 @@ class TestConfEffort:
             assert conf_effort("buildme.review", conf_effort("buildme")) == "high"
 
     def test_step_falls_back_to_the_pipeline_wide_value(self, tmp_path):
-        with patch.dict(os.environ, self._conf(tmp_path, "[buildme]\nEFFORT=medium\n"), clear=True):
+        with patch.dict(
+            os.environ, self._conf(tmp_path, "[buildme]\nEFFORT=medium\n"), clear=True
+        ):
             assert conf_effort("buildme.review", conf_effort("buildme")) == "medium"
 
     def test_unknown_effort_is_ignored_not_passed_through(self, tmp_path):
@@ -1122,7 +1256,9 @@ class TestConfEffort:
         `KNOWN_EFFORTS` guard in `conf_effort` is what turns it into a warning
         plus *default* instead.
         """
-        with patch.dict(os.environ, self._conf(tmp_path, "[buildme]\nEFFORT=turbo\n"), clear=True):
+        with patch.dict(
+            os.environ, self._conf(tmp_path, "[buildme]\nEFFORT=turbo\n"), clear=True
+        ):
             assert conf_effort("buildme") is None
             assert conf_effort("buildme", "medium") == "medium"
 
@@ -1153,7 +1289,9 @@ class TestConfEffort:
 
 class TestBuildConfigEffortFields:
     def test_defaults_are_unset_without_a_conf(self, tmp_path):
-        with patch.dict(os.environ, {"CLAUDE_MULTIPLAI_HOME": str(tmp_path)}, clear=True):
+        with patch.dict(
+            os.environ, {"CLAUDE_MULTIPLAI_HOME": str(tmp_path)}, clear=True
+        ):
             config = BuildConfig()
             assert config.spec_effort is None
             assert config.review_effort is None
@@ -1161,9 +1299,13 @@ class TestBuildConfigEffortFields:
 
     def test_step_fields_pick_up_their_conf_sections(self, tmp_path):
         (tmp_path / "multiplai.conf").write_text(
-            "[buildme]\nEFFORT=low\n[buildme.review]\nEFFORT=high\n")
-        with patch.dict(os.environ, {"CLAUDE_MULTIPLAI_HOME": str(tmp_path),
-                                     "MULTIPLAI_EFFORT": "high"}, clear=True):
+            "[buildme]\nEFFORT=low\n[buildme.review]\nEFFORT=high\n"
+        )
+        with patch.dict(
+            os.environ,
+            {"CLAUDE_MULTIPLAI_HOME": str(tmp_path), "MULTIPLAI_EFFORT": "high"},
+            clear=True,
+        ):
             config = BuildConfig()
             assert config.review_effort == "high"
             # spec/agent inherit the pipeline-wide value
@@ -1173,13 +1315,20 @@ class TestBuildConfigEffortFields:
     def test_explicit_root_effort_reaches_every_step(self, tmp_path):
         """The fallback lives in __post_init__, so a directly-constructed
         config propagates too — per-field conf reads would have ignored it."""
-        with patch.dict(os.environ, {"CLAUDE_MULTIPLAI_HOME": str(tmp_path)}, clear=True):
+        with patch.dict(
+            os.environ, {"CLAUDE_MULTIPLAI_HOME": str(tmp_path)}, clear=True
+        ):
             config = BuildConfig(effort="low")
-            assert (config.spec_effort, config.review_effort, config.agent_effort) == \
-                ("low", "low", "low")
+            assert (config.spec_effort, config.review_effort, config.agent_effort) == (
+                "low",
+                "low",
+                "low",
+            )
 
     def test_an_explicit_step_effort_still_wins_over_the_root(self, tmp_path):
-        with patch.dict(os.environ, {"CLAUDE_MULTIPLAI_HOME": str(tmp_path)}, clear=True):
+        with patch.dict(
+            os.environ, {"CLAUDE_MULTIPLAI_HOME": str(tmp_path)}, clear=True
+        ):
             config = BuildConfig(effort="low", review_effort="max")
             assert config.review_effort == "max"
             assert config.spec_effort == "low"
@@ -1213,7 +1362,9 @@ class TestConfModel:
     def test_blank_value_is_treated_as_unset(self, tmp_path):
         from build_pipeline.config import conf_model
 
-        with patch.dict(os.environ, self._conf(tmp_path, "[buildme.spec]\nMODEL=\n"), clear=True):
+        with patch.dict(
+            os.environ, self._conf(tmp_path, "[buildme.spec]\nMODEL=\n"), clear=True
+        ):
             assert conf_model("buildme.spec") is None
 
     def test_section_model_resolves_to_a_concrete_id(self, tmp_path):
@@ -1240,8 +1391,9 @@ class TestConfModel:
         with patch.dict(os.environ, self._conf(tmp_path, body), clear=True):
             with caplog.at_level("WARNING"):
                 assert conf_model("buildme.review") is None
-        assert any("Ignoring [buildme.review] MODEL=" in r.getMessage()
-                   for r in caplog.records)
+        assert any(
+            "Ignoring [buildme.review] MODEL=" in r.getMessage() for r in caplog.records
+        )
 
 
 class TestBuildConfigModelFields:
@@ -1293,7 +1445,9 @@ class TestBuildConfigModelFields:
         assert config.plan_review_model == CURRENT_MODEL["haiku"]
         assert config.review_model == CURRENT_MODEL["sonnet"]
 
-    def test_plan_review_model_falls_through_to_model_when_review_is_unset(self, tmp_path):
+    def test_plan_review_model_falls_through_to_model_when_review_is_unset(
+        self, tmp_path
+    ):
         """review_model may legitimately be None; plan_review_model must still
         name a model, so its chain ends at `model`."""
         with patch.dict(os.environ, self._env(tmp_path), clear=True):
@@ -1309,8 +1463,10 @@ class TestBuildConfigModelFields:
         assert config.plan_review_effort == "high"
 
     def test_plan_review_effort_reads_its_own_section(self, tmp_path):
-        body = ("[buildme]\nEFFORT=low\n[buildme.review]\nEFFORT=high\n"
-                "[buildme.plan_review]\nEFFORT=medium\n")
+        body = (
+            "[buildme]\nEFFORT=low\n[buildme.review]\nEFFORT=high\n"
+            "[buildme.plan_review]\nEFFORT=medium\n"
+        )
         env = self._env(tmp_path, body)
         env["MULTIPLAI_EFFORT"] = "high"
         with patch.dict(os.environ, env, clear=True):
@@ -1338,7 +1494,9 @@ class TestBuildConfigModelFields:
             config._load_specs_config()
         assert config.review_model == "claude-haiku-4-5"
 
-    def test_an_explicitly_constructed_review_model_survives_specs_config_yaml(self, tmp_path):
+    def test_an_explicitly_constructed_review_model_survives_specs_config_yaml(
+        self, tmp_path
+    ):
         project = tmp_path / "project"
         specs = project / "specs"
         specs.mkdir(parents=True)
@@ -1417,8 +1575,10 @@ class TestPlanSplitTriggers:
         assert config.plan_split_package_trigger == 5
 
     def test_read_from_the_conf(self, tmp_path):
-        body = ("[buildme.plan_review]\nPLAN_SPLIT_BLOCK_TRIGGER=12\n"
-                "PLAN_SPLIT_PACKAGE_TRIGGER=2\n")
+        body = (
+            "[buildme.plan_review]\nPLAN_SPLIT_BLOCK_TRIGGER=12\n"
+            "PLAN_SPLIT_PACKAGE_TRIGGER=2\n"
+        )
         with patch.dict(os.environ, self._env(tmp_path, body), clear=True):
             config = BuildConfig()
         assert config.plan_split_block_trigger == 12
@@ -1607,7 +1767,9 @@ class TestConventionFiles:
         with caplog.at_level("WARNING"):
             text = config.standards_text(["src/a.py"])
         assert "SRC-RULE" in text
-        assert any("Conventions file unreadable" in r.getMessage() for r in caplog.records)
+        assert any(
+            "Conventions file unreadable" in r.getMessage() for r in caplog.records
+        )
 
 
 class TestStageKeys:
@@ -1631,7 +1793,9 @@ class TestStageKeys:
         assert config.model_specs == {}
 
     def test_each_key_is_read(self, tmp_path):
-        config = _config_from_yaml(tmp_path, """
+        config = _config_from_yaml(
+            tmp_path,
+            """
 architecture: docs/architecture.md
 pr:
   template: .github/pull_request_template.md
@@ -1646,7 +1810,8 @@ mutation:
 models:
   spec: claude:opus
   agent: pi:qwen3-coder@openrouter
-""")
+""",
+        )
         assert config.architecture == "docs/architecture.md"
         assert config.pr.template == ".github/pull_request_template.md"
         assert config.pr.max_change_lines == 400
@@ -1655,46 +1820,62 @@ models:
         assert config.findings.allow_bots == ["renovate-bot"]
         assert config.mutation.enabled is False
         assert config.mutation.min_score == 0.65
-        assert config.model_specs == {"spec": "claude:opus",
-                                      "agent": "pi:qwen3-coder@openrouter"}
+        assert config.model_specs == {
+            "spec": "claude:opus",
+            "agent": "pi:qwen3-coder@openrouter",
+        }
 
     def test_pm_specs_intake_and_interview_keys_are_ignored(self, tmp_path, caplog):
         with caplog.at_level("WARNING"):
             config = _config_from_yaml(
-                tmp_path, "intake: {provider: github}\ninterview: self\narchitecture: a.md\n")
+                tmp_path,
+                "intake: {provider: github}\ninterview: self\narchitecture: a.md\n",
+            )
         assert config.architecture == "a.md"
         assert not hasattr(config, "intake") and not hasattr(config, "interview_mode")
         assert not [r for r in caplog.records if r.levelname == "WARNING"]
 
-    @pytest.mark.parametrize("yaml_text, attr, expected", [
-        ("architecture: [a, b]\n", ("architecture",), ""),
-        ("pr: {template: 3}\n", ("pr", "template"), "auto"),
-        ("pr: {max_change_lines: lots}\n", ("pr", "max_change_lines"), 1000),
-        ("pr: {max_change_lines: 0}\n", ("pr", "max_change_lines"), 1000),
-        ("findings: {authors: everyone}\n", ("findings", "authors"), "collaborators"),
-        ("findings: {authors: []}\n", ("findings", "authors"), "collaborators"),
-        ("findings: {max_rounds: -1}\n", ("findings", "max_rounds"), 3),
-        ("findings: {allow_bots: dependabot}\n", ("findings", "allow_bots"), []),
-        ("findings: {allow_bots: [3]}\n", ("findings", "allow_bots"), []),
-        ("mutation: {enabled: sometimes}\n", ("mutation", "enabled"), True),
-        ("mutation: {min_score: 1.5}\n", ("mutation", "min_score"), 0.8),
-        ("mutation: {min_score: high}\n", ("mutation", "min_score"), 0.8),
-    ])
-    def test_invalid_value_warns_and_falls_back(self, tmp_path, caplog, yaml_text,
-                                                attr, expected):
+    @pytest.mark.parametrize(
+        "yaml_text, attr, expected",
+        [
+            ("architecture: [a, b]\n", ("architecture",), ""),
+            ("pr: {template: 3}\n", ("pr", "template"), "auto"),
+            ("pr: {max_change_lines: lots}\n", ("pr", "max_change_lines"), 1000),
+            ("pr: {max_change_lines: 0}\n", ("pr", "max_change_lines"), 1000),
+            (
+                "findings: {authors: everyone}\n",
+                ("findings", "authors"),
+                "collaborators",
+            ),
+            ("findings: {authors: []}\n", ("findings", "authors"), "collaborators"),
+            ("findings: {max_rounds: -1}\n", ("findings", "max_rounds"), 3),
+            ("findings: {allow_bots: dependabot}\n", ("findings", "allow_bots"), []),
+            ("findings: {allow_bots: [3]}\n", ("findings", "allow_bots"), []),
+            ("mutation: {enabled: sometimes}\n", ("mutation", "enabled"), True),
+            ("mutation: {min_score: 1.5}\n", ("mutation", "min_score"), 0.8),
+            ("mutation: {min_score: high}\n", ("mutation", "min_score"), 0.8),
+        ],
+    )
+    def test_invalid_value_warns_and_falls_back(
+        self, tmp_path, caplog, yaml_text, attr, expected
+    ):
         with caplog.at_level("WARNING"):
             config = _config_from_yaml(tmp_path, yaml_text)
         value = config
         for part in attr:
             value = getattr(value, part)
         assert value == expected
-        assert any("config.yaml" in r.getMessage() for r in caplog.records
-                   if r.levelname == "WARNING")
+        assert any(
+            "config.yaml" in r.getMessage()
+            for r in caplog.records
+            if r.levelname == "WARNING"
+        )
 
     def test_unknown_model_prefix_is_dropped_with_a_warning(self, tmp_path, caplog):
         with caplog.at_level("WARNING"):
             config = _config_from_yaml(
-                tmp_path, "models:\n  spec: claude:opus\n  agent: gpt-5\n  review: 7\n")
+                tmp_path, "models:\n  spec: claude:opus\n  agent: gpt-5\n  review: 7\n"
+            )
         assert config.model_specs == {"spec": "claude:opus"}
         assert any("models.agent" in r.getMessage() for r in caplog.records)
         assert any("models.review" in r.getMessage() for r in caplog.records)

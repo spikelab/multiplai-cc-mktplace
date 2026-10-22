@@ -9,7 +9,6 @@ import json
 import pytest
 from fakes import FakeAgents
 from test_pipeline import run_args
-
 from walkthrough_pipeline import budget, sdk
 from walkthrough_pipeline.__main__ import main
 from walkthrough_pipeline.state import STATE_FILE
@@ -21,7 +20,9 @@ def _spend(out: str) -> float:
     return float(last.split(":")[1])
 
 
-def test_run_and_resume_each_print_their_own_spend(ws, tmp_path, monkeypatch, fake_fetch, capsys):
+def test_run_and_resume_each_print_their_own_spend(
+    ws, tmp_path, monkeypatch, fake_fetch, capsys
+):
     monkeypatch.setattr(budget, "_process", budget.ProcessSpend())
     monkeypatch.setattr(sdk, "agent_call_structured", FakeAgents(cost=1.0))
     assert main(run_args(ws, tmp_path, "--max-usd", "1.5")) == 2
@@ -29,7 +30,7 @@ def test_run_and_resume_each_print_their_own_spend(ws, tmp_path, monkeypatch, fa
     first = json.loads((run_dir / STATE_FILE).read_text())["budget"]["cost_usd"]
     assert _spend(capsys.readouterr().out) == pytest.approx(first)
 
-    monkeypatch.setattr(budget, "_process", budget.ProcessSpend())     # a new process
+    monkeypatch.setattr(budget, "_process", budget.ProcessSpend())  # a new process
     assert main(["resume", str(run_dir), "--trust-repo", "--max-usd", "0"]) == 0
     total = json.loads((run_dir / STATE_FILE).read_text())["budget"]["cost_usd"]
     assert total > first
@@ -42,7 +43,7 @@ def test_record_adds_to_the_process_total(monkeypatch):
     monkeypatch.setattr(budget, "_process", budget.ProcessSpend())
     budget.start(None)
     budget.record(SimpleNamespace(input_tokens=10, output_tokens=5, cost_usd=0.5))
-    budget.start(None, {"cost_usd": 9.0})       # a resume restores spend it did not make
+    budget.start(None, {"cost_usd": 9.0})  # a resume restores spend it did not make
     budget.record(SimpleNamespace(input_tokens=1, output_tokens=0, cost_usd=0.25))
     assert budget.spend_marker() == "SPEND:0.750000:16"
 
@@ -53,5 +54,7 @@ def test_record_never_raises_on_a_bad_usage(monkeypatch):
 
     monkeypatch.setattr(budget, "_process", budget.ProcessSpend())
     budget.start(None)
-    budget.record(SimpleNamespace(input_tokens="many", output_tokens=5, cost_usd="a lot"))
+    budget.record(
+        SimpleNamespace(input_tokens="many", output_tokens=5, cost_usd="a lot")
+    )
     assert budget.spend_marker() == "SPEND:0.000000:0"

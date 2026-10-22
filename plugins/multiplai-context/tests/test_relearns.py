@@ -8,18 +8,27 @@ can carry.
 
 import json
 
-import pytest
-
 from lib import relearns
 
 
-def drop(target="git-policy.md", title="Worktree location convention",
-         text="Worktrees live under $WORKSPACE/.worktrees.", kind="RULE",
-         source="2026-08-06.md:12", ts="2026-08-10T20:28:34+00:00",
-         reason="redundant", judge_reason="restates existing entry"):
+def drop(
+    target="git-policy.md",
+    title="Worktree location convention",
+    text="Worktrees live under $WORKSPACE/.worktrees.",
+    kind="RULE",
+    source="2026-08-06.md:12",
+    ts="2026-08-10T20:28:34+00:00",
+    reason="redundant",
+    judge_reason="restates existing entry",
+):
     return {
-        "target": target, "title": title, "text": text, "kind": kind,
-        "source": source, "ts": ts, "reason": reason,
+        "target": target,
+        "title": title,
+        "text": text,
+        "kind": kind,
+        "source": source,
+        "ts": ts,
+        "reason": reason,
         "judge_reason": judge_reason,
     }
 
@@ -73,14 +82,18 @@ class TestGrouping:
         # Titles alone score 0.0 here — under MIN_CONTENT_WORDS — which is
         # exactly why the clustering scores title and text together.
         records = [
-            drop(title="Worktree location convention",
-                 text="All worktrees live under $WORKSPACE/.worktrees, created "
-                      "with git worktree add, never scattered inside a project "
-                      "directory."),
-            drop(title="Worktrees belong outside the repo tree",
-                 text="Every worktree lives under $WORKSPACE/.worktrees and is "
-                      "created with git worktree add; never place one inside a "
-                      "project directory."),
+            drop(
+                title="Worktree location convention",
+                text="All worktrees live under $WORKSPACE/.worktrees, created "
+                "with git worktree add, never scattered inside a project "
+                "directory.",
+            ),
+            drop(
+                title="Worktrees belong outside the repo tree",
+                text="Every worktree lives under $WORKSPACE/.worktrees and is "
+                "created with git worktree add; never place one inside a "
+                "project directory.",
+            ),
         ]
         groups = relearns.group_relearns(relearns.redundant_records(records))
         assert len(groups) == 1
@@ -88,12 +101,16 @@ class TestGrouping:
 
     def test_unrelated_rules_in_one_file_stay_apart(self):
         records = [
-            drop(title="Container git remotes must be HTTPS",
-                 text="Remotes configured inside the container must use HTTPS "
-                      "URLs; an SSH remote cannot authenticate from there."),
-            drop(title="Never bypass a pre-commit hook",
-                 text="Fix whatever the hook is complaining about instead of "
-                      "passing --no-verify to get the commit through."),
+            drop(
+                title="Container git remotes must be HTTPS",
+                text="Remotes configured inside the container must use HTTPS "
+                "URLs; an SSH remote cannot authenticate from there.",
+            ),
+            drop(
+                title="Never bypass a pre-commit hook",
+                text="Fix whatever the hook is complaining about instead of "
+                "passing --no-verify to get the commit through.",
+            ),
         ]
         groups = relearns.group_relearns(relearns.redundant_records(records))
         assert len(groups) == 2
@@ -107,15 +124,21 @@ class TestGrouping:
 
     def test_most_relearned_sorts_first(self):
         records = [
-            drop(title="Container git remotes must be HTTPS",
-                 text="Remotes configured inside the container must use HTTPS "
-                      "URLs; an SSH remote cannot authenticate from there."),
-            drop(title="Worktree location convention",
-                 text="All worktrees live under $WORKSPACE/.worktrees, created "
-                      "with git worktree add, never inside a project."),
-            drop(title="Worktrees belong outside the repo tree",
-                 text="Every worktree lives under $WORKSPACE/.worktrees and is "
-                      "created with git worktree add, never inside a project."),
+            drop(
+                title="Container git remotes must be HTTPS",
+                text="Remotes configured inside the container must use HTTPS "
+                "URLs; an SSH remote cannot authenticate from there.",
+            ),
+            drop(
+                title="Worktree location convention",
+                text="All worktrees live under $WORKSPACE/.worktrees, created "
+                "with git worktree add, never inside a project.",
+            ),
+            drop(
+                title="Worktrees belong outside the repo tree",
+                text="Every worktree lives under $WORKSPACE/.worktrees and is "
+                "created with git worktree add, never inside a project.",
+            ),
         ]
         groups = relearns.group_relearns(relearns.redundant_records(records))
         assert groups[0].count == 2
@@ -123,28 +146,40 @@ class TestGrouping:
 
 class TestInjectionIndex:
     def test_it_maps_day_to_files_and_whether_they_were_used(self):
-        index = relearns.injection_index([
-            session(day="2026-08-06", injected=("git-policy.md", "dev.md"),
-                    used=("dev.md",)),
-        ])
+        index = relearns.injection_index(
+            [
+                session(
+                    day="2026-08-06",
+                    injected=("git-policy.md", "dev.md"),
+                    used=("dev.md",),
+                ),
+            ]
+        )
         assert index["2026-08-06"]["git-policy.md"] is False
         assert index["2026-08-06"]["dev.md"] is True
 
     def test_used_anywhere_that_day_wins(self):
         # OR over the day is the direction that avoids accusing a rule of being
         # ignored when some session did use its file.
-        index = relearns.injection_index([
-            session(day="2026-08-06", injected=("git-policy.md",)),
-            session(day="2026-08-06", injected=("git-policy.md",),
-                    used=("git-policy.md",)),
-        ])
+        index = relearns.injection_index(
+            [
+                session(day="2026-08-06", injected=("git-policy.md",)),
+                session(
+                    day="2026-08-06",
+                    injected=("git-policy.md",),
+                    used=("git-policy.md",),
+                ),
+            ]
+        )
         assert index["2026-08-06"]["git-policy.md"] is True
 
     def test_missing_or_null_lists_do_not_raise(self):
-        index = relearns.injection_index([
-            {"ts": "2026-08-06T09:00:00Z", "injected": None, "judge": None},
-            {"ts": "", "injected": [{"file": "x.md"}]},
-        ])
+        index = relearns.injection_index(
+            [
+                {"ts": "2026-08-06T09:00:00Z", "injected": None, "judge": None},
+                {"ts": "", "injected": [{"file": "x.md"}]},
+            ]
+        )
         assert index == {"2026-08-06": {}}
 
 
@@ -168,8 +203,13 @@ class TestDiagnosis:
         # verdict from it is the failure the pipeline exists to prevent.
         groups = relearns.analyse(
             [drop()],
-            [session(day="2026-08-06", injected=("git-policy.md",),
-                     used=("git-policy.md",))],
+            [
+                session(
+                    day="2026-08-06",
+                    injected=("git-policy.md",),
+                    used=("git-policy.md",),
+                )
+            ],
         )
         assert groups[0].verdict == relearns.INCONCLUSIVE
 
@@ -180,17 +220,24 @@ class TestDiagnosis:
 
     def test_a_routing_hole_on_any_occasion_outranks_the_rest(self):
         records = [
-            drop(source="2026-08-06.md:1",
-                 text="All worktrees live under $WORKSPACE/.worktrees, created "
-                      "with git worktree add, never inside a project."),
-            drop(source="2026-08-07.md:1",
-                 text="Every worktree lives under $WORKSPACE/.worktrees and is "
-                      "created with git worktree add, never inside a project."),
+            drop(
+                source="2026-08-06.md:1",
+                text="All worktrees live under $WORKSPACE/.worktrees, created "
+                "with git worktree add, never inside a project.",
+            ),
+            drop(
+                source="2026-08-07.md:1",
+                text="Every worktree lives under $WORKSPACE/.worktrees and is "
+                "created with git worktree add, never inside a project.",
+            ),
         ]
-        groups = relearns.analyse(records, [
-            session(day="2026-08-06", injected=("git-policy.md",)),
-            session(day="2026-08-07", injected=("dev.md",)),
-        ])
+        groups = relearns.analyse(
+            records,
+            [
+                session(day="2026-08-06", injected=("git-policy.md",)),
+                session(day="2026-08-07", injected=("dev.md",)),
+            ],
+        )
         assert groups[0].count == 2
         assert groups[0].verdict == relearns.NOT_ROUTED
 
@@ -210,10 +257,16 @@ class TestRendering:
 
     def test_the_count_survives_into_the_table(self):
         groups = relearns.analyse(
-            [drop(text="All worktrees live under $WORKSPACE/.worktrees, "
-                       "created with git worktree add, never in a project."),
-             drop(text="Every worktree lives under $WORKSPACE/.worktrees and "
-                       "is created with git worktree add, never in a project.")],
+            [
+                drop(
+                    text="All worktrees live under $WORKSPACE/.worktrees, "
+                    "created with git worktree add, never in a project."
+                ),
+                drop(
+                    text="Every worktree lives under $WORKSPACE/.worktrees and "
+                    "is created with git worktree add, never in a project."
+                ),
+            ],
             [session(day="2026-08-06", injected=("git-policy.md",))],
         )
         out = relearns.render_section(groups)
@@ -231,21 +284,31 @@ class TestRendering:
 
     def test_the_limit_is_reported_when_it_truncates(self):
         records = [
-            drop(title="Container git remotes must be HTTPS",
-                 text="Remotes configured inside the container use HTTPS URLs; "
-                      "an SSH remote cannot authenticate from there."),
-            drop(title="Never bypass a pre-commit hook",
-                 text="Fix whatever the hook complains about instead of passing "
-                      "--no-verify to force the commit through."),
-            drop(title="Absolute paths for git worktree add",
-                 text="Pass an absolute destination to git worktree add; a "
-                      "relative one resolves against the wrong directory."),
-            drop(title="Security commits stay unbundled",
-                 text="A commit fixing a vulnerability carries nothing else, so "
-                      "it can be cherry-picked and audited on its own."),
-            drop(title="Tag only after verifying the version string",
-                 text="Read the version out of the target commit before cutting "
-                      "an annotated tag; never trust the working tree."),
+            drop(
+                title="Container git remotes must be HTTPS",
+                text="Remotes configured inside the container use HTTPS URLs; "
+                "an SSH remote cannot authenticate from there.",
+            ),
+            drop(
+                title="Never bypass a pre-commit hook",
+                text="Fix whatever the hook complains about instead of passing "
+                "--no-verify to force the commit through.",
+            ),
+            drop(
+                title="Absolute paths for git worktree add",
+                text="Pass an absolute destination to git worktree add; a "
+                "relative one resolves against the wrong directory.",
+            ),
+            drop(
+                title="Security commits stay unbundled",
+                text="A commit fixing a vulnerability carries nothing else, so "
+                "it can be cherry-picked and audited on its own.",
+            ),
+            drop(
+                title="Tag only after verifying the version string",
+                text="Read the version out of the target commit before cutting "
+                "an annotated tag; never trust the working tree.",
+            ),
         ]
         out = relearns.render_section(relearns.analyse(records, []), limit=2)
         assert "3 more not shown" in out
@@ -269,6 +332,7 @@ class TestDreamWiring:
 
     def setup_method(self):
         from pathlib import Path
+
         plugin_root = Path(__file__).parent.parent
         self.source = (plugin_root / "scripts" / "dream.py").read_text()
         self.skill = (plugin_root / "skills" / "dream" / "SKILL.md").read_text()
@@ -311,10 +375,18 @@ class TestCliSurface:
         utilisation_path.write_text(json.dumps(session()) + "\n", encoding="utf-8")
 
         result = subprocess.run(
-            [sys.executable, str(scripts / "relearn_report.py"),
-             "--rejections", str(rejections_path),
-             "--utilisation", str(utilisation_path), "--json"],
-            capture_output=True, text=True, timeout=60,
+            [
+                sys.executable,
+                str(scripts / "relearn_report.py"),
+                "--rejections",
+                str(rejections_path),
+                "--utilisation",
+                str(utilisation_path),
+                "--json",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
         )
         assert result.returncode == 0, result.stderr
         payload = json.loads(result.stdout)

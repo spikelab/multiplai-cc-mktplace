@@ -29,8 +29,8 @@ from lib.fleet_sources.jobs import BackgroundJob, collect_jobs
 from lib.fleet_sources.prs import PullRequest, collect_prs, gh_available
 
 __all__ = [
-    "Backlog",
     "BackgroundJob",
+    "Backlog",
     "PullRequest",
     "RepoState",
     "collect_backlog",

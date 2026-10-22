@@ -35,7 +35,9 @@ SEVERITIES = ("critical", "major", "minor")
 ACTIONABLE = ("critical", "major")
 FINDING_ID_PREFIXES = {"prototype": "PT", "consistency": "CC", "revise": "RV"}
 
-REOPEN_LINE = "Edit the files to fix these and run again; the step then gets one rewrite."
+REOPEN_LINE = (
+    "Edit the files to fix these and run again; the step then gets one rewrite."
+)
 
 
 class PriorAssessment(BaseModel):
@@ -57,19 +59,35 @@ def finding_text(finding: dict) -> str:
     if finding.get("text"):
         return str(finding["text"])
     return str(finding.get("description", "")) + (
-        f" Fix: {finding['suggestion']}" if finding.get("suggestion") else "")
+        f" Fix: {finding['suggestion']}" if finding.get("suggestion") else ""
+    )
 
 
 def number_findings(step: str, findings: list[dict], *, start: int = 1) -> list[dict]:
     """Copies of *findings*, each with an id `<prefix>-F<n>` and the text the
     rewrite and the recheck are shown."""
     prefix = FINDING_ID_PREFIXES[step]
-    return [{**f, "finding_id": f"{prefix}-F{n}", "severity": f.get("severity", "major"),
-             "category": f.get("category", ""), "text": finding_text(f)}
-            for n, f in enumerate(findings, start)]
+    return [
+        {
+            **f,
+            "finding_id": f"{prefix}-F{n}",
+            "severity": f.get("severity", "major"),
+            "category": f.get("category", ""),
+            "text": finding_text(f),
+        }
+        for n, f in enumerate(findings, start)
+    ]
 
 
-SAVED_KEYS = ("finding_id", "severity", "category", "text", "places", "status", "evidence")
+SAVED_KEYS = (
+    "finding_id",
+    "severity",
+    "category",
+    "text",
+    "places",
+    "status",
+    "evidence",
+)
 
 
 def saved_findings(findings: list[dict]) -> list[dict]:
@@ -79,29 +97,52 @@ def saved_findings(findings: list[dict]) -> list[dict]:
 def assess_listed(listed: list[dict], assessments) -> list[dict]:
     """Each listed finding with the recheck's status; none given is `cannot_verify`."""
     given = {a.finding_id: a for a in assessments or []}
-    return [{**f, "status": given[f["finding_id"]].status if f["finding_id"] in given else "cannot_verify",
-             "evidence": given[f["finding_id"]].evidence if f["finding_id"] in given else ""}
-            for f in listed]
+    return [
+        {
+            **f,
+            "status": given[f["finding_id"]].status
+            if f["finding_id"] in given
+            else "cannot_verify",
+            "evidence": given[f["finding_id"]].evidence
+            if f["finding_id"] in given
+            else "",
+        }
+        for f in listed
+    ]
 
 
 def new_finding(finding: dict) -> dict:
-    out = {"finding_id": "", "severity": finding.get("severity", "major"),
-           "category": finding.get("category", ""), "text": finding_text(finding), "status": "new"}
+    out = {
+        "finding_id": "",
+        "severity": finding.get("severity", "major"),
+        "category": finding.get("category", ""),
+        "text": finding_text(finding),
+        "status": "new",
+    }
     if finding.get("places"):
         out["places"] = finding["places"]
     return out
 
 
-def recheck_verdict(listed: list[dict], assessments, new_findings: list[dict], *,
-                    deterministic: list[dict] = ()) -> tuple[list[dict], list[dict]]:
+def recheck_verdict(
+    listed: list[dict],
+    assessments,
+    new_findings: list[dict],
+    *,
+    deterministic: list[dict] = (),
+) -> tuple[list[dict], list[dict]]:
     """(blocking, advisory) after a rewrite. Blocking: a listed finding not
     `resolved`, a new critical finding, and every deterministic finding (a
     rewrite that broke a file's format). Advisory: every other new finding."""
-    blocking = [f for f in assess_listed(listed, assessments) if f["status"] != "resolved"]
+    blocking = [
+        f for f in assess_listed(listed, assessments) if f["status"] != "resolved"
+    ]
     blocking += [new_finding(f) for f in deterministic]
     advisory = []
     for finding in new_findings:
-        (blocking if finding.get("severity") == "critical" else advisory).append(new_finding(finding))
+        (blocking if finding.get("severity") == "critical" else advisory).append(
+            new_finding(finding)
+        )
     return blocking, advisory
 
 
@@ -118,11 +159,13 @@ def findings_report(findings: list[dict]) -> str:
     for f in findings:
         places = "; ".join(_place(p) for p in f.get("places") or [])
         lines.append(
-            "- " + (f"{f['finding_id']} " if f.get("finding_id") else "")
+            "- "
+            + (f"{f['finding_id']} " if f.get("finding_id") else "")
             + f"{f.get('status') or 'open'} [{f.get('severity', '?')}] ({f.get('category') or '?'}) "
             + finding_text(f)
             + (f" Places: {places}." if places else "")
-            + (f" Evidence: {f['evidence']}" if f.get("evidence") else ""))
+            + (f" Evidence: {f['evidence']}" if f.get("evidence") else "")
+        )
     return "\n".join(lines)
 
 
@@ -135,9 +178,15 @@ def _place(place) -> str:
 
 def log_findings(step: str, label: str, findings: list[dict]) -> None:
     for f in findings:
-        log.warning("%s %s finding id=%s status=%s severity=%s text=%s", step, label,
-                    f.get("finding_id") or "-", f.get("status") or "open",
-                    f.get("severity", "?"), finding_text(f)[:300])
+        log.warning(
+            "%s %s finding id=%s status=%s severity=%s text=%s",
+            step,
+            label,
+            f.get("finding_id") or "-",
+            f.get("status") or "open",
+            f.get("severity", "?"),
+            finding_text(f)[:300],
+        )
 
 
 def record_advisory(run: Run, name: str, advisory: list[dict]) -> None:
@@ -147,7 +196,10 @@ def record_advisory(run: Run, name: str, advisory: list[dict]) -> None:
     if advisory:
         log_findings(name, "advisory", advisory)
         run.progress(name.upper() + "_ADVISORY", findings_report(advisory))
-        print(f"{name}: advisory findings (not blocking)\n{findings_report(advisory)}", flush=True)
+        print(
+            f"{name}: advisory findings (not blocking)\n{findings_report(advisory)}",
+            flush=True,
+        )
 
 
 def admit_repair(run: Run, name: str, revision: str, numbered: list[dict]) -> None:
@@ -165,7 +217,10 @@ def admit_repair(run: Run, name: str, revision: str, numbered: list[dict]) -> No
     step.blocking_findings = []
     run.save()
     log_findings(name, "listed", numbered)
-    run.progress(name.upper() + "_REWRITE", "One rewrite admitted for:\n" + findings_report(numbered))
+    run.progress(
+        name.upper() + "_REWRITE",
+        "One rewrite admitted for:\n" + findings_report(numbered),
+    )
 
 
 def record_passed(run: Run, name: str, revision: str, reason: str = "") -> None:
@@ -196,7 +251,9 @@ def record_error(run: Run, name: str, reason: str) -> None:
     run.progress(name.upper() + "_ERROR", reason)
 
 
-def block_on_findings(run: Run, name: str, revision: str, reason: str, blocking: list[dict]) -> None:
+def block_on_findings(
+    run: Run, name: str, revision: str, reason: str, blocking: list[dict]
+) -> None:
     """Record a final block on *blocking*, save, log and print them, and stop with exit 4."""
     step = run.state.step(name)
     step.outcome = "blocked"
@@ -216,7 +273,10 @@ def block_on_findings(run: Run, name: str, revision: str, reason: str, blocking:
 def refusal_text(name: str, step: StepOutcome) -> str:
     parts = [f"{name} is blocked at this revision of the files."]
     if step.repair_findings:
-        parts += ["Findings the rewrite was asked to fix:", findings_report(step.repair_findings)]
+        parts += [
+            "Findings the rewrite was asked to fix:",
+            findings_report(step.repair_findings),
+        ]
     if step.blocking_findings:
         parts += ["Blocking findings:", findings_report(step.blocking_findings)]
     elif step.reason:
@@ -239,15 +299,24 @@ def refuse_if_blocked(run: Run, name: str, revision: str) -> None:
 def reopen_if_edited(run: Run, name: str, revision: str) -> None:
     """A step findings blocked whose files changed since gets its one rewrite back."""
     step = run.state.steps.get(name)
-    if not (step and step.outcome == "blocked" and step.blocked_revision
-            and step.blocked_revision != revision):
+    if not (
+        step
+        and step.outcome == "blocked"
+        and step.blocked_revision
+        and step.blocked_revision != revision
+    ):
         return
     step.repair_attempts = 0
     step.repair_findings = []
     step.rewrite_published = False
     step.blocked_revision = None
-    log.warning("%s: the files changed since it was blocked; one rewrite allowed again", name)
-    run.progress(name.upper() + "_REOPENED", "The files changed since the block; one rewrite allowed again.")
+    log.warning(
+        "%s: the files changed since it was blocked; one rewrite allowed again", name
+    )
+    run.progress(
+        name.upper() + "_REOPENED",
+        "The files changed since the block; one rewrite allowed again.",
+    )
     run.save()
 
 
@@ -263,5 +332,10 @@ def restart_if_passed_earlier(run: Run, name: str, revision: str) -> None:
 def rewrite_pending(run: Run, name: str) -> bool:
     """The step's rewrite was admitted and its recheck has not finished."""
     step = run.state.steps.get(name)
-    return bool(step and step.repair_attempts and step.outcome == "blocked"
-                and step.blocked_revision is None and step.repair_findings)
+    return bool(
+        step
+        and step.repair_attempts
+        and step.outcome == "blocked"
+        and step.blocked_revision is None
+        and step.repair_findings
+    )

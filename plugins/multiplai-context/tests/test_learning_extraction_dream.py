@@ -18,14 +18,7 @@ These tests MUST FAIL against the current stub implementations.
 """
 
 import ast
-import asyncio
-import inspect
-import os
-import re
-import sys
-import textwrap
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -57,6 +50,7 @@ ALL_SCRIPT_NAMES = [
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _read_source(path: Path) -> str:
     """Read a script's source code."""
     return path.read_text(encoding="utf-8")
@@ -83,6 +77,7 @@ def _find_imports(tree: ast.Module) -> list[str]:
 # ===================================================================
 # Requirement: PEP 723 inline metadata present in all four scripts
 # ===================================================================
+
 
 class TestDependencyDeclaration:
     """Dependencies live in the workspace member, not in each script.
@@ -130,6 +125,7 @@ class TestDependencyDeclaration:
 # Requirement: No direct claude_agent_sdk imports in ported scripts
 # ===================================================================
 
+
 class TestNoDirectSDKImports:
     """Every ported script must use ModelClient abstraction.
     No script may import claude_agent_sdk or anthropic directly."""
@@ -167,6 +163,7 @@ class TestNoDirectSDKImports:
 # Requirement: No hardcoded path constants in ported scripts
 # ===================================================================
 
+
 class TestNoHardcodedPaths:
     """Every ported script must resolve file paths via paths.* —
     no hardcoded home-directory paths."""
@@ -196,8 +193,8 @@ class TestNoHardcodedPaths:
         THEN it imports from lib.paths."""
         source = _read_source(script_path)
         has_paths_import = (
-            "from multiplai_core.paths" in source or
-            "import multiplai_core.paths" in source
+            "from multiplai_core.paths" in source
+            or "import multiplai_core.paths" in source
         )
         assert has_paths_import, (
             f"{script_path.name} must import from multiplai_core.paths for path resolution"
@@ -207,6 +204,7 @@ class TestNoHardcodedPaths:
 # ===================================================================
 # Requirement: No git_stage / auto-commit logic (D8 stripping)
 # ===================================================================
+
 
 class TestGitLogicStripped:
     """All ported scripts must have git_stage(), git add, git commit
@@ -239,6 +237,7 @@ class TestGitLogicStripped:
 # Requirement: All scripts are syntactically valid Python
 # ===================================================================
 
+
 class TestSyntaxValidity:
     """All four scripts must parse as valid Python 3.12+."""
 
@@ -257,6 +256,7 @@ class TestSyntaxValidity:
 # Requirement: Scripts use sys.path setup for lib imports
 # ===================================================================
 
+
 class TestSysPathSetup:
     """Scripts must set up sys.path so lib.* imports work."""
 
@@ -273,6 +273,7 @@ class TestSysPathSetup:
 # ===================================================================
 # Requirement: Extract Learnings Port — specific behaviors
 # ===================================================================
+
 
 class TestExtractLearningsPort:
     """extract_learnings.py must be ported with path/SDK/stripping transforms."""
@@ -300,12 +301,12 @@ class TestExtractLearningsPort:
         THEN it reads session transcript or conversation data from stdin/input."""
         source = _read_source(EXTRACT_LEARNINGS)
         reads_input = (
-            "stdin" in source or
-            "sys.stdin" in source or
-            "json.load" in source or
-            "input()" in source or
-            "hook_input" in source or
-            "read()" in source
+            "stdin" in source
+            or "sys.stdin" in source
+            or "json.load" in source
+            or "input()" in source
+            or "hook_input" in source
+            or "read()" in source
         )
         assert reads_input, (
             "extract_learnings.py must read session data (stdin JSON or hook input) "
@@ -331,12 +332,12 @@ class TestExtractLearningsPort:
         source = _read_source(EXTRACT_LEARNINGS)
         # Must have a guard that checks if learnings were produced before writing
         has_guard = (
-            "if not learnings" in source or
-            "if learnings" in source or
-            "if len(learnings)" in source or
-            "if result" in source or
-            "no learnings" in source.lower() or
-            "nothing to" in source.lower()
+            "if not learnings" in source
+            or "if learnings" in source
+            or "if len(learnings)" in source
+            or "if result" in source
+            or "no learnings" in source.lower()
+            or "nothing to" in source.lower()
         )
         assert has_guard, (
             "extract_learnings.py must guard against writing empty learnings — "
@@ -348,11 +349,11 @@ class TestExtractLearningsPort:
         THEN they are appended to the existing file, not overwriting it."""
         source = _read_source(EXTRACT_LEARNINGS)
         has_append = (
-            '"a"' in source or
-            "'a'" in source or
-            "append" in source or
-            "mode='a'" in source or
-            'mode="a"' in source
+            '"a"' in source
+            or "'a'" in source
+            or "append" in source
+            or "mode='a'" in source
+            or 'mode="a"' in source
         )
         assert has_append, (
             "extract_learnings.py must append learnings to the file, not overwrite. "
@@ -363,10 +364,7 @@ class TestExtractLearningsPort:
         """WHEN extract-learnings produces learnings
         THEN they are written under paths.memory_dir() (via learnings_file)."""
         source = _read_source(EXTRACT_LEARNINGS)
-        has_memory_path = (
-            "memory_dir" in source or
-            "learnings_file" in source
-        )
+        has_memory_path = "memory_dir" in source or "learnings_file" in source
         assert has_memory_path, (
             "extract_learnings.py must write learnings to a path derived from "
             "paths.memory_dir() or paths.learnings_file()"
@@ -377,6 +375,7 @@ class TestExtractLearningsPort:
 # Requirement: Dream Port — specific behaviors
 # ===================================================================
 
+
 class TestAutodreamPort:
     """dream.py must be ported with concurrent LLM calls via async model client."""
 
@@ -385,8 +384,7 @@ class TestAutodreamPort:
         THEN it uses ModelClient methods via create_client()."""
         source = _read_source(DREAM)
         assert "create_client" in source, (
-            "dream.py must use create_client() from lib.model_client "
-            "for LLM synthesis"
+            "dream.py must use create_client() from lib.model_client for LLM synthesis"
         )
 
     def test_reads_learnings_from_path_resolver(self):
@@ -430,10 +428,10 @@ class TestAutodreamPort:
         THEN it uses concurrent LLM calls (asyncio.gather or TaskGroup)."""
         source = _read_source(DREAM)
         has_concurrency = (
-            "asyncio.gather" in source or
-            "TaskGroup" in source or
-            "create_task" in source or
-            "gather(" in source
+            "asyncio.gather" in source
+            or "TaskGroup" in source
+            or "create_task" in source
+            or "gather(" in source
         )
         assert has_concurrency, (
             "dream.py must use concurrent LLM calls (asyncio.gather, TaskGroup, "
@@ -444,9 +442,8 @@ class TestAutodreamPort:
         """WHEN dream updates dream state
         THEN dream state is written to paths.plugin_data() / dream_state."""
         source = _read_source(DREAM)
-        has_state_write = (
-            "dream_state" in source and
-            ("write" in source or "dump" in source or "save" in source)
+        has_state_write = "dream_state" in source and (
+            "write" in source or "dump" in source or "save" in source
         )
         assert has_state_write, (
             "dream.py must persist dream state (last run timestamp, etc.) "
@@ -458,12 +455,12 @@ class TestAutodreamPort:
         THEN it exits early without modifying memory files."""
         source = _read_source(DREAM)
         has_empty_check = (
-            "not learnings" in source or
-            "is empty" in source.lower() or
-            "nothing to consolidate" in source.lower() or
-            "no learnings" in source.lower() or
-            'learnings_file.exists()' in source or
-            "if not learnings" in source
+            "not learnings" in source
+            or "is empty" in source.lower()
+            or "nothing to consolidate" in source.lower()
+            or "no learnings" in source.lower()
+            or "learnings_file.exists()" in source
+            or "if not learnings" in source
         )
         assert has_empty_check, (
             "dream.py must check for empty/missing learnings and exit early"
@@ -474,9 +471,9 @@ class TestAutodreamPort:
         THEN it exits gracefully without error."""
         source = _read_source(DREAM)
         has_existence_check = (
-            ".exists()" in source or
-            "FileNotFoundError" in source or
-            "not learnings_file" in source
+            ".exists()" in source
+            or "FileNotFoundError" in source
+            or "not learnings_file" in source
         )
         assert has_existence_check, (
             "dream.py must handle missing learnings file gracefully"
@@ -486,6 +483,7 @@ class TestAutodreamPort:
 # ===================================================================
 # Requirement: Dream — functional behavior tests
 # ===================================================================
+
 
 class TestAutodreamFunctional:
     """Functional tests for dream.py using mocked dependencies."""
@@ -516,6 +514,7 @@ class TestAutodreamFunctional:
         """WHEN dream runs in plugin mode
         THEN per-day learnings live under paths.learnings_dir()."""
         from multiplai_core.paths import get_paths
+
         paths = get_paths()
 
         learnings_today = paths.learnings_file("2026-01-01")
@@ -533,6 +532,7 @@ class TestAutodreamFunctional:
         """WHEN dream updates dream state
         THEN it writes to plugin data directory."""
         from multiplai_core.paths import get_paths
+
         paths = get_paths()
         dream_state = paths.dream_state_file()
         assert str(mock_env["data"]) in str(dream_state), (
@@ -543,6 +543,7 @@ class TestAutodreamFunctional:
         """WHEN dream produces memory file updates
         THEN they are written to the configured memory directory."""
         from multiplai_core.paths import get_paths
+
         paths = get_paths()
         assert paths.memory_dir() == mock_env["memory"], (
             "Memory dir should resolve to the configured CLAUDE_PLUGIN_OPTION_MEMORY_DIR"
@@ -552,6 +553,7 @@ class TestAutodreamFunctional:
 # ===================================================================
 # Requirement: Synthesize Now Port — specific behaviors
 # ===================================================================
+
 
 class TestSynthesizeNowPort:
     """synthesize_now.py must be ported with path resolution and model client."""
@@ -585,10 +587,10 @@ class TestSynthesizeNowPort:
         THEN it groups them by project (derived from working-directory path)."""
         source = _read_source(SYNTHESIZE_NOW)
         has_grouping = (
-            "_derive_project_name" in source or
-            "project_name" in source or
-            "entries_by_project" in source or
-            "Path(working_dir).name" in source
+            "_derive_project_name" in source
+            or "project_name" in source
+            or "entries_by_project" in source
+            or "Path(working_dir).name" in source
         )
         assert has_grouping, (
             "synthesize_now.py must group diary entries by project name"
@@ -598,11 +600,7 @@ class TestSynthesizeNowPort:
         """WHEN synthesize-now produces a synthesis artifact
         THEN the artifact is written to a path resolved via paths.*."""
         source = _read_source(SYNTHESIZE_NOW)
-        has_write = (
-            "write" in source or
-            "open(" in source or
-            "save" in source.lower()
-        )
+        has_write = "write" in source or "open(" in source or "save" in source.lower()
         assert has_write, (
             "synthesize_now.py must write synthesis output to a path-resolved location"
         )
@@ -639,6 +637,7 @@ class TestSynthesizeNowPort:
 # Requirement: PreCompact Port — specific behaviors
 # ===================================================================
 
+
 class TestPreCompactPort:
     """pre_compact.py must handle PreCompact hook event correctly."""
 
@@ -657,9 +656,7 @@ class TestPreCompactPort:
         assert 'if __name__ == "__main__"' in source, (
             "pre_compact.py must have a __main__ guard"
         )
-        assert "def main" in source, (
-            "pre_compact.py must have a main() function"
-        )
+        assert "def main" in source, "pre_compact.py must have a main() function"
 
     def test_reads_context_for_preservation(self):
         """WHEN the PreCompact hook fires
@@ -667,13 +664,13 @@ class TestPreCompactPort:
         to preserve important information before compaction."""
         source = _read_source(PRE_COMPACT)
         preserves_context = (
-            "learnings" in source.lower() or
-            "memory" in source.lower() or
-            "diary" in source.lower() or
-            "context" in source.lower() or
-            "session" in source.lower() or
-            "synthesize" in source.lower() or
-            "extract" in source.lower()
+            "learnings" in source.lower()
+            or "memory" in source.lower()
+            or "diary" in source.lower()
+            or "context" in source.lower()
+            or "session" in source.lower()
+            or "synthesize" in source.lower()
+            or "extract" in source.lower()
         )
         assert preserves_context, (
             "pre_compact.py must preserve context (learnings, session state) "
@@ -685,13 +682,13 @@ class TestPreCompactPort:
         THEN it writes to a path resolved via paths.*."""
         source = _read_source(PRE_COMPACT)
         has_output = (
-            "write" in source or
-            "dump" in source or
-            "save" in source.lower() or
-            "append" in source.lower() or
-            "learnings_file" in source or
-            "diary_dir" in source or
-            "memory_dir" in source
+            "write" in source
+            or "dump" in source
+            or "save" in source.lower()
+            or "append" in source.lower()
+            or "learnings_file" in source
+            or "diary_dir" in source
+            or "memory_dir" in source
         )
         assert has_output, (
             "pre_compact.py must write preserved context to a path-resolved location"
@@ -709,9 +706,9 @@ class TestPreCompactPort:
         else:
             # If no LLM calls, it should at least trigger extract_learnings or similar
             has_trigger = (
-                "extract" in source.lower() or
-                "subprocess" in source or
-                "learnings" in source.lower()
+                "extract" in source.lower()
+                or "subprocess" in source
+                or "learnings" in source.lower()
             )
             assert has_trigger, (
                 "pre_compact.py must either use LLM (via create_client) or "
@@ -723,31 +720,38 @@ class TestPreCompactPort:
 # Requirement: LLM calls go through ModelClient interface
 # ===================================================================
 
+
 class TestModelClientUsage:
     """Scripts that make LLM calls must use the ModelClient interface."""
 
-    @pytest.mark.parametrize("script_path,script_name", [
-        (EXTRACT_LEARNINGS, "extract_learnings.py"),
-        (DREAM, "dream.py"),
-        (SYNTHESIZE_NOW, "synthesize_now.py"),
-    ])
+    @pytest.mark.parametrize(
+        "script_path,script_name",
+        [
+            (EXTRACT_LEARNINGS, "extract_learnings.py"),
+            (DREAM, "dream.py"),
+            (SYNTHESIZE_NOW, "synthesize_now.py"),
+        ],
+    )
     def test_llm_scripts_use_create_client(self, script_path, script_name):
         """WHEN any LLM-calling script is inspected
         THEN it imports create_client from lib.model_client."""
         source = _read_source(script_path)
         has_model_import = (
-            "from multiplai_core.model_client import" in source or
-            "from multiplai_core.model_client import create_client" in source
+            "from multiplai_core.model_client import" in source
+            or "from multiplai_core.model_client import create_client" in source
         )
         assert has_model_import, (
             f"{script_name} must import create_client from multiplai_core.model_client"
         )
 
-    @pytest.mark.parametrize("script_path,script_name", [
-        (EXTRACT_LEARNINGS, "extract_learnings.py"),
-        (DREAM, "dream.py"),
-        (SYNTHESIZE_NOW, "synthesize_now.py"),
-    ])
+    @pytest.mark.parametrize(
+        "script_path,script_name",
+        [
+            (EXTRACT_LEARNINGS, "extract_learnings.py"),
+            (DREAM, "dream.py"),
+            (SYNTHESIZE_NOW, "synthesize_now.py"),
+        ],
+    )
     def test_llm_scripts_await_create_client(self, script_path, script_name):
         """WHEN the script creates a client
         THEN it awaits create_client() inside an async function."""
@@ -756,22 +760,27 @@ class TestModelClientUsage:
             f"{script_name} must 'await create_client(...)' inside an async function"
         )
 
-    @pytest.mark.parametrize("script_path,script_name", [
-        (EXTRACT_LEARNINGS, "extract_learnings.py"),
-        (DREAM, "dream.py"),
-        (SYNTHESIZE_NOW, "synthesize_now.py"),
-    ])
+    @pytest.mark.parametrize(
+        "script_path,script_name",
+        [
+            (EXTRACT_LEARNINGS, "extract_learnings.py"),
+            (DREAM, "dream.py"),
+            (SYNTHESIZE_NOW, "synthesize_now.py"),
+        ],
+    )
     def test_llm_scripts_call_query(self, script_path, script_name):
         """WHEN the script uses the model client
         THEN it or its shared lib calls client.query() to make LLM requests."""
         source = _read_source(script_path)
         # extract_learnings delegates to lib/extraction.py; check both
         lib_extraction = SCRIPTS_DIR / "lib" / "extraction.py"
-        combined = source + (lib_extraction.read_text() if lib_extraction.exists() else "")
+        combined = source + (
+            lib_extraction.read_text() if lib_extraction.exists() else ""
+        )
         has_query_call = (
-            ".query(" in combined or
-            "client.query" in combined or
-            "await client.query" in combined
+            ".query(" in combined
+            or "client.query" in combined
+            or "await client.query" in combined
         )
         assert has_query_call, (
             f"{script_name} must call client.query() for LLM requests"
@@ -781,6 +790,7 @@ class TestModelClientUsage:
 # ===================================================================
 # Requirement: Memory file writes go to paths.memory_dir
 # ===================================================================
+
 
 class TestMemoryFileWriteLocations:
     """Verify that memory file writes go to paths.memory_dir
@@ -807,9 +817,8 @@ class TestMemoryFileWriteLocations:
         THEN it writes those updates to the directory returned by paths.memory_dir()."""
         source = _read_source(DREAM)
         # Must have logic to write updated memory files
-        has_memory_write = (
-            "memory_dir" in source and
-            ("write" in source or "open" in source)
+        has_memory_write = "memory_dir" in source and (
+            "write" in source or "open" in source
         )
         assert has_memory_write, (
             "dream.py must write updated memory files to paths.memory_dir()"
@@ -827,6 +836,7 @@ class TestMemoryFileWriteLocations:
 # ===================================================================
 # Requirement: No bash wrapper scripts
 # ===================================================================
+
 
 class TestNoBashWrappers:
     """All ported scripts must be pure Python.
@@ -887,6 +897,7 @@ class TestNoBashWrappers:
 # Requirement: Extract learnings — query with system prompt
 # ===================================================================
 
+
 class TestExtractLearningsQueryPattern:
     """Extract learnings must send a system prompt and messages to the LLM
     for learning identification."""
@@ -897,10 +908,11 @@ class TestExtractLearningsQueryPattern:
         source = _read_source(EXTRACT_LEARNINGS)
         # May delegate to lib/extraction.py
         lib_extraction = SCRIPTS_DIR / "lib" / "extraction.py"
-        combined = source + (lib_extraction.read_text() if lib_extraction.exists() else "")
-        has_system = (
-            "system" in combined.lower() and
-            ("prompt" in combined.lower() or "='" in combined or '="' in combined)
+        combined = source + (
+            lib_extraction.read_text() if lib_extraction.exists() else ""
+        )
+        has_system = "system" in combined.lower() and (
+            "prompt" in combined.lower() or "='" in combined or '="' in combined
         )
         assert has_system, (
             "extract_learnings.py must provide a system prompt for the LLM call "
@@ -912,9 +924,9 @@ class TestExtractLearningsQueryPattern:
         THEN it builds messages from the session transcript."""
         source = _read_source(EXTRACT_LEARNINGS)
         has_messages = (
-            "messages" in source or
-            "transcript" in source.lower() or
-            "conversation" in source.lower()
+            "messages" in source
+            or "transcript" in source.lower()
+            or "conversation" in source.lower()
         )
         assert has_messages, (
             "extract_learnings.py must build messages from session transcript "
@@ -926,6 +938,7 @@ class TestExtractLearningsQueryPattern:
 # Requirement: Dream concurrent processing
 # ===================================================================
 
+
 class TestAutodreamConcurrency:
     """Dream must use concurrent LLM calls for processing multiple
     memory files in parallel."""
@@ -935,10 +948,11 @@ class TestAutodreamConcurrency:
         THEN it can process updates for multiple memory files."""
         source = _read_source(DREAM)
         has_multi_file = (
-            "for " in source and "memory" in source.lower() or
-            "files" in source.lower() or
-            "glob" in source or
-            "iterdir" in source
+            "for " in source
+            and "memory" in source.lower()
+            or "files" in source.lower()
+            or "glob" in source
+            or "iterdir" in source
         )
         assert has_multi_file, (
             "dream.py must handle processing updates for multiple memory files"
@@ -957,6 +971,7 @@ class TestAutodreamConcurrency:
 # Requirement: Dream dream state management
 # ===================================================================
 
+
 class TestAutodreamDreamState:
     """Dream must read/write dream state to track consolidation runs."""
 
@@ -964,23 +979,23 @@ class TestAutodreamDreamState:
         """WHEN dream starts
         THEN it reads existing dream state to check last run time."""
         source = _read_source(DREAM)
-        has_state_read = (
-            "dream_state" in source and
-            ("read" in source or "load" in source or "open" in source or
-             "exists" in source)
+        has_state_read = "dream_state" in source and (
+            "read" in source
+            or "load" in source
+            or "open" in source
+            or "exists" in source
         )
-        assert has_state_read, (
-            "dream.py must read dream state to check last run timing"
-        )
+        assert has_state_read, "dream.py must read dream state to check last run timing"
 
     def test_updates_dream_state_after_run(self):
         """WHEN dream completes successfully
         THEN it updates the dream state with the current timestamp."""
         source = _read_source(DREAM)
-        has_state_update = (
-            "dream_state" in source and
-            ("write" in source or "dump" in source or "save" in source or
-             "timestamp" in source.lower())
+        has_state_update = "dream_state" in source and (
+            "write" in source
+            or "dump" in source
+            or "save" in source
+            or "timestamp" in source.lower()
         )
         assert has_state_update, (
             "dream.py must update dream state after successful consolidation"
@@ -990,10 +1005,7 @@ class TestAutodreamDreamState:
         """WHEN dream persists dream state
         THEN it uses YAML format (as specified by dream_state_file path .yaml)."""
         source = _read_source(DREAM)
-        has_yaml = (
-            "yaml" in source.lower() or
-            "pyyaml" in source.lower()
-        )
+        has_yaml = "yaml" in source.lower() or "pyyaml" in source.lower()
         assert has_yaml, (
             "dream.py must use YAML for dream state persistence "
             "(dream_state_file is .yaml)"
@@ -1003,6 +1015,7 @@ class TestAutodreamDreamState:
 # ===================================================================
 # Requirement: Synthesize Now — reads all input sources
 # ===================================================================
+
 
 class TestSynthesizeNowInputs:
     """Synthesize-now must read from diary, learnings, and memory files."""
@@ -1027,11 +1040,11 @@ class TestSynthesizeNowInputs:
         THEN it handles the missing directory gracefully."""
         source = _read_source(SYNTHESIZE_NOW)
         has_existence_check = (
-            ".exists()" in source or
-            "FileNotFoundError" in source or
-            "OSError" in source or
-            "if not diary" in source.lower() or
-            "mkdir" in source
+            ".exists()" in source
+            or "FileNotFoundError" in source
+            or "OSError" in source
+            or "if not diary" in source.lower()
+            or "mkdir" in source
         )
         assert has_existence_check, (
             "synthesize_now.py must handle missing diary directory gracefully"
@@ -1042,6 +1055,7 @@ class TestSynthesizeNowInputs:
 # Requirement: PreCompact triggers context preservation
 # ===================================================================
 
+
 class TestPreCompactBehavior:
     """PreCompact hook must preserve context before compaction."""
 
@@ -1049,9 +1063,7 @@ class TestPreCompactBehavior:
         """WHEN pre_compact.py is loaded
         THEN it has a valid main() that can be called."""
         source = _read_source(PRE_COMPACT)
-        assert "def main" in source, (
-            "pre_compact.py must have a main() function"
-        )
+        assert "def main" in source, "pre_compact.py must have a main() function"
 
     def test_extracts_or_preserves_learnings(self):
         """WHEN PreCompact fires
@@ -1059,13 +1071,13 @@ class TestPreCompactBehavior:
         survive the compaction."""
         source = _read_source(PRE_COMPACT)
         has_preservation = (
-            "extract" in source.lower() or
-            "learnings" in source.lower() or
-            "preserve" in source.lower() or
-            "save" in source.lower() or
-            "write" in source.lower() or
-            "synthesize" in source.lower() or
-            "flush" in source.lower()
+            "extract" in source.lower()
+            or "learnings" in source.lower()
+            or "preserve" in source.lower()
+            or "save" in source.lower()
+            or "write" in source.lower()
+            or "synthesize" in source.lower()
+            or "flush" in source.lower()
         )
         assert has_preservation, (
             "pre_compact.py must extract/preserve learnings before compaction. "
@@ -1097,6 +1109,7 @@ class TestPreCompactBehavior:
 # Integration-style tests: verify the scripts work together
 # ===================================================================
 
+
 class TestScriptIntegrationPatterns:
     """Verify the ported scripts follow consistent patterns."""
 
@@ -1115,24 +1128,24 @@ class TestScriptIntegrationPatterns:
         """WHEN each script is read
         THEN it has an if __name__ == '__main__' guard."""
         source = _read_source(script_path)
-        assert '__name__' in source and '__main__' in source, (
+        assert "__name__" in source and "__main__" in source, (
             f"{script_path.name} must have an if __name__ == '__main__' guard"
         )
 
-    @pytest.mark.parametrize("script_path,script_name", [
-        (EXTRACT_LEARNINGS, "extract_learnings.py"),
-        (DREAM, "dream.py"),
-        (SYNTHESIZE_NOW, "synthesize_now.py"),
-    ], ids=["extract_learnings", "dream", "synthesize_now"])
+    @pytest.mark.parametrize(
+        "script_path,script_name",
+        [
+            (EXTRACT_LEARNINGS, "extract_learnings.py"),
+            (DREAM, "dream.py"),
+            (SYNTHESIZE_NOW, "synthesize_now.py"),
+        ],
+        ids=["extract_learnings", "dream", "synthesize_now"],
+    )
     def test_llm_scripts_have_error_handling(self, script_path, script_name):
         """WHEN an LLM-calling script is inspected
         THEN it has error handling for LLM call failures."""
         source = _read_source(script_path)
-        has_error_handling = (
-            "try:" in source or
-            "except" in source or
-            "raise" in source
-        )
+        has_error_handling = "try:" in source or "except" in source or "raise" in source
         assert has_error_handling, (
             f"{script_name} must have error handling for LLM call failures "
             "to avoid leaving files in a partially-written state"
@@ -1142,10 +1155,10 @@ class TestScriptIntegrationPatterns:
         """The Stop hook is session_stop.py (it gates the deferred
         extract_learnings path via session_end → session_start)."""
         from conftest import parse_hooks
+
         stop_scripts = [h["script"] for h in parse_hooks() if h["event"] == "Stop"]
         has_extract = any(
-            "extract_learnings" in s or "session_stop" in s
-            for s in stop_scripts
+            "extract_learnings" in s or "session_stop" in s for s in stop_scripts
         )
         assert has_extract, (
             "hooks/hooks.json must register session_stop.py (or "
@@ -1155,6 +1168,7 @@ class TestScriptIntegrationPatterns:
     def test_pre_compact_is_precompact_hook(self):
         """pre_compact.py must be registered as the PreCompact hook."""
         from conftest import parse_hooks
+
         precompact_scripts = [
             h["script"] for h in parse_hooks() if h["event"] == "PreCompact"
         ]

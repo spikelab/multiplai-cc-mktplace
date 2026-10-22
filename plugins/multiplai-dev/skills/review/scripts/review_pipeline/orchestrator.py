@@ -15,29 +15,43 @@ import shutil
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import yaml
-
 from multiplai_core.log_utils import log_event
 
-from . import budget, deps, ledger as review_ledger, rounds, runlock, sdk, target as target_mod, timings
+from . import budget, deps, rounds, runlock, sdk, timings
+from . import ledger as review_ledger
+from . import target as target_mod
 from .chunks import split_pieces
 from .config import ReviewConfig, run_config
 from .costs import cost_lines, kept_line
-from .export import producer, run_record, to_findings_file, write_checks_file, write_findings_file
+from .export import (
+    producer,
+    run_record,
+    to_findings_file,
+    write_checks_file,
+    write_findings_file,
+)
 from .facts import FACTS_FILE
 from .gates import gated_need, reason_kind
 from .models import MODES, SEVERITIES, ReviewState
 from .progress import ProgressWriter
-from .render import count_line, listed, summary_path, write_review, write_rollups, write_runs
+from .render import (
+    count_line,
+    listed,
+    summary_path,
+    write_review,
+    write_rollups,
+    write_runs,
+)
 from .stages import RunContext
 from .stages.assess import reconcile_earlier, run_assess
 from .stages.explain import run_explain
-from .stages.paths import PATH_CAP, run_paths
 from .stages.find import file_chars, file_groups, finder_dimensions, run_find
 from .stages.merge import run_merge
+from .stages.paths import PATH_CAP, run_paths
 from .stages.recheck import run_recheck
 from .stages.repeats import run_repeats
 from .stages.verify import VerifyIncomplete, run_verify
@@ -50,11 +64,15 @@ STAGE_FUNCTIONS = (
     ("paths", run_paths),  # every change review; a tree review only with `--paths`
     ("find", run_find),
     ("verify", run_verify),
-    ("recheck", run_recheck),  # earlier rounds' open findings; skipped on a tree and with none open
+    (
+        "recheck",
+        run_recheck,
+    ),  # earlier rounds' open findings; skipped on a tree and with none open
     ("merge", run_merge),
     ("repeats", run_repeats),
     ("assess", run_assess),
 )
+
 
 class ReviewError(Exception):
     """Bad input or an unresolvable target. Exit code 2."""
@@ -66,7 +84,9 @@ class InterruptedRun(ReviewError):
 
     def __init__(self, target_dir: Path):
         self.target_dir = target_dir
-        super().__init__(f"interrupted run found; continue with: python -m review_pipeline resume {target_dir}")
+        super().__init__(
+            f"interrupted run found; continue with: python -m review_pipeline resume {target_dir}"
+        )
 
 
 class RunInProgress(ReviewError):
@@ -97,16 +117,21 @@ class TargetSpec:
     fetch: bool = False
     tree: str | None = None  # a commit-ish: review every file at it, not a change
     path: str | None = None  # with tree: only this directory
-    dir: str | None = None   # a directory not under git, copied and reviewed as a tree
+    dir: str | None = None  # a directory not under git, copied and reviewed as a tree
     mode: str = "full"  # `full` or `critical` (models.MODES)
     restart: bool = False  # start over even when the ledger shows an interrupted run
     trim: bool = False  # a tree review also runs the trim finder (`--trim`)
-    extra_finders: bool = False  # `--extra-finders` was given: accepted, ignored, noticed once
+    extra_finders: bool = (
+        False  # `--extra-finders` was given: accepted, ignored, noticed once
+    )
     paths: bool = False  # a tree review also maps its paths (`--paths`); a change review always does
 
 
 def _count_line(counts: dict[str, int]) -> str:
-    return ", ".join(f"{v} {k.replace('_', ' ')}" for k, v in counts.items()) or "nothing to do"
+    return (
+        ", ".join(f"{v} {k.replace('_', ' ')}" for k, v in counts.items())
+        or "nothing to do"
+    )
 
 
 NO_USAGE_NOTE = "budget:"
@@ -117,16 +142,19 @@ def note_missing_usage(state: ReviewState, ledger: budget.ReviewBudget) -> None:
     state.errors = [e for e in state.errors if not e.startswith(NO_USAGE_NOTE)]
     if ledger.no_usage_calls:
         n = ledger.no_usage_calls
-        state.errors.append(f"{NO_USAGE_NOTE} {n} agent call{'' if n == 1 else 's'} returned no usage; "
-                            "their cost and tokens are counted as 0")
+        state.errors.append(
+            f"{NO_USAGE_NOTE} {n} agent call{'' if n == 1 else 's'} returned no usage; "
+            "their cost and tokens are counted as 0"
+        )
 
 
 # Stopped, not failed: the run can be resumed, so the ledger gets no end line.
 INTERRUPTIONS = (KeyboardInterrupt, asyncio.CancelledError, SystemExit)
 
 
-async def run_state(state: ReviewState, target_dir: Path, config: ReviewConfig, *,
-                    session_id: str = "") -> Path:
+async def run_state(
+    state: ReviewState, target_dir: Path, config: ReviewConfig, *, session_id: str = ""
+) -> Path:
     """Run every stage not yet done; return the findings.json path.
 
     Saves this run's state, then appends a `started` line to the review
@@ -142,7 +170,9 @@ async def run_state(state: ReviewState, target_dir: Path, config: ReviewConfig, 
     t = state.target
     number = f"{rounds.round_number(target_dir):02d}"
     save_state(state, target_dir)
-    review_ledger.started(slug=t.slug, target_dir=target_dir, head_sha=t.head_sha, session_id=session_id)
+    review_ledger.started(
+        slug=t.slug, target_dir=target_dir, head_sha=t.head_sha, session_id=session_id
+    )
     stopped: str | None = "failed"
     interrupted = False
     try:
@@ -166,20 +196,39 @@ async def run_state(state: ReviewState, target_dir: Path, config: ReviewConfig, 
         raise
     finally:
         if not interrupted:
-            _finish(state, target_dir, session_id=session_id, number=number, stopped=stopped)
+            _finish(
+                state, target_dir, session_id=session_id, number=number, stopped=stopped
+            )
 
 
-def _finish(state: ReviewState, target_dir: Path, *, session_id: str, number: str, stopped: str | None) -> None:
+def _finish(
+    state: ReviewState,
+    target_dir: Path,
+    *,
+    session_id: str,
+    number: str,
+    stopped: str | None,
+) -> None:
     """The `finished` ledger line of a run that ended."""
     t = state.target
     try:
         run = run_record(state)
-    except Exception:  # noqa: BLE001 — the ledger line must not hide the run's own error
+    except Exception:  # the ledger line must not hide the run's own error
         log.warning("cannot build the run record for the ledger", exc_info=True)
         run = None
-    review_ledger.finished(producer=producer(), session_id=session_id, slug=t.slug, target_dir=target_dir,
-                           round_=number, head_sha=t.head_sha, base_sha=t.base_sha, kind=t.kind, pr=t.pr,
-                           stopped=stopped, run=run)
+    review_ledger.finished(
+        producer=producer(),
+        session_id=session_id,
+        slug=t.slug,
+        target_dir=target_dir,
+        round_=number,
+        head_sha=t.head_sha,
+        base_sha=t.base_sha,
+        kind=t.kind,
+        pr=t.pr,
+        stopped=stopped,
+        run=run,
+    )
 
 
 def _with_deps(state: ReviewState, snapshot: Path, config: ReviewConfig) -> None:
@@ -191,27 +240,49 @@ def _with_deps(state: ReviewState, snapshot: Path, config: ReviewConfig) -> None
     manifest = deps.ensure(state.target, snapshot, config)
     state.target.deps = manifest.ok()
     known = {n.what for n in state.needs}
-    state.needs.extend(n for n in map(gated_need, deps.needs(manifest)) if n.what not in known)
+    state.needs.extend(
+        n for n in map(gated_need, deps.needs(manifest)) if n.what not in known
+    )
 
 
-async def _run_stages(state: ReviewState, target_dir: Path, config: ReviewConfig, *,
-                      session_id: str = "") -> Path:
+async def _run_stages(
+    state: ReviewState, target_dir: Path, config: ReviewConfig, *, session_id: str = ""
+) -> Path:
     t = state.target
     ledger = budget.start(config.max_cost_usd, state.budget)
     progress = ProgressWriter(target_dir / "progress.log")
     if state.stage == "target":
-        progress.started(t.label or t.slug, t.base_sha, t.head_sha, len(t.files),
-                         deps=len(deps.locked_git_deps(t)) if config.deps else 0)
-        log_event("review", "start", f"review started for {t.slug}", session_id=session_id,
-                  target=t.slug, base=t.base_sha, head=t.head_sha, files=len(t.files))
+        progress.started(
+            t.label or t.slug,
+            t.base_sha,
+            t.head_sha,
+            len(t.files),
+            deps=len(deps.locked_git_deps(t)) if config.deps else 0,
+        )
+        log_event(
+            "review",
+            "start",
+            f"review started for {t.slug}",
+            session_id=session_id,
+            target=t.slug,
+            base=t.base_sha,
+            head=t.head_sha,
+            files=len(t.files),
+        )
     else:
         progress.line(f"RESUMED after {state.stage}")
 
     snapshot = target_mod.snapshot_head(t, target_dir / "tree")
     _with_deps(state, snapshot, config)
     diff = Path(t.diff_path).read_text(encoding="utf-8") if t.diff_path else ""
-    ctx = RunContext(config=config, snapshot=snapshot, diff=diff, progress=progress, session_id=session_id,
-                     target_dir=target_dir)
+    ctx = RunContext(
+        config=config,
+        snapshot=snapshot,
+        diff=diff,
+        progress=progress,
+        session_id=session_id,
+        target_dir=target_dir,
+    )
     state.run_config = run_config(config)
     timings.open_interval(state, "run")
     save_state(state, target_dir)
@@ -234,8 +305,16 @@ async def _run_stages(state: ReviewState, target_dir: Path, config: ReviewConfig
             state.budget = ledger.to_state()
             save_state(state, target_dir)
             progress.failed(str(e))
-            log_event("review", "budget_stop", str(e), session_id=session_id, level="WARNING",
-                      target=t.slug, cost_usd=round(e.cost_usd, 4), stage=name)
+            log_event(
+                "review",
+                "budget_stop",
+                str(e),
+                session_id=session_id,
+                level="WARNING",
+                target=t.slug,
+                cost_usd=round(e.cost_usd, 4),
+                stage=name,
+            )
             e.kept = kept_line(state)  # the STOPPED message's last line
             raise
         except VerifyIncomplete as e:
@@ -245,8 +324,15 @@ async def _run_stages(state: ReviewState, target_dir: Path, config: ReviewConfig
             state.budget = ledger.to_state()
             save_state(state, target_dir)
             progress.failed(str(e))
-            log_event("review", "verify_incomplete", f"verify stopped: {len(e.finding_ids)} findings have no verdict",
-                      session_id=session_id, level="WARNING", target=t.slug, findings=e.finding_ids)
+            log_event(
+                "review",
+                "verify_incomplete",
+                f"verify stopped: {len(e.finding_ids)} findings have no verdict",
+                session_id=session_id,
+                level="WARNING",
+                target=t.slug,
+                findings=e.finding_ids,
+            )
             raise
         except sdk.UsageLimitError as e:
             # Every answer that came back is in the state; `resume` after the reset asks for the rest.
@@ -255,24 +341,49 @@ async def _run_stages(state: ReviewState, target_dir: Path, config: ReviewConfig
             state.budget = ledger.to_state()
             save_state(state, target_dir)
             progress.failed(str(e))
-            log_event("review", "usage_limit", str(e), session_id=session_id, level="WARNING",
-                      target=t.slug, stage=name, resets=e.resets)
+            log_event(
+                "review",
+                "usage_limit",
+                str(e),
+                session_id=session_id,
+                level="WARNING",
+                target=t.slug,
+                stage=name,
+                resets=e.resets,
+            )
             e.target_dir = target_dir  # for the STOPPED message's resume command
             raise
         timings.close_interval(state, name)
-        timings.close_interval(state, "run")  # moved forward at each checkpoint; see timings.py
+        timings.close_interval(
+            state, "run"
+        )  # moved forward at each checkpoint; see timings.py
         state.budget = ledger.to_state()
         save_state(state, target_dir)
         summary = f"{name} done: {_count_line(ctx.counts)}"
         progress.stage(name, summary)
         print(f"{t.slug}: {summary}", flush=True)
-        log_event("review", "stage", summary, session_id=session_id, target=t.slug, stage=name,
-                  counts=dict(ctx.counts), cost_usd=round(ledger.cost_usd, 4))
+        log_event(
+            "review",
+            "stage",
+            summary,
+            session_id=session_id,
+            target=t.slug,
+            stage=name,
+            counts=dict(ctx.counts),
+            cost_usd=round(ledger.cost_usd, 4),
+        )
         if ctx.gate_reasons:
             noun = "findings" if name == "find" else "verdicts"
-            log_event("review", "gate_reject", f"{len(ctx.gate_reasons)} {noun} rejected by gates",
-                      session_id=session_id, target=t.slug, stage=name, count=len(ctx.gate_reasons),
-                      reasons=sorted({reason_kind(r) for r in ctx.gate_reasons}))
+            log_event(
+                "review",
+                "gate_reject",
+                f"{len(ctx.gate_reasons)} {noun} rejected by gates",
+                session_id=session_id,
+                target=t.slug,
+                stage=name,
+                count=len(ctx.gate_reasons),
+                reasons=sorted({reason_kind(r) for r in ctx.gate_reasons}),
+            )
 
     if reconcile_now:
         reconcile_earlier(state, ctx)
@@ -300,13 +411,26 @@ async def _run_stages(state: ReviewState, target_dir: Path, config: ReviewConfig
     progress.done(f"{message} (${ledger.cost_usd:.2f})")
     print(f"{t.slug}: {message}; output in {target_dir}", flush=True)
     print(f"summary: {summary_path(state, target_dir)}", flush=True)
-    log_event("review", "done", message, session_id=session_id, target=t.slug, counts=counts,
-              cost_usd=round(ledger.cost_usd, 4), findings_path=str(findings_path))
+    log_event(
+        "review",
+        "done",
+        message,
+        session_id=session_id,
+        target=t.slug,
+        counts=counts,
+        cost_usd=round(ledger.cost_usd, 4),
+        findings_path=str(findings_path),
+    )
     return findings_path
 
 
-def prepare(spec: TargetSpec, out_dir: Path, *, check_interrupted: bool = False,
-            lock: contextlib.ExitStack | None = None) -> tuple[ReviewState, Path]:
+def prepare(
+    spec: TargetSpec,
+    out_dir: Path,
+    *,
+    check_interrupted: bool = False,
+    lock: contextlib.ExitStack | None = None,
+) -> tuple[ReviewState, Path]:
     """Resolve and gate the target, then write its directory. Raises ReviewError.
 
     With *lock*, the target directory's run lock is taken on it before the
@@ -344,31 +468,57 @@ def prepare(spec: TargetSpec, out_dir: Path, *, check_interrupted: bool = False,
                 _hold(lock, import_to)
             repo = str(target_mod.import_dir(src, import_to))
             tree = "HEAD"
-        resolved = target_mod.resolve(repo, branch=spec.branch, pr=spec.pr, range_=spec.range, tree=tree,
-                                      path=spec.path, base_branch=spec.base_branch, fetch=spec.fetch)
+        resolved = target_mod.resolve(
+            repo,
+            branch=spec.branch,
+            pr=spec.pr,
+            range_=spec.range,
+            tree=tree,
+            path=spec.path,
+            base_branch=spec.base_branch,
+            fetch=spec.fetch,
+        )
         diff = None
         if resolved.kind == "tree":
             if resolved.head_sha and not resolved.problem:
                 label = f"{src}: whole tree at {resolved.head_sha[:8]}" if src else None
-                info = target_mod.build_target(resolved, tickets=spec.tickets, deployed_in=spec.deployed_in,
-                                               name=name, label=label, needs=needs)
+                info = target_mod.build_target(
+                    resolved,
+                    tickets=spec.tickets,
+                    deployed_in=spec.deployed_in,
+                    name=name,
+                    label=label,
+                    needs=needs,
+                )
         elif resolved.base_sha and resolved.head_sha and not resolved.problem:
-            diff = target_mod.diff_text(resolved.repo, resolved.base_sha, resolved.head_sha)
+            diff = target_mod.diff_text(
+                resolved.repo, resolved.base_sha, resolved.head_sha
+            )
     except target_mod.TargetError as e:
         raise ReviewError(str(e)) from e
     gate = target_mod.target_gate(resolved, diff, info.files if info else None)
     if not gate.passed:
         raise ReviewError(f"{spec.dir or spec.repo}: {gate.reason}")
     if info is None:
-        info = target_mod.build_target(resolved, tickets=spec.tickets, deployed_in=spec.deployed_in, needs=needs)
-    target_dir = import_to if import_to is not None else _choose_folder(out_dir, resolved, lock)
+        info = target_mod.build_target(
+            resolved, tickets=spec.tickets, deployed_in=spec.deployed_in, needs=needs
+        )
+    target_dir = (
+        import_to if import_to is not None else _choose_folder(out_dir, resolved, lock)
+    )
     if check_interrupted and not spec.restart:
         if _resumable(target_dir, info.head_sha):
             raise InterruptedRun(target_dir)
         old = out_dir / info.slug
-        if old.is_dir() and old != target_dir and not (target_dir / STATE_FILE).exists():
+        if (
+            old.is_dir()
+            and old != target_dir
+            and not (target_dir / STATE_FILE).exists()
+        ):
             with contextlib.ExitStack() as old_lock:
-                if lock is not None:  # a run still going there is running, not interrupted
+                if (
+                    lock is not None
+                ):  # a run still going there is running, not interrupted
                     _hold(old_lock, old)
                 if _resumable(old, info.head_sha):
                     raise InterruptedRun(old)
@@ -382,24 +532,38 @@ def prepare(spec: TargetSpec, out_dir: Path, *, check_interrupted: bool = False,
     pieces = None
     if not info.is_tree:
         try:
-            pieces = split_pieces(diff or "", head_tree=target_mod.tree_paths(info.repo_path, info.head_sha),
-                                  base_tree=target_mod.tree_paths(info.repo_path, info.base_sha))
+            pieces = split_pieces(
+                diff or "",
+                head_tree=target_mod.tree_paths(info.repo_path, info.head_sha),
+                base_tree=target_mod.tree_paths(info.repo_path, info.base_sha),
+            )
         except target_mod.TargetError as e:
             raise ReviewError(str(e)) from e
-    return (ReviewState(target=info, mode=spec.mode, trim=spec.trim,
-                        paths_enabled=spec.paths and info.is_tree, pieces=pieces,
-                        needs=[gated_need(n) for n in needs]), target_dir)
+    return (
+        ReviewState(
+            target=info,
+            mode=spec.mode,
+            trim=spec.trim,
+            paths_enabled=spec.paths and info.is_tree,
+            pieces=pieces,
+            needs=[gated_need(n) for n in needs],
+        ),
+        target_dir,
+    )
 
 
 def _same_remote(url: str | None, here: tuple[str, str] | None) -> bool:
     """True when *url* names the repository *here* is (`(owner, repo)`), compared without case,
     so the `https://` and `git@` forms of one repository are one remote."""
     pair = target_mod.origin_owner_repo(url)
-    return (tuple(x.lower() for x in pair) if pair else None) == (tuple(x.lower() for x in here) if here else None)
+    return (tuple(x.lower() for x in pair) if pair else None) == (
+        tuple(x.lower() for x in here) if here else None
+    )
 
 
-def _try_folder(folder: Path, lock: contextlib.ExitStack | None,
-                passed_over: Callable[[dict], bool]) -> tuple[contextlib.ExitStack, dict]:
+def _try_folder(
+    folder: Path, lock: contextlib.ExitStack | None, passed_over: Callable[[dict], bool]
+) -> tuple[contextlib.ExitStack, dict]:
     """Take *folder*'s run lock in a stack of its own (with *lock*), then read whose it is.
 
     When another process holds the lock, read whose the folder is without it: a folder
@@ -423,7 +587,9 @@ def _try_folder(folder: Path, lock: contextlib.ExitStack | None,
     return held, rounds.folder_target(folder)
 
 
-def _choose_folder(out_dir: Path, resolved: target_mod.Resolved, lock: contextlib.ExitStack | None) -> Path:
+def _choose_folder(
+    out_dir: Path, resolved: target_mod.Resolved, lock: contextlib.ExitStack | None
+) -> Path:
     """`<out>/<repo>/<object>/` for a PR, branch, range or tree, never a folder another
     remote's or another ref's review wrote.
 
@@ -457,14 +623,18 @@ def _choose_folder(out_dir: Path, resolved: target_mod.Resolved, lock: contextli
         held, t = _try_folder(folder, lock, passed_over)
     if not other_remote(t) and other_ref(t):
         held.close()
-        folder = folder.parent / f"{obj}-{hashlib.sha256(resolved.ref.encode()).hexdigest()[:6]}"
+        folder = (
+            folder.parent
+            / f"{obj}-{hashlib.sha256(resolved.ref.encode()).hexdigest()[:6]}"
+        )
         held, t = _try_folder(folder, lock, passed_over)
     if other_remote(t) or other_ref(t):
         held.close()
         raise ReviewError(
             f"{folder} holds a review of {t.get('remote_url') or 'no remote'} {t.get('ref') or ''}".rstrip()
             + f", not of {target_mod.remote_url(resolved.repo) or resolved.repo} {resolved.ref}; "
-            "pass --out to write this review somewhere else")
+            "pass --out to write this review somewhere else"
+        )
     if lock is not None:
         lock.enter_context(held.pop_all())
     return folder
@@ -487,9 +657,17 @@ def _resumable(target_dir: Path, head_sha: str) -> bool:
     saved = load_state(path) if path.is_file() else None
     if saved is not None and saved.target.head_sha == head_sha:
         return True
-    found = f"a saved state on {saved.target.head_sha[:12]}" if saved is not None else f"no readable {STATE_FILE}"
-    log.warning("%s: the ledger shows an unfinished run on %s, but the directory holds %s; starting over",
-                target_dir, head_sha[:12], found)
+    found = (
+        f"a saved state on {saved.target.head_sha[:12]}"
+        if saved is not None
+        else f"no readable {STATE_FILE}"
+    )
+    log.warning(
+        "%s: the ledger shows an unfinished run on %s, but the directory holds %s; starting over",
+        target_dir,
+        head_sha[:12],
+        found,
+    )
     return False
 
 
@@ -501,11 +679,19 @@ def plan_text(state: ReviewState, config: ReviewConfig) -> str:
     lines = []
     for i, group in enumerate(groups, 1):
         chars = sum(file_chars(t, f) for f in group)
-        where = f" ({group[0]} .. {group[-1]})" if len(group) > 1 else (f" ({group[0]})" if group else "")
+        where = (
+            f" ({group[0]} .. {group[-1]})"
+            if len(group) > 1
+            else (f" ({group[0]})" if group else "")
+        )
         lines.append(f"group {i}: {len(group)} files, {chars} characters{where}")
     calls = len(groups) * len(dims)
-    total = f"groups: {len(groups)}  finder calls: {calls}  files skipped: {len(t.skipped)}"
-    found = deps.locked_git_deps(t) if config.deps else []  # read from git only; nothing is fetched
+    total = (
+        f"groups: {len(groups)}  finder calls: {calls}  files skipped: {len(t.skipped)}"
+    )
+    found = (
+        deps.locked_git_deps(t) if config.deps else []
+    )  # read from git only; nothing is fetched
     if found:
         total += f"  git dependencies: {len(found)}"
     lines.append(total)
@@ -527,13 +713,17 @@ def piece_plan_lines(state: ReviewState) -> list[str]:
         lines.append(" ".join(parts))
     each = "(each one report call and one convert call)"
     if not state.target.is_tree:
-        lines.append(f"piece and path finder calls: {len(state.pieces or [])} pieces + up to {PATH_CAP} paths {each}")
+        lines.append(
+            f"piece and path finder calls: {len(state.pieces or [])} pieces + up to {PATH_CAP} paths {each}"
+        )
     elif state.paths_enabled:
         lines.append(f"path finder calls: up to {PATH_CAP} paths {each}")
     return lines
 
 
-def plan_only(spec: TargetSpec, out_dir: Path, config: ReviewConfig) -> tuple[str, Path]:
+def plan_only(
+    spec: TargetSpec, out_dir: Path, config: ReviewConfig
+) -> tuple[str, Path]:
     """Resolve the target and write `plan.txt` beside `skipped.txt`; no model call, no ledger."""
     extra_finders_notice(config, spec)
     with contextlib.ExitStack() as lock:
@@ -545,14 +735,22 @@ def plan_only(spec: TargetSpec, out_dir: Path, config: ReviewConfig) -> tuple[st
     return text, path
 
 
-def print_cost_lines(state: ReviewState, config: ReviewConfig, *, resuming: bool) -> None:
+def print_cost_lines(
+    state: ReviewState, config: ReviewConfig, *, resuming: bool
+) -> None:
     """The piece and path finders' estimate, WARNING and NOTICE (`costs.cost_lines`) on stderr. Advisory only."""
-    for line in cost_lines(state, budget=config.max_cost_usd or 0.0,
-                           budget_is_default=config.max_cost_source == "default", resuming=resuming):
+    for line in cost_lines(
+        state,
+        budget=config.max_cost_usd or 0.0,
+        budget_is_default=config.max_cost_source == "default",
+        resuming=resuming,
+    ):
         print(line, file=sys.stderr, flush=True)
 
 
-EXTRA_FINDERS_NOTICE = "review: --extra-finders has no effect; per-piece finders now run by default"
+EXTRA_FINDERS_NOTICE = (
+    "review: --extra-finders has no effect; per-piece finders now run by default"
+)
 
 
 def extra_finders_notice(config: ReviewConfig, spec: TargetSpec | None = None) -> None:
@@ -577,22 +775,31 @@ def _set_aside_progress(target_dir: Path) -> None:
         text = log.read_bytes()
     except OSError:
         return
-    if any(kept.read_bytes() == text for kept in (target_dir / rounds.ROUNDS_DIR).glob("*/progress.log")):
+    if any(
+        kept.read_bytes() == text
+        for kept in (target_dir / rounds.ROUNDS_DIR).glob("*/progress.log")
+    ):
         log.unlink(missing_ok=True)
         return
     try:
-        stamp = datetime.fromtimestamp(log.stat().st_mtime, timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        stamp = datetime.fromtimestamp(log.stat().st_mtime, UTC).strftime(
+            "%Y%m%dT%H%M%SZ"
+        )
         os.link(log, target_dir / f"progress-{stamp}.log")
         log.unlink()
     except OSError:
         pass
 
 
-async def review(spec: TargetSpec, out_dir: Path, config: ReviewConfig, *, session_id: str = "") -> Path:
+async def review(
+    spec: TargetSpec, out_dir: Path, config: ReviewConfig, *, session_id: str = ""
+) -> Path:
     extra_finders_notice(config, spec)
     with contextlib.ExitStack() as lock:
         state, target_dir = prepare(spec, out_dir, check_interrupted=True, lock=lock)
-        print_cost_lines(state, config, resuming=False)  # after the pieces, before the paths stage
+        print_cost_lines(
+            state, config, resuming=False
+        )  # after the pieces, before the paths stage
         # A fresh review starts a fresh progress file; --plan-only leaves the last one alone.
         _set_aside_progress(target_dir)
         # The last round's facts.json is kept in rounds/ by prepare; the explain stage writes
@@ -604,7 +811,9 @@ async def review(spec: TargetSpec, out_dir: Path, config: ReviewConfig, *, sessi
         return await run_state(state, target_dir, config, session_id=session_id)
 
 
-async def resume(target_dir: Path, config: ReviewConfig, *, session_id: str = "") -> Path:
+async def resume(
+    target_dir: Path, config: ReviewConfig, *, session_id: str = ""
+) -> Path:
     """Continue the run saved in *target_dir*. Refuses (RunInProgress) while a process is still running it."""
     with contextlib.ExitStack() as lock:
         _hold(lock, target_dir)
@@ -625,8 +834,11 @@ FOLDED = ("repeat", "low-value")
 @dataclass
 class AssessOnly:
     """The assess stage's labels for one saved review, beside the person's decisions."""
+
     target_dir: Path
-    rows: list[dict] = field(default_factory=list)  # id, severity, claim, decision, note, label, reason
+    rows: list[dict] = field(
+        default_factory=list
+    )  # id, severity, claim, decision, note, label, reason
     cost_usd: float = 0.0
     errors: list[str] = field(default_factory=list)
 
@@ -645,7 +857,12 @@ async def assess_only(target_dir: Path, config: ReviewConfig) -> AssessOnly:
         raise ReviewError(f"no readable review-state.json in {target_dir}")
     state = loaded.model_copy(deep=True)
     state.stage, state.errors = "merge", []
-    state.repeats, state.repeats_checked, state.assessments, state.assess_answer = {}, [], {}, None
+    state.repeats, state.repeats_checked, state.assessments, state.assess_answer = (
+        {},
+        [],
+        {},
+        None,
+    )
     ledger = budget.start(config.max_cost_usd)
     snapshot = target_mod.snapshot_head(state.target, target_dir / "assess-tree")
     _with_deps(state, snapshot, config)
@@ -656,37 +873,61 @@ async def assess_only(target_dir: Path, config: ReviewConfig) -> AssessOnly:
     finally:
         shutil.rmtree(snapshot, ignore_errors=True)
     decisions = rounds.load_decisions(target_dir)
-    result = AssessOnly(target_dir=target_dir, cost_usd=ledger.cost_usd, errors=list(state.errors))
+    result = AssessOnly(
+        target_dir=target_dir, cost_usd=ledger.cost_usd, errors=list(state.errors)
+    )
     for f in state.findings:
         a = state.assessments.get(f.id)
         if a is None:
             continue
         d = decisions.get(f.id) or {}
-        result.rows.append({"id": f.id, "severity": f.severity, "claim": f.claim,
-                            "decision": d.get("decision") or "", "note": d.get("note") or "",
-                            "label": a.label, "reason": a.reason})
+        result.rows.append(
+            {
+                "id": f.id,
+                "severity": f.severity,
+                "claim": f.claim,
+                "decision": d.get("decision") or "",
+                "note": d.get("note") or "",
+                "label": a.label,
+                "reason": a.reason,
+            }
+        )
     return result
 
 
 def assess_report(results: list[AssessOnly], skipped: list[str]) -> str:
     """Markdown: one row per finding (decision, label, reason), then the two counts that matter."""
+
     def cell(text) -> str:
         return " ".join(str(text).split()).replace("|", "\\|")
 
-    out = ["# Assess stage measured against recorded decisions", "",
-           "| Review | Finding | Severity | Decision | Label | Reason |", "|---|---|---|---|---|---|"]
+    out = [
+        "# Assess stage measured against recorded decisions",
+        "",
+        "| Review | Finding | Severity | Decision | Label | Reason |",
+        "|---|---|---|---|---|---|",
+    ]
     for r in results:
         for row in r.rows:
-            out.append(f"| {r.target_dir.name} | `{row['id']}` {cell(row['claim'])[:100]} | {row['severity']} | "
-                       f"{row['decision'] or 'none'} | {row['label']} | {cell(row['reason'])} |")
+            out.append(
+                f"| {r.target_dir.name} | `{row['id']}` {cell(row['claim'])[:100]} | {row['severity']} | "
+                f"{row['decision'] or 'none'} | {row['label']} | {cell(row['reason'])} |"
+            )
     rows = [row for r in results for row in r.rows]
-    right = sum(1 for row in rows if row["decision"] == "reject" and row["label"] in FOLDED)
-    wrong = sum(1 for row in rows if row["decision"] == "accept" and row["label"] in FOLDED)
+    right = sum(
+        1 for row in rows if row["decision"] == "reject" and row["label"] in FOLDED
+    )
+    wrong = sum(
+        1 for row in rows if row["decision"] == "accept" and row["label"] in FOLDED
+    )
     rejected = sum(1 for row in rows if row["decision"] == "reject")
     accepted = sum(1 for row in rows if row["decision"] == "accept")
-    out += ["", f"- Rejected findings labelled repeat or low-value: {right} of {rejected}",
-            f"- Accepted findings labelled repeat or low-value (wrongly folded): {wrong} of {accepted}",
-            f"- Cost: ${sum(r.cost_usd for r in results):.2f} over {len(results)} reviews"]
+    out += [
+        "",
+        f"- Rejected findings labelled repeat or low-value: {right} of {rejected}",
+        f"- Accepted findings labelled repeat or low-value (wrongly folded): {wrong} of {accepted}",
+        f"- Cost: ${sum(r.cost_usd for r in results):.2f} over {len(results)} reviews",
+    ]
     errors = [f"{r.target_dir.name}: {e}" for r in results for e in r.errors]
     if errors:
         out += ["", "Errors:", ""] + [f"- {cell(e)}" for e in errors]
@@ -710,23 +951,41 @@ def load_batch(path: Path, default_mode: str = "full") -> list[TargetSpec]:
             raise ReviewError(f"{path}: entry {i} needs a `repo`")
         refs = [k for k in ("branch", "pr", "range") if entry.get(k) not in (None, "")]
         if len(refs) != 1:
-            raise ReviewError(f"{path}: entry {i} needs exactly one of branch, pr, range")
+            raise ReviewError(
+                f"{path}: entry {i} needs exactly one of branch, pr, range"
+            )
         tickets = entry.get("tickets") or []
-        specs.append(TargetSpec(
-            repo=str(Path(str(entry["repo"])).expanduser()),
-            branch=entry.get("branch"), pr=int(entry["pr"]) if entry.get("pr") not in (None, "") else None,
-            range=entry.get("range"),
-            tickets=[str(x) for x in (tickets if isinstance(tickets, list) else [tickets])],
-            deployed_in=entry.get("deployed_in"), base_branch=entry.get("base_branch"),
-            fetch=bool(entry.get("fetch", False)), mode=str(entry.get("mode") or default_mode),
-        ))
+        specs.append(
+            TargetSpec(
+                repo=str(Path(str(entry["repo"])).expanduser()),
+                branch=entry.get("branch"),
+                pr=int(entry["pr"]) if entry.get("pr") not in (None, "") else None,
+                range=entry.get("range"),
+                tickets=[
+                    str(x)
+                    for x in (tickets if isinstance(tickets, list) else [tickets])
+                ],
+                deployed_in=entry.get("deployed_in"),
+                base_branch=entry.get("base_branch"),
+                fetch=bool(entry.get("fetch", False)),
+                mode=str(entry.get("mode") or default_mode),
+            )
+        )
         if specs[-1].mode not in MODES:
-            raise ReviewError(f"{path}: entry {i} has mode {specs[-1].mode!r}; expected one of {', '.join(MODES)}")
+            raise ReviewError(
+                f"{path}: entry {i} has mode {specs[-1].mode!r}; expected one of {', '.join(MODES)}"
+            )
     return specs
 
 
-async def batch(specs: list[TargetSpec], out_dir: Path, config: ReviewConfig, *, parallel: int = 2,
-                session_id: str = "") -> tuple[list[Path], list[str]]:
+async def batch(
+    specs: list[TargetSpec],
+    out_dir: Path,
+    config: ReviewConfig,
+    *,
+    parallel: int = 2,
+    session_id: str = "",
+) -> tuple[list[Path], list[str]]:
     """Review every target, at most *parallel* at once. Returns (findings paths in order, failures).
 
     After a target hits the Claude usage limit, no target that has not started
@@ -772,6 +1031,8 @@ async def batch(specs: list[TargetSpec], out_dir: Path, config: ReviewConfig, *,
     if limits:
         first = limits[0]
         first.written, first.failures = written, failures
-        first.stopped_dirs = [d for e in limits if (d := getattr(e, "target_dir", None)) is not None]
+        first.stopped_dirs = [
+            d for e in limits if (d := getattr(e, "target_dir", None)) is not None
+        ]
         raise first
     return written, failures

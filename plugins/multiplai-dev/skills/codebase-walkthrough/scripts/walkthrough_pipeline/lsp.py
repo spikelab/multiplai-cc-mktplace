@@ -55,10 +55,16 @@ class _Client:
                 headers[k.lower()] = v.strip()
             body = await stdout.readexactly(int(headers.get("content-length", "0")))
             msg = json.loads(body)
-            if "id" in msg and "method" in msg:      # a request from the server
-                await self._send({"jsonrpc": "2.0", "id": msg["id"],
-                                  "result": [{}] * len(msg.get("params", {}).get("items", []))
-                                  if msg["method"] == "workspace/configuration" else None})
+            if "id" in msg and "method" in msg:  # a request from the server
+                await self._send(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": msg["id"],
+                        "result": [{}] * len(msg.get("params", {}).get("items", []))
+                        if msg["method"] == "workspace/configuration"
+                        else None,
+                    }
+                )
             elif "id" in msg and msg["id"] in self.pending:
                 fut = self.pending.pop(msg["id"])
                 if not fut.done():
@@ -69,14 +75,18 @@ class _Client:
 
     async def _send(self, msg: dict) -> None:
         data = json.dumps(msg).encode("utf-8")
-        self.proc.stdin.write(f"Content-Length: {len(data)}\r\n\r\n".encode("ascii") + data)
+        self.proc.stdin.write(
+            f"Content-Length: {len(data)}\r\n\r\n".encode("ascii") + data
+        )
         await self.proc.stdin.drain()
 
     async def request(self, method: str, params: dict):
         self.next_id += 1
         fut = asyncio.get_running_loop().create_future()
         self.pending[self.next_id] = fut
-        await self._send({"jsonrpc": "2.0", "id": self.next_id, "method": method, "params": params})
+        await self._send(
+            {"jsonrpc": "2.0", "id": self.next_id, "method": method, "params": params}
+        )
         return await fut
 
     async def notify(self, method: str, params: dict) -> None:
@@ -87,8 +97,13 @@ def _uri_path(uri: str) -> Path:
     return Path(unquote(urlparse(uri).path))
 
 
-async def find_references(target: TargetInfo, snapshot: Path, symbols: list[SymbolEntry], *,
-                          timeout_s: float = 300.0) -> tuple[list[Reference], dict]:
+async def find_references(
+    target: TargetInfo,
+    snapshot: Path,
+    symbols: list[SymbolEntry],
+    *,
+    timeout_s: float = 300.0,
+) -> tuple[list[Reference], dict]:
     """(references outside the target subpath, a report: {status, seconds, symbols, answered})."""
     report = {"status": "skipped", "seconds": 0.0, "symbols": 0, "answered": 0}
     exe = shutil.which(SERVER)
@@ -98,51 +113,101 @@ async def find_references(target: TargetInfo, snapshot: Path, symbols: list[Symb
     if exe is None:
         report["status"] = f"skipped ({SERVER} not installed)"
         return [], report
-    wanted = [e for e in symbols if e.kind in ("function", "class") and not e.name.startswith("_")]
+    wanted = [
+        e
+        for e in symbols
+        if e.kind in ("function", "class") and not e.name.startswith("_")
+    ]
     report["symbols"] = len(wanted)
     if not wanted:
         report["status"] = "no public symbols"
         return [], report
 
     config = snapshot / "pyrightconfig.json"
-    config.write_text(json.dumps({"exclude": ["**/migrations", "**/node_modules", "**/.venv", "**/static"],
-                                  "typeCheckingMode": "off"}), encoding="utf-8")
+    config.write_text(
+        json.dumps(
+            {
+                "exclude": [
+                    "**/migrations",
+                    "**/node_modules",
+                    "**/.venv",
+                    "**/static",
+                ],
+                "typeCheckingMode": "off",
+            }
+        ),
+        encoding="utf-8",
+    )
     start = time.monotonic()
     proc = await asyncio.create_subprocess_exec(
-        exe, "--stdio", stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL, cwd=str(snapshot))
+        exe,
+        "--stdio",
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+        cwd=str(snapshot),
+    )
     client = _Client(proc)
     answers: dict[int, list] = {}
     prefix = target.repo_key + "/"
 
     async def run() -> None:
         root = snapshot.resolve().as_uri()
-        await client.request("initialize", {
-            "processId": None, "rootUri": root, "workspaceFolders": [{"uri": root, "name": target.repo_key}],
-            "capabilities": {"textDocument": {"references": {}}, "workspace": {"configuration": True}},
-        })
+        await client.request(
+            "initialize",
+            {
+                "processId": None,
+                "rootUri": root,
+                "workspaceFolders": [{"uri": root, "name": target.repo_key}],
+                "capabilities": {
+                    "textDocument": {"references": {}},
+                    "workspace": {"configuration": True},
+                },
+            },
+        )
         await client.notify("initialized", {})
         opened = set()
         for e in wanted:
-            rel = e.path[len(prefix):]
+            rel = e.path[len(prefix) :]
             if rel not in opened:
                 opened.add(rel)
                 f = snapshot / rel
-                await client.notify("textDocument/didOpen", {"textDocument": {
-                    "uri": f.resolve().as_uri(), "languageId": "python", "version": 1,
-                    "text": f.read_text(encoding="utf-8", errors="replace")}})
+                await client.notify(
+                    "textDocument/didOpen",
+                    {
+                        "textDocument": {
+                            "uri": f.resolve().as_uri(),
+                            "languageId": "python",
+                            "version": 1,
+                            "text": f.read_text(encoding="utf-8", errors="replace"),
+                        }
+                    },
+                )
 
         async def one(i: int, e: SymbolEntry) -> None:
-            rel = e.path[len(prefix):]
-            lines = (snapshot / rel).read_text(encoding="utf-8", errors="replace").split("\n")
+            rel = e.path[len(prefix) :]
+            lines = (
+                (snapshot / rel)
+                .read_text(encoding="utf-8", errors="replace")
+                .split("\n")
+            )
             col = lines[e.line - 1].find(e.name)
             if col < 0:
                 return
             try:
-                answers[i] = await client.request("textDocument/references", {
-                    "textDocument": {"uri": (snapshot / rel).resolve().as_uri()},
-                    "position": {"line": e.line - 1, "character": col},
-                    "context": {"includeDeclaration": False}}) or []
+                answers[i] = (
+                    await client.request(
+                        "textDocument/references",
+                        {
+                            "textDocument": {
+                                "uri": (snapshot / rel).resolve().as_uri()
+                            },
+                            "position": {"line": e.line - 1, "character": col},
+                            "context": {"includeDeclaration": False},
+                        },
+                    )
+                    or []
+                )
             except (RuntimeError, ConnectionError) as err:
                 log.debug("references for %s failed: %s", e.name, err)
 
@@ -154,7 +219,7 @@ async def find_references(target: TargetInfo, snapshot: Path, symbols: list[Symb
     try:
         await asyncio.wait_for(run(), timeout=timeout_s)
         report["status"] = "ok"
-    except asyncio.TimeoutError:
+    except TimeoutError:
         report["status"] = f"timed out after {timeout_s:g}s"
     except (ConnectionError, OSError, json.JSONDecodeError) as e:
         report["status"] = f"failed ({type(e).__name__}: {str(e)[:120]})"
@@ -186,10 +251,23 @@ async def find_references(target: TargetInfo, snapshot: Path, symbols: list[Symb
                 continue
             seen.add((rel, line))
             if rel not in text_cache:
-                text_cache[rel] = (snapshot / rel).read_text(encoding="utf-8", errors="replace").split("\n")
+                text_cache[rel] = (
+                    (snapshot / rel)
+                    .read_text(encoding="utf-8", errors="replace")
+                    .split("\n")
+                )
             lines = text_cache[rel]
             quote = lines[line - 1].strip() if 0 < line <= len(lines) else ""
             if quote:
-                out.append(Reference(repo=target.repo_key, kind="python-ref", symbol=e.name, path=prefix + rel,
-                                     line=line, quote=quote, method="lsp"))
+                out.append(
+                    Reference(
+                        repo=target.repo_key,
+                        kind="python-ref",
+                        symbol=e.name,
+                        path=prefix + rel,
+                        line=line,
+                        quote=quote,
+                        method="lsp",
+                    )
+                )
     return out, report

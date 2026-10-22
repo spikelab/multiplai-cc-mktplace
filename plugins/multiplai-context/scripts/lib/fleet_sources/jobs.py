@@ -25,7 +25,7 @@ report long-dead jobs as running. Staleness comes from the file's own clock.
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from lib.fsio import claude_config_dir
@@ -78,7 +78,7 @@ def config_dir() -> Path | None:
 
 def _mtime(path: Path) -> datetime | None:
     try:
-        return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+        return datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
     except OSError:
         return None
 
@@ -102,7 +102,7 @@ def collect_jobs(
     cfg = cfg or config_dir()
     if cfg is None:
         return []
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     cutoff = timedelta(hours=stale_after_hours)
     roster = _roster(cfg)
 
@@ -144,7 +144,7 @@ def collect_jobs(
         jobs.append(job)
 
     jobs.sort(
-        key=lambda j: (j.updated or datetime.min.replace(tzinfo=timezone.utc)),
+        key=lambda j: j.updated or datetime.min.replace(tzinfo=UTC),
         reverse=True,
     )
     return jobs

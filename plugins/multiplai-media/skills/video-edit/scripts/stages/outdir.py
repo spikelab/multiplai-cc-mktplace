@@ -4,6 +4,7 @@ The workspace INBOX/ if there is one — the workspace root is read from
 $CLAUDE_CONFIG_DIR/.workspace — else the current directory. Nothing here
 creates INBOX/ on a machine that does not have it.
 """
+
 from __future__ import annotations
 
 import os

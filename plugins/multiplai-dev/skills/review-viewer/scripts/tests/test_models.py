@@ -6,10 +6,15 @@ from sys import executable as PYTHON
 
 import jsonschema
 import pytest
-from pydantic import ValidationError
-
 from conftest import FIXTURE
-from review_viewer.models import SCHEMA_PATH, FindingsFile, finding_id, load_findings, schema_text
+from pydantic import ValidationError
+from review_viewer.models import (
+    SCHEMA_PATH,
+    FindingsFile,
+    finding_id,
+    load_findings,
+    schema_text,
+)
 
 
 def fixture_data() -> dict:
@@ -18,8 +23,20 @@ def fixture_data() -> dict:
 
 def test_fixture_validates():
     ff = load_findings(FIXTURE)
-    assert [f.severity for f in ff.findings] == ["HIGH", "MEDIUM", "LOW", "LOW", "MEDIUM"]
-    assert [f.status for f in ff.findings] == ["confirmed", "unverifiable", "refuted", "confirmed", "rejected"]
+    assert [f.severity for f in ff.findings] == [
+        "HIGH",
+        "MEDIUM",
+        "LOW",
+        "LOW",
+        "MEDIUM",
+    ]
+    assert [f.status for f in ff.findings] == [
+        "confirmed",
+        "unverifiable",
+        "refuted",
+        "confirmed",
+        "rejected",
+    ]
     assert ff.findings[0].expected_behaviour.startswith("Items without a qty")
     assert ff.findings[2].expected_behaviour is None  # refuted: nothing to expect
 
@@ -30,8 +47,17 @@ def test_a_file_with_the_fix_older_reviews_wrote_still_loads():
         del f["expected_behaviour"]
         f["fix"] = None
     data["findings"][0]["fix"] = {
-        "description": "Default the quantity to 1.", "patch_sketch": None, "open_questions": [],
-        "premises": [{"statement": "Items without qty mean one", "kind": "external", "citation": None}]}
+        "description": "Default the quantity to 1.",
+        "patch_sketch": None,
+        "open_questions": [],
+        "premises": [
+            {
+                "statement": "Items without qty mean one",
+                "kind": "external",
+                "citation": None,
+            }
+        ],
+    }
     ff = FindingsFile.model_validate(data)
     assert ff.findings[0].fix.description == "Default the quantity to 1."
     assert ff.findings[0].expected_behaviour is None
@@ -74,8 +100,9 @@ def test_wrong_schema_version_rejected():
 
 
 def test_committed_schema_matches_fresh_export():
-    assert SCHEMA_PATH.read_text(encoding="utf-8") == schema_text(), \
+    assert SCHEMA_PATH.read_text(encoding="utf-8") == schema_text(), (
         "run: python -m review_viewer export-schema"
+    )
 
 
 def test_fixture_validates_against_committed_schema():
@@ -93,8 +120,11 @@ def test_committed_schema_rejects_empty_citations():
 
 
 def _validate_cli(*paths) -> subprocess.CompletedProcess:
-    return subprocess.run([PYTHON, "-m", "review_viewer", "validate", *map(str, paths)],
-                          capture_output=True, text=True)
+    return subprocess.run(
+        [PYTHON, "-m", "review_viewer", "validate", *map(str, paths)],
+        capture_output=True,
+        text=True,
+    )
 
 
 def test_validate_cli_ok_and_broken(tmp_path):
@@ -112,28 +142,49 @@ def test_validate_cli_ok_and_broken(tmp_path):
 
 # --- walkthrough.json v1 -------------------------------------------------------------
 
-from review_viewer.models import (  # noqa: E402
-    WALKTHROUGH_SCHEMA_PATH, InboxRow, Walkthrough, walkthrough_schema_text)
+from review_viewer.models import (
+    WALKTHROUGH_SCHEMA_PATH,
+    InboxRow,
+    Walkthrough,
+    walkthrough_schema_text,
+)
 
 SHA = "a" * 40
 
 
 def walkthrough_data() -> dict:
     return {
-        "schema_version": 1, "generated_at": "2026-09-26T10:00:00Z", "base_sha": SHA,
-        "head_sha": "b" * 40, "overview_md": "What this change is for.",
-        "steps": [{"id": "core-change", "title": "The core change", "body_md": "Text.",
-                   "anchors": [{"path": "app/service.py", "side": "head", "line_start": 1,
-                                "line_end": 3}],
-                   "diagram": {"kind": "mermaid", "source": "flowchart LR\n A --> B"},
-                   "finding_ids": ["b561bd34ce"]}],
-        "skipped": [{"path": "uv.lock", "reason": "generated"}], "complete": False,
+        "schema_version": 1,
+        "generated_at": "2026-09-26T10:00:00Z",
+        "base_sha": SHA,
+        "head_sha": "b" * 40,
+        "overview_md": "What this change is for.",
+        "steps": [
+            {
+                "id": "core-change",
+                "title": "The core change",
+                "body_md": "Text.",
+                "anchors": [
+                    {
+                        "path": "app/service.py",
+                        "side": "head",
+                        "line_start": 1,
+                        "line_end": 3,
+                    }
+                ],
+                "diagram": {"kind": "mermaid", "source": "flowchart LR\n A --> B"},
+                "finding_ids": ["b561bd34ce"],
+            }
+        ],
+        "skipped": [{"path": "uv.lock", "reason": "generated"}],
+        "complete": False,
     }
 
 
 def test_committed_walkthrough_schema_matches_fresh_export():
-    assert WALKTHROUGH_SCHEMA_PATH.read_text(encoding="utf-8") == walkthrough_schema_text(), \
-        "run: python -m review_viewer export-schema"
+    assert (
+        WALKTHROUGH_SCHEMA_PATH.read_text(encoding="utf-8") == walkthrough_schema_text()
+    ), "run: python -m review_viewer export-schema"
 
 
 def test_walkthrough_validates_against_model_and_committed_schema():
@@ -143,33 +194,45 @@ def test_walkthrough_validates_against_model_and_committed_schema():
     jsonschema.validate(walkthrough_data(), schema)
 
 
-@pytest.mark.parametrize("mutate", [
-    lambda d: d.update(surprise=True),
-    lambda d: d["steps"][0].update(id="Has Spaces"),
-    lambda d: d["steps"][0].update(anchors=[]),
-    lambda d: d["steps"][0]["anchors"][0].update(side="left"),
-    lambda d: d["steps"][0]["anchors"][0].update(line_start=0),
-    lambda d: d["steps"][0].update(finding_ids=["XYZ"]),
-    lambda d: d["steps"][0]["diagram"].update(kind="plantuml"),
-    lambda d: d["steps"][0]["diagram"].update(source="x" * 20001),
-    lambda d: d.update(schema_version=2),
-    lambda d: d.update(head_sha="short"),
-])
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda d: d.update(surprise=True),
+        lambda d: d["steps"][0].update(id="Has Spaces"),
+        lambda d: d["steps"][0].update(anchors=[]),
+        lambda d: d["steps"][0]["anchors"][0].update(side="left"),
+        lambda d: d["steps"][0]["anchors"][0].update(line_start=0),
+        lambda d: d["steps"][0].update(finding_ids=["XYZ"]),
+        lambda d: d["steps"][0]["diagram"].update(kind="plantuml"),
+        lambda d: d["steps"][0]["diagram"].update(source="x" * 20001),
+        lambda d: d.update(schema_version=2),
+        lambda d: d.update(head_sha="short"),
+    ],
+)
 def test_walkthrough_rejects(mutate):
     data = walkthrough_data()
     mutate(data)
     with pytest.raises(ValidationError):
         Walkthrough.model_validate(data)
     with pytest.raises(jsonschema.ValidationError):
-        jsonschema.validate(data, json.loads(WALKTHROUGH_SCHEMA_PATH.read_text(encoding="utf-8")))
+        jsonschema.validate(
+            data, json.loads(WALKTHROUGH_SCHEMA_PATH.read_text(encoding="utf-8"))
+        )
 
 
 def test_inbox_row_carries_an_optional_step_id():
-    row = InboxRow(id="q-1", ts="t", target="t", kind="question", text="x", step_id="core-change")
+    row = InboxRow(
+        id="q-1", ts="t", target="t", kind="question", text="x", step_id="core-change"
+    )
     assert row.model_dump()["step_id"] == "core-change"
-    assert InboxRow(id="q-1", ts="t", target="t", kind="question", text="x").step_id is None
+    assert (
+        InboxRow(id="q-1", ts="t", target="t", kind="question", text="x").step_id
+        is None
+    )
     with pytest.raises(ValidationError):
-        InboxRow(id="q-1", ts="t", target="t", kind="question", text="x", step_id="Bad Id")
+        InboxRow(
+            id="q-1", ts="t", target="t", kind="question", text="x", step_id="Bad Id"
+        )
 
 
 def test_findings_with_path_ids_load_and_bad_ids_are_refused(tmp_path):

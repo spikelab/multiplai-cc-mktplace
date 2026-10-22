@@ -14,14 +14,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-asyncio", "jsonschema>=4"]
+dev = ["pytest", "pytest-asyncio", "jsonschema>=4", "pytest-xdist>=3.8"]
 
-# The same three as the `dev` extra, as a dependency group: `uv run` installs
+# The same as the `dev` extra, as a dependency group: `uv run` installs
 # the default group without being asked, so the bare
 # `uv run --directory <this dir> python -m pytest tests/` works too. CI keeps
 # using `--package review-pipeline --extra dev` like the other members.
 [dependency-groups]
-dev = ["pytest", "pytest-asyncio", "jsonschema>=4"]
+dev = ["pytest", "pytest-asyncio", "jsonschema>=4", "pytest-xdist>=3.8"]
 
 [build-system]
 requires = ["hatchling"]

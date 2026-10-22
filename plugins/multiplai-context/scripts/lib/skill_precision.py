@@ -48,10 +48,10 @@ import json
 import os
 import re
 from collections import Counter
+from collections.abc import Iterator
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Iterator, Optional
 
 from lib.costing_collector import _COMMAND_IGNORE, _COMMAND_RE, _user_text
 from lib.timeparse import parse_ts
@@ -71,10 +71,12 @@ _PERSISTED_PATH_RE = re.compile(r"Full output saved to: (\S+)")
 class Suggestion:
     """One user prompt whose hook attachment named at least one skill."""
 
-    ts: Optional[datetime]
+    ts: datetime | None
     session: str
     skills: list[str]
-    invoked: list[str] = field(default_factory=list)  # suggested names invoked in-window
+    invoked: list[str] = field(
+        default_factory=list
+    )  # suggested names invoked in-window
 
 
 def bare_name(name: str) -> str:
@@ -96,7 +98,7 @@ def suggested_skills(text: str) -> list[str]:
     start = text.find(SKILLS_HEADER)
     if start < 0:
         return []
-    body = text[start + len(SKILLS_HEADER):]
+    body = text[start + len(SKILLS_HEADER) :]
     nxt = _SECTION_HEADER_RE.search(body)
     if nxt:
         body = body[: nxt.start()]
@@ -144,7 +146,9 @@ def _is_prompt_hook_attachment(entry: dict) -> bool:
 # ----------------------------------------------------------------------
 
 
-def iter_main_transcripts(config_dir: Path, *, modified_since: Optional[datetime] = None) -> Iterator[Path]:
+def iter_main_transcripts(
+    config_dir: Path, *, modified_since: datetime | None = None
+) -> Iterator[Path]:
     """Main-session transcripts under ``projects/``: one directory level down
     (plus the ``projects_migration_tmp/`` prefix), ``*.jsonl`` files only.
 
@@ -162,7 +166,11 @@ def iter_main_transcripts(config_dir: Path, *, modified_since: Optional[datetime
     cutoff = modified_since.timestamp() if modified_since else None
     for root in roots:
         try:
-            project_dirs = [d for d in os.scandir(root) if d.is_dir() and d.name != "projects_migration_tmp"]
+            project_dirs = [
+                d
+                for d in os.scandir(root)
+                if d.is_dir() and d.name != "projects_migration_tmp"
+            ]
         except OSError:
             continue
         for proj in sorted(project_dirs, key=lambda d: d.name):
@@ -204,14 +212,18 @@ def _skill_tool_uses(entry: dict) -> list[str]:
         return []
     names = []
     for block in content:
-        if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") == "Skill":
+        if (
+            isinstance(block, dict)
+            and block.get("type") == "tool_use"
+            and block.get("name") == "Skill"
+        ):
             skill = (block.get("input") or {}).get("skill")
             if isinstance(skill, str) and skill.strip():
                 names.append(bare_name(skill))
     return names
 
 
-def _command_in_prompt(text: str) -> Optional[str]:
+def _command_in_prompt(text: str) -> str | None:
     m = _COMMAND_RE.search(text)
     if not m:
         return None
@@ -222,8 +234,8 @@ def _command_in_prompt(text: str) -> Optional[str]:
 
 
 def measure_transcript(
-    path: Path, *, since: Optional[datetime] = None
-) -> tuple[int, list[Suggestion], Optional[datetime]]:
+    path: Path, *, since: datetime | None = None
+) -> tuple[int, list[Suggestion], datetime | None]:
     """``(prompts, suggestions, earliest_prompt_ts)`` for one main transcript.
 
     ``prompts`` counts real user prompts at or after ``since``; each
@@ -263,9 +275,9 @@ def measure_transcript(
         # A slash-command prompt is followed by an ``isMeta`` user entry that
         # carries the skill body, and the attachment hangs off *that*; keep
         # walking until the entry is a real prompt.
-        cur: Optional[dict] = e
+        cur: dict | None = e
         hops = 0
-        pi: Optional[int] = None
+        pi: int | None = None
         while cur is not None and hops < 50:
             if cur.get("type") == "user":
                 idx = index_of.get(id(cur))
@@ -285,7 +297,7 @@ def measure_transcript(
 
     # Pass 3: windows and hits.
     prompts = 0
-    earliest: Optional[datetime] = None
+    earliest: datetime | None = None
     suggestions: list[Suggestion] = []
     for n, pi in enumerate(prompt_idx):
         ts = parse_ts(entries[pi].get("timestamp"))
@@ -299,7 +311,9 @@ def measure_transcript(
             continue
         end = prompt_idx[n + 1] if n + 1 < len(prompt_idx) else len(entries)
         wanted = set(skills)
-        hit = sorted({name for idx, name in invocations if pi <= idx < end and name in wanted})
+        hit = sorted(
+            {name for idx, name in invocations if pi <= idx < end and name in wanted}
+        )
         suggestions.append(Suggestion(ts, session, list(skills), invoked=hit))
     return prompts, suggestions, earliest
 
@@ -311,8 +325,8 @@ def measure_transcript(
 
 @dataclass
 class Report:
-    since: Optional[datetime]
-    earliest_prompt: Optional[datetime] = None  # oldest prompt actually read
+    since: datetime | None
+    earliest_prompt: datetime | None = None  # oldest prompt actually read
     transcripts_read: int = 0
     prompts_total: int = 0  # real user prompts in window
     suggestions: list[Suggestion] = field(default_factory=list)
@@ -326,7 +340,7 @@ class Report:
         return len([s for s in self.suggestions if s.invoked])
 
     @property
-    def precision(self) -> Optional[float]:
+    def precision(self) -> float | None:
         n = self.suggested_prompts
         return (self.hit_prompts / n) if n else None
 
@@ -342,16 +356,29 @@ class Report:
         rows = []
         for name, n in suggested.most_common():
             k = invoked.get(name, 0)
-            rows.append({"skill": name, "suggested": n, "invoked": k, "ratio": (k / n) if n else None})
+            rows.append(
+                {
+                    "skill": name,
+                    "suggested": n,
+                    "invoked": k,
+                    "ratio": (k / n) if n else None,
+                }
+            )
         return rows
 
     def never_invoked(self, *, min_suggested: int = 3) -> list[dict]:
-        return [r for r in self.per_skill() if r["invoked"] == 0 and r["suggested"] >= min_suggested]
+        return [
+            r
+            for r in self.per_skill()
+            if r["invoked"] == 0 and r["suggested"] >= min_suggested
+        ]
 
     def to_dict(self) -> dict:
         return {
             "since": self.since.isoformat() if self.since else None,
-            "earliest_prompt": self.earliest_prompt.isoformat() if self.earliest_prompt else None,
+            "earliest_prompt": self.earliest_prompt.isoformat()
+            if self.earliest_prompt
+            else None,
             "transcripts_read": self.transcripts_read,
             "prompts_total": self.prompts_total,
             "suggested_prompts": self.suggested_prompts,
@@ -365,8 +392,8 @@ class Report:
 def run(
     config_dir: Path,
     *,
-    days: Optional[int] = 30,
-    now: Optional[datetime] = None,
+    days: int | None = 30,
+    now: datetime | None = None,
 ) -> Report:
     """Measure precision over the last ``days`` days.
 
@@ -375,7 +402,7 @@ def run(
     """
     if days is not None and days < 0:
         raise ValueError(f"days must be >= 0 or None, got {days}")
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     since = (now - timedelta(days=days)) if days else None
     report = Report(since=since)
     for path in iter_main_transcripts(Path(config_dir), modified_since=since):
@@ -383,7 +410,9 @@ def run(
         report.transcripts_read += 1
         report.prompts_total += prompts
         report.suggestions.extend(suggestions)
-        if earliest is not None and (report.earliest_prompt is None or earliest < report.earliest_prompt):
+        if earliest is not None and (
+            report.earliest_prompt is None or earliest < report.earliest_prompt
+        ):
             report.earliest_prompt = earliest
     return report
 
@@ -393,25 +422,29 @@ def run(
 # ----------------------------------------------------------------------
 
 
-def _pct(value: Optional[float]) -> str:
+def _pct(value: float | None) -> str:
     return "n/a" if value is None else f"{value * 100:.1f}%"
 
 
-def _day(dt: Optional[datetime]) -> str:
+def _day(dt: datetime | None) -> str:
     return dt.strftime("%Y-%m-%d") if dt else "n/a"
 
 
 def render(report: Report, *, limit: int = 25) -> str:
     lines = []
     window = f"since {_day(report.since)}" if report.since else "all transcripts"
-    lines.append(f"# Skill routing precision ({window}; earliest prompt read {_day(report.earliest_prompt)})")
+    lines.append(
+        f"# Skill routing precision ({window}; earliest prompt read {_day(report.earliest_prompt)})"
+    )
     lines.append("")
     lines.append("| Measure | Value |")
     lines.append("|---|---|")
     lines.append(f"| Transcripts read | {report.transcripts_read} |")
     lines.append(f"| Prompts in window | {report.prompts_total} |")
     lines.append(f"| Prompts with a skill suggestion | {report.suggested_prompts} |")
-    lines.append(f"| ... where a suggested skill was then invoked | {report.hit_prompts} |")
+    lines.append(
+        f"| ... where a suggested skill was then invoked | {report.hit_prompts} |"
+    )
     lines.append(f"| **Prompt-level precision** | **{_pct(report.precision)}** |")
     lines.append("")
     rows = report.per_skill()
@@ -421,7 +454,9 @@ def render(report: Report, *, limit: int = 25) -> str:
         lines.append("| Skill | Suggested | Invoked | Ratio |")
         lines.append("|---|---:|---:|---:|")
         for r in rows[:limit]:
-            lines.append(f"| {r['skill']} | {r['suggested']} | {r['invoked']} | {_pct(r['ratio'])} |")
+            lines.append(
+                f"| {r['skill']} | {r['suggested']} | {r['invoked']} | {_pct(r['ratio'])} |"
+            )
         if len(rows) > limit:
             lines.append(f"| … {len(rows) - limit} more | | | |")
         lines.append("")

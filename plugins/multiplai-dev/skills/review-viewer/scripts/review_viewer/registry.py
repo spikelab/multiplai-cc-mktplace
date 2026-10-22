@@ -43,7 +43,9 @@ def register(pid: int, boxes: list[Path]) -> Path:
     d = state_dir()
     d.mkdir(parents=True, exist_ok=True, mode=0o700)
     entry = d / f"{pid}.json"
-    entry.write_text(json.dumps({"mailboxes": [str(b) for b in boxes]}), encoding="utf-8")
+    entry.write_text(
+        json.dumps({"mailboxes": [str(b) for b in boxes]}), encoding="utf-8"
+    )
     return entry
 
 
@@ -108,12 +110,21 @@ def read_record(box: Path) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
-def _request(port: int, route: str, token: str, *, body: dict | None = None,
-             timeout: float = PROBE_TIMEOUTS[0]) -> dict | None:
+def _request(
+    port: int,
+    route: str,
+    token: str,
+    *,
+    body: dict | None = None,
+    timeout: float = PROBE_TIMEOUTS[0],
+) -> dict | None:
     data = json.dumps(body).encode("utf-8") if body is not None else None
-    req = Request(f"http://{netinfo.probe_host()}:{port}{route}", data=data,
-                  method="POST" if data is not None else "GET",
-                  headers={"X-Review-Token": token, "Content-Type": "application/json"})
+    req = Request(
+        f"http://{netinfo.probe_host()}:{port}{route}",
+        data=data,
+        method="POST" if data is not None else "GET",
+        headers={"X-Review-Token": token, "Content-Type": "application/json"},
+    )
     try:
         with urlopen(req, timeout=timeout) as resp:
             parsed = json.loads(resp.read().decode("utf-8"))
@@ -175,7 +186,11 @@ def existing(box: Path) -> dict | None:
         return who
     record = read_record(box)
     if record and pid_alive(_int(record.get("pid"))):
-        return {"unresponsive": True, "pid": record.get("pid"), "port": record.get("port")}
+        return {
+            "unresponsive": True,
+            "pid": record.get("pid"),
+            "port": record.get("port"),
+        }
     for leftover in ("server.json", "server.token", "open.html"):
         try:
             (box / leftover).unlink()
@@ -185,12 +200,18 @@ def existing(box: Path) -> dict | None:
 
 
 def shutdown(who: dict, token: str, reason: str = "stop") -> bool:
-    return _request(who["port"], "/api/shutdown", token, body={"reason": reason},
-                    timeout=4.0) is not None
+    return (
+        _request(
+            who["port"], "/api/shutdown", token, body={"reason": reason}, timeout=4.0
+        )
+        is not None
+    )
 
 
 def describe(who: dict) -> str:
     sid = (who.get("session_id") or "")[:8] or "no session"
     targets = ", ".join(who.get("targets", [])) or "?"
-    return (f"port {who.get('port')}  targets: {targets}  agent: {who.get('agent', '?')}"
-            f"  session: {sid}  pid: {who.get('pid', '?')}  since {who.get('started', '?')}")
+    return (
+        f"port {who.get('port')}  targets: {targets}  agent: {who.get('agent', '?')}"
+        f"  session: {sid}  pid: {who.get('pid', '?')}  since {who.get('started', '?')}"
+    )

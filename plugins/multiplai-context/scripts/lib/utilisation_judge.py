@@ -31,8 +31,8 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Optional, Sequence
 
 from multiplai_core.untrusted import fence
 
@@ -128,8 +128,9 @@ def current_instrument(model: str) -> dict:
     return {
         "plugin_version": _plugin_version(),
         "model": model,
-        "thinking": bool(judge_thinking_kwargs().get("thinking", {}).get("type")
-                         != "disabled"),
+        "thinking": bool(
+            judge_thinking_kwargs().get("thinking", {}).get("type") != "disabled"
+        ),
     }
 
 
@@ -225,7 +226,9 @@ def injected_keys(record: dict) -> list[str]:
         if not isinstance(file, str) or not file:
             continue
         section = entry.get("section")
-        key = util.section_key(file, section if isinstance(section, str) and section else None)
+        key = util.section_key(
+            file, section if isinstance(section, str) and section else None
+        )
         if key not in seen:
             seen.append(key)
     return seen
@@ -243,10 +246,8 @@ def render_injected(keys: Sequence[str]) -> str:
 def build_prompt(keys: Sequence[str], transcript: str) -> str:
     """The per-call user half. Both untrusted inputs are fenced."""
     fenced = fence(transcript, "claude code session transcript", TRANSCRIPT_CHAR_BUDGET)
-    return (
-        JUDGE_USER
-        .replace("{injected}", render_injected(keys))
-        .replace("{transcript}", "\n".join(fenced) if fenced else "(empty)")
+    return JUDGE_USER.replace("{injected}", render_injected(keys)).replace(
+        "{transcript}", "\n".join(fenced) if fenced else "(empty)"
     )
 
 
@@ -301,12 +302,14 @@ def parse_verdicts(
         seen.add(key)
         evidence = " ".join((body or "").split())
         used = (parsed.get("used") or "").strip().lower() in _YES
-        out.append({
-            "file": file,
-            "section": section,
-            "used": bool(used and evidence),
-            "evidence": evidence,
-        })
+        out.append(
+            {
+                "file": file,
+                "section": section,
+                "used": bool(used and evidence),
+                "evidence": evidence,
+            }
+        )
     _warn_dropped(
         session,
         allowed=allowed,
@@ -346,26 +349,34 @@ def _warn_dropped(
     label = f"session {session}" if session else "an unnamed session"
     parts: list[str] = []
     if missing:
-        parts.append(f"{len(missing)} injected section(s) got no verdict "
-                     f"[{_sample(missing)}]")
+        parts.append(
+            f"{len(missing)} injected section(s) got no verdict [{_sample(missing)}]"
+        )
     if malformed:
         parts.append(f"{malformed} <verdict> tag(s) had no usable file=")
     if not_injected:
-        parts.append(f"{len(not_injected)} verdict(s) named a section that was "
-                     f"never injected [{_sample(not_injected)}]")
+        parts.append(
+            f"{len(not_injected)} verdict(s) named a section that was "
+            f"never injected [{_sample(not_injected)}]"
+        )
     if duplicated:
-        parts.append(f"{len(duplicated)} duplicate verdict(s) after the first "
-                     f"[{_sample(duplicated)}]")
+        parts.append(
+            f"{len(duplicated)} duplicate verdict(s) after the first "
+            f"[{_sample(duplicated)}]"
+        )
     logger.warning(
         "Utilisation judge dropped verdicts for %s: %s. Dropped sections are "
         "recorded as NOT OBSERVED (never as unused), so the rates stay honest "
         "— but the prompt asks for one verdict per injected section, so this "
         "is model non-compliance worth watching.",
-        label, "; ".join(parts),
+        label,
+        "; ".join(parts),
     )
 
 
-def distilled_transcript(path: Path, *, char_budget: int = TRANSCRIPT_CHAR_BUDGET) -> str:
+def distilled_transcript(
+    path: Path, *, char_budget: int = TRANSCRIPT_CHAR_BUDGET
+) -> str:
     """Distilled transcript text for one session, bounded, or ``""``.
 
     The distiller already chunks to a token budget; the judge needs one call,
@@ -402,7 +413,7 @@ async def judge_one_detailed(
     *,
     model: str,
     timeout_s: float = JUDGE_TIMEOUT_S,
-) -> tuple[Optional[list[dict]], str]:
+) -> tuple[list[dict] | None, str]:
     """``(verdicts, reason)`` for one session. ``reason`` is ``""`` on success.
 
     Split from :func:`judge_one` so the caller can tell a **model outage** from
@@ -416,13 +427,16 @@ async def judge_one_detailed(
         return None, SKIP_NO_KEYS
     transcript_path = record.get("transcript")
     if not isinstance(transcript_path, str) or not transcript_path:
-        logger.info("No transcript recorded for session %s; skipping",
-                    record.get("session"))
+        logger.info(
+            "No transcript recorded for session %s; skipping", record.get("session")
+        )
         return None, SKIP_NO_TRANSCRIPT
     transcript = distilled_transcript(Path(transcript_path))
     if not transcript:
-        logger.info("Transcript for session %s is gone or empty; skipping",
-                    record.get("session"))
+        logger.info(
+            "Transcript for session %s is gone or empty; skipping",
+            record.get("session"),
+        )
         return None, SKIP_NO_TRANSCRIPT
     try:
         # Thinking is PINNED on for this call, not inherited from
@@ -440,8 +454,10 @@ async def judge_one_detailed(
             response.content, keys, session=str(record.get("session") or "")
         ), ""
     except Exception:
-        logger.exception("Utilisation judge failed for session %s (fails closed)",
-                         record.get("session"))
+        logger.exception(
+            "Utilisation judge failed for session %s (fails closed)",
+            record.get("session"),
+        )
         return None, SKIP_UNAVAILABLE
 
 
@@ -451,7 +467,7 @@ async def judge_one(
     *,
     model: str,
     timeout_s: float = JUDGE_TIMEOUT_S,
-) -> Optional[list[dict]]:
+) -> list[dict] | None:
     """Verdicts for one session, or ``None`` when the call could not be trusted.
 
     ``None`` covers every failure mode — no transcript, model error, timeout,
@@ -483,7 +499,7 @@ async def judge_sessions(
     records = util.read_records(path)
     eligible = util.sessions_awaiting_judge(records)
     eligible.sort(key=lambda r: str(r.get("ts") or ""), reverse=True)
-    sample = eligible[:max(0, sample_size)]
+    sample = eligible[: max(0, sample_size)]
 
     # Resolved once for the run: it cannot change between sessions, and every
     # verdict written below carries it so a later reader can segment the corpus
@@ -522,7 +538,9 @@ async def judge_sessions(
             )
             continue
         util.record_judge(
-            path, str(record.get("session") or ""), verdicts,
+            path,
+            str(record.get("session") or ""),
+            verdicts,
             instrument=instrument,
         )
         judged += 1
@@ -543,13 +561,15 @@ async def judge_sessions(
         logger.warning(
             "Utilisation judge: %d of %d sampled session(s) could not be judged "
             "because the call failed — the judge column is degraded, not zero",
-            unavailable, len(sample),
+            unavailable,
+            len(sample),
         )
     if not_judgeable:
         logger.info(
             "Utilisation judge: %d of %d sampled session(s) had nothing to "
             "judge (no injected sections, or the transcript has aged out)",
-            not_judgeable, len(sample),
+            not_judgeable,
+            len(sample),
         )
     logger.info("Utilisation judge coverage: %s", report)
     return report

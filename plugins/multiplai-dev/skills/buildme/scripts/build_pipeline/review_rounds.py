@@ -23,7 +23,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .models import BlockInfo, PriorAssessment, ReviewFinding, ReviewResult, class_line
@@ -75,19 +75,27 @@ def _write_json(path: Path, data: dict) -> None:
     os.replace(tmp, path)
 
 
-def finding_id(block_number: int, round_number: int, index: int, prefix: str = "F") -> str:
+def finding_id(
+    block_number: int, round_number: int, index: int, prefix: str = "F"
+) -> str:
     """The id of the *index*-th (from 0) finding of a round: accepted findings
     are ``F``, rejected ones ``X``. ``B01-R2-F1`` is block 1's first accepted
     finding in round 2."""
     return f"B{block_number:02d}-R{round_number}-{prefix}{index + 1}"
 
 
-def _with_ids(findings: list[ReviewFinding], block_number: int,
-              round_number: int) -> list[ReviewFinding]:
+def _with_ids(
+    findings: list[ReviewFinding], block_number: int, round_number: int
+) -> list[ReviewFinding]:
     """*findings* with an id on each that has none, by its place in the list."""
-    return [f if f.finding_id else f.model_copy(
-                update={"finding_id": finding_id(block_number, round_number, i)})
-            for i, f in enumerate(findings)]
+    return [
+        f
+        if f.finding_id
+        else f.model_copy(
+            update={"finding_id": finding_id(block_number, round_number, i)}
+        )
+        for i, f in enumerate(findings)
+    ]
 
 
 def record_round(
@@ -135,13 +143,17 @@ def record_round(
     taken = round_numbers(change_dir, block.number)
     k = (taken[-1] if taken else 0) + 1
     record = {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "kind": kind,
         "block": {"number": block.number, "name": block.name},
         "round": k,
         "head_sha": head_sha,
         "reviewed_sha": reviewed_sha,
-        **({} if reviewed_sha else {"reviewed_sha_unknown": reviewed_sha_unknown or "not checked"}),
+        **(
+            {}
+            if reviewed_sha
+            else {"reviewed_sha_unknown": reviewed_sha_unknown or "not checked"}
+        ),
         "scores": [s.model_dump(mode="json") for s in review.scores],
         "weighted_average": weighted_average,
         "gate": {"passed": gate_passed, "reason": gate_reason},
@@ -154,7 +166,9 @@ def record_round(
             for f in review.rejected_findings
         ],
         "open_findings": None,
-        "prior_assessments": [a.model_dump(mode="json") for a in prior_assessments or []],
+        "prior_assessments": [
+            a.model_dump(mode="json") for a in prior_assessments or []
+        ],
         "outside_fix_scope": None,
         "fix_brief": None,
         "fix": None,
@@ -163,12 +177,16 @@ def record_round(
     def numbered(k: int) -> dict:
         accepted = _with_ids(review.findings, block.number, k)
         opened = list(carried_open or []) + (
-            accepted if new_open is None else [accepted[i] for i in new_open])
+            accepted if new_open is None else [accepted[i] for i in new_open]
+        )
         return {
-            **record, "round": k,
+            **record,
+            "round": k,
             "accepted": [f.model_dump(mode="json") for f in accepted],
             "open_findings": [f.model_dump(mode="json") for f in opened],
-            "outside_fix_scope": [accepted[i].model_dump(mode="json") for i in outside or []],
+            "outside_fix_scope": [
+                accepted[i].model_dump(mode="json") for i in outside or []
+            ],
         }
 
     for _ in range(100):
@@ -209,13 +227,18 @@ def _findings(entries, block_number: int, round_number: int) -> list[ReviewFindi
         try:
             out.append(ReviewFinding.model_validate(entry))
         except (TypeError, ValueError) as e:
-            log.warning("Skipping an unreadable finding in round %s of block %d: %s",
-                        round_number, block_number, e)
+            log.warning(
+                "Skipping an unreadable finding in round %s of block %d: %s",
+                round_number,
+                block_number,
+                e,
+            )
     return _with_ids(out, block_number, round_number)
 
 
 def open_state(
-    change_dir: Path, block_number: int,
+    change_dir: Path,
+    block_number: int,
 ) -> tuple[list[ReviewFinding], list[dict], dict | None]:
     """What the block's earlier review rounds left: ``(open, rejected, last)``.
 
@@ -234,7 +257,9 @@ def open_state(
         for i, entry in enumerate(record.get("rejected") or []):
             if not isinstance(entry, dict):
                 continue
-            fid = entry.get("finding_id") or finding_id(block_number, record["round"], i, "X")
+            fid = entry.get("finding_id") or finding_id(
+                block_number, record["round"], i, "X"
+            )
             if fid not in seen:
                 seen.add(fid)
                 rejected.append({**entry, "finding_id": fid})
@@ -256,15 +281,18 @@ class RoundMemory:
 
 
 def complete_assessments(
-    assessments: list[PriorAssessment], open_: list[ReviewFinding],
+    assessments: list[PriorAssessment],
+    open_: list[ReviewFinding],
 ) -> list[PriorAssessment]:
     """One assessment per open finding, in the open list's order. An open
     finding the review gave no status is ``cannot_verify``, never resolved;
     a status for an id that is not open is left out."""
     given = {a.finding_id: a for a in assessments}
-    return [given.get(f.finding_id) or PriorAssessment(finding_id=f.finding_id,
-                                                       status="cannot_verify")
-            for f in open_]
+    return [
+        given.get(f.finding_id)
+        or PriorAssessment(finding_id=f.finding_id, status="cannot_verify")
+        for f in open_
+    ]
 
 
 @dataclass
@@ -285,12 +313,15 @@ class RoundPlan:
     to_fix: list[ReviewFinding] = field(default_factory=list)
 
     def status(self, finding_id: str) -> str:
-        return next((a.status for a in self.assessments if a.finding_id == finding_id),
-                    "cannot_verify")
+        return next(
+            (a.status for a in self.assessments if a.finding_id == finding_id),
+            "cannot_verify",
+        )
 
 
 def plan_round(
-    accepted: list[ReviewFinding], open_: list[ReviewFinding],
+    accepted: list[ReviewFinding],
+    open_: list[ReviewFinding],
     assessments: list[PriorAssessment],
 ) -> RoundPlan:
     """Sort a round's accepted findings against the open list (plan B2
@@ -313,8 +344,13 @@ def plan_round(
         if plan.status(f.finding_id) == "resolved" and not more:
             continue
         if more:
-            f = f.model_copy(update={"evidence": "\n".join(
-                [f.evidence, *(f"RESTATED: {e}" for e in more)]).strip()})
+            f = f.model_copy(
+                update={
+                    "evidence": "\n".join(
+                        [f.evidence, *(f"RESTATED: {e}" for e in more)]
+                    ).strip()
+                }
+            )
         plan.carried.append(f)
     plan.to_fix = plan.carried + [accepted[i] for i in plan.new_open]
     return plan
@@ -325,8 +361,10 @@ def open_findings_text(plan: RoundPlan) -> str:
     lines = []
     for f in plan.carried:
         where = f" ({f.file_path}:{f.line})" if f.file_path else ""
-        lines.append(f"- {f.finding_id} [{f.severity}] {f.claim}{where} — status: "
-                     f"{plan.status(f.finding_id)}")
+        lines.append(
+            f"- {f.finding_id} [{f.severity}] {f.claim}{where} — status: "
+            f"{plan.status(f.finding_id)}"
+        )
         if f.evidence:
             lines.append(f"  evidence: {f.evidence}")
         if class_line(f):
@@ -334,7 +372,9 @@ def open_findings_text(plan: RoundPlan) -> str:
     return "\n".join(lines)
 
 
-def history(change_dir: Path, block_number: int) -> list[tuple[ReviewFinding, list[str]]]:
+def history(
+    change_dir: Path, block_number: int
+) -> list[tuple[ReviewFinding, list[str]]]:
     """Every finding this block's review records accepted, by id, in the
     order first raised, with what each round said about it."""
     seen: dict[str, tuple[ReviewFinding, list[str]]] = {}
@@ -359,7 +399,9 @@ def history_text(change_dir: Path, block_number: int) -> str:
     lines = []
     for f, events in history(change_dir, block_number):
         where = f" ({f.file_path}:{f.line})" if f.file_path else ""
-        lines.append(f"- {f.finding_id} [{f.severity}] {f.claim}{where} — {'; '.join(events)}")
+        lines.append(
+            f"- {f.finding_id} [{f.severity}] {f.claim}{where} — {'; '.join(events)}"
+        )
     return "\n".join(lines) or "(no findings recorded)"
 
 
@@ -370,8 +412,12 @@ def recurring_ids(change_dir: Path, block_number: int) -> list[str]:
     for record in _review_records(change_dir, block_number):
         for entry in record.get("prior_assessments") or []:
             if isinstance(entry, dict) and entry.get("status") in (
-                    "still_present", "partially_resolved"):
-                counts[entry.get("finding_id")] = counts.get(entry.get("finding_id"), 0) + 1
+                "still_present",
+                "partially_resolved",
+            ):
+                counts[entry.get("finding_id")] = (
+                    counts.get(entry.get("finding_id"), 0) + 1
+                )
     return [fid for fid, n in counts.items() if fid and n >= 2]
 
 
@@ -434,7 +480,10 @@ def restore(saved: dict[Path, bytes]) -> None:
 
 
 def append_unfixed(
-    change_dir: Path, block: BlockInfo, findings: list[ReviewFinding], status: str,
+    change_dir: Path,
+    block: BlockInfo,
+    findings: list[ReviewFinding],
+    status: str,
 ) -> Path | None:
     """Append *findings* to ``unfixed-findings.md`` with *status* (why they
     are unfixed). The file starts with a Markdown heading, which the pr skill
@@ -444,17 +493,24 @@ def append_unfixed(
     path = Path(change_dir) / UNFIXED_FINDINGS_FILE
     lines = []
     for f in findings:
-        where = f" (`{f.file_path}:{f.line}`)" if f.file_path and f.line else (
-            f" (`{f.file_path}`)" if f.file_path else "")
+        where = (
+            f" (`{f.file_path}:{f.line}`)"
+            if f.file_path and f.line
+            else (f" (`{f.file_path}`)" if f.file_path else "")
+        )
         claim = " ".join(f.claim.split())
-        lines.append(f"- Block {block.number} ({block.name}): [{f.severity}] {claim}{where} "
-                     f"— {status}\n")
+        lines.append(
+            f"- Block {block.number} ({block.name}): [{f.severity}] {claim}{where} "
+            f"— {status}\n"
+        )
     try:
         new = not path.exists()
         with path.open("a") as fh:
             if new:
-                fh.write(f"{UNFIXED_HEADING}\n\nAccepted review findings that buildme left "
-                         "unfixed, each with the reason.\n\n")
+                fh.write(
+                    f"{UNFIXED_HEADING}\n\nAccepted review findings that buildme left "
+                    "unfixed, each with the reason.\n\n"
+                )
             fh.writelines(lines)
         return path
     except OSError as e:

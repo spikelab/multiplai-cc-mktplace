@@ -14,15 +14,14 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-
-from multiplai_core.paths import Paths
 
 from lib.fsio import atomic_write_json
 from lib.job_effort import CATALOG_EFFORT_OPTION, effort_kwargs
 from lib.thinking import CATALOG_THINKING_OPTION, thinking_kwargs
+from multiplai_core.paths import Paths
 
 logger = logging.getLogger(__name__)
 
@@ -380,9 +379,14 @@ class GeneratorBase:
             batch.hashes[key] = current_hash
 
             if self._should_skip(
-                key, current_hash, stored_hashes, force,
+                key,
+                current_hash,
+                stored_hashes,
+                force,
                 has_existing_entry=key in existing_by_key,
-            ) and not self.entry_needs_regeneration(key, source, existing_by_key.get(key)):
+            ) and not self.entry_needs_regeneration(
+                key, source, existing_by_key.get(key)
+            ):
                 batch.skipped += 1
                 batch.entries[key] = existing_by_key[key]
                 continue
@@ -439,8 +443,12 @@ class GeneratorBase:
 
     @staticmethod
     def _should_skip(
-        key: str, current_hash: str, stored_hashes: dict[str, str], force: bool,
-        *, has_existing_entry: bool,
+        key: str,
+        current_hash: str,
+        stored_hashes: dict[str, str],
+        force: bool,
+        *,
+        has_existing_entry: bool,
     ) -> bool:
         """Determine whether a source should be skipped (unchanged hash).
 
@@ -517,13 +525,13 @@ class GeneratorBase:
         """Write catalog and update generation state."""
         catalog = {
             "schema_version": CATALOG_SCHEMA_VERSION,
-            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "generated_at": datetime.now(UTC).isoformat(),
             "entries": list(new_entries.values()),
         }
         self._write_catalog(catalog)
 
         state.generators[self.name] = {
-            "last_run": datetime.now(timezone.utc).isoformat(),
+            "last_run": datetime.now(UTC).isoformat(),
             "source_hashes": new_hashes,
             "entry_count": len(new_entries),
         }
@@ -617,8 +625,7 @@ class GeneratorBase:
             try:
                 response = await self._model_client.query(
                     system=(
-                        "You are a catalog generator. "
-                        "Produce structured JSON output."
+                        "You are a catalog generator. Produce structured JSON output."
                     ),
                     messages=[{"role": "user", "content": prompt}],
                     model=self._call_model,
@@ -629,7 +636,7 @@ class GeneratorBase:
             except Exception as e:
                 is_last_attempt = attempt >= MAX_RETRIES
                 if _is_retryable(e) and not is_last_attempt:
-                    delay = RETRY_BACKOFF_BASE * (2 ** attempt)
+                    delay = RETRY_BACKOFF_BASE * (2**attempt)
                     await asyncio.sleep(delay)
                     continue
                 raise

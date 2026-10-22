@@ -9,9 +9,8 @@ from __future__ import annotations
 
 import os
 
-import pytest
-
 import plane
+import pytest
 from conftest import ALLOWED, ALLOWED_TWO, BAD, OK, OK2, guard
 from conftest import Args as _Args
 

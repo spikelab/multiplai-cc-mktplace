@@ -26,7 +26,16 @@ from __future__ import annotations
 import logging
 
 from .. import checks, sdk
-from ..models import SEVERITIES, AgentCheck, DuplicateSet, Finding, Merged, MergeOutput, ReviewState, is_trim
+from ..models import (
+    SEVERITIES,
+    AgentCheck,
+    DuplicateSet,
+    Finding,
+    Merged,
+    MergeOutput,
+    ReviewState,
+    is_trim,
+)
 from ..paths_io import assign_paths, load_paths
 from ..prompts import merge as prompt
 from . import RunContext, bounded
@@ -46,7 +55,9 @@ def _near(a_start: int, a_end: int, b_start: int, b_end: int) -> bool:
 
 def anchors_near(a: Finding, b: Finding) -> bool:
     """The two findings' anchors are in one file and overlap or are at most MERGE_LINE_GAP lines apart."""
-    return a.file == b.file and _near(a.line_start, a.line_end, b.line_start, b.line_end)
+    return a.file == b.file and _near(
+        a.line_start, a.line_end, b.line_start, b.line_end
+    )
 
 
 def linked(a: Finding, b: Finding) -> bool:
@@ -62,9 +73,14 @@ def linked(a: Finding, b: Finding) -> bool:
         return False
     if anchors_near(a, b):
         return True
-    return any(ca.path == cb.path and _near(ca.line_start, ca.line_end, cb.line_start, cb.line_end)
-               for ca in a.citations if not ca.is_web
-               for cb in b.citations if not cb.is_web)
+    return any(
+        ca.path == cb.path
+        and _near(ca.line_start, ca.line_end, cb.line_start, cb.line_end)
+        for ca in a.citations
+        if not ca.is_web
+        for cb in b.citations
+        if not cb.is_web
+    )
 
 
 def link_groups(findings: list[Finding], link=linked) -> list[list[Finding]]:
@@ -96,15 +112,22 @@ def link_groups(findings: list[Finding], link=linked) -> list[list[Finding]]:
     for idx in sorted(members.values(), key=min):
         if len(idx) < 2:
             continue
-        groups.append(sorted((findings[i] for i in idx),
-                             key=lambda f: (file_order[f.file], f.line_start, f.line_end)))
+        groups.append(
+            sorted(
+                (findings[i] for i in idx),
+                key=lambda f: (file_order[f.file], f.line_start, f.line_end),
+            )
+        )
     return groups
 
 
 def overlap_groups(state: ReviewState) -> list[list[Finding]]:
     """Groups of 2+ shown (confirmed or unverifiable) findings that `linked` chains together."""
-    shown = [f for f in state.findings
-             if getattr(state.verdicts.get(f.id), "status", "") in MERGED_STATUSES]
+    shown = [
+        f
+        for f in state.findings
+        if getattr(state.verdicts.get(f.id), "status", "") in MERGED_STATUSES
+    ]
     return link_groups(shown)
 
 
@@ -112,13 +135,17 @@ def group_key(group: list[Finding]) -> str:
     return ",".join(sorted(f.id for f in group))
 
 
-def usable_sets(group: list[Finding], sets: list[DuplicateSet]) -> list[tuple[list[str], str]]:
+def usable_sets(
+    group: list[Finding], sets: list[DuplicateSet]
+) -> list[tuple[list[str], str]]:
     """The agent's sets, keeping only ids in the group, each id once, sets of 2+."""
     in_group = {f.id for f in group}
     used: set[str] = set()
     out = []
     for s in sets:
-        ids = [i for i in dict.fromkeys(s.finding_ids) if i in in_group and i not in used]
+        ids = [
+            i for i in dict.fromkeys(s.finding_ids) if i in in_group and i not in used
+        ]
         if len(ids) < 2:
             continue
         used.update(ids)
@@ -134,7 +161,10 @@ def merge_set(members: list[Finding], state: ReviewState) -> Finding:
     """The finding *members* become; the first of them in `state.findings` order breaks ties."""
     rank = {s: i for i, s in enumerate(SEVERITIES)}
     status_rank = {"confirmed": 0, "unverifiable": 1}
-    survivor = min(members, key=lambda f: (status_rank[state.verdicts[f.id].status], rank[f.severity]))
+    survivor = min(
+        members,
+        key=lambda f: (status_rank[state.verdicts[f.id].status], rank[f.severity]),
+    )
     severity = min((f.severity for f in members), key=rank.__getitem__)
     citations, seen = [], set()
     finders: list[str] = []
@@ -152,10 +182,18 @@ def merge_set(members: list[Finding], state: ReviewState) -> Finding:
         # Every member is unverifiable (a confirmed one would have survived),
         # so each was lowered; the merged finding was lowered from the highest.
         state.original_severity[survivor.id] = min(
-            (state.original_severity.get(f.id, f.severity) for f in members), key=rank.__getitem__)
+            (state.original_severity.get(f.id, f.severity) for f in members),
+            key=rank.__getitem__,
+        )
     # The survivor's `defect_class` stands; the other places are every member's.
-    return survivor.model_copy(update={"severity": severity, "citations": citations, "finders": finders,
-                                       "other_locations": locations})
+    return survivor.model_copy(
+        update={
+            "severity": severity,
+            "citations": citations,
+            "finders": finders,
+            "other_locations": locations,
+        }
+    )
 
 
 def mark_merged(state: ReviewState) -> None:
@@ -174,15 +212,23 @@ def _record_merges(state: ReviewState, groups: list[list[Finding]]) -> None:
     for m in state.merged:
         for group in groups:
             if m.finding.id in {f.id for f in group}:
-                outcomes.setdefault(group_key(group), []).append(f"merged {m.finding.id} into {m.into}")
+                outcomes.setdefault(group_key(group), []).append(
+                    f"merged {m.finding.id} into {m.into}"
+                )
     for check in state.checks:
         if check.stage == "merge" and not check.error:
-            check.outcome = "; ".join(outcomes.get(check.subject, [])) or "no duplicates"
+            check.outcome = (
+                "; ".join(outcomes.get(check.subject, [])) or "no duplicates"
+            )
     mark_merged(state)
 
 
-def apply_duplicate_sets(state: ReviewState, answers: list[tuple[list[Finding], list[DuplicateSet]]],
-                         *, by: str = "") -> set[str]:
+def apply_duplicate_sets(
+    state: ReviewState,
+    answers: list[tuple[list[Finding], list[DuplicateSet]]],
+    *,
+    by: str = "",
+) -> set[str]:
     """Merge each usable set of each (group, answer) into one finding; return the ids merged away.
 
     *by* names the stage in each merged finding's reason when it is not merge.
@@ -196,7 +242,9 @@ def apply_duplicate_sets(state: ReviewState, answers: list[tuple[list[Finding], 
             ids = [i for i in ids if i in by_id and i not in removed]
             if len(ids) < 2:
                 continue
-            members = sorted((replaced.get(i, by_id[i]) for i in ids), key=lambda f: order[f.id])
+            members = sorted(
+                (replaced.get(i, by_id[i]) for i in ids), key=lambda f: order[f.id]
+            )
             merged = merge_set(members, state)
             replaced[merged.id] = merged
             for m in members:
@@ -206,9 +254,16 @@ def apply_duplicate_sets(state: ReviewState, answers: list[tuple[list[Finding], 
                 why = f"the same defect as {merged.id} ({merged.file}:{merged.line_start})"
                 if by:
                     why = f"{by}: {why}"
-                state.merged.append(Merged(finding=m, into=merged.id,
-                                           reason=f"{why}: {reason}" if reason.strip() else why))
-    state.findings = [replaced.get(f.id, f) for f in state.findings if f.id not in removed]
+                state.merged.append(
+                    Merged(
+                        finding=m,
+                        into=merged.id,
+                        reason=f"{why}: {reason}" if reason.strip() else why,
+                    )
+                )
+    state.findings = [
+        replaced.get(f.id, f) for f in state.findings if f.id not in removed
+    ]
     return removed
 
 
@@ -222,14 +277,21 @@ async def run_merge(state: ReviewState, ctx: RunContext) -> ReviewState:
 
     async def one(group: list[Finding]) -> None:
         nonlocal failures
-        where = f"{group[0].file}:{group[0].line_start}-{max(f.line_end for f in group)}"
+        where = (
+            f"{group[0].file}:{group[0].line_start}-{max(f.line_end for f in group)}"
+        )
         started = checks.now()
         with sdk.recording() as rec:
             try:
                 out = await sdk.agent_call_structured(
-                    prompt.build(target, group), MergeOutput,
-                    allowed_tools=sdk.MERGER_TOOLS, model=cfg.merger_model, effort=cfg.effort,
-                    max_turns=cfg.max_turns, cwd=str(ctx.snapshot), budget_label="merge",
+                    prompt.build(target, group),
+                    MergeOutput,
+                    allowed_tools=sdk.MERGER_TOOLS,
+                    model=cfg.merger_model,
+                    effort=cfg.effort,
+                    max_turns=cfg.max_turns,
+                    cwd=str(ctx.snapshot),
+                    budget_label="merge",
                 )
                 error = ""
             except (sdk.RepoTrustError, sdk.UsageLimitError):
@@ -238,9 +300,16 @@ async def run_merge(state: ReviewState, ctx: RunContext) -> ReviewState:
                 log.error("merge agent failed for %s", where, exc_info=True)
                 error = f"merge {where}: {str(e).splitlines()[0][:200]}"
         check = AgentCheck(
-            stage="merge", subject=group_key(group), given=[f"findings ({len(group)})"],
-            calls=[checks.summarise_call(c, target, ctx.snapshot) for c in rec.tool_calls],
-            turns=rec.turns, cost_usd=round(rec.cost_usd, 6), started_at=started, ended_at=checks.now(),
+            stage="merge",
+            subject=group_key(group),
+            given=[f"findings ({len(group)})"],
+            calls=[
+                checks.summarise_call(c, target, ctx.snapshot) for c in rec.tool_calls
+            ],
+            turns=rec.turns,
+            cost_usd=round(rec.cost_usd, 6),
+            started_at=started,
+            ended_at=checks.now(),
             outcome="no duplicates",
         )
         if error:
@@ -256,16 +325,26 @@ async def run_merge(state: ReviewState, ctx: RunContext) -> ReviewState:
         state.merge_answers[group_key(group)] = out.duplicate_sets
         state.checks.append(check)
         if ctx.progress:
-            dupes = sum(len(ids) - 1 for ids, _ in usable_sets(group, out.duplicate_sets))
-            ctx.progress.line(f"  merge {where}: {len(group)} findings, {dupes} duplicates")
+            dupes = sum(
+                len(ids) - 1 for ids, _ in usable_sets(group, out.duplicate_sets)
+            )
+            ctx.progress.line(
+                f"  merge {where}: {len(group)} findings, {dupes} duplicates"
+            )
 
     await bounded(todo, one, cfg.concurrency)
 
-    removed = apply_duplicate_sets(state, [(g, state.merge_answers.get(group_key(g), [])) for g in groups])
+    removed = apply_duplicate_sets(
+        state, [(g, state.merge_answers.get(group_key(g), [])) for g in groups]
+    )
     _record_merges(state, groups)
     paths = load_paths(ctx.target_dir, state) if ctx.target_dir is not None else None
     state.findings = assign_paths(state.findings, paths)
 
-    ctx.counts = {"groups": len(groups), "merged": len(removed), "agent_failures": failures}
+    ctx.counts = {
+        "groups": len(groups),
+        "merged": len(removed),
+        "agent_failures": failures,
+    }
     state.stage = "merge"
     return state

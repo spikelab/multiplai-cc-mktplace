@@ -15,7 +15,7 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from lib import reference_docs  # noqa: E402
+from lib import reference_docs
 
 
 @pytest.fixture
@@ -46,7 +46,9 @@ class TestStackDetection:
     def test_django_read_out_of_requirements_txt(self, tmp_path):
         project = tmp_path / "site"
         project.mkdir()
-        (project / "requirements.txt").write_text("# deps\nDjango[argon2]==5.2\nrequests\n")
+        (project / "requirements.txt").write_text(
+            "# deps\nDjango[argon2]==5.2\nrequests\n"
+        )
         assert "django" in reference_docs.detect_stack_keys(project)
 
     def test_fastapi_and_plain_library_are_distinguished(self, tmp_path):
@@ -98,7 +100,8 @@ class TestProjectResolution:
         project.mkdir(parents=True)
         (project / "pyproject.toml").write_text('[project]\nname = "site"\n')
         found = reference_docs.projects_from_prompt(
-            "fix the serializer in PROJECTS/site/api/views.py please", root,
+            "fix the serializer in PROJECTS/site/api/views.py please",
+            root,
         )
         assert found == [project.resolve()]
 
@@ -207,7 +210,11 @@ class TestHookIntegration:
         payload = json.dumps({"prompt": prompt, "cwd": str(cwd), "session_id": "t"})
         result = subprocess.run(
             [sys.executable, str(SCRIPTS / "context_manager.py")],
-            input=payload, capture_output=True, text=True, env=env, timeout=120,
+            input=payload,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=120,
         )
         assert result.returncode == 0, result.stderr
         return json.loads(result.stdout or "{}")
@@ -259,7 +266,9 @@ class TestSiblingReferenceDirs:
         dirs = reference_docs.reference_dirs()
         assert [d.name for d in dirs] == ["dev", "review"]
 
-    def test_precedence_is_the_allowlist_order_not_alphabetical(self, tmp_path, monkeypatch):
+    def test_precedence_is_the_allowlist_order_not_alphabetical(
+        self, tmp_path, monkeypatch
+    ):
         """`dev` sorts after `archive` and before `review`; only the declared
         order may decide which copy of a name wins."""
         root = self._refs(tmp_path, monkeypatch)
@@ -331,16 +340,21 @@ class TestSiblingReferenceDirs:
         assert len(resolved) == 1, "a name in two directories must resolve once"
         assert resolved[0][0].parent.name == "dev"
 
-    def test_a_name_in_no_directory_is_still_skipped_silently(self, tmp_path, monkeypatch):
+    def test_a_name_in_no_directory_is_still_skipped_silently(
+        self, tmp_path, monkeypatch
+    ):
         root = self._refs(tmp_path, monkeypatch)
         (root / "dev").mkdir(parents=True)
         (root / "review").mkdir(parents=True)
         assert reference_docs.resolve_docs(["nobody-wrote-this.md"]) == []
 
     def test_an_unreadable_copy_does_not_suppress_a_readable_sibling(
-        self, tmp_path, monkeypatch, caplog,
+        self,
+        tmp_path,
+        monkeypatch,
+        caplog,
     ):
-        """"First hit wins" means first *readable* hit. A file that exists but
+        """ "First hit wins" means first *readable* hit. A file that exists but
         cannot be read is not a hit, so it must fall through exactly as a
         missing file does — an unreadable `dev/` copy used to abandon the name
         entirely and hide the perfectly good `review/` one."""
@@ -402,7 +416,12 @@ class TestReviewChecklistsAreReachable:
         ],
     )
     def test_each_stack_reaches_its_review_checklist(
-        self, review_dir, tmp_path, manifest, body, expected,
+        self,
+        review_dir,
+        tmp_path,
+        manifest,
+        body,
+        expected,
     ):
         project = tmp_path / "proj"
         project.mkdir()
@@ -413,7 +432,9 @@ class TestReviewChecklistsAreReachable:
         resolved = reference_docs.resolve_docs(names)
         assert expected in [p.name for p, _ in resolved]
 
-    def test_a_stack_whose_docs_are_all_review_docs_still_resolves(self, review_dir, tmp_path):
+    def test_a_stack_whose_docs_are_all_review_docs_still_resolves(
+        self, review_dir, tmp_path
+    ):
         """A Go project has no `dev/` doc at all, so it is the case that proves
         the search and the map were widened together."""
         project = tmp_path / "svc"
@@ -478,7 +499,9 @@ class TestMappedDocsMissingFromDisk:
     )
 
     def test_a_candidate_with_no_docs_on_disk_does_not_abandon_the_others(
-        self, tmp_path, monkeypatch,
+        self,
+        tmp_path,
+        monkeypatch,
     ):
         """The Node project's doc is not on disk. That must cost the Node
         project its block and nothing else — the Python project the prompt
@@ -490,7 +513,10 @@ class TestMappedDocsMissingFromDisk:
         assert "uv-python-best-practices.md" in block
 
     def test_the_miss_is_logged_at_info_naming_what_was_searched(
-        self, tmp_path, monkeypatch, caplog,
+        self,
+        tmp_path,
+        monkeypatch,
+        caplog,
     ):
         """A contentless DEBUG "detection failed" is not a diagnostic. The line
         has to say which docs were wanted and which directories were looked

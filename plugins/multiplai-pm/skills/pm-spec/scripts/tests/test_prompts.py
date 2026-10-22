@@ -8,9 +8,8 @@ import importlib
 import pkgutil
 
 import pm_spec_pipeline.prompts as prompts_pkg
-from pm_spec_pipeline.prompts import UNTRUSTED_NOTICE
-
 from conftest import change_dir, run, write
+from pm_spec_pipeline.prompts import UNTRUSTED_NOTICE
 from test_prototype import NOTES_FINDINGS, agent, ui_proposal
 
 
@@ -32,16 +31,34 @@ def test_every_call_that_carries_fenced_text_carries_the_notice(repo, model, tmp
     """A full run with a PRD, a ticket, a prototype and a consistency rewrite."""
     from conftest import PRD
     from test_consistency import finding, recheck
+
     ticket = write(tmp_path / "t.md", "Throttle the API.\n")
     prd = write(tmp_path / "prd.md", PRD)
-    model["spec:proposal"] = lambda prompt, label, kw: ui_proposal() + (
-        '\n## Sources\n\n- `rate-limit`: PRD "Limit requests per client"\n'
-        '- `retry-policy`: PRD "Retry guidance"\n')
+    model["spec:proposal"] = lambda prompt, label, kw: (
+        ui_proposal()
+        + (
+            '\n## Sources\n\n- `rate-limit`: PRD "Limit requests per client"\n'
+            '- `retry-policy`: PRD "Retry guidance"\n'
+        )
+    )
     model["prototype"] = agent(NOTES_FINDINGS)
     model["prototype:rewrite:proposal"] = model.handlers["spec:proposal"]
     model["consistency"] = [{"findings": [finding()]}, recheck()]
-    assert run(repo, "new", "throttle", "--auto", "--prd", str(prd), "--ticket-file", str(ticket),
-               "--ticket-ref", "EPIC-9") == 0
+    assert (
+        run(
+            repo,
+            "new",
+            "throttle",
+            "--auto",
+            "--prd",
+            str(prd),
+            "--ticket-file",
+            str(ticket),
+            "--ticket-ref",
+            "EPIC-9",
+        )
+        == 0
+    )
     labels = {label.split(":")[0] for label in model.labels()}
     assert {"interview", "epic_split", "spec", "prototype", "consistency"} <= labels
     for label, prompt, _ in model.calls:

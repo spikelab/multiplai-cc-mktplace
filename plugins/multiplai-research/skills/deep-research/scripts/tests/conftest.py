@@ -36,5 +36,6 @@ _SESSION_DEFAULT_VARS = (
 def _no_session_defaults(monkeypatch):
     for key in _SESSION_DEFAULT_VARS:
         monkeypatch.delenv(key, raising=False)
-    monkeypatch.setattr("multiplai_core.session.load_multiplai_conf",
-                        lambda: {"_sections": {}})
+    monkeypatch.setattr(
+        "multiplai_core.session.load_multiplai_conf", lambda: {"_sections": {}}
+    )

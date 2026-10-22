@@ -62,8 +62,8 @@ import re
 import signal
 from pathlib import Path
 
-from ..findings.cli import ResolveError, change_dir_for, change_name_for
 from ..findings import decisions
+from ..findings.cli import ResolveError, change_dir_for, change_name_for
 from ..findings.decisions import DECISIONS_FILE
 from ..findings.loop import STATE_FILE
 from . import review
@@ -78,11 +78,15 @@ def write_decisions(review_dir: str | Path) -> Path:
     """32.1: `findings.decisions.write_decisions`, keeping only the Code
     findings at the severities the epic blocks on (`review.blockers`), so the
     fixer acts on nothing the epic would merge with."""
-    return decisions.write_decisions(review_dir, severities=review.BLOCKING_SEVERITIES, code_only=True)
+    return decisions.write_decisions(
+        review_dir, severities=review.BLOCKING_SEVERITIES, code_only=True
+    )
 
 
 def post_argv(review_dir: str) -> list[str]:
-    return review._skill("post", review_dir, "--decisions", str(Path(review_dir) / DECISIONS_FILE))
+    return review._skill(
+        "post", review_dir, "--decisions", str(Path(review_dir) / DECISIONS_FILE)
+    )
 
 
 def _state_rounds(project: Path, change: str) -> list:
@@ -91,7 +95,9 @@ def _state_rounds(project: Path, change: str) -> list:
     change name. Empty when there is no change directory or no state file,
     or the file holds no list of rounds."""
     try:
-        path = change_dir_for(project / "specs", change_name_for(change, "")) / STATE_FILE
+        path = (
+            change_dir_for(project / "specs", change_name_for(change, "")) / STATE_FILE
+        )
     except (ResolveError, ValueError):
         return []
     try:
@@ -109,8 +115,13 @@ def _state_rounds(project: Path, change: str) -> list:
 def rounds_done(project: Path, change: str) -> int:
     """The fix rounds `findings` has finished for *change*: the rounds in its
     state (`_state_rounds`) with `review` among their finished steps."""
-    return sum(1 for r in _state_rounds(project, change) if isinstance(r, dict)
-               and isinstance(r.get("finished"), list) and "review" in r["finished"])
+    return sum(
+        1
+        for r in _state_rounds(project, change)
+        if isinstance(r, dict)
+        and isinstance(r.get("finished"), list)
+        and "review" in r["finished"]
+    )
 
 
 def rounds_started(project: Path, change: str) -> int:
@@ -124,7 +135,9 @@ def rounds_started(project: Path, change: str) -> int:
 # and SIGHUP into SystemExit(128 + signal) (`build_pipeline/__main__.py`), and
 # `uv run`, which runs the review and the post, reports a child killed by
 # SIGKILL, SIGTERM or SIGHUP as 128 + signal.
-STOPPED_EXITS = frozenset(128 + s for s in (signal.SIGHUP, signal.SIGKILL, signal.SIGTERM))
+STOPPED_EXITS = frozenset(
+    128 + s for s in (signal.SIGHUP, signal.SIGKILL, signal.SIGTERM)
+)
 
 # What `findings` prints when it exits 0 (`findings/loop.py`): no new comment
 # to act on, or its own round cap reached.
@@ -157,18 +170,49 @@ def acted_on_nothing(text: str) -> bool:
 def budget_stopped(text: str) -> bool:
     """Whether a fixer's output ends at its `--max-usd` ceiling: its last
     `FINDINGS:` end line is `FINDINGS:BUDGET`."""
-    ends = [m for m in re.finditer(r"^FINDINGS:(?:DONE|MAX_ROUNDS|BUDGET):.*$", text, re.MULTILINE)]
+    ends = [
+        m
+        for m in re.finditer(
+            r"^FINDINGS:(?:DONE|MAX_ROUNDS|BUDGET):.*$", text, re.MULTILINE
+        )
+    ]
     return bool(ends) and BUDGET.match(ends[-1].group(0)) is not None
 
 
-def fix_argv(session_id: str, number: int, change: str, project: Path, max_rounds: int,
-             max_usd: float | None = None, *, final: bool = False,
-             accept_unknown_spend: bool = False) -> list[str]:
+def fix_argv(
+    session_id: str,
+    number: int,
+    change: str,
+    project: Path,
+    max_rounds: int,
+    max_usd: float | None = None,
+    *,
+    final: bool = False,
+    accept_unknown_spend: bool = False,
+) -> list[str]:
     """*final*: the final fix (`--no-review`), whose round gets no review."""
-    argv = ["python", "-m", "build_pipeline", "--session-id", session_id, "findings", "--pr", str(number),
-            "--change", change, "--project-dir", str(project), "--auto", "--trust-repo",
-            "--max-rounds", str(max_rounds), "--severities", ",".join(review.BLOCKING_SEVERITIES),
-            "--code-only", ESCALATION_OFF]
+    argv = [
+        "python",
+        "-m",
+        "build_pipeline",
+        "--session-id",
+        session_id,
+        "findings",
+        "--pr",
+        str(number),
+        "--change",
+        change,
+        "--project-dir",
+        str(project),
+        "--auto",
+        "--trust-repo",
+        "--max-rounds",
+        str(max_rounds),
+        "--severities",
+        ",".join(review.BLOCKING_SEVERITIES),
+        "--code-only",
+        ESCALATION_OFF,
+    ]
     if accept_unknown_spend:
         argv.append("--accept-unknown-spend")
     if final:

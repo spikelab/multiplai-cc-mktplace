@@ -78,24 +78,59 @@ from functools import partial
 from pathlib import Path
 from typing import get_args
 
-from .commands import (first_positional, hook_commands, parse_command_line, python_module, python_script,
-                       shell_commands)
-from .e2e_patches import FUNCTION_DEFS, FunctionNode, Patch, PatchScan, Symbol, body_nodes, call_argument
-from .entries import ConsoleScript, Entry, cli_routes, console_scripts, main_module_handler
-from .paths import (E2EListing, E2ETest, Handler, ListingSkip, Location, MatchKind, MockedE2ETest, PathHop,
-                    SkipReason, TracedPath)
+from .commands import (
+    first_positional,
+    hook_commands,
+    parse_command_line,
+    python_module,
+    python_script,
+    shell_commands,
+)
+from .e2e_patches import (
+    FUNCTION_DEFS,
+    FunctionNode,
+    Patch,
+    PatchScan,
+    Symbol,
+    body_nodes,
+    call_argument,
+)
+from .entries import (
+    ConsoleScript,
+    Entry,
+    cli_routes,
+    console_scripts,
+    main_module_handler,
+)
+from .paths import (
+    E2EListing,
+    E2ETest,
+    Handler,
+    ListingSkip,
+    Location,
+    MatchKind,
+    MockedE2ETest,
+    PathHop,
+    SkipReason,
+    TracedPath,
+)
 from .pyindex import Def, PyIndex, dotted_reference, snapshot_files
 
 log = logging.getLogger(__name__)
 
-LISTING_SKIP_DIRS = frozenset({".git", ".venv", "venv", "node_modules", "__pycache__", "site-packages"})
+LISTING_SKIP_DIRS = frozenset(
+    {".git", ".venv", "venv", "node_modules", "__pycache__", "site-packages"}
+)
 TEST_FILE_PATTERNS = ("test_*.py", "*_test.py")
 HELPER_DEPTH = 2
 MATCH_ORDER: tuple[MatchKind, ...] = get_args(MatchKind)
 
 _EXCLUDED_FLAGS = frozenset({"-h", "--help", "--version"})
 _PARSE_METHODS = frozenset({"parse_args", "parse_known_args"})
-_SUBPROCESS_CALLS = frozenset(f"subprocess.{name}" for name in ("run", "call", "check_call", "check_output", "Popen"))
+_SUBPROCESS_CALLS = frozenset(
+    f"subprocess.{name}"
+    for name in ("run", "call", "check_call", "check_output", "Popen")
+)
 _RUN_MODULE = "runpy.run_module"
 # An element of a literal argv that is not a string literal.
 _UNKNOWN = ""
@@ -115,6 +150,7 @@ _PathOf = Callable[[str], str | None]
 @dataclass(frozen=True)
 class Invocation:
     """A call a test makes that can run code: what it reaches, the literal argv, and the test's line."""
+
     match: MatchKind
     key: _Key
     argv: Argv
@@ -124,6 +160,7 @@ class Invocation:
 @dataclass(frozen=True)
 class E2ECandidate:
     """A test function, the invocations its body makes (helpers inlined), and the patches applied to it."""
+
     node_id: str
     file: str
     line: int
@@ -134,8 +171,13 @@ class E2ECandidate:
 class E2EIndex:
     """The test functions of a snapshot and their invocations, parsed once and matched against every entry."""
 
-    def __init__(self, index: PyIndex, tests: Sequence[E2ECandidate], skips: Sequence[ListingSkip],
-                 scripts: Sequence[ConsoleScript] = ()):
+    def __init__(
+        self,
+        index: PyIndex,
+        tests: Sequence[E2ECandidate],
+        skips: Sequence[ListingSkip],
+        scripts: Sequence[ConsoleScript] = (),
+    ):
         self.index = index
         self.tests = tuple(tests)
         self.scripts = tuple(scripts)
@@ -146,7 +188,11 @@ class E2EIndex:
     def build(cls, root: Path, index: PyIndex) -> E2EIndex:
         """Parse the test files under `root`. `index` is the snapshot's `PyIndex`; files it prunes are added."""
         root = Path(root)
-        py_files = [rel for rel in snapshot_files(root, LISTING_SKIP_DIRS) if rel.endswith(".py")]
+        py_files = [
+            rel
+            for rel in snapshot_files(root, LISTING_SKIP_DIRS)
+            if rel.endswith(".py")
+        ]
         unindexed = [rel for rel in py_files if index.line_count(rel) is None]
         if unindexed:
             index = index.including(root, unindexed)
@@ -157,10 +203,17 @@ class E2EIndex:
         for rel in filter(is_test_file, py_files):
             tree = index.tree(rel)
             if tree is None:
-                skips.append(ListingSkip(file=rel, reason=_unreadable_reason(root / rel)))
+                skips.append(
+                    ListingSkip(file=rel, reason=_unreadable_reason(root / rel))
+                )
             else:
                 tests += _TestScan(index, functions, patch_scan, rel).candidates(tree)
-        log.debug("listed %d tests under %s (%d test files skipped)", len(tests), root, len(skips))
+        log.debug(
+            "listed %d tests under %s (%d test files skipped)",
+            len(tests),
+            root,
+            len(skips),
+        )
         return cls(index, tests, skips, console_scripts(root, index))
 
     def skips(self) -> list[ListingSkip]:
@@ -172,19 +225,31 @@ class E2EIndex:
         return self._by_id[node_id]
 
 
-def list_e2e_tests(root: Path, paths: Sequence[TracedPath], entries: Mapping[str, Entry], *,
-                   index: PyIndex) -> tuple[dict[str, E2EListing], list[ListingSkip]]:
+def list_e2e_tests(
+    root: Path,
+    paths: Sequence[TracedPath],
+    entries: Mapping[str, Entry],
+    *,
+    index: PyIndex,
+) -> tuple[dict[str, E2EListing], list[ListingSkip]]:
     """The tests of each path, keyed by path id, and the test files skipped. `entries` maps a path id to the
     entry the path was traced from.
     """
     e2e_index = E2EIndex.build(root, index)
-    listings = {path.id: _split_on_hop_2(e2e_index, match_invocations(e2e_index, entries[path.id], root=root),
-                                         path.hops)
-                for path in paths}
+    listings = {
+        path.id: _split_on_hop_2(
+            e2e_index,
+            match_invocations(e2e_index, entries[path.id], root=root),
+            path.hops,
+        )
+        for path in paths
+    }
     return listings, e2e_index.skips()
 
 
-def match_invocations(e2e_index: E2EIndex, entry: Entry, *, root: Path) -> list[E2ETest]:
+def match_invocations(
+    e2e_index: E2EIndex, entry: Entry, *, root: Path
+) -> list[E2ETest]:
     """The tests that invoke `entry` or one of its invokers and leave its handler in place, one record each,
     sorted by (file, line, node_id).
     """
@@ -198,12 +263,21 @@ def match_invocations(e2e_index: E2EIndex, entry: Entry, *, root: Path) -> list[
         hits = [i for i in test.invocations if any(t.reached_by(i) for t in targets)]
         if hits:
             first = min(hits, key=lambda i: (i.line, MATCH_ORDER.index(i.match)))
-            records.append(E2ETest(node_id=test.node_id, file=test.file, line=test.line, match=first.match,
-                                   invocation_line=first.line))
+            records.append(
+                E2ETest(
+                    node_id=test.node_id,
+                    file=test.file,
+                    line=test.line,
+                    match=first.match,
+                    invocation_line=first.line,
+                )
+            )
     return sorted(records, key=lambda r: (r.file, r.line, r.node_id))
 
 
-def applied_patches(e2e_index: E2EIndex, node_id: str, *, root: Path) -> list[tuple[str, str, int]]:
+def applied_patches(
+    e2e_index: E2EIndex, node_id: str, *, root: Path
+) -> list[tuple[str, str, int]]:
     """`(dotted target, file, line)` of each patch applied to the test `node_id`, by its decorators and body or
     by the fixtures it uses, sorted by (file, line, target). `root` is the snapshot root `e2e_index` was built
     from; every file is relative to it.
@@ -230,18 +304,28 @@ def _unreadable_reason(full: Path) -> SkipReason:
 # --- what patches move or drop ------------------------------------------------------------------
 
 
-def _split_on_hop_2(e2e_index: E2EIndex, records: Sequence[E2ETest], hops: Sequence[PathHop]) -> E2EListing:
+def _split_on_hop_2(
+    e2e_index: E2EIndex, records: Sequence[E2ETest], hops: Sequence[PathHop]
+) -> E2EListing:
     """The records, those of tests that patch the symbol at hop 2 moved to `mocks_hop_2`."""
     index = e2e_index.index
     hop_2 = _hop_2_symbol(index, hops)
     e2e: list[E2ETest] = []
     mocked: list[MockedE2ETest] = []
     for record in records:
-        patch = None if hop_2 is None else hop_2.patched_by(index, e2e_index.candidate(record.node_id).patches)
+        patch = (
+            None
+            if hop_2 is None
+            else hop_2.patched_by(index, e2e_index.candidate(record.node_id).patches)
+        )
         if patch is None:
             e2e.append(record)
         else:
-            mocked.append(MockedE2ETest(**record.model_dump(), patch_file=patch.file, patch_line=patch.line))
+            mocked.append(
+                MockedE2ETest(
+                    **record.model_dump(), patch_file=patch.file, patch_line=patch.line
+                )
+            )
     return E2EListing(e2e=e2e, mocks_hop_2=mocked)
 
 
@@ -257,7 +341,9 @@ def _hop_2_symbol(index: PyIndex, hops: Sequence[PathHop]) -> Symbol | None:
     lookups: dict[Def | None, int] = {}
     for line in range(first.line_start, first.line_end + 1):
         lookups.setdefault(index.enclosing_def(first.path, line), line)
-    return Symbol.of(cited, second.path, ((first.path, line) for line in lookups.values()))
+    return Symbol.of(
+        cited, second.path, ((first.path, line) for line in lookups.values())
+    )
 
 
 def _cited_def(index: PyIndex, hop: PathHop) -> Def | None:
@@ -265,8 +351,15 @@ def _cited_def(index: PyIndex, hop: PathHop) -> Def | None:
     either starting within the hop's cited lines or spanning their first line; None when there is none.
     """
     name = hop.symbol_called.rpartition(".")[2]
-    cited = [d for d in index.defs(hop.path) if d.name == name
-             and (hop.line_start <= d.start <= hop.line_end or d.start <= hop.line_start <= d.end)]
+    cited = [
+        d
+        for d in index.defs(hop.path)
+        if d.name == name
+        and (
+            hop.line_start <= d.start <= hop.line_end
+            or d.start <= hop.line_start <= d.end
+        )
+    ]
     return cited[-1] if cited else None
 
 
@@ -294,6 +387,7 @@ def _bypassed_by_patching(index: PyIndex, entry: Entry) -> list[Symbol]:
 @dataclass(frozen=True)
 class _Target:
     """A way to reach an entry: an invocation with `key` whose argv holds `words`, in order."""
+
     key: _Key
     words: Argv = ()
 
@@ -301,7 +395,9 @@ class _Target:
         return invocation.key == self.key and _in_order(self.words, invocation.argv)
 
 
-def _is_target_in(target_path: str, target_name: str | None, path: str, name: str | None) -> bool:
+def _is_target_in(
+    target_path: str, target_name: str | None, path: str, name: str | None
+) -> bool:
     """Whether a target is in `path`, and is called `name` when one is given."""
     return target_path == path and (name is None or target_name == name)
 
@@ -324,20 +420,26 @@ class _Targets:
         found: set[_Target] = set()
         if entry.handler is not None and entry.handler.symbol is not None:
             found.add(_Target(("def", entry.handler.path, entry.handler.line)))
-        found |= self._declared(entry.kind, entry.name, entry.location, entry.invocation)
+        found |= self._declared(
+            entry.kind, entry.name, entry.location, entry.invocation
+        )
         for invoker in entry.also_invoked_by:
             found |= self._declared(invoker.kind, invoker.name, invoker.location, None)
         return frozenset(found)
 
-    def _declared(self, kind: str, name: str, location: Location,
-                  invocation: str | None) -> set[_Target]:
+    def _declared(
+        self, kind: str, name: str, location: Location, invocation: str | None
+    ) -> set[_Target]:
         """The targets of one declaration; `invocation` is the command text when the caller has it."""
         words = tuple(name.split(" "))
         match kind:
             case "argparse_subcommand":
                 program = location.path
-                launchers = [("program", program), *(("module", m) for m in self._program_modules(program)),
-                             *self._scripts_running(program)]
+                launchers = [
+                    ("program", program),
+                    *(("module", m) for m in self._program_modules(program)),
+                    *self._scripts_running(program),
+                ]
                 return {_Target(key, words) for key in launchers}
             case "click_command" | "typer_command":
                 return self._app_targets(location.path, name)
@@ -346,8 +448,16 @@ class _Targets:
             case "project_script":
                 return {_Target(("command", name))}
             case "skill_command" | "hook_command":
-                commands = [invocation] if invocation is not None else self._commands_at(kind, location)
-                return {t for command in commands if (t := self._command_target(command, location.path))}
+                commands = (
+                    [invocation]
+                    if invocation is not None
+                    else self._commands_at(kind, location)
+                )
+                return {
+                    t
+                    for command in commands
+                    if (t := self._command_target(command, location.path))
+                }
             case _:
                 return set()
 
@@ -368,7 +478,11 @@ class _Targets:
         for main in dict.fromkeys((path, package_main)):
             module = self._index.module_name(main)
             _, handler = main_module_handler(self._index, main)
-            if module and handler is not None and _is_target_in(handler.path, handler.symbol, path, name):
+            if (
+                module
+                and handler is not None
+                and _is_target_in(handler.path, handler.symbol, path, name)
+            ):
                 modules.append(module.removesuffix(".__main__"))
         return modules
 
@@ -379,7 +493,11 @@ class _Targets:
         keys: list[_Key] = []
         for script in self._scripts:
             handler = script.handler
-            target = (handler.path, handler.symbol) if handler is not None else (script.module_file, script.attribute)
+            target = (
+                (handler.path, handler.symbol)
+                if handler is not None
+                else (script.module_file, script.attribute)
+            )
             if _is_target_in(*target, path, name):
                 keys.append(("command", script.name))
         return keys
@@ -393,8 +511,11 @@ class _Targets:
         found: set[_Target] = set()
         for route in cli_routes(path, tree) if tree is not None else ():
             if route.command == command:
-                launchers = [("app", path, route.app), *self._scripts_running(path, route.app),
-                             *(("module", m) for m in self._modules_running(path, route.app))]
+                launchers = [
+                    ("app", path, route.app),
+                    *self._scripts_running(path, route.app),
+                    *(("module", m) for m in self._modules_running(path, route.app)),
+                ]
                 found |= {_Target(key, route.words) for key in launchers}
         return found
 
@@ -403,16 +524,31 @@ class _Targets:
         try:
             text = (self._root / location.path).read_text(encoding="utf-8-sig")
             if kind == "hook_command":
-                return [hook.command for hook in hook_commands(text) if hook.line == location.line]
-            return [command for line, command in shell_commands(text) if line == location.line]
+                return [
+                    hook.command
+                    for hook in hook_commands(text)
+                    if hook.line == location.line
+                ]
+            return [
+                command
+                for line, command in shell_commands(text)
+                if line == location.line
+            ]
         except (OSError, ValueError) as e:
-            log.debug("cannot re-read the command at %s:%d: %s", location.path, location.line, e)
+            log.debug(
+                "cannot re-read the command at %s:%d: %s",
+                location.path,
+                location.line,
+                e,
+            )
             return []
 
     def _command_target(self, command: str, source_file: str) -> _Target | None:
         """What running `command`, as written in `source_file`, looks like; its first positional must be passed."""
         try:
-            line = parse_command_line(command, source_file=source_file, root=self._root, index=self._index)
+            line = parse_command_line(
+                command, source_file=source_file, root=self._root, index=self._index
+            )
         except ValueError:
             return None
         reached = _reached_command(line.tokens, line.snapshot_path)
@@ -466,8 +602,16 @@ class _Functions:
         if key not in self._defs:
             tree = self._index.tree(handler.path)
             nodes = ast.walk(tree) if tree is not None else ()
-            self._defs[key] = next((n for n in nodes if isinstance(n, FUNCTION_DEFS)
-                                    and n.lineno == handler.line and n.name == handler.symbol), None)
+            self._defs[key] = next(
+                (
+                    n
+                    for n in nodes
+                    if isinstance(n, FUNCTION_DEFS)
+                    and n.lineno == handler.line
+                    and n.name == handler.symbol
+                ),
+                None,
+            )
         return self._defs[key]
 
     def first_parameter(self, handler: Handler) -> str | None:
@@ -480,8 +624,11 @@ class _Functions:
         """Whether the function's body calls `.parse_args(` or `.parse_known_args(`."""
         func = self.of(handler)
         return func is not None and any(
-            isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr in _PARSE_METHODS
-            for n in ast.walk(func))
+            isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Attribute)
+            and n.func.attr in _PARSE_METHODS
+            for n in ast.walk(func)
+        )
 
 
 # What a literal argv of one match form reaches.
@@ -525,7 +672,13 @@ def _shell_words(value: _Literal) -> Argv | None:
 class _TestScan:
     """The test functions of one test file, and the invocations of each."""
 
-    def __init__(self, index: PyIndex, functions: _Functions, patch_scan: PatchScan, test_file: str):
+    def __init__(
+        self,
+        index: PyIndex,
+        functions: _Functions,
+        patch_scan: PatchScan,
+        test_file: str,
+    ):
         self._index = index
         self._functions = functions
         self._patch_scan = patch_scan
@@ -538,13 +691,18 @@ class _TestScan:
         found: dict[str, E2ECandidate] = {}
         for name, func, owner in _test_functions(tree):
             invocations = tuple(self._body(func, self._file, {}, 0))
-            found[name] = E2ECandidate(node_id=f"{self._file}::{name}", file=self._file, line=func.lineno,
-                                       invocations=invocations,
-                                       patches=self._patch_scan.of_test(self._file, func, owner))
+            found[name] = E2ECandidate(
+                node_id=f"{self._file}::{name}",
+                file=self._file,
+                line=func.lineno,
+                invocations=invocations,
+                patches=self._patch_scan.of_test(self._file, func, owner),
+            )
         return list(found.values())
 
-    def _body(self, func: FunctionNode, path: str, env: _Env,
-              depth: int) -> Iterator[Invocation]:
+    def _body(
+        self, func: FunctionNode, path: str, env: _Env, depth: int
+    ) -> Iterator[Invocation]:
         """The invocations of a test body (depth 0) or of a helper inlined at `depth` with parameters `env`."""
         handed_on = self._handed_on(func, path)
         for call in _calls(func):
@@ -556,17 +714,28 @@ class _TestScan:
         """
         assigned: dict[str, list[ast.Call]] = {}
         for node in body_nodes(func):
-            if isinstance(node, ast.Assign | ast.AnnAssign) and isinstance(node.value, ast.Call):
-                for target in node.targets if isinstance(node, ast.Assign) else [node.target]:
+            if isinstance(node, ast.Assign | ast.AnnAssign) and isinstance(
+                node.value, ast.Call
+            ):
+                for target in (
+                    node.targets if isinstance(node, ast.Assign) else [node.target]
+                ):
                     if isinstance(target, ast.Name):
                         assigned.setdefault(target.id, []).append(node.value)
         handed: set[ast.Call] = set()
         for call in _calls(func):
             callee = call.func
-            if isinstance(callee, ast.Attribute) and callee.attr == "func" and isinstance(callee.value, ast.Name):
+            if (
+                isinstance(callee, ast.Attribute)
+                and callee.attr == "func"
+                and isinstance(callee.value, ast.Name)
+            ):
                 handed.update(assigned.get(callee.value.id, ()))
             reference = dotted_reference(callee)
-            if reference is None or self._index.resolve_name(path, call.lineno, reference) is None:
+            if (
+                reference is None
+                or self._index.resolve_name(path, call.lineno, reference) is None
+            ):
                 continue
             for argument in [*call.args, *(k.value for k in call.keywords)]:
                 if isinstance(argument, ast.Call):
@@ -575,13 +744,19 @@ class _TestScan:
                     handed.update(assigned.get(argument.id, ()))
         return handed
 
-    def _call(self, call: ast.Call, path: str, env: _Env, depth: int, handed_on: bool) -> Iterator[Invocation]:
+    def _call(
+        self, call: ast.Call, path: str, env: _Env, depth: int, handed_on: bool
+    ) -> Iterator[Invocation]:
         line = call.lineno
         reference = dotted_reference(call.func)
         handler = self._index.resolve_name(path, line, reference) if reference else None
         if depth == 0 and handler is not None:
-            yield Invocation("direct_call", ("def", handler.path, handler.line), (), line)
-        for match, expr, reach in self._forms(call, path, reference, handler, handed_on):
+            yield Invocation(
+                "direct_call", ("def", handler.path, handler.line), (), line
+            )
+        for match, expr, reach in self._forms(
+            call, path, reference, handler, handed_on
+        ):
             # Inside a helper, only a form fed by a parameter is the test's invocation.
             if depth and not _uses(expr, env):
                 continue
@@ -589,31 +764,70 @@ class _TestScan:
             reached = reach(value) if value is not None else None
             if reached is not None and _EXCLUDED_FLAGS.isdisjoint(reached[1]):
                 yield Invocation(match, reached[0], reached[1], line)
-        if handler is not None and depth < HELPER_DEPTH and self._is_helper(handler.path):
+        if (
+            handler is not None
+            and depth < HELPER_DEPTH
+            and self._is_helper(handler.path)
+        ):
             yield from self._inlined(call, handler, path, env, depth)
 
-    def _forms(self, call: ast.Call, path: str, reference: str | None, handler: Handler | None,
-               handed_on: bool) -> Iterator[_Form]:
+    def _forms(
+        self,
+        call: ast.Call,
+        path: str,
+        reference: str | None,
+        handler: Handler | None,
+        handed_on: bool,
+    ) -> Iterator[_Form]:
         """The match forms `call` has, whatever its argv turns out to be. A builder parse counts only when its
         result is `handed_on` to a handler: a bare parse runs none.
         """
         line = call.lineno
         if handler is not None and self._functions.parses_args(handler):
-            yield ("cli_argv", call_argument(call, 0, self._functions.first_parameter(handler)),
-                   partial(_argv_reaches, ("program", handler.path)))
+            yield (
+                "cli_argv",
+                call_argument(call, 0, self._functions.first_parameter(handler)),
+                partial(_argv_reaches, ("program", handler.path)),
+            )
         callee = call.func
-        if handed_on and isinstance(callee, ast.Attribute) and isinstance(callee.value, ast.Call):
-            builder_ref = dotted_reference(callee.value.func) if callee.attr in _PARSE_METHODS else None
-            builder = self._index.resolve_name(path, line, builder_ref) if builder_ref else None
+        if (
+            handed_on
+            and isinstance(callee, ast.Attribute)
+            and isinstance(callee.value, ast.Call)
+        ):
+            builder_ref = (
+                dotted_reference(callee.value.func)
+                if callee.attr in _PARSE_METHODS
+                else None
+            )
+            builder = (
+                self._index.resolve_name(path, line, builder_ref)
+                if builder_ref
+                else None
+            )
             if builder is not None:
-                yield "cli_argv", call_argument(call, 0, "args"), partial(_argv_reaches, ("program", builder.path))
+                yield (
+                    "cli_argv",
+                    call_argument(call, 0, "args"),
+                    partial(_argv_reaches, ("program", builder.path)),
+                )
         if isinstance(callee, ast.Attribute) and callee.attr == "invoke":
             app = self._app(path, line, call_argument(call, 0, "cli"))
             if app is not None:
-                yield "cli_runner", call_argument(call, 1, "args"), partial(_args_reaches, app)
-        qualified = self._index.qualified_name(path, line, reference) if reference else None
+                yield (
+                    "cli_runner",
+                    call_argument(call, 1, "args"),
+                    partial(_args_reaches, app),
+                )
+        qualified = (
+            self._index.qualified_name(path, line, reference) if reference else None
+        )
         if qualified in _SUBPROCESS_CALLS:
-            yield "subprocess", call_argument(call, 0, "args"), partial(_command_reaches, self._script_path)
+            yield (
+                "subprocess",
+                call_argument(call, 0, "args"),
+                partial(_command_reaches, self._script_path),
+            )
         elif qualified == _RUN_MODULE:
             yield "runpy", call_argument(call, 0, "mod_name"), _module_reaches
 
@@ -625,7 +839,9 @@ class _TestScan:
         handler = self._index.resolve_name(path, line, reference)
         if handler is not None and handler.symbol is not None:
             return "app", handler.path, handler.symbol
-        module, _, name = (self._index.qualified_name(path, line, reference) or "").rpartition(".")
+        module, _, name = (
+            self._index.qualified_name(path, line, reference) or ""
+        ).rpartition(".")
         module_file = self._index.resolve_module(path, module) if module else None
         return ("app", module_file, name) if module_file is not None else None
 
@@ -640,7 +856,9 @@ class _TestScan:
                 return env[name]
             case ast.List(elts=elements) | ast.Tuple(elts=elements):
                 return self._words(elements, path, env)
-            case ast.Call(func=ast.Name(id="list" | "tuple"), args=[inner], keywords=[]):
+            case ast.Call(
+                func=ast.Name(id="list" | "tuple"), args=[inner], keywords=[]
+            ):
                 value = self._literal(inner, path, env)
                 return value if isinstance(value, tuple) else None
         return None
@@ -663,9 +881,15 @@ class _TestScan:
 
     def _is_executable(self, expr: ast.expr, path: str) -> bool:
         reference = dotted_reference(expr)
-        return reference is not None and self._index.qualified_name(path, expr.lineno, reference) == "sys.executable"
+        return (
+            reference is not None
+            and self._index.qualified_name(path, expr.lineno, reference)
+            == "sys.executable"
+        )
 
-    def _inlined(self, call: ast.Call, helper: Handler, path: str, env: _Env, depth: int) -> Iterator[Invocation]:
+    def _inlined(
+        self, call: ast.Call, helper: Handler, path: str, env: _Env, depth: int
+    ) -> Iterator[Invocation]:
         """The invocations of a helper called with literal arguments, at the call's line."""
         func = self._functions.of(helper)
         bound = self._bind(func, call, path, env) if func is not None else {}
@@ -674,8 +898,9 @@ class _TestScan:
         for invocation in self._body(func, helper.path, bound, depth + 1):
             yield replace(invocation, line=call.lineno)
 
-    def _bind(self, func: FunctionNode, call: ast.Call, path: str,
-              env: _Env) -> dict[str, _Literal]:
+    def _bind(
+        self, func: FunctionNode, call: ast.Call, path: str, env: _Env
+    ) -> dict[str, _Literal]:
         """The helper's parameters that `call` passes a literal to."""
         positional = [a.arg for a in func.args.posonlyargs + func.args.args]
         named = {*positional, *(a.arg for a in func.args.kwonlyargs)}
@@ -701,11 +926,16 @@ class _TestScan:
         directory, name = posixpath.split(path)
         if name == "conftest.py":
             return not directory or self._file.startswith(directory + "/")
-        return (self._tests_tree is not None and path.startswith(self._tests_tree + "/")
-                and not is_test_file(path))
+        return (
+            self._tests_tree is not None
+            and path.startswith(self._tests_tree + "/")
+            and not is_test_file(path)
+        )
 
 
-def _test_functions(tree: ast.Module) -> Iterator[tuple[str, FunctionNode, ast.ClassDef | None]]:
+def _test_functions(
+    tree: ast.Module,
+) -> Iterator[tuple[str, FunctionNode, ast.ClassDef | None]]:
     """`(qualified name, def, class)` of each module-level `test*` function (class None) and `test*` method of
     a `Test*` class.
     """
@@ -725,7 +955,9 @@ def _calls(func: FunctionNode) -> Iterator[ast.Call]:
 
 def _uses(expr: ast.expr | None, env: _Env) -> bool:
     """Whether `expr` reads one of the helper parameters bound in `env`."""
-    return expr is not None and any(isinstance(n, ast.Name) and n.id in env for n in ast.walk(expr))
+    return expr is not None and any(
+        isinstance(n, ast.Name) and n.id in env for n in ast.walk(expr)
+    )
 
 
 def _tests_tree(test_file: str) -> str | None:

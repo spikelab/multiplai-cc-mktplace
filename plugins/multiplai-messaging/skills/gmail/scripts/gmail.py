@@ -46,6 +46,7 @@ a JSON token file via GMAIL_TOKEN_FILE. Every invocation is audited to the share
 activity log ``$WORKSPACE/.multiplai/data/logs/activity.{log,jsonl}`` (grep
 ``"component": "gmail"``); diagnostics go to ``gmail.log`` in the same dir.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -118,7 +119,8 @@ def _creds_from_env() -> dict | None:
         "client_secret": csec,
         "refresh_token": rtok,
         "token_uri": os.environ.get(
-            "GMAIL_TOKEN_URI", "https://oauth2.googleapis.com/token"),
+            "GMAIL_TOKEN_URI", "https://oauth2.googleapis.com/token"
+        ),
         "scopes": None,
     }
 
@@ -134,8 +136,9 @@ def _creds_from_file() -> dict | None:
             data = json.load(fh)
     except (OSError, json.JSONDecodeError) as e:
         _die(f"cannot read token file {token_path}: {e}")
-    missing = [k for k in ("client_id", "client_secret", "refresh_token")
-               if not data.get(k)]
+    missing = [
+        k for k in ("client_id", "client_secret", "refresh_token") if not data.get(k)
+    ]
     if missing:
         _die(f"token file {token_path} is missing fields: {', '.join(missing)}")
     return data
@@ -144,8 +147,8 @@ def _creds_from_file() -> dict | None:
 def _load_credentials():
     """Build refreshed OAuth credentials from env vars (preferred) or a file."""
     try:
-        from google.oauth2.credentials import Credentials
         from google.auth.transport.requests import Request
+        from google.oauth2.credentials import Credentials
     except ImportError as e:  # pragma: no cover - env guard
         _die(
             "google client libraries missing. Run this script with uv so the "
@@ -178,12 +181,13 @@ def _load_credentials():
     return creds
 
 
-def _assert_scopes(creds) -> "None":
+def _assert_scopes(creds) -> None:
     """Fetch the token's *granted* scopes from Google; abort on any extra."""
     try:
         url = f"{TOKENINFO_URL}?" + urllib.parse.urlencode(
-            {"access_token": creds.token})
-        with urllib.request.urlopen(url, timeout=15) as resp:  # noqa: S310
+            {"access_token": creds.token}
+        )
+        with urllib.request.urlopen(url, timeout=15) as resp:
             info = json.load(resp)
     except Exception as e:  # noqa: BLE001
         _die(f"could not verify granted scopes via tokeninfo: {e}")
@@ -201,6 +205,7 @@ def _assert_scopes(creds) -> "None":
 
 def _service(creds):
     from googleapiclient.discovery import build
+
     # cache_discovery=False avoids a noisy warning + file cache in the container.
     return build("gmail", "v1", credentials=creds, cache_discovery=False)
 
@@ -251,22 +256,35 @@ def _header(headers: list, name: str) -> str:
 # --------------------------------------------------------------------------- #
 # search
 # --------------------------------------------------------------------------- #
-def cmd_search(svc, query: str, limit: int) -> "None":
+def cmd_search(svc, query: str, limit: int) -> None:
     # labelIds=['INBOX'] is the structural inbox boundary; the free-text query is
     # AND-ed with it, so archived/sent/spam/trash/all-mail are never reachable.
-    resp = svc.users().messages().list(
-        userId="me", q=query, labelIds=[INBOX], maxResults=limit).execute()
+    resp = (
+        svc.users()
+        .messages()
+        .list(userId="me", q=query, labelIds=[INBOX], maxResults=limit)
+        .execute()
+    )
     msgs = resp.get("messages", [])
-    log_event("gmail", "search", f"searched inbox: {query!r}",
-              query=query, hits=len(msgs))
+    log_event(
+        "gmail", "search", f"searched inbox: {query!r}", query=query, hits=len(msgs)
+    )
     if not msgs:
         print(f"No inbox messages match: {query!r}")
         return
     print(f"{len(msgs)} inbox match(es) for {query!r} (headers + snippet only):\n")
     for m in msgs:
-        full = svc.users().messages().get(
-            userId="me", id=m["id"], format="metadata",
-            metadataHeaders=["Subject", "From", "Date"]).execute()
+        full = (
+            svc.users()
+            .messages()
+            .get(
+                userId="me",
+                id=m["id"],
+                format="metadata",
+                metadataHeaders=["Subject", "From", "Date"],
+            )
+            .execute()
+        )
         # Defense in depth: skip anything that somehow lacks the INBOX label.
         if INBOX not in full.get("labelIds", []):
             continue
@@ -294,7 +312,8 @@ def _decode_part(part: dict) -> str:
         return ""
     try:
         return base64.urlsafe_b64decode(data.encode("utf-8")).decode(
-            "utf-8", errors="replace")
+            "utf-8", errors="replace"
+        )
     except Exception:  # noqa: BLE001
         return ""
 
@@ -334,14 +353,16 @@ def _extract_body(payload: dict) -> str:
     return plain if plain is not None else fallback
 
 
-def cmd_read(svc, message_id: str) -> "None":
-    msg = svc.users().messages().get(
-        userId="me", id=message_id, format="full").execute()
+def cmd_read(svc, message_id: str) -> None:
+    msg = (
+        svc.users().messages().get(userId="me", id=message_id, format="full").execute()
+    )
     # Structural inbox gate: refuse to surface anything not currently in INBOX.
     if INBOX not in msg.get("labelIds", []):
         _die(f"message {message_id} is not in the inbox; refusing to read it.")
-    log_event("gmail", "read", f"read inbox message {message_id}",
-              message_id=message_id)
+    log_event(
+        "gmail", "read", f"read inbox message {message_id}", message_id=message_id
+    )
     payload = msg.get("payload", {})
     hdrs = payload.get("headers", [])
     print(f"id:      {message_id}")
@@ -370,8 +391,10 @@ def _read_payload(input_file: str | None) -> dict:
             _die(f"cannot read --input file {input_file}: {e}")
     else:
         if sys.stdin.isatty():
-            _die("draft payload must come from --input <file> or stdin "
-                 '(JSON: {"to","subject","body"}).')
+            _die(
+                "draft payload must come from --input <file> or stdin "
+                '(JSON: {"to","subject","body"}).'
+            )
         raw = sys.stdin.read()
     try:
         payload = json.loads(raw)
@@ -390,10 +413,12 @@ def _body_html(body: str) -> str:
     paras = [p.strip("\n") for p in body.replace("\r\n", "\n").split("\n\n")]
     return "".join(
         "<p>" + html.escape(p).replace("\n", "<br>\n") + "</p>\n"
-        for p in paras if p.strip())
+        for p in paras
+        if p.strip()
+    )
 
 
-def cmd_draft(svc, reply_to: str, input_file: str | None) -> "None":
+def cmd_draft(svc, reply_to: str, input_file: str | None) -> None:
     payload = _read_payload(input_file)
     to = (payload.get("to") or "").strip()
     subject = (payload.get("subject") or "").strip()
@@ -405,10 +430,23 @@ def cmd_draft(svc, reply_to: str, input_file: str | None) -> "None":
     in_reply_to = None
     references = None
     if reply_to and reply_to.lower() != "none":
-        orig = svc.users().messages().get(
-            userId="me", id=reply_to, format="metadata",
-            metadataHeaders=["Message-ID", "References", "Subject",
-                             "From", "Reply-To"]).execute()
+        orig = (
+            svc.users()
+            .messages()
+            .get(
+                userId="me",
+                id=reply_to,
+                format="metadata",
+                metadataHeaders=[
+                    "Message-ID",
+                    "References",
+                    "Subject",
+                    "From",
+                    "Reply-To",
+                ],
+            )
+            .execute()
+        )
         # Only reply to messages that are actually in the inbox.
         if INBOX not in orig.get("labelIds", []):
             _die(f"cannot reply to {reply_to}: it is not in the inbox.")
@@ -419,19 +457,25 @@ def cmd_draft(svc, reply_to: str, input_file: str | None) -> "None":
         orig_subject = _header(ohdrs, "Subject")
         if orig_msgid:
             in_reply_to = orig_msgid
-            references = (orig_refs + " " + orig_msgid).strip() if orig_refs \
-                else orig_msgid
+            references = (
+                (orig_refs + " " + orig_msgid).strip() if orig_refs else orig_msgid
+            )
         if not subject and orig_subject:
-            subject = orig_subject if orig_subject.lower().startswith("re:") \
+            subject = (
+                orig_subject
+                if orig_subject.lower().startswith("re:")
                 else f"Re: {orig_subject}"
+            )
         # Set the recipient EXPLICITLY. A threadId alone does NOT make Gmail
         # infer a "To"; a draft with no recipient is unsendable. Prefer the
         # original's Reply-To, else its From.
         if not to:
             to = (_header(ohdrs, "Reply-To") or _header(ohdrs, "From")).strip()
             if not to:
-                _die("could not determine reply recipient (original message has "
-                     "no Reply-To or From header); provide 'to' in the payload.")
+                _die(
+                    "could not determine reply recipient (original message has "
+                    "no Reply-To or From header); provide 'to' in the payload."
+                )
 
     if not to:
         _die("draft payload has no 'to' and no reply target; nothing to address.")
@@ -453,13 +497,19 @@ def cmd_draft(svc, reply_to: str, input_file: str | None) -> "None":
         message["threadId"] = thread_id
 
     # The ONLY write operation in this module. Creates a draft; does not deliver.
-    result = svc.users().drafts().create(
-        userId="me", body={"message": message}).execute()
+    result = (
+        svc.users().drafts().create(userId="me", body={"message": message}).execute()
+    )
 
     draft_id = result.get("id", "?")
-    log_event("gmail", "draft", f"draft created to={to} subject={subject!r}",
-              draft_id=draft_id, reply_to=(reply_to if thread_id else None),
-              mode=("reply" if thread_id else "new"))
+    log_event(
+        "gmail",
+        "draft",
+        f"draft created to={to} subject={subject!r}",
+        draft_id=draft_id,
+        reply_to=(reply_to if thread_id else None),
+        mode=("reply" if thread_id else "new"),
+    )
     print(f"Draft created (NOT sent). draft_id={draft_id}")
     if thread_id:
         print(f"Threaded onto conversation threadId={thread_id}")
@@ -471,7 +521,8 @@ def cmd_draft(svc, reply_to: str, input_file: str | None) -> "None":
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="gmail.py",
-        description="Search/read the Gmail inbox and create drafts. Never sends.")
+        description="Search/read the Gmail inbox and create drafts. Never sends.",
+    )
     sub = p.add_subparsers(dest="verb", required=True)
 
     sp = sub.add_parser("search", help="search the inbox (headers + snippet)")
@@ -482,14 +533,20 @@ def build_parser() -> argparse.ArgumentParser:
     rp.add_argument("message_id", help="Gmail message id from `search`")
 
     dp = sub.add_parser("draft", help="create a draft (never sends)")
-    dp.add_argument("--reply-to", default="none",
-                    help="message id to reply to, or 'none' for a new draft")
-    dp.add_argument("--input", default=None,
-                    help="JSON file with {to,subject,body}; omit to read stdin")
+    dp.add_argument(
+        "--reply-to",
+        default="none",
+        help="message id to reply to, or 'none' for a new draft",
+    )
+    dp.add_argument(
+        "--input",
+        default=None,
+        help="JSON file with {to,subject,body}; omit to read stdin",
+    )
     return p
 
 
-def main(argv: list) -> "None":
+def main(argv: list) -> None:
     setup_logging("gmail")
     args = build_parser().parse_args(argv)
     creds = _load_credentials()

@@ -1,9 +1,8 @@
 """Tests for rubric — change type detection and rubric generation."""
 
-import pytest
-from pathlib import Path
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from build_pipeline.rubric import detect_change_type, generate_rubric
 
 
@@ -113,7 +112,9 @@ class TestRubricHasCoreDimensions:
     async def test_rubric_generation_called_with_change_type(self, tmp_path):
         change_dir = tmp_path / "change"
         change_dir.mkdir()
-        (change_dir / "proposal.md").write_text("REST API with database models and endpoint")
+        (change_dir / "proposal.md").write_text(
+            "REST API with database models and endpoint"
+        )
         (change_dir / "tasks.md").write_text("## 1. Setup\nCreate module")
 
         config = MagicMock()
@@ -131,7 +132,9 @@ class TestRubricHasCoreDimensions:
             "| Score | Criteria |\n|---|---|\n| 5 | Excellent |\n| 3 | OK |\n| 1 | Bad |\n"
         )
 
-        with patch("build_pipeline.rubric.llm_call", new_callable=AsyncMock) as mock_llm:
+        with patch(
+            "build_pipeline.rubric.llm_call", new_callable=AsyncMock
+        ) as mock_llm:
             mock_llm.return_value = rubric_content
             result = await generate_rubric(change_dir, config)
 
@@ -154,7 +157,9 @@ class TestRubricHasCoreDimensions:
         config = MagicMock()
         config.model = "test-model"
 
-        with patch("build_pipeline.rubric.llm_call", new_callable=AsyncMock) as mock_llm:
+        with patch(
+            "build_pipeline.rubric.llm_call", new_callable=AsyncMock
+        ) as mock_llm:
             mock_llm.return_value = "# Rubric\nContent"
             await generate_rubric(change_dir, config)
 
@@ -172,12 +177,16 @@ class TestRubricHasCoreDimensions:
         (change_dir / "tasks.md").write_text("## 1. Setup")
         req_dir = change_dir / "requirements"
         req_dir.mkdir(parents=True)
-        (req_dir / "auth.md").write_text("Requirement: rubric-req-marker for login flow")
+        (req_dir / "auth.md").write_text(
+            "Requirement: rubric-req-marker for login flow"
+        )
 
         config = MagicMock()
         config.model = "test-model"
 
-        with patch("build_pipeline.rubric.llm_call", new_callable=AsyncMock) as mock_llm:
+        with patch(
+            "build_pipeline.rubric.llm_call", new_callable=AsyncMock
+        ) as mock_llm:
             mock_llm.return_value = "# Rubric\nContent"
             await generate_rubric(change_dir, config)
 
@@ -199,13 +208,17 @@ class TestArchitectureBaseline:
         """
         change_dir = tmp_path / "change"
         change_dir.mkdir()
-        (change_dir / "proposal.md").write_text("REST API with database models and endpoint")
+        (change_dir / "proposal.md").write_text(
+            "REST API with database models and endpoint"
+        )
         (change_dir / "tasks.md").write_text("## 1. Setup")
 
         config = MagicMock()
         config.model = "test-model"
 
-        with patch("build_pipeline.rubric.llm_call", new_callable=AsyncMock) as mock_llm:
+        with patch(
+            "build_pipeline.rubric.llm_call", new_callable=AsyncMock
+        ) as mock_llm:
             mock_llm.return_value = "# Rubric\nContent"
             await generate_rubric(change_dir, config)
 

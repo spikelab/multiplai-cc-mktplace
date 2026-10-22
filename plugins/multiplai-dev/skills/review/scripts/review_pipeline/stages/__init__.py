@@ -47,14 +47,18 @@ def relative_path(path: str, target: TargetInfo, snapshot: Path) -> str:
     for root in (str(snapshot.resolve()), str(snapshot), target.repo_path):
         root = root.rstrip("/") + "/"
         if p.startswith(root):
-            p = p[len(root):]
+            p = p[len(root) :]
             break
     while p.startswith("./"):
         p = p[2:]
     return p
 
 
-def fix_citation(citation: Citation | None, target: TargetInfo, snapshot: Path) -> Citation | None:
+def fix_citation(
+    citation: Citation | None, target: TargetInfo, snapshot: Path
+) -> Citation | None:
     if citation is None:
         return None
-    return citation.model_copy(update={"path": relative_path(citation.path, target, snapshot)})
+    return citation.model_copy(
+        update={"path": relative_path(citation.path, target, snapshot)}
+    )

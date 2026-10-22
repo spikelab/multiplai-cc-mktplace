@@ -6,7 +6,6 @@ import subprocess
 from sys import executable as PYTHON
 
 import pytest
-
 from review_viewer import walkthrough
 from review_viewer.mailbox import read_rows
 from review_viewer.models import Walkthrough, load_findings
@@ -14,10 +13,17 @@ from review_viewer.models import Walkthrough, load_findings
 HIGH, MEDIUM, REFUTED = "b561bd34ce", "7ca6553fd7", "cebb020bdb"
 
 
-def _step(sid, path="app/service.py", start=1, end=3, side="head", findings=(), diagram=None):
-    return {"id": sid, "title": sid.replace("-", " "), "body_md": f"About {sid}.",
-            "anchors": [{"path": path, "side": side, "line_start": start, "line_end": end}],
-            "diagram": diagram, "finding_ids": list(findings)}
+def _step(
+    sid, path="app/service.py", start=1, end=3, side="head", findings=(), diagram=None
+):
+    return {
+        "id": sid,
+        "title": sid.replace("-", " "),
+        "body_md": f"About {sid}.",
+        "anchors": [{"path": path, "side": side, "line_start": start, "line_end": end}],
+        "diagram": diagram,
+        "finding_ids": list(findings),
+    }
 
 
 @pytest.fixture
@@ -31,26 +37,51 @@ def complete(ff) -> dict:
     that must be linked."""
     t = ff.target
     return {
-        "schema_version": 1, "generated_at": "2026-09-26T10:00:00Z",
-        "base_sha": t.base_sha, "head_sha": t.head_sha,
+        "schema_version": 1,
+        "generated_at": "2026-09-26T10:00:00Z",
+        "base_sha": t.base_sha,
+        "head_sha": t.head_sha,
         "overview_md": "Adds quantities to totals, caps discounts, logs refunds.",
         "steps": [
             _step("totals", start=7, end=9, findings=[HIGH]),
-            _step("refund-logging", start=17, end=20, findings=[MEDIUM],
-                  diagram={"kind": "mermaid", "source": "flowchart LR\n A --> B"}),
+            _step(
+                "refund-logging",
+                start=17,
+                end=20,
+                findings=[MEDIUM],
+                diagram={"kind": "mermaid", "source": "flowchart LR\n A --> B"},
+            ),
             _step("loyalty", path="app/new_feature.py", start=1, end=5),
-            _step("legacy-removed", path="app/old_module.py", side="base", start=1, end=150),
+            _step(
+                "legacy-removed",
+                path="app/old_module.py",
+                side="base",
+                start=1,
+                end=150,
+            ),
             _step("big-value", path="app/big.py", start=2000, end=2000),
         ],
         "skipped": [{"path": "assets/logo.bin", "reason": "binary logo swap"}],
         "assessments": [
-            {"topic": "commits", "verdict": "good", "title": "Messages explain it",
-             "detail_md": "Each commit says why."},
-            {"topic": "tests", "verdict": "concern", "title": "Refunds untested",
-             "detail_md": "`refund()` has no test."},
+            {
+                "topic": "commits",
+                "verdict": "good",
+                "title": "Messages explain it",
+                "detail_md": "Each commit says why.",
+            },
+            {
+                "topic": "tests",
+                "verdict": "concern",
+                "title": "Refunds untested",
+                "detail_md": "`refund()` has no test.",
+            },
         ],
-        "risk": {"tier": 3, "tier_why": "refunds move money", "revertable": True,
-                 "revert_why": "no migration or external call"},
+        "risk": {
+            "tier": 3,
+            "tier_why": "refunds move money",
+            "revertable": True,
+            "revert_why": "no migration or external call",
+        },
         "complete": True,
     }
 
@@ -73,26 +104,36 @@ def test_rule1_shas_must_match_the_served_target(complete, ff):
 def test_rule2_anchor_path_must_be_changed(complete, ff):
     complete["steps"][0]["anchors"][0]["path"] = "setup.py"
     errs = errors_for(complete, ff)
-    assert any(e.startswith("step totals:") and "setup.py is not a changed file" in e
-               for e in errs), errs
+    assert any(
+        e.startswith("step totals:") and "setup.py is not a changed file" in e
+        for e in errs
+    ), errs
 
 
 def test_rule2_anchor_range_must_exist_at_its_side(complete, ff):
-    complete["steps"][0]["anchors"][0]["line_end"] = 22  # service.py has 21 lines at head
+    complete["steps"][0]["anchors"][0]["line_end"] = (
+        22  # service.py has 21 lines at head
+    )
     complete["steps"][3]["anchors"][0]["side"] = "head"  # old_module.py is gone at head
     complete["steps"][2]["anchors"][0]["side"] = "base"  # new_feature.py is new at head
     errs = errors_for(complete, ff)
-    assert any(e.startswith("step totals:") and "has 21 lines at head" in e for e in errs), errs
-    assert any(e.startswith("step legacy-removed:") and "does not exist at head" in e
-               for e in errs), errs
-    assert any(e.startswith("step loyalty:") and "does not exist at base" in e
-               for e in errs), errs
+    assert any(
+        e.startswith("step totals:") and "has 21 lines at head" in e for e in errs
+    ), errs
+    assert any(
+        e.startswith("step legacy-removed:") and "does not exist at head" in e
+        for e in errs
+    ), errs
+    assert any(
+        e.startswith("step loyalty:") and "does not exist at base" in e for e in errs
+    ), errs
     assert len(errs) == 3
 
 
 def test_rule2_binary_file_cannot_be_anchored(complete, ff):
     complete["steps"][2]["anchors"].append(
-        {"path": "assets/logo.bin", "side": "head", "line_start": 1, "line_end": 1})
+        {"path": "assets/logo.bin", "side": "head", "line_start": 1, "line_end": 1}
+    )
     errs = errors_for(complete, ff)
     assert any("step loyalty:" in e and "binary" in e for e in errs), errs
 
@@ -100,7 +141,9 @@ def test_rule2_binary_file_cannot_be_anchored(complete, ff):
 def test_rule3_finding_ids_must_exist(complete, ff):
     complete["steps"][1]["finding_ids"].append("0123456789")
     errs = errors_for(complete, ff)
-    assert errs == ["step refund-logging: finding 0123456789 is not in the loaded findings"]
+    assert errs == [
+        "step refund-logging: finding 0123456789 is not in the loaded findings"
+    ]
 
 
 def test_rule4_complete_needs_every_file_and_finding(complete, ff):
@@ -119,7 +162,9 @@ def test_rule4_complete_needs_every_file_and_finding(complete, ff):
 def test_rule4_a_finding_the_page_never_shows_need_not_be_linked(complete, ff, label):
     i = next(i for i, f in enumerate(ff.findings) if f.id == MEDIUM)
     f = ff.findings[i]
-    ff.findings[i] = type(f).model_validate({**f.model_dump(), "assessment": {"label": label}})
+    ff.findings[i] = type(f).model_validate(
+        {**f.model_dump(), "assessment": {"label": label}}
+    )
     complete["steps"][1]["finding_ids"] = []
     assert errors_for(complete, ff) == []
     assert walkthrough.coverage(Walkthrough.model_validate(complete), ff) == ([], [])
@@ -128,7 +173,9 @@ def test_rule4_a_finding_the_page_never_shows_need_not_be_linked(complete, ff, l
 def test_rule4_a_trim_suggestion_labelled_important_need_not_be_linked(complete, ff):
     i = next(i for i, f in enumerate(ff.findings) if f.id == MEDIUM)
     f = ff.findings[i]
-    ff.findings[i] = type(f).model_validate({**f.model_dump(), "assessment": {"label": "important"}})
+    ff.findings[i] = type(f).model_validate(
+        {**f.model_dump(), "assessment": {"label": "important"}}
+    )
     complete["steps"][1]["finding_ids"] = []
     assert errors_for(complete, ff) == []
 
@@ -137,7 +184,9 @@ def test_rule4_a_critical_review_needs_only_its_breaks_findings_linked(complete,
     ff.mode = "critical"
     for fid, impact in ((HIGH, "breaks-users"), (MEDIUM, "hygiene")):
         i = next(i for i, f in enumerate(ff.findings) if f.id == fid)
-        ff.findings[i] = type(ff.findings[i]).model_validate({**ff.findings[i].model_dump(), "impact": impact})
+        ff.findings[i] = type(ff.findings[i]).model_validate(
+            {**ff.findings[i].model_dump(), "impact": impact}
+        )
     complete["steps"][1]["finding_ids"] = []
     complete["steps"][0]["finding_ids"] = []
     errs = errors_for(complete, ff)
@@ -146,10 +195,13 @@ def test_rule4_a_critical_review_needs_only_its_breaks_findings_linked(complete,
 
 
 def test_step_text_must_not_restate_a_finding(complete, ff):
-    complete["steps"][0]["body_md"] = f"**Finding {HIGH} (HIGH):** totals drop the quantity."
+    complete["steps"][0]["body_md"] = (
+        f"**Finding {HIGH} (HIGH):** totals drop the quantity."
+    )
     assert errors_for(complete, ff) == [
         f"step totals: body_md names finding {HIGH}; the page shows linked findings under "
-        "the step, so explain the code instead"]
+        "the step, so explain the code instead"
+    ]
 
 
 def test_rule5_step_ids_are_unique(complete, ff):
@@ -159,9 +211,12 @@ def test_rule5_step_ids_are_unique(complete, ff):
 
 
 def test_rule6_complete_needs_commits_and_tests_assessments(complete, ff):
-    complete["assessments"] = [a for a in complete["assessments"] if a["topic"] != "tests"]
+    complete["assessments"] = [
+        a for a in complete["assessments"] if a["topic"] != "tests"
+    ]
     assert errors_for(complete, ff) == [
-        "walkthrough: complete is true but there is no 'tests' assessment"]
+        "walkthrough: complete is true but there is no 'tests' assessment"
+    ]
     complete["complete"] = False
     assert errors_for(complete, ff) == []
 
@@ -172,12 +227,15 @@ def test_rule6_one_assessment_per_topic_except_other(complete, ff):
     assert errors_for(complete, ff) == []
     complete["assessments"].append(dict(complete["assessments"][0]))
     assert errors_for(complete, ff) == [
-        "assessment commits: more than one assessment has this topic"]
+        "assessment commits: more than one assessment has this topic"
+    ]
 
 
 def test_complete_needs_a_risk_block(complete, ff):
     del complete["risk"]
-    assert errors_for(complete, ff) == ["walkthrough: complete is true but there is no 'risk' block"]
+    assert errors_for(complete, ff) == [
+        "walkthrough: complete is true but there is no 'risk' block"
+    ]
     complete["complete"] = False
     assert errors_for(complete, ff) == []
 
@@ -191,23 +249,31 @@ def test_risk_tier_is_0_to_3(complete):
 def test_size_and_risk_topics_load_but_put_rejects_them(complete, ff):
     complete["assessments"] += [
         {"topic": "size", "verdict": "good", "title": "Small", "detail_md": "x"},
-        {"topic": "risk", "verdict": "note", "title": "Some", "detail_md": "x"}]
+        {"topic": "risk", "verdict": "note", "title": "Some", "detail_md": "x"},
+    ]
     assert errors_for(complete, ff) == [
         "assessment size: not an assessment topic any more (size is measured from git)",
-        "assessment risk: not an assessment topic any more (risk is scored from the `risk` block)"]
+        "assessment risk: not an assessment topic any more (risk is scored from the `risk` block)",
+    ]
 
 
 def test_assessment_title_fits_one_line(complete, ff):
-    complete["assessments"][0]["title"] = "PR body is thorough; neither commit has a body"
+    complete["assessments"][0]["title"] = (
+        "PR body is thorough; neither commit has a body"
+    )
     assert errors_for(complete, ff) == [
-        "assessment commits: title is 46 characters, over 32; put the rest in detail_md"]
+        "assessment commits: title is 46 characters, over 32; put the rest in detail_md"
+    ]
     # A file written before 0.22 with a longer title still loads.
     Walkthrough.model_validate(complete)
 
 
 def test_the_schema_advertises_the_title_limit_put_enforces():
     schema = Walkthrough.model_json_schema()
-    assert schema["$defs"]["WalkthroughAssessment"]["properties"]["title"]["maxLength"] == walkthrough.TITLE_MAX
+    assert (
+        schema["$defs"]["WalkthroughAssessment"]["properties"]["title"]["maxLength"]
+        == walkthrough.TITLE_MAX
+    )
 
 
 def test_assessment_verdicts_and_topics_are_closed_sets(complete):
@@ -223,15 +289,21 @@ def test_assessment_verdicts_and_topics_are_closed_sets(complete):
 
 def test_skipped_path_must_be_changed(complete, ff):
     complete["skipped"].append({"path": "nope.txt", "reason": "x"})
-    assert errors_for(complete, ff) == ["skipped nope.txt: not a changed file in this diff"]
+    assert errors_for(complete, ff) == [
+        "skipped nope.txt: not a changed file in this diff"
+    ]
 
 
 # --- CLI and route ------------------------------------------------------------------------
 
 
 def _cli(*args, cwd=None):
-    return subprocess.run([PYTHON, "-m", "review_viewer", *map(str, args)],
-                          capture_output=True, text=True, cwd=cwd)
+    return subprocess.run(
+        [PYTHON, "-m", "review_viewer", *map(str, args)],
+        capture_output=True,
+        text=True,
+        cwd=cwd,
+    )
 
 
 def test_put_publishes_and_the_route_serves_it(start_live, complete, tmp_path):
@@ -254,8 +326,13 @@ def test_put_publishes_and_the_route_serves_it(start_live, complete, tmp_path):
 
     status_out = _cli("walkthrough", "status", "--box", live.box)
     assert status_out.returncode == 0
-    assert f"head_sha: {live.viewer.targets[live.slug].findings.target.head_sha}\n" in status_out.stdout
-    assert "  assets/logo.bin" in status_out.stdout and f"  {MEDIUM} " in status_out.stdout
+    assert (
+        f"head_sha: {live.viewer.targets[live.slug].findings.target.head_sha}\n"
+        in status_out.stdout
+    )
+    assert (
+        "  assets/logo.bin" in status_out.stdout and f"  {MEDIUM} " in status_out.stdout
+    )
 
     src.write_text(json.dumps(complete))
     assert _cli("walkthrough", "put", "--box", live.box, "--file", src).returncode == 0
@@ -267,18 +344,27 @@ def test_put_publishes_and_the_route_serves_it(start_live, complete, tmp_path):
     assert "(0)" in _cli("walkthrough", "status", "--box", live.box).stdout
 
 
-@pytest.mark.parametrize("mutate,needle", [
-    (lambda d: d["steps"][0]["anchors"][0].update(path="setup.py"),
-     "step totals: anchor setup.py"),
-    (lambda d: d["steps"][0]["anchors"][0].update(line_end=999),
-     "step totals: anchor app/service.py:7-999 (head): app/service.py has 21 lines"),
-    (lambda d: d["steps"][1]["finding_ids"].append("0123456789"),
-     "step refund-logging: finding 0123456789"),
-    (lambda d: d.update(skipped=[]),
-     "changed file assets/logo.bin has no anchor"),
-])
-def test_put_rejects_with_exit_2_and_publishes_nothing(start_live, complete, tmp_path,
-                                                       mutate, needle):
+@pytest.mark.parametrize(
+    "mutate,needle",
+    [
+        (
+            lambda d: d["steps"][0]["anchors"][0].update(path="setup.py"),
+            "step totals: anchor setup.py",
+        ),
+        (
+            lambda d: d["steps"][0]["anchors"][0].update(line_end=999),
+            "step totals: anchor app/service.py:7-999 (head): app/service.py has 21 lines",
+        ),
+        (
+            lambda d: d["steps"][1]["finding_ids"].append("0123456789"),
+            "step refund-logging: finding 0123456789",
+        ),
+        (lambda d: d.update(skipped=[]), "changed file assets/logo.bin has no anchor"),
+    ],
+)
+def test_put_rejects_with_exit_2_and_publishes_nothing(
+    start_live, complete, tmp_path, mutate, needle
+):
     live = start_live()
     mutate(complete)
     src = tmp_path / "wt.json"
@@ -319,11 +405,13 @@ def test_question_about_a_step(start_live, complete, tmp_path):
 def test_target_detail_carries_pr_and_notice(findings_path):
     from conftest import free_port
     from review_viewer import netinfo, server
+
     ff = load_findings(findings_path)
     box = findings_path.parent / "viewer"
     meta = {ff.target.slug: {"pr": {"number": 7, "title": "T"}, "notice": "stale"}}
-    viewer = server.build_viewer([(ff, box)], agent="A", session_id="s", idle_minutes=0,
-                                 meta=meta)
+    viewer = server.build_viewer(
+        [(ff, box)], agent="A", session_id="s", idle_minutes=0, meta=meta
+    )
     server.bind(viewer, "127.0.0.1", free_port(), 1)
     server.publish(viewer, netinfo.display_urls(viewer.port))
     try:
@@ -338,14 +426,20 @@ def test_target_detail_carries_pr_and_notice(findings_path):
 # --- paths in the walkthrough: prose only (review-viewer reads paths.json, walkthrough.v1 is unchanged) ---
 
 
-def test_put_stores_a_walkthrough_that_names_paths_in_prose_and_follows_a_hop_order(start_live, complete, tmp_path):
+def test_put_stores_a_walkthrough_that_names_paths_in_prose_and_follows_a_hop_order(
+    start_live, complete, tmp_path
+):
     live = start_live()
     named = copy.deepcopy(complete)
-    named["overview_md"] = ("The change reaches six entry points: shop checkout, pre-commit discount check, "
-                            "/shop:refund, scripts/points_report.py, app/big.py and shop discount.")
+    named["overview_md"] = (
+        "The change reaches six entry points: shop checkout, pre-commit discount check, "
+        "/shop:refund, scripts/points_report.py, app/big.py and shop discount."
+    )
     # p1's hops, in hop order: total (app/service.py:8-9), then points_for (app/new_feature.py:4-5).
-    named["steps"] = [_step("p1-total", start=8, end=9, findings=[HIGH]),
-                      _step("p1-points", path="app/new_feature.py", start=4, end=5)] + named["steps"]
+    named["steps"] = [
+        _step("p1-total", start=8, end=9, findings=[HIGH]),
+        _step("p1-points", path="app/new_feature.py", start=4, end=5),
+    ] + named["steps"]
     src = tmp_path / "wt.json"
     src.write_text(json.dumps(named))
     proc = _cli("walkthrough", "put", "--box", live.box, "--file", src)
@@ -355,7 +449,9 @@ def test_put_stores_a_walkthrough_that_names_paths_in_prose_and_follows_a_hop_or
     assert [s["id"] for s in body["steps"]][:2] == ["p1-total", "p1-points"]
 
 
-def test_put_treats_a_path_ids_field_like_any_other_unknown_field(start_live, complete, tmp_path):
+def test_put_treats_a_path_ids_field_like_any_other_unknown_field(
+    start_live, complete, tmp_path
+):
     live = start_live()
     outs = []
     for field in ("path_ids", "some_unknown_field"):
@@ -365,6 +461,11 @@ def test_put_treats_a_path_ids_field_like_any_other_unknown_field(start_live, co
         src = tmp_path / f"{field}.json"
         src.write_text(json.dumps(data))
         proc = _cli("walkthrough", "put", "--box", live.box, "--file", src)
-        outs.append((proc.returncode, proc.stderr.replace(field, "<field>").replace(str(src), "<file>")))
+        outs.append(
+            (
+                proc.returncode,
+                proc.stderr.replace(field, "<field>").replace(str(src), "<file>"),
+            )
+        )
     assert outs[0] == outs[1]
     assert outs[0][0] == 2 and not walkthrough.walkthrough_path(live.box).exists()

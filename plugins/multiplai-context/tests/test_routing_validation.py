@@ -20,20 +20,19 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from lib.routing_validation import (  # noqa: E402
+from lib.routing_validation import (
     NEAR_DUPLICATE_QUOTES,
     _owners,
     append_routing_warnings,
     build_section_registry,
-    index_sections,
     find_batch_near_duplicate_groups,
     find_duplicate_content,
     find_near_duplicate_line,
+    index_sections,
     parse_proposal_entries,
     render_warnings_section,
     validate_proposal,
 )
-
 
 # A paragraph long enough to form many 8-grams, reused as the planted duplicate.
 _DUP_TEXT = (
@@ -141,7 +140,9 @@ class TestSectionExistenceSpansAllLevels:
         warnings = validate_proposal(
             _proposal("python.md", "Hook Timing", "Some new fact."), memory
         )
-        assert any("does not exist" in w and "claude-code-tools.md" in w for w in warnings)
+        assert any(
+            "does not exist" in w and "claude-code-tools.md" in w for w in warnings
+        )
 
     def test_new_section_colliding_with_h3_elsewhere_is_not_a_collision(self):
         """Collision checking stays H2-scoped — the uniqueness invariant is H2's."""
@@ -167,7 +168,9 @@ class TestSectionExistenceSpansAllLevels:
 
 class TestParseProposalEntries:
     def test_extracts_target_section_and_text(self):
-        entries = parse_proposal_entries(_proposal("python.md", "Asyncio Patterns", "Line one.\nLine two."))
+        entries = parse_proposal_entries(
+            _proposal("python.md", "Asyncio Patterns", "Line one.\nLine two.")
+        )
         assert len(entries) == 1
         e = entries[0]
         assert e["target"] == "python.md"
@@ -177,7 +180,9 @@ class TestParseProposalEntries:
         assert e["text"] == "Line one.\nLine two."
 
     def test_change_field_lowercased(self):
-        entries = parse_proposal_entries(_proposal("python.md", "Packaging", change="Update"))
+        entries = parse_proposal_entries(
+            _proposal("python.md", "Packaging", change="Update")
+        )
         assert entries[0]["change"] == "update"
 
     def test_skips_action_items(self):
@@ -192,7 +197,9 @@ class TestParseProposalEntries:
     def test_other_h2_ends_file_block(self):
         # A trailing "## Routing Warnings" (or "## Filtered Out") section must
         # not be parsed as content belonging to the last file.
-        proposal = _proposal("python.md", "Packaging") + "\n## Routing Warnings\n\n- bogus\n"
+        proposal = (
+            _proposal("python.md", "Packaging") + "\n## Routing Warnings\n\n- bogus\n"
+        )
         entries = parse_proposal_entries(proposal)
         assert len(entries) == 1
         assert "bogus" not in entries[0]["text"]
@@ -201,7 +208,9 @@ class TestParseProposalEntries:
 class TestSectionChecks:
     def test_misrouted_section_flagged_with_reroute(self):
         # "Worktrees" lives in git-policy.md, proposal targets python.md.
-        warnings = validate_proposal(_proposal("python.md", "Worktrees"), _memory_contents())
+        warnings = validate_proposal(
+            _proposal("python.md", "Worktrees"), _memory_contents()
+        )
         assert len(warnings) == 1
         assert "Worktrees" in warnings[0]
         assert "reroute to `git-policy.md`" in warnings[0]
@@ -239,7 +248,9 @@ class TestSectionChecks:
         assert "reroute to `infra-patterns.md`" in warnings[0]
 
     def test_correctly_routed_section_clean(self):
-        warnings = validate_proposal(_proposal("python.md", "Packaging"), _memory_contents())
+        warnings = validate_proposal(
+            _proposal("python.md", "Packaging"), _memory_contents()
+        )
         assert warnings == []
 
     def test_new_section_collision_flagged(self):
@@ -263,7 +274,8 @@ class TestSectionChecks:
 
     def test_new_unique_section_clean(self):
         warnings = validate_proposal(
-            _proposal("python.md", 'New section: "Typing Discipline"'), _memory_contents()
+            _proposal("python.md", 'New section: "Typing Discipline"'),
+            _memory_contents(),
         )
         assert warnings == []
 
@@ -404,7 +416,8 @@ class TestNearDuplicateDetection:
     def test_fresh_text_is_clean(self):
         warnings = validate_proposal(
             _proposal(
-                "python.md", "Packaging",
+                "python.md",
+                "Packaging",
                 "Pin the interpreter version in the member pyproject so a fresh "
                 "checkout resolves the same wheel set every time.",
             ),
@@ -415,8 +428,9 @@ class TestNearDuplicateDetection:
     def test_update_entry_exempt_in_its_own_target(self):
         for change in ("update", "replace"):
             warnings = validate_proposal(
-                _proposal("git-policy.md", "Worktree Location", _RESTATEMENT,
-                          change=change),
+                _proposal(
+                    "git-policy.md", "Worktree Location", _RESTATEMENT, change=change
+                ),
                 _memory_with_rule(),
             )
             assert [w for w in warnings if "near-duplicate" in w] == [], change
@@ -429,8 +443,9 @@ class TestNearDuplicateDetection:
         12-of-17 always-loaded case the check exists for."""
         for change in ("update", "replace"):
             warnings = validate_proposal(
-                _proposal("git-policy.md", "Worktree Location", _RESTATEMENT,
-                          change=change),
+                _proposal(
+                    "git-policy.md", "Worktree Location", _RESTATEMENT, change=change
+                ),
                 _memory_with_rule(),  # the target ALSO holds the rule
                 dedup_extra={"CLAUDE.md (global)": f"# Global\n\n- {_EXISTING_RULE}\n"},
             )
@@ -444,16 +459,16 @@ class TestNearDuplicateDetection:
         contents = _memory_contents()
         contents["git-policy.md"] += f"\n## Worktree Location\n\n- {_EXISTING_RULE}\n"
         warnings = validate_proposal(
-            _proposal("dev.md", "Worktree Location",
-                      f"{_DUP_TEXT} {_RESTATEMENT}"),
+            _proposal("dev.md", "Worktree Location", f"{_DUP_TEXT} {_RESTATEMENT}"),
             contents,
         )
         assert any("already present" in w and "git-policy.md" in w for w in warnings)
         # git-policy.md is suppressed for the near-dup pass by the verbatim hit,
         # and there is no second file holding the rule, so the near-dup pass
         # finds nothing — but it ran over the rest of the corpus.
-        assert all("near-duplicate" not in w or "git-policy.md" not in w
-                   for w in warnings)
+        assert all(
+            "near-duplicate" not in w or "git-policy.md" not in w for w in warnings
+        )
 
     def test_short_text_never_flagged(self):
         assert find_near_duplicate_line("use uv", _memory_with_rule()) is None
@@ -463,8 +478,7 @@ class TestNearDuplicateDetection:
         and config samples. A near-duplicate warning pointing at a line of shell
         is a lead the reviewer cannot act on."""
         fenced = {
-            "dev.md": "# Dev\n\n## Tooling\n\n```bash\n"
-                      f"# {_EXISTING_RULE}\n```\n"
+            "dev.md": f"# Dev\n\n## Tooling\n\n```bash\n# {_EXISTING_RULE}\n```\n"
         }
         assert find_near_duplicate_line(_RESTATEMENT, fenced) is None
 
@@ -495,10 +509,11 @@ class TestWarningSectionSize:
     @staticmethod
     def _many(n: int):
         texts = [f"{_RESTATEMENT} Case {i} of the same policy." for i in range(n)]
-        corpus = {"git-policy.md": "# Git\n\n## Worktree Location\n\n" + "\n".join(
-            f"- {_EXISTING_RULE} Case {i}." for i in range(n))}
-        return validate_proposal(
-            _multi_entry_proposal("git-policy.md", *texts), corpus)
+        corpus = {
+            "git-policy.md": "# Git\n\n## Worktree Location\n\n"
+            + "\n".join(f"- {_EXISTING_RULE} Case {i}." for i in range(n))
+        }
+        return validate_proposal(_multi_entry_proposal("git-policy.md", *texts), corpus)
 
     def test_only_the_first_n_warnings_carry_a_quote(self):
         warnings = self._many(NEAR_DUPLICATE_QUOTES + 15)
@@ -516,14 +531,21 @@ class TestWarningSectionSize:
         auto-applies unreviewed — the opposite of what a cap is for."""
         n = NEAR_DUPLICATE_QUOTES + 15
         warnings = self._many(n)
-        labelled = {w.split(":")[0] for w in warnings
-                    if "near-duplicate of an existing line" in w}
+        labelled = {
+            w.split(":")[0]
+            for w in warnings
+            if "near-duplicate of an existing line" in w
+        }
         assert len(labelled) == n
 
     def test_a_clean_run_says_nothing_about_the_bound(self):
         warnings = validate_proposal(
-            _proposal("python.md", "Packaging", "Something entirely unrelated to "
-                      "worktrees, about wheel resolution in a fresh checkout."),
+            _proposal(
+                "python.md",
+                "Packaging",
+                "Something entirely unrelated to "
+                "worktrees, about wheel resolution in a fresh checkout.",
+            ),
             _memory_contents(),
         )
         assert not any("carry no quote" in w for w in warnings)
@@ -568,27 +590,33 @@ class TestBatchNearDuplicates:
         """The output has to stay readable: a proposal restating one rule 20
         times has 190 duplicate pairs and must still yield one warning."""
         texts = [_EXISTING_RULE, _RESTATEMENT] * 10
-        groups = find_batch_near_duplicate_groups(parse_proposal_entries(
-            _multi_entry_proposal("git-policy.md", *texts)
-        ))
+        groups = find_batch_near_duplicate_groups(
+            parse_proposal_entries(_multi_entry_proposal("git-policy.md", *texts))
+        )
         assert len(groups) == 1
         assert len(groups[0][0]) == 20
 
     def test_a_cluster_reports_its_strongest_overlap(self):
-        groups = find_batch_near_duplicate_groups(parse_proposal_entries(
-            _multi_entry_proposal("git-policy.md", _EXISTING_RULE, _RESTATEMENT)
-        ))
+        groups = find_batch_near_duplicate_groups(
+            parse_proposal_entries(
+                _multi_entry_proposal("git-policy.md", _EXISTING_RULE, _RESTATEMENT)
+            )
+        )
         assert 0.35 <= groups[0][1] <= 1.0
 
 
 class TestAppendRoutingWarnings:
     def test_clean_proposal_gets_none_marker(self):
-        out = append_routing_warnings(_proposal("python.md", "Packaging"), _memory_contents())
+        out = append_routing_warnings(
+            _proposal("python.md", "Packaging"), _memory_contents()
+        )
         assert "## Routing Warnings" in out
         assert "(none)" in out.split("## Routing Warnings")[1]
 
     def test_dirty_proposal_gets_bullets(self):
-        out = append_routing_warnings(_proposal("python.md", "Worktrees"), _memory_contents())
+        out = append_routing_warnings(
+            _proposal("python.md", "Worktrees"), _memory_contents()
+        )
         tail = out.split("## Routing Warnings")[1]
         assert "- " in tail
         assert "(none)" not in tail

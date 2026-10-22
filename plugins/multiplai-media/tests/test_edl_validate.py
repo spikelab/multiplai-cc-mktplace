@@ -6,6 +6,7 @@ analysis proxy, never end the video zoomed (unless zoom.hold is a
 deliberate choice), and warn on zoom overuse. These tests lock in the
 path heuristic, the hold escape hatch, and both warning thresholds.
 """
+
 from __future__ import annotations
 
 import sys
@@ -16,10 +17,12 @@ import pytest
 _SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "video-edit" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 
-from stages.edl import EDL, Segment, Zoom  # noqa: E402
+from stages.edl import EDL, Segment, Zoom
 
 
-def _edl(source: str = "/rec/original.mov", segments: list[Segment] | None = None) -> EDL:
+def _edl(
+    source: str = "/rec/original.mov", segments: list[Segment] | None = None
+) -> EDL:
     if segments is None:
         segments = [Segment(src_start=0.0, src_end=5.0)]
     return EDL(source=source, segments=segments)
@@ -27,12 +30,13 @@ def _edl(source: str = "/rec/original.mov", segments: list[Segment] | None = Non
 
 # --- proxy-source rejection -------------------------------------------------
 
+
 @pytest.mark.parametrize(
     "source",
     [
-        "/work/.video-edit-cache/proxy_720p.mp4",           # project cache root
-        "/home/u/.cache/video-edit/rec/proxy_720p.mp4",     # user cache root
-        "/anywhere/proxy_720p.mp4",                          # bare proxy_ name
+        "/work/.video-edit-cache/proxy_720p.mp4",  # project cache root
+        "/home/u/.cache/video-edit/rec/proxy_720p.mp4",  # user cache root
+        "/anywhere/proxy_720p.mp4",  # bare proxy_ name
     ],
 )
 def test_proxy_source_rejected(source: str) -> None:
@@ -50,6 +54,7 @@ def test_cache_dirname_alone_is_not_a_proxy() -> None:
 
 
 # --- final-segment zoom guard -----------------------------------------------
+
 
 def test_final_segment_zoomed_raises() -> None:
     segs = [
@@ -77,6 +82,7 @@ def test_mid_video_zoom_with_full_frame_ending_is_fine() -> None:
 
 
 # --- warning thresholds -----------------------------------------------------
+
 
 def test_long_zoom_warns_over_12s() -> None:
     segs = [
@@ -114,39 +120,59 @@ def test_speed_affects_zoomed_ratio() -> None:
 
 
 def test_shipped_example_edl_validates_clean() -> None:
-    example = (
-        _SCRIPTS.parent / "examples" / "demo-narrated.edl.json"
-    )
+    example = _SCRIPTS.parent / "examples" / "demo-narrated.edl.json"
     edl = EDL.load(example)
     assert edl.validate() == []
 
 
 # --- fit per segment, transitions ----------------------------------------------
 
+
 def test_a_segment_fit_must_be_a_known_mode() -> None:
     edl = _edl(segments=[Segment(0, 5, fit="stretch")])
-    with pytest.raises(ValueError, match='segment 0 fit .stretch. is not one of pad, blur, crop'):
+    with pytest.raises(
+        ValueError, match="segment 0 fit .stretch. is not one of pad, blur, crop"
+    ):
         edl.validate()
 
 
 def test_a_segment_cannot_set_both_fit_and_frame() -> None:
-    edl = EDL.from_dict({"source": "/rec/x.mp4",
-                         "layout": {"panels": {"A": {"x": 0, "y": 0, "w": 900, "h": 700}}},
-                         "segments": [{"src_start": 0, "src_end": 5, "fit": "blur", "frame": "A"}]})
+    edl = EDL.from_dict(
+        {
+            "source": "/rec/x.mp4",
+            "layout": {"panels": {"A": {"x": 0, "y": 0, "w": 900, "h": 700}}},
+            "segments": [{"src_start": 0, "src_end": 5, "fit": "blur", "frame": "A"}],
+        }
+    )
     with pytest.raises(ValueError, match="both fit 'blur' and frame 'A'"):
         edl.validate()
 
 
 def test_a_blur_segment_is_not_counted_as_letterboxed() -> None:
-    edl = EDL.from_dict({"source": "/rec/x.mp4", "output": {"width": 1080, "height": 1920},
-                         "segments": [{"src_start": 0, "src_end": 5, "fit": "blur"},
-                                      {"src_start": 9, "src_end": 12}]})
+    edl = EDL.from_dict(
+        {
+            "source": "/rec/x.mp4",
+            "output": {"width": 1080, "height": 1920},
+            "segments": [
+                {"src_start": 0, "src_end": 5, "fit": "blur"},
+                {"src_start": 9, "src_end": 12},
+            ],
+        }
+    )
     warnings = edl.validate(source_size=(1920, 1080))
     assert any("segments [1] letterbox" in x for x in warnings)
 
 
 def test_a_negative_transition_is_refused() -> None:
-    edl = EDL.from_dict({"source": "/rec/x.mp4", "transitions": [{"after": 0, "duration": -1}],
-                         "segments": [{"src_start": 0, "src_end": 5}, {"src_start": 9, "src_end": 12}]})
+    edl = EDL.from_dict(
+        {
+            "source": "/rec/x.mp4",
+            "transitions": [{"after": 0, "duration": -1}],
+            "segments": [
+                {"src_start": 0, "src_end": 5},
+                {"src_start": 9, "src_end": 12},
+            ],
+        }
+    )
     with pytest.raises(ValueError, match="negative duration"):
         edl.validate()

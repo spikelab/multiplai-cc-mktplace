@@ -43,7 +43,7 @@ import os
 import re
 import tempfile
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 # 2 — keys are hashed from a normalized projection rather than the raw record
@@ -177,7 +177,7 @@ def parse_blocks(file_name: str, text: str) -> list[Block]:
             not lines[end].strip() or _SEPARATOR_RE.match(lines[end])
         ):
             end -= 1
-        body = "\n".join(lines[start:end + 1])
+        body = "\n".join(lines[start : end + 1])
         blocks.append(
             Block(
                 file=file_name,
@@ -332,7 +332,7 @@ def record(path: Path, blocks: list[Block], proposal: str) -> int:
         return 0
     ledger = load(path)
     processed = ledger.setdefault("processed", {})
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     added = 0
     for b in blocks:
         if b.key in processed or (b.legacy_key and b.legacy_key in processed):

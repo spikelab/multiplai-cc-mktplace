@@ -34,20 +34,20 @@ MCP servers.
 import asyncio
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from multiplai_core.agent_runner import run_agent
-from multiplai_core.log_utils import setup_logging, log_event
-from multiplai_core.model_client import DEFAULT_MODEL
-from multiplai_core.paths import get_paths
 from lib import checkpoint as cp
 from lib.hook_input import read_hook_input
 from lib.job_effort import CHECKPOINT_EFFORT_OPTION, effort_kwargs
 from lib.thinking import CHECKPOINT_THINKING_OPTION, RUN_AGENT, thinking_kwargs
 from lib.transcript_distiller import distill
+from multiplai_core.agent_runner import run_agent
+from multiplai_core.log_utils import log_event, setup_logging
+from multiplai_core.model_client import DEFAULT_MODEL
+from multiplai_core.paths import get_paths
 
 logger = setup_logging("checkpoint_writer", packages=("lib", "generators"))
 
@@ -122,9 +122,7 @@ def _cap_segment(text: str) -> str:
     head = int(_MAX_SEGMENT_CHARS * _HEAD_FRACTION)
     tail = _MAX_SEGMENT_CHARS - head
     return (
-        text[:head]
-        + "\n\n[… middle of segment elided for length …]\n\n"
-        + text[-tail:]
+        text[:head] + "\n\n[… middle of segment elided for length …]\n\n" + text[-tail:]
     )
 
 
@@ -135,7 +133,7 @@ def _distill_segment(transcript_path: str, since_iso: str | None) -> str:
         try:
             since = datetime.fromisoformat(since_iso)
             if since.tzinfo is None:
-                since = since.replace(tzinfo=timezone.utc)
+                since = since.replace(tzinfo=UTC)
         except (ValueError, TypeError):
             since = None
     chunks = distill(Path(transcript_path), since=since)
@@ -283,7 +281,7 @@ def _record_failure(data_dir: Path, session_id: str, state: dict, why: str) -> N
     state[cp.CONSECUTIVE_FAILURE_KEY] = cp.consecutive_failures(state) + 1
     state["session_id"] = session_id
     state["last_failure"] = why
-    state["last_failure_ts"] = datetime.now(timezone.utc).isoformat()
+    state["last_failure_ts"] = datetime.now(UTC).isoformat()
     try:
         cp.save_state(data_dir, session_id, state)
     except OSError:
@@ -364,7 +362,8 @@ async def write_checkpoint(payload: dict) -> bool:
         if not cp.validate_checkpoint(text):
             logger.warning(
                 "Writer output failed validation for %s (%d chars)",
-                session_id, len(text),
+                session_id,
+                len(text),
             )
             failure = f"output failed validation ({len(text)} chars)"
             text = ""
@@ -378,7 +377,9 @@ async def write_checkpoint(payload: dict) -> bool:
             # bookmark where it is so the window is retried, not skipped.
             logger.error(
                 "Checkpoint failed for %s with no previous checkpoint to "
-                "degrade onto (%s); nothing written", session_id, failure,
+                "degrade onto (%s); nothing written",
+                session_id,
+                failure,
             )
             _record_failure(data_dir, session_id, state, failure)
             return False
@@ -392,7 +393,7 @@ async def write_checkpoint(payload: dict) -> bool:
         text = _trim_degraded_sections(text)
 
     cp.write_checkpoint_file(data_dir, session_id, text)
-    now_iso = datetime.now(timezone.utc).isoformat()
+    now_iso = datetime.now(UTC).isoformat()
     state.update(
         {
             "session_id": session_id,
@@ -431,17 +432,24 @@ async def write_checkpoint(payload: dict) -> bool:
     # the in-container Stop path, where the two are the same — the key falls
     # back to the registry and then to this process.
     cp.write_pending_marker(
-        data_dir, cwd, session_id, tokens,
+        data_dir,
+        cwd,
+        session_id,
+        tokens,
         hostname=str(payload.get("hostname") or "") or None,
     )
 
     logger.info(
         "Checkpoint %s for %s (%d tokens, reason=%s, handoff=%s)",
         "degraded" if degraded else "written",
-        session_id, tokens, reason, tokens >= cfg.handoff_tokens,
+        session_id,
+        tokens,
+        reason,
+        tokens >= cfg.handoff_tokens,
     )
     log_event(
-        "checkpoint", "degraded" if degraded else "write",
+        "checkpoint",
+        "degraded" if degraded else "write",
         (
             f"checkpoint DEGRADED at {tokens:,} tokens ({reason}): {failure} — "
             "previous checkpoint kept plus the raw unsummarised window"
@@ -490,7 +498,8 @@ def main() -> int:
     data_dir = get_paths().plugin_data()
     before = (
         cp.consecutive_failures(cp.load_state(data_dir, session_id))
-        if session_id else 0
+        if session_id
+        else 0
     )
     try:
         asyncio.run(write_checkpoint(payload))
@@ -515,7 +524,8 @@ def main() -> int:
 
     after = (
         cp.consecutive_failures(cp.load_state(data_dir, session_id))
-        if session_id else 0
+        if session_id
+        else 0
     )
     return 1 if after > before else 0
 

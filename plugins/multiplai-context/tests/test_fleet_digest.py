@@ -1,10 +1,9 @@
 """The digest: ranking, the cap, honest gaps, and the AGENTS.md/JSON contract."""
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
-
 from lib.fleet import Agent, Collision, Fleet, fleet_json, render_agents_md
 from lib.fleet_digest import MAX_ITEMS, WAITING_STALE_HOURS, rank, render_digest
 from lib.fleet_sources.backlog import Backlog
@@ -12,7 +11,7 @@ from lib.fleet_sources.git_repos import RepoState
 from lib.fleet_sources.jobs import BackgroundJob
 from lib.fleet_sources.prs import PRScan, PullRequest
 
-NOW = datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
 
 
 def agent(status="waiting_input", minutes=5, **kw):
@@ -36,12 +35,15 @@ def fleet(agents=(), collisions=(), **kw):
 # Ranking
 # ---------------------------------------------------------------------------
 
+
 def test_approved_pr_outranks_red_ci_outranks_waiting_session():
     """The whole product is this ordering: what is blocked on a human decision."""
-    scan = PRScan(prs=[
-        pr(number=7, ci="failing"),
-        pr(number=9, review_decision="APPROVED", head="h9"),
-    ])
+    scan = PRScan(
+        prs=[
+            pr(number=7, ci="failing"),
+            pr(number=9, review_decision="APPROVED", head="h9"),
+        ]
+    )
     items, _ = rank(fleet([agent()], prs=scan), NOW)
     assert "approved" in items[0].text and "#9" in items[0].text
     assert "CI red" in items[1].text
@@ -63,8 +65,12 @@ def test_a_stack_is_one_line_not_four():
 
 def test_waiting_sessions_are_ranked_youngest_first():
     """A two-minute-old question is a live conversation; a six-hour one is not."""
-    items, _ = rank(fleet([agent(minutes=300, session_id="old"),
-                           agent(minutes=2, session_id="new")]), NOW)
+    items, _ = rank(
+        fleet(
+            [agent(minutes=300, session_id="old"), agent(minutes=2, session_id="new")]
+        ),
+        NOW,
+    )
     assert "2m" in items[0].text and "just now" not in items[0].text
     ages = [i.sort_key[0] for i in items]
     assert ages == sorted(ages)
@@ -133,6 +139,7 @@ def test_collisions_rank_last_but_always_appear():
 # The cap
 # ---------------------------------------------------------------------------
 
+
 def test_digest_caps_the_urgent_list_and_says_how_many_it_hid():
     agents = [agent(minutes=i + 1, session_id=f"s{i}") for i in range(MAX_ITEMS + 4)]
     text = render_digest(fleet(agents), NOW)
@@ -156,6 +163,7 @@ def test_empty_fleet_says_so_plainly():
 # The in-flight line — one total, then its breakdown
 # ---------------------------------------------------------------------------
 
+
 def test_in_flight_counts_every_live_agent_not_just_the_working_ones():
     """The bug this replaces: a session that stops to ask a question leaves
     `Working` for `Needs you`, so four live containers rendered as
@@ -164,8 +172,12 @@ def test_in_flight_counts_every_live_agent_not_just_the_working_ones():
         agent(status="waiting_input", minutes=1, session_id="w1"),
         agent(status="waiting_input", minutes=2, session_id="w2"),
         agent(status="working", minutes=3, session_id="k1"),
-        Agent(session_id="p1", status="ended", disposition="parked",
-              last_ts=NOW - timedelta(hours=3)),
+        Agent(
+            session_id="p1",
+            status="ended",
+            disposition="parked",
+            last_ts=NOW - timedelta(hours=3),
+        ),
     ]
 
     text = render_digest(fleet(agents), NOW)
@@ -204,6 +216,7 @@ def test_an_empty_fleet_says_zero_in_flight():
 # The unseen count — only when something is recording attention
 # ---------------------------------------------------------------------------
 
+
 def test_the_unseen_count_appears_when_attention_is_recorded():
     agents = [
         agent(status="working", minutes=1, session_id="k1", seen=True),
@@ -239,6 +252,7 @@ def test_a_fully_seen_fleet_prints_no_unseen_count():
 # Honest gaps — "not collected" must never print as "none"
 # ---------------------------------------------------------------------------
 
+
 def test_uncollected_sources_are_absent_not_zero():
     """The hook path collects none of these; silence is the only honest output."""
     text = render_digest(fleet([agent()]), NOW)
@@ -268,6 +282,7 @@ def test_no_access_repos_are_reported_apart_from_errors():
 # One collection, three renderings
 # ---------------------------------------------------------------------------
 
+
 def _rich_fleet():
     return fleet(
         [agent(), agent(status="working", minutes=30, session_id="w")],
@@ -279,9 +294,16 @@ def _rich_fleet():
     )
 
 
-@pytest.mark.parametrize("heading", [
-    "Pull requests", "Repos", "Background jobs", "Backlog", "Collisions",
-])
+@pytest.mark.parametrize(
+    "heading",
+    [
+        "Pull requests",
+        "Repos",
+        "Background jobs",
+        "Backlog",
+        "Collisions",
+    ],
+)
 def test_every_digest_section_exists_in_the_full_report(heading):
     """The digest is a summary of AGENTS.md, never a second opinion about it."""
     assert f"## {heading}" in render_agents_md(_rich_fleet(), NOW)
@@ -289,8 +311,9 @@ def test_every_digest_section_exists_in_the_full_report(heading):
 
 def test_worktrees_are_listed_even_when_every_repo_is_clean():
     """A clean repo with a stale linked worktree is still work in flight."""
-    clean = RepoState(path="proj", slug="o/r", branch="main",
-                      worktrees=["/ws/.worktrees/feat-x"])
+    clean = RepoState(
+        path="proj", slug="o/r", branch="main", worktrees=["/ws/.worktrees/feat-x"]
+    )
     text = render_agents_md(fleet(repos=[clean]), NOW)
     assert "All 1 checkout(s) clean" in text
     assert "1 linked worktree(s)" in text and ".worktrees/feat-x" in text

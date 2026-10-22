@@ -21,10 +21,9 @@ degrade to live file scanning rather than breaking context assembly.
 
 import json
 import logging
-import os
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -34,8 +33,9 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from generators.base import CATALOG_SCHEMA_VERSION
+from datetime import UTC
 
+from generators.base import CATALOG_SCHEMA_VERSION
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -60,6 +60,7 @@ def plugin_data_env(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(data_dir))
     # Reset the paths cache so it picks up the new env
     from multiplai_core.paths import _reset_cache
+
     _reset_cache()
     yield catalogs_dir
     _reset_cache()
@@ -75,7 +76,9 @@ def _valid_memory_catalog(entries=None):
     return {
         "schema_version": CATALOG_SCHEMA_VERSION,
         "generated_at": "2026-04-19T10:30:00Z",
-        "entries": entries if entries is not None else [
+        "entries": entries
+        if entries is not None
+        else [
             {
                 "source": "me.md",
                 "summary": "Identity and background info",
@@ -98,17 +101,31 @@ def _valid_diary_catalog(entries=None):
     return {
         "schema_version": CATALOG_SCHEMA_VERSION,
         "generated_at": "2026-04-19T22:00:00Z",
-        "entries": entries if entries is not None else [
+        "entries": entries
+        if entries is not None
+        else [
             {
                 "date": "2026-04-19",
-                "sessions": [{"id": "session-abc", "project": "multiplai", "summary": "Catalog work"}],
+                "sessions": [
+                    {
+                        "id": "session-abc",
+                        "project": "multiplai",
+                        "summary": "Catalog work",
+                    }
+                ],
                 "topics": ["catalog-generation", "context-routing"],
                 "projects": ["multiplai"],
                 "word_count": 2340,
             },
             {
                 "date": "2026-04-18",
-                "sessions": [{"id": "session-def", "project": "dotfiles", "summary": "Hook fixes"}],
+                "sessions": [
+                    {
+                        "id": "session-def",
+                        "project": "dotfiles",
+                        "summary": "Hook fixes",
+                    }
+                ],
                 "topics": ["hooks", "debugging"],
                 "projects": ["dotfiles"],
                 "word_count": 1200,
@@ -122,7 +139,9 @@ def _valid_skills_catalog(entries=None):
     return {
         "schema_version": CATALOG_SCHEMA_VERSION,
         "generated_at": "2026-04-19T10:30:00Z",
-        "entries": entries if entries is not None else [
+        "entries": entries
+        if entries is not None
+        else [
             {
                 "name": "dream",
                 "file": "dream.md",
@@ -139,7 +158,9 @@ def _valid_resources_catalog(entries=None):
     return {
         "schema_version": CATALOG_SCHEMA_VERSION,
         "generated_at": "2026-04-19T10:30:00Z",
-        "entries": entries if entries is not None else [
+        "entries": entries
+        if entries is not None
+        else [
             {
                 "path": "apis/openai.md",
                 "summary": "OpenAI API integration docs",
@@ -210,9 +231,7 @@ class TestMemoryCatalogHit:
 
         result = context_manager._read_catalog_or_scan("memory")
 
-        assert len(result) > 0, (
-            "Valid memory catalog should return non-empty entries"
-        )
+        assert len(result) > 0, "Valid memory catalog should return non-empty entries"
 
     def test_memory_catalog_entries_contain_expected_fields(self, plugin_data_env):
         """Scenario: Memory catalog is used for routing decisions.
@@ -245,7 +264,9 @@ class TestMemoryCatalogHit:
                 "Memory catalog entry must contain routing-relevant fields"
             )
 
-    def test_memory_catalog_does_not_scan_source_files(self, plugin_data_env, tmp_path, monkeypatch):
+    def test_memory_catalog_does_not_scan_source_files(
+        self, plugin_data_env, tmp_path, monkeypatch
+    ):
         """When valid memory catalog exists, source files must NOT be scanned.
 
         This verifies the catalog-first optimization: no raw file I/O for
@@ -306,9 +327,7 @@ class TestDiaryCatalogHit:
 
         result = context_manager._read_catalog_or_scan("diary")
 
-        assert len(result) > 0, (
-            "Valid diary catalog should return non-empty entries"
-        )
+        assert len(result) > 0, "Valid diary catalog should return non-empty entries"
 
     def test_diary_catalog_entries_have_date_field(self, plugin_data_env):
         """Diary catalog entries must have date fields for day selection."""
@@ -321,9 +340,7 @@ class TestDiaryCatalogHit:
 
         assert len(result) >= 1
         if isinstance(result[0], dict):
-            assert "date" in result[0], (
-                "Diary catalog entry must contain 'date' field"
-            )
+            assert "date" in result[0], "Diary catalog entry must contain 'date' field"
 
     def test_diary_catalog_enables_selective_day_loading(self, plugin_data_env):
         """Scenario: Diary catalog enables selective day loading.
@@ -337,7 +354,9 @@ class TestDiaryCatalogHit:
         entries = [
             {
                 "date": f"2026-03-{i:02d}",
-                "sessions": [{"id": f"s-{i}", "project": "proj-a", "summary": f"Day {i}"}],
+                "sessions": [
+                    {"id": f"s-{i}", "project": "proj-a", "summary": f"Day {i}"}
+                ],
                 "topics": ["topic-a"],
                 "projects": ["proj-a"],
                 "word_count": 500,
@@ -494,9 +513,7 @@ class TestFailOpenMissingMandatoryCatalog:
             context_manager._read_catalog_or_scan("memory")
             context_manager._read_catalog_or_scan("diary")
         except Exception as e:
-            pytest.fail(
-                f"Missing mandatory catalog must not raise: {e}"
-            )
+            pytest.fail(f"Missing mandatory catalog must not raise: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -535,7 +552,9 @@ class TestFailOpenCorruptMandatoryCatalog:
         """
         import context_manager
 
-        (plugin_data_env / "memory.json").write_text('{"schema_version": "1.0.0", "entries": [')
+        (plugin_data_env / "memory.json").write_text(
+            '{"schema_version": "1.0.0", "entries": ['
+        )
 
         result = context_manager._read_catalog_or_scan("memory")
 
@@ -573,7 +592,9 @@ class TestFailOpenCorruptMandatoryCatalog:
             context_manager._read_catalog_or_scan("memory")
 
         # Should have logged a warning about corrupt catalog
-        warning_messages = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
+        warning_messages = [
+            r.message for r in caplog.records if r.levelno >= logging.WARNING
+        ]
         assert len(warning_messages) > 0, (
             "Corrupt catalog must produce a warning log message"
         )
@@ -587,9 +608,7 @@ class TestFailOpenCorruptMandatoryCatalog:
         try:
             context_manager._read_catalog_or_scan("memory")
         except json.JSONDecodeError:
-            pytest.fail(
-                "Corrupt catalog must not raise JSONDecodeError to caller"
-            )
+            pytest.fail("Corrupt catalog must not raise JSONDecodeError to caller")
         except Exception as e:
             pytest.fail(
                 f"Corrupt catalog must not raise any exception: {type(e).__name__}: {e}"
@@ -622,9 +641,7 @@ class TestSchemaVersionChecking:
 
         result = context_manager._read_catalog_or_scan("memory")
 
-        assert len(result) > 0, (
-            "Catalog with matching schema version should be used"
-        )
+        assert len(result) > 0, "Catalog with matching schema version should be used"
 
     def test_wrong_schema_version_falls_back(self, plugin_data_env):
         """Scenario: Memory catalog has wrong schema version.
@@ -659,10 +676,13 @@ class TestSchemaVersionChecking:
         with caplog.at_level(logging.WARNING):
             context_manager._read_catalog_or_scan("memory")
 
-        warning_messages = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
-        assert any("schema" in msg.lower() or "version" in msg.lower() for msg in warning_messages), (
-            "Schema mismatch must produce a warning mentioning schema/version"
-        )
+        warning_messages = [
+            r.message for r in caplog.records if r.levelno >= logging.WARNING
+        ]
+        assert any(
+            "schema" in msg.lower() or "version" in msg.lower()
+            for msg in warning_messages
+        ), "Schema mismatch must produce a warning mentioning schema/version"
 
     def test_missing_schema_version_field_falls_back(self, plugin_data_env):
         """Catalog missing schema_version field entirely should fall back.
@@ -678,9 +698,7 @@ class TestSchemaVersionChecking:
 
         result = context_manager._read_catalog_or_scan("memory")
 
-        assert isinstance(result, list), (
-            "Missing schema_version must not raise"
-        )
+        assert isinstance(result, list), "Missing schema_version must not raise"
 
     def test_diary_schema_version_mismatch_falls_back(self, plugin_data_env):
         """Diary catalog with wrong schema version also falls back.
@@ -696,9 +714,7 @@ class TestSchemaVersionChecking:
 
         result = context_manager._read_catalog_or_scan("diary")
 
-        assert isinstance(result, list), (
-            "Diary schema mismatch must not raise"
-        )
+        assert isinstance(result, list), "Diary schema mismatch must not raise"
 
     def test_schema_version_accessible_before_entries(self, plugin_data_env):
         """Consumer can read schema_version before parsing entries.
@@ -712,9 +728,7 @@ class TestSchemaVersionChecking:
 
         # Read raw JSON and verify schema_version is accessible at top level
         raw = json.loads(catalog_path.read_text())
-        assert "schema_version" in raw, (
-            "schema_version must be a top-level field"
-        )
+        assert "schema_version" in raw, "schema_version must be a top-level field"
         # Should be accessible without parsing entries
         version = raw["schema_version"]
         assert isinstance(version, str)
@@ -776,7 +790,9 @@ class TestOptionalCatalogsMissing:
     silently skips that context source.
     """
 
-    def test_skills_catalog_missing_with_skills_enabled(self, plugin_data_env, monkeypatch):
+    def test_skills_catalog_missing_with_skills_enabled(
+        self, plugin_data_env, monkeypatch
+    ):
         """Scenario: Skills catalog missing with skills enabled.
 
         WHEN enable_skills is true and skills catalog does not exist
@@ -789,11 +805,11 @@ class TestOptionalCatalogsMissing:
 
         result = context_manager._read_catalog_or_scan("skills")
 
-        assert isinstance(result, list), (
-            "Missing skills catalog must not raise"
-        )
+        assert isinstance(result, list), "Missing skills catalog must not raise"
 
-    def test_resources_catalog_missing_with_resources_disabled(self, plugin_data_env, monkeypatch):
+    def test_resources_catalog_missing_with_resources_disabled(
+        self, plugin_data_env, monkeypatch
+    ):
         """Scenario: Resources catalog missing with resources disabled.
 
         WHEN enable_resources is false and resources catalog does not exist
@@ -814,7 +830,9 @@ class TestOptionalCatalogsMissing:
             "Disabled resources should return empty list without any I/O"
         )
 
-    def test_skills_missing_does_not_log_error(self, plugin_data_env, monkeypatch, caplog):
+    def test_skills_missing_does_not_log_error(
+        self, plugin_data_env, monkeypatch, caplog
+    ):
         """Missing optional catalog should not produce error-level log.
 
         WHEN enable_skills is true but skills catalog is missing
@@ -855,9 +873,7 @@ class TestOncePerSessionWarning:
             context_manager._read_catalog_or_scan("memory")
 
         warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
-        assert len(warnings) >= 1, (
-            "First call with corrupt catalog must log a warning"
-        )
+        assert len(warnings) >= 1, "First call with corrupt catalog must log a warning"
 
     def test_repeated_calls_warn_only_once(self, plugin_data_env, caplog):
         """Repeated calls with same corrupt catalog should warn only once per session.
@@ -877,8 +893,11 @@ class TestOncePerSessionWarning:
             context_manager._read_catalog_or_scan("memory")
 
         # Second call should NOT produce additional warnings
-        warnings = [r for r in caplog.records if r.levelno >= logging.WARNING
-                     and "memory" in r.message.lower()]
+        warnings = [
+            r
+            for r in caplog.records
+            if r.levelno >= logging.WARNING and "memory" in r.message.lower()
+        ]
         assert len(warnings) == 0, (
             "Repeated calls should not re-warn (once-per-session deduplication)"
         )
@@ -900,9 +919,7 @@ class TestOncePerSessionWarning:
 
         # Both catalog types should get their own warning
         warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
-        assert len(warnings) >= 2, (
-            "Different catalog types should warn independently"
-        )
+        assert len(warnings) >= 2, "Different catalog types should warn independently"
 
 
 # ---------------------------------------------------------------------------
@@ -963,7 +980,8 @@ class TestCatalogStalenessWarning:
 
         assert len(result) > 0, "Stale catalog must still be returned (fail-open)"
         stale_warnings = [
-            r.message for r in caplog.records
+            r.message
+            for r in caplog.records
             if r.levelno >= logging.WARNING and "stale" in r.message.lower()
         ]
         assert stale_warnings, (
@@ -972,18 +990,20 @@ class TestCatalogStalenessWarning:
 
     def test_fresh_catalog_does_not_warn(self, plugin_data_env, caplog):
         """Scenario: generated_at within the TTL → no staleness warning."""
+        from datetime import datetime
+
         import context_manager
-        from datetime import datetime, timezone
 
         catalog = _valid_memory_catalog()
-        catalog["generated_at"] = datetime.now(timezone.utc).isoformat()
+        catalog["generated_at"] = datetime.now(UTC).isoformat()
         _write_catalog(plugin_data_env, "memory.json", catalog)
 
         with caplog.at_level(logging.WARNING):
             context_manager._read_catalog_or_scan("memory", ttl_hours=168)
 
         stale_warnings = [
-            r.message for r in caplog.records
+            r.message
+            for r in caplog.records
             if r.levelno >= logging.WARNING and "stale" in r.message.lower()
         ]
         assert not stale_warnings, "A fresh catalog must not log a staleness warning"
@@ -1004,7 +1024,8 @@ class TestCatalogStalenessWarning:
             context_manager._read_catalog_or_scan("memory")  # no ttl_hours
 
         stale_warnings = [
-            r.message for r in caplog.records
+            r.message
+            for r in caplog.records
             if r.levelno >= logging.WARNING and "stale" in r.message.lower()
         ]
         assert not stale_warnings, (
@@ -1201,7 +1222,7 @@ class TestEdgeCases:
         """
         import context_manager
 
-        (plugin_data_env / "memory.json").write_text('[1, 2, 3]')
+        (plugin_data_env / "memory.json").write_text("[1, 2, 3]")
 
         result = context_manager._read_catalog_or_scan("memory")
 
@@ -1237,9 +1258,7 @@ class TestEdgeCases:
 
         result = context_manager._read_catalog_or_scan("memory")
 
-        assert isinstance(result, list), (
-            "Empty file should fall back, not crash"
-        )
+        assert isinstance(result, list), "Empty file should fall back, not crash"
 
     def test_unknown_catalog_type(self, plugin_data_env):
         """Unknown catalog type should return empty list without crashing."""
@@ -1248,9 +1267,7 @@ class TestEdgeCases:
         result = context_manager._read_catalog_or_scan("nonexistent")
 
         assert isinstance(result, list)
-        assert result == [], (
-            "Unknown catalog type should return empty list"
-        )
+        assert result == [], "Unknown catalog type should return empty list"
 
     def test_catalog_with_extra_fields(self, plugin_data_env):
         """Catalog with extra unexpected fields should still work.
@@ -1267,9 +1284,7 @@ class TestEdgeCases:
 
         result = context_manager._read_catalog_or_scan("memory")
 
-        assert len(result) > 0, (
-            "Extra fields should be ignored, not cause failure"
-        )
+        assert len(result) > 0, "Extra fields should be ignored, not cause failure"
 
     def test_catalogs_dir_does_not_exist(self, tmp_path, monkeypatch):
         """When catalogs directory itself doesn't exist, should fall back.

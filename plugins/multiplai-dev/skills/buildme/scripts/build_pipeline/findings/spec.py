@@ -29,7 +29,11 @@ import logging
 import re
 from pathlib import Path
 
-from multiplai_core.specs import CHANGE_META_FILE, normalize_change_name, set_spec_issues
+from multiplai_core.specs import (
+    CHANGE_META_FILE,
+    normalize_change_name,
+    set_spec_issues,
+)
 from multiplai_core.untrusted import defang
 
 from .. import git_ops
@@ -67,8 +71,11 @@ def defers_fix(record: TriageRecord) -> bool:
 
 def needs_spec(records: list[TriageRecord]) -> list[TriageRecord]:
     """The records that ask for a requirements change."""
-    return [r for r in records
-            if r.triage and (r.triage.verdict == Verdict.SPEC_CHANGE or defers_fix(r))]
+    return [
+        r
+        for r in records
+        if r.triage and (r.triage.verdict == Verdict.SPEC_CHANGE or defers_fix(r))
+    ]
 
 
 def _line(text: str, limit: int) -> str:
@@ -103,16 +110,24 @@ def entry(record: TriageRecord, req_file: str) -> str:
     lines = [f"## {heading(record)}", ""]
     if req_file:
         lines.append(f"- Requirements file: `{req_file}`")
-    lines.append(f"- Requirement: {_line(t.requirement, 300) or '(not named by the triage)'}")
-    lines.append(f"- Raised in: {link} (by @{_line(c.author, 80)}, "
-                 f"buildme findings round {record.round})")
+    lines.append(
+        f"- Requirement: {_line(t.requirement, 300) or '(not named by the triage)'}"
+    )
+    lines.append(
+        f"- Raised in: {link} (by @{_line(c.author, 80)}, "
+        f"buildme findings round {record.round})"
+    )
     if defers_fix(record):
-        lines.append("- A code fix waits on this change: the fix the comment asks for "
-                     "contradicts this requirement.")
+        lines.append(
+            "- A code fix waits on this change: the fix the comment asks for "
+            "contradicts this requirement."
+        )
     label = "Why the fix needs it" if defers_fix(record) else "Requested change"
     lines += ["", f"{label}: {_line(t.reason, 2000)}"]
     if defers_fix(record) and t.failing_test:
-        lines.append(f"Once changed, the requirement must allow this: {_line(t.failing_test, 1000)}")
+        lines.append(
+            f"Once changed, the requirement must allow this: {_line(t.failing_test, 1000)}"
+        )
     return "\n".join(lines) + "\n"
 
 
@@ -131,12 +146,18 @@ def append_issues(change_dir: Path, records: list[TriageRecord]) -> list[str]:
     if text.strip() and not _H2_RE.search(text):
         m = _TITLE_RE.match(text)
         cut = m.end() if m else 0
-        text = (text[:cut] + ("\n" if cut else "") + f"## {EARLIER_HEADING}\n\n"
-                + text[cut:].lstrip("\n"))
+        text = (
+            text[:cut]
+            + ("\n" if cut else "")
+            + f"## {EARLIER_HEADING}\n\n"
+            + text[cut:].lstrip("\n")
+        )
     if not text.strip():
-        text = ("# Requirements issues\n\n"
-                "Raised by buildme findings. Each `## ` section is one issue for "
-                "`pm-spec revise`, which edits the requirements.\n")
+        text = (
+            "# Requirements issues\n\n"
+            "Raised by buildme findings. Each `## ` section is one issue for "
+            "`pm-spec revise`, which edits the requirements.\n"
+        )
     added: list[str] = []
     for r in records:
         head = heading(r)
@@ -144,19 +165,25 @@ def append_issues(change_dir: Path, records: list[TriageRecord]) -> list[str]:
             continue
         t = r.triage
         assert t is not None
-        text = text.rstrip("\n") + "\n\n" + entry(r, requirements_file(change_dir, t.requirement))
+        text = (
+            text.rstrip("\n")
+            + "\n\n"
+            + entry(r, requirements_file(change_dir, t.requirement))
+        )
         added.append(head)
     if added:
         path.write_text(text)
     return added
 
 
-def commit_spec(project_dir: Path, round_n: int, records: list[TriageRecord],
-                paths: list[Path]) -> str | None:
+def commit_spec(
+    project_dir: Path, round_n: int, records: list[TriageRecord], paths: list[Path]
+) -> str | None:
     """`spec(findings-r<N>): <ids>` over exactly *paths*."""
     ids = ", ".join(short_id(r) for r in records)
     return git_ops.commit_paths(
-        Path(project_dir), f"spec(findings-r{round_n}): {ids}",
+        Path(project_dir),
+        f"spec(findings-r{round_n}): {ids}",
         [str(p) for p in paths] + git_ops.BOOKKEEPING_EXCLUDES,
     )
 
@@ -168,9 +195,14 @@ def _relative(path: Path, project_dir: Path) -> str:
         return str(path)
 
 
-def run_spec_step(config: BuildConfig, change_dir: Path, round_n: int,
-                  records: list[TriageRecord], *,
-                  extra_paths: list[Path] | None = None) -> tuple[list[SpecIssue], str | None]:
+def run_spec_step(
+    config: BuildConfig,
+    change_dir: Path,
+    round_n: int,
+    records: list[TriageRecord],
+    *,
+    extra_paths: list[Path] | None = None,
+) -> tuple[list[SpecIssue], str | None]:
     """Record the round's requirements changes in `spec-issues.md`, set
     `spec_issues` in `.change.yaml` and commit both. Returns the issues and
     the commit sha (None when no finding asked for a requirements change).
@@ -181,7 +213,10 @@ def run_spec_step(config: BuildConfig, change_dir: Path, round_n: int,
     change_dir = Path(change_dir)
     added = set(append_issues(change_dir, wanted))
     if not added:
-        log.info("findings round %d: spec-issues.md already held every requirements issue", round_n)
+        log.info(
+            "findings round %d: spec-issues.md already held every requirements issue",
+            round_n,
+        )
     path = issues_path(change_dir)
     set_spec_issues(change_dir, path)
     issues_file, command = _relative(path, config.project_dir), revise_command(config)
@@ -190,12 +225,23 @@ def run_spec_step(config: BuildConfig, change_dir: Path, round_n: int,
         t = r.triage
         assert t is not None
         head = heading(r)
-        issues.append(SpecIssue(
-            finding_key=r.comment.key, heading=head, issues_file=issues_file,
-            command=command, requirement=t.requirement,
-            requirements_file=requirements_file(change_dir, t.requirement),
-            defers_fix=defers_fix(r), appended=head in added))
-        added.discard(head)   # a second record under the same heading added nothing
-    sha = commit_spec(config.project_dir, round_n, wanted,
-                      [path, change_dir / CHANGE_META_FILE, *(extra_paths or [])])
+        issues.append(
+            SpecIssue(
+                finding_key=r.comment.key,
+                heading=head,
+                issues_file=issues_file,
+                command=command,
+                requirement=t.requirement,
+                requirements_file=requirements_file(change_dir, t.requirement),
+                defers_fix=defers_fix(r),
+                appended=head in added,
+            )
+        )
+        added.discard(head)  # a second record under the same heading added nothing
+    sha = commit_spec(
+        config.project_dir,
+        round_n,
+        wanted,
+        [path, change_dir / CHANGE_META_FILE, *(extra_paths or [])],
+    )
     return issues, sha

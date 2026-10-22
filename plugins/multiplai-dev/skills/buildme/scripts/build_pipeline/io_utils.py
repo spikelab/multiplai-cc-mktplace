@@ -1,4 +1,5 @@
 """Atomic publication of complete text files."""
+
 import os
 import tempfile
 from pathlib import Path
@@ -18,4 +19,3 @@ def atomic_write(path: Path, content: str) -> None:
         os.replace(name, path)
     finally:
         Path(name).unlink(missing_ok=True)
-

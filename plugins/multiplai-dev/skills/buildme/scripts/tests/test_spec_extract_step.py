@@ -15,10 +15,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from tests.planning_fakes import accepted_planning
 import pytest
-from tests.planning_fakes import _prepare_and_publish
-
 from build_pipeline import git_ops, orchestrator
 from build_pipeline.change_manager import ChangeManager
 from build_pipeline.config import BuildConfig, GitToggles
@@ -27,16 +24,29 @@ from build_pipeline.orchestrator import _run_spec_extract_step, run_orchestrator
 from build_pipeline.progress import ProgressWriter
 from build_pipeline.state import BuildState, SpecGenState
 
-CAPABILITY = "## ADDED Requirements\n\n### Requirement: Billing totals\n\n#### Scenario: sum\n" \
-             "- **WHEN** two lines are billed\n- **THEN** the total is their sum\n" \
-             "- **CITES** `app.py:1-2`\n- **EVIDENCE** read from code only\n"
+from tests.planning_fakes import (
+    _prepare_and_publish,
+    accepted_planning,  # noqa: F401
+)
+
+CAPABILITY = (
+    "## ADDED Requirements\n\n### Requirement: Billing totals\n\n#### Scenario: sum\n"
+    "- **WHEN** two lines are billed\n- **THEN** the total is their sum\n"
+    "- **CITES** `app.py:1-2`\n- **EVIDENCE** read from code only\n"
+)
 
 
 def _git(repo: Path, *args: str) -> str:
-    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
-           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
-    return subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True,
-                          text=True, env=env).stdout.strip()
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@t",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@t",
+    }
+    return subprocess.run(
+        ["git", *args], cwd=repo, check=True, capture_output=True, text=True, env=env
+    ).stdout.strip()
 
 
 def _repo(root: Path) -> Path:
@@ -58,8 +68,13 @@ def _config(project: Path, *, branch: str | None = "buildme/c", **kw) -> BuildCo
 
 
 def _state(config: BuildConfig) -> BuildState:
-    state = BuildState(change_name="c", tier="advanced", phase=BuildPhase.RESEARCH,
-                       bootstrap_done=True, state_file=str(config.state_file_path()))
+    state = BuildState(
+        change_name="c",
+        tier="advanced",
+        phase=BuildPhase.RESEARCH,
+        bootstrap_done=True,
+        state_file=str(config.state_file_path()),
+    )
     state.checkpoint(config.state_file_path())
     return state
 
@@ -84,8 +99,12 @@ class FakeSpecExtract:
         if isinstance(step, BaseException):
             raise step
         code = step() if callable(step) else step
-        return git_ops.GitResult(list(argv), code, self.stdout if code == 0 else "",
-                                 "" if code == 0 else self.stderr)
+        return git_ops.GitResult(
+            list(argv),
+            code,
+            self.stdout if code == 0 else "",
+            "" if code == 0 else self.stderr,
+        )
 
 
 @pytest.fixture(autouse=True)
@@ -95,11 +114,13 @@ def trusted(monkeypatch):
 
 def _apply_into(config: BuildConfig):
     """What `--apply` leaves: one new registry file, uncommitted."""
+
     def write():
         registry = config.specs_dir / "registry"
         registry.mkdir(parents=True, exist_ok=True)
         (registry / "billing.md").write_text(CAPABILITY)
         return 0
+
     return write
 
 
@@ -130,17 +151,24 @@ class TestConfigKeys:
     def test_invalid_values_keep_the_defaults(self, tmp_path, caplog):
         c = self._load(tmp_path, "spec_extract: 'no thanks'\nspec_extract_max_usd: 0\n")
         assert (c.spec_extract, c.spec_extract_max_usd) == (True, 80.0)
-        assert sum("Invalid spec_extract" in r.getMessage() for r in caplog.records) == 2
+        assert (
+            sum("Invalid spec_extract" in r.getMessage() for r in caplog.records) == 2
+        )
 
     def test_a_boolean_is_not_a_spend_cap(self, tmp_path):
-        assert self._load(tmp_path, "spec_extract_max_usd: true\n").spec_extract_max_usd == 80.0
+        assert (
+            self._load(tmp_path, "spec_extract_max_usd: true\n").spec_extract_max_usd
+            == 80.0
+        )
 
 
 # --- the command -------------------------------------------------------------------------------
 
 
 class TestArgv:
-    def test_runs_spec_extract_at_the_saved_head_with_apply(self, tmp_path, monkeypatch):
+    def test_runs_spec_extract_at_the_saved_head_with_apply(
+        self, tmp_path, monkeypatch
+    ):
         project = _repo(tmp_path / "proj")
         config = _config(project, spec_extract_max_usd=25.0)
         state = _state(config)
@@ -152,7 +180,12 @@ class TestArgv:
         [argv] = fake.calls
         head = _git(project, "rev-parse", "HEAD")
         assert argv[:3] == ["uv", "run", "--directory"]
-        assert Path(argv[3]) == Path(orchestrator.__file__).resolve().parents[3] / "spec-extract" / "scripts"
+        assert (
+            Path(argv[3])
+            == Path(orchestrator.__file__).resolve().parents[3]
+            / "spec-extract"
+            / "scripts"
+        )
         assert argv[4:8] == ["python", "-m", "spec_extract_pipeline", "run"]
         assert _flag(argv, "--tree") == head
         assert Path(_flag(argv, "--repo")).resolve() == project.resolve()
@@ -161,12 +194,16 @@ class TestArgv:
         assert "--trust-repo" in argv and "--apply" in argv
         assert _flag(argv, "--specs-dir") == str(config.specs_dir)
 
-    @pytest.mark.parametrize("cap, passed", [(1234.567, "1234.567"), (1234567.0, "1234567"), (0.25, "0.25")])
+    @pytest.mark.parametrize(
+        "cap, passed", [(1234.567, "1234.567"), (1234567.0, "1234567"), (0.25, "0.25")]
+    )
     def test_the_spend_cap_is_passed_exactly(self, cap, passed, tmp_path, monkeypatch):
         config = _config(_repo(tmp_path / "proj"), spec_extract_max_usd=cap)
         fake = FakeSpecExtract(0)
         monkeypatch.setattr(git_ops, "_run_spec_extract_skill", fake)
-        assert _run_spec_extract_step(config, _state(config), _progress(tmp_path)) is None
+        assert (
+            _run_spec_extract_step(config, _state(config), _progress(tmp_path)) is None
+        )
         assert _flag(fake.calls[0], "--max-usd") == passed
 
     def test_a_subdirectory_project_reads_only_its_path(self, tmp_path, monkeypatch):
@@ -193,8 +230,11 @@ class TestArgv:
 
     def test_the_seam_runs_the_launcher_with_the_four_hour_limit(self, monkeypatch):
         seen = {}
-        monkeypatch.setattr(git_ops, "_run_skill",
-                            lambda argv, cwd, timeout: seen.update(argv=argv, timeout=timeout))
+        monkeypatch.setattr(
+            git_ops,
+            "_run_skill",
+            lambda argv, cwd, timeout: seen.update(argv=argv, timeout=timeout),
+        )
         git_ops._run_spec_extract_skill(["uv"], cwd=None)
         assert seen == {"argv": ["uv"], "timeout": 4 * 3600}
 
@@ -206,53 +246,77 @@ class TestSkips:
         with caplog.at_level(logging.INFO):
             assert _run_spec_extract_step(config, state, _progress(tmp_path)) is None
         assert fake.calls == []
-        assert any(f"SKIP phase=CODEBASE_ANALYSIS step=spec-extract reason={reason}" in r.getMessage()
-                   for r in caplog.records)
+        assert any(
+            f"SKIP phase=CODEBASE_ANALYSIS step=spec-extract reason={reason}"
+            in r.getMessage()
+            for r in caplog.records
+        )
         assert state.spec_gen is None or state.spec_gen.spec_extract_sha is None
 
     def test_switched_off(self, tmp_path, monkeypatch, caplog):
         config = _config(_repo(tmp_path / "p"), spec_extract=False)
-        self._skipped(config, _state(config), tmp_path, monkeypatch, caplog, "spec_extract-false")
+        self._skipped(
+            config, _state(config), tmp_path, monkeypatch, caplog, "spec_extract-false"
+        )
 
     def test_untrusted_repo(self, tmp_path, monkeypatch, caplog):
         monkeypatch.delenv("BUILDME_TRUST_REPO")
         config = _config(_repo(tmp_path / "p"))
-        self._skipped(config, _state(config), tmp_path, monkeypatch, caplog, "repo-not-trusted")
+        self._skipped(
+            config, _state(config), tmp_path, monkeypatch, caplog, "repo-not-trusted"
+        )
 
-    def test_a_registry_that_already_holds_a_capability(self, tmp_path, monkeypatch, caplog):
+    def test_a_registry_that_already_holds_a_capability(
+        self, tmp_path, monkeypatch, caplog
+    ):
         config = _config(_repo(tmp_path / "p"))
         (config.specs_dir / "registry" / "auth.md").write_text(CAPABILITY)
-        self._skipped(config, _state(config), tmp_path, monkeypatch, caplog, "registry-not-empty")
+        self._skipped(
+            config, _state(config), tmp_path, monkeypatch, caplog, "registry-not-empty"
+        )
 
     def test_a_project_with_no_commit(self, tmp_path, monkeypatch, caplog):
         project = tmp_path / "p"
         project.mkdir()
         _git(project, "init", "-q")
         config = _config(project)
-        self._skipped(config, _state(config), tmp_path, monkeypatch, caplog, "no-git-commit")
+        self._skipped(
+            config, _state(config), tmp_path, monkeypatch, caplog, "no-git-commit"
+        )
 
 
 class TestExits:
-    def test_exit_0_commits_the_registry_and_prints_the_baseline(self, tmp_path, monkeypatch, capsys):
+    def test_exit_0_commits_the_registry_and_prints_the_baseline(
+        self, tmp_path, monkeypatch, capsys
+    ):
         project = _repo(tmp_path / "p")
         config = _config(project)
         state = _state(config)
-        fake = FakeSpecExtract(_apply_into(config), stdout="SPEC_EXTRACT:RENDERED 1 x\nSPEC_EXTRACT:APPLIED 1\n")
+        fake = FakeSpecExtract(
+            _apply_into(config),
+            stdout="SPEC_EXTRACT:RENDERED 1 x\nSPEC_EXTRACT:APPLIED 1\n",
+        )
         monkeypatch.setattr(git_ops, "_run_spec_extract_skill", fake)
 
         assert _run_spec_extract_step(config, state, _progress(tmp_path)) is None
 
         sha12 = state.spec_gen.spec_extract_sha[:12]
-        assert _git(project, "log", "-1", "--format=%s") == \
-            f"docs(specs): baseline registry from spec-extract at {sha12}"
-        assert _git(project, "show", "HEAD:specs/registry/billing.md") + "\n" == CAPABILITY
+        assert (
+            _git(project, "log", "-1", "--format=%s")
+            == f"docs(specs): baseline registry from spec-extract at {sha12}"
+        )
+        assert (
+            _git(project, "show", "HEAD:specs/registry/billing.md") + "\n" == CAPABILITY
+        )
         assert _git(project, "status", "--porcelain", "--", "specs/registry") == ""
         assert "SPEC_EXTRACT:BASELINE 1" in capsys.readouterr().out
 
     def test_exit_5_returns_1(self, tmp_path, monkeypatch, capsys):
         config = _config(_repo(tmp_path / "p"))
         state = _state(config)
-        fake = FakeSpecExtract(5, stderr="spec-extract: another run holds /x/.locks/tree.lock (pid 7)")
+        fake = FakeSpecExtract(
+            5, stderr="spec-extract: another run holds /x/.locks/tree.lock (pid 7)"
+        )
         monkeypatch.setattr(git_ops, "_run_spec_extract_skill", fake)
 
         assert _run_spec_extract_step(config, state, _progress(tmp_path)) == 1
@@ -261,12 +325,17 @@ class TestExits:
 
     @pytest.mark.parametrize("code", [1, 2, 3, 4])
     def test_another_exit_with_a_clean_registry_goes_on_without_a_baseline(
-            self, code, tmp_path, monkeypatch, capsys):
+        self, code, tmp_path, monkeypatch, capsys
+    ):
         """Row S7."""
         project = _repo(tmp_path / "p")
         config = _config(project)
         state = _state(config)
-        monkeypatch.setattr(git_ops, "_run_spec_extract_skill", FakeSpecExtract(code, stderr="a\nlast words"))
+        monkeypatch.setattr(
+            git_ops,
+            "_run_spec_extract_skill",
+            FakeSpecExtract(code, stderr="a\nlast words"),
+        )
         before = _git(project, "rev-parse", "HEAD")
 
         assert _run_spec_extract_step(config, state, _progress(tmp_path)) is None
@@ -282,7 +351,9 @@ class TestExits:
         assert _run_spec_extract_step(config, state, _progress(tmp_path)) is None
         assert "SPEC_EXTRACT:NOT_RUN exit=1" in capsys.readouterr().out
 
-    def test_another_exit_with_a_dirty_registry_returns_1(self, tmp_path, monkeypatch, capsys):
+    def test_another_exit_with_a_dirty_registry_returns_1(
+        self, tmp_path, monkeypatch, capsys
+    ):
         """Row S6: the user's uncommitted edits under the registry stop the build."""
         project = _repo(tmp_path / "p")
         config = _config(project)
@@ -310,8 +381,14 @@ class TestInTheBlock:
         from unittest.mock import AsyncMock, patch
 
         project = _repo(tmp_path / "p")
-        config = BuildConfig(project_dir=project, change_name="c", auto=True,
-                             spec_only=True, skip_research=True, git=GitToggles(worktree=False))
+        config = BuildConfig(
+            project_dir=project,
+            change_name="c",
+            auto=True,
+            spec_only=True,
+            skip_research=True,
+            git=GitToggles(worktree=False),
+        )
         config.specs_dir = project / "specs"
         config.prototype_mode = "false"
         cm = ChangeManager(config.specs_dir)
@@ -319,18 +396,38 @@ class TestInTheBlock:
         cm.create_change("c")
         (config.change_dir / "proposal.md").write_text("## Why\nA thing.\n")
         _state(config)
-        args = argparse.Namespace(change="c", project_dir=str(project), auto=True,
-                                  spec_only=True, skip_research=True, research_path="", session_id="")
+        args = argparse.Namespace(
+            change="c",
+            project_dir=str(project),
+            auto=True,
+            spec_only=True,
+            skip_research=True,
+            research_path="",
+            session_id="",
+        )
         monkeypatch.setattr(git_ops, "_run_spec_extract_skill", fake)
-        with patch("build_pipeline.llm_steps.spec_steps.run_codebase_analysis",
-                   AsyncMock(return_value="## Architecture\nx")), \
-                patch("build_pipeline.spec_generator.run_spec_generator", AsyncMock(return_value=0)), \
-                patch("build_pipeline.llm_steps.spec_steps.run_design_audit", AsyncMock(return_value=[])):
+        with (
+            patch(
+                "build_pipeline.llm_steps.spec_steps.run_codebase_analysis",
+                AsyncMock(return_value="## Architecture\nx"),
+            ),
+            patch(
+                "build_pipeline.spec_generator.run_spec_generator",
+                AsyncMock(return_value=0),
+            ),
+            patch(
+                "build_pipeline.llm_steps.spec_steps.run_design_audit",
+                AsyncMock(return_value=[]),
+            ),
+        ):
             import asyncio
+
             rc = asyncio.run(run_orchestrator(config, args))
         return rc, config
 
-    def test_exit_5_stops_the_build_without_advancing_the_phase(self, tmp_path, monkeypatch, capsys):
+    def test_exit_5_stops_the_build_without_advancing_the_phase(
+        self, tmp_path, monkeypatch, capsys
+    ):
         """Row S2."""
         rc, config = self._run(tmp_path, FakeSpecExtract(5), monkeypatch)
         assert rc == 1
@@ -344,7 +441,9 @@ class TestInTheBlock:
         assert rc == 0
         out = capsys.readouterr().out
         assert "SPEC_EXTRACT:NOT_RUN exit=2" in out
-        assert out.index("SPEC_EXTRACT:NOT_RUN") < out.index("PHASE:CODEBASE_ANALYSIS:COMPLETE")
+        assert out.index("SPEC_EXTRACT:NOT_RUN") < out.index(
+            "PHASE:CODEBASE_ANALYSIS:COMPLETE"
+        )
 
 
 # --- stop and resume (rows S1, S3, S5) -----------------------------------------------------------
@@ -352,7 +451,9 @@ class TestInTheBlock:
 
 def _resume(config: BuildConfig, tmp_path: Path):
     """A new buildme process: the state comes back from its checkpoint."""
-    return _run_spec_extract_step(config, BuildState.load(config.state_file_path()), _progress(tmp_path))
+    return _run_spec_extract_step(
+        config, BuildState.load(config.state_file_path()), _progress(tmp_path)
+    )
 
 
 class TestStopAndResume:
@@ -361,7 +462,9 @@ class TestStopAndResume:
         config = _config(project)
         fake = FakeSpecExtract(*steps)
         monkeypatch.setattr(git_ops, "_run_spec_extract_skill", fake)
-        assert _run_spec_extract_step(config, _state(config), _progress(tmp_path)) is None
+        assert (
+            _run_spec_extract_step(config, _state(config), _progress(tmp_path)) is None
+        )
         return project, fake
 
     def _argv_in(self, argv: list[str], project: Path) -> list[str]:
@@ -371,7 +474,8 @@ class TestStopAndResume:
         return [a.replace(str(project), "<p>").replace(head, "<head>") for a in argv]
 
     def test_S1_a_stopped_launch_is_resumed_at_the_saved_commit_in_the_same_folder(
-            self, tmp_path, monkeypatch):
+        self, tmp_path, monkeypatch
+    ):
         """Row S1, stopped twice: each resume launches the same command, so spec-extract
         resumes its own folder and pays only for what had not returned."""
         ref_project, ref = self._reference(tmp_path, monkeypatch)
@@ -389,10 +493,16 @@ class TestStopAndResume:
         head = _git(project, "rev-parse", "HEAD")
         assert [_flag(a, "--tree") for a in fake.calls] == [head] * 3
         assert len({tuple(a) for a in fake.calls}) == 1
-        assert self._argv_in(fake.calls[-1], project) == self._argv_in(ref.calls[0], ref_project)
-        assert BuildState.load(config.state_file_path()).spec_gen.spec_extract_sha == head
+        assert self._argv_in(fake.calls[-1], project) == self._argv_in(
+            ref.calls[0], ref_project
+        )
+        assert (
+            BuildState.load(config.state_file_path()).spec_gen.spec_extract_sha == head
+        )
 
-    def test_S5_a_commit_added_before_the_resume_does_not_move_the_target(self, tmp_path, monkeypatch):
+    def test_S5_a_commit_added_before_the_resume_does_not_move_the_target(
+        self, tmp_path, monkeypatch
+    ):
         """Row S5: the resume uses the saved commit, never the new HEAD, so it reaches
         the folder the stopped run paid into instead of starting a second one."""
         project = _repo(tmp_path / "p")
@@ -411,15 +521,23 @@ class TestStopAndResume:
         assert [_flag(a, "--tree") for a in fake.calls] == [first, first]
         assert fake.calls[0] == fake.calls[1]
 
-    def test_S3_files_applied_but_not_committed_are_committed_on_resume(self, tmp_path, monkeypatch, capsys):
+    def test_S3_files_applied_but_not_committed_are_committed_on_resume(
+        self, tmp_path, monkeypatch, capsys
+    ):
         """Row S3: the stop came after spec-extract applied its files and before
         `commit_stage`. The non-empty registry does not skip the step (the commit is
         saved), and the resume commits exactly what a run that never stopped commits."""
         ref_project = _repo(tmp_path / "ref")
         ref_config = _config(ref_project)
-        monkeypatch.setattr(git_ops, "_run_spec_extract_skill",
-                            FakeSpecExtract(_apply_into(ref_config), stdout="SPEC_EXTRACT:APPLIED 1\n"))
-        assert _run_spec_extract_step(ref_config, _state(ref_config), _progress(tmp_path)) is None
+        monkeypatch.setattr(
+            git_ops,
+            "_run_spec_extract_skill",
+            FakeSpecExtract(_apply_into(ref_config), stdout="SPEC_EXTRACT:APPLIED 1\n"),
+        )
+        assert (
+            _run_spec_extract_step(ref_config, _state(ref_config), _progress(tmp_path))
+            is None
+        )
 
         project = _repo(tmp_path / "p")
         config = _config(project)
@@ -440,13 +558,18 @@ class TestStopAndResume:
         assert len(fake.calls) == 2 and fake.calls[0] == fake.calls[1]
         for repo in (project, ref_project):
             assert _git(repo, "status", "--porcelain", "--", "specs/registry") == ""
-        assert _git(project, "ls-tree", "-r", "HEAD", "--", "specs/registry") == \
-            _git(ref_project, "ls-tree", "-r", "HEAD", "--", "specs/registry")
+        assert _git(project, "ls-tree", "-r", "HEAD", "--", "specs/registry") == _git(
+            ref_project, "ls-tree", "-r", "HEAD", "--", "specs/registry"
+        )
         for repo in (project, ref_project):
-            assert _git(repo, "log", "--format=%s", "--", "specs/registry") == \
-                "docs(specs): baseline registry from spec-extract at " + _git(repo, "rev-parse", "HEAD~1")[:12]
-        assert (project / "specs/registry/billing.md").read_bytes() == \
-            (ref_project / "specs/registry/billing.md").read_bytes()
+            assert (
+                _git(repo, "log", "--format=%s", "--", "specs/registry")
+                == "docs(specs): baseline registry from spec-extract at "
+                + _git(repo, "rev-parse", "HEAD~1")[:12]
+            )
+        assert (project / "specs/registry/billing.md").read_bytes() == (
+            ref_project / "specs/registry/billing.md"
+        ).read_bytes()
 
 
 # --- review round 1 of #345 ----------------------------------------------------------------------
@@ -456,14 +579,21 @@ class TestTheBaselineMarkerSaysWhetherItWasCommitted:
     """`commit_stage` commits nothing without a pipeline branch (`--no-worktree`) and
     returns None when the commit fails; the marker then says the files are uncommitted."""
 
-    def test_no_pipeline_branch_leaves_the_files_uncommitted_and_says_so(self, tmp_path, monkeypatch, capsys):
+    def test_no_pipeline_branch_leaves_the_files_uncommitted_and_says_so(
+        self, tmp_path, monkeypatch, capsys
+    ):
         project = _repo(tmp_path / "p")
         config = _config(project, branch=None)
         before = _git(project, "rev-parse", "HEAD")
-        monkeypatch.setattr(git_ops, "_run_spec_extract_skill",
-                            FakeSpecExtract(_apply_into(config), stdout="SPEC_EXTRACT:APPLIED 1\n"))
+        monkeypatch.setattr(
+            git_ops,
+            "_run_spec_extract_skill",
+            FakeSpecExtract(_apply_into(config), stdout="SPEC_EXTRACT:APPLIED 1\n"),
+        )
 
-        assert _run_spec_extract_step(config, _state(config), _progress(tmp_path)) is None
+        assert (
+            _run_spec_extract_step(config, _state(config), _progress(tmp_path)) is None
+        )
 
         assert _git(project, "rev-parse", "HEAD") == before
         assert (config.specs_dir / "registry" / "billing.md").read_text() == CAPABILITY
@@ -472,15 +602,22 @@ class TestTheBaselineMarkerSaysWhetherItWasCommitted:
 
     def test_a_failed_commit_says_so(self, tmp_path, monkeypatch, capsys):
         config = _config(_repo(tmp_path / "p"))
-        monkeypatch.setattr(git_ops, "_run_spec_extract_skill",
-                            FakeSpecExtract(_apply_into(config), stdout="SPEC_EXTRACT:APPLIED 1\n"))
+        monkeypatch.setattr(
+            git_ops,
+            "_run_spec_extract_skill",
+            FakeSpecExtract(_apply_into(config), stdout="SPEC_EXTRACT:APPLIED 1\n"),
+        )
         monkeypatch.setattr(git_ops, "commit_stage", lambda *a, **k: None)
 
-        assert _run_spec_extract_step(config, _state(config), _progress(tmp_path)) is None
+        assert (
+            _run_spec_extract_step(config, _state(config), _progress(tmp_path)) is None
+        )
 
         assert "SPEC_EXTRACT:BASELINE 1 uncommitted" in capsys.readouterr().out
 
-    def test_nothing_left_to_commit_is_the_plain_marker(self, tmp_path, monkeypatch, capsys):
+    def test_nothing_left_to_commit_is_the_plain_marker(
+        self, tmp_path, monkeypatch, capsys
+    ):
         """Row S4: the files were committed before the stop; the resume applies none."""
         project = _repo(tmp_path / "p")
         config = _config(project)
@@ -490,7 +627,11 @@ class TestTheBaselineMarkerSaysWhetherItWasCommitted:
         (config.specs_dir / "registry" / "billing.md").write_text(CAPABILITY)
         _git(project, "add", "specs")
         _git(project, "commit", "-q", "-m", "baseline")
-        monkeypatch.setattr(git_ops, "_run_spec_extract_skill", FakeSpecExtract(0, stdout="SPEC_EXTRACT:APPLIED 0\n"))
+        monkeypatch.setattr(
+            git_ops,
+            "_run_spec_extract_skill",
+            FakeSpecExtract(0, stdout="SPEC_EXTRACT:APPLIED 0\n"),
+        )
 
         assert _run_spec_extract_step(config, state, _progress(tmp_path)) is None
 
@@ -499,16 +640,34 @@ class TestTheBaselineMarkerSaysWhetherItWasCommitted:
 
     def test_no_applied_line_counts_0(self, tmp_path, monkeypatch, capsys):
         config = _config(_repo(tmp_path / "p"))
-        monkeypatch.setattr(git_ops, "_run_spec_extract_skill", FakeSpecExtract(0, stdout="something else\n"))
-        assert _run_spec_extract_step(config, _state(config), _progress(tmp_path)) is None
+        monkeypatch.setattr(
+            git_ops,
+            "_run_spec_extract_skill",
+            FakeSpecExtract(0, stdout="something else\n"),
+        )
+        assert (
+            _run_spec_extract_step(config, _state(config), _progress(tmp_path)) is None
+        )
         assert "SPEC_EXTRACT:BASELINE 0" in capsys.readouterr().out.splitlines()
 
-    def test_an_empty_stderr_reports_the_last_stdout_line(self, tmp_path, monkeypatch, capsys):
+    def test_an_empty_stderr_reports_the_last_stdout_line(
+        self, tmp_path, monkeypatch, capsys
+    ):
         config = _config(_repo(tmp_path / "p"))
-        monkeypatch.setattr(git_ops, "_run_spec_extract_skill", lambda argv, cwd=None, timeout=None:
-                            git_ops.GitResult(list(argv), 2, "first\nSPEC_EXTRACT:REFUSED here\n", ""))
-        assert _run_spec_extract_step(config, _state(config), _progress(tmp_path)) is None
-        assert "SPEC_EXTRACT:NOT_RUN exit=2 SPEC_EXTRACT:REFUSED here" in capsys.readouterr().out
+        monkeypatch.setattr(
+            git_ops,
+            "_run_spec_extract_skill",
+            lambda argv, cwd=None, timeout=None: git_ops.GitResult(
+                list(argv), 2, "first\nSPEC_EXTRACT:REFUSED here\n", ""
+            ),
+        )
+        assert (
+            _run_spec_extract_step(config, _state(config), _progress(tmp_path)) is None
+        )
+        assert (
+            "SPEC_EXTRACT:NOT_RUN exit=2 SPEC_EXTRACT:REFUSED here"
+            in capsys.readouterr().out
+        )
 
 
 def test_a_relative_specs_dir_is_passed_absolute(tmp_path, monkeypatch):
@@ -533,16 +692,22 @@ class TestEpicChildren:
 
         monkeypatch.setenv(CHILD_ENV, "1")
         config = _config(_repo(tmp_path / "p"))
-        TestSkips()._skipped(config, _state(config), tmp_path, monkeypatch, caplog, "epic-child")
+        TestSkips()._skipped(
+            config, _state(config), tmp_path, monkeypatch, caplog, "epic-child"
+        )
 
-    def test_a_child_run_again_by_hand_skips_spec_extract(self, tmp_path, monkeypatch, caplog):
+    def test_a_child_run_again_by_hand_skips_spec_extract(
+        self, tmp_path, monkeypatch, caplog
+    ):
         """#347: the child's saved command carries `--epic-child`, so a run of it
         without the coordinator's environment still skips spec-extract."""
         from build_pipeline.epic import CHILD_ENV
 
         monkeypatch.delenv(CHILD_ENV, raising=False)
         config = _config(_repo(tmp_path / "p"), epic_child=True)
-        TestSkips()._skipped(config, _state(config), tmp_path, monkeypatch, caplog, "epic-child")
+        TestSkips()._skipped(
+            config, _state(config), tmp_path, monkeypatch, caplog, "epic-child"
+        )
 
     def test_the_coordinator_marks_each_child_it_starts(self, tmp_path, monkeypatch):
         from build_pipeline.epic import CHILD_ENV, coordinator
@@ -578,11 +743,19 @@ class TestSiblingsOpenTheirPrsAgainstMain:
 
         use_workspace(monkeypatch, tmp_path)
         project = make_project(tmp_path)
-        _git(project, "checkout", "-q", "-b", "buildme/e")        # the parent's branch, never pushed
+        _git(
+            project, "checkout", "-q", "-b", "buildme/e"
+        )  # the parent's branch, never pushed
         (project / "specs" / "registry").mkdir(parents=True)
         (project / "specs" / "registry" / "billing.md").write_text(CAPABILITY)
         _git(project, "add", "specs/registry/billing.md")
-        _git(project, "commit", "-q", "-m", "docs(specs): baseline registry from spec-extract")
+        _git(
+            project,
+            "commit",
+            "-q",
+            "-m",
+            "docs(specs): baseline registry from spec-extract",
+        )
         registry = _git(project, "rev-parse", "HEAD")
         _git(project, "checkout", "-q", "main")
 
@@ -590,7 +763,9 @@ class TestSiblingsOpenTheirPrsAgainstMain:
 
         def fake_pr(argv, cwd=None, timeout=None):
             opened[argv[argv.index("--head") + 1]] = list(argv)
-            return git_ops.GitResult(argv, 0, f"PR:https://github.com/o/r/pull/{len(opened)}\n", "")
+            return git_ops.GitResult(
+                argv, 0, f"PR:https://github.com/o/r/pull/{len(opened)}\n", ""
+            )
 
         monkeypatch.setattr(git_ops, "_run_pr_skill", fake_pr)
         if marked_by == "env":
@@ -603,17 +778,36 @@ class TestSiblingsOpenTheirPrsAgainstMain:
             config.specs_dir = project / "specs"
             config.base_ref = registry
             config.epic_child = marked_by == "flag"
-            state = BuildState(change_name=config.change_name, tier="advanced",
-                               state_file=str(config.state_file_path()))
-            asyncio.run(orchestrator._run_bootstrap(config, state, ChangeManager(config.specs_dir),
-                                                    config.state_file_path()))
+            state = BuildState(
+                change_name=config.change_name,
+                tier="advanced",
+                state_file=str(config.state_file_path()),
+            )
+            asyncio.run(
+                orchestrator._run_bootstrap(
+                    config,
+                    state,
+                    ChangeManager(config.specs_dir),
+                    config.state_file_path(),
+                )
+            )
             trees[cid] = Path(state.worktree_path)
             (trees[cid] / f"{cid}.txt").write_text(f"{cid}\n")
             _git(trees[cid], "add", f"{cid}.txt")
             _git(trees[cid], "commit", "-q", "-m", f"child {cid}")
-            if cid == "ui":         # the trap: the one origin branch holding the commit is api's
-                assert orchestrator._pr_base_branch(trees["ui"], registry) == "buildme/e-api"
-            assert _prepare_and_publish(config, state, ProgressWriter(tmp_path / f"{cid}.md")) is True
+            if (
+                cid == "ui"
+            ):  # the trap: the one origin branch holding the commit is api's
+                assert (
+                    orchestrator._pr_base_branch(trees["ui"], registry)
+                    == "buildme/e-api"
+                )
+            assert (
+                _prepare_and_publish(
+                    config, state, ProgressWriter(tmp_path / f"{cid}.md")
+                )
+                is True
+            )
 
         assert sorted(opened) == ["buildme/e-api", "buildme/e-ui"]
         for argv in opened.values():
@@ -626,8 +820,14 @@ class TestTheAnalysisIsNotPaidTwice:
 
     def _setup(self, tmp_path):
         project = _repo(tmp_path / "p")
-        config = BuildConfig(project_dir=project, change_name="c", auto=True,
-                             spec_only=True, skip_research=True, git=GitToggles(worktree=False))
+        config = BuildConfig(
+            project_dir=project,
+            change_name="c",
+            auto=True,
+            spec_only=True,
+            skip_research=True,
+            git=GitToggles(worktree=False),
+        )
         config.specs_dir = project / "specs"
         config.prototype_mode = "false"
         cm = ChangeManager(config.specs_dir)
@@ -635,8 +835,15 @@ class TestTheAnalysisIsNotPaidTwice:
         cm.create_change("c")
         (config.change_dir / "proposal.md").write_text("## Why\nA thing.\n")
         _state(config)
-        args = argparse.Namespace(change="c", project_dir=str(project), auto=True,
-                                  spec_only=True, skip_research=True, research_path="", session_id="")
+        args = argparse.Namespace(
+            change="c",
+            project_dir=str(project),
+            auto=True,
+            spec_only=True,
+            skip_research=True,
+            research_path="",
+            session_id="",
+        )
         return config, args
 
     def _runs(self, config, args, monkeypatch, analysis, *steps, runs: int = 1) -> list:
@@ -647,9 +854,19 @@ class TestTheAnalysisIsNotPaidTwice:
 
         monkeypatch.setattr(git_ops, "_run_spec_extract_skill", FakeSpecExtract(*steps))
         codes = []
-        with patch("build_pipeline.llm_steps.spec_steps.run_codebase_analysis", analysis), \
-                patch("build_pipeline.spec_generator.run_spec_generator", AsyncMock(return_value=0)), \
-                patch("build_pipeline.llm_steps.spec_steps.run_design_audit", AsyncMock(return_value=[])):
+        with (
+            patch(
+                "build_pipeline.llm_steps.spec_steps.run_codebase_analysis", analysis
+            ),
+            patch(
+                "build_pipeline.spec_generator.run_spec_generator",
+                AsyncMock(return_value=0),
+            ),
+            patch(
+                "build_pipeline.llm_steps.spec_steps.run_design_audit",
+                AsyncMock(return_value=[]),
+            ),
+        ):
             for _ in range(runs):
                 codes.append(asyncio.run(run_orchestrator(config, args)))
         return codes
@@ -668,7 +885,9 @@ class TestTheAnalysisIsNotPaidTwice:
         return analysis, config
 
     @pytest.mark.parametrize("first", [5, "dirty"])
-    def test_S2_and_S6_the_re_run_asks_the_analysis_once(self, first, tmp_path, monkeypatch):
+    def test_S2_and_S6_the_re_run_asks_the_analysis_once(
+        self, first, tmp_path, monkeypatch
+    ):
         ref_analysis, ref_config = self._reference(tmp_path, monkeypatch)
         config, args = self._setup(tmp_path / "p")
         mine = config.specs_dir / "registry" / "mine.md"
@@ -679,41 +898,59 @@ class TestTheAnalysisIsNotPaidTwice:
             return 2
 
         analysis = self._analysis()
-        assert self._runs(config, args, monkeypatch, analysis, 5 if first == 5 else user_edit) == [1]
+        assert self._runs(
+            config, args, monkeypatch, analysis, 5 if first == 5 else user_edit
+        ) == [1]
         if first == "dirty":
             mine.unlink()
         assert self._runs(config, args, monkeypatch, analysis, 0) == [0]
 
         assert analysis.await_count == ref_analysis.await_count == 1
-        assert config.codebase_analysis_path.read_text() == ref_config.codebase_analysis_path.read_text()
+        assert (
+            config.codebase_analysis_path.read_text()
+            == ref_config.codebase_analysis_path.read_text()
+        )
 
-    def test_an_analysis_that_failed_is_asked_again_on_the_re_run(self, tmp_path, monkeypatch):
+    def test_an_analysis_that_failed_is_asked_again_on_the_re_run(
+        self, tmp_path, monkeypatch
+    ):
         """No report was saved, so the re-run retries the analysis, as before the step."""
         from unittest.mock import AsyncMock
 
         config, args = self._setup(tmp_path / "p")
-        analysis = AsyncMock(side_effect=[RuntimeError("model down"), "## Architecture\nx"])
+        analysis = AsyncMock(
+            side_effect=[RuntimeError("model down"), "## Architecture\nx"]
+        )
         assert self._runs(config, args, monkeypatch, analysis, 5) == [1]
         assert self._runs(config, args, monkeypatch, analysis, 0) == [0]
         assert analysis.await_count == 2
         assert config.codebase_analysis_path.read_text() == "## Architecture\nx"
 
-    def test_a_retried_analysis_is_kept_when_the_step_stops_again(self, tmp_path, monkeypatch):
+    def test_a_retried_analysis_is_kept_when_the_step_stops_again(
+        self, tmp_path, monkeypatch
+    ):
         """Run 1: the analysis fails, and the step returns 1. Run 2: the analysis is
         asked again and succeeds, and the step returns 1 again. Run 3 keeps run 2's
         report and does not ask again: two asks in all, the failed one and one more."""
         from unittest.mock import AsyncMock
 
         config, args = self._setup(tmp_path / "p")
-        analysis = AsyncMock(side_effect=[RuntimeError("model down"), "## Architecture\nx",
-                                          "## Architecture\npaid again"])
+        analysis = AsyncMock(
+            side_effect=[
+                RuntimeError("model down"),
+                "## Architecture\nx",
+                "## Architecture\npaid again",
+            ]
+        )
         assert self._runs(config, args, monkeypatch, analysis, 5, runs=2) == [1, 1]
         assert self._runs(config, args, monkeypatch, analysis, 5) == [1]
         assert self._runs(config, args, monkeypatch, analysis, 0) == [0]
         assert analysis.await_count == 2
         assert config.codebase_analysis_path.read_text() == "## Architecture\nx"
 
-    def test_S1_stopped_twice_during_spec_extract_asks_the_analysis_once(self, tmp_path, monkeypatch):
+    def test_S1_stopped_twice_during_spec_extract_asks_the_analysis_once(
+        self, tmp_path, monkeypatch
+    ):
         ref_analysis, _ = self._reference(tmp_path, monkeypatch)
         config, args = self._setup(tmp_path / "p")
         analysis = self._analysis()
@@ -728,7 +965,9 @@ def test_no_test_can_start_a_real_spec_extract():
     """conftest refuses the paid launch unless a test stubs the seam, as it refuses
     the real pr skill and a real walkthrough run."""
     with pytest.raises(AssertionError, match="spec-extract"):
-        git_ops._run_spec_extract_skill(["uv", "run", "python", "-m", "spec_extract_pipeline", "run"])
+        git_ops._run_spec_extract_skill(
+            ["uv", "run", "python", "-m", "spec_extract_pipeline", "run"]
+        )
 
 
 class TestSpend:
@@ -742,12 +981,25 @@ class TestSpend:
 
         monkeypatch.setattr(budget, "_process", budget.ProcessSpend())
 
-    ARGV = ["uv", "run", "--directory", "/s", "python", "-m", "spec_extract_pipeline", "run", "--tree", "abc"]
+    ARGV = [
+        "uv",
+        "run",
+        "--directory",
+        "/s",
+        "python",
+        "-m",
+        "spec_extract_pipeline",
+        "run",
+        "--tree",
+        "abc",
+    ]
 
     def test_its_spend_line_is_added(self):
         from build_pipeline import budget
 
-        git_ops._count_skill_spend(self.ARGV, "SPEC_EXTRACT:APPLIED 2\nSPEND:12.500000:3400\n")
+        git_ops._count_skill_spend(
+            self.ARGV, "SPEC_EXTRACT:APPLIED 2\nSPEND:12.500000:3400\n"
+        )
         assert budget.spend_marker() == "SPEND:12.500000:3400"
 
     def test_no_spend_line_makes_the_total_incomplete(self):

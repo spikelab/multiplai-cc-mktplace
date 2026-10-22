@@ -52,10 +52,12 @@ class ImportLost(Exception):
     row R27). The message names `--restart`."""
 
     def __init__(self, dest: Path, head: str, src: str):
-        super().__init__(f"{dest} no longer holds the import commit {head[:12]} this run's "
-                         "state.json names; nothing was written. Run the same command with "
-                         "--restart to move this run folder aside (it is renamed, never "
-                         f"deleted) and import {src} again")
+        super().__init__(
+            f"{dest} no longer holds the import commit {head[:12]} this run's "
+            "state.json names; nothing was written. Run the same command with "
+            "--restart to move this run folder aside (it is renamed, never "
+            f"deleted) and import {src} again"
+        )
 
 
 class Target(BaseModel):
@@ -65,7 +67,9 @@ class Target(BaseModel):
     kind: Literal["tree", "pr", "dir"]
     repo: str  # the top of the checkout; for --dir, <run>/source once imported
     head_sha: str | None = None  # None only for a --dir target before its import
-    base_sha: str | None = None  # --pr only: the merge-base of the base tip and the head
+    base_sha: str | None = (
+        None  # --pr only: the merge-base of the base tip and the head
+    )
     path: str = ""  # --tree --path: repo-relative, normalised; "" for the whole tree
     pr: int | None = None
     remote_url: str | None = None
@@ -74,9 +78,19 @@ class Target(BaseModel):
 
 # --- git ----------------------------------------------------------------------------
 
-def git(repo: str | Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
-    proc = subprocess.run([*GIT_ARGV, "-C", str(repo), *args], capture_output=True, text=True,
-                          stdin=subprocess.DEVNULL, env=git_env(), shell=False, check=False)
+
+def git(
+    repo: str | Path, *args: str, check: bool = True
+) -> subprocess.CompletedProcess:
+    proc = subprocess.run(
+        [*GIT_ARGV, "-C", str(repo), *args],
+        capture_output=True,
+        text=True,
+        stdin=subprocess.DEVNULL,
+        env=git_env(),
+        shell=False,
+        check=False,
+    )
     if check and proc.returncode != 0:
         raise TargetError(f"git {' '.join(args)} failed: {proc.stderr.strip()}")
     return proc
@@ -84,7 +98,9 @@ def git(repo: str | Path, *args: str, check: bool = True) -> subprocess.Complete
 
 def rev_parse(repo: str | Path, ref: str) -> str | None:
     """Full 40-hex sha for *ref*, or None when it does not resolve to a commit."""
-    proc = git(repo, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}", check=False)
+    proc = git(
+        repo, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}", check=False
+    )
     sha = proc.stdout.strip()
     return sha if proc.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", sha) else None
 
@@ -103,6 +119,7 @@ def _toplevel(repo: Path) -> Path | None:
 
 # --- names (review's target.py) ----------------------------------------------------------
 
+
 def sanitize_slug(text: str) -> str:
     """review's `sanitize_slug`: runs outside `[A-Za-z0-9._-]` become `_`, `_` stripped at
     both ends, empty becomes `target`. Never yields `@`."""
@@ -116,8 +133,7 @@ def origin_owner_repo(url: str | None) -> tuple[str, str] | None:
     if not url:
         return None
     path = url.strip().rstrip("/")
-    if path.endswith(".git"):
-        path = path[:-len(".git")]
+    path = path.removesuffix(".git")
     parts = [p for p in re.split(r"[/:]", path) if p]
     if len(parts) < 2:
         return None
@@ -158,7 +174,9 @@ def tree_root(repo: Path, path: str | None) -> tuple[Path, str]:
     top = _toplevel(repo) or repo
     if path and Path(path).is_absolute():
         path = os.path.relpath(Path(path).resolve(), repo)
-    prefix = repo.relative_to(top).as_posix() if top != repo and top in repo.parents else ""
+    prefix = (
+        repo.relative_to(top).as_posix() if top != repo and top in repo.parents else ""
+    )
     joined = normalise_path("/".join(p for p in (prefix, normalise_path(path)) if p))
     sub = normalise_path(posixpath.normpath(joined)) if joined else ""
     if sub == ".." or sub.startswith("../"):
@@ -173,7 +191,9 @@ def _hex6(text: str) -> str:
 def dir_object(src: Path) -> tuple[str, str]:
     """review's `dir_object` and `dir_name`: `(<basename>, dir-<basename>-<6 hex of the
     absolute path>)`."""
-    return repo_part(src.name, None), "dir-" + sanitize_slug(f"{src.name}-{_hex6(str(src))}")
+    return repo_part(src.name, None), "dir-" + sanitize_slug(
+        f"{src.name}-{_hex6(str(src))}"
+    )
 
 
 def object_name(target: Target) -> str:
@@ -200,8 +220,11 @@ PR_VIEW_FIELDS = "headRefOid,baseRefOid,headRefName,baseRefName,url"
 
 def github_owner_repo(url: str | None) -> tuple[str, str] | None:
     """`(owner, repo)` for a github.com remote URL (review's `github_web_base` forms), else None."""
-    m = re.match(r"^(?:https?://(?:[^@/]+@)?github\.com/|git@github\.com:|ssh://git@github\.com/)"
-                 r"([^/]+)/([^/]+?)(?:\.git)?/?$", url or "")
+    m = re.match(
+        r"^(?:https?://(?:[^@/]+@)?github\.com/|git@github\.com:|ssh://git@github\.com/)"
+        r"([^/]+)/([^/]+?)(?:\.git)?/?$",
+        url or "",
+    )
     return (m.group(1), m.group(2)) if m else None
 
 
@@ -215,16 +238,25 @@ def _pr_view(repo: Path, number: int) -> dict:
     """
     gh = shutil.which("gh")
     if gh is None:
-        raise TargetError("--pr needs the GitHub CLI (`gh`), which is not installed. Install it "
-                          "from https://cli.github.com and run `gh auth login`, or pass "
-                          "--tree <head sha>.")
+        raise TargetError(
+            "--pr needs the GitHub CLI (`gh`), which is not installed. Install it "
+            "from https://cli.github.com and run `gh auth login`, or pass "
+            "--tree <head sha>."
+        )
     origin = remote_url(repo)
     argv = [gh, "pr", "view", str(number), "--json", PR_VIEW_FIELDS]
     on_github = github_owner_repo(origin)
     if on_github:
         argv += ["--repo", "/".join(on_github)]
-    proc = subprocess.run(argv, cwd=repo, capture_output=True, text=True, stdin=subprocess.DEVNULL,
-                          shell=False, check=False)
+    proc = subprocess.run(
+        argv,
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        stdin=subprocess.DEVNULL,
+        shell=False,
+        check=False,
+    )
     if proc.returncode != 0:
         raise TargetError(f"gh pr view {number} failed: {proc.stderr.strip()}")
     try:
@@ -234,16 +266,27 @@ def _pr_view(repo: Path, number: int) -> dict:
     if not isinstance(info, dict):
         raise TargetError(f"gh pr view {number} returned no JSON object")
     here = origin_owner_repo(origin)
-    m = re.match(r"^https?://[^/]+/([^/]+)/([^/]+)/pull/\d+/?$", str(info.get("url") or ""))
+    m = re.match(
+        r"^https?://[^/]+/([^/]+)/([^/]+)/pull/\d+/?$", str(info.get("url") or "")
+    )
     if here and m and not _same_remote(f"{m.group(1)}/{m.group(2)}", here):
-        raise TargetError(f"gh pr view {number} read PR #{number} of {m.group(1)}/{m.group(2)}, but "
-                          f"origin is {here[0]}/{here[1]}; run spec-extract in a clone whose origin "
-                          f"is {m.group(1)}/{m.group(2)}")
+        raise TargetError(
+            f"gh pr view {number} read PR #{number} of {m.group(1)}/{m.group(2)}, but "
+            f"origin is {here[0]}/{here[1]}; run spec-extract in a clone whose origin "
+            f"is {m.group(1)}/{m.group(2)}"
+        )
     return info
 
 
-def resolve(repo: str | Path, *, tree: str | None = None, path: str | None = None,
-            pr: int | None = None, dir: str | Path | None = None, fetch: bool = False) -> Target:
+def resolve(
+    repo: str | Path,
+    *,
+    tree: str | None = None,
+    path: str | None = None,
+    pr: int | None = None,
+    dir: str | Path | None = None,
+    fetch: bool = False,
+) -> Target:
     """The target of exactly one of *tree*, *pr*, *dir*.
 
     For `--dir`, `repo` and `head_sha` are filled in by `import_dir` once the run
@@ -262,8 +305,10 @@ def resolve(repo: str | Path, *, tree: str | None = None, path: str | None = Non
         top = _toplevel(src)
         if top is not None:
             rel = src.relative_to(top).as_posix() if src != top else "."
-            raise TargetError(f"{src} is inside the git repository {top}; read it with "
-                              f"--repo {top} --tree --path {rel}")
+            raise TargetError(
+                f"{src} is inside the git repository {top}; read it with "
+                f"--repo {top} --tree --path {rel}"
+            )
         return Target(kind="dir", repo="", source=str(src))
 
     start = Path(repo).expanduser().resolve()
@@ -276,31 +321,53 @@ def resolve(repo: str | Path, *, tree: str | None = None, path: str | None = Non
         head = rev_parse(top, tree)
         if head is None:
             raise TargetError(f"{tree} does not resolve to a commit in {top}")
-        return Target(kind="tree", repo=str(top), head_sha=head, path=sub, remote_url=remote_url(top))
+        return Target(
+            kind="tree",
+            repo=str(top),
+            head_sha=head,
+            path=sub,
+            remote_url=remote_url(top),
+        )
 
     number = int(pr)
     if fetch:
         git(top, "fetch", "--quiet", "origin")
         git(top, "fetch", "--quiet", "origin", f"pull/{number}/head", check=False)
     info = _pr_view(top, number)
-    head_oid, base_oid = str(info.get("headRefOid") or ""), str(info.get("baseRefOid") or "")
+    head_oid, base_oid = (
+        str(info.get("headRefOid") or ""),
+        str(info.get("baseRefOid") or ""),
+    )
     head = rev_parse(top, head_oid) if head_oid else None
     if head is None:
-        raise TargetError(f"PR #{number} head {head_oid[:12]} is not in this clone: run "
-                          f"`git -C {top} fetch origin pull/{number}/head`, or pass --fetch")
+        raise TargetError(
+            f"PR #{number} head {head_oid[:12]} is not in this clone: run "
+            f"`git -C {top} fetch origin pull/{number}/head`, or pass --fetch"
+        )
     base_tip = rev_parse(top, base_oid) if base_oid else None
     if base_tip is None:
-        raise TargetError(f"PR #{number} base {base_oid[:12]} is not in this clone: run "
-                          f"`git -C {top} fetch origin`, or pass --fetch")
+        raise TargetError(
+            f"PR #{number} base {base_oid[:12]} is not in this clone: run "
+            f"`git -C {top} fetch origin`, or pass --fetch"
+        )
     proc = git(top, "merge-base", base_tip, head, check=False)
     base = proc.stdout.strip()
     if proc.returncode != 0 or not base:
-        raise TargetError(f"PR #{number}: no merge-base between {base_tip[:12]} and {head[:12]}")
-    return Target(kind="pr", repo=str(top), head_sha=head, base_sha=base, pr=number,
-                  remote_url=remote_url(top))
+        raise TargetError(
+            f"PR #{number}: no merge-base between {base_tip[:12]} and {head[:12]}"
+        )
+    return Target(
+        kind="pr",
+        repo=str(top),
+        head_sha=head,
+        base_sha=base,
+        pr=number,
+        remote_url=remote_url(top),
+    )
 
 
 # --- the run folder (plan, Decided 14) ------------------------------------------------
+
 
 def folder_target(folder: Path) -> dict | None:
     """The `target` object of *folder*'s `state.json`, read without validating: None when
@@ -319,11 +386,13 @@ def _same_remote(url: str | None, here: tuple[str, str] | None) -> bool:
     """review's `_same_remote`: *url* names the repository *here* is, compared without case."""
     pair = origin_owner_repo(url)
     return (tuple(x.lower() for x in pair) if pair else None) == (
-        tuple(x.lower() for x in here) if here else None)
+        tuple(x.lower() for x in here) if here else None
+    )
 
 
-def _try_folder(folder: Path, passed_over: Callable[[dict], bool],
-                create: bool) -> tuple[contextlib.ExitStack, dict | None]:
+def _try_folder(
+    folder: Path, passed_over: Callable[[dict], bool], create: bool
+) -> tuple[contextlib.ExitStack, dict | None]:
     """Take *folder*'s lock in a stack of its own, then read whose run it holds.
 
     When another process holds the lock, the folder's `state.json` is read
@@ -355,10 +424,14 @@ def check_out_dir(src: Path, folder: Path) -> None:
     same basename is), and the source must not be under the run folder."""
     repo_dir = folder.parent
     if repo_dir == src or src in repo_dir.parents:
-        raise TargetError(f"the run folder {folder} and its lock would be inside {src}; "
-                          "pass --out somewhere else")
+        raise TargetError(
+            f"the run folder {folder} and its lock would be inside {src}; "
+            "pass --out somewhere else"
+        )
     if folder in src.parents:
-        raise TargetError(f"{src} is inside the run folder {folder}; pass --out somewhere else")
+        raise TargetError(
+            f"{src} is inside the run folder {folder}; pass --out somewhere else"
+        )
 
 
 def run_folder(root: Path, target: Target, lock: contextlib.ExitStack) -> Path:
@@ -441,9 +514,11 @@ def run_folder(root: Path, target: Target, lock: contextlib.ExitStack) -> Path:
         held, t = _try_folder(folder, passed_over, create=True)
     if passed_over(t or {}):
         held.close()
-        raise TargetError("every folder this run could use holds another target's run: "
-                          + ", ".join(str(f) for f in tried)
-                          + "; pass --out to write this run somewhere else")
+        raise TargetError(
+            "every folder this run could use holds another target's run: "
+            + ", ".join(str(f) for f in tried)
+            + "; pass --out to write this run somewhere else"
+        )
     lock.enter_context(held.pop_all())
     return folder
 
@@ -457,21 +532,45 @@ def _import_env(now: datetime) -> dict[str, str]:
     """No user or system git config, a fixed author and the run's clock: the same files at
     the same clock give the same commit."""
     date = f"{int(now.timestamp())} +0000"
-    return dict(git_env(), GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
-                GIT_AUTHOR_NAME=_IMPORT_NAME, GIT_AUTHOR_EMAIL=_IMPORT_EMAIL,
-                GIT_COMMITTER_NAME=_IMPORT_NAME, GIT_COMMITTER_EMAIL=_IMPORT_EMAIL,
-                GIT_AUTHOR_DATE=date, GIT_COMMITTER_DATE=date)
+    return dict(
+        git_env(),
+        GIT_CONFIG_NOSYSTEM="1",
+        GIT_CONFIG_GLOBAL=os.devnull,
+        GIT_AUTHOR_NAME=_IMPORT_NAME,
+        GIT_AUTHOR_EMAIL=_IMPORT_EMAIL,
+        GIT_COMMITTER_NAME=_IMPORT_NAME,
+        GIT_COMMITTER_EMAIL=_IMPORT_EMAIL,
+        GIT_AUTHOR_DATE=date,
+        GIT_COMMITTER_DATE=date,
+    )
 
 
 def _import_git(dest: Path, *args: str, env: dict[str, str]) -> None:
-    proc = subprocess.run([*GIT_ARGV, "-c", f"user.name={_IMPORT_NAME}", "-c", f"user.email={_IMPORT_EMAIL}",
-                           "-C", str(dest), *args], capture_output=True, text=True,
-                          stdin=subprocess.DEVNULL, env=env, shell=False, check=False)
+    proc = subprocess.run(
+        [
+            *GIT_ARGV,
+            "-c",
+            f"user.name={_IMPORT_NAME}",
+            "-c",
+            f"user.email={_IMPORT_EMAIL}",
+            "-C",
+            str(dest),
+            *args,
+        ],
+        capture_output=True,
+        text=True,
+        stdin=subprocess.DEVNULL,
+        env=env,
+        shell=False,
+        check=False,
+    )
     if proc.returncode != 0:
         raise TargetError(f"git {args[0]} in {dest} failed: {proc.stderr.strip()}")
 
 
-def import_dir(target: Target, run_dir: Path, now: datetime, saved_head: str | None = None) -> Target:
+def import_dir(
+    target: Target, run_dir: Path, now: datetime, saved_head: str | None = None
+) -> Target:
     """Copy the `--dir` source into `<run>/source/` and commit it there; return the target
     with `repo` and `head_sha` set.
 
@@ -494,8 +593,12 @@ def import_dir(target: Target, run_dir: Path, now: datetime, saved_head: str | N
             elif dest.exists():
                 shutil.rmtree(dest)
             dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(src, dest, symlinks=True,
-                            ignore=shutil.ignore_patterns(*IMPORT_EXCLUDES, ".git"))
+            shutil.copytree(
+                src,
+                dest,
+                symlinks=True,
+                ignore=shutil.ignore_patterns(*IMPORT_EXCLUDES, ".git"),
+            )
         except OSError as e:  # shutil.Error is an OSError
             raise TargetError(f"cannot copy {src} into {dest}: {e}") from e
         env = _import_env(now)
@@ -504,8 +607,15 @@ def import_dir(target: Target, run_dir: Path, now: datetime, saved_head: str | N
         # must not keep copied code out of the commit; IMPORT_EXCLUDES already left out
         # what is not the project's.
         _import_git(dest, "add", "-A", "-f", env=env)
-        _import_git(dest, "commit", "-q", "--allow-empty", "-m", f"Import {src.name} for spec-extract",
-                    env=env)
+        _import_git(
+            dest,
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            f"Import {src.name} for spec-extract",
+            env=env,
+        )
         head = rev_parse(dest, "HEAD")
         if head is None:
             raise TargetError(f"the import of {src} into {dest} left no commit")
@@ -513,11 +623,19 @@ def import_dir(target: Target, run_dir: Path, now: datetime, saved_head: str | N
 
 
 def _git_bytes(repo: str | Path, *args: str, stdin: bytes | None = None) -> bytes:
-    proc = subprocess.run([*GIT_ARGV, "-C", str(repo), *args], input=stdin, capture_output=True,
-                          env=git_env(), shell=False, check=False,
-                          **({} if stdin is not None else {"stdin": subprocess.DEVNULL}))
+    proc = subprocess.run(
+        [*GIT_ARGV, "-C", str(repo), *args],
+        input=stdin,
+        capture_output=True,
+        env=git_env(),
+        shell=False,
+        check=False,
+        **({} if stdin is not None else {"stdin": subprocess.DEVNULL}),
+    )
     if proc.returncode != 0:
-        raise TargetError(f"git {args[0]} failed: {proc.stderr.decode(errors='replace').strip()}")
+        raise TargetError(
+            f"git {args[0]} failed: {proc.stderr.decode(errors='replace').strip()}"
+        )
     return proc.stdout
 
 
@@ -539,7 +657,9 @@ def _blob_bytes(repo: str | Path, oids: list[str]) -> dict[str, bytes]:
     uniq = list(dict.fromkeys(oids))
     if not uniq:
         return {}
-    out = _git_bytes(repo, "cat-file", "--batch", stdin="".join(f"{o}\n" for o in uniq).encode())
+    out = _git_bytes(
+        repo, "cat-file", "--batch", stdin="".join(f"{o}\n" for o in uniq).encode()
+    )
     blobs, pos = {}, 0
     for oid in uniq:
         nl = out.index(b"\n", pos)
@@ -547,14 +667,16 @@ def _blob_bytes(repo: str | Path, oids: list[str]) -> dict[str, bytes]:
         if len(header) != 3 or header[1] != b"blob":
             raise TargetError(f"git cat-file: {oid} is not a blob in {repo}")
         size = int(header[2])
-        blobs[oid] = out[nl + 1:nl + 1 + size]
+        blobs[oid] = out[nl + 1 : nl + 1 + size]
         pos = nl + 1 + size + 1
     return blobs
 
 
 def _safe_rel(path: str) -> bool:
     parts = path.split("/")
-    return not path.startswith("/") and all(p not in ("", ".", "..", ".git") for p in parts)
+    return not path.startswith("/") and all(
+        p not in ("", ".", "..", ".git") for p in parts
+    )
 
 
 def _inside(path: str, top: str) -> bool:
@@ -606,7 +728,9 @@ def _write_tree(repo: str | Path, sha: str, dest: Path) -> list[str]:
         for out, to in links:
             if out.is_symlink() and not _inside(os.path.realpath(out), top):
                 out.unlink()
-                left_out.append(f"{out.relative_to(dest).as_posix()} -> {to}: a link outside the tree")
+                left_out.append(
+                    f"{out.relative_to(dest).as_posix()} -> {to}: a link outside the tree"
+                )
                 changed = True
     return left_out
 
@@ -623,7 +747,10 @@ def snapshot(target: Target, run_dir: Path) -> Path:
     """
     dest = run_dir / SNAPSHOT_DIR
     marker = dest / SNAPSHOT_MARKER
-    if marker.is_file() and marker.read_text(encoding="utf-8").strip() == target.head_sha:
+    if (
+        marker.is_file()
+        and marker.read_text(encoding="utf-8").strip() == target.head_sha
+    ):
         return dest
     if dest.is_symlink() or dest.is_file():
         dest.unlink()

@@ -11,7 +11,6 @@ import ipaddress
 import socket
 
 import pytest
-
 from research_pipeline.models import FetchErrorType
 from research_pipeline.netguard import (
     UnsafeURLError,
@@ -38,15 +37,15 @@ class TestPolicy:
     @pytest.mark.parametrize(
         "ip",
         [
-            "127.0.0.1",            # loopback
-            "169.254.169.254",      # cloud metadata — the canonical SSRF target
-            "10.1.2.3",             # RFC1918
-            "192.168.0.5",          # RFC1918
-            "172.16.4.4",           # RFC1918
-            "0.0.0.0",              # unspecified
-            "::1",                  # IPv6 loopback
-            "fd00::1",              # IPv6 ULA (is_private)
-            "fe80::1",              # IPv6 link-local
+            "127.0.0.1",  # loopback
+            "169.254.169.254",  # cloud metadata — the canonical SSRF target
+            "10.1.2.3",  # RFC1918
+            "192.168.0.5",  # RFC1918
+            "172.16.4.4",  # RFC1918
+            "0.0.0.0",  # unspecified
+            "::1",  # IPv6 loopback
+            "fd00::1",  # IPv6 ULA (is_private)
+            "fe80::1",  # IPv6 link-local
             "::ffff:169.254.169.254",  # IPv4-mapped metadata
         ],
     )

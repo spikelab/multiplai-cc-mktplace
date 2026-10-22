@@ -61,41 +61,100 @@ from .models import BlockInfo
 # check over-fires more readily than it under-fires.
 
 MIGRATION_KEYWORDS: tuple[str, ...] = (
-    "migration", "migrate", "alembic", "schema change", "backfill",
-    "add column", "drop column", "alter table", "create table", "drop table",
-    "reindex", "data migration",
+    "migration",
+    "migrate",
+    "alembic",
+    "schema change",
+    "backfill",
+    "add column",
+    "drop column",
+    "alter table",
+    "create table",
+    "drop table",
+    "reindex",
+    "data migration",
 )
 
 PAYMENTS_KEYWORDS: tuple[str, ...] = (
-    "payment", "billing", "invoice", "stripe", "paypal", "checkout",
-    "subscription", "refund", "charge card", "credit card", "pricing plan",
+    "payment",
+    "billing",
+    "invoice",
+    "stripe",
+    "paypal",
+    "checkout",
+    "subscription",
+    "refund",
+    "charge card",
+    "credit card",
+    "pricing plan",
     "payout",
 )
 
 # Deliberately not the bare substring "auth": it matches "author" and
 # "authored", which appear in ordinary block prose.
 AUTH_KEYWORDS: tuple[str, ...] = (
-    "authenticat", "authoriz", "auth token", "auth flow", "oauth",
-    "login", "logout", "signup", "sign-up", "password", "jwt",
-    "session token", "permission", "access control", "rbac", "credential",
-    "api key", "sso",
+    "authenticat",
+    "authoriz",
+    "auth token",
+    "auth flow",
+    "oauth",
+    "login",
+    "logout",
+    "signup",
+    "sign-up",
+    "password",
+    "jwt",
+    "session token",
+    "permission",
+    "access control",
+    "rbac",
+    "credential",
+    "api key",
+    "sso",
 )
 
 CONTRACT_KEYWORDS: tuple[str, ...] = (
-    "api contract", "public api", "breaking change", "openapi", "swagger",
-    "protobuf", "graphql schema", "rest endpoint", "endpoint signature",
-    "response shape", "serializer", "wire format", "versioned api",
-    "backwards incompatible", "backward incompatible",
+    "api contract",
+    "public api",
+    "breaking change",
+    "openapi",
+    "swagger",
+    "protobuf",
+    "graphql schema",
+    "rest endpoint",
+    "endpoint signature",
+    "response shape",
+    "serializer",
+    "wire format",
+    "versioned api",
+    "backwards incompatible",
+    "backward incompatible",
 )
 
 # Deliberately not the bare substring "integrat": buildme blocks talk about
 # "integration tests" constantly, and that word says nothing about a service.
 EXTERNAL_SERVICE_KEYWORDS: tuple[str, ...] = (
-    "third-party", "third party", "external service", "external api",
-    "webhook", "sdk client", "http client", "api client",
-    "integrate with", "integration with", "vendor api",
-    "sendgrid", "twilio", "sentry", "datadog", "pubsub", "kafka",
-    "rabbitmq", "redis", "smtp", "amazon s3",
+    "third-party",
+    "third party",
+    "external service",
+    "external api",
+    "webhook",
+    "sdk client",
+    "http client",
+    "api client",
+    "integrate with",
+    "integration with",
+    "vendor api",
+    "sendgrid",
+    "twilio",
+    "sentry",
+    "datadog",
+    "pubsub",
+    "kafka",
+    "rabbitmq",
+    "redis",
+    "smtp",
+    "amazon s3",
 )
 
 #: kind name → keyword tuple. Five of the six high-risk kinds from programme
@@ -127,13 +186,29 @@ HIGH_RISK_KEYWORDS: dict[str, tuple[str, ...]] = {
 #: first place. Only a head written bare in prose (``usr/local/bin``) reaches
 #: here. Entries that could never match were removed rather than left in as
 #: apparent protection.
-NON_PACKAGE_SEGMENTS: frozenset[str] = frozenset({
-    "http", "https", "file", "ftp", "ssh", "git", "mailto",
-    "usr", "var", "etc", "tmp", "opt", "home", "dev", "proc",
-})
+NON_PACKAGE_SEGMENTS: frozenset[str] = frozenset(
+    {
+        "http",
+        "https",
+        "file",
+        "ftp",
+        "ssh",
+        "git",
+        "mailto",
+        "usr",
+        "var",
+        "etc",
+        "tmp",
+        "opt",
+        "home",
+        "dev",
+        "proc",
+    }
+)
 
 
 # --- Result types -------------------------------------------------------------
+
 
 class BlockGroup(BaseModel):
     """One ordered group of blocks that ships as its own branch."""
@@ -280,14 +355,49 @@ _SYMBOL = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*")
 # style, so taking one as the fallback key makes every such block look like it
 # produces the same thing — which unions the whole plan into one component and
 # silences both split checks. Skipped when picking the fallback symbol.
-_DECLARATION_LEADS = frozenset({
-    "def", "async", "class", "func", "function", "fn", "proc", "sub",
-    "struct", "enum", "protocol", "interface", "trait", "impl", "type",
-    "const", "let", "var", "val", "public", "private", "internal",
-    "protected", "static", "final", "export", "default", "extension",
-    "abstract", "override", "new", "get", "set",
-    "post", "put", "patch", "delete", "head", "options",
-})
+_DECLARATION_LEADS = frozenset(
+    {
+        "def",
+        "async",
+        "class",
+        "func",
+        "function",
+        "fn",
+        "proc",
+        "sub",
+        "struct",
+        "enum",
+        "protocol",
+        "interface",
+        "trait",
+        "impl",
+        "type",
+        "const",
+        "let",
+        "var",
+        "val",
+        "public",
+        "private",
+        "internal",
+        "protected",
+        "static",
+        "final",
+        "export",
+        "default",
+        "extension",
+        "abstract",
+        "override",
+        "new",
+        "get",
+        "set",
+        "post",
+        "put",
+        "patch",
+        "delete",
+        "head",
+        "options",
+    }
+)
 
 
 def normalize_signature(signature: str) -> str:
@@ -339,7 +449,7 @@ def _leading_symbol(normalized: str) -> str | None:
         token = match.group(0)
         if token.lower() not in _DECLARATION_LEADS:
             return token.lower()
-        remainder = remainder[match.end():].lstrip()
+        remainder = remainder[match.end() :].lstrip()
         if not remainder:
             return None
 
@@ -352,6 +462,7 @@ def _keys_for(signatures: list[str]) -> frozenset[str]:
 
 
 # --- Check 2: separability ----------------------------------------------------
+
 
 def _dedup(values: list[str]) -> list[str]:
     seen: set[str] = set()
@@ -443,32 +554,36 @@ def partition_blocks(blocks: list[BlockInfo]) -> SplitProposal:
     boundaries: list[CutBoundary] = []
     for i in range(len(groups) - 1):
         earlier = groups[: i + 1]
-        later = groups[i + 1:]
+        later = groups[i + 1 :]
         produced_before = _keys_for([s for g in earlier for s in g.produces])
         produced_after = _keys_for([s for g in later for s in g.produces])
         crossing = [
-            s for g in later for s in g.consumes
-            if signature_keys(s) & produced_before
+            s for g in later for s in g.consumes if signature_keys(s) & produced_before
         ] + [
-            s for g in earlier for s in g.consumes
-            if signature_keys(s) & produced_after
+            s for g in earlier for s in g.consumes if signature_keys(s) & produced_after
         ]
-        boundaries.append(CutBoundary(
-            after_group=i,
-            last_block_before=groups[i].block_numbers[-1],
-            first_block_after=groups[i + 1].block_numbers[0],
-            crossing_signatures=_dedup(crossing),
-            boundary_signatures=_dedup(
-                [sig for g in earlier for sig in g.produces]
-                + [sig for g in later for sig in g.consumes]
-            ),
-        ))
+        boundaries.append(
+            CutBoundary(
+                after_group=i,
+                last_block_before=groups[i].block_numbers[-1],
+                first_block_after=groups[i + 1].block_numbers[0],
+                crossing_signatures=_dedup(crossing),
+                boundary_signatures=_dedup(
+                    [sig for g in earlier for sig in g.produces]
+                    + [sig for g in later for sig in g.consumes]
+                ),
+            )
+        )
 
     all_produced = _keys_for([s for b in ordered for s in b.produces])
-    unresolved = _dedup([
-        s for b in ordered for s in b.consumes
-        if not (signature_keys(s) & all_produced)
-    ])
+    unresolved = _dedup(
+        [
+            s
+            for b in ordered
+            for s in b.consumes
+            if not (signature_keys(s) & all_produced)
+        ]
+    )
 
     if len(groups) > 1:
         reason = (
@@ -503,6 +618,7 @@ def partition_blocks(blocks: list[BlockInfo]) -> SplitProposal:
 
 
 # --- Check 1: atomicity -------------------------------------------------------
+
 
 def _block_text(block: BlockInfo) -> str:
     parts = [block.name, block.description]
@@ -562,12 +678,14 @@ def check_atomicity(
             if hits:
                 matched[kind] = hits
         if matched:
-            high_risk.append(HighRiskBlock(
-                number=block.number,
-                name=block.name,
-                kinds=sorted(matched),
-                matched_keywords=matched,
-            ))
+            high_risk.append(
+                HighRiskBlock(
+                    number=block.number,
+                    name=block.name,
+                    kinds=sorted(matched),
+                    matched_keywords=matched,
+                )
+            )
 
     kinds_present = sorted({k for hr in high_risk for k in hr.kinds})
 
@@ -590,15 +708,15 @@ def check_atomicity(
             related |= numbers
 
     unrelated = [
-        b for b in ordered
+        b
+        for b in ordered
         if b.number not in high_risk_numbers and b.number not in related
     ]
 
     kind_list = ", ".join(kinds_present)
     if unrelated:
         risky = ", ".join(
-            f"block {hr.number} ({hr.name}: {'/'.join(hr.kinds)})"
-            for hr in high_risk
+            f"block {hr.number} ({hr.name}: {'/'.join(hr.kinds)})" for hr in high_risk
         )
         others = ", ".join(f"block {b.number} ({b.name})" for b in unrelated)
         reason = (
@@ -669,7 +787,9 @@ def _looks_like_path(match: re.Match[str], text: str) -> bool:
     if "/" in tail:
         return True
     start, end = match.span()
-    return (start > 0 and text[start - 1] == "`") or (end < len(text) and text[end] == "`")
+    return (start > 0 and text[start - 1] == "`") or (
+        end < len(text) and text[end] == "`"
+    )
 
 
 def package_spread(blocks: list[BlockInfo]) -> PackageSpread:
@@ -684,7 +804,9 @@ def package_spread(blocks: list[BlockInfo]) -> PackageSpread:
     """
     blocks_by_package: dict[str, list[int]] = {}
     for block in sorted(blocks, key=lambda b: b.number):
-        text = "\n".join([block.name, block.description, *block.produces, *block.consumes])
+        text = "\n".join(
+            [block.name, block.description, *block.produces, *block.consumes]
+        )
         for package in top_level_packages(text):
             numbers = blocks_by_package.setdefault(package, [])
             if block.number not in numbers:
@@ -696,6 +818,7 @@ def package_spread(blocks: list[BlockInfo]) -> PackageSpread:
 
 
 # --- All three, with the caller's thresholds ----------------------------------
+
 
 def assess_plan_split(
     blocks: list[BlockInfo],

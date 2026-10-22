@@ -20,11 +20,9 @@ Covers all scenarios from requirements/catalog-dispatcher.md:
 """
 
 import asyncio
-import json
-import os
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -69,13 +67,20 @@ class TestDispatcherModuleStructure:
 
         async def mock_run(self, *, force=False, dry_run=False, force_enable=False):
             return GenerationResult(
-                generator=self.name, total_sources=0, skipped=0,
-                generated=0, pruned=0, errors=[], dry_run=dry_run,
+                generator=self.name,
+                total_sources=0,
+                skipped=0,
+                generated=0,
+                pruned=0,
+                errors=[],
+                dry_run=dry_run,
             )
 
-        with patch("generators.memory.MemoryGenerator.run", mock_run), \
-             patch("generators.diary.DiaryGenerator.run", mock_run), \
-             patch("generators.skills.SkillsGenerator.run", mock_run):
+        with (
+            patch("generators.memory.MemoryGenerator.run", mock_run),
+            patch("generators.diary.DiaryGenerator.run", mock_run),
+            patch("generators.skills.SkillsGenerator.run", mock_run),
+        ):
             results = asyncio.run(generate_catalogs(config=CatalogConfig()))
 
         assert isinstance(results, list)
@@ -101,6 +106,7 @@ class TestDispatcherSignature:
         replaces the prior trio of introspection tests (one of which had a
         tautological ``default is None or ... or default is None`` guard)."""
         import inspect
+
         from generators.dispatcher import generate_catalogs
 
         params = inspect.signature(generate_catalogs).parameters
@@ -139,15 +145,23 @@ class TestSequentialExecution:
 
         async def mock_run(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
+
             invocation_order.append(self.name)
             return GenerationResult(
-                generator=self.name, total_sources=0, skipped=0,
-                generated=0, pruned=0, errors=[], dry_run=dry_run,
+                generator=self.name,
+                total_sources=0,
+                skipped=0,
+                generated=0,
+                pruned=0,
+                errors=[],
+                dry_run=dry_run,
             )
 
-        with patch("generators.memory.MemoryGenerator.run", mock_run), \
-             patch("generators.diary.DiaryGenerator.run", mock_run), \
-             patch("generators.skills.SkillsGenerator.run", mock_run):
+        with (
+            patch("generators.memory.MemoryGenerator.run", mock_run),
+            patch("generators.diary.DiaryGenerator.run", mock_run),
+            patch("generators.skills.SkillsGenerator.run", mock_run),
+        ):
             results = asyncio.run(generate_catalogs(config=config))
 
         assert invocation_order == ["memory", "diary", "skills"]
@@ -166,17 +180,25 @@ class TestSequentialExecution:
 
         async def mock_run(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
+
             orders.append(self.name)
             return GenerationResult(
-                generator=self.name, total_sources=0, skipped=0,
-                generated=0, pruned=0, errors=[], dry_run=dry_run,
+                generator=self.name,
+                total_sources=0,
+                skipped=0,
+                generated=0,
+                pruned=0,
+                errors=[],
+                dry_run=dry_run,
             )
 
         for _ in range(3):
             orders.clear()
-            with patch("generators.memory.MemoryGenerator.run", mock_run), \
-                 patch("generators.diary.DiaryGenerator.run", mock_run), \
-                 patch("generators.skills.SkillsGenerator.run", mock_run):
+            with (
+                patch("generators.memory.MemoryGenerator.run", mock_run),
+                patch("generators.diary.DiaryGenerator.run", mock_run),
+                patch("generators.skills.SkillsGenerator.run", mock_run),
+            ):
                 asyncio.run(generate_catalogs(config=config))
             assert orders == ["memory", "diary", "skills"]
 
@@ -193,15 +215,23 @@ class TestSequentialExecution:
 
         async def mock_run(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
+
             call_counts[self.name] += 1
             return GenerationResult(
-                generator=self.name, total_sources=0, skipped=0,
-                generated=0, pruned=0, errors=[], dry_run=dry_run,
+                generator=self.name,
+                total_sources=0,
+                skipped=0,
+                generated=0,
+                pruned=0,
+                errors=[],
+                dry_run=dry_run,
             )
 
-        with patch("generators.memory.MemoryGenerator.run", mock_run), \
-             patch("generators.diary.DiaryGenerator.run", mock_run), \
-             patch("generators.skills.SkillsGenerator.run", mock_run):
+        with (
+            patch("generators.memory.MemoryGenerator.run", mock_run),
+            patch("generators.diary.DiaryGenerator.run", mock_run),
+            patch("generators.skills.SkillsGenerator.run", mock_run),
+        ):
             asyncio.run(generate_catalogs(config=config))
 
         for name, count in call_counts.items():
@@ -232,20 +262,30 @@ class TestGeneratorFiltering:
 
         async def mock_run(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
+
             invoked.append(self.name)
             return GenerationResult(
-                generator=self.name, total_sources=0, skipped=0,
-                generated=0, pruned=0, errors=[], dry_run=dry_run,
+                generator=self.name,
+                total_sources=0,
+                skipped=0,
+                generated=0,
+                pruned=0,
+                errors=[],
+                dry_run=dry_run,
             )
 
-        with patch("generators.memory.MemoryGenerator.run", mock_run), \
-             patch("generators.diary.DiaryGenerator.run", mock_run), \
-             patch("generators.skills.SkillsGenerator.run", mock_run):
+        with (
+            patch("generators.memory.MemoryGenerator.run", mock_run),
+            patch("generators.diary.DiaryGenerator.run", mock_run),
+            patch("generators.skills.SkillsGenerator.run", mock_run),
+        ):
             asyncio.run(generate_catalogs(config=config, generators=["diary"]))
 
         assert invoked == ["diary"]
 
-    def test_multiple_generator_filter_maintains_canonical_order(self, tmp_path, monkeypatch):
+    def test_multiple_generator_filter_maintains_canonical_order(
+        self, tmp_path, monkeypatch
+    ):
         """WHEN invoked with generators=["diary", "memory"]
         THEN only memory and diary run, in canonical order (memory before diary)."""
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
@@ -258,16 +298,26 @@ class TestGeneratorFiltering:
 
         async def mock_run(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
+
             invoked.append(self.name)
             return GenerationResult(
-                generator=self.name, total_sources=0, skipped=0,
-                generated=0, pruned=0, errors=[], dry_run=dry_run,
+                generator=self.name,
+                total_sources=0,
+                skipped=0,
+                generated=0,
+                pruned=0,
+                errors=[],
+                dry_run=dry_run,
             )
 
-        with patch("generators.memory.MemoryGenerator.run", mock_run), \
-             patch("generators.diary.DiaryGenerator.run", mock_run), \
-             patch("generators.skills.SkillsGenerator.run", mock_run):
-            asyncio.run(generate_catalogs(config=config, generators=["diary", "memory"]))
+        with (
+            patch("generators.memory.MemoryGenerator.run", mock_run),
+            patch("generators.diary.DiaryGenerator.run", mock_run),
+            patch("generators.skills.SkillsGenerator.run", mock_run),
+        ):
+            asyncio.run(
+                generate_catalogs(config=config, generators=["diary", "memory"])
+            )
 
         assert invoked == ["memory", "diary"]
 
@@ -295,7 +345,9 @@ class TestGeneratorFiltering:
         config = CatalogConfig()
 
         with pytest.raises((ValueError, SystemExit)):
-            asyncio.run(generate_catalogs(config=config, generators=["memory", "nonexistent"]))
+            asyncio.run(
+                generate_catalogs(config=config, generators=["memory", "nonexistent"])
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -323,15 +375,23 @@ class TestConfigGatedGenerators:
 
         async def mock_run(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
+
             invoked.append(self.name)
             return GenerationResult(
-                generator=self.name, total_sources=0, skipped=0,
-                generated=0, pruned=0, errors=[], dry_run=dry_run,
+                generator=self.name,
+                total_sources=0,
+                skipped=0,
+                generated=0,
+                pruned=0,
+                errors=[],
+                dry_run=dry_run,
             )
 
-        with patch("generators.memory.MemoryGenerator.run", mock_run), \
-             patch("generators.diary.DiaryGenerator.run", mock_run), \
-             patch("generators.skills.SkillsGenerator.run", mock_run):
+        with (
+            patch("generators.memory.MemoryGenerator.run", mock_run),
+            patch("generators.diary.DiaryGenerator.run", mock_run),
+            patch("generators.skills.SkillsGenerator.run", mock_run),
+        ):
             results = asyncio.run(generate_catalogs(config=config))
 
         # Skills should either not be invoked or return a disabled result
@@ -369,9 +429,9 @@ class TestConfigGatedGenerators:
         from generators.dispatcher import generate_catalogs
 
         with pytest.raises(ValueError, match="resources"):
-            asyncio.run(generate_catalogs(
-                config=CatalogConfig(), generators=["resources"]
-            ))
+            asyncio.run(
+                generate_catalogs(config=CatalogConfig(), generators=["resources"])
+            )
 
     def test_mandatory_generators_always_run(self, tmp_path, monkeypatch):
         """WHEN generate_catalogs runs with all optional generators disabled
@@ -386,15 +446,23 @@ class TestConfigGatedGenerators:
 
         async def mock_run(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
+
             invoked.append(self.name)
             return GenerationResult(
-                generator=self.name, total_sources=0, skipped=0,
-                generated=0, pruned=0, errors=[], dry_run=dry_run,
+                generator=self.name,
+                total_sources=0,
+                skipped=0,
+                generated=0,
+                pruned=0,
+                errors=[],
+                dry_run=dry_run,
             )
 
-        with patch("generators.memory.MemoryGenerator.run", mock_run), \
-             patch("generators.diary.DiaryGenerator.run", mock_run), \
-             patch("generators.skills.SkillsGenerator.run", mock_run):
+        with (
+            patch("generators.memory.MemoryGenerator.run", mock_run),
+            patch("generators.diary.DiaryGenerator.run", mock_run),
+            patch("generators.skills.SkillsGenerator.run", mock_run),
+        ):
             asyncio.run(generate_catalogs(config=config))
 
         assert "memory" in invoked
@@ -424,15 +492,23 @@ class TestForceMode:
 
         async def mock_run(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
+
             force_values[self.name] = force
             return GenerationResult(
-                generator=self.name, total_sources=0, skipped=0,
-                generated=0, pruned=0, errors=[], dry_run=dry_run,
+                generator=self.name,
+                total_sources=0,
+                skipped=0,
+                generated=0,
+                pruned=0,
+                errors=[],
+                dry_run=dry_run,
             )
 
-        with patch("generators.memory.MemoryGenerator.run", mock_run), \
-             patch("generators.diary.DiaryGenerator.run", mock_run), \
-             patch("generators.skills.SkillsGenerator.run", mock_run):
+        with (
+            patch("generators.memory.MemoryGenerator.run", mock_run),
+            patch("generators.diary.DiaryGenerator.run", mock_run),
+            patch("generators.skills.SkillsGenerator.run", mock_run),
+        ):
             asyncio.run(generate_catalogs(config=config, force=True))
 
         assert force_values.get("memory") is True
@@ -462,15 +538,23 @@ class TestDryRunMode:
 
         async def mock_run(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
+
             dry_run_values[self.name] = dry_run
             return GenerationResult(
-                generator=self.name, total_sources=1, skipped=0,
-                generated=1, pruned=0, errors=[], dry_run=dry_run,
+                generator=self.name,
+                total_sources=1,
+                skipped=0,
+                generated=1,
+                pruned=0,
+                errors=[],
+                dry_run=dry_run,
             )
 
-        with patch("generators.memory.MemoryGenerator.run", mock_run), \
-             patch("generators.diary.DiaryGenerator.run", mock_run), \
-             patch("generators.skills.SkillsGenerator.run", mock_run):
+        with (
+            patch("generators.memory.MemoryGenerator.run", mock_run),
+            patch("generators.diary.DiaryGenerator.run", mock_run),
+            patch("generators.skills.SkillsGenerator.run", mock_run),
+        ):
             results = asyncio.run(generate_catalogs(config=config, dry_run=True))
 
         assert dry_run_values.get("memory") is True
@@ -487,14 +571,22 @@ class TestDryRunMode:
 
         async def mock_run(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
+
             return GenerationResult(
-                generator=self.name, total_sources=0, skipped=0,
-                generated=0, pruned=0, errors=[], dry_run=dry_run,
+                generator=self.name,
+                total_sources=0,
+                skipped=0,
+                generated=0,
+                pruned=0,
+                errors=[],
+                dry_run=dry_run,
             )
 
-        with patch("generators.memory.MemoryGenerator.run", mock_run), \
-             patch("generators.diary.DiaryGenerator.run", mock_run), \
-             patch("generators.skills.SkillsGenerator.run", mock_run):
+        with (
+            patch("generators.memory.MemoryGenerator.run", mock_run),
+            patch("generators.diary.DiaryGenerator.run", mock_run),
+            patch("generators.skills.SkillsGenerator.run", mock_run),
+        ):
             results = asyncio.run(generate_catalogs(config=config, dry_run=True))
 
         for result in results:
@@ -511,9 +603,9 @@ class TestDryRunMode:
         """
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
 
-        from generators.config import CatalogConfig
         from generators import dispatcher
-        from generators.dispatcher import generate_catalogs, _StubModelClient
+        from generators.config import CatalogConfig
+        from generators.dispatcher import _StubModelClient, generate_catalogs
 
         config = CatalogConfig()
         created = {"real": False}
@@ -526,16 +618,24 @@ class TestDryRunMode:
 
         async def mock_run(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
+
             seen_clients.append(self._model_client)
             return GenerationResult(
-                generator=self.name, total_sources=0, skipped=0,
-                generated=0, pruned=0, errors=[], dry_run=dry_run,
+                generator=self.name,
+                total_sources=0,
+                skipped=0,
+                generated=0,
+                pruned=0,
+                errors=[],
+                dry_run=dry_run,
             )
 
         monkeypatch.setattr(dispatcher, "_create_model_client", boom)
-        with patch("generators.memory.MemoryGenerator.run", mock_run), \
-             patch("generators.diary.DiaryGenerator.run", mock_run), \
-             patch("generators.skills.SkillsGenerator.run", mock_run):
+        with (
+            patch("generators.memory.MemoryGenerator.run", mock_run),
+            patch("generators.diary.DiaryGenerator.run", mock_run),
+            patch("generators.skills.SkillsGenerator.run", mock_run),
+        ):
             asyncio.run(generate_catalogs(config=config, dry_run=True))
 
         assert created["real"] is False
@@ -566,19 +666,31 @@ class TestFailureIsolation:
 
         config = CatalogConfig(enable_skills=True)
 
-        async def mock_run_success(self, *, force=False, dry_run=False, force_enable=False):
+        async def mock_run_success(
+            self, *, force=False, dry_run=False, force_enable=False
+        ):
             from generators.base import GenerationResult
+
             return GenerationResult(
-                generator=self.name, total_sources=1, skipped=0,
-                generated=1, pruned=0, errors=[], dry_run=dry_run,
+                generator=self.name,
+                total_sources=1,
+                skipped=0,
+                generated=1,
+                pruned=0,
+                errors=[],
+                dry_run=dry_run,
             )
 
-        async def mock_run_fail(self, *, force=False, dry_run=False, force_enable=False):
+        async def mock_run_fail(
+            self, *, force=False, dry_run=False, force_enable=False
+        ):
             raise RuntimeError("Skills LLM call failed")
 
-        with patch("generators.memory.MemoryGenerator.run", mock_run_success), \
-             patch("generators.diary.DiaryGenerator.run", mock_run_success), \
-             patch("generators.skills.SkillsGenerator.run", mock_run_fail):
+        with (
+            patch("generators.memory.MemoryGenerator.run", mock_run_success),
+            patch("generators.diary.DiaryGenerator.run", mock_run_success),
+            patch("generators.skills.SkillsGenerator.run", mock_run_fail),
+        ):
             results = asyncio.run(generate_catalogs(config=config))
 
         # Should still get results for all generators
@@ -601,12 +713,16 @@ class TestFailureIsolation:
 
         config = CatalogConfig()
 
-        async def mock_run_fail(self, *, force=False, dry_run=False, force_enable=False):
+        async def mock_run_fail(
+            self, *, force=False, dry_run=False, force_enable=False
+        ):
             raise RuntimeError(f"{self.name} failed")
 
-        with patch("generators.memory.MemoryGenerator.run", mock_run_fail), \
-             patch("generators.diary.DiaryGenerator.run", mock_run_fail), \
-             patch("generators.skills.SkillsGenerator.run", mock_run_fail):
+        with (
+            patch("generators.memory.MemoryGenerator.run", mock_run_fail),
+            patch("generators.diary.DiaryGenerator.run", mock_run_fail),
+            patch("generators.skills.SkillsGenerator.run", mock_run_fail),
+        ):
             results = asyncio.run(generate_catalogs(config=config))
 
         # Should still return results, each with errors
@@ -626,25 +742,39 @@ class TestFailureIsolation:
 
         config = CatalogConfig()
 
-        async def mock_run_partial(self, *, force=False, dry_run=False, force_enable=False):
+        async def mock_run_partial(
+            self, *, force=False, dry_run=False, force_enable=False
+        ):
             from generators.base import GenerationResult
+
             return GenerationResult(
-                generator=self.name, total_sources=3, skipped=1,
-                generated=1, pruned=0,
+                generator=self.name,
+                total_sources=3,
+                skipped=1,
+                generated=1,
+                pruned=0,
                 errors=["Error generating entry-2: LLM timeout"],
                 dry_run=dry_run,
             )
 
         async def mock_run_ok(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
+
             return GenerationResult(
-                generator=self.name, total_sources=0, skipped=0,
-                generated=0, pruned=0, errors=[], dry_run=dry_run,
+                generator=self.name,
+                total_sources=0,
+                skipped=0,
+                generated=0,
+                pruned=0,
+                errors=[],
+                dry_run=dry_run,
             )
 
-        with patch("generators.memory.MemoryGenerator.run", mock_run_partial), \
-             patch("generators.diary.DiaryGenerator.run", mock_run_ok), \
-             patch("generators.skills.SkillsGenerator.run", mock_run_ok):
+        with (
+            patch("generators.memory.MemoryGenerator.run", mock_run_partial),
+            patch("generators.diary.DiaryGenerator.run", mock_run_ok),
+            patch("generators.skills.SkillsGenerator.run", mock_run_ok),
+        ):
             results = asyncio.run(generate_catalogs(config=config))
 
         memory_result = [r for r in results if r.generator == "memory"][0]
@@ -675,13 +805,20 @@ class TestResultAggregation:
 
         async def mock_run(self, *, force=False, dry_run=False, force_enable=False):
             return GenerationResult(
-                generator=self.name, total_sources=0, skipped=0,
-                generated=0, pruned=0, errors=[], dry_run=dry_run,
+                generator=self.name,
+                total_sources=0,
+                skipped=0,
+                generated=0,
+                pruned=0,
+                errors=[],
+                dry_run=dry_run,
             )
 
-        with patch("generators.memory.MemoryGenerator.run", mock_run), \
-             patch("generators.diary.DiaryGenerator.run", mock_run), \
-             patch("generators.skills.SkillsGenerator.run", mock_run):
+        with (
+            patch("generators.memory.MemoryGenerator.run", mock_run),
+            patch("generators.diary.DiaryGenerator.run", mock_run),
+            patch("generators.skills.SkillsGenerator.run", mock_run),
+        ):
             results = asyncio.run(generate_catalogs(config=config))
 
         assert isinstance(results, list)
@@ -700,13 +837,20 @@ class TestResultAggregation:
 
         async def mock_run(self, *, force=False, dry_run=False, force_enable=False):
             return GenerationResult(
-                generator=self.name, total_sources=0, skipped=0,
-                generated=0, pruned=0, errors=[], dry_run=dry_run,
+                generator=self.name,
+                total_sources=0,
+                skipped=0,
+                generated=0,
+                pruned=0,
+                errors=[],
+                dry_run=dry_run,
             )
 
-        with patch("generators.memory.MemoryGenerator.run", mock_run), \
-             patch("generators.diary.DiaryGenerator.run", mock_run), \
-             patch("generators.skills.SkillsGenerator.run", mock_run):
+        with (
+            patch("generators.memory.MemoryGenerator.run", mock_run),
+            patch("generators.diary.DiaryGenerator.run", mock_run),
+            patch("generators.skills.SkillsGenerator.run", mock_run),
+        ):
             results = asyncio.run(generate_catalogs(config=config))
 
         assert len(results) == 3
@@ -723,14 +867,23 @@ class TestResultAggregation:
 
         async def mock_run(self, *, force=False, dry_run=False, force_enable=False):
             return GenerationResult(
-                generator=self.name, total_sources=0, skipped=0,
-                generated=0, pruned=0, errors=[], dry_run=dry_run,
+                generator=self.name,
+                total_sources=0,
+                skipped=0,
+                generated=0,
+                pruned=0,
+                errors=[],
+                dry_run=dry_run,
             )
 
-        with patch("generators.memory.MemoryGenerator.run", mock_run), \
-             patch("generators.diary.DiaryGenerator.run", mock_run), \
-             patch("generators.skills.SkillsGenerator.run", mock_run):
-            results = asyncio.run(generate_catalogs(config=config, generators=["memory"]))
+        with (
+            patch("generators.memory.MemoryGenerator.run", mock_run),
+            patch("generators.diary.DiaryGenerator.run", mock_run),
+            patch("generators.skills.SkillsGenerator.run", mock_run),
+        ):
+            results = asyncio.run(
+                generate_catalogs(config=config, generators=["memory"])
+            )
 
         assert len(results) == 1
         assert results[0].generator == "memory"
@@ -758,14 +911,22 @@ class TestCatalogsDirectoryCreation:
 
         async def mock_run(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
+
             return GenerationResult(
-                generator=self.name, total_sources=0, skipped=0,
-                generated=0, pruned=0, errors=[], dry_run=dry_run,
+                generator=self.name,
+                total_sources=0,
+                skipped=0,
+                generated=0,
+                pruned=0,
+                errors=[],
+                dry_run=dry_run,
             )
 
-        with patch("generators.memory.MemoryGenerator.run", mock_run), \
-             patch("generators.diary.DiaryGenerator.run", mock_run), \
-             patch("generators.skills.SkillsGenerator.run", mock_run):
+        with (
+            patch("generators.memory.MemoryGenerator.run", mock_run),
+            patch("generators.diary.DiaryGenerator.run", mock_run),
+            patch("generators.skills.SkillsGenerator.run", mock_run),
+        ):
             asyncio.run(generate_catalogs(config=config))
 
         assert catalogs_dir.exists()
@@ -786,14 +947,22 @@ class TestCatalogsDirectoryCreation:
 
         async def mock_run(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
+
             return GenerationResult(
-                generator=self.name, total_sources=0, skipped=0,
-                generated=0, pruned=0, errors=[], dry_run=dry_run,
+                generator=self.name,
+                total_sources=0,
+                skipped=0,
+                generated=0,
+                pruned=0,
+                errors=[],
+                dry_run=dry_run,
             )
 
-        with patch("generators.memory.MemoryGenerator.run", mock_run), \
-             patch("generators.diary.DiaryGenerator.run", mock_run), \
-             patch("generators.skills.SkillsGenerator.run", mock_run):
+        with (
+            patch("generators.memory.MemoryGenerator.run", mock_run),
+            patch("generators.diary.DiaryGenerator.run", mock_run),
+            patch("generators.skills.SkillsGenerator.run", mock_run),
+        ):
             asyncio.run(generate_catalogs(config=config))
 
         assert existing_file.read_text() == '{"test": true}'
@@ -818,16 +987,25 @@ class TestProgressLogging:
 
         async def mock_run(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
+
             return GenerationResult(
-                generator=self.name, total_sources=0, skipped=0,
-                generated=0, pruned=0, errors=[], dry_run=dry_run,
+                generator=self.name,
+                total_sources=0,
+                skipped=0,
+                generated=0,
+                pruned=0,
+                errors=[],
+                dry_run=dry_run,
             )
 
         import logging
+
         with caplog.at_level(logging.INFO):
-            with patch("generators.memory.MemoryGenerator.run", mock_run), \
-                 patch("generators.diary.DiaryGenerator.run", mock_run), \
-                 patch("generators.skills.SkillsGenerator.run", mock_run):
+            with (
+                patch("generators.memory.MemoryGenerator.run", mock_run),
+                patch("generators.diary.DiaryGenerator.run", mock_run),
+                patch("generators.skills.SkillsGenerator.run", mock_run),
+            ):
                 asyncio.run(generate_catalogs(config=config))
 
         log_text = caplog.text.lower()
@@ -846,19 +1024,30 @@ class TestProgressLogging:
 
         async def mock_run_ok(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
+
             return GenerationResult(
-                generator=self.name, total_sources=0, skipped=0,
-                generated=0, pruned=0, errors=[], dry_run=dry_run,
+                generator=self.name,
+                total_sources=0,
+                skipped=0,
+                generated=0,
+                pruned=0,
+                errors=[],
+                dry_run=dry_run,
             )
 
-        async def mock_run_fail(self, *, force=False, dry_run=False, force_enable=False):
+        async def mock_run_fail(
+            self, *, force=False, dry_run=False, force_enable=False
+        ):
             raise RuntimeError("Simulated failure")
 
         import logging
+
         with caplog.at_level(logging.ERROR):
-            with patch("generators.memory.MemoryGenerator.run", mock_run_fail), \
-                 patch("generators.diary.DiaryGenerator.run", mock_run_ok), \
-                 patch("generators.skills.SkillsGenerator.run", mock_run_ok):
+            with (
+                patch("generators.memory.MemoryGenerator.run", mock_run_fail),
+                patch("generators.diary.DiaryGenerator.run", mock_run_ok),
+                patch("generators.skills.SkillsGenerator.run", mock_run_ok),
+            ):
                 asyncio.run(generate_catalogs(config=config))
 
         log_text = caplog.text.lower()
@@ -889,19 +1078,29 @@ class TestErrorClassification:
 
         config = CatalogConfig()
 
-        async def mock_run_critical(self, *, force=False, dry_run=False, force_enable=False):
+        async def mock_run_critical(
+            self, *, force=False, dry_run=False, force_enable=False
+        ):
             raise OSError("Permission denied writing state file")
 
         async def mock_run_ok(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
+
             return GenerationResult(
-                generator=self.name, total_sources=0, skipped=0,
-                generated=0, pruned=0, errors=[], dry_run=dry_run,
+                generator=self.name,
+                total_sources=0,
+                skipped=0,
+                generated=0,
+                pruned=0,
+                errors=[],
+                dry_run=dry_run,
             )
 
-        with patch("generators.memory.MemoryGenerator.run", mock_run_critical), \
-             patch("generators.diary.DiaryGenerator.run", mock_run_ok), \
-             patch("generators.skills.SkillsGenerator.run", mock_run_ok):
+        with (
+            patch("generators.memory.MemoryGenerator.run", mock_run_critical),
+            patch("generators.diary.DiaryGenerator.run", mock_run_ok),
+            patch("generators.skills.SkillsGenerator.run", mock_run_ok),
+        ):
             results = asyncio.run(generate_catalogs(config=config))
 
         memory_result = [r for r in results if r.generator == "memory"][0]
@@ -917,25 +1116,39 @@ class TestErrorClassification:
 
         config = CatalogConfig()
 
-        async def mock_run_with_errors(self, *, force=False, dry_run=False, force_enable=False):
+        async def mock_run_with_errors(
+            self, *, force=False, dry_run=False, force_enable=False
+        ):
             from generators.base import GenerationResult
+
             return GenerationResult(
-                generator=self.name, total_sources=5, skipped=2,
-                generated=2, pruned=0,
+                generator=self.name,
+                total_sources=5,
+                skipped=2,
+                generated=2,
+                pruned=0,
                 errors=["Error generating key-3: API timeout"],
                 dry_run=dry_run,
             )
 
         async def mock_run_ok(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
+
             return GenerationResult(
-                generator=self.name, total_sources=0, skipped=0,
-                generated=0, pruned=0, errors=[], dry_run=dry_run,
+                generator=self.name,
+                total_sources=0,
+                skipped=0,
+                generated=0,
+                pruned=0,
+                errors=[],
+                dry_run=dry_run,
             )
 
-        with patch("generators.memory.MemoryGenerator.run", mock_run_with_errors), \
-             patch("generators.diary.DiaryGenerator.run", mock_run_ok), \
-             patch("generators.skills.SkillsGenerator.run", mock_run_ok):
+        with (
+            patch("generators.memory.MemoryGenerator.run", mock_run_with_errors),
+            patch("generators.diary.DiaryGenerator.run", mock_run_ok),
+            patch("generators.skills.SkillsGenerator.run", mock_run_ok),
+        ):
             results = asyncio.run(generate_catalogs(config=config))
 
         memory_result = [r for r in results if r.generator == "memory"][0]
@@ -966,15 +1179,23 @@ class TestConfigPassthrough:
 
         async def mock_run(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
+
             configs_seen[self.name] = self._config
             return GenerationResult(
-                generator=self.name, total_sources=0, skipped=0,
-                generated=0, pruned=0, errors=[], dry_run=dry_run,
+                generator=self.name,
+                total_sources=0,
+                skipped=0,
+                generated=0,
+                pruned=0,
+                errors=[],
+                dry_run=dry_run,
             )
 
-        with patch("generators.memory.MemoryGenerator.run", mock_run), \
-             patch("generators.diary.DiaryGenerator.run", mock_run), \
-             patch("generators.skills.SkillsGenerator.run", mock_run):
+        with (
+            patch("generators.memory.MemoryGenerator.run", mock_run),
+            patch("generators.diary.DiaryGenerator.run", mock_run),
+            patch("generators.skills.SkillsGenerator.run", mock_run),
+        ):
             asyncio.run(generate_catalogs(config=config))
 
         for name in ("memory", "diary"):
@@ -993,8 +1214,8 @@ class TestAsyncInterface:
 
     def test_generate_catalogs_is_async(self):
         """generate_catalogs must be an async function or coroutine function."""
-        import asyncio
         import inspect
+
         from generators.dispatcher import generate_catalogs
 
         assert inspect.iscoroutinefunction(generate_catalogs), (
@@ -1022,15 +1243,23 @@ class TestModelClientPassthrough:
 
         async def mock_run(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
+
             clients_seen[self.name] = self._model_client
             return GenerationResult(
-                generator=self.name, total_sources=0, skipped=0,
-                generated=0, pruned=0, errors=[], dry_run=dry_run,
+                generator=self.name,
+                total_sources=0,
+                skipped=0,
+                generated=0,
+                pruned=0,
+                errors=[],
+                dry_run=dry_run,
             )
 
-        with patch("generators.memory.MemoryGenerator.run", mock_run), \
-             patch("generators.diary.DiaryGenerator.run", mock_run), \
-             patch("generators.skills.SkillsGenerator.run", mock_run):
+        with (
+            patch("generators.memory.MemoryGenerator.run", mock_run),
+            patch("generators.diary.DiaryGenerator.run", mock_run),
+            patch("generators.skills.SkillsGenerator.run", mock_run),
+        ):
             asyncio.run(generate_catalogs(config=config))
 
         for name in ("memory", "diary"):
@@ -1056,8 +1285,7 @@ class TestRunSignatureContract:
         for name, cls in GENERATOR_CLASSES.items():
             sig = inspect.signature(cls.run)
             has_kwargs = any(
-                p.kind is inspect.Parameter.VAR_KEYWORD
-                for p in sig.parameters.values()
+                p.kind is inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
             )
             assert "force_enable" in sig.parameters or has_kwargs, (
                 f"{name} generator's run() must accept force_enable "

@@ -17,7 +17,6 @@ if str(SCRIPTS_DIR) not in sys.path:
 import qmd_retrieval as qr
 from generators.config import CatalogConfig, load_catalog_config
 
-
 TARGET = qr.QmdTarget(
     workspace="/ws",
     resources_dir="/ws/RESOURCES",
@@ -34,7 +33,7 @@ TARGET = qr.QmdTarget(
 
 class TestSanitizeQuery:
     def test_strips_gateway_metacharacters(self):
-        q = qr.sanitize_query("what's up; rm -rf | cat & `id` $(x) > out < in \"q\"")
+        q = qr.sanitize_query('what\'s up; rm -rf | cat & `id` $(x) > out < in "q"')
         for ch in ";|&<>`$()'\"\\":
             assert ch not in q
 
@@ -63,7 +62,9 @@ class TestContentWords:
 
     def test_strips_punctuation(self):
         assert qr.content_words("kubernetes, (docker) 'helm'!") == [
-            "kubernetes", "docker", "helm",
+            "kubernetes",
+            "docker",
+            "helm",
         ]
 
 
@@ -176,8 +177,12 @@ class TestResultsToEntries:
         assert entry["line"] == 42
 
     def test_chunk_line_omitted_when_missing_or_invalid(self):
-        for item in (_r("a", 0.9), dict(_r("b", 0.9), line="5"),
-                     dict(_r("c", 0.9), line=0), dict(_r("d", 0.9), line=True)):
+        for item in (
+            _r("a", 0.9),
+            dict(_r("b", 0.9), line="5"),
+            dict(_r("c", 0.9), line=0),
+            dict(_r("d", 0.9), line=True),
+        ):
             (entry,) = qr.results_to_entries([item], TARGET)
             assert "line" not in entry
 
@@ -190,7 +195,10 @@ class TestResultsToEntries:
 class TestBuildArgv:
     def test_ssh_mode_shape(self):
         target = qr.QmdTarget(
-            workspace="/ws", resources_dir="/ws/R", mode="ssh", ssh_host="hosty",
+            workspace="/ws",
+            resources_dir="/ws/R",
+            mode="ssh",
+            ssh_host="hosty",
             collection="resources",
         )
         argv = qr.build_argv("vsearch", "hello; world", target)
@@ -209,7 +217,9 @@ class TestBuildArgv:
     def test_ssh_workspace_with_spaces_is_quoted(self):
         """A legitimate path with a space survives via single-quoting."""
         target = qr.QmdTarget(
-            workspace="/home/My Project", resources_dir="/r", mode="ssh",
+            workspace="/home/My Project",
+            resources_dir="/r",
+            mode="ssh",
         )
         argv = qr.build_argv("search", "hello", target)
         assert argv is not None
@@ -227,7 +237,10 @@ class TestBuildArgv:
         """A collection with shell metacharacters yields no command."""
         for bad_col in ("res;rm", "res$(x)", "res`x`", "res'x"):
             target = qr.QmdTarget(
-                workspace="/ws", resources_dir="/r", mode="ssh", collection=bad_col,
+                workspace="/ws",
+                resources_dir="/r",
+                mode="ssh",
+                collection=bad_col,
             )
             assert qr.build_argv("search", "hello", target) is None, (
                 f"unsafe collection must be refused: {bad_col!r}"
@@ -278,10 +291,12 @@ class TestSearch:
         assert qr.search("a long enough prompt here", target, runner) == []
 
     def test_fused_strategy_merges_vec_and_fts(self):
-        runner = _runner_returning({
-            "vsearch": [_r("vec", 0.7)],
-            "search": [_r("fts", 0.6)],
-        })
+        runner = _runner_returning(
+            {
+                "vsearch": [_r("vec", 0.7)],
+                "search": [_r("fts", 0.6)],
+            }
+        )
         entries = qr.search("compare water filter options", TARGET, runner)
         paths = {e["path"] for e in entries}
         assert paths == {"/ws/RESOURCES/vec", "/ws/RESOURCES/fts"}
@@ -293,7 +308,9 @@ class TestSearch:
 
     def test_hybrid_strategy_uses_query_subcommand(self):
         target = qr.QmdTarget(
-            workspace="/ws", resources_dir="/ws/RESOURCES", strategy="hybrid",
+            workspace="/ws",
+            resources_dir="/ws/RESOURCES",
+            strategy="hybrid",
         )
         runner = _runner_returning({"query": [_r("deep", 0.8)]})
         entries = qr.search("compare water filter options", target, runner)
@@ -309,7 +326,9 @@ class TestSearch:
     def test_ladder_narrows_terms(self):
         runner = _runner_returning({"vsearch": None, "search": [_r("kw", 0.5)]})
         qr.search(
-            "kubernetes deployment strategies canary rollouts production", TARGET, runner,
+            "kubernetes deployment strategies canary rollouts production",
+            TARGET,
+            runner,
         )
         searches = [q for c, q in runner.calls if c == "search"]
         assert len(searches) == 3
@@ -404,7 +423,9 @@ class TestQmdRefreshRemoteQuoting:
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_QMD_SSH_HOST", "myhost")
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_QMD_COLLECTION", "notes")
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_QMD_STRATEGY", "fts")
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_QMD_HTTP_URL", "http://host.docker.internal:9000")
+        monkeypatch.setenv(
+            "CLAUDE_PLUGIN_OPTION_QMD_HTTP_URL", "http://host.docker.internal:9000"
+        )
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_QMD_CANDIDATE_LIMIT", "20")
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_QMD_MIN_SCORE", "0.5")
         cfg = load_catalog_config()
@@ -418,8 +439,11 @@ class TestQmdRefreshRemoteQuoting:
 
     def test_target_from_config_uses_cwd_as_workspace(self):
         cfg = CatalogConfig(
-            resources_dir="/ws/RESOURCES", qmd_mode="http",
-            qmd_http_url="http://h:1", qmd_candidate_limit=7, qmd_min_score=0.4,
+            resources_dir="/ws/RESOURCES",
+            qmd_mode="http",
+            qmd_http_url="http://h:1",
+            qmd_candidate_limit=7,
+            qmd_min_score=0.4,
         )
         target = qr.target_from_config(cfg, "/some/project")
         assert target.workspace == "/some/project"
@@ -458,8 +482,11 @@ def _make_index(workspace: Path, docs: list[str]) -> None:
 
 
 HTTP_TARGET = qr.QmdTarget(
-    workspace="/ws", resources_dir="/ws/RESOURCES", mode="http",
-    http_url="http://host.docker.internal:8181", collection="resources",
+    workspace="/ws",
+    resources_dir="/ws/RESOURCES",
+    mode="http",
+    http_url="http://host.docker.internal:8181",
+    collection="resources",
 )
 
 
@@ -478,8 +505,15 @@ class TestFlattenQuery:
 
 class TestDocFrequencies:
     def test_counts_documents_per_term(self, tmp_path):
-        _make_index(tmp_path, ["coffee arabica gesha", "more learning here",
-                               "learn more about things", "learning more today"])
+        _make_index(
+            tmp_path,
+            [
+                "coffee arabica gesha",
+                "more learning here",
+                "learn more about things",
+                "learning more today",
+            ],
+        )
         target = qr.QmdTarget(workspace=str(tmp_path), resources_dir="/r", mode="http")
         dfs = qr.doc_frequencies(["coffee", "more", "learn"], target)
         assert dfs is not None
@@ -525,14 +559,17 @@ class TestLexicalTerms:
 
     def test_degrades_to_word_order_without_index(self):
         target = qr.QmdTarget(workspace="/nonexistent", resources_dir="/r", mode="http")
-        terms = qr.lexical_terms("kubernetes deployment canary rollout", target, max_terms=2)
+        terms = qr.lexical_terms(
+            "kubernetes deployment canary rollout", target, max_terms=2
+        )
         assert terms == ["kubernetes", "deployment"]  # stopword-filtered order
 
 
 class TestBuildSearches:
     def test_lex_and_vec_arms(self, tmp_path):
-        _make_index(tmp_path, ["arabica robusta special"]
-                    + ["beans"] * 30 + ["compare"] * 30)
+        _make_index(
+            tmp_path, ["arabica robusta special"] + ["beans"] * 30 + ["compare"] * 30
+        )
         target = qr.QmdTarget(workspace=str(tmp_path), resources_dir="/r", mode="http")
         prompt = "compare arabica and robusta beans"
         searches = qr.build_searches(prompt, target)
@@ -568,11 +605,16 @@ class TestHttpSearch:
         captured = {}
 
         class FakeResp:
-            def __enter__(self): return self
-            def __exit__(self, *a): return False
-            def read(self): return json.dumps(
-                {"results": [{"file": "qmd://resources/x.md", "score": 0.9}]}
-            ).encode()
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return json.dumps(
+                    {"results": [{"file": "qmd://resources/x.md", "score": 0.9}]}
+                ).encode()
 
         def fake_urlopen(req, timeout=None):
             captured["url"] = req.full_url
@@ -583,8 +625,10 @@ class TestHttpSearch:
             return FakeResp()
 
         monkeypatch.setattr(qr.urllib.request, "urlopen", fake_urlopen)
-        searches = [{"type": "lex", "query": "coffee"},
-                    {"type": "vec", "query": "learn about coffee"}]
+        searches = [
+            {"type": "lex", "query": "coffee"},
+            {"type": "vec", "query": "learn about coffee"},
+        ]
         results = qr.http_search(searches, "learn about coffee", HTTP_TARGET)
 
         assert captured["url"] == "http://host.docker.internal:8181/query"
@@ -595,7 +639,7 @@ class TestHttpSearch:
         assert body["intent"] == "learn about coffee"
         assert body["collections"] == ["resources"]
         assert body["rerank"] is True
-        assert body["minScore"] == 0.0            # cutoff stays in results_to_entries
+        assert body["minScore"] == 0.0  # cutoff stays in results_to_entries
         assert body["candidateLimit"] == HTTP_TARGET.candidate_limit
         # default dial (10): the HTTP_TIMEOUT floor applies
         assert captured["timeout"] == qr.HTTP_TIMEOUT
@@ -609,8 +653,9 @@ class TestHttpSearch:
             raise qr.urllib.error.URLError("refused")
 
         monkeypatch.setattr(qr.urllib.request, "urlopen", fake_urlopen)
-        target = qr.QmdTarget(workspace="/ws", resources_dir="/r", mode="http",
-                              candidate_limit=40)
+        target = qr.QmdTarget(
+            workspace="/ws", resources_dir="/r", mode="http", candidate_limit=40
+        )
         qr.http_search([{"type": "vec", "query": "x"}], "x", target)
         assert captured["timeout"] == pytest.approx(31.0)  # 3 + 0.7*40
 
@@ -626,7 +671,9 @@ class TestSearchHttpDispatch:
     def test_http_mode_authors_query_and_filters(self, tmp_path):
         _make_index(tmp_path, ["coffee arabica"] + ["common"] * 40)
         target = qr.QmdTarget(
-            workspace=str(tmp_path), resources_dir=str(tmp_path / "R"), mode="http",
+            workspace=str(tmp_path),
+            resources_dir=str(tmp_path / "R"),
+            mode="http",
             min_score=0.30,
         )
         seen = {}
@@ -634,15 +681,19 @@ class TestSearchHttpDispatch:
         def fake_http(searches, intent, tgt):
             seen["searches"] = searches
             seen["intent"] = intent
-            return [{"file": "qmd://resources/good.md", "score": 0.8},
-                    {"file": "qmd://resources/weak.md", "score": 0.1}]
+            return [
+                {"file": "qmd://resources/good.md", "score": 0.8},
+                {"file": "qmd://resources/weak.md", "score": 0.1},
+            ]
 
-        entries = qr.search("I want to learn more about coffee", target,
-                            http_runner=fake_http)
+        entries = qr.search(
+            "I want to learn more about coffee", target, http_runner=fake_http
+        )
         # authored, not raw: a lex arm of rare terms + the vec arm
         assert seen["intent"] == "I want to learn more about coffee"
-        assert any(s["type"] == "lex" and "coffee" in s["query"]
-                   for s in seen["searches"])
+        assert any(
+            s["type"] == "lex" and "coffee" in s["query"] for s in seen["searches"]
+        )
         assert any(s["type"] == "vec" for s in seen["searches"])
         # min_score drops the weak hit
         assert [e["path"] for e in entries] == [str(tmp_path / "R" / "good.md")]
@@ -650,11 +701,17 @@ class TestSearchHttpDispatch:
     def test_http_mode_never_calls_shell_runner(self, tmp_path):
         _make_index(tmp_path, ["coffee"])
         target = qr.QmdTarget(
-            workspace=str(tmp_path), resources_dir=str(tmp_path / "R"), mode="http",
+            workspace=str(tmp_path),
+            resources_dir=str(tmp_path / "R"),
+            mode="http",
         )
 
         def exploding_runner(*a, **k):
             raise AssertionError("shell runner must not be used in http mode")
 
-        qr.search("a prompt about coffee here", target,
-                  runner=exploding_runner, http_runner=lambda *a: [])
+        qr.search(
+            "a prompt about coffee here",
+            target,
+            runner=exploding_runner,
+            http_runner=lambda *a: [],
+        )

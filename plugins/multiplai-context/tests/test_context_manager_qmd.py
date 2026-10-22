@@ -19,7 +19,6 @@ import textwrap
 from pathlib import Path
 
 import pytest
-
 from conftest import corpus_files, hook_context, run_context_hook
 
 # The sandbox layout (env_setup fixture) and subprocess runner live in
@@ -31,17 +30,20 @@ def _fake_qmd(tmp_path: Path, results: list[dict], exit_code: int = 0) -> Path:
     bin_dir = tmp_path / "fakebin"
     bin_dir.mkdir(exist_ok=True)
     script = bin_dir / "qmd"
-    script.write_text(textwrap.dedent(f"""\
+    script.write_text(
+        textwrap.dedent(f"""\
         #!/bin/sh
         echo '{json.dumps(results)}'
         exit {exit_code}
-        """))
+        """)
+    )
     script.chmod(0o755)
     return bin_dir
 
 
-def _run_hook(env_setup, *, prompt: str, qmd_bin_dir: Path | None,
-              extra_env: dict | None = None) -> dict:
+def _run_hook(
+    env_setup, *, prompt: str, qmd_bin_dir: Path | None, extra_env: dict | None = None
+) -> dict:
     qmd_env = {
         "CLAUDE_PLUGIN_OPTION_ENABLE_RESOURCES": "true",
         "CLAUDE_PLUGIN_OPTION_QMD_MODE": "local",
@@ -49,7 +51,8 @@ def _run_hook(env_setup, *, prompt: str, qmd_bin_dir: Path | None,
         "HOME": str(env_setup["tmp_path"]),
         "PATH": (
             f"{qmd_bin_dir}:{os.environ['PATH']}"
-            if qmd_bin_dir is not None else "/usr/bin:/bin"
+            if qmd_bin_dir is not None
+            else "/usr/bin:/bin"
         ),
     }
     if extra_env:
@@ -64,18 +67,27 @@ def _run_hook(env_setup, *, prompt: str, qmd_bin_dir: Path | None,
 
 
 QMD_RESULTS = [
-    {"file": "qmd://resources/water/filters.md", "score": 0.72,
-     "title": "Water filter comparison", "snippet": "Reverse osmosis vs carbon."},
-    {"file": "qmd://resources/gcp/isolation.md", "score": 0.44,
-     "title": "GCP isolation", "snippet": "Project-per-env pattern."},
+    {
+        "file": "qmd://resources/water/filters.md",
+        "score": 0.72,
+        "title": "Water filter comparison",
+        "snippet": "Reverse osmosis vs carbon.",
+    },
+    {
+        "file": "qmd://resources/gcp/isolation.md",
+        "score": 0.44,
+        "title": "GCP isolation",
+        "snippet": "Project-per-env pattern.",
+    },
 ]
 
 
 class TestQmdBackendE2E:
     def test_results_render_in_resources_section(self, env_setup):
         bin_dir = _fake_qmd(env_setup["tmp_path"], QMD_RESULTS)
-        out = _run_hook(env_setup, prompt="which water filter should I buy?",
-                        qmd_bin_dir=bin_dir)
+        out = _run_hook(
+            env_setup, prompt="which water filter should I buy?", qmd_bin_dir=bin_dir
+        )
         ctx = hook_context(out)
         assert "=== RESOURCES ===" in ctx
         assert f"{env_setup['resources_dir']}/water/filters.md" in ctx
@@ -86,22 +98,25 @@ class TestQmdBackendE2E:
     def test_weak_scores_filtered(self, env_setup):
         weak = [dict(QMD_RESULTS[0], score=0.05)]
         bin_dir = _fake_qmd(env_setup["tmp_path"], weak)
-        out = _run_hook(env_setup, prompt="which water filter should I buy?",
-                        qmd_bin_dir=bin_dir)
+        out = _run_hook(
+            env_setup, prompt="which water filter should I buy?", qmd_bin_dir=bin_dir
+        )
         assert corpus_files(out, "RESOURCES") == []
 
     def test_fail_open_when_qmd_missing(self, env_setup):
         (env_setup["memory_dir"] / "notes.md").write_text("# Notes\nsome memory")
-        out = _run_hook(env_setup, prompt="which water filter should I buy?",
-                        qmd_bin_dir=None)
+        out = _run_hook(
+            env_setup, prompt="which water filter should I buy?", qmd_bin_dir=None
+        )
         # No crash; resources empty, memory fallback still works.
         assert corpus_files(out, "RESOURCES") == []
         assert len(corpus_files(out, "MEMORY")) >= 1
 
     def test_fail_open_when_qmd_errors(self, env_setup):
         bin_dir = _fake_qmd(env_setup["tmp_path"], [], exit_code=3)
-        out = _run_hook(env_setup, prompt="which water filter should I buy?",
-                        qmd_bin_dir=bin_dir)
+        out = _run_hook(
+            env_setup, prompt="which water filter should I buy?", qmd_bin_dir=bin_dir
+        )
         assert corpus_files(out, "RESOURCES") == []
 
     def test_resources_catalog_on_disk_is_never_read(self, env_setup):
@@ -109,14 +124,24 @@ class TestQmdBackendE2E:
         from generators.base import CATALOG_SCHEMA_VERSION
 
         (env_setup["resources_dir"] / "catalog-doc.md").write_text("# Catalog doc")
-        (env_setup["data_dir"] / "catalogs" / "resources.json").write_text(json.dumps({
-            "schema_version": CATALOG_SCHEMA_VERSION,
-            "entries": [{"source": "catalog-doc.md", "summary": "catalog doc",
-                         "intent_domains": ["water filter shopping"]}],
-        }))
+        (env_setup["data_dir"] / "catalogs" / "resources.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": CATALOG_SCHEMA_VERSION,
+                    "entries": [
+                        {
+                            "source": "catalog-doc.md",
+                            "summary": "catalog doc",
+                            "intent_domains": ["water filter shopping"],
+                        }
+                    ],
+                }
+            )
+        )
         bin_dir = _fake_qmd(env_setup["tmp_path"], QMD_RESULTS)
-        out = _run_hook(env_setup, prompt="which water filter should I buy?",
-                        qmd_bin_dir=bin_dir)
+        out = _run_hook(
+            env_setup, prompt="which water filter should I buy?", qmd_bin_dir=bin_dir
+        )
         assert "catalog-doc.md" not in hook_context(out)
         assert "water/filters.md" in hook_context(out)
 
@@ -124,7 +149,8 @@ class TestQmdBackendE2E:
         """enable_resources off → qmd is never invoked, even with one on PATH."""
         bin_dir = _fake_qmd(env_setup["tmp_path"], QMD_RESULTS)
         out = _run_hook(
-            env_setup, prompt="which water filter should I buy?",
+            env_setup,
+            prompt="which water filter should I buy?",
             qmd_bin_dir=bin_dir,
             extra_env={"CLAUDE_PLUGIN_OPTION_ENABLE_RESOURCES": "false"},
         )
@@ -137,8 +163,9 @@ class TestQmdBackendE2E:
 
 
 def _real_qmd() -> str | None:
-    return shutil.which("qmd", path=f"{os.path.expanduser('~')}/.bun/bin:"
-                        + os.environ.get("PATH", ""))
+    return shutil.which(
+        "qmd", path=f"{os.path.expanduser('~')}/.bun/bin:" + os.environ.get("PATH", "")
+    )
 
 
 @pytest.mark.skipif(_real_qmd() is None, reason="qmd not installed")
@@ -153,17 +180,35 @@ class TestQmdLocalIntegration:
             "# Zanzibar travel research\nFerries run from Dar es Salaam daily."
         )
         env = dict(os.environ, HOME=str(tmp_path))
-        subprocess.run([_real_qmd(), "init"], cwd=ws, env=env, check=True,
-                       capture_output=True, timeout=60)
+        subprocess.run(
+            [_real_qmd(), "init"],
+            cwd=ws,
+            env=env,
+            check=True,
+            capture_output=True,
+            timeout=60,
+        )
         subprocess.run(
             [_real_qmd(), "collection", "add", str(rd), "--name", "resources"],
-            cwd=ws, env=env, check=True, capture_output=True, timeout=60,
+            cwd=ws,
+            env=env,
+            check=True,
+            capture_output=True,
+            timeout=60,
         )
-        subprocess.run([_real_qmd(), "update"], cwd=ws, env=env, check=True,
-                       capture_output=True, timeout=120)
+        subprocess.run(
+            [_real_qmd(), "update"],
+            cwd=ws,
+            env=env,
+            check=True,
+            capture_output=True,
+            timeout=120,
+        )
 
         target = qr.QmdTarget(
-            workspace=str(ws), resources_dir=str(rd), strategy="fts",
+            workspace=str(ws),
+            resources_dir=str(rd),
+            strategy="fts",
         )
         entries = qr.search("zanzibar travel ferries", target)
         assert any("zanzibar-travel.md" in e["path"] for e in entries)

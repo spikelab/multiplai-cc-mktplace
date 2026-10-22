@@ -24,10 +24,10 @@ from __future__ import annotations
 import copy
 import logging
 import re
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Awaitable, Callable
 
 from multiplai_core.untrusted import defang, fence
 
@@ -64,8 +64,13 @@ def code_fixes(records: list[TriageRecord]) -> list[TriageRecord]:
     order. A `code_fix` whose fix contradicts the current spec
     (`spec_conflict`) is left out: it waits on the requirements change the
     spec step recorded for `pm-spec revise`."""
-    return [r for r in records
-            if r.triage and r.triage.verdict == Verdict.CODE_FIX and not r.triage.spec_conflict]
+    return [
+        r
+        for r in records
+        if r.triage
+        and r.triage.verdict == Verdict.CODE_FIX
+        and not r.triage.spec_conflict
+    ]
 
 
 def _line(text: str, limit: int = 1200) -> str:
@@ -99,9 +104,16 @@ def escalation_task(history: str) -> str:
     lines = [line for line in lines if line]
     body = " ".join(lines)
     if len(body) > room:
+
         def cut(kept: int) -> str:
-            return " ".join(lines[:kept] + [f"({len(lines) - kept} more findings are left out: "
-                                            "the history was cut to fit this task)"])
+            return " ".join(
+                lines[:kept]
+                + [
+                    f"({len(lines) - kept} more findings are left out: "
+                    "the history was cut to fit this task)"
+                ]
+            )
+
         kept = 0
         while kept < len(lines) and len(cut(kept + 1)) <= room:
             kept += 1
@@ -109,10 +121,14 @@ def escalation_task(history: str) -> str:
     return " ".join(REVIEW_FIX_ESCALATION.format(findings=body).split())
 
 
-def render_tasks(round_n: int, records: list[TriageRecord],
-                 self_check: dict | None = None, *,
-                 other_locations: dict[str, list[str]] | None = None,
-                 escalation: str = "") -> tuple[str, dict[int, str]]:
+def render_tasks(
+    round_n: int,
+    records: list[TriageRecord],
+    self_check: dict | None = None,
+    *,
+    other_locations: dict[str, list[str]] | None = None,
+    escalation: str = "",
+) -> tuple[str, dict[int, str]]:
     """(`findings-r<N>-tasks.md` text, block number → the finding's row key).
     When *self_check* (`FindingsRound.self_check`) names a block, the check's
     report is that block, after the last fix, keyed `block:<k>`.
@@ -135,12 +151,22 @@ def render_tasks(round_n: int, records: list[TriageRecord],
         failing = _line(t.failing_test) or _line(t.reason)
         where = ", ".join(_line(loc, 200) for loc in t.locations) or "see the reason"
         others = (other_locations or {}).get(r.comment.finding_id or "") or []
-        also = (" The review found the same defect at: "
-                + ", ".join(_line(loc, 200) for loc in others)) if others else ""
+        also = (
+            (
+                " The review found the same defect at: "
+                + ", ".join(_line(loc, 200) for loc in others)
+            )
+            if others
+            else ""
+        )
         out += [
             f"## {i}. Fix {block_ident(r)}",
             "",
-            *([f"- [ ] {i}.0 {_line(escalation, ESCALATION_LIMIT)}"] if escalation else []),
+            *(
+                [f"- [ ] {i}.0 {_line(escalation, ESCALATION_LIMIT)}"]
+                if escalation
+                else []
+            ),
             f"- [ ] {i}.1 Write a failing test that shows the defect: {failing}",
             f"- [ ] {i}.2 Change the code so that test passes. "
             f"Why it is a defect: {_line(t.reason)} Code involved: {where}{also}",
@@ -159,7 +185,11 @@ def render_tasks(round_n: int, records: list[TriageRecord],
         out += [
             f"## {k}. Fix what the check of this round's fixes found",
             "",
-            *([f"- [ ] {k}.0 {_line(escalation, ESCALATION_LIMIT)}"] if escalation else []),
+            *(
+                [f"- [ ] {k}.0 {_line(escalation, ESCALATION_LIMIT)}"]
+                if escalation
+                else []
+            ),
             f"- [ ] {k}.1 Write a failing test that shows each problem the check found: {report}",
             f"- [ ] {k}.2 Change the code so those tests pass, and nothing else.",
             "",
@@ -170,12 +200,15 @@ def render_tasks(round_n: int, records: list[TriageRecord],
 @dataclass
 class CodeResult:
     exit_code: int
-    blocks: dict[int, str] = field(default_factory=dict)       # block number → row key
-    fixes: dict[str, dict[str, str]] = field(default_factory=dict)  # row key → {test, impl}
+    blocks: dict[int, str] = field(default_factory=dict)  # block number → row key
+    fixes: dict[str, dict[str, str]] = field(
+        default_factory=dict
+    )  # row key → {test, impl}
 
 
-def round_config(config: BuildConfig, change_dir: Path, round_n: int,
-                 escalated: bool = False) -> BuildConfig:
+def round_config(
+    config: BuildConfig, change_dir: Path, round_n: int, escalated: bool = False
+) -> BuildConfig:
     """A copy of *config* whose engine paths are the round's own. In an
     *escalated* round the implementer runs on `review_fix_escalated`'s model
     and effort."""
@@ -188,27 +221,41 @@ def round_config(config: BuildConfig, change_dir: Path, round_n: int,
     return rc
 
 
-def write_tasks(change_dir: Path, round_n: int, records: list[TriageRecord],
-                self_check: dict | None = None, *,
-                other_locations: dict[str, list[str]] | None = None,
-                escalation: str = "") -> tuple[Path, dict[int, str]]:
-    text, blocks = render_tasks(round_n, records, self_check,
-                                other_locations=other_locations, escalation=escalation)
+def write_tasks(
+    change_dir: Path,
+    round_n: int,
+    records: list[TriageRecord],
+    self_check: dict | None = None,
+    *,
+    other_locations: dict[str, list[str]] | None = None,
+    escalation: str = "",
+) -> tuple[Path, dict[int, str]]:
+    text, blocks = render_tasks(
+        round_n,
+        records,
+        self_check,
+        other_locations=other_locations,
+        escalation=escalation,
+    )
     path = Path(change_dir) / tasks_file_name(round_n)
     path.write_text(text)
     return path, blocks
 
 
-def write_self_check(change_dir: Path, round_n: int, self_check: dict | None) -> Path | None:
+def write_self_check(
+    change_dir: Path, round_n: int, self_check: dict | None
+) -> Path | None:
     """`findings-r<N>-self-check.md` from the saved check, or None (nothing
     written) when the check found no problem or has not run."""
     report = (self_check or {}).get("report") or ""
     if not report:
         return None
     path = Path(change_dir) / self_check_file_name(round_n)
-    path.write_text(f"# Check of round {round_n}'s fixes\n\n"
-                    f"Commits checked: up to `{self_check.get('head') or ''}`\n\n"
-                    f"{report.strip()}\n")
+    path.write_text(
+        f"# Check of round {round_n}'s fixes\n\n"
+        f"Commits checked: up to `{self_check.get('head') or ''}`\n\n"
+        f"{report.strip()}\n"
+    )
     return path
 
 
@@ -227,16 +274,24 @@ def fixer_part(report: str, first_later: str | None = None) -> str | None:
 
     report = report or ""
     first = _LATER_AGENT.search(report)
-    lost = (first_later is not None and len(report) >= MAX_EVIDENCE_CHARS
-            and (first is None or first.group(1) != first_later))
-    return None if lost else (report[:first.start()] if first else report)
+    lost = (
+        first_later is not None
+        and len(report) >= MAX_EVIDENCE_CHARS
+        and (first is None or first.group(1) != first_later)
+    )
+    return None if lost else (report[: first.start()] if first else report)
 
 
 def _first_later(block: BlockInfo) -> str | None:
     """The marker of the first later agent that ran on *block*, if any."""
     # A review fix ran when a second review did.
-    return ("review-fix 1" if block.review_iterations > 1
-            else "fix on pass" if block.fix_on_pass_kept else None)
+    return (
+        "review-fix 1"
+        if block.review_iterations > 1
+        else "fix on pass"
+        if block.fix_on_pass_kept
+        else None
+    )
 
 
 def searched_text(report: str, first_later: str | None = None) -> str:
@@ -259,7 +314,9 @@ def searched_text(report: str, first_later: str | None = None) -> str:
     return "; ".join(entries)
 
 
-def fixes_from_state(state_path: Path, blocks: dict[int, str]) -> dict[str, dict[str, str]]:
+def fixes_from_state(
+    state_path: Path, blocks: dict[int, str]
+) -> dict[str, dict[str, str]]:
     """Row key → the block's test and impl commits, from the round's engine
     checkpoint. A block that is not done, or has no impl commit, is left out
     (not fixed): a failed block's commits are discarded (`failed_block`)."""
@@ -267,12 +324,15 @@ def fixes_from_state(state_path: Path, blocks: dict[int, str]) -> dict[str, dict
         return {}
     state = BuildState.load(state_path)
     out: dict[str, dict[str, str]] = {}
-    for b in (state.tdd.blocks if state.tdd else []):
+    for b in state.tdd.blocks if state.tdd else []:
         key = blocks.get(b.number)
         if key and b.impl_commit and b.status == BlockStatus.DONE:
-            out[key] = {"test": b.test_commit or "", "impl": b.impl_commit,
-                        "status": b.status.value,
-                        "searched": searched_text(b.implementer_report, _first_later(b))}
+            out[key] = {
+                "test": b.test_commit or "",
+                "impl": b.impl_commit,
+                "status": b.status.value,
+                "searched": searched_text(b.implementer_report, _first_later(b)),
+            }
     return out
 
 
@@ -285,7 +345,7 @@ def recurring_from_state(state_path: Path) -> dict[int, str]:
         return {}
     state = BuildState.load(state_path)
     out: dict[int, str] = {}
-    for b in (state.tdd.blocks if state.tdd else []):
+    for b in state.tdd.blocks if state.tdd else []:
         own = fixer_part(b.implementer_report, _first_later(b))
         slot = parse_recurring(own) if own else None
         if slot:
@@ -293,9 +353,16 @@ def recurring_from_state(state_path: Path) -> dict[int, str]:
     return out
 
 
-async def run_code_step(config: BuildConfig, change_dir: Path, round_n: int,
-                        records: list[TriageRecord], *, blocks: dict[int, str] | None = None,
-                        engine: Engine | None = None, escalated: bool = False) -> CodeResult:
+async def run_code_step(
+    config: BuildConfig,
+    change_dir: Path,
+    round_n: int,
+    records: list[TriageRecord],
+    *,
+    blocks: dict[int, str] | None = None,
+    engine: Engine | None = None,
+    escalated: bool = False,
+) -> CodeResult:
     """Run the round's code-fix blocks through `run_tdd_engine` (standalone=False,
     so the round's checkpoint is kept for a resume and the fixing commits are
     read back from it). The tasks file must already exist; *blocks* is what
@@ -307,8 +374,13 @@ async def run_code_step(config: BuildConfig, change_dir: Path, round_n: int,
     if engine is None:
         from ..tdd_engine import run_tdd_engine as engine
     rc = round_config(config, change_dir, round_n, escalated)
-    log.info("START findings_code round=%d blocks=%d tasks=%s state=%s",
-             round_n, len(blocks), rc.tasks_path, rc.state_file_path())
+    log.info(
+        "START findings_code round=%d blocks=%d tasks=%s state=%s",
+        round_n,
+        len(blocks),
+        rc.tasks_path,
+        rc.state_file_path(),
+    )
     code = await engine(rc, SimpleNamespace(block=None), standalone=False)
     fixes = fixes_from_state(rc.state_file_path(), blocks)
     log.info("DONE findings_code round=%d exit=%d fixed=%d", round_n, code, len(fixes))
@@ -327,7 +399,10 @@ def add_block(state_path: Path, tasks_path: Path, number: int) -> None:
     if state.tdd is None or any(b.number == number for b in state.tdd.blocks):
         return
     from ..tdd_engine import parse_blocks
-    block = next((b for b in parse_blocks(Path(tasks_path)) if b.number == number), None)
+
+    block = next(
+        (b for b in parse_blocks(Path(tasks_path)) if b.number == number), None
+    )
     if block is None:
         raise ValueError(f"block {number} is not in {tasks_path}")
     state.tdd.blocks.append(block)
@@ -343,7 +418,8 @@ def add_block(state_path: Path, tasks_path: Path, number: int) -> None:
 # continuation is never one.
 _CHECK_MARKER = re.compile(
     r"^(?:#+[ \t]*)?[*_`]*(?:(?P<none>no problems?\b)|problems[*_`]*[ \t]*:)",
-    re.IGNORECASE | re.MULTILINE)
+    re.IGNORECASE | re.MULTILINE,
+)
 
 # A list that says only "none" or "nothing", optionally "found", with
 # punctuation at most.
@@ -363,7 +439,7 @@ def _check_report(text: str) -> str:
         return text
     if last.group("none"):
         return text if _LIST_ITEM.search(text, last.end()) else ""
-    listed = text[last.end():].strip()
+    listed = text[last.end() :].strip()
     if _NONE.fullmatch(listed):
         return ""
     return listed or text
@@ -381,19 +457,22 @@ async def run_self_check(config: BuildConfig, diff: str) -> str:
         diff = diff[:MAX_SELF_CHECK_DIFF_CHARS] + "\n... (diff truncated)"
     prompt = SELF_CHECK_PROMPT.format(
         change_name=config.change_name,
-        fenced_diff="\n".join(fence(diff, "git diff of this round's fix commits")) or "(empty diff)",
+        fenced_diff="\n".join(fence(diff, "git diff of this round's fix commits"))
+        or "(empty diff)",
     )
     result = await agent_call(
         prompt,
         allowed_tools=AUDITOR_TOOLS,
-        model=config.model_for('findings_self_check'),
-        effort=config.effort_for('findings_self_check'),
+        model=config.model_for("findings_self_check"),
+        effort=config.effort_for("findings_self_check"),
         max_turns=AUDITOR_MAX_TURNS,
         cwd=str(config.project_dir),
         budget_label="findings_self_check",
     )
     if not result.success:
-        raise RuntimeError(f"the self-check agent failed: {' '.join((result.error or '').split())[:300]}")
+        raise RuntimeError(
+            f"the self-check agent failed: {' '.join((result.error or '').split())[:300]}"
+        )
     return _check_report((result.output or "").strip())
 
 
@@ -436,7 +515,7 @@ def restart_block(state_path: Path, number: int) -> None:
     process, whose budget is empty, and the resumed engine restores its
     budget from it."""
     state = BuildState.load(state_path)
-    for b in (state.tdd.blocks if state.tdd else []):
+    for b in state.tdd.blocks if state.tdd else []:
         if b.number == number:
             b.status = BlockStatus.PENDING
             b.baseline_commit = b.test_commit = b.impl_commit = b.refactor_commit = None
@@ -453,7 +532,11 @@ def skip_block(state_path: Path, number: int) -> bool:
     as `restart_block` does."""
     state = BuildState.load(state_path)
     tdd = state.tdd
-    if not tdd or tdd.current_block >= len(tdd.blocks) or tdd.blocks[tdd.current_block].number != number:
+    if (
+        not tdd
+        or tdd.current_block >= len(tdd.blocks)
+        or tdd.blocks[tdd.current_block].number != number
+    ):
         return False
     tdd.current_block += 1
     state.checkpoint(state_path, keep_budget=True)
@@ -476,8 +559,10 @@ def stopped_after_blocks(state_path: Path) -> str | None:
     if not tdd.refactor_all_done:
         return "the budget stopped the whole-change refactor"
     if not tdd.mutation_done:
-        return ("mutation testing failed (a score below mutation.min_score, or cosmic-ray "
-                "could not score the changed lines; the progress log says which)")
+        return (
+            "mutation testing failed (a score below mutation.min_score, or cosmic-ray "
+            "could not score the changed lines; the progress log says which)"
+        )
     return "a whole-change check failed"
 
 
@@ -490,13 +575,16 @@ def baseline_red(state_path: Path) -> bool:
     return bool(tdd) and not tdd.baseline_tests_pass
 
 
-def commit_round_files(project_dir: Path, round_n: int, paths: list[Path]) -> str | None:
+def commit_round_files(
+    project_dir: Path, round_n: int, paths: list[Path]
+) -> str | None:
     """Commit the round's own records (`findings-r<N>.md`, the tasks file)
     before the engine runs, so its whole-tree block commits start clean."""
     existing = [str(p) for p in paths if Path(p).exists()]
     if not existing:
         return None
     return git_ops.commit_paths(
-        Path(project_dir), f"chore(findings-r{round_n}): record the round's findings",
+        Path(project_dir),
+        f"chore(findings-r{round_n}): record the round's findings",
         existing + git_ops.BOOKKEEPING_EXCLUDES,
     )

@@ -1,21 +1,37 @@
 """Tests for Pydantic models — validation, scoring, state transitions."""
 
-import pytest
 from build_pipeline.models import (
-    ReviewScore, ReviewResult, ReviewIssue, GateResult,
-    BlockInfo, BlockStatus, ArtifactInfo, ArtifactStatus, ChangeStatus,
-    FindingAdjudication, FindingVerdict, ReviewFinding, ReviewGatePolicy,
-    ImplementationNote, SPEC_IMPACT_LEVELS,
+    SPEC_IMPACT_LEVELS,
+    ArtifactInfo,
+    ArtifactStatus,
+    BlockInfo,
+    BlockStatus,
+    ChangeStatus,
+    FindingAdjudication,
+    FindingVerdict,
+    GateResult,
+    ImplementationNote,
+    ReviewFinding,
+    ReviewGatePolicy,
+    ReviewIssue,
+    ReviewResult,
+    ReviewScore,
 )
 
 
 class TestReviewResult:
     def test_weighted_average_basic(self):
-        r = ReviewResult(scores=[
-            ReviewScore(dimension="Architecture", weight=2, score=4, evidence="good"),
-            ReviewScore(dimension="Tests", weight=1, score=3, evidence="ok"),
-            ReviewScore(dimension="Compliance", weight=3, score=5, evidence="perfect"),
-        ])
+        r = ReviewResult(
+            scores=[
+                ReviewScore(
+                    dimension="Architecture", weight=2, score=4, evidence="good"
+                ),
+                ReviewScore(dimension="Tests", weight=1, score=3, evidence="ok"),
+                ReviewScore(
+                    dimension="Compliance", weight=3, score=5, evidence="perfect"
+                ),
+            ]
+        )
         # (4*2 + 3*1 + 5*3) / (2+1+3) = (8+3+15)/6 = 26/6 ≈ 4.33
         assert abs(r.weighted_average - 4.333) < 0.01
 
@@ -24,33 +40,41 @@ class TestReviewResult:
         assert r.weighted_average == 0.0
 
     def test_passed_above_threshold(self):
-        r = ReviewResult(scores=[
-            ReviewScore(dimension="A", weight=2, score=4, evidence=""),
-            ReviewScore(dimension="B", weight=1, score=3, evidence=""),
-        ])
+        r = ReviewResult(
+            scores=[
+                ReviewScore(dimension="A", weight=2, score=4, evidence=""),
+                ReviewScore(dimension="B", weight=1, score=3, evidence=""),
+            ]
+        )
         assert r.passed  # avg = (8+3)/3 = 3.67
 
     def test_failed_below_threshold(self):
-        r = ReviewResult(scores=[
-            ReviewScore(dimension="A", weight=2, score=3, evidence=""),
-            ReviewScore(dimension="B", weight=1, score=2, evidence=""),
-        ])
+        r = ReviewResult(
+            scores=[
+                ReviewScore(dimension="A", weight=2, score=3, evidence=""),
+                ReviewScore(dimension="B", weight=1, score=2, evidence=""),
+            ]
+        )
         assert not r.passed  # avg = (6+2)/3 = 2.67
 
     def test_failed_with_score_1(self):
-        r = ReviewResult(scores=[
-            ReviewScore(dimension="A", weight=2, score=5, evidence=""),
-            ReviewScore(dimension="B", weight=1, score=1, evidence=""),
-        ])
+        r = ReviewResult(
+            scores=[
+                ReviewScore(dimension="A", weight=2, score=5, evidence=""),
+                ReviewScore(dimension="B", weight=1, score=1, evidence=""),
+            ]
+        )
         # avg = (10+1)/3 = 3.67 — above threshold, but B=1 triggers fail
         assert not r.passed
 
     def test_failing_dimensions(self):
-        r = ReviewResult(scores=[
-            ReviewScore(dimension="A", weight=2, score=5, evidence=""),
-            ReviewScore(dimension="B", weight=1, score=1, evidence=""),
-            ReviewScore(dimension="C", weight=1, score=1, evidence=""),
-        ])
+        r = ReviewResult(
+            scores=[
+                ReviewScore(dimension="A", weight=2, score=5, evidence=""),
+                ReviewScore(dimension="B", weight=1, score=1, evidence=""),
+                ReviewScore(dimension="C", weight=1, score=1, evidence=""),
+            ]
+        )
         assert r.failing_dimensions == ["B", "C"]
 
 
@@ -66,12 +90,16 @@ class TestTwoVerdictReview:
         assert r.passed
 
     def test_missing_spec_behavior_fails_despite_high_scores(self):
-        r = ReviewResult(scores=self._good_scores(), missing=["WHEN empty input THEN 400"])
+        r = ReviewResult(
+            scores=self._good_scores(), missing=["WHEN empty input THEN 400"]
+        )
         assert not r.spec_compliant
         assert not r.passed
 
     def test_misunderstood_scenario_fails_despite_high_scores(self):
-        r = ReviewResult(scores=self._good_scores(), misunderstood=["retry means backoff, not loop"])
+        r = ReviewResult(
+            scores=self._good_scores(), misunderstood=["retry means backoff, not loop"]
+        )
         assert not r.spec_compliant
         assert not r.passed
 
@@ -81,7 +109,9 @@ class TestTwoVerdictReview:
         assert r.passed
 
     def test_clean_spec_but_low_scores_still_fails(self):
-        r = ReviewResult(scores=[ReviewScore(dimension="A", weight=1, score=2, evidence="")])
+        r = ReviewResult(
+            scores=[ReviewScore(dimension="A", weight=1, score=2, evidence="")]
+        )
         assert r.spec_compliant
         assert not r.passed
 
@@ -92,7 +122,9 @@ class TestTwoVerdictReview:
         report a verdict `review_score_gate` does not apply — the two disagree
         precisely when someone bothered to configure them.
         """
-        r = ReviewResult(scores=[ReviewScore(dimension="A", weight=1, score=3, evidence="")])
+        r = ReviewResult(
+            scores=[ReviewScore(dimension="A", weight=1, score=3, evidence="")]
+        )
         assert not r.passed  # 3.0 < the default 3.5 floor
         lenient = ReviewGatePolicy(min_weighted_average=2.5)
         assert r.passed_with(lenient)
@@ -100,7 +132,9 @@ class TestTwoVerdictReview:
         assert not r.passed_with(strict)
 
     def test_passed_with_no_policy_matches_the_property(self):
-        r = ReviewResult(scores=[ReviewScore(dimension="A", weight=1, score=4, evidence="")])
+        r = ReviewResult(
+            scores=[ReviewScore(dimension="A", weight=1, score=4, evidence="")]
+        )
         assert r.passed_with(None) == r.passed
 
 
@@ -132,8 +166,12 @@ class TestChangeStatus:
         cs = ChangeStatus(
             change_name="test",
             artifacts=[
-                ArtifactInfo(id="proposal", generates="proposal.md", status=ArtifactStatus.DONE),
-                ArtifactInfo(id="tasks", generates="tasks.md", status=ArtifactStatus.DONE),
+                ArtifactInfo(
+                    id="proposal", generates="proposal.md", status=ArtifactStatus.DONE
+                ),
+                ArtifactInfo(
+                    id="tasks", generates="tasks.md", status=ArtifactStatus.DONE
+                ),
             ],
             is_complete=True,
         )
@@ -154,8 +192,12 @@ class TestEffectiveScore:
     def test_unsure_bad_score_is_not_harsher_than_a_sure_one(self):
         """Multiplying by confidence would invert the meaning — a 40%-sure
         score of 2 would land at 0.8, a hard critical fail."""
-        unsure = ReviewScore(dimension="A", weight=1, score=2, evidence="e", confidence=0.4)
-        sure = ReviewScore(dimension="A", weight=1, score=2, evidence="e", confidence=1.0)
+        unsure = ReviewScore(
+            dimension="A", weight=1, score=2, evidence="e", confidence=0.4
+        )
+        sure = ReviewScore(
+            dimension="A", weight=1, score=2, evidence="e", confidence=1.0
+        )
         assert unsure.effective_score() > sure.effective_score()
 
     def test_default_confidence_leaves_legacy_fixtures_unchanged(self):
@@ -177,8 +219,15 @@ class TestFindingsOrDerived:
         """A reviewer on the older prompt still gets adjudicated."""
         r = ReviewResult(
             scores=[],
-            issues=[ReviewIssue(dimension="D", severity="Critical",
-                                description="bare except", file_path="a.py", line=9)],
+            issues=[
+                ReviewIssue(
+                    dimension="D",
+                    severity="Critical",
+                    description="bare except",
+                    file_path="a.py",
+                    line=9,
+                )
+            ],
         )
         derived = r.findings_or_derived()
         assert len(derived) == 1
@@ -204,10 +253,12 @@ class TestFindingDedupeKey:
 
 class TestFindingAdjudication:
     def test_rejected_findings_are_dropped(self):
-        adj = FindingAdjudication(verdicts=[
-            FindingVerdict(index=0, accepted=True),
-            FindingVerdict(index=1, accepted=False, reason="misread the diff"),
-        ])
+        adj = FindingAdjudication(
+            verdicts=[
+                FindingVerdict(index=0, accepted=True),
+                FindingVerdict(index=1, accepted=False, reason="misread the diff"),
+            ]
+        )
         assert adj.accepted_indices(2) == {0}
 
     def test_unjudged_findings_stay_in_play(self):
@@ -232,23 +283,33 @@ class TestReviewGatePolicy:
 
     def test_passed_property_reads_the_policy(self):
         """`passed` and `review_score_gate` must not be able to drift apart."""
-        r = ReviewResult(scores=[
-            ReviewScore(dimension="A", weight=1, score=3, evidence="e"),
-        ])
+        r = ReviewResult(
+            scores=[
+                ReviewScore(dimension="A", weight=1, score=3, evidence="e"),
+            ]
+        )
         assert not r.passed
+
+
 class TestImplementationNote:
     def test_contradicts_property(self):
         note = ImplementationNote(
-            block_number=1, block_name="A", role="implementer",
-            surprises="x", spec_impact="contradicts",
+            block_number=1,
+            block_name="A",
+            role="implementer",
+            surprises="x",
+            spec_impact="contradicts",
         )
         assert note.contradicts
 
     def test_clarify_and_none_are_not_contradictions(self):
         for impact in ("none", "clarify"):
             note = ImplementationNote(
-                block_number=1, block_name="A", role="test_writer",
-                surprises="x", spec_impact=impact,
+                block_number=1,
+                block_name="A",
+                role="test_writer",
+                surprises="x",
+                spec_impact=impact,
             )
             assert not note.contradicts
 
@@ -261,8 +322,13 @@ class TestImplementationNote:
     def test_block_info_collects_notes(self):
         block = BlockInfo(number=1, name="A", description="d")
         assert block.notes == []
-        block.notes.append(ImplementationNote(
-            block_number=1, block_name="A", role="implementer",
-            spec_impact="clarify", surprises="TTL unspecified",
-        ))
+        block.notes.append(
+            ImplementationNote(
+                block_number=1,
+                block_name="A",
+                role="implementer",
+                spec_impact="clarify",
+                surprises="TTL unspecified",
+            )
+        )
         assert block.notes[0].spec_impact == "clarify"

@@ -36,8 +36,13 @@ BLOCKS = 2
 
 
 def _usage(usd: float) -> SimpleNamespace:
-    return SimpleNamespace(input_tokens=int(usd * 1000), output_tokens=0,
-                           cache_read_tokens=0, cache_creation_tokens=0, cost_usd=usd)
+    return SimpleNamespace(
+        input_tokens=int(usd * 1000),
+        output_tokens=0,
+        cache_read_tokens=0,
+        cache_creation_tokens=0,
+        cost_usd=usd,
+    )
 
 
 def main() -> int:
@@ -49,7 +54,12 @@ def main() -> int:
         raise AssertionError("stop_resume_driver: a phase made a real model call")
 
     # Before anything imports these names from sdk.
-    for name in ("llm_call", "agent_call", "llm_call_structured", "agent_call_structured"):
+    for name in (
+        "llm_call",
+        "agent_call",
+        "llm_call_structured",
+        "agent_call_structured",
+    ):
         setattr(sdk, name, no_model_call)
 
     from build_pipeline import budget, git_ops
@@ -74,6 +84,7 @@ def main() -> int:
 
     async def fake_spec_generator(config, args, **kwargs):
         from tests.planning_fakes import _plan_fixture
+
         state = BuildState.load(config.state_file_path())
         _plan_fixture(config, state)
         budget.record(_usage(SPEC_USD), label="spec_generation")
@@ -90,8 +101,12 @@ def main() -> int:
         budget.get_budget().load_state(state.budget)
         progress = ProgressWriter(config.progress_file_path())
         if state.tdd is None:
-            state.tdd = TDDState(blocks=[BlockInfo(number=n, name=f"block-{n}", description="d")
-                                         for n in range(1, BLOCKS + 1)])
+            state.tdd = TDDState(
+                blocks=[
+                    BlockInfo(number=n, name=f"block-{n}", description="d")
+                    for n in range(1, BLOCKS + 1)
+                ]
+            )
             state.checkpoint(state_path)
         progress.log_phase("TDD_BUILD", f"Blocks: {BLOCKS}")
         stop_point("tdd-start")
@@ -111,29 +126,55 @@ def main() -> int:
         return 0
 
     pr = f"https://github.com/acme/proj/pull/{spec.get('pr_number', 7)}"
-    git_ops._run_pr_skill = lambda argv, cwd=None, timeout=None: git_ops.GitResult(argv, 0, f"PR:{pr}\n", "")
+    git_ops._run_pr_skill = lambda argv, cwd=None, timeout=None: git_ops.GitResult(
+        argv, 0, f"PR:{pr}\n", ""
+    )
 
     project = Path(spec["project_dir"])
-    config = BuildConfig(project_dir=project, change_name=spec["change"], auto=True,
-                         spec_only=spec.get("spec_only", False), skip_research=True)
+    config = BuildConfig(
+        project_dir=project,
+        change_name=spec["change"],
+        auto=True,
+        spec_only=spec.get("spec_only", False),
+        skip_research=True,
+    )
     config.specs_dir = project / "specs"
     config.test_command = "true"
     os.environ["BUILDME_TRUST_REPO"] = "1"
     args = argparse.Namespace(
-        change=spec["change"], project_dir=str(project), auto=True,
-        spec_only=config.spec_only, skip_research=True, research_path="", session_id="", block=None,
+        change=spec["change"],
+        project_dir=str(project),
+        auto=True,
+        spec_only=config.spec_only,
+        skip_research=True,
+        research_path="",
+        session_id="",
+        block=None,
         force=spec.get("force", False),
     )
-    with patch("build_pipeline.spec_generator.run_spec_generator", fake_spec_generator), \
-         patch("build_pipeline.llm_steps.spec_steps.run_design_audit", fake_design_audit), \
-         patch("build_pipeline.llm_steps.plan_review_steps.run_plan_review",
-               new_callable=AsyncMock, return_value=PlanReviewResult(findings=[])), \
-         patch("build_pipeline.tdd_engine.run_tdd_engine", fake_tdd), \
-         patch("build_pipeline.llm_steps.respec_steps.run_respec_audit",
-               new_callable=AsyncMock, return_value=None), \
-         patch("build_pipeline.orchestrator._run_docs_update_phase",
-               new_callable=AsyncMock, return_value=None), \
-         git_ops._exit_on_termination(interrupt=False):
+    with (
+        patch("build_pipeline.spec_generator.run_spec_generator", fake_spec_generator),
+        patch(
+            "build_pipeline.llm_steps.spec_steps.run_design_audit", fake_design_audit
+        ),
+        patch(
+            "build_pipeline.llm_steps.plan_review_steps.run_plan_review",
+            new_callable=AsyncMock,
+            return_value=PlanReviewResult(findings=[]),
+        ),
+        patch("build_pipeline.tdd_engine.run_tdd_engine", fake_tdd),
+        patch(
+            "build_pipeline.llm_steps.respec_steps.run_respec_audit",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "build_pipeline.orchestrator._run_docs_update_phase",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        git_ops._exit_on_termination(interrupt=False),
+    ):
         return asyncio.run(run_orchestrator(config, args))
 
 

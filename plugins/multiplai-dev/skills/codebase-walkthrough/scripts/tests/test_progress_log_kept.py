@@ -5,12 +5,14 @@ from __future__ import annotations
 import os
 
 from fakes import FakeAgents
+from test_pipeline import run_args
 from walkthrough_pipeline import orchestrator, sdk
 from walkthrough_pipeline.__main__ import main
-from test_pipeline import run_args
 
 
-def test_a_new_run_keeps_the_previous_progress_log(ws, tmp_path, monkeypatch, fake_fetch):
+def test_a_new_run_keeps_the_previous_progress_log(
+    ws, tmp_path, monkeypatch, fake_fetch
+):
     monkeypatch.setattr(sdk, "agent_call_structured", FakeAgents(cost=0.1))
     assert main(run_args(ws, tmp_path)) == 0
     run_dir = next((tmp_path / "runs").iterdir())
@@ -21,7 +23,9 @@ def test_a_new_run_keeps_the_previous_progress_log(ws, tmp_path, monkeypatch, fa
 
     kept = list(run_dir.glob("progress-*.log"))
     assert [p.read_text() for p in kept] == [first]
-    assert (run_dir / "progress.log").read_text().count(" STARTED ") == 1  # a fresh log, not appended
+    assert (run_dir / "progress.log").read_text().count(
+        " STARTED "
+    ) == 1  # a fresh log, not appended
 
 
 def test_a_taken_dated_name_is_never_overwritten(tmp_path):

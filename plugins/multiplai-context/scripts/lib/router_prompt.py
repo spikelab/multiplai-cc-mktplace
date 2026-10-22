@@ -16,7 +16,6 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-
 SYSTEM_PROMPT = """\
 You are a CONTEXT ROUTER for a Claude Code session. Given the user's prompt, \
 optionally the most recent assistant response, and catalogs of memory files, \
@@ -173,9 +172,7 @@ def _bank_of(entry: dict) -> str:
     declared = str(entry.get("bank") or "").strip()
     if declared:
         return declared
-    ref = str(
-        entry.get("source") or entry.get("path") or entry.get("file") or ""
-    )
+    ref = str(entry.get("source") or entry.get("path") or entry.get("file") or "")
     return ref.split("/", 1)[0] if "/" in ref else "personal"
 
 
@@ -256,9 +253,7 @@ def format_catalog_for_llm(corpus_label: str, entries: Iterable[dict]) -> str:
             )
         anchor_lines = _render_anchors(entry.get("section_anchors"))
         if anchor_lines:
-            block.append(
-                f"  Sections (emit '{filename}#<section>' to load just one):"
-            )
+            block.append(f"  Sections (emit '{filename}#<section>' to load just one):")
             block.extend(f"    - {_clean(line, shared)}" for line in anchor_lines)
         bundle = entry.get("bundle")
         if isinstance(bundle, str) and bundle.strip():

@@ -5,7 +5,14 @@ from __future__ import annotations
 import json
 
 from ..models import Finding, TargetInfo, is_trim
-from . import CITATION_RULES, JSON_ONLY, deps_block, description_block, settings_block, workspace_block
+from . import (
+    CITATION_RULES,
+    JSON_ONLY,
+    deps_block,
+    description_block,
+    settings_block,
+    workspace_block,
+)
 
 SCHEMA = """\
 {"status": "confirmed" | "refuted" | "unverifiable",
@@ -81,42 +88,46 @@ other answer."""
 
 def build(target: TargetInfo, finding: Finding) -> str:
     cited = json.dumps([c.model_dump() for c in finding.citations], indent=1)
-    return "\n\n".join(p for p in [
-        "You are checking one claim from a code review. You did not write it; assume nothing it says "
-        "until you have read the code yourself.",
-        workspace_block(target, web=True),
-        deps_block(target),
-        description_block(target),
-        settings_block(target),
-        f"Claim ({finding.severity}) about `{finding.file}` lines {finding.line_start}-{finding.line_end}:\n"
-        f"{finding.claim}",
-        f"Failure scenario given:\n{finding.failure_scenario}",
-        f"Lines cited for it:\n{cited}",
-        "Read the cited lines and whatever else decides the question: callers, the values that reach "
-        "this code, the settings it reads. Then answer:\n"
-        "- `confirmed`: the failure scenario can happen. Cite the lines that make it happen.\n"
-        "- `refuted`: the code shows it cannot happen. Cite the lines that prevent it.\n"
-        "- `unverifiable`: it depends on something you could not read (production data, a vendor's "
-        "configuration, runtime values, a dependency whose source or documentation you could not reach "
-        "on the web) or the code does not settle it. Say what is missing. When part of the claim holds "
-        "in this repository and part depends on something you could not read, the answer is "
-        "`unverifiable`, not `confirmed` with a caveat.\n"
-        "A `confirmed` answer without a citation that a program can find at the cited lines is "
-        "recorded as `unverifiable`.",
-        "Unless you answer `refuted`, set `expected_behaviour`: state what correct behaviour would be, in "
-        "one sentence, without proposing a code change. For example: \"A null timeout is rejected, not "
-        "skipped.\" Say what the code should do, not how to change it.",
-        "Set `topic` to what the finding is about, whatever your answer: `code` (behaviour of the "
-        "program), `tests`, `docs` (documentation, comments, decision logs), `config`, `infra` "
-        "(deployment, CI, cloud resources), `data` (schemas, migrations, stored data), `security`, "
-        "`performance`, or `process` (the order of steps a person must follow, such as merge before "
-        "deploy). Pick the one a reader would file it under, not the file's type. Use one of these words "
-        "exactly (`tests`, not `test`): `topic` is required on every answer but `refuted`, and an answer "
-        "without one from this list is rejected.",
-        IMPACT_RULES,
-        TRIM_RULES if is_trim(finding) else "",
-        NEEDS_RULES,
-        CITATION_RULES,
-        f"Schema:\n{SCHEMA}",
-        JSON_ONLY,
-    ] if p)
+    return "\n\n".join(
+        p
+        for p in [
+            "You are checking one claim from a code review. You did not write it; assume nothing it says "
+            "until you have read the code yourself.",
+            workspace_block(target, web=True),
+            deps_block(target),
+            description_block(target),
+            settings_block(target),
+            f"Claim ({finding.severity}) about `{finding.file}` lines {finding.line_start}-{finding.line_end}:\n"
+            f"{finding.claim}",
+            f"Failure scenario given:\n{finding.failure_scenario}",
+            f"Lines cited for it:\n{cited}",
+            "Read the cited lines and whatever else decides the question: callers, the values that reach "
+            "this code, the settings it reads. Then answer:\n"
+            "- `confirmed`: the failure scenario can happen. Cite the lines that make it happen.\n"
+            "- `refuted`: the code shows it cannot happen. Cite the lines that prevent it.\n"
+            "- `unverifiable`: it depends on something you could not read (production data, a vendor's "
+            "configuration, runtime values, a dependency whose source or documentation you could not reach "
+            "on the web) or the code does not settle it. Say what is missing. When part of the claim holds "
+            "in this repository and part depends on something you could not read, the answer is "
+            "`unverifiable`, not `confirmed` with a caveat.\n"
+            "A `confirmed` answer without a citation that a program can find at the cited lines is "
+            "recorded as `unverifiable`.",
+            "Unless you answer `refuted`, set `expected_behaviour`: state what correct behaviour would be, in "
+            'one sentence, without proposing a code change. For example: "A null timeout is rejected, not '
+            'skipped." Say what the code should do, not how to change it.',
+            "Set `topic` to what the finding is about, whatever your answer: `code` (behaviour of the "
+            "program), `tests`, `docs` (documentation, comments, decision logs), `config`, `infra` "
+            "(deployment, CI, cloud resources), `data` (schemas, migrations, stored data), `security`, "
+            "`performance`, or `process` (the order of steps a person must follow, such as merge before "
+            "deploy). Pick the one a reader would file it under, not the file's type. Use one of these words "
+            "exactly (`tests`, not `test`): `topic` is required on every answer but `refuted`, and an answer "
+            "without one from this list is rejected.",
+            IMPACT_RULES,
+            TRIM_RULES if is_trim(finding) else "",
+            NEEDS_RULES,
+            CITATION_RULES,
+            f"Schema:\n{SCHEMA}",
+            JSON_ONLY,
+        ]
+        if p
+    )

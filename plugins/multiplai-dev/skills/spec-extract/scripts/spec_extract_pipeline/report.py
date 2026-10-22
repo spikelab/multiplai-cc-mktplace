@@ -59,12 +59,20 @@ def scope_sections(scope: TargetScope, not_answered: list[str]) -> list[Section]
     """
     skipped = [f"- `{s.path}`: {s.reason}" for s in scope.skipped]
     not_analysed = [f"- `{s.path}`: not analysed: {s.reason}" for s in scope.unparsed]
-    not_analysed += [f"- `{p}`: not analysed: explore gave no answer in 2 attempts" for p in not_answered]
+    not_analysed += [
+        f"- `{p}`: not analysed: explore gave no answer in 2 attempts"
+        for p in not_answered
+    ]
     return [Section("Skipped files", skipped), Section("Not analysed", not_analysed)]
 
 
 def render(target: Target, sections: list[Section]) -> str:
-    out = ["# spec-extract report", "", f"Target: {describe(target)}", f"Commit: {target.head_sha}"]
+    out = [
+        "# spec-extract report",
+        "",
+        f"Target: {describe(target)}",
+        f"Commit: {target.head_sha}",
+    ]
     for s in sections:
         out += ["", f"## {s.heading}", ""]
         out += s.lines or [s.empty]

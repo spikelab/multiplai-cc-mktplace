@@ -33,7 +33,9 @@ from lib.skill_precision import render, run
 def _days(value: str) -> int:
     n = int(value)
     if n < 0:
-        raise argparse.ArgumentTypeError("--days must be 0 (all transcripts) or a positive number")
+        raise argparse.ArgumentTypeError(
+            "--days must be 0 (all transcripts) or a positive number"
+        )
     return n
 
 
@@ -41,13 +43,27 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Report skill-routing precision: suggested skills vs. skills actually invoked."
     )
-    parser.add_argument("--days", type=_days, default=30,
-                        help="window in days (default 30; 0 = all transcripts)")
-    parser.add_argument("--json", action="store_true", help="emit JSON on stdout instead of markdown")
-    parser.add_argument("--json-out", type=Path, default=None,
-                        help="also write the JSON report to this file (one run, both outputs)")
-    parser.add_argument("--config-dir", type=Path, default=None,
-                        help="override CLAUDE_CONFIG_DIR (transcripts live under projects/)")
+    parser.add_argument(
+        "--days",
+        type=_days,
+        default=30,
+        help="window in days (default 30; 0 = all transcripts)",
+    )
+    parser.add_argument(
+        "--json", action="store_true", help="emit JSON on stdout instead of markdown"
+    )
+    parser.add_argument(
+        "--json-out",
+        type=Path,
+        default=None,
+        help="also write the JSON report to this file (one run, both outputs)",
+    )
+    parser.add_argument(
+        "--config-dir",
+        type=Path,
+        default=None,
+        help="override CLAUDE_CONFIG_DIR (transcripts live under projects/)",
+    )
     parser.add_argument("--limit", type=int, default=25, help="per-skill rows to print")
     args = parser.parse_args(argv)
 

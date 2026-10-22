@@ -346,17 +346,21 @@ def scan(
 #   activity*.jsonl       inject/fallback/skip events (session id, final
 #                         injected files, bytes)
 
-ROUTING_SCORES_RE = re.compile(r"ROUTING_SCORES (?P<corpus>\w+)=(?P<payload>\{.*\})\s*$")
-COOLDOWN_RE = re.compile(r"COOLDOWN turn=\d+ window=\d+ suppressed=(?P<payload>\{.*\})\s*$")
+ROUTING_SCORES_RE = re.compile(
+    r"ROUTING_SCORES (?P<corpus>\w+)=(?P<payload>\{.*\})\s*$"
+)
+COOLDOWN_RE = re.compile(
+    r"COOLDOWN turn=\d+ window=\d+ suppressed=(?P<payload>\{.*\})\s*$"
+)
 
 
 @dataclass
 class RoutingDecision:
     ts: datetime
-    scores: dict = field(default_factory=dict)      # corpus → ROUTING_SCORES payload
+    scores: dict = field(default_factory=dict)  # corpus → ROUTING_SCORES payload
     suppressed: dict = field(default_factory=dict)  # corpus → [files] (cooldown)
     session: str = ""
-    event: str = ""          # inject | fallback | skip | (blank if no activity match)
+    event: str = ""  # inject | fallback | skip | (blank if no activity match)
     injected: list = field(default_factory=list)
     bytes: int = 0
     msg: str = ""
@@ -424,7 +428,11 @@ def load_routing_decisions(logs_dir: Path, since: date | None = None) -> list:
                     if d is None:
                         continue
                 d.session = str(obj.get("session", ""))
-                d.event = "inject" if is_inject else ("fallback" if is_fallback else "abstain")
+                d.event = (
+                    "inject"
+                    if is_inject
+                    else ("fallback" if is_fallback else "abstain")
+                )
                 d.msg = msg
                 if is_inject:
                     d.injected = list(obj.get("files", []))
@@ -469,14 +477,16 @@ def injection_stats(decisions: list, file_filter: str | None = None) -> dict:
         if file_filter and fname != file_filter:
             continue
         scores = r["scores"]
-        rows.append({
-            "file": fname,
-            "picked": r["picked"],
-            "injected": r["injected"],
-            "suppressed": r["suppressed"],
-            "avg_score": round(sum(scores) / len(scores), 2) if scores else None,
-            "max_score": round(max(scores), 2) if scores else None,
-        })
+        rows.append(
+            {
+                "file": fname,
+                "picked": r["picked"],
+                "injected": r["injected"],
+                "suppressed": r["suppressed"],
+                "avg_score": round(sum(scores) / len(scores), 2) if scores else None,
+                "max_score": round(max(scores), 2) if scores else None,
+            }
+        )
     rows.sort(key=lambda r: (-r["injected"], -r["picked"]))
     return {
         "decisions": len(decisions),
@@ -488,8 +498,9 @@ def injection_stats(decisions: list, file_filter: str | None = None) -> dict:
     }
 
 
-def render_injections_markdown(stats: dict, decisions: list,
-                               file_filter: str | None, trace: int) -> str:
+def render_injections_markdown(
+    stats: dict, decisions: list, file_filter: str | None, trace: int
+) -> str:
     out = ["# Injection forensics", "", UNTRUSTED_NOTICE, ""]
     out.append(
         f"Decisions: {stats['decisions']} · injects: {stats['injects']} · "
@@ -499,7 +510,9 @@ def render_injections_markdown(stats: dict, decisions: list,
     out.append("")
     out.append("## Per-file stats (sorted by injections)")
     out.append("")
-    out.append("| File | Picked | Injected | Cooldown-suppressed | Avg score | Max score |")
+    out.append(
+        "| File | Picked | Injected | Cooldown-suppressed | Avg score | Max score |"
+    )
     out.append("|---|---|---|---|---|---|")
     for r in stats["files"]:
         out.append(
@@ -509,17 +522,23 @@ def render_injections_markdown(stats: dict, decisions: list,
     out.append("")
     if trace:
         shown = [
-            d for d in decisions
+            d
+            for d in decisions
             if not file_filter
             or file_filter in d.injected
-            or any(file_filter == f for p in d.scores.values()
-                   for f, _ in p.get("picked", []))
+            or any(
+                file_filter == f
+                for p in d.scores.values()
+                for f, _ in p.get("picked", [])
+            )
         ][-trace:]
         out.append(f"## Decision trace (last {len(shown)})")
         out.append("")
         for d in shown:
             sid = d.session or "--------"
-            out.append(f"### {d.ts.isoformat()} · session {sid} · {d.event or 'no-activity-match'}")
+            out.append(
+                f"### {d.ts.isoformat()} · session {sid} · {d.event or 'no-activity-match'}"
+            )
             out.append("")
             # Since plugin 0.5.3 the ROUTING_SCORES payload embeds a
             # truncated "prompt" key (same value on every corpus line
@@ -547,7 +566,8 @@ def render_injections_markdown(stats: dict, decisions: list,
                     out.append(f"  - cooldown-suppressed: {', '.join(sup)}")
             if d.injected:
                 out.append(
-                    f"- **injected:** {', '.join(defang(f) for f in d.injected)}")
+                    f"- **injected:** {', '.join(defang(f) for f in d.injected)}"
+                )
             elif d.event:
                 out.append("- outcome:")
                 out.extend(fence(d.msg, "routing log", 200))
@@ -665,8 +685,8 @@ class HookRunRecord:
     startup_ms: float | None = None
     stages: dict = field(default_factory=dict)
     fields: dict = field(default_factory=dict)
-    killed: bool = False          # entered and never exited
-    watchdog: bool = False        # logged HOOK_WATCHDOG (near its ceiling)
+    killed: bool = False  # entered and never exited
+    watchdog: bool = False  # logged HOOK_WATCHDOG (near its ceiling)
     file: str = ""
 
 
@@ -807,7 +827,7 @@ def load_hook_runs(logs_dir: Path, since: date | None = None) -> list:
                         # the prefix reads `--------`.
                         session=_session_of(kv, e.session),
                         startup_ms=_num(kv, "startup_ms"),
-                        killed=True,   # until an EXIT says otherwise
+                        killed=True,  # until an EXIT says otherwise
                         file=path.name,
                     )
                     runs.append(rec)
@@ -817,8 +837,11 @@ def load_hook_runs(logs_dir: Path, since: date | None = None) -> list:
                 if wd_m:
                     kv = _kv(wd_m.group("rest"))
                     rec = open_entries.get(
-                        (wd_m.group("hook"), _session_of(kv, e.session),
-                         kv.get("pid", ""))
+                        (
+                            wd_m.group("hook"),
+                            _session_of(kv, e.session),
+                            kv.get("pid", ""),
+                        )
                     )
                     if rec is not None:
                         rec.watchdog = True
@@ -836,7 +859,9 @@ def load_hook_runs(logs_dir: Path, since: date | None = None) -> list:
                     # the scan window starts mid-run. Record it standalone so
                     # its timing still counts.
                     rec = HookRunRecord(
-                        hook=exit_m.group("hook"), ts=e.ts, session=session,
+                        hook=exit_m.group("hook"),
+                        ts=e.ts,
+                        session=session,
                         file=path.name,
                     )
                     runs.append(rec)
@@ -923,17 +948,26 @@ def hook_stats(
     watchdog_hooks = watchdog_hooks or {}
     per_hook: dict[str, dict] = {}
     for r in runs:
-        h = per_hook.setdefault(r.hook, {
-            "runs": 0, "killed": 0, "cancelled": 0, "errors": 0, "ms": [],
-            "startup": [], "stages": {}, "outcomes": {}, "kill_sessions": [],
-            "cancel_sessions": [], "floored": 0,
-        })
+        h = per_hook.setdefault(
+            r.hook,
+            {
+                "runs": 0,
+                "killed": 0,
+                "cancelled": 0,
+                "errors": 0,
+                "ms": [],
+                "startup": [],
+                "stages": {},
+                "outcomes": {},
+                "kill_sessions": [],
+                "cancel_sessions": [],
+                "floored": 0,
+            },
+        )
         h["runs"] += 1
         if r.killed and _is_cancel(r, timeouts, watchdog_hooks, watchdog_seen):
             h["cancelled"] += 1
-            h["cancel_sessions"].append(
-                (r.ts.isoformat() if r.ts else "?", r.session)
-            )
+            h["cancel_sessions"].append((r.ts.isoformat() if r.ts else "?", r.session))
         elif r.killed:
             h["killed"] += 1
             h["kill_sessions"].append((r.ts.isoformat() if r.ts else "?", r.session))
@@ -957,37 +991,39 @@ def hook_stats(
     for hook, h in per_hook.items():
         budget = timeouts.get(hook)
         p95 = _pct(h["ms"], 0.95)
-        rows.append({
-            "hook": hook,
-            "runs": h["runs"],
-            "killed": h["killed"],
-            "cancelled": h["cancelled"],
-            "expected_orphan": hook in EXPECTED_ORPHAN_HOOKS,
-            "p95_is_lower_bound": bool(h["floored"]),
-            "errors": h["errors"],
-            "p50_ms": round(_pct(h["ms"], 0.50) or 0),
-            "p95_ms": round(p95 or 0),
-            "max_ms": round(max(h["ms"]) if h["ms"] else 0),
-            "startup_p50_ms": round(_pct(h["startup"], 0.50) or 0),
-            "budget_s": budget,
-            "p95_pct": (
-                round(100 * (p95 / 1000.0) / budget) if budget and p95 else None
-            ),
-            "stages": sorted(
-                (
-                    {
-                        "stage": name,
-                        "p50_ms": round(_pct(vals, 0.50) or 0),
-                        "max_ms": round(max(vals)),
-                    }
-                    for name, vals in h["stages"].items()
+        rows.append(
+            {
+                "hook": hook,
+                "runs": h["runs"],
+                "killed": h["killed"],
+                "cancelled": h["cancelled"],
+                "expected_orphan": hook in EXPECTED_ORPHAN_HOOKS,
+                "p95_is_lower_bound": bool(h["floored"]),
+                "errors": h["errors"],
+                "p50_ms": round(_pct(h["ms"], 0.50) or 0),
+                "p95_ms": round(p95 or 0),
+                "max_ms": round(max(h["ms"]) if h["ms"] else 0),
+                "startup_p50_ms": round(_pct(h["startup"], 0.50) or 0),
+                "budget_s": budget,
+                "p95_pct": (
+                    round(100 * (p95 / 1000.0) / budget) if budget and p95 else None
                 ),
-                key=lambda s: -s["max_ms"],
-            ),
-            "outcomes": h["outcomes"],
-            "kill_sessions": h["kill_sessions"][-5:],
-            "cancel_sessions": h["cancel_sessions"][-5:],
-        })
+                "stages": sorted(
+                    (
+                        {
+                            "stage": name,
+                            "p50_ms": round(_pct(vals, 0.50) or 0),
+                            "max_ms": round(max(vals)),
+                        }
+                        for name, vals in h["stages"].items()
+                    ),
+                    key=lambda s: -s["max_ms"],
+                ),
+                "outcomes": h["outcomes"],
+                "kill_sessions": h["kill_sessions"][-5:],
+                "cancel_sessions": h["cancel_sessions"][-5:],
+            }
+        )
     rows.sort(key=lambda r: (-r["killed"], -(r["p95_pct"] or 0), -r["p95_ms"]))
     return {
         "runs": len(runs),
@@ -996,15 +1032,14 @@ def hook_stats(
         # What a caller can gate on: orphans from hooks the harness is
         # documented to kill (see EXPECTED_ORPHAN_HOOKS) are routine teardown,
         # not a regression.
-        "unexpected_killed": sum(
-            r["killed"] for r in rows if not r["expected_orphan"]
-        ),
+        "unexpected_killed": sum(r["killed"] for r in rows if not r["expected_orphan"]),
         "hooks": rows,
     }
 
 
-def _is_cancel(r, timeouts: dict, watchdog_hooks: dict,
-               watchdog_seen: dict | None) -> bool:
+def _is_cancel(
+    r, timeouts: dict, watchdog_hooks: dict, watchdog_seen: dict | None
+) -> bool:
     """Whether orphan *r* provably ended before its watchdog (see hook_stats)."""
     secs = watchdog_hooks.get(r.hook)
     budget = timeouts.get(r.hook)
@@ -1031,18 +1066,14 @@ def hook_health_notes(stats: dict) -> list:
                 f"these are not counted as failures."
             )
         elif row["killed"]:
-            where = ", ".join(
-                f"{ts} ({sid})" for ts, sid in row["kill_sessions"]
-            )
+            where = ", ".join(f"{ts} ({sid})" for ts, sid in row["kill_sessions"])
             notes.append(
                 f"{row['hook']}: {row['killed']} run(s) entered and never "
                 f"exited — killed at the {row['budget_s'] or '?'}s ceiling or "
                 f"crashed hard. Last: {where}"
             )
         if row["cancelled"]:
-            where = ", ".join(
-                f"{ts} ({sid})" for ts, sid in row["cancel_sessions"]
-            )
+            where = ", ".join(f"{ts} ({sid})" for ts, sid in row["cancel_sessions"])
             notes.append(
                 f"{row['hook']}: {row['cancelled']} run(s) logged no exit and "
                 f"no near-timeout warning — cancelled (interrupted or crashed "
@@ -1052,7 +1083,8 @@ def hook_health_notes(stats: dict) -> list:
         if row["p95_pct"] and row["p95_pct"] >= HOOK_BUDGET_WARN_RATIO * 100:
             bound = (
                 " (a lower bound — killed runs counted at their ceiling)"
-                if row["p95_is_lower_bound"] else ""
+                if row["p95_is_lower_bound"]
+                else ""
             )
             notes.append(
                 f"{row['hook']}: p95 is {row['p95_pct']}% of its "
@@ -1060,9 +1092,7 @@ def hook_health_notes(stats: dict) -> list:
                 f"tail is one slow dependency away from a kill."
             )
         if row["errors"]:
-            notes.append(
-                f"{row['hook']}: {row['errors']} run(s) exited status=error."
-            )
+            notes.append(f"{row['hook']}: {row['errors']} run(s) exited status=error.")
         slowest = row["stages"][0] if row["stages"] else None
         if slowest and row["p95_ms"] and slowest["max_ms"] > 0.6 * row["p95_ms"]:
             notes.append(
@@ -1070,8 +1100,10 @@ def hook_health_notes(stats: dict) -> list:
                 f"(max {slowest['max_ms']}ms of a {row['p95_ms']}ms p95)."
             )
     if not notes:
-        notes.append("No kills, no error exits, and every hook's p95 is "
-                     "comfortably inside its budget.")
+        notes.append(
+            "No kills, no error exits, and every hook's p95 is "
+            "comfortably inside its budget."
+        )
     return notes
 
 
@@ -1085,16 +1117,13 @@ def hooks_json_payload(stats: dict, notes: list) -> dict:
     one a script pipes somewhere else — carrying raw log content with no notice
     attached.
     """
+
     def _row(r: dict) -> dict:
         out = dict(r)
         out["hook"] = defang(r["hook"], 40)
-        out["stages"] = [
-            {**s, "stage": defang(s["stage"], 40)} for s in r["stages"]
-        ]
+        out["stages"] = [{**s, "stage": defang(s["stage"], 40)} for s in r["stages"]]
         out["outcomes"] = {defang(k, 40): v for k, v in r["outcomes"].items()}
-        out["kill_sessions"] = [
-            [ts, defang(sid, 40)] for ts, sid in r["kill_sessions"]
-        ]
+        out["kill_sessions"] = [[ts, defang(sid, 40)] for ts, sid in r["kill_sessions"]]
         out["cancel_sessions"] = [
             [ts, defang(sid, 40)] for ts, sid in r["cancel_sessions"]
         ]
@@ -1122,11 +1151,14 @@ def render_hooks_markdown(stats: dict, notes: list) -> str:
         + (
             f"; {stats['cancelled']} cancelled (no exit and no near-timeout "
             f"warning — not timeouts)."
-            if stats.get("cancelled") else "."
+            if stats.get("cancelled")
+            else "."
         )
     )
     out.append("")
-    out.append("| hook | runs | killed | cancelled | err | p50 | p95 | max | startup p50 | budget | p95 % |")
+    out.append(
+        "| hook | runs | killed | cancelled | err | p50 | p95 | max | startup p50 | budget | p95 % |"
+    )
     out.append("|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|")
     for r in stats["hooks"]:
         out.append(
@@ -1153,8 +1185,7 @@ def render_hooks_markdown(stats: dict, notes: list) -> str:
             out.append("|---|--:|--:|")
             for s in r["stages"]:
                 out.append(
-                    f"| {defang(s['stage'], 40)} | {s['p50_ms']}ms | "
-                    f"{s['max_ms']}ms |"
+                    f"| {defang(s['stage'], 40)} | {s['p50_ms']}ms | {s['max_ms']}ms |"
                 )
         if r["outcomes"]:
             out.append("")
@@ -1208,7 +1239,11 @@ SCENARIOS = {
         "trigger": "Let a session end (a `claude -p` one-shot ends immediately after replying).",
         "subsystems": ["session_end", "activity"],
         "expect": [
-            ("session_end", "INFO", r"Wrote deferred extraction marker|[Ss]ession ended"),
+            (
+                "session_end",
+                "INFO",
+                r"Wrote deferred extraction marker|[Ss]ession ended",
+            ),
         ],
     },
     "session-stop": {
@@ -1223,28 +1258,44 @@ SCENARIOS = {
         "subsystems": ["context_manager", "activity"],
         "expect": [
             ("context_manager", "INFO", r"ROUTING "),
-            ("context", "INFO", r"injected \d+ memory|router abstained|router matched nothing"),
+            (
+                "context",
+                "INFO",
+                r"injected \d+ memory|router abstained|router matched nothing",
+            ),
         ],
     },
     "extract-learnings": {
         "trigger": "End a session with substantive work in it, or run the backfill skill on one transcript.",
         "subsystems": ["extract_learnings"],
         "expect": [
-            ("extract_learnings", "INFO", r"Extract learnings using \w+|No actionable content found"),
+            (
+                "extract_learnings",
+                "INFO",
+                r"Extract learnings using \w+|No actionable content found",
+            ),
         ],
     },
     "generate-catalog": {
         "trigger": "Run `/multiplai-context:refresh-catalogs` (or the generate_catalog.py script, e.g. with --dry-run).",
         "subsystems": ["generate_catalog"],
         "expect": [
-            ("generate_catalog", "INFO", r"complete \(sources=|Catalog generation complete|dry.run"),
+            (
+                "generate_catalog",
+                "INFO",
+                r"complete \(sources=|Catalog generation complete|dry.run",
+            ),
         ],
     },
     "synthesize-now": {
         "trigger": "Run `/multiplai-context:now` (or complete an extraction that refreshes now/).",
         "subsystems": ["synthesize_now"],
         "expect": [
-            ("synthesize_now", "INFO", r"Synthesize now using \w+|Synthesized|Refreshed now/"),
+            (
+                "synthesize_now",
+                "INFO",
+                r"Synthesize now using \w+|Synthesized|Refreshed now/",
+            ),
         ],
     },
     "backfill": {
@@ -1328,30 +1379,43 @@ def _entry_matches(e: Entry, subsystem: str, level: str, pattern: str) -> bool:
     return re.search(pattern, e.msg) is not None
 
 
-def probe_check(entries: list, expectations: list, forbid_subsystems: list,
-                allow_errors: bool = False) -> dict:
+def probe_check(
+    entries: list,
+    expectations: list,
+    forbid_subsystems: list,
+    allow_errors: bool = False,
+) -> dict:
     """Evaluate expectations against new entries. Returns a verdict dict."""
     results = []
     for subsystem, level, pattern in expectations:
         matches = [e for e in entries if _entry_matches(e, subsystem, level, pattern)]
-        results.append({
-            "subsystem": subsystem,
-            "level": level,
-            "pattern": pattern,
-            "matched": len(matches),
-            "sample": matches[0].msg[:200] if matches else None,
-            "ok": bool(matches),
-        })
+        results.append(
+            {
+                "subsystem": subsystem,
+                "level": level,
+                "pattern": pattern,
+                "matched": len(matches),
+                "sample": matches[0].msg[:200] if matches else None,
+                "ok": bool(matches),
+            }
+        )
     unexpected = []
     if not allow_errors:
         unexpected = [
-            {"subsystem": e.subsystem, "component": e.component, "level": e.level,
-             "msg": e.msg[:200], "traceback_tail": e.detail_tail[:200]}
+            {
+                "subsystem": e.subsystem,
+                "component": e.component,
+                "level": e.level,
+                "msg": e.msg[:200],
+                "traceback_tail": e.detail_tail[:200],
+            }
             for e in entries
             if e.level in ("ERROR", "CRITICAL")
-            and (not forbid_subsystems
-                 or e.subsystem in forbid_subsystems
-                 or e.component in forbid_subsystems)
+            and (
+                not forbid_subsystems
+                or e.subsystem in forbid_subsystems
+                or e.component in forbid_subsystems
+            )
         ]
     passed = all(r["ok"] for r in results) and not unexpected
     return {
@@ -1363,8 +1427,12 @@ def probe_check(entries: list, expectations: list, forbid_subsystems: list,
 
 
 def render_probe_markdown(verdict: dict) -> str:
-    out = [f"# Probe {'PASSED' if verdict['passed'] else 'FAILED'}", "",
-           UNTRUSTED_NOTICE, ""]
+    out = [
+        f"# Probe {'PASSED' if verdict['passed'] else 'FAILED'}",
+        "",
+        UNTRUSTED_NOTICE,
+        "",
+    ]
     out.append(f"New log entries since baseline: {verdict['new_entries']}")
     out.append("")
     out.append("## Expectations")
@@ -1388,8 +1456,7 @@ def render_probe_markdown(verdict: dict) -> str:
             out.extend(fence(u["msg"], f"{u['subsystem']} log"))
             if u["traceback_tail"]:
                 out.append("  - traceback tail:")
-                out.extend(fence(u["traceback_tail"],
-                                 f"{u['subsystem']} traceback"))
+                out.extend(fence(u["traceback_tail"], f"{u['subsystem']} traceback"))
     return "\n".join(out)
 
 
@@ -1434,8 +1501,7 @@ def render_markdown(clusters, stats, notes, max_clusters: int) -> str:
             out.extend(fence(c.sample.msg, f"{c.subsystem} log", 300))
             if c.sample.detail_tail:
                 out.append(f"- traceback tail ({c.sample.detail_lines} lines):")
-                out.extend(fence(c.sample.detail_tail,
-                                 f"{c.subsystem} traceback", 300))
+                out.extend(fence(c.sample.detail_tail, f"{c.subsystem} traceback", 300))
         # Filenames are log-derived too: a repo can carry a file named to read
         # as an instruction, and it reaches the digest verbatim.
         out.append(f"- files: {', '.join(defang(f) for f in sorted(c.files))}")
@@ -1472,8 +1538,10 @@ def render_json(clusters, stats, notes, max_clusters: int) -> str:
                     ),
                     "injection_suspected": bool(
                         c.sample
-                        and (contains_injection(c.sample.msg)
-                             or contains_injection(c.sample.detail_tail))
+                        and (
+                            contains_injection(c.sample.msg)
+                            or contains_injection(c.sample.detail_tail)
+                        )
                     ),
                     "files": [defang(f) for f in sorted(c.files)],
                 }
@@ -1486,9 +1554,7 @@ def render_json(clusters, stats, notes, max_clusters: int) -> str:
 
 def main(argv: list | None = None) -> int:
     parser = argparse.ArgumentParser(prog="log_doctor")
-    parser.add_argument(
-        "--logs-dir", help="logs directory (default: paths.logs_dir())"
-    )
+    parser.add_argument("--logs-dir", help="logs directory (default: paths.logs_dir())")
     parser.add_argument(
         "--subsystem",
         help="comma-separated subsystem names to focus on (default: all)",
@@ -1508,20 +1574,27 @@ def main(argv: list | None = None) -> int:
     )
     inj = parser.add_argument_group("injection forensics")
     inj.add_argument(
-        "--injections", action="store_true",
+        "--injections",
+        action="store_true",
         help="analyze context-routing injections (joins context_manager + activity logs)",
     )
     inj.add_argument(
-        "--file", dest="inj_file",
+        "--file",
+        dest="inj_file",
         help="focus on one memory/skill/resource file (e.g. life.md)",
     )
     inj.add_argument(
-        "--trace", type=int, nargs="?", const=10, default=0,
+        "--trace",
+        type=int,
+        nargs="?",
+        const=10,
+        default=0,
         help="show the last N full decision traces (default 10 when given)",
     )
     hooks = parser.add_argument_group("hook timing")
     hooks.add_argument(
-        "--hooks", action="store_true",
+        "--hooks",
+        action="store_true",
         help=(
             "per-hook latency, stage breakdown, and runs killed at their "
             f"timeout (last {HOOK_DEFAULT_DAYS} days unless --days says otherwise)"
@@ -1529,29 +1602,35 @@ def main(argv: list | None = None) -> int:
     )
     probe = parser.add_argument_group("probe mode")
     probe.add_argument(
-        "--probe-start", action="store_true",
+        "--probe-start",
+        action="store_true",
         help="snapshot the logs as a baseline, then exercise the functionality",
     )
     probe.add_argument(
-        "--probe-check", action="store_true",
+        "--probe-check",
+        action="store_true",
         help="verify expected log entries appeared since --probe-start",
     )
     probe.add_argument(
         "--scenario", help="named scenario for --probe-check (see --scenarios)"
     )
     probe.add_argument(
-        "--expect", action="append", default=[],
+        "--expect",
+        action="append",
+        default=[],
         help="ad-hoc expectation SUBSYSTEM:LEVEL:REGEX (repeatable; LEVEL may be *)",
     )
     probe.add_argument(
-        "--scenarios", action="store_true",
+        "--scenarios",
+        action="store_true",
         help="list probe scenarios with their trigger instructions and exit",
     )
     probe.add_argument(
         "--state", help="probe state file (default: <logs>/state/log-doctor-probe.json)"
     )
     probe.add_argument(
-        "--allow-errors", action="store_true",
+        "--allow-errors",
+        action="store_true",
         help="don't fail the probe on ERROR entries from involved subsystems",
     )
     args = parser.parse_args(argv)
@@ -1601,44 +1680,59 @@ def main(argv: list | None = None) -> int:
             if args.trace:
                 payload["trace"] = [
                     {
-                        "ts": d.ts.isoformat(), "session": d.session,
-                        "event": d.event, "injected": d.injected,
-                        "bytes": d.bytes, "scores": d.scores,
+                        "ts": d.ts.isoformat(),
+                        "session": d.session,
+                        "event": d.event,
+                        "injected": d.injected,
+                        "bytes": d.bytes,
+                        "scores": d.scores,
                         "suppressed": d.suppressed,
                     }
-                    for d in decisions[-args.trace:]
+                    for d in decisions[-args.trace :]
                 ]
             print(json.dumps(payload, indent=2))
         else:
-            print(render_injections_markdown(stats, decisions, args.inj_file, args.trace))
-        logger.info("DONE injections decisions=%d file=%s",
-                    len(decisions), args.inj_file or "all")
+            print(
+                render_injections_markdown(stats, decisions, args.inj_file, args.trace)
+            )
+        logger.info(
+            "DONE injections decisions=%d file=%s",
+            len(decisions),
+            args.inj_file or "all",
+        )
         return 0
 
     if args.probe_start or args.probe_check:
         state_file = (
-            Path(args.state).expanduser() if args.state else default_state_file(logs_dir)
+            Path(args.state).expanduser()
+            if args.state
+            else default_state_file(logs_dir)
         )
         if args.probe_start:
             snap = probe_snapshot(logs_dir)
             state_file.parent.mkdir(parents=True, exist_ok=True)
             state_file.write_text(json.dumps(snap, indent=2))
-            logger.info("START probe baseline files=%d state=%s",
-                        len(snap["files"]), state_file)
+            logger.info(
+                "START probe baseline files=%d state=%s", len(snap["files"]), state_file
+            )
             print(f"Probe baseline recorded ({len(snap['files'])} files): {state_file}")
             print("Now exercise the functionality, then run --probe-check.")
             return 0
         # --probe-check
         if not state_file.is_file():
-            print(f"no probe baseline at {state_file} — run --probe-start first",
-                  file=sys.stderr)
+            print(
+                f"no probe baseline at {state_file} — run --probe-start first",
+                file=sys.stderr,
+            )
             return 2
         expectations, forbid = [], []
         if args.scenario:
             sc = SCENARIOS.get(args.scenario)
             if sc is None:
-                print(f"unknown scenario {args.scenario!r} — see --scenarios",
-                      file=sys.stderr)
+                print(
+                    f"unknown scenario {args.scenario!r} — see --scenarios",
+                    file=sys.stderr,
+                )
                 return 2
             expectations += sc["expect"]
             forbid += sc["subsystems"]
@@ -1647,17 +1741,24 @@ def main(argv: list | None = None) -> int:
             expectations.append(exp)
             forbid.append(exp[0])
         if not expectations:
-            print("nothing to check — pass --scenario and/or --expect",
-                  file=sys.stderr)
+            print("nothing to check — pass --scenario and/or --expect", file=sys.stderr)
             return 2
         snap = json.loads(state_file.read_text())
         entries = probe_new_entries(logs_dir, snap)
-        verdict = probe_check(entries, expectations, forbid,
-                              allow_errors=args.allow_errors)
-        print(json.dumps(verdict, indent=2) if args.json
-              else render_probe_markdown(verdict))
-        logger.info("DONE probe scenario=%s passed=%s new_entries=%d",
-                    args.scenario or "ad-hoc", verdict["passed"], len(entries))
+        verdict = probe_check(
+            entries, expectations, forbid, allow_errors=args.allow_errors
+        )
+        print(
+            json.dumps(verdict, indent=2)
+            if args.json
+            else render_probe_markdown(verdict)
+        )
+        logger.info(
+            "DONE probe scenario=%s passed=%s new_entries=%d",
+            args.scenario or "ad-hoc",
+            verdict["passed"],
+            len(entries),
+        )
         return 0 if verdict["passed"] else 1
 
     subsystems = (
@@ -1669,7 +1770,10 @@ def main(argv: list | None = None) -> int:
 
     logger.info(
         "START logs_dir=%s subsystems=%s since=%s errors_only=%s",
-        logs_dir, subsystems or "all", since, args.errors_only,
+        logs_dir,
+        subsystems or "all",
+        since,
+        args.errors_only,
     )
     clusters, stats, notes, found = scan(
         logs_dir, subsystems=subsystems, since=since, errors_only=args.errors_only
@@ -1695,7 +1799,10 @@ def main(argv: list | None = None) -> int:
         print(render_markdown(clusters, stats, notes, args.max_clusters))
     logger.info(
         "DONE files=%d entries=%d clusters=%d anomalies=%d",
-        len(stats), sum(s.entries for s in stats), len(clusters), len(notes),
+        len(stats),
+        sum(s.entries for s in stats),
+        len(clusters),
+        len(notes),
     )
     return 0
 

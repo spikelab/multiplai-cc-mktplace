@@ -54,7 +54,8 @@ from pathlib import Path
 AS_OF_RE = re.compile(
     r"\(as of (?P<as_of>\d{4}-\d{2}(?:-\d{2})?)"
     r"(?:\s*,\s*review by (?P<review_by>\d{4}-\d{2}(?:-\d{2})?))?\)",
-    re.IGNORECASE)
+    re.IGNORECASE,
+)
 
 # Volatile-fact detection is a CONJUNCTION, not a disjunction, and this is the
 # whole design.
@@ -76,20 +77,29 @@ CURRENCY_RE = re.compile(
     r"latest|newest|most recent|state of the art|"
     r"best (?:available|option|choice|model|tool)|"
     r"works? at|employed (?:at|by)|now (?:costs?|uses?|runs?|lives?))\b",
-    re.IGNORECASE)
+    re.IGNORECASE,
+)
 
 # Half two: a specific value that can be superseded.
 CONCRETE_CLASSES: list[tuple[str, re.Pattern, str]] = [
-    ("price",
-     re.compile(r"(?:[$€£]\s?\d[\d,.]*(?:[KkMm]\b)?"
-                r"|\b\d[\d,.]*\s?(?:USD|EUR|GBP)\b)"),
-     "prices change without announcement"),
-    ("version",
-     re.compile(r"\bv?\d+\.\d+(?:\.\d+)?\b(?!\s*%)"),
-     "version numbers are superseded silently"),
-    ("employer",
-     re.compile(r"\b(?:works? at|employed (?:at|by))\s+[A-Z]", re.IGNORECASE),
-     "employment changes and the old fact reads as current"),
+    (
+        "price",
+        re.compile(
+            r"(?:[$€£]\s?\d[\d,.]*(?:[KkMm]\b)?"
+            r"|\b\d[\d,.]*\s?(?:USD|EUR|GBP)\b)"
+        ),
+        "prices change without announcement",
+    ),
+    (
+        "version",
+        re.compile(r"\bv?\d+\.\d+(?:\.\d+)?\b(?!\s*%)"),
+        "version numbers are superseded silently",
+    ),
+    (
+        "employer",
+        re.compile(r"\b(?:works? at|employed (?:at|by))\s+[A-Z]", re.IGNORECASE),
+        "employment changes and the old fact reads as current",
+    ),
 ]
 
 # Deadlines are the exception to the conjunction rule: a deadline is volatile by
@@ -100,7 +110,8 @@ DEADLINE_RE = re.compile(
     r"\b(?:deadline|due (?:by|on)|expires? on|renewal|ends? on|valid until)\b"
     r"[^.\n]{0,40}?\b(?:\d{4}-\d{2}(?:-\d{2})?|"
     r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2}?,?\s*\d{4})",
-    re.IGNORECASE)
+    re.IGNORECASE,
+)
 
 # Lines that are structure, not facts.
 _SKIP_LINE_RE = re.compile(r"^\s*(?:#{1,6}\s|```|\||-{3,}\s*$|\*\*Last Updated)")
@@ -131,7 +142,7 @@ AS_OF_STALE_DAYS = 365
 class Finding:
     path: Path
     lineno: int
-    kind: str          # "expired" | "unmarked" | "undated" | "duplicate-h2"
+    kind: str  # "expired" | "unmarked" | "undated" | "duplicate-h2"
     fact_class: str
     line: str
     detail: str
@@ -173,7 +184,9 @@ def _parse_stamp(value: str) -> date:
 # who already did the right thing.
 HISTORICAL_RE = re.compile(
     r"\b(?:historical|no longer current|formerly|previously|used to be|"
-    r"deprecated|superseded|obsolete|was:|until \d{4})\b", re.IGNORECASE)
+    r"deprecated|superseded|obsolete|was:|until \d{4})\b",
+    re.IGNORECASE,
+)
 
 
 def classify(line: str) -> list[tuple[str, str]]:
@@ -189,8 +202,9 @@ def classify(line: str) -> list[tuple[str, str]]:
         return [("deadline", "a passed deadline is worse than no deadline")]
     if not CURRENCY_RE.search(line):
         return []
-    return [(name, why) for name, pattern, why in CONCRETE_CLASSES
-            if pattern.search(line)]
+    return [
+        (name, why) for name, pattern, why in CONCRETE_CLASSES if pattern.search(line)
+    ]
 
 
 def lint_text(text: str, path: Path, today: date) -> list[Finding]:
@@ -210,10 +224,16 @@ def lint_text(text: str, path: Path, today: date) -> list[Finding]:
             review_by = match.group("review_by")
             if review_by:
                 if _parse_stamp(review_by) < today:
-                    findings.append(Finding(
-                        path=path, lineno=lineno, kind="expired",
-                        fact_class="annotated", line=line,
-                        detail=f"review by {review_by} has passed — re-verify or re-stamp"))
+                    findings.append(
+                        Finding(
+                            path=path,
+                            lineno=lineno,
+                            kind="expired",
+                            fact_class="annotated",
+                            line=line,
+                            detail=f"review by {review_by} has passed — re-verify or re-stamp",
+                        )
+                    )
                 continue
             # `(as of ...)` with NO `review by`: the author dated the fact but
             # never said when it stops being trustworthy, so nothing can ever
@@ -225,19 +245,31 @@ def lint_text(text: str, path: Path, today: date) -> list[Finding]:
             as_of = _parse_stamp(match.group("as_of"))
             age_days = (today - as_of).days
             if age_days > AS_OF_STALE_DAYS:
-                findings.append(Finding(
-                    path=path, lineno=lineno, kind="undated",
-                    fact_class="annotated", line=line,
-                    detail=f"'as of {match.group('as_of')}' is {age_days // 30} "
-                           f"months old with no 'review by' — nothing can expire "
-                           f"it; add 'review by YYYY-MM'"))
+                findings.append(
+                    Finding(
+                        path=path,
+                        lineno=lineno,
+                        kind="undated",
+                        fact_class="annotated",
+                        line=line,
+                        detail=f"'as of {match.group('as_of')}' is {age_days // 30} "
+                        f"months old with no 'review by' — nothing can expire "
+                        f"it; add 'review by YYYY-MM'",
+                    )
+                )
             continue  # annotated: the author already made a claim about freshness
 
         for name, why in classify(line):
-            findings.append(Finding(
-                path=path, lineno=lineno, kind="unmarked",
-                fact_class=name, line=line,
-                detail=f"{why}; add '(as of YYYY-MM[, review by YYYY-MM])'"))
+            findings.append(
+                Finding(
+                    path=path,
+                    lineno=lineno,
+                    kind="unmarked",
+                    fact_class=name,
+                    line=line,
+                    detail=f"{why}; add '(as of YYYY-MM[, review by YYYY-MM])'",
+                )
+            )
             break  # one finding per line — the first class is enough to act on
     return findings
 
@@ -300,13 +332,19 @@ def find_duplicate_h2(texts: dict[Path, str]) -> list[Finding]:
         for header, lineno in _h2_positions(texts[path]):
             key = header.lower()
             if key in seen_in_file:
-                findings.append(Finding(
-                    path=path, lineno=lineno, kind="duplicate-h2-in-file",
-                    fact_class="section", line=f"## {header}",
-                    detail=f"'{header}' is an H2 more than once in this file — "
-                           f"a '#{header}' pick loads every occurrence, so the "
-                           f"slice is larger and vaguer than it looks; retitle "
-                           f"one of them"))
+                findings.append(
+                    Finding(
+                        path=path,
+                        lineno=lineno,
+                        kind="duplicate-h2-in-file",
+                        fact_class="section",
+                        line=f"## {header}",
+                        detail=f"'{header}' is an H2 more than once in this file — "
+                        f"a '#{header}' pick loads every occurrence, so the "
+                        f"slice is larger and vaguer than it looks; retitle "
+                        f"one of them",
+                    )
+                )
                 continue
             seen_in_file.add(key)
             by_name.setdefault(key, []).append((path, lineno, header))
@@ -317,11 +355,17 @@ def find_duplicate_h2(texts: dict[Path, str]) -> list[Finding]:
         names = [p.name for p, _, _ in occurrences]
         for path, lineno, header in occurrences:
             others = [n for n in names if n != path.name] or names
-            findings.append(Finding(
-                path=path, lineno=lineno, kind="duplicate-h2",
-                fact_class="section", line=f"## {header}",
-                detail=f"'{header}' is also an H2 in {', '.join(sorted(set(others)))}"
-                       f" — a '#{header}' section pick is ambiguous; retitle one"))
+            findings.append(
+                Finding(
+                    path=path,
+                    lineno=lineno,
+                    kind="duplicate-h2",
+                    fact_class="section",
+                    line=f"## {header}",
+                    detail=f"'{header}' is also an H2 in {', '.join(sorted(set(others)))}"
+                    f" — a '#{header}' section pick is ambiguous; retitle one",
+                )
+            )
     return findings
 
 
@@ -363,20 +407,32 @@ def summarize(findings: list[Finding], root: Path | None = None) -> str:
         lines.append(f"## Duplicate H2 section names ({len(duplicate)})")
         lines.extend(f.render(root) for f in duplicate)
         lines.append("")
-    lines.append(f"memory_lint: {len(expired)} expired, {len(undated)} undated, "
-                 f"{len(unmarked)} unmarked, {len(duplicate)} duplicate-h2")
+    lines.append(
+        f"memory_lint: {len(expired)} expired, {len(undated)} undated, "
+        f"{len(unmarked)} unmarked, {len(duplicate)} duplicate-h2"
+    )
     return "\n".join(lines)
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
-        description="Lint memory files for stale and unannotated volatile facts.")
-    ap.add_argument("memory_dir", nargs="?", type=Path, default=None,
-                    help="memory directory (default: the configured one)")
-    ap.add_argument("--expired-only", action="store_true",
-                    help="report only passed 'review by' dates, not missing annotations")
-    ap.add_argument("--today", default=None,
-                    help="YYYY-MM-DD to evaluate against (testing)")
+        description="Lint memory files for stale and unannotated volatile facts."
+    )
+    ap.add_argument(
+        "memory_dir",
+        nargs="?",
+        type=Path,
+        default=None,
+        help="memory directory (default: the configured one)",
+    )
+    ap.add_argument(
+        "--expired-only",
+        action="store_true",
+        help="report only passed 'review by' dates, not missing annotations",
+    )
+    ap.add_argument(
+        "--today", default=None, help="YYYY-MM-DD to evaluate against (testing)"
+    )
     args = ap.parse_args(argv)
 
     memory_dir = args.memory_dir
@@ -384,17 +440,20 @@ def main(argv: list[str] | None = None) -> int:
         try:
             sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
             from multiplai_core.paths import get_paths  # type: ignore
+
             memory_dir = get_paths().memory_dir()
         except Exception:
-            print("memory_lint: no memory directory given and none configured",
-                  file=sys.stderr)
+            print(
+                "memory_lint: no memory directory given and none configured",
+                file=sys.stderr,
+            )
             return 1
 
     if not memory_dir.is_dir():
         print(f"memory_lint: not a directory: {memory_dir}", file=sys.stderr)
         return 1
 
-    today = (date.fromisoformat(args.today) if args.today else date.today())
+    today = date.fromisoformat(args.today) if args.today else date.today()
     findings = lint_dir(memory_dir, today)
     if args.expired_only:
         findings = [f for f in findings if f.kind == "expired"]

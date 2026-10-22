@@ -45,16 +45,16 @@ runs no review and posts nothing: it is recorded finished, with no
 
 from __future__ import annotations
 
-from build_pipeline.budget import BudgetExceededError
-
 import asyncio
 import functools
 import logging
 import re
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Awaitable, Callable
+
+from build_pipeline.budget import BudgetExceededError
 
 from .. import budget, git_ops, stop_record
 from ..change_manager import normalize_change_name
@@ -117,25 +117,25 @@ class Seams:
     decisions: Callable[[str], Path] | None = None
     # The review target directories the ledger holds for this PR
     # (`history.ledger_dirs`).
-    review_dirs: Callable[["FindingsRun"], list[str]] | None = None
+    review_dirs: Callable[[FindingsRun], list[str]] | None = None
 
 
 @dataclass
 class FindingsRun:
-    config: BuildConfig          # bound to the PR's worktree
+    config: BuildConfig  # bound to the PR's worktree
     pr: int
-    repo: str                    # owner/name
+    repo: str  # owner/name
     branch: str
     change_dir: Path
     auto: bool = False
     trust_repo: bool = False
     seams: Seams = field(default_factory=Seams)
     emit: Callable[[str], None] = print
-    max_usd: float | None = None             # `--max-usd`: stop between rounds once reached
-    severities: tuple[str, ...] | None = None    # `--severities`: what `--auto` posts
-    code_only: bool = False                  # `--code-only`: `--auto` posts Code findings only
-    review: bool = True                      # False (`--no-review`): a round ends with no review
-    escalate: bool = True                    # False (`--no-escalation`): no round is escalated
+    max_usd: float | None = None  # `--max-usd`: stop between rounds once reached
+    severities: tuple[str, ...] | None = None  # `--severities`: what `--auto` posts
+    code_only: bool = False  # `--code-only`: `--auto` posts Code findings only
+    review: bool = True  # False (`--no-review`): a round ends with no review
+    escalate: bool = True  # False (`--no-escalation`): no round is escalated
 
     @property
     def project_dir(self) -> Path:
@@ -147,7 +147,7 @@ class FindingsRun:
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def load_state(run: FindingsRun) -> BuildState:
@@ -157,10 +157,13 @@ def load_state(run: FindingsRun) -> BuildState:
             return st
     c = run.config
     return BuildState(
-        change_name=c.change_name, tier=c.tier, phase=BuildPhase.COMPLETE,
+        change_name=c.change_name,
+        tier=c.tier,
+        phase=BuildPhase.COMPLETE,
         state_file=str(run.state_path),
-        findings=FindingsState(pr=run.pr, repo=run.repo, branch=run.branch,
-                               change_dir=str(run.change_dir)),
+        findings=FindingsState(
+            pr=run.pr, repo=run.repo, branch=run.branch, change_dir=str(run.change_dir)
+        ),
     )
 
 
@@ -169,9 +172,11 @@ def state_mismatch(run: FindingsRun, fs: FindingsState) -> str | None:
     theirs = (fs.pr, fs.repo.lower(), fs.branch)
     if theirs == (run.pr, run.repo.lower(), run.branch):
         return None
-    return (f"{run.state_path} belongs to PR #{fs.pr} on {fs.repo} (branch {fs.branch}), "
-            f"not PR #{run.pr} on {run.repo} (branch {run.branch}); "
-            "move that file aside to start over for this PR")
+    return (
+        f"{run.state_path} belongs to PR #{fs.pr} on {fs.repo} (branch {fs.branch}), "
+        f"not PR #{run.pr} on {run.repo} (branch {run.branch}); "
+        "move that file aside to start over for this PR"
+    )
 
 
 def all_records(fs: FindingsState) -> list[TriageRecord]:
@@ -185,7 +190,9 @@ def review_files(run: FindingsRun, fs: FindingsState) -> list[dict]:
     """Every review of the PR, oldest first: those in the target
     directories the ledger records for it and in each round's
     `review_run_dir` (`history.review_files`)."""
-    ledger = (run.seams.review_dirs or (lambda r: history.ledger_dirs(r.project_dir, r.pr)))(run)
+    ledger = (
+        run.seams.review_dirs or (lambda r: history.ledger_dirs(r.project_dir, r.pr))
+    )(run)
     return history.review_files([*ledger, *(r.review_run_dir for r in fs.rounds)])
 
 
@@ -194,15 +201,22 @@ def recurring_lines(run: FindingsRun, fs: FindingsState) -> list[str]:
     per lineage open in two or more of the PR's reviews, then one
     `FINDINGS_RECURRING_SLOT:<block>:<answer>` per `RECURRING:` answer the
     last round saved."""
-    out = [f"FINDINGS_RECURRING:{lin}:{n}" for lin, n in history.recurring(review_files(run, fs))]
+    out = [
+        f"FINDINGS_RECURRING:{lin}:{n}"
+        for lin, n in history.recurring(review_files(run, fs))
+    ]
     last = fs.rounds[-1] if fs.rounds else None
     for block, slot in sorted((last.recurring if last else {}).items()):
         out.append(f"FINDINGS_RECURRING_SLOT:{block}:{' '.join(slot.split())}")
     return out
 
 
-def _write_findings_file(run: FindingsRun, fs: FindingsState, rnd: FindingsRound) -> Path:
-    return triage.write_findings(run.change_dir, rnd.number, all_records(fs), rnd.spec_issues)
+def _write_findings_file(
+    run: FindingsRun, fs: FindingsState, rnd: FindingsRound
+) -> Path:
+    return triage.write_findings(
+        run.change_dir, rnd.number, all_records(fs), rnd.spec_issues
+    )
 
 
 # --- wip refs -----------------------------------------------------------------
@@ -236,21 +250,34 @@ def keep_and_rewind(run: FindingsRun, rnd: FindingsRound, step: str) -> None:
     if git_ops.tree_is_clean(repo) and git_ops.rev_parse_head(repo) == start:
         return
     name = wip_ref(run, rnd, step)
-    ref = git_ops.save_wip_ref(repo, name, f"wip(findings-r{rnd.number}): {step}, kept before discard")
+    ref = git_ops.save_wip_ref(
+        repo, name, f"wip(findings-r{rnd.number}): {step}, kept before discard"
+    )
     if ref is None:
-        raise StepFailed(step, f"could not write {name}, so the tree was left as it is; "
-                               f"inspect {repo} before re-running")
+        raise StepFailed(
+            step,
+            f"could not write {name}, so the tree was left as it is; "
+            f"inspect {repo} before re-running",
+        )
     run.emit(f"FINDINGS:WIP:{ref}")
     if not git_ops.discard_to(repo, start, f"findings r{rnd.number} {step}"):
-        raise StepFailed(step, f"edits kept under {ref}, but the discard back to "
-                               f"{start[:12]} was refused; inspect {repo}")
+        raise StepFailed(
+            step,
+            f"edits kept under {ref}, but the discard back to "
+            f"{start[:12]} was refused; inspect {repo}",
+        )
 
 
-async def _step(run: FindingsRun, st: BuildState, rnd: FindingsRound, name: str,
-                body: Callable[[], Awaitable[None]]) -> None:
+async def _step(
+    run: FindingsRun,
+    st: BuildState,
+    rnd: FindingsRound,
+    name: str,
+    body: Callable[[], Awaitable[None]],
+) -> None:
     if name in rnd.finished:
         return
-    save = lambda: st.checkpoint(run.state_path)  # noqa: E731
+    save = lambda: st.checkpoint(run.state_path)
     if name in rnd.started and name in REWIND_STEPS:
         keep_and_rewind(run, rnd, name)
     if name not in rnd.started:
@@ -258,12 +285,12 @@ async def _step(run: FindingsRun, st: BuildState, rnd: FindingsRound, name: str,
     head = git_ops.rev_parse_head(run.project_dir)
     if head:
         rnd.step_heads[name] = head
-    rnd.stops.pop(name, None)    # a kill from here on leaves no record
+    rnd.stops.pop(name, None)  # a kill from here on leaves no record
     save()
     log.info("START findings_step round=%d step=%s", rnd.number, name)
     try:
         await body()
-    except BaseException as e:   # Ctrl-C too: its record lets the resume go on
+    except BaseException as e:  # Ctrl-C too: its record lets the resume go on
         if isinstance(e, Exception) and name in REWIND_STEPS:
             try:
                 keep_and_rewind(run, rnd, name)
@@ -302,8 +329,12 @@ def others_work(run: FindingsRun, rnd: FindingsRound) -> str | None:
     stop = rnd.stops.get(step) if step in rnd.started else None
     head = stop.head if stop and step in DISCARDING_STEPS else None
     reason = stop_record.others_work(
-        run.project_dir, stop, ignore=_change_dir_in_project(run), head=head,
-        origin_ref=f"refs/remotes/origin/{run.branch}")
+        run.project_dir,
+        stop,
+        ignore=_change_dir_in_project(run),
+        head=head,
+        origin_ref=f"refs/remotes/origin/{run.branch}",
+    )
     return f"{step} step: {reason}" if reason else None
 
 
@@ -325,16 +356,25 @@ def keep_stopped_code_work(run: FindingsRun, rnd: FindingsRound) -> None:
         return
     start = rewind_target(run, start)
     if not (git_ops.tree_is_clean(repo) and git_ops.rev_parse_head(repo) == start):
-        name = wip_ref(run, rnd, f"code-block{block.number}-stopped" if block else "code-stopped")
-        ref = git_ops.save_wip_ref(repo, name, f"wip(findings-r{rnd.number}): code, kept "
-                                               "before the resume")
+        name = wip_ref(
+            run, rnd, f"code-block{block.number}-stopped" if block else "code-stopped"
+        )
+        ref = git_ops.save_wip_ref(
+            repo, name, f"wip(findings-r{rnd.number}): code, kept before the resume"
+        )
         if ref is None:
-            raise StepFailed("code", f"could not write {name}, so the tree was left as it is; "
-                                     f"inspect {repo} before re-running")
+            raise StepFailed(
+                "code",
+                f"could not write {name}, so the tree was left as it is; "
+                f"inspect {repo} before re-running",
+            )
         run.emit(f"FINDINGS:WIP:{ref}")
         if not git_ops.discard_to(repo, start, f"findings r{rnd.number} code resume"):
-            raise StepFailed("code", f"the stopped work is kept under {ref}, but the discard "
-                                     f"back to {start[:12]} was refused; inspect {repo}")
+            raise StepFailed(
+                "code",
+                f"the stopped work is kept under {ref}, but the discard "
+                f"back to {start[:12]} was refused; inspect {repo}",
+            )
     if block is not None and block.status != BlockStatus.PENDING:
         code.restart_block(state_path, block.number)
 
@@ -347,20 +387,35 @@ def keep_failed_block(run: FindingsRun, rnd: FindingsRound, block) -> str | None
     repo = run.project_dir
     start = block.baseline_commit
     if not start:
-        raise StepFailed("code", f"block {block.number} failed and its start commit is unknown; "
-                                 f"inspect {repo}")
+        raise StepFailed(
+            "code",
+            f"block {block.number} failed and its start commit is unknown; "
+            f"inspect {repo}",
+        )
     if git_ops.tree_is_clean(repo) and git_ops.rev_parse_head(repo) == start:
         return None
     name = wip_ref(run, rnd, f"code-block{block.number}")
-    ref = git_ops.save_wip_ref(repo, name, f"wip(findings-r{rnd.number}): block {block.number} "
-                                           "failed, kept before discard")
+    ref = git_ops.save_wip_ref(
+        repo,
+        name,
+        f"wip(findings-r{rnd.number}): block {block.number} "
+        "failed, kept before discard",
+    )
     if ref is None:
-        raise StepFailed("code", f"could not write {name}, so the tree was left as it is; "
-                                 f"inspect {repo} before re-running")
+        raise StepFailed(
+            "code",
+            f"could not write {name}, so the tree was left as it is; "
+            f"inspect {repo} before re-running",
+        )
     run.emit(f"FINDINGS:WIP:{ref}")
-    if not git_ops.discard_to(repo, start, f"findings r{rnd.number} block {block.number}"):
-        raise StepFailed("code", f"block {block.number}'s work is kept under {ref}, but the "
-                                 f"discard back to {start[:12]} was refused; inspect {repo}")
+    if not git_ops.discard_to(
+        repo, start, f"findings r{rnd.number} block {block.number}"
+    ):
+        raise StepFailed(
+            "code",
+            f"block {block.number}'s work is kept under {ref}, but the "
+            f"discard back to {start[:12]} was refused; inspect {repo}",
+        )
     return ref
 
 
@@ -369,23 +424,45 @@ def keep_failed_block(run: FindingsRun, rnd: FindingsRound, block) -> str | None
 
 def _review_skill_dir() -> Path:
     from ..orchestrator import _pr_skill_dir
+
     return _pr_skill_dir().parent.parent / "review" / "scripts"
 
 
 def review_argv(run: FindingsRun) -> list[str]:
     """`--fetch`: `review` refuses a PR whose head or base is not in the clone,
     and the base moves on GitHub without any fetch here."""
-    argv = ["uv", "run", "--directory", str(_review_skill_dir()),
-            "python", "-m", "review_pipeline", "review",
-            "--repo", str(run.project_dir), "--pr", str(run.pr), "--fetch"]
+    argv = [
+        "uv",
+        "run",
+        "--directory",
+        str(_review_skill_dir()),
+        "python",
+        "-m",
+        "review_pipeline",
+        "review",
+        "--repo",
+        str(run.project_dir),
+        "--pr",
+        str(run.pr),
+        "--fetch",
+    ]
     if run.trust_repo:
         argv.append("--trust-repo")
     return argv
 
 
 def resume_argv(run: FindingsRun, target_dir: str) -> list[str]:
-    argv = ["uv", "run", "--directory", str(_review_skill_dir()),
-            "python", "-m", "review_pipeline", "resume", target_dir]
+    argv = [
+        "uv",
+        "run",
+        "--directory",
+        str(_review_skill_dir()),
+        "python",
+        "-m",
+        "review_pipeline",
+        "resume",
+        target_dir,
+    ]
     if run.trust_repo:
         argv.append("--trust-repo")
     return argv
@@ -398,8 +475,10 @@ def resume_argv(run: FindingsRun, target_dir: str) -> list[str]:
 # `review` checks the target directory's run lock first, so a review that is
 # still running exits 2 ("is running now", `RunInProgress`) instead and is
 # never resumed here; a `resume` that finds the lock taken refuses the same way.
-_INTERRUPTED = re.compile(r"interrupted run found; continue with: python -m review_pipeline resume (.+)$",
-                          re.MULTILINE)
+_INTERRUPTED = re.compile(
+    r"interrupted run found; continue with: python -m review_pipeline resume (.+)$",
+    re.MULTILINE,
+)
 
 
 def run_review(run: FindingsRun, rnd: FindingsRound) -> ReviewOutcome:
@@ -411,11 +490,13 @@ def run_review(run: FindingsRun, rnd: FindingsRound) -> ReviewOutcome:
     if m:
         target_dir = m.group(1).strip()
         log.info("resuming the interrupted review in %s", target_dir)
-        res = git_ops._run_review_skill(resume_argv(run, target_dir), cwd=run.project_dir)
+        res = git_ops._run_review_skill(
+            resume_argv(run, target_dir), cwd=run.project_dir
+        )
     run_dir = None
     for line in (res.stdout or "").splitlines():
         if line.startswith("findings: "):
-            run_dir = str(Path(line[len("findings: "):].strip()).parent)
+            run_dir = str(Path(line[len("findings: ") :].strip()).parent)
     if not res.ok or not run_dir:
         tail = " ".join((res.stderr or res.stdout or "").split())[-400:]
         return ReviewOutcome(None, False, f"review exited {res.returncode}: {tail}")
@@ -426,8 +507,19 @@ def post_review(run: FindingsRun, run_dir: str, decisions: Path) -> tuple[bool, 
     """Unattended (`--auto`): post the findings *decisions* accepts
     (`write_decisions`). `post` skips any finding already marked on the PR,
     so a re-run is safe."""
-    argv = ["uv", "run", "--directory", str(_review_skill_dir()),
-            "python", "-m", "review_pipeline", "post", run_dir, "--decisions", str(decisions)]
+    argv = [
+        "uv",
+        "run",
+        "--directory",
+        str(_review_skill_dir()),
+        "python",
+        "-m",
+        "review_pipeline",
+        "post",
+        run_dir,
+        "--decisions",
+        str(decisions),
+    ]
     res = git_ops._run_review_skill(argv, cwd=run.project_dir)
     return res.ok, " ".join((res.stderr or res.stdout or "").split())[-400:]
 
@@ -439,7 +531,7 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
     fs = st.findings
     assert fs is not None
     seams = run.seams
-    save = lambda: st.checkpoint(run.state_path)  # noqa: E731
+    save = lambda: st.checkpoint(run.state_path)
     n = rnd.number
 
     async def do_triage() -> None:
@@ -447,17 +539,30 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
         # a resumed triage gives each comment the same earlier rows.
         earlier = history.earlier_rows(
             [r for m in fs.rounds if m.number < n for r in publish.records_of(m)],
-            rnd.comments, review_files(run, fs))
-        await triage.triage_round(run.config, run.change_dir, n, rnd.comments,
-                                  done=rnd.triaged, on_triaged=lambda *_: save(),
-                                  call=seams.triage_call, earlier=earlier)
+            rnd.comments,
+            review_files(run, fs),
+        )
+        await triage.triage_round(
+            run.config,
+            run.change_dir,
+            n,
+            rnd.comments,
+            done=rnd.triaged,
+            on_triaged=lambda *_: save(),
+            call=seams.triage_call,
+            earlier=earlier,
+        )
         _write_findings_file(run, fs, rnd)
 
     async def do_spec() -> None:
         findings_file = _write_findings_file(run, fs, rnd)
         issues, sha = spec.run_spec_step(
-            run.config, run.change_dir, n, publish.records_of(rnd),
-            extra_paths=[findings_file])
+            run.config,
+            run.change_dir,
+            n,
+            publish.records_of(rnd),
+            extra_paths=[findings_file],
+        )
         rnd.spec_issues = issues
         rnd.spec_commit = sha
         _write_findings_file(run, fs, rnd)
@@ -467,12 +572,19 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
         `other_locations` from the review, and in an escalated round the
         escalation text over every lineage of the PR's reviews."""
         files = review_files(run, fs)
-        others = {r.comment.finding_id: history.other_locations(files, r.comment.finding_id)
-                  for r in code.code_fixes(records) if r.comment.finding_id}
-        escalation = code.escalation_task(history.history_text(files)) if rnd.escalated else ""
+        others = {
+            r.comment.finding_id: history.other_locations(files, r.comment.finding_id)
+            for r in code.code_fixes(records)
+            if r.comment.finding_id
+        }
+        escalation = (
+            code.escalation_task(history.history_text(files)) if rnd.escalated else ""
+        )
         return {"other_locations": others, "escalation": escalation}
 
-    async def check_own_commits(records: list[TriageRecord], engine_state: Path) -> bool:
+    async def check_own_commits(
+        records: list[TriageRecord], engine_state: Path
+    ) -> bool:
         """The self-check: one read-only agent over `code_base..HEAD`. Its
         answer is saved in one checkpoint before anything is written, so it
         never runs twice. True when it listed a problem, which is then
@@ -483,20 +595,30 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
         range (every fix block failed and was discarded) is saved as no
         problem, with no call."""
         head = git_ops.rev_parse_head(run.project_dir)
-        diff = git_ops.diff_range(run.project_dir, rnd.code_base or head or "HEAD", head or "HEAD",
-                                  exclude=_change_dir_in_project(run))
+        diff = git_ops.diff_range(
+            run.project_dir,
+            rnd.code_base or head or "HEAD",
+            head or "HEAD",
+            exclude=_change_dir_in_project(run),
+        )
         if diff is None:
-            raise StepFailed("code", "git could not show the round's fix commits to check them")
-        report = ((await (seams.self_check or code.run_self_check)(run.config, diff)).strip()
-                  if diff.strip() else "")
+            raise StepFailed(
+                "code", "git could not show the round's fix commits to check them"
+            )
+        report = (
+            (await (seams.self_check or code.run_self_check)(run.config, diff)).strip()
+            if diff.strip()
+            else ""
+        )
         k = max(rnd.blocks) + 1 if report else None
         rnd.self_check = {"head": head, "report": report, "block": k}
         save()
         if k is None:
             return False
         report_path = code.write_self_check(run.change_dir, n, rnd.self_check)
-        tasks, rnd.blocks = code.write_tasks(run.change_dir, n, records, rnd.self_check,
-                                             **task_options(records))
+        tasks, rnd.blocks = code.write_tasks(
+            run.change_dir, n, records, rnd.self_check, **task_options(records)
+        )
         if code.commit_round_files(run.project_dir, n, [report_path, tasks]) is None:
             left = git_ops.status_of(run.project_dir, [report_path, tasks])
             if left is None or left.strip():
@@ -512,10 +634,13 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
         if report_path is not None:
             paths.append(report_path)
         if code.code_fixes(records):
-            tasks, blocks = code.write_tasks(run.change_dir, n, records, rnd.self_check,
-                                             **task_options(records))
+            tasks, blocks = code.write_tasks(
+                run.change_dir, n, records, rnd.self_check, **task_options(records)
+            )
             rnd.tasks_path, rnd.blocks = str(tasks), blocks
-            rnd.engine_state_path = str(Path(run.change_dir) / code.engine_state_name(n))
+            rnd.engine_state_path = str(
+                Path(run.change_dir) / code.engine_state_name(n)
+            )
             save()
             paths.append(tasks)
         code.commit_round_files(run.project_dir, n, paths)
@@ -534,16 +659,24 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
         # One engine run per block that may fail and one that finishes, and
         # two more for a block the self-check adds.
         for _ in range(len(rnd.blocks) + 3):
-            result = await code.run_code_step(run.config, run.change_dir, n, records,
-                                              blocks=rnd.blocks, engine=seams.engine,
-                                              escalated=rnd.escalated)
+            result = await code.run_code_step(
+                run.config,
+                run.change_dir,
+                n,
+                records,
+                blocks=rnd.blocks,
+                engine=seams.engine,
+                escalated=rnd.escalated,
+            )
             failed = {k: v for k, v in rnd.fixes.items() if v.get("failed")}
             rnd.fixes = {**failed, **result.fixes}
             if rnd.escalated:
                 rnd.recurring = code.recurring_from_state(engine_state)
             save()
             if result.exit_code == 0:
-                if rnd.self_check is not None or not await check_own_commits(records, engine_state):
+                if rnd.self_check is not None or not await check_own_commits(
+                    records, engine_state
+                ):
                     return
                 continue
             # A step the engine runs after its blocks (the whole-change
@@ -555,45 +688,65 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
                 rnd.code_check_failed = after
                 save()
                 run.emit(f"FINDINGS:CODE_CHECK_FAILED:{after}")
-                raise StepFailed("code", f"Required post-build check failed: {after}", exit_code=result.exit_code)
+                raise StepFailed(
+                    "code",
+                    f"Required post-build check failed: {after}",
+                    exit_code=result.exit_code,
+                )
             if code.baseline_red(engine_state):
-                raise StepFailed("code", "the PR's test suite fails before any fix (the TDD "
-                                         "engine's baseline gate), so no fix can be tested; "
-                                         "make the suite pass, then re-run",
-                                 exit_code=result.exit_code)
+                raise StepFailed(
+                    "code",
+                    "the PR's test suite fails before any fix (the TDD "
+                    "engine's baseline gate), so no fix can be tested; "
+                    "make the suite pass, then re-run",
+                    exit_code=result.exit_code,
+                )
             block = code.failed_block(engine_state)
             if block is None:
                 break
             ref = keep_failed_block(run, rnd, block)
             key = rnd.blocks.get(block.number) or f"block:{block.number}"
             kept = f"; its work is kept under `{ref}`" if ref else ""
-            rnd.fixes[key] = {"failed": f"the TDD engine could not complete block "
-                                        f"{block.number} (its RED gate, implementation or "
-                                        f"review failed){kept}"}
+            rnd.fixes[key] = {
+                "failed": f"the TDD engine could not complete block "
+                f"{block.number} (its RED gate, implementation or "
+                f"review failed){kept}"
+            }
             save()
             run.emit(f"FINDINGS:BLOCK_FAILED:{block.number}:{key}")
             if not code.skip_block(engine_state, block.number):
                 break
-        raise StepFailed("code", f"the TDD engine stopped (exit {result.exit_code}); "
-                                 f"its checkpoint is {rnd.engine_state_path}",
-                         exit_code=result.exit_code)
+        raise StepFailed(
+            "code",
+            f"the TDD engine stopped (exit {result.exit_code}); "
+            f"its checkpoint is {rnd.engine_state_path}",
+            exit_code=result.exit_code,
+        )
 
     async def do_publish() -> None:
         from ..gates import final_verification
-        gate = final_verification(run.config.test_command, run.project_dir,
-                                  parallel=run.config.parallel_tests)
+
+        gate = final_verification(
+            run.config.test_command, run.project_dir, parallel=run.config.parallel_tests
+        )
         st.verification = gate.model_dump()
         save()
         if not gate.passed:
             raise StepFailed("publish", f"Final verification failed: {gate.reason}")
         try:
-            publish.publish_round(fs, rnd, project_dir=run.project_dir,
-                                  change_dir=run.change_dir, save=save, emit=run.emit)
+            publish.publish_round(
+                fs,
+                rnd,
+                project_dir=run.project_dir,
+                change_dir=run.change_dir,
+                save=save,
+                emit=run.emit,
+            )
         except publish.PublishError as e:
             raise StepFailed("publish", str(e)) from e
 
     async def do_review() -> None:
-        if not run.review:        # an epic's final fix: its fixes get no review
+        if not run.review:  # an epic's final fix: its fixes get no review
             return
         if rnd.review_run_dir is None:
             outcome = (seams.review or run_review)(run, rnd)
@@ -603,8 +756,9 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
             save()
         if run.auto:
             try:
-                choose = seams.decisions or functools.partial(write_decisions, severities=run.severities,
-                                                           code_only=run.code_only)
+                choose = seams.decisions or functools.partial(
+                    write_decisions, severities=run.severities, code_only=run.code_only
+                )
                 decisions = choose(rnd.review_run_dir)
             except (FileNotFoundError, ValueError) as e:
                 raise StepFailed("review", f"cannot choose what to post: {e}") from e
@@ -617,8 +771,13 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
             raise _Waiting()
         rnd.review_finished_at = _now()
 
-    bodies = {"triage": do_triage, "spec": do_spec, "code": do_code,
-              "publish": do_publish, "review": do_review}
+    bodies = {
+        "triage": do_triage,
+        "spec": do_spec,
+        "code": do_code,
+        "publish": do_publish,
+        "review": do_review,
+    }
     for name, body in ((s, bodies[s]) for s in STEPS):
         try:
             await _step(run, st, rnd, name, body)
@@ -632,7 +791,9 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
             raise
         except Exception as e:  # an agent or model call that raised: resumable
             log.exception("findings round %d: step %s failed", n, name)
-            run.emit(f"FINDINGS:FAILED:{name}:{type(e).__name__}: {' '.join(str(e).split())}")
+            run.emit(
+                f"FINDINGS:FAILED:{name}:{type(e).__name__}: {' '.join(str(e).split())}"
+            )
             return EXIT_FAILED
     run.emit(f"FINDINGS:ROUND_DONE:{n}")
     return EXIT_OK
@@ -679,7 +840,9 @@ def spend_meter(run: FindingsRun) -> Callable[[], float]:
     what it held when the meter started, so the reviews before the fixer
     started are not its spend."""
     process, reviews = budget.process_spend().cost_usd, review_spend(run)
-    return lambda: budget.process_spend().cost_usd - process + review_spend(run) - reviews
+    return lambda: (
+        budget.process_spend().cost_usd - process + review_spend(run) - reviews
+    )
 
 
 async def run_findings(run: FindingsRun) -> int:
@@ -703,9 +866,18 @@ async def run_findings(run: FindingsRun) -> int:
         raise
     finally:
         spend = budget.process_spend()
-        _progress_note(progress, "BUDGET", (
-            f"Findings run (this process): ${spend.cost_usd:.2f}, {spend.tokens:,} tokens"
-            + ("" if spend.complete else " (incomplete: a skill printed no SPEND line)")))
+        _progress_note(
+            progress,
+            "BUDGET",
+            (
+                f"Findings run (this process): ${spend.cost_usd:.2f}, {spend.tokens:,} tokens"
+                + (
+                    ""
+                    if spend.complete
+                    else " (incomplete: a skill printed no SPEND line)"
+                )
+            ),
+        )
 
 
 def _progress_note(progress: ProgressWriter, phase: str, details: str = "") -> None:
@@ -718,8 +890,12 @@ def _progress_note(progress: ProgressWriter, phase: str, details: str = "") -> N
 async def _run_findings(run: FindingsRun) -> int:
     st = load_state(run)
     budget.reset()
-    budget.configure(max_tokens=run.config.budget_max_tokens, max_usd=run.config.budget_max_usd)
-    budget.get_budget().load_state(st.budget, accept_unknown_spend=run.config.accept_unknown_spend)
+    budget.configure(
+        max_tokens=run.config.budget_max_tokens, max_usd=run.config.budget_max_usd
+    )
+    budget.get_budget().load_state(
+        st.budget, accept_unknown_spend=run.config.accept_unknown_spend
+    )
     fs = st.findings
     assert fs is not None
     mismatch = state_mismatch(run, fs)
@@ -754,8 +930,10 @@ async def _run_findings(run: FindingsRun) -> int:
             if not git_ops.tree_is_clean(run.project_dir):
                 # A failed step keeps the tree's edits under a wip ref and
                 # resets it; never do that to work this pipeline did not make.
-                run.emit(f"FINDINGS:FAILED:fetch:{run.project_dir} has uncommitted changes; "
-                         "commit or stash them first")
+                run.emit(
+                    f"FINDINGS:FAILED:fetch:{run.project_dir} has uncommitted changes; "
+                    "commit or stash them first"
+                )
                 return EXIT_FAILED
             # The previous round's fetch time, not its review's end: a comment
             # posted while that round ran must still count as new. Comments
@@ -763,17 +941,25 @@ async def _run_findings(run: FindingsRun) -> int:
             since = fs.rounds[-1].fetched_at if fs.rounds else None
             fetched_at = _now()
             try:
-                comments = fetch.fetch_comments(fs.repo, fs.pr, since, cwd=run.project_dir)
+                comments = fetch.fetch_comments(
+                    fs.repo, fs.pr, since, cwd=run.project_dir
+                )
             except fetch.FetchError as e:
                 run.emit(f"FINDINGS:FAILED:fetch:{' '.join(str(e).split())}")
                 return EXIT_FAILED
-            fetch.prepare(comments, run.config.findings, cache, repo=fs.repo, cwd=run.project_dir)
+            fetch.prepare(
+                comments, run.config.findings, cache, repo=fs.repo, cwd=run.project_dir
+            )
             seen = fs.seen_ids()
             new = [c for c in comments if c.id not in seen]
             if not any(triage.should_triage(c)[0] for c in new):
                 for c in new:
-                    log.info("findings: comment %d by %s not acted on: %s",
-                             c.id, c.author, triage.should_triage(c)[1])
+                    log.info(
+                        "findings: comment %d by %s not acted on: %s",
+                        c.id,
+                        c.author,
+                        triage.should_triage(c)[1],
+                    )
                 run.emit(f"FINDINGS:DONE:{done}")
                 return EXIT_OK
             # After the fetch, which calls no model: a PR left with nothing to
@@ -782,19 +968,31 @@ async def _run_findings(run: FindingsRun) -> int:
             # with, so adding ledger costs leaves no float noise under it.
             usd = round(spent(), 6) if spent is not None else 0.0
             if run.max_usd is not None and usd >= run.max_usd:
-                log.warning("findings: $%.2f spent has reached --max-usd $%.2f: no round %d",
-                            usd, run.max_usd, done + 1)
+                log.warning(
+                    "findings: $%.2f spent has reached --max-usd $%.2f: no round %d",
+                    usd,
+                    run.max_usd,
+                    done + 1,
+                )
                 run.emit(f"FINDINGS:BUDGET:{done}:{usd:.2f}")
                 return EXIT_OK
             # Saved with the round, so a resume keeps it whatever
             # `--max-rounds` says then.
-            rnd = FindingsRound(number=done + 1, since=since, fetched_at=fetched_at,
-                                comments=new, started=["fetch"], finished=["fetch"],
-                                escalated=run.escalate and done + 1 == max_rounds and done + 1 >= 2)
+            rnd = FindingsRound(
+                number=done + 1,
+                since=since,
+                fetched_at=fetched_at,
+                comments=new,
+                started=["fetch"],
+                finished=["fetch"],
+                escalated=run.escalate and done + 1 == max_rounds and done + 1 >= 2,
+            )
             fs.rounds.append(rnd)
             st.checkpoint(run.state_path)
             acted = sum(1 for c in new if triage.should_triage(c)[0])
-            run.emit(f"FINDINGS:ROUND:{rnd.number}:{acted} to act on, {len(new) - acted} not")
+            run.emit(
+                f"FINDINGS:ROUND:{rnd.number}:{acted} to act on, {len(new) - acted} not"
+            )
         code_ = await run_round(run, st, rnd)
         if code_ != EXIT_OK:
             return code_

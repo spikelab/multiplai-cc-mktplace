@@ -27,23 +27,26 @@ import os
 import re
 import subprocess
 from collections.abc import Callable
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-
+from build_pipeline.config import BuildConfig, GitToggles
 from multiplai_core.specs import mark_ready, write_change_meta
 
-from build_pipeline.config import BuildConfig, GitToggles
-
-DROP_KEYS = {"at", "since", "pid", "host"}          # and every key ending in "_at"
-NOT_COMPARED = {".lock", "progress.log"}            # the lock and the log: never compared
-NOT_COMPARED_DIRS = ("agents/", "runs/")            # compared as records_snapshot and last_summary
+DROP_KEYS = {"at", "since", "pid", "host"}  # and every key ending in "_at"
+NOT_COMPARED = {".lock", "progress.log"}  # the lock and the log: never compared
+NOT_COMPARED_DIRS = (
+    "agents/",
+    "runs/",
+)  # compared as records_snapshot and last_summary
 
 GIT_ENV = {
-    "GIT_AUTHOR_NAME": "Row Test", "GIT_AUTHOR_EMAIL": "row@example.invalid",
-    "GIT_COMMITTER_NAME": "Row Test", "GIT_COMMITTER_EMAIL": "row@example.invalid",
+    "GIT_AUTHOR_NAME": "Row Test",
+    "GIT_AUTHOR_EMAIL": "row@example.invalid",
+    "GIT_COMMITTER_NAME": "Row Test",
+    "GIT_COMMITTER_EMAIL": "row@example.invalid",
     "GIT_AUTHOR_DATE": "2026-10-13T12:00:00+00:00",
     "GIT_COMMITTER_DATE": "2026-10-13T12:00:00+00:00",
 }
@@ -65,7 +68,9 @@ def use_workspace(monkeypatch, root: Path) -> Path:
 
 
 def _git(cwd: Path, *a: str) -> str:
-    return subprocess.run(["git", *a], cwd=cwd, check=True, capture_output=True, text=True).stdout
+    return subprocess.run(
+        ["git", *a], cwd=cwd, check=True, capture_output=True, text=True
+    ).stdout
 
 
 def make_project(root: Path, name: str = "r", dest: str = "p") -> Path:
@@ -102,8 +107,13 @@ def make_build(project: Path, change: str = "e") -> BuildConfig:
     """A build of the parent change *change*: its change dir with a
     `.change.yaml`, not yet committed (`approve` writes the split and commits
     it). The parent's run writes nothing there."""
-    config = BuildConfig(project_dir=project, change_name=change, auto=True,
-                         skip_research=True, git=GitToggles(worktree=False))
+    config = BuildConfig(
+        project_dir=project,
+        change_name=change,
+        auto=True,
+        skip_research=True,
+        git=GitToggles(worktree=False),
+    )
     config.specs_dir = project / "specs"
     config.change_dir.mkdir(parents=True, exist_ok=True)
     write_change_meta(config.change_dir, {"schema": "spec-driven"})
@@ -113,8 +123,13 @@ def make_build(project: Path, change: str = "e") -> BuildConfig:
 def args_for(config: BuildConfig, **over) -> Any:
     import argparse
 
-    base = dict(change=config.change_name, project_dir=str(config.project_dir),
-                auto=True, skip_research=True, session_id="s")
+    base = dict(
+        change=config.change_name,
+        project_dir=str(config.project_dir),
+        auto=True,
+        skip_research=True,
+        session_id="s",
+    )
     base.update(over)
     return argparse.Namespace(**base)
 
@@ -129,17 +144,24 @@ def run_build(config: BuildConfig, args, *, coordinator: bool = False) -> int:
 
     with ExitStack() as stack:
         if not coordinator:
-            stack.enter_context(patch("build_pipeline.epic.coordinator.run_epic", AsyncMock(return_value=0)))
+            stack.enter_context(
+                patch(
+                    "build_pipeline.epic.coordinator.run_epic",
+                    AsyncMock(return_value=0),
+                )
+            )
         return asyncio.run(run_orchestrator(config, args))
 
 
 # --- the split pm-spec writes ------------------------------------------------------
+
 
 @dataclass
 class EpicChild:
     """One child of a split: its id (its change is `<parent>-<id>`) and the
     ids it depends on. A stand-in for the answer buildme's own split gave
     before pm-spec wrote the split."""
+
     id: str
     depends_on: list[str] = field(default_factory=list)
 
@@ -155,10 +177,15 @@ def child(cid: str, deps: tuple[str, ...] = (), title: str | None = None) -> Epi
     return EpicChild(id=cid, depends_on=list(deps))
 
 
-THREE = EpicSplitAnswer(single=False, reason="Three parts.",
-                        children=[child("api"), child("ui"), child("docs", ("api", "ui"))])
+THREE = EpicSplitAnswer(
+    single=False,
+    reason="Three parts.",
+    children=[child("api"), child("ui"), child("docs", ("api", "ui"))],
+)
 
-READY_AT = datetime(2026, 10, 13, 12, 0, tzinfo=timezone.utc)    # same in every root, so the commits match
+READY_AT = datetime(
+    2026, 10, 13, 12, 0, tzinfo=UTC
+)  # same in every root, so the commits match
 REQUIREMENT = """## ADDED Requirements
 
 ### Requirement: {title}
@@ -177,13 +204,20 @@ def write_ready_specs(change_dir: Path, cid: str) -> None:
     cap = f"cap-{cid}"
     (change_dir / "requirements").mkdir(parents=True, exist_ok=True)
     (change_dir / "proposal.md").write_text(
-        f"# Proposal: {cid}\n\n## Why\n\nPart {cid} of the epic.\n\n## Capabilities\n\n- `{cap}`: {cid}\n")
-    (change_dir / "use-cases.md").write_text(f"# Use cases\n\n## UC-1: {cid}\n\nA user uses {cid}.\n")
-    (change_dir / "requirements" / f"{cap}.md").write_text(REQUIREMENT.format(title=cid))
+        f"# Proposal: {cid}\n\n## Why\n\nPart {cid} of the epic.\n\n## Capabilities\n\n- `{cap}`: {cid}\n"
+    )
+    (change_dir / "use-cases.md").write_text(
+        f"# Use cases\n\n## UC-1: {cid}\n\nA user uses {cid}.\n"
+    )
+    (change_dir / "requirements" / f"{cap}.md").write_text(
+        REQUIREMENT.format(title=cid)
+    )
     mark_ready(change_dir, now=READY_AT)
 
 
-def approve(config: BuildConfig, answer: EpicSplitAnswer, log: "CallLog | None" = None) -> str:
+def approve(
+    config: BuildConfig, answer: EpicSplitAnswer, log: CallLog | None = None
+) -> str:
     """Write the split pm-spec makes of *config*'s change as *answer* gives
     it: each child's change dir with ready specs, `parent` and `depends_on`
     (change names), and the parent's `children` (in the answer's order); then
@@ -197,14 +231,32 @@ def approve(config: BuildConfig, answer: EpicSplitAnswer, log: "CallLog | None" 
         names.append(name)
         d = changes / name
         d.mkdir(parents=True, exist_ok=True)
-        write_change_meta(d, {"schema": "spec-driven", "parent": parent,
-                              "depends_on": [f"{parent}-{dep}" for dep in c.depends_on]})
+        write_change_meta(
+            d,
+            {
+                "schema": "spec-driven",
+                "parent": parent,
+                "depends_on": [f"{parent}-{dep}" for dep in c.depends_on],
+            },
+        )
         write_ready_specs(d, c.id)
     write_change_meta(config.change_dir, {"children": names})
     project = Path(config.project_dir)
-    rels = [os.path.relpath(p, project) for p in (config.change_dir, *(changes / n for n in names))]
+    rels = [
+        os.path.relpath(p, project)
+        for p in (config.change_dir, *(changes / n for n in names))
+    ]
     _git(project, "add", "--", *rels)
-    _git(project, "-c", "commit.gpgsign=false", "commit", "-qm", f"specs({parent}): ready", "--", *rels)
+    _git(
+        project,
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-qm",
+        f"specs({parent}): ready",
+        "--",
+        *rels,
+    )
     return _git(project, "rev-parse", "HEAD").strip()
 
 
@@ -226,6 +278,7 @@ class CallLog:
 
 # --- stopping -----------------------------------------------------------------
 
+
 def run_killed(fn: Callable[[], Any], setup: Callable[[], Any] = lambda: None) -> None:
     """Run fn() in a forked child that is expected to exit 137 at a seam *setup*
     installs (in the child only); assert it did."""
@@ -237,7 +290,9 @@ def run_killed(fn: Callable[[], Any], setup: Callable[[], Any] = lambda: None) -
         finally:
             os._exit(0)
     _, status = os.waitpid(pid, 0)
-    assert os.waitstatus_to_exitcode(status) == 137, "the child never reached the kill point"
+    assert os.waitstatus_to_exitcode(status) == 137, (
+        "the child never reached the kill point"
+    )
 
 
 def die_at(obj: Any, attr: str, *, after: bool = False) -> Callable[[], None]:
@@ -261,10 +316,14 @@ def die_at(obj: Any, attr: str, *, after: bool = False) -> Callable[[], None]:
 
 # --- comparing ----------------------------------------------------------------
 
+
 def _norm(v: Any, root: Path) -> Any:
     if isinstance(v, dict):
-        return {k: _norm(x, root) for k, x in v.items()
-                if k not in DROP_KEYS and not k.endswith("_at")}
+        return {
+            k: _norm(x, root)
+            for k, x in v.items()
+            if k not in DROP_KEYS and not k.endswith("_at")
+        }
     if isinstance(v, list):
         return [_norm(x, root) for x in v]
     return v.replace(str(root), "<root>") if isinstance(v, str) else v
@@ -277,8 +336,12 @@ def epic_snapshot(epic_dir: Path, root: Path) -> dict[str, Any] | None:
     out: dict[str, Any] = {}
     for p in sorted(epic_dir.rglob("*")):
         rel = p.relative_to(epic_dir).as_posix()
-        if not p.is_file() or rel in NOT_COMPARED or re.match(r".*\.tmp$", rel) \
-                or rel.startswith(NOT_COMPARED_DIRS):
+        if (
+            not p.is_file()
+            or rel in NOT_COMPARED
+            or re.match(r".*\.tmp$", rel)
+            or rel.startswith(NOT_COMPARED_DIRS)
+        ):
             continue
         text = p.read_text()
         if p.suffix == ".json":
@@ -850,7 +913,11 @@ def real_git() -> str:
     """The real `git`, skipping any fake root's shim on PATH."""
     import shutil
 
-    path = [p for p in os.environ["PATH"].split(os.pathsep) if not (Path(p).parent / "fakes.json").exists()]
+    path = [
+        p
+        for p in os.environ["PATH"].split(os.pathsep)
+        if not (Path(p).parent / "fakes.json").exists()
+    ]
     return shutil.which("git", path=os.pathsep.join(path))
 
 
@@ -875,8 +942,14 @@ class Fakes:
     `<root>/posts.log`; the fixer (`FAKE_FINDINGS`) answers from
     `<root>/fixes.json` and logs to `<root>/calls.log` as kind `findings`."""
 
-    def __init__(self, root: Path, monkeypatch, steps: dict[str, list[dict]] | None = None,
-                 reviews: dict[str, list[dict]] | None = None, fixes: dict[str, list[dict]] | None = None):
+    def __init__(
+        self,
+        root: Path,
+        monkeypatch,
+        steps: dict[str, list[dict]] | None = None,
+        reviews: dict[str, list[dict]] | None = None,
+        fixes: dict[str, list[dict]] | None = None,
+    ):
         import sys
 
         self.root = root
@@ -884,27 +957,42 @@ class Fakes:
         self.bin.mkdir(parents=True, exist_ok=True)
         (root / "reviews.json").write_text(json.dumps(reviews or {}))
         (root / "fixes.json").write_text(json.dumps(fixes or {}))
-        for name, text in (("python", FAKE_BUILD), ("gh", FAKE_GH), ("uv", FAKE_UV),
-                           ("fake_findings.py", FAKE_FINDINGS), ("fake-tests", FAKE_TESTS), ("git", GIT_SHIM)):
+        for name, text in (
+            ("python", FAKE_BUILD),
+            ("gh", FAKE_GH),
+            ("uv", FAKE_UV),
+            ("fake_findings.py", FAKE_FINDINGS),
+            ("fake-tests", FAKE_TESTS),
+            ("git", GIT_SHIM),
+        ):
             path = self.bin / name
             path.write_text(text.format(python=sys.executable, git=real_git()))
             path.chmod(0o755)
         (root / "release").mkdir(exist_ok=True)
         (root / "fakes.json").write_text(json.dumps(steps or {}))
         (root / "psfail").mkdir(exist_ok=True)
-        (root / "psfail" / "ps").write_text("#!/bin/sh\necho 'ps: failed' >&2\nexit 1\n")
+        (root / "psfail" / "ps").write_text(
+            "#!/bin/sh\necho 'ps: failed' >&2\nexit 1\n"
+        )
         (root / "psfail" / "ps").chmod(0o755)
         self.use(monkeypatch)
 
     def ps_fails(self, monkeypatch) -> None:
-        monkeypatch.setenv("PATH", os.pathsep.join([str(self.root / "psfail"), os.environ["PATH"]]))
+        monkeypatch.setenv(
+            "PATH", os.pathsep.join([str(self.root / "psfail"), os.environ["PATH"]])
+        )
 
     def grandchildren(self) -> list[int]:
-        return [int(p.read_text()) for p in sorted((self.root / "grandchildren").glob("*"))]
+        return [
+            int(p.read_text()) for p in sorted((self.root / "grandchildren").glob("*"))
+        ]
 
     def use(self, monkeypatch) -> None:
-        path = [p for p in os.environ["PATH"].split(os.pathsep)
-                if not (Path(p).parent / "fakes.json").exists()]     # another root's fakes
+        path = [
+            p
+            for p in os.environ["PATH"].split(os.pathsep)
+            if not (Path(p).parent / "fakes.json").exists()
+        ]  # another root's fakes
         monkeypatch.setenv("PATH", os.pathsep.join([str(self.bin), *path]))
         monkeypatch.setenv("EPIC_FAKE_ROOT", str(self.root))
 
@@ -943,16 +1031,38 @@ class Fakes:
         checkouts = json.loads((self.root / "checkouts.json").read_text())
         source = self.root / checkouts.get(repo, "p")
         clone = self.root / f"lander-{repo}"
-        with (self.root / "prs.lock").open("a") as held:     # a fake build lands from this clone too
+        with (self.root / "prs.lock").open(
+            "a"
+        ) as held:  # a fake build lands from this clone too
             fcntl.flock(held, fcntl.LOCK_EX)
             if not clone.exists():
-                subprocess.run([git, "clone", "-q", str(self.root / "o" / f"{repo}.git"), str(clone)],
-                               check=True, capture_output=True)
-            for cmd in (["fetch", "-q", "origin"], ["checkout", "-q", "-B", "main", "origin/main"],
-                        ["fetch", "-q", str(source), f"refs/heads/{branch}"],
-                        ["-c", "commit.gpgsign=false", "merge", "-q", "--no-ff", "-m",
-                         f"Merge pull request {url} from {branch}", "FETCH_HEAD"],
-                        ["push", "-q", "origin", "main"]):
+                subprocess.run(
+                    [
+                        git,
+                        "clone",
+                        "-q",
+                        str(self.root / "o" / f"{repo}.git"),
+                        str(clone),
+                    ],
+                    check=True,
+                    capture_output=True,
+                )
+            for cmd in (
+                ["fetch", "-q", "origin"],
+                ["checkout", "-q", "-B", "main", "origin/main"],
+                ["fetch", "-q", str(source), f"refs/heads/{branch}"],
+                [
+                    "-c",
+                    "commit.gpgsign=false",
+                    "merge",
+                    "-q",
+                    "--no-ff",
+                    "-m",
+                    f"Merge pull request {url} from {branch}",
+                    "FETCH_HEAD",
+                ],
+                ["push", "-q", "origin", "main"],
+            ):
                 subprocess.run([git, *cmd], cwd=clone, check=True, capture_output=True)
 
     def attempts(self, cid: str) -> int:
@@ -983,7 +1093,11 @@ class Fakes:
         return [json.loads(x) for x in p.read_text().splitlines()] if p.exists() else []
 
     def fix_launches(self) -> list[dict]:
-        return [x for x in CallLog(self.root / "calls.log").calls() if x["kind"] == "findings"]
+        return [
+            x
+            for x in CallLog(self.root / "calls.log").calls()
+            if x["kind"] == "findings"
+        ]
 
     def release_fix(self, change: str) -> None:
         (self.root / "release" / f"fix-{pr_number(change)}").write_text("")
@@ -1015,7 +1129,7 @@ class FakeClock:
         await asyncio.sleep(0.01)
 
 
-_OUT: list[str] = []      # what the last `run_coordinator` printed
+_OUT: list[str] = []  # what the last `run_coordinator` printed
 
 
 class _Tee:
@@ -1044,7 +1158,10 @@ def run_coordinator(config: BuildConfig, **over) -> int:
     lock.release_all()
     tee = _Tee(sys.stdout)
     try:
-        with patch.object(coordinator, "CLOCK", FakeClock()), contextlib.redirect_stdout(tee):
+        with (
+            patch.object(coordinator, "CLOCK", FakeClock()),
+            contextlib.redirect_stdout(tee),
+        ):
             return run_build(config, args_for(config, **over), coordinator=True)
     finally:
         lock.release_all()
@@ -1054,7 +1171,7 @@ def run_coordinator(config: BuildConfig, **over) -> int:
 def merge_waiting() -> list[str] | None:
     """The PRs the last `run_coordinator` named on `EPIC:MERGE_WAITING:`; None without that line."""
     found = [line for line in _OUT if line.startswith("EPIC:MERGE_WAITING:")]
-    return found[-1][len("EPIC:MERGE_WAITING:"):].split(",") if found else None
+    return found[-1][len("EPIC:MERGE_WAITING:") :].split(",") if found else None
 
 
 def run_signalled(fn: Callable[[], int], ready: Callable[[], bool], sig: int) -> int:
@@ -1083,7 +1200,12 @@ def run_signalled(fn: Callable[[], int], ready: Callable[[], bool], sig: int) ->
 
 def alive(pid: int) -> bool:
     """True while *pid* runs (a zombie counts as gone)."""
-    ps = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True, check=False)
+    ps = subprocess.run(
+        ["ps", "-o", "stat=", "-p", str(pid)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
     return bool(ps.stdout.strip()) and not ps.stdout.strip().startswith("Z")
 
 
@@ -1095,11 +1217,18 @@ def records_snapshot(epic_dir: Path, root: Path) -> dict[str, list[tuple]]:
     out: dict[str, list[tuple]] = {}
     for a in records.attempts(epic_dir):
         r = a.result or {}
-        out.setdefault(a.child, []).append((
-            a.kind, [str(x).replace(str(root), "<root>") for x in a.started.get("argv", [])],
-            r.get("exit_code", "no result"),
-            [m.replace(str(root), "<root>") for m in r.get("markers", [])],
-            r.get("interrupted")))
+        out.setdefault(a.child, []).append(
+            (
+                a.kind,
+                [
+                    str(x).replace(str(root), "<root>")
+                    for x in a.started.get("argv", [])
+                ],
+                r.get("exit_code", "no result"),
+                [m.replace(str(root), "<root>") for m in r.get("markers", [])],
+                r.get("interrupted"),
+            )
+        )
     return out
 
 
@@ -1113,9 +1242,13 @@ def commit_names(repos: list[Path]) -> dict[str, str]:
     line (repos in the order given, branches by name; the first name wins)."""
     names: dict[str, str] = {}
     for k, repo in enumerate(repos):
-        branches = _git(repo, "for-each-ref", "--format=%(refname:short)", "refs/heads").split()
+        branches = _git(
+            repo, "for-each-ref", "--format=%(refname:short)", "refs/heads"
+        ).split()
         for b in sorted(branches):
-            for i, sha in enumerate(_git(repo, "rev-list", "--first-parent", "--reverse", b).split()):
+            for i, sha in enumerate(
+                _git(repo, "rev-list", "--first-parent", "--reverse", b).split()
+            ):
                 names.setdefault(sha, f"<repo {k}> {b} {i}")
     return names
 

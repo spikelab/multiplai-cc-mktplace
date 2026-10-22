@@ -13,7 +13,6 @@ import sys
 from pathlib import Path
 
 import pytest
-
 from conftest import commit_file, everything, git, make_repo, read_state, run, write
 from spec_extract_pipeline import apply as apply_mod
 
@@ -43,7 +42,10 @@ def test_check_runs_buildme_stop_record_cli():
     assert argv[:3] == ["uv", "run", "--directory"]
     assert argv[4:] == ["python", "-m", "build_pipeline.stop_record_cli"]
     assert (Path(argv[3]) / "build_pipeline" / "stop_record_cli.py").is_file()
-    assert Path(argv[3]) == Path(apply_mod.__file__).resolve().parents[3] / "buildme" / "scripts"
+    assert (
+        Path(argv[3])
+        == Path(apply_mod.__file__).resolve().parents[3] / "buildme" / "scripts"
+    )
 
 
 def test_dir_without_specs_dir_is_refused(tmp_path, capsys, fake_call):
@@ -90,7 +92,10 @@ def test_specs_dir_under_the_run_folder_is_refused(tmp_path, capsys, fake_call):
 def _repo_with_registry(path: Path) -> Path:
     """make_repo, plus a committed registry: charge.md with other bytes, one unrelated file."""
     repo = make_repo(path)
-    write(repo / "specs" / "registry" / "charge.md", "## ADDED Requirements\n\nwritten by hand\n")
+    write(
+        repo / "specs" / "registry" / "charge.md",
+        "## ADDED Requirements\n\nwritten by hand\n",
+    )
     write(repo / "specs" / "registry" / "notes.md", "notes\n")
     git(repo, "add", "-A")
     git(repo, "commit", "-q", "-m", "registry")
@@ -105,20 +110,38 @@ def test_apply_copies_new_files_and_commits_nothing(tmp_path, capsys):
     run_dir = _folder(root)
     registry = repo / "specs" / "registry"
     lines = _lines(capsys.readouterr().out)
-    assert lines[-2:] == ["SPEC_EXTRACT:APPLIED 2",
-                          f"SPEC_EXTRACT:SKIPPED_EXISTING charge {run_dir / 'registry' / 'charge.md'}"]
+    assert lines[-2:] == [
+        "SPEC_EXTRACT:APPLIED 2",
+        f"SPEC_EXTRACT:SKIPPED_EXISTING charge {run_dir / 'registry' / 'charge.md'}",
+    ]
     for name in ["one.md", "two.md"]:
-        assert (registry / name).read_bytes() == (run_dir / "registry" / name).read_bytes()
-    assert (registry / "charge.md").read_text() == "## ADDED Requirements\n\nwritten by hand\n"
+        assert (registry / name).read_bytes() == (
+            run_dir / "registry" / name
+        ).read_bytes()
+    assert (
+        registry / "charge.md"
+    ).read_text() == "## ADDED Requirements\n\nwritten by hand\n"
     assert git(repo, "rev-parse", "HEAD") == head  # commits nothing
-    assert git(repo, "status", "--porcelain") == "?? specs/registry/one.md\n?? specs/registry/two.md"
+    assert (
+        git(repo, "status", "--porcelain")
+        == "?? specs/registry/one.md\n?? specs/registry/two.md"
+    )
     assert not (registry / apply_mod.APPLY_TMP).exists()
     state = read_state(run_dir)
     assert state["steps_done"][-2:] == ["render", "apply"]
-    expected_index = {entry.split("\t", 1)[1]: entry.split("\t", 1)[0] + "\n"
-                      for entry in git(registry, "ls-files", "--stage", "-z").split("\0") if entry}
-    assert state["apply_stop"] == {"head": None, "index": expected_index, "edits": {
-        n: _sha((run_dir / "registry" / n).read_bytes()) for n in ["one.md", "two.md"]}}
+    expected_index = {
+        entry.split("\t", 1)[1]: entry.split("\t", 1)[0] + "\n"
+        for entry in git(registry, "ls-files", "--stage", "-z").split("\0")
+        if entry
+    }
+    assert state["apply_stop"] == {
+        "head": None,
+        "index": expected_index,
+        "edits": {
+            n: _sha((run_dir / "registry" / n).read_bytes())
+            for n in ["one.md", "two.md"]
+        },
+    }
 
 
 def test_identical_file_counts_as_applied(tmp_path, capsys):
@@ -126,9 +149,16 @@ def test_identical_file_counts_as_applied(tmp_path, capsys):
     root, sha = tmp_path / "out", git(repo, "rev-parse", "HEAD")
     assert _tree(repo, root) == 0
     run_dir = _folder(root)
-    for name in CAPS:  # an earlier apply, committed; the run is still the first commit's
-        write(repo / "specs" / "registry" / name, (run_dir / "registry" / name).read_text())
-    commit_file(repo, "specs/registry/one.md", (run_dir / "registry" / "one.md").read_text())
+    for (
+        name
+    ) in CAPS:  # an earlier apply, committed; the run is still the first commit's
+        write(
+            repo / "specs" / "registry" / name,
+            (run_dir / "registry" / name).read_text(),
+        )
+    commit_file(
+        repo, "specs/registry/one.md", (run_dir / "registry" / "one.md").read_text()
+    )
     capsys.readouterr()
     assert _tree(repo, root, "--apply", tree=sha) == 0
     assert _lines(capsys.readouterr().out)[-1] == "SPEC_EXTRACT:APPLIED 3"
@@ -174,8 +204,19 @@ def test_dir_with_specs_dir_creates_the_registry(tmp_path, capsys):
     target.mkdir()
     git(target, "init", "-q", "-b", "main")
     commit_file(target, "README", "hi\n")
-    assert run("run", "--dir", src, "--out", tmp_path / "out", "--apply",
-               "--specs-dir", target / "specs") == 0
+    assert (
+        run(
+            "run",
+            "--dir",
+            src,
+            "--out",
+            tmp_path / "out",
+            "--apply",
+            "--specs-dir",
+            target / "specs",
+        )
+        == 0
+    )
     assert _lines(capsys.readouterr().out)[-1] == "SPEC_EXTRACT:APPLIED 1"
     assert [p.name for p in (target / "specs" / "registry").iterdir()] == ["m.md"]
     assert not (src / "specs").exists()
@@ -192,13 +233,22 @@ def test_repo_with_no_commit_is_refused(tmp_path, capsys):
     assert list((empty / "specs" / "registry").iterdir()) == []
 
 
-@pytest.mark.parametrize("script, says", [
-    ("print('not json')", "not one JSON line"),
-    ("print('{\"reason\": null}'); print('{\"reason\": null}')", "not one JSON line"),
-    ("print('[1]')", "not one JSON line"),
-    ("import sys; sys.stderr.write('boom one\\nboom two\\n'); sys.exit(1)", "boom two"),
-    ("import time; time.sleep(30)", "no answer within"),
-])
+@pytest.mark.parametrize(
+    "script, says",
+    [
+        ("print('not json')", "not one JSON line"),
+        (
+            "print('{\"reason\": null}'); print('{\"reason\": null}')",
+            "not one JSON line",
+        ),
+        ("print('[1]')", "not one JSON line"),
+        (
+            "import sys; sys.stderr.write('boom one\\nboom two\\n'); sys.exit(1)",
+            "boom two",
+        ),
+        ("import time; time.sleep(30)", "no answer within"),
+    ],
+)
 def test_check_that_cannot_run_refuses(tmp_path, monkeypatch, capsys, script, says):
     repo = make_repo(tmp_path / "widgets")
     root = tmp_path / "out"

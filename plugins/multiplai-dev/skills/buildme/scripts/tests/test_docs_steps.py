@@ -1,8 +1,8 @@
 """Tests for the documentation phase step — prompt inputs, tools, failed-writer handling."""
 
-import pytest
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from build_pipeline.change_manager import ChangeManager
 from build_pipeline.config import BuildConfig
 from build_pipeline.llm_steps.docs_steps import DOCS_TOOLS, run_docs_update
@@ -33,13 +33,16 @@ class TestRunDocsUpdate:
     async def test_reports_the_files_the_agent_wrote(self, tmp_path):
         config = make_config(tmp_path)
         (tmp_path / "CHANGELOG.md").write_text("# Changelog\n")
-        agent = AsyncMock(return_value=AgentResult(
-            success=True,
-            output="DOCS_IMPACT: README.md, CHANGELOG.md\nSTATUS: DONE\n",
-        ))
-        with patch("build_pipeline.llm_steps.docs_steps.agent_call", agent), \
-             patch("build_pipeline.tdd_engine.capture_build_diff",
-                   return_value=DIFF):
+        agent = AsyncMock(
+            return_value=AgentResult(
+                success=True,
+                output="DOCS_IMPACT: README.md, CHANGELOG.md\nSTATUS: DONE\n",
+            )
+        )
+        with (
+            patch("build_pipeline.llm_steps.docs_steps.agent_call", agent),
+            patch("build_pipeline.tdd_engine.capture_build_diff", return_value=DIFF),
+        ):
             files, gate = await run_docs_update(config, make_state())
 
         assert files == ["README.md", "CHANGELOG.md"]
@@ -49,9 +52,13 @@ class TestRunDocsUpdate:
     @pytest.mark.asyncio
     async def test_agent_gets_the_documented_tools_budget_label_and_cwd(self, tmp_path):
         config = make_config(tmp_path)
-        agent = AsyncMock(return_value=AgentResult(success=True, output="DOCS_IMPACT: none\n"))
-        with patch("build_pipeline.llm_steps.docs_steps.agent_call", agent), \
-             patch("build_pipeline.tdd_engine.capture_build_diff", return_value=""):
+        agent = AsyncMock(
+            return_value=AgentResult(success=True, output="DOCS_IMPACT: none\n")
+        )
+        with (
+            patch("build_pipeline.llm_steps.docs_steps.agent_call", agent),
+            patch("build_pipeline.tdd_engine.capture_build_diff", return_value=""),
+        ):
             await run_docs_update(config, make_state())
 
         kwargs = agent.await_args.kwargs
@@ -70,10 +77,13 @@ class TestRunDocsUpdate:
         (config.change_dir / "implementation-notes.md").write_text(
             "## Block 1 — Uploader (implementer)\n- SPEC_IMPACT: clarify\n"
         )
-        agent = AsyncMock(return_value=AgentResult(success=True, output="DOCS_IMPACT: none\n"))
-        with patch("build_pipeline.llm_steps.docs_steps.agent_call", agent), \
-             patch("build_pipeline.tdd_engine.capture_build_diff",
-                   return_value=DIFF):
+        agent = AsyncMock(
+            return_value=AgentResult(success=True, output="DOCS_IMPACT: none\n")
+        )
+        with (
+            patch("build_pipeline.llm_steps.docs_steps.agent_call", agent),
+            patch("build_pipeline.tdd_engine.capture_build_diff", return_value=DIFF),
+        ):
             await run_docs_update(config, make_state())
 
         prompt = agent.await_args.args[0]
@@ -85,9 +95,13 @@ class TestRunDocsUpdate:
     @pytest.mark.asyncio
     async def test_missing_notes_are_stated_not_faked(self, tmp_path):
         config = make_config(tmp_path)
-        agent = AsyncMock(return_value=AgentResult(success=True, output="DOCS_IMPACT: none\n"))
-        with patch("build_pipeline.llm_steps.docs_steps.agent_call", agent), \
-             patch("build_pipeline.tdd_engine.capture_build_diff", return_value=""):
+        agent = AsyncMock(
+            return_value=AgentResult(success=True, output="DOCS_IMPACT: none\n")
+        )
+        with (
+            patch("build_pipeline.llm_steps.docs_steps.agent_call", agent),
+            patch("build_pipeline.tdd_engine.capture_build_diff", return_value=""),
+        ):
             await run_docs_update(config, make_state())
 
         assert "no implementation notes were recorded" in agent.await_args.args[0]
@@ -95,25 +109,35 @@ class TestRunDocsUpdate:
     @pytest.mark.asyncio
     async def test_llm_failure_blocks_completion(self, tmp_path):
         config = make_config(tmp_path)
-        with patch("build_pipeline.llm_steps.docs_steps.agent_call",
-                   AsyncMock(side_effect=RuntimeError("model down"))), \
-             patch("build_pipeline.tdd_engine.capture_build_diff", return_value=DIFF):
+        with (
+            patch(
+                "build_pipeline.llm_steps.docs_steps.agent_call",
+                AsyncMock(side_effect=RuntimeError("model down")),
+            ),
+            patch("build_pipeline.tdd_engine.capture_build_diff", return_value=DIFF),
+        ):
             with pytest.raises(RuntimeError, match="model down"):
                 await run_docs_update(config, make_state())
 
     @pytest.mark.asyncio
     async def test_failed_agent_result_blocks_completion(self, tmp_path):
         config = make_config(tmp_path)
-        with patch("build_pipeline.llm_steps.docs_steps.agent_call",
-                   AsyncMock(return_value=AgentResult(success=False, error="timed out"))), \
-             patch("build_pipeline.tdd_engine.capture_build_diff", return_value=""):
+        with (
+            patch(
+                "build_pipeline.llm_steps.docs_steps.agent_call",
+                AsyncMock(return_value=AgentResult(success=False, error="timed out")),
+            ),
+            patch("build_pipeline.tdd_engine.capture_build_diff", return_value=""),
+        ):
             with pytest.raises(RuntimeError, match="timed out"):
                 await run_docs_update(config, make_state())
 
     @pytest.mark.asyncio
     async def test_no_state_means_no_diff_capture(self, tmp_path):
         config = make_config(tmp_path)
-        agent = AsyncMock(return_value=AgentResult(success=True, output="DOCS_IMPACT: none\n"))
+        agent = AsyncMock(
+            return_value=AgentResult(success=True, output="DOCS_IMPACT: none\n")
+        )
         with patch("build_pipeline.llm_steps.docs_steps.agent_call", agent):
             files, gate = await run_docs_update(config, None)
 

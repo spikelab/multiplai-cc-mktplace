@@ -52,6 +52,7 @@ def _clip(text: str, limit: int = MAX_TEXT) -> str:
     cut = text[:limit].rsplit(" ", 1)[0].rstrip(" ,;:—-")
     return f"{cut}…"
 
+
 # Rank tiers, lowest first. Named rather than inline so the ordering can be
 # read in one place and asserted in tests.
 _RANK_APPROVED = 10
@@ -95,28 +96,34 @@ def _pr_items(fleet: Fleet) -> list[Item]:
         # lets it merge. "approved" over a red head invites a bouncing click.
         state = "approved" if head.approved and not head.failing else f"CI {head.ci}"
         repo = head.repo.split("/")[-1]
-        items.append(Item(
-            _RANK_STACK,
-            f"{repo} stack — {len(chain)} PRs, merge order {order} "
-            f"(next: #{head.number}, {state})",
-            (head.repo, head.number),
-        ))
+        items.append(
+            Item(
+                _RANK_STACK,
+                f"{repo} stack — {len(chain)} PRs, merge order {order} "
+                f"(next: #{head.number}, {state})",
+                (head.repo, head.number),
+            )
+        )
 
     for pr in human:
         if (pr.repo, pr.number) in stacked:
             continue
         if pr.approved and pr.ci != "failing":
-            items.append(Item(
-                _RANK_APPROVED,
-                f"{pr.label} — approved, awaiting your merge: {_clip(pr.title)}",
-                (pr.repo, pr.number),
-            ))
+            items.append(
+                Item(
+                    _RANK_APPROVED,
+                    f"{pr.label} — approved, awaiting your merge: {_clip(pr.title)}",
+                    (pr.repo, pr.number),
+                )
+            )
         elif pr.failing:
-            items.append(Item(
-                _RANK_RED_CI,
-                f"{pr.label} — CI red: {_clip(pr.title)}",
-                (pr.repo, pr.number),
-            ))
+            items.append(
+                Item(
+                    _RANK_RED_CI,
+                    f"{pr.label} — CI red: {_clip(pr.title)}",
+                    (pr.repo, pr.number),
+                )
+            )
     return items
 
 
@@ -138,19 +145,23 @@ def _waiting_items(fleet: Fleet, now: datetime) -> tuple[list[Item], int]:
         # The checkpoint's next action is what it is waiting on; without one
         # the honest answer is that we only know it stopped to ask.
         what = agent.next_action or agent.intent or "waiting on you (no checkpoint)"
-        items.append(Item(
-            _RANK_WAITING,
-            f"{who} — {_clip(what)} ({format_age(age)})",
-            (int(age.total_seconds()),),
-        ))
+        items.append(
+            Item(
+                _RANK_WAITING,
+                f"{who} — {_clip(what)} ({format_age(age)})",
+                (int(age.total_seconds()),),
+            )
+        )
     return items, stale
 
 
 def _collision_items(fleet: Fleet) -> list[Item]:
     return [
-        Item(_RANK_COLLISION,
-             f"collision on `{c.path}` — {', '.join(c.labels)}",
-             (c.path,))
+        Item(
+            _RANK_COLLISION,
+            f"collision on `{c.path}` — {', '.join(c.labels)}",
+            (c.path,),
+        )
         for c in fleet.collisions
     ]
 
@@ -166,6 +177,7 @@ def rank(fleet: Fleet, now: datetime) -> tuple[list[Item], int]:
 # ---------------------------------------------------------------------------
 # Rendering
 # ---------------------------------------------------------------------------
+
 
 def _summary_lines(fleet: Fleet, now: datetime, stale_prompts: int) -> list[str]:
     out: list[str] = []
@@ -221,8 +233,11 @@ def _summary_lines(fleet: Fleet, now: datetime, stale_prompts: int) -> list[str]
         dirty = [r for r in fleet.repos if r.dirty]
         unpushed = [r for r in fleet.repos if r.unpushed or r.no_upstream]
         worktrees = sum(len(r.worktrees) for r in fleet.repos)
-        parts = [f"{len(dirty)} dirty", f"{len(unpushed)} with unpushed branches",
-                 f"{worktrees} worktrees"]
+        parts = [
+            f"{len(dirty)} dirty",
+            f"{len(unpushed)} with unpushed branches",
+            f"{worktrees} worktrees",
+        ]
         out.append(f"Repos ({len(fleet.repos)}): " + " · ".join(parts))
 
     if fleet.jobs is not None:
@@ -259,7 +274,8 @@ def _summary_lines(fleet: Fleet, now: datetime, stale_prompts: int) -> list[str]
             out.append("Backlog: " + " · ".join(parts))
 
     out.append(
-        "Collisions: none" if not fleet.collisions
+        "Collisions: none"
+        if not fleet.collisions
         else f"Collisions: {len(fleet.collisions)}"
     )
     return out

@@ -13,7 +13,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .untrusted import defang_untrusted, safe_url_text
 
-
 # ---------------------------------------------------------------------------
 # Search & Sources
 # ---------------------------------------------------------------------------
@@ -89,7 +88,9 @@ class Source(BaseModel):
     source_api: str = ""
     status: SourceStatus = SourceStatus.PENDING
     error: str | None = None  # populated when status=FAILED
-    extracted_content: str | None = None  # debug excerpt (mark_source_extracted truncates to 2000 chars)
+    extracted_content: str | None = (
+        None  # debug excerpt (mark_source_extracted truncates to 2000 chars)
+    )
     published_date: str | None = None
     # Carried from the SearchResult; a declared field so the authority-budget
     # reservation in READ survives checkpoint/resume.
@@ -288,7 +289,9 @@ class GateResult(BaseModel):
 
     passed: bool
     reason: str
-    action: str | None = None  # e.g., "expand_queries", "retry_search", "targeted_search"
+    action: str | None = (
+        None  # e.g., "expand_queries", "retry_search", "targeted_search"
+    )
     metadata: dict = Field(default_factory=dict)
 
 

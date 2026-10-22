@@ -36,8 +36,8 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +82,7 @@ class Directive:
 # ---------------------------------------------------------------------------
 # Parsing
 # ---------------------------------------------------------------------------
+
 
 def parse_directives(text: str) -> tuple[list[Directive], list[str]]:
     """Parse the critic's response into directives and the lines that failed.
@@ -135,13 +136,18 @@ def _parse_line(line: str) -> Directive | None:
         # toolchain change-request, not memory") is exactly DROP's, so it becomes
         # one, carrying the reason the Filtered Out section needs.
         return Directive(
-            "DROP", m.group("file"), int(m.group("index")),
+            "DROP",
+            m.group("file"),
+            int(m.group("index")),
             m.group("arg").strip() or "toolchain change-request",
         )
     m = _DROP_RE.match(line)
     if m:
         return Directive(
-            "DROP", m.group("file"), int(m.group("index")), m.group("arg").strip() or None
+            "DROP",
+            m.group("file"),
+            int(m.group("index")),
+            m.group("arg").strip() or None,
         )
     return None
 
@@ -150,12 +156,13 @@ def _parse_line(line: str) -> Directive | None:
 # Document model
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class _Section:
-    kind: str        # "update" | "action" | "other"
-    name: str        # target file for "update", "" otherwise
-    head: int        # index of the heading line
-    end: int         # exclusive end of the section
+    kind: str  # "update" | "action" | "other"
+    name: str  # target file for "update", "" otherwise
+    head: int  # index of the heading line
+    end: int  # exclusive end of the section
 
 
 def _sections(lines: Sequence[str]) -> list[_Section]:
@@ -224,6 +231,7 @@ def _renumber(block: list[str], number: int, prefix: str = "") -> list[str]:
 # Applying
 # ---------------------------------------------------------------------------
 
+
 def apply_directives(
     proposal: str, directives: Sequence[Directive]
 ) -> tuple[str, list[str], list[str]]:
@@ -267,7 +275,9 @@ def _apply(
             refused.append(f"{d.op} {ref}: no such entry")
             continue
         if key in claimed:
-            refused.append(f"{d.op} {ref}: entry already edited by an earlier directive")
+            refused.append(
+                f"{d.op} {ref}: entry already edited by an earlier directive"
+            )
             continue
         block = lines[slice(*ranges[key])]
 
@@ -315,7 +325,9 @@ def _apply(
                 refused.append(f"MERGE {ref} <- {src_ref}: no such entry")
                 continue
             if src_key == key:
-                refused.append(f"MERGE {ref} <- {src_ref}: cannot merge an entry into itself")
+                refused.append(
+                    f"MERGE {ref} <- {src_ref}: cannot merge an entry into itself"
+                )
                 continue
             if src_key in claimed:
                 refused.append(
@@ -331,7 +343,9 @@ def _apply(
                 continue
             merged = _append_sources(block, carried)
             if merged is None:
-                refused.append(f"MERGE {ref} <- {src_ref}: surviving entry has no **Source:** line")
+                refused.append(
+                    f"MERGE {ref} <- {src_ref}: surviving entry has no **Source:** line"
+                )
                 continue
             edits.append((*ranges[key], merged))
             edits.append((*ranges[src_key], []))
@@ -394,7 +408,7 @@ def _replace_block(block: list[str], text: str) -> tuple[list[str] | None, str]:
     quotes = [i for i, line in enumerate(block) if line.lstrip().startswith(">")]
     if not quotes:
         return None, "entry has no quoted text to replace"
-    new = [*block[:quotes[0]], f"> {text}", *block[quotes[-1] + 1:]]
+    new = [*block[: quotes[0]], f"> {text}", *block[quotes[-1] + 1 :]]
     if _sources(new) != _sources(block):
         return None, "would alter the **Source:** line"
     return new, ""
@@ -407,7 +421,9 @@ def _append_sources(block: list[str], carried: list[str]) -> list[str] | None:
     the surviving entry verbatim, so a merged pair remains traceable to both
     learnings records.
     """
-    positions = [i for i, line in enumerate(block) if line.lstrip().startswith(_SOURCE_PREFIX)]
+    positions = [
+        i for i, line in enumerate(block) if line.lstrip().startswith(_SOURCE_PREFIX)
+    ]
     if not positions:
         return None
     at = positions[-1] + 1
@@ -421,12 +437,13 @@ def _to_action(block: list[str], origin: str, reason: str | None) -> list[str]:
     never has to know how many action items already exist.
     """
     quoted = [
-        line.lstrip()[1:].strip()
-        for line in block
-        if line.lstrip().startswith(">")
+        line.lstrip()[1:].strip() for line in block if line.lstrip().startswith(">")
     ]
     what = " ".join(q for q in quoted if q) or _title(block)
-    why = reason or f"Filed under `{origin}` but it is a change to the toolchain, not a memory."
+    why = (
+        reason
+        or f"Filed under `{origin}` but it is a change to the toolchain, not a memory."
+    )
     return [
         f"### A0. {_title(block)}",
         f"**What:** {what}",
@@ -439,6 +456,7 @@ def _to_action(block: list[str], origin: str, reason: str | None) -> list[str]:
 # Insertion + renumbering
 # ---------------------------------------------------------------------------
 
+
 def _back(lines: list[str], idx: int, floor: int = 0) -> int:
     """Walk *idx* back over the blank/``---`` run that separates two sections.
 
@@ -446,7 +464,9 @@ def _back(lines: list[str], idx: int, floor: int = 0) -> int:
     *before* the separator — appending after the rule instead is how an entry
     ends up visually filed under the following section.
     """
-    while idx > floor and (not lines[idx - 1].strip() or _RULE_ONLY_RE.match(lines[idx - 1])):
+    while idx > floor and (
+        not lines[idx - 1].strip() or _RULE_ONLY_RE.match(lines[idx - 1])
+    ):
         idx -= 1
     return idx
 
@@ -470,14 +490,25 @@ def _new_section_point(lines: list[str], sections: list[_Section], kind: str) ->
     return len(lines)
 
 
-def _append_to_update_section(lines: list[str], dest: str, block: list[str]) -> list[str]:
+def _append_to_update_section(
+    lines: list[str], dest: str, block: list[str]
+) -> list[str]:
     sections = _sections(lines)
     for s in sections:
         if s.kind == "update" and s.name == dest:
             at = _back(lines, s.end, s.head + 1)
             return [*lines[:at], "", *block, *lines[at:]]
     at = _new_section_point(lines, sections, "update")
-    return [*lines[:at], "", "---", "", f"## Updates for `{dest}`", "", *block, *lines[at:]]
+    return [
+        *lines[:at],
+        "",
+        "---",
+        "",
+        f"## Updates for `{dest}`",
+        "",
+        *block,
+        *lines[at:],
+    ]
 
 
 def _filtered_line(block: list[str], reason: str | None) -> str:
@@ -489,7 +520,7 @@ def _filtered_line(block: list[str], reason: str | None) -> str:
     dropped". A DROP that vanished silently would make that false.
     """
     citations = "; ".join(
-        s.lstrip()[len(_SOURCE_PREFIX):].strip() for s in _sources(block)
+        s.lstrip()[len(_SOURCE_PREFIX) :].strip() for s in _sources(block)
     )
     tail = f" (Source: {citations})" if citations else ""
     return f"- {_title(block)} — {reason or 'dropped by the critic'}{tail}"
@@ -513,7 +544,7 @@ def _refresh_counts(lines: list[str]) -> list[str]:
     """
     out = list(lines)
     for s in _sections(out):
-        body = out[s.head + 1:s.end]
+        body = out[s.head + 1 : s.end]
         if s.kind == "action":
             n = sum(1 for line in body if _ACTION_ENTRY_RE.match(line))
             out[s.head] = f"{_ACTIONS_HEADING} ({n} items)"

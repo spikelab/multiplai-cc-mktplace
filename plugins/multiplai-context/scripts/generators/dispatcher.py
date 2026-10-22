@@ -14,14 +14,15 @@ qmd at prompt time, not summarised into a catalog — see the note in
 import logging
 from dataclasses import dataclass
 
+from lib.banks import shared_banks
 from multiplai_core.paths import Paths
+
 from generators.banks import BanksGenerator
 from generators.base import GenerationResult
 from generators.config import CatalogConfig
 from generators.diary import DiaryGenerator
 from generators.memory import MemoryGenerator
 from generators.skills import SkillsGenerator
-from lib.banks import shared_banks
 
 logger = logging.getLogger(__name__)
 
@@ -89,9 +90,7 @@ def _resolve_generators(
     return [name for name in GENERATOR_ORDER if _is_generator_enabled(name, config)]
 
 
-def _make_error_result(
-    name: str, error: Exception, dry_run: bool
-) -> GenerationResult:
+def _make_error_result(name: str, error: Exception, dry_run: bool) -> GenerationResult:
     """Create a GenerationResult capturing a generator-level failure."""
     return GenerationResult(
         generator=name,
@@ -167,6 +166,7 @@ async def _create_model_client():
     """Create a model client, with graceful fallback for test environments."""
     try:
         from multiplai_core.model_client import create_client
+
         return await create_client(component="catalogs")
     except Exception:
         logger.debug("Could not create model client, using stub")
@@ -176,6 +176,7 @@ async def _create_model_client():
 @dataclass(frozen=True)
 class _StubModelResponse:
     """Minimal response object for stub client, avoiding external imports."""
+
     content: str = "{}"
 
 

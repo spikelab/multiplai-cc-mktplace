@@ -17,10 +17,9 @@ check whether changes to `preferences.md` trace back to verdicts.
 """
 
 import sys
+from datetime import UTC
 from pathlib import Path
 from unittest.mock import AsyncMock
-
-import pytest
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
@@ -29,6 +28,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 def _make_mock_client(content: str):
     from multiplai_core.model_client import ModelResponse
+
     client = AsyncMock()
     client.query = AsyncMock(return_value=ModelResponse(content=content))
     return client
@@ -37,17 +37,21 @@ def _make_mock_client(content: str):
 def _unit(learnings: list[dict], diary="Did some work.") -> str:
     body = "".join(
         "<learning>\n" + "".join(f"{k}: {v}\n" for k, v in l.items()) + "</learning>\n"
-        for l in learnings)
-    return ("<unit>\n"
-            "<timestamp>2026-07-26T14:00:00+00:00</timestamp>\n"
-            f"<diary>\n{diary}\n</diary>\n"
-            f"{body}"
-            "</unit>")
+        for l in learnings
+    )
+    return (
+        "<unit>\n"
+        "<timestamp>2026-07-26T14:00:00+00:00</timestamp>\n"
+        f"<diary>\n{diary}\n</diary>\n"
+        f"{body}"
+        "</unit>"
+    )
 
 
 class TestVerdictPrompt:
     def test_the_three_verdict_markers_are_specified(self):
         from lib.extraction import EXTRACTION_PROMPT
+
         for marker in ("verdict: keep", "verdict: kill", "verdict: expand"):
             assert marker in EXTRACTION_PROMPT
 
@@ -61,6 +65,7 @@ class TestVerdictPrompt:
         and can only be revoked, not falsified.
         """
         from lib.extraction import EXTRACTION_PROMPT
+
         section = EXTRACTION_PROMPT.split("## Verdict detection")[1]
         assert "DECLARATION" in section and "CORRECTION" in section
         assert "kind: RULE" in section
@@ -71,6 +76,7 @@ class TestVerdictPrompt:
         preference, and preferences.md fills with noise that outvotes the
         real verdicts."""
         from lib.extraction import EXTRACTION_PROMPT
+
         section = EXTRACTION_PROMPT.split("## Verdict detection")[1]
         assert "go ahead" in section
         assert "not a judgment about output style" in section
@@ -79,31 +85,35 @@ class TestVerdictPrompt:
 class TestIntentionPrompt:
     def test_intention_is_a_listed_type(self):
         from lib.extraction import EXTRACTION_PROMPT
+
         assert "INTENTION" in EXTRACTION_PROMPT
 
     def test_both_trigger_shapes_are_specified(self):
         from lib.extraction import EXTRACTION_PROMPT
+
         section = EXTRACTION_PROMPT.split("## Intention detection")[1]
         assert "due:" in section and "on:" in section
 
     def test_the_prompt_knows_what_day_it_is(self):
-        """"revisit in September" is only resolvable against a known today.
+        """ "revisit in September" is only resolvable against a known today.
         Without the date the model invents one, and the intention fires in
         the wrong month."""
         from lib.extraction import EXTRACTION_PROMPT
+
         assert "Today's date:" in EXTRACTION_PROMPT
 
     def test_todays_date_is_substituted_before_the_call(self, tmp_path):
         import asyncio
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         from lib.extraction import extract_units
 
         client = _make_mock_client("<no-units/>")
         asyncio.run(extract_units("some transcript", valid_targets=[], client=client))
-        sent = client.query.call_args.kwargs.get("system", "") + \
-            str(client.query.call_args.kwargs.get("messages", ""))
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        sent = client.query.call_args.kwargs.get("system", "") + str(
+            client.query.call_args.kwargs.get("messages", "")
+        )
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
         assert today in sent
         assert "{today}" not in sent
 
@@ -111,17 +121,23 @@ class TestIntentionPrompt:
 class TestVerdictsSurviveThePipeline:
     def test_a_verdict_learning_round_trips(self):
         import asyncio
+
         from lib.extraction import extract_units
 
-        response = _unit([{
-            "trust": "verified",
-            "type": "PREFERENCE",
-            "description": "verdict: kill — stop opening replies with a summary of the request",
-            "target": "preferences.md",
-            "action": "Record that reply preambles are unwanted",
-        }])
-        units = asyncio.run(extract_units("t", valid_targets=[],
-                                          client=_make_mock_client(response)))
+        response = _unit(
+            [
+                {
+                    "trust": "verified",
+                    "type": "PREFERENCE",
+                    "description": "verdict: kill — stop opening replies with a summary of the request",
+                    "target": "preferences.md",
+                    "action": "Record that reply preambles are unwanted",
+                }
+            ]
+        )
+        units = asyncio.run(
+            extract_units("t", valid_targets=[], client=_make_mock_client(response))
+        )
         [learning] = units[0]["learnings"]
         assert learning["type"] == "PREFERENCE"
         assert learning["trust"] == "verified"
@@ -132,17 +148,21 @@ class TestVerdictsSurviveThePipeline:
         mangles or strips it, the whole experiment is unmeasurable."""
         from lib.extraction import append_learnings
 
-        units = [{
-            "timestamp": "2026-07-26T14:00:00+00:00",
-            "diary_entry": "x",
-            "learnings": [{
-                "trust": "verified",
-                "type": "PREFERENCE",
-                "description": "verdict: expand — more tables like that one",
-                "target": "preferences.md",
-                "action": "Note the preference for tabular comparisons",
-            }],
-        }]
+        units = [
+            {
+                "timestamp": "2026-07-26T14:00:00+00:00",
+                "diary_entry": "x",
+                "learnings": [
+                    {
+                        "trust": "verified",
+                        "type": "PREFERENCE",
+                        "description": "verdict: expand — more tables like that one",
+                        "target": "preferences.md",
+                        "action": "Note the preference for tabular comparisons",
+                    }
+                ],
+            }
+        ]
         out = tmp_path / "2026-07-26.md"
         append_learnings(units, out, "sess-1", "2026-07-26T14:00:00+00:00")
         text = out.read_text(encoding="utf-8")
@@ -153,17 +173,23 @@ class TestVerdictsSurviveThePipeline:
 class TestIntentionsSurviveThePipeline:
     def test_an_intention_learning_round_trips(self):
         import asyncio
+
         from lib.extraction import extract_units
 
-        response = _unit([{
-            "trust": "verified",
-            "type": "INTENTION",
-            "description": "due: 2026-09-01 — re-check the Italian residency rule",
-            "target": "prospective.md",
-            "action": "Add the dated intention",
-        }])
-        units = asyncio.run(extract_units("t", valid_targets=[],
-                                          client=_make_mock_client(response)))
+        response = _unit(
+            [
+                {
+                    "trust": "verified",
+                    "type": "INTENTION",
+                    "description": "due: 2026-09-01 — re-check the Italian residency rule",
+                    "target": "prospective.md",
+                    "action": "Add the dated intention",
+                }
+            ]
+        )
+        units = asyncio.run(
+            extract_units("t", valid_targets=[], client=_make_mock_client(response))
+        )
         [learning] = units[0]["learnings"]
         assert learning["type"] == "INTENTION"
         assert learning["target"] == "prospective.md"
@@ -171,17 +197,21 @@ class TestIntentionsSurviveThePipeline:
     def test_an_intention_reaches_the_learnings_file(self, tmp_path):
         from lib.extraction import append_learnings
 
-        units = [{
-            "timestamp": "2026-07-26T14:00:00+00:00",
-            "diary_entry": "x",
-            "learnings": [{
-                "trust": "verified",
-                "type": "INTENTION",
-                "description": "on: the container image moves past v0.5 — re-run the config audit",
-                "target": "prospective.md",
-                "action": "Add the conditional intention",
-            }],
-        }]
+        units = [
+            {
+                "timestamp": "2026-07-26T14:00:00+00:00",
+                "diary_entry": "x",
+                "learnings": [
+                    {
+                        "trust": "verified",
+                        "type": "INTENTION",
+                        "description": "on: the container image moves past v0.5 — re-run the config audit",
+                        "target": "prospective.md",
+                        "action": "Add the conditional intention",
+                    }
+                ],
+            }
+        ]
         out = tmp_path / "2026-07-26.md"
         append_learnings(units, out, "sess-1", "2026-07-26T14:00:00+00:00")
         text = out.read_text(encoding="utf-8")
@@ -195,7 +225,10 @@ class TestIntentionsSurviveThePipeline:
 
         from scripts.lib.prospective import format_line, parse
 
-        line = format_line("re-check the residency rule", due=date(2026, 9, 1),
-                           captured=date(2026, 7, 26))
+        line = format_line(
+            "re-check the residency rule",
+            due=date(2026, 9, 1),
+            captured=date(2026, 7, 26),
+        )
         [i] = parse(line)
         assert i.due == date(2026, 9, 1)

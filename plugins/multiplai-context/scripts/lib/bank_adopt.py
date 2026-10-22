@@ -44,9 +44,9 @@ from __future__ import annotations
 import dataclasses
 import logging
 import re
-from datetime import datetime, timezone
+from collections.abc import Sequence
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Optional, Sequence
 
 from lib.bank_collisions import find_collisions
 from lib.bank_git import dirty_paths, head_sha, is_git_repo, stage_commit
@@ -56,9 +56,9 @@ from lib.memory_write_floor import is_safe_target
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "CONVERSATION_THRESHOLD",
     "AdoptionCandidate",
     "AdoptionPlan",
-    "CONVERSATION_THRESHOLD",
     "content_present",
     "finalize",
     "plan_adoption",
@@ -91,7 +91,7 @@ _LIST_MARKER_RE = re.compile(r"^(?:[-*+>]|\d+[.)])\s+")
 
 
 def _today() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return datetime.now(UTC).strftime("%Y-%m-%d")
 
 
 def _significant_lines(text: str) -> list[str]:
@@ -106,7 +106,9 @@ def _significant_lines(text: str) -> list[str]:
     return out
 
 
-def content_present(personal_text: str, bank_texts: Sequence[str]) -> tuple[bool, list[str]]:
+def content_present(
+    personal_text: str, bank_texts: Sequence[str]
+) -> tuple[bool, list[str]]:
     """Is every substantive line of *personal_text* already in the bank?
 
     Returns ``(ok, missing_lines)``. The comparison normalises whitespace and
@@ -131,9 +133,7 @@ def content_present(personal_text: str, bank_texts: Sequence[str]) -> tuple[bool
       it" against an **empty** bank. Requiring at least one matched line turns
       that from silent deletion into a skip.
     """
-    haystack = {
-        line for text in bank_texts for line in _significant_lines(text)
-    }
+    haystack = {line for text in bank_texts for line in _significant_lines(text)}
     personal_lines = _significant_lines(personal_text)
     if not personal_lines:
         return False, []
@@ -166,7 +166,7 @@ class AdoptionPlan:
         return len(self.candidates) > CONVERSATION_THRESHOLD
 
 
-def _read(path: Path) -> Optional[str]:
+def _read(path: Path) -> str | None:
     try:
         return path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
@@ -222,7 +222,9 @@ def plan_adoption(
     )
     errors: list[str] = []
     if not bank.path.exists():
-        errors.append(f"bank '{bank.name}' is not present at {bank.path} — sync it first")
+        errors.append(
+            f"bank '{bank.name}' is not present at {bank.path} — sync it first"
+        )
     return AdoptionPlan(bank=bank, candidates=candidates, errors=tuple(errors))
 
 
@@ -296,8 +298,10 @@ def finalize(
     for filename in filenames:
         if not is_safe_target(filename):
             report["skipped"].append(
-                {"file": filename,
-                 "why": "not a bare memory filename (no paths, no '..', must end .md)"}
+                {
+                    "file": filename,
+                    "why": "not a bare memory filename (no paths, no '..', must end .md)",
+                }
             )
             continue
         personal = memory_dir / filename
@@ -308,7 +312,9 @@ def finalize(
             )
             continue
         bank_texts = [
-            t for t in (_read(p) for p in sorted(bank.path.glob("*.md"))) if t is not None
+            t
+            for t in (_read(p) for p in sorted(bank.path.glob("*.md")))
+            if t is not None
         ]
         ok, missing = content_present(text, bank_texts)
         if not ok:
@@ -340,8 +346,7 @@ def finalize(
             memory_dir,
             pathspec=to_delete,
             message=(
-                f"memory: adopt {len(to_delete)} file(s) into shared bank "
-                f"'{bank.name}'"
+                f"memory: adopt {len(to_delete)} file(s) into shared bank '{bank.name}'"
             ),
         )
         if committed.ok:
@@ -357,7 +362,9 @@ def finalize(
     return report
 
 
-def render_receipt(bank: MemoryBank, report: dict, plan: Optional[AdoptionPlan] = None) -> str:
+def render_receipt(
+    bank: MemoryBank, report: dict, plan: AdoptionPlan | None = None
+) -> str:
     """The audit record of an adoption. Written whether or not anything moved."""
     lines = [
         f"# Bank adoption receipt — `{bank.name}`",
@@ -415,7 +422,7 @@ def render_receipt(bank: MemoryBank, report: dict, plan: Optional[AdoptionPlan] 
     return "\n".join(lines).rstrip() + "\n"
 
 
-def resolve_bank(name: str) -> Optional[MemoryBank]:
+def resolve_bank(name: str) -> MemoryBank | None:
     """The subscribed shared bank called *name*, or ``None``."""
     for bank in configured_banks():
         if bank.name == name and bank.is_shared:

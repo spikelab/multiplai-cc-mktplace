@@ -10,14 +10,14 @@ import json
 import re
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from multiplai_core.paths import get_paths
-from multiplai_core.model_client import detect_client_type
 from lib.memory_router import resolve_strategy
+from multiplai_core.model_client import detect_client_type
+from multiplai_core.paths import get_paths
 
 # Machine-readable routing line emitted by context_manager:
 #   ... INFO: ROUTING_SCORES memory={"picked": [...], "capped": ..., ...}
@@ -80,8 +80,8 @@ def _check_memory_file(memory_dir: Path, filename: str) -> dict:
     stat = filepath.stat()
     st_size = stat.st_size
     st_mtime = stat.st_mtime
-    modified_dt = datetime.fromtimestamp(st_mtime, tz=timezone.utc)
-    age_days = (datetime.now(timezone.utc) - modified_dt).days
+    modified_dt = datetime.fromtimestamp(st_mtime, tz=UTC)
+    age_days = (datetime.now(UTC) - modified_dt).days
     stale = age_days > STALENESS_THRESHOLD_DAYS
 
     return {
@@ -171,6 +171,7 @@ def _get_last_dream_date(data_dir: Path) -> str | None:
         return None
     try:
         import yaml
+
         with open(dream_state_file) as f:
             state = yaml.safe_load(f) or {}
         return state.get("last_run")
@@ -242,7 +243,7 @@ def _routing_status(paths) -> dict:
             if gen:
                 try:
                     dt = datetime.fromisoformat(gen.replace("Z", "+00:00"))
-                    age_days = (datetime.now(timezone.utc) - dt).days
+                    age_days = (datetime.now(UTC) - dt).days
                 except ValueError:
                     pass
             status["last_eval"] = {
@@ -304,10 +305,17 @@ def _read_routing_events(logs_dir: Path) -> list:
             m = _PICKED_RE.match(msg)
             if m:
                 last_strategy = m.group(1)
-                found.append((
-                    "picked", last_strategy, int(m.group(2)), int(m.group(3)),
-                    ts, abstained, degraded,
-                ))
+                found.append(
+                    (
+                        "picked",
+                        last_strategy,
+                        int(m.group(2)),
+                        int(m.group(3)),
+                        ts,
+                        abstained,
+                        degraded,
+                    )
+                )
                 abstained = degraded = False
                 n_picked += 1
             elif _LLM_ABSTAINED_RE.match(msg):
@@ -325,7 +333,8 @@ def _score_aggregates(events: list, strategy: str | None) -> dict:
     say which router wrote them) every sample counts.
     """
     samples = [
-        e[1] for e in events
+        e[1]
+        for e in events
         if e[0] == "scores" and (strategy is None or e[2] == strategy)
     ]
     samples = samples[-_MAX_ROUTING_SAMPLES:]
@@ -333,9 +342,7 @@ def _score_aggregates(events: list, strategy: str | None) -> dict:
         return {"strategy": strategy, "source": "ROUTING_SCORES", "samples": 0}
     n = len(samples)
     capped = sum(1 for s in samples if s.get("capped"))
-    picked_counts = [
-        s.get("n_picked", len(s.get("picked") or [])) for s in samples
-    ]
+    picked_counts = [s.get("n_picked", len(s.get("picked") or [])) for s in samples]
     tops = [s["picked"][0][1] for s in samples if s.get("picked")]
     floors = [s["picked"][-1][1] for s in samples if s.get("picked")]
     return {
@@ -343,14 +350,10 @@ def _score_aggregates(events: list, strategy: str | None) -> dict:
         "source": "ROUTING_SCORES",
         "samples": n,
         "cap_saturation_pct": round(100 * capped / n, 1),
-        "empty_pct": round(
-            100 * sum(1 for c in picked_counts if c == 0) / n, 1
-        ),
+        "empty_pct": round(100 * sum(1 for c in picked_counts if c == 0) / n, 1),
         "mean_picked": round(sum(picked_counts) / n, 1),
         "mean_top_score": round(sum(tops) / len(tops), 2) if tops else None,
-        "mean_floor_score": (
-            round(sum(floors) / len(floors), 2) if floors else None
-        ),
+        "mean_floor_score": (round(sum(floors) / len(floors), 2) if floors else None),
     }
 
 
@@ -366,14 +369,11 @@ def _pick_aggregates(events: list, strategy: str) -> dict:
     """
     picks = [e for e in events if e[0] == "picked" and e[1] == strategy]
     picks = picks[-_MAX_ROUTING_SAMPLES:]
-    out: dict = {"strategy": strategy, "source": "router_picks",
-                 "samples": len(picks)}
+    out: dict = {"strategy": strategy, "source": "router_picks", "samples": len(picks)}
     if not picks:
         return out
     n = len(picks)
-    out["memory_empty_pct"] = round(
-        100 * sum(1 for e in picks if e[2] == 0) / n, 1
-    )
+    out["memory_empty_pct"] = round(100 * sum(1 for e in picks if e[2] == 0) / n, 1)
     out["mean_picked_memory"] = round(sum(e[2] for e in picks) / n, 1)
     if strategy == "llm":
         out["abstained_pct"] = round(100 * sum(1 for e in picks if e[5]) / n, 1)
@@ -443,13 +443,10 @@ def run_health_check() -> dict:
     # Full-corpus inventory: every *.md in the memory dir gets size,
     # mtime, and staleness — not just the starter-template trio.
     corpus = sorted(p.name for p in memory_dir.glob("*.md"))
-    report["memory_files"] = [
-        _check_memory_file(memory_dir, name) for name in corpus
-    ]
+    report["memory_files"] = [_check_memory_file(memory_dir, name) for name in corpus]
     # Required starter files that are absent (drives the setup hint).
     required_missing = [
-        name for name in REQUIRED_MEMORY_FILES
-        if not (memory_dir / name).exists()
+        name for name in REQUIRED_MEMORY_FILES if not (memory_dir / name).exists()
     ]
     report["required_missing"] = required_missing
 
@@ -457,8 +454,7 @@ def run_health_check() -> dict:
     report["memory_summary"] = {
         "total": len(report["memory_files"]),
         "fresh": sum(
-            1 for f in report["memory_files"]
-            if f["exists"] and not f.get("stale")
+            1 for f in report["memory_files"] if f["exists"] and not f.get("stale")
         ),
         "stale": len(stale),
         "required_missing": len(required_missing),
@@ -476,18 +472,21 @@ def run_health_check() -> dict:
         report["memory_validity"] = {
             "expired": [
                 {"file": f.path.name, "line": f.lineno, "detail": f.detail}
-                for f in lint_findings if f.kind == "expired"
+                for f in lint_findings
+                if f.kind == "expired"
             ],
             "unmarked": [
                 {"file": f.path.name, "line": f.lineno, "class": f.fact_class}
-                for f in lint_findings if f.kind == "unmarked"
+                for f in lint_findings
+                if f.kind == "unmarked"
             ],
             # Corpus-wide H2 collisions. Reported here because they are
             # what makes a `file.md#Section` router pick ambiguous, so
             # they degrade retrieval rather than just tidiness.
             "duplicate_h2": [
                 {"file": f.path.name, "line": f.lineno, "detail": f.detail}
-                for f in lint_findings if f.kind == "duplicate-h2"
+                for f in lint_findings
+                if f.kind == "duplicate-h2"
             ],
         }
     except Exception as exc:  # pragma: no cover - defensive
@@ -573,6 +572,7 @@ def run_health_check() -> dict:
     # are actually discoverable, otherwise the suggested command just SystemExits.
     try:
         from eval_router import _default_case_paths
+
         _have_eval_cases = bool(_default_case_paths())
     except Exception:
         _have_eval_cases = False
@@ -584,7 +584,11 @@ def run_health_check() -> dict:
             'python "${CLAUDE_PLUGIN_ROOT}/scripts/eval_router.py" '
             "(zero LLM cost under token_overlap) to baseline routing quality."
         )
-    elif last_eval is not None and (last_eval.get("age_days") or 0) > 30 and _have_eval_cases:
+    elif (
+        last_eval is not None
+        and (last_eval.get("age_days") or 0) > 30
+        and _have_eval_cases
+    ):
         recommendations.append(
             f"Router eval is {last_eval['age_days']} days old. Re-run "
             'python "${CLAUDE_PLUGIN_ROOT}/scripts/eval_router.py".'

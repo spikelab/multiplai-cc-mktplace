@@ -7,12 +7,13 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
 from pr_pipeline import fill, github
 
 
 def git(repo: Path, *args: str) -> str:
-    return subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True).stdout
+    return subprocess.run(
+        ["git", *args], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout
 
 
 def make_repo(path: Path, branch: str = "feat/x") -> Path:
@@ -34,17 +35,32 @@ def make_repo(path: Path, branch: str = "feat/x") -> Path:
 
 
 def make_bare_origin(repo: Path, origin: Path) -> Path:
-    subprocess.run(["git", "init", "-q", "--bare", str(origin)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "init", "-q", "--bare", str(origin)], check=True, capture_output=True
+    )
     git(repo, "remote", "add", "origin", str(origin))
     git(repo, "push", "-q", "origin", "main")
     return origin
 
 
-def make_change(repo: Path, name: str = "feat", *, why: str = "Because the queue drops jobs.",
-                tasks: str | None = "## 1. First block\n\nDo it.\n\n## 2. Second block\n\nDo more.\n",
-                state: dict | None = None, artifacts: tuple[str, ...] = (), ticket: str | None = None,
-                archive: str | None = None) -> Path:
-    d = repo / "specs" / ("archive" if archive else "changes") / (f"{archive}-{name}" if archive else name)
+def make_change(
+    repo: Path,
+    name: str = "feat",
+    *,
+    why: str = "Because the queue drops jobs.",
+    tasks: str
+    | None = "## 1. First block\n\nDo it.\n\n## 2. Second block\n\nDo more.\n",
+    state: dict | None = None,
+    artifacts: tuple[str, ...] = (),
+    ticket: str | None = None,
+    archive: str | None = None,
+) -> Path:
+    d = (
+        repo
+        / "specs"
+        / ("archive" if archive else "changes")
+        / (f"{archive}-{name}" if archive else name)
+    )
     d.mkdir(parents=True, exist_ok=True)
     (d / "proposal.md").write_text(f"# P\n\n## Why\n\n{why}\n\n## Impact\n\nnone\n")
     if tasks is not None:
@@ -67,7 +83,9 @@ class GhStub:
         self.bodies: dict[str, str] = {}
         self.rules: list[tuple] = []
 
-    def on(self, prefix: list[str], returncode: int = 0, stdout: str = "", stderr: str = ""):
+    def on(
+        self, prefix: list[str], returncode: int = 0, stdout: str = "", stderr: str = ""
+    ):
         self.rules.append((prefix, returncode, stdout, stderr))
         return self
 
@@ -84,8 +102,12 @@ class GhStub:
         return github.Result(list(argv), 1, "", f"unstubbed gh call: {argv}")
 
     def writes(self) -> list[list[str]]:
-        return [c for c in self.calls if c[:3] in (["gh", "pr", "create"], ["gh", "pr", "edit"],
-                                                   ["gh", "pr", "comment"])]
+        return [
+            c
+            for c in self.calls
+            if c[:3]
+            in (["gh", "pr", "create"], ["gh", "pr", "edit"], ["gh", "pr", "comment"])
+        ]
 
 
 @pytest.fixture(autouse=True)
@@ -145,5 +167,6 @@ _SESSION_DEFAULT_VARS = (
 def _no_session_defaults(monkeypatch):
     for key in _SESSION_DEFAULT_VARS:
         monkeypatch.delenv(key, raising=False)
-    monkeypatch.setattr("multiplai_core.session.load_multiplai_conf",
-                        lambda: {"_sections": {}})
+    monkeypatch.setattr(
+        "multiplai_core.session.load_multiplai_conf", lambda: {"_sections": {}}
+    )

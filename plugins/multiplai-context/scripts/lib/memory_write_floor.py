@@ -77,18 +77,18 @@ from __future__ import annotations
 
 import re
 from pathlib import Path, PurePosixPath
-from typing import Optional, Protocol
+from typing import Protocol
 
 from multiplai_core.banks import PERSONAL_BANK, split_bank_ref
 
 __all__ = [
     "ADDITIVE_CHANGES",
-    "RESERVED_BASENAMES",
     "FLOOR_REASONS",
+    "RESERVED_BASENAMES",
     "floor_check",
-    "path_refusal",
-    "is_safe_target",
     "is_reserved_target",
+    "is_safe_target",
+    "path_refusal",
     "target_bank",
     "targets_shared_bank",
 ]
@@ -98,6 +98,7 @@ __all__ = [
 # check survived only because it happens to `.strip()` — luck, not design — and
 # `"python.md\n"` was contained one layer out by `memory_file.exists()`.
 _SAFE_TARGET_RE = re.compile(r"\A[A-Za-z0-9._-]+\.md\Z")
+
 
 # Mirrors ``multiplai_core.banks``'s own name rule. Kept as a literal here
 # rather than imported because it guards a *refusal*: this file must be able to
@@ -210,7 +211,7 @@ def is_reserved_target(filename: str) -> bool:
     return PurePosixPath(filename).name.strip().lower() in RESERVED_BASENAMES
 
 
-def floor_check(item: _WriteCandidate) -> Optional[str]:
+def floor_check(item: _WriteCandidate) -> str | None:
     """The refusal reason for writing *item*, or ``None`` when it may be written.
 
     ``None`` is **permission to proceed with the caller's own verdict**, not a
@@ -240,7 +241,7 @@ def floor_check(item: _WriteCandidate) -> Optional[str]:
     return None
 
 
-def path_refusal(memory_dir, filename: str) -> Optional[str]:
+def path_refusal(memory_dir, filename: str) -> str | None:
     """Refusal reason for the **resolved** destination, or ``None``.
 
     :func:`floor_check` inspects the target *string*. That is the right layer for

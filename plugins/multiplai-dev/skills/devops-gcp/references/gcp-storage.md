@@ -59,6 +59,7 @@ gsutil rewrite -s ARCHIVE gs://my-backups/old-backup.tar.gz
 ```python
 from google.cloud import compute_v1
 
+
 def create_instance_with_disk(project_id, zone, instance_name):
     client = compute_v1.InstancesClient()
 
@@ -74,23 +75,20 @@ def create_instance_with_disk(project_id, zone, instance_name):
                 initialize_params=compute_v1.AttachedDiskInitializeParams(
                     source_image="projects/debian-cloud/global/images/family/debian-11",
                     disk_size_gb=20,
-                    disk_type=f"zones/{zone}/diskTypes/pd-balanced"
-                )
+                    disk_type=f"zones/{zone}/diskTypes/pd-balanced",
+                ),
             ),
             # Data disk (pd-ssd, 500GB)
             compute_v1.AttachedDisk(
                 auto_delete=False,  # Preserve disk after instance deletion
                 initialize_params=compute_v1.AttachedDiskInitializeParams(
-                    disk_size_gb=500,
-                    disk_type=f"zones/{zone}/diskTypes/pd-ssd"
-                )
-            )
+                    disk_size_gb=500, disk_type=f"zones/{zone}/diskTypes/pd-ssd"
+                ),
+            ),
         ],
         network_interfaces=[
-            compute_v1.NetworkInterface(
-                network="global/networks/default"
-            )
-        ]
+            compute_v1.NetworkInterface(network="global/networks/default")
+        ],
     )
 
     operation = client.insert(project=project_id, zone=zone, instance_resource=instance)
@@ -196,6 +194,7 @@ gcloud compute instances attach-disk db-secondary \
 from google.cloud import storage
 from datetime import timedelta
 
+
 def generate_signed_url(bucket_name, blob_name, expiration_minutes=15):
     storage_client = storage.Client()
     bucket = storage_client.bucket(bucket_name)
@@ -203,12 +202,11 @@ def generate_signed_url(bucket_name, blob_name, expiration_minutes=15):
 
     # Generate signed URL valid for 15 minutes
     url = blob.generate_signed_url(
-        version="v4",
-        expiration=timedelta(minutes=expiration_minutes),
-        method="GET"
+        version="v4", expiration=timedelta(minutes=expiration_minutes), method="GET"
     )
 
     return url
+
 
 # Example usage
 url = generate_signed_url("private-reports", "report-2025-10.pdf")
@@ -222,6 +220,7 @@ url = generate_signed_url("private-reports", "report-2025-10.pdf")
 ```python
 from google.cloud import storage
 
+
 def resumable_upload(bucket_name, source_file, destination_blob):
     storage_client = storage.Client()
     bucket = storage_client.bucket(bucket_name)
@@ -231,10 +230,11 @@ def resumable_upload(bucket_name, source_file, destination_blob):
     # If upload fails, it automatically resumes from where it left off
     blob.upload_from_filename(
         source_file,
-        timeout=3600  # 1 hour timeout for large files
+        timeout=3600,  # 1 hour timeout for large files
     )
 
     print(f"Uploaded {source_file} to gs://{bucket_name}/{destination_blob}")
+
 
 # Upload 10GB file - automatically handles interruptions
 resumable_upload("my-bucket", "/data/large-dataset.tar.gz", "datasets/2025-10.tar.gz")

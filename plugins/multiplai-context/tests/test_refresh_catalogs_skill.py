@@ -17,17 +17,10 @@ Covers all scenarios from requirements/refresh-catalogs-skill.md:
 """
 
 import asyncio
-import json
-import os
 import re
-import sys
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 from conftest import PLUGIN_ROOT, SCRIPTS_DIR
-
 
 # ---------------------------------------------------------------------------
 # Skill registration
@@ -54,26 +47,35 @@ class TestRefreshCatalogsSkillRegistration:
     def test_skill_has_frontmatter(self):
         """Scenario: Skill file has YAML frontmatter for CC auto-discovery."""
         import re as _re
+
         text = (PLUGIN_ROOT / "skills" / "refresh-catalogs" / "SKILL.md").read_text()
-        assert _re.match(r'^---\n', text), "skills/refresh-catalogs/SKILL.md missing YAML frontmatter"
+        assert _re.match(r"^---\n", text), (
+            "skills/refresh-catalogs/SKILL.md missing YAML frontmatter"
+        )
 
     def test_skill_frontmatter_name(self):
         """Frontmatter must declare name: refresh-catalogs."""
         import re as _re
+
         text = (PLUGIN_ROOT / "skills" / "refresh-catalogs" / "SKILL.md").read_text()
-        m = _re.match(r'^---\n(.*?)\n---', text, _re.DOTALL)
+        m = _re.match(r"^---\n(.*?)\n---", text, _re.DOTALL)
         assert m, "Missing frontmatter block"
-        fm = dict(line.partition(':')[::2] for line in m.group(1).splitlines() if ':' in line)
-        assert fm.get('name', '').strip().strip('"') == "refresh-catalogs"
+        fm = dict(
+            line.partition(":")[::2] for line in m.group(1).splitlines() if ":" in line
+        )
+        assert fm.get("name", "").strip().strip('"') == "refresh-catalogs"
 
     def test_skill_frontmatter_description(self):
         """Frontmatter must have a non-empty description."""
         import re as _re
+
         text = (PLUGIN_ROOT / "skills" / "refresh-catalogs" / "SKILL.md").read_text()
-        m = _re.match(r'^---\n(.*?)\n---', text, _re.DOTALL)
+        m = _re.match(r"^---\n(.*?)\n---", text, _re.DOTALL)
         assert m, "Missing frontmatter block"
-        fm = dict(line.partition(':')[::2] for line in m.group(1).splitlines() if ':' in line)
-        assert fm.get('description', '').strip().strip('"')
+        fm = dict(
+            line.partition(":")[::2] for line in m.group(1).splitlines() if ":" in line
+        )
+        assert fm.get("description", "").strip().strip('"')
 
 
 # ---------------------------------------------------------------------------
@@ -261,10 +263,7 @@ class TestRefreshCatalogsForceMode:
             r"(?i)(force.*bypass|force.*skip|force.*regardless|"
             r"force.*all.*regen|ignore.*hash|ignore.*state)",
             self.text,
-        ), (
-            "refresh-catalogs.md must explain that --force bypasses "
-            "state-aware skipping"
-        )
+        ), "refresh-catalogs.md must explain that --force bypasses state-aware skipping"
 
     def test_force_flag_passthrough_to_dispatcher(self):
         """Skill must pass --force through to the dispatcher.
@@ -274,9 +273,7 @@ class TestRefreshCatalogsForceMode:
         assert re.search(
             r"(?i)(--force|force.*flag|force.*pass|force.*dispatch)",
             self.text,
-        ), (
-            "refresh-catalogs.md must indicate --force is passed to the dispatcher"
-        )
+        ), "refresh-catalogs.md must indicate --force is passed to the dispatcher"
 
 
 # ---------------------------------------------------------------------------
@@ -313,9 +310,7 @@ class TestRefreshCatalogsDryRunMode:
             r"(no|without|not).*(writ|modif|chang).*(dry.?run)|"
             r"dry.?run.*report|preview|would)",
             self.text,
-        ), (
-            "refresh-catalogs.md must explain that --dry-run has no side effects"
-        )
+        ), "refresh-catalogs.md must explain that --dry-run has no side effects"
 
     def test_dry_run_output_format(self):
         """Dry-run must show what would be generated/pruned.
@@ -404,9 +399,7 @@ class TestRefreshCatalogsOutputReporting:
             r"(?i)(per.?catalog|each.?catalog|individual|status.*catalog|"
             r"catalog.*status|regenerat.*skip.*fail)",
             self.text,
-        ), (
-            "refresh-catalogs.md must describe per-catalog status reporting"
-        )
+        ), "refresh-catalogs.md must describe per-catalog status reporting"
 
     def test_reports_success_status(self):
         """Output must indicate successful regeneration."""
@@ -472,9 +465,7 @@ class TestRefreshCatalogsDelegatesToDispatcher:
         assert re.search(
             r"(?i)(pass.*flag|flag.*pass|--force|--dry.?run)",
             self.text,
-        ), (
-            "refresh-catalogs.md must indicate flags are passed to the dispatcher"
-        )
+        ), "refresh-catalogs.md must indicate flags are passed to the dispatcher"
 
 
 # ---------------------------------------------------------------------------
@@ -508,9 +499,7 @@ class TestRefreshCatalogsStateFileHandling:
         assert re.search(
             r"(?i)(missing|first.?run|no.*state|graceful|corrupt|invalid)",
             self.text,
-        ), (
-            "refresh-catalogs.md must mention handling of missing/corrupt state"
-        )
+        ), "refresh-catalogs.md must mention handling of missing/corrupt state"
 
 
 # ---------------------------------------------------------------------------
@@ -541,9 +530,7 @@ class TestRefreshCatalogsMissingDirectories:
         assert re.search(
             r"(?i)(director|missing|not.*exist|skip|graceful)",
             self.text,
-        ), (
-            "refresh-catalogs.md must mention handling of missing directories"
-        )
+        ), "refresh-catalogs.md must mention handling of missing directories"
 
 
 # ---------------------------------------------------------------------------
@@ -575,9 +562,7 @@ class TestRefreshCatalogsModelConfig:
         assert re.search(
             r"(?i)(model|config|model_client|configured)",
             self.text,
-        ), (
-            "refresh-catalogs.md must reference model configuration"
-        )
+        ), "refresh-catalogs.md must reference model configuration"
 
 
 # ---------------------------------------------------------------------------
@@ -721,8 +706,12 @@ class TestRefreshCatalogsIntegrationFlags:
         gen_names = [r.generator for r in results]
         assert "memory" in gen_names, "Memory generator must run by default"
         assert "diary" in gen_names, "Diary generator must run by default"
-        assert "skills" not in gen_names, "Skills generator must be skipped when disabled"
-        assert "resources" not in gen_names, "Resources generator must be skipped when disabled"
+        assert "skills" not in gen_names, (
+            "Skills generator must be skipped when disabled"
+        )
+        assert "resources" not in gen_names, (
+            "Resources generator must be skipped when disabled"
+        )
 
     def test_force_flag_regenerates_all(self, mock_env):
         """Scenario: Unchanged sources are regenerated under force mode.
@@ -769,7 +758,9 @@ class TestRefreshCatalogsIntegrationFlags:
         files_after = set(catalogs_dir.iterdir()) if catalogs_dir.exists() else set()
         new_files = files_after - files_before
         # Filter to only catalog json files (exclude state file which may exist)
-        new_catalogs = {f for f in new_files if f.suffix == ".json" and not f.name.startswith(".")}
+        new_catalogs = {
+            f for f in new_files if f.suffix == ".json" and not f.name.startswith(".")
+        }
         assert not new_catalogs, (
             f"Dry-run must not create catalog files. New files: {new_catalogs}"
         )
@@ -801,9 +792,7 @@ class TestRefreshCatalogsIntegrationFlags:
 
         config = CatalogConfig()
 
-        results = asyncio.run(
-            generate_catalogs(config=config, generators=["diary"])
-        )
+        results = asyncio.run(generate_catalogs(config=config, generators=["diary"]))
 
         gen_names = [r.generator for r in results]
         assert gen_names == ["diary"], (
@@ -840,9 +829,7 @@ class TestRefreshCatalogsIntegrationFlags:
         config = CatalogConfig()
 
         with pytest.raises(ValueError, match="nonexistent"):
-            asyncio.run(
-                generate_catalogs(config=config, generators=["nonexistent"])
-            )
+            asyncio.run(generate_catalogs(config=config, generators=["nonexistent"]))
 
     def test_skills_enabled_runs_skills_generator(self, mock_env):
         """Scenario: All enabled catalogs regenerated.
@@ -939,9 +926,7 @@ class TestRefreshCatalogsIntegrationFlags:
 
         config = CatalogConfig()
 
-        results = asyncio.run(
-            generate_catalogs(config=config, dry_run=True)
-        )
+        results = asyncio.run(generate_catalogs(config=config, dry_run=True))
 
         # All results should have dry_run=True and no fatal errors
         for r in results:

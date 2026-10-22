@@ -16,6 +16,7 @@ option name and uppercases it once. There is deliberately no lowercase
 fallback: accepting both cases would keep a dead name alive as though it meant
 something, and would let this very guard pass while the bug persisted.
 """
+
 from __future__ import annotations
 
 import re
@@ -35,8 +36,7 @@ def test_no_lowercase_option_name_under_scripts():
     assert not offenders, (
         "Plugin options are exported UPPERCASED; a lowercase name can never "
         "match and fails silently in production. Read it via "
-        "multiplai_core.plugin_options.option(<bare name>):\n"
-        + "\n".join(offenders)
+        "multiplai_core.plugin_options.option(<bare name>):\n" + "\n".join(offenders)
     )
 
 

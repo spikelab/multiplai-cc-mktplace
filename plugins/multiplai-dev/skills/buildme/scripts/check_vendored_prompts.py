@@ -29,9 +29,10 @@ import re
 import subprocess
 import sys
 import time
-from dataclasses import dataclass, field
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any
 
 DEFAULT_MANIFEST = (
     Path(__file__).resolve().parent
@@ -42,7 +43,15 @@ DEFAULT_MANIFEST = (
 )
 
 # The manifest contract, fixed with the agent that writes SOURCES.json.
-REQUIRED_KEYS = ("repo", "path", "blob_sha", "tree_sha", "licence", "modified", "used_by")
+REQUIRED_KEYS = (
+    "repo",
+    "path",
+    "blob_sha",
+    "tree_sha",
+    "licence",
+    "modified",
+    "used_by",
+)
 
 # Transient enough to be worth re-issuing the identical request. Anything else
 # is a fact about the upstream repo and retrying only repeats the same answer.
@@ -129,7 +138,9 @@ def load_manifest(path: Path) -> list[VendoredSource]:
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise ManifestError(f"manifest is not valid JSON: {path} (line {exc.lineno}: {exc.msg})") from None
+        raise ManifestError(
+            f"manifest is not valid JSON: {path} (line {exc.lineno}: {exc.msg})"
+        ) from None
 
     if not isinstance(data, list):
         raise ManifestError(
@@ -142,13 +153,19 @@ def load_manifest(path: Path) -> list[VendoredSource]:
     for index, entry in enumerate(data):
         where = f"{path} entry {index}"
         if not isinstance(entry, dict):
-            raise ManifestError(f"{where}: expected an object, got {type(entry).__name__}")
+            raise ManifestError(
+                f"{where}: expected an object, got {type(entry).__name__}"
+            )
         missing = [key for key in REQUIRED_KEYS if key not in entry]
         if missing:
-            raise ManifestError(f"{where}: missing required key(s): {', '.join(missing)}")
+            raise ManifestError(
+                f"{where}: missing required key(s): {', '.join(missing)}"
+            )
         used_by = entry["used_by"]
         if not isinstance(used_by, list):
-            raise ManifestError(f"{where}: 'used_by' must be a list, got {type(used_by).__name__}")
+            raise ManifestError(
+                f"{where}: 'used_by' must be a list, got {type(used_by).__name__}"
+            )
         sources.append(
             VendoredSource(
                 repo=str(entry["repo"]),
@@ -170,10 +187,14 @@ def load_manifest(path: Path) -> list[VendoredSource]:
 
 def _classify(returncode: int, stderr: str) -> FetchError:
     """Turn a failed `gh api` run into a FetchError with the status attached."""
-    first_line = next((line for line in stderr.splitlines() if line.strip()), "").strip()
+    first_line = next(
+        (line for line in stderr.splitlines() if line.strip()), ""
+    ).strip()
     match = _HTTP_STATUS_RE.search(stderr)
     status = int(match.group(1)) if match else None
-    return FetchError(status=status, message=first_line or f"gh api exited {returncode}")
+    return FetchError(
+        status=status, message=first_line or f"gh api exited {returncode}"
+    )
 
 
 def _hint_for(error: FetchError) -> str:
@@ -236,7 +257,9 @@ def fetch_blob_sha(
             if proc.returncode == 0:
                 sha = (proc.stdout or "").strip()
                 if not sha:
-                    raise FetchError(status=None, message="`gh api` returned an empty blob sha")
+                    raise FetchError(
+                        status=None, message="`gh api` returned an empty blob sha"
+                    )
                 return sha, attempt
             last = _classify(proc.returncode, proc.stderr or "")
 
@@ -302,10 +325,16 @@ def _short(sha: str | None) -> str:
 
 
 def render_text(results: list[CheckResult], manifest: Path) -> str:
-    lines = [f"Vendored prompt staleness check — {len(results)} pinned file(s)", f"manifest: {manifest}", ""]
+    lines = [
+        f"Vendored prompt staleness check — {len(results)} pinned file(s)",
+        f"manifest: {manifest}",
+        "",
+    ]
     for r in results:
         if r.status == "ok":
-            lines.append(f"  OK     {r.source.repo}/{r.source.path}  {_short(r.source.blob_sha)}")
+            lines.append(
+                f"  OK     {r.source.repo}/{r.source.path}  {_short(r.source.blob_sha)}"
+            )
         elif r.status == "drift":
             lines.append(f"  DRIFT  {r.source.repo}/{r.source.path}")
             lines.append(f"           recorded {r.source.blob_sha}")
@@ -313,7 +342,9 @@ def render_text(results: list[CheckResult], manifest: Path) -> str:
             if r.source.used_by:
                 lines.append(f"           used by: {', '.join(r.source.used_by)}")
             if r.source.modified:
-                lines.append("           local copy is modified — re-apply the edits, do not overwrite")
+                lines.append(
+                    "           local copy is modified — re-apply the edits, do not overwrite"
+                )
         else:
             lines.append(f"  ERROR  {r.source.repo}/{r.source.path}")
             lines.append(f"           {r.error}")
@@ -323,12 +354,20 @@ def render_text(results: list[CheckResult], manifest: Path) -> str:
     errored = [r for r in results if r.status == "error"]
     ok = [r for r in results if r.status == "ok"]
     lines.append("")
-    lines.append(f"{len(ok)} unchanged, {len(drifted)} drifted, {len(errored)} not checked")
+    lines.append(
+        f"{len(ok)} unchanged, {len(drifted)} drifted, {len(errored)} not checked"
+    )
     if drifted:
-        lines.append("Drift is not automatically bad — re-read the upstream file, decide whether the")
-        lines.append("change matters, then update the prompt and the recorded blob_sha together.")
+        lines.append(
+            "Drift is not automatically bad — re-read the upstream file, decide whether the"
+        )
+        lines.append(
+            "change matters, then update the prompt and the recorded blob_sha together."
+        )
     if errored:
-        lines.append("A failed fetch is NOT 'unchanged'. Those files were not checked at all.")
+        lines.append(
+            "A failed fetch is NOT 'unchanged'. Those files were not checked at all."
+        )
     return "\n".join(lines)
 
 
@@ -401,24 +440,38 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None, *, fetch: Callable[..., tuple[str, int]] | None = None) -> int:
+def main(
+    argv: list[str] | None = None,
+    *,
+    fetch: Callable[..., tuple[str, int]] | None = None,
+) -> int:
     args = build_parser().parse_args(argv)
 
     try:
         sources = load_manifest(args.manifest)
     except ManifestError as exc:
         if args.as_json:
-            print(json.dumps({"manifest": str(args.manifest), "error": str(exc), "exit_code": 2}, indent=2))
+            print(
+                json.dumps(
+                    {"manifest": str(args.manifest), "error": str(exc), "exit_code": 2},
+                    indent=2,
+                )
+            )
         else:
             print(f"error: {exc}", file=sys.stderr)
         return 2
 
     if fetch is None:
+
         def fetch(source: VendoredSource) -> tuple[str, int]:  # type: ignore[misc]
             return fetch_blob_sha(source, retries=args.retries)
 
     results = check_sources(sources, fetch=fetch)
-    print(render_json(results, args.manifest) if args.as_json else render_text(results, args.manifest))
+    print(
+        render_json(results, args.manifest)
+        if args.as_json
+        else render_text(results, args.manifest)
+    )
     return exit_code_for(results)
 
 

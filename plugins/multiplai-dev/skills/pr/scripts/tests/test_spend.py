@@ -11,7 +11,6 @@ from types import ModuleType, SimpleNamespace
 import multiplai_core
 import pytest
 from multiplai_core.agent_runner import AgentRunError, AgentRunResult, AgentUsage
-
 from pr_pipeline import __main__ as cli
 from pr_pipeline import commands, fill
 
@@ -26,8 +25,13 @@ def _fresh_process(monkeypatch):
 
 
 def _result(usd: float, tokens: int) -> AgentRunResult:
-    return AgentRunResult(text="answer", turns=1, files_changed=[], stderr_tail="",
-                          usage=AgentUsage(input_tokens=tokens, output_tokens=0, cost_usd=usd))
+    return AgentRunResult(
+        text="answer",
+        turns=1,
+        files_changed=[],
+        stderr_tail="",
+        usage=AgentUsage(input_tokens=tokens, output_tokens=0, cost_usd=usd),
+    )
 
 
 def test_each_model_call_adds_to_the_process_spend(monkeypatch):
@@ -65,7 +69,9 @@ def _fake_sdk(monkeypatch) -> list[dict]:
         yield AssistantMessage()
 
     fake = ModuleType("claude_agent_sdk")
-    fake.ClaudeAgentOptions = lambda **kwargs: options.append(kwargs) or SimpleNamespace(**kwargs)
+    fake.ClaudeAgentOptions = lambda **kwargs: (
+        options.append(kwargs) or SimpleNamespace(**kwargs)
+    )
     fake.query = query
     fake.AssistantMessage = AssistantMessage
     fake.TextBlock = TextBlock
@@ -75,11 +81,17 @@ def _fake_sdk(monkeypatch) -> list[dict]:
 
 # The pr skill has no model or effort setting of its own, so there is no third case in which
 # one wins over both.
-@pytest.mark.parametrize("env, sent", [
-    ({}, ("claude-test-session", "low")),
-    ({"MULTIPLAI_MODEL": "claude-test-default", "MULTIPLAI_EFFORT": "high"},
-     ("claude-test-default", "high")),
-], ids=["session", "multiplai-defaults"])
+@pytest.mark.parametrize(
+    "env, sent",
+    [
+        ({}, ("claude-test-session", "low")),
+        (
+            {"MULTIPLAI_MODEL": "claude-test-default", "MULTIPLAI_EFFORT": "high"},
+            ("claude-test-default", "high"),
+        ),
+    ],
+    ids=["session", "multiplai-defaults"],
+)
 def test_the_model_call_gets_multiplai_then_the_session_model(monkeypatch, env, sent):
     """`_run_model` passes no model or effort, and run_agent's own fallback
     (multiplai-core 0.21) picks MULTIPLAI_MODEL / MULTIPLAI_EFFORT, else the session's."""
@@ -104,7 +116,10 @@ def test_open_and_edit_print_spend_last(tmp_path, monkeypatch, capsys, argv, cod
         return code
 
     monkeypatch.setattr(commands, "run", run)
-    assert cli.main([*argv, "--repo", str(tmp_path), "--change-dir", str(tmp_path)]) == code
+    assert (
+        cli.main([*argv, "--repo", str(tmp_path), "--change-dir", str(tmp_path)])
+        == code
+    )
     assert capsys.readouterr().out.splitlines()[-1] == "SPEND:0.400000:40"
 
 
@@ -115,11 +130,16 @@ def test_open_prints_spend_when_it_cannot_start(tmp_path, monkeypatch, capsys):
         raise PermissionError("cannot read .env")
 
     monkeypatch.setattr(multiplai_core.env, "load_env", boom)
-    assert cli.main(["open", "--repo", str(tmp_path), "--change-dir", str(tmp_path)]) == 2
+    assert (
+        cli.main(["open", "--repo", str(tmp_path), "--change-dir", str(tmp_path)]) == 2
+    )
     assert capsys.readouterr().out.splitlines()[-1] == "SPEND:0.000000:0"
 
 
 def test_render_prints_no_spend(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(commands, "run", lambda args: 0)
-    assert cli.main(["render", "--repo", str(tmp_path), "--change-dir", str(tmp_path)]) == 0
+    assert (
+        cli.main(["render", "--repo", str(tmp_path), "--change-dir", str(tmp_path)])
+        == 0
+    )
     assert "SPEND:" not in capsys.readouterr().out

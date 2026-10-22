@@ -11,7 +11,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from code_facts import UNTRUSTED_RULES, CallFn, Citation, Fact, Gated, citation_rules, schema_json
+from code_facts import (
+    UNTRUSTED_RULES,
+    CallFn,
+    Citation,
+    Fact,
+    Gated,
+    citation_rules,
+    schema_json,
+)
 from multiplai_core.budget import SpendLedger
 from pydantic import BaseModel, ConfigDict
 
@@ -23,7 +31,9 @@ from .scope import Symbol, is_test_file
 from .state import State
 from .target import SNAPSHOT_DIR
 
-PATH_RULE = "- `path` is the file's path relative to your working directory, as listed above."
+PATH_RULE = (
+    "- `path` is the file's path relative to your working directory, as listed above."
+)
 
 
 class _Model(BaseModel):
@@ -49,14 +59,25 @@ class WriteOutput(_Model):
     requirements: list[RequirementOut]
 
 
-def capability_facts(cap: Capability, by_id: dict[str, list[Symbol]], gated: Gated) -> list[Fact]:
+def capability_facts(
+    cap: Capability, by_id: dict[str, list[Symbol]], gated: Gated
+) -> list[Fact]:
     paths = {d.path for sid in cap.symbols for d in by_id[sid]}
     return [f for f in gated.facts if any(c.path in paths for c in f.citations)]
 
 
-def prompt(code: str, cap: Capability, by_id: dict[str, list[Symbol]], gated: Gated, tests: list[str]) -> str:
-    facts = [f"- {f.id}: {one_line(f.claim)} ({c.path}:{c.line_start}-{c.line_end})"
-             for f in capability_facts(cap, by_id, gated) for c in f.citations[:1]]
+def prompt(
+    code: str,
+    cap: Capability,
+    by_id: dict[str, list[Symbol]],
+    gated: Gated,
+    tests: list[str],
+) -> str:
+    facts = [
+        f"- {f.id}: {one_line(f.claim)} ({c.path}:{c.line_start}-{c.line_end})"
+        for f in capability_facts(cap, by_id, gated)
+        for c in f.citations[:1]
+    ]
     return f"""\
 Write the requirements of the capability "{cap.name}" of {code}, as the code behaves now.
 What it does: {cap.summary or "see the symbols below"}
@@ -84,8 +105,16 @@ Answer with JSON only, matching this schema:
 """
 
 
-async def run(state: State, run_dir: Path, caps: list[Capability], gated: Gated, *, call: CallFn,
-              ledger: SpendLedger, model: str | None) -> None:
+async def run(
+    state: State,
+    run_dir: Path,
+    caps: list[Capability],
+    gated: Gated,
+    *,
+    call: CallFn,
+    ledger: SpendLedger,
+    model: str | None,
+) -> None:
     """Ask each capability the dispatch rule allows, four at a time."""
     scope = state.scope
     assert scope is not None
@@ -93,7 +122,9 @@ async def run(state: State, run_dir: Path, caps: list[Capability], gated: Gated,
     if not calls.any_eligible([c.name for c in caps], answers, attempts):
         return
     sdk.require_trusted_repo()
-    by_id: dict[str, list[Symbol]] = {}  # every def of the name: a property's getter and setter
+    by_id: dict[
+        str, list[Symbol]
+    ] = {}  # every def of the name: a property's getter and setter
     for s in scope.symbols:
         by_id.setdefault(symbol_id(s), []).append(s)
     tests = [f for f in scope.files if is_test_file(f)]
@@ -103,7 +134,21 @@ async def run(state: State, run_dir: Path, caps: list[Capability], gated: Gated,
         state.budget = ledger.to_state()
         state_mod.save(state, run_dir)
 
-    tasks = [(c.name, prompt(code, c, by_id, gated, tests), f"write:{c.name}") for c in caps]
-    await calls.dispatch(tasks, WriteOutput, call, answers, attempts, ledger, save,
-                         call_kwargs=dict(allowed_tools=list(sdk.READ_ONLY_TOOLS), max_turns=sdk.EXPLORE_MAX_TURNS,
-                                          cwd=str(run_dir / SNAPSHOT_DIR), model=model))
+    tasks = [
+        (c.name, prompt(code, c, by_id, gated, tests), f"write:{c.name}") for c in caps
+    ]
+    await calls.dispatch(
+        tasks,
+        WriteOutput,
+        call,
+        answers,
+        attempts,
+        ledger,
+        save,
+        call_kwargs=dict(
+            allowed_tools=list(sdk.READ_ONLY_TOOLS),
+            max_turns=sdk.EXPLORE_MAX_TURNS,
+            cwd=str(run_dir / SNAPSHOT_DIR),
+            model=model,
+        ),
+    )

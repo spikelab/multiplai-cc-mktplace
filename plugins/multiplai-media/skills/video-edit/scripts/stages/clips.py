@@ -5,6 +5,7 @@ proposed clip [start, end] is first widened to the sentences it touches, then
 each edge moves to the middle of the nearest short silence within
 SNAP_WINDOW_S, when there is one.
 """
+
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
@@ -43,8 +44,14 @@ def build_sentences(words: list[dict]) -> list[Sentence]:
         if cur:
             speakers = [w.get("speaker") for w in cur if w.get("speaker")]
             speaker = max(set(speakers), key=speakers.count) if speakers else None
-            out.append(Sentence(start=cur[0]["start"], end=cur[-1]["end"],
-                                text=" ".join(w["text"] for w in cur), speaker=speaker))
+            out.append(
+                Sentence(
+                    start=cur[0]["start"],
+                    end=cur[-1]["end"],
+                    text=" ".join(w["text"] for w in cur),
+                    speaker=speaker,
+                )
+            )
             cur.clear()
 
     for i, w in enumerate(words):
@@ -52,11 +59,13 @@ def build_sentences(words: list[dict]) -> list[Sentence]:
         nxt = words[i + 1] if i + 1 < len(words) else None
         gap = nxt["start"] - w["end"] if nxt else 0.0
         long_enough = w["end"] - cur[0]["start"] >= SOFT_BREAK_S
-        if (w["text"].endswith(SENTENCE_END)
-                or nxt is None
-                or gap >= PAUSE_BREAK_S
-                or (long_enough and (w["text"].endswith(CLAUSE_END) or gap >= SOFT_PAUSE_S))
-                or w["end"] - cur[0]["start"] >= MAX_SENTENCE_S):
+        if (
+            w["text"].endswith(SENTENCE_END)
+            or nxt is None
+            or gap >= PAUSE_BREAK_S
+            or (long_enough and (w["text"].endswith(CLAUSE_END) or gap >= SOFT_PAUSE_S))
+            or w["end"] - cur[0]["start"] >= MAX_SENTENCE_S
+        ):
             flush()
     return out
 
@@ -66,8 +75,12 @@ def sentences_to_json(sentences: list[Sentence]) -> list[dict]:
 
 
 def sentences_from_json(rows: list[dict]) -> list[Sentence]:
-    return [Sentence(start=r["start"], end=r["end"], text=r["text"], speaker=r.get("speaker"))
-            for r in rows]
+    return [
+        Sentence(
+            start=r["start"], end=r["end"], text=r["text"], speaker=r.get("speaker")
+        )
+        for r in rows
+    ]
 
 
 def _nearest_trough(t: float, silences: list[tuple[float, float]]) -> float | None:
@@ -75,14 +88,20 @@ def _nearest_trough(t: float, silences: list[tuple[float, float]]) -> float | No
     best = None
     for s, e in silences:
         mid = (s + e) / 2
-        if abs(mid - t) <= SNAP_WINDOW_S and (best is None or abs(mid - t) < abs(best - t)):
+        if abs(mid - t) <= SNAP_WINDOW_S and (
+            best is None or abs(mid - t) < abs(best - t)
+        ):
             best = mid
     return best
 
 
-def snap(start: float, end: float, sentences: list[Sentence],
-         silences: list[tuple[float, float]],
-         words: list[dict] | None = None) -> tuple[float, float]:
+def snap(
+    start: float,
+    end: float,
+    sentences: list[Sentence],
+    silences: list[tuple[float, float]],
+    words: list[dict] | None = None,
+) -> tuple[float, float]:
     """Widen [start, end] to whole sentences, then move each edge into a silence.
 
     The start goes to the first sentence that ends after `start`; the end to the

@@ -44,8 +44,14 @@ def probe_host() -> str:
 
 def _first_address() -> str | None:
     try:
-        out = subprocess.run(["hostname", "-I"], shell=False, stdin=subprocess.DEVNULL,
-                             capture_output=True, text=True, timeout=2).stdout
+        out = subprocess.run(
+            ["hostname", "-I"],
+            shell=False,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        ).stdout
     except (OSError, subprocess.SubprocessError):
         return None
     parts = out.split()
@@ -63,8 +69,12 @@ def display_urls(port: int) -> list[tuple[str, str]]:
         urls.append((f"http://{socket.gethostname()}.orb.local:{port}/", "OrbStack"))
         addr = _first_address()
         if addr:
-            urls.append((f"http://{addr}:{port}/",
-                         "container IP; with Docker Desktop, publish the port instead"))
+            urls.append(
+                (
+                    f"http://{addr}:{port}/",
+                    "container IP; with Docker Desktop, publish the port instead",
+                )
+            )
     elif not override:
         urls.append((f"http://127.0.0.1:{port}/", "local"))
     return urls

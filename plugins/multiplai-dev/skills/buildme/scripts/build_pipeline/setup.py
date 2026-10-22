@@ -141,9 +141,11 @@ def config_get(args: argparse.Namespace) -> int:
         "architecture": config.architecture,
         "pr.template": config.pr.template,
         "pr.max_change_lines": config.pr.max_change_lines,
-        "findings.authors": (config.findings.authors
-                             if isinstance(config.findings.authors, str)
-                             else ",".join(config.findings.authors)),
+        "findings.authors": (
+            config.findings.authors
+            if isinstance(config.findings.authors, str)
+            else ",".join(config.findings.authors)
+        ),
         "findings.max_rounds": config.findings.max_rounds,
         "mutation.enabled": str(config.mutation.enabled).lower(),
         "mutation.min_score": config.mutation.min_score,
@@ -152,8 +154,10 @@ def config_get(args: argparse.Namespace) -> int:
         "git.pr": config.git.pr,
     }
     if args.key not in resolved:
-        print(f"ERROR: unknown key {args.key!r}; known: {', '.join(sorted(resolved))}",
-              file=sys.stderr)
+        print(
+            f"ERROR: unknown key {args.key!r}; known: {', '.join(sorted(resolved))}",
+            file=sys.stderr,
+        )
         return 2
     print(resolved[args.key])
     return 0

@@ -9,10 +9,10 @@ from __future__ import annotations
 import asyncio
 import importlib
 import json
-import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from conftest import _git, line_of, make_tree
 
@@ -23,9 +23,18 @@ DEPTH = 4  # cmd_<n> -> step1_<n> -> step2_<n> -> step3_<n>
 
 def lib(name: str) -> Any:
     """A code_facts name from whichever module defines it, looked up at call time."""
-    for mod in ("code_facts", "code_facts.trace_gate", "code_facts.paths", "code_facts.prompts",
-                "code_facts.entries", "code_facts.pyindex", "code_facts.commands", "code_facts.fallback",
-                "code_facts.tracing", "code_facts.scope"):
+    for mod in (
+        "code_facts",
+        "code_facts.trace_gate",
+        "code_facts.paths",
+        "code_facts.prompts",
+        "code_facts.entries",
+        "code_facts.pyindex",
+        "code_facts.commands",
+        "code_facts.fallback",
+        "code_facts.tracing",
+        "code_facts.scope",
+    ):
         try:
             module = importlib.import_module(mod)
         except ModuleNotFoundError:
@@ -38,16 +47,26 @@ def lib(name: str) -> Any:
 # --- snapshot sources --------------------------------------------------------------------
 
 
-def cli_source(names: list[str], *, prelude: str = "", dispatch: str = "set_defaults") -> str:
+def cli_source(
+    names: list[str], *, prelude: str = "", dispatch: str = "set_defaults"
+) -> str:
     """An argparse CLI: one subcommand per name, each `cmd_<n>` calling a chain of `step<k>_<n>`."""
     out = ["import argparse", "", prelude]
     for n in names:
         out += ["", f"def cmd_{n}(args):", f"    return step1_{n}(args)", ""]
         for k in range(1, DEPTH):
-            body = f"    return step{k + 1}_{n}(args)" if k < DEPTH - 1 else f"    print('done {n}')\n    return 0"
+            body = (
+                f"    return step{k + 1}_{n}(args)"
+                if k < DEPTH - 1
+                else f"    print('done {n}')\n    return 0"
+            )
             out += ["", f"def step{k}_{n}(args):", body, ""]
-    out += ["", "def main(argv=None):", "    parser = argparse.ArgumentParser(prog='tool')",
-            "    sub = parser.add_subparsers(dest='command', required=True)"]
+    out += [
+        "",
+        "def main(argv=None):",
+        "    parser = argparse.ArgumentParser(prog='tool')",
+        "    sub = parser.add_subparsers(dest='command', required=True)",
+    ]
     for n in names:
         out.append(f"    p_{n} = sub.add_parser({n!r})")
         if dispatch == "set_defaults":
@@ -86,15 +105,34 @@ class Snapshot:
     def resolve(self, path: str, side: str):
         return str(self.root), self.head, path
 
-    def hop(self, path: str, symbol: str, *, quote: str | None = None, side: str = "head",
-            called: str | None = None, line: int | None = None, end: int | None = None) -> dict:
+    def hop(
+        self,
+        path: str,
+        symbol: str,
+        *,
+        quote: str | None = None,
+        side: str = "head",
+        called: str | None = None,
+        line: int | None = None,
+        end: int | None = None,
+    ) -> dict:
         """A hop citing the `def <symbol>(` line of `path` (or `line`), quoting it."""
         if line is None:
             line = self.line(path, f"def {symbol}(")
-        text = self.files[path].splitlines()[line - 1].strip() if line <= len(self.files[path].splitlines()) else ""
-        return {"symbol_called": called if called is not None else symbol, "path": path, "line_start": line,
-                "line_end": end if end is not None else line, "quote": quote if quote is not None else text,
-                "note": "", "side": side}
+        text = (
+            self.files[path].splitlines()[line - 1].strip()
+            if line <= len(self.files[path].splitlines())
+            else ""
+        )
+        return {
+            "symbol_called": called if called is not None else symbol,
+            "path": path,
+            "line_start": line,
+            "line_end": end if end is not None else line,
+            "quote": quote if quote is not None else text,
+            "note": "",
+            "side": side,
+        }
 
 
 def commit_snapshot(root: Path, files: dict[str, str]) -> Snapshot:
@@ -106,8 +144,11 @@ def commit_snapshot(root: Path, files: dict[str, str]) -> Snapshot:
 
 
 def cli_snapshot(root: Path, names: list[str] = NAMES, **kw: Any) -> Snapshot:
-    files = {"pkg/__init__.py": "", "pkg/cli.py": cli_source(names, **kw),
-             "pkg/other.py": "def elsewhere(args):\n    return 0\n"}
+    files = {
+        "pkg/__init__.py": "",
+        "pkg/cli.py": cli_source(names, **kw),
+        "pkg/other.py": "def elsewhere(args):\n    return 0\n",
+    }
     return commit_snapshot(root, files)
 
 
@@ -145,6 +186,7 @@ class FakeCall:
     every call and the most calls ever in flight, and returns (or raises) what
     the responder gives for that entry.
     """
+
     trace: Responder
     reask: Responder | None = None
     fallback: Responder | None = None
@@ -160,8 +202,13 @@ class FakeCall:
 
     async def __call__(self, prompt: str, schema: Any, **kwargs: Any) -> Any:
         label = kwargs.get("budget_label", "")
-        stage = ("trace" if label.startswith("paths:trace:") else
-                 "reask" if label.startswith("paths:reask:") else label)
+        stage = (
+            "trace"
+            if label.startswith("paths:trace:")
+            else "reask"
+            if label.startswith("paths:reask:")
+            else label
+        )
         entry = self._entry(prompt)
         self.calls.append(Call(stage, entry, prompt, schema, dict(kwargs)))
         self.in_flight += 1
@@ -183,7 +230,11 @@ class FakeCall:
             self.in_flight -= 1
 
     def of(self, entry: str, stage: str | None = None) -> list[Call]:
-        return [c for c in self.calls if c.entry == entry and (stage is None or c.stage == stage)]
+        return [
+            c
+            for c in self.calls
+            if c.entry == entry and (stage is None or c.stage == stage)
+        ]
 
 
 def as_json(hops: list[dict]) -> str:
@@ -192,6 +243,8 @@ def as_json(hops: list[dict]) -> str:
 
 def run_map(snap: Snapshot, call: FakeCall, **kw: Any):
     kw.setdefault("fallback", False)
-    return asyncio.run(lib("map_paths")(root=snap.root, commit=snap.head, resolve=snap.resolve, call=call, **kw))
-
-
+    return asyncio.run(
+        lib("map_paths")(
+            root=snap.root, commit=snap.head, resolve=snap.resolve, call=call, **kw
+        )
+    )

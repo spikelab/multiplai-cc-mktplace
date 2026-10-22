@@ -12,7 +12,6 @@ import stat
 from pathlib import Path
 
 import pytest
-
 from research_pipeline.atomic import atomic_write_text, replacement_mode
 
 

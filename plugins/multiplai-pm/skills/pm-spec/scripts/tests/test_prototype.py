@@ -8,18 +8,21 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
+from conftest import CAPS, change_dir, proposal, run, state, write
 from pm_spec_pipeline import prototype as P
 
-from conftest import CAPS, change_dir, proposal, run, state, write
-
-NOTES_CLEAN = "PROVES: the layout\nDISPROVES: none\nOPEN_QUESTIONS: none\nSTATUS: DONE\n"
-NOTES_FINDINGS = ("PROVES: the layout\nDISPROVES: a per-minute counter does not fit the header\n"
-                  "OPEN_QUESTIONS: show the retry time in seconds or as a clock time?\nSTATUS: DONE\n")
+NOTES_CLEAN = (
+    "PROVES: the layout\nDISPROVES: none\nOPEN_QUESTIONS: none\nSTATUS: DONE\n"
+)
+NOTES_FINDINGS = (
+    "PROVES: the layout\nDISPROVES: a per-minute counter does not fit the header\n"
+    "OPEN_QUESTIONS: show the retry time in seconds or as a clock time?\nSTATUS: DONE\n"
+)
 
 
 def agent(notes=NOTES_CLEAN, *, artifact="mockup.html", outside: Path | None = None):
     """A prototype agent stand-in: writes its files where it was told to."""
+
     def handler(prompt, label, kw):
         root = Path(kw["cwd"])
         files = []
@@ -30,6 +33,7 @@ def agent(notes=NOTES_CLEAN, *, artifact="mockup.html", outside: Path | None = N
         if outside is not None:
             files.append(str(write(outside, "oops\n")))
         return "done", files
+
     return handler
 
 
@@ -75,17 +79,24 @@ def test_the_specs_config_can_force_it_on(repo, model):
     assert model.calls_to("prototype") == 1
 
 
-def test_disproves_and_open_questions_rewrite_the_proposal_and_requirements(repo, model):
+def test_disproves_and_open_questions_rewrite_the_proposal_and_requirements(
+    repo, model
+):
     model["spec:proposal"] = lambda *a: ui_proposal()
     model["prototype"] = agent(NOTES_FINDINGS)
     assert run(repo, "new", "throttle", "--auto") == 0
     cdir = change_dir(repo)
     rewrites = [label for label in model.labels() if ":rewrite:" in label]
-    assert rewrites == ["prototype:rewrite:proposal", *(f"prototype:rewrite:{c}" for c in CAPS)]
+    assert rewrites == [
+        "prototype:rewrite:proposal",
+        *(f"prototype:rewrite:{c}" for c in CAPS),
+    ]
     prompt = model.prompts("prototype:rewrite:proposal")[0]
     assert "PT-F1" in prompt and "per-minute counter" in prompt and "PT-F2" in prompt
     for cap in CAPS:
-        assert f"the rewritten {cap}" in (cdir / "requirements" / f"{cap}.md").read_text()
+        assert (
+            f"the rewritten {cap}" in (cdir / "requirements" / f"{cap}.md").read_text()
+        )
     step = state(cdir)["steps"]["prototype"]
     assert step["outcome"] == "passed" and step["repair_attempts"] == 1
     assert [f["finding_id"] for f in step["repair_findings"]] == ["PT-F1", "PT-F2"]
@@ -98,7 +109,10 @@ def test_a_rewrite_that_drops_a_capability_moves_its_requirements_aside(repo, mo
     model["prototype:rewrite:proposal"] = proposal(caps=("rate-limit", "retry-clock"))
     assert run(repo, "new", "throttle", "--auto") == 0
     cdir = change_dir(repo)
-    assert sorted(p.stem for p in (cdir / "requirements").glob("*.md")) == ["rate-limit", "retry-clock"]
+    assert sorted(p.stem for p in (cdir / "requirements").glob("*.md")) == [
+        "rate-limit",
+        "retry-clock",
+    ]
     assert list((cdir / "superseded-requirements").glob("retry-policy-*.md"))
 
 
@@ -110,7 +124,9 @@ def test_the_gate_retries_once_then_fails(repo, model, capsys):
 
 
 def test_blocked_fails_without_a_retry(repo, model):
-    model["prototype"] = agent("PROVES: x\nDISPROVES: none\nOPEN_QUESTIONS: none\nSTATUS: BLOCKED\n")
+    model["prototype"] = agent(
+        "PROVES: x\nDISPROVES: none\nOPEN_QUESTIONS: none\nSTATUS: BLOCKED\n"
+    )
     assert run(repo, "new", "throttle", "--auto", "--prototype") == 1
     assert model.calls_to("prototype") == 1
 
@@ -122,12 +138,15 @@ def test_writes_outside_the_prototype_dir_fail_the_stage(repo, model, tmp_path, 
 
 
 class TestPrototypeRequired:
-    @pytest.mark.parametrize("extra,expected", [
-        (" Add a settings page with a form and a button.", True),   # frontend
-        (" Export a monthly PDF report.", True),                     # an output format
-        (" Change the CLI output of `limits show`.", True),
-        (" Tune the database queue worker.", False),                 # backend
-    ])
+    @pytest.mark.parametrize(
+        "extra,expected",
+        [
+            (" Add a settings page with a form and a button.", True),  # frontend
+            (" Export a monthly PDF report.", True),  # an output format
+            (" Change the CLI output of `limits show`.", True),
+            (" Tune the database queue worker.", False),  # backend
+        ],
+    )
     def test_ui_and_output_formats(self, tmp_path, extra, expected):
         cdir = tmp_path / "c"
         write(cdir / "proposal.md", proposal(extra=extra))
@@ -136,8 +155,15 @@ class TestPrototypeRequired:
 
 class TestNotes:
     def test_the_slots_are_parsed_with_markdown_decoration(self):
-        notes = P.parse_prototype_notes("**PROVES**: a\n## DISPROVES: b\nOPEN_QUESTIONS: c\nSTATUS: DONE")
-        assert notes == {"proves": "a", "disproves": "b", "open_questions": "c", "status": "DONE"}
+        notes = P.parse_prototype_notes(
+            "**PROVES**: a\n## DISPROVES: b\nOPEN_QUESTIONS: c\nSTATUS: DONE"
+        )
+        assert notes == {
+            "proves": "a",
+            "disproves": "b",
+            "open_questions": "c",
+            "status": "DONE",
+        }
 
     def test_findings_are_empty_for_clean_notes(self):
         assert P.prototype_findings(P.parse_prototype_notes(NOTES_CLEAN)) == []
@@ -147,5 +173,10 @@ class TestNotes:
         assert [f["severity"] for f in found] == ["major", "minor"]
 
     def test_relative_paths_inside_the_dir_are_allowed(self, tmp_path):
-        assert P.files_outside(["mockup.html", str(tmp_path / "x" / "a")], tmp_path / "x") == []
-        assert P.files_outside(["../a"], tmp_path / "x") == [str((tmp_path / "a").resolve())]
+        assert (
+            P.files_outside(["mockup.html", str(tmp_path / "x" / "a")], tmp_path / "x")
+            == []
+        )
+        assert P.files_outside(["../a"], tmp_path / "x") == [
+            str((tmp_path / "a").resolve())
+        ]

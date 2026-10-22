@@ -6,7 +6,6 @@ import asyncio
 
 import httpx
 import pytest
-
 from research_pipeline import fetcher
 from research_pipeline.fetcher import (
     basic_tag_strip,
@@ -16,7 +15,6 @@ from research_pipeline.fetcher import (
     fetch_url,
 )
 from research_pipeline.models import FetchErrorType
-
 
 # ---------------------------------------------------------------------------
 # Test HTML fixtures
@@ -89,7 +87,9 @@ class TestExtractContent:
         assert basic_tag_strip("   ") == ""
 
     def test_extract_outbound_links(self) -> None:
-        links = extract_outbound_links(ARTICLE_HTML, base_url="https://site.example/article")
+        links = extract_outbound_links(
+            ARTICLE_HTML, base_url="https://site.example/article"
+        )
         assert "https://example.com/related" in links
         assert "https://external.example/page" in links
         assert "https://site.example/other" in links
@@ -156,10 +156,13 @@ class TestFetchUrl:
         async with _make_client_with_handler(handler) as client:
             # Use shorter backoff in test
             from research_pipeline import fetcher
+
             original = fetcher.RETRY_DELAYS
             fetcher.RETRY_DELAYS = [0.01, 0.01]
             try:
-                result = await fetch_url("https://test.example/boom", client, max_retries=2)
+                result = await fetch_url(
+                    "https://test.example/boom", client, max_retries=2
+                )
             finally:
                 fetcher.RETRY_DELAYS = original
 
@@ -181,6 +184,7 @@ class TestFetchUrl:
 
         async with _make_client_with_handler(handler) as client:
             from research_pipeline import fetcher
+
             original = fetcher.RETRY_DELAYS
             fetcher.RETRY_DELAYS = [0.01, 0.01]
             try:
@@ -257,11 +261,13 @@ class TestFetchBatch:
     @pytest.mark.asyncio
     async def test_batch_never_returns_none(self) -> None:
         """Every URL in the batch produces a typed result — no silent Nones."""
+
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(500)
 
         async with _make_client_with_handler(handler) as client:
             from research_pipeline import fetcher
+
             original = fetcher.RETRY_DELAYS
             fetcher.RETRY_DELAYS = [0.001, 0.001]
             try:
@@ -298,9 +304,7 @@ class TestBoundedFetch:
             return httpx.Response(200, text=big_body)
 
         async with _make_client_with_handler(handler) as client:
-            response = await fetcher._get_validated(
-                client, "https://big.example/page"
-            )
+            response = await fetcher._get_validated(client, "https://big.example/page")
 
         # Body was truncated at the ceiling rather than materialized whole.
         assert len(response.content) <= 1000

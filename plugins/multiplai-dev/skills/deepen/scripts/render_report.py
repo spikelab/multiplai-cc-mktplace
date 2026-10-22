@@ -17,7 +17,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
@@ -55,7 +55,7 @@ def render(payload: dict, repo: str | None = None) -> str:
     return template.render(
         repo=repo or payload.get("repo") or "(unknown repo)",
         generated_at=payload.get("generated_at")
-        or datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        or datetime.now(UTC).isoformat(timespec="seconds"),
         candidates=candidates,
         top_recommendation=payload.get("top_recommendation"),
     )
@@ -81,21 +81,31 @@ def open_in_browser(path: Path) -> None:
     elif platform.startswith("win"):
         cmd = ["cmd", "/c", "start", "", str(path)]
     else:
-        print(f"[deepen] unknown platform {platform}; open manually: {path}", file=sys.stderr)
+        print(
+            f"[deepen] unknown platform {platform}; open manually: {path}",
+            file=sys.stderr,
+        )
         return
 
     try:
         subprocess.run(cmd, check=False)
     except OSError as e:
-        print(f"[deepen] failed to launch viewer ({e}); open manually: {path}", file=sys.stderr)
+        print(
+            f"[deepen] failed to launch viewer ({e}); open manually: {path}",
+            file=sys.stderr,
+        )
 
 
 def main(argv: list[str]) -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--in", dest="in_path", required=True, help="Candidates JSON file.")
     p.add_argument("--repo", help="Repo name (overrides payload.repo).")
-    p.add_argument("--out", help="Output HTML path (defaults to a fresh file in $TMPDIR).")
-    p.add_argument("--open", action="store_true", help="Open the report in the default browser.")
+    p.add_argument(
+        "--out", help="Output HTML path (defaults to a fresh file in $TMPDIR)."
+    )
+    p.add_argument(
+        "--open", action="store_true", help="Open the report in the default browser."
+    )
     args = p.parse_args(argv)
 
     payload = json.loads(Path(args.in_path).read_text(encoding="utf-8"))

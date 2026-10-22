@@ -28,18 +28,42 @@ from build_pipeline import git_ops
 from build_pipeline.git_ops import BOOKKEEPING_EXCLUDES
 
 # Decided 10: keys that legitimately differ between a resumed run and an unstopped one.
-DROP_KEYS = {"at", "since", "budget", "earlier_fixes", "step_heads"}   # and every key ending in "_at"
+DROP_KEYS = {
+    "at",
+    "since",
+    "budget",
+    "earlier_fixes",
+    "step_heads",
+}  # and every key ending in "_at"
 HEX = re.compile(r"\b[0-9a-f]{7,40}\b")
-WIP_SUFFIX = re.compile(r"(refs/buildme/wip/[A-Za-z0-9._/-]*?)-[0-9]+(?![A-Za-z0-9._/-])")
-NOT_COMPARED = ("build-progress.md", "pr-sections/*")      # logs: presence compared, content not
-JSON_NORMALIZED = (".build-state.json", ".findings-state.json", ".findings-r*-state.json",
-                   ".board.json", "reviews/block-*-round-*.json")
-BOOKKEEPING = (".build-state.json", ".findings-state.json", ".findings-r*-state.json",
-               ".board.json", "build-progress.md", "pr-sections/*")
+WIP_SUFFIX = re.compile(
+    r"(refs/buildme/wip/[A-Za-z0-9._/-]*?)-[0-9]+(?![A-Za-z0-9._/-])"
+)
+NOT_COMPARED = (
+    "build-progress.md",
+    "pr-sections/*",
+)  # logs: presence compared, content not
+JSON_NORMALIZED = (
+    ".build-state.json",
+    ".findings-state.json",
+    ".findings-r*-state.json",
+    ".board.json",
+    "reviews/block-*-round-*.json",
+)
+BOOKKEEPING = (
+    ".build-state.json",
+    ".findings-state.json",
+    ".findings-r*-state.json",
+    ".board.json",
+    "build-progress.md",
+    "pr-sections/*",
+)
 
 
 def _git(root: Path | str, *a: str, text: bool = True) -> Any:
-    return subprocess.run(["git", *a], cwd=root, check=True, capture_output=True, text=text).stdout
+    return subprocess.run(
+        ["git", *a], cwd=root, check=True, capture_output=True, text=text
+    ).stdout
 
 
 def _match(rel: str, pats: Iterable[str]) -> bool:
@@ -69,8 +93,11 @@ def _norm_text(s: str, root: Path, tok: dict[str, str]) -> str:
 
 def _norm_json(v: Any, root: Path, tok: dict[str, str]) -> Any:
     if isinstance(v, dict):
-        return {k: _norm_json(x, root, tok) for k, x in v.items()
-                if k not in DROP_KEYS and not k.endswith("_at")}
+        return {
+            k: _norm_json(x, root, tok)
+            for k, x in v.items()
+            if k not in DROP_KEYS and not k.endswith("_at")
+        }
     if isinstance(v, list):
         return [_norm_json(x, root, tok) for x in v]
     return _norm_text(v, root, tok) if isinstance(v, str) else v
@@ -84,12 +111,17 @@ def _content(rel: str, data: bytes, root: Path, tok: dict[str, str]) -> Any:
         verification = value.get("verification") if isinstance(value, dict) else None
         if verification and verification.get("passed"):
             from build_pipeline.gates import verification_inputs
+
             inputs = verification["metadata"]["inputs"]
             project = root / rel.split("specs/", 1)[0]
             # The opaque digest includes fixture-specific absolute paths. Verify
             # it against this checkout before normalizing it for row comparison.
-            actual = verification_inputs(inputs["command"], project,
-                parallel=inputs["parallel"], plan_revision=inputs["plan_revision"])
+            actual = verification_inputs(
+                inputs["command"],
+                project,
+                parallel=inputs["parallel"],
+                plan_revision=inputs["plan_revision"],
+            )
             assert inputs == actual, "saved verification must describe this checkout"
             inputs["content"] = "<verified checkout content>"
         return _norm_json(value, root, tok)
@@ -117,7 +149,12 @@ def repo_snapshot(root: Path | str, extra_files: Iterable[str] = ()) -> dict[str
         for line in _git(root, "ls-tree", "-r", sha).splitlines():
             meta, rel = line.split("\t", 1)
             if not skip(rel):
-                files[rel] = _content(rel, _git(root, "cat-file", "blob", meta.split()[2], text=False), root, tok)
+                files[rel] = _content(
+                    rel,
+                    _git(root, "cat-file", "blob", meta.split()[2], text=False),
+                    root,
+                    tok,
+                )
         history.append((_git(root, "log", "-1", "--format=%s", sha).strip(), files))
     work = {}
     for p in sorted(root.rglob("*")):
@@ -130,19 +167,47 @@ def repo_snapshot(root: Path | str, extra_files: Iterable[str] = ()) -> dict[str
         meta, rel = line.split("\t", 1)
         mode, blob, stage = meta.split()
         if not skip(rel):
-            index[(rel, stage)] = (mode, _content(rel, _git(root, "cat-file", "blob", blob, text=False), root, tok))
-    refs = [r for r in _git(root, "for-each-ref", "--format=%(refname)", "refs/buildme/").split()
-            if not r.startswith("refs/buildme/wip/")]
-    status = _git(root, "status", "--porcelain", "--untracked-files=all", "--", ".", *BOOKKEEPING_EXCLUDES)
-    return {"history": history, "worktree": work, "index": index, "status": status, "refs": refs}
+            index[(rel, stage)] = (
+                mode,
+                _content(
+                    rel, _git(root, "cat-file", "blob", blob, text=False), root, tok
+                ),
+            )
+    refs = [
+        r
+        for r in _git(
+            root, "for-each-ref", "--format=%(refname)", "refs/buildme/"
+        ).split()
+        if not r.startswith("refs/buildme/wip/")
+    ]
+    status = _git(
+        root,
+        "status",
+        "--porcelain",
+        "--untracked-files=all",
+        "--",
+        ".",
+        *BOOKKEEPING_EXCLUDES,
+    )
+    return {
+        "history": history,
+        "worktree": work,
+        "index": index,
+        "status": status,
+        "refs": refs,
+    }
 
 
-def assert_same_as_unstopped(stopped_root: Path | str, clean_root: Path | str,
-                             extra_files: Iterable[str] = ()) -> None:
+def assert_same_as_unstopped(
+    stopped_root: Path | str, clean_root: Path | str, extra_files: Iterable[str] = ()
+) -> None:
     """Assert a resumed run's repo matches a run of the same scenario that
     never stopped. Both arguments are repo roots, not project directories."""
     extra_files = tuple(extra_files)
-    a, b = repo_snapshot(stopped_root, extra_files), repo_snapshot(clean_root, extra_files)
+    a, b = (
+        repo_snapshot(stopped_root, extra_files),
+        repo_snapshot(clean_root, extra_files),
+    )
     for k in a:
         assert a[k] == b[k], k
 
@@ -155,12 +220,28 @@ def repo_state(root: Path | str) -> dict[str, Any]:
     files = {}
     for p in sorted(root.rglob("*")):
         rel = p.relative_to(root).as_posix()
-        if ".git" in p.relative_to(root).parts or not p.is_file() or _match(rel, BOOKKEEPING):
+        if (
+            ".git" in p.relative_to(root).parts
+            or not p.is_file()
+            or _match(rel, BOOKKEEPING)
+        ):
             continue
         files[rel] = p.read_bytes()
-    return {"head": _git(root, "rev-parse", "HEAD"), "refs": _git(root, "for-each-ref"),
-            "status": _git(root, "status", "--porcelain", "--untracked-files=all", "--", ".", *BOOKKEEPING_EXCLUDES),
-            "index": _git(root, "ls-files", "-s"), "files": files}
+    return {
+        "head": _git(root, "rev-parse", "HEAD"),
+        "refs": _git(root, "for-each-ref"),
+        "status": _git(
+            root,
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+            "--",
+            ".",
+            *BOOKKEEPING_EXCLUDES,
+        ),
+        "index": _git(root, "ls-files", "-s"),
+        "files": files,
+    }
 
 
 def run_killed_at(git_command: str, fn: Callable[[], Any]) -> None:
@@ -181,4 +262,6 @@ def run_killed_at(git_command: str, fn: Callable[[], Any]) -> None:
         finally:
             os._exit(0)
     _, status = os.waitpid(pid, 0)
-    assert os.waitstatus_to_exitcode(status) == 137, "the child never reached the kill point"
+    assert os.waitstatus_to_exitcode(status) == 137, (
+        "the child never reached the kill point"
+    )

@@ -7,29 +7,24 @@ All tests use stubs — no real SDK or API calls.
 from __future__ import annotations
 
 import asyncio
-import os
+from datetime import UTC
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
-
 from research_pipeline.claude_agent_fetcher import (
     ClaudeAgentFetcher,
-    FetcherProtocol,
     HttpxFetcher,
 )
 from research_pipeline.config import ResearchConfig
 from research_pipeline.models import FetchErrorType, SearchResult
 from research_pipeline.search_router import (
     ClaudeAgentSearchProvider,
-    PaidFallbackError,
     ProviderError,
     QuotaExhaustedError,
     RouterConfig,
     SearchRouter,
     build_default_router,
 )
-
 
 # ---------------------------------------------------------------------------
 # SDK allowed_tools
@@ -38,7 +33,9 @@ from research_pipeline.search_router import (
 
 class TestSDKAllowedTools:
     @pytest.mark.asyncio
-    async def test_default_allowed_tools_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_default_allowed_tools_empty(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         calls = {}
 
         async def fake_llm_call(prompt, **kwargs):  # type: ignore
@@ -46,17 +43,20 @@ class TestSDKAllowedTools:
             return '{"sub_questions": ["q1"]}'
 
         import research_pipeline.sdk as sdk_mod
+
         monkeypatch.setattr(sdk_mod, "llm_call", fake_llm_call)
 
-        from research_pipeline.sdk import llm_call_structured
         from research_pipeline.nodes.plan import PlanResponse
+        from research_pipeline.sdk import llm_call_structured
 
         await llm_call_structured("test", PlanResponse)
         # default: no tools
         assert calls.get("allowed_tools") is None or calls["allowed_tools"] == []
 
     @pytest.mark.asyncio
-    async def test_allowed_tools_passed_through(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_allowed_tools_passed_through(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         calls = {}
 
         async def fake_llm_call(prompt, **kwargs):  # type: ignore
@@ -64,6 +64,7 @@ class TestSDKAllowedTools:
             return "result"
 
         import research_pipeline.sdk as sdk_mod
+
         monkeypatch.setattr(sdk_mod, "llm_call", fake_llm_call)
 
         await sdk_mod.llm_call("test", allowed_tools=["WebSearch"])
@@ -87,6 +88,7 @@ class TestClaudeAgentSearchProvider:
 ```"""
 
         import research_pipeline.sdk as sdk_mod
+
         monkeypatch.setattr(sdk_mod, "llm_call", fake_llm_call)
 
         provider = ClaudeAgentSearchProvider()
@@ -103,6 +105,7 @@ class TestClaudeAgentSearchProvider:
             raise Exception("SDK unavailable")
 
         from research_pipeline import sdk
+
         monkeypatch.setattr(sdk, "llm_call", failing_llm_call)
 
         provider = ClaudeAgentSearchProvider()
@@ -196,7 +199,9 @@ class TestRouterWithClaudeAgent:
     ) -> None:
         claude = StubClaudeAgent(fail_count=10)
         tavily = StubExternal()
-        router = SearchRouter([claude, tavily], claude_first_config, allow_paid_fallback=True)
+        router = SearchRouter(
+            [claude, tavily], claude_first_config, allow_paid_fallback=True
+        )
 
         # Claude fails, falls back to tavily (allowed because flag is set)
         results = await router.search("test")
@@ -208,7 +213,9 @@ class TestRouterWithClaudeAgent:
     ) -> None:
         claude = StubClaudeAgent(fail_count=10)
         tavily = StubExternal()
-        router = SearchRouter([claude, tavily], claude_first_config, allow_paid_fallback=True)
+        router = SearchRouter(
+            [claude, tavily], claude_first_config, allow_paid_fallback=True
+        )
 
         # After 2 failures (threshold), claude_agent circuit opens
         await router.search("q1")  # claude fails → tavily (allowed)
@@ -221,6 +228,7 @@ class TestRouterWithClaudeAgent:
 
 class StubExternalExhausted:
     """Tavily-like provider whose free tier is exhausted."""
+
     name = "tavily_exhausted"
     monthly_limit = 1000
     one_time_limit: int | None = None
@@ -248,7 +256,9 @@ class TestPaidFallbackEnforcement:
         """Claude Agent fails → Tavily with free quota remaining should be tried automatically."""
         claude = StubClaudeAgent(fail_count=10)
         tavily = StubExternal()
-        router = SearchRouter([claude, tavily], claude_first_config, allow_paid_fallback=False)
+        router = SearchRouter(
+            [claude, tavily], claude_first_config, allow_paid_fallback=False
+        )
 
         results = await router.search("test")
         assert results[0].source_api == "tavily"
@@ -273,9 +283,10 @@ class TestPaidFallbackEnforcement:
         # Pre-exhaust the free tier
         quota = router.quotas.get_or_create(tavily)
         quota.monthly_count = 1000  # at limit
-        from datetime import datetime, timezone
-        quota.last_reset_month = datetime.now(timezone.utc).strftime("%Y-%m")
-        quota.last_reset_day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        from datetime import datetime
+
+        quota.last_reset_month = datetime.now(UTC).strftime("%Y-%m")
+        quota.last_reset_day = datetime.now(UTC).strftime("%Y-%m-%d")
         router.quotas._save()
 
         with pytest.raises(QuotaExhaustedError):
@@ -289,7 +300,9 @@ class TestPaidFallbackEnforcement:
         """With allow_paid_fallback=True, falls back normally even past free tier."""
         claude = StubClaudeAgent(fail_count=10)
         tavily = StubExternal()
-        router = SearchRouter([claude, tavily], claude_first_config, allow_paid_fallback=True)
+        router = SearchRouter(
+            [claude, tavily], claude_first_config, allow_paid_fallback=True
+        )
 
         results = await router.search("test")
         assert results[0].source_api == "tavily"
@@ -320,7 +333,9 @@ class TestPaidFallbackEnforcement:
         """Batch search: Claude fails, Tavily with free quota succeeds."""
         claude = StubClaudeAgent(fail_count=100)
         tavily = StubExternal()
-        router = SearchRouter([claude, tavily], claude_first_config, allow_paid_fallback=False)
+        router = SearchRouter(
+            [claude, tavily], claude_first_config, allow_paid_fallback=False
+        )
 
         results = await router.batch_search(["q1", "q2", "q3"])
         assert len(results) == 3  # all succeeded via Tavily fallback
@@ -360,6 +375,7 @@ class TestClaudeAgentFetcher:
 ```"""
 
         import research_pipeline.sdk as sdk_mod
+
         monkeypatch.setattr(sdk_mod, "llm_call", fake_llm_call)
 
         fetcher = ClaudeAgentFetcher(request_timeout=30)
@@ -386,9 +402,7 @@ class TestClaudeAgentFetcher:
         from research_pipeline import sdk
 
         async def timing_out_llm_call(prompt, *, call_timeout=None, **kwargs):  # type: ignore
-            raise sdk.LLMCallTimeoutError(
-                f"LLM call exceeded {call_timeout}s timeout"
-            )
+            raise sdk.LLMCallTimeoutError(f"LLM call exceeded {call_timeout}s timeout")
 
         monkeypatch.setattr(sdk, "llm_call", timing_out_llm_call)
 
@@ -410,6 +424,7 @@ class TestClaudeAgentFetcher:
             return '{"content_markdown": "ok", "findings": [], "links": []}'
 
         from research_pipeline import sdk
+
         monkeypatch.setattr(sdk, "llm_call", mixed_llm_call)
 
         fetcher = ClaudeAgentFetcher(request_timeout=5, batch_timeout=10)
@@ -541,9 +556,7 @@ class TestThinkingWiring:
     """Search and fetch are mechanical work: both classes take thinking= next
     to effort= and hand it to llm_call unchanged."""
 
-    def _capture_llm_call(
-        self, monkeypatch: pytest.MonkeyPatch, response: str
-    ) -> dict:
+    def _capture_llm_call(self, monkeypatch: pytest.MonkeyPatch, response: str) -> dict:
         import research_pipeline.sdk as sdk_mod
 
         captured: dict = {}
@@ -576,9 +589,7 @@ class TestThinkingWiring:
     async def test_fetcher_forwards_thinking(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        captured = self._capture_llm_call(
-            monkeypatch, '{"content_markdown": "c"}'
-        )
+        captured = self._capture_llm_call(monkeypatch, '{"content_markdown": "c"}')
         fetcher = ClaudeAgentFetcher(thinking={"type": "disabled"})
         result = await fetcher.fetch_url("https://test.example")
         assert result.success
@@ -588,9 +599,7 @@ class TestThinkingWiring:
     async def test_fetcher_defaults_to_none(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        captured = self._capture_llm_call(
-            monkeypatch, '{"content_markdown": "c"}'
-        )
+        captured = self._capture_llm_call(monkeypatch, '{"content_markdown": "c"}')
         result = await ClaudeAgentFetcher().fetch_url("https://test.example")
         assert result.success
         assert captured["thinking"] is None
@@ -606,7 +615,5 @@ class TestThinkingWiring:
             prefer_claude_tools=True,
             thinking={"type": "disabled"},
         )
-        claude = next(
-            p for p in router.providers.values() if p.name == "claude_agent"
-        )
+        claude = next(p for p in router.providers.values() if p.name == "claude_agent")
         assert claude.thinking == {"type": "disabled"}

@@ -27,8 +27,8 @@ from ..claude_agent_fetcher import ClaudeAgentFetcher, FetcherProtocol, HttpxFet
 from ..config import ResearchConfig
 from ..models import FetchResult, Finding, ReputationTier, Source, SourceStatus
 from ..prompts.extract import EXTRACT_PROMPT
-from ..search_router import SearchRouter
 from ..sdk import llm_call_structured
+from ..search_router import SearchRouter
 from ..state import ResearchState
 from ..untrusted import defang_untrusted, is_fetchable_url
 
@@ -88,7 +88,8 @@ async def read(
     primary, fallback = _build_fetchers(config)
     log.info(
         "READ: %d pending sources, batch size %d, primary=%s, fallback=%s",
-        len(pending), DEFAULT_BATCH_SIZE,
+        len(pending),
+        DEFAULT_BATCH_SIZE,
         type(primary).__name__,
         type(fallback).__name__ if fallback else "none",
     )
@@ -100,7 +101,8 @@ async def read(
     if authority:
         log.info(
             "READ: %d authority sources with guaranteed budget, %d regular",
-            len(authority), len(regular),
+            len(authority),
+            len(regular),
         )
 
     # Process regular sources first (budget-limited), then authority (guaranteed)
@@ -135,7 +137,9 @@ async def read(
 
         # Fetch (+ extract for Strategy C)
         fetch_results = await primary.fetch_batch(
-            batch_urls, query=config.query, sub_questions=sub_questions,
+            batch_urls,
+            query=config.query,
+            sub_questions=sub_questions,
         )
         state.total_fetches += len(batch_urls)
 
@@ -162,7 +166,12 @@ async def read(
         # --- Fallback chain for failed sources ---
         if failed_in_batch and fallback:
             await _retry_with_fallback(
-                config, state, fallback, router, failed_in_batch, sub_questions,
+                config,
+                state,
+                fallback,
+                router,
+                failed_in_batch,
+                sub_questions,
             )
         elif failed_in_batch:
             # No fallback available — mark all as failed
@@ -190,7 +199,9 @@ async def _retry_with_fallback(
         # Tier 2: httpx fallback
         log.info("READ fallback: retrying %s with httpx", source.url[:60])
         fallback_result = await fallback.fetch_url(
-            source.url, query=config.query, sub_questions=sub_questions,
+            source.url,
+            query=config.query,
+            sub_questions=sub_questions,
         )
 
         if fallback_result.success and fallback_result.content:
@@ -200,16 +211,15 @@ async def _retry_with_fallback(
             continue
 
         # Tier 3: Tavily content search (AUTHORITATIVE only)
-        if (
-            router is not None
-            and source.reputation == ReputationTier.AUTHORITATIVE
-        ):
+        if router is not None and source.reputation == ReputationTier.AUTHORITATIVE:
             log.info(
                 "READ fallback: trying Tavily for AUTHORITATIVE source %s",
                 source.url[:60],
             )
             tavily_results = await router.tavily_content_fallback(
-                source.url, source.title, config.query,
+                source.url,
+                source.title,
+                config.query,
             )
             if tavily_results:
                 # Combine Tavily search result snippets as synthetic content
@@ -219,7 +229,8 @@ async def _retry_with_fallback(
                 if content.strip():
                     log.info(
                         "READ fallback: Tavily provided %d results for %s",
-                        len(tavily_results), source.url[:60],
+                        len(tavily_results),
+                        source.url[:60],
                     )
                     state.tavily_fallback_count += 1
                     await _extract_findings(config, source, content, state)
@@ -234,7 +245,7 @@ async def _retry_with_fallback(
 
 
 def _store_pre_extracted(
-    config: ResearchConfig,  # noqa: ARG001 — kept for signature consistency
+    config: ResearchConfig,  # kept for signature consistency
     source: Source,
     fetch_result: FetchResult,
     findings_raw: list[dict],
@@ -272,7 +283,7 @@ def _store_pre_extracted(
 
     # Store follow links on the source for _follow_links
     extracted_links = fetch_result.extracted_links or []
-    setattr(source, "_follow_links", extracted_links[:3])
+    source._follow_links = extracted_links[:3]
 
     content = fetch_result.content or ""
     state.mark_source_extracted(source.url, content=content, findings=findings)
@@ -335,7 +346,7 @@ async def _extract_findings(
 
     # Store follow links on the source for _follow_links to pick up
     # (a private attr via model_extra — Pydantic allows this)
-    setattr(source, "_follow_links", [fl.url for fl in extracted.follow_links[:3]])
+    source._follow_links = [fl.url for fl in extracted.follow_links[:3]]
 
     state.mark_source_extracted(source.url, content=content, findings=findings)
     log.info("READ: %s → %d findings", source.title[:50], len(findings))
@@ -389,7 +400,9 @@ async def _follow_links(
     urls = [u for u, _ in links_to_fetch]
     sub_questions = state.plan.sub_questions if state.plan else []
     fetch_results = await fetcher.fetch_batch(
-        urls, query=config.query, sub_questions=sub_questions,
+        urls,
+        query=config.query,
+        sub_questions=sub_questions,
     )
     state.total_fetches += len(urls)
 

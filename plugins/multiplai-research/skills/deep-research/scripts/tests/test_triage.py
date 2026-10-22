@@ -10,7 +10,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from research_pipeline.config import PRESETS, ResearchConfig
 from research_pipeline.models import SearchResult
 from research_pipeline.nodes.triage import triage

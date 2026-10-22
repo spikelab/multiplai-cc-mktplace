@@ -62,7 +62,10 @@ def _read(path: Path) -> str | None:
 def publish(run: Run, step: str, files: dict[str, str | None]) -> None:
     """Write *files* (paths relative to the change dir) as one publication of *step*'s rewrite."""
     change_dir = run.config.change_dir
-    entries = {rel: {"before": _read(change_dir / rel), "after": text} for rel, text in sorted(files.items())}
+    entries = {
+        rel: {"before": _read(change_dir / rel), "after": text}
+        for rel, text in sorted(files.items())
+    }
     journal = run.config.run_dir / JOURNAL
     atomic_write(journal, json.dumps({"step": step, "files": entries}, indent=1))
     finish(run)
@@ -83,8 +86,10 @@ def finish(run: Run) -> bool:
             raise ValueError(f"Invalid publication journal entry: {rel}")
         actual = _read(change_dir / rel)
         if actual not in (item["before"], item["after"]):
-            raise RuntimeError(f"A rewrite was interrupted while it was being written and {rel} changed "
-                               f"since; save your edit, then delete {journal} to go on")
+            raise RuntimeError(
+                f"A rewrite was interrupted while it was being written and {rel} changed "
+                f"since; save your edit, then delete {journal} to go on"
+            )
     for rel, item in files.items():
         if item["after"] is None:
             supersede(change_dir, rel)

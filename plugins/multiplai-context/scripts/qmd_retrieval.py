@@ -60,16 +60,16 @@ from multiplai_core.log_utils import setup_logging
 logger = setup_logging("qmd_retrieval", packages=("lib", "generators"))
 
 MAX_RESULTS = 5
-MIN_SCORE = 0.30          # drop weak matches rather than inject noise
+MIN_SCORE = 0.30  # drop weak matches rather than inject noise
 SNIPPET_CHARS = 500
-TIMEOUT_HYBRID = 25       # qmd query (expansion + rerank)
-TIMEOUT_VEC = 15          # qmd vsearch (query embedding only)
-TIMEOUT_FTS = 5           # qmd search (BM25)
-RRF_K = 60                # standard reciprocal-rank-fusion constant
+TIMEOUT_HYBRID = 25  # qmd query (expansion + rerank)
+TIMEOUT_VEC = 15  # qmd vsearch (query embedding only)
+TIMEOUT_FTS = 5  # qmd search (BM25)
+RRF_K = 60  # standard reciprocal-rank-fusion constant
 SSH_CONNECT_TIMEOUT = 3
-HTTP_TIMEOUT = 10         # POST /query floor; http_timeout() scales with dial
-DEFAULT_CANDIDATE_LIMIT = 10   # docs sent to the reranker (latency dial)
-MAX_LEX_TERMS = 3         # IDF-rarest content words fed to the lexical arm
+HTTP_TIMEOUT = 10  # POST /query floor; http_timeout() scales with dial
+DEFAULT_CANDIDATE_LIMIT = 10  # docs sent to the reranker (latency dial)
+MAX_LEX_TERMS = 3  # IDF-rarest content words fed to the lexical arm
 
 # Minimum prompt length worth a retrieval round-trip; shorter prompts
 # ("yes", "go on") carry no retrievable signal.
@@ -101,15 +101,15 @@ _STOPWORDS = frozenset(
 class QmdTarget:
     """Where and how to run qmd for one search call."""
 
-    workspace: str                     # cwd for qmd (project-local index)
-    resources_dir: str                 # maps qmd:// URIs to absolute paths
+    workspace: str  # cwd for qmd (project-local index)
+    resources_dir: str  # maps qmd:// URIs to absolute paths
     collection: str = "resources"
-    mode: str = "local"                # "http" | "local" | "ssh"
+    mode: str = "local"  # "http" | "local" | "ssh"
     ssh_host: str = "host.docker.internal"
-    strategy: str = "fused"            # "fused" | "hybrid" | "fts" (local/ssh)
+    strategy: str = "fused"  # "fused" | "hybrid" | "fts" (local/ssh)
     http_url: str = "http://host.docker.internal:8181"  # qmd mcp --http daemon
-    candidate_limit: int = DEFAULT_CANDIDATE_LIMIT      # docs reranked (http)
-    min_score: float = MIN_SCORE       # weak-match cutoff, all modes
+    candidate_limit: int = DEFAULT_CANDIDATE_LIMIT  # docs reranked (http)
+    min_score: float = MIN_SCORE  # weak-match cutoff, all modes
 
 
 def target_from_config(cfg, workspace: str) -> QmdTarget:
@@ -130,6 +130,7 @@ def target_from_config(cfg, workspace: str) -> QmdTarget:
 # ---------------------------------------------------------------------------
 # Pure helpers (unit-tested without qmd)
 # ---------------------------------------------------------------------------
+
 
 def sanitize_query(query: str) -> str:
     """Strip gateway-rejected metacharacters and flatten whitespace."""
@@ -168,6 +169,7 @@ def content_words(text: str) -> list[str]:
 # carrying the whole prompt. See INBOX/qmd-http-rewrite-plan.
 # ---------------------------------------------------------------------------
 
+
 def flatten_query(text: str) -> str:
     """Collapse whitespace and bound length; keep the text otherwise intact.
 
@@ -182,7 +184,9 @@ def index_db_path(target: QmdTarget) -> Path:
     return Path(target.workspace) / ".qmd" / "index.sqlite"
 
 
-def doc_frequencies(terms: list[str], target: QmdTarget) -> dict[str, int | None] | None:
+def doc_frequencies(
+    terms: list[str], target: QmdTarget
+) -> dict[str, int | None] | None:
     """Document frequency per term from the FTS index, or None if unreachable.
 
     Read-only, single connection, short timeout. A term that trips the FTS
@@ -205,7 +209,9 @@ def doc_frequencies(terms: list[str], target: QmdTarget) -> dict[str, int | None
             try:
                 row = conn.execute(
                     "SELECT count(*) FROM documents_fts WHERE documents_fts MATCH ?",
-                    (f'"{term}"',),   # double-quote → literal token, never an FTS operator
+                    (
+                        f'"{term}"',
+                    ),  # double-quote → literal token, never an FTS operator
                 ).fetchone()
                 out[term] = int(row[0]) if row else 0
             except sqlite3.Error:
@@ -215,8 +221,9 @@ def doc_frequencies(terms: list[str], target: QmdTarget) -> dict[str, int | None
     return out
 
 
-def lexical_terms(prompt: str, target: QmdTarget,
-                  max_terms: int = MAX_LEX_TERMS) -> list[str]:
+def lexical_terms(
+    prompt: str, target: QmdTarget, max_terms: int = MAX_LEX_TERMS
+) -> list[str]:
     """The IDF-rarest content words of *prompt* for the lexical arm.
 
     Ordered by document frequency ascending (rarest first) so ``coffee``
@@ -228,16 +235,16 @@ def lexical_terms(prompt: str, target: QmdTarget,
     if not words:
         return []
     dfs = doc_frequencies(words, target)
-    if dfs is None:                       # index unreachable
+    if dfs is None:  # index unreachable
         return words[:max_terms]
     scored: list[tuple[int, int, str]] = []
     for i, w in enumerate(words):
         df = dfs.get(w)
-        if df == 0:                       # not in corpus → contributes nothing
+        if df == 0:  # not in corpus → contributes nothing
             continue
         # unknown DF (parser-tripping token) → treat as rare but keep it.
         scored.append((df if df is not None else 1, i, w))
-    scored.sort(key=lambda t: (t[0], t[1]))   # DF asc, then prompt order
+    scored.sort(key=lambda t: (t[0], t[1]))  # DF asc, then prompt order
     return [w for _, _, w in scored[:max_terms]]
 
 
@@ -270,7 +277,7 @@ def to_abs_path(item: dict, target: QmdTarget) -> str:
     uri = item.get("file") or item.get("uri") or item.get("path") or ""
     prefix = f"qmd://{target.collection}/"
     if uri.startswith(prefix):
-        return f"{target.resources_dir}/{uri[len(prefix):]}"
+        return f"{target.resources_dir}/{uri[len(prefix) :]}"
     if uri.startswith("/"):
         return uri
     return f"{target.resources_dir}/{uri}"
@@ -330,8 +337,9 @@ def rrf_fuse(
     return results
 
 
-def results_to_entries(results: list, target: QmdTarget,
-                       min_score: float = MIN_SCORE) -> list[dict]:
+def results_to_entries(
+    results: list, target: QmdTarget, min_score: float = MIN_SCORE
+) -> list[dict]:
     """Filter/dedupe raw qmd results into renderable entries.
 
     Returns ``[{"path", "title", "score", "snippet"[, "line"]}, ...]`` —
@@ -351,8 +359,9 @@ def results_to_entries(results: list, target: QmdTarget,
         if path in seen:  # multiple chunks of the same doc
             continue
         seen.add(path)
-        snippet = (item.get("snippet") or item.get("text")
-                   or item.get("content") or "").strip()
+        snippet = (
+            item.get("snippet") or item.get("text") or item.get("content") or ""
+        ).strip()
         entry = {
             "path": path,
             "title": item.get("title") or os.path.basename(path),
@@ -369,6 +378,7 @@ def results_to_entries(results: list, target: QmdTarget,
 # ---------------------------------------------------------------------------
 # qmd execution
 # ---------------------------------------------------------------------------
+
 
 def build_argv(subcmd: str, query: str, target: QmdTarget) -> list[str] | None:
     """Argv for a qmd search command, via SSH bridge or local binary."""
@@ -396,12 +406,17 @@ def build_argv(subcmd: str, query: str, target: QmdTarget) -> list[str] | None:
             f"qmd {subcmd} '{q}' -c '{target.collection}' --json -n {MAX_RESULTS}"
         )
         return [
-            "ssh", "-o", "BatchMode=yes",
-            "-o", f"ConnectTimeout={SSH_CONNECT_TIMEOUT}",
-            target.ssh_host, remote,
+            "ssh",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            f"ConnectTimeout={SSH_CONNECT_TIMEOUT}",
+            target.ssh_host,
+            remote,
         ]
-    qmd = shutil.which("qmd", path=f"{os.path.expanduser('~')}/.bun/bin:"
-                       + os.environ.get("PATH", ""))
+    qmd = shutil.which(
+        "qmd", path=f"{os.path.expanduser('~')}/.bun/bin:" + os.environ.get("PATH", "")
+    )
     if not qmd:
         return None
     return [qmd, subcmd, q, *tail.split()]
@@ -414,8 +429,12 @@ def run_qmd(subcmd: str, query: str, timeout: int, target: QmdTarget) -> list | 
         return None
     try:
         proc = subprocess.Popen(
-            argv, cwd=target.workspace or None, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, text=True, start_new_session=True,
+            argv,
+            cwd=target.workspace or None,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
         )
     except OSError as e:
         logger.warning("qmd %s spawn failed: %s", subcmd, type(e).__name__)
@@ -481,7 +500,7 @@ def http_search(searches: list[dict], intent: str, target: QmdTarget) -> list | 
     """
     payload = {
         "searches": searches,
-        "intent": intent,               # steers rerank + snippet extraction
+        "intent": intent,  # steers rerank + snippet extraction
         "collections": [target.collection],
         "limit": MAX_RESULTS,
         "candidateLimit": target.candidate_limit,
@@ -490,8 +509,10 @@ def http_search(searches: list[dict], intent: str, target: QmdTarget) -> list | 
     }
     url = f"{target.http_url.rstrip('/')}/query"
     req = urllib.request.Request(
-        url, data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"}, method="POST",
+        url,
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
     )
     timeout = http_timeout(target.candidate_limit)
     try:
@@ -501,7 +522,10 @@ def http_search(searches: list[dict], intent: str, target: QmdTarget) -> list | 
         logger.warning(
             "qmd http query failed (%s, timeout=%.1fs, candidate_limit=%d): "
             "%s — resources retrieval degraded to empty",
-            url, timeout, target.candidate_limit, type(e).__name__,
+            url,
+            timeout,
+            target.candidate_limit,
+            type(e).__name__,
         )
         return None
     try:
@@ -518,8 +542,10 @@ def http_search(searches: list[dict], intent: str, target: QmdTarget) -> list | 
 # Entry point for the context manager
 # ---------------------------------------------------------------------------
 
-def search(prompt: str, target: QmdTarget, runner=run_qmd,
-           http_runner=http_search) -> list[dict]:
+
+def search(
+    prompt: str, target: QmdTarget, runner=run_qmd, http_runner=http_search
+) -> list[dict]:
     """Retrieve resources entries for *prompt*; ``[]`` on any failure.
 
     In ``http`` mode we author a typed query and let the daemon fuse +

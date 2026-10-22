@@ -5,7 +5,6 @@ fenced YAML data appendix, matching the existing skill's format for downstream
 compatibility.
 """
 
-
 BASE_HEADER = """You are the SYNTHESIZE stage of a research pipeline. You write the \
 final research report. This is the creative core — genuinely reason across all \
 findings, identify tensions, verify logic, and produce a document the reader can \
@@ -288,6 +287,6 @@ def synthesis_prompt_for(summary_level: str) -> str:
     else:
         template = STRUCTURED_TEMPLATE
 
-    return template.replace(
-        "{yaml_appendix_format}", YAML_APPENDIX_FORMAT
-    ).replace("{base_header}", BASE_HEADER)
+    return template.replace("{yaml_appendix_format}", YAML_APPENDIX_FORMAT).replace(
+        "{base_header}", BASE_HEADER
+    )

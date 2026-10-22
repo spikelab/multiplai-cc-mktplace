@@ -41,8 +41,8 @@ import logging
 import os
 import signal
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 from multiplai_core.paths import get_paths
 
@@ -80,8 +80,9 @@ def _kill_group(proc: subprocess.Popen) -> None:
     try:
         os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
     except (ProcessLookupError, PermissionError, OSError) as exc:
-        logger.debug("killpg on pid %d failed (%s) — killing the process alone",
-                     proc.pid, exc)
+        logger.debug(
+            "killpg on pid %d failed (%s) — killing the process alone", proc.pid, exc
+        )
         try:
             proc.kill()
         except ProcessLookupError:
@@ -89,7 +90,10 @@ def _kill_group(proc: subprocess.Popen) -> None:
 
 
 def run_supervised(
-    argv: Sequence[str], *, timeout: float, text: bool = True,
+    argv: Sequence[str],
+    *,
+    timeout: float,
+    text: bool = True,
     input: str | bytes | None = None,
 ) -> subprocess.CompletedProcess:
     """Run *argv* to completion, killing its whole process tree on timeout.

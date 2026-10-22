@@ -20,11 +20,10 @@ The goal condition it demonstrates:
 import asyncio
 import io
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
-
 from conftest import import_script
 from lib import checkpoint as cp
 
@@ -59,9 +58,7 @@ def _fake_run_agent_factory(calls):
         # Carry forward breadcrumbs from the previous checkpoint (merge
         # semantics) and add one for the newest work item in the segment.
         breadcrumbs = [
-            line
-            for line in prompt.splitlines()
-            if line.startswith("- breadcrumb:")
+            line for line in prompt.splitlines() if line.startswith("- breadcrumb:")
         ]
         for line in prompt.splitlines():
             if ("work item" in line or "goal step" in line) and "user:" in line:
@@ -73,7 +70,9 @@ def _fake_run_agent_factory(calls):
                     breadcrumbs.append(crumb)
         sections = []
         for s in cp.CHECKPOINT_SECTIONS:
-            body = "\n".join(breadcrumbs) if s == "Task tree" else f"- {s.lower()} state"
+            body = (
+                "\n".join(breadcrumbs) if s == "Task tree" else f"- {s.lower()} state"
+            )
             sections.append(f"## {s}\n{body}")
         return SimpleNamespace(text="\n".join(sections))
 
@@ -89,7 +88,7 @@ class LongChatHarness:
         self.monkeypatch = monkeypatch
         self.capsys = capsys
         self.cwd = str(tmp_path / "bigproject")
-        self.clock = datetime.now(timezone.utc)
+        self.clock = datetime.now(UTC)
         self.total_context_tokens = 0
         self.handoffs = 0
         self.rebuild_seeds: list[str] = []
@@ -196,20 +195,30 @@ class LongChatHarness:
             self.rebuild_seeds.append(out)
             self.handoffs += 1
             with transcript.open("a") as f:
-                f.write(json.dumps({
-                    "type": "user",
-                    "timestamp": self._tick(),
-                    "cwd": self.cwd,
-                    "message": {"role": "user", "content": out},
-                }) + "\n")
+                f.write(
+                    json.dumps(
+                        {
+                            "type": "user",
+                            "timestamp": self._tick(),
+                            "cwd": self.cwd,
+                            "message": {"role": "user", "content": out},
+                        }
+                    )
+                    + "\n"
+                )
         return injected, out
 
 
 class TestLongHorizonChat:
-    def test_700k_chat_survives_rebuild_cycles(self, tmp_path, data_env, monkeypatch, capsys):
+    def test_700k_chat_survives_rebuild_cycles(
+        self, tmp_path, data_env, monkeypatch, capsys
+    ):
         model_calls: list[str] = []
         harness = LongChatHarness(
-            tmp_path, data_env, monkeypatch, capsys,
+            tmp_path,
+            data_env,
+            monkeypatch,
+            capsys,
             _fake_run_agent_factory(model_calls),
         )
 
@@ -234,16 +243,14 @@ class TestLongHorizonChat:
                 assert not injected
 
             for turn_idx, ctx in enumerate(TURN_TOKENS, start=1):
-                harness.append_turn(
-                    transcript, f"work item {s}-{turn_idx}", ctx
-                )
+                harness.append_turn(transcript, f"work item {s}-{turn_idx}", ctx)
                 harness.run_stop_hook(session_id, transcript)
 
             # Handoff threshold reached at the last turn: pending marker set,
             # user was advised via systemMessage.
             assert any(
                 "systemMessage" in out and "/clear" in out
-                for out in harness.stop_outputs[-len(TURN_TOKENS):]
+                for out in harness.stop_outputs[-len(TURN_TOKENS) :]
             ), f"session {s}: no handoff advisory emitted"
 
         # ---- Volume: the logical chat consumed >700K context tokens ----
@@ -277,7 +284,9 @@ class TestLongHorizonChat:
             "tool_result content never reached the checkpoint writer"
         )
 
-    def test_subagent_transcripts_never_checkpoint(self, tmp_path, data_env, monkeypatch, capsys):
+    def test_subagent_transcripts_never_checkpoint(
+        self, tmp_path, data_env, monkeypatch, capsys
+    ):
         """A research subagent's huge transcript must not trigger anything."""
         harness = LongChatHarness(
             tmp_path, data_env, monkeypatch, capsys, _fake_run_agent_factory([])
@@ -294,7 +303,9 @@ class TestLongHorizonChat:
             cp.checkpoints_root(data_env).iterdir()
         )
 
-    def test_automatic_compact_rebuild_cycle(self, tmp_path, data_env, monkeypatch, capsys):
+    def test_automatic_compact_rebuild_cycle(
+        self, tmp_path, data_env, monkeypatch, capsys
+    ):
         """The fully-automatic path: steered auto-compaction fires near the
         handoff threshold, SessionStart(source=compact) re-injects the
         checkpoint into the SAME session (id unchanged, /goal hooks survive),
@@ -304,7 +315,10 @@ class TestLongHorizonChat:
         monkeypatch.setenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "90")  # trigger 207K
         model_calls: list[str] = []
         harness = LongChatHarness(
-            tmp_path, data_env, monkeypatch, capsys,
+            tmp_path,
+            data_env,
+            monkeypatch,
+            capsys,
             _fake_run_agent_factory(model_calls),
         )
         session_id = "auto-sess"
@@ -316,9 +330,7 @@ class TestLongHorizonChat:
         # Three compact cycles, same session id throughout.
         for cycle in range(1, 4):
             for turn_idx, ctx in enumerate(TURN_TOKENS, start=1):
-                harness.append_turn(
-                    transcript, f"work item {cycle}-{turn_idx}", ctx
-                )
+                harness.append_turn(transcript, f"work item {cycle}-{turn_idx}", ctx)
                 out = harness.run_stop_hook(session_id, transcript)
                 # AUTO MODE: no /clear nagging, ever — compaction handles it.
                 assert "systemMessage" not in out
@@ -339,12 +351,17 @@ class TestLongHorizonChat:
             # Post-compact, the same-session window restarts small; mirror
             # the injected seed into the transcript like Claude Code does.
             with transcript.open("a") as f:
-                f.write(json.dumps({
-                    "type": "user",
-                    "timestamp": harness._tick(),
-                    "cwd": harness.cwd,
-                    "message": {"role": "user", "content": seed},
-                }) + "\n")
+                f.write(
+                    json.dumps(
+                        {
+                            "type": "user",
+                            "timestamp": harness._tick(),
+                            "cwd": harness.cwd,
+                            "message": {"role": "user", "content": seed},
+                        }
+                    )
+                    + "\n"
+                )
 
         assert total > 700_000, total
         # Counters reset each cycle → every cycle re-checkpoints both
@@ -362,7 +379,10 @@ class TestLongHorizonChat:
         blocked."""
         model_calls: list[str] = []
         harness = LongChatHarness(
-            tmp_path, data_env, monkeypatch, capsys,
+            tmp_path,
+            data_env,
+            monkeypatch,
+            capsys,
             _fake_run_agent_factory(model_calls),
         )
         transcript = tmp_path / "transcripts" / "marathon.jsonl"

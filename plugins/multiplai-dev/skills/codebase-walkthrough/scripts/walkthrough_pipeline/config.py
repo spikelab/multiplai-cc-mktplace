@@ -17,7 +17,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from multiplai_core.env import load_multiplai_conf
-from multiplai_core.stage_config import check_effort, coerce_int, conf_value, read_yaml_mapping
+from multiplai_core.stage_config import (
+    check_effort,
+    coerce_int,
+    conf_value,
+    read_yaml_mapping,
+)
 
 from .budget import DEFAULT_MAX_USD
 
@@ -39,7 +44,9 @@ class WalkConfig:
     max_cost_usd: float | None = DEFAULT_MAX_USD
 
 
-def load_config(run_dir: Path | None, *, max_cost_usd: float | None = DEFAULT_MAX_USD) -> WalkConfig:
+def load_config(
+    run_dir: Path | None, *, max_cost_usd: float | None = DEFAULT_MAX_USD
+) -> WalkConfig:
     cfg = WalkConfig(max_cost_usd=max_cost_usd)
     try:
         conf = load_multiplai_conf()

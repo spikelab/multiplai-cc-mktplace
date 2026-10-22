@@ -32,17 +32,17 @@ phase can accept.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import date
 from pathlib import Path
-from typing import Mapping, Optional
 
 from lib import doctor_contradiction, doctor_deadweight, doctor_duplication
 
 __all__ = [
     "FORBIDDEN_HEADINGS",
-    "report_name",
-    "render_report",
     "assert_not_appliable",
+    "render_report",
+    "report_name",
 ]
 
 #: Headings that would make an existing applier treat this file as actionable.
@@ -65,7 +65,7 @@ FORBIDDEN_HEADINGS: tuple[str, ...] = (
 )
 
 
-def report_name(day: Optional[date] = None) -> str:
+def report_name(day: date | None = None) -> str:
     return f"doctor-{(day or date.today()).isoformat()}.md"
 
 
@@ -86,8 +86,8 @@ def render_report(
     contradiction: Mapping,
     deadweight: Mapping,
     *,
-    day: Optional[date] = None,
-    memory_dir: Optional[Path] = None,
+    day: date | None = None,
+    memory_dir: Path | None = None,
 ) -> str:
     """The whole report. Pure — takes three pass results, returns markdown."""
     day = day or date.today()
@@ -111,8 +111,11 @@ def render_report(
         "were looked for, so the absence of cross-file findings is not evidence "
         "that there are none."
     )
-    basis = [name for name in ("self_report", "judge")
-             if (deadweight.get("estimator_notes") or {}).get(name)]
+    basis = [
+        name
+        for name in ("self_report", "judge")
+        if (deadweight.get("estimator_notes") or {}).get(name)
+    ]
     out.append(
         f"- **Dead weight is backed by these utilisation estimators:** "
         f"{', '.join(f'`{b}`' for b in basis) or '_none available_'}. Both are "

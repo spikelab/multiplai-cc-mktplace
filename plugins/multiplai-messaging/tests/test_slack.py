@@ -5,6 +5,7 @@ early exit), Fix 9 (the default-command / --data-dir re-parse no longer crashes)
 and Fix 1 (send is audited via log_event). A fake WebClient stands in for Slack;
 the SQLite store is real (a temp file).
 """
+
 from __future__ import annotations
 
 import pytest
@@ -64,27 +65,29 @@ def reader_factory(slack, tmp_path):
 class TestSyncMarker:
     def test_limit_stop_does_not_advance_marker(self, reader_factory):
         reader, store, cid = reader_factory(
-            [_msgs("300.0", "200.0", "150.0")], preset_marker="100.0")
-        res = reader.sync_channel(cid, "#test", limit=2, fetch_files=False,
-                                  fetch_threads=False)
+            [_msgs("300.0", "200.0", "150.0")], preset_marker="100.0"
+        )
+        res = reader.sync_channel(
+            cid, "#test", limit=2, fetch_files=False, fetch_threads=False
+        )
         assert res["completed"] is False
         assert store.get_last_ts(cid) == "100.0"  # unchanged
 
     def test_api_error_mid_pagination_does_not_advance_marker(self, reader_factory):
         reader, store, cid = reader_factory(
             [_msgs("300.0", "250.0"), _msgs("200.0")],
-            error_on_page=2, preset_marker="100.0")
-        res = reader.sync_channel(cid, "#test", fetch_files=False,
-                                  fetch_threads=False)
+            error_on_page=2,
+            preset_marker="100.0",
+        )
+        res = reader.sync_channel(cid, "#test", fetch_files=False, fetch_threads=False)
         assert res["completed"] is False
         assert store.get_last_ts(cid) == "100.0"  # unchanged despite page-1 rows
 
     def test_full_clean_run_advances_marker_to_newest_ts(self, reader_factory):
         reader, store, cid = reader_factory(
-            [_msgs("300.0", "250.0"), _msgs("200.0", "150.0")],
-            preset_marker="100.0")
-        res = reader.sync_channel(cid, "#test", fetch_files=False,
-                                  fetch_threads=False)
+            [_msgs("300.0", "250.0"), _msgs("200.0", "150.0")], preset_marker="100.0"
+        )
+        res = reader.sync_channel(cid, "#test", fetch_files=False, fetch_threads=False)
         assert res["completed"] is True
         assert store.get_last_ts(cid) == "300.0"  # newest ts across all pages
 
@@ -92,7 +95,9 @@ class TestSyncMarker:
         # First run errors on page 2 → marker stays put, page-1 rows are stored.
         reader, store, cid = reader_factory(
             [_msgs("300.0", "250.0"), _msgs("200.0")],
-            error_on_page=2, preset_marker="100.0")
+            error_on_page=2,
+            preset_marker="100.0",
+        )
         reader.sync_channel(cid, "#test", fetch_files=False, fetch_threads=False)
         assert store.get_last_ts(cid) == "100.0"
         stored_after_fail = store.stats()["messages"]

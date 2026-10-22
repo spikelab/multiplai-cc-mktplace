@@ -18,6 +18,7 @@ Playwright's Chromium, as tests/test_overlay_bridge_chromium.py does:
 
 Without playwright importable, or without its browser, every test here is skipped.
 """
+
 from __future__ import annotations
 
 import json
@@ -33,8 +34,8 @@ sys.path.insert(0, str(_SCRIPTS))
 sys.path.insert(0, str(Path(__file__).resolve().parent / "fixtures"))
 
 sync_api = pytest.importorskip("playwright.sync_api")
-import make_job  # noqa: E402
-from stages import review_server as rs  # noqa: E402
+import make_job
+from stages import review_server as rs
 
 PAGE = """<!doctype html><html><head><meta charset="utf-8"><style>
 html,body{margin:0;width:640px;height:200px;overflow:hidden;background:#00FF00;font-family:sans-serif}
@@ -79,11 +80,31 @@ MEDIA_STAND_IN = """(() => {
 
 
 def sidecar(page: Path) -> dict:
-    edl = {"source": "/rec/x.mp4", "segments": [], "output": {"width": 720, "height": 1280}, "captions": None,
-           "overlays": [{"html": str(page), "start": 1.0, "end": 3.0, "mode": "keyed",
-                         "region": {"x": 40, "y": 860, "w": 640, "h": 200}, "style": "flat-vector"}]}
-    return {"format": 1, "video": "clip-01.mp4", "edl_file": "/jobs/x/edl.json", "edl": edl,
-            "duration": 8.0, "segments": [], "captions_events": []}
+    edl = {
+        "source": "/rec/x.mp4",
+        "segments": [],
+        "output": {"width": 720, "height": 1280},
+        "captions": None,
+        "overlays": [
+            {
+                "html": str(page),
+                "start": 1.0,
+                "end": 3.0,
+                "mode": "keyed",
+                "region": {"x": 40, "y": 860, "w": 640, "h": 200},
+                "style": "flat-vector",
+            }
+        ],
+    }
+    return {
+        "format": 1,
+        "video": "clip-01.mp4",
+        "edl_file": "/jobs/x/edl.json",
+        "edl": edl,
+        "duration": 8.0,
+        "segments": [],
+        "captions_events": [],
+    }
 
 
 @pytest.fixture(scope="module")
@@ -95,11 +116,21 @@ def job(tmp_path_factory):
     page.write_text(PAGE)
     side = paths["dir"] / "clip-01.edl.json"
     side.write_text(json.dumps(sidecar(page)))
-    httpd, token, _urls = rs.serve(paths["dir"], paths["dir"] / "review", host="127.0.0.1", port=19665, span=200)
-    t = threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
+    httpd, token, _urls = rs.serve(
+        paths["dir"], paths["dir"] / "review", host="127.0.0.1", port=19665, span=200
+    )
+    t = threading.Thread(
+        target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True
+    )
     t.start()
-    yield {"port": httpd.server_address[1], "token": token, "dir": paths["dir"], "page": page, "sidecar": side,
-           "mailbox": paths["dir"] / "review" / "comments.jsonl"}
+    yield {
+        "port": httpd.server_address[1],
+        "token": token,
+        "dir": paths["dir"],
+        "page": page,
+        "sidecar": side,
+        "mailbox": paths["dir"] / "review" / "comments.jsonl",
+    }
     httpd.shutdown()
     httpd.server_close()
     rs.unpublish(paths["dir"] / "review")
@@ -143,8 +174,11 @@ def _forge_picked(pg) -> None:
     second sandboxed frame of the same overlay page that this test made, not review-live.js:
     an opaque origin, like the page's own frames, but not one of them.
     """
-    pg.evaluate("""(props) => window.postMessage({type: 'picked', selector: 'body', box: {x: 0, y: 0, w: 10, h: 10},
-        styles: Object.fromEntries(props.map((p) => [p, '1'])), text: 'forged'}, '*')""", list(rs.RESTYLE_PROPS))
+    pg.evaluate(
+        """(props) => window.postMessage({type: 'picked', selector: 'body', box: {x: 0, y: 0, w: 10, h: 10},
+        styles: Object.fromEntries(props.map((p) => [p, '1'])), text: 'forged'}, '*')""",
+        list(rs.RESTYLE_PROPS),
+    )
     pg.evaluate("""() => new Promise((ok) => {
         const f = document.createElement('iframe');
         f.id = 'stranger';
@@ -166,11 +200,16 @@ def test_live_overlay_plays_over_its_region_while_on_screen(page) -> None:
     assert frame.get_attribute("sandbox") == "allow-scripts"
     page.evaluate("document.getElementById('video').currentTime = 0.5")
     page.wait_for_timeout(300)
-    assert "on" not in (frame.get_attribute("class") or "")             # before the overlay starts
+    assert "on" not in (frame.get_attribute("class") or "")  # before the overlay starts
     page.evaluate("document.getElementById('video').currentTime = 1.5")
     _wait(page, "document.querySelector('#live-layer iframe').classList.contains('on')")
     # keyed: the bridge was told to drop the key colour
-    assert _frame(page).locator("body").evaluate("(b) => getComputedStyle(b).backgroundColor") == "rgba(0, 0, 0, 0)"
+    assert (
+        _frame(page)
+        .locator("body")
+        .evaluate("(b) => getComputedStyle(b).backgroundColor")
+        == "rgba(0, 0, 0, 0)"
+    )
 
 
 def test_forged_picked_messages_are_ignored(page) -> None:
@@ -178,7 +217,9 @@ def test_forged_picked_messages_are_ignored(page) -> None:
     assert page.get_attribute("#pick-toggle", "aria-pressed") == "true"
     _forge_picked(page)
     assert page.locator("#restyle-form").is_hidden()
-    assert page.get_attribute("#pick-toggle", "aria-pressed") == "true"   # still waiting for a real pick
+    assert (
+        page.get_attribute("#pick-toggle", "aria-pressed") == "true"
+    )  # still waiting for a real pick
 
 
 def test_pick_edit_and_send_a_restyle(page, job) -> None:
@@ -197,15 +238,29 @@ def test_pick_edit_and_send_a_restyle(page, job) -> None:
     assert page.evaluate("document.getElementById('video').currentTime") == 1.5
     page.fill("#restyle-color", "#FF3B30")
     t = _frame(page).locator(".t")
-    assert t.evaluate("(e) => getComputedStyle(e).color") == "rgb(255, 59, 48)"     # shown at once
+    assert (
+        t.evaluate("(e) => getComputedStyle(e).color") == "rgb(255, 59, 48)"
+    )  # shown at once
     page.fill("#restyle-note", "warmer title")
     page.click("#restyle-send")
     deadline = time.monotonic() + 5
-    while time.monotonic() < deadline and not (job["mailbox"].is_file() and job["mailbox"].read_text().strip()):
+    while time.monotonic() < deadline and not (
+        job["mailbox"].is_file() and job["mailbox"].read_text().strip()
+    ):
         time.sleep(0.05)
     [row] = [json.loads(x) for x in job["mailbox"].read_text().splitlines()]
-    assert (row["kind"], row["video"], row["version"], row["overlay"]) == ("restyle", "clip-01", 1, 0)
-    assert (row["html"], row["selector"], row["t"], row["text"]) == (str(job["page"]), SELECTOR, 1.5, "warmer title")
+    assert (row["kind"], row["video"], row["version"], row["overlay"]) == (
+        "restyle",
+        "clip-01",
+        1,
+        0,
+    )
+    assert (row["html"], row["selector"], row["t"], row["text"]) == (
+        str(job["page"]),
+        SELECTOR,
+        1.5,
+        "warmer title",
+    )
     assert row["changes"]["color"] == ["rgb(31, 42, 68)", "#FF3B30"]
     assert row["changes"]["font-family"][1] == "Times New Roman, serif"
     # after the send the form starts over from the page as rendered, ready for another edit
@@ -217,7 +272,9 @@ def test_pick_edit_and_send_a_restyle(page, job) -> None:
 def test_live_overlays_follow_the_sidecar(page, job) -> None:
     kept = job["sidecar"].read_text()
     job["sidecar"].unlink()
-    page.dispatch_event("#version", "change")          # selecting the render again reloads its sidecar
+    page.dispatch_event(
+        "#version", "change"
+    )  # selecting the render again reloads its sidecar
     _wait(page, "document.querySelectorAll('#live-layer iframe').length === 0")
     assert page.locator("#restyle-form").is_hidden()
     assert "no .edl.json" in page.text_content("#live-panel")
@@ -234,16 +291,27 @@ def test_a_frame_that_is_not_opaque_is_not_listened_to(page) -> None:
     # this server's origin, not "null", and review-live.js ignores its pick.
     def no_csp(route):
         res = route.fetch()
-        headers = {k: v for k, v in res.headers.items() if k.lower() != "content-security-policy"}
+        headers = {
+            k: v
+            for k, v in res.headers.items()
+            if k.lower() != "content-security-policy"
+        }
         route.fulfill(response=res, headers=headers)
+
     page.route("**/media/overlay?*", no_csp)
     try:
         page.evaluate("""() => { const f = document.querySelector('#live-layer iframe');
             f.setAttribute('sandbox', 'allow-scripts allow-same-origin'); f.src = f.src; }""")
-        _wait(page, "(() => { try { return document.querySelector('#live-layer iframe').contentDocument"
-                    ".querySelector('.t') !== null; } catch (e) { return false; } })()")
+        _wait(
+            page,
+            "(() => { try { return document.querySelector('#live-layer iframe').contentDocument"
+            ".querySelector('.t') !== null; } catch (e) { return false; } })()",
+        )
         page.evaluate("document.getElementById('video').currentTime = 1.5")
-        _wait(page, "document.querySelector('#live-layer iframe').classList.contains('on')")
+        _wait(
+            page,
+            "document.querySelector('#live-layer iframe').classList.contains('on')",
+        )
         page.click("#pick-toggle")
         _frame(page).locator(".t").click()
         page.wait_for_timeout(300)

@@ -12,7 +12,6 @@ a classifier downstream cannot read a field that stopped at the learnings file.
 """
 
 import pytest
-
 from lib import taxonomy
 from lib.extraction import _format_learning_entry, _parse_learning
 from lib.learnings_ledger import (
@@ -26,15 +25,19 @@ from lib.learnings_ledger import (
 from lib.learnings_ledger import migrate as taxonomy_migrate
 from lib.routing_validation import parse_proposal_entries
 
-
 # ---------------------------------------------------------------------------
 # The vocabulary itself
 # ---------------------------------------------------------------------------
 
+
 class TestValueSets:
     def test_the_five_provenances(self):
         assert set(taxonomy.PROVENANCES) == {
-            "RESEARCH", "EMPIRICAL", "CORRECTION", "DECLARATION", "INFERENCE",
+            "RESEARCH",
+            "EMPIRICAL",
+            "CORRECTION",
+            "DECLARATION",
+            "INFERENCE",
         }
 
     def test_the_four_kinds(self):
@@ -67,15 +70,19 @@ class TestValueSets:
 # Case 2 — legacy records map without inventing labels
 # ---------------------------------------------------------------------------
 
+
 class TestNormalizeLegacy:
-    @pytest.mark.parametrize("ltype,expected", [
-        ("CORRECTION", ("CORRECTION", "FACT")),
-        ("PREFERENCE", ("DECLARATION", "FACT")),
-        ("RULE-PROPOSAL", (None, "RULE")),
-        ("INTENTION", ("DECLARATION", "INTENTION")),
-        ("OBSERVATION", ("INFERENCE", "FACT")),
-        ("PATTERN", ("INFERENCE", "FACT")),
-    ])
+    @pytest.mark.parametrize(
+        "ltype,expected",
+        [
+            ("CORRECTION", ("CORRECTION", "FACT")),
+            ("PREFERENCE", ("DECLARATION", "FACT")),
+            ("RULE-PROPOSAL", (None, "RULE")),
+            ("INTENTION", ("DECLARATION", "INTENTION")),
+            ("OBSERVATION", ("INFERENCE", "FACT")),
+            ("PATTERN", ("INFERENCE", "FACT")),
+        ],
+    )
     def test_the_six_old_values(self, ltype, expected):
         assert taxonomy.normalize_legacy({"type": ltype}) == expected
 
@@ -100,7 +107,10 @@ class TestNormalizeLegacy:
         Guessing that a confidently-worded OBSERVATION was "really empirical"
         is the exact fabrication the taxonomy exists to prevent.
         """
-        confident = {"type": "OBSERVATION", "description": "Verified by running the suite."}
+        confident = {
+            "type": "OBSERVATION",
+            "description": "Verified by running the suite.",
+        }
         hedged = {"type": "OBSERVATION", "description": "Probably true, unchecked."}
         assert taxonomy.normalize_legacy(confident) == taxonomy.normalize_legacy(hedged)
 
@@ -108,6 +118,7 @@ class TestNormalizeLegacy:
 # ---------------------------------------------------------------------------
 # Case 1, 3, 4 — parsing a learning record
 # ---------------------------------------------------------------------------
+
 
 class TestParseLearning:
     def test_a_record_with_both_axes_parses(self):
@@ -189,6 +200,7 @@ class TestParseLearning:
 
     def test_the_log_says_recovered_only_when_the_kind_was_used(self, caplog):
         import logging
+
         with caplog.at_level(logging.INFO, logger="lib.extraction"):
             _parse_learning("provenance: DECISION\ndescription: Use Postgres.\n")
         assert "recovered as kind" in caplog.text
@@ -256,15 +268,18 @@ class TestPairResolution:
 # Case 1 and 7 — rendering
 # ---------------------------------------------------------------------------
 
+
 class TestRendering:
     def test_a_taxonomy_record_renders_the_pair(self):
-        line = _format_learning_entry({
-            "provenance": "CORRECTION",
-            "kind": "RULE",
-            "description": "Stage with a pathspec.",
-            "target": "dev.md",
-            "action": "Add to the git section.",
-        })
+        line = _format_learning_entry(
+            {
+                "provenance": "CORRECTION",
+                "kind": "RULE",
+                "description": "Stage with a pathspec.",
+                "target": "dev.md",
+                "action": "Add to the git section.",
+            }
+        )
         assert line == (
             "- **[CORRECTION/RULE]** Stage with a pathspec. "
             "→ Target: dev.md — Add to the git section."
@@ -273,18 +288,26 @@ class TestRendering:
     def test_trust_is_dropped_from_the_new_line(self):
         """Two confidence-ish markers on one line is what made the old format
         ambiguous. `trust` stays in the record, off the line."""
-        line = _format_learning_entry({
-            "trust": "verified", "provenance": "EMPIRICAL", "kind": "FACT",
-            "description": "It works now.",
-        })
+        line = _format_learning_entry(
+            {
+                "trust": "verified",
+                "provenance": "EMPIRICAL",
+                "kind": "FACT",
+                "description": "It works now.",
+            }
+        )
         assert "trust" not in line
         assert line.startswith("- **[EMPIRICAL/FACT]**")
 
     def test_a_legacy_record_renders_in_the_legacy_form(self):
-        line = _format_learning_entry({
-            "trust": "high", "type": "OBSERVATION",
-            "description": "The router caps at 40 KB.", "target": "dev.md",
-        })
+        line = _format_learning_entry(
+            {
+                "trust": "high",
+                "type": "OBSERVATION",
+                "description": "The router caps at 40 KB.",
+                "target": "dev.md",
+            }
+        )
         assert line.startswith("- **[trust: high]** OBSERVATION ")
 
     def test_a_legacy_line_claims_no_provenance_it_does_not_have(self):
@@ -293,9 +316,13 @@ class TestRendering:
         Printing its output into the file would turn a conservative guess into
         a written-down claim that survives every later review.
         """
-        line = _format_learning_entry({
-            "trust": "high", "type": "PATTERN", "description": "A pattern.",
-        })
+        line = _format_learning_entry(
+            {
+                "trust": "high",
+                "type": "PATTERN",
+                "description": "A pattern.",
+            }
+        )
         assert "INFERENCE" not in line
         assert "/FACT" not in line
 
@@ -350,7 +377,9 @@ class TestLedgerCompatibility:
             "version": 1,
             "processed": {
                 legacy_block_key(b.text): {
-                    "file": b.file, "proposal": "old.md", "at": "2026-08-06T10:00:00Z",
+                    "file": b.file,
+                    "proposal": "old.md",
+                    "at": "2026-08-06T10:00:00Z",
                 }
                 for b in blocks
             },
@@ -433,10 +462,15 @@ class TestLedgerCompatibility:
         [block] = parse_blocks("2026-08-06.md", LEGACY_LEARNINGS)
         path = tmp_path / "ledger.json"
         import json
-        path.write_text(json.dumps({
-            "version": 1,
-            "processed": {legacy_block_key(block.text): {"file": block.file}},
-        }))
+
+        path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "processed": {legacy_block_key(block.text): {"file": block.file}},
+                }
+            )
+        )
         assert record(path, [block], "new.md") == 0
 
     def test_the_version_marks_the_new_key_scheme(self):
@@ -580,7 +614,9 @@ class TestProjectionCollisions:
         "word",
         ["OBSERVATION", "PREFERENCE", "CORRECTION", "PATTERN", "INTENTION"],
     )
-    def test_a_description_opening_with_a_legacy_type_word_keeps_its_own_key(self, word):
+    def test_a_description_opening_with_a_legacy_type_word_keeps_its_own_key(
+        self, word
+    ):
         with_word = (
             "---\n## Session Learnings — 2026-08-06T10:00:00Z\n"
             f"- **[EMPIRICAL/FACT]** {word} about the router. → Target: dev.md\n"
@@ -628,14 +664,24 @@ class TestRenderInvarianceIsDrivenByTheRenderer:
         self, legacy_type, provenance, kind
     ):
         desc = "the router caches picks per session"
-        legacy = _format_learning_entry({
-            "trust": "verified", "type": legacy_type, "description": desc,
-            "target": "dev.md", "action": "note it",
-        })
-        new = _format_learning_entry({
-            "provenance": provenance, "kind": kind, "description": desc,
-            "target": "dev.md", "action": "note it",
-        })
+        legacy = _format_learning_entry(
+            {
+                "trust": "verified",
+                "type": legacy_type,
+                "description": desc,
+                "target": "dev.md",
+                "action": "note it",
+            }
+        )
+        new = _format_learning_entry(
+            {
+                "provenance": provenance,
+                "kind": kind,
+                "description": desc,
+                "target": "dev.md",
+                "action": "note it",
+            }
+        )
         wrap = "---\n## Session Learnings — 2026-08-06T10:00:00Z\n{}\n"
         assert block_key(wrap.format(legacy)) == block_key(wrap.format(new))
 
@@ -742,15 +788,18 @@ class TestPairReachesTheProposal:
         """
         entries = parse_proposal_entries(PROPOSAL)
         assert [(e["provenance"], e["kind"]) for e in entries] == [
-            ("CORRECTION", "RULE"), ("INFERENCE", "FACT"),
+            ("CORRECTION", "RULE"),
+            ("INFERENCE", "FACT"),
         ]
 
     def test_the_taxonomy_survives_the_whole_hop(self):
         """A CORRECTION/RULE learning still reads CORRECTION/RULE at the far end."""
         learning = {
-            "provenance": "CORRECTION", "kind": "RULE",
+            "provenance": "CORRECTION",
+            "kind": "RULE",
             "description": "Always stage with an explicit pathspec.",
-            "target": "dev.md", "action": "Add to the Git section.",
+            "target": "dev.md",
+            "action": "Add to the Git section.",
         }
         line = _format_learning_entry(learning)
         rendered_pair = line.split("**[")[1].split("]**")[0]
