@@ -520,8 +520,10 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
         # Cancelled only if nothing survives to resume from; otherwise the card
         # stays in its last column and a re-run picks it up there. Once the
         # build succeeded `.build-state.json` may have become
-        # `.build-state.complete.json` — never Cancelled then.
-        if not build_succeeded:
+        # `.build-state.complete.json` — never Cancelled then. A worktree build
+        # that failed before bootstrap gave it a worktree is still pointed at
+        # the caller's source repo, whose change dir is pm-spec's: no card there.
+        if not build_succeeded and not (config.git.worktree and not state.worktree_path):
             board.record_failure(config, state, f"pipeline error: {e}", progress=progress)
         return 1
     finally:
