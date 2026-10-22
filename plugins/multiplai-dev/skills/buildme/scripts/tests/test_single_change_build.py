@@ -52,3 +52,38 @@ def test_T4_a_single_change_builds_on_its_feature_branch_and_opens_one_pr(tmp_pa
     assert argv[argv.index("--head") + 1] == feature
     assert argv[argv.index("--base") + 1] == "main"
     assert argv[argv.index("--title") + 1] == f"[main] {TICKET} {TITLE}"
+
+
+def test_a_refused_rerun_leaves_the_feature_branch_as_it_was(tmp_path):
+    """A rerun of a published change without `--force` asks first (exit 3)
+    and changes nothing: origin's default branch, moved since, is not merged
+    into the feature branch, the head of the open PR."""
+    box = Sandbox(tmp_path / "box", proposal=f"# {TITLE}\n\n## Why\nSlow.\n")
+    first = box.run()
+    assert first.returncode == 0, first.stdout[-1500:] + first.stderr[-1500:]
+    origin = tmp_path / "box" / "origin.git"
+    feature = f"{TICKET}-feat"
+    before = _git(origin, "rev-parse", feature)
+    _git(box.repo, "commit", "-q", "--allow-empty", "-m", "main moves")
+    _git(box.repo, "push", "-q", "origin", "main")
+
+    again = box.run()
+
+    assert again.returncode == 3, again.stdout[-1500:] + again.stderr[-1500:]
+    assert "BUILD:COMPLETE:" in again.stdout
+    assert _git(origin, "rev-parse", feature) == before
+
+
+def test_a_forced_rerun_of_an_archived_change_finds_its_ticket(tmp_path):
+    """`--force` after an `--auto` build archived the change: the feature
+    branch no longer holds `specs/changes/<name>` and the checkout never did,
+    so the ticket comes from where the published build started."""
+    box = Sandbox(tmp_path / "box", proposal=f"# {TITLE}\n\n## Why\nSlow.\n")
+    first = box.run()
+    assert first.returncode == 0, first.stdout[-1500:] + first.stderr[-1500:]
+
+    again = box.run(force=True)
+
+    assert again.returncode == 0, again.stdout[-1500:] + again.stderr[-1500:]
+    assert "records no ticket ref" not in again.stdout
+    assert f"{TICKET}-feat-2" in _git(box.repo, "branch", "--list", f"{TICKET}-feat-2")

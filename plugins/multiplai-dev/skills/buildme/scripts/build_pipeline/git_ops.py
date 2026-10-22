@@ -472,7 +472,9 @@ def resolve_new_branch(
     work — refuse rather than guess. A colliding branch with nothing on it
     gets a ``-2``/``-3``/... suffix (branch and worktree stay in lockstep).
     A branch in *taken* (a published build's, when the user asked for a new
-    build of that change) is skipped the same way, whatever it carries.
+    build of that change) is skipped the same way, whatever it carries, and
+    so is one origin has (``refs/remotes/origin/<branch>``): a branch cut
+    here under that name could not be pushed there.
     """
     base_branch = name or branch_name_for(change_name)
     for suffix in range(1, 51):
@@ -495,6 +497,11 @@ def resolve_new_branch(
                     f"or run with a different --change name. Refusing to reuse or "
                     f"overwrite it."
                 )
+            continue
+        if _run(
+            ["git", "show-ref", "--verify", "--quiet", f"refs/remotes/origin/{branch}"],
+            cwd=repo,
+        ).ok:
             continue
         if dest.exists():
             continue

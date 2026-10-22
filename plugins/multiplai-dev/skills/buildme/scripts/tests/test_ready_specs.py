@@ -17,6 +17,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
+import yaml
 from build_pipeline import readiness
 from build_pipeline.config import BuildConfig, GitToggles
 from build_pipeline.llm_steps.spec_steps import AuditFindings
@@ -965,7 +966,15 @@ class TestBranchNames:
         self, repo, tmp_path, capsys
     ):
         _handoff(repo)
-        self._push_as(repo, f"ENG-2-{CHANGE}")
+        # A second handoff of the change, under another ticket.
+        at = tmp_path / "second"
+        _git(repo, "worktree", "add", "-q", "--detach", str(at), "HEAD")
+        meta = at / "specs" / "changes" / CHANGE / ".change.yaml"
+        data = yaml.safe_load(meta.read_text())
+        data["ticket_refs"] = {"epic": "ENG-2", "children": []}
+        meta.write_text(yaml.safe_dump(data))
+        _git(at, "commit", "-qam", "specs: under ENG-2")
+        self._push_as(at, f"ENG-2-{CHANGE}")
         models = Models()
 
         rc = await _build(repo, models)
@@ -977,6 +986,32 @@ class TestBranchNames:
             in out
         )
         assert "--branch" in out
+        assert not (tmp_path / "ws").exists(), "no worktree"
+        models.generate.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_an_origin_branch_not_holding_the_change_is_not_its_feature_branch(
+        self, repo, tmp_path, capsys
+    ):
+        """An origin branch whose name merely ends in `-<change>` (another
+        change's, here `ENG-40-auth-feat`, cut before these specs existed) is
+        not the change's feature branch: the build neither builds from it nor
+        merges into it, and refuses the specs ready only in the checkout."""
+        other = f"ENG-40-auth-{CHANGE}"
+        self._push_as(repo, other)
+        before = _git(repo, "rev-parse", f"origin/{other}")
+        _git(repo, "commit", "-q", "--allow-empty", "-m", "main moves")
+        _git(repo, "push", "-q", "origin", "main")
+        ready_specs(_source_change(repo), repo)
+        models = Models()
+
+        rc = await _build(repo, models)
+
+        out = capsys.readouterr().out
+        assert rc == 2
+        assert "on no feature branch" in out
+        _git(repo, "fetch", "-q", "origin")
+        assert _git(repo, "rev-parse", f"origin/{other}") == before
         assert not (tmp_path / "ws").exists(), "no worktree"
         models.generate.assert_not_awaited()
 

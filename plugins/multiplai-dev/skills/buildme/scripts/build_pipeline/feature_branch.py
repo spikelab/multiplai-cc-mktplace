@@ -10,7 +10,8 @@ pull requests target it:
 
 - `resolve` names the branch: `build --branch`, else the `branch` the
   change's `.change.yaml` in the checkout records, else the one origin branch
-  (after `git fetch origin`) named `<something>-<change>`. Several such
+  (after `git fetch origin`) named `<something>-<change>` that holds the
+  change's specs as their feature branch (`candidates`). Several such
   branches are listed for the caller to refuse; none applies to specs handed
   off before pm-spec pushed, or none at all.
 - `tickets_at` reads the change's ticket id on the branch: its own ref, else
@@ -128,9 +129,12 @@ def ticket_refusal(repo: Path, ticket: str, change: str) -> str | None:
     return f"the ticket id {ticket!r} cannot start the branch name {full!r}: {why}"
 
 
-def candidates(repo: Path, change: str) -> list[str]:
+def candidates(repo: Path, change: str, changes_rel: str | None = None) -> list[str]:
     """Origin's branches named `<something>-<change>`, origin's default and
-    `HEAD` left out, sorted."""
+    `HEAD` left out, sorted. With *changes_rel* (the specs' `changes` dir,
+    relative to the repo), only those that are the change's feature branch
+    (`_feature_branch_of`): another change's branch whose name ends the same
+    way (`ENG-40-auth-<change>`), or an epic child's build branch, is not."""
     from .change_manager import normalize_change_name
 
     suffix = "-" + normalize_change_name(change)
@@ -145,8 +149,61 @@ def candidates(repo: Path, change: str) -> list[str]:
     return sorted(
         n
         for n in names
-        if n.endswith(suffix) and len(n) > len(suffix) and n not in ("HEAD", default)
+        if n.endswith(suffix)
+        and len(n) > len(suffix)
+        and n not in ("HEAD", default)
+        and (changes_rel is None or _feature_branch_of(repo, n, changes_rel, change))
     )
+
+
+def _feature_branch_of(repo: Path, branch: str, changes_rel: str, change: str) -> bool:
+    """Whether `origin/<branch>` is *change*'s feature branch. It holds the
+    change dir, or, once an `--auto` build archived it, its newest
+    `archive/YYYY-MM-DD-<change>` beside the changes dir. That copy's
+    `.change.yaml` records *branch* as its `branch`; or records none, and
+    *branch* is `<TICKET>-<change>` for one of the change's tickets, or the
+    change has no ticket (the build then refuses it for that). An epic
+    child's build branch holds the child's change dir, but that records the
+    epic's branch; another change's branch does not hold it at all."""
+    import re
+
+    from .change_manager import normalize_change_name
+
+    ref = f"refs/remotes/origin/{branch}"
+    here = normalize_change_name(change)
+    meta = _meta_at(repo, ref, f"{changes_rel}/{here}" if changes_rel else here)
+    tickets: list[str] = []
+    if meta:
+        tickets = tickets_at(repo, ref, changes_rel, change)
+    else:
+        archive = (Path(changes_rel).parent / "archive").as_posix()
+        archive = "" if archive == "." else archive
+        res = git_ops._run(
+            ["git", "ls-tree", "--name-only", f"{ref}:{archive}"]
+            if archive
+            else ["git", "ls-tree", "--name-only", ref],
+            cwd=repo,
+        )
+        pattern = re.compile(rf"^\d{{4}}-\d{{2}}-\d{{2}}-{re.escape(here)}$")
+        dated = sorted(n for n in res.stdout.split() if res.ok and pattern.match(n))
+        if not dated:
+            return False
+        meta = _meta_at(repo, ref, f"{archive}/{dated[-1]}" if archive else dated[-1])
+        if not meta:
+            return False
+        if own := own_ticket(meta):
+            tickets.append(own)
+        parent = meta.get("parent")
+        if isinstance(parent, str) and parent:
+            tickets += [
+                t
+                for t in tickets_at(repo, ref, changes_rel, parent)
+                if t not in tickets
+            ]
+    mark = meta.get("branch")
+    if isinstance(mark, str) and mark:
+        return mark == branch
+    return not tickets or any(branch == name(t, change) for t in tickets)
 
 
 @dataclass
@@ -164,7 +221,7 @@ def resolve(repo: Path, change: str, flag: str, change_dir: Path) -> Resolved:
     mark = recorded(change_dir)
     if mark:
         return Resolved(mark)
-    found = candidates(repo, change)
+    found = candidates(repo, change, rel_to(repo, Path(change_dir).parent))
     if len(found) == 1:
         return Resolved(found[0])
     return Resolved(None, found)

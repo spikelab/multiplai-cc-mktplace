@@ -156,6 +156,20 @@ class TestResolveNewBranch:
         assert branch == "buildme/my-change-2"
         assert dest.name == "buildme-my-change-2"
 
+    def test_a_name_origin_has_gets_a_suffix(self, tmp_path, monkeypatch):
+        """A branch origin already has (a single change's feature branch, for a
+        build given `--base-ref`) is not cut again locally: its push would be
+        refused after the whole build ran."""
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        repo = make_repo(tmp_path / "proj")
+        make_bare_origin(repo, tmp_path / "origin.git")
+        _git(repo, "push", "-q", "origin", "HEAD:refs/heads/ENG-1-my-change")
+        _git(repo, "fetch", "-q", "origin")
+        branch, _ = git_ops.resolve_new_branch(
+            repo, "my-change", "main", name="ENG-1-my-change"
+        )
+        assert branch == "ENG-1-my-change-2"
+
     def test_refuses_branch_with_unmerged_commits(self, tmp_path, monkeypatch):
         monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
         repo = make_repo(tmp_path / "proj")

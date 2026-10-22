@@ -21,14 +21,18 @@ time, not derived from a tag.
 - buildme builds from the change's feature branch, where pm-spec 0.8.0
   pushes the specs: new flag `build --branch <name>`, else the branch the
   change dir's `.change.yaml` records, else the one branch on origin named
-  `<TICKET>-<change>`. Origin having several is refused with `SPEC:NOT_READY`,
+  `<TICKET>-<change>` that holds the change's specs (or, after an `--auto`
+  build, their archive) as their feature branch: another change's branch
+  whose name merely ends the same way is not taken. Origin having several
+  is refused with `SPEC:NOT_READY`,
   asking for `--branch`; a `--branch` that does not start with the change's
   `<TICKET>-` is refused the same way. The specs are read as that branch
   holds them, so the checkout you run it in need not have them.
 - Every branch buildme makes is now named `<TICKET>-<change>`, replacing
   `buildme/<change>`. The ticket is the change's own ticket ref, else its
   nearest parent's (`ENG-40-auth-rework-a` for a child of `ENG-40`). A ticket
-  id git refuses in a branch name is refused with the reason.
+  id git refuses in a branch name is refused with the reason. A name origin
+  already has is skipped for the next free one (`-2`, …).
 - A single change (not an epic) builds on its feature branch itself, with no
   second branch: it pushes that branch, never forced, and opens one pull
   request from it to origin's default branch, left for you to merge. The
@@ -45,8 +49,9 @@ time, not derived from a tag.
 - Specs whose `.change.yaml` records no ticket ref, of their own or a
   parent's, refuse with `SPEC:NOT_READY` and
   `Run /multiplai-pm:pm-spec resume <name> --ticket-ref <ticket id> first`.
-- At the start of every run, buildme merges origin's default branch into the
-  feature branch with a merge commit, never a rebase or a force; in an epic
+- At the start of every run, once its refusals passed (a refused run
+  changes nothing, origin included), buildme merges origin's default branch
+  into the feature branch with a merge commit, never a rebase or a force; in an epic
   it does so again before each later wave of children. A first run merges in
   a worktree of its own and pushes; a resume merges in the build's worktree
   and its own push takes the merge (skipped, with a warning, while that

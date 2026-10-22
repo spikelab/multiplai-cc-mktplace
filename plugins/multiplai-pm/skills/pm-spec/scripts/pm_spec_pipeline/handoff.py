@@ -102,6 +102,39 @@ def print_ready(run: Run, revision: str) -> None:
         )
 
 
+def commit_ticket(run: Run) -> None:
+    """A resume of specs ready, committed and pushed: commit the change's
+    `.change.yaml` when `--ticket-ref` just recorded the change's own ticket
+    there (`branch.record_ticket`), and push it, so the ticket reaches the
+    feature branch; then `SPEC:READY` as always. With nothing to commit, only
+    `SPEC:READY`."""
+    from multiplai_core.specs import CHANGE_META_FILE
+
+    handoff = run.state.handoff
+    try:
+        sha = commit_change_dir(
+            run.config.project_dir,
+            run.config.change_dir / CHANGE_META_FILE,
+            f"specs({run.config.change_name}): ticket ref recorded",
+        )
+    except GitError as e:
+        run.progress("HANDOFF_ERROR", f"The commit of the ticket ref failed: {e}")
+        print(
+            f"ERROR: handoff: the ticket ref is written but its commit failed: {e}\n"
+            f"Fix that, then run `resume {run.config.change_name}` again.",
+            flush=True,
+        )
+        raise Stop(EXIT_FAILED, str(e)) from e
+    if sha is None:
+        print_ready(run, handoff.revision)
+        return
+    handoff.commit = sha
+    handoff.pushed = False
+    run.save()
+    run.progress("HANDOFF", f"Ticket ref recorded; committed {sha}")
+    _push(run)
+
+
 def _push(run: Run) -> None:
     """Push the feature branch (row S6), then print `SPEC:READY` and the branch.
     A failed push keeps the ready record and the commit, and stops with exit 1."""

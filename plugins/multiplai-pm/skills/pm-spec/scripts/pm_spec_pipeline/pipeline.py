@@ -154,7 +154,7 @@ def _ready_again(run: Run) -> bool:
         return False
     ready, reason = is_ready(run.config.change_dir)
     if ready:
-        handoff.print_ready(run, h.revision)
+        handoff.commit_ticket(run)
         return True
     log.info(
         "The change was ready and its files changed since (%s); checking again", reason

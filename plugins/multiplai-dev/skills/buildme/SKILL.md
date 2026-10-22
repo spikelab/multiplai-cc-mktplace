@@ -100,7 +100,7 @@ fixture runs establish harness behavior, not model quality.
 | `--accept-size` | Build a plan the size gate says should be split, as one PR. The build remembers it, so a later retry or resume does not stop on size again. |
 | `--force` | Start a new build even if this change already published. The new build gets the next free branch (`<feature branch>-2`, …, cut where the published build started) and leaves the published one alone. Pass it only after the user said yes to the `BUILD:COMPLETE` question (below). A stopped build with a `.build-state.json` resumes with or without it. |
 | `--epic-child` | Build as an epic's child: no spec-extract, and the PR targets `--branch` (the epic's feature branch), else the default branch. The epic's build passes it to every child, so the child's saved command keeps it when run again by hand. `BUILDME_EPIC_CHILD=1` in the environment does the same: a child's command saved before 0.84.2 lacks the flag, so pass one of them when running it by hand. |
-| `--base-ref <sha>` | Branch a new worktree from this commit instead of the source checkout's HEAD; the change's feature branch is then not looked up. An epic's children get `origin/<feature branch>` (see [Epic builds](#epic-builds-a-parent-and-its-children)), and a build that finds its change's feature branch sets it to that itself; a build that re-binds to its worktree ignores it. With `--base-ref`, the change dir as that commit holds it must be ready, or the build refuses before the worktree is cut. With `--branch` the PR targets that branch; otherwise, when the commit is not on the default branch, the PR targets the branch that holds it (`--base`), except under `--epic-child` (or `BUILDME_EPIC_CHILD=1`), where it targets the default branch. Exits `1` when the `specs/config.yaml` committed at HEAD is not the version at that commit (push yours, or pull origin's, first). |
+| `--base-ref <sha>` | Branch a new worktree from this commit instead of the source checkout's HEAD; the change's feature branch is then not looked up. An epic's children get `origin/<feature branch>` (see [Epic builds](#epic-builds-a-parent-and-its-children)), and a build that finds its change's feature branch sets it to that itself; a build that re-binds to its worktree ignores it. With `--base-ref`, the change dir as that commit holds it must be ready, or the build refuses before the worktree is cut. With `--branch` and `--epic-child`, the PR targets that branch (a single change given `--branch` builds on that branch itself, ignoring `--base-ref`, and its PR goes to the default branch); otherwise, when the commit is not on the default branch, the PR targets the branch that holds it (`--base`), except under `--epic-child` (or `BUILDME_EPIC_CHILD=1`), where it targets the default branch. Exits `1` when the `specs/config.yaml` committed at HEAD is not the version at that commit (push yours, or pull origin's, first). |
 | `--branch <name>` | The change's feature branch: where pm-spec pushed its specs, and what a single change builds on (an epic's child: what it starts from and what its PR targets). It must start with the change's `<TICKET>-`. Without it the build uses the branch the change dir's `.change.yaml` records, else the one branch on origin named `<TICKET>-<change>` (see [The feature branch](#the-feature-branch)). A branch it names that origin does not have, a name without the ticket prefix, and several matching branches on origin each refuse with `SPEC:NOT_READY`. |
 | `--trust-repo` | Required for every run that reaches a tool-using agent — which now includes the reviews. The per-block code review, the design audit, the tasks audit and the plan review all run as subagents that `Read`/`Grep`/`Glob` the repo, so a `spec-generate` or review-only run needs this flag too, not just a full `build`. `BUILDME_TRUST_REPO=1` is the environment equivalent. Without it the step stops and says so. An approved epic vouches for its own repo: it passes `--trust-repo` to each child build, review and fixer, and its merge step's one agent call (under `epic.merge: auto`) runs trusted for that call only. |
 
@@ -300,7 +300,10 @@ pm-spec puts each change's specs on a branch of their own, `<TICKET>-<change>`
 - **Finding it.** `build --branch <name>`; else the `branch` the change dir
   in the checkout records; else the one branch on origin whose name is
   `<TICKET>-<change>` (after `git fetch origin`; a failed fetch is a warning
-  and origin's refs are read as they are). Several such branches refuse with
+  and origin's refs are read as they are) and that holds the change's specs,
+  or their archive after an `--auto` build, recording that branch or a
+  ticket that names it. Another change's branch whose name merely ends in
+  `-<change>`, and an epic child's build branch, are not taken. Several such branches refuse with
   `SPEC:NOT_READY`, asking for `--branch`, and so does a `--branch` that does
   not start with the change's `<TICKET>-`. A branch named by `--branch` or a
   `.change.yaml` that origin does not have refuses with `SPEC:NOT_READY`. A
@@ -313,7 +316,8 @@ pm-spec puts each change's specs on a branch of their own, `<TICKET>-<change>`
   <ticket id>` when the change records no ticket). That resume copies the
   change dir onto `<TICKET>-<name>`, commits it there and pushes it, leaving
   your copy in place; then run the build again.
-- **Keeping it current.** At the start of every run, and in an epic before
+- **Keeping it current.** At the start of every run (once the run's
+  refusals passed, so a refused run changes nothing), and in an epic before
   each later wave, buildme merges origin's default branch into the feature
   branch with a merge commit (`Merge origin/<default> into <branch>`), never
   a rebase or a force. A first run makes it in its own detached worktree,

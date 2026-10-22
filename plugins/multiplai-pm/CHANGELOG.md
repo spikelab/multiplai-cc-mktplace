@@ -36,7 +36,9 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
   not have it, writes in its own worktree under `$WORKSPACE/.worktrees/`
   (`pm-spec-<branch>`, detached, so a build can check the branch out),
   commits there and runs `git push origin HEAD:refs/heads/<branch>`, never
-  forced. Your checkout and its branch are left as they were. pm-spec opens
+  forced. Your checkout and its branch are left as they were, unless your
+  checkout has that branch checked out: pm-spec then writes, commits and
+  pushes there. pm-spec opens
   no pull request and talks to no ticket system. After `SPEC:READY` it
   prints `SPEC:BRANCH:<branch>`. An epic's children go on the parent's
   branch.
@@ -53,7 +55,9 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
 
 ### Added
 - `--ticket-ref <ticket id>` on `new`, `resume` and `revise` records the
-  change's ticket ref.
+  change's ticket ref. On `resume` of specs already ready and pushed (an
+  epic's child handed off under its parent's ticket), the `.change.yaml`
+  recording it is committed and pushed to the feature branch.
 - No ticket, no handoff: a change with no ticket ref, of its own or a
   parent's, is refused before the commit and the push (and, for `new`,
   before any model call), with advice naming `--ticket-ref`. Nothing is

@@ -375,3 +375,35 @@ def test_revise_in_a_checkout_that_is_not_a_build_works_in_pm_specs_worktree(
     assert (tmp_path / "elsewhere" / ".worktrees" / "pm-spec-ENG-1-throttle").is_dir()
     assert tree(mine) == before and git(mine, "rev-parse", "HEAD") == head
     assert git(mine, "symbolic-ref", "--short", "HEAD") == "my-notes"
+
+
+def test_resume_with_a_ticket_ref_commits_and_pushes_it(repo, model, capsys):
+    """A change handed off under its parent's ticket gets its own on
+    `resume --ticket-ref`: the `.change.yaml` recording it is committed and
+    pushed, not left in pm-spec's worktree."""
+    assert run(repo, "new", "throttle", "--auto", "--ticket-ref", "ENG-42") == 0
+    wt = worktree(repo, "ENG-42-throttle")
+    cdir = change_dir(repo)
+    # As pm-spec's split hands a child off: no ticket of its own, the parent's.
+    data = meta(cdir)
+    data.pop("ticket_refs")
+    data["parent"] = "auth"
+    write(cdir / ".change.yaml", yaml.safe_dump(data))
+    write(
+        cdir.parent / "auth" / ".change.yaml",
+        yaml.safe_dump({"ticket_refs": {"epic": "ENG-42", "children": ["throttle"]}}),
+    )
+    git(wt, "add", "-A")
+    git(wt, "commit", "-qm", "specs: a child of auth")
+    git(wt, "push", "-q", "origin", "HEAD:refs/heads/ENG-42-throttle")
+    capsys.readouterr()
+
+    assert run(repo, "resume", "throttle", "--ticket-ref", "ENG-45") == 0
+
+    out = capsys.readouterr().out
+    assert "SPEC:BRANCH:ENG-42-throttle" in out
+    assert git(wt, "status", "--porcelain") == ""
+    pushed = yaml.safe_load(
+        on_origin(repo, "ENG-42-throttle", "specs/changes/throttle/.change.yaml")
+    )
+    assert pushed["ticket_refs"]["epic"] == "ENG-45"

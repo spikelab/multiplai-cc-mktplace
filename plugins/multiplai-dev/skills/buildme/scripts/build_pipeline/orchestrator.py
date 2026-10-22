@@ -58,9 +58,14 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
     # config.state_file_path() lookup against the source repo would miss it
     # and bootstrap would create a second worktree.
     _rebind_to_existing_worktree(config)
-    rc = _merge_into_feature_branch(config)
-    if rc is not None:
-        return rc
+    # Origin's default branch is merged into the feature branch after the
+    # refusals below, which change nothing; until then the specs are read as
+    # the branch holds them.
+    merging = _merges_into_feature_branch(config)
+    if merging:
+        from . import feature_branch
+
+        config.base_ref = feature_branch.ref(config.feature_branch)
 
     # The checkpoint normally lives at specs/changes/<name>/.build-state.json,
     # but after an --auto archive with publish still pending it has traveled
@@ -97,12 +102,18 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
                 and first.base_sha
             ):
                 config.base_ref = first.base_sha
+                if not config.tickets:
+                    _find_tickets_at(config, first.base_sha)
 
     # buildme builds only from specs pm-spec marked ready (rows S10, S11, S13):
     # checked before anything is written, so a refusal changes nothing.
     rc = _refuse_unless_ready(config, state_path)
     if rc is not None:
         return rc
+    if merging:
+        rc = _merge_into_feature_branch(config)
+        if rc is not None:
+            return rc
 
     progress = ProgressWriter(config.progress_file_path())
 
@@ -765,23 +776,53 @@ def _find_tickets(config: BuildConfig, repo: Path | None) -> None:
     config.tickets = tuple(found)
 
 
+def _find_tickets_at(config: BuildConfig, commit: str) -> None:
+    """`config.tickets` as *commit* holds the change dirs: for a `--force`
+    rerun of a published change whose `--auto` build archived it, so that
+    neither the feature branch nor the checkout holds `specs/changes/<name>`
+    any more, while the commit the published build started from does."""
+    from . import feature_branch
+
+    repo = git_ops.repo_root(config.project_dir)
+    rel = feature_branch.rel_to(repo, Path(config.change_dir).parent) if repo else None
+    if rel is None:
+        return
+    found = feature_branch.tickets_at(repo, commit, rel, config.change_name)
+    if found:
+        config.tickets = tuple(found)
+
+
+def _merges_into_feature_branch(config: BuildConfig) -> bool:
+    """Whether this run merges origin's default branch into the change's
+    feature branch (`_merge_into_feature_branch`): a worktree build of a
+    change on one, not an epic's child (the coordinator merges before each
+    wave) and not with `--base-ref`. Decided before the published-rerun and
+    specs checks, which may set `config.base_ref` themselves."""
+    return bool(
+        config.feature_branch
+        and config.git.worktree
+        and not _epic_child(config)
+        and not config.base_ref
+        and git_ops.repo_root(config.project_dir) is not None
+    )
+
+
 def _merge_into_feature_branch(config: BuildConfig) -> int | None:
-    """Before a worktree build of a change on a feature branch: merge origin's
-    default branch into it. A first run merges in buildme's own worktree for
-    that and pushes (`feature_branch.merge_default`), then builds from
-    `origin/<branch>` (`config.base_ref`). A run that re-bound to the build's
-    worktree (`_rebind_to_existing_worktree`, called first) merges there and
+    """Merge origin's default branch into the change's feature branch, once
+    the run passed its refusals (`_merges_into_feature_branch` says when). A
+    first run merges in buildme's own worktree for that and pushes
+    (`feature_branch.merge_default`), then builds from `origin/<branch>`
+    (`config.base_ref`, set by the caller; a `--force` rerun keeps the
+    commit the published build started from). A run that re-bound to the
+    build's worktree (`_rebind_to_existing_worktree`) merges there and
     pushes nothing (`merge_default_into`): the build is on the feature branch
-    and its own push takes the merge. Skipped for an epic's child (the
-    coordinator merges before each wave) and with `--base-ref`.
-    `FEATURE_BRANCH:CONFLICT` exit 3 on a conflict, exit 1 when git fails."""
+    and its own push takes the merge. `FEATURE_BRANCH:CONFLICT` exit 3 on a
+    conflict, exit 1 when git fails."""
     from . import feature_branch
 
     branch = config.feature_branch
-    if not branch or not config.git.worktree or _epic_child(config) or config.base_ref:
-        return None
     repo = git_ops.repo_root(config.project_dir)
-    if repo is None:
+    if not branch or repo is None:
         return None
     if config.pipeline_branch:
         merged = feature_branch.merge_default_into(repo, branch)
@@ -803,7 +844,6 @@ def _merge_into_feature_branch(config: BuildConfig) -> int | None:
             flush=True,
         )
         return 1
-    config.base_ref = feature_branch.ref(branch)
     return None
 
 
