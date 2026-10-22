@@ -166,6 +166,20 @@ def pr_view(monkeypatch):
     return view
 
 
+@pytest.fixture(autouse=True)
+def _no_git_auto_maintenance(monkeypatch):
+    """No git call in a test, its own or the pipeline's, starts auto-maintenance.
+
+    A commit can start `git maintenance run --auto` in the background, which holds
+    `.git/objects/maintenance.lock` for a moment. `everything()` then sees the lock
+    in one snapshot and not in the next (git 2.55 on CI, in R27)."""
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "2")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "maintenance.auto")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "false")
+    monkeypatch.setenv("GIT_CONFIG_KEY_1", "gc.auto")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_1", "0")
+
+
 # --- the fake model call --------------------------------------------------------------
 
 _LISTED = re.compile(r"^- (\S.*) \((\d+) lines\)$", re.MULTILINE)

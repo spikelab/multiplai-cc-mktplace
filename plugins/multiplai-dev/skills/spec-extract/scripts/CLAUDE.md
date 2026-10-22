@@ -42,6 +42,7 @@ import each other in an installed plugin. Review's folder rule is restated in
 
 No test calls the real `gh` or a model: `conftest.FakeCall` replaces `sdk.agent_call_structured` for every test (autouse), answering explore from the snapshot (and group and write by budget label, or from `answers[key]`), with a per-unit or per-label script of `ok`/`fail`/`kill`/`over`/`backend`; `test_target`, `test_explore`, `test_report` and `test_sdk` use `stops_after_explore`, which ends the run there; `--pr` tests replace `target._pr_view`, or put a
 fake `gh` script in place to check its argv and failure paths. The `--apply` tests run buildme's real `stop_record_cli` through `uv run --directory`; `test_apply.py` replaces `apply.check_argv` only to test a check that cannot run. Git runs
-for real on temporary repositories. `tests/test_resume_matrix.py` holds a
+for real on temporary repositories, with auto-maintenance off for every git call a test
+makes (the autouse `_no_git_auto_maintenance`, checked by `tests/test_git_env.py`). `tests/test_resume_matrix.py` holds a
 `def test_R<n>_…` for each row of the plan's table that needs a test (R8 and R12 have two); each stops the
 step at its row's point, resumes, and compares with a run that never stopped.
