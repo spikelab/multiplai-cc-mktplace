@@ -96,10 +96,19 @@ def open_issues(change_dir: Path) -> Path | None:
 
 
 def refuse_issues(path: Path) -> int:
-    """Print `SPEC:ISSUES:<path>` and the pm-spec revise line; the exit code (4)."""
+    """Print `SPEC:ISSUES:<path>` and the pm-spec revise line; the exit code (4).
+
+    The file sits in the change dir the build reads, which for a worktree
+    build is the build's worktree, so the line names that repository with
+    `--project-dir` when the change dir is `<repo>/specs/changes/<change>`."""
+    path = Path(path)
     print(f"{MARKER_ISSUES}:{path}", flush=True)
-    change = Path(path).parent.name
-    print(f"Run /multiplai-pm:pm-spec revise {change}, then run the build again", flush=True)
+    change_dir = path.parent
+    where = ""
+    if change_dir.parent.name == "changes" and change_dir.parent.parent.name == "specs":
+        where = f" --project-dir {change_dir.parent.parent.parent}"
+    print(f"Run /multiplai-pm:pm-spec revise {change_dir.name}{where}, then run the build again",
+          flush=True)
     return EXIT_SPEC_ISSUES
 
 
