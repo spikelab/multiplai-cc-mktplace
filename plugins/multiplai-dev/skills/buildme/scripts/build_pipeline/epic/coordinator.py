@@ -64,6 +64,7 @@ from build_pipeline.budget import BudgetExceededError
 
 import asyncio
 import contextlib
+import io
 import json
 import logging
 import os
@@ -331,9 +332,25 @@ def _opt(argv: list[str], flag: str) -> str | None:
 
 def _argv_pid(argv: list[str]) -> int | None:
     """`build_pid` for the build launched with *argv*; None when *argv* names
-    no change or project dir (a record from before pm-spec: `--plan-file`)."""
+    no change or project dir. A command buildme's own epic split saved
+    (`--mode brief --plan-file ...`) names both, so a build it started that
+    still runs is found too."""
     change, project = _opt(argv, "--change"), _opt(argv, "--project-dir")
     return build_pid(change, project) if change and project else None
+
+
+def _parses(argv: list[str]) -> bool:
+    """Whether this version's `build_pipeline` command line accepts the saved
+    command *argv* (`python -m build_pipeline ...`)."""
+    from ..__main__ import build_parser
+
+    rest = argv[argv.index("build_pipeline") + 1:] if "build_pipeline" in argv else argv
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):
+            build_parser().parse_args(rest)
+    except SystemExit:
+        return False
+    return True
 
 
 # --- the coordinator ---------------------------------------------------------------
@@ -683,6 +700,11 @@ class Coordinator:
         if c.status == "failed":
             c.relaunched = True
         argv = c.argv
+        if argv is not None and not _parses(argv):
+            # Saved by buildme's own epic split (`--mode brief --plan-file ...`),
+            # whose flags this version removed: argparse would refuse it (exit 2).
+            log.info("EPIC child %s: its saved command does not parse any more; building a new one", c.id)
+            argv = None
         if argv is None:
             try:
                 base = await self._base(c)

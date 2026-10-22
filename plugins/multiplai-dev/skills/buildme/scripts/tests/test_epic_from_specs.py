@@ -245,6 +245,31 @@ def test_a_first_wave_child_never_carries_unrelated_local_commits(tmp_path, monk
     assert "notes.txt" in a["reason"] and "outside the epic's change dirs" in a["reason"]
 
 
+@pytest.mark.parametrize("interrupted", [False, True], ids=["failed", "stopped"])
+def test_a_saved_child_command_from_buildmes_own_split_is_rebuilt(tmp_path, monkeypatch, interrupted):
+    """(j) An epic buildme once split saved its child's command with flags
+    this version removed (`--mode brief --plan-file ...`), which argparse
+    would refuse (exit 2) on every relaunch. The relaunch builds a new
+    command instead."""
+    e = Epic(tmp_path, monkeypatch, answer=CHAIN)
+    old = ["python", "-m", "build_pipeline", "--session-id", "", "build", "--mode", "brief",
+           "--change", "e-a", "--plan-file", str(e.dir / "plans" / "a.md"), "--skip-research",
+           "--auto", "--trust-repo", "--no-epic-split", "--epic-child", "--pr-ready",
+           "--project-dir", str(e.project)]
+    records.finish(records.start(e.dir, "build", "a", old), None if interrupted else 1, interrupted=interrupted)
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-a")]
+    relaunch = e.build_records("a")[-1].started["argv"]
+    assert relaunch == e_new_argv(e, "a")
+    for flag in ("--mode", "--plan-file", "--no-epic-split"):
+        assert flag not in relaunch
+
+
+def e_new_argv(e: Epic, cid: str) -> list[str]:
+    from build_pipeline.epic import coordinator
+    coord = coordinator.Coordinator(e.config, args_for(e.config), e.dir, store.load_epic(e.dir), e.specs)
+    return coord.new_argv(cid, e.specs)
+
+
 def _archive(e: Epic, child: str) -> Path:
     """What a merged `--auto` child's PR leaves in the checkout after a pull:
     its change dir moved to specs/archive/<date>-<child>/, committed."""
