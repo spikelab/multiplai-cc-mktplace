@@ -5,10 +5,11 @@ Deterministic Python pipeline for the `/buildme` skill. Replaces 4,370 lines of 
 ## Architecture
 
 ```
-SKILL.md (thin wrapper — handles interview, plan review)
+SKILL.md (thin wrapper — the research request, plan review; pm-spec writes the specs first)
   └── python -m build_pipeline build
-        ├── orchestrator.py    — mode detect, phase sequence, bootstrap
-        ├── spec_generator.py  — proposal → specs → design → tasks → rubric
+        ├── orchestrator.py    — readiness check, phase sequence, bootstrap
+        ├── readiness.py       — SPEC:NOT_READY / SPEC:ISSUES, spec-issues.md
+        ├── spec_generator.py  — pm-spec's proposal + requirements → design → unknowns → tasks → rubric
         ├── tdd_engine.py      — per-block TDD with agent spawning
         ├── apply.py           — manual single-agent implementation
         ├── change_manager.py  — manages specs/ directory
@@ -22,7 +23,7 @@ SKILL.md (thin wrapper — handles interview, plan review)
 
 ```bash
 # Full build (the main entry point — invoked by SKILL.md wrapper)
-python -m build_pipeline build --mode scratch --change my-feature --project-dir /path
+python -m build_pipeline build --change my-feature --project-dir /path
 
 # Spec generation only (dev/debug)
 python -m build_pipeline spec-generate --change my-feature --project-dir /path
@@ -471,8 +472,8 @@ An unknown key or effort name is dropped with a warning.
 
 | Stage | Steps |
 |---|---|
-| `spec` | `spec_artifact` (every spec artifact, use-cases included), `rubric`, `design_audit`, `tasks_audit`, `codebase_analysis`, `explainer`, `respec`, `interview`, `research`, `epic_split` |
-| `agent` | `test_writer`, `implementer`, `refactor`, `refactor_all`, `mutation_test_writer`, `integration_fix`, `review_fix`, `docs_update`, `prototype`, `merge` |
+| `spec` | `spec_artifact` (design, unknowns and tasks), `rubric`, `design_audit`, `tasks_audit`, `codebase_analysis`, `explainer`, `respec`, `research`, `epic_split` |
+| `agent` | `test_writer`, `implementer`, `refactor`, `refactor_all`, `mutation_test_writer`, `integration_fix`, `review_fix`, `docs_update`, `merge` |
 | `review` | `review`, `adjudication`, `test_quality_audit`, `plan_review`, `integration_fix_escalated` (the last integration-fix attempt), `review_fix_escalated` (the review loop's last fix, which questions the block's approach), `findings_triage` (the findings stage's one read-only agent per PR comment), `findings_self_check` (the findings stage's one read-only check of a round's fix commits) |
 
 The tier (advanced or standard) comes from the default model: `models.default`,
@@ -489,7 +490,7 @@ so when `models.default` is a `pi:` spec the tier comes from `BUILDME_TIER`
 | `[buildme]` | `MODEL=` and `EFFORT=` for the whole pipeline |
 | `[buildme.spec]` | `MODEL=` and `EFFORT=` for spec generation, audits, rubric |
 | `[buildme.review]` | `MODEL=` and `EFFORT=` for code review, test-quality audit |
-| `[buildme.agent]` | `MODEL=` and `EFFORT=` for the agent stage (test writer, implementer, refactorers, fixers, docs update, prototype, merge) |
+| `[buildme.agent]` | `MODEL=` and `EFFORT=` for the agent stage (test writer, implementer, refactorers, fixers, docs update, merge) |
 
 ```ini
 [buildme]

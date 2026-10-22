@@ -14,13 +14,14 @@
 | `narrow_tests.py` | The narrow test command a block's loop runs (`tdd_engine._block_test_command` for RED; `_block_agent_test_command` / `agent_test_command` for the block's test writer, implementer and refactorer, which adds how to append the tests they write or name): `test_command` plus the test files changed since `BlockInfo.baseline_commit` (untracked included, deleted or missing left out) and the test file named after each changed source file (the nearest one), never chosen by import, and only files the whole command collects (never under `tdd_engine._is_tool_cache` directories; for pytest, `_pytest_collects`: under `testpaths`, outside `norecursedirs` and `--ignore`). Only for pytest, or jest/vitest direct or through a single-command `npm test` script (`runner_of`; a task runner before the test runner means unknown); any other runner, an empty selection, a changed file `tdd_engine._TEST_PATH_RE` calls a test but the naming cannot pick out, a coverage setting, a Node path with regex characters, a command that already names paths or filters (`_pytest_collects` / `_node_names_tests`), a pytest config it cannot read (`pytest.toml`, `.pytest.toml`, `pytest.ini`, `.pytest.ini`, `pyproject.toml`, `tox.ini`, `setup.cfg`, in pytest 9's order) or a project `python_files`, a selected pytest file below another pytest config or `setup.py` than the whole run's, or under a `conftest.py` pytest loads (none above the whole run's config directory) whose written-out `collect_ignore` / `collect_ignore_glob` could name it, or that has a `pytest_ignore_collect` hook, a list it cannot read or a syntax error (`_pytest_runs_alike`, `_conftest_ignores`), a command over 20,000 characters, no baseline, a git error or `tdd.narrow_tests: false` gives the whole `test_command`. `integration_gate`, `baseline_test_gate`, the whole-change refactor, mutation and `epic/merge.py` keep the whole command. | No |
 | `change_manager.py` | Manages specs/ directory (DAG, status, templates, archiving). The spec format itself (change names, capability and requirement parsing, delta merge into `registry/`, the archive move) is `multiplai_core.specs`, imported here | No |
 | `config.py` | BuildConfig, tier detection, test command discovery, reference-doc resolution (`stack_reference_docs`/`reference_docs_text`: built-in stack map + `reference_docs:` overrides from `specs/config.yaml` + django/fastapi/react manifest detection; `summarize_reference_doc` reduces an over-limit doc on section boundaries and always emits the full section index). Also the per-step tuning knobs: `conf_model`/`conf_int` join `conf_effort` as the multiplai.conf readers that can say "the conf said nothing" (`pick_model` cannot — it always returns a concrete ID), feeding `spec_model`/`agent_model`/`plan_review_model`, `plan_review_effort` and the two `plan_split_*_trigger` integers; `specs/config.yaml` overrides a conf-supplied `review_model`, which is what `_review_model_from_conf` exists to record. `model_for(step)` is the one place a call site gets its model: `models.<step>` → `models.<stage>` → the per-stage field → `models.default` → `model` (`[buildme] MODEL=`) → multiplai-core's `default_model()` (`MULTIPLAI_MODEL`, then the session's model; None leaves the CLI to choose), over the `STEP_STAGES` table (`tests/test_model_per_step.py` fails when a model-bearing call site is not in it). `effort_for(step)` is the same for effort, from `efforts:`: `efforts.<step>` → `efforts.<stage>` → the per-stage effort field (`[buildme.<stage>] EFFORT=`) → `efforts.default` → `effort` → `default_effort()`; every call site passes `effort=config.effort_for(<its step>)` (`test_every_call_site_passes_its_steps_effort`). `detect_tier` reads `models.default`, `[buildme] MODEL=`, then `default_model()`; `CLAUDE_MODEL` is not read. `convention_files()` resolves the project's own `CLAUDE.md` chain for the reviewer. | No |
-| `intake.py` | What a build starts from, saved in the change dir: `ticket.md` (fenced untrusted), `plan.md`, `interview.md`, `research.md`. Runs the INTERVIEW phase (`interview: self` / `ticket` / `user`) and the RESEARCH phase (copy `--research-path`, or one decision call). Owns exit code 3 (`WAITING_EXIT`) and its markers `INTERVIEW:WAITING` / `RESEARCH:NEEDED` / `SPLIT:REQUIRED`, and the bootstrap's uncommitted-`specs/config.yaml` check. | Via llm_steps |
+| `intake.py` | Research and the input checks, saved in the change dir: `research.md`, `research-request.md`. Runs the RESEARCH phase (copy `--research-path`, or one decision call on the ready specs, `research_steps.decide_research`). Owns exit code 3 (`WAITING_EXIT`) and its markers `RESEARCH:NEEDED` / `SPLIT:REQUIRED`, and the bootstrap's uncommitted-`specs/config.yaml` check. The interview, ticket and plan intake are pm-spec's. | Via llm_steps |
+| `readiness.py` | buildme builds only from pm-spec's ready specs. `orchestrator._refuse_unless_ready` runs first, before anything is written: `multiplai_core.specs.is_ready` false prints `SPEC:NOT_READY:<reason>` and `Run /multiplai-pm:pm-spec [resume ]<name> first` (`refuse_not_ready`, exit 2; `resume` when specs never marked are on disk and no checkpoint from before spec generation, item 21); an open `.change.yaml` `spec_issues` prints `SPEC:ISSUES:<path>` and the `pm-spec revise <name> --project-dir <repo>` line (`refuse_issues`, exit 4, shared with `tdd_engine.EXIT_AGENT_TIMEOUT`: the marker tells them apart); a first worktree run refuses a change dir with uncommitted changes (`uncommitted`). `SpecIssuesFound` carries `(title, body)` pairs from the design step (`spec_generator.design_spec_issues`, `SPEC_ISSUE:` lines), the design audit (`audit_spec_issues`, `needs_requirements_change`) or TDD (`tdd_engine._record_implementation_note` under `respec.halt_on_contradiction`, which calls `write_issues` itself); `write_issues` appends one `## ` section each to `spec-issues.md` (an identical section is not written twice) and sets `spec_issues`. The checkpoint is kept, never FAILED. | No |
 | `setup.py` | `setup` (round-trip edit of `specs/config.yaml` with ruamel.yaml — the only ruamel user) and `config-get`. | No |
-| `state.py` | BuildState with checkpoint/resume. A finished build is never deleted: `complete` checkpoints and renames `.build-state.json` to `.build-state.complete.json` (`completed_state_path`), which resume never loads; `orchestrator._completed_builds` finds the ones at phase COMPLETE, and a re-run without `--force` exits 3 with `BUILD:COMPLETE:<path>` and writes nothing (`_refuse_published_rerun`); with `--force` their branches count as taken (`git_ops.resolve_new_branch(taken=)`). A SIGTERM/SIGHUP/Ctrl-C stop (`orchestrator._record_interrupt`, and the same in `findings/loop.run_findings`) writes `INTERRUPTED by <signal>` and checkpoints the spend before re-raising. `fail` is the one way to FAILED: it records the tree (`failed_stop`, `stop_record.record`) before the checkpoint. A FAILED build re-run in its own worktree keeps that branch and worktree (`orchestrator._keeps_failed_worktree`), and refuses (exit 1) when the worktree is on another branch or `stop_record.others_work` finds an uncommitted change the record does not hold; a checkpoint with no record, uncommitted changes and no commit of its own goes to `_setup_worktree` (a `-2` worktree) as before the record existed. The kept re-run's bootstrap records its tree in `failed_stop` again, so a stop before the interview finishes (pointer AT BOOTSTRAP) resumes in place; every other bootstrap clears it. `_rebind_to_existing_worktree` binds to the candidate worktree whose checkpoint is newest (`updated_at`), so a build moved to `-2` re-runs there. `test_every_failed_checkpoint_goes_through_fail` scans the AST of `build_pipeline/` for any other write of FAILED. | No |
+| `state.py` | BuildState with checkpoint/resume. A finished build is never deleted: `complete` checkpoints and renames `.build-state.json` to `.build-state.complete.json` (`completed_state_path`), which resume never loads; `orchestrator._completed_builds` finds the ones at phase COMPLETE, and a re-run without `--force` exits 3 with `BUILD:COMPLETE:<path>` and writes nothing (`_refuse_published_rerun`); with `--force` their branches count as taken (`git_ops.resolve_new_branch(taken=)`). A SIGTERM/SIGHUP/Ctrl-C stop (`orchestrator._record_interrupt`, and the same in `findings/loop.run_findings`) writes `INTERRUPTED by <signal>` and checkpoints the spend before re-raising. `fail` is the one way to FAILED: it records the tree (`failed_stop`, `stop_record.record`) before the checkpoint. A FAILED build re-run in its own worktree keeps that branch and worktree (`orchestrator._keeps_failed_worktree`), and refuses (exit 1) when the worktree is on another branch or `stop_record.others_work` finds an uncommitted change the record does not hold; a checkpoint with no record, uncommitted changes and no commit of its own goes to `_setup_worktree` (a `-2` worktree) as before the record existed. The kept re-run's bootstrap records its tree in `failed_stop` again, so a stop before the bootstrap finishes (pointer AT BOOTSTRAP) resumes in place; every other bootstrap clears it. `_rebind_to_existing_worktree` binds to the candidate worktree whose checkpoint is newest (`updated_at`), so a build moved to `-2` re-runs there. `test_every_failed_checkpoint_goes_through_fail` scans the AST of `build_pipeline/` for any other write of FAILED. | No |
 | `stop_record.py` | The one check every resume that keeps or discards a stopped step's work runs first. `record` saves HEAD and the project's uncommitted paths with a content fingerprint (`StepStop`, which `state.py` re-exports) as a step stops; `others_work` refuses an uncommitted path missing from that record or changed since, any uncommitted path when there is no record, and a commit added since the stop unless HEAD is wholly on origin. It checks only the project directory, minus bookkeeping and the caller's own directory. It is the only module that calls `git_ops.dirty_files` (`test_only_stop_record_compares_stop_records`). | No |
 | `stop_record_cli.py` | `python -m build_pipeline.stop_record_cli`: `stop_record.others_work` for another skill, which cannot import buildme and runs it as a subprocess (spec-extract, through `uv run --directory`). Reads one JSON object on stdin (`project_dir`, absolute; `stop`, null or a `StepStop`; optional `ignore`, `head`, `origin_ref`) and prints one line, `{"reason": null}` or `{"reason": "<text>"}`, exit 0; malformed input exits 2 with the error on stderr. Imports `stop_record` and the standard library only, and adds nothing to the check. | No |
 | `models.py` | Pydantic models for all structured data | No |
-| `gates.py` | Quality gate assertions (pure code) + agent-report parsers (`parse_agent_status`, `parse_implementation_note`, `parse_docs_impact`, `parse_searched` for a review-fix agent's `SEARCHED:` section, `parse_red_expected` for the test writer's `RED_EXPECTED:` slot, which `red_expected_note` checks against the RED run and records without deciding anything). `red_gate` returns the first row of `RED_TABLE` whose outcome holds for `_red_facts` (`tests/test_red_table.py` records every verdict). New gates: `unknowns_gate`, `prototype_required`, `prototype_gate`, `docs_freshness_gate` (warn-only). `parallel_command` (`tdd.parallel`, `BuildConfig.parallel_tests`, parsed by `config.parse_parallel`): `baseline_test_gate` and `integration_gate` take `parallel=` and, only when the repo is trusted, append `-n auto` to a pytest command (`narrow_tests.runner_of`) whose arguments, `addopts` and `PYTEST_ADDOPTS` choose no workers (`_chose_workers`), whose pytest loads xdist (`_xdist_loads`: plugin autoloading is on, or `-p xdist` / `PYTEST_PLUGINS=xdist.plugin` names it) and whose environment imports xdist (`_xdist_probe`: `<python> -m pytest`'s python, `<uv/poetry/pdm/hatch/pipenv/rye> run python`, or the `python` beside the `pytest` script; any other wrapper is not probed); every gate call in `tdd_engine` passes `config.parallel_tests`, and `epic/merge.py` `suite_command` does the same for 40.4. | No (runs the project's Python once per full-suite run) |
+| `gates.py` | Quality gate assertions (pure code) + agent-report parsers (`parse_agent_status`, `parse_implementation_note`, `parse_docs_impact`, `parse_searched` for a review-fix agent's `SEARCHED:` section, `parse_red_expected` for the test writer's `RED_EXPECTED:` slot, which `red_expected_note` checks against the RED run and records without deciding anything). `red_gate` returns the first row of `RED_TABLE` whose outcome holds for `_red_facts` (`tests/test_red_table.py` records every verdict). New gates: `unknowns_gate`, `docs_freshness_gate` (warn-only). `parallel_command` (`tdd.parallel`, `BuildConfig.parallel_tests`, parsed by `config.parse_parallel`): `baseline_test_gate` and `integration_gate` take `parallel=` and, only when the repo is trusted, append `-n auto` to a pytest command (`narrow_tests.runner_of`) whose arguments, `addopts` and `PYTEST_ADDOPTS` choose no workers (`_chose_workers`), whose pytest loads xdist (`_xdist_loads`: plugin autoloading is on, or `-p xdist` / `PYTEST_PLUGINS=xdist.plugin` names it) and whose environment imports xdist (`_xdist_probe`: `<python> -m pytest`'s python, `<uv/poetry/pdm/hatch/pipenv/rye> run python`, or the `python` beside the `pytest` script; any other wrapper is not probed); every gate call in `tdd_engine` passes `config.parallel_tests`, and `epic/merge.py` `suite_command` does the same for 40.4. | No (runs the project's Python once per full-suite run) |
 | `budget.py` | Per-build token/cost ledger + circuit-breaker (module singleton; tokens and USD per label, both saved in the checkpoint; the 80% warning prints `BUDGET:WARN:<pct>:<usd>` and writes `BUDGET_WARNING` to the progress file registered with `warn_into`; every `build` run ends with a `BUDGET` section, `diagnosis(advice=False)`), and the process total (`ProcessSpend`, `process_spend`, `spend_marker`) that `record()` adds to and neither `reset()` nor `BuildBudget.load_state` touches; `__main__.main` prints `SPEND:<usd>:<tokens>` from it last for `build` and `findings` (`SPEND_COMMANDS`), in a `finally`, holding SIGTERM and SIGHUP as `SystemExit` for the run (`git_ops._exit_on_termination(interrupt=False)`) so a stop the epic's coordinator sends prints it too; `add_process_spend` / `process_spend_unknown` take a skill subprocess's own `SPEND:` line (`git_ops._count_skill_spend`, for `SPEND_REPORTING`: the pr skill's `open`/`edit`, a walkthrough `run`/`resume`, spec-extract's `run`), and a missing one adds `:incomplete` | No |
 | `dependencies.py` | Pure detection of dependencies **new to this project**: parses the proposal's `## Impact` and design's `## Decisions`, subtracts every manifest (`pyproject.toml`, `package.json`, `Package.swift`, `Cargo.toml`, `go.mod`, `requirements.txt`) and every existing import. Feeds the B1 explainer gate. No LLM, no network. | No |
 | `git_ops.py` | Every `git`/`gh` invocation: worktree+branch setup, explicit-path commits, the TDD loop's whole-tree `commit_tree`/`tree_is_clean`/`discard_to`, push, and the seam that runs the pr skill (`_run_pr_skill`, `open_pr_with_skill`; the argv, `uv run --directory ../../pr/scripts python -m pr_pipeline open --no-push`, is `orchestrator._pr_open_argv`), which opens the PR from the repo's template. `shell=False`, fixed argv, never merges/force-pushes/deletes (the epic's merge step runs `git merge`, `merge --abort` and `commit` through its own wrapper, `epic/merge.py`, and `gh pr checks` / `gh pr merge` through `_run_gh`, under `epic.merge: auto`); the one destructive call (`discard_to`) refuses unless the target sha is still an ancestor of HEAD. Every commit and the discard are limited to the project directory, which may be a subdirectory of a larger repo: `commit_tree` and `commit_paths` commit only their own pathspec (`git commit -- <paths>`), so anything else staged stays staged, and `discard_to` runs `reset --soft`, `restore --source=<sha> --staged --worktree -- .` and the `clean`, and refuses when a commit it would drop changes a file outside the project. `BOOKKEEPING_EXCLUDES` is the single list of buildme's own files (`pr-sections/` included), honored by every commit path and by the discard's `clean`. | No |
@@ -40,12 +41,11 @@
 | File | Functions | What They Do |
 |------|-----------|-------------|
 | `spec_steps.py` | `generate_artifact()`, `run_explainer()`, `run_design_audit()`, `run_tasks_audit()`, `run_codebase_analysis()` | `run_explainer()` is the B1 explainer gate — one call per `dependencies.detect_new_dependencies()` hit, run concurrently with `WebSearch`/`WebFetch`/`Read`/`Glob`/`Grep`, concatenated into `unknowns.md`; `unknowns_gate` then forces at most one regeneration pass (`spec_generator._audit_unknowns`, recorded as `SpecGenState.steps["explainers"]`). Spec generation + adversarial audits (design audit and tasks-shape audit, both wired — the tasks audit forces one regeneration pass on horizontal-decomposition findings, and on `no-new-behaviour` blocks from `spec_generator.scan_no_behaviour_blocks`: a block that produces nothing and whose own text says it adds no code (it says an earlier block already satisfies it, with itself as the subject; it says, unscoped, that it needs no code; it is test work, by its heading or first instruction, changes only test files and has no step that writes code; or it adds tests, leaves every file it names unchanged and has no step that writes code), so its tests would pass before it is built and fail the TDD RED gate; it reads a block's prose and checkboxes, and never flags on `Produces: (none)` or a "Verify"/"Confirm" verb alone). `run_design_audit()` covers consistency **and** plan quality (over-engineering, granularity, testability, edge cases); its critical/major gaps force one regeneration pass of design.md + tasks.md through the single call site `spec_generator.run_design_audit_stage` (recorded as `SpecGenState.steps["design_audit"].repair_attempts`, then a required re-audit; the outcome is tied to its input revision, so an unchanged resume is free). `run_codebase_analysis()` (one `code_facts` explore agent per slice of the source files, through `code_analysis.analyse`, with `_codebase_analysis_call` as its call function; a project with no commit gets `code_analysis.no_commit_report`, a labelled "not analysed" list of its source files) is **wired** as `BuildPhase.CODEBASE_ANALYSIS` — the orchestrator writes its report to `codebase-analysis.md` and records the path on `SpecGenState.codebase_analysis_path`; `spec_generator.read_codebase_analysis` turns that path back into the text the design prompt inlines. |
-| `prototype_steps.py` | Optional prototype before final planning review. Findings request a revision from the shared owner. Failed writers block completion. |
 | `tdd_steps.py` | `run_test_writer()`, `run_mutation_test_writer()`, `run_implementer()`, `run_refactorer()`, `run_refactor_all()`, `run_integration_fix()` | TDD agent spawning with tool allowlists. Reports carry the `SURPRISES:` / `SPEC_IMPACT:` REQUIRED slots parsed by `gates.parse_implementation_note`. `run_refactor_all()` is the whole-change pass: same `REFACTORER_TOOLS`, more turns/time, `budget_label="refactor_all"`. `run_mutation_test_writer()` is the MUTATION step's one survivor round: `TEST_WRITER_TOOLS`, `budget_label="mutation_test_writer"`. |
 | `respec_steps.py` | `append_implementation_note()`, `format_implementation_note()`, `notes_path()`, `ensure_delta_sections()`, `run_respec_audit()` | B3 loop back to the spec. Each parsed `ImplementationNote` is appended to `implementation-notes.md` **as the build runs** (a crashed build still leaves the learning on disk). `run_respec_audit()` (BuildPhase.RESPEC, after TDD_BUILD) reads those notes + current requirements/design and writes `respec.md` in ADDED/MODIFIED/REMOVED form — **propose only, never edits the specs**, and non-fatal on LLM failure. |
 | `docs_steps.py` | Documentation writer; failures propagate. Freshness warnings remain advisory after a successful writer. |
 | `review_steps.py` | `run_code_review()`, `merge_panel_results()`, `run_review_fix()` | `run_code_review()` calls `agent_call_structured` with `REVIEWER_TOOLS = ["Read", "Grep", "Glob"]` and `REVIEWER_MAX_TURNS = 30`, so the reviewer opens the files a changed line calls into instead of judging a diff string — and the whole step now needs a trusted repo. It is **wired** as the active per-block review — `tdd_engine._run_quality_review` calls it with the block's actual diff, rubric, spec context, and coding standards. Runs every model in `config.review_panel` concurrently (empty panel → one reviewer on `review_model`-or-`model`, byte-identical to the pre-panel behavior), drops members that failed, and folds the survivors with `merge_panel_results()`. `run_review_fix()` remains **not wired**. Security review is out of scope for this pipeline — the dedicated security-review prompt, step function and `security_review` config toggle were deleted; use Claude Code's built-in `/security-review` instead. |
-| `interview_steps.py` | `ask_questions()`, `answer_questions()`, `run_self_interview()`, `decide_research()` | `interview: self` is two separate read-only agent calls (`Read`/`Glob`/`Grep`, `budget_label="interview"`): a questioner, then a fresh answerer whose ungrounded answers become assumptions. `ticket` mode uses the questioner alone. `decide_research()` is one toolless `llm_call_structured` (`budget_label="research"`). Each takes `call=` for tests. |
+| `research_steps.py` | `decide_research()`, `specs_summary()` | `decide_research()` is one toolless `llm_call_structured` (`budget_label="research"`) on `specs_summary` of the ready proposal and requirements; takes `call=` for tests. |
 | `plan_review_steps.py` | Read-only final plan review; bounded repairs use the planning owner. Failed/unresolved required review blocks implementation. |
 
 ## Prompt Templates (prompts/)
@@ -54,19 +54,18 @@ Templates are Python f-strings with `{placeholders}`. Each template is a constan
 
 | File | Templates |
 |------|-----------|
-| `spec_generation.py` | PROPOSAL_PROMPT, SPEC_PROMPT, DESIGN_PROMPT, TASKS_PROMPT |
+| `spec_generation.py` | DESIGN_PROMPT (with `## Research Findings` and the `SPEC_ISSUE_PREFIX` rule), TASKS_PROMPT |
 | `test_writing.py` | TEST_WRITER_PROMPT, TEST_QUALITY_PROMPT, MUTATION_TEST_WRITER_PROMPT (both writers' prompts state `{max_turns}`, from `tdd.test_writer_max_turns` / `tdd.mutation_test_writer_max_turns`), DRAFTS_SECTION |
 | `implementation.py` | IMPLEMENTER_PROMPT_CLEAN, IMPLEMENTER_PROMPT_MINIMUM, REFACTOR_PROMPT, REFACTOR_ALL_PROMPT |
 | `writing_rules.py` | TEST_VALUE_RULE (in TEST_WRITER_PROMPT), COMMENT_RULE (in TEST_WRITER_PROMPT and both implementer prompts): the writing rules, concatenated into those prompts (`tests/test_writing_rules.py`) |
 | `review.py` | CODE_REVIEW_PROMPT, FINDING_ADJUDICATION_PROMPT |
 | `design_audit.py` | DESIGN_AUDIT_PROMPT, TASKS_AUDIT_PROMPT |
-| `prototype.py` | PROTOTYPE_PROMPT |
 | `explainer.py` | EXPLAINER_PROMPT, UNKNOWNS_REGEN_PROMPT |
 | `docs_update.py` | DOCS_UPDATE_PROMPT |
 | `respec.py` | RESPEC_PROMPT |
 | `rubric_prompts.py` | RUBRIC_PROMPT |
 | `plan_review.py` | PLAN_REVIEW_PROMPT |
-| `interview.py` | QUESTIONER_PROMPT, ANSWERER_PROMPT, RESEARCH_DECISION_PROMPT, UNTRUSTED_NOTICE |
+| `research.py` | RESEARCH_DECISION_PROMPT, UNTRUSTED_NOTICE |
 | `epic_split.py` | EPIC_SPLIT_PROMPT, EPIC_SPLIT_RETRY |
 | `epic_merge.py` | MERGE_PROMPT |
 | `findings.py` | TRIAGE_PROMPT, SELF_CHECK_PROMPT |
@@ -94,7 +93,10 @@ All tests mock LLM calls — no API keys needed. Tests cover:
 - Spec Generator: dependency ordering, resume, change type detection, design-audit feedback (one bounded repair + required re-audit, revision-guarded)
 - TDD Engine: block parsing, context assembly, weak test patterns, agent selection
 - Dependencies: manifest/import subtraction, false-positive suppression
-- Prototype / Respec steps: write boundary, gate retry, one-pass regeneration, propose-only respec
+- Respec steps: propose-only respec
+- Ready specs (`test_ready_specs.py`): the start refusal, spec issues from the design, the design audit and TDD, old checkpoints, rows S10–S15 of plan-pm-spec-split-2026-10-21.md
+- pm-spec to buildme end to end (`test_pm_spec_handoff.py`): pm-spec's command line runs in its own environment (`uv run --package pm-spec-pipeline`, `pm_spec_driver.py` replaces its model) to `SPEC:READY`, buildme builds to the start of TDD, and an edited requirement refuses with `SPEC:NOT_READY`
+- Tests start from ready specs: `tests/spec_fixtures.py` (`ready_specs`, `write_specs`), and conftest's autouse `pm_spec_handoff` readies and commits a change never marked ready before the readiness check (`@pytest.mark.no_handoff` opts out). conftest also unsets `WORKSPACE`, so no build worktree lands in a real workspace
 - Docs steps: `DOCS_IMPACT:` parsing, the warn-only freshness gate, failed-writer propagation, and the refusal to stage an agent-reported path from outside the project
 - Git ops: real temp git repos with `gh` mocked — worktree/branch setup, resume re-binding, explicit-path commits, non-fatal push/PR failure
 - Board: every `(phase, block_status)` → column case, including the columns the pipeline never drives
@@ -126,7 +128,7 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   always emits an index of *all* of them, so an omitted section is known to
   exist rather than invisible.
 
-- **Planning has one publisher.** Design-audit, prototype and plan-review
+- **Planning has one publisher.** Design-audit and plan-review
   feedback and task-audit repairs call `spec_generator.rewrite_plan`. It stages
   and validates the set, including placeholders and no-behaviour blocks,
   regenerates rubric and shape evidence, then publishes through a recovery
@@ -138,8 +140,8 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   phase checks as proof. The phase still describes progress.
 - **Bounded repair can fail.** Required review errors or remaining blocking
   findings leave resumable blocked evidence. Never log failure and mark it passed.
-  Each of tasks_audit, design_audit, plan_review and prototype gets one
-  rewrite. Its findings are numbered (`number_findings`, `<TA|DA|PR|PT>-F<n>`)
+  Each of tasks_audit, design_audit and plan_review gets one
+  rewrite. Its findings are numbered (`number_findings`, `<TA|DA|PR>-F<n>`)
   and saved in `StepOutcome.repair_findings` in the checkpoint that admits the
   rewrite (`admit_repair`). The audit after the rewrite is given them (`prior=`,
   `prompts.design_audit.prior_findings_section`) and answers a status for each
@@ -254,8 +256,8 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   assume-unchanged or skip-worktree, in the project or any submodule index,
   nested ones and gitlink entries included;
   buildme's bookkeeping and the round records, which the reviewer's diff
-  leaves out too, are left out, while the rest of the change dir, a
-  prototype's source included, counts). Otherwise it is null with `reviewed_sha_unknown`
+  leaves out too, are left out, while the rest of the change dir
+  counts). Otherwise it is null with `reviewed_sha_unknown`
   saying why: a first review after an uncommitted integration fix, and the
   review after the fix on pass, read code HEAD does not hold. `_scope_diff`
   and `review_metrics.py` read `reviewed_sha` only, so such a record, or one
@@ -405,41 +407,43 @@ All tests mock LLM calls — no API keys needed. Tests cover:
 specs/
 ├── config.yaml                       — project context
 ├── changes/<name>/                   — active changes
-│   ├── .change.yaml                  — metadata
+│   ├── .change.yaml                  — metadata; pm-spec's ready record (spec_status, spec_revision, spec_issues)
 │   ├── .board.json                   — kanban card (board.py)
-│   ├── ticket.md                     — the ticket (fenced untrusted), when the input was one
-│   ├── plan.md                       — a --plan-file, recorded
-│   ├── interview.md                  — the interview, whichever mode ran it
 │   ├── research.md                   — research content, or why none was needed
 │   ├── split-proposal.md             — written when the size gate stops the build
 │   ├── codebase-analysis.md          — what the repo already looks like
-│   ├── proposal.md
-│   ├── use-cases.md               — personas + the use cases they must observe
+│   ├── proposal.md                   — pm-spec's (an input, never written here)
+│   ├── use-cases.md                  — pm-spec's: personas + the use cases they must observe
 │   ├── design.md
 │   ├── unknowns.md                   — explainer per new-to-this-project dependency
 │   ├── tasks.md
 │   ├── rubric.md
-│   ├── prototype/                    — NOTES.md + the cheap shape proof
 │   ├── implementation-notes.md       — agent SURPRISES/SPEC_IMPACT, appended live
 │   ├── reviews/block-<NN>-round-<k>.json — one per review round of each block
 │   ├── unfixed-findings.md           — accepted findings buildme left unfixed, with the reason
 │   ├── respec.md                     — proposed spec delta (never auto-applied)
-│   └── requirements/<capability>.md  — BDD scenarios (one per capability)
+│   ├── spec-issues.md                — requirements problems for pm-spec revise (readiness.py, findings/spec.py)
+│   └── requirements/<capability>.md  — pm-spec's: BDD scenarios (one per capability)
 ├── registry/<capability>.md          — main spec registry (merged from archives; a first baseline from spec-extract)
 └── archive/<date>-<name>/            — archived changes
 ```
 
-The hardcoded `ARTIFACT_DAG` constant defines the dependency graph. Templates and instructions are Python constants in `change_manager.py`.
+The hardcoded `ARTIFACT_DAG` constant defines the dependency graph of what
+buildme writes: `design`, `unknowns`, `tasks`, `rubric`. `INPUTS` names
+pm-spec's three documents (`proposal.md`, `use-cases.md`, `requirements/*.md`):
+required inputs, counted done when on disk, never generated
+(`missing_inputs`; `spec_generator._generate_all_artifacts` refuses naming
+pm-spec when one is missing). `reconcile_plan` still hashes them: a proposal
+or requirements change marks design, unknowns, tasks and rubric stale, a
+use-cases change marks tasks and rubric stale, and nothing moves or rewrites
+the inputs. Templates and instructions are Python constants in `change_manager.py`.
 
 `unknowns` sits between `design` and `tasks` (`tasks` requires
-`["requirements", "design", "unknowns", "use-cases"]`), so the edge cases are on
-disk while the task breakdown is written. `use-cases` hangs off `proposal` and
-is required by `tasks` for the same reason: a use case is delivered by a block
-or by nothing at all, and PLAN_REVIEW checks block coverage against it. It is
-its own artifact rather than two more proposal sections because
-`_extract_capabilities` reads backticked list items out of `proposal.md`'s
-`## Capabilities` section, and persona names would land in that harvest. `codebase-analysis.md`,
-`implementation-notes.md`, `respec.md`, `prototype/` and `.board.json` are
+`["proposal", "requirements", "design", "unknowns", "use-cases"]`), so the edge cases are on
+disk while the task breakdown is written. `use-cases` is required by `tasks`
+for the same reason: a use case is delivered by a block
+or by nothing at all, and PLAN_REVIEW checks block coverage against it. `codebase-analysis.md`,
+`implementation-notes.md`, `respec.md`, `spec-issues.md` and `.board.json` are
 **not** DAG artifacts — they are written by their phases. All of them travel into `archive/<date>-<name>/`; only
 `requirements/*.md` ever merge into `registry/`. The one other writer of `registry/` is
 spec-extract's `--apply`, run by CODEBASE_ANALYSIS while the registry is empty (see Codebase Analysis below).
@@ -451,14 +455,18 @@ compatibility and progress display. Required planning decisions use outcomes
 bound to their input revisions, not ordinal position. The execution order is:
 
 ```
-INIT → BOOTSTRAP → INTERVIEW_DONE → RESEARCH → CODEBASE_ANALYSIS → EPIC_SPLIT
-  → SPEC_GENERATION → PROTOTYPE → DESIGN_AUDIT → PLAN_REVIEW → REVIEW
+INIT → (readiness check) → BOOTSTRAP → RESEARCH → CODEBASE_ANALYSIS
+  → SPEC_GENERATION → DESIGN_AUDIT → PLAN_REVIEW → REVIEW
   → TDD_BUILD → DOCS_UPDATE → RESPEC → PUBLISH → COMPLETE  (or FAILED)
 ```
 
-**Exit code 3 and the size gate are not phases.** `interview: ticket` and a
-`RESEARCH:NEEDED` decision stop at the phase that must rerun. The size gate
-checks the final reviewed plan after prototype and audit repairs. It keeps
+`INTERVIEW_DONE`, `EPIC_SPLIT` and `PROTOTYPE` stay in the enum so old
+checkpoints load; no build enters them now. The readiness check is not a phase:
+it runs before the checkpoint is touched (see `readiness.py`).
+
+**Exit code 3 and the size gate are not phases.** A
+`RESEARCH:NEEDED` decision stops at the phase that must rerun. The size gate
+checks the final reviewed plan after audit repairs. It keeps
 stopping while `split_required` is set until `--accept-size`; a changed plan
 revision invalidates that acceptance.
 
@@ -467,15 +475,14 @@ maps to Planning and never moves the card. Old checkpoints load conservatively
 (`tests/fixtures/build-state-pre-plan-review.json` covers the legacy shape):
 missing revision evidence requires validation before implementation can begin.
 
-`PROTOTYPE`, `RESPEC` and `PUBLISH` are the additions from the dark-factory
+`RESPEC` and `PUBLISH` are the additions from the dark-factory
 lifecycle plan. `DOCS_UPDATE` sits between the build and the respec proposal so
 the documentation it writes is committed onto the same branch and lands in the
 same PR as the code it describes. `PUBLISH` runs **after** the `--auto` archive
 move, so the pushed branch carries the archived layout.
 
 `CODEBASE_ANALYSIS` sits before `SPEC_GENERATION` because `design.md` and
-`EPIC_SPLIT` read it. It is best-effort in three ways, all deliberate: skipped in
-`only` mode (no specs are generated, so nothing would read it), skipped when
+research read it. It is best-effort in two ways, all deliberate: skipped when
 the project has no source files yet (explore agents reporting "(new
 project)" is pure spend), and non-fatal on failure (the design falls back to
 "(new project)", exactly the pre-phase behavior). Every skip logs its reason.
@@ -486,8 +493,7 @@ unchanged): `uv run --directory ../../spec-extract/scripts python -m
 spec_extract_pipeline run --repo <checkout top> --tree <sha> [--path <project
 prefix>] --max-usd <spec_extract_max_usd> --trust-repo --apply --specs-dir
 <absolute specs_dir>` through `git_ops._run_spec_extract_skill`. It is skipped,
-with `SKIP phase=CODEBASE_ANALYSIS step=spec-extract reason=<r>`, in `only`
-mode, in an epic's child build (`orchestrator._epic_child`: `--epic-child`,
+with `SKIP phase=CODEBASE_ANALYSIS step=spec-extract reason=<r>`, in an epic's child build (`orchestrator._epic_child`: `--epic-child`,
 which the coordinator's `new_argv` passes, or `epic.CHILD_ENV`, which its
 `_spawn` sets: the parent ran spec-extract, a child with no dependency in the
 epic's repository branches from the parent's registry commit, and siblings at
@@ -523,15 +529,12 @@ clears an inherited `BUILDME_TRUST_REPO` and `BUILDME_EPIC_CHILD`. Its stop and
 resume rows are S1-S7 in the reverse-specs plan, plus S8 (a re-run of the step
 does not repeat the analysis); `tests/test_spec_extract_step.py` tests S1, S2,
 S3, S5, S6 and S8. With a non-empty registry,
-`artifact_context` lists its stems as `registry`, and the proposal prompt gets
-`## Current behaviour (specs/registry)` with the registry's capability names
-and the rule that a changed capability keeps its registry name;
-`spec_steps._registry_section` appends the same heading to the requirements
-prompt (the same-name file, and the MODIFIED/REMOVED/ADDED rule) and to the
-design and tasks prompts (the files of the change's own capabilities), capped
+`artifact_context` lists its stems as `registry`, and
+`spec_steps._registry_section` appends `## Current behaviour (specs/registry)`
+to the design and tasks prompts (the files of the change's own capabilities), capped
 at `REGISTRY_TEXT_LIMIT` (a file left out is named with its requirement names,
-and names still over it are cut, `(cut at 60,000 characters)`, as is the
-proposal's list);
+and names still over it are cut, `(cut at 60,000 characters)`); pm-spec writes
+the proposal and requirements against the registry itself;
 an empty registry leaves every prompt unchanged.
 
 `EPIC_SPLIT` sits after `CODEBASE_ANALYSIS`, whose report it reads, and before
@@ -546,7 +549,7 @@ again. With `state.epic_dir` set, every run goes to
 are PR A's table in the plan; `tests/test_epic_stop_resume_a.py` tests the
 ones where a resume could destroy work or pay twice.
 
-`implementation-notes.md`, `respec.md`, `prototype/` and `.board.json` are not
+`implementation-notes.md`, `respec.md`, `spec-issues.md` and `.board.json` are not
 DAG artifacts, and neither are the documents `DOCS_UPDATE` writes — README,
 CHANGELOG and `docs/**` belong to the project, not to `specs/`, and are
 committed by their phase with an explicit pathspec.

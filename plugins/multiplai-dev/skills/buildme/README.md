@@ -1,6 +1,7 @@
-# BuildMe — From Idea to Working Code
+# BuildMe — From Ready Specs to Working Code
 
-BuildMe is a deterministic Python pipeline that orchestrates the journey from idea to production code. It replaces prompt-based orchestration with code-driven sequencing, keeping LLM calls focused and intentional.
+BuildMe is a deterministic Python pipeline that builds a change from the specs
+`/multiplai-pm:pm-spec` wrote and marked ready, through to production code and a PR. It replaces prompt-based orchestration with code-driven sequencing, keeping LLM calls focused and intentional.
 
 **Entry point:** `/buildme` (Claude Code skill)  
 **Pipeline:** `scripts/build_pipeline/` (Python, invoked as subprocess)
@@ -10,9 +11,10 @@ BuildMe is a deterministic Python pipeline that orchestrates the journey from id
 - **`uv`** (https://docs.astral.sh/uv/) — the pipeline is invoked via `uv run`.
 - **Network + git on first run** — the first invocation fetches the
   `multiplai-core` dependency.
-- **Optional: the `multiplai-research` plugin** — the Interview and Research
-  phases invoke `/interviewer` and `/deep-research` from that plugin. Without it,
-  gather requirements inline and skip research (`--skip-research`).
+- **The `multiplai-pm` plugin** — `/multiplai-pm:pm-spec` writes the proposal,
+  use cases and requirements every build starts from, and marks them ready.
+- **Optional: the `multiplai-research` plugin** — the Research phase invokes
+  `/deep-research` from that plugin. Without it, skip research (`--skip-research`).
 
 ## How It Works
 
@@ -27,8 +29,10 @@ BuildMe has two paths depending on task scale:
 The full pipeline runs as a subprocess to keep the parent context lean:
 
 ```
-Interview → Research → Spec Generation (+ unknowns/explainers) → Design Audit
-  → Plan Review → Prototype → Review → TDD Build → Respec → Archive
+(pm-spec: interview → proposal, use cases, requirements → ready)
+  → Readiness check → Research → Codebase Analysis
+  → Spec Generation (design, unknowns/explainers, tasks, rubric) → Design Audit
+  → Plan Review → Review → TDD Build → Docs → Respec → Archive
   → Publish (push + draft PR)
 ```
 
@@ -41,13 +45,27 @@ column is emitted at every transition — see
 
 ## The Full Pipeline
 
-### Phase 1: Interview
+### Phase 1: Readiness check
 
-The SKILL.md wrapper invokes the `/interviewer` skill to surface requirements, constraints, and hidden assumptions. The transcript is summarized and passed to the pipeline.
+Before anything is written, the build checks the change dir with
+`multiplai_core.specs.is_ready`: `.change.yaml` must say `spec_status: ready`
+with a `spec_revision` that still matches the proposal, use cases and
+requirements on disk. Otherwise it prints `SPEC:NOT_READY:<reason>` and
+`Run /multiplai-pm:pm-spec <name> first` (or `pm-spec resume <name>`, when
+specs never marked ready are on disk, as an older buildme build left them),
+and exits `2` with nothing written. A build that branches a worktree also
+refuses a change dir with uncommitted changes, since the worktree branches from
+`HEAD`. An open `spec_issues` record (below) refuses with `SPEC:ISSUES:<path>`,
+exit `4`. The interview, the ticket or PRD intake, the epic split and the
+prototype are pm-spec's; buildme has none of them.
 
 ### Phase 2: Research
 
-Unless `--skip-research`, the wrapper invokes `/deep-research` with topics from the interview. Research output is passed to the pipeline for spec generation.
+Unless `--skip-research`, one toolless call decides from the ready specs
+whether outside research is needed. When it is, the build exits `3` with
+`RESEARCH:NEEDED:<research-request.md>`; the wrapper runs `/deep-research` and
+re-runs with `--research-path`. The research is saved as `research.md` and the
+design prompt reads it.
 
 ### Phase 2.5: Codebase Analysis
 
@@ -60,7 +78,7 @@ already has instead of proposing a parallel structure beside them. At the
 review checkpoint the pipeline prints `REVIEW:CODEBASE_ANALYSIS:<path>`.
 
 The phase is skipped, with the reason logged, when the project has no source
-files yet and for `--only` runs (which generate no specs). A failure of the
+files yet. A failure of the
 analysis is never a build failure — the design falls back to treating the
 project as new.
 
@@ -89,19 +107,36 @@ spec-extract, not the analysis.
 
 ### Phase 3: Spec Generation
 
-The pipeline generates artifacts in dependency order:
+The pipeline generates the "how" in dependency order, from pm-spec's
+documents, which are required inputs it checks and never writes:
 
 ```
-proposal.md  (no dependencies)
-├── use-cases.md  (requires: proposal)
-├── requirements/*.md  (requires: proposal)
-├── design.md  (requires: proposal)
-│   └── unknowns.md  (requires: design)
-│       └── tasks.md  (requires: requirements + design + unknowns + use-cases)
-│           └── rubric.md  (requires: tasks)
+proposal.md, use-cases.md, requirements/*.md   (pm-spec's inputs)
+└── design.md  (requires: proposal + requirements)
+    └── unknowns.md  (requires: design)
+        └── tasks.md  (requires: proposal + requirements + design + unknowns + use-cases)
+            └── rubric.md  (requires: tasks)
 ```
 
-Each artifact is a focused LLM call with the right context. If generation is interrupted, completed artifacts are skipped on resume.
+Each artifact is a focused LLM call with the right context. If generation is
+interrupted, completed artifacts are skipped on resume. A missing input stops
+the build naming pm-spec. The planning revision still hashes the inputs: a
+change to them after pm-spec marks them ready again makes the design and
+everything after it stale, and they are written again.
+
+**Requirements problems go back to pm-spec.** The design prompt asks for one
+`SPEC_ISSUE: requirements/<capability>.md: <requirement>: <problem and fix>`
+line per requirement that cannot be built as written; the design audit marks a
+finding whose fix needs a requirements change `needs_requirements_change`; and
+a TDD agent's `SPEC_IMPACT: contradicts` under
+`respec: {halt_on_contradiction: true}` is a third. Each appends a `## `
+section to `spec-issues.md` in the change dir, sets `.change.yaml`
+`spec_issues`, prints `SPEC:ISSUES:<path>` and the `pm-spec revise` line, and
+exits `4`; the checkpoint is kept and is not FAILED. Every run refuses the same
+way, at no cost, until `/multiplai-pm:pm-spec revise <name>` fixes the
+requirements, clears `spec_issues` and marks them ready again; the next build
+then rewrites the design and what follows it. Requirements that change after
+the TDD build began refuse with `Planning inputs changed after implementation`.
 
 #### The unknowns / explainer gate
 
@@ -134,8 +169,8 @@ real new dependency. Turn it on only after
 
 ### Phase 4: Design Audit
 
-An adversarial audit call reviews the generated artifacts (proposal, specs,
-design, tasks) and returns a list of gaps. It checks two things: internal
+An adversarial audit call reviews the plan against its inputs (proposal,
+requirements, design, tasks) and returns a list of gaps. It checks two things: internal
 consistency (spec↔task alignment, design coherence, placeholders) and **plan
 quality** — abstractions no requirement asks for, blocks that are mis-sized for
 review, decisions with nothing a test can assert on, and edge cases no scenario
@@ -206,44 +241,16 @@ The phase prints `PHASE:PLAN_REVIEW:COMPLETE` and keeps the card in the
 Planning column: this review *is* the work Planning stands for, so it does not
 move the card.
 
-### Phase 5: Prototype
-
-The cheapest artifact that proves the shape, **before** the expensive TDD build:
-a single self-contained HTML mockup, a sample output file, or a hand-written
-transcript of the intended CLI/API exchange — no framework, no build step, no
-repo code. One agent writes it, plus `NOTES.md`, inside
-`specs/changes/<name>/prototype/`; the write boundary is enforced in code, not
-only in the prompt.
-
-- **When it runs:** `prototype_required()` says yes for `frontend` / `fullstack`
-  change types, or when the proposal/design mention a user-visible output format
-  (report, export, schema, CLI output, document). Otherwise it is skipped **with
-  a logged reason**. Override with `--prototype` / `--no-prototype` or
-  `prototype: {enabled: auto|true|false}`. `--spec-only` runs include this stage.
-- **NOTES.md REQUIRED slots:** `PROVES:`, `DISPROVES:`, `OPEN_QUESTIONS:`,
-  `STATUS:`.
-- **`prototype_gate`:** at least one artifact file besides `NOTES.md`, and
-  non-empty `PROVES:` and `OPEN_QUESTIONS:`. Failure → one retry, then the
-  build stops with a diagnosis and a resumable checkpoint, because the writer
-  may have left partial edits.
-- **Feedback into the spec:** non-empty `DISPROVES:` / `OPEN_QUESTIONS:` triggers
-  exactly **one** regeneration pass of `design.md` and `tasks.md` with the notes
-  injected as audit findings. Recorded as `spec_gen.steps.prototype` for resume.
-  The owner validates the staged set, including placeholders and no-behaviour
-  blocks, before publishing. Required design and plan audits run afterward and
-  may request their own bounded repairs. Completed prototypes do not rerun after
-  those repairs or during implementation resume.
-
 ### Phase 6: Review Checkpoint
 
 Pipeline pauses for human review (unless `--auto`). You can iterate on specs/design before building.
 
 Paths are printed in a deliberate order: `REVIEW:READ_FIRST:<unknowns.md>` comes
-**first, above everything else** — reading it is the anti-slop step — followed by
-`PROTOTYPE:file://…` and `PROTOTYPE_NOTES:file://…` (the container's localhost is
-not the user's, so the shared-mount `file://` path is the channel that works).
+**first, above everything else** — reading it is the anti-slop step.
 Read `use-cases.md` before `tasks.md`: a use case no block delivers is the
-cheapest thing to catch here.
+cheapest thing to catch here. A problem in `proposal.md`, `use-cases.md` or
+`requirements/` goes to `/multiplai-pm:pm-spec revise`, not into an edit here:
+an edit makes the next build refuse with `SPEC:NOT_READY`.
 
 ### Phase 7: TDD Build
 
@@ -270,8 +277,6 @@ files on disk, those files go to the quality and RED gates instead of failing
 the block; a retry is told which files are its drafts. A resumed block whose
 tests are committed and passed the RED gate goes straight to the implementer,
 and one whose tests are committed but did not pass it re-runs only the gates.
-A FAILED build's resume does not run the interview again when `interview.md`
-and the saved summary are there.
 
 Each agent report also carries two REQUIRED slots that close the loop back to the
 spec:
@@ -288,7 +293,7 @@ appended to `specs/changes/<name>/implementation-notes.md` **as the build runs**
 a crashed build still leaves the learning on disk. A `contradicts` note is logged
 as a warning and written to `build-progress.md`; with
 `respec: {halt_on_contradiction: true}` (default **false**) it stops the build
-with a diagnosis instead of steering around the contradiction.
+with `SPEC:ISSUES` (exit `4`, above) instead of steering around the contradiction.
 
 ### Phase 8: Entry-point check
 
@@ -399,7 +404,7 @@ whole-tree stage — a pathspec-limited `git add -A -- . :(exclude)build-progres
 **Publish.** `git push -u origin <branch>`, then `gh pr create` with a title from
 the change name and a body assembled from `proposal.md`'s Why, the block list,
 links to whichever companion artifacts exist (`unknowns.md`,
-`prototype/NOTES.md`, `implementation-notes.md`, `respec.md`), and a
+`implementation-notes.md`, `respec.md`), and a
 **Documentation** section naming the documents the build updated. `--draft` by
 default so nothing looks merge-ready without a human. `pr_url` is recorded in
 `BuildState` and `.board.json`, and `PR:<url>` is printed on stdout.
@@ -457,22 +462,20 @@ specs/
 ├── config.yaml                    # Project context, gate toggles
 ├── changes/
 │   └── my-feature/                # Active change
-│       ├── .change.yaml           # Metadata
+│       ├── .change.yaml           # Metadata; pm-spec's ready record (spec_status, spec_revision, spec_issues)
 │       ├── .build-state.json      # Resumable state checkpoint
 │       ├── .build-state.complete.json  # The same checkpoint, kept once the build finished
 │       ├── .board.json            # Kanban card (column, branch, pr_url, history)
-│       ├── proposal.md            # Why this change exists
-│       ├── use-cases.md           # Who it is for, and what they can observe
+│       ├── proposal.md            # Why this change exists (pm-spec's)
+│       ├── use-cases.md           # Who it is for, and what they can observe (pm-spec's)
 │       ├── design.md              # How to implement (architecture decisions)
 │       ├── unknowns.md            # Explainer per dependency new to this project
 │       ├── tasks.md               # Block-by-block work breakdown
 │       ├── rubric.md              # Evaluation criteria
-│       ├── prototype/             # Cheap shape proof, written before the build
-│       │   ├── NOTES.md           #   PROVES/DISPROVES/OPEN_QUESTIONS/STATUS
-│       │   └── mockup.html        #   (or sample output / CLI transcript)
 │       ├── implementation-notes.md # Agent SURPRISES/SPEC_IMPACT, appended live
 │       ├── respec.md              # Proposed spec delta (never auto-applied)
-│       └── requirements/          # BDD scenarios — one file per capability
+│       ├── spec-issues.md         # Requirements problems for pm-spec revise
+│       └── requirements/          # BDD scenarios — one file per capability (pm-spec's)
 │           ├── user-auth.md
 │           └── email-verification.md
 ├── registry/                      # Main spec registry (merged from archives)
@@ -483,6 +486,10 @@ specs/
 ```
 
 **To find your design doc, tasks, or requirements:** look in `specs/changes/<your-change-name>/`.
+
+pm-spec writes `proposal.md`, `use-cases.md` and `requirements/` (with its own
+interview, PRD, ticket and prototype files beside them); buildme writes the rest.
+The three below are shown as buildme reads them.
 
 ### proposal.md
 
@@ -518,7 +525,7 @@ token column.
 ```
 
 Capability entries are **kebab-case names only** — no descriptions. The intent
-lives in `use-cases.md`, and `_extract_capabilities` harvests every backticked
+lives in `use-cases.md`, and `expected_capabilities` harvests every backticked
 list item in this file, so a trailing description is noise it has to strip.
 Goals and Non-Goals live here, under What Changes; `design.md` no longer
 carries them.
@@ -700,10 +707,8 @@ The `/buildme` skill wrapper invokes the pipeline as a subprocess:
 ```bash
 uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/buildme/scripts \
   python -m build_pipeline build \
-  --mode scratch \
   --change "password-reset" \
   --project-dir /path/to/project \
-  --interview-summary "..." \
   [--auto] [--spec-only] [--skip-research]
 ```
 
@@ -721,14 +726,11 @@ uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/buildme/scripts \
 
 | Flag | Effect |
 |------|--------|
-| `--mode scratch` | Start from bare idea (interview first) |
-| `--mode brief` | Start from docs/research (load then interview) |
-| `--mode only` | Specs exist, just build |
+| `--change <name>` | Required: the change dir under `specs/changes/`, its specs marked ready by pm-spec |
 | `--auto` | Skip review checkpoint |
-| `--spec-only` | Stop after spec generation + design audit + prototype |
+| `--spec-only` | Stop after the design, tasks, design audit and plan review |
 | `--skip-research` | Skip the research phase |
 | `--skip-explainers` | Skip the unknowns/explainer pass (`unknowns.md` still records the skip) — `build`, `spec-generate` |
-| `--prototype` / `--no-prototype` | Force the prototype stage on / off (mutually exclusive) |
 | `--no-worktree` | Build in place on the current branch; implies no push and no PR |
 | `--no-push` | Do not push the build's branch |
 | `--no-pr` | Do not open a PR after pushing |
@@ -743,8 +745,7 @@ uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/buildme/scripts \
 | Key | Default | Effect |
 |-----|---------|--------|
 | `explainers: {enabled}` | `false` | The unknowns/edge-case explainer pass. Off: its dependency scan is broken (#375) |
-| `prototype: {enabled}` | `auto` | `auto` \| `true` \| `false` — the prototype stage |
-| `respec: {halt_on_contradiction}` | `false` | Stop the build on a `SPEC_IMPACT: contradicts` note |
+| `respec: {halt_on_contradiction}` | `false` | Stop the build on a `SPEC_IMPACT: contradicts` note, with `SPEC:ISSUES` for pm-spec |
 | `git: {worktree, push, pr}` | `true, true, draft` | Git lifecycle (`pr`: `draft` \| `ready` \| `none`) |
 | `reference_docs: {<stack>: [...]}` | built-in map | Which docs under `$CLAUDE_CONFIG_DIR/reference/dev/` the design and tasks are written against. Keys: the detected stack (`pyproject`, `Package`, `package`, `Cargo`, `go`) or framework (`django`, `react`); a key given here replaces the built-in list for that key alone |
 
@@ -756,9 +757,9 @@ CLI flags win over `config.yaml` in every case.
 |------|---------|
 | 0 | Success |
 | 1 | Build failure (a failed TDD build prints `ERROR:TDD build failed (exit <n>)`) |
-| 2 | Usage error (e.g. an input file that does not exist), or a refusal that wrote nothing: another process holds the epic's lock, or an approved epic file changed (the `ERROR:` line names which) |
+| 2 | Usage error (e.g. an input file that does not exist), or a refusal that wrote nothing: `SPEC:NOT_READY` (the specs are not ready, changed after they were, or are not committed for a worktree build), or another process holds the epic's lock (the `ERROR:` line names it) |
 | 3 | Waiting on a human or the wrapper — see SKILL.md Step 4. This includes `BUILD:COMPLETE:<path>`: the change already published, and the re-run wrote nothing |
-| 4 | Agent timeout |
+| 4 | `SPEC:ISSUES:<path>`: a requirements problem, written to `spec-issues.md` for `/multiplai-pm:pm-spec revise`. Without that marker: an agent timeout |
 | 130, 143 | An epic run stopped by Ctrl-C or SIGTERM; re-run the same command to continue |
 | 129, 143 | A `build` or `findings` stopped by SIGHUP or SIGTERM (it still prints `SPEND:`). An epic run stopped by SIGHUP leaves its children running; re-run the same command to continue |
 
@@ -779,15 +780,12 @@ model and effort the run started with and where each came from (`session`,
 A build stopped by SIGTERM in block 2, then resumed:
 ```
 # Build Progress: password-reset
-Mode: scratch | Tier: standard
+Tier: standard
 Model: claude-opus-5-5 (session) | Effort: high (session)
 
 ## [2026-10-16T06:41:19Z] LAUNCHED
 
 ## [2026-10-16T06:41:19Z] BOARD → Shaping (owner: product)
-
-## [2026-10-16T06:41:19Z] INTERVIEW
-Interview (user) saved to …/specs/changes/password-reset/interview.md
 
 ## [2026-10-16T06:41:19Z] BOARD → Planning (owner: eng)
 
@@ -851,10 +849,7 @@ PHASE:SPEC_GENERATION:COMPLETE
 PHASE:DESIGN_AUDIT:COMPLETE
 BOARD:password-reset:Planning
 PHASE:PLAN_REVIEW:COMPLETE
-PHASE:PROTOTYPE:COMPLETE
 REVIEW:READ_FIRST:/…/specs/changes/password-reset/unknowns.md
-PROTOTYPE:file:///…/specs/changes/password-reset/prototype/mockup.html
-PROTOTYPE_NOTES:file:///…/specs/changes/password-reset/prototype/NOTES.md
 PHASE:REVIEW:COMPLETE
 BOARD:password-reset:In Development
 BLOCK:1/2:Reset Request:COMPLETE
@@ -886,8 +881,6 @@ Gates are pure functions (no LLM calls) that return pass/fail decisions:
 | Gate | When | Fail Action |
 |------|------|-------------|
 | `unknowns_gate` | After `unknowns.md` is written | One regeneration pass for the missing sections only (no loop) |
-| `prototype_required` | Before the prototype stage | Not a pass/fail gate — decides whether the stage runs, and logs the reason either way |
-| `prototype_gate` | After the prototype agent | One retry, then stop the build with a resumable checkpoint |
 | `docs_freshness_gate` | After the documentation phase | **Never fails.** Prints `DOCS_WARNING:<reason>` when source changed, a changelog exists, and nothing was documented |
 | Baseline test | Before block 1 | Abort (existing tests broken) |
 | Weak test detection | After test writer | Retry with feedback |
@@ -1119,8 +1112,7 @@ State is checkpointed to `.build-state.json` after every phase transition:
                                             "text": "No scenario covers an empty schedule.",
                                             "status": "resolved", "evidence": "requirements/next-run.md, scenario 4"}],
                        "blocked_revision": null},
-      "plan_review": {"revision": "<plan-content-hash>", "outcome": "passed", "repair_attempts": 0},
-      "prototype": {"revision": "<prototype-input-hash>", "outcome": "passed", "repair_attempts": 0}
+      "plan_review": {"revision": "<plan-content-hash>", "outcome": "passed", "repair_attempts": 0}
     }
   },
   "tdd": {
@@ -1172,7 +1164,8 @@ Cancelled.
 | `progress.py` | Tail-able progress file writer | No |
 | `env.py` | .env loading, model resolution | No |
 | `llm_steps/spec_steps.py` | Artifact generation, design audit, per-dependency explainer | Yes |
-| `llm_steps/prototype_steps.py` | Prototype agent + folding its notes back into design/tasks | Yes |
+| `llm_steps/research_steps.py` | The research decision, from the ready specs | Yes |
+| `readiness.py` | `SPEC:NOT_READY` / `SPEC:ISSUES` refusals and `spec-issues.md` | No |
 | `llm_steps/tdd_steps.py` | Test writer, implementer, refactorer | Yes |
 | `llm_steps/docs_steps.py` | The documentation phase — README/CHANGELOG/`docs/**` updated from the build diff | Yes |
 | `llm_steps/respec_steps.py` | Implementation-notes file + the `respec.md` proposal | Yes |
@@ -1190,7 +1183,8 @@ PYTHONPATH=. python -m pytest tests/ -xvs
 
 The test suite covers config, state, models, gates, change manager, dependency
 detection, spec generator, plan review and its split assessment, vendored-prompt
-pins, prototype/docs/respec steps, git lifecycle, board seam, and the TDD
+pins, the ready-specs refusals and spec issues (rows S10–S15), a pm-spec to
+buildme run end to end, docs/respec steps, git lifecycle, board seam, and the TDD
 engine. All tests mock LLM calls (and `gh`) — no API keys
 needed.
 
@@ -1241,9 +1235,7 @@ and resume; the step then gets one rewrite.` Edit the plan to address those
 findings before resuming: when a step's input files differ from
 `blocked_revision`, the resume clears `repair_findings` and `blocked_revision`,
 gives the step its one rewrite back, and audits it as a first audit. The tasks
-audit and the prototype feedback follow the same rule. Prototype evidence remains revision-bound
-before implementation: a changed proposal invalidates a prior skip. Repairs made
-by the planning publisher retain the completed prototype while updating design.
+audit follows the same rule.
 
 If a hard interruption loses staging-ownership evidence, the commit refusal names
 the paths. Inspect `git diff` and `git diff --cached`, save both versions, then
