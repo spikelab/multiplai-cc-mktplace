@@ -125,6 +125,17 @@ async def run_epic_split_phase(config, state, state_path: Path, args, progress) 
     return None
 
 
+def is_epic(config) -> bool:
+    """True when the change's `.change.yaml` lists `children` (pm-spec split it).
+    Placeholder: the epic rework replaces it."""
+    return False
+
+
+async def run_epic_from_specs(config, args) -> int:
+    """Placeholder: the epic rework replaces it."""
+    raise NotImplementedError
+
+
 async def continue_epic(config, state, args, *, just_split: bool = False) -> int:
     """What a build that is an epic does (item 7). *just_split* is True in the
     run that wrote the split: it always waits, so an `--approve-split` given

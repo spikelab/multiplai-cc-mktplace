@@ -35,6 +35,12 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
     """Main entry point for the build orchestrator."""
     budget_mod.reset()
     budget_mod.configure(max_tokens=config.budget_max_tokens, max_usd=config.budget_max_usd)
+    # An epic: pm-spec split this change and its `.change.yaml` lists the
+    # children. Read in the caller's checkout, before any worktree re-binding:
+    # the children build from the commit that holds their ready specs there.
+    from .epic import phase as epic_phase
+    if epic_phase.is_epic(config):
+        return await epic_phase.run_epic_from_specs(config, args)
     # Resume re-binding, before anything derives a path from the config: a
     # previous run's state file lives INSIDE its worktree, so a plain
     # config.state_file_path() lookup against the source repo would miss it
