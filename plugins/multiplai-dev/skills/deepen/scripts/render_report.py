@@ -3,6 +3,10 @@
 
 Usage:
     render_report.py --in <candidates.json> [--repo NAME] [--out PATH] [--open]
+                     [--design-system-dir PATH]
+
+The page is styled with a design-system folder's tokens.css (and fonts.css when it has one):
+--design-system-dir, else the neutral theme the design-system skill ships beside this one.
 
 If --out is omitted, writes to <tmpdir>/architecture-review-<ts>.html and prints the
 path on stdout. With --open, also opens the report in the user's default browser.
@@ -21,19 +25,47 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
+from markupsafe import Markup
+
+# scripts/ → deepen/ → skills/: the design-system skill's neutral theme sits beside this skill.
+NEUTRAL = Path(__file__).resolve().parents[2] / "design-system" / "assets" / "neutral"
 
 STRENGTH_CLASSES = {
-    "Strong": "bg-emerald-100 text-emerald-800",
-    "Worth exploring": "bg-amber-100 text-amber-800",
-    "Speculative": "bg-slate-200 text-slate-700",
+    "Strong": "bg-[var(--ok-soft)] text-[var(--ok)]",
+    "Worth exploring": "bg-[var(--warn-soft)] text-[var(--warn)]",
+    "Speculative": "bg-[var(--sunk)] text-[var(--muted)]",
 }
 
 
 def strength_class(strength: str) -> str:
-    return STRENGTH_CLASSES.get(strength, "bg-slate-200 text-slate-700")
+    return STRENGTH_CLASSES.get(strength, "bg-[var(--sunk)] text-[var(--muted)]")
 
 
-def render(payload: dict, repo: str | None = None) -> str:
+def design_css(design_dir: Path | None = None) -> tuple[str, str]:
+    """`(fonts.css, tokens.css)` of *design_dir* (default: neutral); fonts is empty when the folder has none.
+
+    Raises ValueError when tokens.css is missing, or when either file contains `</style`, which would end
+    the page's style element.
+    """
+    folder = Path(design_dir) if design_dir else NEUTRAL
+    tokens = folder / "tokens.css"
+    if not tokens.is_file():
+        raise ValueError(f"design system {folder}: tokens.css is missing")
+    fonts = folder / "fonts.css"
+    out = (
+        fonts.read_text(encoding="utf-8") if fonts.is_file() else "",
+        tokens.read_text(encoding="utf-8"),
+    )
+    for name, text in zip(("fonts.css", "tokens.css"), out, strict=True):
+        if "</style" in text.lower():
+            raise ValueError(f"design system {folder}: {name} contains </style")
+    return out
+
+
+def render(
+    payload: dict, repo: str | None = None, design_dir: Path | None = None
+) -> str:
+    fonts_css, tokens_css = design_css(design_dir)
     here = Path(__file__).resolve().parent
     env = Environment(
         loader=FileSystemLoader(here / "templates"),
@@ -58,6 +90,9 @@ def render(payload: dict, repo: str | None = None) -> str:
         or datetime.now(UTC).isoformat(timespec="seconds"),
         candidates=candidates,
         top_recommendation=payload.get("top_recommendation"),
+        # Not escaped: CSS inside <style> is raw text, and design_css refused `</style`.
+        fonts_css=Markup(fonts_css),
+        tokens_css=Markup(tokens_css),
     )
 
 
@@ -106,10 +141,24 @@ def main(argv: list[str]) -> int:
     p.add_argument(
         "--open", action="store_true", help="Open the report in the default browser."
     )
+    p.add_argument(
+        "--design-system-dir",
+        help="Design-system folder to style the report with (default: the neutral theme).",
+    )
     args = p.parse_args(argv)
 
     payload = json.loads(Path(args.in_path).read_text(encoding="utf-8"))
-    html = render(payload, repo=args.repo)
+    try:
+        html = render(
+            payload,
+            repo=args.repo,
+            design_dir=Path(args.design_system_dir).expanduser()
+            if args.design_system_dir
+            else None,
+        )
+    except ValueError as e:
+        print(f"[deepen] {e}", file=sys.stderr)
+        return 1
 
     out = Path(args.out) if args.out else default_out_path()
     out.write_text(html, encoding="utf-8")

@@ -208,22 +208,32 @@ The output is a single self-contained HTML file with this structure:
 
 ### Visual design
 
-- System font stack (`-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`)
-- 18px body text, 1.7 line-height
-- Light page background (`#f7fafc`), white content cards
-- Dark code blocks (`#1a202c` background) with Prism.js "Tomorrow Night" theme
-- Sidebar: light background (`#edf2f7`), subtle border-right
-- Code blocks: rounded corners, file-path label as tab above code
-- Progress bar: accent color (teal `#319795`)
+Colours and fonts come from the user's design system. Before writing the page,
+load the `multiplai-dev:design-system` skill and run its `path` command. Inline
+that folder's `fonts.css` (when it exists) and then its `tokens.css` in
+`<style>` elements at the top of `<head>`, as the skeleton below shows. After
+that, use only its `var(--…)` tokens for colours and fonts; write no hex values.
+Without that skill, inline the `:root` token block from the design-system
+contract yourself (greys, one blue accent, system fonts, a dark scheme), and
+keep the same variable names.
+
+- Body text in `var(--font-body)`, 18px, 1.7 line-height
+- Page background `var(--bg)`, content cards `var(--surface)`
+- Code blocks `var(--code-bg)`; the Prism theme follows the reader's colour scheme
+- Sidebar: `var(--sunk)` background, `var(--line)` border-right
+- Code blocks: rounded corners (`var(--radius)`), file-path label as tab above code
+- Progress bar and the current step: `var(--accent)`
 - Tables: striped rows, sticky headers, full-width
 - Responsive: sidebar collapses to hamburger menu below 768px
 - Smooth transitions on navigation
 
 ### Syntax highlighting
 
-Load Prism.js and relevant language component from CDN:
+Load Prism.js and relevant language component from CDN, with the light theme
+and the dark one each behind its `prefers-color-scheme` media query:
 ```html
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+<link rel="stylesheet" media="(prefers-color-scheme: light)" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css">
+<link rel="stylesheet" media="(prefers-color-scheme: dark)" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-{language}.min.js"></script>
 ```
@@ -239,93 +249,96 @@ Use the correct `language-*` class for code blocks. Match the codebase's actual 
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{Framework} Guide — {Project Name}</title>
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+  <link rel="stylesheet" media="(prefers-color-scheme: light)" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css">
+  <link rel="stylesheet" media="(prefers-color-scheme: dark)" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+  <style>/* the design system's fonts.css, when it has one */</style>
+  <style>/* the design system's tokens.css */</style>
   <style>
     /* Reset */
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      font-size: 18px; line-height: 1.7; color: #2d3748; background: #f7fafc;
+      font-family: var(--font-body);
+      font-size: 18px; line-height: 1.7; color: var(--fg); background: var(--bg);
     }
 
     /* Progress bar */
-    #progress { position: fixed; top: 0; left: 0; right: 0; height: 40px; background: #fff;
-      border-bottom: 1px solid #e2e8f0; display: flex; align-items: center; padding: 0 20px;
-      z-index: 100; font-size: 14px; color: #718096; }
-    #progress-bar { height: 4px; background: #319795; position: absolute; bottom: 0; left: 0;
+    #progress { position: fixed; top: 0; left: 0; right: 0; height: 40px; background: var(--surface);
+      border-bottom: 1px solid var(--line); display: flex; align-items: center; padding: 0 20px;
+      z-index: 100; font-size: 14px; color: var(--muted); }
+    #progress-bar { height: 4px; background: var(--accent); position: absolute; bottom: 0; left: 0;
       transition: width 0.3s ease; }
 
     /* Sidebar */
-    #sidebar { position: fixed; top: 40px; left: 0; bottom: 0; width: 280px; background: #edf2f7;
-      border-right: 1px solid #e2e8f0; overflow-y: auto; padding: 20px 0; z-index: 90; }
-    #sidebar h2 { font-size: 15px; padding: 8px 20px; color: #2d3748; margin: 0;
-      border-bottom: 1px solid #e2e8f0; }
+    #sidebar { position: fixed; top: 40px; left: 0; bottom: 0; width: 280px; background: var(--sunk);
+      border-right: 1px solid var(--line); overflow-y: auto; padding: 20px 0; z-index: 90; }
+    #sidebar h2 { font-size: 15px; padding: 8px 20px; color: var(--fg); margin: 0;
+      border-bottom: 1px solid var(--line); }
     .sidebar-section { margin-bottom: 4px; }
-    .sidebar-section-title { font-size: 13px; font-weight: 700; color: #4a5568; padding: 10px 20px 4px;
+    .sidebar-section-title { font-size: 13px; font-weight: 700; color: var(--muted); padding: 10px 20px 4px;
       text-transform: uppercase; letter-spacing: 0.05em; cursor: pointer; user-select: none; }
     .sidebar-section-title::before { content: "▸ "; font-size: 11px; }
     .sidebar-section.open .sidebar-section-title::before { content: "▾ "; }
     .sidebar-section .step-list { display: none; }
     .sidebar-section.open .step-list { display: block; }
-    .step-link { display: block; padding: 6px 20px 6px 32px; font-size: 14px; color: #4a5568;
+    .step-link { display: block; padding: 6px 20px 6px 32px; font-size: 14px; color: var(--muted);
       text-decoration: none; cursor: pointer; border-left: 3px solid transparent;
       transition: all 0.15s ease; }
-    .step-link:hover { background: #e2e8f0; }
-    .step-link.active { background: #fff; color: #319795; border-left-color: #319795; font-weight: 600; }
+    .step-link:hover { background: var(--line); }
+    .step-link.active { background: var(--surface); color: var(--accent); border-left-color: var(--accent); font-weight: 600; }
 
     /* Main content */
     #main { margin-left: 280px; margin-top: 40px; padding: 40px 60px 80px; max-width: 900px; }
     .step { display: none; }
     .step.active { display: block; }
-    .step h1 { font-size: 28px; color: #1a202c; margin-bottom: 8px; }
+    .step h1 { font-size: 28px; font-family: var(--font-display); color: var(--fg); margin-bottom: 8px; }
     .step .section-label { font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em;
-      color: #319795; font-weight: 700; margin-bottom: 4px; }
-    .step h2 { font-size: 22px; color: #2d3748; margin: 32px 0 12px; }
-    .step h3 { font-size: 18px; color: #4a5568; margin: 24px 0 8px; }
+      color: var(--accent); font-weight: 700; margin-bottom: 4px; }
+    .step h2 { font-size: 22px; font-family: var(--font-display); color: var(--fg); margin: 32px 0 12px; }
+    .step h3 { font-size: 18px; color: var(--muted); margin: 24px 0 8px; }
     .step p { margin: 12px 0; }
     .step ul, .step ol { margin: 12px 0; padding-left: 24px; }
     .step li { margin: 6px 0; }
 
     /* Code blocks */
-    .code-block { margin: 16px 0; border-radius: 8px; overflow: hidden; }
-    .code-block .file-path { background: #2d3748; color: #a0aec0; font-size: 12px;
-      padding: 6px 16px; font-family: monospace; }
+    .code-block { margin: 16px 0; border-radius: var(--radius); overflow: hidden; }
+    .code-block .file-path { background: var(--sunk); color: var(--muted); font-size: 12px;
+      padding: 6px 16px; font-family: var(--font-mono); }
     .code-block pre { margin: 0; border-radius: 0; }
     .code-block pre code { font-size: 14px; line-height: 1.5; }
 
     /* Inline code */
-    code:not([class*="language-"]) { background: #edf2f7; padding: 2px 6px; border-radius: 4px;
-      font-size: 0.9em; color: #c53030; }
+    code:not([class*="language-"]) { background: var(--code-bg); padding: 2px 6px; border-radius: 4px;
+      font-size: 0.9em; color: var(--code-fg); font-family: var(--font-mono); }
 
     /* Tables */
     table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 15px; }
     thead { position: sticky; top: 0; }
-    th { background: #2d3748; color: #fff; padding: 10px 14px; text-align: left; font-weight: 600; }
-    td { padding: 10px 14px; border-bottom: 1px solid #e2e8f0; }
-    tr:nth-child(even) td { background: #f7fafc; }
+    th { background: var(--sunk); color: var(--fg); padding: 10px 14px; text-align: left; font-weight: 600; }
+    td { padding: 10px 14px; border-bottom: 1px solid var(--line); }
+    tr:nth-child(even) td { background: var(--bg); }
 
     /* Details / expandable */
-    details { margin: 16px 0; border: 1px solid #e2e8f0; border-radius: 8px; }
-    summary { padding: 12px 16px; cursor: pointer; font-weight: 600; color: #4a5568;
-      background: #f7fafc; border-radius: 8px; }
-    details[open] summary { border-bottom: 1px solid #e2e8f0; border-radius: 8px 8px 0 0; }
+    details { margin: 16px 0; border: 1px solid var(--line); border-radius: var(--radius); }
+    summary { padding: 12px 16px; cursor: pointer; font-weight: 600; color: var(--muted);
+      background: var(--bg); border-radius: var(--radius); }
+    details[open] summary { border-bottom: 1px solid var(--line); border-radius: 8px 8px 0 0; }
     details > div { padding: 16px; }
 
     /* Navigation buttons */
     .nav-buttons { display: flex; justify-content: space-between; margin-top: 48px;
-      padding-top: 24px; border-top: 1px solid #e2e8f0; }
-    .nav-btn { padding: 10px 24px; border: 1px solid #e2e8f0; border-radius: 6px;
-      background: #fff; color: #4a5568; font-size: 15px; cursor: pointer;
+      padding-top: 24px; border-top: 1px solid var(--line); }
+    .nav-btn { padding: 10px 24px; border: 1px solid var(--line); border-radius: var(--radius);
+      background: var(--surface); color: var(--fg); font-size: 15px; cursor: pointer;
       transition: all 0.15s ease; text-decoration: none; }
-    .nav-btn:hover { background: #edf2f7; border-color: #cbd5e0; }
-    .nav-btn.primary { background: #319795; color: #fff; border-color: #319795; }
-    .nav-btn.primary:hover { background: #2c7a7b; }
+    .nav-btn:hover { background: var(--sunk); border-color: var(--muted); }
+    .nav-btn.primary { background: var(--accent); color: var(--surface); border-color: var(--accent); }
+    .nav-btn.primary:hover { filter: brightness(0.9); }
     .nav-btn:disabled { opacity: 0.4; cursor: default; }
 
     /* Hamburger menu for mobile */
     #menu-toggle { display: none; position: fixed; top: 8px; right: 16px; z-index: 110;
-      background: #fff; border: 1px solid #e2e8f0; border-radius: 4px; padding: 6px 10px;
+      background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 10px;
       font-size: 20px; cursor: pointer; }
 
     @media (max-width: 768px) {

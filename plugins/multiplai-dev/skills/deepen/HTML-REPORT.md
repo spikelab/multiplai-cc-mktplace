@@ -1,6 +1,6 @@
 # HTML Report Format
 
-The architectural review is rendered as a single self-contained HTML file in the OS temp directory. The LLM produces a JSON file; `scripts/render_report.py` turns it into HTML using a Jinja2 template (`scripts/templates/report.html.j2`) and, with `--open`, opens it in the default browser. Tailwind and Mermaid come from CDNs.
+The architectural review is rendered as a single self-contained HTML file in the OS temp directory. The LLM produces a JSON file; `scripts/render_report.py` turns it into HTML using a Jinja2 template (`scripts/templates/report.html.j2`) and, with `--open`, opens it in the default browser. Tailwind and Mermaid come from CDNs. Colours and fonts come from a design-system folder (`--design-system-dir`, default the neutral theme of the `design-system` skill), whose `fonts.css` and `tokens.css` the page inlines.
 
 This file is the **spec for the JSON contract** and the **editorial guide** for what each card should contain. The Jinja template is the single source of truth for the HTML.
 
@@ -44,11 +44,11 @@ This file is the **spec for the JSON contract** and the **editorial guide** for 
 - **files** — list of file paths involved. Rendered monospace.
 - **problem / solution** — one sentence each. Use glossary terms verbatim.
 - **wins** — bullets, ≤6 words each. Frame in terms of locality / leverage / interface / seam. Avoid "easier to maintain," "cleaner code" — those aren't in the glossary.
-- **strength** — one of `"Strong"` (emerald), `"Worth exploring"` (amber), `"Speculative"` (slate).
+- **strength** — one of `"Strong"` (the design system's `--ok` colour), `"Worth exploring"` (`--warn`), `"Speculative"` (`--muted`).
 - **dependency_category** — one of `"in-process"`, `"local-substitutable"`, `"ports-and-adapters"`, `"mock"` (see [DEEPENING.md](DEEPENING.md)).
 - **diagram.kind** — currently `"mermaid"` is the only supported kind. Hand-built SVG support may come later; for now, lean on Mermaid `flowchart`, `graph`, or `sequenceDiagram`.
 - **diagram.before / diagram.after** — raw Mermaid source. The template wraps each in a `<pre class="mermaid">` inside a Tailwind card.
-- **adr_callout** — `null` or a one-line string like `"Contradicts ADR-0007 — but worth reopening because the seam is now untested."` Rendered as an amber-tinted box.
+- **adr_callout** — `null` or a one-line string like `"Contradicts ADR-0007 — but worth reopening because the seam is now untested."` Rendered as a box tinted with the design system's `--warn-soft`.
 - **top_recommendation.index** — zero-based index into `candidates`.
 
 ## Diagram patterns
