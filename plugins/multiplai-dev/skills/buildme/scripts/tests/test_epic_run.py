@@ -285,7 +285,7 @@ def test_a_childs_saved_command_marks_it_an_epic_child(tmp_path, monkeypatch):
     e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT)
     argv = e.coord().new_argv("a", None)
     assert BuildConfig.from_cli_args(build_parser().parse_args(argv[3:])).epic_child is True
-    plain = ["build", "--project-dir", str(e.project)]
+    plain = ["build", "--change", "x", "--project-dir", str(e.project)]
     assert BuildConfig.from_cli_args(build_parser().parse_args(plain)).epic_child is False
 
 
@@ -835,7 +835,7 @@ def test_the_build_branches_from_base_ref_and_counts_an_empty_branch_against_it(
 def test_base_ref_is_a_build_flag(tmp_path):
     from build_pipeline.__main__ import build_parser
 
-    args = build_parser().parse_args(["build", "--project-dir", str(tmp_path), "--base-ref", "abc123"])
+    args = build_parser().parse_args(["build", "--change", "x", "--project-dir", str(tmp_path), "--base-ref", "abc123"])
     config = BuildConfig(project_dir=tmp_path)
     config._apply_git_cli_overrides(args)
     assert config.base_ref == "abc123"
