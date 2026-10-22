@@ -22,6 +22,7 @@ from urllib.parse import quote as url_quote
 import code_facts
 from code_facts.paths import PathHop, PathsResult, TracedPath
 
+from . import design
 from .check import LINK
 from .gates import CITE_ID, file_at_commit, lines_at_commit, sections_gate
 from .models import Citation, RepoInfo, WalkState, hop_id
@@ -1454,9 +1455,12 @@ def _html_subs(key: str, sec: MdSection) -> str:
     return "\n".join(out)
 
 
-def render_html(state: WalkState, out_dir: Path) -> str:
+def render_html(
+    state: WalkState, out_dir: Path, styles: tuple[str, str] | None = None
+) -> str:
     """The explainer as one scrolling page with a contents rail. The structured sections are drawn from
-    their gated answers; the others from the same Markdown the .md file holds."""
+    their gated answers; the others from the same Markdown the .md file holds. *styles* is `(fonts, tokens)`
+    CSS from `design.css`; None is the template's own tokens."""
     lk = Linker(state, out_dir)
     t = state.target
     sections = human_md_sections(state, lk, out_dir)
@@ -1490,9 +1494,13 @@ def render_html(state: WalkState, out_dir: Path) -> str:
         )
         + f'<p class="run">{_inline(run_line(state), CiteNumbers())}</p></header>'
     )
+    fonts, tokens = styles if styles is not None else design.css(None)
     page = TEMPLATE.read_text(encoding="utf-8")
     return (
-        page.replace("{{TITLE}}", html.escape(f"{t.package} walkthrough"))
+        # The design system's CSS first, so text it holds is never taken for a later placeholder's.
+        page.replace("{{FONTS}}", fonts)
+        .replace("{{TOKENS}}", tokens)
+        .replace("{{TITLE}}", html.escape(f"{t.package} walkthrough"))
         .replace("{{HEADER}}", hide_locations(header))
         .replace("{{NAV}}", "\n".join(nav))
         .replace("{{BODY}}", hide_locations("\n".join(body)))
@@ -1541,7 +1549,17 @@ def unreadable_commit(state: WalkState) -> str | None:
     return None
 
 
-def write_outputs(state: WalkState, out_dir: Path) -> list[Path]:
+def write_outputs(
+    state: WalkState, out_dir: Path, design_dir: str | Path | None = None
+) -> list[Path]:
+    """Write the run's files to *out_dir*. The page is styled with *design_dir*, else the run's saved
+    `--design-system-dir`, else the template's own tokens; a folder that fails its check raises
+    `design.DesignSystemError` before any file is written."""
+    styles = (
+        design.css(design_dir or state.options.get("design_system_dir"))
+        if state.options.get("mode") != "agent"
+        else None
+    )
     out_dir.mkdir(parents=True, exist_ok=True)
     name = state.target.name
     md = render_markdown(state, out_dir)
@@ -1562,7 +1580,7 @@ def write_outputs(state: WalkState, out_dir: Path) -> list[Path]:
         )
         paths.append(json_path)
         html_path = out_dir / f"{name}-walkthrough.html"
-        html_path.write_text(render_html(state, out_dir), encoding="utf-8")
+        html_path.write_text(render_html(state, out_dir, styles), encoding="utf-8")
         paths.append(html_path)
         written = write_paths_output(state, md_path)
         if written is not None:
