@@ -717,6 +717,8 @@ def _md_affected(state: WalkState, lk: Linker) -> MdSection:
 
 # Drop reasons of map_paths that mean an entry point's path does not go through the change.
 NOT_REACHING = ("unreachable", "no_changed_line_covered")
+# Entry points listed under "Entry points that miss it"; the rest are in the Left out table.
+MAX_UNTOUCHED_ENTRIES = 20
 
 
 def top_dirs(repo: RepoInfo) -> list[str]:
@@ -764,8 +766,15 @@ def _md_untouched(state: WalkState, lk: Linker) -> MdSection:
             "",
             *[
                 f"- `{_cell(d.entry.name)}` (`{t.repo_key}/{d.entry.location.path}:{d.entry.location.line}`)"
-                for d in drops
+                for d in drops[:MAX_UNTOUCHED_ENTRIES]
             ],
+            *(
+                [
+                    f"- … and {len(drops) - MAX_UNTOUCHED_ENTRIES} more; see **Left out** under Coverage."
+                ]
+                if len(drops) > MAX_UNTOUCHED_ENTRIES
+                else []
+            ),
         ]
         if drops
         else [

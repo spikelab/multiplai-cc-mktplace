@@ -318,3 +318,56 @@ def test_s9_render_of_a_finished_change_run_is_identical(change, tmp_path, monke
             assert a == b.replace("../again", "../out") or a == b
         else:
             assert a == b
+
+
+def test_untouched_lists_at_most_twenty_entry_points(change, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from code_facts.paths import PathDrop
+    from walkthrough_pipeline import render
+
+    ws, base, head = change
+    monkeypatch.setattr(sdk, "agent_call_structured", FakeAgents())
+    assert main(_args(ws, tmp_path, "--range", f"{base}..{head}")) == 0
+    state = load_state(next((tmp_path / "runs").iterdir()) / STATE_FILE)
+    drops = [
+        PathDrop.model_construct(
+            stage="import_reachability",
+            reason="unreachable",
+            detail="",
+            entry=SimpleNamespace(
+                name=f"e{i}", location=SimpleNamespace(path="a.py", line=1)
+            ),
+        )
+        for i in range(25)
+    ]
+    state.paths = state.paths.model_copy(update={"dropped": drops})
+    text = render._md_untouched(state, None).subs[2][1]
+    assert text.count("\n- `") == render.MAX_UNTOUCHED_ENTRIES
+    assert "- … and 5 more; see **Left out** under Coverage." in text
+
+
+def test_a_caller_must_reach_the_changed_module():
+    from walkthrough_pipeline.models import RepoInfo
+    from walkthrough_pipeline.references import _callers_in
+
+    repo = RepoInfo(key="r", path="/nowhere", head_sha="0" * 40)
+    modules = {"build_parser": {"client"}}
+    text = (
+        "from bookings.client import build_parser as bp\n"
+        "from bookings import client\n"
+        "import other.client as oc\n"
+        "from tools import build_parser\n"  # another module's function of the same name
+        "bp()\n"
+        "client.build_parser()\n"
+        "oc.build_parser()\n"
+        "build_parser()\n"
+        "thing.build_parser()\n"
+    )
+    hits = sorted(r.line for r in _callers_in(repo, "a.py", text, modules, set()))
+    assert hits == [1, 5, 6, 7]
+    own = "def build_parser():\n    pass\n\n\nclass C:\n    def go(self):\n        return self.build_parser()\n"
+    hits = [
+        r.line for r in _callers_in(repo, "client.py", own, modules, {"build_parser"})
+    ]
+    assert hits == [7]

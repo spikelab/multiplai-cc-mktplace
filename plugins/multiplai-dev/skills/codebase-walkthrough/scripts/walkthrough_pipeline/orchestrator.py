@@ -262,7 +262,7 @@ async def _code_stage(
                 references.scan_callers,
                 state.repos,
                 t,
-                {n for names in changed.values() for n in names},
+                changed,
             )
             state.lsp = {
                 "status": "skipped (a change: callers come from git grep and ast)"
