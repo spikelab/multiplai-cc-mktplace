@@ -257,7 +257,7 @@ def test_S6_spec_only_keeps_its_checkpoint_and_the_mode_only_handoff_runs(box):
     after = box.progress()
     assert after.startswith(specs_progress)
     resumed = after[len(specs_progress):]
-    assert "] RESUMED\nMode: only" in resumed and "Block 2/2: block-2 — done" in resumed
+    assert "] RESUMED\nTier: advanced" in resumed and "Block 2/2: block-2 — done" in resumed
 
 
 def test_S7_a_standalone_tdd_completion_does_not_stop_the_next_build(box):

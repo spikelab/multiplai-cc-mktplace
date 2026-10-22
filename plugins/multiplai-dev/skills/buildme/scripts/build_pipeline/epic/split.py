@@ -15,7 +15,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from ..prompts.epic_split import EPIC_SPLIT_PROMPT, EPIC_SPLIT_RETRY
-from ..prompts.interview import UNTRUSTED_NOTICE
+from ..prompts.research import UNTRUSTED_NOTICE
 from ..sdk import llm_call_structured
 
 log = logging.getLogger(__name__)

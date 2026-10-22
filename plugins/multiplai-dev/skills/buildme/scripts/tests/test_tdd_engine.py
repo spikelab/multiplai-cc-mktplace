@@ -985,7 +985,7 @@ class TestRunBlockTDD:
         )
 
         progress = ProgressWriter(tmp_path / "progress.md")
-        progress.initialize("test", "only", "advanced", 1)
+        progress.initialize("test", "advanced", 1)
 
         return config, state, progress, block
 
@@ -1228,7 +1228,7 @@ class TestBlockRefactorVerification:
             tdd=TDDState(blocks=[block]),
         )
         progress = ProgressWriter(tmp_path / "progress.md")
-        progress.initialize("test", "only", "advanced", 1)
+        progress.initialize("test", "advanced", 1)
         return config, state, progress, block
 
     @staticmethod
@@ -1462,7 +1462,7 @@ class TestRedGateWiring:
             tdd=TDDState(blocks=[block]),
         )
         progress = ProgressWriter(tmp_path / "progress.md")
-        progress.initialize("test", "only", "advanced", 1)
+        progress.initialize("test", "advanced", 1)
         return config, state, progress, block
 
     @pytest.mark.asyncio
@@ -1590,7 +1590,7 @@ class TestNarrowTestCommandInTheBlockLoop:
             tdd=TDDState(blocks=[block]),
         )
         progress = ProgressWriter(tmp_path / "progress.md")
-        progress.initialize("test", "only", "advanced", 1)
+        progress.initialize("test", "advanced", 1)
         return config, state, progress, block
 
     @staticmethod
@@ -1912,7 +1912,7 @@ class TestEvidenceBasedReview:
             tdd=TDDState(blocks=[block]),
         )
         progress = ProgressWriter(tmp_path / "progress.md")
-        progress.initialize("feat", "only", "advanced", 1)
+        progress.initialize("feat", "advanced", 1)
 
         ok = AgentResult(success=True, output="done")
         with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=ok), \
@@ -1939,7 +1939,7 @@ class TestEvidenceBasedReview:
             tdd=TDDState(blocks=[block]),
         )
         progress = ProgressWriter(tmp_path / "progress.md")
-        progress.initialize("feat", "only", "advanced", 1)
+        progress.initialize("feat", "advanced", 1)
 
         ok = AgentResult(success=True, output="done")
         with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=ok), \
@@ -1993,7 +1993,7 @@ class TestEvidenceBasedReview:
             tdd=TDDState(blocks=[block]),
         )
         progress = ProgressWriter(tmp_path / "progress.md")
-        progress.initialize("feat", "only", "advanced", 1)
+        progress.initialize("feat", "advanced", 1)
 
         ok = AgentResult(success=True, output="done")
         with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=ok), \
@@ -2022,7 +2022,7 @@ class TestEvidenceBasedReview:
             tdd=TDDState(blocks=[block]),
         )
         progress = ProgressWriter(tmp_path / "progress.md")
-        progress.initialize("feat", "only", "advanced", 1)
+        progress.initialize("feat", "advanced", 1)
 
         ok = AgentResult(success=True, output="done")
         with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=ok), \
@@ -2204,7 +2204,7 @@ class TestWeakTestEnforcement:
             tdd=TDDState(blocks=[block]),
         )
         progress = ProgressWriter(tmp_path / "progress.md")
-        progress.initialize("test", "only", "advanced", 1)
+        progress.initialize("test", "advanced", 1)
         return config, state, progress, block
 
     @pytest.mark.asyncio
@@ -2323,7 +2323,7 @@ class TestReviewExhaustionEnforcement:
             tdd=TDDState(blocks=[block]),
         )
         progress = ProgressWriter(tmp_path / "progress.md")
-        progress.initialize("test", "only", "advanced", 1)
+        progress.initialize("test", "advanced", 1)
         return config, state, progress, block
 
     def _failing_review(self):
@@ -2537,7 +2537,7 @@ class TestIntegrationFixCircuitBreaker:
             tdd=TDDState(blocks=[block]),
         )
         progress = ProgressWriter(tmp_path / "progress.md")
-        progress.initialize("test", "only", "advanced", 1)
+        progress.initialize("test", "advanced", 1)
         return config, state, progress, block
 
     @pytest.mark.asyncio
@@ -2683,7 +2683,7 @@ class TestAgentStatusEnforcement:
         )
         progress_path = tmp_path / "progress.md"
         progress = ProgressWriter(progress_path)
-        progress.initialize("test", "only", "advanced", 1)
+        progress.initialize("test", "advanced", 1)
         return config, state, progress, block, progress_path
 
     @pytest.mark.asyncio
@@ -3091,7 +3091,7 @@ class TestWholeChangeRefactor:
             tdd=TDDState(blocks=[block], current_block=1),
         )
         progress = ProgressWriter(tmp_path / "progress.md")
-        progress.initialize("feat", "only", "advanced", 1)
+        progress.initialize("feat", "advanced", 1)
         return config, state, progress
 
     @staticmethod
@@ -3590,7 +3590,7 @@ class TestImplementationNotesLoop:
             tdd=TDDState(blocks=[block]),
         )
         progress = ProgressWriter(project_dir / "build-progress.md")
-        progress.initialize("test", "only", "advanced", 1)
+        progress.initialize("test", "advanced", 1)
         return config, state, progress, block
 
     @staticmethod
@@ -3909,7 +3909,7 @@ class TestRedExpected:
         state = BuildState(change_name="test", mode="only", tier="advanced",
                            state_file=str(root / "state.json"), tdd=TDDState(blocks=[block]))
         progress = ProgressWriter(root / "progress.md")
-        progress.initialize("test", "only", "advanced", 1)
+        progress.initialize("test", "advanced", 1)
         return config, state, progress, block
 
     @staticmethod

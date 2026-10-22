@@ -120,7 +120,7 @@ def _make_project(base: Path, subdir: bool = False) -> SimpleNamespace:
     )
     state.checkpoint(config.state_file_path())
     progress = ProgressWriter(base / "progress.md")
-    progress.initialize("test", "only", "advanced", 1)
+    progress.initialize("test", "advanced", 1)
     return SimpleNamespace(dir=project_dir, root=root, config=config, state=state, block=block,
                            progress=progress, baseline=baseline)
 

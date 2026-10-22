@@ -1,11 +1,14 @@
 """Build orchestrator — main pipeline for /buildme.
 
-Three modes:
-  - scratch: interview → research → specs → design audit → review → build
-  - brief: load docs → interview → research → specs → design audit → review → build
-  - only: verify specs → research check → build
+A build starts from a change whose proposal, use cases and requirements
+pm-spec marked ready (`multiplai_core.specs.is_ready`); anything else is
+refused with `SPEC:NOT_READY` (exit 2) before a file is written. Then:
+bootstrap → research → codebase analysis → design, unknowns, tasks, rubric →
+design audit → plan review → size gate → review → TDD → docs → respec →
+archive → publish. A parent change pm-spec split into children is an epic,
+handed to `epic.phase` before any of this.
 
-The SKILL.md wrapper handles interactive phases (interview, plan review).
+The SKILL.md wrapper handles interactive phases (plan review).
 This module handles the non-interactive pipeline sequencing.
 """
 
@@ -20,12 +23,13 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from . import board, git_ops, review_rounds, walkthroughs
+from . import board, git_ops, readiness, review_rounds, walkthroughs
 from . import budget as budget_mod
 from .change_manager import ChangeManager
 from .config import BuildConfig
 from .models import BoardColumn, BuildPhase
 from .progress import ProgressWriter
+from .readiness import SpecIssuesFound
 from .state import BuildState, SpecGenState, completed_state_path
 
 log = logging.getLogger(__name__)
@@ -52,6 +56,12 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
     # with the change dir into specs/archive/ — _existing_state_path finds it
     # in either place.
     state_path = _existing_state_path(config) or config.state_file_path()
+
+    # buildme builds only from specs pm-spec marked ready (rows S10, S11, S13):
+    # checked before anything is written, so a refusal changes nothing.
+    rc = _refuse_unless_ready(config, state_path)
+    if rc is not None:
+        return rc
 
     # Nothing to resume, but this change already published: ask before
     # building it again (exit 3, writing nothing). With --force, build it anew
@@ -89,7 +99,6 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
     else:
         state = BuildState(
             change_name=config.change_name,
-            mode=config.mode,
             tier=config.tier,
             state_file=str(state_path),
         )
@@ -126,14 +135,14 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
     def start_progress() -> None:
         nonlocal progress_started
         if not progress_started:
-            progress.initialize(config.change_name, config.mode, config.tier)
+            progress.initialize(config.change_name, config.tier)
             budget_mod.warn_into(progress)
             progress_started = True
 
     try:
         # Phase: Bootstrap
-        if not state.is_phase_complete(BuildPhase.BOOTSTRAP) and config.mode != "only":
-            log.info("START phase=BOOTSTRAP change=%s mode=%s tier=%s", config.change_name, config.mode, config.tier)
+        if not state.is_phase_complete(BuildPhase.BOOTSTRAP):
+            log.info("START phase=BOOTSTRAP change=%s tier=%s", config.change_name, config.tier)
             from .intake import ConfigNotCommittedError
             try:
                 await _run_bootstrap(config, state, cm, state_path, args=args)
@@ -149,30 +158,9 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             start_progress()
             log.info("DONE phase=BOOTSTRAP")
             print("PHASE:BOOTSTRAP:COMPLETE", flush=True)
-            # First board record of the run: the card is being shaped. Not
-            # recorded any earlier — at INIT the change directory does not
-            # exist yet, and creating it would suppress .change.yaml.
+            # First board record of the run: the card is being shaped.
             board.record(config, state, BuildPhase.BOOTSTRAP, progress=progress)
         start_progress()
-
-        # Phase: Interview. `user`: the SKILL.md wrapper ran the interviewer and
-        # we receive its summary. `self`: questioner + answerer, no human.
-        # `ticket`: questions go on the ticket and the build waits (exit 3).
-        # Every mode saves interview.md in the change dir.
-        # A FAILED build counts no phase as complete, but its interview is on
-        # disk and in the state: running it again rewrites interview.md and,
-        # under `self`, pays for two agent calls. A ticket still waiting for
-        # replies goes through the phase, which owns that wait.
-        if (not state.tdd and not state.is_phase_complete(BuildPhase.INTERVIEW_DONE) and config.mode != "only"
-                and (config.change_dir / "interview.md").is_file() and state.interview_summary
-                and not state.interview_waiting):
-            log.info("SKIP phase=INTERVIEW reason=interview-on-disk")
-            print("PHASE:INTERVIEW:COMPLETE", flush=True)
-        elif not state.tdd and not state.is_phase_complete(BuildPhase.INTERVIEW_DONE) and config.mode != "only":
-            from .intake import run_interview_phase
-            rc = await run_interview_phase(config, state, args, state_path, progress)
-            if rc is not None:
-                return rc
 
         # Phase: Research
         if not state.tdd and not state.is_phase_complete(BuildPhase.RESEARCH):
@@ -180,10 +168,6 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
                 log.info("SKIP phase=RESEARCH reason=--skip-research")
                 log.info("DONE phase=RESEARCH")
                 state.advance_to(BuildPhase.RESEARCH, state_path)
-            elif config.mode == "only":
-                log.info("START phase=RESEARCH_CHECK")
-                await _run_research_check(config, state, cm, state_path)
-                log.info("DONE phase=RESEARCH")
             else:
                 log.info("START phase=RESEARCH")
                 from .intake import run_research_phase
@@ -216,29 +200,9 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             print("PHASE:CODEBASE_ANALYSIS:COMPLETE", flush=True)
             board.record(config, state, BuildPhase.CODEBASE_ANALYSIS, progress=progress)
 
-        # Phase: Epic split — one change, or several children with one plan
-        # each. Unlike the phases above, a pointer AT EPIC_SPLIT means the
-        # decision is made: re-entering would pay for the call again. So does
-        # `state.epic_single`, which a FAILED build keeps. A build that split
-        # (state.epic_dir set) never reaches spec generation.
-        just_split = False
-        if not state.tdd and state.epic_dir is None and not state.epic_single and not (
-                state.phase == BuildPhase.EPIC_SPLIT or state.is_phase_complete(BuildPhase.EPIC_SPLIT)):
-            log.info("START phase=EPIC_SPLIT")
-            from .epic import phase as epic_phase
-            rc = await epic_phase.run_epic_split_phase(config, state, state_path, args, progress)
-            if rc is not None:
-                return rc
-            just_split = state.epic_dir is not None
-            log.info("DONE phase=EPIC_SPLIT")
-            print("PHASE:EPIC_SPLIT:COMPLETE", flush=True)
-            board.record(config, state, BuildPhase.EPIC_SPLIT, progress=progress)
-        if state.epic_dir:
-            from .epic import phase as epic_phase
-            return await epic_phase.continue_epic(config, state, args, just_split=just_split)
-
-        # Phase: Spec Generation
-        if not state.tdd and not state.is_phase_complete(BuildPhase.SPEC_GENERATION) and config.mode != "only":
+        # Phase: Spec Generation — buildme's half of the plan: design, unknowns,
+        # tasks and rubric, from the ready proposal, use cases and requirements.
+        if not state.tdd and not state.is_phase_complete(BuildPhase.SPEC_GENERATION):
             log.info("START phase=SPEC_GENERATION")
             from .spec_generator import run_spec_generator
             result = await run_spec_generator(config, args, standalone=False)
@@ -256,34 +220,26 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             # Reload state from disk — run_spec_generator loaded its own copy
             # and checkpointed the spec_gen sub-state (completed artifacts, the
             # audit/gate completion flags). Advancing our stale copy would
-            # write those back as null, and the design audit below would then
-            # regenerate a second time because design_audit_regen_done was
-            # lost. Same reason the TDD phase reloads.
+            # write those back as null.
             if state_path.exists():
                 state = BuildState.load(state_path)
-            # Only ever forwards. The reloaded copy may already sit at a LATER
-            # phase than this one — run_spec_generator advances to DESIGN_AUDIT
-            # before running its audit stage — and advance_to assigns
-            # unconditionally, so an unguarded call here would rewind the
-            # persisted pointer to SPEC_GENERATION. That re-opens the phases in
-            # between (the DESIGN_AUDIT block below would re-enter and pay
-            # another audit call) and leaves a checkpoint that lies about where
-            # the build is.
+            # Only ever forwards: advance_to assigns unconditionally, and the
+            # reloaded copy may already sit at a later phase.
             if not state.is_phase_complete(BuildPhase.SPEC_GENERATION):
                 state.advance_to(BuildPhase.SPEC_GENERATION, state_path)
-            # Shaping/planning lands as its own commit so the branch history
-            # reads shaping → planning → implementation rather than one lump.
+            # Planning lands as its own commit so the branch history reads
+            # specs → planning → implementation rather than one lump.
             # No-op when the pipeline does not own a branch (--no-worktree).
             git_ops.commit_stage(
                 config,
-                f"docs(specs): {config.change_name} — proposal, requirements, design, tasks",
+                f"docs(specs): {config.change_name} — design, tasks",
                 _spec_paths(config),
             )
             log.info("DONE phase=SPEC_GENERATION")
             print("PHASE:SPEC_GENERATION:COMPLETE", flush=True)
             board.record(config, state, BuildPhase.SPEC_GENERATION, progress=progress)
 
-        # Reconcile edited/legacy plans before required validation. Completed
+        # Reconcile edited plans before required validation. Completed
         # implementation is kept only while its recorded planning inputs agree.
         from .spec_generator import reconcile_plan, _generate_all_artifacts
         if state.phase != BuildPhase.PUBLISH:
@@ -296,14 +252,6 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
                 raise RuntimeError("Planning inputs changed after implementation; start a new build to preserve completed work")
             await _generate_all_artifacts(cm, config.change_dir, config, state)
             state.checkpoint(state_path)
-
-        # Phase: Prototype — a cheap artifact that proves the shape before the
-        # expensive TDD build. A failed writer leaves a resumable failure.
-        if state.phase != BuildPhase.PUBLISH and not _prototype_finished(state):
-            await _run_prototype_phase(config, state, progress, state_path)
-            state.checkpoint(state_path)
-            print("PHASE:PROTOTYPE:COMPLETE", flush=True)
-            board.record(config, state, BuildPhase.PROTOTYPE, progress=progress)
 
         # A plan-review repair can invalidate the earlier design audit. The
         # owner returns only once both outcomes describe the final revision.
@@ -331,7 +279,8 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             assert_plan_current(config, state)
 
         # Stop if --spec-only. The checkpoint is kept, renamed, at the last spec
-        # phase: not a published build, so the `--mode only` handoff runs as usual.
+        # phase: not a published build, so the next `build` of the change runs
+        # as usual.
         if config.spec_only:
             log.info("DONE pipeline=spec-only")
             build_succeeded = True
@@ -347,7 +296,6 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
                 log.info("SKIP phase=REVIEW reason=--auto")
             else:
                 _print_review_context_paths(config)
-                _print_prototype_review_paths(config)
                 log.info("DONE phase=REVIEW")
             state.advance_to(BuildPhase.REVIEW, state_path)
             print("PHASE:REVIEW:COMPLETE", flush=True)
@@ -368,6 +316,12 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             # and our in-memory copy is stale. Without this, advance_to() overwrites tdd state with null.
             if state_path.exists():
                 state = BuildState.load(state_path)
+            issues = readiness.open_issues(config.change_dir)
+            if result != 0 and issues is not None:
+                # SPEC_IMPACT: contradicts under respec.halt_on_contradiction
+                # wrote spec-issues.md (row S12): stop for `pm-spec revise`.
+                log.error("STOP phase=TDD_BUILD reason=spec_issues path=%s", issues)
+                return readiness.refuse_issues(issues)
             if result != 0:
                 log.error("FAIL phase=TDD_BUILD exit_code=%d", result)
                 print(f"ERROR:TDD build failed (exit {result})", file=sys.stderr, flush=True)
@@ -542,6 +496,14 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
         state.checkpoint(state_path)
         progress.log_phase("BUDGET", f"STOPPED: {e}\n{e.diagnosis}")
         return 1
+    except SpecIssuesFound as found:
+        # A requirement the build cannot follow goes back to pm-spec (rows
+        # S11, S12): not a failure, so the state is not marked FAILED and a
+        # re-run after `pm-spec revise` resumes here.
+        log.error("STOP pipeline change=%s reason=spec_issues step=%s", config.change_name, found.step)
+        if state_path.exists():
+            BuildState.load(state_path).checkpoint(state_path)
+        return readiness.stop_on_issues(config.change_dir, found, change=config.change_name)
     except (SystemExit, KeyboardInterrupt, asyncio.CancelledError) as e:
         # A stop (SIGTERM/SIGHUP via git_ops._exit_on_termination, Ctrl-C) is
         # not a failure: write it down, save the spend so far, and let it end
@@ -572,6 +534,69 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
                 log.warning("Could not write the spend summary to the progress file: %s", e)
 
 
+def _refuse_unless_ready(config: BuildConfig, state_path: Path) -> int | None:
+    """Refuse a build whose specs are not ready, before anything is written.
+
+    The specs are the change dir the checkpoint is in (the archive's, once an
+    `--auto` archive moved it), else the change's dir. Not ready
+    (`multiplai_core.specs.is_ready`) prints `SPEC:NOT_READY:<reason>`, exit 2
+    (rows S10, S13). The advice names `pm-spec resume <name>`, which checks
+    specs already on disk and marks them ready without rewriting them, when
+    the specs were never marked and a proposal and requirements are on disk,
+    unless a checkpoint from before buildme stopped generating them is still
+    short of their generation (item 21). An open `spec_issues` prints
+    `SPEC:ISSUES:<path>`, exit 4 (rows S11, S12). A first run that will branch
+    a worktree from HEAD refuses a change dir with uncommitted changes, since
+    the worktree would not hold them. A finished build's checkpoint is not
+    checked: its run only reports the result.
+    """
+    from multiplai_core.specs import CHANGE_META_FILE, is_ready, read_change_meta
+
+    from . import readiness
+
+    prior = None
+    if state_path.exists():
+        try:
+            prior = BuildState.load(state_path)
+        except Exception as e:  # noqa: BLE001 — an unreadable checkpoint is reported where it is loaded
+            log.warning("Could not read %s before the specs check: %s", state_path, e)
+        if prior is not None and prior.phase == BuildPhase.COMPLETE:
+            return None
+    change_dir = state_path.parent if state_path.exists() else config.change_dir
+    ready, reason = is_ready(change_dir)
+    if not ready:
+        try:
+            marked = (change_dir / CHANGE_META_FILE).is_file() and \
+                read_change_meta(change_dir).get("spec_status") is not None
+        except (OSError, UnicodeError, ValueError):
+            marked = False
+        on_disk = (change_dir / "proposal.md").is_file() and any((change_dir / "requirements").glob("*.md"))
+        early = prior is not None and prior.tdd is None and not prior.is_phase_complete(BuildPhase.SPEC_GENERATION)
+        log.error("REFUSED change=%s reason=spec-not-ready detail=%s", config.change_name, reason)
+        return readiness.refuse_not_ready(config.change_name, reason,
+                                          resume=not marked and on_disk and not early)
+    issues = readiness.open_issues(change_dir)
+    if issues is not None:
+        log.error("REFUSED change=%s reason=spec-issues file=%s", config.change_name, issues)
+        return readiness.refuse_issues(issues)
+    if prior is None and config.git.worktree:
+        try:
+            dirty = readiness.uncommitted(config.project_dir, change_dir)
+        except git_ops.GitLifecycleError as e:
+            # Not a checkout git can read: bootstrap's preflight says why.
+            log.warning("Could not check %s for uncommitted changes: %s", change_dir, e)
+            dirty = []
+        if dirty:
+            log.error("REFUSED change=%s reason=specs-uncommitted paths=%s", config.change_name, dirty)
+            return readiness.refuse_not_ready(
+                config.change_name,
+                f"{change_dir} has uncommitted changes ({', '.join(dirty[:5])}"
+                f"{', ...' if len(dirty) > 5 else ''}); the build's worktree branches from HEAD, "
+                f"which does not hold them",
+                resume=True)
+    return None
+
+
 def _record_interrupt(progress, state_path: Path, exc: BaseException, *, completed: bool) -> None:
     """Write a stop down: `## INTERRUPTED by <SIG>` in the progress file, a
     WARNING log line, and the checkpoint re-saved with the spend so far.
@@ -593,114 +618,6 @@ def _record_interrupt(progress, state_path: Path, exc: BaseException, *, complet
         BuildState.load(state_path).checkpoint(state_path)
     except Exception as e:  # noqa: BLE001 — a stop must not turn into a crash
         log.warning("Could not save the checkpoint on %s: %s", sig, e)
-
-
-def prototype_decision(config) -> tuple[bool, str]:
-    """Whether to run the prototype stage, and the reason either way.
-
-    "false" / "true" come from `--no-prototype` / `--prototype` or
-    `prototype: {enabled: ...}` in specs/config.yaml; "auto" defers to
-    gates.prototype_required (frontend/fullstack, or a user-visible output
-    format). The reason is always logged, so a skip is a recorded decision
-    rather than a silent absence.
-    """
-    mode = getattr(config, "prototype_mode", "auto")
-    if mode == "false":
-        return False, "disabled (--no-prototype / config.yaml prototype.enabled: false)"
-    if mode == "true":
-        return True, "forced on (--prototype / config.yaml prototype.enabled: true)"
-
-    from .gates import prototype_required
-
-    if prototype_required(config.change_dir):
-        return True, "auto: change has a UI or a user-visible output format"
-    return False, "auto: no UI and no user-visible output format in proposal/design"
-
-
-def _prototype_finished(state: BuildState) -> bool:
-    """A completed optional prototype is not repeated after downstream repairs."""
-    return state.tdd is not None or bool(state.spec_gen and state.spec_gen.step_passed("prototype"))
-
-
-async def _run_prototype_phase(
-    config: BuildConfig, state: BuildState, progress: ProgressWriter, state_path: Path,
-) -> None:
-    """Run the prototype stage and feed its notes back into design/tasks.
-
-    Completed prototype work is not repeated after downstream audit repairs.
-    A failed writer raises because it can leave partial edits; disabled or
-    inapplicable prototypes record an explicit skipped outcome.
-    """
-    # Resume guard, BEFORE the expensive agent run: prototype_done is
-    # checkpointed after the feedback pass, so a crash between that checkpoint
-    # and advance_to(PROTOTYPE) would otherwise re-run the agent here and then
-    # skip the feedback pass — discarding whatever the fresh run disproved.
-    # The artifact already exists on disk and its findings were applied; skip
-    # the whole re-run.
-    if _prototype_finished(state):
-        log.info("SKIP phase=PROTOTYPE reason=recorded-complete-in-state")
-        return
-
-    should_run, reason = prototype_decision(config)
-    if not should_run:
-        log.info("SKIP phase=PROTOTYPE reason=%s", reason)
-        print(f"PHASE:PROTOTYPE:SKIPPED:{reason}", flush=True)
-        if state.spec_gen is None:
-            state.spec_gen = SpecGenState()
-        state.spec_gen.record_step("prototype", "skipped", reason)
-        state.checkpoint(state_path)
-        return
-
-    if state.spec_gen is None:
-        state.spec_gen = SpecGenState()
-    from .spec_generator import reconcile_plan, refuse_if_blocked, reopen_if_edited, rewrite_published
-
-    reconcile_plan(config, state)
-    if rewrite_published(state.spec_gen, "prototype"):
-        # The feedback rewrite was published before the stop; nothing is left to do.
-        log.info("SKIP phase=PROTOTYPE reason=feedback-rewrite-published")
-        state.spec_gen.record_step("prototype", "passed")
-        state.checkpoint(state_path)
-        return
-    reopen_if_edited(state, "prototype", state_path)
-    refuse_if_blocked(state.spec_gen, "prototype")
-    state.spec_gen.record_step("prototype", "blocked", "Prototype and feedback have not completed")
-    state.checkpoint(state_path)
-    log.info("START phase=PROTOTYPE reason=%s", reason)
-    from .llm_steps.prototype_steps import apply_prototype_findings, run_prototype
-
-    try:
-        result = await run_prototype(config)
-    except BudgetExceededError:
-        raise
-    except Exception as proto_err:
-        log.warning("Prototype stage failed: %s", proto_err)
-        _log_prototype_diagnosis(progress, config, str(proto_err))
-        raise
-
-    if not result.passed:
-        log.warning("FAIL phase=PROTOTYPE reason=%s", result.reason)
-        _log_prototype_diagnosis(progress, config, result.reason)
-        raise RuntimeError(f"Prototype writer failed: {result.reason}")
-
-    log.info("DONE phase=PROTOTYPE — %s", result.reason)
-
-    # One regeneration pass of design.md/tasks.md from the notes. (A completed
-    # feedback pass never reaches here — the guard at the top of this function
-    # skips the whole phase when prototype_done is recorded.)
-    if state.spec_gen is None:
-        state.spec_gen = SpecGenState()
-    try:
-        regenerated = await apply_prototype_findings(config, state)
-        log.info("DONE phase=PROTOTYPE_FEEDBACK regenerated=%d", regenerated)
-    except BudgetExceededError:
-        raise
-    except Exception as feedback_err:
-        log.warning("Prototype feedback pass failed: %s", feedback_err)
-        _log_prototype_diagnosis(progress, config, str(feedback_err))
-        raise
-    state.spec_gen.record_step("prototype", "passed")
-    state.checkpoint(state_path)
 
 
 async def _run_docs_update_phase(
@@ -881,25 +798,6 @@ def _progress_note(progress: ProgressWriter, phase: str, text: str) -> None:
         log.warning("Could not write %s note to progress file: %s", phase, e)
 
 
-def _log_prototype_diagnosis(progress: ProgressWriter, config: BuildConfig, reason: str) -> None:
-    """Record why the prototype phase failed where the user will read it."""
-    print(f"PHASE:PROTOTYPE:FAILED:{reason}", flush=True)
-    try:
-        progress.log_diagnosis(
-            "prototype",
-            f"Prototype stage did not produce a usable artifact.\n"
-            f"Reason: {reason}\n"
-            f"Expected under: {config.prototype_dir}\n"
-            f"The build continues — the prototype is an aid, not a dependency.",
-        )
-    except OSError as e:
-        log.warning("Could not write prototype diagnosis to progress file: %s", e)
-
-
-# Source extensions that make a directory "a codebase worth analyzing". A
-# project whose only files are specs/, a README and a .gitignore has nothing
-# for the explore agents to read, and three agents reporting "(new project)"
-# is pure spend.
 _SOURCE_SUFFIXES = frozenset({
     ".py", ".swift", ".ts", ".tsx", ".js", ".jsx", ".rs", ".go", ".java",
     ".kt", ".rb", ".php", ".cs", ".c", ".h", ".cc", ".cpp", ".hpp", ".m",
@@ -938,12 +836,8 @@ async def _run_codebase_analysis_phase(
 
     Never raises: the design falls back to "(new project)" when this produces
     nothing, which is exactly the pre-phase behavior. Skipped — with the reason
-    logged — in `only` mode (no spec generation to feed) and for a project with
-    no source files yet.
+    logged — for a project with no source files yet.
     """
-    if config.mode == "only":
-        log.info("SKIP phase=CODEBASE_ANALYSIS reason=only-mode-generates-no-specs")
-        return
     if (state.spec_gen is not None and state.spec_gen.spec_extract_sha
             and state.spec_gen.codebase_analysis_path):
         # Saved by the spec-extract step, which runs after this analysis: an
@@ -1066,13 +960,9 @@ def _run_spec_extract_step(
     registry = Path(config.specs_dir) / "registry"
     saved = state.spec_gen.spec_extract_sha if state.spec_gen else None
     reason = None
-    if config.mode == "only":
-        reason = "only-mode"
-    elif _epic_child(config):
-        # The parent ran spec-extract, and a child with no dependency in the
-        # epic's repo branches from the parent's registry commit
-        # (`coordinator.registry_commit`); siblings at one commit would also
-        # race for its lock. A child in another repo builds without a baseline.
+    if _epic_child(config):
+        # Siblings at one commit would race for spec-extract's lock and each
+        # commit a registry baseline, so an epic's children build without one.
         reason = "epic-child"
     elif not config.spec_extract:
         reason = "spec_extract-false"
@@ -1146,24 +1036,6 @@ def _print_review_context_paths(config: BuildConfig) -> None:
         print(f"REVIEW:CODEBASE_ANALYSIS:{config.codebase_analysis_path}", flush=True)
 
 
-def _print_prototype_review_paths(config: BuildConfig) -> None:
-    """Print the prototype's `file://` path at the non-auto review checkpoint.
-
-    The pipeline runs inside a container whose localhost is not the user's, so
-    a served URL would be unreachable; the shared filesystem mount is the
-    channel that always works.
-    """
-    from .llm_steps.prototype_steps import primary_prototype_artifact
-
-    artifact = primary_prototype_artifact(config.prototype_dir)
-    if artifact is None:
-        return
-    print(f"PROTOTYPE:file://{artifact.resolve()}", flush=True)
-    notes = config.prototype_dir / "NOTES.md"
-    if notes.exists():
-        print(f"PROTOTYPE_NOTES:file://{notes.resolve()}", flush=True)
-
-
 async def _run_bootstrap(
     config: BuildConfig, state: BuildState, cm: ChangeManager, state_path: Path,
     *, args=None,
@@ -1180,7 +1052,7 @@ async def _run_bootstrap(
     from . import intake, stop_record
 
     previous_change_dir = config.change_dir if config.change_name else None
-    # A FAILED build, or a re-run of one that stopped before its interview
+    # A FAILED build, or a re-run of one that stopped before its research
     # finished (pointer back AT BOOTSTRAP, with the record this bootstrap
     # saves below), keeps its own worktree: its branch may hold commits,
     # which `_setup_worktree` refuses.
@@ -1229,7 +1101,6 @@ async def _run_bootstrap(
         cm.create_change(config.change_name)
         if previous_change_dir is not None:
             intake.carry_over_inputs(previous_change_dir, config.change_dir)
-        _save_intake(config, state, args)
 
     # Write config.yaml if it doesn't exist
     config_yaml = config.specs_dir / "config.yaml"
@@ -1244,30 +1115,11 @@ async def _run_bootstrap(
 
     # What a kept re-run's bootstrap leaves is the build's own (the check
     # above passed, then bootstrap wrote its files): a stop before the
-    # interview finishes resumes in place against this record. Any other
+    # research finishes resumes in place against this record. Any other
     # bootstrap starts a tree that no failure record describes.
     state.failed_stop = stop_record.record(config.project_dir) if kept else None
     state.bootstrap_done = True
     state.advance_to(BuildPhase.BOOTSTRAP, state_path)
-
-
-def _save_intake(config: BuildConfig, state: BuildState, args) -> None:
-    """Record what the build started from, once the change dir exists:
-    --ticket-file → ticket.md (fenced), --plan-file → plan.md, and the
-    ticket ref/url and plan path on the state."""
-    from . import intake
-
-    if args is None:
-        return
-    state.ticket_ref = getattr(args, "ticket_ref", "") or state.ticket_ref
-    state.ticket_url = getattr(args, "ticket_url", "") or state.ticket_url
-    ticket_file = getattr(args, "ticket_file", "") or ""
-    if ticket_file:
-        intake.save_ticket(config.change_dir, ticket_file,
-                           ref=state.ticket_ref or "", url=state.ticket_url or "")
-    plan_file = getattr(args, "plan_file", "") or ""
-    if plan_file and intake.save_plan(config.change_dir, plan_file):
-        state.plan_file = plan_file
 
 
 def _run_size_gate(
@@ -1327,7 +1179,7 @@ def _inside_own_worktree(config: BuildConfig, state: BuildState) -> bool:
 
 def _keeps_failed_worktree(config: BuildConfig, state: BuildState) -> bool:
     """Whether a FAILED build re-run inside its own worktree keeps it. A
-    re-run stopped before its interview finished (pointer AT BOOTSTRAP) is
+    re-run stopped before its research finished (pointer AT BOOTSTRAP) is
     checked the same way, against the record its bootstrap saved.
 
     A re-run (by hand, or an epic coordinator's relaunch of a failed child
@@ -1444,7 +1296,7 @@ def _rebind_to_existing_worktree(config: BuildConfig) -> None:
     found: list[tuple[str, Path, BuildState]] = []
     for dest in candidates:
         probe = BuildConfig(
-            mode=config.mode, project_dir=dest / offset, change_name=config.change_name,
+            project_dir=dest / offset, change_name=config.change_name,
         )
         probe.specs_dir = dest / offset / "specs"
         probe_state = _existing_state_path(probe)
@@ -1552,7 +1404,7 @@ def _completed_builds(config: BuildConfig) -> list[tuple[str, Path, BuildState]]
             prefix = git_ops.worktree_dir_name(config.change_name)
             for dest in sorted(p for p in root.iterdir() if p.is_dir() and (
                     p.name == prefix or p.name.startswith(f"{prefix}-"))):
-                probe = BuildConfig(mode=config.mode, project_dir=dest / offset,
+                probe = BuildConfig(project_dir=dest / offset,
                                     change_name=config.change_name)
                 probe.specs_dir = dest / offset / "specs"
                 projects.append(probe)
@@ -1689,8 +1541,7 @@ def _pr_base_branch(repo: Path, base_ref: str) -> str | None:
 
 def _pr_open_argv(
     project_dir: Path, change_dir: Path, branch: str, title: str, *,
-    draft: bool = True, sections: list[Path] | None = None, ticket_url: str | None = None,
-    base: str | None = None,
+    draft: bool = True, sections: list[Path] | None = None, base: str | None = None,
 ) -> list[str]:
     """``pr_pipeline open`` for a branch this pipeline already pushed.
 
@@ -1715,8 +1566,6 @@ def _pr_open_argv(
     argv.append("--draft" if draft else "--ready")
     for section in sections or []:
         argv += ["--section", str(section)]
-    if ticket_url:
-        argv += ["--ticket-url", ticket_url]
     return argv
 
 
@@ -1772,12 +1621,13 @@ def _run_publish(
 
     sections = [Path(p) for p in state.publish_sections]
     # An epic's child opens its PR against the default branch. Its --base-ref is
-    # origin's default sha, or the parent's registry commit, which no origin
-    # branch holds until a sibling built on it pushes its own branch.
+    # the local commit that holds the epic's ready specs, which no origin branch
+    # holds until a sibling built on it pushes its own branch, or origin's
+    # default sha.
     base = None if _epic_child(config) else _pr_base_branch(worktree, config.base_ref)
     pr_argv = _pr_open_argv(
         config.project_dir, docs_dir, state.branch, title, draft=draft, sections=sections,
-        ticket_url=state.ticket_url, base=base,
+        base=base,
     )
     manual = git_ops.manual_finish_commands(
         worktree, state.branch, title, include_pr=config.git.pr != "none", draft=draft,
@@ -1881,17 +1731,3 @@ def _publish_diagnosis(progress: ProgressWriter, reason: str, manual: str) -> No
     # report) is folded onto it, or the lines after the first would carry no prefix.
     one_line = " | ".join(part.strip() for part in reason.splitlines() if part.strip())
     print(f"PUBLISH_DIAGNOSIS:{one_line}", flush=True)
-
-
-async def _run_research_check(
-    config: BuildConfig, state: BuildState, cm: ChangeManager, state_path: Path,
-) -> None:
-    """For build-only mode: check if research.md exists, generate if not."""
-    if config.research_path.exists():
-        state.research_path = str(config.research_path)
-        log.info("Research already exists: %s", config.research_path)
-        return
-
-    log.info("No research.md found — will be generated by SKILL.md wrapper via /deep-research")
-    # The SKILL.md wrapper handles invoking /deep-research --quick --auto
-    # We just note that it's needed

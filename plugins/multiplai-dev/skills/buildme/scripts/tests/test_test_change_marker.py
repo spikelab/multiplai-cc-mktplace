@@ -132,7 +132,7 @@ def setup(tmp_path, monkeypatch):
         tdd=TDDState(blocks=[block]),
     )
     progress = ProgressWriter(tmp_path / "progress.md")
-    progress.initialize("test", "only", "advanced", 1)
+    progress.initialize("test", "advanced", 1)
     return config, state, progress, block
 
 

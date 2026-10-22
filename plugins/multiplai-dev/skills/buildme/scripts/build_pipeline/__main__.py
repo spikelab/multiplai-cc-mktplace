@@ -1,20 +1,22 @@
 """CLI entry point for the build pipeline.
 
 Subcommands for dev/debug use (only /buildme is user-facing):
-  build         — Full orchestrator (mode detect → interview → research → specs → build)
-  spec-generate — Artifact generation pipeline
+  build         — Full orchestrator, from specs pm-spec marked ready (research →
+                  design and tasks → build), or an epic pm-spec split
+  spec-generate — Design, unknowns, tasks and rubric for a ready change
   tdd           — TDD implementation engine
   findings      — Fix a PR's review comments, reply on the PR, re-review (rounds)
   archive       — Archive a completed change (merge delta specs → main registry)
   setup         — Write or merge specs/config.yaml (the wrapper asks the questions)
-  config-get    — Print one resolved specs/config.yaml value (e.g. intake.provider)
+  config-get    — Print one resolved specs/config.yaml value (e.g. git.pr)
 
-Exit codes: 0 done (an approved epic prints EPIC:APPROVED, runs its children and
-prints EPIC:SUMMARY), 1 failure (for an epic: a child failed), 2 usage,
-or a refusal that wrote nothing (the epic's lock is held, or an approved epic
-file changed), 3 waiting on a human or the wrapper
-(stdout says which: INTERVIEW:WAITING, RESEARCH:NEEDED, SPLIT:REQUIRED, EPIC:SPLIT,
-EPIC:MERGE_WAITING, EPIC:BUDGET or FINDINGS:REVIEW_READY), 4 an agent timed out,
+Exit codes: 0 done (an epic runs its children and prints EPIC:SUMMARY), 1 failure
+(for an epic: a child failed), 2 usage, or a refusal that wrote nothing
+(SPEC:NOT_READY: the specs are not marked ready by pm-spec, changed since, or
+are not committed; or the epic's lock is held), 3 waiting on a human or the
+wrapper (stdout says which: RESEARCH:NEEDED, SPLIT:REQUIRED, EPIC:MERGE_WAITING,
+EPIC:BUDGET or FINDINGS:REVIEW_READY), 4 SPEC:ISSUES:<path> (buildme wrote a
+requirements problem for `pm-spec revise` to spec-issues.md) or an agent timed out,
 130 or 143 an epic stopped by SIGINT or SIGTERM (129 or 143 for any `build` or
 `findings` stopped by SIGHUP or SIGTERM). `build` and `findings` print
 SPEND:<usd>:<tokens> last, on every exit path but a kill; `:incomplete` follows
@@ -60,24 +62,6 @@ def _add_skip_explainers_flag(p: argparse.ArgumentParser) -> None:
              "to this project. unknowns.md is still written, recording the skip. "
              "Default: explainers on (also settable as "
              "`explainers: {enabled: false}` in specs/config.yaml).",
-    )
-
-
-def _add_prototype_flags(p: argparse.ArgumentParser) -> None:
-    """Override the prototype stage's auto-detection in either direction.
-    Without a flag, `prototype: {enabled: auto|true|false}` in
-    specs/config.yaml decides; with neither, the applicability rule does."""
-    group = p.add_mutually_exclusive_group()
-    group.add_argument(
-        "--prototype",
-        action="store_true",
-        help="Always run the prototype stage before the build, whatever the "
-             "change type.",
-    )
-    group.add_argument(
-        "--no-prototype",
-        action="store_true",
-        help="Skip the prototype stage (the skip and its reason are logged).",
     )
 
 
@@ -154,36 +138,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     # --- build ---
     build = sub.add_parser("build", help="Full build orchestrator")
-    build.add_argument("--mode", choices=["scratch", "brief", "only"], default="scratch")
-    build.add_argument("--change", default="", help="Change name (required for build-only)")
+    build.add_argument("--change", required=True,
+                       help="Change name: specs/changes/<name>/, its specs marked ready by pm-spec")
     build.add_argument("--project-dir", default=".", help="Project directory")
     build.add_argument("--auto", action="store_true", help="Skip review checkpoint")
-    build.add_argument("--spec-only", action="store_true", help="Stop after spec generation")
+    build.add_argument("--spec-only", action="store_true",
+                       help="Stop after the design, tasks and their reviews")
     build.add_argument("--skip-research", action="store_true", help="Skip research phase")
-    build.add_argument("--interview-summary", default="", help="Pre-gathered interview summary")
-    build.add_argument("--context-files", nargs="*", default=[], help="Brief/context file paths")
     build.add_argument("--research-path", default="",
                        help="Research file; its content is saved as research.md in the "
-                            "change dir and fed to the proposal")
-    build.add_argument("--ticket-file", default="",
-                       help="Ticket the wrapper fetched, as Markdown; saved (fenced as "
-                            "untrusted) as ticket.md in the change dir")
-    build.add_argument("--ticket-ref", default="", help="Ticket reference, e.g. DB-2267 or #12")
-    build.add_argument("--ticket-url", default="", help="Ticket URL")
-    build.add_argument("--plan-file", default="",
-                       help="A plan-skill plan (# Plan: + ## Done means); recorded and "
-                            "saved as plan.md")
-    build.add_argument("--interview-replies", default="",
-                       help="interview: ticket — file holding the ticket replies to the "
-                            "posted questions")
+                            "change dir and fed to the design")
     build.add_argument("--accept-size", action="store_true",
                        help="Build a plan the size gate says should be split, as one PR")
-    build.add_argument("--approve-split", action="store_true",
-                       help="Approve the epic split this build printed as EPIC:SPLIT, "
-                            "as split.md and plans/ are on disk now")
-    build.add_argument("--no-epic-split", action="store_true",
-                       help="Build the input as one change: skip the EPIC_SPLIT decision "
-                            "(an epic's child builds pass this)")
     build.add_argument("--epic-child", action="store_true",
                        help="This build is an epic's child (the coordinator passes it): "
                             "no spec-extract, and the PR targets the default branch")
@@ -195,14 +161,12 @@ def build_parser() -> argparse.ArgumentParser:
     _add_trust_repo_flag(build)
     _add_lenient_review_flag(build)
     _add_skip_explainers_flag(build)
-    _add_prototype_flags(build)
     _add_git_lifecycle_flags(build)
 
     # --- spec-generate ---
     spec = sub.add_parser("spec-generate", help="Artifact generation pipeline")
     spec.add_argument("--change", required=True, help="Change name")
     spec.add_argument("--project-dir", default=".", help="Project directory")
-    spec.add_argument("--interview-summary", default="", help="Interview summary text")
     spec.add_argument("--research-path", default="", help="Path to research output")
     _add_trust_repo_flag(spec)
     _add_skip_explainers_flag(spec)
@@ -254,10 +218,6 @@ def build_parser() -> argparse.ArgumentParser:
     # --- setup ---
     setup = sub.add_parser("setup", help="Write or merge specs/config.yaml")
     setup.add_argument("--project-dir", default=".", help="Project directory")
-    setup.add_argument("--provider", choices=["plane", "github", "none"],
-                       help="intake.provider")
-    setup.add_argument("--plane-project", help="intake.plane.project (Plane project key)")
-    setup.add_argument("--interview", choices=["self", "ticket", "user"], help="interview")
     setup.add_argument("--architecture", help="architecture (repo-relative path)")
     setup.add_argument("--pr-template", help="pr.template: auto or a path")
     setup.add_argument("--findings-authors",
@@ -265,7 +225,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # --- config-get ---
     cget = sub.add_parser("config-get", help="Print one resolved specs/config.yaml value")
-    cget.add_argument("key", help="Dotted key, e.g. intake.provider or interview")
+    cget.add_argument("key", help="Dotted key, e.g. git.pr or architecture")
     cget.add_argument("--project-dir", default=".", help="Project directory")
 
     for command in (build, spec, tdd, findings):

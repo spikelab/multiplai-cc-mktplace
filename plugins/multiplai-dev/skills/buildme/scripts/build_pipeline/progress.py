@@ -44,7 +44,7 @@ class ProgressWriter:
         self.path = path
 
     def initialize(
-        self, change_name: str, mode: str, tier: str, block_count: int | None = None,
+        self, change_name: str, tier: str, block_count: int | None = None,
     ) -> None:
         """Start this run's section of the progress file. Never truncates.
 
@@ -60,13 +60,13 @@ class ProgressWriter:
             with self.path.open("a") as f:
                 f.write(
                     f"\n## [{self._now()}] RESUMED\n"
-                    f"Mode: {mode} | Tier: {tier}\n"
+                    f"Tier: {tier}\n"
                     f"{blocks}{settings}\n"
                 )
             return
         self.path.write_text(
             f"# Build Progress: {change_name}\n"
-            f"Mode: {mode} | Tier: {tier}\n"
+            f"Tier: {tier}\n"
             f"{blocks}{settings}\n\n"
             f"## [{self._now()}] LAUNCHED\n"
         )

@@ -158,7 +158,7 @@ def load_state(run: FindingsRun) -> BuildState:
             return st
     c = run.config
     return BuildState(
-        change_name=c.change_name, mode=c.mode, tier=c.tier, phase=BuildPhase.COMPLETE,
+        change_name=c.change_name, tier=c.tier, phase=BuildPhase.COMPLETE,
         state_file=str(run.state_path),
         findings=FindingsState(pr=run.pr, repo=run.repo, branch=run.branch,
                                change_dir=str(run.change_dir)),

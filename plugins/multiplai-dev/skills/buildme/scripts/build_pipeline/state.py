@@ -88,7 +88,6 @@ class SpecGenState(BaseModel):
         keys = {
             "explainers": {"proposal.md", "design.md", "config.yaml", "references"},
             "tasks_audit": {"tasks.md", "design.md", "proposal.md", "use-cases.md", "unknowns.md", "config.yaml", "references", "granularity"},
-            "prototype": {"proposal.md", "design.md"},
             "design_audit": {"proposal.md", "design.md", "tasks.md", "config.yaml", "references"},
         }.get(name)
         if keys is None:
@@ -98,7 +97,7 @@ class SpecGenState(BaseModel):
 
     def step_passed(self, name: str) -> bool:
         step = self.steps.get(name)
-        accepted = {"passed", "skipped", "advisory"} if name in {"prototype", "explainers"} else {"passed"}
+        accepted = {"passed", "skipped", "advisory"} if name == "explainers" else {"passed"}
         return bool(step and step.revision == self.step_revision(name) and step.outcome in accepted)
 
     def record_step(self, name: str, outcome: Literal["passed", "blocked", "advisory", "skipped"] = "passed", reason: str = "", *, blocking_findings: str = "",
@@ -244,7 +243,6 @@ class BuildState(BaseModel):
 
     # Identity
     change_name: str
-    mode: str  # scratch | brief | only
     tier: str  # advanced | standard
 
     # Phase tracking
@@ -252,20 +250,11 @@ class BuildState(BaseModel):
 
     # Orchestrator state
     bootstrap_done: bool = False
-    interview_summary: str | None = None
     research_path: str | None = None
-
-    # Intake (--ticket-ref / --ticket-url / --plan-file). Recorded so a resume
-    # and the wrapper know what the build was started from. All default to
-    # None, so checkpoints written before intake existed still load.
-    ticket_ref: str | None = None
-    ticket_url: str | None = None
-    plan_file: str | None = None
-    # `interview: ticket` asked its questions on the ticket and is waiting for
-    # replies. The pointer sits at INTERVIEW_DONE, which is_phase_complete
-    # does not count as complete, so a resume re-enters the interview.
-    # Default False for old checkpoints.
-    interview_waiting: bool = False
+    # A checkpoint written before buildme built only from pm-spec's ready specs
+    # may hold `mode`, `interview_summary`, `ticket_ref`, `ticket_url`,
+    # `plan_file`, `interview_waiting`, `epic_dir` and `epic_single`; they are
+    # ignored on load.
     # The plan should be split and the build stopped after plan review; a
     # re-run stops the same way until --accept-size. Default False.
     split_required: bool = False
@@ -273,16 +262,6 @@ class BuildState(BaseModel):
     # (a resume, or a FAILED build re-running every phase) keeps the
     # acceptance instead of stopping again. Default False.
     size_accepted: bool = False
-    # Epic mode: the epic directory EPIC_SPLIT wrote (`<data_dir>/buildme/
-    # epics/<owner>-<repo>--<change>/`), saved in the same checkpoint that
-    # completes the phase. Set means the build is an epic: every later run
-    # reads epic.json and never reaches spec generation. Default None.
-    epic_dir: str | None = None
-    # EPIC_SPLIT answered one change. A retry of a FAILED build (which re-runs
-    # every phase) skips the step instead of asking again, since a second
-    # answer of several would turn a change already being built into an
-    # epic. Default False; a skip and `load` (row A.S14) set it too.
-    epic_single: bool = False
 
     # Git lifecycle — set when the pipeline creates its own worktree/branch.
     # Persisted so a resume RE-BINDS to the existing worktree instead of
@@ -303,7 +282,7 @@ class BuildState(BaseModel):
     # not hold (`orchestrator._run_bootstrap`). None in older checkpoints and
     # when git could not be asked; the re-run then refuses any uncommitted
     # change. The re-run's bootstrap records its tree here again once it is
-    # done, so a stop before the interview finishes (pointer AT BOOTSTRAP)
+    # done, so a stop before the research finishes (pointer AT BOOTSTRAP)
     # resumes in place too; any other bootstrap clears it.
     failed_stop: StepStop | None = None
 
@@ -378,9 +357,6 @@ class BuildState(BaseModel):
         if data.get("schema_version", 0) > 1:
             raise ValueError("Checkpoint version is newer than this Buildme; upgrade before resuming")
         state = cls.model_validate(data)
-        if "epic_single" not in data and state.epic_dir is None and (
-                state.phase == BuildPhase.FAILED or state.is_phase_complete(BuildPhase.EPIC_SPLIT)):
-            state.epic_single = True
         log.info("Resumed state from %s (phase=%s)", path, state.phase)
         return state
 

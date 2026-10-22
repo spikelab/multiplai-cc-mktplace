@@ -66,7 +66,7 @@ def setup(tmp_path, monkeypatch):
     state = BuildState(change_name="test", mode="only", tier="advanced",
                        state_file=str(tmp_path / "state.json"), tdd=TDDState(blocks=[block]))
     progress = ProgressWriter(tmp_path / "progress.md")
-    progress.initialize("test", "only", "advanced", 1)
+    progress.initialize("test", "advanced", 1)
     return config, state, progress, block
 
 
