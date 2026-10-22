@@ -41,17 +41,6 @@ from tests.test_git_ops import make_bare_origin, make_repo
 
 
 @pytest.fixture(autouse=True)
-def _epic_split_is_one_change(monkeypatch):
-    """Every build here is one change: EPIC_SPLIT's model call answers `single: true`."""
-    from unittest.mock import AsyncMock
-
-    from build_pipeline.epic import split as epic_split
-
-    answer = epic_split.EpicSplitAnswer(single=True, reason="one change")
-    monkeypatch.setattr(epic_split, "epic_split", AsyncMock(return_value=answer))
-
-
-@pytest.fixture(autouse=True)
 def _no_spec_extract(monkeypatch):
     """No build here runs spec-extract: its step inside CODEBASE_ANALYSIS lets the phase complete."""
     from build_pipeline import orchestrator

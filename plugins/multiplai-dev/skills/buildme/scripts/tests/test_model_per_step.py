@@ -92,8 +92,8 @@ class TestSessionDefaults:
     MULTIPLAI_MODEL moves every step's model; `models:` / `efforts:` move only
     the steps they name."""
 
-    def test_there_are_26_steps(self):
-        assert len(STEP_STAGES) == 26
+    def test_there_are_25_steps(self):
+        assert len(STEP_STAGES) == 25
 
     def test_every_step_follows_the_session(self, tmp_path, no_conf):
         with patch.dict(os.environ, SESSION):
@@ -348,8 +348,6 @@ CALL_SITES = {
     ("findings/code.py", "run_self_check", "agent_call"):
         ("config.model_for('findings_self_check')", ("findings_self_check",)),
     ("epic/merge.py", "run_merge_agent", "agent_call"): ("config.model_for('merge')", ("merge",)),
-    ("epic/split.py", "epic_split", "call"):
-        ("config.model_for('epic_split')", ("epic_split",)),
     ("findings/triage.py", "triage_comment", "call"):
         ("config.model_for('findings_triage')", ("findings_triage",)),
     ("llm_steps/docs_steps.py", "run_docs_update", "agent_call"):

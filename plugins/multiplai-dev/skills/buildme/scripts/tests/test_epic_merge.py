@@ -21,7 +21,7 @@ from build_pipeline import budget, git_ops, stop_record
 from build_pipeline.config import EpicSettings, discover_test_command
 from build_pipeline.epic import coordinator, merge, records
 from build_pipeline.epic import lock as epic_lock
-from build_pipeline.epic.split import EpicSplitAnswer
+from .epic_row_helpers import EpicSplitAnswer
 from build_pipeline.models import AgentResult
 
 from .epic_row_helpers import (
@@ -143,10 +143,10 @@ class MergeRoot:
         self.project.mkdir(exist_ok=True)
         self.config = make_build(self.project)
         self.config.epic = EpicSettings(max_parallel=2, merge=merge_mode)
-        approve(self.config, answer, CallLog(root / "split.log"))
         files = {**BASE, **({"specs/config.yaml": f"tdd:\n  test_command: {command}\n"} if command else {})}
         push_files(root, at(files), "base")
         git(repo, "pull", "-q", "origin", "main")        # the source checkout holds origin's config.yaml
+        approve(self.config, answer, CallLog(root / "split.log"))     # the specs commit, on top, not pushed
         (root / "tests.json").write_text(json.dumps(tests or []))
         self.agent = agent or FakeAgent(root, at(RESOLVED))
         self.dir = self.data / "buildme" / "epics" / "o-r--e"

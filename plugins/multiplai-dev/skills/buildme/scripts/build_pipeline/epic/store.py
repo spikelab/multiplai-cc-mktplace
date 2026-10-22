@@ -1,29 +1,27 @@
-"""The epic directory: where it is, and the files in it (items 5 and 7).
+"""The epic directory: where it is, and the file in it (items 5 and 7).
 
 `<data_dir>/buildme/epics/<owner>-<repo>--<epic>/`, where `<epic>` is the
-parent build's change name and `<owner>-<repo>` comes from the review skill's
+parent change's name and `<owner>-<repo>` comes from the review skill's
 slug rule (`origin_owner_repo`, `slug_repo_name`, `sanitize_slug` in
-`review_pipeline/target.py`), copied here and pinned by `tests/test_epic_split.py`.
+`review_pipeline/target.py`), copied here and pinned by `tests/test_epic_store.py`.
 
-- `epic.json` (`Epic`): the children with their plans, `state` (`proposed`,
-  then `approved` with the sha256 of `split.md` and each plan). Saved with
-  `multiplai_core.checkpoint.save_model`, so a kill leaves the old or the new
-  file, never half of one.
-- `split.md`: the children, what each depends on, and which run in parallel.
-  Its table is what approval reads back, so a hand edit to it is used.
-- `plans/<id>.md`: one plan per child, also used as edited.
+`epic.json` (`Epic`) holds the children as the parent's and the children's
+`.change.yaml` list them (`phase.run_epic_from_specs` sets them on every
+run) and each child's status. Saved with `multiplai_core.checkpoint.save_model`,
+so a kill leaves the old or the new file, never half of one. A file saved
+before pm-spec fed the epic, with keys this model no longer has (the split's
+`state`, `hashes`, plans, a child's `repo`), still loads: pydantic ignores
+the extra keys.
 """
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
 import re
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
 
 from multiplai_core import checkpoint
 from multiplai_core.paths import get_paths
@@ -31,19 +29,22 @@ from pydantic import BaseModel, Field
 
 from .. import git_ops
 from ..stop_record import StepStop
-from .split import EpicChild, check_children, waves
 
 log = logging.getLogger(__name__)
 
 EPIC_FILE = "epic.json"
-SPLIT_FILE = "split.md"
-PLANS_DIR = "plans"
-TABLE_HEADER = ["id", "title", "depends on", "repo"]
-NONE = "—"
 
 
 class EpicFileError(Exception):
     """An epic file cannot be read, or fails the checks."""
+
+
+class EpicChild(BaseModel):
+    """One child: its id (its change is `<epic>-<id>`) and the ids of the
+    children it depends on, from its `.change.yaml` `depends_on`."""
+
+    id: str
+    depends_on: list[str] = Field(default_factory=list)
 
 
 class ChildStatus(BaseModel):
@@ -55,10 +56,7 @@ class ChildStatus(BaseModel):
     rounds, item 23) and `conflicts` (its last mergeability read) are cached
     here; the review ledger and `gh` are the truth. PR E: `merge_stop`, the
     tree of the child's worktree when its merge step last stopped (item 39),
-    and `merge_park`, why its merge step parked it, which keeps it parked.
-    PR F: `repo_park`, why it parked when its `repo` checkout was gone
-    (F.S5), which keeps it parked though the checkout comes back, and `slug`,
-    the review slug of its repo while its checkout was there (F.S11)."""
+    and `merge_park`, why its merge step parked it, which keeps it parked."""
 
     status: str = "pending"
     pr: str | None = None
@@ -67,19 +65,12 @@ class ChildStatus(BaseModel):
     conflicts: bool | None = None
     merge_stop: StepStop | None = None
     merge_park: str = ""
-    repo_park: str = ""
-    slug: str = ""
 
 
 class Epic(BaseModel):
     name: str
-    state: Literal["proposed", "approved"] = "proposed"
-    reason: str = ""
     children: list[EpicChild] = Field(default_factory=list)
-    # Approved: published path ("split.md", "plans/<id>.md") -> sha256.
-    hashes: dict[str, str] = Field(default_factory=dict)
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-    approved_at: str | None = None
     child_status: dict[str, ChildStatus] = Field(default_factory=dict)
     # PR B2: what the epic has spent, rebuilt from the records and the review
     # ledger at each save; incomplete when a spend could not be read.
@@ -142,46 +133,6 @@ def epic_dir_for(repo: Path, change_name: str) -> Path:
     return get_paths().data_dir / "buildme" / "epics" / sanitize_slug(f"{slug_repo_name(repo)}--{change_name}")
 
 
-# --- a child in another repo (PR F, item 43) ------------------------------------------
-
-def checkout_path(repo: str, base: Path) -> Path:
-    """Where a child's `repo` points: the path as written (`~` expanded),
-    relative to *base*, the epic's repository root, when it is not absolute."""
-    path = Path(repo).expanduser()
-    return Path(os.path.normpath(path if path.is_absolute() else Path(base).absolute() / path))
-
-
-def checkout_root(path: Path) -> Path | None:
-    """*path* as git gives it when it is the top of a checkout; None when it
-    is missing, not in a repository, or a directory inside one (git would
-    find the repository above it)."""
-    if not Path(path).is_dir():
-        return None
-    proc = _git(["git", "rev-parse", "--show-toplevel"], cwd=path)
-    top = Path(proc.stdout.strip()) if proc.returncode == 0 and proc.stdout.strip() else None
-    return top if top is not None and top.resolve() == Path(path).resolve() else None
-
-
-def repo_errors(children: list[EpicChild], base: Path) -> list[str]:
-    """Item 43, at approval: each child's `repo` must be the top of a checkout
-    with an `origin` remote. One error per child that fails, naming it and its repo."""
-    errors = []
-    for c in children:
-        if not c.repo:
-            continue
-        path = checkout_path(c.repo, base)
-        try:
-            if not path.is_dir():
-                errors.append(f"child {c.id}: repo {c.repo} not found ({path})")
-            elif checkout_root(path) is None:
-                errors.append(f"child {c.id}: repo {c.repo} is not a git checkout ({path})")
-            elif _remote_url(path) is None:
-                errors.append(f"child {c.id}: repo {c.repo} has no origin remote ({path})")
-        except GitUnreadable as e:
-            errors.append(f"child {c.id}: cannot read repo {c.repo} with git: {e}")
-    return errors
-
-
 # --- epic.json -----------------------------------------------------------------
 
 def load_epic(epic_dir: Path) -> Epic:
@@ -200,61 +151,6 @@ def save_epic(epic_dir: Path, epic: Epic) -> Path:
     return checkpoint.save_model(epic, epic_dir, EPIC_FILE)
 
 
-# --- split.md and plans/ ----------------------------------------------------------
-
-def _cell(text: str) -> str:
-    return text.replace("|", "\\|").replace("\n", " ").strip()
-
-
-def render_split(epic: Epic) -> str:
-    lines = [f"# Epic split: {epic.name}", ""]
-    if epic.reason:
-        lines += [epic.reason.strip(), ""]
-    lines += ["| " + " | ".join(TABLE_HEADER) + " |", "|---|---|---|---|"]
-    for c in epic.children:
-        deps = ", ".join(c.depends_on) or NONE
-        lines.append(f"| {_cell(c.id)} | {_cell(c.title)} | {_cell(deps)} | {_cell(c.repo or NONE)} |")
-    lines += ["", "## Order", ""]
-    for i, wave in enumerate(waves(epic.children), 1):
-        how = "in parallel" if len(wave) > 1 else "alone"
-        lines.append(f"{i}. {', '.join(wave)} ({how})")
-    lines += ["", f"Each child's plan is `{PLANS_DIR}/<id>.md`. Edit the table or a plan before "
-              "approving: approval reads both as they are on disk.", ""]
-    return "\n".join(lines)
-
-
-def _split_row(line: str) -> list[str]:
-    cells = re.split(r"(?<!\\)\|", line.strip())
-    return [c.strip().replace("\\|", "|") for c in cells[1:-1]]
-
-
-def parse_split(text: str) -> list[EpicChild]:
-    """The children in split.md's table (no plans). Raises EpicFileError when
-    there is no table with the expected header."""
-    lines = text.splitlines()
-    for i, line in enumerate(lines):
-        if line.strip().startswith("|") and [c.lower() for c in _split_row(line)] == TABLE_HEADER:
-            break
-    else:
-        raise EpicFileError(f"{SPLIT_FILE} has no table with the columns {' | '.join(TABLE_HEADER)}")
-    children = []
-    for line in lines[i + 2:]:
-        if not line.strip().startswith("|"):
-            break
-        cells = _split_row(line)
-        if len(cells) != len(TABLE_HEADER):
-            raise EpicFileError(f"{SPLIT_FILE}: the row {line.strip()!r} does not have {len(TABLE_HEADER)} cells")
-        cid, title, deps, repo = cells
-        depends_on = [] if deps in ("", NONE, "-") else [d.strip() for d in deps.split(",") if d.strip()]
-        children.append(EpicChild(id=cid, title=title, depends_on=depends_on,
-                                  repo=None if repo in ("", NONE, "-") else repo))
-    return children
-
-
-def plan_path(epic_dir: Path, child_id: str) -> Path:
-    return Path(epic_dir) / PLANS_DIR / f"{child_id}.md"
-
-
 def _write_atomic(path: Path, text: str) -> None:
     """Write through a temp file and os.replace, so a stop never leaves half a file."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -266,64 +162,3 @@ def _write_atomic(path: Path, text: str) -> None:
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
-
-
-def write_split(epic_dir: Path, epic: Epic) -> None:
-    _write_atomic(Path(epic_dir) / SPLIT_FILE, render_split(epic))
-
-
-def write_plan(epic_dir: Path, child: EpicChild) -> None:
-    _write_atomic(plan_path(epic_dir, child.id), child.plan)
-
-
-def write_files(epic_dir: Path, epic: Epic, *, keep_existing: bool = False) -> None:
-    """Render split.md and every plan from *epic* (epic.json is saved first, by
-    the caller). With *keep_existing*, a file already on disk is left as it is."""
-    if not (keep_existing and (Path(epic_dir) / SPLIT_FILE).exists()):
-        write_split(epic_dir, epic)
-    for c in epic.children:
-        if not (keep_existing and plan_path(epic_dir, c.id).exists()):
-            write_plan(epic_dir, c)
-
-
-def read_children(epic_dir: Path) -> tuple[list[EpicChild], list[str]]:
-    """split.md's table and each `plans/<id>.md` as on disk, and item 4's
-    checks on them; every error names the file."""
-    epic_dir = Path(epic_dir)
-    try:
-        children = parse_split((epic_dir / SPLIT_FILE).read_text())
-    except FileNotFoundError:
-        return [], [f"{SPLIT_FILE} is missing"]
-    except EpicFileError as e:
-        return [], [str(e)]
-    if len(children) < 2:
-        return children, [f"{SPLIT_FILE}: the table lists {len(children)} children; an epic needs at least two"]
-    for c in children:
-        path = plan_path(epic_dir, c.id)
-        c.plan = path.read_text() if path.is_file() else ""
-    errors = check_children(children, plan_where=lambda c: f"{PLANS_DIR}/{c.id}.md")
-    return children, [e if e.startswith(f"{PLANS_DIR}/") else f"{SPLIT_FILE}: {e}" for e in errors]
-
-
-def file_hashes(epic_dir: Path, children: list[EpicChild]) -> dict[str, str]:
-    epic_dir = Path(epic_dir)
-    rels = [SPLIT_FILE] + [f"{PLANS_DIR}/{c.id}.md" for c in children]
-    return {rel: hashlib.sha256((epic_dir / rel).read_bytes()).hexdigest() for rel in rels}
-
-
-def changed_file(epic_dir: Path, epic: Epic) -> str | None:
-    """The first approved file that changed, or None. `split.md` and the plans
-    are checked against their hashes, then `epic.json` itself: its hashes must
-    name split.md and every child's plan, and its children must be split.md's
-    table and the plans as on disk (from PR B1 the coordinator builds them)."""
-    epic_dir = Path(epic_dir)
-    for rel, digest in epic.hashes.items():
-        path = epic_dir / rel
-        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
-            return rel
-    if set(epic.hashes) != {SPLIT_FILE, *(f"{PLANS_DIR}/{c.id}.md" for c in epic.children)}:
-        return EPIC_FILE
-    children, errors = read_children(epic_dir)
-    if errors or children != epic.children:
-        return EPIC_FILE
-    return None

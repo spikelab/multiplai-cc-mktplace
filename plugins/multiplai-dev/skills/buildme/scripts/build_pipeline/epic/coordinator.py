@@ -1,13 +1,20 @@
-"""The coordinator: an approved epic builds its children
-(plan-buildme-epic-mode-2026-10-12.md, items 11-16a).
+"""The coordinator: an epic pm-spec split builds its children
+(plan-buildme-epic-mode-2026-10-12.md, items 11-16a; plan-pm-spec-split-2026-10-21.md,
+Decision 11).
 
-`run_epic` runs in the approved build's process, under the epic lock that
-process already holds (item 6), and never takes it again. Each child is its own
-`python -m build_pipeline build` subprocess, in its own process group, with its
+`run_epic` runs in the parent's build process, under the epic lock that
+process already holds (item 6), and never takes it again. The children and
+their dependencies are the change dirs' `.change.yaml` records
+(`phase.run_epic_from_specs`). Each child is its own
+`python -m build_pipeline build --change <epic>-<id>` subprocess, in the
+epic's own project, in its own process group, with its
 stdout and stderr going to the attempt's log file (never a pipe), so a child
 outlives a killed coordinator. A child is ready once every child it depends on
 has merged; at most `epic.max_parallel` build at once, and one starts only
-after the last one printed `WORKTREE:` or exited.
+after the last one printed `WORKTREE:` or exited. A child with no dependency
+branches from the local commit that holds the ready specs, so its PR carries
+that commit and nothing is pushed before the build; one with dependencies
+branches from origin's default branch after they merged (`Coordinator._base`).
 
 Every run starts from disk: the records under `agents/` (`records.py`) say
 what each child did, and a started record with no result is an attempt that
@@ -32,7 +39,7 @@ A child whose review left no blocker is merged (PR E, items 35-42;
 `origin/<default>` into the child's branch in its worktree, has an agent
 resolve version, CHANGELOG and lockfile conflicts, runs the tests, pushes,
 waits for the PR's required checks and runs `gh pr merge --merge`, one
-merge per repo at a time. Under `manual` (the default) nothing is merged:
+merge at a time. Under `manual` (the default) nothing is merged:
 the PR is waited on, and the run exits 3 with `EPIC:MERGE_WAITING` while it
 is open. Its stop and resume rows are PR E's table.
 
@@ -135,7 +142,7 @@ def _merge_point(coord: "Coordinator", c: "Child", point: str) -> None:
 
 def _spawn(argv: list[str], log_path: Path) -> subprocess.Popen:
     """Start one child in its own process group, its output in *log_path*, with
-    `CHILD_ENV` set so it does not run spec-extract (the parent ran it)."""
+    `CHILD_ENV` set so it does not run spec-extract (see `epic.CHILD_ENV`)."""
     with log_path.open("ab") as out:
         return subprocess.Popen(argv, cwd=SCRIPTS_DIR, stdin=subprocess.DEVNULL, stdout=out,
                                 stderr=subprocess.STDOUT, start_new_session=True,
@@ -151,22 +158,6 @@ def _spawn_review(argv: list[str], log_path: Path, cwd: Path, env: dict | None =
 
 
 # --- where a child builds -------------------------------------------------------
-
-def source_project_dir(config, state) -> Path:
-    """The parent's project directory in its source checkout: the repo root
-    plus the project's offset inside the parent's worktree, so a subdirectory
-    project's children build in that subdirectory."""
-    if state.source_repo and state.worktree_path:
-        from ..orchestrator import _project_offset
-        return Path(state.source_repo) / _project_offset(Path(config.project_dir), Path(state.worktree_path))
-    return Path(config.project_dir)
-
-
-def _source_repo(config, state) -> Path:
-    if state.source_repo:
-        return Path(state.source_repo)
-    return git_ops.repo_root(Path(config.project_dir)) or Path(config.project_dir)
-
 
 def _git(repo: Path, *args: str, timeout: int = git_ops._GIT_TIMEOUT) -> git_ops.GitResult:
     return git_ops._run(["git", *args], cwd=repo, timeout=timeout)
@@ -227,45 +218,9 @@ async def base_sha(repo: Path, *, need_fetch: bool) -> str | None:
     return None
 
 
-def registry_commit(config, state, origin: str) -> str | None:
-    """The parent's commit that holds the `specs/registry` baseline its
-    spec-extract step committed: the last commit after the saved
-    `spec_gen.spec_extract_sha` that changed `<specs_dir>/registry`, read in
-    the parent's project. None when the parent ran no spec-extract, or committed
-    nothing from it (`SPEC_EXTRACT:NOT_RUN`, `--no-worktree`, a failed commit),
-    and None when *origin* (origin's default sha) already holds a
-    `<specs_dir>/registry/*.md`: the registry has reached main, so a child
-    branches from origin's newer tip. None with a warning when origin does not
-    hold the commit's parents, or the commit changes files outside the registry
-    (a parent started from a feature branch or unpushed commits, a commit added
-    before a resume, a user's own commit of the baseline): a child's PR to the
-    default branch must carry the registry and nothing else."""
-    spec_gen = getattr(state, "spec_gen", None)
-    saved = spec_gen.spec_extract_sha if spec_gen is not None else None
-    if not saved:
-        return None
-    project = Path(config.project_dir)
-    registry = os.path.relpath(Path(config.specs_dir) / "registry", project)
-    res = _git(project, "rev-list", "-1", f"{saved}..HEAD", "--", registry)
-    sha = res.stdout.strip()
-    if res.returncode != 0 or not sha:
-        return None
-    landed = _git(project, "ls-tree", "--name-only", origin, "--", f"{registry}/")
-    if landed.returncode == 0 and any(Path(name).suffix == ".md" for name in landed.stdout.splitlines()):
-        return None
-    beyond = _git(project, "rev-list", "-1", f"{sha}^@", "--not", origin)
-    others = _git(project, "diff", "--name-only", f"{sha}^", sha, "--", ":/", f":(exclude){registry}")
-    if beyond.returncode != 0 or beyond.stdout.strip() or others.returncode != 0 or others.stdout.strip():
-        log.warning("the parent's registry commit %s carries commits or files origin's default branch does "
-                    "not hold: children branch from origin without the baseline", sha[:12])
-        return None
-    return sha
-
-
 def in_place_reason(project_dir: Path) -> str | None:
     """Why a child would not build in its own worktree and open a PR: the
-    project's specs/config.yaml, which every child building in that project
-    reads (the epic's, or a child's own `repo`, PR F), turns off
+    epic's project's specs/config.yaml, which every child reads, turns off
     `git.worktree` or `git.push` (B1.S23). None when neither is off."""
     path = Path(project_dir) / "specs" / "config.yaml"
     try:
@@ -286,12 +241,18 @@ def _has(line: str, text: str) -> bool:
     return re.search(re.escape(text) + r"(?=\s|$)", line) is not None
 
 
-def build_pid(plan_path: Path) -> int | None:
-    """The pid of a live build of *plan_path*: one `ps` line holding both
-    `build_pipeline` and `--plan-file <plan>`, each followed by a space or the
-    line's end (item 14). Raises ReadFailed when `ps` fails: a live child must
+def build_pid(change: str) -> int | None:
+    """The pid of a live build of the child change *change*: one `ps` line
+    holding `build_pipeline`, the word `build` and `--change <change>`, each
+    followed by a space or the line's end, and not the word `findings` (item
+    14): a fixer of the same change (`fix.fix_argv`) carries `--change` too,
+    and is not its build. Raises ReadFailed when `ps` fails: a live child must
     never be taken for a gone one."""
-    return _ps_pid("build_pipeline", f"--plan-file {plan_path}")
+    def match(line: str) -> bool:
+        words = line.split()
+        return (_has(line, "build_pipeline") and "build" in words and "findings" not in words
+                and _has(line, f"--change {change}"))
+    return _ps_find(match)
 
 
 def fix_pid(number: int, repo: Path) -> int | None:
@@ -357,8 +318,8 @@ def _ps_find(match: Callable[[str], bool]) -> int | None:
     return None
 
 
-def _plan_of(argv: list[str]) -> Path | None:
-    return Path(argv[argv.index("--plan-file") + 1]) if "--plan-file" in argv[:-1] else None
+def _change_of(argv: list[str]) -> str | None:
+    return argv[argv.index("--change") + 1] if "--change" in argv[:-1] else None
 
 
 # --- the coordinator ---------------------------------------------------------------
@@ -391,107 +352,50 @@ class Child:
     rattempt: records.Attempt | None = None
     merge_stop: stop_record.StepStop | None = None   # PR E, item 39
     merge_park: str = ""                 # why the merge step parked it; kept until <W> is clean
-    repo_park: str = ""                  # F.S5: its checkout was gone; kept for good
     head: str | None = None              # its PR's head at the last read in this run
-    # PR F (item 43): where it builds. `repo` as split.md gives it, or None in
-    # the epic's own repo; `project` its `--project-dir`, `root` that
-    # project's repository root (the merge lock's key), `slug` its review slug.
-    repo: str | None = None
-    project: Path | None = None
-    root: Path | None = None
-    slug: str = ""
 
 
 @dataclass
 class Coordinator:
     config: object
-    state: object
     args: object
     epic_dir: Path
     epic: store.Epic
+    specs_sha: str                       # the local commit that holds the ready specs
     children: dict[str, Child] = field(default_factory=dict)
     signal_sent: int | None = None
     budget_stop: float | None = None     # the spend that stopped launches, once reached
     shares: dict[str, Share] = field(default_factory=dict)   # running fixers' --max-usd, per child
-    merge_locks: dict[str, asyncio.Lock] = field(default_factory=dict)   # item 35, per repo root
+    merge_lock: asyncio.Lock = field(default_factory=asyncio.Lock)   # item 35: one merge at a time
 
     def __post_init__(self) -> None:
-        self.repo = _source_repo(self.config, self.state)
-        self.project_dir = source_project_dir(self.config, self.state)
+        self.project_dir = Path(self.config.project_dir)
+        self.repo = git_ops.repo_root(self.project_dir) or self.project_dir
         self.settings = self.config.epic
         self.slug = store.slug_repo_name(self.repo)
         for c in self.epic.children:
             self.children[c.id] = Child(c.id, list(c.depends_on))
             cached = self.epic.child_status.get(c.id)
-            self._place(self.children[c.id], c.repo, cached.slug if cached is not None else "")
             if cached is not None:
                 self.children[c.id].pr_round, self.children[c.id].conflicts = cached.pr_round, cached.conflicts
                 self.children[c.id].merge_stop, self.children[c.id].merge_park = cached.merge_stop, cached.merge_park
-                self.children[c.id].repo_park = cached.repo_park
-
-    def _place(self, c: Child, repo: str | None, saved_slug: str = "") -> None:
-        """Item 43: a child with a `repo` builds in that checkout, relative to
-        the epic's repository root; any other child in the epic's project.
-        Once the checkout is gone, its review slug is the one saved while it
-        was there (F.S11), so its PR's reviews still count in `spent()`. With
-        none saved, the child was approved before PR F, when every child was
-        built and reviewed in the epic's repo: the slug is the epic's."""
-        if not repo:
-            c.project, c.root, c.slug = self.project_dir, self.repo, self.slug
-            return
-        c.repo, c.project = repo, store.checkout_path(repo, self.repo)
-        top = store.checkout_root(c.project)
-        c.root = top or c.project
-        c.slug = store.slug_repo_name(top) if top else (saved_slug or self.slug)
-
-    def _park_missing(self, c: Child) -> bool:
-        """F.S5: a child whose checkout is gone, or is no longer the top of a
-        checkout, parks, and stays parked (`repo_park`). True when it parked,
-        or when git could not answer (`store.GitUnreadable`): then the child is
-        `unknown` for this run."""
-        if not c.repo:
-            return False
-        try:
-            if not c.project.is_dir():
-                c.repo_park = f"repo {c.project} not found"
-            elif store.checkout_root(c.project) is None:
-                c.repo_park = f"repo {c.project} is not a git checkout"
-            else:
-                return False
-        except store.GitUnreadable as e:      # not an answer: the next run asks again
-            c.status, c.reason = "unknown", f"cannot tell whether its repo is a git checkout: {e}"
-            log.warning("EPIC child %s: %s", c.id, c.reason)
-            self._save()
-            return True
-        self._park(c, c.repo_park)
-        self._save()
-        return True
 
     # -- argv -----------------------------------------------------------------
 
     def new_argv(self, cid: str, base: str | None) -> list[str]:
-        """Item 11's command for a first launch. All paths are absolute."""
-        change_dir = Path(self.config.change_dir).absolute()
-        context = [str(change_dir / name) for name in ("interview.md", "research.md")
-                   if (change_dir / name).is_file()]
-        research = change_dir / "research.md"
+        """Item 11's command for a first launch: the child's own change, whose
+        ready specs pm-spec wrote. Each child runs its own codebase analysis
+        and research (`--skip-research` only when the parent run had it), and
+        no spec-extract (`--epic-child`, see `epic.CHILD_ENV`). The path is
+        absolute."""
         argv = ["python", "-m", "build_pipeline", "--session-id",
                 getattr(self.args, "session_id", "") or "", "build",
-                "--mode", "brief", "--change", f"{self.epic.name}-{cid}",
-                "--plan-file", str(store.plan_path(self.epic_dir, cid).absolute())]
-        if context:
-            argv += ["--context-files", *context]
-        # The parent's research decision stands: no child makes a second one. A
-        # parent run with --skip-research advances past RESEARCH and writes no
-        # research.md, so its children skip research too.
-        if research.is_file():
-            argv += ["--research-path", str(research)]
-        else:
-            argv += ["--skip-research"]
-        argv += ["--auto", "--trust-repo", "--no-epic-split", "--epic-child", "--pr-ready",
-                 "--project-dir", str(self.children[cid].project.absolute())]
+                "--change", f"{self.epic.name}-{cid}", "--auto", "--trust-repo", "--epic-child",
+                "--pr-ready", "--project-dir", str(self.project_dir.absolute())]
         if base:
             argv += ["--base-ref", base]
+        if getattr(self.config, "skip_research", False):
+            argv.append("--skip-research")
         if getattr(self.config, "accept_unknown_spend", False):
             argv.append("--accept-unknown-spend")
         return argv
@@ -511,9 +415,7 @@ class Coordinator:
         if not worktrees:
             return None
         branches = list(dict.fromkeys(records.marker(found, "BRANCH")))
-        owner = self.children.get(tries[-1].child)
-        root = owner.root if owner is not None else self.repo
-        porcelain = _git(root, "worktree", "list", "--porcelain")
+        porcelain = _git(self.repo, "worktree", "list", "--porcelain")
         if not porcelain.ok:
             raise ReadFailed(f"git worktree list failed: {porcelain.stderr.strip()[-200:]}")
         wanted = {Path(w).resolve() for w in worktrees}
@@ -524,7 +426,7 @@ class Coordinator:
             if path and Path(path).resolve() in wanted and ref and ref not in branches:
                 branches.append(ref)
         for branch in branches:
-            listed = _gh(root, "pr", "list", "--head", branch, "--state", "all", "--json", "url")
+            listed = _gh(self.repo, "pr", "list", "--head", branch, "--state", "all", "--json", "url")
             if not isinstance(listed, list):
                 raise ReadFailed(f"gh pr list --head {branch} failed")
             if listed and isinstance(listed[0], dict) and listed[0].get("url"):
@@ -588,9 +490,9 @@ class Coordinator:
             for a in tries:
                 if a.result is not None:
                     continue
-                plan = _plan_of(a.started.get("argv", []))
+                change = _change_of(a.started.get("argv", []))
                 try:
-                    live = a is tries[-1] and plan is not None and build_pid(plan) is not None
+                    live = a is tries[-1] and change is not None and build_pid(change) is not None
                 except ReadFailed as e:       # B1.S21: never relaunch what may still run
                     c.status, c.reason = "unknown", f"cannot tell whether its build is still running: {e}"
                     break
@@ -608,8 +510,6 @@ class Coordinator:
         for c in self.children.values():             # and a merge step's (PR E), until <W> is clean (E.S26)
             if c.merge_park and not self._merge_retry(c):
                 c.status, c.reason = "parked", c.merge_park
-            if c.repo_park:                          # F.S5: for good
-                c.status, c.reason = "parked", c.repo_park
 
     # -- dependencies and merges -------------------------------------------------
 
@@ -633,8 +533,7 @@ class Coordinator:
 
     def _read_prs(self, which: list[Child]) -> None:
         """`gh pr view` each PR. A failed read is not "still open": the child is
-        `unknown` until a read answers (B1.S24). `c.pr` is the PR's URL, so
-        the read works from the epic's repo for a child in another (PR F)."""
+        `unknown` until a read answers (B1.S24)."""
         for c in which:
             got = _gh(self.repo, "pr", "view", c.pr, "--json", "state,headRefOid")
             state = got.get("state") if isinstance(got, dict) else None
@@ -676,29 +575,42 @@ class Coordinator:
     # -- launching and watching -------------------------------------------------
 
     async def _base(self, c: Child) -> str | None:
-        """The commit *c* first branches from. A child with no dependency, in the
-        epic's own repository, branches from the parent's commit that holds the
-        `specs/registry` baseline (`registry_commit`), so it builds on that
-        baseline and the registry lands on main with the first merged child PR.
-        Any other child, and every child when the parent committed no baseline,
-        when its commit would carry anything origin's default branch lacks
-        besides the registry, or once that branch holds a registry, branches
-        from origin's default branch (`base_sha`): one that waits on a
-        dependency does so after that dependency's merge."""
-        origin = await base_sha(c.root, need_fetch=bool(c.depends_on))
-        if not c.depends_on and c.root == self.repo and origin:
-            registry = registry_commit(self.config, self.state, origin)
-            if registry:
-                return registry
-        return origin
+        """The commit *c* first branches from. A child with no dependency
+        branches from the local commit that holds the ready specs
+        (`specs_sha`), so its PR carries that commit and nothing is pushed
+        before the build. A child with dependencies branches from origin's
+        default branch (`base_sha`, after a fetch that must work), which holds
+        their merges, and so the specs commit an earlier child's PR carried;
+        `_launch` checks that it holds this child's change dir as the specs
+        commit does (`_specs_missing`). None when origin has no default-branch
+        ref: the child branches from the source checkout's HEAD."""
+        if not c.depends_on:
+            return self.specs_sha
+        return await base_sha(self.repo, need_fetch=True)
+
+    def _specs_missing(self, c: Child, base: str) -> str | None:
+        """Why *base* cannot be *c*'s base: its change dir there is not the one
+        the specs commit holds (missing, or another version). None when it is."""
+        rel = Path(self.config.specs_dir).resolve() / "changes" / f"{self.epic.name}-{c.id}"
+        try:
+            rel = rel.relative_to(self.repo.resolve()).as_posix()
+        except ValueError:
+            return f"{rel} is not inside {self.repo}"
+        trees = []
+        for rev in (base, self.specs_sha):
+            res = _git(self.repo, "rev-parse", "--verify", "--quiet", f"{rev}:{rel}")
+            trees.append(res.stdout.strip() if res.ok and res.stdout.strip() else None)
+        if trees[0] is not None and trees[0] == trees[1]:
+            return None
+        return (f"origin's default branch at {base[:12]} does not hold {rel} as the commit with the ready "
+                f"specs ({self.specs_sha[:12]}) does; merge that commit into origin's default branch, then re-run")
 
     async def _launch(self, c: Child) -> bool:
         """Start *c*. False when it was not started, with nothing written for
-        it but its status: a first launch whose base could not be fetched, or
-        whose specs/config.yaml is not the base's (B1.S22). The next run then
-        fetches again."""
-        if self._park_missing(c):     # F.S5: nothing is launched for it
-            return False
+        it but its status: a first launch whose base could not be fetched,
+        whose specs/config.yaml is not the base's (B1.S22), or, for a child
+        with dependencies, whose base does not hold its change dir as the
+        specs commit does. The next run then fetches again."""
         if c.status == "failed":
             c.relaunched = True
         argv = c.argv
@@ -709,9 +621,14 @@ class Coordinator:
                 c.status, c.reason = "unknown", f"cannot get a base that holds its dependencies' merges: {e}"
                 self._save()
                 return False
-            if base and intake.config_yaml_off_ref(c.project, base):
+            missing = self._specs_missing(c, base) if c.depends_on and base else None
+            if missing:
+                c.status, c.relaunched, c.reason = "failed", True, missing
+                self._save()
+                return False
+            if base and intake.config_yaml_off_ref(self.project_dir, base):
                 c.status, c.relaunched = "failed", True
-                c.reason = f"in {c.project}: {intake.CONFIG_NOT_ON_BASE}"
+                c.reason = f"in {self.project_dir}: {intake.CONFIG_NOT_ON_BASE}"
                 self._save()
                 return False
             argv = self.new_argv(c.id, base)
@@ -720,13 +637,12 @@ class Coordinator:
         argv = [arg for arg in argv if arg != "--accept-unknown-spend"]
         if getattr(self.config, "accept_unknown_spend", False):
             argv.append("--accept-unknown-spend")
-        plan = _plan_of(argv)
         head = argv[argv.index("--base-ref") + 1] if "--base-ref" in argv[:-1] else None
         c.attempt = records.start(self.epic_dir, "build", c.id, argv, head_sha=head)
         c.status, c.argv, c.reason = "running", argv, ""
         self._save()
         c.proc = _spawn(argv, c.attempt.log)
-        log.info("EPIC child %s: launched pid %d (plan %s)", c.id, c.proc.pid, plan)
+        log.info("EPIC child %s: launched pid %d (change %s)", c.id, c.proc.pid, _change_of(argv))
         # One start at a time: worktree creation in one repo is not run concurrently.
         while c.proc.poll() is None and not records.marker(records.markers(c.attempt.log), "WORKTREE"):
             await CLOCK.sleep(POLL)
@@ -750,7 +666,7 @@ class Coordinator:
                     self._done(c, code, interrupted=False)
             else:
                 try:
-                    gone = build_pid(_plan_of(c.attempt.started["argv"])) is None
+                    gone = build_pid(_change_of(c.attempt.started["argv"])) is None
                 except ReadFailed as e:       # B1.S21
                     c.status, c.reason, c.attempt = "unknown", f"cannot tell whether its build is still running: {e}", None
                     self._save()
@@ -778,12 +694,11 @@ class Coordinator:
 
     def _worktree(self, c: Child) -> Path:
         """The child's worktree: the last `WORKTREE:` line of its builds; the
-        child's repo root (the source repo's, or its own `repo`'s, PR F) when
-        there is none or it is gone (removed by hand)."""
+        source repo's root when there is none or it is gone (removed by hand)."""
         found = [m for a in records.attempts(self.epic_dir) if a.kind == "build" and a.child == c.id
                  for m in records.markers(a.log)]
         trees = records.marker(found, "WORKTREE")
-        return Path(trees[-1]) if trees and Path(trees[-1]).is_dir() else c.root
+        return Path(trees[-1]) if trees and Path(trees[-1]).is_dir() else self.repo
 
     async def _run_review(self, c: Child, kind: str, argv: list[str], head: str) -> tuple[int, str]:
         """Run one `review` or `resume` to its end, as a pair of records; its
@@ -807,7 +722,7 @@ class Coordinator:
         blockers, `next` and `next_reason`, what follows it (`review.decide`);
         with `parked` when that is `park` (an open HIGH at the round cap) or
         its findings cannot be read."""
-        c.pr_round = review.pr_round(review.ledger_lines(), c.slug, number)
+        c.pr_round = review.pr_round(review.ledger_lines(), self.slug, number)
         blocking = review.blockers(review_dir)
         fields = {"head_sha": line.get("head_sha"), "base_sha": line.get("base_sha"), "review_dir": review_dir,
                   "cost_usd": (line.get("run") or {}).get("cost_usd"), "pr_round": c.pr_round,
@@ -884,7 +799,7 @@ class Coordinator:
                     await self._merge(c)
                     return
                 lines = review.ledger_lines()
-                running = review.running_dir(lines, c.slug, head)
+                running = review.running_dir(lines, self.slug, head)
                 if running is not None:
                     if review.lock_held(running):     # C.S2: it runs now; never two at once
                         await CLOCK.sleep(review.REVIEW_WAIT)
@@ -892,8 +807,8 @@ class Coordinator:
                     # Its lock is free, so it ended: read again, as its `finished`
                     # line may have come after the read above.
                     lines = review.ledger_lines()
-                c.pr_round = review.pr_round(lines, c.slug, number)
-                line = review.finished_line(lines, c.slug, number, head)
+                c.pr_round = review.pr_round(lines, self.slug, number)
+                line = review.finished_line(lines, self.slug, number, head)
                 if line is not None:
                     self._reuse(c, line, head, number)
                     if await self._fix(c, head, number):
@@ -924,7 +839,7 @@ class Coordinator:
                         await CLOCK.sleep(review.REVIEW_WAIT)
                         continue
                 found = review.findings_path(out)
-                line = review.finished_line(review.ledger_lines(), c.slug, number, head)
+                line = review.finished_line(review.ledger_lines(), self.slug, number, head)
                 if code == 0 and found and line is not None:
                     fields = self._fields(c, line, str(Path(found).parent), number, reused=False)
                     records.finish(c.rattempt, code, interrupted=False, extra=fields)
@@ -976,9 +891,7 @@ class Coordinator:
     def _child_project(self, c: Child) -> Path:
         """`<P>`: the child's worktree joined with the project's offset in its repo, absolute."""
         try:
-            own = c is not None and c.repo        # PR F: a child in another repo
-            project, root = (c.project, c.root) if own else (self.project_dir, self.repo)
-            offset = project.resolve().relative_to(root.resolve())
+            offset = self.project_dir.resolve().relative_to(self.repo.resolve())
         except ValueError:
             offset = Path()
         return (self._worktree(c) / offset).absolute()
@@ -1023,7 +936,7 @@ class Coordinator:
             await CLOCK.sleep(POLL)
 
     async def _fixer_gone(self, c: Child, number: int) -> bool:
-        return await self._gone(c, "fixer", lambda: fix_pid(number, c.root))
+        return await self._gone(c, "fixer", lambda: fix_pid(number, self.repo))
 
     def _rounds_left(self, c: Child) -> int:
         return self.settings.max_review_rounds - (c.pr_round or 0)
@@ -1215,7 +1128,7 @@ class Coordinator:
         argv = last.started.get("argv") or []
         final = fix.is_final(argv)
         if not final:
-            c.pr_round = review.pr_round(review.ledger_lines(), c.slug, number)
+            c.pr_round = review.pr_round(review.ledger_lines(), self.slug, number)
             if self._rounds_left(c) < 1:      # no review round left: the review step decides
                 return None
         if self._over_budget():
@@ -1270,7 +1183,7 @@ class Coordinator:
         if done is None or last is None:
             return
         title = f"buildme epic {self.epic.name}: what the final fix of #{fix.pr_of(done.started['argv'])} left"
-        found = _gh(c.root, "issue", "list", "--state", "all", "--search", f'"{title}" in:title',
+        found = _gh(self.repo, "issue", "list", "--state", "all", "--search", f'"{title}" in:title',
                     "--json", "number,title,url")
         if not isinstance(found, list):
             log.warning("EPIC child %s: cannot search for its final-fix issue; the next run tries again", c.id)
@@ -1288,7 +1201,7 @@ class Coordinator:
             "",
             *(f"- {b}" for b in last.result["blocking"]),
         ])
-        res = git_ops._run_gh(["gh", "issue", "create", "--title", title, "--body", body], cwd=c.root, timeout=60)
+        res = git_ops._run_gh(["gh", "issue", "create", "--title", title, "--body", body], cwd=self.repo, timeout=60)
         if res.ok:
             log.info("EPIC child %s: filed %s", c.id, res.stdout.strip())
         else:
@@ -1306,7 +1219,7 @@ class Coordinator:
     def _merge_worktree(self, c: Child) -> Path | None:
         """`<W>`: the child's last `WORKTREE:` path, when it is still there."""
         w = self._worktree(c)
-        return None if w == c.root else w.absolute()
+        return None if w == self.repo else w.absolute()
 
     def _merge_head(self, c: Child, head: str) -> bool:
         """Under `auto`: *head* is the last clean reviewed head with only the
@@ -1339,14 +1252,14 @@ class Coordinator:
 
     async def _merge(self, c: Child) -> None:
         """Items 35-40 under `auto`: merge `origin/<default>` into *c*'s
-        branch, push it and merge its PR, one merge per repo at a time. Every git command, check and stop record runs on `<W>` (item 36).
+        branch, push it and merge its PR, one merge at a time. Every git command, check and stop record runs on `<W>` (item 36).
         A stop by an exception or a signal first saves `merge_stop` (item 39)."""
         w = self._merge_worktree(c)
         if w is None:
             self._merge_park(c, "its worktree is gone, so the merge step has nowhere to merge")
             return
         c.status = "reviewing"
-        async with self.merge_locks.setdefault(str(c.root.resolve()), asyncio.Lock()):
+        async with self.merge_lock:
             try:
                 await self._merge_steps(c, w)
             except BaseException:
@@ -1674,8 +1587,7 @@ class Coordinator:
     def _save(self) -> None:
         self.epic.child_status = {cid: store.ChildStatus(status=c.status, pr=c.pr, reason=c.reason,
                                                          pr_round=c.pr_round, conflicts=c.conflicts,
-                                                         merge_stop=c.merge_stop, merge_park=c.merge_park,
-                                                         repo_park=c.repo_park, slug=c.slug)
+                                                         merge_stop=c.merge_stop, merge_park=c.merge_park)
                                   for cid, c in self.children.items()}
         self.epic.spent_usd, self.epic.spend_complete = self.spent()
         store.save_epic(self.epic_dir, self.epic)
@@ -1683,7 +1595,7 @@ class Coordinator:
     # -- spend (PR B2) ---------------------------------------------------------------
 
     def _review_slugs(self) -> set[str]:
-        return {s for c in self.children.values() for s in spend.review_slugs(c.slug, [c.pr])}
+        return spend.review_slugs(self.slug, [c.pr for c in self.children.values()])
 
     def spent(self) -> tuple[float, bool]:
         """(USD, complete): every record's spend plus the child PRs' reviews (item 19)."""
@@ -1698,7 +1610,7 @@ class Coordinator:
         """The USD of *c*'s PR's reviews in the ledger, as `spent` counts them."""
         from multiplai_core.paths import get_paths
 
-        usd, _ = spend.review_spend(Path(get_paths().data_dir) / spend.LEDGER, spend.review_slugs(c.slug, [c.pr]))
+        usd, _ = spend.review_spend(Path(get_paths().data_dir) / spend.LEDGER, spend.review_slugs(self.slug, [c.pr]))
         return usd
 
     def _held(self, but: str | None = None) -> float:
@@ -1762,7 +1674,7 @@ class Coordinator:
             if c.proc is not None:
                 return c.proc.pid if c.proc.poll() is None else None
             try:
-                return build_pid(_plan_of(c.attempt.started["argv"]))
+                return build_pid(_change_of(c.attempt.started["argv"]))
             except ReadFailed:
                 return -1
         for c in running:
@@ -1810,8 +1722,7 @@ class Coordinator:
     # -- the run ------------------------------------------------------------------
 
     async def run(self) -> int:
-        projects = [self.project_dir, *dict.fromkeys(c.project for c in self.children.values() if c.repo)]
-        refused = next((r for r in map(in_place_reason, projects) if r), None)    # B1.S23, each child's project
+        refused = in_place_reason(self.project_dir)    # B1.S23
         if refused:
             log.error("EPIC %s", refused)
             print(f"ERROR:{refused}", file=sys.stderr, flush=True)
@@ -1819,9 +1730,6 @@ class Coordinator:
         run_dir = _new_run_dir(self.epic_dir)
         self._recover()
         self._read_prs([c for c in self.children.values() if c.status == "built"])
-        for c in self.children.values():      # F.S5: a checkout gone since approval
-            if c.status in ("pending", "waiting", "failed", "built", "unknown"):
-                self._park_missing(c)
         self._resolve()
         self._save()
         loop = asyncio.get_running_loop()
@@ -1959,8 +1867,9 @@ def _new_run_dir(epic_dir: Path) -> Path:
     return path
 
 
-async def run_epic(config, state, args, epic_dir: Path, epic: store.Epic) -> int:
-    """Build an approved epic's children (item 11). Returns 0 when nothing is
+async def run_epic(config, args, epic_dir: Path, epic: store.Epic, specs_sha: str) -> int:
+    """Build an epic's children (item 11); *specs_sha* is the local commit
+    that holds their ready specs. Returns 0 when nothing is
     left to do, 1 when a child failed or its state is unknown, or a child's PR
     head has no finished review (`Coordinator._unreviewed`), 3 with `EPIC:MERGE_WAITING:<urls>` while a
     child waits on an open PR or with `EPIC:BUDGET:<spent>` once `epic.max_usd` is reached,
@@ -1968,4 +1877,4 @@ async def run_epic(config, state, args, epic_dir: Path, epic: store.Epic) -> int
     from . import lock as epic_lock
 
     assert epic_lock.held(epic_dir), "the coordinator runs under the epic lock its build holds"
-    return await Coordinator(config, state, args, Path(epic_dir), epic).run()
+    return await Coordinator(config, args, Path(epic_dir), epic, specs_sha).run()

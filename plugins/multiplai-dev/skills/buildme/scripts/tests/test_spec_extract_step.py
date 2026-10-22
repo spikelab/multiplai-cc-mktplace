@@ -306,15 +306,6 @@ class TestExits:
 class TestInTheBlock:
     """The step runs inside CODEBASE_ANALYSIS, after the analysis and before the phase advances."""
 
-    @pytest.fixture(autouse=True)
-    def _one_change(self, monkeypatch):
-        from unittest.mock import AsyncMock
-
-        from build_pipeline.epic import split as epic_split
-
-        answer = epic_split.EpicSplitAnswer(single=True, reason="one change")
-        monkeypatch.setattr(epic_split, "epic_split", AsyncMock(return_value=answer))
-
     def _run(self, tmp_path, fake, monkeypatch):
         from unittest.mock import AsyncMock, patch
 
@@ -534,9 +525,8 @@ def test_a_relative_specs_dir_is_passed_absolute(tmp_path, monkeypatch):
 
 
 class TestEpicChildren:
-    """An epic's child skips spec-extract: the parent ran it, and the child branches
-    from the parent's registry commit (below); siblings at one commit would also
-    race for spec-extract's lock."""
+    """An epic's child skips spec-extract: siblings at one commit would race for
+    spec-extract's lock, and each would commit a registry baseline."""
 
     def test_a_child_build_skips_spec_extract(self, tmp_path, monkeypatch, caplog):
         from build_pipeline.epic import CHILD_ENV
@@ -568,216 +558,6 @@ class TestEpicChildren:
         coordinator._spawn(["python", "-m", "build_pipeline"], tmp_path / "log")
         assert seen["env"][CHILD_ENV] == "1"
         assert seen["env"]["PATH"] == os.environ["PATH"]
-
-
-class TestEpicChildrenBranchFromTheRegistryCommit:
-    """Spike, 2026-10-14 (run-decisions-2026-10-11.md): a child with no dependency
-    branches from the parent's commit that holds `specs/registry`, so the registry
-    lands on main with the first merged child PR; a child that waits on a
-    dependency branches from origin's default branch after that merge."""
-
-    def _epic(self, tmp_path, monkeypatch, *, unpushed: bool = False, worktree: bool = False,
-              extra: bool = False, mixed: bool = False):
-        """An approved epic (api, ui; docs waits on both) whose parent committed a
-        baseline registry after the commit its spec-extract step read. The
-        registry commit is on the parent's branch only, not on origin.
-
-        *unpushed*: the source checkout holds a commit origin's main does not,
-        which the parent started from. *worktree*: the parent builds in its own
-        worktree, as a real build does, so the registry commit is on that
-        worktree's branch only; the config returned is the parent's, bound to it.
-        *extra*: row S5, a commit added to the parent's branch after the saved
-        sha and before the registry commit. *mixed*: the registry commit also
-        changes a file outside the registry, as a user's own commit of the
-        baseline can."""
-        import copy
-
-        from build_pipeline.config import EpicSettings
-
-        from .epic_row_helpers import THREE, CallLog, Fakes, approve, make_build, make_project, use_workspace
-
-        monkeypatch.delenv("BUILDME_TRUST_REPO")      # the parent's own step is not under test
-        use_workspace(monkeypatch, tmp_path)
-        project = make_project(tmp_path)
-        fakes = Fakes(tmp_path, monkeypatch)
-        config = make_build(project)
-        config.epic = EpicSettings(max_parallel=2)
-        approve(config, THREE, CallLog(tmp_path / "split.log"))
-        state = BuildState.load(config.state_file_path())
-        if unpushed:
-            (project / "local.txt").write_text("local only\n")
-            _git(project, "add", "local.txt")
-            _git(project, "commit", "-q", "-m", "local only")
-        parent = config
-        if worktree:      # a committed specs/config.yaml, on origin, which every child reads
-            (project / "specs" / "config.yaml").write_text("spec_extract: true\n")
-            _git(project, "add", "specs/config.yaml")
-            _git(project, "commit", "-q", "-m", "specs config")
-            _git(project, "push", "-q", "origin", "HEAD:main")
-            parent = copy.copy(config)
-            orchestrator._setup_worktree(parent, state)
-        state.spec_gen = SpecGenState(spec_extract_sha=_git(parent.project_dir, "rev-parse", "HEAD"))
-        for path in {config.state_file_path(), parent.state_file_path()}:
-            state.checkpoint(path)
-        if extra:
-            (Path(parent.project_dir) / "y.txt").write_text("added before the resume\n")
-            _git(parent.project_dir, "add", "y.txt")
-            _git(parent.project_dir, "commit", "-q", "-m", "a user's commit")
-        (parent.specs_dir / "registry").mkdir(parents=True, exist_ok=True)
-        (parent.specs_dir / "registry" / "billing.md").write_text(CAPABILITY)
-        _git(parent.project_dir, "add", "specs/registry/billing.md")
-        if mixed:
-            (Path(parent.project_dir) / "z.txt").write_text("not the registry\n")
-            _git(parent.project_dir, "add", "z.txt")
-        _git(parent.project_dir, "commit", "-q", "-m", "docs(specs): baseline registry from spec-extract")
-        return parent, fakes, _git(parent.project_dir, "rev-parse", "HEAD")
-
-    def _coordinator(self, config):
-        from build_pipeline.epic import coordinator, store
-
-        state = BuildState.load(config.state_file_path())
-        epic_dir = Path(state.epic_dir)
-        return coordinator.Coordinator(config, state, None, epic_dir, store.load_epic(epic_dir))
-
-    def test_a_child_with_no_dependency_branches_from_the_registry_commit(self, tmp_path, monkeypatch):
-        from .epic_row_helpers import run_coordinator
-
-        config, _, registry = self._epic(tmp_path, monkeypatch)
-        assert run_coordinator(config) == 3
-        for cid in ("api", "ui"):
-            assert (tmp_path / "bases" / cid).read_text() == registry
-        assert not (tmp_path / "bases" / "docs").exists()
-
-    def test_a_child_waiting_on_a_dependency_branches_from_origin_after_the_merge(self, tmp_path, monkeypatch):
-        from .epic_row_helpers import pr_url, run_coordinator
-
-        config, fakes, registry = self._epic(tmp_path, monkeypatch)
-        assert run_coordinator(config) == 3
-        fakes.set_pr(pr_url("e-api"), "MERGED")
-        fakes.set_pr(pr_url("e-ui"), "MERGED")
-        run_coordinator(config)
-        origin = _git(tmp_path / "o" / "r.git", "rev-parse", "main")
-        assert (tmp_path / "bases" / "docs").read_text() == origin != registry
-
-    def test_a_child_in_another_repository_branches_from_its_origin(self, tmp_path, monkeypatch):
-        import asyncio
-
-        from build_pipeline.epic import coordinator, store
-
-        from .epic_row_helpers import make_project
-
-        config, _, registry = self._epic(tmp_path, monkeypatch)
-        state = BuildState.load(config.state_file_path())
-        epic_dir = Path(state.epic_dir)
-        coord = coordinator.Coordinator(config, state, None, epic_dir, store.load_epic(epic_dir))
-        other = make_project(tmp_path, "q", "q")
-        c = coord.children["api"]
-        c.repo, c.project, c.root = "../q", other, other
-        assert asyncio.run(coord._base(c)) == _git(other, "rev-parse", "HEAD") != registry
-
-    def test_no_registry_commit_keeps_origin(self, tmp_path, monkeypatch):
-        """The parent's spec-extract step committed nothing (`NOT_RUN`, `--no-worktree`,
-        a failed commit): every child branches from origin's default branch."""
-        import asyncio
-
-        from build_pipeline.epic import coordinator, store
-
-        config, _, _ = self._epic(tmp_path, monkeypatch)
-        project = Path(config.project_dir)
-        _git(project, "reset", "-q", "--hard", "HEAD~1")
-        state = BuildState.load(config.state_file_path())
-        epic_dir = Path(state.epic_dir)
-        coord = coordinator.Coordinator(config, state, None, epic_dir, store.load_epic(epic_dir))
-        assert asyncio.run(coord._base(coord.children["api"])) == _git(project, "rev-parse", "origin/main")
-
-    def test_a_worktree_parent_s_registry_commit_is_the_base_and_passes_the_config_check(
-            self, tmp_path, monkeypatch):
-        """The baseline is on the parent's worktree branch, not in the source
-        checkout the children are placed in; `registry_commit` reads the
-        parent's worktree, and the child's specs/config.yaml check passes at it."""
-        import asyncio
-
-        from build_pipeline import intake
-
-        config, _, registry = self._epic(tmp_path, monkeypatch, worktree=True)
-        coord = self._coordinator(config)
-        source = tmp_path / "p"
-        c = coord.children["api"]
-        assert c.root.resolve() == c.project.resolve() == source.resolve() != Path(config.project_dir).resolve()
-        assert subprocess.run(["git", "merge-base", "--is-ancestor", registry, "HEAD"],
-                              cwd=source, check=False).returncode == 1    # only the worktree branch holds it
-        base = asyncio.run(coord._base(c))
-        assert base == registry
-        assert intake.config_yaml_off_ref(c.project, base) is False
-
-    def test_a_parent_started_from_commits_origin_lacks_keeps_origin(self, tmp_path, monkeypatch):
-        """The parent's worktree starts at the source checkout's HEAD. When that
-        holds a commit origin's main does not (a feature branch, unpushed work),
-        the registry commit would carry it into every child's PR to main: the
-        children branch from origin's main, without the baseline."""
-        import asyncio
-
-        config, _, registry = self._epic(tmp_path, monkeypatch, unpushed=True)
-        coord = self._coordinator(config)
-        origin = _git(Path(config.project_dir), "rev-parse", "origin/main")
-        for cid in ("api", "ui"):
-            assert asyncio.run(coord._base(coord.children[cid])) == origin != registry
-
-    def test_a_commit_added_before_the_registry_commit_keeps_origin(self, tmp_path, monkeypatch):
-        """Row S5: the build stopped, the user added a commit to the parent's
-        branch, and the resumed step committed the baseline on top of it. The
-        saved sha is on origin, but the registry commit's parent is not, so it
-        would carry the user's commit into every child's PR to main."""
-        import asyncio
-
-        config, _, registry = self._epic(tmp_path, monkeypatch, extra=True)
-        coord = self._coordinator(config)
-        origin = _git(Path(config.project_dir), "rev-parse", "origin/main")
-        assert _git(Path(config.project_dir), "rev-parse", "HEAD~2") == origin
-        for cid in ("api", "ui"):
-            assert asyncio.run(coord._base(coord.children[cid])) == origin != registry
-
-    def test_a_registry_commit_that_changes_other_files_keeps_origin(self, tmp_path, monkeypatch):
-        """A baseline committed together with other changes (a user's own commit
-        of it, with no build branch to commit to) would carry them into every
-        child's PR to main."""
-        import asyncio
-
-        config, _, registry = self._epic(tmp_path, monkeypatch, mixed=True)
-        coord = self._coordinator(config)
-        origin = _git(Path(config.project_dir), "rev-parse", "origin/main")
-        assert asyncio.run(coord._base(coord.children["api"])) == origin != registry
-
-    def test_origin_holding_the_registry_is_the_base(self, tmp_path, monkeypatch):
-        """Once origin's default branch holds `specs/registry` (a sibling's PR
-        merged), a child launched later branches from origin's tip, with main's
-        newer code, not from the parent's older registry commit."""
-        import asyncio
-
-        config, _, registry = self._epic(tmp_path, monkeypatch)
-        other = tmp_path / "merged"
-        _git(tmp_path, "clone", "-q", str(tmp_path / "o" / "r.git"), str(other))
-        (other / "specs" / "registry").mkdir(parents=True)
-        (other / "specs" / "registry" / "billing.md").write_text(CAPABILITY)
-        (other / "api.txt").write_text("api\n")
-        _git(other, "add", "specs/registry/billing.md", "api.txt")
-        _git(other, "commit", "-q", "-m", "child api (#1)")
-        _git(other, "push", "-q", "origin", "HEAD:main")
-        moved = _git(other, "rev-parse", "HEAD")
-        coord = self._coordinator(config)
-        assert asyncio.run(coord._base(coord.children["ui"])) == moved != registry
-
-    def test_origin_moved_without_the_registry_keeps_the_registry_commit(self, tmp_path, monkeypatch):
-        """Spike's decision: until the registry lands on main, a child with no
-        dependency branches from the registry commit, however far origin moved."""
-        import asyncio
-
-        from .epic_row_helpers import move_origin
-
-        config, _, registry = self._epic(tmp_path, monkeypatch)
-        move_origin(tmp_path)
-        coord = self._coordinator(config)
-        assert asyncio.run(coord._base(coord.children["ui"])) == registry
 
 
 class TestSiblingsOpenTheirPrsAgainstMain:
@@ -865,10 +645,6 @@ class TestTheAnalysisIsNotPaidTwice:
         import asyncio
         from unittest.mock import AsyncMock, patch
 
-        from build_pipeline.epic import split as epic_split
-
-        answer = epic_split.EpicSplitAnswer(single=True, reason="one change")
-        monkeypatch.setattr(epic_split, "epic_split", AsyncMock(return_value=answer))
         monkeypatch.setattr(git_ops, "_run_spec_extract_skill", FakeSpecExtract(*steps))
         codes = []
         with patch("build_pipeline.llm_steps.spec_steps.run_codebase_analysis", analysis), \
