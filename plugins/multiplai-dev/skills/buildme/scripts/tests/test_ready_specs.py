@@ -322,6 +322,43 @@ class TestStartRefusal:
         assert not change_dir.exists(), "the checkout is never written"
 
     @pytest.mark.asyncio
+    async def test_a_conflict_merging_main_into_the_feature_branch_builds_nothing(
+        self, repo, tmp_path, capsys
+    ):
+        """T6 for one build: main and the feature branch changed the same
+        line. The build prints the marker, exits 3, leaves no merge in
+        progress and the branch as it was, and cuts no worktree."""
+        _handoff(repo)
+        (repo / "README.md").write_text("on main\n")
+        _git(repo, "commit", "-qam", "main's readme")
+        _git(repo, "push", "-q", "origin", "HEAD:main")
+        _git(repo, "checkout", "-q", "-b", "other", f"origin/change/{CHANGE}")
+        (repo / "README.md").write_text("on the branch\n")
+        _git(repo, "commit", "-qam", "the branch's readme")
+        _git(repo, "push", "-q", "origin", f"HEAD:change/{CHANGE}")
+        before = _git(repo, "rev-parse", "HEAD")
+        _git(repo, "checkout", "-q", "main")
+        models = Models()
+
+        rc = await _build(repo, models)
+
+        out = capsys.readouterr().out
+        assert rc == 3
+        assert f"FEATURE_BRANCH:CONFLICT:change/{CHANGE}:README.md" in out.splitlines()
+        assert _git(repo, "rev-parse", f"origin/change/{CHANGE}") == before
+        merger = tmp_path / "ws" / ".worktrees" / f"buildme-feature-change-{CHANGE}"
+        assert _git(merger, "status", "--porcelain") == ""
+        merging = subprocess.run(
+            ["git", "rev-parse", "-q", "--verify", "MERGE_HEAD"],
+            cwd=merger,
+            capture_output=True,
+            check=False,
+        )
+        assert merging.returncode != 0, "no merge in progress"
+        assert not _worktree(tmp_path).exists()
+        models.generate.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_ready_uncommitted_specs_build_in_place_with_no_worktree(
         self, repo, capsys
     ):
