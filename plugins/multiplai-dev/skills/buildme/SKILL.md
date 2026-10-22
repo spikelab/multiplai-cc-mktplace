@@ -209,8 +209,15 @@ calling checkout:
 - The worktree is created in BOOTSTRAP from `HEAD`, which must hold the
   ready specs: a change dir with uncommitted changes refuses with
   `SPEC:NOT_READY` (the worktree would not hold them), since pm-spec commits
-  the change dir when it marks it ready. Every artifact buildme writes is born
-  on the branch, and all later phases operate inside it.
+  the change dir when it marks it ready. With `--base-ref`, the change dir as
+  that ref holds it must be ready, with the revision marked ready here, or the
+  build refuses before the worktree is cut. Every artifact buildme writes is
+  born on the branch, and all later phases operate inside it.
+- A resume reads the specs in the build's worktree. A refusal then names
+  `--project-dir <worktree>` for pm-spec. When the change dir in your checkout
+  was marked ready again after the worktree was cut, with other specs, the
+  resume refuses with `SPEC:NOT_READY`, naming both copies: copy the newer
+  files into the worktree's change dir, commit them there, and re-run.
 - The build refuses to start (hard failure, no silent fallback) when the repo has
   uncommitted tracked changes, or the target branch already exists with unmerged
   commits. Commit or stash first.
@@ -477,8 +484,11 @@ it never splits anything itself.
 
 Before anything is written, the build checks every listed child: named
 `<parent>-<id>`, its change dir present, its `depends_on` naming only listed
-children with no cycle, and its specs ready. The parent's change dir and every
-child's must have no uncommitted change and be in `HEAD`. Any failure prints
+children with no cycle, and its specs ready. A child whose change dir is gone
+because it merged (its `--auto` build moved it to `specs/archive/`, or the
+saved `epic.json` says it merged) counts as merged and is not checked. The
+parent's change dir and every other child's must have no uncommitted change
+and be in `HEAD`. Any failure prints
 `SPEC:NOT_READY:<reason>` and the pm-spec line, and exits `2`. A change that
 names the parent but is not in its `children` list is not built.
 
@@ -496,7 +506,11 @@ builds in the epic's own repository.
 --project-dir <project dir> [--base-ref <base>] [--skip-research]` subprocess,
 so each child gets its own worktree, branch and ready PR. A child with no
 dependency branches from `HEAD`, the local commit that holds the ready specs,
-so its PR carries that commit and nothing is pushed before the build. A child
+so its PR carries that commit and nothing is pushed before the build. When a
+commit between origin's default branch and that commit touches a path outside
+the epic's change dirs, the child would carry it too, so it is failed with the
+paths and not launched: merge those commits into origin's default branch or
+move them off the branch, then re-run. A child
 that waits on a dependency branches from origin's default branch after that
 merge; when that branch does not hold the child's change dir as the specs
 commit does (its specs were revised and the revision has not reached it), the
@@ -879,9 +893,12 @@ Parse pipeline stdout for progress lines:
   after a failed spec-extract also exits `1`: tell the user to stash or commit
   them, or set `spec_extract: false`, and re-run
 - `RESULT:SUCCESS` — build complete
-- `SPEC:NOT_READY:<reason>`, then `Run /multiplai-pm:pm-spec [resume ]<name> first`
+- `SPEC:NOT_READY:<reason>`, then `Run /multiplai-pm:pm-spec [resume ]<name> [--project-dir <worktree>] first`
   — the specs are not marked ready, changed after they were, or (for a build
   that branches a worktree) are not committed. Nothing was written; exit `2`.
+  When the second line is not a pm-spec command, it says what to do instead
+  (a `--base-ref` that does not hold the ready specs, or newer specs in your
+  checkout than in the build's worktree).
   Run the pm-spec command the second line names (`resume` checks specs already
   on disk, from an older buildme build or edited by hand, and marks them ready
   without rewriting them), then re-run the same build command

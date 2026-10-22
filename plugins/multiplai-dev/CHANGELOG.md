@@ -28,7 +28,13 @@ time, not derived from a tag.
   `Run /multiplai-pm:pm-spec <name> first`, and exits `2` with nothing
   written. When specs pm-spec never marked are on disk (an older buildme
   build wrote them), the line names `pm-spec resume <name>`, which checks them
-  and marks them ready without rewriting them.
+  and marks them ready without rewriting them. The check reads the copy the
+  build reads: with `--base-ref`, the change dir as that ref holds it, before
+  the worktree is cut; on a resume, the copy in the build's worktree, and the
+  pm-spec line then names `--project-dir <worktree>`. A resumed worktree build
+  also refuses when the change dir in the checkout it was cut from was marked
+  ready again since with other specs, and names where they are and how to
+  bring them into the worktree, instead of building its older copy.
 - buildme: `--change` is now required on `build`. The design reads the
   research directly, and the research decision reads the ready specs.
 - buildme: a requirements problem goes back to pm-spec instead of being
@@ -56,7 +62,12 @@ time, not derived from a tag.
   that commit and nothing is pushed before the build; a child that waits on a
   dependency branches from origin's default branch once that dependency merged,
   and is not launched (it fails, naming the commit to merge) when that branch
-  does not hold its specs as that commit does. Each child runs as
+  does not hold its specs as that commit does. A child with no dependency is
+  not launched either (it fails, naming the paths) when a commit between
+  origin's default branch and the specs commit touches a path outside the
+  epic's change dirs, which its PR would carry. A merged child whose change
+  dir its `--auto` build moved to `specs/archive/` stays merged on the next
+  run instead of being refused. Each child runs as
   `build --change <parent>-<id>`. An epic now runs no spec-extract, so its
   children build without a `specs/registry` baseline.
 
@@ -89,7 +100,11 @@ time, not derived from a tag.
   continued: its parent has no `children` list, so it refuses with
   `SPEC:NOT_READY`. Child PRs already open are kept; split the rest again with
   pm-spec. A child's saved command from before this release uses removed flags,
-  so re-running it by hand stops with a usage error.
+  so re-running it by hand stops with a usage error. Once pm-spec has split the
+  parent again, the epic relaunches such a child with a new command instead of
+  the saved one.
+- A build stopped in its own worktree refuses the same way, and the line names
+  `--project-dir <worktree>`: run pm-spec there, then re-run the build.
 
 ## [0.98.1] - 2026-10-21
 
