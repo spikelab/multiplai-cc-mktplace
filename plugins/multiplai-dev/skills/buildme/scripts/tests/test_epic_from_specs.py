@@ -263,3 +263,38 @@ def test_the_children_come_from_the_change_dirs_on_every_run(tmp_path, monkeypat
     assert set(data["child_status"]) == {"a", "b"}
     assert data["child_status"]["a"]["status"] == "parked" and data["child_status"]["b"]["status"] == "skipped"
 
+
+def test_a_build_of_the_same_change_in_another_project_is_not_this_child(tmp_path):
+    """`build_pid` matches `--change` and `--project-dir`: the change names
+    `e-a` in two projects are two children, and a fixer of the same change
+    (`findings`) is not its build."""
+    import os
+    import signal
+    import sys
+    import time
+
+    from build_pipeline.epic import coordinator
+
+    def spawn(*argv: str) -> subprocess.Popen:
+        stub = tmp_path / "build_pipeline"      # first on `-m`'s path, so no real build runs
+        stub.mkdir(exist_ok=True)
+        (stub / "__init__.py").write_text("")
+        (stub / "__main__.py").write_text("import time\ntime.sleep(60)\n")
+        return subprocess.Popen([sys.executable, "-m", "build_pipeline", *argv], cwd=tmp_path,
+                                start_new_session=True)
+
+    here, there = tmp_path / "p", tmp_path / "q"
+    other = spawn("--session-id", "s", "build", "--change", "e-a", "--project-dir", str(there))
+    fixer = spawn("--session-id", "s", "findings", "--change", "e-a", "--project-dir", str(here))
+    try:
+        for _ in range(250):
+            if (coordinator.build_pid("e-a", str(there)) == other.pid
+                    and coordinator._ps_pid("findings", f"--project-dir {here}") == fixer.pid):
+                break
+            time.sleep(0.02)
+        assert coordinator.build_pid("e-a", str(there)) == other.pid
+        assert coordinator.build_pid("e-a", str(here)) is None
+    finally:
+        for p in (other, fixer):
+            os.killpg(p.pid, signal.SIGKILL)
+            p.wait()

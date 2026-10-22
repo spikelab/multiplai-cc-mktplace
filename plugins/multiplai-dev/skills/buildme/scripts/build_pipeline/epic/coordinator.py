@@ -241,17 +241,19 @@ def _has(line: str, text: str) -> bool:
     return re.search(re.escape(text) + r"(?=\s|$)", line) is not None
 
 
-def build_pid(change: str) -> int | None:
-    """The pid of a live build of the child change *change*: one `ps` line
-    holding `build_pipeline`, the word `build` and `--change <change>`, each
-    followed by a space or the line's end, and not the word `findings` (item
-    14): a fixer of the same change (`fix.fix_argv`) carries `--change` too,
-    and is not its build. Raises ReadFailed when `ps` fails: a live child must
-    never be taken for a gone one."""
+def build_pid(change: str, project_dir: str) -> int | None:
+    """The pid of a live build of the child change *change* in *project_dir*:
+    one `ps` line holding `build_pipeline`, the word `build`, `--change
+    <change>` and `--project-dir <project_dir>`, each followed by a space or
+    the line's end, and not the word `findings` (item 14): a fixer of the same
+    change (`fix.fix_argv`) carries `--change` too, and is not its build. The
+    project dir is what the child was launched with: a change of the same
+    name in another project is not this child. Raises ReadFailed when `ps`
+    fails: a live child must never be taken for a gone one."""
     def match(line: str) -> bool:
         words = line.split()
         return (_has(line, "build_pipeline") and "build" in words and "findings" not in words
-                and _has(line, f"--change {change}"))
+                and _has(line, f"--change {change}") and _has(line, f"--project-dir {project_dir}"))
     return _ps_find(match)
 
 
@@ -318,8 +320,15 @@ def _ps_find(match: Callable[[str], bool]) -> int | None:
     return None
 
 
-def _change_of(argv: list[str]) -> str | None:
-    return argv[argv.index("--change") + 1] if "--change" in argv[:-1] else None
+def _opt(argv: list[str], flag: str) -> str | None:
+    return argv[argv.index(flag) + 1] if flag in argv[:-1] else None
+
+
+def _argv_pid(argv: list[str]) -> int | None:
+    """`build_pid` for the build launched with *argv*; None when *argv* names
+    no change or project dir (a record from before pm-spec: `--plan-file`)."""
+    change, project = _opt(argv, "--change"), _opt(argv, "--project-dir")
+    return build_pid(change, project) if change and project else None
 
 
 # --- the coordinator ---------------------------------------------------------------
@@ -490,9 +499,8 @@ class Coordinator:
             for a in tries:
                 if a.result is not None:
                     continue
-                change = _change_of(a.started.get("argv", []))
                 try:
-                    live = a is tries[-1] and change is not None and build_pid(change) is not None
+                    live = a is tries[-1] and _argv_pid(a.started.get("argv", [])) is not None
                 except ReadFailed as e:       # B1.S21: never relaunch what may still run
                     c.status, c.reason = "unknown", f"cannot tell whether its build is still running: {e}"
                     break
@@ -642,7 +650,7 @@ class Coordinator:
         c.status, c.argv, c.reason = "running", argv, ""
         self._save()
         c.proc = _spawn(argv, c.attempt.log)
-        log.info("EPIC child %s: launched pid %d (change %s)", c.id, c.proc.pid, _change_of(argv))
+        log.info("EPIC child %s: launched pid %d (change %s)", c.id, c.proc.pid, _opt(argv, "--change"))
         # One start at a time: worktree creation in one repo is not run concurrently.
         while c.proc.poll() is None and not records.marker(records.markers(c.attempt.log), "WORKTREE"):
             await CLOCK.sleep(POLL)
@@ -666,7 +674,7 @@ class Coordinator:
                     self._done(c, code, interrupted=False)
             else:
                 try:
-                    gone = build_pid(_change_of(c.attempt.started["argv"])) is None
+                    gone = _argv_pid(c.attempt.started["argv"]) is None
                 except ReadFailed as e:       # B1.S21
                     c.status, c.reason, c.attempt = "unknown", f"cannot tell whether its build is still running: {e}", None
                     self._save()
@@ -1674,7 +1682,7 @@ class Coordinator:
             if c.proc is not None:
                 return c.proc.pid if c.proc.poll() is None else None
             try:
-                return build_pid(_change_of(c.attempt.started["argv"]))
+                return _argv_pid(c.attempt.started["argv"])
             except ReadFailed:
                 return -1
         for c in running:

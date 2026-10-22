@@ -94,14 +94,14 @@ class Root:
         return f"e-{cid}"
 
     def kill_child(self, cid: str) -> None:
-        pid = coordinator.build_pid(self.change(cid))
+        pid = coordinator.build_pid(self.change(cid), str(self.project.absolute()))
         assert pid, f"{cid} is not running"
         os.killpg(pid, signal.SIGKILL)
         self.wait_gone(cid)
 
     def wait_gone(self, cid: str) -> None:
         for _ in range(500):
-            if coordinator.build_pid(self.change(cid)) is None:
+            if coordinator.build_pid(self.change(cid), str(self.project.absolute())) is None:
                 return
             time.sleep(0.02)
         raise AssertionError(f"{cid} never exited")
@@ -168,7 +168,7 @@ def test_B1_S4_coordinator_killed_with_the_child_alive_adopts_it(tmp_path, monke
     steps = {"a": [{"block": True}]}
     stopped, clean = _roots(tmp_path, monkeypatch, steps)
     stopped.killed(die_at(coordinator, "_tick"))
-    assert coordinator.build_pid(stopped.change("a")) is not None      # the child outlived it
+    assert coordinator.build_pid(stopped.change("a"), str(stopped.project.absolute())) is not None      # the child outlived it
     assert not epic_lock.held(stopped.dir)                           # the resume takes it itself
     assert stopped.run(_release_all(stopped)) == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]
     assert clean.run(_release_all(clean)) == 3 and merge_waiting() == [pr_url("e-a"), pr_url("e-b")]

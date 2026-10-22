@@ -238,7 +238,7 @@ def test_a_child_alive_after_the_stop_wait_keeps_no_result(tmp_path, monkeypatch
         raise KeyboardInterrupt
 
     def ps_fails_then_ctrl_c(coord):
-        def fail(change):
+        def fail(change, project_dir):
             raise coordinator.ReadFailed("ps failed")
         monkeypatch.setattr(coordinator, "build_pid", fail)
         raise KeyboardInterrupt
@@ -253,7 +253,7 @@ def test_a_child_alive_after_the_stop_wait_keeps_no_result(tmp_path, monkeypatch
     finally:
         e.fakes.release("a")
         for _ in range(500):
-            if real_pid("e-a") is None:
+            if real_pid("e-a", str(e.project.absolute())) is None:
                 break
             time.sleep(0.02)
 
