@@ -19,6 +19,10 @@ Each tool does one job:
      There is no AST there; the output says how each was found.
 3. `lsp.py` adds `pyright-langserver` references inside the target's own repo.
 
+A change target (`--scope pr`) uses `scan_callers` instead: `git grep` at each
+repository's commit picks the files naming a changed function or class, and
+`ast` confirms each call or import of it.
+
 Cross-repo HTTP and SQL references are string matches by nature: no AST or
 LSP follows a call across an HTTP boundary or a database.
 """
@@ -563,3 +567,99 @@ def merge_lsp(refs: list[Reference], lsp_refs: list[Reference]) -> list[Referenc
             have.add((r.path, r.line))
             out.append(r)
     return out
+
+
+# --- a change's callers ----------------------------------------------------------------------
+
+# Names shorter than this, and dunder names, would match too much to mean a caller.
+MIN_CALLER_NAME = 4
+MAX_CALLERS = 300
+
+
+def _grep_files(repo: RepoInfo, names: list[str]) -> list[str]:
+    """Repo-relative Python files at repo.head_sha naming any of *names* as a whole word."""
+    if not names:
+        return []
+    argv = ["grep", "-l", "-F", "-w"]
+    for n in names:
+        argv += ["-e", n]
+    proc = git(repo.path, *argv, repo.head_sha, "--", "*.py", check=False)
+    prefix = f"{repo.head_sha}:"
+    return sorted(
+        line[len(prefix) :]
+        for line in proc.stdout.splitlines()
+        if line.startswith(prefix) and not is_secret_path(line[len(prefix) :])
+    )
+
+
+def _callers_in(
+    repo: RepoInfo, rel: str, text: str, names: set[str], attributes: bool
+) -> list[Reference]:
+    try:
+        tree = ast.parse(text, rel)
+    except SyntaxError:
+        return []
+    lines = text.split("\n")
+    imported = {
+        (a.asname or a.name)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        for a in node.names
+        if a.name in names
+    }
+    out: list[Reference] = []
+
+    def add(name: str, line: int) -> None:
+        out.append(
+            Reference(
+                repo=repo.key,
+                kind="caller",
+                symbol=name,
+                path=f"{repo.key}/{rel}",
+                line=line,
+                quote=lines[line - 1].strip() if 0 < line <= len(lines) else name,
+                method="ast",
+            )
+        )
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            for a in node.names:
+                if a.name in names:
+                    add(a.name, node.lineno)
+        elif isinstance(node, ast.Call):
+            f = node.func
+            if (
+                isinstance(f, ast.Name)
+                and f.id in names
+                and (attributes or f.id in imported)
+            ):
+                add(f.id, node.lineno)
+            elif attributes and isinstance(f, ast.Attribute) and f.attr in names:
+                add(f.attr, node.lineno)
+    return out
+
+
+def scan_callers(
+    repos: dict[str, RepoInfo], target: TargetInfo, names: set[str]
+) -> list[Reference]:
+    """Calls and imports of the changed functions and classes, in every repository but the base key.
+
+    In the target's repository a call by name or as an attribute counts; in another one only a
+    call of a name the file imports with `from … import`, since an attribute call there names too
+    many unrelated methods. The definitions themselves are not calls. At most MAX_CALLERS.
+    """
+    wanted = sorted(
+        n for n in names if len(n) >= MIN_CALLER_NAME and not n.startswith("__")
+    )
+    base_key = target.change.base_key if target.change else ""
+    refs: list[Reference] = []
+    for key, repo in repos.items():
+        if key == base_key:
+            continue
+        mine = key == target.repo_key
+        for rel in _grep_files(repo, wanted):
+            text = show(repo, rel)
+            if text is not None:
+                refs += _callers_in(repo, rel, text, set(wanted), attributes=mine)
+    return first_per_file(refs)[:MAX_CALLERS]

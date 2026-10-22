@@ -80,6 +80,15 @@ REFERENCE_SUBSECTIONS = [
     "Glossary",
 ]
 MADE_SUBSECTIONS = ["Commits read", "Coverage", "Cut by the checks"]
+# A change's H2s (`--scope pr`). "What it does not touch" is written by code, from the diff and the paths.
+CHANGE_SECTIONS = [
+    ("summary", "What changed and why"),
+    ("flow", "The path through the change"),
+    ("affected", "Who is affected"),
+    ("untouched", "What it does not touch"),
+    ("reference", "Reference"),
+    ("made", "How this was made"),
+]
 STRUCTURED = {
     "summary": SummaryOutput,
     "usecases": UseCasesOutput,
@@ -98,8 +107,15 @@ AGENT_SECTIONS = [
 ]
 
 
-def required_titles(mode: str) -> list[str]:
-    return [t for _, t in (AGENT_SECTIONS if mode == "agent" else HUMAN_SECTIONS)]
+def human_sections(options: dict) -> list[tuple[str, str]]:
+    """The H2s of a human-mode walkthrough: a module's, or a change's (`--scope pr`)."""
+    return CHANGE_SECTIONS if options.get("scope") == "pr" else HUMAN_SECTIONS
+
+
+def required_titles(mode: str, scope: str = "module") -> list[str]:
+    if mode == "agent":
+        return [t for _, t in AGENT_SECTIONS]
+    return [t for _, t in human_sections({"scope": scope})]
 
 
 @dataclass
@@ -110,6 +126,7 @@ class Spec:
     material: str
     kind: str = "prose"  # "prose", or a key of STRUCTURED
     rules: str = WRITE_RULES  # the prose rule block; the structured prompts always use EXPLAINER_RULES
+    ask: str = ""  # the prompts.STRUCTURED_ASKS key, when it is not `kind` (a change's sections)
 
 
 def _fact_line(f: Fact) -> str:
@@ -197,7 +214,92 @@ def write_specs(state: WalkState) -> list[Spec]:
                 _material([_fact_line(by_id[i]) for i in state.gotchas if i in by_id]),
             ),
         ]
+    if state.target.scope == "change":
+        return _change_specs(state) + _reference_specs(state)
     return _explainer_specs(state) + _reference_specs(state)
+
+
+def change_material(state: WalkState) -> list[str]:
+    """The PR's title and description and the commit subjects, inside one untrusted-content fence."""
+    ch = state.target.change
+    text = []
+    if ch.kind == "pr":
+        text.append(f"PR #{ch.pr}: {ch.title}")
+        if ch.body:
+            text += ["", ch.body[:8000]]
+    text += ["", "Commits, oldest first:"] + [
+        f"- {sha[:8]} {subject}" for sha, subject in ch.commits[:200]
+    ]
+    return [
+        markdown_notice(
+            "the PR description and commit subjects, written by the change's author",
+            "Change description",
+        ),
+        *fence("\n".join(text).strip(), f"{state.target.package} description"),
+    ]
+
+
+def _changed_files_block(state: WalkState) -> list[str]:
+    ch = state.target.change
+    out = ["Files the change touches (status, head lines added, base lines removed):"]
+    for f in ch.files:
+        added = sum(b - a + 1 for a, b in f["added"])
+        removed = sum(b - a + 1 for a, b in f["removed"])
+        moved = (
+            f" (from {f['old_path']})" if f["old_path"] not in ("", f["path"]) else ""
+        )
+        out.append(f"- {f['status']} {f['path']}{moved}: +{added} -{removed}")
+    return out
+
+
+def _change_specs(state: WalkState) -> list[Spec]:
+    name = state.target.package
+    unit = [f for f in _facts(state, ("unit:",)) if "/file" not in f.source]
+    main = main_first(state)
+    on_main = (
+        {f"{state.target.repo_key}/{h.path}" for h in main[0].hops} if main else set()
+    )
+    flow_facts = [f for f in unit if any(c.path in on_main for c in f.citations)] + unit
+    callers = [
+        f"- `{r.symbol}` is called in {r.repo}: {r.path}:{r.line}"
+        for r in state.references
+        if r.kind == "caller"
+    ]
+    by_id = {f.id: f for f in state.facts}
+    return [
+        Spec(
+            "summary",
+            "What changed and why",
+            f"What `{name}` changes, and why.",
+            "\n".join(change_material(state))
+            + "\n\n"
+            + _material(_changed_files_block(state) + _lines(unit[:150])),
+            kind="summary",
+            ask="change_summary",
+        ),
+        Spec(
+            "flow",
+            "The path through the change",
+            f"How a run goes through the code `{name}` changes.",
+            _material([_hops(state)] + _lines(flow_facts)),
+            kind="flow",
+            ask="change_flow",
+        ),
+        Spec(
+            "affected",
+            "Who is affected",
+            "Say who and what this change affects: the code that calls what it changed, the entry points "
+            "whose paths go through it, and the people or systems behind them. Short paragraphs or a short "
+            "bullet list. Name only callers and entry points in the material.",
+            _material(
+                _entries_block(state)
+                + callers
+                + _lines(_facts(state, ("boundary:inbound",)))
+                + [_fact_line(by_id[i]) for i in state.interfaces if i in by_id]
+            ),
+            rules=EXPLAINER_RULES,
+        ),
+    ]
 
 
 DOC_NAMES = ("SKILL.md", "README.md")
@@ -650,7 +752,12 @@ async def run_write(state: WalkState, ctx: RunContext) -> WalkState:
         out = await call(
             spec.key,
             write_structured(
-                name, spec.kind, spec.title, spec.brief, spec.material, schema
+                name,
+                spec.ask or spec.kind,
+                spec.title,
+                spec.brief,
+                spec.material,
+                schema,
             ),
             schema,
         )
@@ -662,7 +769,7 @@ async def run_write(state: WalkState, ctx: RunContext) -> WalkState:
                 spec.key + ":rewrite",
                 write_structured(
                     name,
-                    spec.kind,
+                    spec.ask or spec.kind,
                     spec.title,
                     spec.brief,
                     spec.material,
