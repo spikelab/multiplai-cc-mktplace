@@ -161,6 +161,9 @@ def test_S3_split_killed_before_the_child_dirs_exist(repo, model, tmp_path, monk
     parent, api, ui = (change_dir(repo, n) for n in ("throttle", "throttle-api", "throttle-ui"))
     assert state(parent)["split"]["children"][1]["id"] == "ui"
     assert (api / ".pm-spec" / "state.json").is_file() and not (ui / ".pm-spec").exists()
+    # Killed before the list: the parent names no child yet, and nothing is committed.
+    assert "children" not in meta(parent)
+    assert git(repo, "log", "-1", "--format=%s") == "initial"
     capsys.readouterr()
 
     assert run(repo, "resume", "throttle") == 0
@@ -179,12 +182,19 @@ def test_S3_split_killed_before_the_child_dirs_exist(repo, model, tmp_path, monk
     # The child killed before its dir existed gets its dependencies as the
     # child written before the kill did.
     assert meta(api)["depends_on"] == [] and meta(ui)["depends_on"] == ["throttle-api"]
+    # The resume writes the parent's list and commits the parent once, as the
+    # run that never stopped did.
+    assert meta(parent)["children"] == ["throttle-api", "throttle-ui"]
+    assert git(repo, "log", "--format=%s").splitlines() == ["specs(throttle): children updated", "initial"]
+    assert git(other, "log", "--format=%s").splitlines() == ["specs(throttle): children updated", "initial"]
 
-    # Unchanged inputs: no second split, and no child record is written again.
-    before = {p: (p / ".change.yaml").stat().st_mtime_ns for p in (api, ui)}
+    # Unchanged inputs: no second split, and no record is written or committed again.
+    before = {p: (p / ".change.yaml").stat().st_mtime_ns for p in (parent, api, ui)}
+    head = git(repo, "rev-parse", "HEAD")
     assert run(repo, "resume", "throttle") == 0
     assert model.calls_to("epic_split") == 1
-    assert {p: (p / ".change.yaml").stat().st_mtime_ns for p in (api, ui)} == before
+    assert {p: (p / ".change.yaml").stat().st_mtime_ns for p in (parent, api, ui)} == before
+    assert git(repo, "rev-parse", "HEAD") == head
     # Changed parent inputs: split again. The children already created keep
     # their files, and their depends_on follows the new answer.
     from test_epic_split import child
@@ -196,6 +206,11 @@ def test_S3_split_killed_before_the_child_dirs_exist(repo, model, tmp_path, monk
     assert model.calls_to("epic_split") == 2
     assert meta(api)["depends_on"] == ["throttle-ui"] and meta(ui)["depends_on"] == []
     assert (api / "plan.md").read_text() == plan_before
+    # The parent's list follows the new wave order and is committed with the
+    # changed interview; the children, never handed off, are not committed.
+    assert meta(parent)["children"] == ["throttle-ui", "throttle-api"]
+    assert git(repo, "log", "--format=%s", f"{head}..HEAD").splitlines() == ["specs(throttle): children updated"]
+    assert git(repo, "status", "--porcelain", "--", "specs/changes/throttle") == ""
 
 
 # --- S4 ---------------------------------------------------------------------------

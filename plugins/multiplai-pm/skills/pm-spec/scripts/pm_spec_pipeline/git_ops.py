@@ -39,8 +39,21 @@ def _index_entries(cwd: Path, rel: str, env: dict | None = None) -> str:
     return _git(["ls-files", "-s", "-z", "--", rel], cwd, env).stdout
 
 
+def committed_text(project_dir: Path, path: Path) -> str | None:
+    """The text of *path* (inside `project_dir`) in HEAD's commit; None when HEAD
+    does not hold it, or there is no HEAD."""
+    project_dir = Path(project_dir)
+    try:
+        rel = Path(path).resolve().relative_to(project_dir.resolve()).as_posix()
+    except ValueError:
+        raise GitError(f"{path} is not inside {project_dir}") from None
+    shown = _git(["show", f"HEAD:./{rel}"], project_dir)
+    return shown.stdout if shown.returncode == 0 else None
+
+
 def commit_change_dir(project_dir: Path, change_dir: Path, message: str) -> str | None:
-    """Commit `change_dir` (inside `project_dir`'s work tree); the new sha, or None when nothing changed."""
+    """Commit `change_dir` (inside `project_dir`'s work tree); the new sha, or None when nothing changed.
+    `change_dir` may also be one file in a change dir, which is then all the commit holds."""
     project_dir = Path(project_dir)
     try:
         rel = Path(change_dir).resolve().relative_to(project_dir.resolve()).as_posix()

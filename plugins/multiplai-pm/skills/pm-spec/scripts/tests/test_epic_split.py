@@ -5,11 +5,13 @@ errors, `--no-epic-split` making no call)."""
 from __future__ import annotations
 
 import pytest
+from multiplai_core.specs import is_ready
 
+from pm_spec_pipeline import git_ops
 from pm_spec_pipeline.epic import SplitAnswer, check_answer, waves
 from pm_spec_pipeline.state import EpicChild
 
-from conftest import change_dir, meta, run, state, write
+from conftest import change_dir, committed, git, meta, run, state, write
 
 PLAN = "# Plan: {t}\n\n> File: {i}.md\n\n**Objective:** {t}.\n\n## Context\n\n## Outcome\n\n## Done means\n1. it works\n"
 
@@ -98,6 +100,14 @@ def test_a_split_creates_one_change_dir_per_child_and_stops(repo, model, tmp_pat
         s = state(kid)
         assert s["parent"] == "throttle" and s["options"]["epic_split"] is False
         assert s["options"]["ticket_ref"] == ref
+    # The parent lists its children in dependency order, and is committed
+    # whole with that list; the new child dirs wait for their own handoff.
+    assert meta(parent)["children"] == ["throttle-api", "throttle-ui"]
+    assert git(repo, "log", "-1", "--format=%s") == "specs(throttle): children updated"
+    assert committed(repo, parent) == [f"specs/changes/throttle/{n}" for n in
+                                       (".change.yaml", "interview.md", "ticket.md")]
+    assert git(repo, "status", "--porcelain", "--", "specs/changes/throttle") == ""
+    assert all(committed(repo, kid) == [] for kid in kids)
 
 
 def test_a_child_is_specified_by_its_own_resume_from_its_plan(repo, model):
@@ -150,3 +160,72 @@ def test_the_split_follows_the_tickets_children_first(repo, model):
                "--ticket-child", "T-2") == 0
     prompt = model.prompts("epic_split")[0]
     assert "T-1, T-2" in prompt and "first" in prompt
+
+
+def _resplit(repo, model, children):
+    """Change the parent's inputs, so the next resume splits again into *children*."""
+    model["epic_split"] = {"single": False, "reason": "Again.", "children": children}
+    interview_md = change_dir(repo) / "interview.md"
+    interview_md.write_text(interview_md.read_text() + "\nAlso throttle websockets.\n")
+    return run(repo, "resume", "throttle")
+
+
+def test_a_resplit_commits_the_new_dependencies_of_handed_off_children(repo, model):
+    model["epic_split"] = PLAIN_SPLIT
+    assert run(repo, "new", "throttle", "--auto") == 0
+    api, ui = change_dir(repo, "throttle-api"), change_dir(repo, "throttle-ui")
+    assert run(repo, "resume", "throttle-api") == 0 and run(repo, "resume", "throttle-ui") == 0
+    assert is_ready(api)[0] and is_ready(ui)[0]
+    specs_before = {p: p.read_text() for kid in (api, ui) for p in (kid / "requirements").glob("*.md")}
+    head = git(repo, "rev-parse", "HEAD")
+
+    assert _resplit(repo, model, [child("api", deps=["ui"]), child("ui")]) == 0
+    assert meta(api)["depends_on"] == ["throttle-ui"] and meta(ui)["depends_on"] == []
+    assert meta(change_dir(repo))["children"] == ["throttle-ui", "throttle-api"]
+    log = git(repo, "log", "--format=%s", f"{head}..HEAD").splitlines()
+    # Both children's dependencies changed, so each gets its own commit of its
+    # .change.yaml alone, in the new wave order (ui first); then the parent.
+    assert log == ["specs(throttle): children updated", "specs(throttle-api): dependencies updated",
+                   "specs(throttle-ui): dependencies updated"]
+    for rev, kid in (("HEAD~1", api), ("HEAD~2", ui)):
+        files = git(repo, "show", "--name-only", "--format=", rev).splitlines()
+        assert files == [f"specs/changes/{kid.name}/.change.yaml"]
+    assert git(repo, "status", "--porcelain", "--", "specs") == ""
+    assert {p: p.read_text() for p in specs_before} == specs_before
+    assert is_ready(api)[0] and is_ready(ui)[0]   # the record is not part of the spec revision
+
+    # Unchanged inputs: nothing is written or committed.
+    head = git(repo, "rev-parse", "HEAD")
+    assert run(repo, "resume", "throttle") == 0
+    assert git(repo, "rev-parse", "HEAD") == head
+
+
+def test_a_child_dropped_by_a_resplit_keeps_its_dir_and_leaves_the_list(repo, model):
+    model["epic_split"] = PLAIN_SPLIT
+    assert run(repo, "new", "throttle", "--auto") == 0
+    assert _resplit(repo, model, [child("api"), child("web", deps=["api"])]) == 0
+    ui = change_dir(repo, "throttle-ui")
+    assert meta(change_dir(repo))["children"] == ["throttle-api", "throttle-web"]
+    assert ui.is_dir() and meta(ui)["parent"] == "throttle"
+    assert meta(change_dir(repo, "throttle-web"))["depends_on"] == ["throttle-api"]
+    assert git(repo, "show", "HEAD:specs/changes/throttle/.change.yaml").count("throttle-web") == 1
+
+
+def test_a_failed_commit_of_the_records_is_made_by_the_next_run(repo, model, monkeypatch):
+    model["epic_split"] = PLAIN_SPLIT
+    real = git_ops.commit_change_dir
+
+    def fail(*a, **kw):
+        raise git_ops.GitError("commit failed: disk full")
+
+    monkeypatch.setattr(git_ops, "commit_change_dir", fail)
+    assert run(repo, "new", "throttle", "--auto") == 1
+    assert meta(change_dir(repo))["children"] == ["throttle-api", "throttle-ui"]
+    head = git(repo, "rev-parse", "HEAD")
+    monkeypatch.setattr(git_ops, "commit_change_dir", real)
+    # The record is already right on disk; the run compares with HEAD, not
+    # with what it writes, so it commits it now.
+    assert run(repo, "resume", "throttle") == 0
+    assert git(repo, "rev-parse", "HEAD~1") == head
+    assert git(repo, "log", "-1", "--format=%s") == "specs(throttle): children updated"
+    assert model.calls_to("epic_split") == 1
