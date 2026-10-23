@@ -15,6 +15,8 @@ You are an adversarial reviewer auditing the generated OpenSpec artifacts for in
 ## Proposal
 {proposal_content}
 
+{plan_section}
+
 ## Specs
 {specs_content}
 
@@ -50,7 +52,7 @@ Cross-reference these artifacts and report ANY gaps:
 
 ### Completeness
 - No vague or placeholder text in specs (e.g., "TBD", "TODO")
-- All capability names from proposal have corresponding spec files
+{capability_check}
 - Task block count is reasonable (2-8 blocks typical)
 
 ### Plan Quality — Right-Sizing (category "over-engineering")
@@ -131,6 +133,40 @@ Report what you can point at in these documents — quote the line, the block, o
 the scenario each finding comes from, and make the suggestion concrete enough
 to apply.
 """
+
+
+# The plan, in an audit or review prompt. A component's proposal and use cases
+# are its change's, which covers every component, so a prompt that judged a
+# component against them alone reported its siblings' capabilities as missing.
+# The plan is what narrows them to the one being built; for a component the
+# prompt says so (`plan_section`).
+PLAN_SECTION = """\
+## Plan — what this builds, what is out of scope, and what done means
+{plan_content}"""
+
+COMPONENT_SCOPE = """\
+## Scope — one component of the change
+The proposal and the use cases describe the whole change. This build is one
+component of it: the plan below says what this component builds and what it
+leaves to other components. Judge these documents against the plan. A
+capability, goal or use case the plan does not give this component is built by
+another component, and is not a gap here."""
+
+# The design audit's capability check: against the proposal for a change,
+# against the plan for a component.
+CAPABILITY_CHECK = "- All capability names from proposal have corresponding spec files"
+COMPONENT_CAPABILITY_CHECK = (
+    "- Everything the plan says this component builds has a requirement in the "
+    "specs. A capability the proposal names and the plan leaves to another "
+    "component is not missing here"
+)
+
+
+def plan_section(plan_content: str, *, component: bool) -> str:
+    """The `## Plan` section of an audit or review prompt, with the
+    `COMPONENT_SCOPE` note above it when *component*."""
+    section = PLAN_SECTION.format(plan_content=plan_content)
+    return f"{COMPONENT_SCOPE}\n\n{section}" if component else section
 
 
 TASKS_AUDIT_PROMPT = """\

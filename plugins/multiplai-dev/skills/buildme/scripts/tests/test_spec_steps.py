@@ -182,6 +182,85 @@ class TestDesignAudit:
         assert "(no specs)" not in prompt
 
 
+class TestDesignAuditComponentScope:
+    """A component is audited against its own plan.md, not the whole change.
+
+    Real-model run, 2026-10-23: the audit of component `word-frequencies` read
+    only the change's proposal (which promises `word_frequencies` and
+    `top_words`), reported its sibling `top-words`' capability as missing
+    (critical), and the epic stopped on spec-issues.md (exit 4)."""
+
+    def _change(self, tmp_path) -> Path:
+        root = tmp_path / "project" / "specs" / "changes" / "word-freq"
+        root.mkdir(parents=True)
+        (root / "proposal.md").write_text(
+            "## Impact\nAdds word_frequencies and top_words.\n"
+        )
+        for comp, cap in (
+            ("word-frequencies", "word-frequencies"),
+            ("top-words", "top-words"),
+        ):
+            d = root / "components" / comp
+            d.mkdir(parents=True)
+            (d / "plan.md").write_text(f"# Plan: {comp}\nPLAN-MARKER-{comp}\n")
+            (d / "specs.md").write_text(
+                f"# Capability: {cap}\n\n## ADDED Requirements\n\n"
+                "### Requirement: R\nThe system SHALL r.\n"
+            )
+            for name in ("design.md", "tasks.md"):
+                (d / name).write_text("x")
+        return root
+
+    async def _prompt(self, change_dir: Path, tmp_path) -> str:
+        config = BuildConfig(project_dir=tmp_path / "project", change_name="c")
+        with patch(
+            "build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock
+        ) as mock_llm:
+            mock_llm.return_value = _agent_text("[]")
+            await run_design_audit(change_dir, config)
+        return mock_llm.call_args[0][0]
+
+    @pytest.mark.asyncio
+    async def test_a_component_is_judged_against_its_plan(self, tmp_path):
+        from build_pipeline.prompts.design_audit import (
+            CAPABILITY_CHECK,
+            COMPONENT_CAPABILITY_CHECK,
+            COMPONENT_SCOPE,
+        )
+
+        root = self._change(tmp_path)
+        prompt = await self._prompt(root / "components" / "word-frequencies", tmp_path)
+        assert "PLAN-MARKER-word-frequencies" in prompt
+        assert "PLAN-MARKER-top-words" not in prompt
+        assert COMPONENT_SCOPE in prompt
+        assert COMPONENT_CAPABILITY_CHECK in prompt
+        assert CAPABILITY_CHECK not in prompt
+        # Its own specs only: the sibling's capability is not shown as its.
+        assert "### top-words" not in prompt
+
+    @pytest.mark.asyncio
+    async def test_a_change_with_its_plan_in_the_change_dir_keeps_the_proposal_check(
+        self, tmp_path
+    ):
+        from build_pipeline.prompts.design_audit import (
+            CAPABILITY_CHECK,
+            COMPONENT_SCOPE,
+        )
+
+        root = tmp_path / "project" / "specs" / "changes" / "one"
+        root.mkdir(parents=True)
+        (root / "proposal.md").write_text("proposal")
+        (root / "plan.md").write_text("PLAN-MARKER-one\n")
+        (root / "specs.md").write_text(
+            "# Capability: one\n\n## ADDED Requirements\n\n"
+            "### Requirement: R\nThe system SHALL r.\n"
+        )
+        prompt = await self._prompt(root, tmp_path)
+        assert "PLAN-MARKER-one" in prompt
+        assert CAPABILITY_CHECK in prompt
+        assert COMPONENT_SCOPE not in prompt
+
+
 class TestSpecIssueLabels:
     """A requirement a design or its audit cannot follow is named as the
     change holds it: `specs.md#<capability>` with a `specs.md`, else

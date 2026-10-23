@@ -163,8 +163,12 @@ every issue is `resolved` clears `spec_issues` in `.change.yaml`, moves the
 file to `spec-issues.resolved-<revision>.md` (or `respec.resolved-<revision>.md`)
 and hands off again. The issues file may be in the change dir or in a
 component's (`components/<id>/spec-issues.md`, where buildme writes a
-component's issues). An issues file written after that is a new round, with
-its own rewrite. While `spec_issues` is set or a revise is blocked, `resume`
+component's issues): name the change, `revise <name>`, never
+`<name>/<component>`, which is refused. An issues file written after that is a
+new round, with its own rewrite. Each rewrite, here and in the check, answers `UNCHANGED` or the whole
+file between two delimiter lines; only the text between them is written, a
+file answered `UNCHANGED` stays byte for byte as it was, and an answer of any
+other shape blocks the revise (exit 4) with nothing written. While `spec_issues` is set or a revise is blocked, `resume`
 refuses with exit 4 and never reports the change ready: run `revise`. In
 `spec-issues.md` each `## ` section is one issue; name the file it concerns
 (`components/<id>/specs.md`), its capability in backticks, or quote the
@@ -318,7 +322,11 @@ In `specs/changes/<name>/`: `.change.yaml`, `prd.md`, `ticket.md`,
 own state is in `.pm-spec/` (`state.json`, `progress.md`, `run.lock`), which
 has its own `.gitignore` and is never committed. Each review stop, the ticket
 wait and the handoff commit the change dir and push the feature branch;
-nothing else is pushed, and no pull request is opened.
+nothing else is pushed, and no pull request is opened. A commit holds only
+these files, the issues files `revise` reads and moves aside, and the old
+layout's `requirements/`: never buildme's (`design.md`, `tasks.md`,
+`.build-state.json`, `.board.json` and the rest), which share the change dir
+in a build's worktree.
 
 `tickets.json` is a JSON array, described by `references/tickets.schema.json`.
 For several components: one `epic` item for the change (the proposal's title
@@ -342,7 +350,7 @@ calls cost.
 |---|---|
 | 0 | Ready (`SPEC:READY:...`, then `SPEC:BRANCH:<branch>`). |
 | 1 | Failed: a model call, an answer rejected twice, the prototype, `git fetch`, the commit or the push (the ready record is kept; `resume` retries only the commit or the push while the files are unchanged), or the spend cap. |
-| 2 | Refused: an input file missing, an untrusted repository, no ticket ref (or one git cannot start a branch name with), a `--branch` not starting with `<TICKET>-`, no `origin` remote, pm-spec's worktree diverged from `origin/<branch>` (the `git pull --rebase` to run is printed), a run that exists (`new`) or does not (`resume`), no issues to revise, a resume at the ticket wait without every component's `--ticket` (or `--tickets-later`), or a `--ticket` naming no component. |
+| 2 | Refused: a change name with a `/` (a component's path: the change is named), an input file missing, an untrusted repository, no ticket ref (or one git cannot start a branch name with), a `--branch` not starting with `<TICKET>-`, no `origin` remote, pm-spec's worktree diverged from `origin/<branch>` (the `git pull --rebase` to run is printed), a run that exists (`new`) or does not (`resume`), no issues to revise, a resume at the ticket wait without every component's `--ticket` (or `--tickets-later`), or a `--ticket` naming no component. |
 | 3 | Waiting: for review (`SPEC:REVIEW:proposal`, `SPEC:REVIEW:components` or `SPEC:REVIEW:specs`), for the components' tickets (`SPEC:TICKETS:<path>`), or for the ticket replies (`INTERVIEW:WAITING:<path>`). Each but the last is pushed (`SPEC:BRANCH:<branch>`). |
 | 4 | Blocked on findings (`SPEC:BLOCKED:<change_dir>`). Edit the files, then run again. Also `resume` while requirements issues are open or a revise is blocked: run `revise`. |
 | 5 | Another process holds the change's lock; the message names its pid, host and start time. |

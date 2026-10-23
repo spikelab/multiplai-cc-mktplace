@@ -901,6 +901,34 @@ class TestSpecIssuesFile:
         assert read_change_meta(change_dir)["spec_issues"] == "spec-issues.md"
         assert readiness.open_issues(change_dir) == path
 
+    def test_a_components_file_names_the_change_for_pm_spec(self, tmp_path):
+        """pm-spec revises a change with all its components and refuses
+        `<change>/<component>`: the real-model run of 2026-10-23 was told to
+        run `pm-spec revise word-freq/word-frequencies`, which pm-spec
+        refused."""
+        component = write_specs(
+            tmp_path
+            / "specs"
+            / "changes"
+            / "word-freq"
+            / "components"
+            / "word-frequencies"
+        )
+        path = readiness.write_issues(
+            component, [("Design: a", "one")], change="word-freq/word-frequencies"
+        )
+        text = path.read_text()
+        assert text.startswith("# Spec issues: word-freq/word-frequencies\n")
+        assert "`/multiplai-pm:pm-spec revise word-freq`" in text
+        assert "revise word-freq/" not in text
+
+    @pytest.mark.parametrize(
+        ("name", "change"),
+        [("word-freq/word-frequencies", "word-freq"), ("calc", "calc")],
+    )
+    def test_pm_spec_change_is_the_change_of_a_component(self, name, change):
+        assert readiness.pm_spec_change(name) == change
+
     def test_a_title_cannot_start_a_second_section(self, tmp_path):
         change_dir = write_specs(tmp_path / "c")
         path = readiness.write_issues(change_dir, [("a\n## b", "x")], change="c")

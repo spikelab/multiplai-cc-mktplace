@@ -31,7 +31,7 @@
       "name": "multiplai-pm",
       "source": "./plugins/multiplai-pm",
       "description": "Product-management skill pack: JTBD synthesis, persona codification, PR/FAQ, strategy memos, job applications, landing pages, and Plane ticket management with a project allowlist.",
-      "version": "0.9.0",
+      "version": "0.9.1",
       "author": {
         "name": "Spike",
         "email": "fsm@spikelab.org"
@@ -96,7 +96,7 @@
       "name": "multiplai-dev",
       "source": "./plugins/multiplai-dev",
       "description": "Developer skill pack: spec-driven builds, executable plan authoring, refactoring, walkthroughs, e2e tests, cloud ops, skill authoring.",
-      "version": "0.105.0",
+      "version": "0.105.1",
       "author": {
         "name": "Spike",
         "email": "fsm@spikelab.org"
