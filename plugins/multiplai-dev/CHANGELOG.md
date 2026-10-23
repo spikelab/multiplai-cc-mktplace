@@ -15,7 +15,7 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
-## [0.100.0] - 2026-10-22
+## [0.102.0] - 2026-10-23
 
 ### Added
 - **codebase-walkthrough explains a PR or a commit range.** `run --scope pr
@@ -38,6 +38,47 @@ time, not derived from a tag.
 - review's PR and fetch lookups (`gh pr view`, `git fetch`, `rev-parse`,
   `merge-base`) moved to a new shared library, `lib/git_targets`, which the
   walkthrough also uses. Review behaves as before.
+
+## [0.101.0] - 2026-10-22
+
+### Added
+- **codebase-walkthrough styles its HTML page with your design system.**
+  `run`, `resume` and `render` take `--design-system-dir <folder>`, the
+  folder `/multiplai-dev:design-system`'s `path` command prints. The page then
+  inlines that folder's `fonts.css` and `tokens.css`. The folder is checked
+  before any model call, so a bad one costs nothing. A missing folder, a
+  missing token, or a text colour below WCAG AA exits 1 with
+  `ERROR: design system <path>: …`. A run keeps its folder, and `resume` uses
+  it unless you pass the option again. `render --design-system-dir` restyles a
+  finished run for free, without changing its saved state. Without the
+  option the page looks as before.
+
+## [0.100.0] - 2026-10-22
+
+### Added
+- **`/multiplai-dev:design-system`: one set of design tokens for every HTML
+  page a skill builds.** Keep your design systems in one folder
+  (`MULTIPLAI_DESIGN_SYSTEMS`, an absolute path) and name the default
+  (`MULTIPLAI_DESIGN_SYSTEM`), in the environment or in `multiplai.conf`.
+  With neither set, pages use a neutral theme shipped with the plugin: greys,
+  one blue accent, system fonts, light and dark. Each design system is a
+  `tokens.css` (colours, fonts, type scale, spacing, radius, measure) plus a
+  `README.md`, and optionally `fonts.css` and `components.md`.
+  `python -m design_system list | show | path | check | create`:
+  - `check` fails a token missing from the light block or from either dark
+    block, a text/background pair below WCAG AA (4.5:1), a colour it cannot
+    read, and `</style` in a CSS file, and prints every contrast ratio;
+  - `create` copies the neutral theme to a new name and never overwrites;
+  - a name that does not exist is an error listing the names that do. It
+    never falls back to neutral.
+
+### Changed
+- **learn-stack's guide and deepen's architecture report use the design
+  system's colours and fonts.** learn-stack's page no longer hardcodes a
+  teal accent and dark Prism code blocks, and its code theme follows the
+  reader's light or dark setting. `render_report.py` takes
+  `--design-system-dir`, and without it uses the neutral theme. The report
+  now follows the reader's light or dark setting too.
 
 ## [0.99.0] - 2026-10-22
 

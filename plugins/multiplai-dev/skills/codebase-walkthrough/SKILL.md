@@ -155,6 +155,7 @@ the repositories next to it, and re-run with `--trust-repo` only on a yes.
 | `--api-collection` | Bruno/OpenCollection directory | a directory next to the repos holding `opencollection.yml` |
 | `--scenarios` | Cap on the number of paths traced (the flag keeps its old name) | 21 |
 | `--max-usd` | Budget circuit breaker | 50 |
+| `--design-system-dir` | Design-system folder the HTML page is styled with (on `run`, `resume` and `render`) | the page's own tokens |
 
 ## Steps
 
@@ -165,8 +166,18 @@ Use the Bash tool with `run_in_background: true`. Pass absolute paths.
 ```bash
 uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/codebase-walkthrough/scripts \
   python -m walkthrough_pipeline --session-id "{session_id}" \
-  run /abs/path/to/module --trust-repo [--docs https://docs.vendor.example] [--output /abs/out]
+  run /abs/path/to/module --trust-repo [--docs https://docs.vendor.example] [--output /abs/out] \
+  [--design-system-dir /abs/design-system]
 ```
+
+For `--design-system-dir`, load the `multiplai-dev:design-system` skill and pass
+the folder its `path` command prints. Leave the option out when that skill is
+not installed, or when `path` exits 1; in the second case, tell the user why in
+one line. The folder is checked before anything else: a folder that is missing,
+lacks a required token, or has a text colour below WCAG AA exits 1 with
+`ERROR: design system <path>: …` before any model call. A `resume` uses the
+run's saved folder unless you pass `--design-system-dir` again, and checks it
+first the same way.
 
 For a PR or a commit range, pass `--scope pr` and one of `--pr N` or
 `--range <base>..<head>` instead of the module directory, plus
@@ -175,7 +186,8 @@ For a PR or a commit range, pass `--scope pr` and one of `--pr N` or
 ```bash
 uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/codebase-walkthrough/scripts \
   python -m walkthrough_pipeline --session-id "{session_id}" \
-  run --scope pr --pr 123 --repo /abs/path/to/repo --trust-repo [--fetch] [--expect-head <sha>]
+  run --scope pr --pr 123 --repo /abs/path/to/repo --trust-repo [--fetch] [--expect-head <sha>] \
+  [--design-system-dir /abs/design-system]
 ```
 
 A change's walkthrough has six sections: What changed and why, The path
@@ -274,7 +286,7 @@ printed on stderr. It reads only the Markdown; walkthroughs with the older
 
 ```bash
 uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/codebase-walkthrough/scripts \
-  python -m walkthrough_pipeline render <run dir> [--output /abs/out]
+  python -m walkthrough_pipeline render <run dir> [--output /abs/out] [--design-system-dir /abs/design-system]
 ```
 
 It rewrites the Markdown, `walkthrough.json`, `<name>-paths.json` and the
@@ -288,7 +300,11 @@ with `git show`, so they must still hold the commits in the "Commits read"
 table. It exits 1 with `render: <run dir> has not finished its write stage`
 for a run that has not got that far (resume it instead), and with
 `render: cannot read <repo> at <sha>: …` when a repository or its commit is
-gone; in both cases it writes nothing. Report as in step 2.
+gone; in both cases it writes nothing. With `--design-system-dir` the page is
+styled with that folder instead of the run's saved one, and the saved state
+is not changed. This is how to restyle a finished run for free. A folder that
+fails its check exits 1 with `render: design system <path>: …`, writing
+nothing. Report as in step 2.
 
 ### 5. Write a finished run again
 

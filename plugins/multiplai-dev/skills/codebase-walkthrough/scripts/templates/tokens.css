@@ -1,0 +1,22 @@
+/* The page's own tokens: used when no --design-system-dir is given. The names are the design-system
+   skill's; a design system's tokens.css replaces this file whole. */
+:root {
+  color-scheme: light;
+  --bg: #f4f6f8; --surface: #ffffff; --fg: #15212c; --muted: #566573; --line: #d6dde4;
+  --accent: #0b6a8a; --accent-soft: #e2f0f5; --sunk: #e9edf1; --code-bg: #eef2f5;
+  --font-display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --font-body: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0f161c; --surface: #16202a; --fg: #e3eaf0; --muted: #98a8b6; --line: #2a3946;
+    --accent: #5cc0de; --accent-soft: #15323d; --sunk: #22303b; --code-bg: #1d2a35;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0f161c; --surface: #16202a; --fg: #e3eaf0; --muted: #98a8b6; --line: #2a3946;
+  --accent: #5cc0de; --accent-soft: #15323d; --sunk: #22303b; --code-bg: #1d2a35;
+}
