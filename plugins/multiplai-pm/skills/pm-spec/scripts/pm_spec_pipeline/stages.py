@@ -20,7 +20,7 @@ missing, committed and pushed with the prototype, `steps.tickets` is recorded
 shows the tickets, creates them (or a person does), and resumes with
 `--ticket <component>=<REF>` for each component that has no ticket yet, or
 `--tickets-later`; any other resume refuses (exit 2), printing the flags it
-expects. With `--auto` there is no wait: the components keep `pending`.
+expects and recording none of the refs it was given. With `--auto` there is no wait: the components keep `pending`.
 """
 
 from __future__ import annotations
@@ -149,17 +149,18 @@ def tickets_step(run: Run, refs: dict[str, str], later: bool) -> None:
             flush=True,
         )
         raise Stop(EXIT_REFUSED, "unknown component")
-    if refs:
-        tickets.apply_refs(change_dir, refs)
-        run.progress("TICKETS", "Recorded " + ", ".join(f"{c}={r}" for c, r in refs.items()))
-    missing = tickets.pending(change_dir)
+    missing = [c for c in tickets.pending(change_dir) if c not in refs]
     if missing and not later:
+        # Nothing is written: the refs given are taken with the rest, or not at all.
         print(
-            f"ERROR: {', '.join(missing)} have no ticket yet. Pass each one's ticket id:\n"
-            + _flag_lines(run, missing),
+            f"ERROR: {', '.join(missing)} have no ticket yet. Nothing was recorded. Pass "
+            "every component's ticket id:\n" + _flag_lines(run, tickets.pending(change_dir)),
             flush=True,
         )
         raise Stop(EXIT_REFUSED, "tickets pending")
+    if refs:
+        tickets.apply_refs(change_dir, refs)
+        run.progress("TICKETS", "Recorded " + ", ".join(f"{c}={r}" for c, r in refs.items()))
     if missing:
         F.record_skipped(run, TICKETS, "", "--tickets-later: " + ", ".join(missing) + " pending")
     else:

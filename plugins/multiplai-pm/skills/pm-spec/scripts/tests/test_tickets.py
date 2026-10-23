@@ -104,11 +104,14 @@ def test_the_wait_takes_every_components_ticket_then_writes_the_specs(repo, mode
     out = capsys.readouterr().out
     assert "resume throttle --ticket api=<ID> --ticket ui=<ID>" in out
     assert "resume throttle --tickets-later" in out
-    # One of two: recorded, and the other is still asked for.
+    # One of two: refused, and nothing recorded.
+    before = (cdir / "components.md").read_text()
     assert run(repo, "resume", "throttle", "--ticket", "api=ENG-2") == 2
-    assert "ui have no ticket yet" in capsys.readouterr().out
+    assert "ui have no ticket yet. Nothing was recorded" in capsys.readouterr().out
+    assert "ticket_refs" not in meta(cdir / "components" / "api")
+    assert (cdir / "components.md").read_text() == before
     assert len(model.calls) == calls
-    assert run(repo, "resume", "throttle", "--ticket", "ui=ENG-3") == 0
+    assert run(repo, "resume", "throttle", "--ticket", "api=ENG-2", "--ticket", "ui=ENG-3") == 0
     for cid, ref in (("api", "ENG-2"), ("ui", "ENG-3")):
         assert meta(cdir / "components" / cid)["ticket_refs"] == {"epic": ref, "children": []}
     table = (cdir / "components.md").read_text()

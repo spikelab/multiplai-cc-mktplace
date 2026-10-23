@@ -370,19 +370,19 @@ SNAPSHOT_SKIP = {".pm-spec"}
 
 
 def snapshot(cdir: Path) -> dict[str, str]:
-    """Every file of the change dir but the run folder, `.change.yaml` without its timestamps."""
+    """Every file of the change dir but the run folder, each `.change.yaml` without its timestamps."""
     out = {}
     for path in sorted(cdir.rglob("*")):
         rel = path.relative_to(cdir)
         if not path.is_file() or rel.parts[0] in SNAPSHOT_SKIP:
             continue
-        if rel.as_posix() == ".change.yaml":
+        if rel.name == ".change.yaml":
             data = {
                 k: v
-                for k, v in meta(cdir).items()
+                for k, v in meta(path.parent).items()
                 if k not in ("created", "spec_checked_at")
             }
-            out[".change.yaml"] = json.dumps(data, sort_keys=True)
+            out[rel.as_posix()] = json.dumps(data, sort_keys=True)
         else:
             out[rel.as_posix()] = path.read_text()
     return out
