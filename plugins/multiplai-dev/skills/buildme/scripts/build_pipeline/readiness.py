@@ -57,7 +57,7 @@ def write_issues(
         if path.is_file()
         else (
             f"# Spec issues: {change}\n\nRequirements problems buildme found. Fix them with "
-            f"`/multiplai-pm:pm-spec revise {change}`, then run the build again.\n"
+            f"`/multiplai-pm:pm-spec revise {pm_spec_change(change)}`, then run the build again.\n"
         )
     )
     for title, body in issues:
@@ -88,6 +88,13 @@ def change_project(change_dir: Path) -> Path | None:
     return None
 
 
+def pm_spec_change(name: str) -> str:
+    """The change a pm-spec command names for *name*: for a component,
+    `<change>/<id>`, the change, since pm-spec writes and revises a change's
+    components in one run (and refuses a `<change>/<id>` name)."""
+    return name.split("/", 1)[0]
+
+
 def pm_spec_line(
     name: str,
     *,
@@ -96,8 +103,8 @@ def pm_spec_line(
     ticket_ref: bool = False,
 ) -> str:
     """The pm-spec command for *name*; for a component, `<change>/<id>`,
-    the change's, since pm-spec writes a change's components in one run."""
-    name = name.split("/", 1)[0]
+    the change's (`pm_spec_change`)."""
+    name = pm_spec_change(name)
     where = f" --project-dir {project_dir}" if project_dir else ""
     ticket = " --ticket-ref <ticket id>" if ticket_ref else ""
     return f"Run /multiplai-pm:pm-spec {'resume ' if resume else ''}{name}{where}{ticket} first"
@@ -171,7 +178,7 @@ def refuse_issues_at(shown: str, name: str) -> int:
     the revise line names no `--project-dir`."""
     print(f"{MARKER_ISSUES}:{shown}", flush=True)
     print(
-        f"Run /multiplai-pm:pm-spec revise {name.split('/', 1)[0]}, then run the build again",
+        f"Run /multiplai-pm:pm-spec revise {pm_spec_change(name)}, then run the build again",
         flush=True,
     )
     return EXIT_SPEC_ISSUES

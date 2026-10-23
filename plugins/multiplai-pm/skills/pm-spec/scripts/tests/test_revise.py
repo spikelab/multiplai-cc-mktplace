@@ -207,6 +207,23 @@ def test_an_issues_file_in_a_component_goes_to_that_components_specs(repo, model
     assert is_ready(ui) == (True, "")
 
 
+def test_a_component_path_is_refused_naming_the_change(repo, model, capsys):
+    """buildme's spec-issues.md told the real-model run of 2026-10-23 to run
+    `revise word-freq/word-frequencies`; pm-spec ran the name together and
+    refused `there is no change word-freqword-frequencies`. revise reads each
+    component's issues file through the change, so the change is named."""
+    model["components"] = TWO
+    assert run(repo, "new", "throttle", "--auto") == 0
+    capsys.readouterr()
+    calls = len(model.calls)
+    assert run(repo, "revise", "throttle/ui") == 2
+    out = capsys.readouterr().out
+    assert "throttle/ui names the component ui of the change throttle" in out
+    assert "run `revise throttle`" in out
+    assert "throttleui" not in out
+    assert len(model.calls) == calls
+
+
 def test_no_issues_file_is_refused(repo, model, capsys):
     assert run(repo, "new", "throttle", "--auto") == 0
     assert run(repo, "revise", "throttle") == 2
@@ -253,3 +270,4 @@ def test_revise_finds_an_archived_change(repo, model, capsys):
     assert is_ready(archived) == (True, "")
     assert f"SPEC:READY:{archived}:" in out
     assert git(wt, "status", "--porcelain", "--", "specs") == ""
+

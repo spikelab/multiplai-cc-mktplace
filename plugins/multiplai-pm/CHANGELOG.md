@@ -21,6 +21,15 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-10-23
+
+### Fixed
+- A change name with a `/` is refused with a message naming the change:
+  `revise word-freq/word-frequencies` now says to run `revise word-freq`
+  (revise reads each component's `spec-issues.md` through its change). It
+  used to run the two names together and report that there is no change
+  `word-freqword-frequencies`.
+
 ## [0.9.0] - 2026-10-23
 
 ### Changed

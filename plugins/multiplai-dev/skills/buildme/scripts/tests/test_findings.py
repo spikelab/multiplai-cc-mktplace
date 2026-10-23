@@ -728,6 +728,13 @@ class TestSpecStep:
         assert issues[0].defers_fix
 
 
+def test_the_revise_command_of_a_component_names_its_change(tmp_path):
+    """pm-spec revises a change with all its components; normalizing
+    `word-freq/word-frequencies` whole gave `word-freqword-frequencies`."""
+    config = BuildConfig(project_dir=tmp_path, change_name="word-freq/word-frequencies")
+    assert spec.revise_command(config) == "/multiplai-pm:pm-spec revise word-freq"
+
+
 class TestSpecIssuesFile:
     """spec-issues.md may already hold issues: an earlier round's, or the
     build's own. Appending keeps every byte of them and never writes a

@@ -24,6 +24,10 @@ time, not derived from a tag.
   capability as missing (critical), wrote it to `spec-issues.md` and stopped
   the epic with exit 4. Both now get the component's `plan.md` and are told
   that what the plan leaves to another component is not a gap.
+- Every pm-spec command buildme prints (in `spec-issues.md`, after a TDD
+  contradiction, in the findings round and in the ticket-ref refusals) names
+  the change, `revise word-freq`, never the component path
+  `word-freq/word-frequencies`, which pm-spec refuses.
 
 ## [0.105.0] - 2026-10-23
 
