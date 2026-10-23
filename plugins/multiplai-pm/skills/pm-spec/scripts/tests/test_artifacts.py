@@ -108,3 +108,57 @@ def test_with_no_registry_the_specs_prompt_allows_only_added_requirements(repo, 
     assert "for behaviour that exists today" not in prompt
     assert "specs/registry has no capability files" in prompt
     assert "Write only `## ADDED Requirements`" in prompt
+
+
+def test_every_markdown_file_the_model_writes_ends_in_one_newline(repo, model):
+    """The model's text comes back with no final newline, or with several: the
+    file on disk ends in exactly one, and the run records that text."""
+    model["components"] = TWO
+    model["spec:proposal"] = lambda prompt, label, kw: proposal().rstrip("\n")
+    model["spec:use-cases"] = (
+        "# Use cases\n\n## Personas\n\n### operator\n- **Who they are:** ops\n\n\n\n"
+    )
+    model["spec:specs"] = lambda prompt, label, kw: specs().rstrip("\n") + "  "
+    assert run(repo, "new", "throttle", "--auto") == 0
+    cdir = change_dir(repo)
+    for rel in (
+        "proposal.md",
+        "use-cases.md",
+        "interview.md",
+        "components.md",
+        "components/api/plan.md",
+        "components/api/specs.md",
+        "components/ui/specs.md",
+    ):
+        text = (cdir / rel).read_text()
+        assert text.endswith("\n") and not text.endswith("\n\n"), rel
+        assert not text.endswith(" \n"), rel
+
+
+def test_a_rewritten_specs_file_ends_in_one_newline(repo, model):
+    model["consistency"] = [
+        {
+            "findings": [
+                {
+                    "type": "gap",
+                    "severity": "major",
+                    "description": "a gap",
+                    "places": [
+                        {"file": "specs.md", "where": "rate-limit"},
+                        {"file": "proposal.md", "where": "Why"},
+                    ],
+                }
+            ]
+        },
+        {
+            "findings": [],
+            "prior_assessments": [
+                {"finding_id": "CC-F1", "status": "resolved", "evidence": "x"}
+            ],
+        },
+    ]
+    model["rewrite"] = lambda prompt, label, kw: specs(rule="fixed").rstrip("\n")
+    assert run(repo, "new", "throttle", "--auto") == 0
+    text = (change_dir(repo) / "specs.md").read_text()
+    assert "fixed" in text
+    assert text.endswith("\n") and not text.endswith("\n\n")

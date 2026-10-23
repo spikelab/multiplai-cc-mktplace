@@ -85,6 +85,8 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
   it asks for `ADDED` requirements only. The consistency check finds a
   `MODIFIED` or `REMOVED` section in a capability with no registry file in
   code, as a critical finding.
+- Every markdown file pm-spec writes ends in exactly one newline; model text
+  with none, or with several, is no longer written as it came.
 
 ### Migration
 - A change written in the old layout (`requirements/<capability>.md`) is

@@ -35,7 +35,7 @@ from multiplai_core.specs import valid_specs_text
 from . import intake, layout, sdk
 from .prompts import UNTRUSTED_NOTICE
 from .prompts import spec as P
-from .publish import atomic_write
+from .publish import atomic_write, markdown_text
 from .run import Run
 from .state import ArtifactRecord
 
@@ -341,6 +341,7 @@ async def produce(run: Run, key: str, spec_dir: Path | None = None) -> None:
         )
     else:
         text = await write_specs(run, spec_dir)
+    text = markdown_text(path, text)
     atomic_write(path, text)
     run.state.artifacts[key] = ArtifactRecord(inputs=inputs, output=sha(text))
     run.save()

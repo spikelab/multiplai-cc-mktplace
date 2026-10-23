@@ -27,7 +27,16 @@ log = logging.getLogger(__name__)
 JOURNAL = "publication.json"
 
 
+def markdown_text(path: Path | str, text: str) -> str:
+    """*text* as it is written to *path*: a `.md` file ends in exactly one
+    newline (model text often has none, or several); any other file as given."""
+    if Path(path).suffix != ".md":
+        return text
+    return text.rstrip() + "\n"
+
+
 def atomic_write(path: Path, text: str) -> None:
+    text = markdown_text(path, text)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     try:
@@ -47,7 +56,7 @@ def publish(run: Run, step: str, files: dict[str, str]) -> None:
     """Write *files* (paths relative to the change dir) as one publication of *step*'s rewrite."""
     change_dir = run.config.change_dir
     entries = {
-        rel: {"before": _read(change_dir / rel), "after": text}
+        rel: {"before": _read(change_dir / rel), "after": markdown_text(rel, text)}
         for rel, text in sorted(files.items())
     }
     journal = run.config.run_dir / JOURNAL
