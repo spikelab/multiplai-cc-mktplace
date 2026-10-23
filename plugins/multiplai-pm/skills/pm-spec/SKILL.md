@@ -193,10 +193,14 @@ is left alone: pm-spec works in its own worktree.
 
 **A change handed off before pm-spec pushed** (ready in your checkout, its
 `.change.yaml` records no `branch`): `resume <name>` (with `--ticket-ref`
-when the change records no ticket ref) copies its change dir,
-and the sibling child changes it lists, into pm-spec's worktree, commits them there
-(`specs(<name>): moved to <branch>`) and pushes the branch. The originals in
-your checkout are left as they are; delete them when you no longer need them.
+when the change records no ticket ref) copies pm-spec's files of its change
+dir (the ones it commits: proposal, use cases, plans, specs, `prototype/` and
+the like) and its run folder, and the same of the sibling child changes it
+lists, into pm-spec's worktree, commits them there
+(`specs(<name>): moved to <branch>`) and pushes the branch. Any other file
+there (buildme's design, tasks or records, your notes) is not copied. The
+originals in your checkout are left as they are; delete them when you no
+longer need them.
 
 ## Before you run it
 
