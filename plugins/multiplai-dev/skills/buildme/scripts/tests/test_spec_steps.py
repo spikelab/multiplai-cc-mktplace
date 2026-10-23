@@ -485,7 +485,9 @@ class TestRegistryInThePrompts:
 
         prompt = _build_prompt(artifact, ctx, config)
 
-        plan = prompt.split("## Plan — what this builds", 1)[1].split("\n## Specs", 1)[0]
+        plan = prompt.split("## Plan — what this builds", 1)[1].split("\n## Specs", 1)[
+            0
+        ]
         assert "OUT-OF-SCOPE-MARKER" in plan and "DONE-MEANS-MARKER" in plan
         assert "PROPOSAL-MARKER" in prompt and "SPEC-MARKER" in prompt
         assert (

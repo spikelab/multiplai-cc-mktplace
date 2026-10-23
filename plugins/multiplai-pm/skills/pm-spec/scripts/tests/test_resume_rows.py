@@ -679,9 +679,7 @@ def test_S14_a_run_from_before_the_staged_flow_only_checks_and_hands_off(
     old_layout_change(repo, handed_off=handed_off)
     # Edited after the old handoff: the ready record is stale (S9).
     hand = source_dir(repo)
-    write(
-        hand / "requirements" / f"{CAPS[0]}.md", requirements(CAPS[0], rule="EDITED")
-    )
+    write(hand / "requirements" / f"{CAPS[0]}.md", requirements(CAPS[0], rule="EDITED"))
 
     assert run(repo, *RESUME) == 0
     out = capsys.readouterr().out
@@ -699,7 +697,11 @@ def test_S14_a_run_from_before_the_staged_flow_only_checks_and_hands_off(
         assert steps[name]["outcome"] == "skipped"
         assert steps[name]["reason"] == stages.BEFORE_STAGED_FLOW
     # The old run's own record of its prototype step is kept as it was.
-    assert steps["prototype"] == {**steps["prototype"], "outcome": "skipped", "reason": ""}
+    assert steps["prototype"] == {
+        **steps["prototype"],
+        "outcome": "skipped",
+        "reason": "",
+    }
     assert git(worktree(repo), "rev-parse", "HEAD") == git(
         origin(repo), "rev-parse", BRANCH
     )
@@ -731,7 +733,10 @@ def test_S15_a_blocked_prototype_is_checked_again_not_taken_as_the_pms(
     assert "spec:specs" not in " ".join(model.labels())
 
     # A person answers the agent's question: checked again, kept, and on.
-    write(cdir / "prototype" / "NOTES.md", "- mockup.html: the limits page\nSTATUS: DONE\n")
+    write(
+        cdir / "prototype" / "NOTES.md",
+        "- mockup.html: the limits page\nSTATUS: DONE\n",
+    )
     assert run(repo, *RESUME) == 0
     assert model.calls_to("prototype") == 1
     assert state(cdir)["steps"]["prototype"]["outcome"] == "passed"

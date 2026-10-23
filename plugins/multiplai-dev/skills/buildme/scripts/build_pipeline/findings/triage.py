@@ -43,7 +43,8 @@ def findings_path(change_dir: Path, round_n: int) -> Path:
 def _requirements_text(change_dir: Path) -> str:
     """Each capability's delta, from `specs.md` or `requirements/*.md`."""
     parts = [
-        f"### {cap}\n{text}" for cap, text in requirement_texts(Path(change_dir)).items()
+        f"### {cap}\n{text}"
+        for cap, text in requirement_texts(Path(change_dir)).items()
     ]
     text = "\n\n".join(parts) or "(none)"
     return text[:_DOC_CHARS]
