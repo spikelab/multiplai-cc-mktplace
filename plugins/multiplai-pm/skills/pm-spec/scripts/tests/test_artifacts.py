@@ -55,12 +55,63 @@ def test_artifact_calls_hold_no_tools(repo, model):
 
 
 def test_invalid_specs_fail_the_run(repo, model, capsys):
-    model["spec:specs"] = (
+    model["spec:specs"] = rewrite_answer(
         "# Capability: Bad Name\n\n### Requirement: no scenario\nThe system SHALL.\n"
     )
     assert run(repo, "new", "throttle", "--auto") == 1
     assert "Invalid specs.md for throttle" in capsys.readouterr().out
     assert not (change_dir(repo) / "specs.md").exists()
+
+
+def test_the_specs_prompt_asks_for_one_delimited_file(repo, model):
+    from pm_spec_pipeline.rewrite import BEGIN, END
+
+    assert run(repo, "new", "throttle", "--auto") == 0
+    prompt = " ".join(model.exactly("spec:specs:throttle")[0].split())
+    assert f"a line `{BEGIN}` above it and a line `{END}` below it" in prompt
+    assert "Output ONLY the markdown content" not in prompt
+
+
+def test_commentary_around_the_specs_file_is_not_written(repo, model):
+    """A real-model run (2026-10-23) put the model's own note above the first
+    `# Capability:` line; only the delimited file is written now."""
+    model["spec:specs"] = lambda prompt, label, kw: (
+        "Here are the specs for this component.\n\n"
+        + rewrite_answer(specs())
+        + "\nI kept every requirement atomic.\n"
+    )
+    assert run(repo, "new", "throttle", "--auto") == 0
+    assert (change_dir(repo) / "specs.md").read_text() == specs()
+
+
+def test_specs_without_the_delimiters_fail_the_run(repo, model, capsys):
+    model["spec:specs"] = lambda prompt, label, kw: specs()
+    assert run(repo, "new", "throttle", "--auto") == 1
+    out = capsys.readouterr().out
+    assert "specs.md for throttle was not written" in out
+    assert not (change_dir(repo) / "specs.md").exists()
+
+
+def test_text_above_the_first_capability_fails_the_run(repo, model, capsys):
+    model["spec:specs"] = lambda prompt, label, kw: rewrite_answer(
+        "Sure, here is the file:\n\n" + specs()
+    )
+    assert run(repo, "new", "throttle", "--auto") == 1
+    out = capsys.readouterr().out
+    assert "text above the first `# Capability:` line" in out
+    assert not (change_dir(repo) / "specs.md").exists()
+
+
+def test_blank_lines_above_the_first_capability_are_allowed(repo, model):
+    model["spec:specs"] = lambda prompt, label, kw: rewrite_answer("\n\n" + specs())
+    assert run(repo, "new", "throttle", "--auto") == 0
+    assert (change_dir(repo) / "specs.md").read_text() == specs()
+
+
+def test_an_unchanged_answer_to_the_first_pass_fails_the_run(repo, model, capsys):
+    model["spec:specs"] = "UNCHANGED"
+    assert run(repo, "new", "throttle", "--auto") == 1
+    assert "specs.md for throttle was not written" in capsys.readouterr().out
 
 
 def test_an_empty_proposal_is_asked_for_again(repo, model):
@@ -119,7 +170,9 @@ def test_every_markdown_file_the_model_writes_ends_in_one_newline(repo, model):
     model["spec:use-cases"] = (
         "# Use cases\n\n## Personas\n\n### operator\n- **Who they are:** ops\n\n\n\n"
     )
-    model["spec:specs"] = lambda prompt, label, kw: specs().rstrip("\n") + "  "
+    model["spec:specs"] = lambda prompt, label, kw: rewrite_answer(
+        specs().rstrip("\n") + "  "
+    )
     assert run(repo, "new", "throttle", "--auto") == 0
     cdir = change_dir(repo)
     for rel in (

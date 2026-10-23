@@ -222,7 +222,10 @@ Rules:
 - Include edge cases and error scenarios, not just happy path
 - The prototype shows what things look like; the behaviour is yours to state here
 
-Output ONLY the markdown content. No commentary.
+Answer with the whole specs.md, with a line `{begin}` above it and a line
+`{end}` below it. Only the text between those two lines is written to the
+file: put no commentary, explanation or summary in it, and nothing above its
+first `# Capability:` line.
 """
 
 REGISTRY_HEADING = "## Current behaviour (specs/registry)"

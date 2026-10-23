@@ -19,6 +19,7 @@ from types import SimpleNamespace
 
 from pm_spec_pipeline import __main__ as cli
 from pm_spec_pipeline import sdk
+from pm_spec_pipeline.rewrite import BEGIN, END
 
 CAPABILITY = "fixture"
 
@@ -67,7 +68,7 @@ ANSWERS = {
             }
         ],
     },
-    "spec:specs:feat": SPECS,
+    "spec:specs:feat": f"{BEGIN}\n{SPECS}{END}\n",
     "consistency": {"findings": [], "prior_assessments": []},
 }
 
