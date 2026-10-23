@@ -281,9 +281,12 @@ support. A gap is closed with a requirement and a WHEN/THEN scenario. When none
 of the findings needs a change in this file, return it unchanged.
 
 ## Output Format
-The same format as the current file{format_note}: `## ADDED Requirements` (or
-MODIFIED / REMOVED), `### Requirement: <name>`, and under each requirement at
-least one `#### Scenario: <name>` with a `- **WHEN** ...` and a `- **THEN** ...` line.
+The same format as the current file{format_note}: `## ADDED Requirements`,
+`### Requirement: <name>`, and under each requirement at least one
+`#### Scenario: <name>` with a `- **WHEN** ...` and a `- **THEN** ...` line.
+`## MODIFIED` and `## REMOVED Requirements` only in a capability that has a
+file in specs/registry/; every other capability is new, and all its
+requirements are ADDED.
 
 Output ONLY the whole file as markdown. No commentary.
 """

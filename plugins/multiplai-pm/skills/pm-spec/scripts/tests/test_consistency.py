@@ -86,6 +86,12 @@ def test_a_major_finding_rewrites_only_the_cited_specs_once_then_rechecks(repo, 
         "CC-F1" in rewrite_prompt
         and "## The file to revise: components/api/specs.md" in rewrite_prompt
     )
+    # The registry rule the specs prompt states: no registry file here.
+    assert "(or MODIFIED / REMOVED)" not in rewrite_prompt
+    assert (
+        "`## MODIFIED` and `## REMOVED Requirements` only in a capability that "
+        "has a file in specs/registry/" in " ".join(rewrite_prompt.split())
+    )
     recheck_prompt = model.exactly("consistency")[1]
     assert (
         "Findings the rewrite was asked to fix" in recheck_prompt
