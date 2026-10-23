@@ -70,7 +70,9 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
   <component>=<REF>` (once per component) records each component's ticket in
   its `.change.yaml`, `components.md` and `tickets.json`;
   `resume --tickets-later` goes on with them pending. Any other resume is
-  refused (exit 2) with the flags it expects.
+  refused (exit 2) with the flags it expects. A `--ticket` id git would
+  refuse in a branch name (a space, `..`, `~`, a leading `-`) is refused
+  (exit 2) with the reason, before anything is written.
 - The skill tells Claude what to share at each review stop, and to show the
   tickets and wait for a yes before creating them.
 - A `specs.md` that breaks the format (a capability name that is not

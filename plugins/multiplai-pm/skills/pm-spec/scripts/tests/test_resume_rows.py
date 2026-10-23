@@ -363,6 +363,29 @@ def test_S6_the_ticket_wait(repo, model, tmp_path, monkeypatch, capsys):
     assert "ticket_refs" not in meta(change_dir(later) / "components" / "ui")
 
 
+@pytest.mark.parametrize("bad", ["ENG 2", "ENG..2", "ENG~2", "-ENG-2"])
+def test_S6_a_ticket_ref_git_refuses_is_refused_and_nothing_is_written(
+    repo, model, tmp_path, monkeypatch, capsys, bad
+):
+    two(model)
+    go(repo, FLOW[:3])
+    cdir, wt = change_dir(repo), worktree(repo)
+    before, calls = run_dir_files(cdir), len(model.calls)
+    head = git(wt, "rev-parse", "HEAD")
+    capsys.readouterr()
+
+    assert run(repo, *RESUME, "--ticket", f"api={bad}", "--ticket", "ui=ENG-3") == 2
+    out = capsys.readouterr().out
+    assert f"--ticket 'api={bad}'" in out and "Nothing was recorded" in out
+    assert run_dir_files(cdir) == before and len(model.calls) == calls
+    assert git(wt, "rev-parse", "HEAD") == head
+
+    # Good refs afterwards: as if the bad one was never given.
+    go(repo, [(TICKETS, 3), (RESUME, 0)])
+    other, _ = baseline(tmp_path, monkeypatch, two, FLOW)
+    same_as(repo, other)
+
+
 # --- S7 ---------------------------------------------------------------------------
 
 

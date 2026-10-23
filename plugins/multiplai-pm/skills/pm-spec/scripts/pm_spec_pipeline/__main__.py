@@ -200,7 +200,33 @@ def _path(raw: str, base: str) -> str:
     return path if os.path.isabs(path) else os.path.join(os.path.abspath(base), path)
 
 
+def _ticket_refs(args: argparse.Namespace) -> dict[str, str] | None:
+    """`resume --ticket <component>=<REF>`, each checked as a ticket id
+    (`branch._ticket_refusal`); None, the reason printed, when one is not."""
+    refs: dict[str, str] = {}
+    project = Path(args.project_dir).expanduser()
+    repo = project if project.is_dir() else Path.cwd()
+    change = normalize_change_name(args.change)
+    for raw in getattr(args, "ticket", []):
+        component, sep, ref = raw.partition("=")
+        if not sep or not component.strip() or not ref.strip():
+            print(
+                f"ERROR: --ticket {raw!r}: expected <component>=<ticket id>",
+                flush=True,
+            )
+            return None
+        if why := branch._ticket_refusal(ref.strip(), change, repo):
+            print(f"ERROR: --ticket {raw!r}: {why}. Nothing was recorded.", flush=True)
+            return None
+        refs[component.strip()] = ref.strip()
+    return refs
+
+
 async def _dispatch(args: argparse.Namespace) -> int:
+    # Checked before anything is written (row S6).
+    refs = _ticket_refs(args) if args.command == "resume" else {}
+    if refs is None:
+        return EXIT_REFUSED
     # The checkout the run writes in is the feature branch's (`branch.place`);
     # the input files are still read from `--project-dir`.
     where = branch.place(
@@ -245,16 +271,6 @@ async def _dispatch(args: argparse.Namespace) -> int:
         )
         return await cmd_new(config, inputs, replies_file=replies, max_usd=args.max_usd)
     if args.command == "resume":
-        refs = {}
-        for raw in args.ticket:
-            component, sep, ref = raw.partition("=")
-            if not sep or not component.strip() or not ref.strip():
-                print(
-                    f"ERROR: --ticket {raw!r}: expected <component>=<ticket id>",
-                    flush=True,
-                )
-                return EXIT_REFUSED
-            refs[component.strip()] = ref.strip()
         return await cmd_resume(
             config,
             replies_file=replies,
