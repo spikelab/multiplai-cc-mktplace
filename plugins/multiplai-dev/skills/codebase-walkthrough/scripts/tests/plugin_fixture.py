@@ -34,6 +34,10 @@ KIT = {
         "\n"
         "Use `tool build --run-dir <dir>` for a full build.\n"
         "Use `tool check` for a quick check; it exits 2 when something is wrong.\n"
+        "\n"
+        "| Command | When |\n"
+        "|---|---|\n"
+        "| `tool build` | a build |\n"
         "Re-running `tool build` keeps the attempts recorded in tool-state.json.\n"
     ),
     f"{TOOL}/scripts/CLAUDE.md": "# tool scripts\n\nRun `python -m tool build`.\n",

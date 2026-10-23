@@ -736,7 +736,8 @@ def _md_table(state: WalkState, lk: Linker, key: str) -> MdSection:
                 # A writer may backtick names inside the value; the whole cell is code already.
                 cells.append(f"`{_cell(value.replace('`', ''))}`" if value else "")
             else:
-                cells.append(_cell(lk.expand(value)))
+                # Escaped before expanding: a link's title escapes its own `|`.
+                cells.append(lk.expand(_cell(value)))
         out.append("| " + " | ".join(cells) + " |")
     return MdSection(_join(out))
 

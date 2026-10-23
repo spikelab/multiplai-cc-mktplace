@@ -48,7 +48,7 @@ STRUCTURED = (
 SURVEY_NEEDLES = {
     "loops": ("MAX_", "range(", "sys.exit(", 'print("'),
     "lifecycle": ("write_text(", "json.loads(", ".open(", "STATE ="),
-    "commands": ("Use `", "Run `", "exits 2"),
+    "commands": ("Use `", "Run `", "exits 2", "| `tool"),
 }
 SURVEY_MAX_FACTS = 12
 
@@ -56,6 +56,10 @@ SURVEY_MAX_FACTS = 12
 def _line(cwd: str, path: str, n: int) -> str:
     lines = (Path(cwd) / path).read_text(encoding="utf-8").split("\n")
     return lines[n - 1].strip()
+
+
+def _text(cwd: str, path: str) -> str:
+    return (Path(cwd) / path).read_text(encoding="utf-8")
 
 
 def _first_code_line(cwd: str, path: str) -> int:
@@ -184,7 +188,8 @@ class FakeAgents:
                 files.append(
                     {"path": path, "purpose": "part of bookings", "citation": cit}
                 )
-                if path.endswith("models.py"):
+                # The bookings fixture's models.py (a real tree, as in the free check, has others).
+                if path.endswith("models.py") and "ospite_count" in _text(cwd, path):
                     k = _find(cwd, path, "ospite_count")
                     terms.append(
                         {
@@ -420,7 +425,8 @@ class FakeAgents:
                 {
                     "situation": "A full build",
                     "command": "tool build --run-dir <dir>",
-                    "why": f"It runs every attempt. [[{id_with('build')}]]",
+                    # Cites the docs' table row: its `|` must survive the table cell (check re-reads it).
+                    "why": f"It runs every attempt. [[{id_with('| `tool build`')}]]",
                     "cite": id_with("build"),
                 }
             ]
