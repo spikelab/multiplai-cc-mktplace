@@ -140,98 +140,77 @@ def test_validate_cli_ok_and_broken(tmp_path):
     assert "FAIL" in bad.stdout
 
 
-# --- walkthrough.json v1 -------------------------------------------------------------
+# --- summary.json v1 -----------------------------------------------------------------
 
 from review_viewer.models import (
-    WALKTHROUGH_SCHEMA_PATH,
+    SUMMARY_SCHEMA_PATH,
     InboxRow,
-    Walkthrough,
-    walkthrough_schema_text,
+    Summary,
+    summary_schema_text,
 )
 
 SHA = "a" * 40
 
 
-def walkthrough_data() -> dict:
+def summary_data() -> dict:
     return {
         "schema_version": 1,
         "generated_at": "2026-09-26T10:00:00Z",
         "base_sha": SHA,
         "head_sha": "b" * 40,
-        "overview_md": "What this change is for.",
-        "steps": [
-            {
-                "id": "core-change",
-                "title": "The core change",
-                "body_md": "Text.",
-                "anchors": [
-                    {
-                        "path": "app/service.py",
-                        "side": "head",
-                        "line_start": 1,
-                        "line_end": 3,
-                    }
-                ],
-                "diagram": {"kind": "mermaid", "source": "flowchart LR\n A --> B"},
-                "finding_ids": ["b561bd34ce"],
-            }
+        "assessments": [
+            {"topic": "tests", "verdict": "note", "title": "T", "detail_md": "d"}
         ],
-        "skipped": [{"path": "uv.lock", "reason": "generated"}],
+        "risk": {"tier": 1, "tier_why": "w", "revertable": True, "revert_why": "r"},
         "complete": False,
     }
 
 
-def test_committed_walkthrough_schema_matches_fresh_export():
-    assert (
-        WALKTHROUGH_SCHEMA_PATH.read_text(encoding="utf-8") == walkthrough_schema_text()
-    ), "run: python -m review_viewer export-schema"
+def test_committed_summary_schema_matches_fresh_export():
+    assert SUMMARY_SCHEMA_PATH.read_text(encoding="utf-8") == summary_schema_text(), (
+        "run: python -m review_viewer export-schema"
+    )
 
 
-def test_walkthrough_validates_against_model_and_committed_schema():
-    Walkthrough.model_validate(walkthrough_data())
-    schema = json.loads(WALKTHROUGH_SCHEMA_PATH.read_text(encoding="utf-8"))
+def test_summary_validates_against_model_and_committed_schema():
+    Summary.model_validate(summary_data())
+    schema = json.loads(SUMMARY_SCHEMA_PATH.read_text(encoding="utf-8"))
     jsonschema.Draft202012Validator.check_schema(schema)
-    jsonschema.validate(walkthrough_data(), schema)
+    jsonschema.validate(summary_data(), schema)
 
 
 @pytest.mark.parametrize(
     "mutate",
     [
         lambda d: d.update(surprise=True),
-        lambda d: d["steps"][0].update(id="Has Spaces"),
-        lambda d: d["steps"][0].update(anchors=[]),
-        lambda d: d["steps"][0]["anchors"][0].update(side="left"),
-        lambda d: d["steps"][0]["anchors"][0].update(line_start=0),
-        lambda d: d["steps"][0].update(finding_ids=["XYZ"]),
-        lambda d: d["steps"][0]["diagram"].update(kind="plantuml"),
-        lambda d: d["steps"][0]["diagram"].update(source="x" * 20001),
+        lambda d: d.update(overview_md="prose about the code"),
+        lambda d: d.update(steps=[]),
+        lambda d: d["risk"].update(tier=4),
+        lambda d: d["assessments"][0].update(verdict="great"),
         lambda d: d.update(schema_version=2),
         lambda d: d.update(head_sha="short"),
     ],
 )
-def test_walkthrough_rejects(mutate):
-    data = walkthrough_data()
+def test_summary_rejects(mutate):
+    data = summary_data()
     mutate(data)
     with pytest.raises(ValidationError):
-        Walkthrough.model_validate(data)
+        Summary.model_validate(data)
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(
-            data, json.loads(WALKTHROUGH_SCHEMA_PATH.read_text(encoding="utf-8"))
+            data, json.loads(SUMMARY_SCHEMA_PATH.read_text(encoding="utf-8"))
         )
 
 
-def test_inbox_row_carries_an_optional_step_id():
-    row = InboxRow(
-        id="q-1", ts="t", target="t", kind="question", text="x", step_id="core-change"
-    )
-    assert row.model_dump()["step_id"] == "core-change"
-    assert (
-        InboxRow(id="q-1", ts="t", target="t", kind="question", text="x").step_id
-        is None
-    )
+def test_inbox_row_has_no_step_id_and_an_optional_full_walkthrough_flag():
+    row = InboxRow(id="q-1", ts="t", target="t", kind="question", text="x")
+    assert row.full_walkthrough is False and "step_id" not in row.model_dump()
+    assert InboxRow(
+        id="q-1", ts="t", target="t", kind="question", text="x", full_walkthrough=True
+    ).full_walkthrough
     with pytest.raises(ValidationError):
         InboxRow(
-            id="q-1", ts="t", target="t", kind="question", text="x", step_id="Bad Id"
+            id="q-1", ts="t", target="t", kind="question", text="x", step_id="core"
         )
 
 

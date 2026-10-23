@@ -363,7 +363,8 @@ class TestRegenerate:
 
         def write():
             md.write_text(md.read_text() + "\nregenerated\n")
-            md.with_suffix(".json").write_text("{}\n")
+            md.with_suffix(".html").write_text("<html></html>\n")
+            md.with_name("calc-paths.json").write_text("{}\n")
 
         seen = _stub(monkeypatch, write=write)
         path = walkthroughs.pr_section(stale, None, tmp_path / "docs")
@@ -386,6 +387,14 @@ class TestRegenerate:
             _git(stale.project_dir, "log", "-1", "--format=%s").stdout.strip()
             == f"docs(walkthroughs): regenerate {MD_NAME}"
         )
+        committed = _git(
+            stale.project_dir, "show", "--name-only", "--format=", "HEAD"
+        ).stdout.split()
+        assert sorted(committed) == [
+            "docs/walkthroughs/calc-paths.json",
+            "docs/walkthroughs/calc-walkthrough.html",
+            f"docs/walkthroughs/{MD_NAME}",
+        ]
         assert _git(stale.project_dir, "status", "--porcelain").stdout == ""
         assert "regenerated and committed" in path.read_text()
         assert (

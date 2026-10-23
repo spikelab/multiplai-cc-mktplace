@@ -192,6 +192,19 @@ the main one.""",
 that writes it) and, when the material shows its shape, an `example`: `format` "json", "yaml",
 "markdown" or "text", and its `text`, a short realistic sample. A program checks every key of a JSON or
 YAML example against the code; use only keys that appear in the material.""",
+    "change_summary": """Return `tagline`: ONE sentence saying what this change does, for someone who has not
+read it. Then `paragraphs`: at most two short paragraphs in plain language: what changed, and why (from the
+PR description and the commit subjects when they say why; never guess a reason they do not give).""",
+    "change_flow": """Return the path through the change as a flow diagram plus a walk through it.
+- `nodes`: at most 14 boxes, each with an `id` (letters and digits, e.g. "n1"), a `label` in plain words
+  (no code names, no file names, at most 60 characters) and a `cite`: the citation id of the line that
+  box stands for. Start at the entry point a user or caller reaches first, and include the changed code;
+- `edges`: arrows `{"from": <node id>, "to": <node id>, "label": <optional plain words>}`. Every box must
+  be reached by an arrow: one connected diagram;
+- `steps`: one per box or group of boxes, in order, each with a `title`, a `summary` of one to three
+  sentences saying what happens there and what the change altered, `details_paragraphs` (the specifics)
+  and `snippet_cites` (one or two citation ids whose lines are worth showing as code).
+Follow the first path listed unless the material shows another goes through more of the change.""",
     "config": """Return `rows`: the settings, flags, environment variables and config keys that change
 what the code does. Each row has the `name` exactly as the code spells it, its `effect` in one plain
 sentence, its `default` when the material shows it, and `cite`: the citation id of the line that reads

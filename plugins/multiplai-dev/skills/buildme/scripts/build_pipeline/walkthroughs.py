@@ -319,9 +319,13 @@ def regenerate(config, w: Walkthrough) -> str:
         return f"not regenerated: the run stopped at its spend limit (${usd:g}); the old file is left in place"
     if not res.ok:
         return f"not regenerated: the run failed (exit {res.returncode}): {_last_line(res)}"
+    # The run rewrites the HTML page and, in human mode, `<name>-paths.json` beside the Markdown.
     paths = [w.rel] + [
         p.relative_to(config.project_dir).as_posix()
-        for p in [w.path.with_suffix(".json")]
+        for p in [
+            w.path.with_suffix(".html"),
+            w.path.with_name(f"{name}-paths.json"),
+        ]
         if p.exists()
     ]
     sha = git_ops.commit_stage(

@@ -11,6 +11,9 @@ dependencies = [
     "pyyaml>=6",
     "python-dotenv>=1",
     "code-facts",
+    # Resolves --pr/--range to shas and lists what changed; shared with
+    # codebase-walkthrough.
+    "git-targets",
 ]
 
 [project.optional-dependencies]
@@ -49,3 +52,4 @@ multiplai-core = { git = "https://github.com/spikelab/multiplai-core", branch = 
 # that copy. code_facts is not a workspace member, because uv rejects a member
 # that is also reached through a path source.
 code-facts = { path = "../../../lib/code_facts", editable = true }
+git-targets = { path = "../../../lib/git_targets", editable = true }

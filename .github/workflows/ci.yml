@@ -293,6 +293,43 @@ jobs:
           uv run --project ../../../.. --package walkthrough-pipeline \
             --extra dev python -m pytest tests/ -q -n auto
 
+  git-targets-tests:
+    name: git_targets tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      # git_targets is not a workspace member either: it runs in
+      # walkthrough-pipeline's environment, which installs it. The tests build
+      # a fixture git repo and stub `gh`; nothing reaches the network.
+      - name: Run tests
+        working-directory: plugins/multiplai-dev/lib/git_targets
+        run: |
+          uv run --project ../../../.. --package walkthrough-pipeline \
+            --extra dev python -m pytest tests/ -q -n auto
+
+  design-system-tests:
+    name: design_system tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      # design_system is not a workspace member (its consumers reach it
+      # through an editable path source), so its tests run in the
+      # design-system skill's environment, which installs it. Offline; no
+      # model call.
+      - name: Run tests
+        working-directory: plugins/multiplai-dev/lib/design_system
+        run: |
+          uv run --project ../../../.. --package design-system-scripts \
+            --extra dev python -m pytest tests/ -q -n auto
+
   review-pipeline-tests:
     name: review pipeline tests
     runs-on: ubuntu-latest

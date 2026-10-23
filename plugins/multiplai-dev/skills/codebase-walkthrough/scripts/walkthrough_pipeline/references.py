@@ -19,6 +19,10 @@ Each tool does one job:
      There is no AST there; the output says how each was found.
 3. `lsp.py` adds `pyright-langserver` references inside the target's own repo.
 
+A change target (`--scope pr`) uses `scan_callers` instead: `git grep` at each
+repository's commit picks the files naming a changed function or class, and
+`ast` confirms each call or import of it.
+
 Cross-repo HTTP and SQL references are string matches by nature: no AST or
 LSP follows a call across an HTTP boundary or a database.
 """
@@ -563,3 +567,130 @@ def merge_lsp(refs: list[Reference], lsp_refs: list[Reference]) -> list[Referenc
             have.add((r.path, r.line))
             out.append(r)
     return out
+
+
+# --- a change's callers ----------------------------------------------------------------------
+
+# Names shorter than this, and dunder names, would match too much to mean a caller.
+MIN_CALLER_NAME = 4
+MAX_CALLERS = 300
+
+
+def module_name(rel: str) -> str:
+    """The name a Python file is imported by, last part only: its stem, or its package's for
+    `__init__.py` and `__main__.py`."""
+    p = PurePosixPath(rel)
+    return p.parent.name if p.stem in ("__init__", "__main__") else p.stem
+
+
+def _grep_files(repo: RepoInfo, names: list[str]) -> list[str]:
+    """Repo-relative Python files at repo.head_sha naming any of *names* as a whole word."""
+    if not names:
+        return []
+    argv = ["grep", "-l", "-F", "-w"]
+    for n in names:
+        argv += ["-e", n]
+    proc = git(repo.path, *argv, repo.head_sha, "--", "*.py", check=False)
+    prefix = f"{repo.head_sha}:"
+    return sorted(
+        line[len(prefix) :]
+        for line in proc.stdout.splitlines()
+        if line.startswith(prefix) and not is_secret_path(line[len(prefix) :])
+    )
+
+
+def _callers_in(
+    repo: RepoInfo,
+    rel: str,
+    text: str,
+    modules: dict[str, set[str]],
+    defined_here: set[str],
+) -> list[Reference]:
+    """Imports and calls of a changed name in one file.
+
+    *modules* maps each changed name to the module names (`module_name`) of the files that define
+    it. A call counts when the file imports the name from one of those modules, calls it through
+    one of them (`write.build(...)` after `from stages import write`), or defines it itself
+    (*defined_here*: a call by name or as an attribute, so `self.method()` counts).
+    """
+    try:
+        tree = ast.parse(text, rel)
+    except SyntaxError:
+        return []
+    lines = text.split("\n")
+    out: list[Reference] = []
+
+    def add(name: str, line: int) -> None:
+        out.append(
+            Reference(
+                repo=repo.key,
+                kind="caller",
+                symbol=name,
+                path=f"{repo.key}/{rel}",
+                line=line,
+                quote=lines[line - 1].strip() if 0 < line <= len(lines) else name,
+                method="ast",
+            )
+        )
+
+    bound: dict[str, str] = {n: n for n in defined_here}  # local name -> changed name
+    via: dict[str, set[str]] = {}  # module alias as written -> its module name
+    all_modules = {m for ms in modules.values() for m in ms}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            last = (node.module or "").rsplit(".", 1)[-1]
+            for a in node.names:
+                if a.name in modules and last in modules[a.name]:
+                    bound[a.asname or a.name] = a.name
+                    add(a.name, node.lineno)
+                elif a.name in all_modules:
+                    via.setdefault(a.asname or a.name, set()).add(a.name)
+        elif isinstance(node, ast.Import):
+            for a in node.names:
+                last = a.name.rsplit(".", 1)[-1]
+                if last in all_modules:
+                    via.setdefault(a.asname or a.name, set()).add(last)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        f = node.func
+        if isinstance(f, ast.Name) and f.id in bound:
+            add(bound[f.id], node.lineno)
+        elif (
+            isinstance(f, ast.Attribute)
+            and f.attr in modules
+            and (
+                f.attr in defined_here
+                or via.get(_dotted(f.value), set()) & modules[f.attr]
+            )
+        ):
+            add(f.attr, node.lineno)
+    return out
+
+
+def scan_callers(
+    repos: dict[str, RepoInfo], target: TargetInfo, changed: dict[str, set[str]]
+) -> list[Reference]:
+    """Calls and imports of the changed functions and classes, in every repository but the base key.
+
+    *changed* maps each changed file (repo-relative, in the target's repository) to the names it
+    defines that the change edits. Files are picked with `git grep` and confirmed with `ast`
+    (`_callers_in`). The definitions themselves are not calls. At most MAX_CALLERS.
+    """
+    modules: dict[str, set[str]] = {}
+    for rel, names in changed.items():
+        for n in names:
+            if len(n) >= MIN_CALLER_NAME and not n.startswith("__"):
+                modules.setdefault(n, set()).add(module_name(rel))
+    base_key = target.change.base_key if target.change else ""
+    refs: list[Reference] = []
+    for key, repo in repos.items():
+        if key == base_key:
+            continue
+        for rel in _grep_files(repo, sorted(modules)):
+            text = show(repo, rel)
+            if text is None:
+                continue
+            here = changed.get(rel, set()) if key == target.repo_key else set()
+            refs += _callers_in(repo, rel, text, modules, here & set(modules))
+    return first_per_file(refs)[:MAX_CALLERS]
