@@ -15,6 +15,38 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.101.0] - 2026-10-23
+
+### Added
+- buildme builds a change whose components pm-spec 0.9.0 nests in it
+  (`specs/changes/<change>/components/<id>/`, each with its own `plan.md`,
+  `specs.md` and `.change.yaml`). `/buildme <change>` runs the epic
+  coordinator over the components in their `depends_on` order: each builds
+  as `--change <change>/<id>` on its own branch,
+  `<component ticket>-<change>-<id>` (the change's ticket when the component
+  has none yet, as for an epic's child before), and its PR merges into the
+  change's feature branch. `--change <change>/<id>` also builds one
+  component on its own.
+- buildme reads a change's capabilities from the `# Capability: <name>`
+  sections of `specs.md`. A component's proposal and use cases are its
+  change's.
+- The agents that write each block's tests and code get the list of files in
+  the change's `prototype/` and are told to match what they show of a UI or
+  API.
+- When every component has merged into the feature branch, the
+  `/buildme <change>` run that sees it archives the whole change there, once: every
+  component's capabilities merge into `specs/registry/`, and the change moves
+  to `specs/archive/<date>-<change>/`, committed and pushed to the feature
+  branch. A component does not archive itself, and `buildme archive
+  --change <change>/<id>` is refused: archive the change.
+
+### Changed
+- A change in the older layout (`requirements/<cap>.md`, children as sibling
+  change dirs `<parent>-<id>`) builds and archives as before.
+- A `specs.md` whose capability headings repeat a name or are not
+  kebab-case counts as missing requirements, so the build stops before
+  planning instead of failing part way.
+
 ## [0.100.0] - 2026-10-22
 
 ### Changed
