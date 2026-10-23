@@ -66,7 +66,7 @@ class Root:
         self.project = make_project(root)
         self.fakes = Fakes(root, monkeypatch, {}, reviews)
         self.config = make_build(self.project)
-        self.config.epic = EpicSettings(max_parallel=1)
+        self.config.epic = EpicSettings(max_parallel=1, merge="manual")
         approve(self.config, TWO, CallLog(root / "split.log"))
         self.dir = self.data / "buildme" / "epics" / "o-r--e"
         self.target = self.data / "reviews" / "o-r" / f"pr-{N}"

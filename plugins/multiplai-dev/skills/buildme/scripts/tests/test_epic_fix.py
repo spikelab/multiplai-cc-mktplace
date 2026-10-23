@@ -84,7 +84,10 @@ class Epic:
         )
         self.config = make_build(self.project)
         self.config.epic = EpicSettings(
-            max_parallel=2, max_review_rounds=rounds, max_usd=max_usd
+            max_parallel=2,
+            max_review_rounds=rounds,
+            max_usd=max_usd,
+            merge="manual",
         )
         approve(self.config, answer, CallLog(root / "split.log"))
         self.dir = self.data / "buildme" / "epics" / "o-r--e"

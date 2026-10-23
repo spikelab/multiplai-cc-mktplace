@@ -587,19 +587,35 @@ def test_recheck_verdict_reads_a_listed_finding_with_no_status_as_cannot_verify(
         ),
         ({"severity": "major", "category": "correctness", "description": "gap"}, False),
         ({"severity": "minor", "category": "style", "description": "nit"}, False),
+        # SKILL.md: a re-audit stops on a new critical problem; new major and
+        # minor findings are reported only, whatever their category.
         (
             {
                 "severity": "minor",
                 "category": "no-new-behaviour",
                 "description": "block 2 adds nothing",
             },
+            False,
+        ),
+        (
+            {
+                "severity": "major",
+                "category": "no-new-behaviour",
+                "description": "block 3 adds nothing",
+            },
+            False,
+        ),
+        (
+            {
+                "severity": "critical",
+                "category": "no-new-behaviour",
+                "description": "block 4 adds nothing",
+            },
             True,
         ),
     ],
 )
-def test_recheck_verdict_blocks_a_new_finding_only_when_critical_or_no_new_behaviour(
-    finding, blocks
-):
+def test_recheck_verdict_blocks_a_new_finding_only_when_critical(finding, blocks):
     blocking, advisory = owner.recheck_verdict([], [], [finding], deterministic=[])
     assert (len(blocking), len(advisory)) == ((1, 0) if blocks else (0, 1))
     assert (blocking or advisory)[0]["status"] == "new"

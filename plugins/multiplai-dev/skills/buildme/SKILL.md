@@ -14,8 +14,12 @@ fixes → prepare docs and archive → verify the final revision → publish.
 **The step before is `/multiplai-pm:pm-spec`.** pm-spec writes the change's
 proposal, use cases and requirements in `specs/changes/<name>/` (with the
 interview, the ticket or PRD intake, the epic split and the prototype), checks
-them, marks them ready in `.change.yaml` and commits the change dir. buildme
-reads those three documents and never writes them: a build whose specs are not
+them, marks them ready in `.change.yaml`, commits the change dir on the
+change's feature branch (`<TICKET>-<name>`, or the one its `--branch` named) and
+pushes that branch to `origin`. buildme builds on that branch, or, for an
+epic's children, into it (see
+[The feature branch](#the-feature-branch)), reads those three documents and
+never writes them: a build whose specs are not
 marked ready, or changed after they were, refuses with `SPEC:NOT_READY` (exit
 `2`) and writes nothing. A requirements problem buildme finds goes back to
 pm-spec in `spec-issues.md` (`SPEC:ISSUES`, exit `4`), for
@@ -94,9 +98,10 @@ fixture runs establish harness behavior, not model quality.
 | `--pr-ready` | Open the PR ready-for-review instead of the default draft. |
 | `--research-path <file>` | Research to build on. Its content is saved as `research.md` in the change dir and fed to the design (fenced as untrusted). Without it, the pipeline decides whether research is needed — see [Step 2](#step-2-research). |
 | `--accept-size` | Build a plan the size gate says should be split, as one PR. The build remembers it, so a later retry or resume does not stop on size again. |
-| `--force` | Start a new build even if this change already published. The new build gets the next free branch (`buildme/<change>-2`, …) and leaves the published one alone. Pass it only after the user said yes to the `BUILD:COMPLETE` question (below). A stopped build with a `.build-state.json` resumes with or without it. |
-| `--epic-child` | Build as an epic's child: no spec-extract, and the PR targets the default branch. The epic's build passes it to every child, so the child's saved command keeps it when run again by hand. `BUILDME_EPIC_CHILD=1` in the environment does the same: a child's command saved before 0.84.2 lacks the flag, so pass one of them when running it by hand. |
-| `--base-ref <sha>` | Branch a new worktree from this commit instead of the source checkout's HEAD. An epic's child with no dependency gets the commit that holds the ready specs, and one that waits on a dependency gets origin's default branch (see [Epic builds](#epic-builds-a-parent-and-its-children)); a build that re-binds to its worktree ignores it. When the commit is not on the default branch, the PR targets the branch that holds it (`--base`), except under `--epic-child` (or `BUILDME_EPIC_CHILD=1`), where the PR targets the default branch. Exits `1` when the `specs/config.yaml` committed at HEAD is not the version at that commit (push yours, or pull origin's, first). |
+| `--force` | Start a new build even if this change already published. The new build gets the next free branch (`<feature branch>-2`, …, cut where the published build started) and leaves the published one alone. Pass it only after the user said yes to the `BUILD:COMPLETE` question (below). A stopped build with a `.build-state.json` resumes with or without it. |
+| `--epic-child` | Build as an epic's child: no spec-extract, and the PR targets `--branch` (the epic's feature branch), else the default branch. The epic's build passes it to every child, so the child's saved command keeps it when run again by hand. `BUILDME_EPIC_CHILD=1` in the environment does the same: a child's command saved before 0.84.2 lacks the flag, so pass one of them when running it by hand. |
+| `--base-ref <sha>` | Branch a new worktree from this commit instead of the source checkout's HEAD; the change's feature branch is then not looked up. An epic's children get `origin/<feature branch>` (see [Epic builds](#epic-builds-a-parent-and-its-children)), and a build that finds its change's feature branch sets it to that itself; a build that re-binds to its worktree ignores it. With `--base-ref`, the change dir as that commit holds it must be ready, or the build refuses before the worktree is cut. With `--branch` and `--epic-child`, the PR targets that branch (a single change given `--branch` builds on that branch itself, ignoring `--base-ref`, and its PR goes to the default branch); otherwise, when the commit is not on the default branch, the PR targets the branch that holds it (`--base`), except under `--epic-child` (or `BUILDME_EPIC_CHILD=1`), where it targets the default branch. Exits `1` when the `specs/config.yaml` committed at HEAD is not the version at that commit (push yours, or pull origin's, first). |
+| `--branch <name>` | The change's feature branch: where pm-spec pushed its specs, and what a single change builds on (an epic's child: what it starts from and what its PR targets). It must start with the change's `<TICKET>-`. Without it the build uses the branch the change dir's `.change.yaml` records, else the one branch on origin named `<TICKET>-<change>` (see [The feature branch](#the-feature-branch)). A branch it names that origin does not have, a name without the ticket prefix, and several matching branches on origin each refuse with `SPEC:NOT_READY`. |
 | `--trust-repo` | Required for every run that reaches a tool-using agent — which now includes the reviews. The per-block code review, the design audit, the tasks audit and the plan review all run as subagents that `Read`/`Grep`/`Glob` the repo, so a `spec-generate` or review-only run needs this flag too, not just a full `build`. `BUILDME_TRUST_REPO=1` is the environment equivalent. Without it the step stops and says so. An approved epic vouches for its own repo: it passes `--trust-repo` to each child build, review and fixer, and its merge step's one agent call (under `epic.merge: auto`) runs trusted for that call only. |
 
 `specs/config.yaml` equivalents (CLI flags win): `explainers: {enabled: false}` (the default; #375),
@@ -134,8 +139,9 @@ buildme ignores them.
 **Commit `specs/config.yaml`.** The build's worktree branches from `HEAD`, so an
 uncommitted config never reaches it. With `git.worktree` on, the pipeline stops
 with `ERROR: specs/config.yaml is not committed; the build's worktree would not
-see it. Commit it first.` With `--base-ref` (every epic child) the worktree
-branches from that commit instead, and the build still reads the checkout's
+see it. Commit it first.` With `--base-ref` (every epic child, and every
+build of a change on a feature branch, which starts from
+`origin/<branch>`) the worktree branches from that commit instead, and the build still reads the checkout's
 file, so the version committed at `HEAD` must be the one at that commit:
 otherwise it stops with `... Push it, or pull origin's, first.` An epic checks
 this before each child's first launch and launches nothing for it, so the next
@@ -154,7 +160,8 @@ sessions — the two cover different phases and neither replaces the other.
 Resolution, in order:
 
 1. **Stack** — the manifest filename (`pyproject`, `package`, `Package`,
-   `Cargo`, `go`).
+   `Cargo`, `go`), also when `tdd.test_command` in `specs/config.yaml` sets
+   the test command.
 2. **Frameworks** — read out of the manifests, not their names, because a
    Django app and a plain library are both `pyproject.toml`: `manage.py` or a
    `django` dependency → `django`; a `fastapi` dependency → `fastapi`; a
@@ -203,21 +210,30 @@ capped. The reference docs above reach the spec generator, not the reviewer.
 A build **creates its own git worktree and branch** and never writes to the
 calling checkout:
 
-- Branch `buildme/<change-name>` (collisions get `-2`, `-3`, …).
+- Branch: a single change builds on its feature branch itself,
+  `<TICKET>-<change>`, checked out in the build's worktree; an epic's child
+  gets `<TICKET>-<child>` (collisions get `-2`, `-3`, …). The ticket is the
+  change's own ticket ref, else its nearest parent's; specs with none refuse
+  with `SPEC:NOT_READY` and `pm-spec resume <name> --ticket-ref <ticket id>`,
+  and a ticket id git refuses in a branch name is refused with the reason.
+  A single change's build refuses when its feature branch is checked out in
+  a worktree that is not one of the change's own builds, or when your local
+  copy of the branch holds commits origin lacks.
 - Worktree at `$WORKSPACE/.worktrees/buildme-<change-name>` (falls back to
   `<repo>/../.worktrees/…` when `WORKSPACE` is unset).
-- The worktree is created in BOOTSTRAP from `HEAD`, which must hold the
-  ready specs: a change dir with uncommitted changes refuses with
-  `SPEC:NOT_READY` (the worktree would not hold them), since pm-spec commits
-  the change dir when it marks it ready. With `--base-ref`, the change dir as
-  that ref holds it must be ready, with the revision marked ready here, or the
-  build refuses before the worktree is cut. Every artifact buildme writes is
-  born on the branch, and all later phases operate inside it.
+- The worktree is created in BOOTSTRAP from the change's feature branch,
+  `origin/<branch>` (below), and the change dir as that branch holds it must
+  be ready, or the build refuses before the worktree is cut; the checkout the
+  build runs in need not hold the change dir, and its own copy is not read.
+  With `--base-ref`, the same holds for that commit. Every artifact buildme
+  writes is born on the build's branch, and all later phases operate inside
+  it.
 - A resume reads the specs in the build's worktree. A refusal then names
-  `--project-dir <worktree>` for pm-spec. When the change dir in your checkout
-  was marked ready again after the worktree was cut, with other specs, the
-  resume refuses with `SPEC:NOT_READY`, naming both copies: copy the newer
-  files into the worktree's change dir, commit them there, and re-run.
+  `--project-dir <worktree>` for pm-spec. When pm-spec marked the specs ready
+  again on the feature branch after the worktree was cut, with other specs,
+  the resume refuses with `SPEC:NOT_READY`, naming the branch: merge it into
+  the build's branch (`git -C <worktree> merge origin/<branch>`, as the
+  message says), and re-run.
 - The build refuses to start (hard failure, no silent fallback) when the repo has
   uncommitted tracked changes, or the target branch already exists with unmerged
   commits. Commit or stash first.
@@ -252,8 +268,14 @@ calling checkout:
 - PUBLISH pushes the branch and opens a **draft** PR through the pr skill
   (`/multiplai-dev:pr`, run as `pr_pipeline open --no-push`), so the PR's
   description follows the repo's PR template, or the skill's standard one when
-  the repo has none. Push/PR failure is non-fatal: the branch and worktree stay
-  intact and the exact manual commands land in `build-progress.md`.
+  the repo has none. Every PR buildme opens goes through it; `gh pr create`
+  appears only as the printed manual fallback. The title is
+  `[<target branch>] <TICKET> <title>`, `<title>` being the proposal's first
+  heading: `[main] ENG-42 Login times out after 5 min` for a single change
+  (its PR goes to origin's default branch), `[ENG-40-auth-rework] ENG-40
+  Retry the token refresh` for an epic's child. Push/PR failure is
+  non-fatal: the branch and worktree stay intact and the exact manual
+  commands land in `build-progress.md`.
 - One hook adds sections to the PR description without touching the pr skill:
   `PRE_PUBLISH_CONTRIBUTORS` in `orchestrator.py`, run by
   `_pre_publish_sections` after the last block and before publish. Each
@@ -262,6 +284,58 @@ calling checkout:
   `--section`. A contributor that fails is logged and skipped. The list is
   empty today; its first intended user is the walkthrough step that lists
   stale walkthroughs.
+
+### The feature branch
+
+The flow: pm-spec pushes the change's specs to `<TICKET>-<change>`;
+`/buildme <change>` builds on that branch (a single change) or into it (an
+epic's children); the children's PRs merge into it on their own; origin's
+default branch is merged into it before each wave; and the PR from it to the
+default branch is opened by buildme for a single change and by you for an
+epic.
+
+pm-spec puts each change's specs on a branch of their own, `<TICKET>-<change>`
+(or the one `pm-spec --branch` named, which each `.change.yaml` records as
+`branch`), and pushes it. buildme builds from that branch:
+
+- **Finding it.** `build --branch <name>`; else the `branch` the change dir
+  in the checkout records; else the one branch on origin whose name is
+  `<TICKET>-<change>` (after `git fetch origin`; a failed fetch is a warning
+  and origin's refs are read as they are) and that holds the change's specs,
+  or their archive after an `--auto` build, recording that branch or a
+  ticket that names it. Another change's branch whose name merely ends in
+  `-<change>`, and an epic child's build branch, are not taken. Several such branches refuse with
+  `SPEC:NOT_READY`, asking for `--branch`, and so does a `--branch` that does
+  not start with the change's `<TICKET>-`. A branch named by `--branch` or a
+  `.change.yaml` that origin does not have refuses with `SPEC:NOT_READY`. A
+  `--no-worktree` build reads the specs in the checkout as before.
+- **Specs ready only in your checkout** (handed off by a pm-spec from before
+  it pushed: ready and committed, no feature branch on origin, or no
+  `origin` remote at all) refuse with
+  `SPEC:NOT_READY:... on no feature branch ...` and
+  `Run /multiplai-pm:pm-spec resume <name> first` (with `--ticket-ref
+  <ticket id>` when the change records no ticket). That resume copies the
+  change dir onto `<TICKET>-<name>`, commits it there and pushes it, leaving
+  your copy in place; then run the build again.
+- **Keeping it current.** At the start of every run (once the run's
+  refusals passed, so a refused run changes nothing), and in an epic before
+  each later wave, buildme merges origin's default branch into the feature
+  branch with a merge commit (`Merge origin/<default> into <branch>`), never
+  a rebase or a force. A first run makes it in its own detached worktree,
+  `<worktrees root>/buildme-feature-<branch>`, and pushes it; a single
+  change's resume makes it in the build's worktree, which has the branch
+  checked out, and its own push takes it (skipped, with a `WARNING:`, while
+  that worktree has uncommitted changes to tracked files). With nothing new
+  it does nothing. A conflict is aborted, so the branch and the worktree are
+  left as they were, nothing is built, and the run prints
+  `FEATURE_BRANCH:CONFLICT:<branch>:<files>` and exits `3`: merge the default
+  branch into the feature branch by hand, resolve the conflicts, push, and
+  run the build again.
+- **The PRs.** A single change's build pushes the feature branch and opens
+  one PR from it to origin's default branch, left for a person to merge. An
+  epic's children's PRs target the feature branch and merge on their own;
+  the epic's PR from the feature branch to the default branch is yours:
+  buildme never opens or merges it.
 
 Commits you will see on the branch, per block: `test(block-N)`, `impl(block-N)`,
 and — when the block's refactor pass survives verification — `refactor(block-N)`.
@@ -374,12 +448,14 @@ settings now; `config-get` does not know their keys (exit `2`).
 
 ### Step 0: The specs come from pm-spec
 
-A build starts from a change whose specs `/multiplai-pm:pm-spec` marked ready.
-A ticket, a PRD, a plan written with the plan skill, or a prompt all go to
-pm-spec first; it runs the interview, splits an epic into children, writes the
-proposal, use cases and requirements, and prints
-`SPEC:READY:<change_dir>:<revision>` with the next step,
-`/multiplai-dev:buildme <name>`.
+A build starts from a change whose specs `/multiplai-pm:pm-spec` marked ready
+and pushed to the change's feature branch. A ticket, a PRD, a plan written
+with the plan skill, or a prompt all go to pm-spec first; it runs the
+interview, splits an epic into children, writes the proposal, use cases and
+requirements, and prints `SPEC:READY:<change_dir>:<revision>` and
+`SPEC:BRANCH:<branch>` with the next step, `/multiplai-dev:buildme <name>`.
+The build finds the branch on `origin` by itself; the checkout it runs in
+need not hold the change dir.
 
 When the user asks to build something with no ready change for it, run
 `/multiplai-pm:pm-spec` for it first and come back with the change name it
@@ -444,9 +520,10 @@ critical/major gap back into one regeneration pass of `design.md` and
 `tasks.md` before re-auditing once. The plan review
 reads `tasks.md` against the rubric, the constraints and the use cases and
 regenerates `tasks.md` at most once. Each re-audit is told which findings the
-rewrite was asked to fix and stops the run when one is not `resolved` or when
-it finds a new critical problem; new major and minor findings are reported
-only. A stopped step prints those findings with their statuses. Resuming
+rewrite was asked to fix and stops the run when one is not `resolved`, when
+it finds a new critical problem, or when the rewritten `tasks.md` still has a
+placeholder or a block that adds no behaviour by buildme's own scans; new
+major and minor findings are reported only, whatever their category. A stopped step prints those findings with their statuses. Resuming
 without editing the plan stops again at no cost; editing the plan gives the
 step one more rewrite. TDD implementation (test-writer + implementer agents per block),
 integration gates, scored quality reviews, entry point verification, the
@@ -482,14 +559,40 @@ pm-spec splits an epic: the parent's `.change.yaml` lists its `children`
 and merge loops below. buildme reads only those records and the change dirs;
 it never splits anything itself.
 
-Before anything is written, the build checks every listed child: named
+**Components nested in the change.** pm-spec 0.9.0 writes a change of several
+components as `specs/changes/<change>/components/<id>/` (each with
+`plan.md`, `specs.md` and a `.change.yaml` whose `depends_on` lists sibling
+ids), with the proposal, use cases and `prototype/` at the change.
+`/buildme <change>` runs the same coordinator over those components, in
+`depends_on` order: each builds as `--change <change>/<id>` on
+`<component ticket>-<change>-<id>` (the change's ticket while the component
+has none), from and into the feature branch, and the checks below apply to
+the components as they do to children (an id that is not kebab-case, a
+`depends_on` naming no component, a cycle, specs not ready). A component
+reads its capabilities from the `# Capability:` sections of its `specs.md`,
+and its proposal and use cases from the change; its design and tasks agents
+also get its `plan.md` (what it builds, what is out of scope, what done
+means). A merged component's dir
+stays on the branch (the saved `epic.json` says it merged), and no component
+archives itself: once every component has merged, the run archives the whole
+change on the feature branch, once (every component's capabilities merge
+into `specs/registry/`, the change moves to `specs/archive/<date>-<change>/`,
+committed as `chore(specs): archive <change>` and pushed), printing
+`PHASE:ARCHIVE:COMPLETE`; a later run finds it archived and archives nothing
+more. `buildme archive --change <change>/<id>` is refused; archive the change.
+A change in the older layout (`requirements/<cap>.md`, sibling child dirs) is
+built as before.
+
+Before anything is written, the build checks every listed child as the
+epic's feature branch on origin holds it (`origin/<TICKET>-<parent>` after a
+`git fetch origin`; the checkout's own copy is not read): named
 `<parent>-<id>`, its change dir present, its `depends_on` naming only listed
 children with no cycle, and its specs ready. A child whose change dir is gone
 because it merged (its `--auto` build moved it to `specs/archive/`, or the
-saved `epic.json` says it merged) counts as merged and is not checked. The
-parent's change dir and every other child's must have no uncommitted change
-and be in `HEAD`. Any failure prints
-`SPEC:NOT_READY:<reason>` and the pm-spec line, and exits `2`. A change that
+saved `epic.json` says it merged) counts as merged and is not checked. Any
+failure prints `SPEC:NOT_READY:<reason>` and the pm-spec line, and exits `2`;
+so does an epic with no feature branch on origin (a split pm-spec handed off
+before it pushed: `pm-spec resume <parent>` moves it there). A change that
 names the parent but is not in its `children` list is not built.
 
 Only one process at a time writes an epic's directory
@@ -503,19 +606,19 @@ builds in the epic's own repository.
 
 **Running the children.** The build runs each child as its own
 `build --change <parent>-<id> --auto --trust-repo --epic-child --pr-ready
---project-dir <project dir> [--base-ref <base>] [--skip-research]` subprocess,
-so each child gets its own worktree, branch and ready PR. A child with no
-dependency branches from `HEAD`, the local commit that holds the ready specs,
-so its PR carries that commit and nothing is pushed before the build. When a
-commit between origin's default branch and that commit touches a path outside
-the epic's change dirs, the child would carry it too, so it is failed with the
-paths and not launched: merge those commits into origin's default branch or
-move them off the branch, then re-run. A child
-that waits on a dependency branches from origin's default branch after that
-merge; when that branch does not hold the child's change dir as the specs
-commit does (its specs were revised and the revision has not reached it), the
-child is failed with that reason and not launched: merge the commit, then
-re-run. Every child's PR targets the default branch. The parent runs no
+--project-dir <project dir> --base-ref origin/<feature branch> --branch
+<feature branch> [--skip-research]` subprocess, so each child gets its own
+worktree, `<TICKET>-<child>` branch and ready PR. Every child starts from the feature branch as
+origin holds it when it launches, and its PR targets that branch, never the
+default branch. A child that waits on a dependency starts after the
+dependency's PR merged into the feature branch, so it holds that work, and any
+specs revision pm-spec pushed to the branch since. At the start of every run,
+and before the first launch of each later wave (the children whose
+dependencies just merged), the build merges origin's default branch into the
+feature branch and pushes it; a conflict there launches nothing more and the
+run exits `3` with `FEATURE_BRANCH:CONFLICT:<branch>:<files>` (Step 4). The
+pull request from the feature branch to the default branch is yours: buildme
+never opens or merges it. The parent runs no
 spec-extract, and the children run none (`--epic-child`), so an epic builds
 without a `specs/registry` baseline. A `specs/config.yaml` that sets
 `git.worktree` or `git.push` to `false` would build the children in place or
@@ -523,8 +626,8 @@ open no PR, so the build exits `2` before launching any. A parent run with
 `--skip-research` passes it to each child. A child starts once
 every child it depends on has **merged**; dependent children never stack on an
 open PR. Before a child's first launch the build runs `git fetch origin`; when
-that fails for a child with dependencies, the child is `unknown` and is not
-launched, since its base could lack their merges. At most `epic.max_parallel`
+that fails, or origin no longer has the feature branch, the child is `unknown`
+and is not launched, since its base could lack their merges. At most `epic.max_parallel`
 build at once (default `2`). Each run
 writes `agents/<NNN>-build-<id>.{started.json,result.json,log}` and ends with
 `runs/<NN>/summary.json` (each child's status, PR and reason), printing
@@ -548,10 +651,11 @@ the next run waits for them. An ignored SIGHUP or SIGTERM (SIGHUP under
 `specs/config.yaml` takes an `epic:` block: `epic.max_parallel` (default `2`),
 `epic.max_review_rounds` (default `3`), `epic.round_worth` (`breaks` or
 `any`, default `breaks`; which Code MEDIUM earns another review round, below),
-`epic.merge` (`auto` or `manual`,
-default `manual`; under `manual` a human merges each child's PR, and under
-`auto` buildme merges the default branch into it, tests and pushes, waits for
-the PR's required checks, and merges it with `gh pr merge --merge`;
+`epic.merge` (`auto` or `manual`; unset, it is `auto` when the feature
+branch is not origin's default branch, which is always the case for a
+pm-spec epic, else `manual`; under `manual` a human merges each child's PR,
+and under `auto` buildme merges the feature branch into it, tests and pushes,
+waits for the PR's required checks, and merges it with `gh pr merge --merge`;
 a version, CHANGELOG or lockfile conflict there costs one agent call, with
 Read, Edit and Bash in the child's worktree, counted against `epic.max_usd`) and
 `epic.max_usd` (one ceiling for the whole epic, default none; each child keeps
@@ -716,19 +820,20 @@ clean review) is waited on only when another child depends on it. The run
 names it on stderr (`EPIC: child <id> built: its PR's head <first 12
 characters of the sha> has no finished review; the next run reviews it`)
 and exits `1`, unless it exits `3` with `EPIC:MERGE_WAITING` or
-`EPIC:BUDGET`. Under `epic.merge: manual` (the default)
+`EPIC:BUDGET`. Under `epic.merge: manual`
 nothing more happens: the run exits `3` with `EPIC:MERGE_WAITING:<urls>`
 naming every such PR still open, and a re-run once a person merged them goes
-on. Under `auto`, the default branch is first merged into each such PR, in its
-worktree, one merge at a time. The worktree must hold nothing
+on. Under `auto` (the default for an epic on a feature branch), the feature
+branch, the PR's base, is first merged into each such PR, in its worktree,
+one merge at a time. The worktree must hold nothing
 but buildme's own files and be at the reviewed head (or it plus the merge step's own merges), else the child parks naming what it found; then
-`git merge --no-ff --no-commit origin/<default>`. Conflicts only in version
+`git merge --no-ff --no-commit origin/<feature branch>`. Conflicts only in version
 fields, CHANGELOGs and lockfiles go to one agent call (step `merge`,
 `agents/<NNN>-merge-<id>.*`, counted against `epic.max_usd`), and so does a
-version both sides raised alike, which git merges cleanly at the default
-branch's value: the agent writes the next version after the default branch's,
+version both sides raised alike, which git merges cleanly at the feature
+branch's value: the agent writes the next version after the feature branch's,
 keeps both CHANGELOG entries in full with the child's under that version, and
-regenerates a lockfile from the default branch's copy. A conflict in any other
+regenerates a lockfile from the feature branch's copy. A conflict in any other
 file (a deleted or binary side included), any other file the agent changed,
 staged or not, or a change the merge did not make, parks the child; when the
 agent changed other files, the hint names the `checkout` or `rm` that undoes
@@ -736,7 +841,7 @@ them before the abort. The project's tests then run in the worktree
 (`tdd.test_command`, else the command buildme discovers, with
 `BUILDME_TRUST_REPO=1`, `agents/<NNN>-merge-tests-<id>.*`; SIGHUP ends them with the run), and a failure
 parks. The merge commit is pushed, never forced; a push rejected because origin's branch moved parks naming
-where it now is and the `fetch` and `reset --keep` to run; any other failed push, or a failed fetch, leaves the child `unknown` (exit `1`), and the next run tries again. When `epic.max_usd` is reached and the merge would need the agent, nothing is merged. A merge commit holding only git's own merge plus such resolutions (checked against each file's three sides: a version file is git's merge with each version value the side's that changed it or, where both did, the next after the default branch's; a CHANGELOG is the default branch's with every line the child added; a lockfile in a format read as data (TOML, JSON, pnpm's YAML) loads with no key twice, holds only either side's keys and values, the written version or a new hex manifest hash, and pins each package, under its own name, as one side does; another lockfile holds only either side's lines or the written version), as the merge step's own do, is not
+where it now is and the `fetch` and `reset --keep` to run; any other failed push, or a failed fetch, leaves the child `unknown` (exit `1`), and the next run tries again. When `epic.max_usd` is reached and the merge would need the agent, nothing is merged. A merge commit holding only git's own merge plus such resolutions (checked against each file's three sides: a version file is git's merge with each version value the side's that changed it or, where both did, the next after the feature branch's; a CHANGELOG is the feature branch's with every line the child added; a lockfile in a format read as data (TOML, JSON, pnpm's YAML) loads with no key twice, holds only either side's keys and values, the written version or a new hex manifest hash, and pins each package, under its own name, as one side does; another lockfile holds only either side's lines or the written version), as the merge step's own do, is not
 reviewed again; any other, such as a person's "Update branch" with other edits, is. Then
 buildme waits for the PR's required checks (`gh pr checks --required`, read
 every 30 seconds while one is pending; when no check is required, the PR's
@@ -746,15 +851,19 @@ the PR's head: for a moment after a push GitHub still shows the previous
 commit and its checks. Another commit still shown after two minutes, such
 as one someone else pushed, parks the child. Right after its own push it
 treats "no checks reported" as pending for two minutes, since GitHub has
-not registered the new commit's checks yet.
+not registered the new commit's checks yet. A PR with no checks at all (a
+feature branch no branch rule covers often has none) merges once none
+appeared in those two minutes, or at once when the step pushed nothing:
+buildme's own review is then the only gate.
 Checks still pending after an hour leave the PR open: the run exits 3 with
 `EPIC:MERGE_WAITING`, and the next run reads them again. Then it runs
 `gh pr merge <n> --merge --match-head-commit <sha>`, never `--admin`, so a
 commit pushed to the PR after the step checked it is refused, not merged.
 The child counts as merged only when `gh pr view` says `MERGED`: a merge
 queue that only queued the PR leaves it open and waited on. A merge
-GitHub refuses as `BEHIND` (the default branch moved again) starts the merge
-step over, merging the new commit in; any other refusal parks the child with
+GitHub refuses as `BEHIND` (the feature branch moved again: a sibling merged
+into it, or the default branch was merged in) starts the merge step over,
+merging the new commit in; any other refusal parks the child with
 GitHub's message and `mergeStateStatus`, and a refused merge is never retried
 within one run. A merged child's dependants then start. A run stopped during the
 merge saves what the worktree held (`merge_stop` in `epic.json`); the next
@@ -831,12 +940,15 @@ Work through them **in this order**, and do not skip the first one:
    some block, and a use case with no block is the cheapest thing to catch at
    this checkpoint.
 4. Then `design.md`, `tasks.md`, `rubric.md`. `proposal.md` and
-   `requirements/` are pm-spec's: a problem in them goes to
+   `specs.md` (or `requirements/`) are pm-spec's: a problem in them goes to
    `/multiplai-pm:pm-spec revise <name>`, never into an edit here (an edit
    makes the next build refuse with `SPEC:NOT_READY`).
 
 A prototype, when the change has a UI or an output format, is pm-spec's step
-now, before the specs are marked ready.
+now, before the specs are marked ready. buildme hands the list of files in
+the change's `prototype/` to each block's test writer and implementer, with
+the instruction to match what they show of a UI or API when the block writes
+one.
 
 ### Step 4: Report results
 
@@ -893,12 +1005,12 @@ Parse pipeline stdout for progress lines:
   after a failed spec-extract also exits `1`: tell the user to stash or commit
   them, or set `spec_extract: false`, and re-run
 - `RESULT:SUCCESS` — build complete
-- `SPEC:NOT_READY:<reason>`, then `Run /multiplai-pm:pm-spec [resume ]<name> [--project-dir <worktree>] first`
-  — the specs are not marked ready, changed after they were, or (for a build
-  that branches a worktree) are not committed. Nothing was written; exit `2`.
-  When the second line is not a pm-spec command, it says what to do instead
-  (a `--base-ref` that does not hold the ready specs, or newer specs in your
-  checkout than in the build's worktree).
+- `SPEC:NOT_READY:<reason>`, then `Run /multiplai-pm:pm-spec [resume ]<name> [--project-dir <worktree>] [--ticket-ref <ticket id>] first`
+  — the specs are not marked ready, changed after they were, record no
+  ticket ref, or (for a build that branches a worktree) are on no feature
+  branch, on one origin does not have, or on one of several origin has. Nothing was written; exit `2`. When the second line is not a
+  pm-spec command, it says what to do instead (newer specs on the feature
+  branch than in the build's worktree: the merge to run).
   Run the pm-spec command the second line names (`resume` checks specs already
   on disk, from an older buildme build or edited by hand, and marks them ready
   without rewriting them), then re-run the same build command
@@ -909,6 +1021,12 @@ Parse pipeline stdout for progress lines:
   same build command
 - `EPIC:SUMMARY:<path>` — an epic run ended; `<path>` holds each child's status, PR and park reason. Then exit `0`; `1` when a child failed or is `unknown` (`3` while a child waits on a dependency's open PR), and when a child's PR head has no finished review and neither `EPIC:MERGE_WAITING` nor `EPIC:BUDGET` is printed; `3` with `EPIC:MERGE_WAITING` or `EPIC:BUDGET`; `130`/`143` when stopped by a signal
 - `SPEND:<usd>:<tokens>` — the last line of every `build` and `findings` run: what that process spent, the pr skill, a walkthrough run and spec-extract included (`:incomplete` follows when one of them printed no spend)
+- `FEATURE_BRANCH:CONFLICT:<branch>:<files>` — merging origin's default
+  branch into the change's feature branch conflicts in `<files>`
+  (comma-separated); the merge was aborted, the branch is as it was, and
+  nothing was built or launched; exit `3`. Tell the user the files: they
+  merge the default branch into `<branch>` by hand, resolve the conflicts and
+  push, then re-run the same build command
 - `ERROR:<message>` — failure
 
 **Exit codes.** `0` done, `1` failure (a failed TDD build prints `ERROR:TDD build failed (exit <n>)`), `2` usage error or a refusal that wrote
@@ -923,8 +1041,9 @@ get past it), `4` with `SPEC:ISSUES` the requirements go back to pm-spec
 | `RESEARCH:NEEDED:<path>` | the research decision asked for research; topics in `<path>` | Run `/deep-research` on them and re-run with `--research-path <output>` — or, without `multiplai-research`, say so and re-run with `--skip-research`. |
 | `SPLIT:REQUIRED:<path>` | the size gate wants the plan split; proposal in `<path>` | Show `<path>` to the user, or post it on the change's ticket (`ticket_refs` in its `.change.yaml`, which pm-spec wrote; plane `comment` / `gh issue comment --body-file`), and stop. Re-run with `--accept-size` only when the user chooses to build it as one PR. |
 | `BUILD:COMPLETE:<path>` | this change already published; `<path>` is its kept checkpoint, and stderr names its branch and PR. Nothing was written | Ask the user with AskUserQuestion whether to start a new build of it on a new branch. On yes, re-run the same command with `--force`; on no, stop. Never add `--force` without the user's yes. |
-| `EPIC:MERGE_WAITING:<urls>` | a child waits for a PR another child opened to merge, or a PR passed review and waits for a person to merge it under `epic.merge: manual`, or, under `epic.merge: auto`, buildme left a PR open itself: its checks were still pending after an hour, or a merge queue only queued it (comma-separated `<urls>`) | Tell the user which PRs wait for a merge, and any child the `EPIC: child` lines on stderr name, and stop. Under `manual`, re-run the same command once they are merged. Under `auto`, do not ask the user to merge by hand. Checks still pending: re-run the same command, which reads them again and merges. A queued PR: re-run once the queue has merged it, since a re-run while it is still queued runs the merge step again, which merges origin's default branch in and pushes when that branch has moved (see [Merging the children's PRs](#epic-builds-a-parent-and-its-children)). A PR closed without a merge parks the children that wait on it. |
+| `EPIC:MERGE_WAITING:<urls>` | a child waits for a PR another child opened to merge, or a PR passed review and waits for a person to merge it under `epic.merge: manual`, or, under `epic.merge: auto`, buildme left a PR open itself: its checks were still pending after an hour, or a merge queue only queued it (comma-separated `<urls>`) | Tell the user which PRs wait for a merge, and any child the `EPIC: child` lines on stderr name, and stop. Under `manual`, re-run the same command once they are merged. Under `auto`, do not ask the user to merge by hand. Checks still pending: re-run the same command, which reads them again and merges. A queued PR: re-run once the queue has merged it, since a re-run while it is still queued runs the merge step again, which merges the feature branch in and pushes when that branch has moved (see [Merging the children's PRs](#epic-builds-a-parent-and-its-children)). A PR closed without a merge parks the children that wait on it. |
 | `EPIC:BUDGET:<spent>` | the epic's spend (USD) reached `epic.max_usd`; nothing more was launched | Tell the user what was spent and which children did not start (the `EPIC:SUMMARY` file), and stop. A re-run stops again until the user raises `epic.max_usd` in `specs/config.yaml`; never raise it yourself. |
+| `FEATURE_BRANCH:CONFLICT:<branch>:<files>` | merging origin's default branch into the change's feature branch conflicts in `<files>`; the merge was aborted and nothing was built or launched (an epic's running children went on; nothing more was launched) | Tell the user the files and stop. They merge the default branch into `<branch>` by hand, resolve the conflicts and push; then re-run the same command. Never resolve the conflict yourself unless the user asks. |
 
 `SPLIT:REQUIRED` is the only case where you may post on a ticket. The pipeline itself
 never posts and never talks to a ticket system.

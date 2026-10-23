@@ -30,6 +30,7 @@ from .prompts.interview import (
     QUESTIONER_PRD_RULE,
     QUESTIONER_PROMPT,
 )
+from .publish import atomic_write
 from .run import EXIT_WAITING, MARKER_INTERVIEW_WAITING, Run, Stop
 
 log = logging.getLogger(__name__)
@@ -114,7 +115,7 @@ def effective_mode(run: Run) -> str:
 
 
 def _write(run: Run, text: str) -> None:
-    (run.config.change_dir / "interview.md").write_text(text)
+    atomic_write(run.config.change_dir / "interview.md", text)
     run.state.interview_waiting = False
     run.state.interview_done = True
     run.save()

@@ -20,6 +20,9 @@ You are generating a design document for an spec-driven change.
 ## Proposal
 {proposal_content}
 
+## Plan — what this builds, what is out of scope, and what done means
+{plan_content}
+
 ## Specs
 {specs_content}
 
@@ -52,7 +55,7 @@ Rules:
   and the design must not tell their author what to reword. When a requirement
   is infeasible, or contradicts another requirement or the codebase, end your
   output with one line per problem, in exactly this form and nothing after:
-  `SPEC_ISSUE: requirements/<capability>.md: <requirement name>: <what is
+  `SPEC_ISSUE: {spec_ref}: <requirement name>: <what is
   infeasible or contradictory, and the change to the requirement that would
   fix it>`. Those lines go back to the requirements' author; write them only
   for a problem a design cannot solve
@@ -82,6 +85,9 @@ You are generating a task breakdown for an spec-driven change.
 
 ## Proposal
 {proposal_content}
+
+## Plan — what this builds, what is out of scope, and what done means
+{plan_content}
 
 ## Use cases
 {use_cases_content}

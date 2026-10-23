@@ -13,7 +13,13 @@ import re
 from pathlib import Path
 
 from code_facts import CallFn
+from multiplai_core.specs import change_root
 
+from ..change_manager import (
+    requirement_sources,
+    requirement_texts,
+    spec_issue_ref,
+)
 from ..models import PriorAssessment
 from ..prompts.design_audit import (
     DESIGN_AUDIT_PROMPT,
@@ -209,7 +215,9 @@ def _build_prompt(
         return DESIGN_PROMPT.format(
             project_context=project_context,
             proposal_content=proposal_content,
+            plan_content=_read_plan(config),
             specs_content=specs_content,
+            spec_ref=spec_issue_ref(config.change_dir),
             codebase_analysis=codebase_analysis or "(new project)",
             research=research or "(no research conducted)",
             reference_docs=reference_docs or "(none available)",
@@ -226,6 +234,7 @@ def _build_prompt(
         return TASKS_PROMPT.format(
             project_context=project_context,
             proposal_content=proposal_content,
+            plan_content=_read_plan(config),
             specs_content=specs_content,
             design_content=design_content,
             use_cases_content=_read_dep(context, "use-cases", config),
@@ -265,26 +274,32 @@ def _read_dep(context: dict, dep_id: str, config) -> str:
     return "(not available)"
 
 
-def _read_specs(config) -> str:
-    """Read all requirement files from the change directory.
+def _read_plan(config) -> str:
+    """The `plan.md` pm-spec wrote for the component (or for a change with one
+    component, in the change dir): its scope, what is out of scope and what
+    done means."""
+    path = config.change_dir / "plan.md"
+    return path.read_text() if path.is_file() else "(no plan.md)"
 
-    Requirements are flat files, change_dir/requirements/<capability>.md,
-    written by pm-spec. The capability name is the file stem — mirrors
+
+def _read_specs(config) -> str:
+    """Read the change's requirements, one section per capability.
+
+    pm-spec writes them as `# Capability: <name>` sections of
+    change_dir/specs.md, or, in an older change, as flat files,
+    change_dir/requirements/<capability>.md (`requirement_texts`) — mirrors
     tdd_engine.assemble_context.
     """
-    req_dir = config.change_dir / "requirements"
-    if not req_dir.exists():
-        return "(no specs yet)"
-    parts = []
-    for req_file in sorted(req_dir.glob("*.md")):
-        cap_name = req_file.stem
-        parts.append(f"### {cap_name}\n{req_file.read_text()}")
+    parts = [
+        f"### {cap_name}\n{text}"
+        for cap_name, text in requirement_texts(config.change_dir).items()
+    ]
     return "\n\n".join(parts) if parts else "(no specs yet)"
 
 
 def _change_capabilities(config) -> list[str]:
-    """The stems of the change's own `requirements/*.md`, sorted."""
-    return sorted(p.stem for p in (config.change_dir / "requirements").glob("*.md"))
+    """The change's own capability names (`requirement_texts`), sorted."""
+    return sorted(requirement_texts(config.change_dir))
 
 
 _REGISTRY_REQUIREMENT = re.compile(r"^###\s+Requirement:\s*(.+?)\s*$", re.MULTILINE)
@@ -390,16 +405,14 @@ async def run_design_audit(
     With `prior` (the findings a rewrite was asked to fix) it also asks for a
     status for each, returned as `prior_assessments`.
     """
-    proposal = _read_file(change_dir / "proposal.md")
+    proposal = _read_file(change_root(change_dir) / "proposal.md")
     design = _read_file(change_dir / "design.md")
     tasks = _read_file(change_dir / "tasks.md")
 
-    specs_parts = []
-    req_dir = change_dir / "requirements"
-    if req_dir.exists():
-        for req_file in sorted(req_dir.glob("*.md")):
-            cap_name = req_file.stem
-            specs_parts.append(f"### {cap_name}\n{req_file.read_text()}")
+    specs_parts = [
+        f"### {cap_name}\n{text}"
+        for cap_name, text in requirement_texts(change_dir).items()
+    ]
     specs_content = "\n\n".join(specs_parts) if specs_parts else "(no specs)"
 
     # Detect change type for type-specific audit questions
@@ -413,6 +426,7 @@ async def run_design_audit(
         design_content=design,
         tasks_content=tasks,
         change_type=change_type,
+        spec_ref=spec_issue_ref(change_dir),
     ) + prior_findings_section(prior)
 
     log.info("Running design audit on %s", change_dir.name)
@@ -436,11 +450,11 @@ async def run_tasks_audit(
     design = _read_file(change_dir / "design.md")
 
     # Specs feed the traceability check: every WHEN/THEN must map to a block.
-    specs_parts = []
-    req_dir = change_dir / "requirements"
-    if req_dir.exists():
-        for req_file in sorted(req_dir.glob("*.md")):
-            specs_parts.append(f"### {req_file.name}\n{req_file.read_text()}")
+    # `specs.md#<cap>` or `requirements/<cap>.md`, as the change holds them.
+    specs_parts = [
+        f"### {label}\n{text}"
+        for label, text in requirement_sources(change_dir).items()
+    ]
     specs_content = "\n\n".join(specs_parts) or "(no requirements files)"
 
     prompt = TASKS_AUDIT_PROMPT.format(

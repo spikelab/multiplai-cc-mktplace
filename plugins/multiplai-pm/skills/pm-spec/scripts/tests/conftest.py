@@ -1,6 +1,9 @@
-"""Shared fixtures: a real git repository in a temporary directory, the command
-line run in-process, and a fake model that answers each call by its label.
-No test makes a model call: `pm_spec_pipeline.sdk.run_agent` is replaced."""
+"""Shared fixtures: a real git repository in a temporary directory, with a
+bare `origin` beside it, the command line run in-process, and a fake model
+that answers each call by its label. No test makes a model call:
+`pm_spec_pipeline.sdk.run_agent` is replaced. WORKSPACE is unset, so pm-spec's
+worktree is `<tmp>/.worktrees/pm-spec-<branch>`, beside the test's repo and
+never in the workspace of whoever runs the suite."""
 
 from __future__ import annotations
 
@@ -64,33 +67,27 @@ Each client gets a fixed number of API requests per minute.
 A refused request tells the client when to retry.
 """
 
-PRD_SECTIONS = {
-    "rate-limit": "Limit requests per client",
-    "retry-policy": "Retry guidance",
-}
+PRD_SECTIONS = ("Limit requests per client", "Retry guidance")
 
 
 def proposal(
-    caps=CAPS,
     *,
     title="Request throttling",
-    sources: dict | None = None,
+    sources: list[str] | None = None,
     extra: str = "",
 ) -> str:
+    """A proposal in the stage 1 format: no capabilities; `## Sources` lists PRD headings."""
     text = (
-        f"# {title}\n\n## Why\n\nClients flood the API server.\n\n## What Changes\n\nThrottle requests.{extra}\n\n"
-        "## Capabilities\n\n### New Capabilities\n"
-        + "".join(f"- `{c}`\n" for c in caps)
-        + "\n### Modified Capabilities\n\n## Impact\n\nThe `server` module.\n"
+        f"# {title}\n\n## Why\n\nClients flood the API server.\n\n## What Changes\n\n"
+        f"Throttle requests.{extra}\n\n## Impact\n\nThe `server` module.\n"
     )
     if sources:
-        text += "\n## Sources\n\n" + "".join(
-            f"- `{c}`: {s}\n" for c, s in sources.items()
-        )
+        text += "\n## Sources\n\n" + "".join(f'- PRD "{s}"\n' for s in sources)
     return text
 
 
 def requirements(cap: str, *, rule: str = "", scenario: str = "") -> str:
+    """One capability's delta (the text under its `# Capability:` heading)."""
     name = cap.replace("-", " ").capitalize()
     return (
         f"## ADDED Requirements\n\n### Requirement: {name} holds\n"
@@ -98,6 +95,38 @@ def requirements(cap: str, *, rule: str = "", scenario: str = "") -> str:
         f"#### Scenario: {scenario or name + ' applies'}\n"
         f"- **WHEN** a client sends a request\n- **THEN** {rule or cap} is applied\n"
     )
+
+
+def specs(caps=CAPS, *, rule: str = "", rules: dict | None = None) -> str:
+    """A `specs.md`: one `# Capability:` section per capability."""
+    rules = rules or {}
+    return "\n".join(
+        f"# Capability: {c}\n\n" + requirements(c, rule=rules.get(c, rule))
+        for c in caps
+    )
+
+
+def plan(
+    title: str = "Throttle the API",
+    done: tuple = ("A client over its limit is refused.",),
+) -> str:
+    return (
+        f"# Plan: {title}\n\n> File: x.md · Date: 2026-10-23\n\n"
+        f"**Objective:** {title}, so the server stays up.\n\n"
+        "## Context\nThe server falls over.\n\n## Outcome\nIt does not.\n\n"
+        "## Constraints / out of scope\n- None.\n\n## Done means\n"
+        + "".join(f"{i}. {d}\n" for i, d in enumerate(done, 1))
+    )
+
+
+def component(cid: str, deps=(), ticket_ref: str = "", title: str = "") -> dict:
+    return {
+        "id": cid,
+        "title": title or cid,
+        "depends_on": list(deps),
+        "ticket_ref": ticket_ref,
+        "plan": plan(title or f"Build {cid}", (f"{cid} works.",)),
+    }
 
 
 USE_CASES = "# Use cases\n\n## Personas\n\n### operator\n- **Who they are:** runs the API server\n"
@@ -116,43 +145,55 @@ ANSWERS = {
     ]
 }
 
-SINGLE = {"single": True, "reason": "One pull request carries it.", "children": []}
+SINGLE = {
+    "reason": "One pull request carries it.",
+    "components": [component("throttle", title="Throttle the API")],
+}
+TWO = {
+    "reason": "Each is a pull request on its own.",
+    "components": [component("api"), component("ui", deps=["api"])],
+}
 NO_FINDINGS = {"findings": [], "prior_assessments": []}
+
+NOTES = "- mockup.html: the limits page\n\nQUESTIONS: none\nSTATUS: DONE\n"
+
+
+def agent(notes=NOTES, *, artifact="mockup.html", outside: Path | None = None):
+    """A prototype agent stand-in: writes its files where it was told to."""
+
+    def handler(prompt, label, kw):
+        root = Path(kw["cwd"])
+        files = []
+        if artifact:
+            files.append(str(write(root / artifact, "<html>sample</html>\n")))
+        if notes is not None:
+            files.append(str(write(root / "NOTES.md", notes)))
+        if outside is not None:
+            files.append(str(write(outside, "oops\n")))
+        return "done", files
+
+    return handler
 
 
 def default_proposal(prompt: str) -> str:
-    """The proposal, citing the PRD and the ticket children when the prompt has them."""
-    sources: dict[str, str] = {}
-    if "## PRD (prd.md)" in prompt:
-        sources = {c: f'PRD "{PRD_SECTIONS[c]}"' for c in CAPS}
-    if "child items:" in prompt or "ticket <ref>" in prompt:
-        for i, c in enumerate(CAPS, 1):
-            sources[c] = "; ".join(
-                x for x in (sources.get(c, ""), f"ticket T-{i}") if x
-            )
-    return proposal(sources=sources or None)
-
-
-def default_requirements(prompt: str, label: str) -> str:
-    return requirements(label.rsplit(":", 1)[1])
+    """The proposal, citing the PRD when the prompt has one."""
+    return proposal(sources=list(PRD_SECTIONS) if "## PRD (prd.md)" in prompt else None)
 
 
 def default_rewrite(prompt: str, label: str) -> str:
     target = label.rsplit(":", 1)[1]
-    if target == "proposal":
-        return default_proposal(prompt)
-    return requirements(target, rule=f"the rewritten {target}")
+    return specs(rule=f"the rewritten {target}")
 
 
 DEFAULTS = {
     "interview:questions": QUESTIONS,
     "interview:answers": ANSWERS,
-    "epic_split": SINGLE,
+    "components": SINGLE,
     "spec:proposal": lambda prompt, label, kw: default_proposal(prompt),
     "spec:use-cases": USE_CASES,
-    "spec:requirements": lambda prompt, label, kw: default_requirements(prompt, label),
+    "spec:specs": lambda prompt, label, kw: specs(),
     "consistency": NO_FINDINGS,
-    "prototype": None,  # set by a test that runs the prototype
+    "prototype": agent(),
 }
 
 
@@ -245,28 +286,85 @@ def model(monkeypatch):
     )
     for key, value in GIT_ENV.items():
         monkeypatch.setenv(key, value)
+    monkeypatch.delenv("WORKSPACE", raising=False)
     return fake
 
 
-@pytest.fixture
-def repo(tmp_path) -> Path:
-    path = tmp_path / "proj"
-    path.mkdir()
+def make_repo(path: Path) -> Path:
+    """A checkout at *path*, on `main`, with `origin` (a bare repo beside it,
+    `<parent>/origin.git`) holding `main`. pm-spec's worktrees go in
+    `<parent>/.worktrees/`, so each repo needs a parent of its own."""
+    origin = path.parent / "origin.git"
+    path.mkdir(parents=True)
+    git(path.parent, "init", "-q", "--bare", "-b", "main", str(origin))
     git(path, "init", "-q", "-b", "main")
     write(path / "README.md", "# proj\n")
     git(path, "add", "-A")
     git(path, "commit", "-q", "-m", "initial")
+    git(path, "remote", "add", "origin", str(origin))
+    git(path, "push", "-q", "origin", "main")
     return path
 
 
+@pytest.fixture
+def repo(tmp_path) -> Path:
+    """The user's checkout (`make_repo`)."""
+    return make_repo(tmp_path / "proj")
+
+
+TICKET = "ENG-1"
+BRANCH = f"{TICKET}-throttle"
+
+
+def worktree(repo: Path, branch: str = "") -> Path:
+    """pm-spec's worktree of *branch* for the checkout *repo* (WORKSPACE unset);
+    with no *branch*, the one pm-spec worktree there (a test's own
+    `--ticket-ref` names the branch), else `ENG-1-throttle`'s."""
+    root = repo.parent / ".worktrees"
+    if not branch:
+        made = sorted(root.glob("pm-spec-*")) if root.is_dir() else []
+        if len(made) == 1:
+            return made[0]
+        branch = BRANCH
+    return root / ("pm-spec-" + branch.replace("/", "-"))
+
+
+def origin(repo: Path) -> Path:
+    return repo.parent / "origin.git"
+
+
 def run(repo: Path, *argv: str) -> int:
-    """The command line, in-process: `<command> <change> --project-dir <repo> ...`."""
+    """The command line, in-process: `<command> <change> --project-dir <repo> ...`;
+    `new` gets `--ticket-ref ENG-1` unless the test names one, as pm-spec
+    refuses a change with no ticket."""
     command, change, *rest = argv
+    if command == "new" and "--ticket-ref" not in rest:
+        rest = [*rest, "--ticket-ref", TICKET]
     return cli.main([command, change, "--project-dir", str(repo), *rest])
 
 
-def change_dir(repo: Path, name: str = "throttle") -> Path:
+def resume_to_end(
+    repo: Path, name: str = "throttle", *args: str, limit: int = 4
+) -> int:
+    """`resume` through each review stop and the ticket wait (exit 3, each time
+    the approval); the first other exit code."""
+    for _ in range(limit):
+        code = run(repo, "resume", name, *args)
+        if code != 3:
+            return code
+    return code
+
+
+def source_dir(repo: Path, name: str = "throttle") -> Path:
+    """The change's dir in the user's checkout, which pm-spec copies into its
+    worktree when the dir records no branch (`branch.adopt`)."""
     return repo / "specs" / "changes" / name
+
+
+def change_dir(repo: Path, name: str = "throttle") -> Path:
+    """The change's dir where pm-spec writes it: its worktree of `ENG-1-throttle`,
+    the branch every change in these tests (a child's too) is on."""
+    return worktree(repo) / "specs" / "changes" / name
 
 
 def meta(cdir: Path) -> dict:
@@ -281,29 +379,30 @@ SNAPSHOT_SKIP = {".pm-spec"}
 
 
 def snapshot(cdir: Path) -> dict[str, str]:
-    """Every file of the change dir but the run folder, `.change.yaml` without its timestamps."""
+    """Every file of the change dir but the run folder, each `.change.yaml` without its timestamps."""
     out = {}
     for path in sorted(cdir.rglob("*")):
         rel = path.relative_to(cdir)
         if not path.is_file() or rel.parts[0] in SNAPSHOT_SKIP:
             continue
-        if rel.as_posix() == ".change.yaml":
+        if rel.name == ".change.yaml":
             data = {
                 k: v
-                for k, v in meta(cdir).items()
+                for k, v in meta(path.parent).items()
                 if k not in ("created", "spec_checked_at")
             }
-            out[".change.yaml"] = json.dumps(data, sort_keys=True)
+            out[rel.as_posix()] = json.dumps(data, sort_keys=True)
         else:
             out[rel.as_posix()] = path.read_text()
     return out
 
 
 def committed(repo: Path, cdir: Path) -> list[str]:
-    """The paths HEAD's commit changed under the change dir."""
-    rel = cdir.relative_to(repo).as_posix()
+    """The paths HEAD's commit changed under the change dir, in pm-spec's worktree."""
+    wt = worktree(repo)
+    rel = cdir.relative_to(wt).as_posix()
     return sorted(
-        git(repo, "show", "--name-only", "--format=", "HEAD", "--", rel).splitlines()
+        git(wt, "show", "--name-only", "--format=", "HEAD", "--", rel).splitlines()
     )
 
 

@@ -335,7 +335,10 @@ project's own test command. Files the test suite runs but never imports are
 left out: `setup.py`, `noxfile.py`, `fabfile.py` and `manage.py` at any depth,
 `docs/` and `doc/` at the project root, and anything under a `migrations/` or
 `alembic/` directory. Every mutant on them would survive, and the survivor
-round may only edit tests. cosmic-ray runs as a pinned tool
+round may only edit tests. Mutants that lie wholly inside a type annotation
+(a parameter, return or variable annotation) are not run and do not count:
+with `from __future__ import annotations` no test can kill them, and
+`mutation.md` gives their number. cosmic-ray runs as a pinned tool
 (`uvx --from cosmic-ray==8.7.0`), so `uv` must be installed; it is not added
 to the project or to buildme's dependencies. The first run downloads it.
 
@@ -361,7 +364,7 @@ round:
 | `mutation.enabled` | `true` | Turn the step off for this project. |
 | `mutation.min_score` | `0.8` | Minimum killed / (killed + survived). Timed-out test runs count as killed. **The default is a starting point:** nobody has measured mutation scores on buildme output yet, so it will be adjusted from measured runs. |
 | `mutation.timeout` | `30` | Seconds allowed per test-suite run under one mutant. When the unmutated suite takes longer than a third of this, each mutant gets three times its measured run instead. The unmutated (baseline) run itself is allowed 15 minutes. |
-| `mutation.max_mutants` | `300` | Cap on mutants run. Above it, a deterministic sample runs, and `mutation.md` says so. |
+| `mutation.max_mutants` | `300` | Cap on mutants run, after annotation mutants are left out. Above it, a deterministic sample runs, and `mutation.md` says so. |
 
 What fails a build (`EXIT_BUILD_FAILURE`, step not marked done, so a resume
 runs it again): a final score below `min_score`, a survivor round that edited

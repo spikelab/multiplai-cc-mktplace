@@ -10,14 +10,20 @@ Saved with `multiplai_core.checkpoint.save_model` (a temp file, then
 
 What each field is for, by the plan's stop-and-resume rows:
 
-- `interview_waiting` / `interview_done`: S1.
-- `split`: S3, the epic split answer with the hash of the parent inputs it read.
-- `artifacts`: S2, per artifact the hash of its inputs and of the text it
-  wrote. A record whose `output` is None was started and not finished.
-- `steps`: S4, S5, S9: one `StepOutcome` per step with a one-rewrite rule
-  (`prototype`, `consistency`, `revise`).
-- `handoff`: S6, the revision the ready record was written at and whether its
-  commit landed.
+- `interview_waiting` / `interview_done`: the ticket interview's wait.
+- `split`: the components answer (row S5), saved before any of its files is
+  written; `single` is one component, kept in the change dir.
+- `artifacts`: per file written (the proposal, the use cases, each
+  `specs.md`), the hash of its inputs and of the text it wrote. Informational:
+  a file on disk is kept whatever its record says (rows S9, S11).
+- `steps`: one `StepOutcome` per stage, `proposal`, `components`,
+  `prototype`, `tickets` and `specs` (rows S1-S7), and per checked step with a
+  one-rewrite rule (`consistency`, `revise`). A review stop is `passed` once
+  pushed, `skipped` under `--auto`; `tickets` is `pending` at the ticket wait.
+  A run started before the stages existed gets each of them `skipped`, reason
+  "before the staged flow" (row S14).
+- `handoff`: row S8, the revision the ready record was written at, whether its
+  commit landed and whether the branch was pushed.
 """
 
 from __future__ import annotations
@@ -49,6 +55,7 @@ class Options(BaseModel):
     interview_mode: Literal["self", "user", "ticket"] = "user"
     auto: bool = False
     prototype: Literal["auto", "true", "false"] = "auto"
+    # False (`--no-epic-split`): the components answer is one component.
     epic_split: bool = True
     ticket_ref: str = ""
     ticket_url: str = ""
@@ -106,6 +113,9 @@ class Handoff(BaseModel):
     revision: str
     committed: bool = False
     commit: str | None = None
+    # The feature branch was pushed after the commit (or there was nothing to
+    # push: a build's worktree). A state saved before pm-spec pushed reads False.
+    pushed: bool = False
 
 
 class RunState(BaseModel):

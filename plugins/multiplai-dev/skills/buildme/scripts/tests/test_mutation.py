@@ -989,6 +989,160 @@ DUMP_PENDING = "\n".join(
 )
 
 
+# --- annotation-only mutants ----------------------------------------------
+
+# store.py from the 2026-10-23 real-model run: every one of its 11 survivors
+# was a `|` operator mutant on line 9's parameter annotation, which no test can
+# kill because `from __future__ import annotations` never evaluates it.
+STORE_PY = """\
+from __future__ import annotations
+
+import datetime
+
+
+def add_task(
+    tasks: list[int],
+    title: str,
+    due: datetime.date | None = None,
+) -> int | None:
+    count: int | None = len(tasks) | 0
+    return count
+"""
+
+
+def _span_line(
+    job_id, path, start, end, operator="core/ReplaceBinaryOperator_BitOr_Add"
+):
+    item = {
+        "job_id": job_id,
+        "mutations": [
+            {
+                "module_path": path,
+                "operator_name": operator,
+                "occurrence": 0,
+                "start_pos": list(start),
+                "end_pos": list(end),
+            }
+        ],
+    }
+    return json.dumps([item, None])
+
+
+class TestAnnotationMutants:
+    def _dump(self):
+        return "\n".join(
+            [
+                # `|` in the parameter annotation on line 9
+                _span_line("param", "src/store.py", (9, 23), (9, 24)),
+                # `|` in the return annotation on line 10
+                _span_line("ret", "src/store.py", (10, 9), (10, 10)),
+                # `|` in the local variable annotation on line 11
+                _span_line("local", "src/store.py", (11, 15), (11, 16)),
+                # `|` in the assigned value on line 11: behaviour, kept
+                _span_line("value", "src/store.py", (11, 35), (11, 36)),
+                # the default value `None` on line 9: behaviour, kept
+                _span_line("default", "src/store.py", (9, 32), (9, 36)),
+            ]
+        )
+
+    def test_mutants_inside_annotations_are_listed(self, tmp_path):
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "store.py").write_text(STORE_PY)
+        ids = mutation.annotation_only_jobs(self._dump(), tmp_path)
+        assert sorted(ids) == ["local", "param", "ret"]
+
+    def test_a_file_that_does_not_parse_lists_nothing(self, tmp_path):
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "store.py").write_text("def broken(:\n")
+        assert mutation.annotation_only_jobs(self._dump(), tmp_path) == []
+
+    def test_a_missing_file_lists_nothing(self, tmp_path):
+        assert mutation.annotation_only_jobs(self._dump(), tmp_path) == []
+
+    def test_columns_count_characters_not_bytes(self, tmp_path):
+        (tmp_path / "m.py").write_text(
+            "from __future__ import annotations\n\n\n"
+            "def f(\u00e9t\u00e9: int | None) -> None:\n    return None\n"
+        )
+        dump = _span_line("p", "m.py", (4, 15), (4, 16))
+        assert mutation.annotation_only_jobs(dump, tmp_path) == ["p"]
+
+    def test_run_skips_annotation_mutants_and_leaves_them_out_of_the_score(
+        self, project
+    ):
+        config, _, _ = _setup(project)
+        repo, baseline = project
+        (repo / "src" / "store.py").write_text(STORE_PY)
+        _commit_all(repo, "store")
+        pending = self._dump()
+        final = "\n".join(
+            json.dumps(
+                [
+                    json.loads(line)[0],
+                    {
+                        "worker_outcome": "normal",
+                        "output": "1 failed",
+                        "test_outcome": "killed",
+                        "diff": "",
+                    },
+                ]
+            )
+            for line in pending.splitlines()
+            if json.loads(line)[0]["job_id"] in ("value", "default")
+        )
+        calls: list[list[str]] = []
+        skipped: list[tuple[list[str], str]] = []
+
+        def _tool(argv, cwd, timeout):
+            calls.append(argv)
+            cmd = argv[len(mutation._UVX) :]
+            if cmd[:2] == ["cosmic-ray", "dump"]:
+                dumps = sum(1 for c in calls if c[len(mutation._UVX) :][:2] == cmd[:2])
+                return pending if dumps == 1 else final
+            if cmd[0] == "python":
+                skipped.append((json.loads(Path(cmd[4]).read_text()), cmd[5]))
+            return ""
+
+        with patch("build_pipeline.mutation._run_tool", side_effect=_tool):
+            r = mutation.run_mutation(config, baseline, ["src/store.py"])
+        assert r.ok, r.error
+        assert skipped == [
+            (["param", "ret", "local"], mutation._ANNOTATION_ONLY),
+        ]
+        assert (r.killed, r.survived, r.score) == (2, 0, 1.0)
+        assert (r.candidates, r.annotation_only, r.sampled_out) == (5, 3, 0)
+        report = mutation.render_report(
+            first=r, final=r, round_note="", min_score=0.8, passed=True
+        )
+        assert "3 mutants inside type annotations were not run" in report
+
+    def test_the_sample_is_drawn_after_annotation_mutants_are_dropped(self, project):
+        config, _, _ = _setup(project)
+        config.mutation.max_mutants = 1
+        repo, baseline = project
+        (repo / "src" / "store.py").write_text(STORE_PY)
+        _commit_all(repo, "store")
+        calls: list[list[str]] = []
+        skipped: list[list[str]] = []
+
+        def _tool(argv, cwd, timeout):
+            calls.append(argv)
+            cmd = argv[len(mutation._UVX) :]
+            if cmd[:2] == ["cosmic-ray", "dump"]:
+                return self._dump()
+            if cmd[0] == "python":
+                skipped.append(json.loads(Path(cmd[4]).read_text()))
+            return ""
+
+        with patch("build_pipeline.mutation._run_tool", side_effect=_tool):
+            r = mutation.run_mutation(config, baseline, ["src/store.py"])
+        assert r.ok, r.error
+        [annotations, sampled] = skipped
+        assert sorted(annotations) == ["local", "param", "ret"]
+        assert len(sampled) == 1 and sampled[0] in ("value", "default")
+        assert (r.candidates, r.annotation_only, r.sampled_out) == (5, 3, 1)
+
+
 # --- the engine step -------------------------------------------------------
 
 

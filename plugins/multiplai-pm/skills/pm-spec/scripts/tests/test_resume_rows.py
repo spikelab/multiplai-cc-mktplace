@@ -1,72 +1,127 @@
-"""One test per row S1-S9 of the plan's "Stop and resume states" table.
+"""One test per row S1-S17 of the plan's "Stop and resume states" table.
 
-Each test stops the run at its row, resumes it, and compares the change dir
-with a run of the same inputs that never stopped (`baseline`), except where
-the row's "Resume does" column says otherwise; those parts assert what the
-column says instead. A kill is `Killed`, a BaseException raised from inside
-the call or the write the row names, so no `except Exception` in the code
-can swallow it."""
+Each test stops the run at its row, resumes it, and compares the result with a
+run of the same inputs that never stopped (`baseline`): the same files, the
+same commits and refs on origin, and the same run state (`same_as`), except
+where the row's "Resume does" column says otherwise; those parts assert what
+the column says instead. A kill is `Killed`, a BaseException raised from
+inside the call or the write the row names, so no `except Exception` in the
+code can swallow it.
+
+Most rows use a change with two components (`TWO`) and the stops a person
+sees: `new` stops for the proposal's review, `resume` for the components',
+`resume` at the ticket wait, `resume --ticket ...` for the specs' review,
+and `resume` hands off (`FLOW`)."""
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
 import pytest
 from conftest import (
+    BRANCH,
+    CAPS,
+    TWO,
     FakeModel,
     Killed,
+    agent,
     change_dir,
-    committed,
     git,
+    make_repo,
     meta,
+    origin,
+    proposal,
     ready_line,
     requirements,
     run,
     snapshot,
+    source_dir,
+    specs,
     state,
+    worktree,
     write,
 )
-from multiplai_core.specs import is_ready, set_spec_issues, spec_revision
-from pm_spec_pipeline import git_ops, handoff, intake, prototype, publish, runlock, sdk
-from test_prototype import NOTES_FINDINGS, agent, ui_proposal
+from multiplai_core.specs import is_ready, mark_ready, write_change_meta
+from pm_spec_pipeline import epic, git_ops, handoff, layout, runlock, sdk, stages
+from pm_spec_pipeline import state as state_mod
+from pm_spec_pipeline.state import (
+    EpicChild,
+    Handoff,
+    RunState,
+    SplitRecord,
+    StepOutcome,
+)
 
-TICKET = "# Throttle the API\n\nClients flood the server.\n"
+NEW = ["new", "throttle", "--interview-summary", "Throttle it."]
+RESUME = ["resume", "throttle"]
+TICKETS = [*RESUME, "--ticket", "api=ENG-2", "--ticket", "ui=ENG-3"]
+FLOW = [(NEW, 3), (RESUME, 3), (RESUME, 3), (TICKETS, 3), (RESUME, 0)]
+AUTO = [(["new", "throttle", "--auto"], 0)]
+AUTO_LIKE_NEW = [([*NEW, "--auto", "--interview-mode", "user"], 0)]
 
 
-def killer(then=None):
-    """A handler that kills the run on its first call and answers like *then* after."""
+def two(m: FakeModel) -> None:
+    m["components"] = TWO
+
+
+def killer(then=None, times: int = 1):
+    """A handler that kills the run on its first *times* calls and answers like *then* after."""
 
     def kill(prompt, label, kw):
         raise Killed(label)
 
-    return [kill, then] if then is not None else kill
+    return [kill] * times + [then] if then is not None else kill
 
 
-def new_repo(path: Path) -> Path:
-    path.mkdir(parents=True)
-    git(path, "init", "-q", "-b", "main")
-    write(path / "README.md", "# proj\n")
-    git(path, "add", "-A")
-    git(path, "commit", "-q", "-m", "initial")
-    return path
-
-
-def baseline(tmp_path, monkeypatch, configure, *commands) -> tuple[Path, FakeModel]:
+def baseline(tmp_path, monkeypatch, configure, commands) -> tuple[Path, FakeModel]:
     """The same inputs in a fresh repository with a fresh fake model, never stopped.
     The test's own model is put back afterwards."""
     previous = sdk.run_agent
     fake = FakeModel()
     configure(fake)
     monkeypatch.setattr(sdk, "run_agent", fake)
-    other = new_repo(tmp_path / f"baseline-{len(list(tmp_path.glob('baseline-*')))}")
+    other = make_repo(
+        tmp_path / f"baseline-{len(list(tmp_path.glob('baseline-*')))}" / "proj"
+    )
     try:
         for argv, code in commands:
-            argv = [str(a).replace("{tmp}", str(tmp_path)) for a in argv]
             assert run(other, *argv) == code, argv
     finally:
         monkeypatch.setattr(sdk, "run_agent", previous)
     return other, fake
+
+
+def pushed(repo: Path) -> list[str]:
+    """Origin's feature branch, newest first: each commit's subject and the files it changed."""
+    out = git(origin(repo), "log", "--format=@ %s", "--name-only", BRANCH)
+    return [line for line in out.splitlines() if line]
+
+
+def refs(repo: Path) -> list[str]:
+    return git(origin(repo), "for-each-ref", "--format=%(refname)").splitlines()
+
+
+def run_state(cdir: Path) -> dict:
+    """The run state, but the handoff commit's sha (`.change.yaml`'s timestamps differ)."""
+    data = json.loads((cdir / ".pm-spec" / "state.json").read_text())
+    if data.get("handoff"):
+        data["handoff"].pop("commit", None)
+    return data
+
+
+def same_as(
+    repo: Path, other: Path, *, commits: bool = True, run_state_too: bool = True
+) -> None:
+    """The change dir, origin's commits and refs, and the run state match *other*'s."""
+    cdir, theirs = change_dir(repo), change_dir(other)
+    assert snapshot(cdir) == snapshot(theirs)
+    assert refs(repo) == refs(other)
+    if commits:
+        assert pushed(repo) == pushed(other)
+    if run_state_too:
+        assert run_state(cdir) == run_state(theirs)
 
 
 def run_dir_files(cdir: Path) -> dict[str, bytes]:
@@ -78,373 +133,298 @@ def run_dir_files(cdir: Path) -> dict[str, bytes]:
     }
 
 
+def clone(repo: Path, at: Path) -> Path:
+    """Another person's clone of origin, on the feature branch."""
+    git(repo.parent, "clone", "-q", "-b", BRANCH, str(origin(repo)), str(at))
+    return at
+
+
+def push_edit(repo: Path, at: Path, rel: str, text: str) -> None:
+    """A person edits *rel* (under the change dir) in their clone and pushes it."""
+    mine = clone(repo, at)
+    write(mine / "specs" / "changes" / "throttle" / rel, text)
+    git(mine, "commit", "-qam", f"edit {rel}")
+    git(mine, "push", "-q", "origin", BRANCH)
+
+
+def go(repo: Path, steps) -> None:
+    for argv, code in steps:
+        assert run(repo, *argv) == code, argv
+
+
 # --- S1 ---------------------------------------------------------------------------
 
 
-def test_S1_ticket_interview_waits_then_continues_with_the_replies(
+def test_S1_the_review_stop_after_the_proposal(
     repo, model, tmp_path, monkeypatch, capsys
 ):
-    ticket = write(tmp_path / "ticket.md", TICKET)
-    replies = write(tmp_path / "replies.md", "alice: sixty a minute, nobody exempt.\n")
-    new = [
-        "new",
-        "throttle",
-        "--interview-mode",
-        "ticket",
-        "--ticket-file",
-        str(ticket),
-        "--ticket-ref",
-        "EPIC-9",
-    ]
-
-    assert run(repo, *new) == 3
+    two(model)
+    assert run(repo, *NEW) == 3
     out = capsys.readouterr().out
     cdir = change_dir(repo)
-    questions = cdir / "interview-questions.md"
-    assert f"INTERVIEW:WAITING:{questions}" in out
-    assert state(cdir)["interview_waiting"] is True
-    assert not (cdir / "interview.md").exists()
+    assert "SPEC:REVIEW:proposal" in out and f"SPEC:BRANCH:{BRANCH}" in out
+    assert pushed(repo) == [
+        "@ specs(throttle): proposal for review",
+        "specs/changes/throttle/.change.yaml",
+        "specs/changes/throttle/interview.md",
+        "specs/changes/throttle/proposal.md",
+        "@ initial",
+        "README.md",
+    ]
+    assert state(cdir)["steps"]["proposal"]["outcome"] == "passed"
+    assert not (cdir / "use-cases.md").exists()
+    assert git(worktree(repo), "status", "--porcelain") == ""
 
-    # Without answers: the marker again, exit 3, nothing written, no call.
-    before, calls = run_dir_files(cdir), len(model.calls)
-    assert run(repo, "resume", "throttle") == 3
-    assert f"INTERVIEW:WAITING:{questions}" in capsys.readouterr().out
-    assert run_dir_files(cdir) == before
-    assert len(model.calls) == calls
+    # Resume pulls, then runs stage 2 only.
+    calls = len(model.calls)
+    assert run(repo, *RESUME) == 3
+    assert model.labels()[calls:] == ["spec:use-cases", "components"]
+    assert "SPEC:REVIEW:components" in capsys.readouterr().out
 
-    # With answers: interview.md, and on to SPEC:READY.
-    assert run(repo, "resume", "throttle", "--interview-replies", str(replies)) == 0
-    assert "sixty a minute" in (cdir / "interview.md").read_text()
-    assert model.calls_to("interview:questions") == 1
-
-    other, _ = baseline(
-        tmp_path,
-        monkeypatch,
-        lambda m: None,
-        (new, 3),
-        (["resume", "throttle", "--interview-replies", str(replies)], 0),
-    )
-    assert snapshot(cdir) == snapshot(change_dir(other))
+    # The files are the ones a run with no stop writes; the commits are not
+    # (a stop pushes for review).
+    go(repo, [(RESUME, 3), ([*RESUME, "--tickets-later"], 3), (RESUME, 0)])
+    other, _ = baseline(tmp_path, monkeypatch, two, AUTO_LIKE_NEW)
+    same_as(repo, other, commits=False, run_state_too=False)
 
 
 # --- S2 ---------------------------------------------------------------------------
 
 
-def test_S2_artifacts_killed_part_way_keep_what_is_finished(
-    repo, model, tmp_path, monkeypatch
+def test_S2_killed_after_the_proposal_before_the_commit(
+    repo, model, tmp_path, monkeypatch, capsys
 ):
-    from conftest import default_requirements
+    two(model)
+    real = git_ops.commit_change_dir
+    kills = {"left": 1}
 
-    regen = lambda prompt, label, kw: default_requirements(prompt, label)
-    model["spec:requirements:retry-policy"] = killer(regen)
+    def commit(*a, **k):
+        if kills["left"]:
+            kills["left"] -= 1
+            raise Killed("commit")
+        return real(*a, **k)
+
+    monkeypatch.setattr(git_ops, "commit_change_dir", commit)
     with pytest.raises(Killed):
-        run(repo, "new", "throttle", "--auto")
+        run(repo, *NEW)
     cdir = change_dir(repo)
-    records = state(cdir)["artifacts"]
-    assert all(
-        records[k]["output"]
-        for k in ("proposal", "use-cases", "requirements/rate-limit")
-    )
-    assert (
-        records["requirements/retry-policy"]["output"] is None
-    )  # started, not finished
+    assert (cdir / "proposal.md").is_file()
+    assert git(worktree(repo), "status", "--porcelain", "--", "specs") != ""
+    assert git(origin(repo), "branch", "--list", BRANCH) == ""
+    capsys.readouterr()
 
-    assert run(repo, "resume", "throttle") == 0
-    assert [
-        model.calls_to(p)
-        for p in (
-            "spec:proposal",
-            "spec:use-cases",
-            "spec:requirements:rate-limit",
-            "spec:requirements:retry-policy",
-        )
-    ] == [1, 1, 1, 2]
-    other, _ = baseline(
-        tmp_path, monkeypatch, lambda m: None, (["new", "throttle", "--auto"], 0)
-    )
-    assert snapshot(cdir) == snapshot(change_dir(other))
+    # Commits and pushes what is there, then stops at S1; nothing regenerated.
+    assert run(repo, *RESUME) == 3
+    assert "SPEC:REVIEW:proposal" in capsys.readouterr().out
+    assert model.calls_to("spec:proposal") == 1
+    assert pushed(repo)[0] == "@ specs(throttle): proposal for review"
 
-    # A finished artifact a person edited, with its inputs unchanged, is kept.
-    second = new_repo(tmp_path / "second")
-    model.count.clear()
-    with pytest.raises(Killed):
-        run(second, "new", "throttle", "--auto")
-    edited = requirements("rate-limit", rule="the edited rule")
-    write(change_dir(second) / "requirements" / "rate-limit.md", edited)
-    assert run(second, "resume", "throttle") == 0
-    assert (change_dir(second) / "requirements" / "rate-limit.md").read_text() == edited
-
-    # A changed proposal regenerates the use cases and every requirements file.
-    third = new_repo(tmp_path / "third")
-    model.count.clear()
-    with pytest.raises(Killed):
-        run(third, "new", "throttle", "--auto")
-    model.calls.clear()
-    path = change_dir(third) / "proposal.md"
-    path.write_text(
-        path.read_text().replace(
-            "Clients flood the API server.", "Bots flood the API server."
-        )
-    )
-    assert run(third, "resume", "throttle") == 0
-    assert "Bots flood" in path.read_text()  # the edit is the proposal now
-    assert [
-        model.calls_to(p)
-        for p in (
-            "spec:proposal",
-            "spec:use-cases",
-            "spec:requirements:rate-limit",
-            "spec:requirements:retry-policy",
-        )
-    ] == [0, 1, 1, 1]
-    assert "Bots flood" in model.prompts("spec:requirements:rate-limit")[0]
+    go(repo, FLOW[1:])
+    other, _ = baseline(tmp_path, monkeypatch, two, FLOW)
+    same_as(repo, other)
 
 
 # --- S3 ---------------------------------------------------------------------------
 
 
-def test_S3_split_killed_before_the_child_dirs_exist(
-    repo, model, tmp_path, monkeypatch, capsys
-):
-    from test_epic_split import PLAIN_SPLIT
+def test_S3_the_push_failed(repo, model, tmp_path, monkeypatch, capsys):
+    two(model)
+    hook = origin(repo) / "hooks" / "pre-receive"
+    write(hook, "#!/bin/sh\necho refused by the test >&2\nexit 1\n")
+    hook.chmod(0o755)
+    assert run(repo, *NEW) == 1
+    assert f"`git push origin {BRANCH}` failed" in capsys.readouterr().out
+    wt = worktree(repo)
+    head = git(wt, "rev-parse", "HEAD")
+    assert git(wt, "log", "-1", "--format=%s") == "specs(throttle): proposal for review"
+    assert git(origin(repo), "branch", "--list", BRANCH) == ""
+    assert state(change_dir(repo))["steps"].get("proposal") is None
 
-    model["epic_split"] = PLAIN_SPLIT
-    real = intake.create_change
-    made: list[Path] = []
-
-    def create_change(change_dir, *, parent=None):
-        if parent and made:
-            raise Killed("between children")
-        if parent:
-            made.append(change_dir)
-        return real(change_dir, parent=parent)
-
-    monkeypatch.setattr(intake, "create_change", create_change)
-    with pytest.raises(Killed):
-        run(repo, "new", "throttle", "--auto")
-    monkeypatch.setattr(intake, "create_change", real)
-    parent, api, ui = (
-        change_dir(repo, n) for n in ("throttle", "throttle-api", "throttle-ui")
+    # Retries the push, then stops at S1: no second commit, no call.
+    hook.unlink()
+    calls = len(model.calls)
+    assert run(repo, *RESUME) == 3
+    assert "SPEC:REVIEW:proposal" in capsys.readouterr().out
+    assert len(model.calls) == calls
+    assert (
+        git(wt, "rev-parse", "HEAD") == head == git(origin(repo), "rev-parse", BRANCH)
     )
-    assert state(parent)["split"]["children"][1]["id"] == "ui"
-    assert (api / ".pm-spec" / "state.json").is_file() and not (
-        ui / ".pm-spec"
-    ).exists()
-    # Killed before the list: the parent names no child yet, and nothing is committed.
-    assert "children" not in meta(parent)
-    assert git(repo, "log", "-1", "--format=%s") == "initial"
-    capsys.readouterr()
 
-    assert run(repo, "resume", "throttle") == 0
-    out = capsys.readouterr().out
-    assert model.calls_to("epic_split") == 1  # never split again
-    assert [line for line in out.splitlines() if line.startswith("SPEC:")] == [
-        f"SPEC:SPLIT:{parent}",
-        f"SPEC:CHILD:{api}",
-        f"SPEC:CHILD:{ui}",
-    ]
-
-    other, _ = baseline(
-        tmp_path,
-        monkeypatch,
-        lambda m: m.__setitem__("epic_split", PLAIN_SPLIT),
-        (["new", "throttle", "--auto"], 0),
-    )
-    for name in ("throttle", "throttle-api", "throttle-ui"):
-        assert snapshot(change_dir(repo, name)) == snapshot(change_dir(other, name))
-        mine, theirs = state(change_dir(repo, name)), state(change_dir(other, name))
-        assert {k: mine[k] for k in ("options", "parent", "split")} == {
-            k: theirs[k] for k in ("options", "parent", "split")
-        }
-    # The child killed before its dir existed gets its dependencies as the
-    # child written before the kill did.
-    assert meta(api)["depends_on"] == [] and meta(ui)["depends_on"] == ["throttle-api"]
-    # The resume writes the parent's list and commits the parent once, as the
-    # run that never stopped did.
-    assert meta(parent)["children"] == ["throttle-api", "throttle-ui"]
-    assert git(repo, "log", "--format=%s").splitlines() == [
-        "specs(throttle): children updated",
-        "initial",
-    ]
-    assert git(other, "log", "--format=%s").splitlines() == [
-        "specs(throttle): children updated",
-        "initial",
-    ]
-
-    # Unchanged inputs: no second split, and no record is written or committed again.
-    before = {p: (p / ".change.yaml").stat().st_mtime_ns for p in (parent, api, ui)}
-    head = git(repo, "rev-parse", "HEAD")
-    assert run(repo, "resume", "throttle") == 0
-    assert model.calls_to("epic_split") == 1
-    assert {
-        p: (p / ".change.yaml").stat().st_mtime_ns for p in (parent, api, ui)
-    } == before
-    assert git(repo, "rev-parse", "HEAD") == head
-    # Changed parent inputs: split again. The children already created keep
-    # their files, and their depends_on follows the new answer.
-    from test_epic_split import child
-
-    model["epic_split"] = {
-        "single": False,
-        "reason": "UI first.",
-        "children": [child("api", deps=["ui"]), child("ui")],
-    }
-    plan_before = (api / "plan.md").read_text()
-    interview_md = parent / "interview.md"
-    interview_md.write_text(interview_md.read_text() + "\nAlso throttle websockets.\n")
-    assert run(repo, "resume", "throttle") == 0
-    assert model.calls_to("epic_split") == 2
-    assert meta(api)["depends_on"] == ["throttle-ui"] and meta(ui)["depends_on"] == []
-    assert (api / "plan.md").read_text() == plan_before
-    # The parent's list follows the new wave order and is committed with the
-    # changed interview; the children, never handed off, are not committed.
-    assert meta(parent)["children"] == ["throttle-ui", "throttle-api"]
-    assert git(repo, "log", "--format=%s", f"{head}..HEAD").splitlines() == [
-        "specs(throttle): children updated"
-    ]
-    assert git(repo, "status", "--porcelain", "--", "specs/changes/throttle") == ""
+    go(repo, FLOW[1:])
+    other, _ = baseline(tmp_path, monkeypatch, two, FLOW)
+    same_as(repo, other)
 
 
 # --- S4 ---------------------------------------------------------------------------
 
 
-def _ui(m):
-    m["spec:proposal"] = lambda *a: ui_proposal()
-    m["prototype"] = agent(NOTES_FINDINGS)
-
-
-def test_S4_prototype_killed_in_the_agent_or_its_rewrite(
+def test_S4_the_review_stop_after_the_components(
     repo, model, tmp_path, monkeypatch, capsys
 ):
-    other, _ = baseline(tmp_path, monkeypatch, _ui, (["new", "throttle", "--auto"], 0))
-    expected = snapshot(change_dir(other))
+    two(model)
+    go(repo, FLOW[:2])
+    out = capsys.readouterr().out
+    cdir = change_dir(repo)
+    assert "SPEC:REVIEW:components" in out and f"SPEC:BRANCH:{BRANCH}" in out
+    assert pushed(repo)[:9] == [
+        "@ specs(throttle): components for review",
+        "specs/changes/throttle/.change.yaml",
+        "specs/changes/throttle/components.md",
+        "specs/changes/throttle/components/api/.change.yaml",
+        "specs/changes/throttle/components/api/plan.md",
+        "specs/changes/throttle/components/ui/.change.yaml",
+        "specs/changes/throttle/components/ui/plan.md",
+        "specs/changes/throttle/use-cases.md",
+        "@ specs(throttle): proposal for review",
+    ]
+    assert state(cdir)["steps"]["components"]["outcome"] == "passed"
+    assert not (cdir / "prototype").exists()
 
-    # (a) Killed during the agent: the agent runs again, then its one rewrite.
-    _ui(model)
-    model["prototype"] = killer(agent(NOTES_FINDINGS))
-    with pytest.raises(Killed):
-        run(repo, "new", "throttle", "--auto")
-    assert run(repo, "resume", "throttle") == 0
-    assert (
-        model.calls_to("prototype:rewrite:proposal") == 1
-        and model.count["prototype"] == 2
-    )
-    assert snapshot(change_dir(repo)) == expected
+    # Resume pulls, then runs stage 3 from the prototype.
+    calls = len(model.calls)
+    assert run(repo, *RESUME) == 3
+    assert model.labels()[calls:] == ["prototype"]
 
-    # (b) Killed during the rewrite, before it publishes: the agent runs again,
-    # with no second rewrite, so its findings stop the run (exit 4).
-    b = new_repo(tmp_path / "b")
-    fake = FakeModel()
-    _ui(fake)
-    fake["prototype:rewrite:proposal"] = killer(lambda *a: ui_proposal())
-    monkeypatch.setattr(sdk, "run_agent", fake)
-    with pytest.raises(Killed):
-        run(b, "new", "throttle", "--auto")
-    cdir = change_dir(b)
-    files_before = {
-        k: v for k, v in snapshot(cdir).items() if not k.startswith("prototype/")
-    }
-    assert state(cdir)["steps"]["prototype"]["repair_attempts"] == 1
-    capsys.readouterr()
-    assert run(b, "resume", "throttle") == 4
-    assert fake.count["prototype"] == 2
-    assert fake.calls_to("prototype:rewrite") == 1
-    assert "PT-F1" in capsys.readouterr().out
-    assert {
-        k: v for k, v in snapshot(cdir).items() if not k.startswith("prototype/")
-    } == files_before
-
-    # (c) Killed after the rewrite published: on to the consistency check,
-    # with no prototype or rewrite call.
-    c = new_repo(tmp_path / "c")
-    fake = FakeModel()
-    _ui(fake)
-    monkeypatch.setattr(sdk, "run_agent", fake)
-    real_publish = prototype.publish
-
-    def publish_then_die(run_, step, files):
-        real_publish(run_, step, files)
-        raise Killed("after publish")
-
-    monkeypatch.setattr(prototype, "publish", publish_then_die)
-    with pytest.raises(Killed):
-        run(c, "new", "throttle", "--auto")
-    monkeypatch.setattr(prototype, "publish", real_publish)
-    calls = len(fake.calls)
-    assert run(c, "resume", "throttle") == 0
-    assert [label for label, _, _ in fake.calls[calls:]] == ["consistency"]
-    assert snapshot(change_dir(c)) == expected
-
-    # (d) Killed while the published files were being written: the run that
-    # finds the journal finishes the publication, then goes on.
-    d = new_repo(tmp_path / "d")
-    fake = FakeModel()
-    _ui(fake)
-    monkeypatch.setattr(sdk, "run_agent", fake)
-    real_write = publish.atomic_write
-
-    def write_then_die(path, text):
-        journal = change_dir(d) / ".pm-spec" / publish.JOURNAL
-        if journal.is_file() and "requirements" in Path(path).parts:
-            raise Killed("mid publication")
-        real_write(path, text)
-
-    monkeypatch.setattr(publish, "atomic_write", write_then_die)
-    with pytest.raises(Killed):
-        run(d, "new", "throttle", "--auto")
-    monkeypatch.setattr(publish, "atomic_write", real_write)
-    assert (change_dir(d) / ".pm-spec" / publish.JOURNAL).is_file()
-    calls = len(fake.calls)
-    assert run(d, "resume", "throttle") == 0
-    assert [label for label, _, _ in fake.calls[calls:]] == ["consistency"]
-    assert not (change_dir(d) / ".pm-spec" / publish.JOURNAL).exists()
-    assert snapshot(change_dir(d)) == expected
+    go(repo, [([*RESUME, "--tickets-later"], 3), (RESUME, 0)])
+    other, _ = baseline(tmp_path, monkeypatch, two, AUTO_LIKE_NEW)
+    same_as(repo, other, commits=False, run_state_too=False)
 
 
 # --- S5 ---------------------------------------------------------------------------
 
 
-def test_S5_consistency_blocked_after_its_rewrite_and_recheck(repo, model, capsys):
-    from test_consistency import finding, recheck
+def test_S5_killed_part_way_through_the_component_plans(
+    repo, model, tmp_path, monkeypatch, capsys
+):
+    two(model)
+    real = epic.atomic_write
+    kills = {"left": 1}
 
-    model["consistency"] = [
-        {"findings": [finding()]},
-        recheck("still_present"),
-        {"findings": [finding()]},
-        recheck("resolved"),
-    ]
-    assert run(repo, "new", "throttle", "--auto") == 4
+    def write_or_die(path, text):
+        if path.name == "plan.md" and path.parent.name == "ui" and kills["left"]:
+            kills["left"] -= 1
+            raise Killed("ui plan")
+        return real(path, text)
+
+    monkeypatch.setattr(epic, "atomic_write", write_or_die)
+    assert run(repo, *NEW) == 3
+    with pytest.raises(Killed):
+        run(repo, *RESUME)
     cdir = change_dir(repo)
-    step = state(cdir)["steps"]["consistency"]
-    assert [(f["finding_id"], f["status"]) for f in step["repair_findings"]] == [
-        ("CC-F1", "still_present")
-    ]
-    assert meta(cdir)["spec_status"] == "draft"
+    assert (cdir / "components" / "api" / "plan.md").is_file()
+    assert not (cdir / "components" / "ui" / "plan.md").exists()
+    assert not (cdir / "components.md").exists()
     capsys.readouterr()
 
-    # Files unchanged: refused with no model call, the findings printed. Twice.
-    calls = len(model.calls)
-    for _ in range(2):
-        assert run(repo, "resume", "throttle") == 4
-        out = capsys.readouterr().out
-        assert "CC-F1 still_present" in out and f"SPEC:BLOCKED:{cdir}" in out
-    assert len(model.calls) == calls
+    # Writes what is missing from the saved answer, keeps the rest, stops at S4.
+    assert run(repo, *RESUME) == 3
+    assert "SPEC:REVIEW:components" in capsys.readouterr().out
+    assert model.calls_to("components") == 1 and model.calls_to("spec:use-cases") == 1
 
-    # Files edited: one rewrite allowed again, then the check.
-    path = cdir / "requirements" / "retry-policy.md"
-    path.write_text(requirements("retry-policy", rule="a retry after sixty seconds"))
-    assert run(repo, "resume", "throttle") == 0
-    assert len(model.exactly("consistency")) == 4
-    assert model.calls_to("consistency:rewrite") == 4  # two files, twice
-    assert is_ready(cdir) == (True, "")
+    go(repo, FLOW[2:])
+    other, _ = baseline(tmp_path, monkeypatch, two, FLOW)
+    same_as(repo, other)
 
 
 # --- S6 ---------------------------------------------------------------------------
 
 
-def test_S6_ready_record_written_and_the_commit_failed(
-    repo, model, tmp_path, monkeypatch, capsys
+def test_S6_the_ticket_wait(repo, model, tmp_path, monkeypatch, capsys):
+    two(model)
+    go(repo, FLOW[:3])
+    out = capsys.readouterr().out
+    cdir = change_dir(repo)
+    assert f"SPEC:TICKETS:{cdir / 'tickets.json'}" in out
+    assert pushed(repo)[:5] == [
+        "@ specs(throttle): prototype and tickets",
+        "specs/changes/throttle/prototype/NOTES.md",
+        "specs/changes/throttle/prototype/mockup.html",
+        "specs/changes/throttle/tickets.json",
+        "@ specs(throttle): components for review",
+    ]
+    assert state(cdir)["steps"]["tickets"]["outcome"] == "pending"
+
+    # Without a ticket for every component: exit 2, the flags printed, nothing changed.
+    before, calls = run_dir_files(cdir), len(model.calls)
+    for argv in (RESUME, [*RESUME, "--ticket", "api=ENG-2"]):
+        assert run(repo, *argv) == 2
+        assert (
+            "resume throttle --ticket api=<ID> --ticket ui=<ID>"
+            in capsys.readouterr().out
+        )
+    assert run_dir_files(cdir) == before and len(model.calls) == calls
+
+    # With them: the refs written, then the specs, then their review stop.
+    assert run(repo, *TICKETS) == 3
+    assert "SPEC:REVIEW:specs" in capsys.readouterr().out
+    assert model.labels()[calls:] == ["spec:specs:api", "spec:specs:ui"]
+    assert run(repo, *RESUME) == 0
+    other, _ = baseline(tmp_path, monkeypatch, two, FLOW)
+    same_as(repo, other)
+
+    # --tickets-later instead: the same, with the tickets pending.
+    later = make_repo(tmp_path / "later" / "proj")
+    go(later, [*FLOW[:3], ([*RESUME, "--tickets-later"], 3), (RESUME, 0)])
+    assert state(change_dir(later))["steps"]["tickets"]["outcome"] == "skipped"
+    assert "ticket_refs" not in meta(change_dir(later) / "components" / "ui")
+
+
+@pytest.mark.parametrize("bad", ["ENG 2", "ENG..2", "ENG~2", "-ENG-2"])
+def test_S6_a_ticket_ref_git_refuses_is_refused_and_nothing_is_written(
+    repo, model, tmp_path, monkeypatch, capsys, bad
 ):
+    two(model)
+    go(repo, FLOW[:3])
+    cdir, wt = change_dir(repo), worktree(repo)
+    before, calls = run_dir_files(cdir), len(model.calls)
+    head = git(wt, "rev-parse", "HEAD")
+    capsys.readouterr()
+
+    assert run(repo, *RESUME, "--ticket", f"api={bad}", "--ticket", "ui=ENG-3") == 2
+    out = capsys.readouterr().out
+    assert f"--ticket 'api={bad}'" in out and "Nothing was recorded" in out
+    assert run_dir_files(cdir) == before and len(model.calls) == calls
+    assert git(wt, "rev-parse", "HEAD") == head
+
+    # Good refs afterwards: as if the bad one was never given.
+    go(repo, [(TICKETS, 3), (RESUME, 0)])
+    other, _ = baseline(tmp_path, monkeypatch, two, FLOW)
+    same_as(repo, other)
+
+
+# --- S7 ---------------------------------------------------------------------------
+
+
+def test_S7_killed_during_the_specs(repo, model, tmp_path, monkeypatch, capsys):
+    two(model)
+    model["spec:specs:ui"] = killer(specs())
+    go(repo, FLOW[:3])
+    with pytest.raises(Killed):
+        run(repo, *TICKETS)
+    cdir = change_dir(repo)
+    assert (cdir / "components" / "api" / "specs.md").is_file()
+    assert not (cdir / "components" / "ui" / "specs.md").exists()
+
+    # Writes the missing one only, then stops for the specs' review (S13).
+    calls = len(model.calls)
+    assert run(repo, *RESUME) == 3
+    assert model.labels()[calls:] == ["spec:specs:ui"]
+    assert "SPEC:REVIEW:specs" in capsys.readouterr().out
+    assert run(repo, *RESUME) == 0
+    assert model.labels()[calls:] == ["spec:specs:ui", "consistency"]
+    assert (
+        ready_line(capsys.readouterr().out)
+        == f"SPEC:READY:{cdir}:{layout.revision(cdir)}"
+    )
+    other, _ = baseline(tmp_path, monkeypatch, two, FLOW)
+    same_as(repo, other)
+
+
+# --- S8 ---------------------------------------------------------------------------
+
+
+def test_S8_the_handoff_commit_failed(repo, model, tmp_path, monkeypatch, capsys):
+    two(model)
     real = git_ops.commit_change_dir
     failing = {"left": 1}
 
@@ -457,169 +437,612 @@ def test_S6_ready_record_written_and_the_commit_failed(
     monkeypatch.setattr(handoff, "commit_change_dir", commit)
     assert run(repo, "new", "throttle", "--auto") == 1
     cdir = change_dir(repo)
-    assert meta(cdir)["spec_status"] == "ready"
-    assert meta(cdir)["spec_revision"] == spec_revision(cdir)
+    assert layout.ready(cdir) == (True, "")
     assert state(cdir)["handoff"]["committed"] is False
-    assert git(repo, "status", "--porcelain", "--", "specs") != ""
+    assert git(worktree(repo), "status", "--porcelain", "--", "specs") != ""
     capsys.readouterr()
 
     # The revision still matches: only the commit is retried.
     calls = len(model.calls)
-    assert run(repo, "resume", "throttle") == 0
+    assert run(repo, *RESUME) == 0
     assert len(model.calls) == calls
     assert (
         ready_line(capsys.readouterr().out)
-        == f"SPEC:READY:{cdir}:{spec_revision(cdir)}"
+        == f"SPEC:READY:{cdir}:{layout.revision(cdir)}"
     )
-    assert git(repo, "status", "--porcelain", "--", "specs") == ""
-    other, _ = baseline(
-        tmp_path, monkeypatch, lambda m: None, (["new", "throttle", "--auto"], 0)
-    )
-    assert snapshot(cdir) == snapshot(change_dir(other))
-    assert committed(repo, cdir) == committed(other, change_dir(other))
+    assert git(worktree(repo), "status", "--porcelain", "--", "specs") == ""
+    other, _ = baseline(tmp_path, monkeypatch, two, AUTO)
+    same_as(repo, other)
 
     # The files changed since: back to draft, the check again, then ready.
-    second = new_repo(tmp_path / "second")
+    second = make_repo(tmp_path / "second" / "proj")
     failing["left"] = 1
     assert run(second, "new", "throttle", "--auto") == 1
     cdir2 = change_dir(second)
-    old = meta(cdir2)["spec_revision"]
-    write(
-        cdir2 / "requirements" / "rate-limit.md",
-        requirements("rate-limit", rule="fifty a minute"),
-    )
+    old = layout.revision(cdir2)
+    write(cdir2 / "components" / "ui" / "specs.md", specs(rule="fifty a minute"))
     checks = len(model.exactly("consistency"))
-    assert run(second, "resume", "throttle") == 0
+    assert run(second, *RESUME) == 0
     assert len(model.exactly("consistency")) == checks + 1
-    assert meta(cdir2)["spec_revision"] == spec_revision(cdir2) != old
-    assert is_ready(cdir2) == (True, "")
-    assert git(second, "status", "--porcelain", "--", "specs") == ""
-
-
-# --- S7 ---------------------------------------------------------------------------
-
-
-def test_S7_an_edit_after_ready_is_checked_and_marked_ready_again(repo, model, capsys):
-    assert run(repo, "new", "throttle", "--auto") == 0
-    cdir = change_dir(repo)
-    old = meta(cdir)["spec_revision"]
-    write(
-        cdir / "requirements" / "retry-policy.md",
-        requirements("retry-policy", rule="a sixty second wait"),
-    )
-    assert is_ready(cdir)[0] is False
-    capsys.readouterr()
-    checks = len(model.exactly("consistency"))
-    assert run(repo, "resume", "throttle") == 0
-    assert len(model.exactly("consistency")) == checks + 1
-    assert model.calls_to("spec:") == 4  # nothing regenerated: the edit is kept
-    assert (
-        "a sixty second wait" in (cdir / "requirements" / "retry-policy.md").read_text()
-    )
-    new = spec_revision(cdir)
-    assert (
-        new != old and ready_line(capsys.readouterr().out) == f"SPEC:READY:{cdir}:{new}"
-    )
-    assert is_ready(cdir) == (True, "")
-    assert git(repo, "status", "--porcelain", "--", "specs") == ""
-
-
-# --- S8 ---------------------------------------------------------------------------
-
-
-def test_S8_a_second_process_is_refused_with_the_holders_pid(
-    repo, model, tmp_path, monkeypatch, capsys
-):
-    model["spec:requirements:retry-policy"] = killer(requirements("retry-policy"))
-    with pytest.raises(Killed):
-        run(repo, "new", "throttle", "--auto")
-    cdir = change_dir(repo)
-    before, calls = run_dir_files(cdir), len(model.calls)
-    capsys.readouterr()
-    with runlock.hold(cdir / ".pm-spec"):
-        assert run(repo, "resume", "throttle") == 5
-    out = capsys.readouterr().out
-    assert f"pid {os.getpid()}" in out
-    assert len(model.calls) == calls and run_dir_files(cdir) == before
-
-    # Once the holder is gone the run resumes as if nothing happened.
-    assert run(repo, "resume", "throttle") == 0
-    other, _ = baseline(
-        tmp_path, monkeypatch, lambda m: None, (["new", "throttle", "--auto"], 0)
-    )
-    assert snapshot(cdir) == snapshot(change_dir(other))
+    assert layout.revision(cdir2) != old and layout.ready(cdir2) == (True, "")
+    assert git(worktree(second), "status", "--porcelain", "--", "specs") == ""
 
 
 # --- S9 ---------------------------------------------------------------------------
 
-ISSUES = "# Spec issues\n\n## Retry header\n\nrequirements/retry-policy.md lacks the Retry-After header.\n"
+
+EDITED_PLAN = (
+    "# Plan: Build the limits endpoint\n\n**Objective:** EDITED objective.\n\n"
+    "## Done means\n1. EDITED: a client over 60 a minute gets 429.\n"
+)
 
 
-def _resolved(m):
-    m["consistency"] = [
-        {"findings": [], "prior_assessments": []},
+def test_S9_edits_between_a_stop_and_the_resume_are_kept(repo, model, tmp_path, capsys):
+    two(model)
+    go(repo, FLOW[:2])
+    cdir = change_dir(repo)
+    push_edit(repo, tmp_path / "pm", "components/api/plan.md", EDITED_PLAN)
+
+    # Pulled, kept, and an input to stage 3 from then on.
+    go(repo, FLOW[2:])
+    assert (cdir / "components" / "api" / "plan.md").read_text() == EDITED_PLAN
+    assert model.calls_to("components") == 1
+    assert "EDITED objective" in model.exactly("prototype")[0]
+    assert "EDITED objective" in model.exactly("spec:specs:api")[0]
+    task = json.loads((cdir / "tickets.json").read_text())[1]
+    assert task["title"] == "Build the limits endpoint"
+    assert task["acceptance"] == ["EDITED: a client over 60 a minute gets 429."]
+
+    # An edit after the ready record makes it stale: checked again, ready again.
+    old = layout.revision(cdir)
+    push_edit(
+        repo, tmp_path / "dev", "components/ui/specs.md", specs(rule="EDITED rule")
+    )
+    capsys.readouterr()
+    checks, written = len(model.exactly("consistency")), model.calls_to("spec:specs")
+    assert run(repo, *RESUME) == 0
+    assert "EDITED rule" in (cdir / "components" / "ui" / "specs.md").read_text()
+    assert len(model.exactly("consistency")) == checks + 1
+    assert model.calls_to("spec:specs") == written
+    assert layout.revision(cdir) != old
+    assert (
+        ready_line(capsys.readouterr().out)
+        == f"SPEC:READY:{cdir}:{layout.revision(cdir)}"
+    )
+    assert is_ready(cdir / "components" / "ui") == (True, "")
+    assert git(worktree(repo), "rev-parse", "HEAD") == git(
+        origin(repo), "rev-parse", BRANCH
+    )
+
+
+# --- S10 --------------------------------------------------------------------------
+
+
+def test_S10_a_diverged_branch_is_refused_and_nothing_changes(
+    repo, model, tmp_path, capsys
+):
+    two(model)
+    assert run(repo, *NEW) == 3
+    wt, cdir = worktree(repo), change_dir(repo)
+    write(cdir / "notes.md", "local\n")
+    git(wt, "add", "-A")
+    git(wt, "commit", "-qm", "mine")
+    mine = git(wt, "rev-parse", "HEAD")
+    push_edit(
+        repo, tmp_path / "other", "proposal.md", "# Request throttling\n\nTheirs.\n"
+    )
+    capsys.readouterr()
+    before, calls = run_dir_files(cdir), len(model.calls)
+
+    assert run(repo, *RESUME) == 2
+    out = capsys.readouterr().out
+    assert f"origin/{BRANCH}" in out and "Nothing was changed" in out
+    assert f"git -C {wt} pull --rebase origin {BRANCH}" in out
+    assert git(wt, "rev-parse", "HEAD") == mine
+    assert run_dir_files(cdir) == before and len(model.calls) == calls
+
+
+# --- S11 --------------------------------------------------------------------------
+
+
+def test_S11_the_same_step_stopped_twice(repo, model, tmp_path, monkeypatch):
+    two(model)
+    model["spec:specs:ui"] = killer(specs(), times=2)
+    go(repo, FLOW[:3])
+    with pytest.raises(Killed):
+        run(repo, *TICKETS)
+    with pytest.raises(Killed):
+        run(repo, *RESUME)
+    go(repo, [(RESUME, 3), (RESUME, 0)])
+    assert model.calls_to("spec:specs:api") == 1 and model.calls_to("prototype") == 1
+    other, _ = baseline(tmp_path, monkeypatch, two, FLOW)
+    same_as(repo, other)
+
+
+# --- S12 --------------------------------------------------------------------------
+
+
+def test_S12_a_second_process_is_refused_with_the_holders_pid(
+    repo, model, tmp_path, monkeypatch, capsys
+):
+    two(model)
+    model["spec:specs:ui"] = killer(specs())
+    go(repo, FLOW[:3])
+    with pytest.raises(Killed):
+        run(repo, *TICKETS)
+    cdir = change_dir(repo)
+    before, calls = run_dir_files(cdir), len(model.calls)
+    capsys.readouterr()
+    with runlock.hold(cdir / ".pm-spec"):
+        assert run(repo, *RESUME) == 5
+    assert f"pid {os.getpid()}" in capsys.readouterr().out
+    assert len(model.calls) == calls and run_dir_files(cdir) == before
+
+    # Once the holder is gone the run resumes as if nothing happened.
+    go(repo, [(RESUME, 3), (RESUME, 0)])
+    other, _ = baseline(tmp_path, monkeypatch, two, FLOW)
+    same_as(repo, other)
+
+
+# --- S13 --------------------------------------------------------------------------
+
+
+def test_S13_the_review_stop_after_the_specs(
+    repo, model, tmp_path, monkeypatch, capsys
+):
+    two(model)
+    go(repo, FLOW[:4])
+    out = capsys.readouterr().out
+    cdir = change_dir(repo)
+    assert "SPEC:REVIEW:specs" in out and f"SPEC:BRANCH:{BRANCH}" in out
+    assert "SPEC:READY" not in out
+    # The specs, and the tickets the resume recorded.
+    assert pushed(repo)[:8] == [
+        "@ specs(throttle): specs for review",
+        "specs/changes/throttle/components.md",
+        "specs/changes/throttle/components/api/.change.yaml",
+        "specs/changes/throttle/components/api/specs.md",
+        "specs/changes/throttle/components/ui/.change.yaml",
+        "specs/changes/throttle/components/ui/specs.md",
+        "specs/changes/throttle/tickets.json",
+        "@ specs(throttle): prototype and tickets",
+    ]
+    assert state(cdir)["steps"]["specs"]["outcome"] == "passed"
+    assert "consistency" not in model.labels() and state(cdir)["handoff"] is None
+    assert meta(cdir)["spec_status"] == "draft"
+
+    # Resume pulls, then runs the check and the handoff only.
+    calls = len(model.calls)
+    assert run(repo, *RESUME) == 0
+    assert model.labels()[calls:] == ["consistency"]
+    assert (
+        ready_line(capsys.readouterr().out)
+        == f"SPEC:READY:{cdir}:{layout.revision(cdir)}"
+    )
+    other, _ = baseline(tmp_path, monkeypatch, two, FLOW)
+    same_as(repo, other)
+
+    # A reviewer's edit to a specs.md and to the prototype, pushed at the
+    # stop: kept, and what the check reads.
+    edited = make_repo(tmp_path / "edited" / "proj")
+    go(edited, FLOW[:4])
+    rule, mock = specs(rule="EDITED by a reviewer"), "<html>the reviewer's</html>\n"
+    mine = clone(edited, tmp_path / "reviewer")
+    write(
+        mine / "specs" / "changes" / "throttle" / "components" / "ui" / "specs.md", rule
+    )
+    write(mine / "specs" / "changes" / "throttle" / "prototype" / "mockup.html", mock)
+    git(mine, "commit", "-qam", "review edits")
+    git(mine, "push", "-q", "origin", BRANCH)
+    written = model.calls_to("spec:specs")
+    assert run(edited, *RESUME) == 0
+    ecdir = change_dir(edited)
+    assert (ecdir / "components" / "ui" / "specs.md").read_text() == rule
+    assert (ecdir / "prototype" / "mockup.html").read_text() == mock
+    assert "EDITED by a reviewer" in model.exactly("consistency")[-1]
+    assert model.calls_to("spec:specs") == written
+    assert layout.ready(ecdir) == (True, "")
+
+
+CONTRADICTION = {
+    "type": "contradiction",
+    "severity": "major",
+    "description": "api says 60 a minute, ui says 100",
+    "places": [
+        {"file": "components/api/specs.md", "where": "rate-limit"},
+        {"file": "components/ui/specs.md", "where": "rate-limit"},
+    ],
+    "suggestion": "make them agree",
+}
+NIT = {**CONTRADICTION, "severity": "minor", "description": "a wording nit"}
+
+
+def two_with_check(*answers):
+    """Two components, and the consistency agent's answers in order."""
+
+    def configure(m: FakeModel) -> None:
+        two(m)
+        m["consistency"] = [{"findings": a} for a in answers]
+
+    return configure
+
+
+def test_S13_after_the_review_a_major_finding_blocks_and_rewrites_nothing(
+    repo, model, tmp_path, monkeypatch, capsys
+):
+    configure = two_with_check([CONTRADICTION])
+    configure(model)
+    go(repo, FLOW[:4])
+    cdir = change_dir(repo)
+    before = {u: (cdir / u).read_text() for u in layout.units(cdir)}
+    capsys.readouterr()
+
+    calls = len(model.calls)
+    assert run(repo, *RESUME) == 4
+    out = capsys.readouterr().out
+    assert model.labels()[calls:] == ["consistency"]
+    assert f"SPEC:BLOCKED:{cdir}" in out and "SPEC:READY" not in out
+    assert "api says 60 a minute, ui says 100" in out
+    assert "no file was rewritten" in out
+    assert {u: (cdir / u).read_text() for u in layout.units(cdir)} == before
+    step = state(cdir)["steps"]["consistency"]
+    assert step["outcome"] == "blocked" and step["repair_attempts"] == 0
+    assert [f["severity"] for f in step["blocking_findings"]] == ["major"]
+    assert meta(cdir)["spec_status"] == "draft" and state(cdir)["handoff"] is None
+
+    other, _ = baseline(tmp_path, monkeypatch, configure, [*FLOW[:4], (RESUME, 4)])
+    same_as(repo, other)
+
+
+def test_S13_after_the_review_a_minor_finding_is_reported_and_handed_off(
+    repo, model, tmp_path, monkeypatch, capsys
+):
+    configure = two_with_check([NIT])
+    configure(model)
+    go(repo, FLOW[:4])
+    capsys.readouterr()
+    assert run(repo, *RESUME) == 0
+    out = capsys.readouterr().out
+    cdir = change_dir(repo)
+    assert "advisory findings" in out and "a wording nit" in out
+    assert ready_line(out) == f"SPEC:READY:{cdir}:{layout.revision(cdir)}"
+    assert not any(":rewrite:" in label for label in model.labels())
+    other, _ = baseline(tmp_path, monkeypatch, configure, FLOW)
+    same_as(repo, other)
+
+
+# --- S17 --------------------------------------------------------------------------
+
+
+def reviewer_edit(repo: Path, at: Path, rule: str) -> str:
+    """A person fixes the ui specs in their own clone and pushes."""
+    text = specs(rule=rule)
+    mine = clone(repo, at)
+    write(
+        mine / "specs" / "changes" / "throttle" / "components" / "ui" / "specs.md", text
+    )
+    git(mine, "commit", "-qam", "fix the contradiction")
+    git(mine, "push", "-q", "origin", BRANCH)
+    return text
+
+
+def test_S17_resume_after_a_blocked_check_rechecks_the_edited_files(
+    repo, model, tmp_path, monkeypatch, capsys
+):
+    configure = two_with_check([CONTRADICTION], [])
+    configure(model)
+    go(repo, [*FLOW[:4], (RESUME, 4)])
+    cdir = change_dir(repo)
+    capsys.readouterr()
+
+    # Unchanged: refused with no model call, the findings printed again.
+    calls = len(model.calls)
+    assert run(repo, *RESUME) == 4
+    out = capsys.readouterr().out
+    assert len(model.calls) == calls
+    assert "api says 60 a minute, ui says 100" in out
+    assert f"SPEC:BLOCKED:{cdir}" in out and "one rewrite" not in out
+
+    # A person edits and pushes: pulled, checked again (no rewrite), handed off.
+    rule = reviewer_edit(repo, tmp_path / "reviewer", "60 a minute everywhere")
+    assert run(repo, *RESUME) == 0
+    out = capsys.readouterr().out
+    assert model.labels()[calls:] == ["consistency"]
+    assert "60 a minute everywhere" in model.exactly("consistency")[-1]
+    assert (cdir / "components" / "ui" / "specs.md").read_text() == rule
+    assert ready_line(out) == f"SPEC:READY:{cdir}:{layout.revision(cdir)}"
+    assert state(cdir)["steps"]["consistency"]["outcome"] == "passed"
+
+    # The same edit made at the review stop, in a run that never blocked.
+    def at_review(m: FakeModel) -> None:
+        two(m)
+        m["consistency"] = {"findings": []}
+
+    other, _ = baseline(tmp_path, monkeypatch, at_review, FLOW[:4])
+    reviewer_edit(other, tmp_path / "reviewer-2", "60 a minute everywhere")
+    monkeypatch.setattr(sdk, "run_agent", FakeModel())
+    assert run(other, *RESUME) == 0
+    monkeypatch.setattr(sdk, "run_agent", model)
+    # Files, commits and refs as if it never blocked; the run state keeps
+    # the check's history.
+    same_as(repo, other, run_state_too=False)
+
+
+def test_S17_an_edit_that_still_disagrees_blocks_again(repo, model, capsys):
+    two_with_check([CONTRADICTION], [CONTRADICTION])(model)
+    go(repo, [*FLOW[:4], (RESUME, 4)])
+    reviewer_edit(repo, repo.parent / "reviewer", "still 100 in the ui")
+    capsys.readouterr()
+    assert run(repo, *RESUME) == 4
+    cdir = change_dir(repo)
+    assert f"SPEC:BLOCKED:{cdir}" in capsys.readouterr().out
+    assert model.calls_to("consistency") == 2
+    assert not any(":rewrite:" in label for label in model.labels())
+    assert state(cdir)["steps"]["consistency"]["outcome"] == "blocked"
+
+
+def test_auto_keeps_the_one_rewrite(repo, model):
+    """No review stop, no reviewer: the check still rewrites what it cites."""
+    two(model)
+    model["consistency"] = [
+        {"findings": [CONTRADICTION]},
         {
             "findings": [],
-            "prior_assessments": [{"finding_id": "RV-F1", "status": "resolved"}],
+            "prior_assessments": [
+                {"finding_id": "CC-F1", "status": "resolved", "evidence": "x"}
+            ],
         },
+    ]
+    assert run(repo, "new", "throttle", "--auto") == 0
+    assert [label for label in model.labels() if ":rewrite:" in label] == [
+        "consistency:rewrite:api",
+        "consistency:rewrite:ui",
     ]
 
 
-def _issues(repo):
+# --- S14 --------------------------------------------------------------------------
+
+
+def old_layout_change(repo: Path, *, handed_off: bool) -> None:
+    """A change pm-spec 0.8.0 or earlier wrote in the user's checkout:
+    `requirements/`, no `specs.md`, and its run state, which `branch.adopt`
+    copies into pm-spec's worktree with it. *handed_off*: the old run checked
+    it and wrote the ready record; else it stopped before the check."""
+    hand = source_dir(repo)
+    write(hand / "proposal.md", proposal())
+    write(hand / "use-cases.md", "# Use cases\n")
+    for cap in CAPS:
+        write(hand / "requirements" / f"{cap}.md", requirements(cap))
+    write_change_meta(hand, {"ticket_refs": {"epic": "ENG-1", "children": []}})
+    steps = {"prototype": StepOutcome(outcome="skipped")}
+    handoff_record = None
+    if handed_off:
+        rev = mark_ready(hand)
+        steps["consistency"] = StepOutcome(outcome="passed", revision=rev)
+        handoff_record = Handoff(revision=rev, committed=True, commit="abc")
+    old = RunState(
+        change="throttle",
+        intake_done=True,
+        interview_done=True,
+        steps=steps,
+        handoff=handoff_record,
+    )
+    state_mod.save(old, hand / ".pm-spec", ledger=False)
+
+
+STAGE_FILES = ("components.md", "specs.md", "plan.md", "components", "prototype")
+
+
+@pytest.mark.parametrize("handed_off", [True, False])
+def test_S14_a_run_from_before_the_staged_flow_only_checks_and_hands_off(
+    repo, model, capsys, handed_off
+):
+    two(model)
+    old_layout_change(repo, handed_off=handed_off)
+    # Edited after the old handoff: the ready record is stale (S9).
+    hand = source_dir(repo)
+    write(hand / "requirements" / f"{CAPS[0]}.md", requirements(CAPS[0], rule="EDITED"))
+
+    assert run(repo, *RESUME) == 0
+    out = capsys.readouterr().out
     cdir = change_dir(repo)
-    write(cdir / "spec-issues.md", ISSUES)
-    set_spec_issues(cdir, cdir / "spec-issues.md")
+    assert model.labels() == ["consistency"]
+    assert "EDITED" in model.exactly("consistency")[0]
+    assert "SPEC:REVIEW" not in out and "SPEC:TICKETS" not in out
+    assert ready_line(out) == f"SPEC:READY:{cdir}:{layout.revision(cdir)}"
+    assert layout.ready(cdir) == (True, "")
+    assert [n for n in STAGE_FILES if (cdir / n).exists()] == []
+    # The handoff writes it when missing, as for an adopted change.
+    assert (cdir / "tickets.json").is_file()
+    steps = state(cdir)["steps"]
+    for name in ("proposal", "components", "tickets", "specs"):
+        assert steps[name]["outcome"] == "skipped"
+        assert steps[name]["reason"] == stages.BEFORE_STAGED_FLOW
+    # The old run's own record of its prototype step is kept as it was.
+    assert steps["prototype"] == {
+        **steps["prototype"],
+        "outcome": "skipped",
+        "reason": "",
+    }
+    assert git(worktree(repo), "rev-parse", "HEAD") == git(
+        origin(repo), "rev-parse", BRANCH
+    )
+
+    # Resumed again: nothing to do, nothing regenerated.
+    assert run(repo, *RESUME) == 0
+    assert model.labels() == ["consistency"]
 
 
-def test_S9_revise_killed_after_the_rewrite_published(
+# --- S15 --------------------------------------------------------------------------
+
+BLOCKED_NOTES = "- mockup.html: half of it\n\nQUESTIONS: which page?\nSTATUS: BLOCKED\n"
+
+
+def test_S15_a_blocked_prototype_is_checked_again_not_taken_as_the_pms(
     repo, model, tmp_path, monkeypatch, capsys
 ):
-    _resolved(model)
-    assert run(repo, "new", "throttle", "--auto") == 0
-    _issues(repo)
-    real = publish.publish
-
-    def publish_then_die(run_, step, files):
-        real(run_, step, files)
-        raise Killed("after publish")
-
-    monkeypatch.setattr(publish, "publish", publish_then_die)
-    with pytest.raises(Killed):
-        run(repo, "revise", "throttle")
-    monkeypatch.setattr(publish, "publish", real)
+    model["prototype"] = [agent(BLOCKED_NOTES), agent()]
+    go(repo, [(AUTO[0][0], 1)])
     cdir = change_dir(repo)
-    step = state(cdir)["steps"]["revise"]
-    assert (
-        step["rewrite_published"] is True
-        and step["repair_findings"][0]["finding_id"] == "RV-F1"
-    )
-    assert meta(cdir)["spec_issues"] == "spec-issues.md"
+    assert state(cdir)["steps"]["prototype"]["outcome"] == "blocked"
+    capsys.readouterr()
 
-    # The recheck alone, against the listed issue; no second rewrite.
-    rewrites, checks = (
-        model.calls_to("revise:rewrite"),
-        len(model.exactly("consistency")),
-    )
-    assert run(repo, "revise", "throttle") == 0
-    assert model.calls_to("revise:rewrite") == rewrites == 1
-    assert len(model.exactly("consistency")) == checks + 1
-    assert "RV-F1" in model.exactly("consistency")[-1]
-    assert meta(cdir)["spec_issues"] is None and is_ready(cdir) == (True, "")
+    # Still BLOCKED: fails again with the reason; no agent, nothing kept.
+    assert run(repo, *RESUME) == 1
+    assert "STATUS: BLOCKED" in capsys.readouterr().out
+    assert model.calls_to("prototype") == 1
+    assert state(cdir)["steps"]["prototype"]["outcome"] == "blocked"
+    assert "spec:specs" not in " ".join(model.labels())
 
-    def setup(m):
-        _resolved(m)
+    # A person answers the agent's question: checked again, kept, and on.
+    write(
+        cdir / "prototype" / "NOTES.md",
+        "- mockup.html: the limits page\nSTATUS: DONE\n",
+    )
+    assert run(repo, *RESUME) == 0
+    assert model.calls_to("prototype") == 1
+    assert state(cdir)["steps"]["prototype"]["outcome"] == "passed"
+    assert "STATUS: DONE" in (cdir / "prototype" / "NOTES.md").read_text()
 
-    other, _ = baseline(
-        tmp_path, monkeypatch, setup, (["new", "throttle", "--auto"], 0)
+
+def test_S15_a_prototype_without_notes_runs_the_agent_again(
+    repo, model, tmp_path, monkeypatch
+):
+    model["prototype"] = [agent(notes=None), agent(notes=None), agent()]
+    go(repo, [(AUTO[0][0], 1)])
+    cdir = change_dir(repo)
+    assert (cdir / "prototype" / "mockup.html").is_file()
+    assert not (cdir / "prototype" / "NOTES.md").exists()
+
+    assert run(repo, *RESUME) == 0
+    assert model.calls_to("prototype") == 3
+    assert (cdir / "prototype" / "NOTES.md").is_file()
+    other, _ = baseline(tmp_path, monkeypatch, lambda m: None, AUTO)
+    same_as(repo, other, commits=False, run_state_too=False)
+
+
+def test_S15_files_are_the_pms_only_when_no_agent_ran(repo, model):
+    # A write outside prototype/ failed the run; what it left inside is
+    # checked by the gate, never kept unchecked.
+    model["prototype"] = [agent(notes=None, outside=repo.parent / "x.txt"), agent()]
+    go(repo, [(AUTO[0][0], 1)])
+    cdir = change_dir(repo)
+    assert (cdir / "prototype" / "mockup.html").is_file()
+    assert run(repo, *RESUME) == 0
+    assert model.calls_to("prototype") == 2
+    reason = state(cdir)["steps"]["prototype"]["reason"]
+    assert not reason.startswith("Kept the")
+
+
+# --- S16 --------------------------------------------------------------------------
+
+OLD_CHILDREN = ("throttle-api", "throttle-ui")
+
+
+def old_split(repo: Path) -> dict:
+    """The parent of a pm-spec 0.7.2 epic split in the user's checkout: its
+    `interview.md` and `.change.yaml` (`children`), and a run state holding
+    the split; each child a sibling change in the old layout, handed off by
+    its own run. Returns the parent's run state as saved."""
+    parent = source_dir(repo)
+    write(parent / "interview.md", "# Interview\n\nThrottle it.\n")
+    write_change_meta(
+        parent,
+        {
+            "children": list(OLD_CHILDREN),
+            "ticket_refs": {"epic": "ENG-1", "children": []},
+        },
     )
-    _issues(other)
-    previous = sdk.run_agent
-    fake = FakeModel()
-    _resolved(fake)
-    fake.count["consistency"] = (
-        1  # the baseline's first check already ran on its own model
+    split = SplitRecord(
+        inputs="old",
+        single=False,
+        children=[
+            EpicChild(id="api", title="API", plan="# Plan: api\n"),
+            EpicChild(id="ui", title="UI", depends_on=["api"], plan="# Plan: ui\n"),
+        ],
     )
-    monkeypatch.setattr(sdk, "run_agent", fake)
-    assert run(other, "revise", "throttle") == 0
-    monkeypatch.setattr(sdk, "run_agent", previous)
-    assert snapshot(cdir) == snapshot(change_dir(other))
+    old = RunState(
+        change="throttle", intake_done=True, interview_done=True, split=split
+    )
+    state_mod.save(old, parent / ".pm-spec", ledger=False)
+    for name, deps in zip(OLD_CHILDREN, ([], ["throttle-api"]), strict=True):
+        child = source_dir(repo, name)
+        write(child / "proposal.md", proposal())
+        write(child / "use-cases.md", "# Use cases\n")
+        write(child / "plan.md", f"# Plan: {name}\n\n## Done means\n1. x\n")
+        for cap in CAPS:
+            write(child / "requirements" / f"{cap}.md", requirements(cap))
+        write_change_meta(child, {"parent": "throttle", "depends_on": deps})
+        rev = mark_ready(child)
+        state_mod.save(
+            RunState(
+                change=name,
+                parent="throttle",
+                intake_done=True,
+                interview_done=True,
+                steps={"consistency": StepOutcome(outcome="passed", revision=rev)},
+                handoff=Handoff(revision=rev, committed=True, commit="abc"),
+            ),
+            child / ".pm-spec",
+            ledger=False,
+        )
+    return json.loads((parent / ".pm-spec" / "state.json").read_text())
+
+
+def change_files(cdir: Path) -> dict[str, object]:
+    """Every file of a change dir, the run folder included, each
+    `.change.yaml` as a mapping without the branch the move to the feature
+    branch records (`branch.adopt`, before any step runs)."""
+    out: dict[str, object] = {}
+    for path in sorted(cdir.rglob("*")):
+        if not path.is_file() or path.name == runlock.LOCK_FILE:
+            continue
+        rel = path.relative_to(cdir).as_posix()
+        if path.name == ".change.yaml":
+            out[rel] = {k: v for k, v in meta(path.parent).items() if k != "branch"}
+        else:
+            out[rel] = path.read_bytes()
+    return out
+
+
+def test_S16_the_parent_of_an_old_split_points_at_its_children(repo, model, capsys):
+    two(model)
+    saved = old_split(repo)
+    names = ("throttle", *OLD_CHILDREN)
+    before = {n: change_files(source_dir(repo, n)) for n in names}
+
+    assert run(repo, *RESUME) == 0
+    out = capsys.readouterr().out
+    assert model.calls == []
+    assert "specs live in the children" in out and "Nothing was changed" in out
+    assert "  resume throttle-api\n  resume throttle-ui" in out
+    assert "SPEC:" not in out
+
+    # As the run that never stopped left it: every file, the children's run
+    # states too, but the parent's state, which gains the stages skipped.
+    after = {n: change_files(change_dir(repo, n)) for n in names}
+    state_rel = ".pm-spec/state.json"
+    for n in names:
+        theirs, mine = dict(before[n]), dict(after[n])
+        if n == "throttle":
+            theirs.pop(state_rel), mine.pop(state_rel)
+        assert mine == theirs, n
+    now = state(change_dir(repo))
+    assert now["steps"] == {
+        name: {**now["steps"][name], "outcome": "skipped", "reason": stages.OLD_SPLIT}
+        for name in stages.STAGES
+    }
+    assert {k: v for k, v in now.items() if k not in ("steps", "budget")} == {
+        k: v for k, v in saved.items() if k not in ("steps", "budget")
+    }
+    # Only the move to the branch was committed, and nothing was pushed by the run.
+    wt = worktree(repo)
+    subjects = git(wt, "log", "--format=%s", "origin/main..HEAD").splitlines()
+    assert subjects and all(s.endswith("moved to ENG-1-throttle") for s in subjects)
+
+    # Resumed again: nothing at all changes.
+    whole = run_dir_files(change_dir(repo).parent)
+    head = git(wt, "rev-parse", "HEAD")
+    assert run(repo, *RESUME) == 0
+    assert run_dir_files(change_dir(repo).parent) == whole
+    assert git(wt, "rev-parse", "HEAD") == head and model.calls == []

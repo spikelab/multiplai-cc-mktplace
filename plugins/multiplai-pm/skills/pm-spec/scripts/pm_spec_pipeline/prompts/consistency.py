@@ -1,4 +1,4 @@
-"""The consistency check: do the proposal, the use cases and the requirements agree?
+"""The consistency check: do the proposal, the use cases, the plans and the specs agree?
 
 The prior-findings section is restated from buildme's
 `prompts/design_audit.py` (`PRIOR_FINDINGS_SECTION`), adapted to spec files."""
@@ -18,8 +18,11 @@ builds from them. You report problems; you do not fix them.
 ## use-cases.md
 {use_cases_content}
 
-## Requirements
-{requirements_content}
+## Component plans
+{plans_content}
+
+## Specs
+{specs_content}
 
 ## What to report
 Read every document above together. You may read the repository (Read, Glob,
@@ -27,15 +30,17 @@ Grep) to understand names it uses, but judge only these documents. Report
 each problem of these three types:
 
 - `contradiction`: two places require behaviour that cannot both hold — two
-  requirements, or a requirement and the proposal or a use case, give
+  requirements, or a requirement and the proposal, a plan or a use case, give
   different rules for the same situation.
-- `gap`: something the proposal or a use case promises that no requirement
-  specifies, or a requirement that relies on a behaviour no requirement states.
-- `duplicate`: the same behaviour required in two capabilities.
+- `gap`: something the proposal, a plan or a use case promises that no
+  requirement specifies, or a requirement that relies on a behaviour no
+  requirement states.
+- `duplicate`: the same behaviour required in two capabilities or two components.
 
-Every finding cites both places, each as the file (`proposal.md`,
-`use-cases.md` or `requirements/<capability>.md`) and where in it (a
-requirement or scenario name, a section, or a use case). Severity:
+Every finding cites both places, each as the file, by the path its heading
+above gives (`proposal.md`, `use-cases.md`, a `plan.md` or a `specs.md`), and
+where in it (a capability, a requirement or scenario name, a section, or a
+use case). Severity:
 `critical` when a builder would have to implement one of two incompatible
 rules, `major` when a builder would have to guess, `minor` for wording that
 reads two ways but would be built the same.
@@ -44,7 +49,7 @@ Return ONLY JSON matching this schema (an empty `findings` list is a real
 answer when the documents agree):
 {{"findings": [{{"type": "contradiction|gap|duplicate", "severity": "critical|major|minor",
   "description": "<what disagrees>",
-  "places": [{{"file": "requirements/<capability>.md", "where": "<requirement or section>"}},
+  "places": [{{"file": "components/<id>/specs.md", "where": "<capability: requirement>"}},
              {{"file": "...", "where": "..."}}],
   "suggestion": "<the change that would make them agree>"}}],
  "prior_assessments": []}}

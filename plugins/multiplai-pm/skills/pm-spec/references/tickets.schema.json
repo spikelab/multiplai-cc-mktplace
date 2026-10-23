@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "pm-spec/tickets.schema.json",
   "title": "pm-spec tickets.json",
-  "description": "A change's work items in a neutral format: one epic for the change and one task per capability. Written by pm-spec at handoff, in specs/changes/<name>/tickets.json. It names no ticket system; mapping it into one is the reader's job.",
+  "description": "A change's work items in a neutral format: for a change with several components, one epic for the change and one task per component; for a change with one component, one task with no parent (the change's own ticket). Written by pm-spec in stage 3, in specs/changes/<name>/tickets.json. It names no ticket system; mapping it into one is the reader's job.",
   "type": "array",
   "minItems": 1,
   "items": {
@@ -13,7 +13,7 @@
       "id": {
         "type": "string",
         "minLength": 1,
-        "description": "Local and stable across runs: the change name for the epic, <change>/<capability> for a task."
+        "description": "Local and stable across runs: the change name for the epic (or the one task of a change with one component), <change>/<component> for a component's task."
       },
       "type": {"enum": ["epic", "task"]},
       "title": {"type": "string", "minLength": 1},
@@ -22,12 +22,12 @@
       "labels": {"type": "array", "items": {"type": "string", "minLength": 1}},
       "parent": {
         "type": ["string", "null"],
-        "description": "The id of the parent item, or null for the epic."
+        "description": "The id of the parent item; null for the epic, and for the one task of a change with one component."
       },
       "acceptance": {
         "type": "array",
         "items": {"type": "string", "minLength": 1},
-        "description": "A checklist: the requirement and scenario titles of the task's requirements file."
+        "description": "A checklist: the numbered criteria of the component's plan, under ## Done means, one entry each. A list nested under a criterion stays in its entry, one sub-item per line, indented as in the plan."
       },
       "links": {
         "type": "array",
@@ -37,7 +37,7 @@
       "ref": {
         "type": "string",
         "minLength": 1,
-        "description": "The ref the item came in with (--ticket-ref for the epic, --ticket-child for a task), as an opaque string."
+        "description": "The item's ticket, as an opaque string: the change's (--ticket-ref) for the epic or the one task, and a component's (--ticket-child, or resume --ticket <component>=<REF>) once it has one."
       }
     },
     "allOf": [
@@ -47,7 +47,7 @@
       },
       {
         "if": {"properties": {"type": {"const": "task"}}},
-        "then": {"properties": {"parent": {"type": "string"}}}
+        "then": {"properties": {"parent": {"type": ["string", "null"]}}}
       }
     ]
   }

@@ -76,7 +76,7 @@ class Root:
             root, monkeypatch, {}, {str(N): [{"findings": [HIGH]}]}, fixes
         )
         self.config = make_build(self.project)
-        self.config.epic = EpicSettings(max_parallel=1)
+        self.config.epic = EpicSettings(max_parallel=1, merge="manual")
         approve(self.config, TWO, CallLog(root / "split.log"))
         self.dir = self.data / "buildme" / "epics" / "o-r--e"
 

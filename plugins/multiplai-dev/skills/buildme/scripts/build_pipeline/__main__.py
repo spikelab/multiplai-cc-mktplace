@@ -175,13 +175,21 @@ def build_parser() -> argparse.ArgumentParser:
         "--epic-child",
         action="store_true",
         help="This build is an epic's child (the coordinator passes it): "
-        "no spec-extract, and the PR targets the default branch",
+        "no spec-extract",
     )
     build.add_argument(
         "--base-ref",
         default="",
         help="The commit a new worktree branches from (default: the source "
         "checkout's HEAD); a build that re-binds to its worktree ignores it",
+    )
+    build.add_argument(
+        "--branch",
+        default="",
+        help="The change's feature branch on origin, where pm-spec pushed its specs; it "
+        "starts with <TICKET>- (default: the branch its .change.yaml records, else the one "
+        "origin branch named <TICKET>-<change>). A single change builds on it and opens its "
+        "PR to the default branch; an epic's children target it",
     )
     build.add_argument(
         "--force",
@@ -218,7 +226,7 @@ def build_parser() -> argparse.ArgumentParser:
     findings.add_argument(
         "--change",
         default="",
-        help="Change name (default: from the PR's buildme/<name> branch)",
+        help="Change name (default: from the PR's <TICKET>-<name> or buildme/<name> branch)",
     )
     findings.add_argument("--project-dir", default=".", help="Project directory")
     findings.add_argument(
@@ -421,6 +429,16 @@ def _main(args: argparse.Namespace) -> int:
         if not change_dir.exists():
             print(
                 f"ERROR: Change '{args.change}' not found at {change_dir}",
+                file=sys.stderr,
+            )
+            return 1
+        from multiplai_core.specs import change_root
+
+        if change_root(change_dir) != change_dir:
+            # A change with components archives once, all of them together.
+            print(
+                f"ERROR: '{args.change}' is a component; archive its change: "
+                f"--change {change_root(change_dir).name}",
                 file=sys.stderr,
             )
             return 1

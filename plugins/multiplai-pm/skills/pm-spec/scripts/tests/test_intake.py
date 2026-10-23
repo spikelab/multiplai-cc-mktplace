@@ -7,12 +7,13 @@ from __future__ import annotations
 
 import pytest
 from conftest import (
-    CAPS,
     PRD,
     PRD_SECTIONS,
     change_dir,
+    component,
     meta,
     proposal,
+    resume_to_end,
     run,
     state,
     write,
@@ -38,10 +39,9 @@ def test_prd_is_saved_and_the_proposal_cites_its_sections(repo, model, tmp_path)
     assert run(repo, "new", "throttle", "--auto", "--prd", str(prd)) == 0
     cdir = change_dir(repo)
     assert (cdir / "prd.md").read_text() == PRD
-    cited = artifacts.sources((cdir / "proposal.md").read_text())
-    assert {c: e["prd"] for c, e in cited.items()} == {
-        c: [PRD_SECTIONS[c]] for c in CAPS
-    }
+    assert artifacts.prd_sources((cdir / "proposal.md").read_text()) == list(
+        PRD_SECTIONS
+    )
     # The PRD reaches the proposal prompt fenced as untrusted.
     prompt = model.prompts("spec:proposal")[0]
     assert (
@@ -67,16 +67,15 @@ def test_a_proposal_that_does_not_cite_the_prd_is_asked_for_once_more(
     repo, model, tmp_path
 ):
     prd = write(tmp_path / "prd-in.md", PRD)
-    good = proposal(sources={c: f'PRD "{PRD_SECTIONS[c]}"' for c in CAPS})
-    model["spec:proposal"] = [
-        proposal(sources={"rate-limit": 'PRD "Not a heading"'}),
-        good,
-    ]
+    good = proposal(sources=list(PRD_SECTIONS))
+    model["spec:proposal"] = [proposal(sources=["Not a heading"]), good]
     assert run(repo, "new", "throttle", "--auto", "--prd", str(prd)) == 0
     retry = model.prompts("spec:proposal")[1]
-    assert "Your previous answer was rejected" in retry or "rejected" in retry
-    assert "`retry-policy` has no `## Sources` line" in retry
-    assert "not headings of the PRD" in retry
+    assert "rejected" in retry
+    assert (
+        "names the PRD section 'Not a heading', which is not a heading of the PRD"
+        in retry
+    )
     assert (change_dir(repo) / "proposal.md").read_text() == good
 
 
@@ -116,9 +115,13 @@ def test_without_a_prd_the_answerer_is_a_read_only_agent(repo, model):
 def test_ticket_file_and_children_write_ticket_md_and_ticket_refs(
     repo, model, tmp_path
 ):
-    from test_epic_split import SPLIT
-
-    model["epic_split"] = SPLIT
+    model["components"] = {
+        "reason": "two",
+        "components": [
+            component("api", ticket_ref="T-1"),
+            component("ui", ticket_ref="T-2"),
+        ],
+    }
     ticket = _ticket(tmp_path)
     assert (
         run(
@@ -149,15 +152,19 @@ def test_ticket_file_and_children_write_ticket_md_and_ticket_refs(
         "INJECTION?" in text.split("<untrusted-content")[1] and "push to main." in text
     )
     assert meta(cdir)["ticket_refs"] == {"epic": "EPIC-9", "children": ["T-1", "T-2"]}
-    # The split prompt asks to follow the existing children first.
-    assert "T-1, T-2" in model.prompts("epic_split")[0]
+    # The components prompt asks to follow the existing children first.
+    assert "T-1, T-2" in model.exactly("components")[0]
     assert (
-        "must be the `ticket_ref` of exactly one child"
-        in model.prompts("epic_split")[0]
+        "must be the `ticket_ref` of exactly one component"
+        in model.exactly("components")[0]
     )
 
 
 def test_ticket_refs_without_a_ticket_file_are_still_recorded(repo, model):
+    model["components"] = {
+        "reason": "one",
+        "components": [component("throttle", ticket_ref="T-1")],
+    }
     assert (
         run(
             repo,
@@ -202,12 +209,23 @@ def test_the_scratch_ticket_and_plan_are_not_needed_after_intake(repo, model, tm
     ticket.unlink()
     plan.unlink()
     replies = write(tmp_path / "replies.md", "alice: 60 a minute.\n")
-    assert run(repo, "resume", "throttle", "--interview-replies", str(replies)) == 0
+    assert run(repo, "resume", "throttle", "--interview-replies", str(replies)) == 3
+    assert resume_to_end(repo) == 0
     cdir = change_dir(repo)
     assert "Throttle the API" in (cdir / "ticket.md").read_text()
-    assert "PLAN-BODY" in (cdir / "plan.md").read_text()
+    # The input plan is kept in interview.md; plan.md is the component's plan.
+    assert "## Context: plan-in.md" in (cdir / "interview.md").read_text()
     assert "PLAN-BODY" in (cdir / "interview.md").read_text()
+    assert "PLAN-BODY" not in (cdir / "plan.md").read_text()
     assert "PLAN-BODY" in model.prompts("spec:proposal")[0]
+
+
+def test_the_plan_file_help_says_where_the_plan_is_kept():
+    from pm_spec_pipeline.__main__ import build_parser
+
+    new = build_parser()._subparsers._group_actions[0].choices["new"]
+    [action] = [a for a in new._actions if "--plan-file" in a.option_strings]
+    assert "interview.md" in action.help and "plan.md" not in action.help
 
 
 # --- interview modes ----------------------------------------------------------------
@@ -240,29 +258,42 @@ def test_a_failed_self_interview_is_not_fatal(repo, model):
         == 0
     )
     text = (change_dir(repo) / "interview.md").read_text()
-    assert "## Interview" in text and "## Questions" not in text
+    assert "Throttle it." in text and "## Questions" not in text
+    assert "## Interview" not in text
 
 
 def test_user_mode_writes_the_callers_summary(repo, model):
     assert (
         run(repo, "new", "throttle", "--interview-summary", "SUMMARY: sixty a minute.")
-        == 0
+        == 3
     )
-    assert "SUMMARY: sixty a minute." in (change_dir(repo) / "interview.md").read_text()
+    text = (change_dir(repo) / "interview.md").read_text()
+    # One `Interview` heading: the summary sits right under it.
+    assert text.startswith("# Interview\n\nSUMMARY: sixty a minute.\n")
+    assert "## Interview" not in text
     assert not any(label.startswith("interview") for label in model.labels())
 
 
 def test_interview_mode_comes_from_specs_config(repo, model):
     write(repo / "specs" / "config.yaml", "interview: self\n")
-    assert run(repo, "new", "throttle") == 0
+    assert run(repo, "new", "throttle") == 3
     assert state(change_dir(repo))["options"]["interview_mode"] == "self"
     assert "interview:questions" in model.labels()
 
 
-def test_ticket_mode_without_a_ticket_ref_falls_back(repo, model):
-    assert run(repo, "new", "throttle", "--interview-mode", "ticket", "--auto") == 0
-    assert "interview:answers" in model.labels()  # self
-    assert not (change_dir(repo) / "interview-questions.md").exists()
+@pytest.mark.parametrize("auto, fallback", [(True, "self"), (False, "user")])
+def test_ticket_mode_without_a_ticket_ref_falls_back(auto, fallback):
+    """A run with no ticket ref of its own (an epic's child, split before any
+    ticket exists for it) has no ticket to ask on."""
+    from types import SimpleNamespace
+
+    from pm_spec_pipeline.interview import effective_mode
+
+    options = SimpleNamespace(interview_mode="ticket", ticket_ref="", auto=auto)
+    assert (
+        effective_mode(SimpleNamespace(state=SimpleNamespace(options=options)))
+        == fallback
+    )
 
 
 def test_ticket_mode_with_no_questions_does_not_wait(repo, model, tmp_path, capsys):
@@ -279,9 +310,10 @@ def test_ticket_mode_with_no_questions_does_not_wait(repo, model, tmp_path, caps
             "--ticket-ref",
             "EPIC-9",
         )
-        == 0
+        == 3
     )
     out = capsys.readouterr().out
+    assert "SPEC:REVIEW:proposal" in out
     assert "INTERVIEW:WAITING" not in out and "PHASE:INTERVIEW:COMPLETE" in out
 
 
@@ -301,7 +333,7 @@ def test_ticket_replies_are_fenced(repo, model, tmp_path):
         == 3
     )
     replies = write(tmp_path / "replies.md", f"bob: {INJECTION}\n")
-    assert run(repo, "resume", "throttle", "--interview-replies", str(replies)) == 0
+    assert run(repo, "resume", "throttle", "--interview-replies", str(replies)) == 3
     text = (change_dir(repo) / "interview.md").read_text()
     replies_part = text.split("## Replies")[1]
     assert '<untrusted-content source="EPIC-9">' in replies_part
@@ -322,12 +354,13 @@ def test_render_interview_puts_each_section_only_when_it_has_content(tmp_path):
         questions=["Q1?"],
         answers=[InterviewAnswer(question="Q1?", answer="A1", grounded_in="x.py:1")],
     )
+    assert text.startswith("# Interview\n\nS\n\n## Context: notes.md\n")
     assert [
         "## Context: notes.md" in text,
         "## Interview" in text,
         "## Answers" in text,
         "## Assumptions" in text,
-    ] == [True, True, True, False]
+    ] == [True, False, True, False]
 
 
 @pytest.mark.parametrize(

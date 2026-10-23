@@ -8,7 +8,7 @@ because of them:
 
 - `SPEC:NOT_READY:<reason>` and the line naming the pm-spec command, exit 2:
   the specs are not marked ready, changed after they were, or (for a build
-  that branches from them) are not all committed.
+  that branches from them) are not on the change's feature branch.
 - `SPEC:ISSUES:<path>`, exit 4: buildme found a problem in the requirements
   and wrote it to `spec-issues.md` for `pm-spec revise`; `.change.yaml`
   `spec_issues` names the file until pm-spec clears it.
@@ -79,18 +79,28 @@ def stop_on_issues(change_dir: Path, found: SpecIssuesFound, *, change: str) -> 
 
 def change_project(change_dir: Path) -> Path | None:
     """The repository *change_dir* belongs to when it is
-    `<repo>/specs/changes/<change>`, else None."""
-    change_dir = Path(change_dir)
+    `<repo>/specs/changes/<change>` (or a component of one), else None."""
+    from multiplai_core.specs import change_root
+
+    change_dir = change_root(Path(change_dir))
     if change_dir.parent.name == "changes" and change_dir.parent.parent.name == "specs":
         return change_dir.parent.parent.parent
     return None
 
 
 def pm_spec_line(
-    name: str, *, resume: bool = False, project_dir: Path | None = None
+    name: str,
+    *,
+    resume: bool = False,
+    project_dir: Path | None = None,
+    ticket_ref: bool = False,
 ) -> str:
+    """The pm-spec command for *name*; for a component, `<change>/<id>`,
+    the change's, since pm-spec writes a change's components in one run."""
+    name = name.split("/", 1)[0]
     where = f" --project-dir {project_dir}" if project_dir else ""
-    return f"Run /multiplai-pm:pm-spec {'resume ' if resume else ''}{name}{where} first"
+    ticket = " --ticket-ref <ticket id>" if ticket_ref else ""
+    return f"Run /multiplai-pm:pm-spec {'resume ' if resume else ''}{name}{where}{ticket} first"
 
 
 def refuse_not_ready(
@@ -100,6 +110,7 @@ def refuse_not_ready(
     resume: bool = False,
     project_dir: Path | None = None,
     advice: str | None = None,
+    ticket_ref: bool = False,
 ) -> int:
     """Print `SPEC:NOT_READY:<reason>` and the pm-spec line; the exit code (2).
     *resume* names `pm-spec resume <name>`, which checks specs already on disk
@@ -107,11 +118,16 @@ def refuse_not_ready(
     `--project-dir`: the specs the build reads are in that checkout (a
     worktree build's own worktree), not the one the user runs in. *advice*,
     when given, is printed in place of the pm-spec line: what to do is not a
-    pm-spec run."""
+    pm-spec run. *ticket_ref* adds `--ticket-ref <ticket id>`: the change
+    records no ticket, which pm-spec names its branch after."""
     reason = " ".join(str(reason).split())
     print(f"{MARKER_NOT_READY}:{reason}", flush=True)
     print(
-        advice or pm_spec_line(name, resume=resume, project_dir=project_dir), flush=True
+        advice
+        or pm_spec_line(
+            name, resume=resume, project_dir=project_dir, ticket_ref=ticket_ref
+        ),
+        flush=True,
     )
     return EXIT_NOT_READY
 
@@ -137,42 +153,28 @@ def refuse_issues(path: Path) -> int:
     `--project-dir` when the change dir is `<repo>/specs/changes/<change>`."""
     path = Path(path)
     print(f"{MARKER_ISSUES}:{path}", flush=True)
+    from multiplai_core.specs import change_root
+
     change_dir = path.parent
     repo = change_project(change_dir)
     where = f" --project-dir {repo}" if repo else ""
     print(
-        f"Run /multiplai-pm:pm-spec revise {change_dir.name}{where}, then run the build again",
+        f"Run /multiplai-pm:pm-spec revise {change_root(change_dir).name}{where}, then run the build again",
         flush=True,
     )
     return EXIT_SPEC_ISSUES
 
 
-def uncommitted(project_dir: Path, path: Path) -> list[str]:
-    """The paths under *path* that differ from HEAD (staged, unstaged or
-    untracked), buildme's own bookkeeping files left out. Raises
-    `git_ops.GitLifecycleError` when git cannot answer."""
-    project_dir = Path(project_dir)
-    try:
-        rel = Path(path).resolve().relative_to(project_dir.resolve()).as_posix() or "."
-    except ValueError:
-        raise git_ops.GitLifecycleError(f"{path} is not inside {project_dir}") from None
-    res = git_ops._run(
-        [
-            "git",
-            "status",
-            "--porcelain",
-            "--untracked-files=all",
-            "--",
-            rel,
-            *git_ops.BOOKKEEPING_EXCLUDES,
-        ],
-        cwd=project_dir,
+def refuse_issues_at(shown: str, name: str) -> int:
+    """`refuse_issues` for an issues file read on a branch, not on disk:
+    *shown* is `<ref>:<path>`. pm-spec finds the change's branch itself, so
+    the revise line names no `--project-dir`."""
+    print(f"{MARKER_ISSUES}:{shown}", flush=True)
+    print(
+        f"Run /multiplai-pm:pm-spec revise {name.split('/', 1)[0]}, then run the build again",
+        flush=True,
     )
-    if not res.ok:
-        raise git_ops.GitLifecycleError(
-            f"{res.command} failed: {res.stderr.strip()[-300:]}"
-        )
-    return [line[3:] for line in res.stdout.splitlines() if line.strip()]
+    return EXIT_SPEC_ISSUES
 
 
 def saved_revision(change_dir: Path) -> str | None:
@@ -189,9 +191,14 @@ def specs_at(repo: Path, rev: str, rel: str, dest: Path) -> Path | None:
     """Write the change dir *rel* (relative to *repo*, POSIX form) as commit
     *rev* holds it to `<dest>/<rel>`, byte for byte, and return that copy:
     what a worktree cut from *rev* would hold. None when *rev* does not hold
-    *rel*. Raises `git_ops.GitLifecycleError` when git cannot read *rev*."""
+    *rel*. For a component, the whole change above it is written, since its
+    ready record covers the change's proposal and use cases too. Raises
+    `git_ops.GitLifecycleError` when git cannot read *rev*."""
+    from multiplai_core.specs import change_root
+
+    root = change_root(Path(rel)).as_posix()
     res = git_ops._run(
-        ["git", "ls-tree", "-r", "-z", rev, "--", f"{rel}/"],
+        ["git", "ls-tree", "-r", "-z", rev, "--", f"{root}/"],
         cwd=repo,
         errors="surrogateescape",
     )
@@ -218,7 +225,8 @@ def specs_at(repo: Path, rev: str, rel: str, dest: Path) -> Path | None:
         target = Path(dest) / path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(blob.stdout)
-    return Path(dest) / rel
+    copy = Path(dest) / rel
+    return copy if root == rel or copy.is_dir() else None
 
 
 def saved_revision_at(repo: Path, rev: str, rel: str) -> str | None:

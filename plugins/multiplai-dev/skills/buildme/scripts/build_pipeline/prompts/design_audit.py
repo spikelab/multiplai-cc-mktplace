@@ -106,7 +106,7 @@ drives changes only design.md and tasks.md. When a gap can only be fixed by
 changing a requirement (it is infeasible, or contradicts another requirement
 or the codebase, or a needed behaviour is missing from the specs), set
 `needs_requirements_change` to true and name the requirement in `requirement`
-as `requirements/<capability>.md: <requirement name>`; the build then stops
+as `{spec_ref}: <requirement name>`; the build then stops
 and sends it to the requirements' author. Every other gap has false.
 
 ## Output Format

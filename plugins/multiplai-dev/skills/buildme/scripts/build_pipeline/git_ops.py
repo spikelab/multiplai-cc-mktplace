@@ -463,16 +463,20 @@ def resolve_new_branch(
     base: str,
     *,
     taken: tuple[str, ...] = (),
+    name: str | None = None,
 ) -> tuple[str, Path]:
-    """Pick a free ``buildme/<change>`` branch and its matching worktree path.
+    """Pick a free branch, *name* (``<TICKET>-<change>``, which the caller
+    passes; ``buildme/<change>`` without one), and its matching worktree path.
 
     A colliding branch that carries commits not on ``base`` is somebody's
     work — refuse rather than guess. A colliding branch with nothing on it
     gets a ``-2``/``-3``/... suffix (branch and worktree stay in lockstep).
     A branch in *taken* (a published build's, when the user asked for a new
-    build of that change) is skipped the same way, whatever it carries.
+    build of that change) is skipped the same way, whatever it carries, and
+    so is one origin has (``refs/remotes/origin/<branch>``): a branch cut
+    here under that name could not be pushed there.
     """
-    base_branch = branch_name_for(change_name)
+    base_branch = name or branch_name_for(change_name)
     for suffix in range(1, 51):
         branch = base_branch if suffix == 1 else f"{base_branch}-{suffix}"
         dest = worktree_dest(repo, change_name, suffix)
@@ -493,6 +497,11 @@ def resolve_new_branch(
                     f"or run with a different --change name. Refusing to reuse or "
                     f"overwrite it."
                 )
+            continue
+        if _run(
+            ["git", "show-ref", "--verify", "--quiet", f"refs/remotes/origin/{branch}"],
+            cwd=repo,
+        ).ok:
             continue
         if dest.exists():
             continue

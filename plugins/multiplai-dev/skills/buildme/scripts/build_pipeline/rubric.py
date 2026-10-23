@@ -10,6 +10,9 @@ import logging
 import re
 from pathlib import Path
 
+from multiplai_core.specs import change_root
+
+from .change_manager import requirement_texts
 from .prompts.rubric_prompts import RUBRIC_PROMPT
 from .sdk import llm_call
 
@@ -113,27 +116,22 @@ def _gather_text(change_dir: Path) -> str:
     """Gather text from all artifacts for keyword analysis."""
     parts = []
     for filename in ["proposal.md", "design.md", "tasks.md"]:
-        path = change_dir / filename
+        # A component's proposal is its change's.
+        path = (
+            change_root(change_dir) if filename == "proposal.md" else change_dir
+        ) / filename
         if path.exists():
             parts.append(path.read_text())
 
-    req_dir = change_dir / "requirements"
-    if req_dir.exists():
-        for req_file in sorted(req_dir.glob("*.md")):
-            parts.append(req_file.read_text())
+    parts += requirement_texts(change_dir).values()
 
     return " ".join(parts)
 
 
 def _gather_spec_summaries(change_dir: Path) -> str:
     """Gather first few lines of each requirement for rubric context."""
-    req_dir = change_dir / "requirements"
-    if not req_dir.exists():
-        return "(no specs)"
     parts = []
-    for req_file in sorted(req_dir.glob("*.md")):
-        cap_name = req_file.stem
-        content = req_file.read_text()
+    for cap_name, content in requirement_texts(change_dir).items():
         # Take first 500 chars as summary
         summary = content[:500] + ("..." if len(content) > 500 else "")
         parts.append(f"### {cap_name}\n{summary}")

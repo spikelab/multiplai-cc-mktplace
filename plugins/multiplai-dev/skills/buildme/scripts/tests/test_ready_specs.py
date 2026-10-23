@@ -2,9 +2,10 @@
 
 Rows S10-S15 of the plan's stop/resume table, the start refusal, old
 checkpoints (item 21) and the three ways a build sends a requirements problem
-back to pm-spec (item 20). Every model call is a fake; the repos and worktrees
-are real temp repos. pm-spec's own steps (marking ready, `revise`) are played
-with `multiplai_core.specs`, the only code the two tools share.
+back to pm-spec (item 20). Every model call is a fake; the repos, the bare
+origin and the worktrees are real temp repos. pm-spec's own steps (marking
+ready, pushing the feature branch, `revise`) are played with
+`multiplai_core.specs`, the only code the two tools share, and git.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
+import yaml
 from build_pipeline import readiness
 from build_pipeline.config import BuildConfig, GitToggles
 from build_pipeline.llm_steps.spec_steps import AuditFindings
@@ -29,8 +31,14 @@ from build_pipeline.orchestrator import run_orchestrator
 from build_pipeline.state import BuildState, TDDState
 from multiplai_core.specs import clear_spec_issues, mark_ready, read_change_meta
 
-from tests.spec_fixtures import REQUIREMENT, commit_specs, ready_specs, write_specs
-from tests.test_git_ops import make_repo
+from tests.spec_fixtures import (
+    REQUIREMENT,
+    commit_specs,
+    publish,
+    ready_specs,
+    write_specs,
+)
+from tests.test_git_ops import make_bare_origin, make_repo
 
 pytestmark = pytest.mark.no_handoff
 
@@ -61,7 +69,45 @@ def repo(tmp_path, monkeypatch):
     monkeypatch.setattr(
         orchestrator, "_run_spec_extract_step", lambda config, state, progress: None
     )
-    return make_repo(tmp_path / "proj")
+    path = make_repo(tmp_path / "proj")
+    make_bare_origin(path, tmp_path / "origin.git")
+    _git(path, "push", "-q", "origin", "main")
+    return path
+
+
+def _merging(w: Path) -> bool:
+    """Whether a merge is in progress in the worktree *w*."""
+    return (
+        subprocess.run(
+            ["git", "rev-parse", "-q", "--verify", "MERGE_HEAD"],
+            cwd=w,
+            capture_output=True,
+            check=False,
+        ).returncode
+        == 0
+    )
+
+
+def _handoff(repo: Path) -> Path:
+    """pm-spec's handoff: the specs ready and committed, and pushed to
+    `origin/ENG-1-<change>`. Returns the checkout's change dir."""
+    change_dir = _source_change(repo)
+    ready_specs(change_dir, repo)
+    assert publish(repo, CHANGE) == f"ENG-1-{CHANGE}"
+    return change_dir
+
+
+def _revise_on_branch(repo: Path, at: Path) -> Path:
+    """`pm-spec revise` in its own worktree of the feature branch: the
+    requirement fixed, marked ready again, committed and pushed."""
+    _git(repo, "fetch", "-q", "origin")
+    _git(repo, "worktree", "add", "-q", "--detach", str(at), f"origin/ENG-1-{CHANGE}")
+    change_dir = at / "specs" / "changes" / CHANGE
+    (change_dir / "requirements" / "fixture.md").write_text(REVISED)
+    mark_ready(change_dir)
+    assert commit_specs(at, change_dir, "specs: revised on the branch")
+    _git(at, "push", "-q", "origin", f"HEAD:refs/heads/ENG-1-{CHANGE}")
+    return change_dir
 
 
 def _source_change(repo: Path) -> Path:
@@ -247,20 +293,78 @@ class TestStartRefusal:
         assert _tree(change_dir) == before
 
     @pytest.mark.asyncio
-    async def test_ready_but_uncommitted_specs_refuse_a_worktree_build(
+    async def test_specs_ready_only_in_the_checkout_refuse_with_pm_spec_resume(
         self, repo, tmp_path, capsys
     ):
-        """The worktree branches from HEAD, which would not hold them."""
-        change_dir = _source_change(repo)
-        ready_specs(change_dir, repo, commit=False)
+        """T8: a handoff from before pm-spec pushed (ready and committed in the
+        checkout, no feature branch on origin) is refused: the build starts
+        from the feature branch, and `pm-spec resume` moves the specs there."""
+        ready_specs(_source_change(repo), repo)
+        models = Models()
 
-        rc = await _build(repo, Models())
+        rc = await _build(repo, models)
 
         out = capsys.readouterr().out
         assert rc == 2
-        assert "SPEC:NOT_READY:" in out and "uncommitted changes" in out
+        assert "SPEC:NOT_READY:" in out
+        assert f"origin has no ENG-1-{CHANGE}" in out
         assert f"Run /multiplai-pm:pm-spec resume {CHANGE} first" in out
         assert not (tmp_path / "ws").exists()
+        models.generate.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_the_specs_are_read_on_the_feature_branch_not_in_the_checkout(
+        self, repo, tmp_path, capsys
+    ):
+        """T4: run from a checkout that lacks the change dir, the build finds
+        the specs on `origin/ENG-1-<change>` and starts from that branch (its
+        PR's target: `test_completion_contract`)."""
+        change_dir = _handoff(repo)
+        pushed = _git(repo, "rev-parse", f"origin/ENG-1-{CHANGE}")
+        _git(repo, "reset", "-q", "--hard", "HEAD~1")
+        assert not change_dir.exists()
+        config = _config(repo)
+        p = Models().patches()
+        with p[0], p[1], p[2], p[3], p[4]:
+            rc = await run_orchestrator(config, _args(repo))
+
+        assert rc == 0, capsys.readouterr().out
+        assert config.feature_branch == f"ENG-1-{CHANGE}"
+        wt = _worktree(tmp_path)
+        assert _git(wt, "merge-base", "--is-ancestor", pushed, "HEAD") == ""
+        assert (wt / "specs" / "changes" / CHANGE / "design.md").is_file()
+        assert not change_dir.exists(), "the checkout is never written"
+
+    @pytest.mark.asyncio
+    async def test_a_conflict_merging_main_into_the_feature_branch_builds_nothing(
+        self, repo, tmp_path, capsys
+    ):
+        """T6 for one build: main and the feature branch changed the same
+        line. The build prints the marker, exits 3, leaves no merge in
+        progress and the branch as it was, and cuts no worktree."""
+        _handoff(repo)
+        (repo / "README.md").write_text("on main\n")
+        _git(repo, "commit", "-qam", "main's readme")
+        _git(repo, "push", "-q", "origin", "HEAD:main")
+        _git(repo, "checkout", "-q", "-b", "other", f"origin/ENG-1-{CHANGE}")
+        (repo / "README.md").write_text("on the branch\n")
+        _git(repo, "commit", "-qam", "the branch's readme")
+        _git(repo, "push", "-q", "origin", f"HEAD:ENG-1-{CHANGE}")
+        before = _git(repo, "rev-parse", "HEAD")
+        _git(repo, "checkout", "-q", "main")
+        models = Models()
+
+        rc = await _build(repo, models)
+
+        out = capsys.readouterr().out
+        assert rc == 3
+        assert f"FEATURE_BRANCH:CONFLICT:ENG-1-{CHANGE}:README.md" in out.splitlines()
+        assert _git(repo, "rev-parse", f"origin/ENG-1-{CHANGE}") == before
+        merger = tmp_path / "ws" / ".worktrees" / f"buildme-feature-ENG-1-{CHANGE}"
+        assert _git(merger, "status", "--porcelain") == ""
+        assert not _merging(merger)
+        assert not _worktree(tmp_path).exists()
+        models.generate.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_ready_uncommitted_specs_build_in_place_with_no_worktree(
@@ -278,8 +382,7 @@ class TestStartRefusal:
     async def test_ready_committed_specs_build_and_buildme_never_writes_them(
         self, repo, tmp_path, capsys
     ):
-        change_dir = _source_change(repo)
-        ready_specs(change_dir, repo)
+        change_dir = _handoff(repo)
         what = {
             name: (change_dir / name).read_bytes()
             for name in ("proposal.md", "use-cases.md", "requirements/fixture.md")
@@ -290,6 +393,16 @@ class TestStartRefusal:
 
         assert rc == 0, capsys.readouterr().err
         built = _worktree(tmp_path) / "specs" / "changes" / CHANGE
+        assert (
+            _git(
+                _worktree(tmp_path),
+                "merge-base",
+                "--is-ancestor",
+                f"origin/ENG-1-{CHANGE}",
+                "HEAD",
+            )
+            == ""
+        )
         for name, data in what.items():
             assert (built / name).read_bytes() == data, name
         assert (built / "design.md").is_file() and (built / "tasks.md").is_file()
@@ -305,7 +418,7 @@ class TestDesignSpecIssue:
     async def test_S11_a_design_spec_issue_stops_and_resumes_after_revise(
         self, repo, tmp_path, capsys
     ):
-        ready_specs(_source_change(repo), repo)
+        _handoff(repo)
         models = Models(
             design=[
                 f"# Design\n\nDraft.\n\n{ISSUE_LINE}\n",
@@ -350,7 +463,7 @@ class TestDesignSpecIssue:
     async def test_S15_a_stopped_design_step_stopped_twice_gives_the_same_refusal_and_spends_nothing(
         self, repo, tmp_path, capsys
     ):
-        ready_specs(_source_change(repo), repo)
+        _handoff(repo)
         models = Models(design=[f"# Design\n\n{ISSUE_LINE}\n"])
         assert await _build(repo, models) == 4
         first = capsys.readouterr().out.strip().splitlines()[-2:]
@@ -371,8 +484,10 @@ class TestDesignSpecIssue:
         self, repo, tmp_path, capsys
     ):
         """Both tools hash files, not git refs: a commit on the source's main
-        after the stop neither refuses the resume nor reaches the build."""
-        ready_specs(_source_change(repo), repo)
+        after the stop does not refuse the resume. The resume merges it into
+        the feature branch it builds on (Decision 5), in the build's own
+        worktree, and the build's push takes it to origin."""
+        _handoff(repo)
         models = Models(
             design=[f"# Design\n\n{ISSUE_LINE}\n", "# Design\n\n## Decisions\nStore.\n"]
         )
@@ -380,12 +495,15 @@ class TestDesignSpecIssue:
         (repo / "LATER.md").write_text("later\n")
         _git(repo, "add", "LATER.md")
         _git(repo, "commit", "-qm", "later on main")
+        _git(repo, "push", "-q", "origin", "main")
         worktree = _worktree(tmp_path)
         _revise(worktree, worktree / "specs" / "changes" / CHANGE)
         capsys.readouterr()
 
         assert await _build(repo, models) == 0, capsys.readouterr().err
-        assert "later on main" not in _git(worktree, "log", "--format=%s")
+        log = _git(worktree, "log", "--format=%s")
+        assert "later on main" in log
+        assert f"Merge origin/main into ENG-1-{CHANGE}" in log
 
 
 class TestDesignAuditSpecIssue:
@@ -402,7 +520,7 @@ class TestDesignAuditSpecIssue:
     async def test_S11_an_audit_gap_needing_a_requirements_change_stops_for_pm_spec(
         self, repo, tmp_path, capsys
     ):
-        ready_specs(_source_change(repo), repo)
+        _handoff(repo)
         models = Models(audit=[[self.GAP], []])
 
         rc = await _build(repo, models)
@@ -436,7 +554,7 @@ class TestDesignAuditSpecIssue:
     async def test_an_audit_gap_the_design_can_fix_is_not_a_spec_issue(
         self, repo, tmp_path, capsys
     ):
-        ready_specs(_source_change(repo), repo)
+        _handoff(repo)
         gap = {**self.GAP, "needs_requirements_change": False}
         models = Models(
             audit=[
@@ -500,7 +618,7 @@ class TestTddContradiction:
     async def test_S12_a_contradiction_under_halt_stops_for_pm_spec(
         self, repo, tmp_path, capsys
     ):
-        ready_specs(_source_change(repo), repo)
+        _handoff(repo)
         with patch("build_pipeline.tdd_engine.run_tdd_engine", self._engine()):
             rc = await _build(repo, Models(), spec_only=False)
 
@@ -613,7 +731,7 @@ class TestOldCheckpoints:
         advice names `--project-dir <worktree>`, and a pm-spec run there
         (played by marking that copy ready and committing it) lets the build
         go on. Run twice, the refusal is the same and changes nothing."""
-        ready_specs(_source_change(repo), repo)
+        _handoff(repo)
         assert await _build(repo, Models(design=[f"# Design\n\n{ISSUE_LINE}\n"])) == 4
         wt = _worktree(tmp_path)
         built = wt / "specs" / "changes" / CHANGE
@@ -675,28 +793,10 @@ class TestTheCopyTheBuildReads:
 
         out = capsys.readouterr().out
         assert rc == 2, out
-        assert f"SPEC:NOT_READY:specs/changes/{CHANGE} at --base-ref {draft}" in out
+        assert f"SPEC:NOT_READY:specs/changes/{CHANGE} at {draft}" in out
         assert "no .change.yaml" in out
-        assert "Build from a --base-ref that holds the ready specs" in out
+        assert f"Run /multiplai-pm:pm-spec resume {CHANGE} first" in out
         assert not (tmp_path / "ws").exists(), "no worktree"
-        models.generate.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_S10_a_base_ref_holding_an_older_ready_revision_refuses(
-        self, repo, tmp_path, capsys
-    ):
-        change_dir = _source_change(repo)
-        ready_specs(change_dir, repo)
-        older = _git(repo, "rev-parse", "HEAD")
-        _revise(repo, change_dir)
-        models = Models()
-
-        rc = await _build(repo, models, base_ref=older)
-
-        out = capsys.readouterr().out
-        assert rc == 2, out
-        assert "holds other specs than the ones marked ready in" in out
-        assert not (tmp_path / "ws").exists()
         models.generate.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -726,19 +826,19 @@ class TestTheCopyTheBuildReads:
         assert await _build(repo, models) == 1
 
     @pytest.mark.asyncio
-    async def test_S7_specs_revised_in_the_checkout_refuse_a_resume_naming_them(
+    async def test_S7_specs_revised_on_the_feature_branch_refuse_a_resume_naming_it(
         self, repo, tmp_path, capsys
     ):
-        """pm-spec revised and marked ready the specs in the user's checkout
-        after the build's worktree was cut: the resume refuses and names
-        where the newer specs are, instead of building its older copy.
-        Following the advice (copy them in, commit) lets it go on, from them."""
-        change_dir = _source_change(repo)
-        ready_specs(change_dir, repo)
+        """pm-spec revised and pushed the specs on the feature branch after
+        the build's worktree was cut: the resume refuses and names the branch,
+        instead of building its older copy. Following the advice (merge the
+        branch into the build's) lets it go on, from them."""
+        _handoff(repo)
         models = Models()
         await self._failed_at_tasks(repo, models)
-        built = _worktree(tmp_path) / "specs" / "changes" / CHANGE
-        _revise(repo, change_dir)
+        wt = _worktree(tmp_path)
+        built = wt / "specs" / "changes" / CHANGE
+        _revise_on_branch(repo, tmp_path / "pm-spec")
         capsys.readouterr()
         asked = len(models.prompts)
         before = _tree(built)
@@ -748,22 +848,16 @@ class TestTheCopyTheBuildReads:
         out = capsys.readouterr().out
         assert rc == 2, out
         assert (
-            f"SPEC:NOT_READY:the specs in {change_dir} were marked ready again" in out
+            f"SPEC:NOT_READY:the specs in origin/ENG-1-{CHANGE} were marked ready again"
+            in out
         )
         assert (
-            f"Copy proposal.md, use-cases.md, requirements/ and .change.yaml from {change_dir} "
-            f"into {built}, commit them there" in out
+            f"Merge origin/ENG-1-{CHANGE} into the build's branch in {wt} "
+            f"(`git -C {wt} merge origin/ENG-1-{CHANGE}`)" in out
         )
         assert len(models.prompts) == asked and _tree(built) == before
 
-        for name in (
-            "proposal.md",
-            "use-cases.md",
-            "requirements/fixture.md",
-            ".change.yaml",
-        ):
-            (built / name).write_bytes((change_dir / name).read_bytes())
-        assert commit_specs(_worktree(tmp_path), built, "specs: from the checkout")
+        _git(wt, "merge", "-q", "--no-edit", f"origin/ENG-1-{CHANGE}")
         rc = await _build(repo, models)
         out = capsys.readouterr().out
         assert rc == 0, out
@@ -774,10 +868,10 @@ class TestTheCopyTheBuildReads:
         self, repo, tmp_path, capsys
     ):
         """The other way round: the worktree's copy was revised (`pm-spec
-        revise --project-dir <worktree>`) and the checkout is as the worktree
-        was cut from it. Nothing is newer elsewhere, so the resume goes on."""
-        change_dir = _source_change(repo)
-        ready_specs(change_dir, repo)
+        revise --project-dir <worktree>`) and the feature branch is as the
+        worktree was cut from it. Nothing is newer elsewhere, so the resume
+        goes on."""
+        _handoff(repo)
         models = Models()
         await self._failed_at_tasks(repo, models)
         built = _worktree(tmp_path) / "specs" / "changes" / CHANGE
@@ -839,8 +933,7 @@ class TestSpecIssuesFile:
         )
 
         assert (
-            f"`{SPEC_ISSUE_PREFIX} requirements/<capability>.md: <requirement name>:"
-            in DESIGN_PROMPT
+            f"`{SPEC_ISSUE_PREFIX} {{spec_ref}}: <requirement name>:" in DESIGN_PROMPT
         )
         assert "Flag any spec requirements that seem infeasible" not in DESIGN_PROMPT
 
@@ -855,3 +948,234 @@ def test_buildme_never_imports_pm_spec_pipeline():
     root = Path(__file__).resolve().parent.parent / "build_pipeline"
     for path in root.rglob("*.py"):
         assert "pm_spec_pipeline" not in path.read_text(), path
+
+
+class TestBranchNames:
+    """T10 and T11 of plan-spec-feature-branch-2026-10-22.md, in buildme:
+    the branches it makes are `<TICKET>-<change>`, the ticket the change's
+    own ref, else its nearest parent's."""
+
+    @staticmethod
+    def _push_as(repo: Path, branch: str) -> None:
+        _git(repo, "push", "-q", "origin", f"HEAD:refs/heads/{branch}")
+        _git(repo, "fetch", "-q", "origin")
+
+    @pytest.mark.asyncio
+    async def test_T10_several_feature_branches_for_the_change_refuse_naming_branch(
+        self, repo, tmp_path, capsys
+    ):
+        _handoff(repo)
+        # A second handoff of the change, under another ticket.
+        at = tmp_path / "second"
+        _git(repo, "worktree", "add", "-q", "--detach", str(at), "HEAD")
+        meta = at / "specs" / "changes" / CHANGE / ".change.yaml"
+        data = yaml.safe_load(meta.read_text())
+        data["ticket_refs"] = {"epic": "ENG-2", "children": []}
+        meta.write_text(yaml.safe_dump(data))
+        _git(at, "commit", "-qam", "specs: under ENG-2")
+        self._push_as(at, f"ENG-2-{CHANGE}")
+        models = Models()
+
+        rc = await _build(repo, models)
+
+        out = capsys.readouterr().out
+        assert rc == 2
+        assert (
+            f"origin has 2 branches named <TICKET>-{CHANGE}: ENG-1-{CHANGE}, ENG-2-{CHANGE}"
+            in out
+        )
+        assert "--branch" in out
+        assert not (tmp_path / "ws").exists(), "no worktree"
+        models.generate.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_an_origin_branch_not_holding_the_change_is_not_its_feature_branch(
+        self, repo, tmp_path, capsys
+    ):
+        """An origin branch whose name merely ends in `-<change>` (another
+        change's, here `ENG-40-auth-feat`, cut before these specs existed) is
+        not the change's feature branch: the build neither builds from it nor
+        merges into it, and refuses the specs ready only in the checkout."""
+        other = f"ENG-40-auth-{CHANGE}"
+        self._push_as(repo, other)
+        before = _git(repo, "rev-parse", f"origin/{other}")
+        _git(repo, "commit", "-q", "--allow-empty", "-m", "main moves")
+        _git(repo, "push", "-q", "origin", "main")
+        ready_specs(_source_change(repo), repo)
+        models = Models()
+
+        rc = await _build(repo, models)
+
+        out = capsys.readouterr().out
+        assert rc == 2
+        assert "on no feature branch" in out
+        _git(repo, "fetch", "-q", "origin")
+        assert _git(repo, "rev-parse", f"origin/{other}") == before
+        assert not (tmp_path / "ws").exists(), "no worktree"
+        models.generate.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_T10_a_branch_flag_without_the_ticket_prefix_is_refused(
+        self, repo, tmp_path, capsys
+    ):
+        _handoff(repo)
+        self._push_as(repo, f"wip-{CHANGE}")
+        models = Models()
+
+        rc = await _build(repo, models, feature_branch=f"wip-{CHANGE}")
+
+        out = capsys.readouterr().out
+        assert rc == 2
+        assert (
+            f"--branch wip-{CHANGE} does not start with the change's ticket id (ENG-1-)"
+            in out
+        )
+        assert not (tmp_path / "ws").exists(), "no worktree"
+        models.generate.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_T11_specs_with_no_ticket_ref_refuse_naming_ticket_ref(
+        self, repo, tmp_path, capsys
+    ):
+        change_dir = write_specs(_source_change(repo))
+        mark_ready(change_dir)
+        commit_specs(repo, change_dir)
+        self._push_as(repo, f"X-{CHANGE}")
+        models = Models()
+
+        rc = await _build(repo, models)
+
+        out = capsys.readouterr().out
+        assert rc == 2
+        assert "records no ticket ref" in out
+        assert f"pm-spec resume {CHANGE} --ticket-ref <ticket id>" in out
+        assert not (tmp_path / "ws").exists(), "no worktree"
+        models.generate.assert_not_awaited()
+
+    @staticmethod
+    def _epic(repo: Path) -> str:
+        """An epic `auth` with ticket ENG-40 on origin's `ENG-40-auth`: child
+        `auth-a` has no ticket of its own, child `auth-b` has ENG-41, and
+        `auth-c` has 'ENG[3'. Returns the feature branch."""
+        from multiplai_core.specs import write_change_meta
+
+        changes = repo / "specs" / "changes"
+        parent = changes / "auth"
+        parent.mkdir(parents=True)
+        write_change_meta(
+            parent,
+            {
+                "ticket_refs": {"epic": "ENG-40", "children": []},
+                "children": ["auth-a", "auth-b", "auth-c"],
+            },
+        )
+        for cid, ticket in (("auth-a", ""), ("auth-b", "ENG-41"), ("auth-c", "ENG[3")):
+            meta = {"parent": "auth"}
+            if ticket:
+                meta["ticket_refs"] = {"epic": ticket, "children": []}
+            (changes / cid).mkdir()
+            write_change_meta(changes / cid, meta)
+            ready_specs(changes / cid, repo, commit=False)
+        _git(repo, "add", "specs")
+        _git(repo, "commit", "-qm", "specs: auth")
+        branch = "ENG-40-auth"
+        TestBranchNames._push_as(repo, branch)
+        _git(repo, "reset", "-q", "--hard", "HEAD~1")
+        return branch
+
+    @staticmethod
+    def _child_config(repo: Path, cid: str, branch: str) -> BuildConfig:
+        config = _config(repo, change_name=cid)
+        config.epic_child = True
+        config.feature_branch = branch  # the coordinator's --branch
+        config.base_ref = f"origin/{branch}"
+        return config
+
+    @pytest.mark.parametrize(
+        ("cid", "expected"), [("auth-a", "ENG-40-auth-a"), ("auth-b", "ENG-41-auth-b")]
+    )
+    def test_T10_a_childs_build_branch_is_its_ticket_else_its_parents(
+        self, repo, cid, expected
+    ):
+        from build_pipeline import orchestrator
+
+        branch = self._epic(repo)
+        config = self._child_config(repo, cid, branch)
+        state = BuildState(
+            change_name=cid, tier="advanced", state_file=str(config.state_file_path())
+        )
+
+        assert orchestrator._find_feature_branch(config) is None
+        orchestrator._setup_worktree(config, state)
+
+        assert state.branch == expected
+        assert _git(Path(state.worktree_path), "branch", "--show-current") == expected
+
+    def test_T10_a_ticket_git_refuses_in_a_branch_name_is_refused_with_the_reason(
+        self, repo
+    ):
+        from build_pipeline import git_ops, orchestrator
+
+        branch = self._epic(repo)
+        config = self._child_config(repo, "auth-c", branch)
+        state = BuildState(
+            change_name="auth-c",
+            tier="advanced",
+            state_file=str(config.state_file_path()),
+        )
+        orchestrator._find_feature_branch(config)
+
+        with pytest.raises(git_ops.GitLifecycleError) as err:
+            orchestrator._setup_worktree(config, state)
+
+        assert (
+            "the ticket id 'ENG[3' cannot start the branch name 'ENG[3-auth-c': it holds "
+            "'[', which git refuses in a branch name" in str(err.value)
+        )
+        assert "--ticket-ref" in str(err.value)
+        assert "ENG[3-auth-c" not in _git(repo, "branch", "--list")
+
+
+class TestSingleChangeCheckout:
+    """A single change builds on its feature branch itself (Decision 3), so
+    the build refuses to take it from somebody's checkout or work."""
+
+    @pytest.mark.asyncio
+    async def test_the_feature_branch_checked_out_elsewhere_refuses(
+        self, repo, tmp_path, capsys
+    ):
+        _handoff(repo)
+        mine = tmp_path / "mine"
+        _git(repo, "worktree", "add", "-q", str(mine), f"ENG-1-{CHANGE}")
+        models = Models()
+
+        rc = await _build(repo, models)
+
+        err = capsys.readouterr().err
+        assert rc == 1
+        assert f"ENG-1-{CHANGE} is checked out in {mine}" in err
+        assert _git(mine, "branch", "--show-current") == f"ENG-1-{CHANGE}"
+        models.generate.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_local_feature_branch_ahead_of_origin_refuses(
+        self, repo, tmp_path, capsys
+    ):
+        _handoff(repo)
+        _git(repo, "branch", "-q", f"ENG-1-{CHANGE}", f"origin/ENG-1-{CHANGE}")
+        mine = tmp_path / "mine"
+        _git(repo, "worktree", "add", "-q", str(mine), f"ENG-1-{CHANGE}")
+        (mine / "local.txt").write_text("not pushed\n")
+        _git(mine, "add", "local.txt")
+        _git(mine, "commit", "-qm", "local work")
+        _git(repo, "worktree", "remove", str(mine))
+        ahead = _git(repo, "rev-parse", f"ENG-1-{CHANGE}")
+        models = Models()
+
+        rc = await _build(repo, models)
+
+        err = capsys.readouterr().err
+        assert rc == 1
+        assert f"The local branch ENG-1-{CHANGE} holds commits" in err
+        assert _git(repo, "rev-parse", f"ENG-1-{CHANGE}") == ahead
+        models.generate.assert_not_awaited()

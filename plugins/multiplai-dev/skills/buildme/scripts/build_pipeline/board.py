@@ -63,7 +63,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from .change_manager import archived_change_dirs, normalize_change_name
+from .change_manager import archived_change_dirs, change_path, normalize_change_name
 from .models import BlockStatus, BoardColumn, BuildPhase
 
 log = logging.getLogger(__name__)
@@ -170,8 +170,7 @@ def board_path(specs_dir: Path, change_name: str) -> Path:
     sits in `specs/archive/<date>-<name>/`. Writing to the active path then
     would resurrect an empty `changes/<name>/` directory.
     """
-    norm = normalize_change_name(change_name)
-    active = specs_dir / "changes" / norm / BOARD_FILENAME
+    active = change_path(specs_dir, change_name) / BOARD_FILENAME
     if active.parent.is_dir():
         return active
     # Anchored to exactly YYYY-MM-DD-<slug> (archived_change_dirs) — a loose

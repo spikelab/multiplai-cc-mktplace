@@ -1,18 +1,28 @@
 """pm-spec command line.
 
-    python -m pm_spec_pipeline new <change> [--project-dir DIR] [--prd FILE]
-        [--ticket-file FILE [--ticket-ref REF] [--ticket-url URL] [--ticket-child REF ...]]
+    python -m pm_spec_pipeline new <change> --ticket-ref REF [--project-dir DIR] [--branch NAME]
+        [--prd FILE] [--ticket-file FILE [--ticket-url URL] [--ticket-child REF ...]]
         [--plan-file FILE] [--context-files FILE ...] [--interview-summary TEXT]
         [--interview-mode self|user|ticket] [--interview-replies FILE] [--auto]
         [--prototype | --no-prototype] [--no-epic-split] [--trust-repo] [--max-usd USD]
-    python -m pm_spec_pipeline resume <change> [--project-dir DIR] [--interview-replies FILE]
-        [--trust-repo] [--max-usd USD]
-    python -m pm_spec_pipeline revise <change> [--project-dir DIR] [--from-respec]
-        [--trust-repo] [--max-usd USD]
+    python -m pm_spec_pipeline resume <change> [--project-dir DIR] [--branch NAME]
+        [--ticket-ref REF] [--ticket COMPONENT=REF ...] [--tickets-later]
+        [--interview-replies FILE] [--trust-repo] [--max-usd USD]
+    python -m pm_spec_pipeline revise <change> [--project-dir DIR] [--branch NAME]
+        [--ticket-ref REF] [--from-respec] [--trust-repo] [--max-usd USD]
 
-Exit codes: 0 done (ready, or split into children), 1 failed, 2 refused,
-3 waiting for interview replies, 4 blocked on findings, 5 another run holds
-the lock. The last line is `SPEND:<usd>:<tokens>`, what this process's model
+The specs are written on the change's feature branch (`<TICKET>-<change>`, or
+`--branch`, which starts with `<TICKET>-` too), in pm-spec's own worktree of
+it, and pushed to origin (`branch.py`). A change with no ticket ref, of its
+own or a parent's, is refused (exit 2) until `--ticket-ref` names one.
+
+pm-spec stops for review after the proposal, after the components and after
+the specs (`SPEC:REVIEW:<stage>`), and waits for the components' tickets
+(`SPEC:TICKETS:<path>`); `resume` goes on. `--auto` never stops.
+
+Exit codes: 0 ready, 1 failed, 2 refused, 3 waiting (for a review, the
+tickets or interview replies), 4 blocked on findings, 5 another run holds the
+lock. The last line is `SPEND:<usd>:<tokens>`, what this process's model
 calls cost.
 """
 
@@ -24,11 +34,14 @@ import logging
 import os
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 
-from . import runlock, sdk
+from multiplai_core.specs import normalize_change_name
+
+from . import branch, runlock, sdk
 from . import state as state_mod
-from .config import INTERVIEW_MODES, SpecConfig
-from .pipeline import NewInputs, cmd_new, cmd_resume, cmd_revise
+from .config import INTERVIEW_MODES, SpecConfig, read_specs_config
+from .pipeline import NewInputs, TicketInputs, cmd_new, cmd_resume, cmd_revise
 from .run import EXIT_FAILED, EXIT_LOCKED, EXIT_REFUSED, Stop
 
 log = logging.getLogger("pm_spec_pipeline")
@@ -49,6 +62,12 @@ def build_parser() -> argparse.ArgumentParser:
             help="The repository (default: here); relative paths are read from it",
         )
         p.add_argument(
+            "--branch",
+            default="",
+            help="The feature branch the specs go on; it starts with <TICKET>- (default: the "
+            "one the change records, else <TICKET>-<change>)",
+        )
+        p.add_argument(
             "--trust-repo",
             action="store_true",
             help="Confirm you trust the repository: the interview, prototype and consistency agents "
@@ -61,6 +80,14 @@ def build_parser() -> argparse.ArgumentParser:
             help=f"Spend cap for the change's run, across resumes (default {sdk.DEFAULT_MAX_USD:g})",
         )
 
+    def ticket_ref(p: argparse.ArgumentParser) -> None:
+        p.add_argument(
+            "--ticket-ref",
+            default="",
+            help="The ticket's ref, as an opaque string; the feature branch is named after it "
+            "(<TICKET>-<change>). Needed when neither the change nor a parent records one",
+        )
+
     new = sub.add_parser("new", help="Start the specs of a change")
     common(new)
     new.add_argument(
@@ -71,9 +98,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help="The ticket's text (with its children's), as fetched",
     )
-    new.add_argument(
-        "--ticket-ref", default="", help="The ticket's ref, as an opaque string"
-    )
+    ticket_ref(new)
     new.add_argument("--ticket-url", default="", help="The ticket's URL")
     new.add_argument(
         "--ticket-child",
@@ -82,7 +107,11 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="REF",
         help="The ref of one of the ticket's child items; once per child",
     )
-    new.add_argument("--plan-file", default="", help="A plan, saved as plan.md")
+    new.add_argument(
+        "--plan-file",
+        default="",
+        help="A plan the interview reads, kept in interview.md",
+    )
     new.add_argument(
         "--context-files",
         nargs="*",
@@ -118,7 +147,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_const",
         const="true",
         default="",
-        help="Run the prototype whatever the change",
+        help="Run the prototype even when specs/config.yaml turns it off",
     )
     proto.add_argument(
         "--no-prototype",
@@ -128,17 +157,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="Never run the prototype",
     )
     new.add_argument(
-        "--no-epic-split", action="store_true", help="Keep the work as one change"
+        "--no-epic-split", action="store_true", help="Keep the work as one component"
     )
 
     resume = sub.add_parser(
         "resume", help="Continue a change's run from where it stopped"
     )
     common(resume)
+    ticket_ref(resume)
     resume.add_argument(
         "--interview-replies",
         default="",
         help="ticket mode: the replies to the questions",
+    )
+    resume.add_argument(
+        "--ticket",
+        action="append",
+        default=[],
+        metavar="COMPONENT=REF",
+        help="At the ticket wait: the ticket created for a component; once per component",
+    )
+    resume.add_argument(
+        "--tickets-later",
+        action="store_true",
+        help="At the ticket wait: go on, the components' tickets left pending",
     )
 
     revise = sub.add_parser(
@@ -146,6 +188,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Fix the requirements issues in spec-issues.md, then hand off again",
     )
     common(revise)
+    ticket_ref(revise)
     revise.add_argument(
         "--from-respec",
         action="store_true",
@@ -161,22 +204,70 @@ def _path(raw: str, base: str) -> str:
     return path if os.path.isabs(path) else os.path.join(os.path.abspath(base), path)
 
 
+def _ticket_refs(args: argparse.Namespace) -> dict[str, str] | None:
+    """`resume --ticket <component>=<REF>`, each checked as a ticket id
+    (`branch._ticket_refusal`); None, the reason printed, when one is not."""
+    refs: dict[str, str] = {}
+    project = Path(args.project_dir).expanduser()
+    repo = project if project.is_dir() else Path.cwd()
+    change = normalize_change_name(args.change)
+    for raw in getattr(args, "ticket", []):
+        component, sep, ref = raw.partition("=")
+        if not sep or not component.strip() or not ref.strip():
+            print(
+                f"ERROR: --ticket {raw!r}: expected <component>=<ticket id>",
+                flush=True,
+            )
+            return None
+        if why := branch._ticket_refusal(ref.strip(), change, repo):
+            print(f"ERROR: --ticket {raw!r}: {why}. Nothing was recorded.", flush=True)
+            return None
+        refs[component.strip()] = ref.strip()
+    return refs
+
+
 async def _dispatch(args: argparse.Namespace) -> int:
+    # Checked before anything is written (row S6).
+    refs = _ticket_refs(args) if args.command == "resume" else {}
+    if refs is None:
+        return EXIT_REFUSED
+    # The checkout the run writes in is the feature branch's (`branch.place`);
+    # the input files are still read from `--project-dir`.
+    where = branch.place(
+        args.project_dir,
+        args.change,
+        args.branch,
+        command=args.command,
+        ticket=args.ticket_ref,
+    )
+    branch.prepare(where)
+    branch.adopt(where, args.project_dir, args.change, args.ticket_ref.strip())
+    if args.command != "new":
+        branch.record_ticket(
+            where.project_dir
+            / "specs"
+            / "changes"
+            / normalize_change_name(args.change),
+            args.ticket_ref.strip(),
+        )
     config = SpecConfig(
-        project_dir=args.project_dir,
+        project_dir=where.project_dir,
         change_name=args.change,
         auto=bool(getattr(args, "auto", False)),
+        # `specs/config.yaml` as `--project-dir` holds it, else as the branch does.
+        data=read_specs_config(Path(args.project_dir).expanduser() / "specs"),
+        place=where,
     )
     replies = _path(getattr(args, "interview_replies", ""), args.project_dir)
     if args.command == "new":
         inputs = NewInputs(
-            prd=args.prd,
-            ticket_file=args.ticket_file,
+            prd=_path(args.prd, args.project_dir),
+            ticket_file=_path(args.ticket_file, args.project_dir),
             ticket_ref=args.ticket_ref,
             ticket_url=args.ticket_url,
             ticket_children=args.ticket_child,
-            plan_file=args.plan_file,
-            context_files=args.context_files,
+            plan_file=_path(args.plan_file, args.project_dir),
+            context_files=[_path(f, args.project_dir) for f in args.context_files],
             interview_summary=args.interview_summary,
             interview_mode=args.interview_mode,
             prototype=args.prototype,
@@ -184,7 +275,12 @@ async def _dispatch(args: argparse.Namespace) -> int:
         )
         return await cmd_new(config, inputs, replies_file=replies, max_usd=args.max_usd)
     if args.command == "resume":
-        return await cmd_resume(config, replies_file=replies, max_usd=args.max_usd)
+        return await cmd_resume(
+            config,
+            replies_file=replies,
+            max_usd=args.max_usd,
+            tickets_in=TicketInputs(refs=refs, later=args.tickets_later),
+        )
     return await cmd_revise(config, from_respec=args.from_respec, max_usd=args.max_usd)
 
 

@@ -25,7 +25,7 @@ from build_pipeline.budget import BudgetExceededError
 
 from . import board, git_ops, readiness, review_rounds, walkthroughs
 from . import budget as budget_mod
-from .change_manager import ChangeManager
+from .change_manager import ChangeManager, registry_names
 from .config import BuildConfig
 from .models import BoardColumn, BuildPhase
 from .progress import ProgressWriter
@@ -41,9 +41,14 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
     budget_mod.configure(
         max_tokens=config.budget_max_tokens, max_usd=config.budget_max_usd
     )
+    # The change's feature branch, where pm-spec pushed its specs
+    # (`feature_branch.py`): found before anything else reads the specs.
+    rc = _find_feature_branch(config)
+    if rc is not None:
+        return rc
     # An epic: pm-spec split this change and its `.change.yaml` lists the
-    # children. Read in the caller's checkout, before any worktree re-binding:
-    # the children build from the commit that holds their ready specs there.
+    # children. Read on the feature branch (else in the caller's checkout),
+    # before any worktree re-binding.
     from .epic import phase as epic_phase
 
     if epic_phase.is_epic(config):
@@ -53,6 +58,14 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
     # config.state_file_path() lookup against the source repo would miss it
     # and bootstrap would create a second worktree.
     _rebind_to_existing_worktree(config)
+    # Origin's default branch is merged into the feature branch after the
+    # refusals below, which change nothing; until then the specs are read as
+    # the branch holds them.
+    merging = _merges_into_feature_branch(config)
+    if merging:
+        from . import feature_branch
+
+        config.base_ref = feature_branch.ref(config.feature_branch)
 
     # The checkpoint normally lives at specs/changes/<name>/.build-state.json,
     # but after an --auto archive with publish still pending it has traveled
@@ -60,15 +73,11 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
     # in either place.
     state_path = _existing_state_path(config) or config.state_file_path()
 
-    # buildme builds only from specs pm-spec marked ready (rows S10, S11, S13):
-    # checked before anything is written, so a refusal changes nothing.
-    rc = _refuse_unless_ready(config, state_path)
-    if rc is not None:
-        return rc
-
     # Nothing to resume, but this change already published: ask before
     # building it again (exit 3, writing nothing). With --force, build it anew
-    # on the next free branch, skipping the published builds' branches.
+    # on the next free branch, skipping the published builds' branches. Asked
+    # before the specs check: a single change's build pushed its feature
+    # branch, which an `--auto` archive left without `specs/changes/<name>`.
     if not state_path.exists():
         completed = _completed_builds(config)
         if completed and not getattr(args, "force", False):
@@ -82,6 +91,29 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
                 config.change_name,
                 ",".join(config.published_branches) or "-",
             )
+            # A single change built on its feature branch: the new build
+            # starts where that one did, from the ready specs, not from the
+            # published build.
+            first = completed[-1][2]
+            if (
+                config.feature_branch
+                and config.feature_branch in config.published_branches
+                and not _epic_child(config)
+                and first.base_sha
+            ):
+                config.base_ref = first.base_sha
+                if not config.tickets:
+                    _find_tickets_at(config, first.base_sha)
+
+    # buildme builds only from specs pm-spec marked ready (rows S10, S11, S13):
+    # checked before anything is written, so a refusal changes nothing.
+    rc = _refuse_unless_ready(config, state_path)
+    if rc is not None:
+        return rc
+    if merging:
+        rc = _merge_into_feature_branch(config)
+        if rc is not None:
+            return rc
 
     progress = ProgressWriter(config.progress_file_path())
 
@@ -435,15 +467,24 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
 
             assert_plan_current(config, state)
         state.advance_to(BuildPhase.PUBLISH, state_path)
-        if config.auto:
+        from multiplai_core.specs import change_root
+
+        if change_root(config.change_dir) != config.change_dir:
+            # A component: its change archives once, after its last component
+            # merged into the feature branch (`epic.coordinator`).
+            log.info(
+                "SKIP phase=ARCHIVE reason=component change=%s", config.change_name
+            )
+            publish_docs_dir = config.change_dir
+        elif config.auto:
             if config.change_dir.exists():
                 log.info("START phase=ARCHIVE reason=--auto")
                 # The checkpoint travels with the move (commit_stage's
                 # bookkeeping excludes keep it out of the archive commit).
                 change_path = config.change_dir
                 registry_paths = [
-                    config.specs_dir / "registry" / path.name
-                    for path in (change_path / "requirements").glob("*.md")
+                    config.specs_dir / "registry" / f"{name}.md"
+                    for name in registry_names(change_path)
                 ]
                 archive_dest = cm.archive_change(change_path)
                 log.info("DONE phase=ARCHIVE dest=%s", archive_dest)
@@ -638,6 +679,190 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
                 )
 
 
+def _find_feature_branch(config: BuildConfig) -> int | None:
+    """Set `config.feature_branch` to the change's feature branch
+    (`feature_branch.resolve`, after `git fetch origin`), and
+    `config.tickets` (`_find_tickets`). The branch is not looked for for an
+    epic's child and with `--base-ref`, which name their base themselves, and
+    when the project is not in a repository with an `origin` remote. A
+    failed fetch is a warning: origin's refs are read as they are, and a
+    build that then merges into the branch fails on its own fetch.
+    `SPEC:NOT_READY` (exit 2) when the branch `--branch` or `.change.yaml`
+    names is not on origin, when origin has several branches for the change,
+    and when `--branch` does not start with the change's `<TICKET>-`; None
+    otherwise."""
+    from . import feature_branch, readiness
+
+    if not config.change_name:
+        return None
+    repo = git_ops.repo_root(config.project_dir)
+    if _epic_child(config) or config.base_ref:
+        _find_tickets(config, repo)
+        return None
+    if repo is None or not git_ops.has_remote(repo):
+        _find_tickets(config, repo)
+        return None
+    failed = feature_branch.fetch(repo)
+    if failed is not None:
+        log.warning("git fetch origin failed in %s: %s", repo, failed)
+    flag = config.feature_branch
+    found = feature_branch.resolve(repo, config.change_name, flag, config.change_dir)
+    if found.several:
+        log.error(
+            "REFUSED change=%s reason=several-feature-branches branches=%s",
+            config.change_name,
+            found.several,
+        )
+        return readiness.refuse_not_ready(
+            config.change_name,
+            f"origin has {len(found.several)} branches named <TICKET>-{config.change_name}: "
+            f"{', '.join(found.several)}",
+            advice="Name the change's feature branch with --branch, then run the build again",
+        )
+    branch = found.branch
+    if branch is None:
+        _find_tickets(config, repo)
+        return None
+    if not feature_branch.on_origin(repo, branch):
+        named = "--branch" if flag else f"{config.change_dir / '.change.yaml'}"
+        log.error(
+            "REFUSED change=%s reason=no-feature-branch branch=%s",
+            config.change_name,
+            branch,
+        )
+        return readiness.refuse_not_ready(
+            config.change_name,
+            f"origin has no branch {branch}, which {named} names; pm-spec pushes the change's "
+            "specs there",
+            resume=config.change_dir.is_dir(),
+        )
+    config.feature_branch = branch
+    _find_tickets(config, repo)
+    if (
+        flag
+        and config.tickets
+        and not any(flag.startswith(f"{t}-") for t in config.tickets)
+    ):
+        log.error(
+            "REFUSED change=%s reason=branch-without-ticket branch=%s",
+            config.change_name,
+            flag,
+        )
+        return readiness.refuse_not_ready(
+            config.change_name,
+            f"--branch {flag} does not start with the change's ticket id ({config.tickets[0]}-)",
+            advice=(
+                f"Name the branch pm-spec pushed the specs to, "
+                f"{feature_branch.name(config.tickets[0], config.change_name)} or another "
+                f"starting with {config.tickets[0]}-, then run the build again"
+            ),
+        )
+    log.info(
+        "FEATURE_BRANCH change=%s branch=%s tickets=%s",
+        config.change_name,
+        branch,
+        ",".join(config.tickets) or "-",
+    )
+    return None
+
+
+def _find_tickets(config: BuildConfig, repo: Path | None) -> None:
+    """`config.tickets`: the change's own ticket id, then each parent's, as
+    `origin/<feature branch>` holds the change dirs (`feature_branch.tickets_at`),
+    else as the checkout does (`tickets_in`)."""
+    from . import feature_branch
+
+    found: list[str] = []
+    branch = config.feature_branch
+    if repo is not None and branch and feature_branch.on_origin(repo, branch):
+        rel = feature_branch.rel_to(repo, _changes_dir(config))
+        if rel is not None:
+            found = feature_branch.tickets_at(
+                repo, f"refs/remotes/origin/{branch}", rel, config.change_name
+            )
+    if not found:
+        found = feature_branch.tickets_in(config.change_dir)
+    config.tickets = tuple(found)
+
+
+def _changes_dir(config: BuildConfig) -> Path:
+    """`specs/changes/`, the dir above the change (a component's change's)."""
+    from multiplai_core.specs import change_root
+
+    return change_root(Path(config.change_dir)).parent
+
+
+def _find_tickets_at(config: BuildConfig, commit: str) -> None:
+    """`config.tickets` as *commit* holds the change dirs: for a `--force`
+    rerun of a published change whose `--auto` build archived it, so that
+    neither the feature branch nor the checkout holds `specs/changes/<name>`
+    any more, while the commit the published build started from does."""
+    from . import feature_branch
+
+    repo = git_ops.repo_root(config.project_dir)
+    rel = feature_branch.rel_to(repo, _changes_dir(config)) if repo else None
+    if rel is None:
+        return
+    found = feature_branch.tickets_at(repo, commit, rel, config.change_name)
+    if found:
+        config.tickets = tuple(found)
+
+
+def _merges_into_feature_branch(config: BuildConfig) -> bool:
+    """Whether this run merges origin's default branch into the change's
+    feature branch (`_merge_into_feature_branch`): a worktree build of a
+    change on one, not an epic's child (the coordinator merges before each
+    wave) and not with `--base-ref`. Decided before the published-rerun and
+    specs checks, which may set `config.base_ref` themselves."""
+    return bool(
+        config.feature_branch
+        and config.git.worktree
+        and not _epic_child(config)
+        and not config.base_ref
+        and git_ops.repo_root(config.project_dir) is not None
+    )
+
+
+def _merge_into_feature_branch(config: BuildConfig) -> int | None:
+    """Merge origin's default branch into the change's feature branch, once
+    the run passed its refusals (`_merges_into_feature_branch` says when). A
+    first run merges in buildme's own worktree for that and pushes
+    (`feature_branch.merge_default`), then builds from `origin/<branch>`
+    (`config.base_ref`, set by the caller; a `--force` rerun keeps the
+    commit the published build started from). A run that re-bound to the
+    build's worktree (`_rebind_to_existing_worktree`) merges there and
+    pushes nothing (`merge_default_into`): the build is on the feature branch
+    and its own push takes the merge. `FEATURE_BRANCH:CONFLICT` exit 3 on a
+    conflict, exit 1 when git fails."""
+    from . import feature_branch
+
+    branch = config.feature_branch
+    repo = git_ops.repo_root(config.project_dir)
+    if not branch or repo is None:
+        return None
+    if config.pipeline_branch:
+        merged = feature_branch.merge_default_into(repo, branch)
+        if merged.error and merged.outcome == "up to date":
+            print(f"WARNING: {merged.error}", flush=True)
+    else:
+        merged = feature_branch.merge_default(repo, branch)
+    if merged.outcome == "conflict":
+        log.error(
+            "REFUSED change=%s reason=feature-branch-conflict files=%s",
+            config.change_name,
+            merged.files,
+        )
+        return feature_branch.conflict_exit(branch, merged.files)
+    if merged.outcome == "failed":
+        print(
+            f"ERROR: cannot bring {branch} up to date with origin's default branch: {merged.error}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return 1
+    return None
+
+
 def _refuse_unless_ready(config: BuildConfig, state_path: Path) -> int | None:
     """Refuse a build whose specs are not ready, before anything is written.
 
@@ -649,19 +874,20 @@ def _refuse_unless_ready(config: BuildConfig, state_path: Path) -> int | None:
     the specs were never marked and a proposal and requirements are on disk,
     unless a checkpoint from before buildme stopped generating them is still
     short of their generation (item 21). An open `spec_issues` prints
-    `SPEC:ISSUES:<path>`, exit 4 (rows S11, S12). A first run that will branch
-    a worktree from HEAD refuses a change dir with uncommitted changes, since
-    the worktree would not hold them; with `--base-ref`, the change dir as
-    that ref holds it must be ready and hold the revision the change dir
-    marked ready (`_base_ref_reason`), since the worktree is cut from it.
+    `SPEC:ISSUES:<path>`, exit 4 (rows S11, S12). A first worktree run with
+    a base (`--base-ref`, or `origin/<feature branch>`) reads the change dir
+    as the base holds it, which is what the worktree cut from it holds
+    (`_refuse_unless_ready_at_base`). One with no base refuses specs that are
+    ready in the checkout but on no feature branch (`_old_handoff_reason`):
+    `pm-spec resume <name>` moves them onto it.
 
     A worktree build's resume reads the copy in its own worktree; the
     not-ready advice then names `--project-dir <worktree>`. When the change
-    dir in the checkout the build was cut from was marked ready again since,
-    with other specs, the resume refuses and names where they are
-    (`_newer_source_reason`, row S7) instead of building the older copy. A
-    finished build's checkpoint is not checked: its run only reports the
-    result.
+    dir on the feature branch (for a build with none, in the checkout the
+    build was cut from) was marked ready again since, with other specs, the
+    resume refuses and names where they are (`_newer_source_reason`, row S7)
+    instead of building the older copy. A finished build's checkpoint is not
+    checked: its run only reports the result.
     """
     from multiplai_core.specs import CHANGE_META_FILE, is_ready, read_change_meta
 
@@ -676,11 +902,27 @@ def _refuse_unless_ready(config: BuildConfig, state_path: Path) -> int | None:
         if prior is not None and prior.phase == BuildPhase.COMPLETE:
             return None
     change_dir = state_path.parent if state_path.exists() else config.change_dir
+    if prior is None and config.git.worktree and config.base_ref:
+        return _refuse_unless_ready_at_base(config)
+    if prior is None and config.git.worktree:
+        old = _old_handoff_reason(config, change_dir)
+        if old:
+            log.error("REFUSED change=%s reason=no-feature-branch", config.change_name)
+            return readiness.refuse_not_ready(
+                config.change_name,
+                old,
+                resume=True,
+                ticket_ref=not config.tickets,
+            )
     source = (
         _source_change_dir(config, prior, change_dir) if prior is not None else None
     )
     in_worktree = source is not None
-    if source is not None:
+    if source is not None and config.feature_branch and prior.worktree_path:
+        newer = _newer_on_branch(config, prior, change_dir)
+        if newer:
+            return newer
+    elif source is not None:
         newer = _newer_source_reason(prior, change_dir, source)
         if newer:
             source, reason = newer
@@ -693,7 +935,7 @@ def _refuse_unless_ready(config: BuildConfig, state_path: Path) -> int | None:
                 config.change_name,
                 reason,
                 advice=(
-                    f"Copy proposal.md, use-cases.md, requirements/ and .change.yaml from {source} "
+                    f"Copy proposal.md, use-cases.md, specs.md or requirements/, and .change.yaml from {source} "
                     f"into {change_dir}, commit them there, then run the build again"
                 ),
             )
@@ -705,9 +947,7 @@ def _refuse_unless_ready(config: BuildConfig, state_path: Path) -> int | None:
             ).get("spec_status") is not None
         except (OSError, UnicodeError, ValueError):
             marked = False
-        on_disk = (change_dir / "proposal.md").is_file() and any(
-            (change_dir / "requirements").glob("*.md")
-        )
+        on_disk = _specs_on_disk(change_dir)
         early = (
             prior is not None
             and prior.tdd is None
@@ -730,40 +970,168 @@ def _refuse_unless_ready(config: BuildConfig, state_path: Path) -> int | None:
             "REFUSED change=%s reason=spec-issues file=%s", config.change_name, issues
         )
         return readiness.refuse_issues(issues)
-    if prior is None and config.git.worktree:
-        try:
-            dirty = readiness.uncommitted(config.project_dir, change_dir)
-        except git_ops.GitLifecycleError as e:
-            # Not a checkout git can read: bootstrap's preflight says why.
-            log.warning("Could not check %s for uncommitted changes: %s", change_dir, e)
-            dirty = []
-        if dirty:
-            log.error(
-                "REFUSED change=%s reason=specs-uncommitted paths=%s",
-                config.change_name,
-                dirty,
-            )
-            return readiness.refuse_not_ready(
-                config.change_name,
-                f"{change_dir} has uncommitted changes ({', '.join(dirty[:5])}"
-                f"{', ...' if len(dirty) > 5 else ''}); the build's worktree branches from HEAD, "
-                f"which does not hold them",
-                resume=True,
-            )
-    if prior is None and config.git.worktree and config.base_ref:
-        why = _base_ref_reason(config, change_dir)
-        if why:
-            log.error(
-                "REFUSED change=%s reason=base-ref-specs detail=%s",
-                config.change_name,
-                why,
-            )
-            return readiness.refuse_not_ready(
-                config.change_name,
-                why,
-                advice=f"Build from a --base-ref that holds the ready specs in {change_dir}, then run the build again",
-            )
     return None
+
+
+def _specs_on_disk(change_dir: Path) -> bool:
+    """A proposal (a component's change's) and requirements are on disk:
+    `specs.md` or `requirements/*.md`."""
+    from multiplai_core.specs import change_root
+
+    return (change_root(change_dir) / "proposal.md").is_file() and (
+        (change_dir / "specs.md").is_file()
+        or any((change_dir / "requirements").glob("*.md"))
+    )
+
+
+def _old_handoff_reason(config: BuildConfig, change_dir: Path) -> str | None:
+    """Why a first worktree run with no base cannot build specs that are ready
+    in the checkout: they are on no feature branch on origin, where the build
+    would start. None when they are not ready (the not-ready refusal says
+    why) or the project is in no repository (bootstrap's preflight says why)."""
+    from multiplai_core.specs import is_ready
+
+    repo = git_ops.repo_root(config.project_dir)
+    if repo is None or not is_ready(change_dir)[0]:
+        return None
+    from . import feature_branch
+
+    branch = feature_branch.name(
+        config.tickets[0] if config.tickets else "<TICKET>", config.change_name
+    )
+    where = (
+        f"origin has no {branch}"
+        if git_ops.has_remote(repo)
+        else f"{repo} has no origin remote"
+    )
+    return (
+        f"the specs in {change_dir} are ready but on no feature branch ({where}); "
+        "a build starts from the branch pm-spec pushed them to"
+    )
+
+
+def _refuse_unless_ready_at_base(config: BuildConfig) -> int | None:
+    """The first-run check of a worktree build with a base: the change dir as
+    `config.base_ref` holds it must be there, ready (`is_ready`) and with no
+    open `spec_issues`, since the build's worktree is cut from it. None when
+    it is, or when git cannot place the change dir (bootstrap's preflight
+    says why)."""
+    import tempfile
+
+    from multiplai_core.specs import is_ready, read_change_meta
+
+    from . import readiness
+
+    name, base = config.change_name, config.base_ref
+    repo = git_ops.repo_root(config.project_dir)
+    if repo is None:
+        return None
+    try:
+        rel = Path(config.change_dir).resolve().relative_to(repo.resolve()).as_posix()
+    except ValueError:
+        return None
+    # The checkout's own copy recording no branch: an old handoff, which
+    # `pm-spec resume` moves onto the feature branch.
+    local = Path(config.change_dir)
+    old = local.is_dir() and not _meta(local).get("branch")
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            copy = readiness.specs_at(repo, base, rel, Path(tmp))
+        except git_ops.GitLifecycleError as e:
+            log.error("REFUSED change=%s reason=base-unreadable detail=%s", name, e)
+            return readiness.refuse_not_ready(name, f"cannot read {rel} at {base}: {e}")
+        if copy is None:
+            log.error("REFUSED change=%s reason=specs-not-on-base base=%s", name, base)
+            return readiness.refuse_not_ready(
+                name,
+                f"{base} does not hold {rel}, and the build's worktree is cut from it",
+                resume=old,
+            )
+        ready, why = is_ready(copy)
+        if not ready:
+            try:
+                marked = read_change_meta(copy).get("spec_status") is not None
+            except (OSError, UnicodeError, ValueError):
+                marked = False
+            on_disk = _specs_on_disk(copy)
+            log.error(
+                "REFUSED change=%s reason=spec-not-ready base=%s detail=%s",
+                name,
+                base,
+                why,
+            )
+            return readiness.refuse_not_ready(
+                name, f"{rel} at {base}: {why}", resume=not marked and on_disk
+            )
+        issues = readiness.open_issues(copy)
+        if issues is not None:
+            try:
+                shown = f"{base}:{rel}/{issues.relative_to(copy).as_posix()}"
+            except ValueError:
+                shown = f"{base}:{issues}"
+            log.error("REFUSED change=%s reason=spec-issues file=%s", name, shown)
+            return readiness.refuse_issues_at(shown, name)
+    if not config.tickets:
+        # Every branch buildme makes is named after the ticket.
+        log.error("REFUSED change=%s reason=no-ticket base=%s", name, base)
+        return readiness.refuse_not_ready(
+            name,
+            f"{rel} at {base} records no ticket ref, of its own or a parent's; buildme names "
+            "the branches it makes <TICKET>-<change>",
+            resume=True,
+            ticket_ref=True,
+        )
+    return None
+
+
+def _meta(change_dir: Path) -> dict:
+    from multiplai_core.specs import read_change_meta
+
+    try:
+        return read_change_meta(change_dir)
+    except (OSError, UnicodeError, ValueError):
+        return {}
+
+
+def _newer_on_branch(
+    config: BuildConfig, prior: BuildState, change_dir: Path
+) -> int | None:
+    """Row S7 for a build on a feature branch: refuse a resume when the change
+    dir on `origin/<feature branch>` was marked ready again after the build's
+    worktree was cut, with other specs than the copy the build reads
+    (`_newer_source_reason`). Exit 2, or None."""
+    from . import feature_branch, readiness
+
+    worktree = Path(prior.worktree_path)
+    rel = feature_branch.rel_to(worktree, change_dir)
+    if rel is None:
+        return None
+    branch = config.feature_branch
+    try:
+        with feature_branch.Copy(worktree, branch, rel) as copy:
+            newer = (
+                _newer_source_reason(prior, change_dir, copy, label=f"origin/{branch}")
+                if copy is not None
+                else None
+            )
+    except (git_ops.GitLifecycleError, OSError) as e:
+        log.warning("Could not read %s on origin/%s: %s", rel, branch, e)
+        return None
+    if newer is None:
+        return None
+    log.error(
+        "REFUSED change=%s reason=newer-specs-on-branch branch=%s",
+        config.change_name,
+        branch,
+    )
+    return readiness.refuse_not_ready(
+        config.change_name,
+        newer[1],
+        advice=(
+            f"Merge origin/{branch} into the build's branch in {worktree} "
+            f"(`git -C {worktree} merge origin/{branch}`), then run the build again"
+        ),
+    )
 
 
 def _source_change_dir(
@@ -794,7 +1162,7 @@ def _source_change_dir(
 
 
 def _newer_source_reason(
-    prior: BuildState, change_dir: Path, source: Path
+    prior: BuildState, change_dir: Path, source: Path, *, label: str | None = None
 ) -> tuple[Path, str] | None:
     """`(source, reason)` when *source*, the change dir in the checkout this
     worktree build was cut from, is ready with other specs than it held when
@@ -804,7 +1172,8 @@ def _newer_source_reason(
     The worktree's own copy may be revised in place (`pm-spec revise
     --project-dir <worktree>`, rows S11, S14): the source is then unchanged
     and the build goes on. With no `base_sha` (an older checkpoint), the
-    source counts as newer whenever it differs from the copy."""
+    source counts as newer whenever it differs from the copy. *label* names
+    the source in the reason in place of its path (a copy of a branch's)."""
     from multiplai_core.specs import is_ready, spec_revision
 
     from . import readiness
@@ -831,48 +1200,10 @@ def _newer_source_reason(
         if rel and readiness.saved_revision_at(root, prior.base_sha, rel) == theirs:
             return None
     return source, (
-        f"the specs in {source} were marked ready again after this build's worktree was cut, "
+        f"the specs in {label or source} were marked ready again after this build's worktree was cut, "
         f"and differ from the copy the build reads in {change_dir} (spec_revision "
         f"{str(theirs)[:12]})"
     )
-
-
-def _base_ref_reason(config: BuildConfig, change_dir: Path) -> str | None:
-    """Why a first run with `--base-ref` cannot build: the change dir as the
-    ref holds it, which is what the worktree cut from it reads, is missing,
-    not ready (`is_ready`), or ready with another revision than the change
-    dir marked ready here. None when it can, or when git cannot place the
-    change dir (bootstrap's preflight says why)."""
-    import tempfile
-
-    from multiplai_core.specs import is_ready
-
-    from . import readiness
-
-    repo = git_ops.repo_root(config.project_dir)
-    if repo is None:
-        return None
-    try:
-        rel = Path(change_dir).resolve().relative_to(repo.resolve()).as_posix()
-    except ValueError:
-        return None
-    base = config.base_ref
-    with tempfile.TemporaryDirectory() as tmp:
-        try:
-            copy = readiness.specs_at(repo, base, rel, Path(tmp))
-        except git_ops.GitLifecycleError as e:
-            return f"cannot read {rel} at --base-ref {base}: {e}"
-        if copy is None:
-            return f"--base-ref {base} does not hold {rel}, and the build's worktree is cut from it"
-        ready, why = is_ready(copy)
-        if not ready:
-            return f"{rel} at --base-ref {base}, which the build's worktree is cut from: {why}"
-        if readiness.saved_revision(copy) != readiness.saved_revision(change_dir):
-            return (
-                f"{rel} at --base-ref {base}, which the build's worktree is cut from, holds other "
-                f"specs than the ones marked ready in {change_dir}"
-            )
-    return None
 
 
 def _record_interrupt(
@@ -1669,16 +2000,63 @@ def _setup_worktree(config: BuildConfig, state: BuildState) -> None:
         log.info("SKIP worktree reason=no-change-name")
         return
 
+    from . import feature_branch
+
     repo = git_ops.preflight(config.project_dir, worktree_requested=True)
     offset = _project_offset(config.project_dir, repo)
     # With --base-ref (an epic's child), an empty branch left by an attempt
     # killed before its first commit sits at that ref, which the local default
     # branch may not have reached: count its commits against the ref.
     base = config.base_ref or git_ops.default_branch(repo)
-    branch, dest = git_ops.resolve_new_branch(
-        repo, config.change_name, base, taken=config.published_branches
-    )
-    git_ops.create_worktree(repo, branch, dest, start_point=config.base_ref or None)
+    single = bool(config.feature_branch) and not _epic_child(config)
+    held = git_ops.worktree_for_branch(repo, config.feature_branch) if single else None
+    if held is not None and not _an_earlier_attempt(repo, held, config.change_name):
+        raise git_ops.GitLifecycleError(
+            f"{config.feature_branch} is checked out in {held}, and a single change builds "
+            "on its feature branch in a worktree of its own. Check another branch out there, "
+            "then run the build again"
+        )
+    if (
+        single
+        and held is None
+        and config.feature_branch not in config.published_branches
+    ):
+        # A single change builds on its feature branch itself.
+        branch = config.feature_branch
+        dest = _check_out_feature_branch(config, repo, branch)
+    else:
+        if not config.tickets:
+            raise git_ops.GitLifecycleError(
+                f"{config.change_name} records no ticket ref, and buildme names the branches "
+                "it makes <TICKET>-<change>; run /multiplai-pm:pm-spec resume "
+                f"{config.change_name} --ticket-ref <ticket id>, then the build again"
+            )
+        refusal = (
+            None
+            if single
+            else feature_branch.ticket_refusal(
+                repo, config.tickets[0], config.change_name
+            )
+        )
+        if refusal:
+            raise git_ops.GitLifecycleError(
+                f"{refusal}; give {config.change_name} a ticket id git takes "
+                f"(/multiplai-pm:pm-spec resume {config.change_name} --ticket-ref "
+                "<ticket id>), then run the build again"
+            )
+        # An epic's child: `<TICKET>-<child>`. A single change built again
+        # with --force, or moved off an earlier attempt's worktree that
+        # still has the feature branch checked out: the next free
+        # `<feature branch>-2`, `-3`, ..., cut from it.
+        name = (
+            config.feature_branch
+            if single
+            else feature_branch.name(config.tickets[0], config.change_name)
+        )
+        branch, dest = git_ops.resolve_new_branch(
+            repo, config.change_name, base, taken=config.published_branches, name=name
+        )
+        git_ops.create_worktree(repo, branch, dest, start_point=config.base_ref or None)
 
     state.source_repo = str(repo)
     state.branch = branch
@@ -1692,6 +2070,65 @@ def _setup_worktree(config: BuildConfig, state: BuildState) -> None:
     log.info("Build re-bound to %s on branch %s", config.project_dir, branch)
     print(f"WORKTREE:{dest}", flush=True)
     print(f"BRANCH:{branch}", flush=True)
+
+
+def _an_earlier_attempt(repo: Path, worktree: Path, change: str) -> bool:
+    """Whether *worktree* is one of this change's build worktrees
+    (`<worktrees root>/buildme-<change>[-<n>]`)."""
+    name = git_ops.worktree_dir_name(change)
+    return Path(worktree).resolve().parent == git_ops.worktrees_root(
+        repo
+    ).resolve() and (
+        Path(worktree).name == name or Path(worktree).name.startswith(f"{name}-")
+    )
+
+
+def _check_out_feature_branch(config: BuildConfig, repo: Path, branch: str) -> Path:
+    """Check the feature branch *branch* out in a new worktree for the build
+    (`worktree_dest`, the first free one) and bring it up to
+    `origin/<branch>`. Refuses (``git_ops.GitLifecycleError``) when the local
+    branch holds commits origin's lacks: they are somebody's work."""
+    local = git_ops.branch_exists(repo, branch)
+    if local and (
+        git_ops._run(
+            [
+                "git",
+                "merge-base",
+                "--is-ancestor",
+                f"refs/heads/{branch}",
+                f"refs/remotes/origin/{branch}",
+            ],
+            cwd=repo,
+        ).returncode
+        != 0
+    ):
+        raise git_ops.GitLifecycleError(
+            f"The local branch {branch} holds commits origin/{branch} lacks. Push them, or "
+            f"rename that branch, then run the build again: buildme builds on origin/{branch}"
+        )
+    dest = next(
+        (
+            d
+            for d in (
+                git_ops.worktree_dest(repo, config.change_name, n) for n in range(1, 51)
+            )
+            if not d.exists()
+        ),
+        None,
+    )
+    if dest is None:
+        raise git_ops.GitLifecycleError(
+            f"Could not find a free worktree path for {config.change_name} after 50 attempts."
+        )
+    git_ops.add_worktree_for_branch(repo, branch, dest)
+    if local:
+        ff = git_ops.fast_forward_from_origin(dest, branch)
+        if not ff.ok:
+            raise git_ops.GitLifecycleError(
+                f"Could not bring {branch} in {dest} up to origin/{branch}: "
+                f"{(ff.stderr or ff.stdout).strip()}"
+            )
+    return dest
 
 
 def _rebind_to_existing_worktree(config: BuildConfig) -> None:
@@ -2041,6 +2478,29 @@ def _pr_base_branch(repo: Path, base_ref: str) -> str | None:
     return None
 
 
+def pr_title(target: str, tickets: tuple[str, ...], docs_dir: Path, change: str) -> str:
+    """`[<target branch>] <TICKET> <title>`: the branch the PR goes against,
+    the change's ticket id (none when it has none) and its title, the first
+    `# ` heading of its proposal (a component, which has none: of its
+    `plan.md`, less `Plan: `; else the change's name)."""
+    import re
+
+    title = ""
+    for name in ("proposal.md", "plan.md"):
+        try:
+            text = (Path(docs_dir) / name).read_text()
+        except (OSError, UnicodeError):
+            continue
+        m = re.search(r"^#\s+(.+?)\s*$", text, re.MULTILINE)
+        if m and not m.group(1).startswith("<!--"):
+            title = m.group(1).strip()
+            if name == "plan.md":
+                title = re.sub(r"^Plan:\s*", "", title)
+        break
+    words = [f"[{target}]", *(tickets[:1]), title or change]
+    return " ".join(w for w in words if w)
+
+
 def _pr_open_argv(
     project_dir: Path,
     change_dir: Path,
@@ -2130,10 +2590,23 @@ def _run_publish(
         log.info("SKIP phase=PUBLISH reason=no-pipeline-branch")
         return True
 
+    from . import feature_branch
+
     worktree = Path(state.worktree_path)
     draft = config.git.pr == "draft"
     docs_dir = docs_dir or config.change_dir
-    title = f"buildme: {config.change_name}"
+    # A single change on its feature branch opens its PR to origin's default
+    # branch; an epic's child targets the feature branch (the coordinator
+    # passes `--branch`); a child started before that flag targets the
+    # default branch, as it did then.
+    default = feature_branch.default_name(worktree) or git_ops.default_branch(worktree)
+    if config.feature_branch and not _epic_child(config):
+        base = default
+    else:
+        base = config.feature_branch or (
+            None if _epic_child(config) else _pr_base_branch(worktree, config.base_ref)
+        )
+    title = pr_title(base or default, config.tickets, docs_dir, config.change_name)
 
     if not config.git.push:
         log.info("SKIP phase=PUBLISH reason=--no-push branch=%s", state.branch)
@@ -2141,11 +2614,6 @@ def _run_publish(
         return True
 
     sections = [Path(p) for p in state.publish_sections]
-    # An epic's child opens its PR against the default branch. Its --base-ref is
-    # the local commit that holds the epic's ready specs, which no origin branch
-    # holds until a sibling built on it pushes its own branch, or origin's
-    # default sha.
-    base = None if _epic_child(config) else _pr_base_branch(worktree, config.base_ref)
     pr_argv = _pr_open_argv(
         config.project_dir,
         docs_dir,

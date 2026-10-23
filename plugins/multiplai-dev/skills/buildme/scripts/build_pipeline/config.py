@@ -536,14 +536,16 @@ class EpicSettings:
     """`epic:` block: how an approved epic runs its children
     (plan-buildme-epic-mode-2026-10-12.md, item 16a). `max_parallel`: children
     building at once. `max_review_rounds`: review rounds per child PR.
-    `merge`: `auto` or `manual` (a human merges). `max_usd`: one ceiling for
+    `merge`: `auto` or `manual` (a human merges); None when config.yaml does
+    not set it, which the coordinator runs as `auto` when the PRs target a
+    feature branch, else `manual` (`Coordinator.__post_init__`). `max_usd`: one ceiling for
     the whole epic, None for none. `round_worth`: which Code MEDIUM earns
     another review round (`epic.review.decide`): `breaks`, one the verifier
     did not rate `correctness-only` or `hygiene`; `any`, every one."""
 
     max_parallel: int = 2
     max_review_rounds: int = 3
-    merge: Literal["auto", "manual"] = "manual"
+    merge: Literal["auto", "manual"] | None = None
     max_usd: float | None = None
     round_worth: Literal["breaks", "any"] = "breaks"
 
@@ -784,8 +786,20 @@ class BuildConfig:
     findings: FindingsSettings = field(default_factory=FindingsSettings)
     epic: EpicSettings = field(default_factory=EpicSettings)
     # `build --base-ref`: the commit a new worktree branches from (an epic's
-    # coordinator passes origin's default branch). Empty: the source HEAD.
+    # coordinator passes `origin/<feature branch>`; a build that found the
+    # change's feature branch sets it to that). Empty: the source HEAD.
     base_ref: str = ""
+    # `build --branch`, else the change's feature branch as
+    # `feature_branch.resolve` found it: where pm-spec pushed the specs. A
+    # single change builds on it and opens its PR to the default branch; an
+    # epic's child builds on `<TICKET>-<child>` cut from it, with its PR
+    # targeting it. Empty: none.
+    feature_branch: str = ""
+    # The change's ticket ids, its own first, then each parent's
+    # (`feature_branch.tickets_at`, on the feature branch, else in the
+    # checkout): the first names the branches buildme makes and goes in
+    # the PR title. Empty: none known.
+    tickets: tuple[str, ...] = ()
     # The checkout the build was started in, when a resume re-bound the config
     # to the build's existing worktree (`orchestrator._rebind_to_existing_worktree`);
     # None otherwise. The readiness check compares its specs with the worktree's.
@@ -1423,6 +1437,7 @@ class BuildConfig:
         if getattr(args, "pr_ready", False):
             self.git.pr = "ready"
         self.base_ref = getattr(args, "base_ref", "") or ""
+        self.feature_branch = getattr(args, "branch", "") or ""
         self.epic_child = bool(getattr(args, "epic_child", False))
 
     def rebind_project_dir(self, new_project_dir: Path) -> None:
@@ -1494,8 +1509,8 @@ class BuildConfig:
             log.warning("Invalid budget.max_usd=%r — ignoring", raw_usd)
 
     def _load_epic(self, epic_cfg: dict) -> None:
-        merge = epic_cfg.get("merge", "manual")
-        if merge not in ("auto", "manual"):
+        merge = epic_cfg.get("merge")
+        if merge not in ("auto", "manual", None):
             log.warning(
                 "Invalid epic.merge value %r in config.yaml — using 'manual'", merge
             )
@@ -1526,16 +1541,19 @@ class BuildConfig:
         )
 
     def _discover_test_command(self) -> None:
-        """Auto-detect test command if not specified in config."""
+        """Auto-detect the test command if not specified in config, and the
+        stack from the same root file either way (a stack already set, from
+        `memory_files.stacks`, is kept): the stack picks the reference docs."""
+        found = discover_test_command(self.project_dir)
+        if not found:
+            return
+        cmd, marker = found
+        self.stack = self.stack or marker.split(".")[0]
         if self.test_command:
             return
-        found = discover_test_command(self.project_dir)
-        if found:
-            cmd, marker = found
-            self.test_command = cmd
-            self.test_command_discovered_from = marker
-            self.stack = self.stack or marker.split(".")[0]
-            log.info("Discovered test command: %s", cmd)
+        self.test_command = cmd
+        self.test_command_discovered_from = marker
+        log.info("Discovered test command: %s", cmd)
 
     @property
     def change_dir(self) -> Path:
@@ -1544,16 +1562,18 @@ class BuildConfig:
         # Normalize the change name so a hostile/careless --change value
         # (e.g. '../../foo') can't escape specs/changes/ — archive() will
         # shutil.move this directory, so an out-of-tree path is dangerous.
-        from .change_manager import normalize_change_name
+        # A component, `<change>/<id>`, is specs/changes/<change>/components/<id>.
+        from .change_manager import change_path
 
-        return self.specs_dir / "changes" / normalize_change_name(self.change_name)
+        return change_path(self.specs_dir, self.change_name)
 
     @change_dir.setter
     def change_dir(self, value: Path | str | None) -> None:
         """Point `change_dir` at another change directory; None or "" restores
         the default. The target must be one directory directly under
-        `specs/changes/` or `specs/archive/` (ValueError otherwise), the same
-        bound the default path keeps through `normalize_change_name`."""
+        `specs/changes/` or `specs/archive/`, or a component's,
+        `specs/changes/<change>/components/<id>` (ValueError otherwise), the
+        same bound the default path keeps through `normalize_change_name`."""
         if value is None or str(value) == "":
             self._change_dir_override = ""
             return
@@ -1565,11 +1585,15 @@ class BuildConfig:
             raise ValueError(
                 f"change_dir {value} is not inside {self.specs_dir}"
             ) from None
+        component = (
+            len(rel.parts) == 4
+            and rel.parts[0] == "changes"
+            and rel.parts[2] == "components"
+        )
         if (
-            len(rel.parts) != 2
-            or rel.parts[0] not in ("changes", "archive")
-            or rel.parts[1].startswith(".")
-        ):
+            not component
+            and (len(rel.parts) != 2 or rel.parts[0] not in ("changes", "archive"))
+        ) or any(part.startswith(".") for part in rel.parts[1:]):
             raise ValueError(
                 f"change_dir {value} must be a directory directly under "
                 f"{self.specs_dir / 'changes'} or {self.specs_dir / 'archive'}"

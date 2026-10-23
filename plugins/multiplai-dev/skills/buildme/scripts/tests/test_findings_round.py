@@ -2994,6 +2994,16 @@ class TestCli:
         assert run.project_dir == repo  # the checkout already on the PR's branch
         assert run.repo == REPO
 
+    def test_the_change_comes_from_a_ticket_branch_it_holds(self, built, monkeypatch):
+        """A build branch from 0.105.0 on is `<TICKET>-<change>`."""
+        repo, change, _ = built
+        _git(repo, "branch", "-m", "buildme/calc", "ENG-7-calc")
+        self._gh(monkeypatch, head="ENG-7-calc")
+        run = cli.resolve(self._args(repo))
+        assert run.branch == "ENG-7-calc"
+        assert run.config.change_name == "calc"
+        assert run.change_dir == change
+
     def test_an_active_change_wins_over_the_archive(self, built, monkeypatch):
         repo, change, _ = built
         active = repo / "specs" / "changes" / "calc"

@@ -1,185 +1,44 @@
-"""The handoff (item 13): the ready record, `tickets.json` and its schema, and
-the commit of the change dir alone."""
+"""The handoff: the ready record on each component and on the change, and the
+commit of the change dir alone."""
 
 from __future__ import annotations
 
-import json
-
-import jsonschema
 import pytest
-from conftest import CAPS, PRD, SCHEMA, change_dir, git, run, write
-from pm_spec_pipeline import git_ops, tickets
+from conftest import TWO, change_dir, git, meta, run, specs, state, write
+from multiplai_core.specs import is_ready, spec_revision
+from pm_spec_pipeline import branch, git_ops, layout
 
 
-def load(cdir):
-    return json.loads((cdir / "tickets.json").read_text())
-
-
-def validate(items):
-    jsonschema.validate(items, json.loads(SCHEMA.read_text()))
-
-
-def test_tickets_json_validates_and_has_one_epic_and_one_task_per_capability(
-    repo, model
-):
+def test_each_component_and_the_change_get_the_ready_record(repo, model, capsys):
+    model["components"] = TWO
     assert run(repo, "new", "throttle", "--auto") == 0
     cdir = change_dir(repo)
-    items = load(cdir)
-    validate(items)
-    epic, *tasks = items
-    assert epic == {
-        "id": "throttle",
-        "type": "epic",
-        "title": "Request throttling",
-        "description": "Clients flood the API server.",
-        "priority": "none",
-        "labels": ["throttle"],
-        "parent": None,
-        "acceptance": [],
-        "links": [
-            "specs/changes/throttle/proposal.md",
-            "specs/changes/throttle/use-cases.md",
-        ],
-    }
-    assert [t["id"] for t in tasks] == [f"throttle/{c}" for c in CAPS]
-    for task, cap in zip(tasks, CAPS):
-        name = cap.replace("-", " ").capitalize()
-        assert (
-            task["type"] == "task"
-            and task["parent"] == "throttle"
-            and task["title"] == cap
-        )
-        assert task["labels"] == ["throttle", cap]
-        assert task["acceptance"] == [
-            f"Requirement: {name} holds",
-            f"Scenario: {name} applies",
-        ]
-        assert task["links"] == [f"specs/changes/throttle/requirements/{cap}.md"]
-        assert "ref" not in task
-    assert "ref" not in epic
+    for d in (cdir, cdir / "components" / "api", cdir / "components" / "ui"):
+        assert is_ready(d) == (True, ""), d
+        assert meta(d)["spec_revision"] == spec_revision(d)
+    revision = layout.revision(cdir)
+    assert f"SPEC:READY:{cdir}:{revision}" in capsys.readouterr().out
+    assert state(cdir)["handoff"]["revision"] == revision
 
 
-def test_refs_come_from_the_recorded_ticket_refs_not_the_proposal(
-    repo, model, tmp_path
+def test_an_edit_to_one_components_specs_after_ready_is_checked_again(
+    repo, model, capsys
 ):
-    """The epic carries the ref the change came in with; no task carries a ref
-    a model wrote, even when the proposal's `## Sources` names a child."""
-    ticket = write(tmp_path / "t.md", "Throttle.\n")
-    assert (
-        run(
-            repo,
-            "new",
-            "throttle",
-            "--auto",
-            "--no-epic-split",
-            "--ticket-file",
-            str(ticket),
-            "--ticket-ref",
-            "EPIC-9",
-            "--ticket-child",
-            "T-1",
-            "--ticket-child",
-            "T-2",
-        )
-        == 0
-    )
-    cdir = change_dir(repo)
-    assert "ticket T-1" in (cdir / "proposal.md").read_text()  # the model cited it
-    items = load(cdir)
-    validate(items)
-    assert [i.get("ref") for i in items] == ["EPIC-9", None, None]
-
-
-def test_a_child_change_carries_its_ticket_childs_ref(repo, model, tmp_path):
-    from test_epic_split import SPLIT
-
-    model["epic_split"] = SPLIT
-    assert (
-        run(
-            repo,
-            "new",
-            "throttle",
-            "--auto",
-            "--ticket-ref",
-            "EPIC-9",
-            "--ticket-child",
-            "T-1",
-            "--ticket-child",
-            "T-2",
-        )
-        == 0
-    )
-    for name, ref in (("throttle-api", "T-1"), ("throttle-ui", "T-2")):
-        assert run(repo, "resume", name) == 0
-        items = load(change_dir(repo, name))
-        validate(items)
-        assert items[0]["ref"] == ref and all("ref" not in i for i in items[1:])
-
-
-def test_priority_comes_from_the_prd_and_tasks_take_the_epics(repo, model, tmp_path):
-    prd = write(tmp_path / "prd.md", PRD)
-    assert run(repo, "new", "throttle", "--auto", "--prd", str(prd)) == 0
-    assert {i["priority"] for i in load(change_dir(repo))} == {"high"}
-
-
-def test_priority_from_the_ticket_when_the_prd_states_none(repo, model, tmp_path):
-    ticket = write(tmp_path / "t.md", "Priority: Urgent\n\nThrottle.\n")
-    assert run(repo, "new", "throttle", "--auto", "--ticket-file", str(ticket)) == 0
-    assert {i["priority"] for i in load(change_dir(repo))} == {"urgent"}
-
-
-@pytest.mark.parametrize(
-    "text,expected",
-    [
-        ("**Priority:** P1\n", "high"),
-        ("priority = low\n", "low"),
-        ("Priority: whenever\n", None),
-        ("", None),
-    ],
-)
-def test_the_priority_line(text, expected):
-    assert tickets.stated_priority(text) == expected
-
-
-def test_tickets_json_ids_are_stable_across_runs(repo, model):
-    """A second handoff after an edit to a non-title field keeps every id."""
+    model["components"] = TWO
     assert run(repo, "new", "throttle", "--auto") == 0
     cdir = change_dir(repo)
-    first = load(cdir)
-    path = cdir / "proposal.md"
-    path.write_text(
-        path.read_text().replace(
-            "Clients flood the API server.", "Bots flood the API server."
-        )
-    )
+    ui = cdir / "components" / "ui"
+    write(ui / "specs.md", specs(rule="the edited rule"))
+    assert is_ready(cdir)[0] is True and is_ready(ui)[0] is False
+    checks = len(model.exactly("consistency"))
+    capsys.readouterr()
     assert run(repo, "resume", "throttle") == 0
-    second = load(cdir)
+    assert len(model.exactly("consistency")) == checks + 1
+    assert is_ready(ui) == (True, "") and layout.ready(cdir) == (True, "")
+    assert f"SPEC:READY:{cdir}:{layout.revision(cdir)}" in capsys.readouterr().out
     assert (
-        second[0]["description"]
-        == "Bots flood the API server."
-        != first[0]["description"]
+        git(change_dir(repo).parents[2], "status", "--porcelain", "--", "specs") == ""
     )
-    assert [i["id"] for i in second] == [i["id"] for i in first]
-    assert [i["parent"] for i in second] == [i["parent"] for i in first]
-
-
-def test_the_schema_rejects_a_ticket_system_shaped_item():
-    schema = json.loads(SCHEMA.read_text())
-    bad = [
-        {
-            "id": "x",
-            "type": "story",
-            "title": "t",
-            "description": "",
-            "priority": "P1",
-            "labels": [],
-            "parent": None,
-            "acceptance": [],
-            "links": ["/abs/path"],
-        }
-    ]
-    with pytest.raises(jsonschema.ValidationError):
-        jsonschema.validate(bad, schema)
 
 
 class TestCommit:
@@ -218,19 +77,13 @@ class TestCommit:
 
 
 def test_an_edit_while_the_check_runs_is_checked_before_ready(repo, model, capsys):
-    from conftest import meta, requirements, state
-    from multiplai_core.specs import is_ready, spec_revision
-
     cdir = change_dir(repo)
     read = []
 
     def check(prompt, label, kw):
         read.append(spec_revision(cdir))
         if len(read) == 1:  # the user saves an edit while the agent is still reading
-            write(
-                cdir / "requirements" / "rate-limit.md",
-                requirements("rate-limit", rule="UNCHECKED EDIT"),
-            )
+            write(cdir / "specs.md", specs(rule="UNCHECKED EDIT"))
         return {"findings": []}
 
     model["consistency"] = check
@@ -245,8 +98,6 @@ def test_an_edit_while_the_check_runs_is_checked_before_ready(repo, model, capsy
 
 
 def test_the_recheck_passes_at_the_revision_it_read(repo, model):
-    from conftest import meta, requirements, state
-    from multiplai_core.specs import spec_revision
     from test_consistency import finding, recheck
 
     cdir = change_dir(repo)
@@ -254,13 +105,14 @@ def test_the_recheck_passes_at_the_revision_it_read(repo, model):
 
     def second(prompt, label, kw):
         read.append(spec_revision(cdir))
-        write(
-            cdir / "requirements" / "retry-policy.md",
-            requirements("retry-policy", rule="EDIT DURING RECHECK"),
-        )
+        write(cdir / "specs.md", specs(rule="EDIT DURING RECHECK"))
         return recheck()
 
-    model["consistency"] = [{"findings": [finding()]}, second, {"findings": []}]
+    model["consistency"] = [
+        {"findings": [finding(files=("specs.md", "proposal.md"))]},
+        second,
+        {"findings": []},
+    ]
     assert run(repo, "new", "throttle", "--auto") == 0
     assert len(model.exactly("consistency")) == 3
     assert meta(cdir)["spec_revision"] == spec_revision(cdir) != read[0]
@@ -270,24 +122,17 @@ def test_the_recheck_passes_at_the_revision_it_read(repo, model):
 def test_a_change_between_the_compare_and_the_ready_record_is_checked_again(
     repo, model, monkeypatch
 ):
-    from conftest import meta, requirements
-    from multiplai_core.specs import is_ready, spec_revision
-
-    real = tickets.write
+    real = branch.record
     cdir = change_dir(repo)
     done = []
 
-    def write_then_edit(change_dir_, project_dir):
-        path = real(change_dir_, project_dir)
-        if not done:
+    def record_then_edit(change_dir_, name):
+        real(change_dir_, name)
+        if model.exactly("consistency") and not done:
             done.append(1)
-            write(
-                cdir / "requirements" / "rate-limit.md",
-                requirements("rate-limit", rule="LATE EDIT"),
-            )
-        return path
+            write(cdir / "specs.md", specs(rule="LATE EDIT"))
 
-    monkeypatch.setattr(tickets, "write", write_then_edit)
+    monkeypatch.setattr(branch, "record", record_then_edit)
     assert run(repo, "new", "throttle", "--auto") == 0
     assert len(model.exactly("consistency")) == 2
     assert meta(cdir)["spec_revision"] == spec_revision(cdir) and is_ready(cdir)[0]
@@ -295,12 +140,13 @@ def test_a_change_between_the_compare_and_the_ready_record_is_checked_again(
 
 # --- never ready while requirements issues are open ------------------------------
 
-ISSUES = "# Spec issues\n\n## Retry header\n\nrequirements/retry-policy.md lacks the Retry-After header.\n"
+ISSUES = (
+    "# Spec issues\n\n## Retry header\n\n`retry-policy` lacks the Retry-After header.\n"
+)
 
 
 def test_resume_after_a_blocked_revise_refuses_and_never_hands_off(repo, model, capsys):
-    from conftest import meta
-    from multiplai_core.specs import is_ready, set_spec_issues
+    from multiplai_core.specs import set_spec_issues
 
     model["consistency"] = [
         {"findings": []},

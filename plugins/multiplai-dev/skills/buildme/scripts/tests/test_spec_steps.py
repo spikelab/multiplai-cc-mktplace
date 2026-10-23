@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from build_pipeline.change_manager import ChangeManager
 from build_pipeline.config import BuildConfig
 from build_pipeline.llm_steps.spec_steps import (
     _build_prompt,
@@ -181,6 +182,86 @@ class TestDesignAudit:
         assert "(no specs)" not in prompt
 
 
+class TestSpecIssueLabels:
+    """A requirement a design or its audit cannot follow is named as the
+    change holds it: `specs.md#<capability>` with a `specs.md`, else
+    `requirements/<capability>.md`."""
+
+    def _component(self, tmp_path) -> BuildConfig:
+        project = tmp_path / "project"
+        root = project / "specs" / "changes" / "feat"
+        component = root / "components" / "billing"
+        component.mkdir(parents=True)
+        (root / "proposal.md").write_text("proposal")
+        (component / "plan.md").write_text("# Plan: billing\n")
+        (component / "specs.md").write_text(
+            "# Capability: billing\n\n## ADDED Requirements\n\n"
+            "### Requirement: Invoices\nThe system SHALL list invoices.\n"
+        )
+        for name in ("design.md", "tasks.md"):
+            (component / name).write_text("x")
+        config = BuildConfig(project_dir=project, change_name="feat/billing")
+        config.specs_dir = project / "specs"
+        return config
+
+    def _old(self, tmp_path) -> BuildConfig:
+        config = _make_config(tmp_path, {"auth": "### Requirement: Log in\n"})
+        for name in ("proposal.md", "design.md", "tasks.md"):
+            (config.change_dir / name).write_text("x")
+        return config
+
+    def test_the_design_prompt_names_specs_md_sections(self, tmp_path):
+        config = self._component(tmp_path)
+        ctx = ChangeManager(config.specs_dir).artifact_context(
+            config.change_dir, "design"
+        )
+        prompt = _build_prompt("design", ctx, config)
+        assert "`SPEC_ISSUE: specs.md#<capability>: <requirement name>:" in prompt
+        assert "requirements/<capability>.md" not in prompt
+
+    def test_the_design_prompt_keeps_requirements_files_for_the_old_layout(
+        self, tmp_path
+    ):
+        config = self._old(tmp_path)
+        ctx = ChangeManager(config.specs_dir).artifact_context(
+            config.change_dir, "design"
+        )
+        prompt = _build_prompt("design", ctx, config)
+        assert (
+            "`SPEC_ISSUE: requirements/<capability>.md: <requirement name>:" in prompt
+        )
+        assert "specs.md#" not in prompt
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("layout", "label", "other"),
+        [
+            ("_component", "specs.md#<capability>", "requirements/<capability>.md"),
+            ("_old", "requirements/<capability>.md", "specs.md#<capability>"),
+        ],
+    )
+    async def test_the_design_audit_prompt_names_them_as_the_change_holds_them(
+        self, tmp_path, layout, label, other
+    ):
+        config = getattr(self, layout)(tmp_path)
+        with patch(
+            "build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock
+        ) as mock_llm:
+            mock_llm.return_value = _agent_text("[]")
+            await run_design_audit(config.change_dir, config)
+        prompt = mock_llm.call_args[0][0]
+        assert f"as `{label}: <requirement name>`" in prompt
+        assert other not in prompt
+
+    def test_a_specs_md_spec_issue_line_is_parsed(self):
+        from build_pipeline.spec_generator import design_spec_issues
+
+        line = "SPEC_ISSUE: specs.md#billing: Invoices: cannot page; allow it\n"
+        assert [t for t, _ in design_spec_issues(line)] == [
+            "Design: specs.md#billing: Invoices"
+        ]
+
+
 class TestTasksPromptVerticalSlices:
     """B4: the tasks prompt must demand vertical slices, not layer-per-block."""
 
@@ -257,6 +338,28 @@ class TestTasksAudit:
         assert "DESIGN-MARKER" in prompt
         assert "vertical slice" in prompt
         assert findings == []
+
+    @pytest.mark.asyncio
+    async def test_prompt_includes_specs_md_capabilities(self, tmp_path):
+        change_dir = self._change_dir(tmp_path, "## 1. TASKS-MARKER block")
+        (change_dir / "specs.md").write_text(
+            "# Capability: cap-a\n\n## ADDED Requirements\n\n"
+            "### Requirement: Keep the form\nThe form keeps the text.\n\n"
+            "#### Scenario: Wake from sleep\n- **WHEN** the laptop wakes\n"
+            "- **THEN** the form still holds the text\n"
+        )
+        config = MagicMock(model="test-model")
+
+        with patch(
+            "build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock
+        ) as mock_llm:
+            mock_llm.return_value = _agent_text("[]")
+            await run_tasks_audit(change_dir, config)
+
+        prompt = mock_llm.call_args[0][0]
+        assert "### specs.md#cap-a" in prompt
+        assert "Scenario: Wake from sleep" in prompt
+        assert "(no requirements files)" not in prompt
 
     @pytest.mark.asyncio
     async def test_returns_layering_findings(self, tmp_path):
@@ -440,6 +543,40 @@ class TestRegistryInThePrompts:
         assert "Other capabilities in specs/registry: auth" in section
 
     @pytest.mark.parametrize("artifact", ["design", "tasks"])
+    def test_design_and_tasks_get_the_components_plan(self, artifact, tmp_path):
+        project = tmp_path / "project"
+        root = project / "specs" / "changes" / "feat"
+        component = root / "components" / "billing"
+        component.mkdir(parents=True)
+        (root / "proposal.md").write_text("PROPOSAL-MARKER")
+        (component / "plan.md").write_text(
+            "# Plan: billing\n\n## Out of scope\n- OUT-OF-SCOPE-MARKER\n\n"
+            "## Done means\n1. DONE-MEANS-MARKER\n"
+        )
+        (component / "specs.md").write_text(
+            "# Capability: billing\n\n## ADDED Requirements\n\n"
+            "### Requirement: Invoices\nSPEC-MARKER\n"
+        )
+        (component / "design.md").write_text("design body")
+        config = BuildConfig(project_dir=project, change_name="feat/billing")
+        config.specs_dir = project / "specs"
+        assert config.change_dir == component
+        ctx = ChangeManager(config.specs_dir).artifact_context(component, artifact)
+
+        prompt = _build_prompt(artifact, ctx, config)
+
+        plan = prompt.split("## Plan — what this builds", 1)[1].split("\n## Specs", 1)[
+            0
+        ]
+        assert "OUT-OF-SCOPE-MARKER" in plan and "DONE-MEANS-MARKER" in plan
+        assert "PROPOSAL-MARKER" in prompt and "SPEC-MARKER" in prompt
+        assert (
+            prompt.index("## Proposal")
+            < prompt.index("## Plan — ")
+            < prompt.index("## Specs")
+        )
+
+    @pytest.mark.parametrize("artifact", ["design", "tasks"])
     def test_every_prompt_is_unchanged_with_an_empty_registry(self, artifact, tmp_path):
         """The section is appended, never a template placeholder, so an empty
         registry gives today's prompt byte for byte."""
@@ -449,7 +586,9 @@ class TestRegistryInThePrompts:
             "design": DESIGN_PROMPT.format(
                 project_context="PROJECT",
                 proposal_content="proposal body",
+                plan_content="(no plan.md)",
                 specs_content=_read_specs(config),
+                spec_ref="requirements/<capability>.md",
                 codebase_analysis="(new project)",
                 research="(no research conducted)",
                 reference_docs="(none available)",
@@ -460,6 +599,7 @@ class TestRegistryInThePrompts:
             "tasks": TASKS_PROMPT.format(
                 project_context="PROJECT",
                 proposal_content="proposal body",
+                plan_content="(no plan.md)",
                 specs_content=_read_specs(config),
                 design_content="design body",
                 use_cases_content="(not available)",

@@ -21,6 +21,155 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-23
+
+### Changed
+- pm-spec now works in three stages and stops for review after each one,
+  pushing the feature branch each time. Stage 1 writes the interview and the
+  proposal and stops with `SPEC:REVIEW:proposal` (exit 3). `resume` means
+  "approved": stage 2 writes the use cases and the components and stops with
+  `SPEC:REVIEW:components`. The next `resume` runs stage 3: the prototype,
+  `tickets.json`, then the specs, and stops with `SPEC:REVIEW:specs`. The
+  `resume` after that runs the consistency check and the handoff on the
+  files as reviewed. `--auto` runs it all with no stop.
+- An epic is no longer split into sibling changes with runs of their own. A
+  change holds its components: `components.md` (component, depends on,
+  ticket) and `components/<id>/` with a `plan.md`, a `.change.yaml` and a
+  `specs.md`, all written by one run. A change with one component has no
+  `components/` folder: its `plan.md` and `specs.md` sit in the change dir.
+  `SPEC:SPLIT` and `SPEC:CHILD` are gone.
+- The specs are one `specs.md` per component, with a `# Capability: <name>`
+  heading over each capability's ADDED/MODIFIED/REMOVED requirements,
+  instead of one `requirements/<capability>.md` per capability. The proposal
+  no longer lists capabilities; with a PRD, its `## Sources` lists the PRD
+  sections it draws on.
+- The prototype runs for every change unless `--no-prototype` (or
+  `prototype: {enabled: false}`) turns it off, after the components are
+  approved. It makes whatever helps people picture the change (screens,
+  endpoint signatures, sample output), with no behaviour. Files already in
+  `prototype/` are kept and no agent runs. After a failed prototype run, the
+  next `resume` checks what is in `prototype/` again rather than taking it
+  as the PM's: it goes on once the check passes, fails again on `STATUS:
+  BLOCKED`, and otherwise runs the agent again. It no longer rewrites the
+  proposal.
+- `tickets.json` now holds one task per component under the change's epic
+  (title, objective and `## Done means` from the component's plan), or, for
+  one component, the change's own ticket as a task to rewrite.
+- Every run pulls the feature branch first, so edits reviewers push between
+  stops are kept and read by the later stages. A file that exists is never
+  written again. A branch that cannot fast-forward is refused with the
+  `git pull --rebase` to run.
+- The ready record is written on each component's `.change.yaml` as well as
+  the change's.
+- `--plan-file` is read by the interview and kept in `interview.md`, no
+  longer saved as `plan.md`.
+
+### Added
+- The ticket wait: after the prototype, pm-spec pushes `tickets.json` and
+  stops with `SPEC:TICKETS:<path>` (exit 3). `resume --ticket
+  <component>=<REF>` (once per component) records each component's ticket in
+  its `.change.yaml`, `components.md` and `tickets.json`;
+  `resume --tickets-later` goes on with them pending. Any other resume is
+  refused (exit 2) with the flags it expects. A `--ticket` id git would
+  refuse in a branch name (a space, `..`, `~`, a leading `-`) is refused
+  (exit 2) with the reason, before anything is written.
+- The skill tells Claude what to share at each review stop, and to show the
+  tickets and wait for a yes before creating them.
+- A `specs.md` that breaks the format (a capability name that is not
+  kebab-case or is used twice) is a critical consistency finding.
+
+### Fixed
+- pm-spec no longer writes `## MODIFIED Requirements` for a capability with
+  no `specs/registry/` file. The specs prompt allows `MODIFIED` and `REMOVED`
+  only in a capability that has one, and names them; with an empty registry
+  it asks for `ADDED` requirements only. The consistency check finds a
+  `MODIFIED` or `REMOVED` section in a capability with no registry file in
+  code, as a critical finding.
+- Every markdown file pm-spec writes ends in exactly one newline; model text
+  with none, or with several, is no longer written as it came.
+- The prototype's `NOTES.md` no longer ends with the agent's `STATUS:` line
+  or a remark that the inputs held no embedded instructions: the line is
+  read by the check and then removed, and the agent mentions embedded
+  instructions only when it found some.
+- A list nested under a `## Done means` criterion stays in that criterion's
+  `tickets.json` acceptance entry, one sub-item per line with its
+  indentation, instead of being run together with " - ".
+- `interview.md` no longer has an `## Interview` heading under its
+  `# Interview` title: the interview summary sits right under the title.
+- `pm-spec new --help` says a `--plan-file` is kept in `interview.md`, not
+  saved as `plan.md`.
+- After the specs review stop, the consistency check no longer rewrites the
+  reviewed `specs.md` files. It reports its findings; a critical or major one
+  stops the run with `SPEC:BLOCKED` (exit 4) and the change is not marked
+  ready. Someone edits the files on the branch and pushes, and `resume`
+  pulls and checks them again. Minor findings are reported and the handoff
+  goes on. Runs with no review stop (`--auto`, an adopted change, a run
+  from before the staged flow) keep the check's one rewrite, whose prompt
+  now allows `MODIFIED` and `REMOVED` only in a capability with a
+  `specs/registry/` file.
+
+### Migration
+- A change written in the old layout (`requirements/<capability>.md`) is
+  still read: `resume` adopts it, and `revise` fixes it in place.
+- A change pm-spec 0.8.0 or earlier started (its run state copied with it)
+  does not go through the three stages on `resume`: they are recorded
+  skipped, and the resume only checks it again when it changed since its
+  handoff, then hands it off.
+- `resume` on the parent of an epic pm-spec 0.7.2 or earlier split into
+  sibling child changes changes nothing: it says the specs live in the
+  children and prints a `resume <child>` command for each, then exits 0.
+
+## [0.8.0] - 2026-10-22
+
+### Changed
+- pm-spec now puts a change's specs on a branch of their own and pushes it.
+  The branch is named after the change's ticket, `<TICKET>-<change>` (for
+  example `ENG-42-login-timeout`): the ticket is the change's own ticket ref,
+  else its nearest parent's, so an epic's children use the epic's ticket
+  until they have their own. New flag `--branch <name>` (on every command)
+  names another branch, which must still start with `<TICKET>-`. A ticket id
+  git refuses at the start of a branch name (one holding `[` or a space, for
+  example) is refused with the reason.
+- pm-spec creates the branch from origin's default branch when origin does
+  not have it, writes in its own worktree under `$WORKSPACE/.worktrees/`
+  (`pm-spec-<branch>`, detached, so a build can check the branch out),
+  commits there and runs `git push origin HEAD:refs/heads/<branch>`, never
+  forced. Your checkout and its branch are left as they were, unless your
+  checkout has that branch checked out: pm-spec then writes, commits and
+  pushes there. pm-spec opens
+  no pull request and talks to no ticket system. After `SPEC:READY` it
+  prints `SPEC:BRANCH:<branch>`. An epic's children go on the parent's
+  branch.
+- A repository with no `origin` remote is refused: the specs reach buildme
+  through the branch on origin.
+- A second run reuses the worktree and fast-forwards it to origin's branch;
+  one that has diverged from origin is refused, naming both commits.
+- A push that fails keeps the commit, exits `1` and says so; `pm-spec resume
+  <name>` then retries only the push.
+- `pm-spec revise <name> --project-dir <build worktree>`, the line buildme
+  prints, commits the revision in the build's worktree and pushes nothing:
+  it reaches the feature branch with that build's push, or through its pull
+  request.
+
+### Added
+- `--ticket-ref <ticket id>` on `new`, `resume` and `revise` records the
+  change's ticket ref. On `resume` of specs already ready and pushed (an
+  epic's child handed off under its parent's ticket), the `.change.yaml`
+  recording it is committed and pushed to the feature branch.
+- No ticket, no handoff: a change with no ticket ref, of its own or a
+  parent's, is refused before the commit and the push (and, for `new`,
+  before any model call), with advice naming `--ticket-ref`. Nothing is
+  committed or pushed.
+
+### Migration
+- Specs a pm-spec before 0.8.0 handed off (ready and committed on your
+  branch, with no feature branch) are refused by buildme with
+  `Run /multiplai-pm:pm-spec resume <name> first`. That resume (add
+  `--ticket-ref <ticket id>` when the change records none) copies the change
+  dir (and an epic's children) onto `<TICKET>-<name>`, commits it as
+  `specs(<name>): moved to <TICKET>-<name>` and pushes it; your copy stays
+  where it is, to delete when you choose.
+
 ## [0.7.2] - 2026-10-22
 
 ### Fixed

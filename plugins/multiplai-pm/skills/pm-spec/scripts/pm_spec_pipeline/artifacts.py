@@ -1,29 +1,25 @@
-"""Proposal, use cases, then requirements one capability at a time (row S2).
+"""The proposal (stage 1), the use cases (stage 2) and each component's `specs.md` (stage 3).
 
 Copied from buildme's `spec_generator.py` (`_generate_single_artifact`,
-`_generate_use_cases`, `_generate_requirements`, and `reconcile_plan`'s move of
-superseded requirements), then adapted.
+`_generate_use_cases`, `_generate_requirements`), then adapted.
 
-Each artifact has a record in the state: the hash of its inputs and the hash
-of the text it wrote. The record is saved with `output: None` before the call
-and completed after the file is written, so:
+Each file is written by one call with no tools, only when it is missing (or
+holds nothing usable): a file on disk is kept as it is, whoever wrote it, so
+an edit made during a review stays and is an input of every later stage
+(rows S2, S5, S7, S9, S11). Each file written gets a record in the state, the
+hash of its inputs and of the text it wrote, saved with `output: None` before
+the call and completed after the write.
 
-- a finished artifact whose inputs are unchanged is kept, whatever its text
-  (an edit by the user stays);
-- one with no file, or whose record was started and not finished, is
-  generated (again);
-- a file the run never recorded (written by a person, or by an earlier tool)
-  is adopted as it is;
-- the proposal's inputs are the intake files and the interview; the use cases'
-  and each requirement's inputs include the proposal's text, so a changed
-  proposal regenerates them.
-
-A requirements file whose capability the proposal no longer names is moved to
-`superseded-requirements/<stem>-<sha256>.md`.
-
-With a PRD, the proposal must name, under `## Sources`, the PRD heading behind
-each capability; a proposal that does not is asked for once more with the
-problems listed, and refused after that.
+- `proposal.md`: from the intake files and the interview. With a PRD, its
+  `## Sources` names the PRD sections it comes from, each a heading of the
+  PRD; a proposal that does not is asked for once more with the problems
+  listed, and refused after that.
+- `use-cases.md`: from the proposal and the interview.
+- `specs.md`, per component (`components/<id>/specs.md`, or `specs.md` in the
+  change dir for a change with one component): from the component's
+  `plan.md`, the change's proposal and use cases, the names of the other
+  components, the prototype's file list and the registry. It must pass
+  `multiplai_core.specs.valid_specs_text`.
 """
 
 from __future__ import annotations
@@ -34,16 +30,12 @@ import logging
 import re
 from pathlib import Path
 
-from multiplai_core.specs import (
-    expected_capabilities,
-    valid_requirement,
-    valid_requirement_text,
-)
+from multiplai_core.specs import valid_specs_text
 
-from . import intake, sdk
+from . import intake, layout, sdk
 from .prompts import UNTRUSTED_NOTICE
 from .prompts import spec as P
-from .publish import atomic_write, supersede
+from .publish import atomic_write, markdown_text
 from .run import Run
 from .state import ArtifactRecord
 
@@ -70,15 +62,13 @@ def registry_names(run: Run) -> list[str]:
 
 
 def intake_hash(run: Run) -> str:
-    """The proposal's inputs: the intake files, the interview, the project context and the registry's names."""
+    """The proposal's inputs: the intake files, the interview and the project context."""
     change_dir = run.config.change_dir
     parts = {
         name: _read(change_dir / name)
-        for name in ("prd.md", "ticket.md", "plan.md", "interview.md")
+        for name in ("prd.md", "ticket.md", "interview.md")
     }
     parts["context"] = run.config.project_context
-    parts["registry"] = ",".join(registry_names(run))
-    parts["ticket_children"] = ",".join(intake.ticket_refs(change_dir)["children"])
     return sha(json.dumps(parts, sort_keys=True))
 
 
@@ -86,104 +76,59 @@ def proposal_text(run: Run) -> str:
     return _read(run.config.change_dir / "proposal.md")
 
 
-def inputs_for(run: Run, key: str) -> str:
-    change_dir = run.config.change_dir
-    if key == "proposal":
-        return intake_hash(run)
-    if key == "use-cases":
-        return sha(
-            json.dumps(
-                {
-                    "proposal": proposal_text(run),
-                    "interview": _read(change_dir / "interview.md"),
-                    "context": run.config.project_context,
-                },
-                sort_keys=True,
-            )
-        )
-    cap = key.split("/", 1)[1]
-    return sha(
-        json.dumps(
-            {
-                "proposal": proposal_text(run),
-                "context": run.config.project_context,
-                "registry": _read(registry_dir(run) / f"{cap}.md"),
-            },
-            sort_keys=True,
-        )
-    )
+def use_cases_text(run: Run) -> str:
+    return _read(run.config.change_dir / "use-cases.md")
 
 
 def artifact_path(run: Run, key: str) -> Path:
-    if key == "proposal":
-        return run.config.change_dir / "proposal.md"
-    if key == "use-cases":
-        return run.config.change_dir / "use-cases.md"
+    """`proposal`, `use-cases`, `specs` or `components/<id>/specs`, as a file."""
     return run.config.change_dir / f"{key}.md"
 
 
-def requirement_keys(run: Run) -> list[str]:
-    return [f"requirements/{cap}" for cap in expected_capabilities(proposal_text(run))]
+def specs_key(run: Run, spec_dir: Path) -> str:
+    rel = layout.rel(run.config.change_dir, spec_dir / layout.SPECS_FILE)
+    return rel.removesuffix(".md")
 
 
 def record_current(run: Run) -> None:
-    """Record every spec file on disk as the run's own, at its current inputs.
-    Called after a rewrite publishes, so the files it wrote are kept."""
-    for key in ["proposal", "use-cases", *requirement_keys(run)]:
+    """Record every spec file on disk as the run's own. Called after a
+    rewrite publishes, so the files it wrote are recorded."""
+    for key in ["proposal", "use-cases"] + [
+        u.removesuffix(".md")
+        for u in layout.units(run.config.change_dir)
+        if Path(u).name == layout.SPECS_FILE
+    ]:
         path = artifact_path(run, key)
         if path.is_file():
+            previous = run.state.artifacts.get(key)
             run.state.artifacts[key] = ArtifactRecord(
-                inputs=inputs_for(run, key), output=sha(path.read_text())
+                inputs=previous.inputs if previous else "", output=sha(path.read_text())
             )
-    for key in [k for k in run.state.artifacts if k.startswith("requirements/")]:
-        if not artifact_path(run, key).is_file():
-            del run.state.artifacts[key]
 
 
 def _usable(run: Run, key: str) -> bool:
+    """A file with text in it. A `specs.md` someone edited into a broken
+    format is kept too: the consistency check reports it."""
     path = artifact_path(run, key)
-    if key.startswith("requirements/"):
-        return valid_requirement(path)
     return path.is_file() and bool(path.read_text().strip())
 
 
-def _decide(run: Run, key: str) -> str:
-    """`keep`, `adopt` or `generate` for one artifact."""
-    record = run.state.artifacts.get(key)
-    usable = _usable(run, key)
-    if record is None:
-        return "adopt" if usable else "generate"
-    if record.output is None or not usable:
-        return "generate"
-    return "keep" if record.inputs == inputs_for(run, key) else "generate"
-
-
-# --- the PRD citations and the ticket refs in `## Sources` ---------------------
+# --- the PRD sources in `## Sources` ------------------------------------------
 
 _SOURCES_RE = re.compile(
     r"^##\s+Sources\s*$(.*?)(?=^##\s|\Z)", re.MULTILINE | re.DOTALL
 )
-_SOURCE_LINE_RE = re.compile(
-    r"^-\s+`([a-z0-9]+(?:-[a-z0-9]+)*)`\s*:\s*(.+?)\s*$", re.MULTILINE
+_PRD_LINE_RE = re.compile(
+    r"^-\s+PRD\s*(?:§\s*)?[\"“']?(.+?)[\"”']?\s*$", re.MULTILINE | re.IGNORECASE
 )
-_PRD_RE = re.compile(r"^PRD\s*(?:§\s*)?[\"“']?(.+?)[\"”']?$", re.IGNORECASE)
-_TICKET_RE = re.compile(r"^ticket\s+(\S+)$", re.IGNORECASE)
 
 
-def sources(proposal: str) -> dict[str, dict[str, list[str]]]:
-    """`{capability: {"prd": [headings], "tickets": [refs]}}` from `## Sources`."""
+def prd_sources(proposal: str) -> list[str]:
+    """The PRD headings `## Sources` names, one `- PRD "<heading>"` line each."""
     section = _SOURCES_RE.search(proposal)
-    out: dict[str, dict[str, list[str]]] = {}
     if not section:
-        return out
-    for cap, rest in _SOURCE_LINE_RE.findall(section.group(1)):
-        entry = out.setdefault(cap, {"prd": [], "tickets": []})
-        for part in (p.strip() for p in rest.split(";")):
-            if m := _PRD_RE.match(part):
-                entry["prd"].append(m.group(1).strip())
-            elif m := _TICKET_RE.match(part):
-                entry["tickets"].append(m.group(1).strip().rstrip(".,"))
-    return out
+        return []
+    return [m.group(1).strip() for m in _PRD_LINE_RE.finditer(section.group(1))]
 
 
 def _norm(heading: str) -> str:
@@ -191,30 +136,22 @@ def _norm(heading: str) -> str:
 
 
 def proposal_errors(run: Run, text: str) -> list[str]:
-    """Why a proposal cannot be kept: no capability, or (with a PRD) a capability
-    with no `## Sources` line naming a heading the PRD has."""
-    caps = expected_capabilities(text)
-    if not caps:
-        return [
-            "the proposal names no capability under `## Capabilities` (a list item `- `name``)"
-        ]
+    """Why a proposal cannot be kept: it is empty, or (with a PRD) its
+    `## Sources` names no PRD section, or names one the PRD does not have."""
+    if not text.strip():
+        return ["the proposal is empty"]
     prd = intake.prd_text(run.config.change_dir)
     if not prd:
         return []
     headings = {_norm(h) for h in intake.prd_headings(prd)}
-    cited = sources(text)
-    errors = []
-    for cap in caps:
-        named = cited.get(cap, {}).get("prd", [])
-        if not named:
-            errors.append(
-                f"capability `{cap}` has no `## Sources` line naming the PRD section it comes from"
-            )
-        elif not any(_norm(h) in headings for h in named):
-            errors.append(
-                f"capability `{cap}` names PRD section(s) {named}, which are not headings of the PRD"
-            )
-    return errors
+    named = prd_sources(text)
+    if not named:
+        return ['`## Sources` names no PRD section (a line `- PRD "<heading>"`)']
+    return [
+        f"`## Sources` names the PRD section {h!r}, which is not a heading of the PRD"
+        for h in named
+        if _norm(h) not in headings
+    ]
 
 
 # --- prompts --------------------------------------------------------------------
@@ -226,34 +163,15 @@ def prd_section(run: Run) -> str:
 
 
 def source_rules(run: Run) -> str:
-    rules = []
     if intake.prd_text(run.config.change_dir):
-        rules.append(P.PRD_RULE)
-    children = intake.ticket_refs(run.config.change_dir)["children"]
-    if children:
-        rules.append(P.TICKET_CHILDREN_RULE.format(children=", ".join(children)))
-    return ("\n" + "\n\n".join(rules) + "\n") if rules else ""
+        return "\n" + P.PRD_RULE + "\n"
+    return ""
 
 
 def proposal_template(run: Run) -> str:
-    forms = []
-    if intake.prd_text(run.config.change_dir):
-        forms.append('PRD "<heading>"')
-    if intake.ticket_refs(run.config.change_dir)["children"]:
-        forms.append("ticket <ref>")
-    if not forms:
+    if not intake.prd_text(run.config.change_dir):
         return P.PROPOSAL_TEMPLATE
-    return P.PROPOSAL_TEMPLATE + P.SOURCES_TEMPLATE.format(
-        source_forms="; ".join(forms)
-    )
-
-
-def _registry_names_section(run: Run) -> str:
-    names = registry_names(run)
-    if not names:
-        return ""
-    text = f"Capabilities in specs/registry: {', '.join(names)}"
-    return f"\n\n{P.REGISTRY_HEADING}\n\n{P.REGISTRY_PROPOSAL_RULE}\n\n{text[:REGISTRY_TEXT_LIMIT]}\n"
+    return P.PROPOSAL_TEMPLATE + P.SOURCES_TEMPLATE
 
 
 def proposal_prompt(run: Run, errors: list[str] | None = None) -> str:
@@ -265,7 +183,7 @@ def proposal_prompt(run: Run, errors: list[str] | None = None) -> str:
         instruction=P.PROPOSAL_INSTRUCTION,
         source_rules=source_rules(run),
         template=proposal_template(run),
-    ) + _registry_names_section(run)
+    )
     if errors:
         prompt += P.PROPOSAL_RETRY.format(errors="\n".join(f"- {e}" for e in errors))
     return prompt
@@ -282,31 +200,63 @@ def use_cases_prompt(run: Run) -> str:
     )
 
 
-def requirements_prompt(run: Run, cap: str, *, proposal: str | None = None) -> str:
-    prompt = P.REQUIREMENTS_PROMPT.format(
+def plan_title(plan: str, fallback: str) -> str:
+    m = re.search(r"^#\s+Plan:\s*(.+?)\s*$", plan, re.MULTILINE)
+    return m.group(1) if m else fallback
+
+
+def prototype_files(change_dir: Path) -> list[str]:
+    """The files in the change's `prototype/`, relative to the change dir."""
+    folder = change_dir / "prototype"
+    if not folder.is_dir():
+        return []
+    return [layout.rel(change_dir, p) for p in sorted(folder.rglob("*")) if p.is_file()]
+
+
+def registry_section(run: Run) -> str:
+    names = registry_names(run)
+    if not names:
+        return f"\n\n{P.REGISTRY_HEADING}\n\n{P.REGISTRY_EMPTY_RULE}\n"
+    texts = [
+        f"### {n} (specs/registry/{n}.md)\n{_read(registry_dir(run) / f'{n}.md')}"
+        for n in names
+    ]
+    body = "\n\n".join(texts)[:REGISTRY_TEXT_LIMIT]
+    return (
+        f"\n\n{P.REGISTRY_HEADING}\n\n{P.REGISTRY_NAMES_RULE}\n\n{P.REGISTRY_REQUIREMENTS_RULE}\n\n"
+        f"{P.REGISTRY_ONLY_RULE.format(names=', '.join(names))}\n\n"
+        f"Capabilities in specs/registry: {', '.join(names)}\n\n{body}\n"
+    )
+
+
+def specs_prompt(run: Run, spec_dir: Path) -> str:
+    change_dir = run.config.change_dir
+    dirs = layout.spec_dirs(change_dir)
+    component = run.config.change_name if spec_dir == change_dir else spec_dir.name
+    others = [
+        f"- `{d.name}`: {plan_title(_read(d / layout.PLAN_FILE), d.name)}"
+        for d in dirs
+        if d != spec_dir
+    ]
+    files = prototype_files(change_dir)
+    prototype = (
+        "Files a reviewer will look at with these specs (what things look like):\n"
+        + "\n".join(f"- {f}" for f in files)
+        if files
+        else "(none)"
+    )
+    return P.SPECS_PROMPT.format(
         notice=UNTRUSTED_NOTICE,
         project_context=run.config.project_context,
-        proposal_content=(proposal_text(run) if proposal is None else proposal)
-        or "(not available)",
-        capability_name=cap,
-        instruction=P.REQUIREMENTS_INSTRUCTION,
-        template=P.REQUIREMENTS_TEMPLATE,
-    )
-    current = _read(registry_dir(run) / f"{cap}.md")
-    if current:
-        prompt += (
-            f"\n\n{P.REGISTRY_HEADING}\n\n{P.REGISTRY_REQUIREMENTS_RULE}\n\n"
-            f"### {cap} (specs/registry/{cap}.md)\n{current[:REGISTRY_TEXT_LIMIT]}\n"
-        )
-    return prompt
-
-
-def all_requirements_text(change_dir: Path) -> str:
-    parts = [
-        f"### requirements/{p.name}\n{p.read_text()}"
-        for p in sorted((change_dir / "requirements").glob("*.md"))
-    ]
-    return "\n\n".join(parts) or "(none)"
+        proposal_content=proposal_text(run) or "(not available)",
+        use_cases_content=use_cases_text(run) or "(not available)",
+        component=component,
+        plan_content=_read(spec_dir / layout.PLAN_FILE) or "(no plan)",
+        other_components="\n".join(others) or "(none: this is the whole change)",
+        prototype_files=prototype,
+        instruction=P.SPECS_INSTRUCTION,
+        template=P.SPECS_TEMPLATE,
+    ) + registry_section(run)
 
 
 # --- generation -------------------------------------------------------------------
@@ -335,34 +285,48 @@ async def write_proposal(run: Run) -> str:
     return text
 
 
-async def write_requirements(run: Run, cap: str) -> str:
+async def write_specs(run: Run, spec_dir: Path) -> str:
+    label = "spec:specs:" + (
+        run.config.change_name if spec_dir == run.config.change_dir else spec_dir.name
+    )
     text = await sdk.text_call(
-        requirements_prompt(run, cap),
+        specs_prompt(run, spec_dir),
         config=run.config,
         step="spec_artifact",
-        label=f"spec:requirements:{cap}",
+        label=label,
     )
-    if not valid_requirement_text(text):
+    if not valid_specs_text(text):
         raise ValueError(
-            f"Invalid requirements for {cap}: expected Requirement/Scenario/WHEN/THEN"
+            f"Invalid specs.md for {spec_dir.name}: expected `# Capability: <kebab-name>` "
+            "sections, each with Requirement/Scenario/WHEN/THEN"
         )
     return text
 
 
-async def _produce(run: Run, key: str) -> None:
-    decision = _decide(run, key)
+def _inputs(run: Run, key: str) -> str:
+    if key == "proposal":
+        return intake_hash(run)
+    parts = [proposal_text(run), _read(run.config.change_dir / "interview.md")]
+    if key != "use-cases":
+        parts += [
+            use_cases_text(run),
+            _read(artifact_path(run, key).parent / layout.PLAN_FILE),
+        ]
+    return sha("\0".join(parts))
+
+
+async def produce(run: Run, key: str, spec_dir: Path | None = None) -> None:
+    """Write the artifact *key* when its file is missing or unusable; keep it otherwise."""
     path = artifact_path(run, key)
-    if decision == "keep":
-        log.info("artifact %s: kept", key)
+    if _usable(run, key):
+        log.info("artifact %s: kept the file on disk", key)
+        if key not in run.state.artifacts or run.state.artifacts[key].output is None:
+            run.state.artifacts[key] = ArtifactRecord(
+                inputs=_inputs(run, key), output=sha(path.read_text())
+            )
+            run.save()
         return
-    if decision == "adopt":
-        log.info("artifact %s: adopted the file on disk", key)
-        run.state.artifacts[key] = ArtifactRecord(
-            inputs=inputs_for(run, key), output=sha(path.read_text())
-        )
-        run.save()
-        return
-    inputs = inputs_for(run, key)
+    inputs = _inputs(run, key)
     run.state.artifacts[key] = ArtifactRecord(inputs=inputs, output=None)
     run.save()
     log.info("START artifact=%s", key)
@@ -376,37 +340,25 @@ async def _produce(run: Run, key: str) -> None:
             label="spec:use-cases",
         )
     else:
-        text = await write_requirements(run, key.split("/", 1)[1])
+        text = await write_specs(run, spec_dir)
+    text = markdown_text(path, text)
     atomic_write(path, text)
     run.state.artifacts[key] = ArtifactRecord(inputs=inputs, output=sha(text))
     run.save()
     print(f"PHASE:ARTIFACT:{key}", flush=True)
 
 
-def retire_superseded(run: Run) -> list[str]:
-    """Move aside each requirements file the proposal no longer names."""
-    expected = set(expected_capabilities(proposal_text(run)))
-    moved = []
-    for path in sorted((run.config.change_dir / "requirements").glob("*.md")):
-        if expected and path.stem not in expected:
-            supersede(run.config.change_dir, f"requirements/{path.name}")
-            run.state.artifacts.pop(f"requirements/{path.stem}", None)
-            moved.append(path.stem)
-    if moved:
-        run.save()
-        run.progress(
-            "ARTIFACTS", "Moved superseded requirements aside: " + ", ".join(moved)
-        )
-    return moved
-
-
-async def generate_artifacts(run: Run) -> None:
-    """Proposal, then use cases, then each capability's requirements, in that order."""
-    await _produce(run, "proposal")
+async def generate_proposal(run: Run) -> None:
+    await produce(run, "proposal")
     if errors := proposal_errors(run, proposal_text(run)):
         raise ValueError("proposal.md cannot be used: " + "; ".join(errors))
-    await _produce(run, "use-cases")
-    (run.config.change_dir / "requirements").mkdir(exist_ok=True)
-    for key in requirement_keys(run):
-        await _produce(run, key)
-    retire_superseded(run)
+
+
+async def generate_use_cases(run: Run) -> None:
+    await produce(run, "use-cases")
+
+
+async def generate_specs(run: Run) -> None:
+    """`specs.md` for each component (or the change), in order; the ones on disk are kept."""
+    for spec_dir in layout.spec_dirs(run.config.change_dir):
+        await produce(run, specs_key(run, spec_dir), spec_dir)

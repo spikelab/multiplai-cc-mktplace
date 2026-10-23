@@ -29,6 +29,8 @@ import shutil
 import tempfile
 from pathlib import Path
 
+from multiplai_core.specs import change_root
+
 from build_pipeline.budget import BudgetExceededError
 
 from . import budget
@@ -1064,10 +1066,10 @@ def recheck_verdict(
     """What a recheck after a rewrite blocks on, and what it only reports.
 
     Blocking: a listed finding whose status is not `resolved` (no status is
-    `cannot_verify`); a new finding that is critical or in the
-    `no-new-behaviour` category, as `_blocks_plan` treats that category; and
-    every finding of the deterministic scans. Every other new finding is
-    advisory. A resolved listed finding is in neither list.
+    `cannot_verify`); a new critical finding; and every finding of the
+    deterministic scans. Every other new finding — major or minor, in any
+    category, `no-new-behaviour` included — is advisory, as SKILL.md says.
+    A resolved listed finding is in neither list.
     """
     blocking = [
         f for f in assess_listed(listed, assessments) if f["status"] != "resolved"
@@ -1075,10 +1077,7 @@ def recheck_verdict(
     blocking += [_new_finding(f) for f in deterministic]
     advisory = []
     for finding in new_findings:
-        blocks = (
-            finding.get("severity") == "critical"
-            or finding.get("category") == "no-new-behaviour"
-        )
+        blocks = finding.get("severity") == "critical"
         (blocking if blocks else advisory).append(_new_finding(finding))
     return blocking, advisory
 
@@ -1671,11 +1670,12 @@ def _load_or_create_state(config) -> BuildState:
 
 
 def _plan_hashes(config) -> dict[str, str]:
-    files = {
+    # A component's proposal and use cases are its change's (`change_root`).
+    root = change_root(config.change_dir)
+    files = {name: root / name for name in ("proposal.md", "use-cases.md")} | {
         name: config.change_dir / name
         for name in (
-            "proposal.md",
-            "use-cases.md",
+            "specs.md",
             "design.md",
             "unknowns.md",
             "tasks.md",
@@ -1735,7 +1735,9 @@ def reconcile_plan(
         # edit to them marks buildme's artifacts stale, never themselves.
         if "proposal.md" in changed:
             stale.update({"design", "unknowns", "tasks", "rubric"})
-        if any(key.startswith("requirements/") for key in changed):
+        if "specs.md" in changed or any(
+            key.startswith("requirements/") for key in changed
+        ):
             stale.update({"design", "unknowns", "tasks", "rubric"})
         if "use-cases.md" in changed:
             stale.update({"tasks", "rubric"})
@@ -1831,8 +1833,16 @@ async def rewrite_plan(
         staged = copy.copy(config)
         staged.specs_dir = Path(directory) / "specs"
         staged._change_dir_override = ""
-        staged.change_dir = staged.specs_dir / "changes" / config.change_name
+        staged.change_dir = staged.specs_dir / Path(config.change_dir).relative_to(
+            config.specs_dir
+        )
         shutil.copytree(config.change_dir, staged.change_dir)
+        # A component's proposal and use cases are its change's.
+        root = change_root(config.change_dir)
+        if root != config.change_dir:
+            for name in ("proposal.md", "use-cases.md"):
+                if (root / name).is_file():
+                    shutil.copy2(root / name, change_root(staged.change_dir) / name)
         registry = config.specs_dir / "registry"
         if registry.exists():
             shutil.copytree(registry, staged.specs_dir / "registry")
@@ -1901,7 +1911,7 @@ async def rewrite_plan(
                     {
                         "category": "requirements",
                         "severity": "critical",
-                        "description": "A capability the proposal names has no requirements file.",
+                        "description": "A capability the proposal names has no requirements file, or specs.md has no valid capability section.",
                     }
                 ],
             )

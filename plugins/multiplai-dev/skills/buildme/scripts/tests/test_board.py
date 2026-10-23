@@ -496,7 +496,7 @@ class TestFullRunBoardTrail:
         assert card.column is BoardColumn.IN_REVIEW
         assert card.owner_agent == "reviewer"
         assert card.pr_url == pr_url
-        assert card.branch == "buildme/boarded"
+        assert card.branch == "ENG-1-boarded"
         assert card.worktree_path == str(
             tmp_path / "ws" / ".worktrees" / "buildme-boarded"
         )

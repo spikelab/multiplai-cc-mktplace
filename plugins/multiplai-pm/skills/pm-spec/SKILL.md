@@ -1,20 +1,50 @@
 ---
 name: pm-spec
-description: Writes the "what" of a change before anyone builds it — an interview, a proposal, use cases and requirements one capability at a time, a UI or output-format prototype when the change has one — then checks with one read-only agent that the specs agree with each other, and hands off a ready record, a tickets.json and a commit of the change dir for /multiplai-dev:buildme to build from. Takes a PRD and a ticket's text (with its child items) as inputs. revise fixes requirements issues buildme raised later.
+description: Writes the "what" of a change before anyone builds it, in three stages, each ending in a stop for review that pushes the change's feature branch (named after its ticket) — an interview and a proposal; use cases and the components, each with a plan; a prototype, a tickets.json it waits on, and a specs.md per component — then, once the specs are approved, checks with one read-only agent that the specs agree with each other and hands off a ready record and a commit of the change dir for /multiplai-dev:buildme to build from. Takes a PRD and a ticket's text (with its child items) as inputs. revise fixes requirements issues buildme raised later.
 when_to_use: 'Triggers: pm-spec, write the spec, spec this change, specify a feature, turn this PRD into specs, spec this ticket, revise the specs, fix spec-issues.md, /multiplai-pm:pm-spec'
 ---
 
 # pm-spec
 
 pm-spec writes the specs of one change in `specs/changes/<name>/` and marks
-them ready to build. buildme then builds from them, and refuses specs that
-are not marked ready or were edited since.
+them ready to build, on the change's feature branch, which it pushes. buildme
+then builds from that branch, and refuses specs that are not marked ready or
+were edited since.
+
+**The feature branch.** The specs go on `<TICKET>-<name>`, for example
+`ENG-42-login-timeout`: the ticket id is the change's `--ticket-ref`, and
+its components are built on it. `--branch` names another, which
+must still start with `<TICKET>-`. Every `.change.yaml` pm-spec writes
+records it as `branch:`. **No ticket, no handoff:** a change with no ticket
+ref, of its own or a parent's, is refused (exit 2) before any model call,
+with nothing written, until you pass `--ticket-ref`; so is a ticket id git
+cannot start a branch name with (a space or `[`, for example), with the
+reason. pm-spec needs an `origin` remote (else exit 2) and fetches it first.
+It writes in a worktree of its own, `$WORKSPACE/.worktrees/pm-spec-<branch>`
+(without `WORKSPACE`, a `.worktrees/` folder beside the repository), with a
+detached HEAD so that no local branch is checked out there, and never touches
+the checkout `--project-dir` names: a new branch starts from origin's default
+branch, an existing one from `origin/<branch>`. A later run reuses the
+worktree and fast-forwards it to `origin/<branch>`; a worktree that has
+diverged from origin is refused (exit 2) with both shas named. When
+`--project-dir` has the branch checked out, pm-spec writes there instead. It
+opens no pull request and calls no ticket system: reviewers comment and edit
+on the branch, buildme builds each component's pull request against it, and
+the pull request from it to your default branch is yours.
+
+It works in three stages and stops for review after each, pushing the feature
+branch at each stop. `resume` means "approved" and runs the next step, after
+pulling the branch, so edits reviewers pushed are kept and read. The resume
+after the third stop runs the consistency check and the handoff.
+
+**Stage 1: the problem.**
 
 1. **Intake.** Creates the change dir and `.change.yaml` (`spec_status: draft`).
    `--prd` is saved as `prd.md`: the primary source. A ticket's text is saved
    as `ticket.md`, inside an untrusted-content fence, and its refs go into
    `.change.yaml` as `ticket_refs` (`epic` and `children`, opaque strings).
-   `--plan-file` is saved as `plan.md`.
+   `--plan-file` and `--context-files` are read by the interview and kept in
+   `interview.md`.
 2. **Interview**, written to `interview.md`:
    - `user` (the default without `--auto`): you run the interview (below) and
      pass its summary as `--interview-summary`.
@@ -24,65 +54,141 @@ are not marked ready or were edited since.
      no tools and answers from the PRD alone.
    - `ticket`: the questions go to `interview-questions.md` and the run stops
      with `INTERVIEW:WAITING:<path>`, exit 3. Post them on the ticket; when
-     the replies come, run `resume` with `--interview-replies <file>`. Needs
-     `--ticket-ref`; without one it runs as `self` under `--auto`, else `user`.
-3. **Epic split.** One call decides whether the work is one change or several.
-   It follows the ticket's existing child items before inventing its own:
-   each `--ticket-child` must become exactly one child change (with two or
-   more, the answer cannot be one change), checked in code, asked once more,
-   then the run fails.
-   Several: each child becomes `specs/changes/<name>-<id>/` with its own plan
-   (`plan.md`) as its interview input, and its `.change.yaml` records `parent`
-   and `depends_on` (the names of the child changes it depends on, `[]` for
-   none). The parent's `.change.yaml` records `children`, the child change
-   names in dependency order; the parent's change dir is then committed. A
-   split run again on changed inputs updates both records: a child it drops
-   keeps its dir but leaves `children`, and a child already handed off gets
-   its new `depends_on` committed (its `.change.yaml` alone). The run prints
-   `SPEC:SPLIT:<dir>` and one `SPEC:CHILD:<dir>` per child in dependency
-   order, and exits 0. Specify each child with `resume <name>-<id>`.
-   `--no-epic-split` keeps one change.
-4. **Artifacts.** `proposal.md`, then `use-cases.md`, then
-   `requirements/<capability>.md` one capability at a time, each from a call
-   with no tools. With a PRD, the proposal's `## Sources` names the PRD
-   section behind each capability (checked; asked for once more, then the
-   run fails). A requirements file whose capability the proposal no longer
-   names is moved to `superseded-requirements/`.
-5. **Prototype**, only for a UI or a user-visible output format (or with
-   `--prototype`): one agent writes a mockup, sample output or transcript and
-   `NOTES.md` into `prototype/`, and nowhere else. Its `DISPROVES` and
-   `OPEN_QUESTIONS` drive one rewrite of the proposal and the requirements.
-6. **Consistency check.** One read-only agent reads the proposal, the use
-   cases and every requirements file together, and reports each
-   `contradiction`, `gap` or `duplicate` citing both places. Critical and
-   major findings get one rewrite of the requirements involved; a recheck
-   must report each of them `resolved`, and a new finding blocks only when
-   critical. Otherwise the run stops with `SPEC:BLOCKED:<change_dir>`, exit 4,
-   the findings printed and `spec_status` still `draft`. Running again with
-   the files unchanged refuses with no model call; after you edit the files
-   the check gets its one rewrite back.
-7. **Handoff.** Only for the files the check read: if they changed after the
+     the replies come, run `resume` with `--interview-replies <file>`.
+3. **Proposal.** `proposal.md`, from a call with no tools: why, what changes,
+   what is out of scope. With a PRD, its `## Sources` names the PRD sections
+   it draws on (`- PRD "<heading>"`, checked; asked for once more, then the
+   run fails).
+4. **Stop:** commits the change dir, pushes the branch, prints
+   `SPEC:REVIEW:proposal` and `SPEC:BRANCH:<branch>`, exit 3.
+
+**Stage 2: the components.**
+
+5. **Use cases**, `use-cases.md`, for the whole change.
+6. **Components.** One call splits the work into components, each a pull
+   request someone can review on its own. It follows the ticket's existing
+   child items before inventing its own: each `--ticket-child` must become
+   exactly one component, checked in code, asked once more, then the run
+   fails. Several components: `components.md` (a table of component, depends
+   on and ticket, then why), and per component `components/<id>/plan.md` and
+   `components/<id>/.change.yaml` (`depends_on`, `branch`); the change's
+   `.change.yaml` records `children`, the ids in dependency order. One
+   component: no `components/` folder, its `plan.md` in the change dir.
+   `--no-epic-split` keeps one component.
+7. **Stop:** commit, push, `SPEC:REVIEW:components`, `SPEC:BRANCH:<branch>`,
+   exit 3.
+
+**Stage 3: the specs.**
+
+8. **Prototype**, in `prototype/`. Files already there (yours, or a
+   reviewer's) are kept and no agent runs. Otherwise one agent makes whatever
+   helps people picture the change: screens copied from the current frontend,
+   endpoint signatures, sample output. It shows only what things look like,
+   with no behaviour and no runnable code, writes `NOTES.md` (each file, and
+   the questions it raised), and writes nowhere else. The `STATUS:` line the
+   agent ends `NOTES.md` with is read by the check, then taken out of the
+   file before it is committed. `--no-prototype` turns
+   it off. After a failed agent run (exit 1), the next resume checks
+   `prototype/` again rather than keeping it unchecked: it goes on once the
+   check passes (for example after someone fixed `NOTES.md`), fails again on
+   `STATUS: BLOCKED` or `NEEDS_CONTEXT`, and otherwise runs the agent again.
+9. **Tickets.** Writes `tickets.json` (below), commits, pushes, prints
+   `SPEC:TICKETS:<path>` and `SPEC:BRANCH:<branch>`, and waits, exit 3. Resume
+   with `--ticket <component>=<REF>` for every component that has no ticket
+   yet: each goes into the component's `.change.yaml` (`ticket_refs`), the
+   Ticket column of `components.md`, and `tickets.json`. Or resume with
+   `--tickets-later` to go on with them `pending`. Any other resume is
+   refused (exit 2), printing the flags it expects, and records nothing. So
+   is a `--ticket` id git refuses in a branch name (a space, `..`, `~`, a
+   leading `-`), with the reason. A change with one component needs no
+   flag: its ticket is the change's own.
+10. **Specs.** `specs.md` per component (or in the change dir, for one), each
+   from a call with no tools given the component's plan, the proposal, the
+   use cases, the other components and the prototype's file list. Each
+   `# Capability: <name>` heading sits over that capability's
+   `## ADDED/MODIFIED/REMOVED Requirements`; a name for existing behaviour
+   must be an existing `specs/registry/` file's, and only such a capability
+   may have `MODIFIED` or `REMOVED` requirements (with no registry file,
+   every requirement is `ADDED`).
+11. **Stop:** commit, push, `SPEC:REVIEW:specs`, `SPEC:BRANCH:<branch>`,
+   exit 3. The specs are not checked yet. Approved, `resume` runs the check
+   and the handoff on the files as they are on the branch, reviewers' edits
+   to `specs.md` and `prototype/` included.
+12. **Consistency check.** One read-only agent reads the proposal, the use
+   cases, the plans and every `specs.md` together, and reports each
+   `contradiction`, `gap` or `duplicate` citing both places; a `specs.md`
+   that breaks the format (a capability name that is not kebab-case or is
+   used twice, a requirement with no scenario) is a critical finding, and so
+   is a `MODIFIED` or `REMOVED` section in a capability with no
+   `specs/registry/<capability>.md`.
+   **After the specs review stop** (step 11) the check rewrites no file: the
+   specs are what reviewers read and edited. A critical or major finding
+   stops the run with `SPEC:BLOCKED:<change_dir>`, exit 4, the findings
+   printed and saved in the run state, and `spec_status` still `draft`;
+   minor findings are printed as advisory and the handoff goes on. A person
+   edits the files on the branch and pushes; `resume` pulls them and checks
+   them again, and hands off or blocks again. Running again with the files
+   unchanged refuses with no model call and prints the findings.
+   **With no review stop** (`--auto`, an adopted change, a run from before
+   the staged flow) critical and major findings get one rewrite of the
+   `specs.md` files involved; a recheck must report each of them
+   `resolved`, and a new finding blocks only when critical. Otherwise the
+   run stops the same way (exit 4, `SPEC:BLOCKED`); after you edit the
+   files the check gets its one rewrite back.
+13. **Handoff.** Only for the files the check read: if they changed after the
    check read them, the change goes back to `draft` and is checked again.
-   Writes `tickets.json`, the ready record (`spec_status: ready`
-   and `spec_revision`, a hash of the proposal, use cases and requirements),
-   commits `specs/changes/<name>/` and nothing else (other staged work is left
-   staged), and prints `SPEC:READY:<change_dir>:<spec_revision>`. Next:
+   Writes the ready record (`spec_status: ready` and `spec_revision`) on each
+   component's `.change.yaml` and on the change's, commits
+   `specs/changes/<name>/` and nothing else (other staged work is left
+   staged), pushes the feature branch (`git push origin HEAD:refs/heads/<branch>`,
+   never with force), and prints `SPEC:READY:<change_dir>:<revision>` and
+   then `SPEC:BRANCH:<branch>`. A failed commit or push keeps the ready
+   record and exits 1; `resume` retries only the commit or the push. Next:
    `/multiplai-dev:buildme <name>`.
+
+`--auto` runs all three stages with no stop and no ticket wait (the
+components' tickets stay `pending`), and commits once, at the handoff.
+
+Pass nothing a stage does not ask for: a file that exists is never written
+again, so an edit made between stops is kept, and is read by every later
+stage. An edit after the ready record makes it stale: `resume` checks the
+change again and marks it ready again. If someone pushed to the branch while
+pm-spec's worktree holds commits origin lacks, the run refuses (exit 2),
+changes nothing, and prints the `git pull --rebase` to run.
 
 **`revise`** reads `spec-issues.md` in the change dir (or `respec.md` with
 `--from-respec`), treats each issue as a finding for one rewrite of the
-requirements files it names, rechecks with the consistency agent, and once
+`specs.md` files it names, rechecks with the consistency agent, and once
 every issue is `resolved` clears `spec_issues` in `.change.yaml`, moves the
 file to `spec-issues.resolved-<revision>.md` (or `respec.resolved-<revision>.md`)
-and hands off again. An issues file written after that is a new round, with
+and hands off again. The issues file may be in the change dir or in a
+component's (`components/<id>/spec-issues.md`, where buildme writes a
+component's issues). An issues file written after that is a new round, with
 its own rewrite. While `spec_issues` is set or a revise is blocked, `resume`
 refuses with exit 4 and never reports the change ready: run `revise`. In
-`spec-issues.md` each `## ` section is one issue; name the file it concerns as
-`requirements/<capability>.md` or quote the requirement's name (an issue that
-names neither goes to every requirements file). When `specs/changes/<name>/`
+`spec-issues.md` each `## ` section is one issue; name the file it concerns
+(`components/<id>/specs.md`), its capability in backticks, or quote the
+requirement's name (an issue that names none of these goes to every
+`specs.md`). When `specs/changes/<name>/`
 is gone because an `--auto` build archived the change, `revise` works on its
 newest archived copy, `specs/archive/<date>-<name>/`, where buildme-findings
 writes later issues.
+
+**A revision in a build's worktree.** When buildme refuses specs edited in
+its worktree, it names `--project-dir <build worktree>`. There (a worktree
+named `buildme-<name>` whose `.change.yaml` records the feature branch),
+`revise` and `resume` write and commit in that worktree and push nothing: a
+single component's build is on the feature branch itself, so the revision
+reaches it with the build's push; a component's in a change with several
+reaches it through that component's pull request. Any other checkout that is not on the feature branch
+is left alone: pm-spec works in its own worktree.
+
+**A change handed off before pm-spec pushed** (ready in your checkout, its
+`.change.yaml` records no `branch`): `resume <name>` (with `--ticket-ref`
+when the change records no ticket ref) copies its change dir,
+and the sibling child changes it lists, into pm-spec's worktree, commits them there
+(`specs(<name>): moved to <branch>`) and pushes the branch. The originals in
+your checkout are left as they are; delete them when you no longer need them.
 
 ## Before you run it
 
@@ -90,10 +196,51 @@ writes later issues.
   using whatever ticket skill the project uses, and pass the text in:
   `--ticket-file` (the text), `--ticket-ref`, `--ticket-url`, and
   `--ticket-child <ref>` once per child. pm-spec reads only the text you pass.
+  A ticket ref is required either way: the branch is named after it. If the
+  user names no ticket, ask for its id and pass it as `--ticket-ref`.
 - **The interview (`user` mode).** Ask the user, in a few short rounds, what
   the inputs leave open: who the change is for, what "done" looks like, what
   is out of scope, and the constraints. With a PRD, ask only what it leaves
   open. Pass a summary of the answers as `--interview-summary`.
+
+## At each stop
+
+- **`SPEC:REVIEW:proposal`.** Tell the user the proposal is pushed on
+  `<branch>` (`SPEC:BRANCH`) and is ready to share: `proposal.md` (and
+  `interview.md`) in `specs/changes/<name>/`. Reviewers comment and edit on
+  the branch. When the user says it is approved, run `resume <name>`.
+- **`SPEC:REVIEW:components`.** Same, for `use-cases.md`, `components.md` and
+  each component's `plan.md`. Approved: `resume <name>`.
+- **`SPEC:TICKETS:<path>`.** Read `tickets.json` and show the user the
+  tickets: each task's title, description and acceptance, under the change's
+  ticket. Wait for their yes. Then create one ticket per task under the
+  change's ticket with the project's ticket skill, or let the user create
+  them by hand and paste the ids into the chat, and run
+  `resume <name> --ticket <component>=<ID>` once per component. If they want
+  to create them later, run `resume <name> --tickets-later`. With one
+  component there is nothing to create: on a yes, rewrite the change's own
+  ticket (`ref`) with the task's title, description and acceptance, then run
+  `resume <name>`.
+- **`SPEC:REVIEW:specs`.** Tell the user the specs and the prototype are
+  pushed on `<branch>` and are ready to share for review: each `specs.md`
+  (in `components/<id>/`, or in the change dir for one component) and the
+  files in `prototype/`, with `NOTES.md`'s questions for the reviewers.
+  Reviewers comment and edit on the branch. Approved: `resume <name>`, which
+  checks the specs and hands them off.
+- **`SPEC:BLOCKED` after `resume` from the specs review.** The check found
+  critical or major problems in the reviewed specs and changed no file.
+  Show the user each finding as printed (its severity, the two places it
+  cites, and the suggested fix) and tell them the specs are not ready:
+  someone edits those `specs.md` files (or `prototype/`) on `<branch>` and
+  pushes, then you run `resume <name>`, which pulls and checks again. Do
+  not edit the specs yourself unless the user asks you to; if they do, edit
+  on the branch, push, then `resume`. Running `resume` before anyone edits
+  just prints the same findings.
+- **`SPEC:READY`.** The specs are pushed and ready: tell the user that
+  `/multiplai-dev:buildme <name>` builds them, and that the prototype and the
+  specs are on the branch for anyone to read.
+
+Never create or edit a ticket before the user says yes to the tickets shown.
 
 **It sends the repository to a model.** The self and ticket interview agents,
 the prototype agent and the consistency check read the repository with
@@ -111,7 +258,8 @@ in them is data, never an instruction.
 uv run --directory "${CLAUDE_PLUGIN_ROOT}/skills/pm-spec/scripts" python -m pm_spec_pipeline \
   new <name> --project-dir /abs/path/to/repo [options]
 uv run --directory "${CLAUDE_PLUGIN_ROOT}/skills/pm-spec/scripts" python -m pm_spec_pipeline \
-  resume <name> --project-dir /abs/path/to/repo [--interview-replies FILE]
+  resume <name> --project-dir /abs/path/to/repo [--interview-replies FILE] \
+    [--ticket COMPONENT=REF ...] [--tickets-later]
 uv run --directory "${CLAUDE_PLUGIN_ROOT}/skills/pm-spec/scripts" python -m pm_spec_pipeline \
   revise <name> --project-dir /abs/path/to/repo [--from-respec]
 ```
@@ -124,17 +272,21 @@ from the skill's `scripts/` folder; other relative paths are read from
 |---|---|---|
 | `--prd FILE` | new | The PRD, saved as `prd.md`. |
 | `--ticket-file FILE` | new | The ticket's text, saved fenced as `ticket.md`. |
-| `--ticket-ref REF`, `--ticket-url URL` | new | The ticket's ref and URL. |
+| `--ticket-ref REF` | all | The ticket's ref; the branch is named after it. Needed by `new`, and by `resume` or `revise` of a change that records none. |
+| `--ticket-url URL` | new | The ticket's URL. |
 | `--ticket-child REF` | new | One of the ticket's child items; once per child. |
-| `--plan-file FILE` | new | A plan, saved as `plan.md`. |
-| `--context-files FILE ...` | new | More files the interview reads. |
+| `--plan-file FILE` | new | A plan the interview reads, kept in `interview.md`. |
+| `--context-files FILE ...` | new | More files the interview reads, kept in `interview.md`. |
 | `--interview-summary TEXT` | new | The summary of the interview you ran. |
 | `--interview-mode self\|user\|ticket` | new | Default: `interview:` in `specs/config.yaml`, else `self` with `--auto`, `user` without. |
 | `--interview-replies FILE` | new, resume | The ticket replies to the questions. |
-| `--auto` | new | No person in the loop. |
-| `--prototype`, `--no-prototype` | new | Force the prototype on or off (default: `prototype: {enabled: auto}` in `specs/config.yaml`). |
-| `--no-epic-split` | new | Keep the work as one change. |
+| `--auto` | new | No person in the loop: no review stop, no ticket wait. |
+| `--prototype`, `--no-prototype` | new | Force the prototype on or off (default: on, unless `prototype: {enabled: false}` in `specs/config.yaml`). |
+| `--no-epic-split` | new | Keep the work as one component. |
+| `--ticket COMPONENT=REF` | resume | At the ticket wait: a component's ticket; once per component. |
+| `--tickets-later` | resume | At the ticket wait: go on with the components' tickets pending. |
 | `--from-respec` | revise | Read `respec.md` instead of `spec-issues.md`. |
+| `--branch NAME` | all | The feature branch; it must start with `<TICKET>-` (default: the one the change's `.change.yaml` records, else `<TICKET>-<name>`). |
 | `--trust-repo` | all | Say the repository is trusted (same as `PM_SPEC_TRUST_REPO=1`). |
 | `--max-usd USD` | all | Spend cap for the change's run, counted across resumes (default 20). |
 
@@ -142,35 +294,44 @@ from the skill's `scripts/` folder; other relative paths are read from
 where it stopped and pays for no call whose result was saved. `resume` on a
 change whose specs were written without pm-spec (for example by buildme before
 pm-spec existed) takes them as they stand and runs only the consistency check
-and the handoff: no interview, no split, no other model call, no new spec
-file.
+and the handoff: no interview, no components, no other model call, no new
+spec file. It needs a `proposal.md` and either `specs.md` files or the old
+`requirements/<capability>.md` files. A change pm-spec 0.8.0 or earlier
+started keeps its run: `resume` records the three stages skipped ("before
+the staged flow"), checks the change again when it changed since its
+handoff, and hands it off. On the parent of an epic that pm-spec 0.7.2 or
+earlier split into sibling child changes, `resume` changes nothing: it says
+the specs live in the children and prints `resume <child>` for each (exit
+0); run those.
 
 Models and efforts come from `specs/config.yaml`: `models:` and `efforts:`
-keyed by `interview`, `spec` (the artifacts, the split and the check),
+keyed by `interview`, `spec` (the artifacts, the components and the check),
 `prototype`, or `default`; unset means the session's model.
 
 ## What it writes
 
-In `specs/changes/<name>/`: `.change.yaml`, `prd.md`, `ticket.md`, `plan.md`,
+In `specs/changes/<name>/`: `.change.yaml`, `prd.md`, `ticket.md`,
 `interview.md` (and `interview-questions.md` in ticket mode), `proposal.md`,
-`use-cases.md`, `requirements/<capability>.md`, `superseded-requirements/`,
-`prototype/`, and `tickets.json`. The run's own state is in `.pm-spec/`
-(`state.json`, `progress.md`, `run.lock`), which has its own `.gitignore` and
-is never committed. The handoff makes one git commit of the change dir, and a
-split commits the parent's change dir and any child whose `depends_on` it
-changed after that child's handoff; pm-spec never pushes.
+`use-cases.md`, `components.md` and `components/<id>/` (`plan.md`,
+`specs.md`, `.change.yaml`) for a change with several components, or
+`plan.md` and `specs.md` for one, `prototype/`, and `tickets.json`. The run's
+own state is in `.pm-spec/` (`state.json`, `progress.md`, `run.lock`), which
+has its own `.gitignore` and is never committed. Each review stop, the ticket
+wait and the handoff commit the change dir and push the feature branch;
+nothing else is pushed, and no pull request is opened.
 
-`tickets.json` is a JSON array, described by `references/tickets.schema.json`:
-one `epic` item for the change (its title and description from the proposal)
-and one `task` per capability under it (the requirement and scenario names as
-`acceptance`, a link to its requirements file). Each item has `id` (stable
-across runs), `type`, `title`, `description`, `priority` (from a `Priority:`
-line in the PRD or the ticket, else `none`; tasks take the epic's), `labels`
-(the change name, and the capability on tasks), `parent`, `acceptance`,
-`links` (repository-relative paths), and `ref` on the epic when the change
-came in with one: `--ticket-ref`, or for a child change of a split, the
-`--ticket-child` it was given. Tasks carry no `ref`. It names no ticket system: creating the
-items in one is the job of the project's ticket skill.
+`tickets.json` is a JSON array, described by `references/tickets.schema.json`.
+For several components: one `epic` item for the change (the proposal's title
+and why, a link to `proposal.md`, `ref` the change's ticket) and one `task`
+per component under it (its plan's title and objective, its `## Done means`
+as `acceptance`, a link to its `plan.md`, and `ref` once it has a ticket).
+For one component: one `task` with no parent and the change's ticket as
+`ref`, the ticket to rewrite. Each item has `id` (stable across runs), `type`,
+`title`, `description`, `priority` (from a `Priority:` line in the PRD or the
+ticket, else `none`; tasks take the epic's), `labels` (the change name, and
+the component on tasks), `parent`, `acceptance` and `links`
+(repository-relative paths). It names no ticket system: creating the items in
+one is the job of the project's ticket skill.
 
 ## Exit codes
 
@@ -179,9 +340,9 @@ calls cost.
 
 | Code | Means |
 |---|---|
-| 0 | Ready (`SPEC:READY:...`), or split into children (`SPEC:SPLIT:...`). |
-| 1 | Failed: a model call, an answer rejected twice, the prototype, the commit (the ready record is kept; `resume` retries only the commit while the files are unchanged), or the spend cap. |
-| 2 | Refused: an input file missing, an untrusted repository, a run that exists (`new`) or does not (`resume`), no issues to revise. |
-| 3 | Waiting for the ticket replies (`INTERVIEW:WAITING:<path>`). |
+| 0 | Ready (`SPEC:READY:...`, then `SPEC:BRANCH:<branch>`). |
+| 1 | Failed: a model call, an answer rejected twice, the prototype, `git fetch`, the commit or the push (the ready record is kept; `resume` retries only the commit or the push while the files are unchanged), or the spend cap. |
+| 2 | Refused: an input file missing, an untrusted repository, no ticket ref (or one git cannot start a branch name with), a `--branch` not starting with `<TICKET>-`, no `origin` remote, pm-spec's worktree diverged from `origin/<branch>` (the `git pull --rebase` to run is printed), a run that exists (`new`) or does not (`resume`), no issues to revise, a resume at the ticket wait without every component's `--ticket` (or `--tickets-later`), or a `--ticket` naming no component. |
+| 3 | Waiting: for review (`SPEC:REVIEW:proposal`, `SPEC:REVIEW:components` or `SPEC:REVIEW:specs`), for the components' tickets (`SPEC:TICKETS:<path>`), or for the ticket replies (`INTERVIEW:WAITING:<path>`). Each but the last is pushed (`SPEC:BRANCH:<branch>`). |
 | 4 | Blocked on findings (`SPEC:BLOCKED:<change_dir>`). Edit the files, then run again. Also `resume` while requirements issues are open or a revise is blocked: run `revise`. |
 | 5 | Another process holds the change's lock; the message names its pid, host and start time. |

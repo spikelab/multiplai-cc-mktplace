@@ -15,6 +15,132 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.105.0] - 2026-10-23
+
+### Added
+- buildme builds a change whose components pm-spec 0.9.0 nests in it
+  (`specs/changes/<change>/components/<id>/`, each with its own `plan.md`,
+  `specs.md` and `.change.yaml`). `/buildme <change>` runs the epic
+  coordinator over the components in their `depends_on` order: each builds
+  as `--change <change>/<id>` on its own branch,
+  `<component ticket>-<change>-<id>` (the change's ticket when the component
+  has none yet, as for an epic's child before), and its PR merges into the
+  change's feature branch. `--change <change>/<id>` also builds one
+  component on its own.
+- buildme reads a change's capabilities from the `# Capability: <name>`
+  sections of `specs.md`. A component's proposal and use cases are its
+  change's. The tasks audit, the review-findings triage, `spec-issues.md`'s
+  requirements file (`specs.md#<capability>`) and the respec audit read
+  `specs.md` too, not only `requirements/`. The design step and the design
+  audit name a requirement they cannot follow as `specs.md#<capability>:
+  <name>` in a change with `specs.md` (`requirements/<capability>.md:
+  <name>` in the old layout).
+- The agents that write each block's tests and code get the list of files in
+  the change's `prototype/` and are told to match what they show of a UI or
+  API.
+- The design and tasks agents get the component's `plan.md` (what it
+  builds, what is out of scope, what done means), beside the change's
+  proposal and the component's `specs.md`; for a change with one component,
+  the `plan.md` in the change dir.
+- When every component has merged into the feature branch, the
+  `/buildme <change>` run that sees it archives the whole change there, once: every
+  component's capabilities merge into `specs/registry/`, and the change moves
+  to `specs/archive/<date>-<change>/`, committed and pushed to the feature
+  branch. A component does not archive itself, and `buildme archive
+  --change <change>/<id>` is refused: archive the change.
+
+### Changed
+- buildme builds from the change's feature branch, where pm-spec 0.8.0
+  pushes the specs: new flag `build --branch <name>`, else the branch the
+  change dir's `.change.yaml` records, else the one branch on origin named
+  `<TICKET>-<change>` that holds the change's specs (or, after an `--auto`
+  build, their archive) as their feature branch: another change's branch
+  whose name merely ends the same way is not taken. Origin having several
+  is refused with `SPEC:NOT_READY`,
+  asking for `--branch`; a `--branch` that does not start with the change's
+  `<TICKET>-` is refused the same way. The specs are read as that branch
+  holds them, so the checkout you run it in need not have them.
+- Every branch buildme makes is now named `<TICKET>-<change>`, replacing
+  `buildme/<change>`. The ticket is the change's own ticket ref, else its
+  nearest parent's (`ENG-40-auth-rework-a` for a child of `ENG-40`). A ticket
+  id git refuses in a branch name is refused with the reason. A name origin
+  already has is skipped for the next free one (`-2`, …).
+- A single change (not an epic) builds on its feature branch itself, with no
+  second branch: it pushes that branch, never forced, and opens one pull
+  request from it to origin's default branch, left for you to merge. The
+  build refuses when that branch is checked out in a worktree that is not
+  one of the change's own builds, or when your local copy of it holds
+  commits origin lacks. A `--force` rebuild of a published change builds on
+  `<branch>-2`, cut where the first build started.
+- Pull request titles are `[<target branch>] <TICKET> <title>`, replacing
+  `buildme: <change>`; `<title>` is the proposal's first heading. For
+  example `[main] ENG-42 Login times out after 5 min`, or
+  `[ENG-40-auth-rework] ENG-40 Retry the token refresh` for an epic's child.
+  Every pull request still opens through the pr skill, from the repo's PR
+  template; the `gh pr create` line is only printed, as the manual fallback.
+- Specs whose `.change.yaml` records no ticket ref, of their own or a
+  parent's, refuse with `SPEC:NOT_READY` and
+  `Run /multiplai-pm:pm-spec resume <name> --ticket-ref <ticket id> first`.
+- At the start of every run, once its refusals passed (a refused run
+  changes nothing, origin included), buildme merges origin's default branch
+  into the feature branch with a merge commit, never a rebase or a force; in an epic
+  it does so again before each later wave of children. A first run merges in
+  a worktree of its own and pushes; a resume merges in the build's worktree
+  and its own push takes the merge (skipped, with a warning, while that
+  worktree has uncommitted changes to tracked files). A conflict is aborted,
+  leaves the branch as it was, builds nothing, and exits `3` with the new
+  marker `FEATURE_BRANCH:CONFLICT:<branch>:<files>`: merge by hand, push,
+  and run the build again.
+- An epic's children build on their own `<TICKET>-<child>` branches cut from
+  the feature branch, and their pull requests target it; a child that
+  depends on others starts after they merged into it, so it builds on their
+  work and on any specs revision pushed there since. With `epic.merge`
+  unset, the children's pull requests now merge automatically (`auto`) when
+  the feature branch is not the default branch; `epic.merge: manual` in
+  `specs/config.yaml` still leaves them to you. A pull request with no
+  checks at all merges once none appear for two minutes after buildme's own
+  push. The epic's pull request from the feature branch to your default
+  branch is yours to open; buildme never opens or merges it.
+- A resume whose specs were revised on the feature branch since its worktree
+  was cut refuses with `SPEC:NOT_READY` and the `git merge` to run.
+- `buildme findings --pr <n>` finds the change from a `<TICKET>-<change>`
+  head branch as well as from `buildme/<change>`.
+- A change in the older layout (`requirements/<cap>.md`, children as sibling
+  change dirs `<parent>-<id>`) builds and archives as before.
+- A `specs.md` whose capability headings repeat a name or are not
+  kebab-case counts as missing requirements, so the build stops before
+  planning instead of failing part way.
+
+### Fixed
+- buildme's mutation step no longer runs mutants that lie wholly inside a
+  type annotation (a parameter, return or variable annotation). With
+  `from __future__ import annotations` no test can kill them, so a fully
+  green build failed `mutation.min_score` on them. `mutation.md` gives
+  their number.
+- A planning re-audit after a rewrite no longer stops the run on a new major
+  or minor finding of a block that adds no behaviour; as SKILL.md says, only
+  a new critical finding (or an unresolved listed one, or a finding of
+  buildme's own placeholder and no-behaviour scans) stops it. SKILL.md now
+  names the scans.
+- A project whose `specs/config.yaml` sets `tdd.test_command` gets its
+  stack's reference docs again. The stack was detected only while
+  discovering a test command, so such a build printed `REFERENCES:(none)`.
+- An epic run no longer marks a child `unknown` because `git fetch origin`
+  lost a ref lock to another git sharing the repository (a child pushing
+  from its worktree): the fetch is run again, up to three times.
+
+### Removed
+- The refusals of a change dir with uncommitted changes, of a first-wave
+  child whose base carried commits outside the epic's change dirs, and of a
+  dependent child whose base lacked its specs commit: every build now reads
+  its specs from the feature branch.
+
+### Migration
+- Specs handed off by a pm-spec before 0.8.0 (ready and committed in your
+  checkout, no feature branch on origin) refuse with
+  `Run /multiplai-pm:pm-spec resume <name> first` (with `--ticket-ref
+  <ticket id>` when the change records none). Run it, then the build.
+
 ## [0.104.2] - 2026-10-23
 
 ### Fixed

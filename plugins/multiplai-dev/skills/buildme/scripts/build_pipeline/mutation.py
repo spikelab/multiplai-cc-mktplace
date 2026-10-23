@@ -27,6 +27,7 @@ mutant was left on disk.
 
 from __future__ import annotations
 
+import ast
 import contextlib
 import hashlib
 import json
@@ -68,6 +69,13 @@ _BASELINE_FACTOR = 3.0
 # dropped, so `cosmic-ray dump` tells them apart from git-filtered ones.
 _SAMPLED_OUT = "Sampled out by buildme (mutation.max_mutants)"
 
+# Marker for mutants that lie wholly inside a type annotation (a parameter,
+# return or variable annotation). They are never run: under
+# `from __future__ import annotations`, or for a local variable, or on Python
+# 3.14's deferred annotations, the annotation is never evaluated, so no test
+# can kill the mutant; where it is evaluated, the mutant only breaks the import.
+_ANNOTATION_ONLY = "Inside a type annotation: skipped by buildme"
+
 # Runs inside cosmic-ray's own tool environment (`uvx --from ... python -I`),
 # because the session database's schema is cosmic-ray's, not ours.
 _SKIP_HELPER = """\
@@ -85,9 +93,8 @@ with use_db(session, WorkDB.Mode.open) as db:
 # config at the project root. Not `config.stack`, which cannot answer the
 # question — test-command discovery records the FIRST marker it finds, so a
 # project with both `pytest.ini` and `pyproject.toml` is stack "pytest" and a
-# `setup.py` project is "setup"; a `tdd.test_command` in specs/config.yaml
-# skips discovery and leaves stack ""; and `memory_files.stacks` names it
-# freely ("python", "django", ...).
+# `setup.py` project is "setup"; and `memory_files.stacks` names it freely
+# ("python", "django", ...).
 PYTHON_MARKERS = (
     "pyproject.toml",
     "setup.py",
@@ -282,6 +289,78 @@ def pending_jobs(text: str) -> list[tuple[str, str]]:
         )
         jobs.append((item.get("job_id", ""), key))
     return jobs
+
+
+def _annotation_spans(source: str) -> list[tuple[tuple[int, int], tuple[int, int]]]:
+    """`((line, col), (end_line, end_col))` of every parameter, return and
+    variable annotation in *source*. Lines count from 1 and columns are
+    characters from 0, as in cosmic-ray's `start_pos`/`end_pos` (ast's columns
+    are UTF-8 byte offsets, so they are converted)."""
+    tree = ast.parse(source)
+    lines = re.split(r"\r\n|\r|\n", source)
+
+    def _char_col(line: int, col: int) -> int:
+        if not 0 < line <= len(lines):
+            return col
+        return len(lines[line - 1].encode()[:col].decode(errors="ignore"))
+
+    nodes: list[ast.expr] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.arg) and node.annotation is not None:
+            nodes.append(node.annotation)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.returns is not None:
+                nodes.append(node.returns)
+        elif isinstance(node, ast.AnnAssign):
+            nodes.append(node.annotation)
+    return [
+        (
+            (n.lineno, _char_col(n.lineno, n.col_offset)),
+            (n.end_lineno, _char_col(n.end_lineno, n.end_col_offset)),
+        )
+        for n in nodes
+        if n.end_lineno is not None and n.end_col_offset is not None
+    ]
+
+
+def annotation_only_jobs(text: str, project_dir: Path) -> list[str]:
+    """Job ids, in dump order, of the jobs in a `cosmic-ray dump` that have no
+    result yet and whose every mutation lies inside a type annotation.
+
+    A module that cannot be read or parsed contributes none: its mutants run.
+    """
+    spans: dict[str, list] = {}
+
+    def _spans_for(module: str) -> list:
+        if module not in spans:
+            try:
+                source = (project_dir / module).read_text(encoding="utf-8")
+                spans[module] = _annotation_spans(source)
+            except (OSError, SyntaxError, ValueError):
+                spans[module] = []
+        return spans[module]
+
+    def _inside(m: dict) -> bool:
+        start, end = m.get("start_pos"), m.get("end_pos")
+        if not start or not end:
+            return False
+        start, end = tuple(start), tuple(end)
+        return any(
+            lo <= start and end <= hi for lo, hi in _spans_for(m.get("module_path", ""))
+        )
+
+    ids = []
+    for raw in text.splitlines():
+        raw = raw.strip()
+        if not raw:
+            continue
+        item, result = json.loads(raw)
+        mutations = item.get("mutations") or []
+        if result or not mutations:
+            continue
+        if all(_inside(m) for m in mutations):
+            ids.append(item.get("job_id", ""))
+    return ids
 
 
 def sample_out(jobs: list[tuple[str, str]], max_mutants: int) -> list[str]:
@@ -548,32 +627,21 @@ def _run_cosmic_ray(
                 project_dir,
                 _SETUP_TIMEOUT,
             )
-            pending = pending_jobs(
-                _run_tool(
-                    [*_UVX, "cosmic-ray", "dump", str(session)],
-                    project_dir,
-                    _SETUP_TIMEOUT,
-                )
+            first_dump = _run_tool(
+                [*_UVX, "cosmic-ray", "dump", str(session)],
+                project_dir,
+                _SETUP_TIMEOUT,
             )
+            annotation_only = annotation_only_jobs(first_dump, project_dir)
+            if annotation_only:
+                _skip_jobs(
+                    tmp_dir, session, project_dir, annotation_only, _ANNOTATION_ONLY
+                )
+            skipped = set(annotation_only)
+            pending = [j for j in pending_jobs(first_dump) if j[0] not in skipped]
             dropped = sample_out(pending, settings.max_mutants)
             if dropped:
-                ids_file = tmp_dir / "sampled-out.json"
-                ids_file.write_text(json.dumps(dropped))
-                helper = tmp_dir / "skip_jobs.py"
-                helper.write_text(_SKIP_HELPER)
-                _run_tool(
-                    [
-                        *_UVX,
-                        "python",
-                        "-I",
-                        str(helper),
-                        str(session),
-                        str(ids_file),
-                        _SAMPLED_OUT,
-                    ],
-                    project_dir,
-                    _SETUP_TIMEOUT,
-                )
+                _skip_jobs(tmp_dir, session, project_dir, dropped, _SAMPLED_OUT)
             to_run = len(pending) - len(dropped)
             if to_run:
                 # Baseline: the unmutated suite must pass under cosmic-ray's
@@ -610,7 +678,8 @@ def _run_cosmic_ray(
             result.test_timeout = test_timeout
             result.tool_version = COSMIC_RAY_VERSION
             result.files = list(paths)
-            result.candidates = len(pending)
+            result.candidates = len(pending) + len(annotation_only)
+            result.annotation_only = len(annotation_only)
             result.sampled_out = len(dropped)
         except _ToolError as e:
             result = base
@@ -619,6 +688,23 @@ def _run_cosmic_ray(
             result = base
             result.error = f"could not parse cosmic-ray output: {e}"
     return result
+
+
+def _skip_jobs(
+    tmp_dir: Path, session: Path, project_dir: Path, ids: list[str], output: str
+) -> None:
+    """Mark *ids* skipped in the session, with *output* as the reason, so
+    `exec` does not run them and `parse_dump` leaves them out of the score."""
+    helper = tmp_dir / "skip_jobs.py"
+    helper.write_text(_SKIP_HELPER)
+    fd, ids_path = tempfile.mkstemp(prefix="skip-", suffix=".json", dir=tmp_dir)
+    with os.fdopen(fd, "w") as f:
+        f.write(json.dumps(ids))
+    _run_tool(
+        [*_UVX, "python", "-I", str(helper), str(session), ids_path, output],
+        project_dir,
+        _SETUP_TIMEOUT,
+    )
 
 
 def _restore_tree(project_dir: Path, restore_to: str, result: MutationResult) -> None:
@@ -675,9 +761,15 @@ def render_report(
             f"(`mutation.timeout`, or {_BASELINE_FACTOR:g}× the unmutated suite's "
             "run when that is longer)"
         )
-    if final.sampled_out:
+    if final.annotation_only:
         lines.append(
-            f"- Sampled: {final.candidates - final.sampled_out} of {final.candidates} "
+            f"- {final.annotation_only} mutants inside type annotations were not "
+            "run: an annotation is not behaviour a test can check"
+        )
+    if final.sampled_out:
+        eligible = final.candidates - final.annotation_only
+        lines.append(
+            f"- Sampled: {eligible - final.sampled_out} of {eligible} "
             "mutants ran (`mutation.max_mutants`); the sample is deterministic"
         )
     if first.mutant_left_on_disk or final.mutant_left_on_disk:

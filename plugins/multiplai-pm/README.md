@@ -22,7 +22,7 @@ marketplace.
 | `pm-strategy-memo` | Leadership-grade strategy memos using Minto Pyramid, with a Working Backwards stress-test and a fresh-Claude reader-test. |
 | `job-application` | Draft tailored resumes and cover letters, then generate PDF applications. |
 | `landing-page` | Landing-page copy: create from scratch, audit an existing page (CRO review), or iterate copy variations for specific sections. |
-| `pm-spec` | Write a change's specs before it is built — interview, proposal, use cases, requirements per capability, a prototype for UI or output-format changes — check they agree with each other, and hand off a ready record, a `tickets.json` and a commit of the change dir to `/multiplai-dev:buildme`. Takes a PRD and a ticket's text with its children; `revise` fixes requirements issues raised during the build. |
+| `pm-spec` | Write a change's specs before it is built — interview, proposal, use cases, requirements per capability, a prototype for UI or output-format changes — check they agree with each other, and hand off a ready record, a `tickets.json` and a commit of the change dir, pushed on the change's feature branch (`<TICKET>-<name>`; no ticket, no handoff), to `/multiplai-dev:buildme`. Takes a PRD and a ticket's text with its children; `revise` fixes requirements issues raised during the build. |
 | `plane` | Work with [Plane](https://plane.so) tickets — list your board, read/create/update issues, comment, search — restricted to an explicit project allowlist: writes outside it are refused, reads and search results are filtered to it (two workspace-scoped commands are disclosed in its SKILL.md). |
 
 ## Composition

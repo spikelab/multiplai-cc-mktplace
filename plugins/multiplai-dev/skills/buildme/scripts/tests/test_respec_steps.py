@@ -245,6 +245,25 @@ class TestRunRespecAudit:
         assert "Uploads are synchronous." in prompt
 
     @pytest.mark.asyncio
+    async def test_specs_md_capabilities_are_in_the_prompt(self, tmp_path):
+        config = _make_config(tmp_path)
+        (config.change_dir / "specs.md").write_text(
+            "# Capability: upload\n\n## ADDED Requirements\n\n"
+            "### Requirement: Upload from specs.md\nThe system SHALL upload.\n"
+        )
+        append_implementation_note(config.change_dir, _note())
+
+        with patch(
+            LLM_CALL, new_callable=AsyncMock, return_value=DELTA_RESPONSE
+        ) as mock:
+            await run_respec_audit(config, None)
+
+        prompt = mock.call_args[0][0]
+        assert "### upload\n" in prompt
+        assert "Requirement: Upload from specs.md" in prompt
+        assert "(no requirements files)" not in prompt
+
+    @pytest.mark.asyncio
     async def test_no_notes_writes_empty_proposal_without_calling_the_llm(
         self, tmp_path
     ):

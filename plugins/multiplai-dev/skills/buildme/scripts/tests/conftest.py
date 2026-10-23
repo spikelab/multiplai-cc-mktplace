@@ -145,20 +145,54 @@ def pm_spec_handoff(monkeypatch, request):
     """Play pm-spec's handoff for tests of what buildme does with ready specs:
     when a build starts (or resumes) on a change pm-spec never marked (no
     `spec_status`), write any missing specs, mark them ready and commit
-    them, then run buildme's own readiness check unchanged. A change that
-    was marked and then edited is left as it is, so the check still refuses
-    it. Tests of the refusal itself use `@pytest.mark.no_handoff`."""
+    them; for a worktree build of ready specs, push that commit to
+    `origin/ENG-1-<change>` (`spec_fixtures.publish`, which gives a repository
+    with no origin a bare one beside it). Then buildme runs unchanged. A
+    change that was marked and then edited is left as it is, so the check
+    still refuses it, and so is an epic's parent (its `.change.yaml` lists
+    `children`), which pm-spec never marks. A build's worktree cut with no
+    ticket known gets `ENG-1`, pm-spec's ticket in these fixtures. Tests of
+    the refusal itself use `@pytest.mark.no_handoff`."""
     if request.node.get_closest_marker("no_handoff"):
         return
     from build_pipeline import orchestrator
+    from multiplai_core.specs import is_ready, read_change_meta
 
-    from tests.spec_fixtures import never_marked, ready_specs
+    from tests.spec_fixtures import never_marked, publish, ready_specs
 
-    real = orchestrator._refuse_unless_ready
+    real = orchestrator._find_feature_branch
 
-    def handoff(config, state_path):
-        if config.change_name and never_marked(config.change_dir):
+    def parent(change_dir) -> bool:
+        try:
+            return bool(read_change_meta(change_dir).get("children"))
+        except (OSError, UnicodeError, ValueError):
+            return False
+
+    def handoff(config):
+        if not config.change_name or parent(config.change_dir):
+            return real(config)
+        if never_marked(config.change_dir):
             ready_specs(config.change_dir, config.project_dir)
-        return real(config, state_path)
+        if (
+            config.git.worktree
+            and not config.base_ref
+            and not orchestrator._epic_child(config)
+            and is_ready(config.change_dir)[0]
+        ):
+            publish(config.project_dir, config.change_name, config.feature_branch)
+        return real(config)
 
-    monkeypatch.setattr(orchestrator, "_refuse_unless_ready", handoff)
+    monkeypatch.setattr(orchestrator, "_find_feature_branch", handoff)
+
+    # pm-spec never hands off a change with no ticket ref; a test that cuts
+    # a build's worktree directly (`_setup_worktree`) gets the fixtures' one.
+    from tests.spec_fixtures import TICKET
+
+    setup = orchestrator._setup_worktree
+
+    def with_ticket(config, state):
+        if not config.tickets:
+            config.tickets = (TICKET,)
+        return setup(config, state)
+
+    monkeypatch.setattr(orchestrator, "_setup_worktree", with_ticket)

@@ -123,7 +123,7 @@ class SpecGenState(BaseModel):
         inputs = {
             k: v
             for k, v in self.artifact_hashes.items()
-            if k in keys or k.startswith("requirements/")
+            if k in keys or k == "specs.md" or k.startswith("requirements/")
         }
         return hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
 

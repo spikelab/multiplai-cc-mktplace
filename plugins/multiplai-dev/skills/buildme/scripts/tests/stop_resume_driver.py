@@ -15,6 +15,8 @@ SystemExit). The spec:
 - ``checkpoint_mid``: save the checkpoint after a block's spend, as the real
   engine does after the block's ``test(block-N)`` commit.
 - ``tag_pid``: write this process's pid into the progress file per block.
+- ``pr_log``: append each argv the pr skill is run with to this file, one
+  JSON list per line.
 """
 
 from __future__ import annotations
@@ -126,9 +128,14 @@ def main() -> int:
         return 0
 
     pr = f"https://github.com/acme/proj/pull/{spec.get('pr_number', 7)}"
-    git_ops._run_pr_skill = lambda argv, cwd=None, timeout=None: git_ops.GitResult(
-        argv, 0, f"PR:{pr}\n", ""
-    )
+
+    def pr_skill(argv, cwd=None, timeout=None):
+        if spec.get("pr_log"):
+            with Path(spec["pr_log"]).open("a") as f:
+                f.write(json.dumps(list(argv)) + "\n")
+        return git_ops.GitResult(argv, 0, f"PR:{pr}\n", "")
+
+    git_ops._run_pr_skill = pr_skill
 
     project = Path(spec["project_dir"])
     config = BuildConfig(

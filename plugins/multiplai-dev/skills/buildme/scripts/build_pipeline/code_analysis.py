@@ -387,12 +387,24 @@ def inbound_imports(texts: dict[str, str]) -> dict[str, int]:
 
 
 def spec_text(change_dir: Path | None) -> str:
-    """The change's own documents so far: its Markdown files and requirements."""
+    """The change's own documents so far: its Markdown files (`specs.md`
+    among them) and `requirements/*.md`; for a component, also its change's
+    proposal and use cases."""
     if change_dir is None or not change_dir.is_dir():
         return ""
+    from multiplai_core.specs import change_root
+
+    root = change_root(change_dir)
+    shared = (
+        [root / n for n in ("proposal.md", "use-cases.md") if (root / n).is_file()]
+        if root != change_dir
+        else []
+    )
     parts = []
-    for f in sorted(change_dir.glob("*.md")) + sorted(
-        (change_dir / "requirements").glob("*.md")
+    for f in (
+        shared
+        + sorted(change_dir.glob("*.md"))
+        + sorted((change_dir / "requirements").glob("*.md"))
     ):
         if f.name == "codebase-analysis.md":
             continue
