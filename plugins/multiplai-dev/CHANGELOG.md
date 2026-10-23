@@ -15,6 +15,20 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.101.0] - 2026-10-22
+
+### Added
+- **codebase-walkthrough styles its HTML page with your design system.**
+  `run`, `resume` and `render` take `--design-system-dir <folder>`, the
+  folder `/multiplai-dev:design-system`'s `path` command prints. The page then
+  inlines that folder's `fonts.css` and `tokens.css`. The folder is checked
+  before any model call, so a bad one costs nothing. A missing folder, a
+  missing token, or a text colour below WCAG AA exits 1 with
+  `ERROR: design system <path>: …`. A run keeps its folder, and `resume` uses
+  it unless you pass the option again. `render --design-system-dir` restyles a
+  finished run for free, without changing its saved state. Without the
+  option the page looks as before.
+
 ## [0.100.0] - 2026-10-22
 
 ### Added

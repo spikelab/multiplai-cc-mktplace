@@ -2493,6 +2493,7 @@ version = "0.1.0"
 source = { editable = "plugins/multiplai-dev/skills/codebase-walkthrough/scripts" }
 dependencies = [
     { name = "code-facts" },
+    { name = "design-system" },
     { name = "httpx" },
     { name = "markdown" },
     { name = "multiplai-core", extra = ["sdk"] },
@@ -2520,6 +2521,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "code-facts", editable = "plugins/multiplai-dev/lib/code_facts" },
+    { name = "design-system", editable = "plugins/multiplai-dev/lib/design_system" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "jsonschema", marker = "extra == 'dev'", specifier = ">=4" },
     { name = "markdown", specifier = ">=3.5" },
