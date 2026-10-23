@@ -19,6 +19,8 @@ from types import SimpleNamespace
 from walkthrough_pipeline import budget
 from walkthrough_pipeline.models import (
     ConfigOutput,
+    CoreChoice,
+    CoreOutput,
     DocsOutput,
     ExitsOutput,
     ExploreOutput,
@@ -38,6 +40,7 @@ STRUCTURED = (
     FlowOutput,
     OutputsOutput,
     ConfigOutput,
+    CoreOutput,
     LoopsOutput,
     ExitsOutput,
     ResumeOutput,
@@ -86,6 +89,7 @@ class FakeAgents:
         plant: set[str] | None = None,
         stop_write_after: int | None = None,
         stop_survey_after: int | None = None,
+        stop_core_after: int | None = None,
     ):
         self.calls: list[dict] = []
         self.cost = cost
@@ -112,6 +116,11 @@ class FakeAgents:
         # is in no quote).
         self.stop_survey_after = stop_survey_after
         self.survey_calls = 0
+        # Raise BudgetExceededError on core call number stop_core_after + 1 (the choice, its re-ask and
+        # the deep read count). The core plants: "core_title_cite" (a title holding a citation) and
+        # "core_outside_file" (a file outside the target), both in every choice answer.
+        self.stop_core_after = stop_core_after
+        self.core_calls = 0
 
     async def __call__(self, prompt: str, schema, **kw):
         from walkthrough_pipeline import sdk
@@ -126,6 +135,20 @@ class FakeAgents:
         if self.fail_on and self.fail_on in prompt:
             raise sdk.AgentCallError("planted failure")
         cwd = kw.get("cwd") or ""
+        if schema is CoreChoice or (
+            schema is ExploreOutput and "Core part: [core:read]" in prompt
+        ):
+            self.core_calls += 1
+            if (
+                self.stop_core_after is not None
+                and self.core_calls > self.stop_core_after
+            ):
+                raise budget.BudgetExceededError(
+                    "circuit breaker: planted stop during core"
+                )
+            if schema is CoreChoice:
+                return CoreChoice.model_validate(self.core_choice(prompt))
+            return self.core_read(prompt, cwd)
         if schema is ExploreOutput and "Survey question: [survey:" in prompt:
             self.survey_calls += 1
             if (
@@ -298,6 +321,44 @@ class FakeAgents:
         gotchas = facts[:1] if question == "loops" else []
         return ExploreOutput.model_validate({"facts": facts, "gotchas": gotchas})
 
+    def core_choice(self, prompt: str) -> dict:
+        """The first `.py` file listed that is not an `__init__.py`, citing the first fact id of the material."""
+        files = [
+            f
+            for f in re.findall(r"^- (\S+) \(\d+ lines\)$", prompt, re.MULTILINE)
+            if f.endswith(".py") and not f.endswith("__init__.py")
+        ]
+        ids = re.findall(r"^- \[([a-z0-9]+)\]", prompt, re.MULTILINE) or ["c1"]
+        title = "How it stores bookings"
+        if "core_title_cite" in self.plant:
+            title += f" [[{ids[0]}]]"
+        chosen = files[:1] + (
+            ["elsewhere/not_the_target.py"] if "core_outside_file" in self.plant else []
+        )
+        return {
+            "title": title,
+            "job": f"It keeps each booking it is sent. [[{ids[0]}]]",
+            "files": chosen,
+            "why": "That file holds the code that saves them.",
+            "cites": [ids[0]],
+        }
+
+    def core_read(self, prompt: str, cwd: str) -> ExploreOutput:
+        """One fact per `def ` or `class ` line of each listed file, and one gotcha on the first."""
+        facts = []
+        for path in re.findall(r"^- (\S+) \(\d+ lines\)$", prompt, re.MULTILINE):
+            lines = (Path(cwd) / path).read_text(encoding="utf-8").split("\n")
+            for n, line in enumerate(lines, start=1):
+                if line.lstrip().startswith(("def ", "class ")):
+                    cit = {
+                        "path": path,
+                        "line_start": n,
+                        "line_end": n,
+                        "quote": line.strip(),
+                    }
+                    facts.append({"claim": f"core: {line.strip()}", "citations": [cit]})
+        return ExploreOutput.model_validate({"facts": facts, "gotchas": facts[:1]})
+
     def docs(self, prompt: str, cwd: str) -> DocsOutput:
         pages = re.findall(r"^- (https://\S+) -> file `(\S+)`", prompt, re.MULTILINE)
         paths = (
@@ -419,6 +480,23 @@ class FakeAgents:
             )
             return m.group(1) if m else a
 
+        if schema is CoreOutput:
+            return {
+                "summary": f"It saves each booking as one row. [[{a}]]",
+                "paragraphs": [
+                    {"text": f"The view writes the row and returns. [[{b}]]"}
+                ],
+                "parts": [
+                    {
+                        "name": "The model",
+                        "looks_at": "The booking it is given.",
+                        "given": "The guest and the count.",
+                        "produces": "One saved row.",
+                        "checked_by": f"The database schema. [[{a}]]",
+                        "cite": a,
+                    }
+                ],
+            }
         if schema is LoopsOutput:
             rows = [
                 {

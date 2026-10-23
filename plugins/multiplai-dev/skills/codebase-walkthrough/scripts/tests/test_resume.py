@@ -139,6 +139,7 @@ WRITE_SCHEMAS = {
     "SummaryOutput",
     "UseCasesOutput",
     "FlowOutput",
+    "CoreOutput",
     "OutputsOutput",
     "ConfigOutput",
 }

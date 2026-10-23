@@ -28,6 +28,7 @@ CODEBASE_H2 = [
     "What it is",
     "Use cases",
     "How it works",
+    "How it stores bookings",
     "Loops and caps",
     "Exit codes and markers",
     "State and resume",

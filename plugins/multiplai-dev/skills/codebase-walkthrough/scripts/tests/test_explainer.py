@@ -27,6 +27,7 @@ H2 = [
     "What it is",
     "Use cases",
     "How it works",
+    "How it stores bookings",
     "What it creates",
     "Configuration",
     "Gotchas",

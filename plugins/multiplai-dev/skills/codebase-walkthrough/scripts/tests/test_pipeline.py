@@ -50,6 +50,7 @@ def test_run_writes_markdown_and_html_with_the_same_headings(done_run):
             "What it is",
             "Use cases",
             "How it works",
+            "How it stores bookings",
             "What it creates",
             "Configuration",
             "Gotchas",

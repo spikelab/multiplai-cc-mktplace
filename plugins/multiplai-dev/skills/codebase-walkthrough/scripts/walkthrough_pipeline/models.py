@@ -38,6 +38,7 @@ STAGES: tuple[str, ...] = (
     "partition",
     "explore",
     "survey",
+    "core",
     "docs",
     "trace",
     "write",
@@ -328,6 +329,36 @@ class ResumeOutput(_Model):
     rows: list[ResumeRow] = Field(default_factory=list)
 
 
+# The part of the code that does its main job (module and codebase scope, human mode): the core stage
+# chooses it, a deep read explains it, and the write stage gives it its own section.
+
+
+class CoreChoice(_Model):
+    title: str = ""  # the section's heading in plain words, e.g. "How it finds bugs"
+    job: str = ""  # one sentence: what the code exists to do
+    files: list[str] = Field(
+        default_factory=list
+    )  # workspace paths of the files that do it
+    why: str = ""  # one sentence: why these files are the ones that do it
+    cites: list[str] = Field(default_factory=list)
+
+
+class CorePart(_Model):
+    name: str
+    looks_at: str = ""
+    given: str = ""
+    produces: str = ""
+    checked_by: str = ""
+    cite: str = ""
+
+
+class CoreOutput(_Model):
+    summary: str = ""  # one sentence that is enough on its own
+    paragraphs: list[Paragraph] = Field(default_factory=list)
+    parts: list[CorePart] = Field(default_factory=list)
+    flow: FlowOutput | None = None  # for a part with a flow of its own
+
+
 # --- stage records in the state ------------------------------------------------------
 
 
@@ -366,6 +397,12 @@ class WalkState(BaseModel):
     terms: list[Term] = Field(default_factory=list)
     uncovered_files: list[str] = Field(default_factory=list)
     uncovered_entries: list[str] = Field(default_factory=list)
+    core_answers: dict[str, dict] = Field(
+        default_factory=dict
+    )  # "core:choice", "core:choice:rewrite" -> CoreChoice dump | {"error": ...}
+    core: dict = Field(
+        default_factory=dict
+    )  # the gated choice: {title, job, why, files, cites}; empty when there is none
     docs: dict = Field(default_factory=dict)
     docs_answers: dict[str, dict] = Field(default_factory=dict)
     paths: PathsResult | None = None  # the trace stage's map_paths result

@@ -555,8 +555,13 @@ def _cut_appendix(state: WalkState, lk: Linker) -> list[str]:
 
 
 def cut_lines(state: WalkState) -> list[str]:
-    """One line per paragraph or item the write checks cut, with its section and reasons."""
-    out = []
+    """One line per paragraph or item the write checks cut, with its section and reasons; first the core
+    stage's choice when its checks cut it."""
+    out = [
+        f"- (The part that does the main job) {_cell(d.what[:400])} — **{_cell(d.reason[:300])}**"
+        for d in state.dropped
+        if d.stage == "core"
+    ]
     for s in state.sections.values():
         for c in s.cut:
             text = CITE_ID.sub("", c["text"]).replace("\n", " ")
@@ -697,6 +702,41 @@ def _md_flow(state: WalkState, lk: Linker) -> MdSection:
         ]
         subs.append((f"{i}. {_cell(st['title'])}", _join(out)))
     return MdSection(_join(body), subs)
+
+
+# The fields of a core part, as (field, what the page calls it).
+CORE_PART_FIELDS = (
+    ("looks_at", "Looks at"),
+    ("given", "Is given"),
+    ("produces", "Produces"),
+    ("checked_by", "Checked by"),
+)
+
+
+def _md_core(state: WalkState, lk: Linker) -> MdSection:
+    data = _data(state, "core")
+    body = [lk.expand(x) + "\n" for x in [data.get("summary") or ""] if x]
+    body += [lk.expand(p) + "\n" for p in data.get("paragraphs") or []]
+    flow = data.get("flow") or {}
+    src = flow_mermaid(flow)
+    if src:
+        body += ["```mermaid", src, "```", ""]
+    subs = []
+    for part in data.get("parts") or []:
+        out = [
+            f"**{head}:** {lk.expand(part[field])}\n"
+            for field, head in CORE_PART_FIELDS
+            if part.get(field)
+        ]
+        out.append(f"Where: {_cites(lk, [part['cite']])}")
+        subs.append((_cell(part["name"]), _join(out)))
+    for i, st in enumerate(flow.get("steps") or [], start=1):
+        subs.append((f"{i}. {_cell(st['title'])}", lk.expand(st["summary"])))
+    return MdSection(
+        _join(body)
+        or ("" if subs else "Nothing about this section passed the checks."),
+        subs,
+    )
 
 
 def _md_outputs(state: WalkState, lk: Linker) -> MdSection:
@@ -1126,6 +1166,7 @@ def human_md_sections(
         ),
         "usecases": _md_usecases(state, lk),
         "flow": _md_flow(state, lk),
+        "core": _md_core(state, lk),
         "outputs": _md_outputs(state, lk),
         "config": _md_config(state, lk),
         **{key: _md_table(state, lk, key) for key in TABLE_COLUMNS},
@@ -1158,7 +1199,7 @@ def human_markdown(state: WalkState, lk: Linker, out_dir: Path) -> str:
         md += [lk.expand(tagline), ""]
     md += [f"> {run_line(state)}", ""]
     sections = human_md_sections(state, lk, out_dir)
-    for key, title in human_sections(state.options):
+    for key, title in human_sections(state.options, state.core):
         sec = sections[key]
         md += [f"## {title}", ""]
         if sec.body:
@@ -1633,6 +1674,39 @@ def _html_flow(state: WalkState, lk: Linker, cites: CiteNumbers) -> str:
     return "\n".join(out)
 
 
+def _html_core(state: WalkState, lk: Linker, cites: CiteNumbers) -> str:
+    data = _data(state, "core")
+    out = []
+    if data.get("summary"):
+        out.append(f"<p>{_inline(lk.expand(data['summary']), cites)}</p>")
+    out += [markdown_html(lk.expand(p), cites) for p in data.get("paragraphs") or []]
+    flow = data.get("flow") or {}
+    picture = flow_picture(flow, caption=state.core.get("title") or "")
+    if picture:
+        out.append(picture)
+    for part in data.get("parts") or []:
+        rows = "".join(
+            f"<dt>{head}</dt><dd>{_inline(lk.expand(part[field]), cites)}</dd>"
+            for field, head in CORE_PART_FIELDS
+            if part.get(field)
+        )
+        out.append(
+            f'<div class="item"><h3>{html.escape(part["name"])}</h3><dl class="part">{rows}</dl>'
+            f'<p class="based">Where {_html_cites(lk, [part["cite"]], cites)}</p></div>'
+        )
+    steps = flow.get("steps") or []
+    if steps:
+        out.append(
+            '<ol class="steps">'
+            + "".join(
+                f"<li><h3>{html.escape(st['title'])}</h3><p>{_inline(lk.expand(st['summary']), cites)}</p></li>"
+                for st in steps
+            )
+            + "</ol>"
+        )
+    return "\n".join(out) or "<p>Nothing about this section passed the checks.</p>"
+
+
 def _html_outputs(state: WalkState, lk: Linker, cites: CiteNumbers) -> str:
     items = _data(state, "outputs").get("items") or []
     if not items:
@@ -1748,12 +1822,13 @@ def render_html(
     builders = {
         "usecases": _html_usecases,
         "flow": _html_flow,
+        "core": _html_core,
         "outputs": _html_outputs,
         "config": _html_config,
         **{key: _html_table(key) for key in TABLE_COLUMNS},
     }
     body, nav = [], []
-    for key, title in human_sections(state.options):
+    for key, title in human_sections(state.options, state.core):
         cites = CiteNumbers()
         if key in builders:
             inner = builders[key](state, lk, cites)
@@ -1852,6 +1927,7 @@ def write_outputs(
         required_titles(
             state.options.get("mode", "human"),
             state.options.get("scope", "module"),
+            state.core.get("title", ""),
         ),
     )
     if not gate.passed:

@@ -886,3 +886,63 @@ def resume_gate(row, *, citations, corpus, labels) -> list[str]:
         labels=labels,
     )
     return reasons
+
+
+# --- the part of the code that does its main job (the core stage and its section) -----------------------
+
+MAX_CORE_TITLE_CHARS = 60
+
+
+def core_gate(
+    choice,
+    *,
+    target_files: set[str],
+    citations: dict[str, Citation],
+    corpus: Corpus,
+    labels: set[str],
+) -> list[str]:
+    """The core stage's choice: a plain title of at most 60 characters (no backticks, citation or path), at
+    least one file and every file one of the target's (workspace paths), every cite a known id, and a `job`
+    and a `why` that pass `explainer_text_gate`."""
+    reasons: list[str] = []
+    title = choice.title.strip()
+    if not title:
+        reasons.append("the title is empty")
+    elif len(title) > MAX_CORE_TITLE_CHARS:
+        reasons.append(f"the title is over {MAX_CORE_TITLE_CHARS} characters")
+    if "`" in title:
+        reasons.append("the title holds backticks")
+    reasons += title_gate(title)
+    if PATH_LINE.search(title) or "/" in title or FILE_SUFFIX.search(title):
+        reasons.append("the title holds a path")
+    files = [f.strip() for f in choice.files if f.strip()]
+    if not files:
+        reasons.append("no file is named")
+    reasons += [
+        f"{f} is not a file of the target" for f in files if f not in target_files
+    ]
+    for raw in choice.cites:
+        cid = cite_id(raw)
+        if cid not in citations:
+            reasons.append(f"[[{cid}]] is not a gated citation")
+    gate = {"citations": citations, "corpus": corpus, "labels": labels}
+    for field in ("job", "why"):
+        text = getattr(choice, field).strip()
+        if not text:
+            reasons.append(f"the {field} is empty")
+        reasons += explainer_text_gate(text, **gate)
+    return reasons
+
+
+def core_part_gate(part, *, citations, corpus, labels) -> list[str]:
+    """A part of the core section: a known cite, a name with no citation, and text that passes the explainer
+    checks."""
+    reasons, _ = _row_head(
+        part,
+        "name",
+        ("name", "looks_at", "given", "produces", "checked_by"),
+        citations=citations,
+        corpus=corpus,
+        labels=labels,
+    )
+    return reasons + title_gate(part.name)

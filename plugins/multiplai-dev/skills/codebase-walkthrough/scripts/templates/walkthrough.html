@@ -98,6 +98,10 @@
   .item { margin: 12px 0; }
   .case h3, .item h3 { margin-top: 12px; }
   .meta { font-size: 14px; color: var(--muted); }
+  dl.part { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 14px; margin: 8px 0; font-size: 15px; }
+  dl.part dt { font-weight: 600; color: var(--muted); }
+  dl.part dd { margin: 0; }
+  @media (max-width: 640px) { dl.part { grid-template-columns: minmax(0, 1fr); } dl.part dd { margin-bottom: 6px; } }
   ol.steps { padding-left: 22px; }
   ol.steps > li { max-width: none; margin: 0 0 12px; }
   ol.steps > li::marker { font-family: var(--font-display); font-weight: 600; color: var(--accent); }

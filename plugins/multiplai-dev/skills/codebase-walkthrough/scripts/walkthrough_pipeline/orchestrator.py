@@ -1,10 +1,11 @@
-"""target → repos → symbols → references → boundary → partition → explore → survey → docs → trace → write
-→ render.
+"""target → repos → symbols → references → boundary → partition → explore → survey → core → docs → trace
+→ write → render.
 
 `walkthrough-state.json` is written after every stage; `resume` reloads it and
 continues from the first stage not yet done. Stages up to `partition` are
 code only; the agent stages store each answer as it returns, so a budget
-stop keeps paid work. `survey` asks only for `--scope codebase`.
+stop keeps paid work. `survey` asks only for `--scope codebase`; `core` only for a module or a codebase in
+human mode.
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ from .partition import partition, ws_lines
 from .progress import ProgressWriter
 from .render import write_outputs
 from .stages import RunContext
+from .stages.core import run_core
 from .stages.docs import run_docs
 from .stages.explore import run_explore
 from .stages.survey import run_survey
@@ -391,6 +393,7 @@ STAGES = (
     ("partition", None),
     ("explore", run_explore),
     ("survey", run_survey),
+    ("core", run_core),
     ("docs", run_docs),
     ("trace", run_trace),
     ("write", run_write),

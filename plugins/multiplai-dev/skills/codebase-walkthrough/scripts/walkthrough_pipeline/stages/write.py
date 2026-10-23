@@ -36,6 +36,7 @@ from ..gates import (
     Corpus,
     cite_id,
     config_gate,
+    core_part_gate,
     exit_gate,
     explainer_text_gate,
     flow_gate,
@@ -48,6 +49,7 @@ from ..gates import (
 )
 from ..models import (
     ConfigOutput,
+    CoreOutput,
     ExitsOutput,
     Fact,
     FlowOutput,
@@ -70,11 +72,13 @@ log = logging.getLogger(__name__)
 MATERIAL_MAX_CHARS = 60_000
 
 # (key, title) of the human-mode H2s, in document order. `write_specs` asks for the structured ones and
-# gotchas; Reference and How this was made hold the sections below, as H3s.
+# gotchas; Reference and How this was made hold the sections below, as H3s. The `core` section's title is
+# `state.core["title"]` (`human_sections`); it is left out when the core stage chose nothing.
 HUMAN_SECTIONS = [
     ("summary", "What it is"),
     ("usecases", "Use cases"),
     ("flow", "How it works"),
+    ("core", ""),
     ("outputs", "What it creates"),
     ("config", "Configuration"),
     ("gotchas", "Gotchas"),
@@ -104,6 +108,7 @@ CODEBASE_SECTIONS = [
     ("summary", "What it is"),
     ("usecases", "Use cases"),
     ("flow", "How it works"),
+    ("core", ""),
     ("loops", "Loops and caps"),
     ("exits", "Exit codes and markers"),
     ("resume", "State and resume"),
@@ -125,6 +130,7 @@ STRUCTURED = {
     "flow": FlowOutput,
     "outputs": OutputsOutput,
     "config": ConfigOutput,
+    "core": CoreOutput,
     "loops": LoopsOutput,
     "exits": ExitsOutput,
     "resume": ResumeOutput,
@@ -140,17 +146,24 @@ AGENT_SECTIONS = [
 ]
 
 
-def human_sections(options: dict) -> list[tuple[str, str]]:
-    """The H2s of a human-mode walkthrough: a module's, a codebase's, or a change's (`--scope pr`)."""
-    return {"pr": CHANGE_SECTIONS, "codebase": CODEBASE_SECTIONS}.get(
+def human_sections(options: dict, core: dict | None = None) -> list[tuple[str, str]]:
+    """The H2s of a human-mode walkthrough: a module's, a codebase's, or a change's (`--scope pr`). *core*
+    is `state.core`: its title names the core section, which is left out when there is none."""
+    sections = {"pr": CHANGE_SECTIONS, "codebase": CODEBASE_SECTIONS}.get(
         options.get("scope"), HUMAN_SECTIONS
     )
+    title = (core or {}).get("title", "")
+    return [
+        (k, title if k == "core" else t) for k, t in sections if k != "core" or title
+    ]
 
 
-def required_titles(mode: str, scope: str = "module") -> list[str]:
+def required_titles(
+    mode: str, scope: str = "module", core_title: str = ""
+) -> list[str]:
     if mode == "agent":
         return [t for _, t in AGENT_SECTIONS]
-    return [t for _, t in human_sections({"scope": scope})]
+    return [t for _, t in human_sections({"scope": scope}, {"title": core_title})]
 
 
 @dataclass
@@ -462,6 +475,7 @@ def _explainer_specs(state: WalkState) -> list[Spec]:
             _material([_hops(state)] + _lines(flow_facts)),
             kind="flow",
         ),
+        *_core_spec(state),
         Spec(
             "outputs",
             "What it creates",
@@ -485,6 +499,27 @@ def _explainer_specs(state: WalkState) -> list[Spec]:
             _material([_fact_line(by_id[i]) for i in state.gotchas if i in by_id]),
             rules=EXPLAINER_RULES,
         ),
+    ]
+
+
+def _core_spec(state: WalkState) -> list[Spec]:
+    """The core section's spec when the core stage chose a part: the deep read's facts first, then the facts
+    citing the chosen files, then the job and why."""
+    core = state.core
+    if not core.get("title"):
+        return []
+    files = set(core.get("files") or [])
+    read = _facts(state, ("core:read/",))
+    citing = [f for f in state.facts if any(c.path in files for c in f.citations)]
+    return [
+        Spec(
+            "core",
+            core["title"],
+            f"Explain the part of `{state.target.package}` that does its main job, deeper than the stages "
+            f"around it. The job: {core['job']} Why these files: {core['why']}",
+            _material(_lines(read + citing)),
+            kind="core",
+        )
     ]
 
 
@@ -744,6 +779,13 @@ def _gate_structured(
             )
         data = {"items": items}
         missing = [] if items else ["no output passed the checks"]
+    elif kind == "core":
+        data, cut = _gate_core(out, gate)
+        missing = (
+            []
+            if data["summary"] or data["paragraphs"] or data["parts"]
+            else ["nothing in the section passed the checks"]
+        )
     elif kind in CODEBASE_TABLES:
         first, check, fields, optional = CODEBASE_TABLES[kind]
         rows = []
@@ -804,6 +846,51 @@ def _gate_structured(
         missing = [] if rows else ["no setting passed the checks"]
     failures = missing + [f"{c['text'][:120]}: {r}" for c in cut for r in c["reasons"]]
     return {"data": data, "cut": cut, "failures": failures}
+
+
+def _gate_core(out: CoreOutput, gate: dict) -> tuple[dict, list[dict]]:
+    """The core section's parts that pass: its summary and paragraphs (`explainer_text_gate`), its parts
+    (`core_part_gate`), and its flow (`flow_gate`, one step per box), which is dropped alone when its graph
+    or its steps fail."""
+    cut: list[dict] = []
+    summary = out.summary.strip()
+    if summary:
+        r = explainer_text_gate(summary, **gate)
+        if r:
+            cut.append({"text": summary, "reasons": r})
+            summary = ""
+    paragraphs = []
+    for p in out.paragraphs:
+        r = explainer_text_gate(p.text, **gate)
+        (cut.append({"text": p.text, "reasons": r}) if r else paragraphs.append(p.text))
+    parts = []
+    for part in out.parts:
+        r = core_part_gate(part, **gate)
+        if r:
+            cut.append({"text": f"part {part.name!r}", "reasons": r})
+            continue
+        parts.append(
+            {
+                "name": part.name.strip(),
+                "looks_at": part.looks_at.strip(),
+                "given": part.given.strip(),
+                "produces": part.produces.strip(),
+                "checked_by": part.checked_by.strip(),
+                "cite": cite_id(part.cite),
+            }
+        )
+    flow = None
+    if out.flow is not None and out.flow.nodes:
+        g = flow_gate(out.flow, **gate, steps_follow_boxes=True)
+        cut += g["cut"]
+        if g["graph"] or g["order"]:
+            cut.append(
+                {"text": "the core flow diagram", "reasons": g["graph"] + g["order"]}
+            )
+        else:
+            flow = {"nodes": g["nodes"], "edges": g["edges"], "steps": g["steps"]}
+    data = {"summary": summary, "paragraphs": paragraphs, "parts": parts, "flow": flow}
+    return data, cut
 
 
 # The list each list-shaped section keeps, and the field that names an item, for merging a re-ask.

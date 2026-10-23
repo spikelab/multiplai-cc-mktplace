@@ -113,6 +113,101 @@ Schema:
 Answer with ONE JSON object and nothing after it."""
 
 
+def core_choice(
+    name: str,
+    files: list[tuple[str, int]],
+    purposes: list[str],
+    doc_facts: list[str],
+    unit_facts: list[str],
+    schema,
+    failures: list[str] | None = None,
+    previous: str | None = None,
+) -> str:
+    """The core stage's first call: name the part of the code that does its main job. No tools."""
+    listing = "\n".join(f"- {path} ({n} lines)" for path, n in files)
+    redo = ""
+    if failures and previous:
+        redo = (
+            "\nYour previous answer failed these checks. Answer again, fixed:\n"
+            + "\n".join(f"- {f}" for f in failures[:30])
+            + "\n\nPrevious answer:\n"
+            + previous[:4000]
+            + "\n"
+        )
+    return f"""You are planning a walkthrough of `{name}` for someone who has never seen it.
+Work out what the code exists to do, and name the part of it that does that job: for example the finders
+of a review tool, the matching engine of a search service, the scheduler of a job runner. That part gets
+its own section and a deeper reading of its code.
+
+Files of `{name}`:
+{listing}
+
+What each file is for (checked against the code):
+{chr(10).join(purposes) or "- (none)"}
+
+What the code's own docs say (every item was checked against the code; ids in brackets are citation ids):
+{chr(10).join(doc_facts) or "- (none)"}
+
+Facts about the code (checked the same way):
+{chr(10).join(unit_facts) or "- (none)"}
+{redo}
+Return ONE JSON object:
+- `title`: the section's heading in plain words, at most 60 characters, no backticks, no file names, no
+  citation, e.g. "How it finds bugs";
+- `job`: one plain sentence: what the code exists to do;
+- `files`: the paths, exactly as listed above, of the files that do that job;
+- `why`: one plain sentence: why those files are the ones that do it;
+- `cites`: the citation ids (e.g. "c12") of the facts your answer rests on.
+A program checks every path and id.
+
+{EXPLAINER_RULES}
+
+Schema:
+{_schema(schema)}
+
+Answer with ONE JSON object and nothing after it."""
+
+
+def core_read(
+    name: str,
+    choice: dict,
+    files: list[tuple[str, int]],
+    libs: list[str],
+    schema,
+) -> str:
+    """The core stage's deep read: one agent with Read, Grep and Glob on the snapshot."""
+    listing = "\n".join(f"- {path} ({n} lines)" for path, n in files)
+    lib_list = "\n".join(f"- {d}/" for d in libs) or "- (none given)"
+    return f"""You are explaining the codebase `{name}` to an engineer who has just joined the team.
+Your working directory holds snapshots of one or more repositories at one commit each; every path
+below starts with the repository name.
+
+Core part: [core:read]
+The code exists to do this: {choice["job"]}
+These files do that job; read them closely, not in passing:
+{listing}
+
+Libraries the code calls, which you may also read:
+{lib_list}
+
+For each part of what these files do, find and cite:
+- what it looks at;
+- what it is given: its prompts, rules and inputs, quoted from the code;
+- what it produces;
+- how its output is checked, and by what;
+- why the part exists: what would go wrong without it.
+Return each finding as a fact in `facts`, and anything that would surprise a newcomer as a fact in
+`gotchas`, every one with citations. Leave `files`, `interfaces` and `terms` empty.
+
+{CITATION_RULES}
+{UNTRUSTED_RULES}
+
+Schema:
+{_schema(schema)}
+
+Answer with ONE JSON object and nothing after it."""
+
+
 def docs_resource(
     name: str,
     resource: str,
@@ -281,6 +376,19 @@ stage's text if at all.
   are worth showing as code).
 Start from the first path listed (the module's main entry point) unless the material shows another path
 is the main one.""",
+    "core": """This section explains the part of the code that does its main job, deeper than the stages
+around it: how it works, what each part looks at, what it is given, what it produces, and how its output is
+checked. Return:
+- `summary`: ONE plain sentence that is enough on its own: what this part does;
+- `paragraphs`: a few short paragraphs, each adding detail to the one before: how it works, and why it is
+  built that way;
+- `parts`: one per piece of it (for a review tool, each finder), each with `name` (plain words, no
+  citation), `looks_at` (what it reads), `given` (its prompt, rules and inputs, as the material quotes
+  them), `produces` (what it returns), `checked_by` (what checks its output, and how) and `cite`: the
+  citation id of the line that runs or defines it;
+- `flow`: only when this part has a flow of its own, its stages as boxes, arrows and steps, as for the
+  "How it works" section (`kind`, `does`, `fan_out`, one step per box that is not an input or an output,
+  with `node` set); else leave it out.""",
     "outputs": """Return `items`: each file, state record, log or other output the code writes, with its
 `name`, `what` (what it is for, in one or two sentences), `written_by_cite` (the citation id of the line
 that writes it) and, when the material shows its shape, an `example`: `format` "json", "yaml",
