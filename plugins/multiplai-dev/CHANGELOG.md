@@ -15,6 +15,20 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.99.2] - 2026-10-23
+
+### Fixed
+- **Subcommands that dispatch with `if args.command == "x":` now have a
+  handler.** codebase-walkthrough and review trace paths from each argparse
+  subcommand; a subcommand whose CLI compares the subparsers' `dest` with its
+  name (an `if`/`elif` chain or a `match` statement) used to get no handler, so
+  its trace stopped at the `add_parser` line. Discovery now takes the function
+  the branch returns (or exits with, or runs through `asyncio.run`), and starts
+  the known edge at the branch line. `set_defaults(func=...)` and dispatch dicts
+  still come first, and a branch of inline code still has no handler. A trace
+  cached by an earlier run is asked again for each subcommand that gains a
+  handler.
+
 ## [0.99.1] - 2026-10-23
 
 ### Fixed
