@@ -1,4 +1,4 @@
-"""One test per row S1-S13 of the plan's "Stop and resume states" table.
+"""One test per row S1-S14 of the plan's "Stop and resume states" table.
 
 Each test stops the run at its row, resumes it, and compares the result with a
 run of the same inputs that never stopped (`baseline`): the same files, the
@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 from conftest import (
     BRANCH,
+    CAPS,
     TWO,
     FakeModel,
     Killed,
@@ -30,16 +31,21 @@ from conftest import (
     make_repo,
     meta,
     origin,
+    proposal,
     ready_line,
+    requirements,
     run,
     snapshot,
+    source_dir,
     specs,
     state,
     worktree,
     write,
 )
-from multiplai_core.specs import is_ready
-from pm_spec_pipeline import epic, git_ops, handoff, layout, runlock, sdk
+from multiplai_core.specs import is_ready, mark_ready, write_change_meta
+from pm_spec_pipeline import epic, git_ops, handoff, layout, runlock, sdk, stages
+from pm_spec_pipeline import state as state_mod
+from pm_spec_pipeline.state import Handoff, RunState, StepOutcome
 
 NEW = ["new", "throttle", "--interview-summary", "Throttle it."]
 RESUME = ["resume", "throttle"]
@@ -606,3 +612,74 @@ def test_S13_the_review_stop_after_the_specs(
     assert "EDITED by a reviewer" in model.exactly("consistency")[-1]
     assert model.calls_to("spec:specs") == written
     assert layout.ready(ecdir) == (True, "")
+
+
+# --- S14 --------------------------------------------------------------------------
+
+
+def old_layout_change(repo: Path, *, handed_off: bool) -> None:
+    """A change pm-spec 0.8.0 or earlier wrote in the user's checkout:
+    `requirements/`, no `specs.md`, and its run state, which `branch.adopt`
+    copies into pm-spec's worktree with it. *handed_off*: the old run checked
+    it and wrote the ready record; else it stopped before the check."""
+    hand = source_dir(repo)
+    write(hand / "proposal.md", proposal())
+    write(hand / "use-cases.md", "# Use cases\n")
+    for cap in CAPS:
+        write(hand / "requirements" / f"{cap}.md", requirements(cap))
+    write_change_meta(hand, {"ticket_refs": {"epic": "ENG-1", "children": []}})
+    steps = {"prototype": StepOutcome(outcome="skipped")}
+    handoff_record = None
+    if handed_off:
+        rev = mark_ready(hand)
+        steps["consistency"] = StepOutcome(outcome="passed", revision=rev)
+        handoff_record = Handoff(revision=rev, committed=True, commit="abc")
+    old = RunState(
+        change="throttle",
+        intake_done=True,
+        interview_done=True,
+        steps=steps,
+        handoff=handoff_record,
+    )
+    state_mod.save(old, hand / ".pm-spec", ledger=False)
+
+
+STAGE_FILES = ("components.md", "specs.md", "plan.md", "components", "prototype")
+
+
+@pytest.mark.parametrize("handed_off", [True, False])
+def test_S14_a_run_from_before_the_staged_flow_only_checks_and_hands_off(
+    repo, model, capsys, handed_off
+):
+    two(model)
+    old_layout_change(repo, handed_off=handed_off)
+    # Edited after the old handoff: the ready record is stale (S9).
+    hand = source_dir(repo)
+    write(
+        hand / "requirements" / f"{CAPS[0]}.md", requirements(CAPS[0], rule="EDITED")
+    )
+
+    assert run(repo, *RESUME) == 0
+    out = capsys.readouterr().out
+    cdir = change_dir(repo)
+    assert model.labels() == ["consistency"]
+    assert "EDITED" in model.exactly("consistency")[0]
+    assert "SPEC:REVIEW" not in out and "SPEC:TICKETS" not in out
+    assert ready_line(out) == f"SPEC:READY:{cdir}:{layout.revision(cdir)}"
+    assert layout.ready(cdir) == (True, "")
+    assert [n for n in STAGE_FILES if (cdir / n).exists()] == []
+    # The handoff writes it when missing, as for an adopted change.
+    assert (cdir / "tickets.json").is_file()
+    steps = state(cdir)["steps"]
+    for name in ("proposal", "components", "tickets", "specs"):
+        assert steps[name]["outcome"] == "skipped"
+        assert steps[name]["reason"] == stages.BEFORE_STAGED_FLOW
+    # The old run's own record of its prototype step is kept as it was.
+    assert steps["prototype"] == {**steps["prototype"], "outcome": "skipped", "reason": ""}
+    assert git(worktree(repo), "rev-parse", "HEAD") == git(
+        origin(repo), "rev-parse", BRANCH
+    )
+
+    # Resumed again: nothing to do, nothing regenerated.
+    assert run(repo, *RESUME) == 0
+    assert model.labels() == ["consistency"]

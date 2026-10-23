@@ -21,13 +21,17 @@ shows the tickets, creates them (or a person does), and resumes with
 `--ticket <component>=<REF>` for each component that has no ticket yet, or
 `--tickets-later`; any other resume refuses (exit 2), printing the flags it
 expects and recording none of the refs it was given. With `--auto` there is no wait: the components keep `pending`.
+
+A run started before the staged flow (pm-spec 0.8.0 and earlier, row S14)
+has no stage records: `skip_before_staged_flow` records each stage step
+`skipped`, so its resume only checks and hands off.
 """
 
 from __future__ import annotations
 
 import logging
 
-from . import branch, git_ops, tickets
+from . import branch, git_ops, layout, tickets
 from . import findings as F
 from .run import (
     EXIT_FAILED,
@@ -56,6 +60,39 @@ MESSAGES = {
     TICKETS: "prototype and tickets",
     SPECS: "specs for review",
 }
+
+
+STAGES = (PROPOSAL, COMPONENTS, PROTOTYPE, TICKETS, SPECS)
+BEFORE_STAGED_FLOW = "before the staged flow"
+
+
+def predates_staged_flow(run: Run) -> bool:
+    """Row S14: the run state records the old flow's check or handoff and no
+    stage step (`prototype` was a step before the stages too), or the change
+    dir is in the old layout (`requirements/`, no `specs.md`)."""
+    steps = run.state.steps
+    if (run.state.handoff is not None or "consistency" in steps) and not any(
+        name in steps for name in (PROPOSAL, COMPONENTS, TICKETS, SPECS)
+    ):
+        return True
+    change_dir = run.config.change_dir
+    return (change_dir / layout.OLD_DIR).is_dir() and not (
+        change_dir / layout.SPECS_FILE
+    ).is_file()
+
+
+def skip_before_staged_flow(run: Run) -> None:
+    """Row S14: record each stage step with no record `skipped`."""
+    if not predates_staged_flow(run):
+        return
+    names = [name for name in STAGES if name not in run.state.steps]
+    for name in names:
+        F.record_skipped(run, name, "", BEFORE_STAGED_FLOW)
+    if names:
+        run.progress(
+            "STAGES",
+            f"Recorded {', '.join(names)} skipped: the run started {BEFORE_STAGED_FLOW}",
+        )
 
 
 def done(run: Run, name: str) -> bool:

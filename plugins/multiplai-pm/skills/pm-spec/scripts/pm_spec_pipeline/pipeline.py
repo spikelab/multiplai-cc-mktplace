@@ -14,6 +14,9 @@ In order, each skipped when the run state or the files say it is done:
    then the review stop (row S13): `SPEC:REVIEW:specs`, exit 3;
 7. on the resume after it, the consistency check, then the handoff (row S8).
 
+A run pm-spec 0.8.0 or earlier started has its stage steps recorded skipped
+first (row S14, `stages.skip_before_staged_flow`), so it runs only 2 and 7.
+
 `--auto` makes no stop and no ticket wait. Every file on disk is kept, whoever
 wrote it: an edit pulled from the branch at a stop is an input of the stages
 after it (rows S9, S11). A change adopted as it stands (specs pm-spec did not
@@ -205,6 +208,8 @@ async def advance(
         await revise.run_revise(run, from_respec=from_respec)
         return EXIT_DONE
     _refuse_while_issues_are_open(run)
+    if not run.state.adopted:
+        stages.skip_before_staged_flow(run)
     if _ready_again(run):
         return EXIT_DONE
     if not run.state.adopted:

@@ -20,6 +20,8 @@ What each field is for, by the plan's stop-and-resume rows:
   `prototype`, `tickets` and `specs` (rows S1-S7), and per checked step with a
   one-rewrite rule (`consistency`, `revise`). A review stop is `passed` once
   pushed, `skipped` under `--auto`; `tickets` is `pending` at the ticket wait.
+  A run started before the stages existed gets each of them `skipped`, reason
+  "before the staged flow" (row S14).
 - `handoff`: row S8, the revision the ready record was written at, whether its
   commit landed and whether the branch was pushed.
 """

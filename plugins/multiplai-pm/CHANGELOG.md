@@ -76,6 +76,10 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
 ### Migration
 - A change written in the old layout (`requirements/<capability>.md`) is
   still read: `resume` adopts it, and `revise` fixes it in place.
+- A change pm-spec 0.8.0 or earlier started (its run state copied with it)
+  does not go through the three stages on `resume`: they are recorded
+  skipped, and the resume only checks it again when it changed since its
+  handoff, then hands it off.
 
 ## [0.8.0] - 2026-10-22
 
