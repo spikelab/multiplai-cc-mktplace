@@ -48,7 +48,7 @@ STRUCTURED = (
 SURVEY_NEEDLES = {
     "loops": ("MAX_", "range(", "sys.exit(", 'print("'),
     "lifecycle": ("write_text(", "json.loads(", ".open(", "STATE ="),
-    "commands": ("Use `", "Run `", "exits 2", "| `tool"),
+    "commands": ("Use `", "Run `", "exits 2", "| `"),
 }
 SURVEY_MAX_FACTS = 12
 
@@ -590,6 +590,19 @@ class FakeAgents:
                         "what": f"A line per poll. [[{c}]]",
                         "written_by_cite": c,
                     },
+                ]
+            }
+        if "| `--run-dir" in prompt:
+            # The plugin fixture: a row citing its docs' flag table, whose `|` must survive the cell.
+            flag = id_with("| `--run-dir")
+            return {
+                "rows": [
+                    {
+                        "name": "--run-dir",
+                        "effect": f"Where the build keeps its state. [[{flag}]]",
+                        "default": "",
+                        "cite": flag,
+                    }
                 ]
             }
         return {

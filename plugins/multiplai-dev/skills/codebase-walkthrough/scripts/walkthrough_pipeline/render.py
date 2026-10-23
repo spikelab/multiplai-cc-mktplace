@@ -680,7 +680,7 @@ def _md_config(state: WalkState, lk: Linker) -> MdSection:
     for r in rows:
         default = f"`{_cell(r['default'])}`" if r.get("default") else ""
         out.append(
-            f"| `{_cell(r['name'])}` | {_cell(lk.expand(r['effect']))} | {default} | {_cites(lk, [r['cite']])} |"
+            f"| `{_cell(r['name'])}` | {lk.expand(_cell(r['effect']))} | {default} | {_cites(lk, [r['cite']])} |"
         )
     return MdSection(_join(out))
 

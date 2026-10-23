@@ -107,6 +107,10 @@ def test_codebase_run_writes_the_twelve_sections_and_check_passes(
     for title, row in TABLES.items():
         assert row in _section(md, title), title
         assert "Nothing about this passed the checks." not in _section(md, title)
+    # The config row cites a docs table line holding `|`; check below re-reads its quote.
+    assert "| `--run-dir` | Where the build keeps its state." in _section(
+        md, "Configuration"
+    )
     # The three survey questions were asked once each, with the docs and the library listed.
     calls = _survey_calls(agents)
     assert sorted(

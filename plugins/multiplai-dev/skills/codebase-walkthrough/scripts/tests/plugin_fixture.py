@@ -38,6 +38,7 @@ KIT = {
         "| Command | When |\n"
         "|---|---|\n"
         "| `tool build` | a build |\n"
+        "| `--run-dir <dir>` | where the build keeps tool-state.json |\n"
         "Re-running `tool build` keeps the attempts recorded in tool-state.json.\n"
     ),
     f"{TOOL}/scripts/CLAUDE.md": "# tool scripts\n\nRun `python -m tool build`.\n",
