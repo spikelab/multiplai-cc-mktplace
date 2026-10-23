@@ -4,8 +4,8 @@ branch and pushes it, buildme builds from that branch.
 pm-spec runs as its own command line in its own environment
 (`uv run --package pm-spec-pipeline`, through `pm_spec_driver.py`, its model
 replaced); buildme runs in-process with its model-calling steps replaced, up
-to the start of TDD. Each test has a real bare origin. Editing one
-requirement on the feature branch after the handoff makes the next build
+to the start of TDD. Each test has a real bare origin. Editing the
+specs on the feature branch after the handoff makes the next build
 refuse with `SPEC:NOT_READY`. buildme never imports `pm_spec_pipeline`: the
 change dir on the branch and `multiplai_core.specs` are all the two share.
 """
@@ -179,15 +179,15 @@ async def test_pm_spec_ready_specs_build_to_tdd_and_an_edit_refuses(
     assert built == wt / "specs" / "changes" / CHANGE
     assert _git(wt, "merge-base", "--is-ancestor", f"origin/{branch}", "HEAD") == ""
     assert _git(wt, "branch", "--show-current") == branch
-    for name in ("proposal.md", "use-cases.md", "requirements/fixture.md"):
+    for name in ("proposal.md", "use-cases.md", "plan.md", "specs.md"):
         assert (built / name).read_bytes() == (change_dir / name).read_bytes(), name
     assert (built / "design.md").is_file() and (built / "tasks.md").is_file()
     generated = {c.args[0] for c in models.generate.await_args_list}
     assert generated == {"design", "tasks"}, generated
 
-    # One requirement edited on the feature branch after the handoff: the
-    # next build, from a teammate's fresh clone, refuses.
-    requirement = change_dir / "requirements" / "fixture.md"
+    # The specs edited on the feature branch after the handoff: the next
+    # build, from a teammate's fresh clone, refuses.
+    requirement = change_dir / "specs.md"
     requirement.write_text(requirement.read_text() + "\nThe value SHALL be 2.\n")
     _git(spec_tree, "commit", "-qam", "edit a requirement")
     _git(spec_tree, "push", "-q", "origin", f"HEAD:refs/heads/{branch}")  # detached

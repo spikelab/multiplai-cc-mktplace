@@ -24,16 +24,21 @@ CAPABILITY = "fixture"
 
 PROPOSAL = (
     "# Return a value\n\n## Why\n\nCallers need a value.\n\n## What Changes\n\nReturn one.\n\n"
-    f"## Capabilities\n\n### New Capabilities\n- `{CAPABILITY}`\n\n### Modified Capabilities\n\n"
     "## Impact\n\nThe `app` module.\n\n## Sources\n\n"
-    f'- `{CAPABILITY}`: PRD "Return a value"\n'
+    '- PRD "Return a value"\n'
 )
 USE_CASES = (
     "# Use cases\n\n## Personas\n\n### caller\n- **Who they are:** calls the app\n\n"
     "## Use cases\n\n- caller asks for a value so that they can use it\n"
 )
-REQUIREMENT = (
-    "## ADDED Requirements\n\n### Requirement: Behavior\nThe system SHALL return a value.\n\n"
+PLAN = (
+    "# Plan: Return a value\n\n> File: feat.md · Date: 2026-10-23\n\n"
+    "**Objective:** Callers get a value.\n\n## Context\nNone is returned.\n\n"
+    "## Outcome\nOne is.\n\n## Constraints / out of scope\n- None.\n\n"
+    "## Done means\n1. The app returns a value.\n"
+)
+SPECS = (
+    f"# Capability: {CAPABILITY}\n\n## ADDED Requirements\n\n### Requirement: Behavior\nThe system SHALL return a value.\n\n"
     "#### Scenario: Works\n- **WHEN** invoked\n- **THEN** returns a value\n"
 )
 
@@ -50,7 +55,19 @@ ANSWERS = {
     },
     "spec:proposal": PROPOSAL,
     "spec:use-cases": USE_CASES,
-    f"spec:requirements:{CAPABILITY}": REQUIREMENT,
+    "components": {
+        "reason": "One pull request carries it.",
+        "components": [
+            {
+                "id": "feat",
+                "title": "Return a value",
+                "depends_on": [],
+                "plan": PLAN,
+                "ticket_ref": "",
+            }
+        ],
+    },
+    "spec:specs:feat": SPECS,
     "consistency": {"findings": [], "prior_assessments": []},
 }
 
