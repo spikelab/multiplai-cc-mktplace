@@ -2,7 +2,8 @@
 
 A stdlib HTTP server and a static page. The server never calls a model: it
 serves the page, answers read-only questions about one review, serves the
-walkthrough the session wrote, and carries messages between the page and the
+summary the session wrote and the codebase-walkthrough page in the mailbox,
+and carries messages between the page and the
 Claude Code session through JSONL files.
 
 Run everything through this member directory:
@@ -19,11 +20,11 @@ The page-logic tests need `node`; they fail (not skip) without it.
 
 | Module | Does |
 |---|---|
-| `__main__.py` | CLI: `serve` (findings files, or `--target`), `reply`, `pending`, `list`, `stop`, `walkthrough put\|status`, `validate`, `export-schema`. Calls `setup_logging` once. Owns the stdout contract. `find_review()` looks for a review of the same commits. |
-| `models.py` | The `findings.json` v1, `checks.json` v1 and `walkthrough.json` v1 pydantic models (source of truth for the three files in `../schema/`), `finding_id()`, `load_checks()`, and the mailbox row models. |
+| `__main__.py` | CLI: `serve` (findings files, or `--target`), `reply`, `pending`, `list`, `stop`, `summary put\|status`, `validate`, `export-schema`. Calls `setup_logging` once. Owns the stdout contract. `find_review()` looks for a review of the same commits. |
+| `models.py` | The `findings.json` v1, `checks.json` v1 and `summary.json` v1 pydantic models (source of truth for the three files in `../schema/`), `finding_id()`, `load_checks()`, and the mailbox row models. |
 | `gitdata.py` | Git: `parse_target()` / `resolve_target()` (PR, branch, worktree, `a..b`, `a...b`; same base/head rules as `review_pipeline/target.py`, restated because that member is not importable here), `parse_unified()`, `file_view()` (an unchanged file is served whole with no diff), `allowed_paths()`, `repo_files()` (`ls-tree -r` at head, blobs only, under the tree pathspec; the page cuts the list at `REPO_FILES_MAX`), `definitions()` (`git grep -E` at head for `definition_pattern(name)`, kept to allowed paths, at most `DEFINITIONS_MAX`), `diff_target()`, `tree_target()` (every file at a commit against `EMPTY_TREE`, for `serve --tree`; `is_tree_review()` knows a tree review by that base; `tree_path()` turns a subdirectory `--repo` into the reviewed path, the rule of `review_pipeline.target.tree_root`). Fixed argv, no shell, stdin closed. The only writes to a repo are the fetches named in `../SKILL.md`. |
 | `stats.py` | measured badges: `classify()` a path (lock, generated, test, docs, code), `change_stats()` from `git diff --numstat`, `--name-status` and `git log` (no commits for a tree review, measured over its directory), the size/tests/commits thresholds, PR badges, `per_file` (status letter and line counts per changed file, for the file list), and `tiers` read from a repo's `.review-risk.toml` for the risk score. |
-| `walkthrough.py` | `check()` a walkthrough against the served target, `coverage()`, `must_assess()` (none for a tree target), `put()` by atomic replace. |
+| `summary.py` | `check()` a summary against the served target, `must_assess()` (none for a tree target), `put()` by atomic replace; `full_walkthrough()`: the state of the codebase-walkthrough page for the served head and the command that writes it. |
 | `mailbox.py` | Append-only JSONL rows, `decisions.json` and `viewed.json` by atomic replace; the directory is 0700 and every file 0600. |
 | `server.py` | `ThreadingHTTPServer` subclass (`allow_reuse_address = False`), request checks, routes, idle watchdog. |
 | `registry.py` | Finds live viewers: probes each mailbox's recorded port with that mailbox's token, in parallel. A token is never sent to any other port. |
@@ -68,8 +69,7 @@ command. Line numbers are 1-based, at
 `sha1(f"{file}\0{line_start}\0{claim}")`.
 
 `findings.json` may carry `verifier_citations` per finding (review 0.26+): the
-lines the verifier read. `allowed_paths()` includes their paths. A
-walkthrough step lists them under the finder's citations. On the Findings
+lines the verifier read. `allowed_paths()` includes their paths. On the Findings
 tab, a finding whose verifier has a `checks.json` entry shows a link to that
 entry instead of both lists; one without (no `checks.json`, or no verifier
 entry) keeps the lists. `logic.findingParts(finding, checks, context)` makes
@@ -142,7 +142,7 @@ the card `path-card-<id>` and marks it `is-target`.
 
 | File | Writer | Row |
 |---|---|---|
-| `inbox.jsonl` | server | `{"v":1,"id":"q-<utc>-<4 hex>","ts","target","kind":"question"\|"decision"\|"share","finding_id","anchor":{"path","side":"head"\|"base","line_start","line_end"}\|null,"text","decision","step_id","explain":bool,"to":"github"\|"slack"\|null,"where":str\|null}` (`explain`: from a block's 💡 button; needs `anchor`. A `share` row is written by `POST /api/share`: `to` github with `where` `pr` or `line` (refused with 403 unless the review is of a PR, read from `pr.number` or `review-state.json`), or slack with `where` the recipient (refused unless `serve --share slack`); `text` is what the page's dialog sent, at most `SHARE_TEXT_MAX`) |
+| `inbox.jsonl` | server | `{"v":1,"id":"q-<utc>-<4 hex>","ts","target","kind":"question"\|"decision"\|"share","finding_id","anchor":{"path","side":"head"\|"base","line_start","line_end"}\|null,"text","decision","explain":bool,"full_walkthrough":bool,"to":"github"\|"slack"\|null,"where":str\|null}` (`explain`: from a block's 💡 button; needs `anchor`. A `share` row is written by `POST /api/share`: `to` github with `where` `pr` or `line` (refused with 403 unless the review is of a PR, read from `pr.number` or `review-state.json`), or slack with `where` the recipient (refused unless `serve --share slack`); `text` is what the page's dialog sent, at most `SHARE_TEXT_MAX`) |
 | `outbox.jsonl` | `reply` | `{"v":1,"reply_to","ts","text","done"}` |
 | `decisions.json` | server | `{finding_id: {"decision","note","ts"}}` |
 | `viewed.json` | server | `{path: ts}`, one entry per changed file ticked "viewed"; written by `POST /api/viewed`, never read by the session |
@@ -155,50 +155,61 @@ would exceed the row limit into several rows; only the last one can carry
 `done: true`. Rows are split on `\n` only: they are written with
 `ensure_ascii=False`, so U+2028 can appear raw inside a string.
 
-`step_id` is null unless the question was asked while a walkthrough step was
-open in the page; then it names that step (`^[a-z0-9-]{1,40}$`), and the
-session answers in the context of that step.
+`full_walkthrough` is true only on a question written by the Full
+walkthrough dialog's Confirm; it carries no finding or anchor, and the server
+sets its text (`Write the full walkthrough of <what> at <sha12>`). The server
+refuses it with 403 while the page cannot be written, and 409 while it
+exists or an earlier one has no final reply.
 
 `pending` prints the inbox rows whose latest reply is missing or not
 `done`. The session runs it after arming (or re-arming) the Monitor.
 
-## Protocol 3: the walkthrough (`<mailbox>/../walkthrough.json`)
+## Protocol 3: the summary (`<mailbox>/../summary.json`)
 
-The session writes it; the server never calls a model. `walkthrough put
---box <mailbox> --file <f>` parses it against `Walkthrough` and checks, in
-code, against `<mailbox>/target.json` (the served target, written by `serve`
-at publish time and left in place — it holds no secret):
+The session writes it; the server never calls a model. It holds assessments
+and the risk block, never an explanation of the code. `summary put --box
+<mailbox> --file <f>` parses it against `Summary` and checks, in code,
+against `<mailbox>/target.json` (the served target, written by `serve` at
+publish time and left in place — it holds no secret):
 
 1. `base_sha`/`head_sha` equal the served target's.
-2. Every anchor path is a changed file, not binary, and its line range exists
-   at `head_sha` (`side: head`) or `base_sha` (`side: base`).
-3. Every `finding_ids` entry is a loaded finding.
-4. With `complete: true`: every changed file is anchored or in `skipped`, and
-   every `confirmed` or `unverifiable` finding is linked from a step, except
-   those labelled `low-value` or `repeat`, and in a `critical` review those
-   whose `impact` is not `breaks-*`: the page never shows them.
-5. Step ids are unique. (`skipped` paths must be changed files too.)
-6. At most one assessment per topic (except `other`); with `complete: true`,
+2. At most one assessment per topic (except `other`); with `complete: true`,
    the `commits` and `tests` assessments exist, except for a tree target
    (`must_assess()`), which is not a change.
-7. No step's `body_md` contains a loaded finding's id: the page shows each
-   linked finding in full under the step, so the text explains the code.
-8. No assessment uses the retired `size` or `risk` topics
-   (`RETIRED_TOPICS`); files written before 0.22 that use them still load.
-9. Every assessment title is at most `TITLE_MAX` (32) characters
+3. No assessment uses the retired `size` or `risk` topics
+   (`RETIRED_TOPICS`).
+4. Every assessment title is at most `TITLE_MAX` (32) characters
    (`models.ASSESSMENT_TITLE_MAX`, which the schema advertises).
-10. With `complete: true`, the `risk` block exists, except for a tree target.
+5. With `complete: true`, the `risk` block exists, except for a tree target.
 
-Any failure → exit 2, every problem listed with its step id, nothing written.
-Otherwise the file is replaced atomically (0600). `GET
-/api/targets/<slug>/walkthrough` returns it (404 while absent); the page polls
-it, so a new walkthrough never restarts the server. `walkthrough status`
-prints the target's shas, the `paths:` line (`server.paths_status_line` over
-`inspect_paths`: `accepted <N> (<file>)` followed by each path's id, entry
-name and kind, `stale <commit> (<file>)`, `invalid (<file>)` or `none`), what is not yet covered, the missing assessments,
-the `risk:` block (or `missing`), the `repo tiers:` that `.review-risk.toml`
-at the base commit sets (or why it was ignored), the measured badges and
-each commit's subject.
+Any failure → exit 2, every problem listed, nothing written. Otherwise the
+file is replaced atomically (0600). `GET /api/targets/<slug>/summary` returns
+it (404 while absent); the page polls it, so a new summary never restarts the
+server. `summary status` prints the target's shas, the `paths:` line
+(`server.paths_status_line` over `inspect_paths`: `accepted <N> (<file>)`,
+`stale <commit> (<file>)`, `invalid (<file>)` or `none`), four `full
+walkthrough` lines, the missing assessments, the `risk:` block (or
+`missing`), the `repo tiers:` that `.review-risk.toml` at the base commit
+sets (or why it was ignored), the measured badges and each commit's subject.
+
+## Protocol 4: the full walkthrough (`<mailbox>/full-walkthrough/<head_sha>/`)
+
+`summary.full_walkthrough()` reads the directory on every call: `ready` when
+it holds exactly one `*-walkthrough.html` whose last `PAGE_TAIL_BYTES` hold
+`</html>`, `unavailable` when it holds several, `requested` while a
+`full_walkthrough` inbox row has no final reply, else `absent`. It also
+builds the codebase-walkthrough command that writes the page there (`--commit
+<head>` for a tree, `--scope pr --expect-head <head>` for a change, always
+`--max-usd FULL_WALKTHROUGH_MAX_USD`, $50) and finds an earlier run of the
+same commit under `full-walkthrough/runs/`. `GET
+/api/targets/<slug>/full-walkthrough` returns the state, and the page's url
+when ready. `GET /full-walkthrough/<page_key>/<slug>` serves the page under
+`PAGE_CSP`: a sandbox without `allow-same-origin`, so the page has an opaque
+origin and cannot read the viewer's token or call its API; script and style
+inline and from cdnjs, fonts from cdnjs and Google Fonts (`template_origins()`
+names every origin the codebase-walkthrough template uses), `connect-src
+'none'`. `page_key` is a second random secret, compared with
+`hmac.compare_digest`; `Viewer.redact()` removes it from every log line.
 
 `/api/targets` lists each target's slug, label, counts and its `run` object
 (null when the file has none), so the page can total the Run block across
@@ -264,7 +275,7 @@ Request lines go to DEBUG. Unexpected handler errors log at ERROR with
 {"error": "internal"}`.
 
 `log_event("review-viewer", …)` fires for exactly these events. No field ever
-holds question, answer or walkthrough text.
+holds question, answer or summary text.
 
 | event | message (example) | fields |
 |---|---|---|
@@ -272,7 +283,7 @@ holds question, answer or walkthrough text.
 | `reuse` | `viewer already running for <slug>; reused it` | `port, owner_session` |
 | `question` | `question q-… on finding 3fa2c91b0e` | `target, finding_id, chars` |
 | `reply` | `reply to q-… (final)` | `target, reply_to, chars, done` |
-| `walkthrough` | `walkthrough for <slug>: 5 steps (complete)` | `target, steps, complete` |
+| `summary` | `summary for <slug> (complete)` | `target, complete` |
 | `decision` | `finding 3fa2c91b0e rejected` | `target, finding_id, decision` |
 | `share` | `share q-…: finding 3fa2c91b0e to PR #7 line` | `target, finding_id, to, chars` |
 | `idle_stop` | `viewer stopped after 30 min with no open page` | `idle_minutes` |
@@ -293,10 +304,10 @@ commit and a PR head under `refs/pull/7/head`, for target resolution;
 | `test_gitdata.py` | diff parsing, file views (unchanged, binary and large files too), `repo_files`, `definitions` per language form, `parse_target`/`resolve_target` |
 | `test_stats.py` | path classes, numstat parsing (renames, binary), each badge's thresholds, check counts, stats on the fixture repo |
 | `test_tree_review.py` | `serve --tree [--path]`, a subdirectory `--repo`, no commits, every file added on a live server |
-| `test_walkthrough.py` | each `walkthrough put` rule, the CLI, the route, `step_id` questions |
-| `test_walkthrough_module.py` | a codebase-walkthrough's `walkthrough.json` (`fixtures/module-walkthrough.json`, over that skill's own fixture workspace) passes every check as a tree target |
-| `test_serve_targets.py` | review lookup (match, stale, none) and the `walkthrough:` stdout line |
+| `test_summary.py` | each `summary put` rule, the CLI, the route |
+| `test_full_walkthrough.py` | each full walkthrough state, the ask rules per state, the page route and its CSP (every origin of a page with Google Fonts allowed), the key kept out of logs, stdout and the mailbox, the status lines and command for a tree, a PR and a range, the SKILL.md rules |
+| `test_serve_targets.py` | review lookup (match, stale, none) and the `summary:` stdout line |
 | `test_server.py` (also `serve` in a subprocess: `--share slack` reaching the page, a saved review's `review-state.json` turning GitHub on, a `repo_path` that no longer exists), `test_mailbox.py`, `test_models.py`, `test_logging.py`, `test_netinfo.py` | the server, mailbox, contracts, logs, container detection |
 | `test_checks.py` | the `checks.v1` contract, loading it beside findings (present, absent, invalid, other commits), `verifier_citations` |
-| `test_paths.py` | `paths.json` beside findings: every accept, stale and invalid case with the payload and the log, the fixture against `PathsResult`, the files and lines a path opens, the `walkthrough status` `paths:` line, the SKILL.md path guidance |
+| `test_paths.py` | `paths.json` beside findings: every accept, stale and invalid case with the payload and the log, the fixture against `PathsResult`, the files and lines a path opens, the `summary status` `paths:` line, the SKILL.md path guidance |
 | `logic.test.js` (via `test_logic_js.py`) | the page's pure functions, under node, and that the help dialog in `index.html` has every section a `?` opens and defines every value the schemas allow. No test loads `app.js` (there is no DOM here), so a few tests read its source to hold its call sites to the tested helpers: the unfiltered findings list, the badges, the share request |

@@ -8,6 +8,12 @@ the review, and carries messages: questions and decisions from the page go to
 Every `/api/*` request needs the per-start token in `X-Review-Token`. The token
 is written only to `server.token` and `open.html` (both 0600, deleted on exit)
 and never printed or logged: the session's stdout is its transcript.
+
+The full walkthrough page is served at `/full-walkthrough/<page_key>/<slug>`, a
+navigation that cannot send the token header. `page_key` is a second secret per
+start, held only in memory and handed to the page by the token-checked
+`/api/targets/<slug>/full-walkthrough`; it is never written, printed or logged.
+The page gets its own CSP, `PAGE_CSP`, whose `sandbox` gives it an opaque origin.
 """
 
 from __future__ import annotations
@@ -53,12 +59,12 @@ from .models import (
     ChecksFile,
     FindingsFile,
     InboxRow,
-    Walkthrough,
+    Summary,
     findings_digest,
     load_checks,
 )
 from .stats import PR_BADGE_IDS, pr_badges
-from .walkthrough import Served, served_path, walkthrough_path
+from .summary import Served, full_walkthrough, served_path, summary_path
 
 log = logging.getLogger(__name__)
 
@@ -66,7 +72,6 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 COMPONENT = "review-viewer"
 MAX_QUESTION_CHARS = 8000
 MAX_BODY_BYTES = 64 * 1024
-STEP_ID_RE = re.compile(r"^[a-z0-9-]{1,40}$")
 SHARE_RECIPIENT = re.compile(SHARE_RECIPIENT_RE)
 REJECT_LOG_INTERVAL = 60.0
 # However many pages ask, GitHub is asked about one PR at most this often.
@@ -82,6 +87,51 @@ CSP = (
     "style-src 'self' https://cdnjs.cloudflare.com; img-src 'self' data:; font-src 'self'; "
     "connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 )
+
+
+# The codebase-walkthrough page's template: the https origins it loads scripts
+# and styles from are the ones PAGE_CSP allows.
+WALKTHROUGH_TEMPLATE = (
+    Path(__file__).resolve().parents[3]
+    / "codebase-walkthrough"
+    / "scripts"
+    / "templates"
+    / "walkthrough.html"
+)
+# A design system's fonts.css, inlined into the page, loads from Google Fonts:
+# the stylesheet from the first origin, the font files from the second.
+FONT_STYLE_ORIGINS = ("https://fonts.googleapis.com",)
+FONT_FILE_ORIGINS = ("https://fonts.gstatic.com",)
+_HTTPS_ORIGIN = re.compile(r"https://[A-Za-z0-9.-]+(?::\d+)?")
+
+
+def template_origins(path: Path = WALKTHROUGH_TEMPLATE) -> tuple[str, ...]:
+    """The https origins *path* names, sorted; () with one warning when it cannot be read."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        log.warning("cannot read the walkthrough template %s: %s", path, exc)
+        return ()
+    return tuple(sorted({m.group(0).lower() for m in _HTTPS_ORIGIN.finditer(text)}))
+
+
+def page_csp(origins: tuple[str, ...]) -> str:
+    """The CSP of the full walkthrough page: a sandbox (an opaque origin, so the
+    page cannot call /api), inline script and style for the template, and only
+    the template's origins plus Google Fonts for what the page loads."""
+    o = " ".join(origins)
+    styles = " ".join((*origins, *FONT_STYLE_ORIGINS))
+    fonts = " ".join((*origins, *FONT_FILE_ORIGINS))
+    return (
+        "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox; "
+        f"default-src 'none'; script-src 'unsafe-inline' {o}; "
+        f"style-src 'unsafe-inline' {styles}; img-src data: {o}; font-src {fonts}; "
+        "connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+    ).replace("  ", " ")
+
+
+PAGE_CSP = page_csp(template_origins())
+FULL_WALKTHROUGH_PREFIX = "/full-walkthrough/"
 
 
 class ViewerHTTPServer(ThreadingHTTPServer):
@@ -152,18 +202,26 @@ class TargetState:
                         ] + [b.to_dict() for b in pr_badges(self.pr)]
             return {"pr": self.pr, "stats": self.stats}
 
-    def walkthrough(self) -> Walkthrough | None:
-        """The walkthrough `walkthrough put` last wrote, or None. It was
-        checked when it was put; a file that no longer parses is treated as
-        absent rather than served half-read."""
-        path = walkthrough_path(self.mailbox.dir)
+    def summary(self) -> Summary | None:
+        """The summary `summary put` last wrote, or None. It was checked when
+        it was put; a file that no longer parses is treated as absent rather
+        than served half-read."""
+        path = summary_path(self.mailbox.dir)
         try:
-            return Walkthrough.model_validate_json(path.read_text(encoding="utf-8"))
+            return Summary.model_validate_json(path.read_text(encoding="utf-8"))
         except FileNotFoundError:
             return None
         except (OSError, ValueError) as exc:
-            log.warning("walkthrough for %s does not parse: %s", self.slug, exc)
+            log.warning("summary for %s does not parse: %s", self.slug, exc)
             return None
+
+    def full_walkthrough(self) -> dict:
+        """summary.full_walkthrough for this target, read from disk on every call."""
+        return full_walkthrough(
+            self.mailbox.dir,
+            Served(self.findings, self.pr, self.notice, self.stats),
+            self.pr_number,
+        )
 
 
 @dataclass
@@ -181,6 +239,9 @@ class Viewer:
     # `serve --share slack`: the session that started the viewer has the
     # multiplai-messaging:slack skill, so the page may ask it to send to Slack.
     share_slack: bool = False
+    # The full walkthrough route's secret (see the module docstring). Never
+    # written, printed or logged; `redact` removes it from anything logged.
+    page_key: str = field(default_factory=lambda: secrets.token_urlsafe(32), repr=False)
     _rejects: dict[int, float] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -204,9 +265,16 @@ class Viewer:
             "share_slack": self.share_slack,
         }
 
+    def redact(self, text: str) -> str:
+        """*text* with the page key replaced by `<key>`."""
+        return text.replace(self.page_key, "<key>")
+
     def note_reject(self, status: int, route: str, reason: str) -> None:
         """Log a refused request, at most once a minute per status code, so a
         scanner hitting the port cannot flood activity.log."""
+        route = self.redact(route)
+        if route.startswith(FULL_WALKTHROUGH_PREFIX):
+            route = FULL_WALKTHROUGH_PREFIX + "<key>/<slug>"
         now = time.monotonic()
         with self._lock:
             last = self._rejects.get(status)
@@ -305,8 +373,8 @@ def paths_beside(review_dir: Path, head_sha: str | None) -> PathsResult | None:
 
 
 def paths_status_line(status: PathsStatus, path: Path) -> str:
-    """The `paths:` line of `walkthrough status`: the verdict the viewer loads
-    paths.json by, so the session's walkthrough uses the same file or none."""
+    """The `paths:` line of `summary status`: the verdict the viewer loads
+    paths.json by (its Paths tab)."""
     if status.status == "accepted":
         return f"paths: accepted {len(status.result.paths)} ({path})"
     if status.status == "stale":
@@ -365,18 +433,18 @@ def make_handler(viewer: Viewer):
         sys_version = ""
 
         def log_message(self, fmt, *args):  # stdlib access log → DEBUG only
-            log.debug("%s " + fmt, self.client_address[0], *args)
+            log.debug("%s %s", self.client_address[0], viewer.redact(fmt % args))
 
         # --- responses --------------------------------------------------------
 
-        def _send(self, status: int, body: bytes, ctype: str) -> None:
+        def _send(self, status: int, body: bytes, ctype: str, csp: str = CSP) -> None:
             self.send_response(status)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.send_header("Referrer-Policy", "no-referrer")
             self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("Content-Security-Policy", CSP)
+            self.send_header("Content-Security-Policy", csp)
             self.end_headers()
             self.wfile.write(body)
 
@@ -454,6 +522,8 @@ def make_handler(viewer: Viewer):
                         viewer.last_seen = time.monotonic()
                     body = self._body() if method == "POST" else {}
                     return self._api(method, route, parse_qs(url.query), body)
+                if method == "GET" and route.startswith(FULL_WALKTHROUGH_PREFIX):
+                    return self._full_walkthrough_page(route)
                 if method == "GET":
                     return self._static(route)
                 raise _Reject(405, "method not allowed")
@@ -462,11 +532,34 @@ def make_handler(viewer: Viewer):
                     viewer.note_reject(rej.status, route, rej.log_reason)
                 self._json({"error": rej.error}, rej.status)
             except Exception:
-                log.error("unhandled error on %s %s", method, route, exc_info=True)
+                log.error(
+                    "unhandled error on %s %s",
+                    method,
+                    viewer.redact(route),
+                    exc_info=True,
+                )
                 try:
                     self._json({"error": "internal"}, 500)
                 except OSError:
                     pass
+
+        def _full_walkthrough_page(self, route: str) -> None:
+            """The full walkthrough page, when the key, the slug and the state are right; else 404.
+            Not activity: it does not reset the idle timer."""
+            key, _, slug = route[len(FULL_WALKTHROUGH_PREFIX) :].partition("/")
+            state = viewer.targets.get(slug)
+            if state is None or not hmac.compare_digest(
+                key.encode("utf-8"), viewer.page_key.encode("utf-8")
+            ):
+                raise _Reject(404, "not found")
+            fw = state.full_walkthrough()
+            if fw["state"] != "ready":
+                raise _Reject(404, "not found")
+            try:
+                body = Path(fw["page"]).read_bytes()
+            except OSError:
+                raise _Reject(404, "not found")
+            self._send(200, body, "text/html; charset=utf-8", PAGE_CSP)
 
         def _static(self, route: str) -> None:
             name = "index.html" if route in ("/", "/index.html") else None
@@ -513,12 +606,28 @@ def make_handler(viewer: Viewer):
                         return self._json(
                             self._target(rest[: -len("/pr")]).refresh_pr()
                         )
-                    if rest.endswith("/walkthrough"):
-                        state = self._target(rest[: -len("/walkthrough")])
-                        wt = state.walkthrough()
-                        if wt is None:
-                            raise _Reject(404, "no walkthrough yet")
-                        return self._json(wt.model_dump(mode="json"))
+                    if rest.endswith("/summary"):
+                        state = self._target(rest[: -len("/summary")])
+                        sm = state.summary()
+                        if sm is None:
+                            raise _Reject(404, "no summary yet")
+                        return self._json(sm.model_dump(mode="json"))
+                    if rest.endswith("/full-walkthrough"):
+                        state = self._target(rest[: -len("/full-walkthrough")])
+                        fw = state.full_walkthrough()
+                        return self._json(
+                            {
+                                "state": fw["state"],
+                                "reason": fw["reason"],
+                                "kind": fw["kind"],
+                                "what": fw["what"],
+                                "commit": fw["commit"],
+                                "request_id": fw["request_id"],
+                                "url": f"{FULL_WALKTHROUGH_PREFIX}{viewer.page_key}/{state.slug}"
+                                if fw["state"] == "ready"
+                                else None,
+                            }
+                        )
                     state = self._target(rest)
                     return self._json(
                         {
@@ -628,16 +737,29 @@ def make_handler(viewer: Viewer):
                 )
             except ValidationError:
                 raise _Reject(400, "invalid anchor")
-            step_id = body.get("step_id")
-            if step_id is not None:
-                if not isinstance(step_id, str) or not STEP_ID_RE.match(step_id):
-                    raise _Reject(400, "invalid step_id")
-                wt = state.walkthrough()
-                if wt is None or not any(s.id == step_id for s in wt.steps):
-                    raise _Reject(404, "unknown step")
             explain = body.get("explain") is True
             if explain and anchor is None:
                 raise _Reject(400, "explain needs the block's anchor")
+            wants_page = body.get("full_walkthrough") is True
+            if wants_page:
+                if finding_id is not None or anchor is not None or explain:
+                    raise _Reject(
+                        400,
+                        "full_walkthrough goes with no finding_id, anchor or explain",
+                    )
+                fw = state.full_walkthrough()
+                if fw["state"] == "unavailable":
+                    raise _Reject(403, fw["reason"])
+                if fw["state"] == "ready":
+                    raise _Reject(409, "the full walkthrough already exists")
+                if fw["state"] == "requested":
+                    raise _Reject(
+                        409,
+                        f"a full walkthrough is already requested ({fw['request_id']})",
+                    )
+                text = (
+                    f"Write the full walkthrough of {fw['what']} at {fw['commit'][:12]}"
+                )
             row = InboxRow(
                 id=new_question_id(),
                 ts=utc_now(),
@@ -646,22 +768,18 @@ def make_handler(viewer: Viewer):
                 finding_id=finding_id,
                 anchor=anchor,
                 text=text,
-                step_id=step_id,
                 explain=explain,
+                full_walkthrough=wants_page,
             )
             state.mailbox.append_inbox(row)
             about = (
-                f"block {anchor.path}:{anchor.line_start}"
+                "the full walkthrough"
+                if wants_page
+                else f"block {anchor.path}:{anchor.line_start}"
                 if explain
                 else f"finding {finding_id}"
                 if finding_id
-                else (
-                    f"step {step_id}"
-                    if step_id
-                    else (
-                        f"{anchor.path}:{anchor.line_start}" if anchor else "the review"
-                    )
-                )
+                else (f"{anchor.path}:{anchor.line_start}" if anchor else "the review")
             )
             log_event(
                 COMPONENT,
@@ -899,7 +1017,7 @@ def publish(viewer: Viewer, urls: list[tuple[str, str]]) -> None:
         write_private(box.token_file, viewer.token + "\n")
         write_private(box.open_html, open_page_html(urls[0][0], viewer.token))
         write_private(box.server_json, json.dumps(record, indent=2) + "\n")
-        # What `walkthrough put` checks against. Kept after exit: no secret.
+        # What `summary put` checks against. Kept after exit: no secret.
         write_private(
             served_path(box.dir),
             Served(state.findings, state.pr, state.notice, state.stats).to_json(),

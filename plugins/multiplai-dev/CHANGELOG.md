@@ -15,6 +15,35 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.103.0] - 2026-10-23
+
+### Removed
+- **review-viewer no longer shows a walkthrough the session writes.** The
+  Reviews tab, its steps, the Overview box, the `]`/`[` keys and mermaid are
+  gone, and so are `walkthrough put|status` and `walkthrough.v1`. The session
+  writes no explanation of the code for the viewer.
+- codebase-walkthrough writes no `walkthrough.json` for a module.
+
+### Added
+- **A Full walkthrough row on the review-viewer's Summary tab**, for a PR, a
+  branch, unpushed commits, a range or a directory. When the codebase-walkthrough
+  page of what is viewed exists at the viewed commit, it opens in a new tab,
+  served by the viewer in a sandbox at a second secret address. When it does
+  not, a dialog says what writing it does (the session runs
+  codebase-walkthrough, which sends the repository's code to a model, makes
+  paid model calls stopping at $50, searches no other repository, and for a PR
+  runs `gh pr view`); Confirm asks the session to run it, and the session
+  resumes or re-renders an earlier run of the same commit instead of paying
+  twice.
+
+### Changed
+- **The session writes `summary.json`** (`summary put|status`, schema
+  `summary.v1`): only its assessments of the commits and the tests and the
+  risk block. `summary status` also prints the full walkthrough's state, its
+  folder, an earlier run of the commit and the command that writes it.
+- buildme's `regenerate_walkthroughs` commits the regenerated HTML page and
+  `-paths.json` with the Markdown.
+
 ## [0.102.0] - 2026-10-23
 
 ### Added
