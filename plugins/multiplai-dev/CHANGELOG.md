@@ -27,6 +27,10 @@ time, not derived from a tag.
   A `pytest.fail()` in a fixture or at module level is still a setup or
   collection error, and NameError or TypeError from the test's own code is
   still not a right reason.
+- A findings round whose fix block failed and was skipped no longer writes
+  "All N blocks implemented successfully" to `build-progress.md`. The
+  COMPLETE line now says how many blocks were implemented and names each
+  failed, skipped block.
 
 ## [0.105.1] - 2026-10-23
 
