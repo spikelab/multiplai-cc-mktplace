@@ -226,7 +226,30 @@ def _ticket_refs(args: argparse.Namespace) -> dict[str, str] | None:
     return refs
 
 
+def _component_refusal(name: str, command: str) -> str:
+    """Why *name* is refused, or "": a `/` in it. One run writes and revises a
+    change with all its components, so `<change>/<component>` names no run of
+    its own; normalizing it would run the two together
+    (`word-freq/word-frequencies` became `word-freqword-frequencies`)."""
+    if "/" not in name:
+        return ""
+    change, _, component = name.partition("/")
+    hint = (
+        f" {name} names the component {component} of the change {change}: "
+        f"run `{command} {change}`."
+        if change.strip(".") and component and "/" not in component
+        else ""
+    )
+    return (
+        f"{name} is not a change name: a change name has no '/', and pm-spec "
+        f"runs a change with all its components.{hint}"
+    )
+
+
 async def _dispatch(args: argparse.Namespace) -> int:
+    if why := _component_refusal(args.change, args.command):
+        print(f"ERROR: {why}", flush=True)
+        return EXIT_REFUSED
     # Checked before anything is written (row S6).
     refs = _ticket_refs(args) if args.command == "resume" else {}
     if refs is None:

@@ -1537,7 +1537,7 @@ def _record_implementation_note(
     # The requirements go back to pm-spec: the issue is written to
     # spec-issues.md and `.change.yaml` `spec_issues` set, and the build
     # stops with SPEC:ISSUES (exit 4) once the engine returns (row S12).
-    from .readiness import write_issues
+    from .readiness import pm_spec_change, write_issues
 
     satisfies = ", ".join(block.satisfies) or "(no Satisfies line)"
     try:
@@ -1562,7 +1562,7 @@ def _record_implementation_note(
         f"not say (or says otherwise), so the spec is decided by pm-spec "
         f"rather than steered around in code.\n\n"
         f"Reported surprise:\n{note.surprises}\n\n"
-        f"Next: `/multiplai-pm:pm-spec revise {config.change_name}` reads "
+        f"Next: `/multiplai-pm:pm-spec revise {pm_spec_change(config.change_name)}` reads "
         f"{issues or 'spec-issues.md'}, or set "
         f"`respec: {{halt_on_contradiction: false}}` in specs/config.yaml to let "
         f"the build continue and collect the delta into respec.md instead."

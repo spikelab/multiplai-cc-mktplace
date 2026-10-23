@@ -39,6 +39,7 @@ from multiplai_core.untrusted import defang
 from .. import git_ops
 from ..change_manager import requirement_sources
 from ..config import BuildConfig
+from ..readiness import pm_spec_change
 from .models import SpecIssue, TriageRecord, Verdict
 
 log = logging.getLogger(__name__)
@@ -55,7 +56,7 @@ def issues_path(change_dir: Path) -> Path:
 
 
 def revise_command(config: BuildConfig) -> str:
-    return f"/multiplai-pm:pm-spec revise {normalize_change_name(config.change_name)}"
+    return f"/multiplai-pm:pm-spec revise {normalize_change_name(pm_spec_change(config.change_name))}"
 
 
 def short_id(record: TriageRecord) -> str:

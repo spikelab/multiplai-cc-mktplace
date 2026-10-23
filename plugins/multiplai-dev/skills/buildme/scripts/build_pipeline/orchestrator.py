@@ -2029,7 +2029,8 @@ def _setup_worktree(config: BuildConfig, state: BuildState) -> None:
             raise git_ops.GitLifecycleError(
                 f"{config.change_name} records no ticket ref, and buildme names the branches "
                 "it makes <TICKET>-<change>; run /multiplai-pm:pm-spec resume "
-                f"{config.change_name} --ticket-ref <ticket id>, then the build again"
+                f"{readiness.pm_spec_change(config.change_name)} --ticket-ref <ticket id>, "
+                "then the build again"
             )
         refusal = (
             None
@@ -2041,7 +2042,7 @@ def _setup_worktree(config: BuildConfig, state: BuildState) -> None:
         if refusal:
             raise git_ops.GitLifecycleError(
                 f"{refusal}; give {config.change_name} a ticket id git takes "
-                f"(/multiplai-pm:pm-spec resume {config.change_name} --ticket-ref "
+                f"(/multiplai-pm:pm-spec resume {readiness.pm_spec_change(config.change_name)} --ticket-ref "
                 "<ticket id>), then run the build again"
             )
         # An epic's child: `<TICKET>-<child>`. A single change built again

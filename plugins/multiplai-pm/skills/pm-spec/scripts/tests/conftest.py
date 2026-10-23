@@ -180,9 +180,16 @@ def default_proposal(prompt: str) -> str:
     return proposal(sources=list(PRD_SECTIONS) if "## PRD (prd.md)" in prompt else None)
 
 
+def rewrite_answer(text: str) -> str:
+    """A rewrite answer holding *text* as the file (`rewrite.parse_answer`)."""
+    from pm_spec_pipeline.rewrite import BEGIN, END
+
+    return f"{BEGIN}\n{text.rstrip(chr(10))}\n{END}\n"
+
+
 def default_rewrite(prompt: str, label: str) -> str:
     target = label.rsplit(":", 1)[1]
-    return specs(rule=f"the rewritten {target}")
+    return rewrite_answer(specs(rule=f"the rewritten {target}"))
 
 
 DEFAULTS = {

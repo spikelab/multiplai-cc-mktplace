@@ -68,6 +68,68 @@ class TestCommit:
         ):
             git_ops.commit_change_dir(repo, path.parent, "m")
 
+    def test_only_pm_specs_own_files_are_committed(self, repo):
+        cdir = repo / "specs" / "changes" / "c"
+        ours = [
+            "proposal.md",
+            ".change.yaml",
+            "components.md",
+            "prototype/screen.png",
+            "components/a/plan.md",
+            "components/a/specs.md",
+            "components/a/.change.yaml",
+            "components/a/spec-issues.resolved-0123456789ab.md",
+            "requirements/cap.md",
+        ]
+        buildmes = [
+            "components/a/.build-state.json",
+            "components/a/.board.json",
+            "components/a/design.md",
+            "components/a/tasks.md",
+            "components/a/reviews/r1.md",
+            "notes.txt",
+        ]
+        for rel in ours + buildmes:
+            write(cdir / rel, "x\n")
+        assert git_ops.commit_change_dir(repo, cdir, "m")
+        committed = git(repo, "show", "--name-only", "--format=", "HEAD").split()
+        assert sorted(committed) == sorted(f"specs/changes/c/{r}" for r in ours)
+        untracked = git(repo, "status", "--porcelain", "-uall", "--", "specs")
+        assert sorted(line.split()[-1] for line in untracked.splitlines()) == sorted(
+            f"specs/changes/c/{r}" for r in buildmes
+        )
+
+    def test_a_change_dir_holding_only_buildmes_files_commits_nothing(self, repo):
+        cdir = write(repo / "specs" / "changes" / "c" / "proposal.md", "p\n").parent
+        assert git_ops.commit_change_dir(repo, cdir, "m")
+        write(cdir / ".build-state.json", "{}\n")
+        assert git_ops.commit_change_dir(repo, cdir, "m") is None
+
+    def test_a_moved_issues_file_commits_its_removal(self, repo):
+        cdir = write(repo / "specs" / "changes" / "c" / "spec-issues.md", "i\n").parent
+        git(repo, "add", "specs")
+        git(repo, "commit", "-q", "-m", "issues")
+        (cdir / "spec-issues.md").rename(cdir / "spec-issues.resolved-abc.md")
+        assert git_ops.commit_change_dir(repo, cdir, "m")
+        assert git(
+            repo, "show", "--no-renames", "--name-status", "--format=", "HEAD"
+        ).split() == [
+            "D",
+            "specs/changes/c/spec-issues.md",
+            "A",
+            "specs/changes/c/spec-issues.resolved-abc.md",
+        ]
+
+    def test_a_staged_and_edited_file_that_is_not_pm_specs_is_left_alone(self, repo):
+        cdir = write(repo / "specs" / "changes" / "c" / "proposal.md", "p\n").parent
+        design = write(cdir / "design.md", "d\n")
+        git(repo, "add", str(design))
+        design.write_text("edited\n")
+        assert git_ops.commit_change_dir(repo, cdir, "m")
+        assert (
+            git(repo, "diff", "--cached", "--name-only") == "specs/changes/c/design.md"
+        )
+
     def test_the_run_folder_is_never_committed(self, repo, model):
         assert run(repo, "new", "throttle", "--auto") == 0
         assert git(repo, "ls-files", "specs/changes/throttle/.pm-spec") == ""

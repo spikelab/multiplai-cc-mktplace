@@ -10,6 +10,7 @@ from conftest import (
     change_dir,
     git,
     proposal,
+    rewrite_answer,
     run,
     source_dir,
     specs,
@@ -157,7 +158,7 @@ def test_a_rewritten_specs_file_ends_in_one_newline(repo, model):
             ],
         },
     ]
-    model["rewrite"] = lambda prompt, label, kw: specs(rule="fixed").rstrip("\n")
+    model["rewrite"] = lambda prompt, label, kw: rewrite_answer(specs(rule="fixed"))
     assert run(repo, "new", "throttle", "--auto") == 0
     text = (change_dir(repo) / "specs.md").read_text()
     assert "fixed" in text

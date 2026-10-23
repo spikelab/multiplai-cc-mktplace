@@ -21,6 +21,25 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-10-23
+
+### Fixed
+- A change name with a `/` is refused with a message naming the change:
+  `revise word-freq/word-frequencies` now says to run `revise word-freq`
+  (revise reads each component's `spec-issues.md` through its change). It
+  used to run the two names together and report that there is no change
+  `word-freqword-frequencies`.
+- A rewrite (by `revise`, or by the consistency check) no longer writes the
+  model's commentary into a specs file. Each answer is now either the line
+  `UNCHANGED` or the whole file between two delimiter lines; only the text
+  between them is written, and a file answered `UNCHANGED` stays byte for
+  byte as it was. An answer of any other shape, or one that adds text above
+  the first `# Capability:` line, writes nothing and blocks the step (exit 4).
+- pm-spec commits only its own files in a change dir. A `revise` in a build's
+  worktree committed buildme's `.build-state.json` and `.board.json` with the
+  specs; buildme's files (and anything else pm-spec does not write) are now
+  left out of every pm-spec commit.
+
 ## [0.9.0] - 2026-10-23
 
 ### Changed

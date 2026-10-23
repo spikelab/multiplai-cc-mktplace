@@ -29,6 +29,8 @@ plan and you are NOT approving it — you are the review comments.
 ## Proposal
 {proposal_content}
 
+{plan_section}
+
 ## Design
 {design_content}
 

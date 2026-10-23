@@ -54,6 +54,20 @@ time, not derived from a tag.
 - The "Which command to run" table of `--scope codebase`, and the survey agent
   that wrote it.
 
+## [0.105.1] - 2026-10-23
+
+### Fixed
+- A component's design audit and plan review judge it against its own
+  `plan.md`. They read only the change's proposal and use cases, which cover
+  every component, so the audit of one component reported its sibling's
+  capability as missing (critical), wrote it to `spec-issues.md` and stopped
+  the epic with exit 4. Both now get the component's `plan.md` and are told
+  that what the plan leaves to another component is not a gap.
+- Every pm-spec command buildme prints (in `spec-issues.md`, after a TDD
+  contradiction, in the findings round and in the ticket-ref refusals) names
+  the change, `revise word-freq`, never the component path
+  `word-freq/word-frequencies`, which pm-spec refuses.
+
 ## [0.105.0] - 2026-10-23
 
 ### Added

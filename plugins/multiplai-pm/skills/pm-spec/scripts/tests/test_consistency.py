@@ -8,6 +8,7 @@ from conftest import (
     git,
     meta,
     proposal,
+    rewrite_answer,
     run,
     source_dir,
     specs,
@@ -165,7 +166,7 @@ def test_a_new_critical_finding_on_the_recheck_blocks_a_new_major_does_not(
 def test_a_rewrite_that_breaks_the_format_blocks(repo, model, capsys):
     model["consistency"] = {"findings": [finding()]}
     model["components"] = TWO
-    model["consistency:rewrite"] = "not a specs file"
+    model["consistency:rewrite"] = rewrite_answer("not a specs file")
     assert run(repo, "new", "throttle", "--auto") == 4
     assert "is not a specs file" in capsys.readouterr().out
     assert len(model.exactly("consistency")) == 1  # no recheck of a broken rewrite
@@ -262,7 +263,7 @@ def test_removed_in_a_component_with_no_registry_file_blocks_on_the_recheck(
         "# Capability: retry-policy\n\n## REMOVED Requirements",
     )
     model["spec:specs"] = lambda prompt, label, kw: removed
-    model["rewrite"] = lambda prompt, label, kw: removed
+    model["rewrite"] = lambda prompt, label, kw: rewrite_answer(removed)
     model["consistency"] = [{"findings": []}, recheck("resolved")]
     assert run(repo, "new", "throttle", "--auto") == 4
     out = capsys.readouterr().out

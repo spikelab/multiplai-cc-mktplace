@@ -15,7 +15,7 @@ from multiplai_core.specs import change_root
 from build_pipeline.budget import BudgetExceededError
 
 from ..models import PlanReviewFinding, PlanReviewResult
-from ..prompts.design_audit import prior_findings_section
+from ..prompts.design_audit import plan_section, prior_findings_section
 from ..prompts.plan_review import NO_USE_CASES, PLAN_REVIEW_PROMPT
 from ..sdk import agent_call_structured
 
@@ -372,12 +372,17 @@ async def run_plan_review(
     raises (the required stage records a blocked outcome). With `prior` (the
     findings a rewrite was asked to fix) it also asks for a status for each.
     """
-    # A component's proposal and use cases are its change's.
+    # A component's proposal and use cases are its change's, so it is
+    # reviewed against its plan.md, which says what it builds of them.
     root = change_root(change_dir)
     use_cases = _read(root / "use-cases.md", NO_USE_CASES)
 
     prompt = PLAN_REVIEW_PROMPT.format(
         proposal_content=_read(root / "proposal.md", "(no proposal)"),
+        plan_section=plan_section(
+            _read(change_dir / "plan.md", "(no plan.md)"),
+            component=root != Path(change_dir),
+        ),
         design_content=_read(change_dir / "design.md", "(no design)"),
         use_cases_content=use_cases,
         tasks_content=_read(change_dir / "tasks.md", "(no tasks)"),
