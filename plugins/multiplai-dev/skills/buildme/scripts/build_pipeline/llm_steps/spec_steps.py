@@ -15,7 +15,7 @@ from pathlib import Path
 from code_facts import CallFn
 from multiplai_core.specs import change_root
 
-from ..change_manager import requirement_texts
+from ..change_manager import requirement_sources, requirement_texts
 from ..models import PriorAssessment
 from ..prompts.design_audit import (
     DESIGN_AUDIT_PROMPT,
@@ -434,11 +434,11 @@ async def run_tasks_audit(
     design = _read_file(change_dir / "design.md")
 
     # Specs feed the traceability check: every WHEN/THEN must map to a block.
-    specs_parts = []
-    req_dir = change_dir / "requirements"
-    if req_dir.exists():
-        for req_file in sorted(req_dir.glob("*.md")):
-            specs_parts.append(f"### {req_file.name}\n{req_file.read_text()}")
+    # `specs.md#<cap>` or `requirements/<cap>.md`, as the change holds them.
+    specs_parts = [
+        f"### {label}\n{text}"
+        for label, text in requirement_sources(change_dir).items()
+    ]
     specs_content = "\n\n".join(specs_parts) or "(no requirements files)"
 
     prompt = TASKS_AUDIT_PROMPT.format(

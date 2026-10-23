@@ -12,7 +12,7 @@ Two halves, both belonging to the same loop:
 
 **Propose only.** `run_respec_audit` writes exactly one file — `respec.md` —
 and reaches the model through `llm_call`, which grants no tools. There is no
-code path here that can edit `requirements/*.md` or `design.md`; applying a
+code path here that can edit `specs.md`, `requirements/*.md` or `design.md`; applying a
 proposed delta stays a deliberate human (or next-change) decision. Both files
 travel with the change into `archive/<date>-<name>/` and are never merged into
 `registry/`.
@@ -28,6 +28,7 @@ from pathlib import Path
 
 from build_pipeline.budget import BudgetExceededError
 
+from ..change_manager import requirement_texts
 from ..models import ImplementationNote
 from ..prompts.respec import RESPEC_PROMPT
 from ..sdk import llm_call
@@ -139,10 +140,10 @@ def _read(path: Path) -> str:
 
 
 def _read_requirements(change_dir: Path) -> str:
-    req_dir = change_dir / "requirements"
-    if not req_dir.exists():
-        return ""
-    parts = [f"### {f.stem}\n{f.read_text()}" for f in sorted(req_dir.glob("*.md"))]
+    """Each capability's delta, from `specs.md` or `requirements/*.md`."""
+    parts = [
+        f"### {cap}\n{text}" for cap, text in requirement_texts(change_dir).items()
+    ]
     return "\n\n".join(parts)
 
 

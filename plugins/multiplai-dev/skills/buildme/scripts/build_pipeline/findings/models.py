@@ -124,7 +124,7 @@ class SpecIssue(BaseModel):
     command: str  # the pm-spec command that makes the edit
     requirement: str = ""  # as triage named it: `<capability>: <requirement name>`
     requirements_file: str = (
-        ""  # `requirements/<cap>.md`, when the change has that file
+        ""  # `specs.md#<cap>` or `requirements/<cap>.md`, when the change has it
     )
     defers_fix: bool = False  # a code_fix whose fix waits on this change
     appended: bool = True  # False: the file already held this finding's section

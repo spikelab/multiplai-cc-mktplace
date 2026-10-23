@@ -600,6 +600,29 @@ def _sections(text: str) -> list[str]:
     return [line[3:] for line in text.splitlines() if line.startswith("## ")]
 
 
+def _component_with_specs_md(tmp_path) -> Path:
+    """A component of a nested change, its specs in `specs.md` (no `requirements/`)."""
+    d = tmp_path / "specs" / "changes" / "calc" / "components" / "adder"
+    d.mkdir(parents=True)
+    (d / "plan.md").write_text("# Plan: adder\n")
+    (d / "specs.md").write_text("# Capability: calc\n\n" + REQUIREMENTS)
+    return d
+
+
+class TestReadersOfSpecsMd:
+    def test_triage_prompt_holds_the_specs_md_capabilities(self, tmp_path):
+        d = _component_with_specs_md(tmp_path)
+        comment = PRComment(id=1, kind="issue", author="alice", body="sum?")
+        prompt = triage.build_prompt(_config(tmp_path), d, comment)
+        assert "### calc\n## ADDED Requirements" in prompt
+        assert "#### Scenario: two numbers" in prompt
+
+    def test_requirements_file_names_the_specs_md_section(self, tmp_path):
+        d = _component_with_specs_md(tmp_path)
+        assert spec.requirements_file(d, "calc: Sum") == "specs.md#calc"
+        assert spec.requirements_file(d, "other: Thing") == ""
+
+
 class TestSpecStep:
     def test_only_spec_changes_and_conflicting_fixes_need_the_spec(self):
         recs = [

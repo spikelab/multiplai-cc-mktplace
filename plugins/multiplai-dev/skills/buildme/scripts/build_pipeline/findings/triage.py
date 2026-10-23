@@ -15,6 +15,7 @@ from pathlib import Path
 from multiplai_core.untrusted import defang, markdown_notice
 
 from .. import sdk
+from ..change_manager import requirement_texts
 from ..config import BuildConfig
 from ..prompts.findings import TRIAGE_PROMPT
 from .history import earlier_text
@@ -40,10 +41,10 @@ def findings_path(change_dir: Path, round_n: int) -> Path:
 
 
 def _requirements_text(change_dir: Path) -> str:
-    req_dir = Path(change_dir) / "requirements"
-    if not req_dir.is_dir():
-        return "(none)"
-    parts = [f"### {f.stem}\n{f.read_text()}" for f in sorted(req_dir.glob("*.md"))]
+    """Each capability's delta, from `specs.md` or `requirements/*.md`."""
+    parts = [
+        f"### {cap}\n{text}" for cap, text in requirement_texts(Path(change_dir)).items()
+    ]
     text = "\n\n".join(parts) or "(none)"
     return text[:_DOC_CHARS]
 

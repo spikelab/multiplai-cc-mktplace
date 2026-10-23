@@ -29,7 +29,9 @@ time, not derived from a tag.
   component on its own.
 - buildme reads a change's capabilities from the `# Capability: <name>`
   sections of `specs.md`. A component's proposal and use cases are its
-  change's.
+  change's. The tasks audit, the review-findings triage, `spec-issues.md`'s
+  requirements file (`specs.md#<capability>`) and the respec audit read
+  `specs.md` too, not only `requirements/`.
 - The agents that write each block's tests and code get the list of files in
   the change's `prototype/` and are told to match what they show of a UI or
   API.

@@ -12,8 +12,8 @@ requirements.
 
 Each section is written from the triage verdict alone, with no model call:
 its heading names the finding, and its body names the requirements file
-(`requirements/<cap>.md`, only when triage named a capability the change has
-a file for), the requirement as triage named it, the reviewer's comment link
+(`specs.md#<cap>` or `requirements/<cap>.md`, only when triage named a
+capability the change has), the requirement as triage named it, the reviewer's comment link
 and the change triage asks for. A section already in the file under the same
 heading (an earlier round's, or a resumed step's) is not written again, and
 nothing already in the file is rewritten.
@@ -37,6 +37,7 @@ from multiplai_core.specs import (
 from multiplai_core.untrusted import defang
 
 from .. import git_ops
+from ..change_manager import requirement_sources
 from ..config import BuildConfig
 from .models import SpecIssue, TriageRecord, Verdict
 
@@ -92,13 +93,18 @@ def heading(record: TriageRecord) -> str:
 
 
 def requirements_file(change_dir: Path, requirement: str) -> str:
-    """`requirements/<cap>.md` for triage's `<cap>: <name>`, only when the
-    change has that file: the name came from a model."""
+    """Where triage's `<cap>: <name>` is specified: `specs.md#<cap>` when the
+    change's `specs.md` has that capability, else `requirements/<cap>.md`
+    when the change has that file (`requirement_sources`); "" otherwise: the
+    name came from a model."""
     cap = requirement.partition(":")[0].strip()
     if not cap or cap != Path(cap).name:
         return ""
-    rel = f"requirements/{cap}.md"
-    return rel if (Path(change_dir) / rel).is_file() else ""
+    sources = requirement_sources(Path(change_dir))
+    for label in (f"specs.md#{cap}", f"requirements/{cap}.md"):
+        if label in sources:
+            return label
+    return ""
 
 
 def entry(record: TriageRecord, req_file: str) -> str:

@@ -259,6 +259,28 @@ class TestTasksAudit:
         assert findings == []
 
     @pytest.mark.asyncio
+    async def test_prompt_includes_specs_md_capabilities(self, tmp_path):
+        change_dir = self._change_dir(tmp_path, "## 1. TASKS-MARKER block")
+        (change_dir / "specs.md").write_text(
+            "# Capability: cap-a\n\n## ADDED Requirements\n\n"
+            "### Requirement: Keep the form\nThe form keeps the text.\n\n"
+            "#### Scenario: Wake from sleep\n- **WHEN** the laptop wakes\n"
+            "- **THEN** the form still holds the text\n"
+        )
+        config = MagicMock(model="test-model")
+
+        with patch(
+            "build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock
+        ) as mock_llm:
+            mock_llm.return_value = _agent_text("[]")
+            await run_tasks_audit(change_dir, config)
+
+        prompt = mock_llm.call_args[0][0]
+        assert "### specs.md#cap-a" in prompt
+        assert "Scenario: Wake from sleep" in prompt
+        assert "(no requirements files)" not in prompt
+
+    @pytest.mark.asyncio
     async def test_returns_layering_findings(self, tmp_path):
         change_dir = self._change_dir(
             tmp_path, "## 1. Database schema\n## 2. API layer\n## 3. Wiring"
