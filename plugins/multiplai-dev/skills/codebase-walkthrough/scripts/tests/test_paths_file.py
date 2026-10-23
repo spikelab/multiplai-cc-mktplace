@@ -16,7 +16,6 @@ import pytest
 from code_facts import Seed
 from fakes import FakeAgents
 from test_paths_stage import (
-    VIEWER_SCHEMA,
     _click_run,
     _paths_body,
     _state,
@@ -234,18 +233,6 @@ def test_a_fully_cached_resume_writes_a_byte_identical_file(tmp_path, monkeypatc
     assert main(["resume", str(run_dir), "--trust-repo"]) == 0
     assert _trace_calls(again) == []
     assert target.read_bytes() == before
-
-
-def test_the_walkthrough_json_does_not_refer_to_the_paths_file(
-    tmp_path, monkeypatch, spy
-):
-    code, _, md_path = _click_run(
-        tmp_path, monkeypatch, FakeAgents(trace_plan=path_fixtures.click_plan())
-    )
-    assert code == 0
-    text = md_path.with_suffix(".json").read_text()
-    jsonschema.validate(json.loads(text), json.loads(VIEWER_SCHEMA.read_text()))
-    assert "paths.json" not in text
 
 
 def test_buildme_scans_only_the_markdown(tmp_path):

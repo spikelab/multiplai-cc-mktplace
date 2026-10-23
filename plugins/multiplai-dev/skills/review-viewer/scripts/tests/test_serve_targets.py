@@ -283,7 +283,7 @@ def test_bad_combinations_exit_2(env, fixture_repo, findings_path):
     assert _load("--target", "no-such-branch", "--repo", str(repo)) == 2
 
 
-def test_serve_prints_the_walkthrough_line_last(env, fixture_repo, tmp_path):
+def test_serve_prints_the_summary_line_last(env, fixture_repo, tmp_path):
     from conftest import free_port
 
     repo, base, head = fixture_repo
@@ -315,19 +315,17 @@ def test_serve_prints_the_walkthrough_line_last(env, fixture_repo, tmp_path):
     try:
         for line in proc.stdout:
             lines.append(line.rstrip("\n"))
-            if line.startswith("walkthrough:"):
+            if line.startswith("summary:"):
                 break
         prefixes = [line.split(":", 1)[0] for line in lines]
         assert prefixes[0] == "open" and prefixes[-3:] == [
             "monitor",
             "pending",
-            "walkthrough",
+            "summary",
         ]
         assert "mailbox" in prefixes and "url" in prefixes
         box = lines[prefixes.index("mailbox")].split(": ", 1)[1]
-        assert (
-            lines[-1] == f"walkthrough: {os.path.dirname(box)}/walkthrough.json (none)"
-        )
+        assert lines[-1] == f"summary: {os.path.dirname(box)}/summary.json (none)"
         served = json.loads(open(os.path.join(box, "target.json")).read())
         assert served["findings"]["target"]["head_sha"] == head
     finally:

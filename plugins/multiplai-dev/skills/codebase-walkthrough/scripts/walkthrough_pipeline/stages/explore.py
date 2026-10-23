@@ -75,6 +75,23 @@ def _unit_prompt(
     state: WalkState, unit_id: str, missing: list[str] | None = None
 ) -> str:
     unit = next(u for u in state.units if u.id == unit_id)
+    if state.target.scope == "change":
+        ch = state.target.change
+        return explore_unit(
+            state.target.package,
+            unit.spans,
+            ExploreOutput,
+            state.options.get("depth", "standard"),
+            missing,
+            path_rule=WS_PATH_RULE,
+            notes=(
+                f"\nThese ranges are what the change touches, with a few lines around each. A path under "
+                f"`{ch.base_key}/` is the file as it was before the change (read it there); the others are "
+                "the files after it. Say what the change does, what it replaces, and what code around it "
+                "depends on it. Cite a line before the change by its `"
+                f"{ch.base_key}/` path.\n"
+            ),
+        )
     lines = ws_lines(state.target)
     spans = [Span.whole(f, lines.get(f, 0)) for f in unit.files]
     return explore_unit(

@@ -327,7 +327,6 @@ body.resizing { cursor: col-resize; user-select: none; }
 .file-row:hover { background: var(--hl-bg); }
 .file-row.selected { background: var(--hl-bg); box-shadow: inset 3px 0 var(--accent); }
 .file-row.selected .file-btn { color: var(--accent); font-weight: 600; }
-.file-row.in-step:not(.selected) { box-shadow: inset 3px 0 var(--border); }
 .file-row.viewed .file-btn, .file-row.viewed .counts { opacity: .55; }
 .file-row .file-btn {
   flex: 1; min-width: 0; min-height: 0; height: 24px;
@@ -635,37 +634,11 @@ pre.sketch {
 .run-stages th, .run-stages td { padding: 2px var(--s2); text-align: right; white-space: nowrap; border-bottom: 1px solid var(--border); }
 .run-stages th:first-child, .run-stages td:first-child { text-align: left; }
 .coverage { font-size: var(--fs-sm); color: var(--muted); margin: var(--s3) 0; }
-.skipped { margin: var(--s1) 0 0; padding-left: 18px; color: var(--muted); }
 
-.walk-steps { list-style: none; padding: 0; margin: 0 0 var(--s3); }
-.walk-steps li { margin: 2px 0; }
-.step-item { display: flex; align-items: flex-start; gap: 10px; width: 100%; text-align: left; background: none; border-color: transparent; padding: 6px var(--s2); }
-.step-item:hover { background: var(--hl-bg); border-color: transparent; }
-.step-item.selected { border-color: var(--accent); background: var(--bg); }
-.step-n {
-  flex-shrink: 0;
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 20px; height: 20px; margin-top: 1px;
-  border-radius: 50%;
-  border: 1px solid var(--border);
-  color: var(--muted);
-  font-size: var(--fs-xs);
-}
-.step-item.selected .step-n { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
-.walk-step { scroll-margin-top: 48px; }
-.walk-step > * { animation: fade var(--t-med) var(--ease); }
-.step-nav { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); margin: var(--s2) 0; }
-.step-nav button { height: var(--ctl-h); min-height: 0; font-size: var(--fs-sm); }
-.step-anchors { display: flex; flex-wrap: wrap; gap: var(--s1) var(--s3); }
-.step-anchors .walk-anchor { max-width: 100%; text-align: left; overflow-wrap: anywhere; }
-.diagram-box { margin: 10px 0; overflow-x: auto; }
-/* Full size: a wide diagram scaled to the panel is unreadable, so the box scrolls. */
-img.diagram { display: block; max-width: none; background: var(--bg); }
-.finding-card { margin-top: var(--s1); }
-.step-finding { margin-top: var(--s2); }
-.step-finding-facts { margin: var(--s1) 0 0 var(--s2); padding-left: var(--s3); border-left: 2px solid var(--border); }
+.full-walk { margin: var(--s3) 0; }
+.full-walk p { margin: var(--s1) 0; }
 
-/* --- markdown prose (overview, reviews, PR text, answers) ----------------------- */
+/* --- markdown prose (assessments, PR text, answers) ------------------------------ */
 
 .md, .a { overflow-wrap: anywhere; min-width: 0; }
 .md > :first-child, .a > :first-child { margin-top: 0; }
@@ -700,7 +673,6 @@ pre:hover > .copy-btn, .copy-btn:focus-visible { opacity: 1; }
 .skel { display: block; height: 12px; margin: var(--s2) 0; border-radius: 4px; background: var(--skel);
   background-image: linear-gradient(90deg, transparent, var(--skel), transparent); background-size: 200% 100%;
   animation: shimmer 1.4s linear infinite; }
-.skel.w90 { width: 90%; } .skel.w75 { width: 75%; } .skel.w60 { width: 60%; } .skel.w40 { width: 40%; }
 .skel.pill { display: inline-block; width: 90px; height: 22px; border-radius: 11px; margin: 0 6px 0 0; }
 .skel-caption { display: flex; align-items: center; gap: var(--s2); font-size: var(--fs-sm); color: var(--muted); margin: var(--s2) 0 var(--s3); }
 .empty-state { text-align: center; color: var(--muted); padding: var(--s6) var(--s4); font-size: var(--fs-sm); }

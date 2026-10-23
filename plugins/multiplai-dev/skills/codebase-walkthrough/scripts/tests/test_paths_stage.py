@@ -13,7 +13,6 @@ import subprocess
 from pathlib import Path
 
 import code_facts
-import jsonschema
 import path_fixtures
 import pytest
 from fakes import FakeAgents
@@ -27,12 +26,6 @@ from walkthrough_pipeline.state import STATE_FILE, load_state
 HOP_ID = re.compile(r"p\d+h\d+")
 TRACE_SCHEMAS = ("TraceAnswer", "FallbackAnswer")
 FIVE = ["sync", "push", "pull", "fetch", "merge"]
-VIEWER_SCHEMA = (
-    Path(__file__).resolve().parents[3]
-    / "review-viewer"
-    / "schema"
-    / "walkthrough.v1.schema.json"
-)
 
 
 def _git_head(repo: Path) -> str:
@@ -252,24 +245,6 @@ def test_paths_section_renders_when_the_writers_return_nothing(
     body = _paths_body(md_path.read_text())
     assert "1 path reaches this module." in body
     assert '<a id="p1h1"></a>`p1h1`' in body and '<a id="p1h2"></a>`p1h2`' in body
-
-
-def test_walkthrough_json_titles_the_step_paths(tmp_path, monkeypatch, spy):
-    code, _, md_path = _click_run(
-        tmp_path, monkeypatch, FakeAgents(trace_plan=path_fixtures.click_plan())
-    )
-    assert code == 0
-    wt = json.loads(md_path.with_suffix(".json").read_text())
-    jsonschema.validate(wt, json.loads(VIEWER_SCHEMA.read_text()))
-    titles = [s["title"] for s in wt["steps"]]
-    assert titles.count("Paths") == 1 and "End-to-end scenarios" not in titles
-    step = next(s for s in wt["steps"] if s["title"] == "Paths")
-    assert {
-        "path": "billing/core.py",
-        "side": "head",
-        "line_start": 4,
-        "line_end": 4,
-    } in step["anchors"]
 
 
 # --- agent mode -------------------------------------------------------------------------------------

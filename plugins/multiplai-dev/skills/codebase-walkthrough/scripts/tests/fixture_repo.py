@@ -243,3 +243,60 @@ def line_of(text: str, needle: str) -> int:
         if needle in line:
             return i
     raise ValueError(needle)
+
+
+# A change on the engine repo, on the branch `feature`: `ack_booking` gains a retry, a new
+# `bookings/retry.py`, `list_webhooks` removed, and `reports/usage.py` calls `ack_booking`.
+CHANGE = {
+    "bookings/client.py": (
+        "import os\n"
+        "\n"
+        "import httpx\n"
+        "from django.conf import settings\n"
+        "\n"
+        "from bookings.retry import with_retry\n"
+        "\n"
+        "BASE_URL = settings.ACME_API_URL\n"
+        "STAGING = settings.ACME_ENV == 'staging'\n"
+        "\n"
+        "\n"
+        "def ack_booking(booking_id):\n"
+        "    key = os.environ.get('ACME_API_KEY')\n"
+        "    return with_retry(\n"
+        "        lambda: httpx.post(f'{BASE_URL}/bookings/{booking_id}/ack', headers={'user-api-key': key})\n"
+        "    )\n"
+    ),
+    "bookings/retry.py": (
+        "def with_retry(call, attempts=3):\n"
+        "    for _ in range(attempts - 1):\n"
+        "        try:\n"
+        "            return call()\n"
+        "        except OSError:\n"
+        "            continue\n"
+        "    return call()\n"
+    ),
+    "reports/usage.py": (
+        "# from bookings.views import webhook  (a comment: not a reference)\n"
+        "from bookings.client import ack_booking\n"
+        "from bookings.models import Reservation\n"
+        "\n"
+        "\n"
+        "def count():\n"
+        "    return Reservation.objects.count()\n"
+        "\n"
+        "\n"
+        "def resend(booking_id):\n"
+        "    return ack_booking(booking_id)\n"
+    ),
+}
+
+
+def change_branch(engine: Path) -> tuple[str, str]:
+    """Commit CHANGE on a new branch `feature` of *engine* and go back to `main`: (base, head)."""
+    base = _git(engine, "rev-parse", "HEAD")
+    _git(engine, "checkout", "-q", "-b", "feature")
+    _write(engine, CHANGE)
+    commit(engine, "ack bookings with a retry")
+    head = _git(engine, "rev-parse", "HEAD")
+    _git(engine, "checkout", "-q", "main")
+    return base, head
