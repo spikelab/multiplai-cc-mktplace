@@ -197,6 +197,27 @@ class FakeAgents:
                     ],
                 }
             )
+        elif "Line ranges in your part of the code:" in prompt:
+            # A change's ranges: one fact citing the first non-blank line of each range.
+            for path, a, b in re.findall(
+                r"^- (\S+?), lines (\d+)-(\d+)", prompt, re.MULTILINE
+            ):
+                lines = (Path(cwd) / path).read_text(encoding="utf-8").split("\n")
+                n = next(
+                    (i for i in range(int(a), int(b) + 1) if lines[i - 1].strip()),
+                    int(a),
+                )
+                cit = {
+                    "path": path,
+                    "line_start": n,
+                    "line_end": n,
+                    "quote": lines[n - 1].strip(),
+                }
+                facts.append({"claim": f"{path} changes here", "citations": [cit]})
+                if "@base/" not in path:
+                    files.append(
+                        {"path": path, "purpose": "changed by the PR", "citation": cit}
+                    )
         else:
             for path, line in re.findall(r"^\[(\S+?):(\d+)\] ", prompt, re.MULTILINE):
                 n = int(line)

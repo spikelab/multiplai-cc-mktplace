@@ -1,6 +1,6 @@
 ---
 name: codebase-walkthrough
-description: Explains a module end to end with a Python pipeline — every repository that calls it, everything it calls, its data stores and config, and the vendor's docs — and keeps only claims whose cited lines are at the commit. Writes a Markdown walkthrough and an HTML page (and a review-viewer file), or compact Markdown for coding agents.
+description: Explains a module, or a PR or commit range (--scope pr), end to end with a Python pipeline — every repository that calls it, everything it calls, its data stores and config, and the vendor's docs — and keeps only claims whose cited lines are at the commit. Writes a Markdown walkthrough and an HTML page (and a review-viewer file), or compact Markdown for coding agents.
 when_to_use: 'Triggers: walk me through this module, explain this codebase, onboard me, codebase tour, walkthrough, /multiplai-dev:codebase-walkthrough'
 disable-model-invocation: true
 ---
@@ -92,8 +92,9 @@ gates never ask a model.
   `Glob` only; the writers get no tools. No agent gets a shell, file edits, or
   web access. This is why it needs `--trust-repo`.
 - **Reads git repositories** with `git rev-parse`, `git show`, `git archive`,
-  `git ls-files` and `git ls-tree` only. It never checks out, fetches, commits or writes to
-  them. It runs `rg` in each repository's working tree to pick which files to
+  `git ls-files`, `git ls-tree`, `git diff`, `git merge-base`, `git log` and
+  `git grep` only. It never checks out, commits or writes to them, and fetches
+  only with `--scope pr --fetch` (`git fetch --quiet origin`). It runs `rg` in each repository's working tree to pick which files to
   parse; what it parses is the commit.
 - **Never reads credentials.** `.env*` files are left out of every search and
   snapshot. From an API collection it reads request names, methods, URLs and
@@ -103,7 +104,10 @@ gates never ask a model.
   private and local addresses. Fetched pages are stored inside
   `<untrusted-content>` fences and treated as data. **It never calls the
   vendor's API.**
-- **Runs local programs**: `git`, `rg`, `ast-grep`, `pyright-langserver`.
+- **Runs local programs**: `git`, `rg`, `ast-grep`, `pyright-langserver`, and
+  with `--scope pr --pr N` the GitHub CLI `gh pr view`, which uses the network
+  and the user's GitHub login. The PR's title and description go to the writer
+  inside `<untrusted-content>` fences, as data.
 - **Writes files** to the run directory, the output directory and the log
   files. The HTML page loads highlight.js and mermaid from
   `cdnjs.cloudflare.com` when a browser opens it.
@@ -133,10 +137,16 @@ the repositories next to it, and re-run with `--trust-repo` only on a yes.
 
 | Arg | Meaning | Default |
 |-----|---------|---------|
-| target | Directory of the module, inside a git repository | required |
+| target | Directory of the module, inside a git repository. With `--scope pr`: the repository | required for a module; for a change, `--repo` or the current directory |
+| `--scope` | `module`, or `pr`: explain a change given by `--pr N` or `--range BASE..HEAD`, read at its head against the merge-base | `module` |
+| `--pr` / `--range` | With `--scope pr`, exactly one: a PR number (needs `gh`), or two commits | none |
+| `--repo` | With `--scope pr`: the repository | the current directory |
+| `--fetch` | With `--scope pr`: `git fetch --quiet origin` first | off |
+| `--expect-head` | With `--scope pr`: refuse to start unless the change's head is this sha | none |
+| `--commit` | Module only: read the directory at this commit instead of HEAD | HEAD |
 | `--depth` | `overview` (skips test files), `standard`, `deep` | `standard` |
-| `--mode` | `human` (Markdown, an HTML page and a review-viewer `walkthrough.json`) or `agent` (compact Markdown for coding agents; no references, docs or paths) | `human` |
-| `--name` | Base file name | the module directory, lower-cased |
+| `--mode` | `human` (Markdown, an HTML page and a review-viewer `walkthrough.json`; a change gets no `walkthrough.json`) or `agent` (compact Markdown for coding agents; no references, docs or paths; a module only) | `human` |
+| `--name` | Base file name | the module directory, lower-cased; `pr-<N>` or `range-<base8>-<head8>` for a change |
 | `--output` | Directory for the walkthrough files | `INBOX/` if it exists, else the current directory |
 | `--search-root` / `--repos` | Where to look for references | the nearest ancestor holding several repositories |
 | `--repo-key` | The module repository's name in the "Commits read" table and every citation | the repository directory's name |
@@ -168,6 +178,23 @@ lacks a required token, or has a text colour below WCAG AA exits 1 with
 `ERROR: design system <path>: …` before any model call. A `resume` uses the
 run's saved folder unless you pass `--design-system-dir` again, and checks it
 first the same way.
+
+For a PR or a commit range, pass `--scope pr` and one of `--pr N` or
+`--range <base>..<head>` instead of the module directory, plus
+`--repo /abs/path/to/repo`:
+
+```bash
+uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/codebase-walkthrough/scripts \
+  python -m walkthrough_pipeline --session-id "{session_id}" \
+  run --scope pr --pr 123 --repo /abs/path/to/repo --trust-repo [--fetch] [--expect-head <sha>] \
+  [--design-system-dir /abs/design-system]
+```
+
+A change's walkthrough has six sections: What changed and why, The path
+through the change, Who is affected, What it does not touch (written by code
+from the diff), Reference, and How this was made. It reads only the lines the
+change touches, with five lines around each, at head and at the merge-base.
+`--pr` without `gh` installed exits 1 and names `--range`.
 
 The first stdout line, `run: <dir>`, is the run directory (state,
 `boundary.json`, `progress.log`); tell the user. While the run is going, check

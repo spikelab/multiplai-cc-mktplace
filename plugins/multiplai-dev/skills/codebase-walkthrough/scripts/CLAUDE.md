@@ -1,6 +1,7 @@
 # codebase-walkthrough scripts — orientation
 
-A pipeline that explains one module. Code finds what the module defines, who
+A pipeline that explains one module, or one change (`run --scope pr`: a PR or a
+commit range, read at its head against the merge-base). Code finds what the module defines, who
 refers to it in every repository nearby, and what the vendor's docs say about
 the APIs it calls. Agents read and explain; gates written in Python re-read
 the commit with `git show` and drop every claim whose quote is not at the cited
@@ -18,12 +19,13 @@ cd plugins/multiplai-dev/skills/codebase-walkthrough/scripts && \
 
 | Module | Does |
 |---|---|
-| `__main__.py` | CLI: `run`, `resume` (`--rewrite`: back to the stage before `write`, dropping its sections, answers and drops, then write and render again), `check`, `render` (rewrites a finished run's four files from its state; no agent, no ledger). Exit codes: 0 done, 1 error/untrusted/stop, 2 budget stop. |
+| `__main__.py` | CLI: `run` (`--scope module|pr`, `--pr`, `--range`, `--repo`, `--fetch`, `--expect-head`, `--commit`; a flag given with the wrong scope is an argparse error), `resume` (`--rewrite`: back to the stage before `write`, dropping its sections, answers and drops, then write and render again), `check`, `render` (rewrites a finished run's four files from its state; no agent, no ledger). Exit codes: 0 done, 1 error/untrusted/stop, 2 budget stop. |
 | `models.py` | Pydantic models and `STAGES`. `WalkState` is the checkpoint. |
-| `target.py` | Resolves the target, lists its files, snapshots a repo with `git archive` (no `.env*`, binaries or files over 2 MB). `git()` runs only `rev-parse`, `show`, `archive`, `ls-files`, `ls-tree`; `tree_files()` is the `ls-tree` list `review-viewer serve --tree` shows. |
+| `target.py` | Resolves the target, lists its files, snapshots a repo with `git archive` (no `.env*`, binaries or files over 2 MB). `git()` runs only `rev-parse`, `show`, `archive`, `ls-files`, `ls-tree`, `diff`, `merge-base`, `log`, `grep`; `resolve_change` resolves `--pr`/`--range` to shas with `lib/git_targets` before any run directory exists, and `build_change_target` lists the changed files and snapshots the base side under `<key>@base` (`snapshot_paths`); `tree_files()` is the `ls-tree` list `review-viewer serve --tree` shows. |
+| `change.py` | A change's scope, code only: `changed_definitions` (Python functions and classes holding an added line), `change_symbols`, `change_spans` (each hunk at head and at base, five lines around), `change_units` (a file's spans stay in one unit). |
 | `repos.py` | Finds repos under the search root (depth 4); the default root is the nearest ancestor holding several repos. |
 | `symbols.py` | Python `ast` over the target: functions, classes, urls, celery tasks, models, outbound HTTP paths, settings, env vars, cache keys. |
-| `references.py` | `rg` picks candidate files (intersected with `git ls-files`); `ast`, `ast-grep` or whole-identifier SQL matching confirms each hit, reading the file at HEAD. |
+| `references.py` | `rg` picks candidate files (intersected with `git ls-files`); `ast`, `ast-grep` or whole-identifier SQL matching confirms each hit, reading the file at HEAD. For a change, `scan_callers` replaces all of it: `git grep` at each repo's commit picks the files naming a changed function or class, `ast` confirms each call or `from … import` of it. |
 | `lsp.py` | `pyright-langserver` references inside the target's own repo, one request at a time (pyright cancels an in-flight one), under one time limit. |
 | `gates.py` | Every gate. Must never import or call `sdk`. `citation_gate` checks `split_path` itself, then calls `multiplai_core.citations.check_quote`; `file_at_commit`/`lines_at_commit` wrap core `file_at`/`lines_at`, whose cache is `gates.file_at.cache_clear()`. |
 | `partition.py` | Splits the target into units of at most `--unit-lines`; a directory stays whole when it fits. |

@@ -26,7 +26,7 @@ from . import design
 from .check import LINK
 from .gates import CITE_ID, file_at_commit, lines_at_commit, sections_gate
 from .models import Citation, RepoInfo, WalkState, hop_id
-from .stages.write import HUMAN_SECTIONS, citations_for_write, required_titles
+from .stages.write import citations_for_write, human_sections, required_titles
 from .target import git, github_web_base, tree_files
 
 LANG = {
@@ -700,6 +700,100 @@ def _prose(state: WalkState, lk: Linker, key: str) -> list[str]:
     return [lk.expand(p) + "\n" for p in s.paragraphs] if s else []
 
 
+def _md_affected(state: WalkState, lk: Linker) -> MdSection:
+    """Who is affected: the writer's text, then the callers of what the change edits, as a table."""
+    body = _prose(state, lk, "affected")
+    callers = [r for r in state.references if r.kind == "caller"]
+    if callers:
+        body += ["| Repo | Calls | Where |", "|---|---|---|"]
+        body += [
+            f"| {r.repo} | `{_cell(r.symbol)}` | {_entry_link(lk, r.path, r.line, r.quote)} |"
+            for r in sorted(callers, key=lambda r: (r.repo, r.path, r.line))
+        ]
+    return MdSection(
+        _join(body)
+        or "Nothing passed the checks, and no caller of a changed function or class was found."
+    )
+
+
+# Drop reasons of map_paths that mean an entry point's path does not go through the change.
+NOT_REACHING = ("unreachable", "no_changed_line_covered")
+# Entry points listed under "Entry points that miss it"; the rest are in the Left out table.
+MAX_UNTOUCHED_ENTRIES = 20
+
+
+def top_dirs(repo: RepoInfo) -> list[str]:
+    """The top-level directories of a repository's tree at its commit."""
+    out = git(repo.path, "ls-tree", "-d", "--name-only", repo.head_sha).stdout
+    return sorted(d for d in out.splitlines() if d)
+
+
+def _md_untouched(state: WalkState, lk: Linker) -> MdSection:
+    """Written by code: the files changed, the top-level directories with none, and the entry points whose
+    paths do not go through the change."""
+    t = state.target
+    ch = t.change
+    files = ["| Status | File | Lines added | Lines removed |", "|---|---|---|---|"]
+    for f in ch.files:
+        moved = (
+            f" (from `{_cell(f['old_path'])}`)"
+            if f["old_path"] not in ("", f["path"])
+            else ""
+        )
+        files.append(
+            f"| {f['status']} | `{_cell(f['path'])}`{moved} | {sum(b - a + 1 for a, b in f['added'])} "
+            f"| {sum(b - a + 1 for a, b in f['removed'])} |"
+        )
+    touched = {
+        PurePosixPath(p).parts[0]
+        for f in ch.files
+        for p in (f["path"], f["old_path"])
+        if p and len(PurePosixPath(p).parts) > 1
+    }
+    quiet = [d for d in top_dirs(state.repos[t.repo_key]) if d not in touched]
+    dirs = (
+        "No file changed under: " + ", ".join(f"`{_cell(d)}/`" for d in quiet) + "."
+        if quiet
+        else "Every top-level directory has a changed file."
+    )
+    drops = (
+        [d for d in state.paths.dropped if d.reason in NOT_REACHING]
+        if state.paths
+        else []
+    )
+    entries = (
+        [
+            "Entry points whose paths do not go through the change:",
+            "",
+            *[
+                f"- `{_cell(d.entry.name)}` (`{t.repo_key}/{d.entry.location.path}:{d.entry.location.line}`)"
+                for d in drops[:MAX_UNTOUCHED_ENTRIES]
+            ],
+            *(
+                [
+                    f"- … and {len(drops) - MAX_UNTOUCHED_ENTRIES} more; see **Left out** under Coverage."
+                ]
+                if len(drops) > MAX_UNTOUCHED_ENTRIES
+                else []
+            ),
+        ]
+        if drops
+        else [
+            "No entry point was found whose path misses the change."
+            if state.paths
+            else "Path finding did not run, so no entry point is listed."
+        ]
+    )
+    return MdSection(
+        "This section is written by code from the diff and the traced paths, not by a model.",
+        [
+            ("Files changed", _join(files)),
+            ("Directories with no change", dirs),
+            ("Entry points that miss it", _join(entries)),
+        ],
+    )
+
+
 def _md_reference(state: WalkState, lk: Linker) -> MdSection:
     subs = [("Paths", render_paths_section(state, lk))]
     tour: list[str] = []
@@ -708,7 +802,12 @@ def _md_reference(state: WalkState, lk: Linker) -> MdSection:
         tour += [f"#### {s.title if s else u.id}", ""] + _prose(
             state, lk, f"tour:{u.id}"
         )
-    subs.append(("Module tour", _join(tour)))
+    subs.append(
+        (
+            "Change tour" if state.target.scope == "change" else "Module tour",
+            _join(tour),
+        )
+    )
 
     who = [_boundary_mermaid(state), "", "#### Who calls it", ""] + _prose(
         state, lk, "boundary:inbound"
@@ -832,6 +931,8 @@ def commit_repos(state: WalkState) -> list[str]:
     t = state.target
     keys = {t.repo_key} | {r.repo for r in state.references}
     keys |= {c.path.partition("/")[0] for c in citations_for_write(state).values()}
+    if t.change:
+        keys.add(t.change.base_key)
     return sorted(
         (k for k in keys if k in state.repos), key=lambda k: (k != t.repo_key, k)
     )
@@ -853,11 +954,33 @@ def _md_made(state: WalkState, out_dir: Path) -> MdSection:
         f"| {k} | {os.path.relpath(state.repos[k].path, out_dir)} | `{state.repos[k].head_sha}` |"
         for k in commit_repos(state)
     ]
+    if t.change:
+        ch = t.change
+        what = (
+            f"- Change: PR #{ch.pr}"
+            + (
+                f" (`{_cell(ch.head_ref)}` into `{_cell(ch.base_ref)}`)"
+                if ch.base_ref
+                else ""
+            )
+            if ch.kind == "pr"
+            else f"- Change: range `{_cell(ch.ref)}`"
+        )
+        scope = [
+            what,
+            f"- Read at head `{t.head_sha}` (`{t.repo_key}`) against the merge-base `{ch.base_sha}` "
+            f"(`{ch.base_key}`)",
+            f"- Commits: {len(ch.commits)}",
+        ]
+    else:
+        scope = [
+            f"- Module directory: `{os.path.relpath(Path(t.repo_path) / t.subpath, out_dir)}`"
+        ]
     commits += [
         "",
         searched_line(state, out_dir),
         "",
-        f"- Module directory: `{os.path.relpath(Path(t.repo_path) / t.subpath, out_dir)}`",
+        *scope,
         f"- Depth: `{state.options.get('depth', 'standard')}`",
         f"- Mode: `{state.options.get('mode', 'human')}`",
         "",
@@ -891,6 +1014,14 @@ def human_md_sections(
 ) -> dict[str, MdSection]:
     return {
         "summary": _md_summary(state, lk),
+        **(
+            {
+                "affected": _md_affected(state, lk),
+                "untouched": _md_untouched(state, lk),
+            }
+            if state.target.change
+            else {}
+        ),
         "usecases": _md_usecases(state, lk),
         "flow": _md_flow(state, lk),
         "outputs": _md_outputs(state, lk),
@@ -904,21 +1035,27 @@ def human_md_sections(
 def run_line(state: WalkState) -> str:
     t = state.target
     spent, calls = state.budget.get("cost_usd", 0.0), state.budget.get("calls", 0)
+    at = (
+        f"`{t.change.base_sha[:12]}..{t.head_sha[:12]}`"
+        if t.change
+        else f"`{t.head_sha[:12]}`"
+    )
     return (
-        f"Generated {date.today().isoformat()} · {t.repo_key} at `{t.head_sha[:12]}` · {len(t.files)} files · "
+        f"Generated {date.today().isoformat()} · {t.repo_key} at {at} · {len(t.files)} files · "
         f"depth {state.options.get('depth', 'standard')} · spent ${spent:.2f} over {calls} agent calls"
     )
 
 
 def human_markdown(state: WalkState, lk: Linker, out_dir: Path) -> str:
     t = state.target
-    md = [f"# {t.package} — codebase walkthrough", ""]
+    kind = "change walkthrough" if t.change else "codebase walkthrough"
+    md = [f"# {t.package} — {kind}", ""]
     tagline = _data(state, "summary").get("tagline")
     if tagline:
         md += [lk.expand(tagline), ""]
     md += [f"> {run_line(state)}", ""]
     sections = human_md_sections(state, lk, out_dir)
-    for key, title in HUMAN_SECTIONS:
+    for key, title in human_sections(state.options):
         sec = sections[key]
         md += [f"## {title}", ""]
         if sec.body:
@@ -1471,11 +1608,11 @@ def render_html(
         "config": _html_config,
     }
     body, nav = [], []
-    for key, title in HUMAN_SECTIONS:
+    for key, title in human_sections(state.options):
         cites = CiteNumbers()
         if key in builders:
             inner = builders[key](state, lk, cites)
-        elif key in ("reference", "made"):
+        elif key in ("reference", "made", "untouched"):
             inner = _html_subs(key, sections[key])
         else:
             inner = markdown_html(sections[key].body, cites)
@@ -1485,7 +1622,7 @@ def render_html(
         )
     tagline = _data(state, "summary").get("tagline")
     header = (
-        f'<header class="top"><div class="eyebrow">Codebase walkthrough</div>'
+        f'<header class="top"><div class="eyebrow">{"Change" if t.change else "Codebase"} walkthrough</div>'
         f"<h1>{html.escape(t.package)}</h1>"
         + (
             f'<p class="lede">{_inline(lk.expand(tagline), CiteNumbers())}</p>'
@@ -1539,6 +1676,8 @@ def unreadable_commit(state: WalkState) -> str | None:
     keys = {state.target.repo_key} | {
         c.path.partition("/")[0] for c in citations_for_write(state).values()
     }
+    if state.target.change:
+        keys.add(state.target.change.base_key)
     for key in sorted(keys):
         repo = state.repos.get(key)
         if repo is None:
@@ -1564,7 +1703,11 @@ def write_outputs(
     name = state.target.name
     md = render_markdown(state, out_dir)
     gate = sections_gate(
-        md, [t for t in required_titles(state.options.get("mode", "human"))]
+        md,
+        required_titles(
+            state.options.get("mode", "human"),
+            state.options.get("scope", "module"),
+        ),
     )
     if not gate.passed:
         state.errors.append(gate.reason)
@@ -1572,13 +1715,16 @@ def write_outputs(
     md_path.write_text(md, encoding="utf-8")
     paths = [md_path]
     if state.options.get("mode") != "agent":
-        json_path = out_dir / f"{name}-walkthrough.json"
-        json_path.write_text(
-            json.dumps(render_walkthrough_json(state, md), indent=2, ensure_ascii=False)
-            + "\n",
-            encoding="utf-8",
-        )
-        paths.append(json_path)
+        if not state.target.change:
+            json_path = out_dir / f"{name}-walkthrough.json"
+            json_path.write_text(
+                json.dumps(
+                    render_walkthrough_json(state, md), indent=2, ensure_ascii=False
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            paths.append(json_path)
         html_path = out_dir / f"{name}-walkthrough.html"
         html_path.write_text(render_html(state, out_dir, styles), encoding="utf-8")
         paths.append(html_path)

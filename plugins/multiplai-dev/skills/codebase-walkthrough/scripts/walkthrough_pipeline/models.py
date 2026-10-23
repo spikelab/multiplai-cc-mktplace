@@ -67,7 +67,35 @@ class RepoInfo(BaseModel):
     remote_url: str | None = None
 
 
+class ChangeInfo(BaseModel):
+    """What a change target is (`--scope pr`): the PR or range, both commits and what changed between them."""
+
+    kind: Literal["pr", "range"]
+    ref: str  # "417" for a PR, "<base>..<head>" as given for a range
+    pr: int | None = None
+    title: str = ""  # the PR's, as gh returned it: untrusted text
+    body: str = ""  # the PR's, as gh returned it: untrusted text
+    base_ref: str = ""
+    head_ref: str = ""
+    base_sha: str  # the merge-base: the commit the change is read against
+    base_key: str  # the repo key under which the base commit is read (`<key>@base`)
+    commits: list[list[str]] = Field(
+        default_factory=list
+    )  # [sha, subject], oldest first
+    files: list[dict] = Field(default_factory=list)  # git_targets.ChangedFile.to_dict()
+
+    def added(self) -> dict[str, set[int]]:
+        """Head lines each file adds, keyed by its repo-relative path at head."""
+        return {
+            f["path"]: {n for a, b in f["added"] for n in range(a, b + 1)}
+            for f in self.files
+            if f["status"] != "D"
+        }
+
+
 class TargetInfo(BaseModel):
+    scope: Literal["module", "change"] = "module"
+    change: ChangeInfo | None = None
     repo_key: str
     repo_path: str
     subpath: str  # repo-relative directory of the module ("" = whole repo)

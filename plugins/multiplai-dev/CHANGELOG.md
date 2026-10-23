@@ -15,6 +15,30 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.102.0] - 2026-10-23
+
+### Added
+- **codebase-walkthrough explains a PR or a commit range.** `run --scope pr
+  --pr <N>` (needs `gh`) or `run --scope pr --range <base>..<head>` reads the
+  change at its head against the merge-base, from git objects only, and writes
+  a change walkthrough as Markdown and an HTML page: What changed and why, The
+  path through the change, Who is affected, What it does not touch (written by
+  code from the diff), Reference and How this was made. The agents read only
+  the lines the change touches, with five lines around each; the callers of the
+  changed functions and classes come from `git grep` and Python `ast`; only the
+  paths through the added lines are traced. `--expect-head <sha>` refuses to
+  start when the change's head is another commit, and `--fetch` runs
+  `git fetch --quiet origin` first. The PR's title and description reach the
+  writer inside untrusted-content fences. No `walkthrough.json` is written for
+  a change.
+- **`run --commit <sha>`** explains a module directory at an older commit, with
+  no checkout.
+
+### Changed
+- review's PR and fetch lookups (`gh pr view`, `git fetch`, `rev-parse`,
+  `merge-base`) moved to a new shared library, `lib/git_targets`, which the
+  walkthrough also uses. Review behaves as before.
+
 ## [0.101.0] - 2026-10-22
 
 ### Added
