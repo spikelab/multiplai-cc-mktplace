@@ -16,6 +16,8 @@ dependencies = [
     # Resolves --pr/--range to shas and lists what changed; shared with
     # review.
     "git-targets",
+    # The design-system folder's token contract, checked before a run that styles the page with it.
+    "design-system",
 ]
 
 [project.optional-dependencies]
@@ -54,3 +56,5 @@ multiplai-core = { git = "https://github.com/spikelab/multiplai-core", branch = 
 # that is also reached through a path source.
 code-facts = { path = "../../../lib/code_facts", editable = true }
 git-targets = { path = "../../../lib/git_targets", editable = true }
+# The design-system token contract, the same way as code_facts.
+design-system = { path = "../../../lib/design_system", editable = true }

@@ -100,8 +100,14 @@ The candidates are written as JSON, then rendered to HTML by `scripts/render_rep
    uv run ${CLAUDE_PLUGIN_ROOT}/skills/deepen/scripts/render_report.py \
      --in <path-to-candidates.json> \
      --repo <repo-name> \
+     --design-system-dir <folder> \
      --open
    ```
+
+   `<folder>` is the user's design system: load the `multiplai-dev:design-system`
+   skill and use what its `path` command prints. If that skill is not
+   available, or `path` exits 1, leave `--design-system-dir` out and the report
+   uses the neutral theme; tell the user why, in one line.
 
    (`uv run` reads the script's inline PEP 723 header and provides `jinja2`
    in an ephemeral env — no manual install.)
