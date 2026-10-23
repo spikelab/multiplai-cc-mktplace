@@ -24,7 +24,7 @@ import re
 import shutil
 import subprocess
 import tarfile
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 
 import git_targets
@@ -452,6 +452,61 @@ def build_target(
         languages=langs,
     )
     return info, repo
+
+
+# --- libraries a codebase run also reads (`--lib`) --------------------------------------------
+
+
+@dataclass
+class ResolvedLib:
+    """A `--lib` directory resolved to the repository and commit it is read at."""
+
+    key: str  # the repo key its citations start with
+    root: str  # absolute path of its repository
+    subpath: str  # repo-relative directory ("" = the whole repository)
+    sha: str
+    in_target_repo: bool  # read under the target's own key and commit
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+def resolve_libs(
+    paths: list[str], target_root: Path, target_key: str, target_sha: str
+) -> list[ResolvedLib]:
+    """Each `--lib` directory as (repo key, root, subpath, sha). Raises TargetError.
+
+    A directory inside the target's repository is read at the target's commit, under its key. One in
+    another repository is read at that repository's HEAD, keyed by the repository directory's name;
+    a name taken by another repository is an error rather than a silent mix-up.
+    """
+    out: list[ResolvedLib] = []
+    keys = {target_key: str(target_root)}
+    for raw in paths:
+        p = Path(raw).expanduser().resolve()
+        if not p.is_dir():
+            raise TargetError(f"--lib {raw}: not a directory")
+        root = repo_root(p)
+        if root is None:
+            raise TargetError(f"--lib {raw}: not inside a git repository")
+        sub = p.relative_to(root).as_posix()
+        sub = "" if sub == "." else sub
+        if root == target_root:
+            out.append(ResolvedLib(target_key, str(root), sub, target_sha, True))
+            continue
+        sha = head_sha(root)
+        if sha is None:
+            raise TargetError(
+                f"--lib {raw}: HEAD does not resolve to a commit in {root}"
+            )
+        key = root.name
+        if keys.get(key, str(root)) != str(root):
+            raise TargetError(
+                f"--lib {raw}: the name {key!r} is already used by {keys[key]}"
+            )
+        keys[key] = str(root)
+        out.append(ResolvedLib(key, str(root), sub, sha, False))
+    return out
 
 
 # --- a change: a PR or a commit range ----------------------------------------------------------

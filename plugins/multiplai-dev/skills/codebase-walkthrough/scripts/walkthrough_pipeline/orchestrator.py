@@ -1,9 +1,10 @@
-"""target → repos → symbols → references → boundary → partition → explore → docs → trace → write → render.
+"""target → repos → symbols → references → boundary → partition → explore → survey → docs → trace → write
+→ render.
 
 `walkthrough-state.json` is written after every stage; `resume` reloads it and
 continues from the first stage not yet done. Stages up to `partition` are
-code only; the four agent stages store each answer as it returns, so a budget
-stop keeps paid work.
+code only; the agent stages store each answer as it returns, so a budget
+stop keeps paid work. `survey` asks only for `--scope codebase`.
 """
 
 from __future__ import annotations
@@ -28,13 +29,14 @@ from . import target as target_mod
 from .config import WalkConfig
 from .gates import boundary_gate, partition_gate, target_files_ws
 from .models import STAGES as STAGES_ORDER
-from .models import Dropped, WalkState
+from .models import Dropped, RepoInfo, WalkState
 from .partition import partition, ws_lines
 from .progress import ProgressWriter
 from .render import write_outputs
 from .stages import RunContext
 from .stages.docs import run_docs
 from .stages.explore import run_explore
+from .stages.survey import run_survey
 from .stages.trace import PATHS_CACHE, rewind_legacy_trace, run_trace
 from .stages.write import run_write
 from .state import STATE_FILE, load_state, save_state
@@ -83,8 +85,15 @@ class RunOptions:
     scenarios: int = 21  # the path cap
     scenarios_given: bool = False  # `--scenarios` was passed; else a resume uses the default of its own version
     lsp_timeout: float = 300.0
-    scope: str = "module"  # "module", or "pr" for a change (`--pr` / `--range`)
-    commit: str | None = None  # module scope: the commit read (default HEAD)
+    scope: str = (
+        "module"  # "module", "codebase", or "pr" for a change (`--pr` / `--range`)
+    )
+    commit: str | None = (
+        None  # module or codebase scope: the commit read (default HEAD)
+    )
+    libs: list[str] = field(
+        default_factory=list
+    )  # codebase scope: library directories the survey also reads
     pr: int | None = None
     range: str | None = None
     fetch: bool = False
@@ -133,13 +142,14 @@ def prepare(opts: RunOptions, runs_dir: Path) -> tuple[WalkState, Path]:
         return _prepare_change(opts, runs_dir)
     try:
         root, sub, sha = target_mod.resolve_target(opts.target, opts.commit)
+        libs = target_mod.resolve_libs(opts.libs, root, opts.repo_key or root.name, sha)
     except target_mod.TargetError as e:
         raise WalkError(str(e)) from e
+    # A codebase run has its own run directory, so it never deletes a module run's state.
+    suffix = "codebase" if opts.scope == "codebase" else opts.mode
     run_dir = _fresh_run_dir(
         runs_dir,
-        target_mod.sanitize_slug(
-            f"{root.name}--{sub or 'root'}--{sha[:12]}--{opts.mode}"
-        ),
+        target_mod.sanitize_slug(f"{root.name}--{sub or 'root'}--{sha[:12]}--{suffix}"),
     )
     try:
         info, repo = target_mod.build_target(
@@ -155,8 +165,26 @@ def prepare(opts: RunOptions, runs_dir: Path) -> tuple[WalkState, Path]:
     gate = target_mod.target_gate(info)
     if not gate.passed:
         raise WalkError(f"{opts.target}: {gate.reason}")
-    state = WalkState(target=info, options=asdict(opts), repos={repo.key: repo})
+    options = asdict(opts)
+    options["libs_resolved"] = [lib.to_dict() for lib in libs]
+    state = WalkState(
+        target=info, options=options, repos={repo.key: repo, **lib_repos(options)}
+    )
     return state, run_dir
+
+
+def lib_repos(options: dict) -> dict[str, RepoInfo]:
+    """The repositories of the `--lib` directories outside the target's repository, keyed as saved."""
+    return {
+        lib["key"]: RepoInfo(
+            key=lib["key"],
+            path=lib["root"],
+            head_sha=lib["sha"],
+            remote_url=target_mod.remote_url(lib["root"]),
+        )
+        for lib in options.get("libs_resolved") or []
+        if not lib["in_target_repo"]
+    }
 
 
 def _prepare_change(opts: RunOptions, runs_dir: Path) -> tuple[WalkState, Path]:
@@ -232,6 +260,8 @@ async def _code_stage(
             if base_repo is not None:
                 # The base commit is read under its own key; it is never searched for references.
                 state.repos = {**found, base_repo.key: base_repo}
+            # A library is read at the commit saved when the run started, under its own key.
+            state.repos = {**state.repos, **lib_repos(opts)}
             state.searched_repos = sorted(found)
             state.warnings += warnings
             opts["search_root_resolved"] = str(root)
@@ -352,6 +382,7 @@ STAGES = (
     ("boundary", None),
     ("partition", None),
     ("explore", run_explore),
+    ("survey", run_survey),
     ("docs", run_docs),
     ("trace", run_trace),
     ("write", run_write),
@@ -386,7 +417,11 @@ async def run_state(
         progress.line(f"RESUMED after {state.stage}")
     snap_root = run_dir / "snap"
     try:
-        for key in {t.repo_key} | {r.repo for r in state.references}:
+        for key in (
+            {t.repo_key}
+            | {r.repo for r in state.references}
+            | set(lib_repos(state.options))
+        ):
             if key in state.repos:
                 await asyncio.to_thread(
                     target_mod.snapshot_repo, state.repos[key], snap_root / key

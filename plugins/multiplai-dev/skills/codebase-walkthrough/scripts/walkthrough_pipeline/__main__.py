@@ -1,6 +1,7 @@
 """CLI for the walkthrough pipeline.
 
-  run     — explain one module end to end, or a change (`--scope pr`: a PR or a commit range)
+  run     — explain one module end to end, a whole plugin or repository (`--scope codebase`), or a
+            change (`--scope pr`: a PR or a commit range)
   resume  — continue a run from its walkthrough-state.json (`--rewrite`: write it again after trace)
   check   — re-check every `path:line` and snippet in a finished walkthrough
   render  — rewrite a finished run's walkthrough files from its state; no model call
@@ -118,7 +119,10 @@ def build_parser() -> argparse.ArgumentParser:
         dest="command", required=True, metavar="{" + ",".join(SUBCOMMANDS) + "}"
     )
 
-    rn = sub.add_parser("run", help="Explain one module, or a PR or commit range")
+    rn = sub.add_parser(
+        "run",
+        help="Explain one module, a whole plugin or repository, or a PR or commit range",
+    )
     rn.add_argument(
         "target",
         nargs="?",
@@ -127,9 +131,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     rn.add_argument(
         "--scope",
-        choices=("module", "pr"),
+        choices=("module", "codebase", "pr"),
         default="module",
-        help="module: explain the target directory; pr: explain a change, given by --pr or --range",
+        help="module: explain the target directory; codebase: explain a whole plugin, skill or "
+        "repository, adding which command to run, loops and caps, exit codes, and state and resume; "
+        "pr: explain a change, given by --pr or --range",
+    )
+    rn.add_argument(
+        "--lib",
+        action="append",
+        default=[],
+        metavar="DIR",
+        help="With --scope codebase: a library the code calls, read at its repository's HEAD so the "
+        "walkthrough can say what it logs and keeps (repeatable)",
     )
     rn.add_argument(
         "--pr",
@@ -160,10 +174,15 @@ def build_parser() -> argparse.ArgumentParser:
     rn.add_argument(
         "--commit",
         metavar="SHA",
-        help="Module scope: explain the directory at this commit instead of HEAD (no checkout)",
+        help="Module or codebase scope: explain the directory at this commit instead of HEAD "
+        "(no checkout)",
     )
     rn.add_argument(
-        "--depth", choices=("overview", "standard", "deep"), default="standard"
+        "--depth",
+        choices=("overview", "standard", "deep"),
+        default=None,
+        help="How much is read (default: overview for --scope codebase, else standard; overview "
+        "skips test files)",
     )
     rn.add_argument(
         "--mode",
@@ -296,6 +315,10 @@ def _check_scope(parser: argparse.ArgumentParser, args: argparse.Namespace) -> N
     """The flags that go with each scope; argparse's own error (exit 2) for the rest."""
     if args.command != "run":
         return
+    if args.lib and args.scope != "codebase":
+        parser.error("--lib goes with --scope codebase")
+    if args.scope == "codebase" and args.mode == "agent":
+        parser.error("--scope codebase writes the human-mode walkthrough only")
     if args.scope == "pr":
         if (args.pr is None) == (args.range_ is None):
             parser.error("--scope pr needs exactly one of --pr and --range")
@@ -313,7 +336,11 @@ def _check_scope(parser: argparse.ArgumentParser, args: argparse.Namespace) -> N
             parser.error("give the repository once: as the target or as --repo")
         return
     if not args.target:
-        parser.error("the module directory is required")
+        parser.error(
+            "the module directory is required"
+            if args.scope == "module"
+            else "the directory to explain is required"
+        )
     for flag, value in (
         ("--pr", args.pr),
         ("--range", args.range_),
@@ -411,7 +438,9 @@ def _main(args: argparse.Namespace) -> int:
                 range=args.range_,
                 fetch=args.fetch,
                 expect_head=args.expect_head,
-                depth=args.depth,
+                libs=args.lib,
+                depth=args.depth
+                or ("overview" if args.scope == "codebase" else "standard"),
                 mode=args.mode,
                 name=args.name,
                 output=str(output),

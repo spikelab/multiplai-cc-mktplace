@@ -37,6 +37,7 @@ STAGES: tuple[str, ...] = (
     "boundary",
     "partition",
     "explore",
+    "survey",
     "docs",
     "trace",
     "write",

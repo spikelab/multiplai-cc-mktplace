@@ -55,6 +55,69 @@ Schema:
 Answer with ONE JSON object and nothing after it."""
 
 
+# The survey's three questions (`--scope codebase`). Each agent reads across the whole snapshot.
+SURVEY_QUESTIONS = {
+    "loops": """Find every loop, retry, round and repeat in the code, and for each: what repeats, its cap
+(the constant or argument that limits it, with its value), what ends it well, and what ends it badly
+(the error, exit code or marker it ends with). Also list every exit code and every marker the code
+prints for a caller to read (for example `DONE:` or `RESEARCH:NEEDED`), with what each means.
+Before you state that a limit stops something or that a gate halts a run, read the code that CALLS it:
+when a gate or check can never fire because of how its callers call it (a loop that stops before the
+gate's limit, a caller that ignores the result), report that as a gotcha, citing both the gate and the
+caller.""",
+    "lifecycle": """Find what the code writes as it runs: state and checkpoint files, logs, cost or spend
+records, reports. For each kind of stop (a crash or kill, a budget or round cap, a failed check, Ctrl-C),
+say what is on disk afterwards, what a re-run or resume keeps, what it redoes, and what refuses to
+resume and with which message. Follow the calls into the libraries listed below when the code hands
+logging, state or cost tracking to them.""",
+    "commands": """Read the code's own docs listed below and its command-line entry points. Say which command,
+subcommand, mode or flag to use in which situation, and why; the decision rules and recipes the docs
+state (for example "use X for a trivial change, Y otherwise"); and the pitfalls they warn about. Where
+the docs and the code disagree (a flag the docs name that the code lacks, a different default), report
+that as a gotcha, citing both. In a `CHANGELOG.md` read only the first 200 lines.""",
+}
+
+
+def survey_task(
+    name: str,
+    question: str,
+    files: list[tuple[str, int]],
+    docs: list[str],
+    libs: list[str],
+    schema,
+) -> str:
+    listing = "\n".join(f"- {path} ({n} lines)" for path, n in files)
+    doc_list = "\n".join(f"- {d}" for d in docs) or "- (none found)"
+    lib_list = "\n".join(f"- {d}/" for d in libs) or "- (none given)"
+    return f"""You are explaining the codebase `{name}` to an engineer who has just joined the team.
+Your working directory holds snapshots of one or more repositories at one commit each; every path
+below starts with the repository name. Read across ALL the files below, not one at a time: use Grep to
+find every place that matters, then Read around each.
+
+Survey question: [survey:{question}]
+{SURVEY_QUESTIONS[question]}
+
+Files of `{name}`:
+{listing}
+
+The code's own docs:
+{doc_list}
+
+Libraries the code calls, which you may also read:
+{lib_list}
+
+Return each finding as a fact in `facts`, and each gate that cannot fire or doc that disagrees with the
+code as a fact in `gotchas`, every one with citations. Leave `files`, `interfaces` and `terms` empty.
+
+{CITATION_RULES}
+{UNTRUSTED_RULES}
+
+Schema:
+{_schema(schema)}
+
+Answer with ONE JSON object and nothing after it."""
+
+
 def docs_resource(
     name: str,
     resource: str,
