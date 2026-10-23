@@ -2,7 +2,9 @@
 
 Each is `async def run_<stage>(state, ctx) -> state`. A stage returns at once
 when `state.stage` is already past it, and skips items it already has a
-result for, so a resumed run repeats no finished work.
+result for, so a resumed run repeats no finished work. A stage that asks many
+agents calls `save` after each answer it stores, so a killed run loses only
+the calls still running.
 
 Only `RepoTrustError`, `UsageLimitError` (a hit Claude usage limit) and
 `BudgetExceededError` escape a stage. Any other
@@ -19,9 +21,11 @@ from pathlib import Path
 
 from code_facts import bounded  # noqa: F401  (re-exported for the stages)
 
+from .. import budget, timings
 from ..config import ReviewConfig
-from ..models import Citation, TargetInfo
+from ..models import Citation, ReviewState, TargetInfo
 from ..progress import ProgressWriter
+from ..state import save_state
 
 log = logging.getLogger(__name__)
 
@@ -39,6 +43,16 @@ class RunContext:
     # Stage-level counts for the `stage` activity event, filled by each stage.
     counts: dict[str, int] = field(default_factory=dict)
     gate_reasons: list[str] = field(default_factory=list)
+
+
+def save(state: ReviewState, ctx: RunContext) -> None:
+    """Write the checkpoint now, with the spend so far and the `run` interval's end moved to now,
+    so a resume after a kill counts every answer it keeps. Nothing to write in tests with no
+    target directory."""
+    if ctx.target_dir is not None:
+        timings.close_interval(state, "run")
+        state.budget = budget.get_budget().to_state()
+        save_state(state, ctx.target_dir)
 
 
 def relative_path(path: str, target: TargetInfo, snapshot: Path) -> str:

@@ -38,7 +38,7 @@ from ..models import (
 )
 from ..paths_io import assign_paths, load_paths
 from ..prompts import merge as prompt
-from . import RunContext, bounded
+from . import RunContext, bounded, save
 
 log = logging.getLogger(__name__)
 
@@ -320,10 +320,12 @@ async def run_merge(state: ReviewState, ctx: RunContext) -> ReviewState:
             # resume does not pay to ask again.
             state.merge_answers[group_key(group)] = []
             state.checks.append(check)
+            save(state, ctx)
             return
-        # Stored as each answer arrives, so a budget stop keeps it.
+        # Stored and saved as each answer arrives, so a budget stop or a kill keeps it.
         state.merge_answers[group_key(group)] = out.duplicate_sets
         state.checks.append(check)
+        save(state, ctx)
         if ctx.progress:
             dupes = sum(
                 len(ids) - 1 for ids, _ in usable_sets(group, out.duplicate_sets)

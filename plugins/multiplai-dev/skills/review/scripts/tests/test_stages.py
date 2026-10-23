@@ -30,6 +30,7 @@ from review_pipeline.models import (
 )
 from review_pipeline.stages import RunContext
 from review_pipeline.stages import find as find_stage
+from review_pipeline.stages import merge as merge_stage
 from review_pipeline.stages.find import conventions_chain, run_find
 from review_pipeline.stages.merge import (
     MERGE_LINE_GAP,
@@ -38,6 +39,7 @@ from review_pipeline.stages.merge import (
     run_merge,
 )
 from review_pipeline.stages.verify import VerifyIncomplete, run_verify
+from review_pipeline.state import STATE_FILE, load_state
 
 
 class Canned:
@@ -961,3 +963,88 @@ async def test_a_usage_limit_stops_merge(target_info, ctx, monkeypatch):
     with pytest.raises(sdk.UsageLimitError):
         await run_merge(state, ctx)
     assert state.merge_answers == {} and state.stage == "verify" and state.errors == []
+
+
+# --- a killed run -------------------------------------------------------------------
+# A RepoTrustError leaves a stage without the orchestrator saving, as a kill does, so
+# only what the stage saved itself is on disk.
+
+
+async def test_a_killed_find_keeps_the_finders_that_answered(
+    target_info, ctx, monkeypatch, tmp_path
+):
+    ctx.config.concurrency = 1
+    ctx.target_dir = tmp_path / "out"
+    ctx.target_dir.mkdir()
+    use(
+        monkeypatch,
+        {
+            "find:diff-bugs": [FinderOutput(findings=[high_finding()])],
+            "find:callers": [sdk.RepoTrustError("killed")],
+        },
+    )
+    with pytest.raises(sdk.RepoTrustError):
+        await run_find(ReviewState(target=target_info), ctx)
+    saved = load_state(ctx.target_dir / STATE_FILE)
+    assert list(saved.finder_results) == ["diff-bugs"]
+    assert [c.subject for c in saved.checks] == ["diff-bugs"]
+
+
+async def test_a_killed_verify_keeps_the_verdicts_and_their_spend(
+    target_info, ctx, monkeypatch, tmp_path
+):
+    from review_pipeline import budget
+
+    high, medium = high_finding(), medium_finding()
+    ctx.config.concurrency = 1
+    ctx.target_dir = tmp_path / "out"
+    ctx.target_dir.mkdir()
+    budget.start(10.0).cost_usd = 1.25  # what the calls so far cost
+    use(
+        monkeypatch,
+        {
+            "verify": [
+                Verdict(
+                    status="confirmed",
+                    impact="breaks-users",
+                    topic="code",
+                    reason="r",
+                    citations=[KEYWORD_CITATION],
+                ),
+                sdk.RepoTrustError("killed"),
+            ]
+        },
+    )
+    state = ReviewState(target=target_info, stage="find", findings=[high, medium])
+    with pytest.raises(sdk.RepoTrustError):
+        await run_verify(state, ctx)
+    saved = load_state(ctx.target_dir / STATE_FILE)
+    assert list(saved.verdicts) == [high.id] and saved.stage == "find"
+    assert saved.budget["cost_usd"] == 1.25
+
+
+async def test_a_killed_merge_keeps_the_answer(target_info, ctx, monkeypatch, tmp_path):
+    state, keep, copy, _ = _merge_state(target_info)
+    ctx.target_dir = tmp_path / "out"
+    ctx.target_dir.mkdir()
+    use(
+        monkeypatch,
+        {
+            "merge": [
+                MergeOutput(
+                    duplicate_sets=[DuplicateSet(finding_ids=[keep.id, copy.id])]
+                )
+            ]
+        },
+    )
+
+    def killed(*a, **kw):
+        raise sdk.RepoTrustError("killed")
+
+    monkeypatch.setattr(merge_stage, "apply_duplicate_sets", killed)
+    with pytest.raises(sdk.RepoTrustError):
+        await run_merge(state, ctx)
+    saved = load_state(ctx.target_dir / STATE_FILE)
+    assert list(saved.merge_answers.values()) == [
+        [DuplicateSet(finding_ids=[keep.id, copy.id])]
+    ]

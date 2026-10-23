@@ -176,15 +176,20 @@ async def run_tasks(
     answers: dict[str, dict],
     *,
     concurrency: int,
+    on_answer: Callable[[], None] | None = None,
     **ask_kwargs: Any,
 ) -> None:
     """Ask every `(key, prompt)` task whose answer is not already in *answers*.
 
     Skipping answered keys is what lets a resumed run repeat no paid work.
+    *on_answer* runs after each answer (or failure) is stored, so a caller can
+    save its checkpoint then.
     """
 
     async def one(task: tuple[str, str]) -> None:
         await ask(task[0], task[1], call, answers, **ask_kwargs)
+        if on_answer is not None:
+            on_answer()
 
     await bounded([t for t in tasks if t[0] not in answers], one, concurrency)
 

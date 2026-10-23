@@ -6,7 +6,7 @@ run adds a new one instead of overwriting, so wall time counts only time
 spent running, not the gap before a resume.
 
 The `run` interval's end is moved forward at every checkpoint, so a run that
-is killed loses only the time since its last stage.
+is killed loses only the time since its last saved answer.
 """
 
 from __future__ import annotations
