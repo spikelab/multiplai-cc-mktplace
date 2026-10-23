@@ -50,7 +50,11 @@ def lib(name: str) -> Any:
 def cli_source(
     names: list[str], *, prelude: str = "", dispatch: str = "set_defaults"
 ) -> str:
-    """An argparse CLI: one subcommand per name, each `cmd_<n>` calling a chain of `step<k>_<n>`."""
+    """An argparse CLI: one subcommand per name, each `cmd_<n>` calling a chain of `step<k>_<n>`.
+
+    `dispatch` is `set_defaults`, `comparison` (`if args.command == n: return cmd_<n>(args)`, which
+    discovery resolves) or `inline` (the branch calls `cmd_<n>` but returns a local, which it does not).
+    """
     out = ["import argparse", "", prelude]
     for n in names:
         out += ["", f"def cmd_{n}(args):", f"    return step1_{n}(args)", ""]
@@ -76,7 +80,12 @@ def cli_source(
         out.append("    return args.func(args)")
     else:
         for n in names:
-            out += [f"    if args.command == {n!r}:", f"        return cmd_{n}(args)"]
+            out.append(f"    if args.command == {n!r}:")
+            out += (
+                [f"        code = cmd_{n}(args)", "        return code"]
+                if dispatch == "inline"
+                else [f"        return cmd_{n}(args)"]
+            )
         out.append("    return 1")
     return "\n".join(out) + "\n"
 
@@ -153,6 +162,82 @@ def cli_snapshot(root: Path, names: list[str] = NAMES, **kw: Any) -> Snapshot:
 
 
 CLI = "pkg/cli.py"
+
+
+# PR #295's pr skill, cut down: `build_parser` registers the subcommands, and `commands.run` dispatches through
+# a dict in another module, so nothing inside `build_parser` names a handler.
+PR_SKILL = "skills/pr/SKILL.md"
+PR_MAIN = "skills/pr/scripts/pr_pipeline/__main__.py"
+PR_COMMANDS = "skills/pr/scripts/pr_pipeline/commands.py"
+PR_GITHUB = "skills/pr/scripts/pr_pipeline/github.py"
+# A SKILL.md command continued onto a second line, as PR #295's buildme SKILL.md writes them.
+PR_SKILL_COMMAND = "cd ${CLAUDE_SKILL_DIR}/scripts && uv run --project ../../.. python -m pr_pipeline open \\\n  --draft"
+PR_FILES = {
+    "skills/pr/scripts/pr_pipeline/__init__.py": "",
+    PR_MAIN: """import argparse
+import sys
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(prog="pr_pipeline")
+    sub = parser.add_subparsers(dest="command", required=True)
+    op = sub.add_parser("open", help="open a PR")
+    op.add_argument("--draft", action="store_true")
+    ed = sub.add_parser("edit", help="refresh the sections this skill owns in an open PR's body")
+    ed.add_argument("--pr", type=int)
+    return parser
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+    from . import commands
+    return commands.run(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+""",
+    PR_COMMANDS: """from .github import run_write
+
+
+def _resolve_repo(path):
+    return path
+
+
+def cmd_open(args):
+    repo = _resolve_repo(".")
+    return run_write(repo, ["pr", "create"])
+
+
+def cmd_edit(args):
+    repo = _resolve_repo(".")
+    return run_write(repo, ["pr", "edit"])
+
+
+COMMANDS = {"open": cmd_open, "edit": cmd_edit}
+
+
+def run(args):
+    code = COMMANDS[args.command](args)
+    return code
+""",
+    PR_GITHUB: "def run_write(repo, argv):\n    return _run_gh(argv)\n\n\ndef _run_gh(argv):\n    return 0\n",
+    PR_SKILL: f"# pr\n\nOpen the PR:\n\n```bash\n{PR_SKILL_COMMAND}\n```\n",
+}
+
+
+def pr_snapshot(root: Path) -> Snapshot:
+    return commit_snapshot(root, PR_FILES)
+
+
+def pr_edit_hops(snap: Snapshot) -> list[dict]:
+    """PR #295's `edit` trace: the `add_parser("edit")` line, then `cmd_edit` and what it calls."""
+    return [
+        snap.hop(PR_MAIN, "cmd_edit", line=snap.line(PR_MAIN, 'sub.add_parser("edit"')),
+        snap.hop(PR_COMMANDS, "cmd_edit"),
+        snap.hop(PR_GITHUB, "run_write"),
+        snap.hop(PR_GITHUB, "_run_gh"),
+    ]
 
 
 def chain_hops(snap: Snapshot, name: str, count: int = DEPTH) -> list[dict]:

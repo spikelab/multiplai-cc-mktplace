@@ -1,11 +1,19 @@
 """Resolve the module to explain, and take snapshots of commits.
 
 Read-only over every repository. The only git commands run anywhere in the
-pipeline are `rev-parse`, `show`, `archive`, `ls-files` and `ls-tree`, each a
-fixed argv with `shell=False`. Nothing checks out, fetches or writes to a repo.
+pipeline are `rev-parse`, `show`, `archive`, `ls-files`, `ls-tree`, `diff`,
+`merge-base`, `log` and `grep`, each a fixed argv with `shell=False`. Nothing checks out
+or writes to a repo; `--fetch` (a change target only, when the user passes it)
+runs `git fetch --quiet origin` through `git_targets.fetch_origin`.
 
 The working tree of the target is never read: its files are listed from a
-`git archive` of HEAD, and agents read that snapshot.
+`git archive` of the commit (HEAD, `--commit`, or a change's head), and agents
+read that snapshot.
+
+A change target (`--scope pr`, `--pr` or `--range`) is read at two commits: its
+head, under the repository's key, and the merge-base, under `<key>@base`, a
+second key for the same repository. Only the files the change touches are
+snapshotted at the base.
 """
 
 from __future__ import annotations
@@ -16,11 +24,13 @@ import re
 import shutil
 import subprocess
 import tarfile
+from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 
+import git_targets
 from multiplai_core.citations import GIT_ARGV, git_env
 
-from .models import GateResult, RepoInfo, TargetInfo
+from .models import ChangeInfo, GateResult, RepoInfo, TargetInfo
 
 log = logging.getLogger(__name__)
 
@@ -151,7 +161,17 @@ def git(
     repo: str | Path, *args: str, check: bool = True
 ) -> subprocess.CompletedProcess:
     """Run one git command against *repo*; stdout/stderr as text."""
-    if args and args[0] not in ("rev-parse", "show", "archive", "ls-files", "ls-tree"):
+    if args and args[0] not in (
+        "rev-parse",
+        "show",
+        "archive",
+        "ls-files",
+        "ls-tree",
+        "diff",
+        "merge-base",
+        "log",
+        "grep",
+    ):
         raise TargetError(f"git {args[0]} is not allowed here")
     proc = subprocess.run(
         [*GIT_ARGV, "-C", str(repo), *args],
@@ -305,21 +325,46 @@ def _python_package(repo: Path, snapshot: Path, subpath: str) -> str:
     return ".".join(parts[start:])
 
 
-def resolve_target(path: str | Path) -> tuple[Path, str, str]:
-    """(repo root, repo-relative subpath, HEAD sha). Raises TargetError."""
+def _existing_ancestor(p: Path) -> Path:
+    while not p.exists() and p != p.parent:
+        p = p.parent
+    return p
+
+
+def resolve_target(
+    path: str | Path, commit: str | None = None
+) -> tuple[Path, str, str]:
+    """(repo root, repo-relative subpath, sha). Raises TargetError.
+
+    The sha is HEAD's, or *commit*'s when given. With *commit* the directory has to
+    exist at that commit, not in the working tree.
+    """
     p = Path(path).expanduser().resolve()
-    if not p.exists():
-        raise TargetError(f"{p} does not exist")
-    if not p.is_dir():
+    if commit is None:
+        if not p.exists():
+            raise TargetError(f"{p} does not exist")
+        if not p.is_dir():
+            raise TargetError(f"{p} is not a directory")
+    elif p.exists() and not p.is_dir():
         raise TargetError(f"{p} is not a directory")
-    root = repo_root(p)
+    root = repo_root(_existing_ancestor(p))
     if root is None:
         raise TargetError(f"{p} is not inside a git repository")
-    sha = head_sha(root)
-    if sha is None:
-        raise TargetError(f"HEAD does not resolve to a commit in {root}")
+    if commit is None:
+        sha = head_sha(root)
+        if sha is None:
+            raise TargetError(f"HEAD does not resolve to a commit in {root}")
+    else:
+        sha = git_targets.rev_parse(root, commit)
+        if sha is None:
+            raise TargetError(f"{commit} does not resolve to a commit in {root}")
     sub = p.relative_to(root).as_posix()
-    return root, ("" if sub == "." else sub), sha
+    sub = "" if sub == "." else sub
+    if commit is not None and sub:
+        out = git(root, "ls-tree", "-d", "--name-only", sha, "--", sub).stdout
+        if sub not in out.splitlines():
+            raise TargetError(f"{sub} is not a directory in {sha[:12]}")
+    return root, sub, sha
 
 
 def list_target_files(
@@ -376,10 +421,12 @@ def build_target(
     name: str | None = None,
     depth: str = "standard",
     key: str | None = None,
+    commit: str | None = None,
 ) -> tuple[TargetInfo, RepoInfo]:
     """Resolve, snapshot and list the target. Raises TargetError. *key* names the
-    target's repository (default: its directory's name)."""
-    root, sub, sha = resolve_target(path)
+    target's repository (default: its directory's name); *commit* the commit read
+    (default: HEAD)."""
+    root, sub, sha = resolve_target(path, commit)
     repo = RepoInfo(
         key=key or root.name, path=str(root), head_sha=sha, remote_url=remote_url(root)
     )
@@ -407,6 +454,319 @@ def build_target(
     return info, repo
 
 
+# --- libraries a codebase run also reads (`--lib`) --------------------------------------------
+
+
+@dataclass
+class ResolvedLib:
+    """A `--lib` directory resolved to the repository and commit it is read at."""
+
+    key: str  # the repo key its citations start with
+    root: str  # absolute path of its repository
+    subpath: str  # repo-relative directory ("" = the whole repository)
+    sha: str
+    in_target_repo: bool  # read under the target's own key and commit
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+def resolve_libs(
+    paths: list[str], target_root: Path, target_key: str, target_sha: str
+) -> list[ResolvedLib]:
+    """Each `--lib` directory as (repo key, root, subpath, sha). Raises TargetError.
+
+    A directory inside the target's repository is read at the target's commit, under its key. One in
+    another repository is read at that repository's HEAD, keyed by the repository directory's name;
+    a name taken by another repository is an error rather than a silent mix-up.
+    """
+    out: list[ResolvedLib] = []
+    keys = {target_key: str(target_root)}
+    for raw in paths:
+        p = Path(raw).expanduser().resolve()
+        if not p.is_dir():
+            raise TargetError(f"--lib {raw}: not a directory")
+        root = repo_root(p)
+        if root is None:
+            raise TargetError(f"--lib {raw}: not inside a git repository")
+        sub = p.relative_to(root).as_posix()
+        sub = "" if sub == "." else sub
+        if root == target_root:
+            out.append(ResolvedLib(target_key, str(root), sub, target_sha, True))
+            continue
+        sha = head_sha(root)
+        if sha is None:
+            raise TargetError(
+                f"--lib {raw}: HEAD does not resolve to a commit in {root}"
+            )
+        key = root.name
+        if keys.get(key, str(root)) != str(root):
+            raise TargetError(
+                f"--lib {raw}: the name {key!r} is already used by {keys[key]}"
+            )
+        keys[key] = str(root)
+        out.append(ResolvedLib(key, str(root), sub, sha, False))
+    return out
+
+
+# --- a change: a PR or a commit range ----------------------------------------------------------
+
+# A change's files at the base side that are snapshotted: every one whose old lines the change touches.
+BASE_STATUSES = ("M", "D", "R", "C", "T")
+
+
+@dataclass
+class ResolvedChange:
+    """A change resolved to two commits, before anything is written."""
+
+    root: Path
+    kind: str  # "pr" or "range"
+    ref: str
+    head: str
+    base: str
+    pr: int | None = None
+    title: str = ""
+    body: str = ""
+    base_ref: str = ""
+    head_ref: str = ""
+
+    def slug_part(self) -> str:
+        return (
+            f"pr-{self.pr}--{self.head[:12]}"
+            if self.kind == "pr"
+            else f"range-{self.base[:12]}-{self.head[:12]}"
+        )
+
+
+def resolve_change(
+    repo: str | Path,
+    *,
+    pr: int | None = None,
+    range_: str | None = None,
+    fetch: bool = False,
+    expect_head: str | None = None,
+) -> ResolvedChange:
+    """Turn `--pr N` or `--range A..B` into (head, merge-base). Writes nothing unless *fetch*. Raises TargetError."""
+    p = Path(repo).expanduser().resolve()
+    root = repo_root(p) if p.is_dir() else None
+    if root is None:
+        raise TargetError(f"{p} is not inside a git repository")
+    if (pr is None) == (not range_):
+        raise TargetError("pass exactly one of --pr and --range")
+    try:
+        if fetch:
+            git_targets.fetch_origin(root)
+        if pr is not None:
+            info = git_targets.pr_view(root, int(pr))
+            head = git_targets.rev_parse(root, info.get("headRefOid") or "")
+            if head is None:
+                raise TargetError(
+                    f"PR #{pr} head {str(info.get('headRefOid'))[:12]} is not in this clone (pass --fetch)"
+                )
+            tip = git_targets.rev_parse(root, info.get("baseRefOid") or "")
+            base = git_targets.merge_base(root, tip, head) if tip else None
+            if base is None:
+                raise TargetError(
+                    f"PR #{pr} base {str(info.get('baseRefOid'))[:12]} is not in this clone (pass --fetch)"
+                )
+            found = ResolvedChange(
+                root,
+                "pr",
+                str(pr),
+                head,
+                base,
+                pr=int(pr),
+                title=(info.get("title") or "").strip(),
+                body=(info.get("body") or "").strip(),
+                base_ref=info.get("baseRefName") or "",
+                head_ref=info.get("headRefName") or "",
+            )
+        else:
+            text = range_ or ""
+            if text.count("..") != 1 or "..." in text:
+                raise TargetError(f"--range must be <base>..<head>, got {text!r}")
+            a, b = text.split("..")
+            tip, head = git_targets.rev_parse(root, a), git_targets.rev_parse(root, b)
+            if tip is None or head is None:
+                raise TargetError(
+                    f"{a if tip is None else b} does not resolve to a commit in {root}"
+                )
+            base = git_targets.merge_base(root, tip, head)
+            if base is None:
+                raise TargetError(f"{a} and {b} have no merge-base")
+            found = ResolvedChange(
+                root, "range", text, head, base, base_ref=a, head_ref=b
+            )
+    except git_targets.GitTargetError as e:
+        raise TargetError(str(e)) from e
+    if expect_head and found.head != git_targets.rev_parse(root, expect_head):
+        raise TargetError(
+            f"the change's head is {found.head[:12]}, not {expect_head[:12]} (--expect-head)"
+        )
+    return found
+
+
+def snapshot_paths(repo: RepoInfo, dest: Path, paths: list[str]) -> Path:
+    """Extract only *paths* at repo.head_sha into *dest*, with the same filters as `snapshot_repo`."""
+    marker = dest / ".walkthrough-head"
+    if marker.exists() and marker.read_text(encoding="utf-8").strip() == repo.head_sha:
+        return dest
+    if dest.exists():
+        shutil.rmtree(dest)
+    dest.mkdir(parents=True)
+    for batch in git_targets.archive_batches(paths):
+        try:
+            proc = subprocess.run(
+                [
+                    *GIT_ARGV,
+                    "-C",
+                    repo.path,
+                    "archive",
+                    "--format=tar",
+                    repo.head_sha,
+                    "--",
+                    *batch,
+                ],
+                capture_output=True,
+                stdin=subprocess.DEVNULL,
+                env=git_env(),
+                shell=False,
+                check=False,
+            )
+            if proc.returncode != 0:
+                raise TargetError(
+                    f"git archive {repo.head_sha[:12]} failed in {repo.path}: "
+                    f"{proc.stderr.decode(errors='replace').strip()}"
+                )
+            with tarfile.open(fileobj=io.BytesIO(proc.stdout), mode="r:") as tar:
+                members = [m for m in tar.getmembers() if _keep_member(m)]
+                tar.extractall(dest, members=members, filter="data")
+        except OSError as e:
+            raise TargetError(f"base snapshot in {dest}: {e}") from e
+    marker.write_text(repo.head_sha + "\n", encoding="utf-8")
+    return dest
+
+
+def _change_files(
+    snap: Path, changed: list[dict], depth: str
+) -> tuple[list[str], dict[str, int], dict[str, str]]:
+    """The changed files present at head that are explained, their line counts, and the ones left out."""
+    files: list[str] = []
+    lines: dict[str, int] = {}
+    skipped: dict[str, str] = {}
+    for f in changed:
+        rel = f["path"]
+        if f["status"] == "D":
+            continue
+        p = PurePosixPath(rel)
+        disk = snap / rel
+        if any(part in SKIP_DIRS for part in p.parts[:-1]):
+            skipped[rel] = "dependency or build directory"
+        elif p.name in LOCKFILES:
+            skipped[rel] = "lockfile"
+        elif p.name.endswith(GENERATED_SUFFIXES):
+            skipped[rel] = "generated"
+        elif not disk.is_file():
+            skipped[rel] = "not snapshotted (a secret, binary or file over 2 MB)"
+        elif _is_binary(disk):
+            skipped[rel] = "binary"
+        elif depth == "overview" and (
+            "tests" in p.parts[:-1]
+            or p.name.startswith("test_")
+            or p.name == "tests.py"
+        ):
+            skipped[rel] = "test file (depth overview)"
+        else:
+            text = disk.read_text(encoding="utf-8", errors="replace")
+            files.append(rel)
+            lines[rel] = len(text.split("\n")) - (1 if text.endswith("\n") else 0)
+    return sorted(files), lines, skipped
+
+
+def build_change_target(
+    found: ResolvedChange,
+    run_dir: Path,
+    *,
+    name: str | None = None,
+    depth: str = "standard",
+    key: str | None = None,
+) -> tuple[TargetInfo, RepoInfo, RepoInfo]:
+    """Snapshot both commits of a resolved change and list its files: (target, head repo, base repo)."""
+    root = found.root
+    k = key or root.name
+    url = remote_url(root)
+    repo = RepoInfo(key=k, path=str(root), head_sha=found.head, remote_url=url)
+    base = RepoInfo(
+        key=f"{k}@base", path=str(root), head_sha=found.base, remote_url=url
+    )
+    try:
+        changed = [
+            f.to_dict() for f in git_targets.changed_files(root, found.base, found.head)
+        ]
+        commits = [
+            [sha, subject]
+            for sha, subject in git_targets.commit_subjects(
+                root, found.base, found.head
+            )
+        ]
+    except git_targets.GitTargetError as e:
+        raise TargetError(str(e)) from e
+    snap = snapshot_repo(repo, run_dir / "snap" / repo.key)
+    snapshot_paths(
+        base,
+        run_dir / "snap" / base.key,
+        sorted(
+            {
+                f["old_path"] or f["path"]
+                for f in changed
+                if f["status"] in BASE_STATUSES
+            }
+        ),
+    )
+    files, lines, skipped = _change_files(snap, changed, depth)
+    langs: dict[str, int] = {}
+    for f in files:
+        ext = PurePosixPath(f).suffix.lower() or PurePosixPath(f).name
+        langs[ext] = langs.get(ext, 0) + 1
+    label = (
+        f"PR #{found.pr}"
+        if found.kind == "pr"
+        else f"{found.base[:8]}..{found.head[:8]}"
+    )
+    default_name = (
+        f"pr-{found.pr}"
+        if found.kind == "pr"
+        else f"range-{found.base[:8]}-{found.head[:8]}"
+    )
+    info = TargetInfo(
+        scope="change",
+        change=ChangeInfo(
+            kind=found.kind,
+            ref=found.ref,
+            pr=found.pr,
+            title=found.title,
+            body=found.body,
+            base_ref=found.base_ref,
+            head_ref=found.head_ref,
+            base_sha=found.base,
+            base_key=base.key,
+            commits=commits,
+            files=changed,
+        ),
+        repo_key=repo.key,
+        repo_path=str(root),
+        subpath="",
+        head_sha=found.head,
+        name=name or default_name,
+        package=label,
+        files=files,
+        file_lines=lines,
+        skipped=skipped,
+        languages=langs,
+    )
+    return info, repo, base
+
+
 def target_gate(info: TargetInfo | None, problem: str = "") -> GateResult:
     """The path is in a git repo, HEAD resolves, and there is at least one file to explain."""
     if problem:
@@ -418,6 +778,10 @@ def target_gate(info: TargetInfo | None, problem: str = "") -> GateResult:
     if not info.files:
         return GateResult(
             passed=False,
-            reason=f"no files to explain under {info.subpath or '.'} at HEAD",
+            reason=(
+                "the change touches no file that can be explained"
+                if info.scope == "change"
+                else f"no files to explain under {info.subpath or '.'} at HEAD"
+            ),
         )
     return GateResult(passed=True)

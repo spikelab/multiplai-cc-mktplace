@@ -1,0 +1,78 @@
+/* neutral: greys with one blue accent, system fonts. Every text/background pair in
+   design_system.tokens.CONTRAST_PAIRS reaches WCAG AA (4.5:1) in both schemes. */
+:root {
+  color-scheme: light;
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --sunk: #eceef1;
+  --fg: #1b1f24;
+  --muted: #565e68;
+  --line: #d5d9de;
+  --accent: #1f5fc4;
+  --accent-soft: #e6eefa;
+  --ok: #1b7339;
+  --ok-soft: #e4f2e8;
+  --warn: #8a5300;
+  --warn-soft: #fbf0d9;
+  --bad: #b3261e;
+  --bad-soft: #fbe8e6;
+  --code-bg: #eef0f3;
+  --code-fg: #1b1f24;
+  --font-display: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-body: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --step--1: 0.875rem;
+  --step-0: 1rem;
+  --step-1: 1.25rem;
+  --step-2: 1.5rem;
+  --step-3: 2rem;
+  --step-4: 2.5rem;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --radius: 6px;
+  --measure: 72ch;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #121417;
+    --surface: #1a1d21;
+    --sunk: #23272c;
+    --fg: #e6e8eb;
+    --muted: #a3aab3;
+    --line: #343a41;
+    --accent: #7eaaf0;
+    --accent-soft: #1c2a40;
+    --ok: #63c78d;
+    --ok-soft: #15291c;
+    --warn: #e2b45c;
+    --warn-soft: #2e240f;
+    --bad: #f28b82;
+    --bad-soft: #351a18;
+    --code-bg: #1e2125;
+    --code-fg: #e6e8eb;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #121417;
+  --surface: #1a1d21;
+  --sunk: #23272c;
+  --fg: #e6e8eb;
+  --muted: #a3aab3;
+  --line: #343a41;
+  --accent: #7eaaf0;
+  --accent-soft: #1c2a40;
+  --ok: #63c78d;
+  --ok-soft: #15291c;
+  --warn: #e2b45c;
+  --warn-soft: #2e240f;
+  --bad: #f28b82;
+  --bad-soft: #351a18;
+  --code-bg: #1e2125;
+  --code-fg: #e6e8eb;
+}

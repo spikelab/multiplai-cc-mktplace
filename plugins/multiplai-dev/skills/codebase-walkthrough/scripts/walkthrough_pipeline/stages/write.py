@@ -14,6 +14,10 @@ example payloads, and its configuration. Each item is checked by a gate in
 fails is cut and listed. Code draws the flow's Mermaid from the gated boxes
 and arrows. The Reference subsections are the prose sections from before.
 
+A codebase run (`--scope codebase`) adds four tables (`CODEBASE_TABLES`): which
+command to run, loops and caps, exit codes and markers, and state and resume.
+Their material leads with the survey stage's facts.
+
 The glossary is not written by an agent: it is the gated terms from explore,
 each checked again by `glossary_gate`.
 """
@@ -31,20 +35,28 @@ from .. import sdk
 from ..gates import (
     Corpus,
     cite_id,
+    commands_gate,
     config_gate,
+    exit_gate,
     explainer_text_gate,
     flow_gate,
     glossary_gate,
+    loop_gate,
     output_gate,
+    resume_gate,
     usecase_gate,
     write_gate,
 )
 from ..models import (
+    CommandsOutput,
     ConfigOutput,
+    ExitsOutput,
     Fact,
     FlowOutput,
+    LoopsOutput,
     OutputsOutput,
     PathsResult,
+    ResumeOutput,
     Section,
     SectionOutput,
     SummaryOutput,
@@ -80,12 +92,47 @@ REFERENCE_SUBSECTIONS = [
     "Glossary",
 ]
 MADE_SUBSECTIONS = ["Commits read", "Coverage", "Cut by the checks"]
+# A change's H2s (`--scope pr`). "What it does not touch" is written by code, from the diff and the paths.
+CHANGE_SECTIONS = [
+    ("summary", "What changed and why"),
+    ("flow", "The path through the change"),
+    ("affected", "Who is affected"),
+    ("untouched", "What it does not touch"),
+    ("reference", "Reference"),
+    ("made", "How this was made"),
+]
+# A codebase run's H2s (`--scope codebase`): a module's, with the four tables of CODEBASE_TABLES.
+CODEBASE_SECTIONS = [
+    ("summary", "What it is"),
+    ("commands", "Which command to run"),
+    ("usecases", "Use cases"),
+    ("flow", "How it works"),
+    ("loops", "Loops and caps"),
+    ("exits", "Exit codes and markers"),
+    ("resume", "State and resume"),
+    ("outputs", "What it creates"),
+    ("config", "Configuration"),
+    ("gotchas", "Gotchas"),
+    ("reference", "Reference"),
+    ("made", "How this was made"),
+]
+# Each table's rows: (field naming a row, the gate, the text fields kept, the field a gate may drop alone).
+CODEBASE_TABLES = {
+    "commands": ("situation", commands_gate, ("situation", "command", "why"), ""),
+    "loops": ("what", loop_gate, ("what", "cap", "ends_well", "ends_badly"), "cap"),
+    "exits": ("signal", exit_gate, ("signal", "meaning", "action"), ""),
+    "resume": ("stop", resume_gate, ("stop", "on_disk", "rerun"), ""),
+}
 STRUCTURED = {
     "summary": SummaryOutput,
     "usecases": UseCasesOutput,
     "flow": FlowOutput,
     "outputs": OutputsOutput,
     "config": ConfigOutput,
+    "commands": CommandsOutput,
+    "loops": LoopsOutput,
+    "exits": ExitsOutput,
+    "resume": ResumeOutput,
 }
 MIN_USE_CASES = 2
 AGENT_SECTIONS = [
@@ -98,8 +145,17 @@ AGENT_SECTIONS = [
 ]
 
 
-def required_titles(mode: str) -> list[str]:
-    return [t for _, t in (AGENT_SECTIONS if mode == "agent" else HUMAN_SECTIONS)]
+def human_sections(options: dict) -> list[tuple[str, str]]:
+    """The H2s of a human-mode walkthrough: a module's, a codebase's, or a change's (`--scope pr`)."""
+    return {"pr": CHANGE_SECTIONS, "codebase": CODEBASE_SECTIONS}.get(
+        options.get("scope"), HUMAN_SECTIONS
+    )
+
+
+def required_titles(mode: str, scope: str = "module") -> list[str]:
+    if mode == "agent":
+        return [t for _, t in AGENT_SECTIONS]
+    return [t for _, t in human_sections({"scope": scope})]
 
 
 @dataclass
@@ -110,6 +166,7 @@ class Spec:
     material: str
     kind: str = "prose"  # "prose", or a key of STRUCTURED
     rules: str = WRITE_RULES  # the prose rule block; the structured prompts always use EXPLAINER_RULES
+    ask: str = ""  # the prompts.STRUCTURED_ASKS key, when it is not `kind` (a change's sections)
 
 
 def _fact_line(f: Fact) -> str:
@@ -197,7 +254,94 @@ def write_specs(state: WalkState) -> list[Spec]:
                 _material([_fact_line(by_id[i]) for i in state.gotchas if i in by_id]),
             ),
         ]
+    if state.target.scope == "change":
+        return _change_specs(state) + _reference_specs(state)
+    if state.options.get("scope") == "codebase":
+        return _codebase_specs(state) + _reference_specs(state)
     return _explainer_specs(state) + _reference_specs(state)
+
+
+def change_material(state: WalkState) -> list[str]:
+    """The PR's title and description and the commit subjects, inside one untrusted-content fence."""
+    ch = state.target.change
+    text = []
+    if ch.kind == "pr":
+        text.append(f"PR #{ch.pr}: {ch.title}")
+        if ch.body:
+            text += ["", ch.body[:8000]]
+    text += ["", "Commits, oldest first:"] + [
+        f"- {sha[:8]} {subject}" for sha, subject in ch.commits[:200]
+    ]
+    return [
+        markdown_notice(
+            "the PR description and commit subjects, written by the change's author",
+            "Change description",
+        ),
+        *fence("\n".join(text).strip(), f"{state.target.package} description"),
+    ]
+
+
+def _changed_files_block(state: WalkState) -> list[str]:
+    ch = state.target.change
+    out = ["Files the change touches (status, head lines added, base lines removed):"]
+    for f in ch.files:
+        added = sum(b - a + 1 for a, b in f["added"])
+        removed = sum(b - a + 1 for a, b in f["removed"])
+        moved = (
+            f" (from {f['old_path']})" if f["old_path"] not in ("", f["path"]) else ""
+        )
+        out.append(f"- {f['status']} {f['path']}{moved}: +{added} -{removed}")
+    return out
+
+
+def _change_specs(state: WalkState) -> list[Spec]:
+    name = state.target.package
+    unit = [f for f in _facts(state, ("unit:",)) if "/file" not in f.source]
+    main = main_first(state)
+    on_main = (
+        {f"{state.target.repo_key}/{h.path}" for h in main[0].hops} if main else set()
+    )
+    flow_facts = [f for f in unit if any(c.path in on_main for c in f.citations)] + unit
+    callers = [
+        f"- `{r.symbol}` is called in {r.repo}: {r.path}:{r.line}"
+        for r in state.references
+        if r.kind == "caller"
+    ]
+    by_id = {f.id: f for f in state.facts}
+    return [
+        Spec(
+            "summary",
+            "What changed and why",
+            f"What `{name}` changes, and why.",
+            "\n".join(change_material(state))
+            + "\n\n"
+            + _material(_changed_files_block(state) + _lines(unit[:150])),
+            kind="summary",
+            ask="change_summary",
+        ),
+        Spec(
+            "flow",
+            "The path through the change",
+            f"How a run goes through the code `{name}` changes.",
+            _material([_hops(state)] + _lines(flow_facts)),
+            kind="flow",
+            ask="change_flow",
+        ),
+        Spec(
+            "affected",
+            "Who is affected",
+            "Say who and what this change affects: the code that calls what it changed, the entry points "
+            "whose paths go through it, and the people or systems behind them. Short paragraphs or a short "
+            "bullet list. Name only callers and entry points in the material.",
+            _material(
+                _entries_block(state)
+                + callers
+                + _lines(_facts(state, ("boundary:inbound",)))
+                + [_fact_line(by_id[i]) for i in state.interfaces if i in by_id]
+            ),
+            rules=EXPLAINER_RULES,
+        ),
+    ]
 
 
 DOC_NAMES = ("SKILL.md", "README.md")
@@ -347,6 +491,80 @@ def _explainer_specs(state: WalkState) -> list[Spec]:
             rules=EXPLAINER_RULES,
         ),
     ]
+
+
+LOOPS = re.compile(
+    r"retr|attempt|iteration|round|max_|MAX_|loop|limit|circuit", re.IGNORECASE
+)
+EXITS = re.compile(r"\bexit|sys\.exit|return code|marker|\b[A-Z_]{3,}:")
+RESUME = re.compile(r"resum|checkpoint|\bstate\b|re-?run|restart", re.IGNORECASE)
+
+
+def _matching(state: WalkState, pattern: re.Pattern) -> list[Fact]:
+    return [
+        f
+        for f in state.facts
+        if pattern.search(f.claim) or any(pattern.search(c.quote) for c in f.citations)
+    ]
+
+
+def _codebase_specs(state: WalkState) -> list[Spec]:
+    """A module's specs, with the four tables in H2 order. Each table's material leads with the survey
+    answer that asked for it; the lifecycle answer also feeds What it creates."""
+    name = state.target.package
+    survey = {
+        q: _facts(state, (f"survey:{q}/",)) for q in ("loops", "lifecycle", "commands")
+    }
+    tables = {
+        "commands": Spec(
+            "commands",
+            "Which command to run",
+            f"Which command of `{name}` to run in which situation.",
+            _material(
+                _lines(survey["commands"] + _doc_facts(state) + _cli_facts(state))
+                + _entries_block(state)
+            ),
+            kind="commands",
+        ),
+        "loops": Spec(
+            "loops",
+            "Loops and caps",
+            f"Every loop, retry and round in `{name}`, with its cap.",
+            _material(_lines(survey["loops"] + _matching(state, LOOPS))),
+            kind="loops",
+        ),
+        "exits": Spec(
+            "exits",
+            "Exit codes and markers",
+            f"The exit codes and printed markers of `{name}`, and what each means.",
+            _material(_lines(survey["loops"] + _matching(state, EXITS))),
+            kind="exits",
+        ),
+        "resume": Spec(
+            "resume",
+            "State and resume",
+            f"What `{name}` keeps on disk, and what a re-run keeps, redoes or refuses after each kind of stop.",
+            _material(_lines(survey["lifecycle"] + _matching(state, RESUME))),
+            kind="resume",
+        ),
+    }
+    specs = {s.key: s for s in _explainer_specs(state)}
+    outputs = specs["outputs"]
+    specs["outputs"] = Spec(
+        outputs.key,
+        outputs.title,
+        outputs.brief,
+        _material(
+            _lines(
+                survey["lifecycle"]
+                + [f for f in state.facts if WRITES.search(f.claim)]
+                + _facts(state, ("boundary:data", "boundary:config"))
+            )
+        ),
+        kind="outputs",
+    )
+    specs.update(tables)
+    return [specs[k] for k, _ in CODEBASE_SECTIONS if k in specs]
 
 
 def _reference_specs(state: WalkState) -> list[Spec]:
@@ -540,6 +758,38 @@ def _gate_structured(kind: str, out, gate: dict) -> dict:
             )
         data = {"items": items}
         missing = [] if items else ["no output passed the checks"]
+    elif kind in CODEBASE_TABLES:
+        first, check, fields, optional = CODEBASE_TABLES[kind]
+        rows = []
+        for row in out.rows:
+            result = check(row, **gate)
+            reasons, keep_optional = (
+                result if isinstance(result, tuple) else (result, True)
+            )
+            if reasons:
+                cut.append(
+                    {
+                        "text": f"row {getattr(row, first)!r} of {kind}",
+                        "reasons": reasons,
+                    }
+                )
+                continue
+            kept = {f: getattr(row, f).strip() for f in fields}
+            if optional and kept[optional] and not keep_optional:
+                cut.append(
+                    {
+                        "text": f"{optional} of {getattr(row, first)!r}: {kept[optional]!r} (the row is "
+                        "kept without it)",
+                        "reasons": [
+                            f"the {optional} is in no cited quote and no snapshot"
+                        ],
+                    }
+                )
+                kept[optional] = ""
+            kept["cite"] = cite_id(row.cite)
+            rows.append(kept)
+        data = {"rows": rows}
+        missing = [] if rows else [f"no row of {kind} passed the checks"]
     else:
         rows = []
         for row in out.rows:
@@ -575,6 +825,7 @@ _LISTS = {
     "usecases": ("cases", "title"),
     "outputs": ("items", "name"),
     "config": ("rows", "name"),
+    **{k: ("rows", first) for k, (first, *_) in CODEBASE_TABLES.items()},
 }
 
 
@@ -650,7 +901,12 @@ async def run_write(state: WalkState, ctx: RunContext) -> WalkState:
         out = await call(
             spec.key,
             write_structured(
-                name, spec.kind, spec.title, spec.brief, spec.material, schema
+                name,
+                spec.ask or spec.kind,
+                spec.title,
+                spec.brief,
+                spec.material,
+                schema,
             ),
             schema,
         )
@@ -662,7 +918,7 @@ async def run_write(state: WalkState, ctx: RunContext) -> WalkState:
                 spec.key + ":rewrite",
                 write_structured(
                     name,
-                    spec.kind,
+                    spec.ask or spec.kind,
                     spec.title,
                     spec.brief,
                     spec.material,

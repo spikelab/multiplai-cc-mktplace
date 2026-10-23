@@ -1,0 +1,35 @@
+[project]
+name = "design-system"
+version = "0.1.0"
+description = "Resolves and checks the folder of design tokens an HTML page is styled with. Shared by the design-system skill and codebase-walkthrough."
+requires-python = ">=3.12"
+dependencies = [
+    # load_multiplai_conf() only: the two settings may come from multiplai.conf.
+    "multiplai-core",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-xdist>=3.8"]
+
+# The same as the `dev` extra, as a dependency group, so the bare
+# `uv run --directory <this dir> python -m pytest tests/` works too.
+[dependency-groups]
+dev = ["pytest", "pytest-xdist>=3.8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+# multiplai-core is a git direct reference (not on PyPI)
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["design_system"]
+
+# Member-local source so this directory also resolves standalone — an
+# installed plugin is a copy of the plugin subtree only (no workspace root
+# above it). In-repo, uv resolves through the workspace root and the single
+# uv.lock.
+[tool.uv.sources]
+multiplai-core = { git = "https://github.com/spikelab/multiplai-core", branch = "main" }

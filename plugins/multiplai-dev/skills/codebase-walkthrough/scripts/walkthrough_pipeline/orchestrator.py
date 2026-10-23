@@ -1,9 +1,10 @@
-"""target → repos → symbols → references → boundary → partition → explore → docs → trace → write → render.
+"""target → repos → symbols → references → boundary → partition → explore → survey → docs → trace → write
+→ render.
 
 `walkthrough-state.json` is written after every stage; `resume` reloads it and
 continues from the first stage not yet done. Stages up to `partition` are
-code only; the four agent stages store each answer as it returns, so a budget
-stop keeps paid work.
+code only; the agent stages store each answer as it returns, so a budget
+stop keeps paid work. `survey` asks only for `--scope codebase`.
 """
 
 from __future__ import annotations
@@ -19,7 +20,8 @@ from pathlib import Path
 
 from multiplai_core.log_utils import log_event
 
-from . import budget, lsp, references
+from . import budget, design, lsp, references
+from . import change as change_mod
 from . import docs as docs_mod
 from . import repos as repos_mod
 from . import symbols as symbols_mod
@@ -27,13 +29,14 @@ from . import target as target_mod
 from .config import WalkConfig
 from .gates import boundary_gate, partition_gate, target_files_ws
 from .models import STAGES as STAGES_ORDER
-from .models import Dropped, WalkState
+from .models import Dropped, RepoInfo, WalkState
 from .partition import partition, ws_lines
 from .progress import ProgressWriter
 from .render import write_outputs
 from .stages import RunContext
 from .stages.docs import run_docs
 from .stages.explore import run_explore
+from .stages.survey import run_survey
 from .stages.trace import PATHS_CACHE, rewind_legacy_trace, run_trace
 from .stages.write import run_write
 from .state import STATE_FILE, load_state, save_state
@@ -82,6 +85,22 @@ class RunOptions:
     scenarios: int = 21  # the path cap
     scenarios_given: bool = False  # `--scenarios` was passed; else a resume uses the default of its own version
     lsp_timeout: float = 300.0
+    scope: str = (
+        "module"  # "module", "codebase", or "pr" for a change (`--pr` / `--range`)
+    )
+    commit: str | None = (
+        None  # module or codebase scope: the commit read (default HEAD)
+    )
+    libs: list[str] = field(
+        default_factory=list
+    )  # codebase scope: library directories the survey also reads
+    pr: int | None = None
+    range: str | None = None
+    fetch: bool = False
+    expect_head: str | None = None
+    design_system_dir: str | None = (
+        None  # `--design-system-dir`: the page's design-system folder; None is the neutral design system
+    )
 
 
 def _keep_previous_progress(run_dir: Path) -> None:
@@ -105,15 +124,7 @@ def _keep_previous_progress(run_dir: Path) -> None:
         pass
 
 
-def prepare(opts: RunOptions, runs_dir: Path) -> tuple[WalkState, Path]:
-    """Resolve, snapshot and gate the target; create the run directory. Raises WalkError."""
-    try:
-        root, sub, sha = target_mod.resolve_target(opts.target)
-    except target_mod.TargetError as e:
-        raise WalkError(str(e)) from e
-    slug = target_mod.sanitize_slug(
-        f"{root.name}--{sub or 'root'}--{sha[:12]}--{opts.mode}"
-    )
+def _fresh_run_dir(runs_dir: Path, slug: str) -> Path:
     run_dir = runs_dir / slug
     run_dir.mkdir(parents=True, exist_ok=True)
     for stale in (STATE_FILE, "boundary.json"):
@@ -121,16 +132,98 @@ def prepare(opts: RunOptions, runs_dir: Path) -> tuple[WalkState, Path]:
     # The stored trace answers belong to the state just deleted: a new run asks for its own.
     shutil.rmtree(run_dir / PATHS_CACHE, ignore_errors=True)
     _keep_previous_progress(run_dir)
+    return run_dir
+
+
+def prepare(opts: RunOptions, runs_dir: Path) -> tuple[WalkState, Path]:
+    """Resolve, snapshot and gate the target; create the run directory. Raises WalkError.
+
+    A change is resolved (gh, merge-base, --expect-head) before the run directory exists, so a
+    refusal leaves nothing behind.
+    """
+    try:
+        # First, before the run directory or its state is touched: a bad folder costs nothing.
+        design.check(opts.design_system_dir)
+    except design.DesignSystemError as e:
+        raise WalkError(str(e)) from e
+    if opts.scope == "pr":
+        return _prepare_change(opts, runs_dir)
+    try:
+        root, sub, sha = target_mod.resolve_target(opts.target, opts.commit)
+        libs = target_mod.resolve_libs(opts.libs, root, opts.repo_key or root.name, sha)
+    except target_mod.TargetError as e:
+        raise WalkError(str(e)) from e
+    # A codebase run has its own run directory, so it never deletes a module run's state.
+    suffix = "codebase" if opts.scope == "codebase" else opts.mode
+    run_dir = _fresh_run_dir(
+        runs_dir,
+        target_mod.sanitize_slug(f"{root.name}--{sub or 'root'}--{sha[:12]}--{suffix}"),
+    )
     try:
         info, repo = target_mod.build_target(
-            opts.target, run_dir, name=opts.name, depth=opts.depth, key=opts.repo_key
+            opts.target,
+            run_dir,
+            name=opts.name,
+            depth=opts.depth,
+            key=opts.repo_key,
+            commit=opts.commit,
         )
     except target_mod.TargetError as e:
         raise WalkError(str(e)) from e
     gate = target_mod.target_gate(info)
     if not gate.passed:
         raise WalkError(f"{opts.target}: {gate.reason}")
-    state = WalkState(target=info, options=asdict(opts), repos={repo.key: repo})
+    options = asdict(opts)
+    options["libs_resolved"] = [lib.to_dict() for lib in libs]
+    state = WalkState(
+        target=info, options=options, repos={repo.key: repo, **lib_repos(options)}
+    )
+    return state, run_dir
+
+
+def lib_repos(options: dict) -> dict[str, RepoInfo]:
+    """The repositories of the `--lib` directories outside the target's repository, keyed as saved."""
+    return {
+        lib["key"]: RepoInfo(
+            key=lib["key"],
+            path=lib["root"],
+            head_sha=lib["sha"],
+            remote_url=target_mod.remote_url(lib["root"]),
+        )
+        for lib in options.get("libs_resolved") or []
+        if not lib["in_target_repo"]
+    }
+
+
+def _prepare_change(opts: RunOptions, runs_dir: Path) -> tuple[WalkState, Path]:
+    try:
+        found = target_mod.resolve_change(
+            opts.target,
+            pr=opts.pr,
+            range_=opts.range,
+            fetch=opts.fetch,
+            expect_head=opts.expect_head,
+        )
+    except target_mod.TargetError as e:
+        raise WalkError(str(e)) from e
+    run_dir = _fresh_run_dir(
+        runs_dir,
+        target_mod.sanitize_slug(
+            f"{found.root.name}--{found.slug_part()}--{opts.mode}"
+        ),
+    )
+    try:
+        info, repo, base = target_mod.build_change_target(
+            found, run_dir, name=opts.name, depth=opts.depth, key=opts.repo_key
+        )
+    except target_mod.TargetError as e:
+        raise WalkError(str(e)) from e
+    gate = target_mod.target_gate(info)
+    if not gate.passed:
+        raise WalkError(f"{found.ref}: {gate.reason}")
+    state = WalkState(
+        target=info, options=asdict(opts), repos={repo.key: repo, base.key: base}
+    )
     return state, run_dir
 
 
@@ -161,6 +254,7 @@ async def _code_stage(
     t = state.target
     agent_mode = opts.get("mode") == "agent"
     target_repo = state.repos[t.repo_key]
+    base_repo = state.repos.get(t.change.base_key) if t.change else None
     if name == "repos":
         if agent_mode:
             state.searched_repos = [t.repo_key]
@@ -171,6 +265,11 @@ async def _code_stage(
                 repos=opts.get("repos") or None,
             )
             state.repos = found
+            if base_repo is not None:
+                # The base commit is read under its own key; it is never searched for references.
+                state.repos = {**found, base_repo.key: base_repo}
+            # A library is read at the commit saved when the run started, under its own key.
+            state.repos = {**state.repos, **lib_repos(opts)}
             state.searched_repos = sorted(found)
             state.warnings += warnings
             opts["search_root_resolved"] = str(root)
@@ -181,6 +280,10 @@ async def _code_stage(
         entries, warnings = symbols_mod.collect(t, snap)
         names = {e.name for e in entries if e.kind == "setting"}
         entries += symbols_mod.setting_definitions(t, snap, names)
+        if t.scope == "change":
+            entries = change_mod.change_symbols(
+                entries, t, change_mod.changed_definitions(snap, t)
+            )
         state.symbols = entries
         state.warnings += warnings
         ctx.counts = {
@@ -191,6 +294,17 @@ async def _code_stage(
     elif name == "references":
         if agent_mode:
             state.references = []
+        elif t.scope == "change":
+            changed = change_mod.changed_definitions(ctx.snap_root / t.repo_key, t)
+            state.references = await asyncio.to_thread(
+                references.scan_callers,
+                state.repos,
+                t,
+                changed,
+            )
+            state.lsp = {
+                "status": "skipped (a change: callers come from git grep and ast)"
+            }
         else:
             refs = await asyncio.to_thread(
                 references.scan_all, state.repos, t, state.symbols, run_dir / "refscan"
@@ -231,7 +345,11 @@ async def _code_stage(
             json.dumps(_boundary_json(state, dropped), indent=1), encoding="utf-8"
         )
         state.boundary_path = str(path)
-        for key in sorted({r.repo for r in state.references} - {t.repo_key}):
+        for key in sorted(
+            {r.repo for r in state.references}
+            - {t.repo_key}
+            - {t.change.base_key if t.change else ""}
+        ):
             await asyncio.to_thread(
                 target_mod.snapshot_repo, state.repos[key], ctx.snap_root / key
             )
@@ -242,8 +360,16 @@ async def _code_stage(
         }
     elif name == "partition":
         limit = int(opts.get("unit_lines") or 6000)
-        units = partition(t, limit)
-        gate = partition_gate(units, target_files_ws(t), ws_lines(t), limit)
+        if t.scope == "change":
+            spans = change_mod.change_spans(
+                t, change_mod.base_line_counts(ctx.snap_root, t)
+            )
+            units = change_mod.change_units(spans, limit)
+            totals = change_mod.unit_line_totals(units)
+            gate = partition_gate(units, list(totals), totals, limit)
+        else:
+            units = partition(t, limit)
+            gate = partition_gate(units, target_files_ws(t), ws_lines(t), limit)
         if not gate.passed:
             raise WalkError(f"partition gate failed: {gate.reason}")
         state.units = units
@@ -264,6 +390,7 @@ STAGES = (
     ("boundary", None),
     ("partition", None),
     ("explore", run_explore),
+    ("survey", run_survey),
     ("docs", run_docs),
     ("trace", run_trace),
     ("write", run_write),
@@ -297,11 +424,25 @@ async def run_state(
     else:
         progress.line(f"RESUMED after {state.stage}")
     snap_root = run_dir / "snap"
-    for key in {t.repo_key} | {r.repo for r in state.references}:
-        if key in state.repos:
+    try:
+        for key in (
+            {t.repo_key}
+            | {r.repo for r in state.references}
+            | set(lib_repos(state.options))
+        ):
+            if key in state.repos:
+                await asyncio.to_thread(
+                    target_mod.snapshot_repo, state.repos[key], snap_root / key
+                )
+        if t.change and t.change.base_key in state.repos:
             await asyncio.to_thread(
-                target_mod.snapshot_repo, state.repos[key], snap_root / key
+                target_mod.snapshot_paths,
+                state.repos[t.change.base_key],
+                snap_root / t.change.base_key,
+                change_mod.base_paths(t),
             )
+    except target_mod.TargetError as e:
+        raise WalkError(f"cannot read a commit this run needs: {e}") from e
     ctx = RunContext(
         config=config,
         run_dir=run_dir,
@@ -437,12 +578,20 @@ async def resume(
     session_id: str = "",
     docs: str | None | object = NO_CHANGE,
     rewrite: bool = False,
+    design_system_dir: str | None = None,
 ) -> list[Path]:
     """Continue a saved run. *docs* replaces the saved `--docs` URL (None drops the docs). *rewrite* runs the
-    write and render stages again on a run past its trace stage (`rewind_for_rewrite`)."""
+    write and render stages again on a run past its trace stage (`rewind_for_rewrite`). *design_system_dir*
+    replaces the saved `--design-system-dir`; the folder in use is checked before anything else."""
     state = load_state(run_dir / STATE_FILE)
     if state is None:
         raise WalkError(f"no readable {STATE_FILE} in {run_dir}")
+    if design_system_dir is not None:
+        state.options["design_system_dir"] = design_system_dir
+    try:
+        design.check(state.options.get("design_system_dir"))
+    except design.DesignSystemError as e:
+        raise WalkError(str(e)) from e
     if docs is not NO_CHANGE:
         if state.past("docs"):
             raise WalkError(

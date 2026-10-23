@@ -846,8 +846,8 @@ stage runs on the session's model.
   base, and no binary files; for `--tree` and `--dir`, every file under
   review. It keeps only facts whose cited lines a program finds at the
   commit, and writes them to `facts.json` beside `findings.json`
-  (contract: `schema/facts.v1.schema.json`). review-viewer builds its
-  walkthrough from that file when the commits match. The stage runs on
+  (contract: `schema/facts.v1.schema.json`). `find_with_facts` lists them
+  in the finders' prompts. The stage runs on
   `finder_model`, counts towards `--max-cost-usd` and adds at least one
   agent call per 6,000 lines in scope (units also break at directories),
   plus one re-ask per unit that left a file with no fact.

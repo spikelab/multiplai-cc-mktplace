@@ -4,7 +4,8 @@
 commands, scripts, skill commands, hooks), traces each one with a read-only
 agent, gates every hop and ranks the paths. The walkthrough passes the whole
 module as the changed lines, so every entry that reaches it is kept, up to
-`--scenarios` paths. Answers are kept under `<run dir>/paths-cache/`, so a
+`--scenarios` paths; for a change (`--scope pr`) it passes the lines the change
+adds, so the paths kept are the ones through the change. Answers are kept under `<run dir>/paths-cache/`, so a
 resumed run asks only for the ones it does not have.
 
 Web entries are not found by `map_paths`; the boundary stage found them, and
@@ -78,6 +79,12 @@ def module_lines(state: WalkState, root: Path) -> dict[str, set[int]]:
         if n:
             out[rel] = set(range(1, n + 1))
     return out
+
+
+def change_lines(state: WalkState) -> dict[str, set[int]]:
+    """A change's added lines per explained file at head: the paths kept are those that pass through them."""
+    added = state.target.change.added()
+    return {f: added[f] for f in state.target.files if added.get(f)}
 
 
 def _rel(state: WalkState, ws: str) -> str | None:
@@ -311,7 +318,9 @@ async def run_trace(state: WalkState, ctx: RunContext) -> WalkState:
             commit=state.target.head_sha,
             resolve=_resolver(state),
             call=_trace_call(ctx, root, latch),
-            changed_lines=module_lines(state, root),
+            changed_lines=change_lines(state)
+            if state.target.scope == "change"
+            else module_lines(state, root),
             seeds=web_seeds(state),
             places=known_places(state),
             cap=path_cap(state.options),

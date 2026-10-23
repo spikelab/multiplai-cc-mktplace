@@ -1,0 +1,36 @@
+[project]
+name = "git-targets"
+version = "0.1.0"
+description = "Resolves a PR, a commit range or a commit to shas and lists what changed, read-only over a git clone. Shared by codebase-walkthrough and review."
+requires-python = ">=3.12"
+dependencies = [
+    # GIT_ARGV and git_env only: every git call runs with core's fixed argv
+    # prefix and environment.
+    "multiplai-core",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-xdist>=3.8"]
+
+# The same as the `dev` extra, as a dependency group, so the bare
+# `uv run --directory <this dir> python -m pytest tests/` works too.
+[dependency-groups]
+dev = ["pytest", "pytest-xdist>=3.8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+# multiplai-core is a git direct reference (not on PyPI)
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["git_targets"]
+
+# Member-local source so this directory also resolves standalone — an
+# installed plugin is a copy of the plugin subtree only (no workspace root
+# above it). In-repo, uv resolves through the workspace root and the single
+# uv.lock.
+[tool.uv.sources]
+multiplai-core = { git = "https://github.com/spikelab/multiplai-core", branch = "main" }

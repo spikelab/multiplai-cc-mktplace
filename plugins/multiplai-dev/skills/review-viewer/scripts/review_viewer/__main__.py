@@ -7,12 +7,12 @@
     pending        print questions and decisions that have no final reply yet
     list           show the live viewers this user can reach
     stop           stop one viewer (--box) or all of them (--all)
-    walkthrough    put: check and publish the session's walkthrough; status: what is uncovered
+    summary        put: check and publish the session's summary; status: what it needs, and the full walkthrough
     validate       check findings files against the v1 contract
-    export-schema  write the findings, checks and walkthrough v1 JSON Schemas
+    export-schema  write the findings, checks and summary v1 JSON Schemas
 
 stdout is a contract: `serve` prints the `open:` line, the reference URLs, the
-mailboxes, the Monitor command, the pending command and one `walkthrough:`
+mailboxes, the Monitor command, the pending command and one `summary:`
 line per mailbox, then nothing per request. Diagnostics go to
 the logger, never to print().
 """
@@ -32,7 +32,7 @@ from pathlib import Path
 from multiplai_core.log_utils import log_event, setup_logging
 from pydantic import ValidationError
 
-from . import gitdata, netinfo, registry, server, stats, walkthrough
+from . import gitdata, netinfo, registry, server, stats, summary
 from .gitdata import (
     EMPTY_TREE,
     GitError,
@@ -48,14 +48,14 @@ from .mailbox import MAX_ROW_BYTES, Mailbox, MailboxError, utc_now
 from .models import (
     CHECKS_SCHEMA_PATH,
     SCHEMA_PATH,
-    WALKTHROUGH_SCHEMA_PATH,
+    SUMMARY_SCHEMA_PATH,
     FindingsFile,
     OutboxRow,
     checks_schema_text,
     findings_digest,
     load_findings,
     schema_text,
-    walkthrough_schema_text,
+    summary_schema_text,
 )
 
 COMPONENT = "review-viewer"
@@ -394,7 +394,7 @@ def _print_contract(
     print(f"monitor: {_monitor_command(boxes, label)}")
     print(f"pending: {_pending_command(boxes)}")
     for box, review in zip(boxes, reviews):
-        print(f"walkthrough: {walkthrough.walkthrough_path(box)} ({review})")
+        print(f"summary: {summary.summary_path(box)} ({review})")
     sys.stdout.flush()
 
 
@@ -704,13 +704,13 @@ def cmd_pending(args) -> int:
     return 0
 
 
-# --- walkthrough ----------------------------------------------------------------------
+# --- summary --------------------------------------------------------------------------
 
 
 def _served(args):
     box = invocation_path(args.box).resolve()
     try:
-        return box, walkthrough.load_served(box)
+        return box, summary.load_served(box)
     except FileNotFoundError:
         print(
             f"no served target in {box} (it is the mailbox: directory `serve` printed; "
@@ -718,11 +718,11 @@ def _served(args):
             file=sys.stderr,
         )
     except (OSError, ValueError) as exc:
-        print(f"cannot read {walkthrough.served_path(box)}: {exc}", file=sys.stderr)
+        print(f"cannot read {summary.served_path(box)}: {exc}", file=sys.stderr)
     return box, None
 
 
-def cmd_walkthrough_put(args) -> int:
+def cmd_summary_put(args) -> int:
     box, served = _served(args)
     if served is None:
         return EXIT_USAGE
@@ -732,14 +732,10 @@ def cmd_walkthrough_put(args) -> int:
     except OSError as exc:
         print(f"cannot read {path}: {exc}", file=sys.stderr)
         return EXIT_USAGE
-    try:
-        wt, errors = walkthrough.put(box, text, served.findings)
-    except GitError as exc:
-        print(f"cannot check the walkthrough: {exc}", file=sys.stderr)
-        return EXIT_USAGE
+    sm, errors = summary.put(box, text, served.findings)
     if errors:
         print(
-            f"walkthrough rejected ({len(errors)} problem{'s' if len(errors) > 1 else ''}); "
+            f"summary rejected ({len(errors)} problem{'s' if len(errors) > 1 else ''}); "
             "nothing was published:",
             file=sys.stderr,
         )
@@ -749,43 +745,32 @@ def cmd_walkthrough_put(args) -> int:
     slug = served.findings.target.slug
     log_event(
         COMPONENT,
-        "walkthrough",
-        f"walkthrough for {slug}: {len(wt.steps)} steps"
-        f"{' (complete)' if wt.complete else ' (in progress)'}",
+        "summary",
+        f"summary for {slug}{' (complete)' if sm.complete else ' (in progress)'}",
         session_id=args.session_id,
         target=slug,
-        steps=len(wt.steps),
-        complete=wt.complete,
+        complete=sm.complete,
     )
-    uncovered, unlinked = walkthrough.coverage(wt, served.findings)
     print(
-        f"published {walkthrough.walkthrough_path(box)}: {len(wt.steps)} steps, "
-        f"{'complete' if wt.complete else 'in progress'}; "
-        f"{len(uncovered)} changed files and {len(unlinked)} findings not covered yet"
+        f"published {summary.summary_path(box)}: "
+        f"{'complete' if sm.complete else 'in progress'}"
     )
     return 0
 
 
-def cmd_walkthrough_status(args) -> int:
+def cmd_summary_status(args) -> int:
     box, served = _served(args)
     if served is None:
         return EXIT_USAGE
     try:
-        wt = walkthrough.load_walkthrough(box)
+        sm = summary.load_summary(box)
     except (OSError, ValueError) as exc:
-        print(
-            f"cannot read {walkthrough.walkthrough_path(box)}: {exc}", file=sys.stderr
-        )
+        print(f"cannot read {summary.summary_path(box)}: {exc}", file=sys.stderr)
         return EXIT_USAGE
     ff = served.findings
     t = ff.target
-    uncovered, unlinked = walkthrough.coverage(wt, ff)
-    state = (
-        "absent"
-        if wt is None
-        else (f"{len(wt.steps)} steps, {'complete' if wt.complete else 'in progress'}")
-    )
-    print(f"walkthrough: {walkthrough.walkthrough_path(box)} ({state})")
+    state = "absent" if sm is None else ("complete" if sm.complete else "in progress")
+    print(f"summary: {summary.summary_path(box)} ({state})")
     print(
         f"target: {t.label}, {len(t.files_changed)} changed files, "
         f"{len(ff.findings)} findings"
@@ -795,28 +780,32 @@ def cmd_walkthrough_status(args) -> int:
     review_dir = box.parent
     paths = server.inspect_paths(review_dir, t.head_sha)
     print(server.paths_status_line(paths, review_dir / "paths.json"))
-    for p in paths.result.paths if paths.result is not None else []:
-        print(f"  {p.id} {p.entry.name} ({p.entry.kind})")
-    print(f"changed files not covered ({len(uncovered)}):")
-    for path in uncovered:
-        print(f"  {path}")
-    by_id = {f.id: f for f in ff.findings}
-    print(f"findings not linked ({len(unlinked)}):")
-    for fid in unlinked:
-        f = by_id[fid]
-        print(f"  {fid} {f.severity} {f.status} {f.file}:{f.line_start} {f.claim}")
-    have = {a.topic for a in wt.assessments} if wt else set()
-    missing = [t for t in walkthrough.must_assess(ff) if t not in have]
+    fw = summary.full_walkthrough(
+        box, served, server.pr_number_of({"pr": served.pr}, box.parent)
+    )
+    print(
+        f"full walkthrough: {fw['state']}"
+        + (f" ({fw['reason']})" if fw["reason"] else "")
+        + (f" {fw['page']}" if fw["page"] else "")
+        + (f" (request {fw['request_id']})" if fw["request_id"] else "")
+    )
+    print(
+        f"full walkthrough dir: {fw['dir']} ({fw['kind']} {fw['what']} at {fw['commit']})"
+    )
+    print(f"full walkthrough run dir: {fw['run_dir'] or 'none'}")
+    print(f"full walkthrough command: {summary.command_line(fw)}")
+    have = {a.topic for a in sm.assessments} if sm else set()
+    missing = [t for t in summary.must_assess(ff) if t not in have]
     print(f"assessments missing ({len(missing)}): {', '.join(missing)}")
     tree = gitdata.is_tree_review(t)
     print(
         "risk: "
         + (
             "not needed for a tree"
-            if tree and (not wt or wt.risk is None)
+            if tree and (not sm or sm.risk is None)
             else "missing"
-            if not wt or wt.risk is None
-            else f"tier {wt.risk.tier}, {'revertable' if wt.risk.revertable else 'not revertable'}"
+            if not sm or sm.risk is None
+            else f"tier {sm.risk.tier}, {'revertable' if sm.risk.revertable else 'not revertable'}"
         )
     )
     st = served.stats or {}
@@ -866,7 +855,7 @@ def cmd_validate(args) -> int:
 def cmd_export_schema(args) -> int:
     for given, default, text in (
         (args.out, SCHEMA_PATH, schema_text()),
-        (args.walkthrough_out, WALKTHROUGH_SCHEMA_PATH, walkthrough_schema_text()),
+        (args.summary_out, SUMMARY_SCHEMA_PATH, summary_schema_text()),
         (args.checks_out, CHECKS_SCHEMA_PATH, checks_schema_text()),
     ):
         out = invocation_path(given) if given else default
@@ -1002,32 +991,30 @@ def build_parser() -> argparse.ArgumentParser:
     st.set_defaults(func=cmd_stop)
 
     w = sub.add_parser(
-        "walkthrough",
+        "summary",
         parents=[common],
-        help="publish or inspect the walkthrough the page shows",
+        help="publish or inspect the summary the page shows, and the full walkthrough",
     )
     wsub = w.add_subparsers(dest="wcmd", required=True, metavar="action")
     wp = wsub.add_parser(
         "put",
         parents=[common],
-        help="check a walkthrough.json and publish it to the page",
+        help="check a summary.json and publish it to the page",
     )
     wp.add_argument(
         "--box", required=True, help="the mailbox directory the server printed"
     )
-    wp.add_argument(
-        "--file", required=True, help="the walkthrough.json the session wrote"
-    )
-    wp.set_defaults(func=cmd_walkthrough_put)
+    wp.add_argument("--file", required=True, help="the summary.json the session wrote")
+    wp.set_defaults(func=cmd_summary_put)
     ws = wsub.add_parser(
         "status",
         parents=[common],
-        help="list changed files and findings the walkthrough does not cover",
+        help="what the summary still needs, and the full walkthrough's state and command",
     )
     ws.add_argument(
         "--box", required=True, help="the mailbox directory the server printed"
     )
-    ws.set_defaults(func=cmd_walkthrough_status)
+    ws.set_defaults(func=cmd_summary_status)
 
     v = sub.add_parser(
         "validate", parents=[common], help="validate findings.json files"
@@ -1038,15 +1025,14 @@ def build_parser() -> argparse.ArgumentParser:
     e = sub.add_parser(
         "export-schema",
         parents=[common],
-        help="write the findings, checks and walkthrough v1 JSON Schemas",
+        help="write the findings, checks and summary v1 JSON Schemas",
     )
     e.add_argument(
         "--out", help=f"findings schema path (default: {SCHEMA_PATH.name} in schema/)"
     )
     e.add_argument(
-        "--walkthrough-out",
-        help=f"walkthrough schema path (default: {WALKTHROUGH_SCHEMA_PATH.name} in "
-        "schema/)",
+        "--summary-out",
+        help=f"summary schema path (default: {SUMMARY_SCHEMA_PATH.name} in schema/)",
     )
     e.add_argument(
         "--checks-out",

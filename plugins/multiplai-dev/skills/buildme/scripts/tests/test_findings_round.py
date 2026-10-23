@@ -2995,7 +2995,7 @@ class TestCli:
         assert run.repo == REPO
 
     def test_the_change_comes_from_a_ticket_branch_it_holds(self, built, monkeypatch):
-        """A build branch from 0.100.0 on is `<TICKET>-<change>`."""
+        """A build branch from 0.105.0 on is `<TICKET>-<change>`."""
         repo, change, _ = built
         _git(repo, "branch", "-m", "buildme/calc", "ENG-7-calc")
         self._gh(monkeypatch, head="ENG-7-calc")

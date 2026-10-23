@@ -24,6 +24,7 @@ import tarfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import git_targets
 from multiplai_core.citations import GIT_ARGV, git_env
 
 from .models import GateResult, Need, TargetInfo
@@ -79,19 +80,9 @@ def git(
     return proc
 
 
-def rev_parse(repo: str | Path, ref: str) -> str | None:
-    """Full 40-hex sha for *ref*, or None when it does not resolve to a commit."""
-    proc = git(
-        repo, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}", check=False
-    )
-    sha = proc.stdout.strip()
-    return sha if proc.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", sha) else None
-
-
-def merge_base(repo: str | Path, a: str, b: str) -> str | None:
-    proc = git(repo, "merge-base", a, b, check=False)
-    sha = proc.stdout.strip()
-    return sha if proc.returncode == 0 and sha else None
+# Shared with codebase-walkthrough (plugins/multiplai-dev/lib/git_targets).
+rev_parse = git_targets.rev_parse
+merge_base = git_targets.merge_base
 
 
 def default_branch(repo: str | Path) -> str:
@@ -192,28 +183,14 @@ def _first_line(text: str) -> str:
     return lines[0][:300] if lines else "no error message"
 
 
-PR_VIEW_FIELDS = "headRefOid,baseRefOid,headRefName,baseRefName,title,body"
+PR_VIEW_FIELDS = git_targets.PR_VIEW_FIELDS
 
 
 def _pr_view(repo: Path, number: int) -> dict:
-    gh = shutil.which("gh")
-    if gh is None:
-        raise TargetError(
-            "--pr needs the GitHub CLI (`gh`), which is not installed. Install it from "
-            "https://cli.github.com and run `gh auth login`, or pass --range <base>..<head>."
-        )
-    proc = subprocess.run(
-        [gh, "pr", "view", str(number), "--json", PR_VIEW_FIELDS],
-        cwd=repo,
-        capture_output=True,
-        text=True,
-        stdin=subprocess.DEVNULL,
-        shell=False,
-        check=False,
-    )
-    if proc.returncode != 0:
-        raise TargetError(f"gh pr view {number} failed: {proc.stderr.strip()}")
-    return json.loads(proc.stdout)
+    try:
+        return git_targets.pr_view(repo, number)
+    except git_targets.GitTargetError as e:
+        raise TargetError(str(e)) from e
 
 
 def branch_rules(
@@ -339,7 +316,10 @@ def resolve(
     ):
         raise TargetError(f"{repo} is not a git repository")
     if fetch:
-        git(repo, "fetch", "--quiet", "origin")
+        try:
+            git_targets.fetch_origin(repo)
+        except git_targets.GitTargetError as e:
+            raise TargetError(str(e)) from e
 
     if tree:
         repo, sub = tree_root(repo, path)

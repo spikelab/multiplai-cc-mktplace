@@ -26,9 +26,6 @@
 <script defer src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.4.16/purify.min.js"
         integrity="sha512-flQmhkXNRQ3iUfvtdCobtpMjCb6kE+zLnTiAulAQJ3WykVfy84JvCMOo6vhwWXHTXjR25h9Zj+LyGFRWKjRoag=="
         crossorigin="anonymous"></script>
-<script defer src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/11.15.0/mermaid.min.js"
-        integrity="sha512-HH52omhHpZF6RfVnGiQwYgYm4H/ya2xsZYLl5xJ4+tLfX+rN4+8zF7V/H/KLeicPrKZYi1g6iBmVkk2AhXTGlg=="
-        crossorigin="anonymous"></script>
 <script defer src="/static/logic.js"></script>
 <script defer src="/static/app.js"></script>
 </head>
@@ -107,13 +104,12 @@
   <div id="detail-resize" class="resizer" role="separator" aria-orientation="vertical"
        aria-controls="detail" aria-label="Resize the right panel (arrow keys; double-click resets)"
        aria-valuemin="240" tabindex="0" title="Drag to resize; double-click to reset"></div>
-  <aside id="detail" class="detail" aria-label="Summary, reviews and findings">
+  <aside id="detail" class="detail" aria-label="Summary and findings">
     <button id="detail-rail" class="rail" type="button" title="Show the review panel (Ctrl+Alt+B)" aria-label="Show the review panel">
       <span class="rail-arrow" aria-hidden="true">‹</span><span class="rail-label">Review</span></button>
     <div class="detail-top">
     <div class="tabs" role="tablist">
       <button id="tab-summary" role="tab" aria-controls="summary">Summary</button>
-      <button id="tab-walk" role="tab" aria-controls="walkthrough">Reviews <span id="walk-count" class="count"></span></button>
       <button id="tab-finding" role="tab" aria-controls="finding">Findings <span id="finding-count" class="count"></span></button>
       <button id="tab-needs" role="tab" aria-controls="needs" hidden>Needs you <span id="needs-count" class="count"></span></button>
       <button id="tab-checked" role="tab" aria-controls="checked" hidden>Checked <span id="checked-count" class="count"></span></button>
@@ -130,16 +126,12 @@
     <div id="summary" role="tabpanel" class="panel">
       <div id="badges" class="badges"></div>
       <div id="badge-detail" class="badge-detail md" hidden></div>
-      <div id="walk-overview" class="md"></div>
+      <section id="full-walkthrough" class="full-walk" aria-label="Full walkthrough"></section>
       <details id="pr-desc" class="pr-desc" open hidden>
         <summary>PR description</summary>
         <div id="pr-body" class="md"></div>
       </details>
       <section id="run-block" class="run-block" hidden></section>
-    </div>
-    <div id="walkthrough" role="tabpanel" class="panel" hidden>
-      <ol id="walk-steps" class="walk-steps"></ol>
-      <div id="walk-step" class="walk-step"></div>
     </div>
     <div id="finding" role="tabpanel" class="panel" hidden>
       <label class="toggle"><input type="checkbox" id="show-hidden"> <span id="hidden-label">Show decided and refuted</span></label>
@@ -190,12 +182,13 @@
   </div>
 </div>
 <dialog id="palette" class="palette" aria-label="Go to">
-  <input id="palette-input" type="text" placeholder="Go to a file, review step or finding" aria-label="Search"
+  <input id="palette-input" type="text" placeholder="Go to a file or finding" aria-label="Search"
          aria-controls="palette-list" autocomplete="off" spellcheck="false">
   <ul id="palette-list" class="palette-list" role="listbox"></ul>
   <div class="palette-foot muted small"><kbd>↑</kbd> <kbd>↓</kbd> move · <kbd>Enter</kbd> open · <kbd>Esc</kbd> close</div>
 </dialog>
 <dialog id="share" class="share-dlg" aria-labelledby="share-title"></dialog>
+<dialog id="full-walk-dlg" class="share-dlg" aria-labelledby="full-walk-title"></dialog>
 <dialog id="help" class="help" aria-labelledby="help-title">
   <div class="help-head">
     <h2 id="help-title">Help</h2>
@@ -209,6 +202,7 @@
       <a href="#help-findings">Findings, verdicts and labels</a>
       <a href="#help-needs">Needs you</a>
       <a href="#help-paths">The Paths tab</a>
+      <a href="#help-full-walkthrough">Full walkthrough</a>
       <a href="#help-run">Run</a>
       <a href="#help-keys">Keyboard shortcuts</a>
     </nav>
@@ -514,6 +508,23 @@
         the test results may be incomplete.</p>
     </section>
 
+    <section id="help-full-walkthrough" class="help-sec" tabindex="-1" aria-labelledby="help-h-full-walkthrough">
+      <h3 id="help-h-full-walkthrough">Full walkthrough</h3>
+      <p>On the Summary tab: the codebase-walkthrough page of what is viewed, the directory of a tree or
+        the change of a PR, branch or range, at the commit shown in the header.</p>
+      <dl>
+        <dt>Open the full walkthrough</dt><dd>The page exists. It opens in a new tab, served by this viewer in
+          a sandbox: it cannot reach this page or its API.</dd>
+        <dt>Write the full walkthrough…</dt><dd>It does not exist yet. A dialog says what writing it does:
+          the session runs codebase-walkthrough, which sends the repository's code to a model and makes
+          paid model calls stopping at $50, searches no other repository, and for a PR runs
+          <code>gh pr view</code>. Confirm asks the session to run it; the chat shows its progress.</dd>
+        <dt>Writing the full walkthrough</dt><dd>The session was asked and has not answered for the last
+          time. The link replaces the spinner when the page is written.</dd>
+        <dt>No full walkthrough</dt><dd>It cannot be written here, for the reason shown.</dd>
+      </dl>
+    </section>
+
     <section id="help-run" class="help-sec" tabindex="-1" aria-labelledby="help-h-run">
       <h3 id="help-h-run">Run</h3>
       <p>At the bottom of the Summary tab, for a review that recorded it (multiplai-dev 0.28 and later).</p>
@@ -538,14 +549,13 @@
         <section>
           <h4>Moving around</h4>
           <dl>
-            <dt><kbd>Ctrl</kbd>+<kbd>K</kbd></dt><dd>Go to a file, review step or finding</dd>
+            <dt><kbd>Ctrl</kbd>+<kbd>K</kbd></dt><dd>Go to a file or finding</dd>
             <dt><kbd>j</kbd> <kbd>k</kbd></dt><dd>Next / previous finding</dd>
-            <dt><kbd>]</kbd> <kbd>[</kbd></dt><dd>Next / previous review step</dd>
             <dt><kbd>n</kbd> <kbd>p</kbd></dt><dd>Next / previous change in this file</dd>
             <dt><kbd>/</kbd></dt><dd>Filter the files (every file in the repo while <b>Show all files in the repo</b> is on)</dd>
             <dt><kbd>Ctrl</kbd>+<kbd>B</kbd></dt><dd>Hide or show the files panel</dd>
             <dt><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>B</kbd></dt><dd>Hide or show the review panel</dd>
-            <dt>‹ Prev / Next ›</dt><dd>Beside the file name: the previous or next file of the open review, or of the whole change</dd>
+            <dt>‹ Prev / Next ›</dt><dd>Beside the file name: the previous or next changed file</dd>
             <dt><kbd>Esc</kbd></dt><dd>Clear the line selection, close the chat</dd>
           </dl>
           <h4>The code</h4>

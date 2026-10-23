@@ -30,6 +30,13 @@ from pathlib import Path
 
 from pydantic import ConfigDict
 
+from .commands import (
+    module_search_roots,
+    parse_command_line,
+    python_module,
+    python_script,
+    resolve_python_m,
+)
 from .entries import Entry, KnownEdge
 from .explore import Resolve, check_citation
 from .models import Citation, Side, _Model
@@ -37,6 +44,10 @@ from .paths import HOP_LIMIT, BreakCode, Location, PathHop, _Strict, normalise_r
 from .pyindex import PyIndex, count_lines
 
 log = logging.getLogger(__name__)
+
+# A shell line continued onto the next, and a CI step's leading `run:` key (after an optional `- `).
+_CONTINUATION = re.compile(r"\\\s*\n")
+_YAML_RUN = re.compile(r"^\s*(?:-\s+)?run:\s*")
 
 BREAK_CODES: tuple[BreakCode, ...] = (
     "malformed_answer",
@@ -258,14 +269,19 @@ class _Gate:
         return any(_holds(hop, anchor) for anchor in anchors)
 
     def _connected(self, prev: PathHop, hop: PathHop) -> bool:
-        """Whether `hop` follows `prev`: by name, by a known edge, or at a known place.
+        """Whether `hop` follows `prev`: by name, by a known edge, at a known place, from the entry's line to its
+        handler, or into the file a command in `prev`'s quote runs.
 
         By name: the last dotted part of `hop`'s symbol is a NAME token in the
         `def`/`class` (or module) enclosing `prev`'s first line, so a comment or
         a string never counts. When `prev` is not parsed Python, that name must
         be a whole word of `prev`'s quote. A known edge must run from that same
         scope (`prev`'s cited range outside Python) into `hop`'s range; a place
-        must lie in `hop`'s range.
+        must lie in `hop`'s range. A `prev` holding the entry's line connects to
+        a `hop` holding its handler's line, as an `add_parser` line does to the
+        handler discovery resolved for it. When `prev` is not parsed Python, a
+        `hop` in the script or `python -m` module that a command line of `prev`'s
+        quote runs also connects.
         """
         start, end = self._scope(prev)
         named = self._is_named(
@@ -277,7 +293,58 @@ class _Gate:
             and _holds(hop, edge.to)
             for edge in self._edges
         )
-        return named or by_edge or any(_holds(hop, place) for place in self._places)
+        return (
+            named
+            or by_edge
+            or any(_holds(hop, place) for place in self._places)
+            or self._entry_to_handler(prev, hop)
+            or self._runs_file(prev, hop)
+        )
+
+    def _entry_to_handler(self, prev: PathHop, hop: PathHop) -> bool:
+        handler = self._entry.handler
+        return (
+            handler is not None
+            and _holds(prev, self._entry.location)
+            and _holds(hop, Location(path=handler.path, line=handler.line))
+        )
+
+    def _runs_file(self, prev: PathHop, hop: PathHop) -> bool:
+        """Whether `prev` is not parsed Python and a command line of its quote runs `hop`'s file."""
+        return not self._is_python(prev) and hop.path in self._command_files(prev)
+
+    def _command_files(self, hop: PathHop) -> set[str]:
+        """The snapshot files the command lines of `hop`'s quote run: a `python -m` module or a script path.
+
+        A line continued with a trailing backslash joins the next; a trailing
+        backslash with nothing after it is dropped. A line that does not
+        tokenise runs nothing.
+        """
+        files: set[str] = set()
+        for line in (
+            _CONTINUATION.sub(" ", hop.quote).rstrip().removesuffix("\\").splitlines()
+        ):
+            try:
+                command = parse_command_line(
+                    _YAML_RUN.sub("", line),
+                    source_file=hop.path,
+                    root=self._root,
+                    index=self._index,
+                )
+            except ValueError:
+                continue
+            if (module := python_module(command.tokens)) is not None:
+                roots = module_search_roots(
+                    command, hop.path, self._index.repo_root(hop.path)
+                )
+                found = resolve_python_m(module[0], roots, self._index)
+            elif (script := python_script(command.tokens)) is not None:
+                found = command.snapshot_path(script[0])
+            else:
+                found = None
+            if found is not None:
+                files.add(found)
+        return files
 
     def _is_python(self, hop: PathHop) -> bool:
         return self._index.tree(hop.path) is not None

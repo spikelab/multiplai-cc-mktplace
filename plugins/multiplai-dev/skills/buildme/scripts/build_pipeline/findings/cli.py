@@ -3,7 +3,7 @@ branch and worktree, then run the round loop.
 
 - Change: `--change`, else from the PR's head branch: `<TICKET>-<name>` for
   a change the branch holds under `specs/changes/` or `specs/archive/` (the
-  longest such name), or a build branch from before 0.100.0,
+  longest such name), or a build branch from before 0.105.0,
   `buildme/<name>`. Its directory is `specs/changes/<name>/`, else the
   newest `specs/archive/<date>-<name>/`. Neither → exit 2 naming `--change`.
 - Worktree: the one that already has the PR's branch checked out, else a new

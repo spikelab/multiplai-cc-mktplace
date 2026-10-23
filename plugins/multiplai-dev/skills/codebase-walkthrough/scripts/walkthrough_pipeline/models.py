@@ -37,6 +37,7 @@ STAGES: tuple[str, ...] = (
     "boundary",
     "partition",
     "explore",
+    "survey",
     "docs",
     "trace",
     "write",
@@ -67,7 +68,35 @@ class RepoInfo(BaseModel):
     remote_url: str | None = None
 
 
+class ChangeInfo(BaseModel):
+    """What a change target is (`--scope pr`): the PR or range, both commits and what changed between them."""
+
+    kind: Literal["pr", "range"]
+    ref: str  # "417" for a PR, "<base>..<head>" as given for a range
+    pr: int | None = None
+    title: str = ""  # the PR's, as gh returned it: untrusted text
+    body: str = ""  # the PR's, as gh returned it: untrusted text
+    base_ref: str = ""
+    head_ref: str = ""
+    base_sha: str  # the merge-base: the commit the change is read against
+    base_key: str  # the repo key under which the base commit is read (`<key>@base`)
+    commits: list[list[str]] = Field(
+        default_factory=list
+    )  # [sha, subject], oldest first
+    files: list[dict] = Field(default_factory=list)  # git_targets.ChangedFile.to_dict()
+
+    def added(self) -> dict[str, set[int]]:
+        """Head lines each file adds, keyed by its repo-relative path at head."""
+        return {
+            f["path"]: {n for a, b in f["added"] for n in range(a, b + 1)}
+            for f in self.files
+            if f["status"] != "D"
+        }
+
+
 class TargetInfo(BaseModel):
+    scope: Literal["module", "change"] = "module"
+    change: ChangeInfo | None = None
     repo_key: str
     repo_path: str
     subpath: str  # repo-relative directory of the module ("" = whole repo)
@@ -244,6 +273,54 @@ class ConfigRow(_Model):
 
 class ConfigOutput(_Model):
     rows: list[ConfigRow] = Field(default_factory=list)
+
+
+# `--scope codebase` adds four tables. Each row cites one id; its gate is in gates.py.
+
+
+class CommandRow(_Model):
+    situation: str
+    command: str = ""
+    why: str = ""
+    cite: str = ""
+
+
+class CommandsOutput(_Model):
+    rows: list[CommandRow] = Field(default_factory=list)
+
+
+class LoopRow(_Model):
+    what: str
+    cap: str = ""
+    ends_well: str = ""
+    ends_badly: str = ""
+    cite: str = ""
+
+
+class LoopsOutput(_Model):
+    rows: list[LoopRow] = Field(default_factory=list)
+
+
+class ExitRow(_Model):
+    signal: str
+    meaning: str = ""
+    action: str = ""
+    cite: str = ""
+
+
+class ExitsOutput(_Model):
+    rows: list[ExitRow] = Field(default_factory=list)
+
+
+class ResumeRow(_Model):
+    stop: str
+    on_disk: str = ""
+    rerun: str = ""
+    cite: str = ""
+
+
+class ResumeOutput(_Model):
+    rows: list[ResumeRow] = Field(default_factory=list)
 
 
 # --- stage records in the state ------------------------------------------------------
