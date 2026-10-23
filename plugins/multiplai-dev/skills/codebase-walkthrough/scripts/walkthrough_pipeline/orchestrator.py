@@ -99,7 +99,7 @@ class RunOptions:
     fetch: bool = False
     expect_head: str | None = None
     design_system_dir: str | None = (
-        None  # `--design-system-dir`: the page's design-system folder; None is the template's own tokens
+        None  # `--design-system-dir`: the page's design-system folder; None is the neutral design system
     )
 
 

@@ -156,7 +156,7 @@ the repositories next to it, and re-run with `--trust-repo` only on a yes.
 | `--api-collection` | Bruno/OpenCollection directory | a directory next to the repos holding `opencollection.yml` |
 | `--scenarios` | Cap on the number of paths traced (the flag keeps its old name) | 21 |
 | `--max-usd` | Budget circuit breaker | 50 |
-| `--design-system-dir` | Design-system folder the HTML page is styled with (on `run`, `resume` and `render`) | the page's own tokens |
+| `--design-system-dir` | Design-system folder the HTML page is styled with (on `run`, `resume` and `render`) | the neutral design system the plugin ships |
 
 ## Steps
 
