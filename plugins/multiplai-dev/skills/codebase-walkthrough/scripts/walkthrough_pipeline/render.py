@@ -1533,7 +1533,7 @@ def render_html(
 ) -> str:
     """The explainer as one scrolling page with a contents rail. The structured sections are drawn from
     their gated answers; the others from the same Markdown the .md file holds. *styles* is `(fonts, tokens)`
-    CSS from `design.css`; None is the template's own tokens."""
+    CSS from `design.css`; None is the neutral design system's."""
     lk = Linker(state, out_dir)
     t = state.target
     sections = human_md_sections(state, lk, out_dir)
@@ -1629,7 +1629,7 @@ def write_outputs(
     state: WalkState, out_dir: Path, design_dir: str | Path | None = None
 ) -> list[Path]:
     """Write the run's files to *out_dir*. The page is styled with *design_dir*, else the run's saved
-    `--design-system-dir`, else the template's own tokens; a folder that fails its check raises
+    `--design-system-dir`, else the neutral design system; a folder that fails its check raises
     `design.DesignSystemError` before any file is written."""
     styles = (
         design.css(design_dir or state.options.get("design_system_dir"))

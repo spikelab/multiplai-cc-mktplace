@@ -263,7 +263,7 @@ def build_parser() -> argparse.ArgumentParser:
     _design_flag(
         rn,
         "Design-system folder the HTML page is styled with (tokens.css, README.md, optional fonts.css); "
-        "checked before any model call. Default: the page's own tokens",
+        "checked before any model call. Default: the neutral design system",
     )
     _run_flags(rn)
 

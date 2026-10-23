@@ -15,6 +15,14 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.104.1] - 2026-10-23
+
+### Changed
+- **codebase-walkthrough's page uses the neutral design system when no
+  `--design-system-dir` is given.** The plugin now ships one theme. The
+  walkthrough's own `templates/tokens.css`, which had different colours from
+  neutral, is deleted.
+
 ## [0.104.0] - 2026-10-23
 
 ### Added

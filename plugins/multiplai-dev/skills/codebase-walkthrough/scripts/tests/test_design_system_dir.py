@@ -24,10 +24,10 @@ from test_pipeline import run_args
 from test_render_command import no_model  # noqa: F401  (a fixture)
 from walkthrough_pipeline import sdk
 from walkthrough_pipeline.__main__ import main
-from walkthrough_pipeline.design import FALLBACK
 from walkthrough_pipeline.state import STATE_FILE
 
 NEUTRAL_ACCENT = "--accent: #1f5fc4;"
+NEUTRAL_TOKENS = (design_system.NEUTRAL / "tokens.css").read_text()
 
 
 def _system(base: Path, name: str, accent: str) -> Path:
@@ -62,10 +62,10 @@ def _break(folder: Path) -> None:
     css.write_text(css.read_text().replace("  --radius: 6px;\n", ""))
 
 
-def test_without_the_option_the_page_has_its_own_tokens(done_run):
+def test_without_the_option_the_page_uses_the_neutral_design_system(done_run):
     md_path, run_dir, _ = done_run
     page = md_path.with_suffix(".html").read_text()
-    assert FALLBACK.read_text() in page
+    assert NEUTRAL_TOKENS in page
     assert "{{" not in page
     assert (
         json.loads((run_dir / STATE_FILE).read_text())["options"]["design_system_dir"]
@@ -81,7 +81,7 @@ def test_run_styles_the_page_with_the_folder(
     page = _page(tmp_path)
     assert "--accent: #1a56b0;" in page
     assert page.index("fonts.example/acme.css") < page.index("--accent: #1a56b0;")
-    assert FALLBACK.read_text() not in page
+    assert NEUTRAL_TOKENS not in page
     # The Markdown does not change with the style.
     assert "#1a56b0" not in (tmp_path / "out" / "bookings-walkthrough.md").read_text()
 
