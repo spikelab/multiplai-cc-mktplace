@@ -1,4 +1,4 @@
-"""One test per row S1-S15 of the plan's "Stop and resume states" table.
+"""One test per row S1-S16 of the plan's "Stop and resume states" table.
 
 Each test stops the run at its row, resumes it, and compares the result with a
 run of the same inputs that never stopped (`baseline`): the same files, the
@@ -46,7 +46,13 @@ from conftest import (
 from multiplai_core.specs import is_ready, mark_ready, write_change_meta
 from pm_spec_pipeline import epic, git_ops, handoff, layout, runlock, sdk, stages
 from pm_spec_pipeline import state as state_mod
-from pm_spec_pipeline.state import Handoff, RunState, StepOutcome
+from pm_spec_pipeline.state import (
+    EpicChild,
+    Handoff,
+    RunState,
+    SplitRecord,
+    StepOutcome,
+)
 
 NEW = ["new", "throttle", "--interview-summary", "Throttle it."]
 RESUME = ["resume", "throttle"]
@@ -770,3 +776,117 @@ def test_S15_files_are_the_pms_only_when_no_agent_ran(repo, model):
     assert model.calls_to("prototype") == 2
     reason = state(cdir)["steps"]["prototype"]["reason"]
     assert not reason.startswith("Kept the")
+
+
+# --- S16 --------------------------------------------------------------------------
+
+OLD_CHILDREN = ("throttle-api", "throttle-ui")
+
+
+def old_split(repo: Path) -> dict:
+    """The parent of a pm-spec 0.7.2 epic split in the user's checkout: its
+    `interview.md` and `.change.yaml` (`children`), and a run state holding
+    the split; each child a sibling change in the old layout, handed off by
+    its own run. Returns the parent's run state as saved."""
+    parent = source_dir(repo)
+    write(parent / "interview.md", "# Interview\n\nThrottle it.\n")
+    write_change_meta(
+        parent,
+        {
+            "children": list(OLD_CHILDREN),
+            "ticket_refs": {"epic": "ENG-1", "children": []},
+        },
+    )
+    split = SplitRecord(
+        inputs="old",
+        single=False,
+        children=[
+            EpicChild(id="api", title="API", plan="# Plan: api\n"),
+            EpicChild(id="ui", title="UI", depends_on=["api"], plan="# Plan: ui\n"),
+        ],
+    )
+    old = RunState(
+        change="throttle", intake_done=True, interview_done=True, split=split
+    )
+    state_mod.save(old, parent / ".pm-spec", ledger=False)
+    for name, deps in zip(OLD_CHILDREN, ([], ["throttle-api"]), strict=True):
+        child = source_dir(repo, name)
+        write(child / "proposal.md", proposal())
+        write(child / "use-cases.md", "# Use cases\n")
+        write(child / "plan.md", f"# Plan: {name}\n\n## Done means\n1. x\n")
+        for cap in CAPS:
+            write(child / "requirements" / f"{cap}.md", requirements(cap))
+        write_change_meta(child, {"parent": "throttle", "depends_on": deps})
+        rev = mark_ready(child)
+        state_mod.save(
+            RunState(
+                change=name,
+                parent="throttle",
+                intake_done=True,
+                interview_done=True,
+                steps={"consistency": StepOutcome(outcome="passed", revision=rev)},
+                handoff=Handoff(revision=rev, committed=True, commit="abc"),
+            ),
+            child / ".pm-spec",
+            ledger=False,
+        )
+    return json.loads((parent / ".pm-spec" / "state.json").read_text())
+
+
+def change_files(cdir: Path) -> dict[str, object]:
+    """Every file of a change dir, the run folder included, each
+    `.change.yaml` as a mapping without the branch the move to the feature
+    branch records (`branch.adopt`, before any step runs)."""
+    out: dict[str, object] = {}
+    for path in sorted(cdir.rglob("*")):
+        if not path.is_file() or path.name == runlock.LOCK_FILE:
+            continue
+        rel = path.relative_to(cdir).as_posix()
+        if path.name == ".change.yaml":
+            out[rel] = {k: v for k, v in meta(path.parent).items() if k != "branch"}
+        else:
+            out[rel] = path.read_bytes()
+    return out
+
+
+def test_S16_the_parent_of_an_old_split_points_at_its_children(repo, model, capsys):
+    two(model)
+    saved = old_split(repo)
+    names = ("throttle", *OLD_CHILDREN)
+    before = {n: change_files(source_dir(repo, n)) for n in names}
+
+    assert run(repo, *RESUME) == 0
+    out = capsys.readouterr().out
+    assert model.calls == []
+    assert "specs live in the children" in out and "Nothing was changed" in out
+    assert "  resume throttle-api\n  resume throttle-ui" in out
+    assert "SPEC:" not in out
+
+    # As the run that never stopped left it: every file, the children's run
+    # states too, but the parent's state, which gains the stages skipped.
+    after = {n: change_files(change_dir(repo, n)) for n in names}
+    state_rel = ".pm-spec/state.json"
+    for n in names:
+        theirs, mine = dict(before[n]), dict(after[n])
+        if n == "throttle":
+            theirs.pop(state_rel), mine.pop(state_rel)
+        assert mine == theirs, n
+    now = state(change_dir(repo))
+    assert now["steps"] == {
+        name: {**now["steps"][name], "outcome": "skipped", "reason": stages.OLD_SPLIT}
+        for name in stages.STAGES
+    }
+    assert {k: v for k, v in now.items() if k not in ("steps", "budget")} == {
+        k: v for k, v in saved.items() if k not in ("steps", "budget")
+    }
+    # Only the move to the branch was committed, and nothing was pushed by the run.
+    wt = worktree(repo)
+    subjects = git(wt, "log", "--format=%s", "origin/main..HEAD").splitlines()
+    assert subjects and all(s.endswith("moved to ENG-1-throttle") for s in subjects)
+
+    # Resumed again: nothing at all changes.
+    whole = run_dir_files(change_dir(repo).parent)
+    head = git(wt, "rev-parse", "HEAD")
+    assert run(repo, *RESUME) == 0
+    assert run_dir_files(change_dir(repo).parent) == whole
+    assert git(wt, "rev-parse", "HEAD") == head and model.calls == []

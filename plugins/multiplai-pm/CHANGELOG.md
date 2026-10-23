@@ -85,6 +85,9 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
   does not go through the three stages on `resume`: they are recorded
   skipped, and the resume only checks it again when it changed since its
   handoff, then hands it off.
+- `resume` on the parent of an epic pm-spec 0.7.2 or earlier split into
+  sibling child changes changes nothing: it says the specs live in the
+  children and prints a `resume <child>` command for each, then exits 0.
 
 ## [0.8.0] - 2026-10-22
 

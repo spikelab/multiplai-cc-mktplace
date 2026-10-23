@@ -16,6 +16,8 @@ In order, each skipped when the run state or the files say it is done:
 
 A run pm-spec 0.8.0 or earlier started has its stage steps recorded skipped
 first (row S14, `stages.skip_before_staged_flow`), so it runs only 2 and 7.
+The parent of a pm-spec 0.7.2 epic split stops there, pointing at its
+children (row S16, `stages.stop_at_old_split`).
 
 `--auto` makes no stop and no ticket wait. Every file on disk is kept, whoever
 wrote it: an edit pulled from the branch at a stop is an input of the stages
@@ -209,6 +211,8 @@ async def advance(
         return EXIT_DONE
     _refuse_while_issues_are_open(run)
     if not run.state.adopted:
+        if stages.stop_at_old_split(run):
+            return EXIT_DONE
         stages.skip_before_staged_flow(run)
     if _ready_again(run):
         return EXIT_DONE

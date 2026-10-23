@@ -277,7 +277,10 @@ spec file. It needs a `proposal.md` and either `specs.md` files or the old
 `requirements/<capability>.md` files. A change pm-spec 0.8.0 or earlier
 started keeps its run: `resume` records the three stages skipped ("before
 the staged flow"), checks the change again when it changed since its
-handoff, and hands it off.
+handoff, and hands it off. On the parent of an epic that pm-spec 0.7.2 or
+earlier split into sibling child changes, `resume` changes nothing: it says
+the specs live in the children and prints `resume <child>` for each (exit
+0); run those.
 
 Models and efforts come from `specs/config.yaml`: `models:` and `efforts:`
 keyed by `interview`, `spec` (the artifacts, the components and the check),

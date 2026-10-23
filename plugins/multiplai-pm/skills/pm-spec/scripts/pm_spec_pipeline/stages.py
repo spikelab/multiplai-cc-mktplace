@@ -24,12 +24,16 @@ expects and recording none of the refs it was given. With `--auto` there is no w
 
 A run started before the staged flow (pm-spec 0.8.0 and earlier, row S14)
 has no stage records: `skip_before_staged_flow` records each stage step
-`skipped`, so its resume only checks and hands off.
+`skipped`, so its resume only checks and hands off. The parent of a pm-spec
+0.7.2 epic split (row S16) holds no specs of its own: `stop_at_old_split`
+records the stages skipped and points at its children, writing nothing else.
 """
 
 from __future__ import annotations
 
 import logging
+
+from multiplai_core.specs import read_change_meta
 
 from . import branch, git_ops, layout, tickets
 from . import findings as F
@@ -64,6 +68,7 @@ MESSAGES = {
 
 STAGES = (PROPOSAL, COMPONENTS, PROTOTYPE, TICKETS, SPECS)
 BEFORE_STAGED_FLOW = "before the staged flow"
+OLD_SPLIT = f"{BEFORE_STAGED_FLOW}: the specs are in the children"
 
 
 def predates_staged_flow(run: Run) -> bool:
@@ -71,14 +76,63 @@ def predates_staged_flow(run: Run) -> bool:
     stage step (`prototype` was a step before the stages too), or the change
     dir is in the old layout (`requirements/`, no `specs.md`)."""
     steps = run.state.steps
-    if (run.state.handoff is not None or "consistency" in steps) and not any(
-        name in steps for name in (PROPOSAL, COMPONENTS, TICKETS, SPECS)
+    if (run.state.handoff is not None or "consistency" in steps) and _no_stage_record(
+        run
     ):
         return True
     change_dir = run.config.change_dir
     return (change_dir / layout.OLD_DIR).is_dir() and not (
         change_dir / layout.SPECS_FILE
     ).is_file()
+
+
+def _no_stage_record(run: Run) -> bool:
+    return not any(
+        name in run.state.steps for name in (PROPOSAL, COMPONENTS, TICKETS, SPECS)
+    )
+
+
+def old_split_children(run: Run) -> list[str]:
+    """Row S16: the child change names of a pm-spec 0.7.2 epic split parent,
+    `[]` for any other run. Such a parent's state has a `split` record with
+    several children and no stage record (the staged flow records the
+    proposal before it splits) but those this row wrote; its `.change.yaml`
+    lists the children."""
+    split = run.state.split
+    if split is None or split.single:
+        return []
+    if not all(
+        run.state.steps[name].reason == OLD_SPLIT
+        for name in (PROPOSAL, COMPONENTS, TICKETS, SPECS)
+        if name in run.state.steps
+    ):
+        return []
+    try:
+        listed = read_change_meta(run.config.change_dir).get("children")
+    except (OSError, UnicodeError, ValueError):
+        listed = None
+    if isinstance(listed, list) and listed:
+        return [c for c in listed if isinstance(c, str)]
+    return [f"{run.config.change_name}-{c.id}" for c in split.children]
+
+
+def stop_at_old_split(run: Run) -> bool:
+    """Row S16: True, the stages recorded skipped and the children printed,
+    for the parent of a pm-spec 0.7.2 epic split; False otherwise."""
+    children = old_split_children(run)
+    if not children:
+        return False
+    for name in STAGES:
+        if name not in run.state.steps:
+            F.record_skipped(run, name, "", OLD_SPLIT)
+    name = run.config.change_name
+    print(
+        f"{name} was split into child changes by pm-spec 0.7.2 or earlier, and its "
+        "specs live in the children. Nothing was changed. Resume each child:\n"
+        + "\n".join(f"  resume {child}" for child in children),
+        flush=True,
+    )
+    return True
 
 
 def skip_before_staged_flow(run: Run) -> None:
