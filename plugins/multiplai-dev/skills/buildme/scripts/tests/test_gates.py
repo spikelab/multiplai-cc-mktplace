@@ -164,6 +164,97 @@ class TestRedGate:
         )
         assert red_gate(output, 1).passed
 
+    # The run that rejected a test writer twice (2026-10-23): five NameErrors
+    # and two `pytest.fail()` calls, printed by `uv run pytest -q`.
+    PYTEST_FAIL_OUTPUT = (
+        "FFFFFFF...                                                [100%]\n"
+        "=================================== FAILURES ===================\n"
+        "E       NameError: name '_has_local_leakage' is not defined\n"
+        "\n"
+        "tests/test_repo_hygiene.py:143: NameError\n"
+        ">           pytest.fail(\n"
+        "E           Failed: _repo_root must call pytest.skip(...) instead of "
+        "raising TypeError: _repo_root() got an unexpected keyword argument 'cwd'\n"
+        "\n"
+        "tests/test_repo_hygiene.py:202: Failed\n"
+        "=========================== short test summary info ============\n"
+        "FAILED tests/test_repo_hygiene.py::test_local_leakage_detector_flags_session_uuids\n"
+        "FAILED tests/test_repo_hygiene.py::test_repo_root_skips_cleanly_outside_a_git_worktree\n"
+        "7 failed, 3 passed in 0.06s\n"
+    )
+
+    def test_passes_on_pytest_fail(self):
+        result = red_gate(self.PYTEST_FAIL_OUTPUT, 1)
+        assert result.passed
+        assert result.metadata["classification"] == "behavioral"
+
+    @pytest.mark.parametrize(
+        "output",
+        [
+            # --tb=short / long: pytest.raises and pytest.warns that saw nothing
+            "FAILED tests/test_a.py::test_x\nE   Failed: DID NOT RAISE ValueError\n",
+            "FAILED tests/test_a.py::test_x\nE   Failed: DID NOT WARN. No warnings\n",
+            # --tb=line: `path:line: message`, no `E` line for the summary
+            (
+                "/p/tests/test_a.py:7: Failed: not implemented yet\n"
+                "FAILED tests/test_a.py::test_x\n"
+            ),
+            "/p/tests/test_a.py:4: assert 1 == 2\nFAILED tests/test_a.py::test_x\n",
+            # --tb=no -rf: only the short summary carries the message
+            "FAILED tests/test_a.py::test_x - Failed: not implemented yet\n",
+            "FAILED tests/test_a.py::test_x - assert 1 == 2\n",
+        ],
+        ids=[
+            "did_not_raise",
+            "did_not_warn",
+            "tb_line_failed",
+            "tb_line_assert",
+            "summary_failed",
+            "summary_assert",
+        ],
+    )
+    def test_passes_on_other_pytest_failure_formats(self, output):
+        result = red_gate(output, 1)
+        assert result.passed
+        assert result.metadata["classification"] == "behavioral"
+
+    @pytest.mark.parametrize(
+        "output",
+        [
+            # pytest.fail() at module level is a collection error
+            (
+                "ERROR collecting tests/test_a.py\nE   Failed: boom\n"
+                "FAILED tests/test_a.py::test_x\n"
+            ),
+            # pytest.fail() in a fixture is a setup error
+            (
+                "ERROR at setup of test_x\nE   Failed: boom\n"
+                "FAILED tests/test_a.py::test_x\n"
+            ),
+        ],
+        ids=["collection", "setup"],
+    )
+    def test_pytest_fail_outside_a_test_body_is_still_rejected(self, output):
+        result = red_gate(output, 1)
+        assert not result.passed
+        assert result.action == "fix_tests"
+
+    @pytest.mark.parametrize(
+        "output",
+        [
+            "FAILED tests/test_a.py::test_x\nE   NameError: name 'f' is not defined\n",
+            "FAILED tests/test_a.py::test_x\nE   TypeError: f() takes 0 arguments\n",
+            "FAILED tests/test_a.py::test_x - NameError: name 'f' is not defined\n",
+            # prose that merely contains the word
+            "FAILED tests/test_a.py::test_x\nE   ValueError: Failed: to parse\n",
+        ],
+        ids=["name_error", "type_error", "summary_name_error", "failed_in_prose"],
+    )
+    def test_errors_in_test_code_are_still_not_right_reason(self, output):
+        result = red_gate(output, 1)
+        assert not result.passed
+        assert result.action == "fix_tests"
+
     def test_suite_passing_means_rewrite_tests(self):
         result = red_gate("5 passed in 0.3s", 0)
         assert not result.passed

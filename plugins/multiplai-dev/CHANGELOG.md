@@ -15,6 +15,19 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.105.2] - 2026-10-23
+
+### Fixed
+- buildme's RED gate accepts a test that fails through pytest's own
+  `Failed`: `pytest.fail()`, and `pytest.raises` / `pytest.warns` that saw
+  nothing (`DID NOT RAISE`). It also reads `--tb=line` and `-rf` output, where
+  an assertion is printed as `path:line: assert ...` or
+  `FAILED <id> - assert ...`. Such tests were rejected as having "no
+  recognizable test-failure signature" and sent back to the test writer.
+  A `pytest.fail()` in a fixture or at module level is still a setup or
+  collection error, and NameError or TypeError from the test's own code is
+  still not a right reason.
+
 ## [0.105.1] - 2026-10-23
 
 ### Fixed

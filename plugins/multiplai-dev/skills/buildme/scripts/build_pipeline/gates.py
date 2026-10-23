@@ -332,9 +332,18 @@ def integration_gate(
 
 # Failure signatures that prove tests fail "for the right reason": the code
 # under test is missing or incomplete, not that the test files themselves are
-# broken.
+# broken. Besides an assertion, pytest's own `Failed` counts: `pytest.fail()`,
+# and `pytest.raises` / `pytest.warns` that saw nothing ("DID NOT RAISE"),
+# as an `E   Failed:` line, the `path:line: Failed` line under a traceback,
+# `--tb=line`'s `path:line: <message>`, or `-rf`'s `FAILED <id> - <message>`.
+# A `pytest.fail()` in a fixture or at module level is a setup or collection
+# error, which `_RED_BROKEN_TESTS` rejects first. NameError, TypeError and
+# other errors raised by the test's own code are not here.
 _RED_RIGHT_REASON = re.compile(
-    r"AssertionError|NotImplementedError|AttributeError:.*has no attribute|^E\s+assert\b",
+    r"AssertionError|NotImplementedError|AttributeError:.*has no attribute|"
+    r"^E\s+(?:assert\b|Failed:)|"
+    r"^\S+:\d+: (?:assert\b|Failed(?::|$))|"
+    r"^FAILED\s+\S+\s+-\s+(?:assert\b|Failed:)",
     re.MULTILINE,
 )
 
