@@ -55,7 +55,7 @@ Rules:
   and the design must not tell their author what to reword. When a requirement
   is infeasible, or contradicts another requirement or the codebase, end your
   output with one line per problem, in exactly this form and nothing after:
-  `SPEC_ISSUE: requirements/<capability>.md: <requirement name>: <what is
+  `SPEC_ISSUE: {spec_ref}: <requirement name>: <what is
   infeasible or contradictory, and the change to the requirement that would
   fix it>`. Those lines go back to the requirements' author; write them only
   for a problem a design cannot solve

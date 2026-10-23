@@ -15,7 +15,11 @@ from pathlib import Path
 from code_facts import CallFn
 from multiplai_core.specs import change_root
 
-from ..change_manager import requirement_sources, requirement_texts
+from ..change_manager import (
+    requirement_sources,
+    requirement_texts,
+    spec_issue_ref,
+)
 from ..models import PriorAssessment
 from ..prompts.design_audit import (
     DESIGN_AUDIT_PROMPT,
@@ -213,6 +217,7 @@ def _build_prompt(
             proposal_content=proposal_content,
             plan_content=_read_plan(config),
             specs_content=specs_content,
+            spec_ref=spec_issue_ref(config.change_dir),
             codebase_analysis=codebase_analysis or "(new project)",
             research=research or "(no research conducted)",
             reference_docs=reference_docs or "(none available)",
@@ -421,6 +426,7 @@ async def run_design_audit(
         design_content=design,
         tasks_content=tasks,
         change_type=change_type,
+        spec_ref=spec_issue_ref(change_dir),
     ) + prior_findings_section(prior)
 
     log.info("Running design audit on %s", change_dir.name)

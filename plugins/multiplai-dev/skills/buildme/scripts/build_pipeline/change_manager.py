@@ -122,6 +122,15 @@ def requirement_sources(change_dir: Path) -> dict[str, str]:
     return {f"requirements/{cap}.md": text for cap, text in texts.items()}
 
 
+def spec_issue_ref(change_dir: Path) -> str:
+    """How a prompt asks a model to name a capability's file in a spec issue,
+    in `requirement_sources`' labels: `specs.md#<capability>` for a change (or
+    component) with a `specs.md`, else `requirements/<capability>.md`."""
+    if (Path(change_dir) / "specs.md").is_file():
+        return "specs.md#<capability>"
+    return "requirements/<capability>.md"
+
+
 def registry_names(change_dir: Path) -> list[str]:
     """The capabilities archiving *change_dir* writes into specs/registry/:
     its own and each component's (`component_dirs`), in order, once each."""

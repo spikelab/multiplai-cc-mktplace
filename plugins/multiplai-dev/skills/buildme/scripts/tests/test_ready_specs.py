@@ -933,8 +933,7 @@ class TestSpecIssuesFile:
         )
 
         assert (
-            f"`{SPEC_ISSUE_PREFIX} requirements/<capability>.md: <requirement name>:"
-            in DESIGN_PROMPT
+            f"`{SPEC_ISSUE_PREFIX} {{spec_ref}}: <requirement name>:" in DESIGN_PROMPT
         )
         assert "Flag any spec requirements that seem infeasible" not in DESIGN_PROMPT
 

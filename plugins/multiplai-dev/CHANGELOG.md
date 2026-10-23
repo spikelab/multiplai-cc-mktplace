@@ -31,7 +31,10 @@ time, not derived from a tag.
   sections of `specs.md`. A component's proposal and use cases are its
   change's. The tasks audit, the review-findings triage, `spec-issues.md`'s
   requirements file (`specs.md#<capability>`) and the respec audit read
-  `specs.md` too, not only `requirements/`.
+  `specs.md` too, not only `requirements/`. The design step and the design
+  audit name a requirement they cannot follow as `specs.md#<capability>:
+  <name>` in a change with `specs.md` (`requirements/<capability>.md:
+  <name>` in the old layout).
 - The agents that write each block's tests and code get the list of files in
   the change's `prototype/` and are told to match what they show of a UI or
   API.
