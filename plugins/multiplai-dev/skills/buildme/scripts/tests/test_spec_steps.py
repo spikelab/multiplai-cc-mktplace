@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from build_pipeline.change_manager import ChangeManager
 from build_pipeline.config import BuildConfig
 from build_pipeline.llm_steps.spec_steps import (
     _build_prompt,
@@ -462,6 +463,38 @@ class TestRegistryInThePrompts:
         assert "Other capabilities in specs/registry: auth" in section
 
     @pytest.mark.parametrize("artifact", ["design", "tasks"])
+    def test_design_and_tasks_get_the_components_plan(self, artifact, tmp_path):
+        project = tmp_path / "project"
+        root = project / "specs" / "changes" / "feat"
+        component = root / "components" / "billing"
+        component.mkdir(parents=True)
+        (root / "proposal.md").write_text("PROPOSAL-MARKER")
+        (component / "plan.md").write_text(
+            "# Plan: billing\n\n## Out of scope\n- OUT-OF-SCOPE-MARKER\n\n"
+            "## Done means\n1. DONE-MEANS-MARKER\n"
+        )
+        (component / "specs.md").write_text(
+            "# Capability: billing\n\n## ADDED Requirements\n\n"
+            "### Requirement: Invoices\nSPEC-MARKER\n"
+        )
+        (component / "design.md").write_text("design body")
+        config = BuildConfig(project_dir=project, change_name="feat/billing")
+        config.specs_dir = project / "specs"
+        assert config.change_dir == component
+        ctx = ChangeManager(config.specs_dir).artifact_context(component, artifact)
+
+        prompt = _build_prompt(artifact, ctx, config)
+
+        plan = prompt.split("## Plan — what this builds", 1)[1].split("\n## Specs", 1)[0]
+        assert "OUT-OF-SCOPE-MARKER" in plan and "DONE-MEANS-MARKER" in plan
+        assert "PROPOSAL-MARKER" in prompt and "SPEC-MARKER" in prompt
+        assert (
+            prompt.index("## Proposal")
+            < prompt.index("## Plan — ")
+            < prompt.index("## Specs")
+        )
+
+    @pytest.mark.parametrize("artifact", ["design", "tasks"])
     def test_every_prompt_is_unchanged_with_an_empty_registry(self, artifact, tmp_path):
         """The section is appended, never a template placeholder, so an empty
         registry gives today's prompt byte for byte."""
@@ -471,6 +504,7 @@ class TestRegistryInThePrompts:
             "design": DESIGN_PROMPT.format(
                 project_context="PROJECT",
                 proposal_content="proposal body",
+                plan_content="(no plan.md)",
                 specs_content=_read_specs(config),
                 codebase_analysis="(new project)",
                 research="(no research conducted)",
@@ -482,6 +516,7 @@ class TestRegistryInThePrompts:
             "tasks": TASKS_PROMPT.format(
                 project_context="PROJECT",
                 proposal_content="proposal body",
+                plan_content="(no plan.md)",
                 specs_content=_read_specs(config),
                 design_content="design body",
                 use_cases_content="(not available)",

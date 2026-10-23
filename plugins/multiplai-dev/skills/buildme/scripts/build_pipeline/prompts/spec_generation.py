@@ -20,6 +20,9 @@ You are generating a design document for an spec-driven change.
 ## Proposal
 {proposal_content}
 
+## Plan — what this builds, what is out of scope, and what done means
+{plan_content}
+
 ## Specs
 {specs_content}
 
@@ -82,6 +85,9 @@ You are generating a task breakdown for an spec-driven change.
 
 ## Proposal
 {proposal_content}
+
+## Plan — what this builds, what is out of scope, and what done means
+{plan_content}
 
 ## Use cases
 {use_cases_content}

@@ -35,6 +35,10 @@ time, not derived from a tag.
 - The agents that write each block's tests and code get the list of files in
   the change's `prototype/` and are told to match what they show of a UI or
   API.
+- The design and tasks agents get the component's `plan.md` (what it
+  builds, what is out of scope, what done means), beside the change's
+  proposal and the component's `specs.md`; for a change with one component,
+  the `plan.md` in the change dir.
 - When every component has merged into the feature branch, the
   `/buildme <change>` run that sees it archives the whole change there, once: every
   component's capabilities merge into `specs/registry/`, and the change moves

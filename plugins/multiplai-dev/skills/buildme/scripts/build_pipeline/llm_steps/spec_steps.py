@@ -211,6 +211,7 @@ def _build_prompt(
         return DESIGN_PROMPT.format(
             project_context=project_context,
             proposal_content=proposal_content,
+            plan_content=_read_plan(config),
             specs_content=specs_content,
             codebase_analysis=codebase_analysis or "(new project)",
             research=research or "(no research conducted)",
@@ -228,6 +229,7 @@ def _build_prompt(
         return TASKS_PROMPT.format(
             project_context=project_context,
             proposal_content=proposal_content,
+            plan_content=_read_plan(config),
             specs_content=specs_content,
             design_content=design_content,
             use_cases_content=_read_dep(context, "use-cases", config),
@@ -265,6 +267,14 @@ def _read_dep(context: dict, dep_id: str, config) -> str:
     if path.exists():
         return path.read_text()
     return "(not available)"
+
+
+def _read_plan(config) -> str:
+    """The `plan.md` pm-spec wrote for the component (or for a change with one
+    component, in the change dir): its scope, what is out of scope and what
+    done means."""
+    path = config.change_dir / "plan.md"
+    return path.read_text() if path.is_file() else "(no plan.md)"
 
 
 def _read_specs(config) -> str:
