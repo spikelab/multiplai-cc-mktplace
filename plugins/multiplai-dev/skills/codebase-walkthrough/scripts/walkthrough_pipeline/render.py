@@ -685,6 +685,61 @@ def _md_config(state: WalkState, lk: Linker) -> MdSection:
     return MdSection(_join(out))
 
 
+# `--scope codebase`: each table's columns, as (row field, heading, how the cell is shown).
+# "text" may cite `[[cN]]`; "code" is shown as code; "cite" is the row's citation.
+TABLE_COLUMNS = {
+    "commands": [
+        ("situation", "When", "text"),
+        ("command", "Run", "code"),
+        ("why", "Why", "text"),
+        ("cite", "Where", "cite"),
+    ],
+    "loops": [
+        ("what", "What repeats", "text"),
+        ("cap", "Cap", "code"),
+        ("ends_well", "Ends well when", "text"),
+        ("ends_badly", "Ends badly when", "text"),
+        ("cite", "Where", "cite"),
+    ],
+    "exits": [
+        ("signal", "Code or marker", "code"),
+        ("meaning", "Means", "text"),
+        ("action", "What to do", "text"),
+        ("cite", "Where", "cite"),
+    ],
+    "resume": [
+        ("stop", "Stop", "text"),
+        ("on_disk", "On disk", "text"),
+        ("rerun", "A re-run", "text"),
+        ("cite", "Where", "cite"),
+    ],
+}
+EMPTY_TABLE = "Nothing about this passed the checks."
+
+
+def _md_table(state: WalkState, lk: Linker, key: str) -> MdSection:
+    rows = _data(state, key).get("rows") or []
+    if not rows:
+        return MdSection(EMPTY_TABLE)
+    cols = TABLE_COLUMNS[key]
+    out = [
+        "| " + " | ".join(head for _, head, _ in cols) + " |",
+        "|" + "---|" * len(cols),
+    ]
+    for r in rows:
+        cells = []
+        for field, _, how in cols:
+            value = r.get(field) or ""
+            if how == "cite":
+                cells.append(_cites(lk, [value]))
+            elif how == "code":
+                cells.append(f"`{_cell(value)}`" if value else "")
+            else:
+                cells.append(_cell(lk.expand(value)))
+        out.append("| " + " | ".join(cells) + " |")
+    return MdSection(_join(out))
+
+
 def _md_gotchas(state: WalkState, lk: Linker) -> MdSection:
     s = state.sections.get("gotchas")
     return MdSection(
@@ -975,6 +1030,12 @@ def _md_made(state: WalkState, out_dir: Path) -> MdSection:
         scope = [
             f"- Module directory: `{os.path.relpath(Path(t.repo_path) / t.subpath, out_dir)}`"
         ]
+        if state.options.get("scope") == "codebase":
+            scope.append("- Scope: codebase")
+            scope += [
+                f"- Library read: `{lib['key']}/{lib['subpath']}` at `{lib['sha']}`"
+                for lib in state.options.get("libs_resolved") or []
+            ]
     commits += [
         "",
         searched_line(state, out_dir),
@@ -1025,6 +1086,7 @@ def human_md_sections(
         "flow": _md_flow(state, lk),
         "outputs": _md_outputs(state, lk),
         "config": _md_config(state, lk),
+        **{key: _md_table(state, lk, key) for key in TABLE_COLUMNS},
         "gotchas": _md_gotchas(state, lk),
         "reference": _md_reference(state, lk),
         "made": _md_made(state, out_dir),
@@ -1576,6 +1638,36 @@ def _html_config(state: WalkState, lk: Linker, cites: CiteNumbers) -> str:
     return "\n".join(out)
 
 
+def _html_table(key: str):
+    """The HTML builder of one `--scope codebase` table."""
+
+    def build(state: WalkState, lk: Linker, cites: CiteNumbers) -> str:
+        rows = _data(state, key).get("rows") or []
+        if not rows:
+            return f"<p>{EMPTY_TABLE}</p>"
+        cols = TABLE_COLUMNS[key]
+        out = [
+            '<div class="tbl"><table><thead><tr>'
+            + "".join(f"<th>{html.escape(head)}</th>" for _, head, _ in cols)
+            + "</tr></thead><tbody>"
+        ]
+        for r in rows:
+            cells = []
+            for field, _, how in cols:
+                value = r.get(field) or ""
+                if how == "cite":
+                    cells.append(_html_cites(lk, [value], cites))
+                elif how == "code":
+                    cells.append(f"<code>{html.escape(value)}</code>" if value else "")
+                else:
+                    cells.append(_inline(lk.expand(value), cites))
+            out.append("<tr>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>")
+        out.append("</tbody></table></div>")
+        return "\n".join(out)
+
+    return build
+
+
 def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
 
@@ -1602,6 +1694,7 @@ def render_html(state: WalkState, out_dir: Path) -> str:
         "flow": _html_flow,
         "outputs": _html_outputs,
         "config": _html_config,
+        **{key: _html_table(key) for key in TABLE_COLUMNS},
     }
     body, nav = [], []
     for key, title in human_sections(state.options):
