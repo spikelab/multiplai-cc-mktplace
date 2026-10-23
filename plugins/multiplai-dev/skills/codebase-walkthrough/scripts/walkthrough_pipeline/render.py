@@ -1269,6 +1269,50 @@ def _raw_links(md: str, cites: CiteNumbers) -> str:
     return "\n".join(out)
 
 
+# A citation link as `_cite_html` writes it; a superscript of one or more (`group_cites`); a hop pointer.
+CITE_A = r'<a class="cite" href="[^"]*" title="[^"]*">\d+</a>'
+CITE_LINK = re.compile(r'<a class="cite" href="([^"]*)" title="([^"]*)">\d+</a>')
+CITE_SUP = rf"<sup>{CITE_A}(?:, {CITE_A})*</sup>"
+CITE_RUN = re.compile(rf"{CITE_SUP}(?:\s*{CITE_SUP})+")
+HOP_SUP = r'<sup><a class="hop" [^>]*>&#8618;</a></sup>'
+CITE_UNIT = re.compile(rf"(\s?)({CITE_SUP})({HOP_SUP})?")
+
+
+def group_cites(body: str) -> str:
+    """Adjacent citation superscripts become one, their numbers separated by ", ": "1, 2, 3"."""
+    return CITE_RUN.sub(
+        lambda m: "<sup>" + ", ".join(re.findall(CITE_A, m.group(0))) + "</sup>", body
+    )
+
+
+def first_cites_only(body: str) -> str:
+    """Only the first citation under each `<h2>` and `<h3>` of *body* is shown, as one link; the hop pointer
+    right after a dropped citation goes with it. The kept links are numbered again from 1 in the order they
+    appear. Every citation was checked before this; only what the page shows changes."""
+
+    def prune(chunk: str) -> str:
+        kept = False
+
+        def one(m: re.Match) -> str:
+            nonlocal kept
+            if kept:
+                return ""
+            kept = True
+            link = re.search(CITE_A, m.group(2)).group(0)
+            return f"{m.group(1)}<sup>{link}</sup>{m.group(3) or ''}"
+
+        return CITE_UNIT.sub(one, chunk)
+
+    out = "".join(prune(c) for c in re.split(r"(?=<h[23][\s>])", body))
+    numbers: dict[tuple[str, str], int] = {}
+
+    def renumber(m: re.Match) -> str:
+        n = numbers.setdefault((m.group(1), m.group(2)), len(numbers) + 1)
+        return f'<a class="cite" href="{m.group(1)}" title="{m.group(2)}">{n}</a>'
+
+    return CITE_LINK.sub(renumber, out)
+
+
 # The pointer `Linker.expand` puts after a hop's citation, ` ([p2h3](#p2h3))`; the page shows it as an arrow.
 HOP_REF_MD = re.compile(r" ?\(\[(p(\d+)h(\d+))\]\(#\1\)\)")
 
@@ -1739,9 +1783,9 @@ def render_html(
         page.replace("{{FONTS}}", fonts)
         .replace("{{TOKENS}}", tokens)
         .replace("{{TITLE}}", html.escape(f"{t.package} walkthrough"))
-        .replace("{{HEADER}}", hide_locations(header))
+        .replace("{{HEADER}}", hide_locations(group_cites(header)))
         .replace("{{NAV}}", "\n".join(nav))
-        .replace("{{BODY}}", hide_locations("\n".join(body)))
+        .replace("{{BODY}}", hide_locations(group_cites("\n".join(body))))
     )
 
 

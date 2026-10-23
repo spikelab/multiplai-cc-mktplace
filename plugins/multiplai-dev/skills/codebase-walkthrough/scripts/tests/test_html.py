@@ -243,3 +243,51 @@ def test_mermaid_is_a_mermaid_pre_and_other_code_is_marked_for_highlight_js():
 def test_a_hop_pointer_is_an_arrow_not_its_id():
     page = markdown_html('It starts here [`e/a.py:3`](u "q") ([p2h3](#p2h3)).')
     assert '<a class="hop" href="#p2h3"' in page and ">p2h3<" not in page
+
+
+def _linked(run_dir, text: str) -> str:
+    """*text* through the page's citation rendering: links, numbered superscripts, then grouping."""
+    from walkthrough_pipeline.render import (
+        CiteNumbers,
+        Linker,
+        group_cites,
+        markdown_html,
+    )
+    from walkthrough_pipeline.state import STATE_FILE, load_state
+
+    lk = Linker(load_state(run_dir / STATE_FILE), run_dir)
+    return group_cites(markdown_html(lk.expand(text), CiteNumbers()))
+
+
+def test_adjacent_citations_are_one_superscript_reading_1_2(done_run):
+    _, run_dir, _ = done_run
+    out = _linked(run_dir, "a [[c1]] [[c2]]")
+    assert out.count("<sup>") == 1
+    sup = re.search(r"<sup>(.*?)</sup>", out).group(1)
+    assert re.sub(r"<[^>]+>", "", sup) == "1, 2"
+
+
+def test_the_sparse_pass_keeps_one_citation_under_each_h3(done_run):
+    from walkthrough_pipeline.render import first_cites_only
+
+    _, run_dir, _ = done_run
+    body = (
+        "<h3>One</h3>"
+        + _linked(run_dir, "It reads. [[c1]]\n\nIt checks. [[c2]] [[c3]]")
+        + "<h3>Two</h3>"
+        + _linked(run_dir, "It writes. [[c3]]")
+    )
+    assert len(re.findall(r'class="cite"', body)) == 4
+    out = first_cites_only(body)
+    one, two = out.split("<h3>Two</h3>")
+    assert len(re.findall(r'class="cite"', one)) == 1
+    assert len(re.findall(r'class="cite"', two)) == 1
+    # Numbered again in the order shown.
+    assert re.findall(r'class="cite"[^>]*>(\d+)<', out) == ["1", "2"]
+    assert "It checks." in one and "It writes." in two
+
+
+def test_the_page_groups_adjacent_citations(done_run):
+    md_path, _, _ = done_run
+    page = md_path.with_suffix(".html").read_text()
+    assert not re.search(r'</a></sup>\s*<sup><a class="cite"', page)
