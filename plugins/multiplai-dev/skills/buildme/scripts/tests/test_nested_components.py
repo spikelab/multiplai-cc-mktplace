@@ -443,3 +443,143 @@ def test_a_component_depending_on_an_unknown_id_is_refused(
     out = capsys.readouterr().out
     assert "SPEC:NOT_READY" in out and "depends on zz" in out
     assert not (tmp_path / "calls.log").exists()
+
+
+# --- a component's --auto build does not archive at PUBLISH -------------------------
+
+
+def _accepted_at_publish(tmp_path, monkeypatch, change: str):
+    """The real orchestrator's last phase for *change* (`e/a`, a component, or
+    `e`, the same specs as a single change), with `--auto`: an accepted plan,
+    a built block and a passing test command, in a real repository. Only the
+    push is doubled, as `test_completion_contract.accepted_build` does."""
+    import argparse
+    import sys
+    from unittest.mock import Mock
+
+    from build_pipeline import orchestrator
+    from build_pipeline.config import GitToggles
+    from build_pipeline.models import BlockStatus, BuildPhase
+    from build_pipeline.spec_generator import reconcile_plan
+    from build_pipeline.state import BuildState, TDDState
+
+    monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
+    project = tmp_path / "p"
+    project.mkdir()
+    _git(project, "init", "-qb", "ENG-40-e")
+    _git(project, "config", "user.email", "t@t")
+    _git(project, "config", "user.name", "t")
+    _git(project, "config", "commit.gpgsign", "false")
+    config = BuildConfig(
+        project_dir=project,
+        change_name=change,
+        auto=True,
+        skip_research=True,
+        git=GitToggles(worktree=False, push=True, pr="none"),
+        test_command=f'{sys.executable} -c "from app import value; assert value == 1"',
+    )
+    config.specs_dir = project / "specs"
+    root = project / "specs" / "changes" / "e"
+    if change == "e":
+        root.mkdir(parents=True)
+        (root / "proposal.md").write_text("# Stop logging people out\n\n## Why\n\nx\n")
+        (root / "use-cases.md").write_text("# Use cases\n\n## UC-1\n\nx\n")
+        (root / "plan.md").write_text("# Plan: e\n")
+        (root / "specs.md").write_text(_specs_md("cap-a"))
+        write_change_meta(root, {"ticket_refs": {"epic": "ENG-40", "children": []}})
+        mark_ready(root, now=READY_AT)
+    else:
+        write_nested(root, {"a": (("cap-a",), (), "ENG-41")}, prototype=False)
+    (config.specs_dir / "registry").mkdir()
+    (config.specs_dir / "registry" / "cap-a.md").write_text(
+        REQUIREMENT.format(title="before")
+    )
+    for name in ("design", "unknowns", "tasks", "rubric"):
+        (config.change_dir / f"{name}.md").write_text(f"# {name}\n")
+    (project / "app.py").write_text("value = 1\n")
+    _git(project, "add", ".")
+    _git(project, "commit", "-qm", "accepted implementation")
+    # pm-spec pushed the feature branch the component's `.change.yaml` names.
+    origin = tmp_path / "o.git"
+    _git(tmp_path, "init", "-q", "--bare", str(origin))
+    _git(project, "remote", "add", "origin", str(origin))
+    _git(project, "push", "-q", "origin", "ENG-40-e")
+    _git(project, "fetch", "-q", "origin")
+    config.pipeline_branch = "ENG-40-e"
+    state = BuildState(
+        change_name=change,
+        tier="advanced",
+        phase=BuildPhase.PUBLISH,
+        branch=config.pipeline_branch,
+        worktree_path=str(project),
+        state_file=str(config.state_file_path()),
+        tdd=TDDState(
+            blocks=[
+                BlockInfo(
+                    number=1,
+                    name="Form",
+                    description="Keep the form.",
+                    status=BlockStatus.DONE,
+                )
+            ],
+            current_block=1,
+            baseline_tests_pass=True,
+            refactor_all_done=True,
+            mutation_done=True,
+            e2e_done=True,
+        ),
+    )
+    reconcile_plan(config, state)
+    state.spec_gen.record_step("design_audit", "passed")
+    state.spec_gen.record_step("plan_review", "passed")
+    state.checkpoint(config.state_file_path())
+    args = argparse.Namespace(
+        change=change,
+        project_dir=str(project),
+        auto=True,
+        spec_only=False,
+        skip_research=True,
+        research_path="",
+        session_id="",
+        block=None,
+    )
+    monkeypatch.setattr(orchestrator, "PRE_PUBLISH_CONTRIBUTORS", [])
+    monkeypatch.setattr(git_ops, "has_remote", lambda *a: True)
+    push = Mock(return_value=git_ops.GitResult([], 0, "", ""))
+    monkeypatch.setattr(git_ops, "push_branch", push)
+    return config, args, push
+
+
+@pytest.mark.parametrize("change", ["e/a", "e"])
+def test_an_auto_component_build_publishes_without_archiving(
+    tmp_path, monkeypatch, capsys, change
+):
+    import asyncio
+
+    from build_pipeline.orchestrator import run_orchestrator
+
+    config, args, push = _accepted_at_publish(tmp_path, monkeypatch, change)
+    specs = config.specs_dir
+    registry = (specs / "registry" / "cap-a.md").read_text()
+    capsys.readouterr()
+
+    assert asyncio.run(run_orchestrator(config, args)) == 0
+    out = capsys.readouterr().out
+    push.assert_called_once()
+    assert "PUBLICATION:published" in out and "RESULT:SUCCESS" in out
+    last = _git(config.project_dir, "log", "-1", "--format=%s").strip()
+    if change == "e/a":
+        # The component's dir, its change and the registry are as they were;
+        # its change archives once, after its last component merged.
+        assert "PHASE:ARCHIVE" not in out
+        assert (specs / "changes" / "e" / "components" / "a" / "specs.md").is_file()
+        assert not (specs / "archive").exists()
+        assert (specs / "registry" / "cap-a.md").read_text() == registry
+        assert last != "chore(specs): archive e/a"
+    else:
+        # The same specs as a single change do archive: the check above is
+        # not vacuous.
+        assert "PHASE:ARCHIVE:COMPLETE" in out
+        assert not (specs / "changes" / "e").exists()
+        assert "Requirement: cap-a" in (specs / "registry" / "cap-a.md").read_text()
+        assert last == "chore(specs): archive e"
