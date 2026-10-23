@@ -355,6 +355,9 @@ def target_files_ws(target: TargetInfo) -> list[str]:
 
 MAX_FLOW_NODES = 14
 MAX_LABEL_CHARS = 60
+MAX_DOES_CHARS = 80
+# Boxes a step need not explain: what goes in and what comes out.
+FLOW_ENDS = ("input", "output")
 MAX_EXAMPLE_LINES = 80
 MAX_EXAMPLE_CHARS = 4000
 FLAG = re.compile(r"-{1,2}[A-Za-z][\w-]*")
@@ -482,17 +485,79 @@ def _plain_label(label: str) -> str | None:
     return None
 
 
+def _box_extras(n, cid: str, gate: dict) -> tuple[dict, list[dict]]:
+    """A kept box's `does`, `reads`, `writes` and `fan_out` that pass, and a cut entry for each one dropped.
+
+    Each is dropped alone, the box kept: `does` when it fails `explainer_text_gate` or is over 80
+    characters; a `reads` or `writes` entry when it fails `explainer_text_gate`; `fan_out` when it fails
+    `explainer_text_gate` or holds a number in neither the cited quote nor the corpus (as `loop_gate`
+    drops a cap)."""
+    cut: list[dict] = []
+    label = n.label.strip()
+    does = n.does.strip()
+    if does:
+        why = explainer_text_gate(does, **gate)
+        if len(does) > MAX_DOES_CHARS:
+            why.append(f"over {MAX_DOES_CHARS} characters")
+        if why:
+            cut.append({"text": f"what box {label!r} does: {does!r}", "reasons": why})
+            does = ""
+    lists = {}
+    for field in ("reads", "writes"):
+        kept = []
+        for item in getattr(n, field):
+            item = item.strip()
+            if not item:
+                continue
+            why = explainer_text_gate(item, **gate)
+            if why:
+                cut.append(
+                    {"text": f"{field} of box {label!r}: {item!r}", "reasons": why}
+                )
+            else:
+                kept.append(item)
+        lists[field] = kept
+    fan_out = n.fan_out.strip()
+    if fan_out:
+        quote = gate["citations"][cid].quote
+        why = explainer_text_gate(fan_out, **gate)
+        why += [
+            f"`{x}` is in no cited quote and no snapshot"
+            for x in NUMBER.findall(fan_out)
+            if not _number_in(x, quote) and not gate["corpus"].contains(x)
+        ]
+        if why:
+            cut.append(
+                {
+                    "text": f"fan-out of box {label!r}: {fan_out!r} (the box is kept)",
+                    "reasons": why,
+                }
+            )
+            fan_out = ""
+    return {"does": does, **lists, "fan_out": fan_out}, cut
+
+
 def flow_gate(
-    flow, *, citations: dict[str, Citation], corpus: Corpus, labels: set[str]
+    flow,
+    *,
+    citations: dict[str, Citation],
+    corpus: Corpus,
+    labels: set[str],
+    steps_follow_boxes: bool = False,
 ) -> dict:
     """The flow's gated parts: `nodes`, `edges` and `steps` that passed, `cut` ({text, reasons}) for each
-    part dropped, and `graph` (reasons the graph as a whole fails: no node, over 14 nodes, not connected).
+    part dropped, `graph` (reasons the graph as a whole fails: no node, over 14 nodes, not connected) and
+    `order` (reasons the steps do not match the boxes; nothing is cut for them).
 
-    A node is dropped when its cite is unknown or its label is not plain words; an edge when it joins an
-    unknown node (its label alone is dropped when not plain); a step when its summary fails, a details
-    paragraph when it fails, a snippet cite when it is unknown."""
+    A node is dropped when its cite is unknown or its label is not plain words; its `does`, `reads`,
+    `writes` and `fan_out` are checked by `_box_extras`. An edge is dropped when it joins an unknown node
+    (its label alone is dropped when not plain); a step when its summary fails, a details paragraph when it
+    fails, a snippet cite when it is unknown. With *steps_follow_boxes* (module and codebase scope), each
+    step's `node` must name a drawn box, every drawn box that is not `input` or `output` must have exactly
+    one step, and the steps must follow the boxes' order."""
     nodes, edges, steps, cut = [], [], [], []
     seen: set[str] = set()
+    gate = {"citations": citations, "corpus": corpus, "labels": labels}
     for n in flow.nodes:
         nid = n.id.strip()
         why = []
@@ -512,7 +577,11 @@ def flow_gate(
             cut.append({"text": f"diagram box {n.label!r}", "reasons": why})
             continue
         seen.add(nid)
-        nodes.append({"id": nid, "label": n.label.strip(), "cite": cid})
+        extras, dropped = _box_extras(n, cid, gate)
+        cut += dropped
+        nodes.append(
+            {"id": nid, "label": n.label.strip(), "cite": cid, "kind": n.kind, **extras}
+        )
     for e in flow.edges:
         a, b = e.source.strip(), e.to.strip()
         if a not in seen or b not in seen:
@@ -554,7 +623,6 @@ def flow_gate(
                 "the diagram is not connected: no arrow reaches "
                 + ", ".join(repr(x) for x in alone)
             )
-    gate = {"citations": citations, "corpus": corpus, "labels": labels}
     for s in flow.steps:
         why = explainer_text_gate(s.title, **gate) + explainer_text_gate(
             s.summary, **gate
@@ -586,9 +654,45 @@ def flow_gate(
                 "summary": s.summary,
                 "details": details,
                 "snippets": snippets,
+                "node": s.node.strip(),
             }
         )
-    return {"nodes": nodes, "edges": edges, "steps": steps, "cut": cut, "graph": graph}
+    order = _step_order(nodes, steps) if steps_follow_boxes else []
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "steps": steps,
+        "cut": cut,
+        "graph": graph,
+        "order": order,
+    }
+
+
+def _step_order(nodes: list[dict], steps: list[dict]) -> list[str]:
+    """Why the steps do not walk the boxes one by one: a step naming no drawn box, a box that is not an
+    input or an output with no step or with several, or steps out of the boxes' order."""
+    reasons: list[str] = []
+    position = {n["id"]: i for i, n in enumerate(nodes)}
+    named = []
+    for s in steps:
+        if s["node"] in position:
+            named.append(s["node"])
+        else:
+            reasons.append(
+                f"step {s['title']!r} names no drawn box"
+                + (f" ({s['node']!r})" if s["node"] else "")
+            )
+    for n in nodes:
+        if n["kind"] in FLOW_ENDS:
+            continue
+        k = named.count(n["id"])
+        if k != 1:
+            reasons.append(
+                f"box {n['label']!r} has {k} steps; each box that is not an input or an output has one"
+            )
+    if named != sorted(named, key=position.get):
+        reasons.append("the steps are not in the order of the boxes")
+    return reasons
 
 
 def _keys(value) -> list[str]:

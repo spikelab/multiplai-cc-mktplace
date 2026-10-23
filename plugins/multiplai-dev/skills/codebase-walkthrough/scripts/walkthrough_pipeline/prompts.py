@@ -234,17 +234,30 @@ code (each CLI subcommand, flag or mode that changes what happens gets its own c
 - `what_happens`: what the code then does, in two or three sentences;
 - `result`: what comes out (files, a PR, a report);
 - `cites`: the citation ids (e.g. "c12") of the material the case rests on, at least one.""",
-    "flow": """Return the main path through the code as a flow diagram plus a walk through it.
-- `nodes`: at most 14 boxes, each with an `id` (letters and digits, e.g. "n1"), a `label` in plain words
-  (no code names, no file names, at most 60 characters) and a `cite`: the citation id of the line that
-  box stands for;
+    "flow": """Return the code's flow as a picture of its stages plus a walk through them.
+Draw the stages a newcomer would name, usually 5 to 10, not the call path: a box stands for a stage, not
+for a line. Leave out setup, locking, logging, clearing old outputs and saving as boxes; mention them in a
+stage's text if at all.
+- `nodes`: at most 14 boxes, each with:
+  - `id` (letters and digits, e.g. "n1");
+  - `label`: the stage's name in plain words (no code names, no file names, at most 60 characters);
+  - `cite`: the citation id of the line that runs that stage;
+  - `kind`: "input" (what goes in), "code" (plain code), "agent" (a model agent runs here), "check"
+    (code with no model checks an answer), "decision" (the flow branches) or "output" (a file or result
+    that comes out). The first boxes are the inputs and the last the outputs. Mark every place a model
+    agent runs, and every place code with no model checks what it answered;
+  - `does`: one plain line on what the stage does, at most 80 characters;
+  - `reads` and `writes`: short plain names of what the stage takes in and produces;
+  - `fan_out`: where the stage runs work in parallel, plain words with the count, e.g. "5 aspect
+    finders, plus 1 per piece"; else leave it empty;
 - `edges`: arrows `{"from": <node id>, "to": <node id>, "label": <optional plain words>}`. Every box must
   be reached by an arrow: one connected diagram;
-- `steps`: one per box or group of boxes, in order, each with a `title`, a `summary` of one to three
-  sentences, `details_paragraphs` (the specifics, for a reader who opens the step) and `snippet_cites`
-  (one or two citation ids whose lines are worth showing as code).
-Follow the first path listed (the module's main entry point) unless the material shows another path is
-the main one.""",
+- `steps`: one per box that is not an input or an output, in box order, each with `node` (that box's
+  `id`), a `title` (the box's stage), a `summary` of one to three sentences, `details_paragraphs` (the
+  specifics, for a reader who opens the step) and `snippet_cites` (one or two citation ids whose lines
+  are worth showing as code).
+Start from the first path listed (the module's main entry point) unless the material shows another path
+is the main one.""",
     "outputs": """Return `items`: each file, state record, log or other output the code writes, with its
 `name`, `what` (what it is for, in one or two sentences), `written_by_cite` (the citation id of the line
 that writes it) and, when the material shows its shape, an `example`: `format` "json", "yaml",

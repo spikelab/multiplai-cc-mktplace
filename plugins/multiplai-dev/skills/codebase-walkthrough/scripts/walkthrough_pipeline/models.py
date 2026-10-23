@@ -217,10 +217,25 @@ class UseCasesOutput(_Model):
     cases: list[UseCase] = Field(default_factory=list)
 
 
+FlowKind = Literal["input", "code", "agent", "check", "decision", "output"]
+
+
 class FlowNode(_Model):
+    """One stage of the flow picture: what kind of step it is, what it does, and what it reads and writes."""
+
     id: str
     label: str
     cite: str = ""
+    kind: FlowKind = "code"
+    does: str = ""  # one plain line, at most 80 characters
+    reads: list[str] = Field(default_factory=list)
+    writes: list[str] = Field(default_factory=list)
+    fan_out: str = ""  # plain words for work run in parallel, e.g. "5 aspect finders, plus 1 per piece"
+
+    @field_validator("kind", mode="before")
+    @classmethod
+    def _kind(cls, v):
+        return _lower(v)
 
 
 class FlowEdge(_Model):
@@ -233,6 +248,7 @@ class FlowEdge(_Model):
 class FlowStep(_Model):
     title: str
     summary: str
+    node: str = ""  # the id of the box this step explains
     details_paragraphs: list[str] = Field(default_factory=list)
     snippet_cites: list[str] = Field(default_factory=list)
 

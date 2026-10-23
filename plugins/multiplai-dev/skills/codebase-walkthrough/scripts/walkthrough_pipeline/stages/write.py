@@ -665,9 +665,12 @@ def citations_for_write(state: WalkState) -> dict:
     return idx
 
 
-def _gate_structured(kind: str, out, gate: dict) -> dict:
+def _gate_structured(
+    kind: str, out, gate: dict, *, steps_follow_boxes: bool = False
+) -> dict:
     """One structured answer through its gates: `data` (what passed, as stored in `Section.data`), `cut`
-    ({text, reasons}) and `failures` (the reasons, for the one re-ask)."""
+    ({text, reasons}) and `failures` (the reasons, for the one re-ask). *steps_follow_boxes* is
+    `flow_gate`'s, for a module's or a codebase's flow."""
     cut: list[dict] = []
     if kind == "summary":
         tagline = out.tagline.strip()
@@ -707,10 +710,10 @@ def _gate_structured(kind: str, out, gate: dict) -> dict:
             ]
         )
     elif kind == "flow":
-        g = flow_gate(out, **gate)
+        g = flow_gate(out, **gate, steps_follow_boxes=steps_follow_boxes)
         cut = g["cut"]
         data = {"nodes": g["nodes"], "edges": g["edges"], "steps": g["steps"]}
-        missing = g["graph"]
+        missing = g["graph"] + g["order"]
         if g["graph"]:
             cut.append({"text": "the flow diagram", "reasons": g["graph"]})
             data["nodes"], data["edges"] = [], []
@@ -895,7 +898,9 @@ async def run_write(state: WalkState, ctx: RunContext) -> WalkState:
         )
         if out is None:
             return sec
-        gated = _gate_structured(spec.kind, out, gate)
+        # A change's flow follows its path, not one step per box.
+        follow = spec.ask != "change_flow"
+        gated = _gate_structured(spec.kind, out, gate, steps_follow_boxes=follow)
         if gated["failures"]:
             retry = await call(
                 spec.key + ":rewrite",
@@ -915,7 +920,9 @@ async def run_write(state: WalkState, ctx: RunContext) -> WalkState:
             )
             if retry is not None:
                 gated = merge_reask(
-                    spec.kind, gated, _gate_structured(spec.kind, retry, gate)
+                    spec.kind,
+                    gated,
+                    _gate_structured(spec.kind, retry, gate, steps_follow_boxes=follow),
                 )
         sec.data, sec.cut = gated["data"], gated["cut"]
         if spec.kind == "summary":

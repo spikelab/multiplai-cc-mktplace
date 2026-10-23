@@ -101,7 +101,8 @@ class FakeAgents:
         self.trace_calls = 0
         # Failures planted in the explainer's structured answers: "usecase_flag" (a use case with a flag
         # the code does not have), "flow_node" (a box citing an unknown id), "flow_disconnected" (two boxes,
-        # no arrow), "output_key" (a JSON example with a key the code does not have).
+        # no arrow), "output_key" (a JSON example with a key the code does not have), "flow_fan_number" (a
+        # fan-out whose number is in no quote and no snapshot), "flow_step_order" (the steps swapped).
         self.plant = plant or set()
         # Raise BudgetExceededError on write call number stop_write_after + 1.
         self.stop_write_after = stop_write_after
@@ -514,9 +515,32 @@ class FakeAgents:
             return {"cases": cases}
         if schema is FlowOutput:
             nodes = [
-                {"id": "n1", "label": "Acme sends a booking", "cite": a},
-                {"id": "n2", "label": "The view stores it", "cite": f"[[{b}]]"},
-                {"id": "n3", "label": "The task acknowledges it", "cite": c},
+                {
+                    "id": "n1",
+                    "label": "Acme sends a booking",
+                    "cite": a,
+                    "kind": "Input",
+                    "does": "A webhook call",
+                },
+                {
+                    "id": "n2",
+                    "label": "The view stores it",
+                    "cite": f"[[{b}]]",
+                    "kind": "code",
+                    "does": "Saves one row",
+                    "reads": ["the booking"],
+                    "writes": ["a reservation row"],
+                },
+                {
+                    "id": "n3",
+                    "label": "The task acknowledges it",
+                    "cite": c,
+                    "kind": "agent",
+                    "does": "Tells Acme it arrived",
+                    "fan_out": "987654 workers"
+                    if "flow_fan_number" in self.plant
+                    else "",
+                },
             ]
             edges = [
                 {"from": "n1", "to": "n2", "label": "webhook"},
@@ -531,18 +555,22 @@ class FakeAgents:
                 edges = []
             steps = [
                 {
+                    "node": "n2",
                     "title": "Receive",
                     "summary": f"A booking arrives. [[{a}]]",
                     "details_paragraphs": [f"The handler reads the body. [[{b}]]"],
                     "snippet_cites": [a],
                 },
                 {
+                    "node": "n3",
                     "title": "Store",
                     "summary": f"It is saved. [[{c}]]",
                     "details_paragraphs": [],
                     "snippet_cites": [],
                 },
             ]
+            if "flow_step_order" in self.plant:
+                steps.reverse()
             return {"nodes": nodes, "edges": edges, "steps": steps}
         if schema is OutputsOutput:
             key = "zz_not_in_the_code" if "output_key" in self.plant else "ospite_count"
