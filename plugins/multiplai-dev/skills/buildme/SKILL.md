@@ -557,6 +557,28 @@ pm-spec splits an epic: the parent's `.change.yaml` lists its `children`
 and merge loops below. buildme reads only those records and the change dirs;
 it never splits anything itself.
 
+**Components nested in the change.** pm-spec 0.9.0 writes a change of several
+components as `specs/changes/<change>/components/<id>/` (each with
+`plan.md`, `specs.md` and a `.change.yaml` whose `depends_on` lists sibling
+ids), with the proposal, use cases and `prototype/` at the change.
+`/buildme <change>` runs the same coordinator over those components, in
+`depends_on` order: each builds as `--change <change>/<id>` on
+`<component ticket>-<change>-<id>` (the change's ticket while the component
+has none), from and into the feature branch, and the checks below apply to
+the components as they do to children (an id that is not kebab-case, a
+`depends_on` naming no component, a cycle, specs not ready). A component
+reads its capabilities from the `# Capability:` sections of its `specs.md`,
+and its proposal and use cases from the change. A merged component's dir
+stays on the branch (the saved `epic.json` says it merged), and no component
+archives itself: once every component has merged, the run archives the whole
+change on the feature branch, once (every component's capabilities merge
+into `specs/registry/`, the change moves to `specs/archive/<date>-<change>/`,
+committed as `chore(specs): archive <change>` and pushed), printing
+`PHASE:ARCHIVE:COMPLETE`; a later run finds it archived and archives nothing
+more. `buildme archive --change <change>/<id>` is refused; archive the change.
+A change in the older layout (`requirements/<cap>.md`, sibling child dirs) is
+built as before.
+
 Before anything is written, the build checks every listed child as the
 epic's feature branch on origin holds it (`origin/<TICKET>-<parent>` after a
 `git fetch origin`; the checkout's own copy is not read): named
@@ -914,12 +936,15 @@ Work through them **in this order**, and do not skip the first one:
    some block, and a use case with no block is the cheapest thing to catch at
    this checkpoint.
 4. Then `design.md`, `tasks.md`, `rubric.md`. `proposal.md` and
-   `requirements/` are pm-spec's: a problem in them goes to
+   `specs.md` (or `requirements/`) are pm-spec's: a problem in them goes to
    `/multiplai-pm:pm-spec revise <name>`, never into an edit here (an edit
    makes the next build refuse with `SPEC:NOT_READY`).
 
 A prototype, when the change has a UI or an output format, is pm-spec's step
-now, before the specs are marked ready.
+now, before the specs are marked ready. buildme hands the list of files in
+the change's `prototype/` to each block's test writer and implementer, with
+the instruction to match what they show of a UI or API when the block writes
+one.
 
 ### Step 4: Report results
 
