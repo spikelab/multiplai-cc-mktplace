@@ -220,6 +220,14 @@ def test_the_scratch_ticket_and_plan_are_not_needed_after_intake(repo, model, tm
     assert "PLAN-BODY" in model.prompts("spec:proposal")[0]
 
 
+def test_the_plan_file_help_says_where_the_plan_is_kept():
+    from pm_spec_pipeline.__main__ import build_parser
+
+    new = build_parser()._subparsers._group_actions[0].choices["new"]
+    [action] = [a for a in new._actions if "--plan-file" in a.option_strings]
+    assert "interview.md" in action.help and "plan.md" not in action.help
+
+
 # --- interview modes ----------------------------------------------------------------
 
 

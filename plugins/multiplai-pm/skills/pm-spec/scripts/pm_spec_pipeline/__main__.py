@@ -107,7 +107,11 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="REF",
         help="The ref of one of the ticket's child items; once per child",
     )
-    new.add_argument("--plan-file", default="", help="A plan, saved as plan.md")
+    new.add_argument(
+        "--plan-file",
+        default="",
+        help="A plan the interview reads, kept in interview.md",
+    )
     new.add_argument(
         "--context-files",
         nargs="*",
