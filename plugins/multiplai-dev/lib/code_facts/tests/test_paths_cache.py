@@ -14,11 +14,16 @@ import pytest
 from trace_fixtures import (
     CLI,
     NAMES,
+    PR_COMMANDS,
+    PR_GITHUB,
+    PR_MAIN,
     FakeCall,
     chain_hops,
     cli_source,
     commit_snapshot,
     lib,
+    pr_edit_hops,
+    pr_snapshot,
     run_map,
 )
 
@@ -457,3 +462,81 @@ def test_interrupted_run_resumes_with_only_the_missing_traces_and_the_same_outpu
         tmp_path / "whole.json",
     )
     assert resumed == whole
+
+
+# --- resume across the gate change (plan rows S5, S6) -------------------------------------------
+
+PR_ENTRIES = ["name: edit", "name: open", "name: skills.pr.scripts.pr_pipeline"]
+
+
+def pr_call(snap):
+    """Every entry of the pr snapshot answers the same trace, first time and on re-ask."""
+    hops = {
+        "name: edit": pr_edit_hops(snap),
+        "name: open": [
+            snap.hop(PR_COMMANDS, "cmd_open"),
+            snap.hop(PR_GITHUB, "run_write"),
+        ],
+        "name: skills.pr.scripts.pr_pipeline": [
+            snap.hop(PR_MAIN, "main"),
+            snap.hop(PR_MAIN, "build_parser"),
+        ],
+    }
+    answer = lambda name: {"hops": hops[name]}
+    return FakeCall(trace=answer, reask=answer, names=PR_ENTRIES)
+
+
+def run_with_the_old_gate(snap, call, cache_dir, monkeypatch):
+    """A run under the gate before PR 3, which connected neither an entry's line to its handler nor a command
+    to the file it runs.
+    """
+    gate = importlib.import_module("code_facts.trace_gate")._Gate
+    with monkeypatch.context() as m:
+        m.setattr(gate, "_entry_to_handler", lambda self, prev, hop: False)
+        m.setattr(gate, "_runs_file", lambda self, prev, hop: False)
+        return {p.entry.name: p for p in run_map(snap, call, cache_dir=cache_dir).paths}
+
+
+def test_s6_answers_cached_under_the_old_gate_are_regated_with_no_model_call(
+    tmp_path, monkeypatch
+):
+    snap = pr_snapshot(tmp_path / "repo")
+    cache_dir = tmp_path / "cache"
+    old = pr_call(snap)
+    before = run_with_the_old_gate(snap, old, cache_dir, monkeypatch)
+    assert (len(before["edit"].hops), before["edit"].break_reason) == (
+        1,
+        "unconnected_hop",
+    )
+    assert [c.stage for c in old.of("name: edit")] == ["trace", "reask"]
+
+    resumed = pr_call(snap)
+    after = {p.entry.name: p for p in run_map(snap, resumed, cache_dir=cache_dir).paths}
+    assert resumed.calls == []
+    assert (
+        len(after["edit"].hops),
+        after["edit"].stops_at,
+        after["edit"].break_reason,
+    ) == (4, None, None)
+
+
+def test_s5_a_resumed_trace_asks_only_for_missing_answers_and_regates_the_cached_ones(
+    tmp_path, monkeypatch
+):
+    snap = pr_snapshot(tmp_path / "repo")
+    cache_dir = tmp_path / "cache"
+    run_with_the_old_gate(snap, pr_call(snap), cache_dir, monkeypatch)
+    # Stopped mid-trace: only `edit`'s answers were stored.
+    tracing = importlib.import_module("code_facts.tracing")
+    ctx = SimpleNamespace(commit=snap.head, changed_lines=None, places=[])
+    for ent in lib("discover_entries")(snap.root).entries:
+        if ent.name != "edit":
+            (cache_dir / ANSWERS_DIR / f"{tracing.trace_key(ent, ctx)}.json").unlink()
+
+    resumed = pr_call(snap)
+    after = {p.entry.name: p for p in run_map(snap, resumed, cache_dir=cache_dir).paths}
+    assert sorted((c.stage, c.entry) for c in resumed.calls) == [
+        ("trace", "name: open"),
+        ("trace", "name: skills.pr.scripts.pr_pipeline"),
+    ]
+    assert (len(after["edit"].hops), after["edit"].stops_at) == (4, None)

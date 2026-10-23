@@ -192,6 +192,38 @@ def test_trace_prompt_names_the_change_scope(tmp_path):
     assert "no change scope" not in prompt
 
 
+START_AT_HANDLER = "parser registration: start hop 1 at its handler's `def` line"
+
+
+def test_trace_prompt_of_a_parser_registration_says_to_start_at_its_handler(tmp_path):
+    snap = cli_snapshot(tmp_path / "repo", ["opal"])
+    ent = lib("discover_entries")(snap.root).entries[0]
+    prompt = lib("paths_trace")(
+        ent, commit="c0ffee", changed_lines=None, known_edges=ent.known_edges, places=[]
+    )
+    assert f"{START_AT_HANDLER}, {CLI}:{snap.line(CLI, 'def cmd_opal(')}" in prompt
+
+
+@pytest.mark.parametrize(
+    "kind,dispatch",
+    [("argparse_subcommand", "comparison"), ("main_module", "set_defaults")],
+)
+def test_trace_prompt_without_a_resolved_parser_handler_names_no_start(
+    tmp_path, kind, dispatch
+):
+    snap = cli_snapshot(tmp_path / "repo", ["opal"], dispatch=dispatch)
+    entries = lib("discover_entries")(snap.root).entries
+    ent = (
+        next(e for e in entries if e.kind == kind)
+        if kind == "argparse_subcommand"
+        else entries[0].model_copy(update={"kind": kind})
+    )
+    prompt = lib("paths_trace")(
+        ent, commit="c0ffee", changed_lines=None, known_edges=ent.known_edges, places=[]
+    )
+    assert "parser registration" not in prompt
+
+
 def test_reask_prompt_carries_index_reason_detail_and_accepted_prefix(tmp_path):
     snap = cli_snapshot(tmp_path / "repo", ["opal"])
     ent = lib("discover_entries")(snap.root).entries[0]

@@ -15,6 +15,19 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.103.1] - 2026-10-23
+
+### Fixed
+- **Path tracing no longer stops at the first hop of a subcommand or a CI
+  step.** codebase-walkthrough and review trace a path hop by hop, and the
+  gate cut a trace with `unconnected_hop` when hop 2 did not follow from hop 1.
+  It now also connects an `add_parser` line to the handler discovery resolved
+  for it, and a command line in a non-Python file (a shell script, a CI
+  `run:` step, a `SKILL.md`) to the script or `python -m` module it runs. The
+  trace prompt tells the agent to start an `add_parser` entry at its handler's
+  `def` line. Resumed runs re-gate their cached trace answers under the new
+  rule, so a resume picks up the fix with no new model call.
+
 ## [0.103.0] - 2026-10-23
 
 ### Removed
