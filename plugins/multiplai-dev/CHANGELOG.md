@@ -15,6 +15,25 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.101.0] - 2026-10-23
+
+### Added
+- **codebase-walkthrough explains a whole tool or plugin.** `run <dir> --scope
+  codebase` reads a skill with its scripts, or a CLI with several commands,
+  and adds four tables to a module's walkthrough: Which command to run, Loops
+  and caps, Exit codes and markers, and State and resume. Three more agents
+  each read the whole snapshot for one question (loops, what is kept on disk
+  and what a re-run does, which command when), so a cap set in one file and
+  checked in another is seen together. The tool's own `SKILL.md`, `README.md`,
+  `CHANGELOG.md` and `CLAUDE.md` are read as input and cited like code. Every
+  row cites a line at the commit; a flag, number or name in no cited quote
+  cuts the row, and a table with no row left says so. It reads at `overview`
+  depth unless `--depth` says otherwise. `--mode agent` is refused with it.
+- **`--lib <dir>`** (with `--scope codebase`, repeatable) also reads a library
+  the code calls, at its HEAD, and cites it; How this was made lists each one
+  with its commit. A directory that is missing or outside a git repository
+  stops the run before anything is written.
+
 ## [0.100.0] - 2026-10-22
 
 ### Added
