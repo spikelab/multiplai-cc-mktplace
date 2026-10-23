@@ -98,6 +98,15 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
   `# Interview` title: the interview summary sits right under the title.
 - `pm-spec new --help` says a `--plan-file` is kept in `interview.md`, not
   saved as `plan.md`.
+- After the specs review stop, the consistency check no longer rewrites the
+  reviewed `specs.md` files. It reports its findings; a critical or major one
+  stops the run with `SPEC:BLOCKED` (exit 4) and the change is not marked
+  ready. Someone edits the files on the branch and pushes, and `resume`
+  pulls and checks them again. Minor findings are reported and the handoff
+  goes on. Runs with no review stop (`--auto`, an adopted change, a run
+  from before the staged flow) keep the check's one rewrite, whose prompt
+  now allows `MODIFIED` and `REMOVED` only in a capability with a
+  `specs/registry/` file.
 
 ### Migration
 - A change written in the old layout (`requirements/<capability>.md`) is

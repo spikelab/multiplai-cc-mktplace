@@ -252,9 +252,16 @@ def record_error(run: Run, name: str, reason: str) -> None:
 
 
 def block_on_findings(
-    run: Run, name: str, revision: str, reason: str, blocking: list[dict]
+    run: Run,
+    name: str,
+    revision: str,
+    reason: str,
+    blocking: list[dict],
+    *,
+    next_step: str = REOPEN_LINE,
 ) -> None:
-    """Record a final block on *blocking*, save, log and print them, and stop with exit 4."""
+    """Record a final block on *blocking*, save, log and print them with
+    *next_step*, and stop with exit 4."""
     step = run.state.step(name)
     step.outcome = "blocked"
     step.reason = reason
@@ -265,12 +272,12 @@ def block_on_findings(
     log_findings(name, "blocking", blocking)
     report = findings_report(blocking)
     run.progress(name.upper() + "_BLOCKED", f"{reason}\n{report}")
-    print(f"{name} blocked: {reason}\n{report}\n{REOPEN_LINE}", flush=True)
+    print(f"{name} blocked: {reason}\n{report}\n{next_step}", flush=True)
     print(f"{MARKER_BLOCKED}:{run.config.change_dir}", flush=True)
     raise Stop(EXIT_BLOCKED, reason)
 
 
-def refusal_text(name: str, step: StepOutcome) -> str:
+def refusal_text(name: str, step: StepOutcome, next_step: str = REOPEN_LINE) -> str:
     parts = [f"{name} is blocked at this revision of the files."]
     if step.repair_findings:
         parts += [
@@ -281,15 +288,17 @@ def refusal_text(name: str, step: StepOutcome) -> str:
         parts += ["Blocking findings:", findings_report(step.blocking_findings)]
     elif step.reason:
         parts.append(step.reason)
-    parts.append(REOPEN_LINE)
+    parts.append(next_step)
     return "\n".join(parts)
 
 
-def refuse_if_blocked(run: Run, name: str, revision: str) -> None:
+def refuse_if_blocked(
+    run: Run, name: str, revision: str, *, next_step: str = REOPEN_LINE
+) -> None:
     """Refuse, with no model call, a step findings blocked at *revision* (exit 4)."""
     step = run.state.steps.get(name)
     if step and step.outcome == "blocked" and step.blocked_revision == revision:
-        text = refusal_text(name, step)
+        text = refusal_text(name, step, next_step)
         print(text, flush=True)
         print(f"{MARKER_BLOCKED}:{run.config.change_dir}", flush=True)
         log.error("%s refused: %s", name, text.replace("\n", " | ")[:1000])

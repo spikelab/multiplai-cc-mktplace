@@ -121,13 +121,20 @@ after the third stop runs the consistency check and the handoff.
    used twice, a requirement with no scenario) is a critical finding, and so
    is a `MODIFIED` or `REMOVED` section in a capability with no
    `specs/registry/<capability>.md`.
-   Critical and major findings get one rewrite of the `specs.md` files
-   involved; a recheck must report each of them `resolved`, and a new finding
-   blocks only when critical. Otherwise the run stops with
-   `SPEC:BLOCKED:<change_dir>`, exit 4, the findings printed and
-   `spec_status` still `draft`. Running again with the files unchanged
-   refuses with no model call; after you edit the files the check gets its
-   one rewrite back.
+   **After the specs review stop** (step 11) the check rewrites no file: the
+   specs are what reviewers read and edited. A critical or major finding
+   stops the run with `SPEC:BLOCKED:<change_dir>`, exit 4, the findings
+   printed and saved in the run state, and `spec_status` still `draft`;
+   minor findings are printed as advisory and the handoff goes on. A person
+   edits the files on the branch and pushes; `resume` pulls them and checks
+   them again, and hands off or blocks again. Running again with the files
+   unchanged refuses with no model call and prints the findings.
+   **With no review stop** (`--auto`, an adopted change, a run from before
+   the staged flow) critical and major findings get one rewrite of the
+   `specs.md` files involved; a recheck must report each of them
+   `resolved`, and a new finding blocks only when critical. Otherwise the
+   run stops the same way (exit 4, `SPEC:BLOCKED`); after you edit the
+   files the check gets its one rewrite back.
 13. **Handoff.** Only for the files the check read: if they changed after the
    check read them, the change goes back to `draft` and is checked again.
    Writes the ready record (`spec_status: ready` and `spec_revision`) on each
@@ -220,6 +227,15 @@ your checkout are left as they are; delete them when you no longer need them.
   files in `prototype/`, with `NOTES.md`'s questions for the reviewers.
   Reviewers comment and edit on the branch. Approved: `resume <name>`, which
   checks the specs and hands them off.
+- **`SPEC:BLOCKED` after `resume` from the specs review.** The check found
+  critical or major problems in the reviewed specs and changed no file.
+  Show the user each finding as printed (its severity, the two places it
+  cites, and the suggested fix) and tell them the specs are not ready:
+  someone edits those `specs.md` files (or `prototype/`) on `<branch>` and
+  pushes, then you run `resume <name>`, which pulls and checks again. Do
+  not edit the specs yourself unless the user asks you to; if they do, edit
+  on the branch, push, then `resume`. Running `resume` before anyone edits
+  just prints the same findings.
 - **`SPEC:READY`.** The specs are pushed and ready: tell the user that
   `/multiplai-dev:buildme <name>` builds them, and that the prototype and the
   specs are on the branch for anyone to read.

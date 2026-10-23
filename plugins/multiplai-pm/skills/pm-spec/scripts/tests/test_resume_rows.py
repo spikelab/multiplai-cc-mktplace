@@ -1,4 +1,4 @@
-"""One test per row S1-S16 of the plan's "Stop and resume states" table.
+"""One test per row S1-S17 of the plan's "Stop and resume states" table.
 
 Each test stops the run at its row, resumes it, and compares the result with a
 run of the same inputs that never stopped (`baseline`): the same files, the
@@ -642,6 +642,162 @@ def test_S13_the_review_stop_after_the_specs(
     assert "EDITED by a reviewer" in model.exactly("consistency")[-1]
     assert model.calls_to("spec:specs") == written
     assert layout.ready(ecdir) == (True, "")
+
+
+CONTRADICTION = {
+    "type": "contradiction",
+    "severity": "major",
+    "description": "api says 60 a minute, ui says 100",
+    "places": [
+        {"file": "components/api/specs.md", "where": "rate-limit"},
+        {"file": "components/ui/specs.md", "where": "rate-limit"},
+    ],
+    "suggestion": "make them agree",
+}
+NIT = {**CONTRADICTION, "severity": "minor", "description": "a wording nit"}
+
+
+def two_with_check(*answers):
+    """Two components, and the consistency agent's answers in order."""
+
+    def configure(m: FakeModel) -> None:
+        two(m)
+        m["consistency"] = [{"findings": a} for a in answers]
+
+    return configure
+
+
+def test_S13_after_the_review_a_major_finding_blocks_and_rewrites_nothing(
+    repo, model, tmp_path, monkeypatch, capsys
+):
+    configure = two_with_check([CONTRADICTION])
+    configure(model)
+    go(repo, FLOW[:4])
+    cdir = change_dir(repo)
+    before = {u: (cdir / u).read_text() for u in layout.units(cdir)}
+    capsys.readouterr()
+
+    calls = len(model.calls)
+    assert run(repo, *RESUME) == 4
+    out = capsys.readouterr().out
+    assert model.labels()[calls:] == ["consistency"]
+    assert f"SPEC:BLOCKED:{cdir}" in out and "SPEC:READY" not in out
+    assert "api says 60 a minute, ui says 100" in out
+    assert "no file was rewritten" in out
+    assert {u: (cdir / u).read_text() for u in layout.units(cdir)} == before
+    step = state(cdir)["steps"]["consistency"]
+    assert step["outcome"] == "blocked" and step["repair_attempts"] == 0
+    assert [f["severity"] for f in step["blocking_findings"]] == ["major"]
+    assert meta(cdir)["spec_status"] == "draft" and state(cdir)["handoff"] is None
+
+    other, _ = baseline(tmp_path, monkeypatch, configure, [*FLOW[:4], (RESUME, 4)])
+    same_as(repo, other)
+
+
+def test_S13_after_the_review_a_minor_finding_is_reported_and_handed_off(
+    repo, model, tmp_path, monkeypatch, capsys
+):
+    configure = two_with_check([NIT])
+    configure(model)
+    go(repo, FLOW[:4])
+    capsys.readouterr()
+    assert run(repo, *RESUME) == 0
+    out = capsys.readouterr().out
+    cdir = change_dir(repo)
+    assert "advisory findings" in out and "a wording nit" in out
+    assert ready_line(out) == f"SPEC:READY:{cdir}:{layout.revision(cdir)}"
+    assert not any(":rewrite:" in label for label in model.labels())
+    other, _ = baseline(tmp_path, monkeypatch, configure, FLOW)
+    same_as(repo, other)
+
+
+# --- S17 --------------------------------------------------------------------------
+
+
+def reviewer_edit(repo: Path, at: Path, rule: str) -> str:
+    """A person fixes the ui specs in their own clone and pushes."""
+    text = specs(rule=rule)
+    mine = clone(repo, at)
+    write(
+        mine / "specs" / "changes" / "throttle" / "components" / "ui" / "specs.md", text
+    )
+    git(mine, "commit", "-qam", "fix the contradiction")
+    git(mine, "push", "-q", "origin", BRANCH)
+    return text
+
+
+def test_S17_resume_after_a_blocked_check_rechecks_the_edited_files(
+    repo, model, tmp_path, monkeypatch, capsys
+):
+    configure = two_with_check([CONTRADICTION], [])
+    configure(model)
+    go(repo, [*FLOW[:4], (RESUME, 4)])
+    cdir = change_dir(repo)
+    capsys.readouterr()
+
+    # Unchanged: refused with no model call, the findings printed again.
+    calls = len(model.calls)
+    assert run(repo, *RESUME) == 4
+    out = capsys.readouterr().out
+    assert len(model.calls) == calls
+    assert "api says 60 a minute, ui says 100" in out
+    assert f"SPEC:BLOCKED:{cdir}" in out and "one rewrite" not in out
+
+    # A person edits and pushes: pulled, checked again (no rewrite), handed off.
+    rule = reviewer_edit(repo, tmp_path / "reviewer", "60 a minute everywhere")
+    assert run(repo, *RESUME) == 0
+    out = capsys.readouterr().out
+    assert model.labels()[calls:] == ["consistency"]
+    assert "60 a minute everywhere" in model.exactly("consistency")[-1]
+    assert (cdir / "components" / "ui" / "specs.md").read_text() == rule
+    assert ready_line(out) == f"SPEC:READY:{cdir}:{layout.revision(cdir)}"
+    assert state(cdir)["steps"]["consistency"]["outcome"] == "passed"
+
+    # The same edit made at the review stop, in a run that never blocked.
+    def at_review(m: FakeModel) -> None:
+        two(m)
+        m["consistency"] = {"findings": []}
+
+    other, _ = baseline(tmp_path, monkeypatch, at_review, FLOW[:4])
+    reviewer_edit(other, tmp_path / "reviewer-2", "60 a minute everywhere")
+    monkeypatch.setattr(sdk, "run_agent", FakeModel())
+    assert run(other, *RESUME) == 0
+    monkeypatch.setattr(sdk, "run_agent", model)
+    # Files, commits and refs as if it never blocked; the run state keeps
+    # the check's history.
+    same_as(repo, other, run_state_too=False)
+
+
+def test_S17_an_edit_that_still_disagrees_blocks_again(repo, model, capsys):
+    two_with_check([CONTRADICTION], [CONTRADICTION])(model)
+    go(repo, [*FLOW[:4], (RESUME, 4)])
+    reviewer_edit(repo, repo.parent / "reviewer", "still 100 in the ui")
+    capsys.readouterr()
+    assert run(repo, *RESUME) == 4
+    cdir = change_dir(repo)
+    assert f"SPEC:BLOCKED:{cdir}" in capsys.readouterr().out
+    assert model.calls_to("consistency") == 2
+    assert not any(":rewrite:" in label for label in model.labels())
+    assert state(cdir)["steps"]["consistency"]["outcome"] == "blocked"
+
+
+def test_auto_keeps_the_one_rewrite(repo, model):
+    """No review stop, no reviewer: the check still rewrites what it cites."""
+    two(model)
+    model["consistency"] = [
+        {"findings": [CONTRADICTION]},
+        {
+            "findings": [],
+            "prior_assessments": [
+                {"finding_id": "CC-F1", "status": "resolved", "evidence": "x"}
+            ],
+        },
+    ]
+    assert run(repo, "new", "throttle", "--auto") == 0
+    assert [label for label in model.labels() if ":rewrite:" in label] == [
+        "consistency:rewrite:api",
+        "consistency:rewrite:ui",
+    ]
 
 
 # --- S14 --------------------------------------------------------------------------

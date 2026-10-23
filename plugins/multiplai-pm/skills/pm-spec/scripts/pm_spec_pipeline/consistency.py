@@ -22,6 +22,15 @@ is no recorded behaviour for it to change. The step follows the recheck rule in
    files unchanged refuses with no model call and prints them; running after
    an edit gives the step its rewrite back.
 
+After the specs review stop (row S13: `steps.specs` passed, so people have
+read and edited the files) the check rewrites nothing (`check_reviewed`): it
+reports its findings, and a critical or major one blocks with exit 4 and
+`SPEC:BLOCKED`, not ready. A person edits the files, pushes and runs `resume`,
+which pulls and checks the edited files again (row S17); unchanged files are
+refused with no model call. Minor findings are advisory. The one rewrite above
+is for specs no review stop showed anyone: `--auto`, an adopted change, a run
+from before the staged flow.
+
 The step's revision is `layout.revision` of the change (the change dir's and
 every component's `spec_revision`), taken before each agent call (the first check and the recheck): it is the
 revision the check read, and the handoff marks ready only that revision.
@@ -49,6 +58,13 @@ log = logging.getLogger(__name__)
 
 NAME = "consistency"
 BLOCK_REASON = "The specs still disagree after their one rewrite"
+REVIEWED_BLOCK_REASON = (
+    "The reviewed specs disagree; no file was rewritten after the specs review"
+)
+REVIEWED_NEXT = (
+    "Edit the files on the feature branch to fix these, push, and run `resume` "
+    "again: it pulls them and checks them again."
+)
 
 
 class Place(BaseModel):
@@ -228,6 +244,35 @@ async def rewrite_and_publish(
     publish(run, name, files)
 
 
+def reviewed(run: Run) -> bool:
+    """The specs passed the review stop after stage 3 (row S13), so people have
+    read them: `steps.specs` is `passed` (`--auto` records it `skipped`, and an
+    adopted change or a run from before the staged flow has no such stop)."""
+    step = run.state.steps.get("specs")
+    return bool(step and step.outcome == "passed")
+
+
+async def check_reviewed(run: Run, revision: str) -> None:
+    """The check after the specs review: reports, rewrites nothing, and blocks
+    (exit 4) on a critical or major finding (rows S13, S17)."""
+    print("PHASE:CONSISTENCY", flush=True)
+    answer = await check(run)
+    found = format_findings(run) + registry_findings(run) + as_dicts(answer)
+    blocking, advisory = F.first_check_verdict(found)
+    F.record_advisory(run, NAME, advisory)
+    if blocking:
+        F.block_on_findings(
+            run,
+            NAME,
+            revision,
+            REVIEWED_BLOCK_REASON,
+            F.number_findings(NAME, blocking),
+            next_step=REVIEWED_NEXT,
+        )
+    F.record_passed(run, NAME, revision, "No critical or major finding")
+    run.progress("CONSISTENCY_PASSED", f"{len(advisory)} advisory finding(s).")
+
+
 async def run_consistency(run: Run) -> None:
     """The stage. Returns when the specs agree; raises `run.Stop` (exit 4) on a block."""
     change_dir = run.config.change_dir
@@ -236,6 +281,10 @@ async def run_consistency(run: Run) -> None:
     step = run.state.steps.get(NAME)
     if step and step.outcome == "passed" and step.revision == revision:
         log.info("SKIP consistency: passed at this revision")
+        return
+    if reviewed(run):
+        F.refuse_if_blocked(run, NAME, revision, next_step=REVIEWED_NEXT)
+        await check_reviewed(run, revision)
         return
     F.reopen_if_edited(run, NAME, revision)
     F.refuse_if_blocked(run, NAME, revision)
