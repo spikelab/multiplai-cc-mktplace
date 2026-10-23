@@ -141,6 +141,18 @@ time, not derived from a tag.
   `Run /multiplai-pm:pm-spec resume <name> first` (with `--ticket-ref
   <ticket id>` when the change records none). Run it, then the build.
 
+## [0.104.2] - 2026-10-23
+
+### Fixed
+- **A killed or Ctrl-C'd review keeps every answer that came back.** The
+  review saves `review-state.json` after each agent answer in the explain,
+  find, verify, recheck and merge steps, with the spend so far, instead of
+  only when a step ends or a budget, verify or usage-limit stop ends the run.
+  A kill now loses only the calls still running, and `resume` asks only for
+  those. The review, summary and checks Markdown files, the rollups and
+  `runs.jsonl` are written to a temporary file and renamed into place, so a
+  kill never leaves one half written.
+
 ## [0.104.1] - 2026-10-23
 
 ### Changed

@@ -32,7 +32,7 @@ from ..gates import earlier_status_gate, reason_kind
 from ..models import AgentCheck, EarlierStatus, GateCheck, RecheckOutput, ReviewState
 from ..prompts import recheck as prompt
 from ..target import _DIFF_FLAGS, git
-from . import RunContext, bounded, fix_citation
+from . import RunContext, bounded, fix_citation, save
 from .verify import VERIFY_TRIES
 
 log = logging.getLogger(__name__)
@@ -170,7 +170,8 @@ async def run_recheck(state: ReviewState, ctx: RunContext) -> ReviewState:
         return status, check, gate_check
 
     async def one(o: rounds.OpenFinding) -> None:
-        # Stored as each answer arrives: a stop mid-stage keeps what was already paid for.
+        # Stored and saved as each answer arrives: a stop mid-stage, a kill included, keeps what was
+        # already paid for.
         status, check, gate_check = await _one(o)
         if check is not None:
             state.checks.append(check)
@@ -183,6 +184,7 @@ async def run_recheck(state: ReviewState, ctx: RunContext) -> ReviewState:
         state.recheck_answers.setdefault(
             o.id, status
         )  # the first stored answer per id stands
+        save(state, ctx)
 
     await bounded(todo, one, cfg.concurrency)
     answers = [

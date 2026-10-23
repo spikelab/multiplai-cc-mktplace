@@ -701,24 +701,29 @@ def render_review(
     return "\n".join(out)
 
 
+def _write(path: Path, text: str) -> None:
+    """Write *text* beside *path*, then rename it over *path*, so a kill mid-write leaves the old file."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(path)
+
+
 def write_review(
     state: ReviewState, target_dir: Path, *, deployed: str | None = None
 ) -> Path:
     """Write the full review, its short summary and the checks record; return the full review's path."""
     path = target_dir / f"review-{state.target.slug}.md"
-    path.write_text(
+    _write(
+        path,
         render_review(
             state,
             deployed=deployed,
             paths=load_paths(target_dir, state),
             earlier_rounds=rounds.kept_findings_files(target_dir),
         ),
-        encoding="utf-8",
     )
-    summary_path(state, target_dir).write_text(render_summary(state), encoding="utf-8")
-    (target_dir / f"checks-{state.target.slug}.md").write_text(
-        render_checks(state), encoding="utf-8"
-    )
+    _write(summary_path(state, target_dir), render_summary(state))
+    _write(target_dir / f"checks-{state.target.slug}.md", render_checks(state))
     return path
 
 
@@ -1149,7 +1154,7 @@ def write_rollups(out_dir: Path, paths: list[Path] | None = None) -> list[Path]:
     written = []
     for severity in SEVERITIES:
         path = out_dir / f"{severity}-only.md"
-        path.write_text(render_rollup(severity, files), encoding="utf-8")
+        _write(path, render_rollup(severity, files))
         written.append(path)
     return written
 
@@ -1221,5 +1226,5 @@ def write_runs(out_dir: Path, paths: list[Path] | None = None) -> tuple[Path, in
         )
     rows.sort(key=lambda r: (r[0], r[1]))
     path = out_dir / RUNS_FILE
-    path.write_text("".join(line + "\n" for _, _, line in rows), encoding="utf-8")
+    _write(path, "".join(line + "\n" for _, _, line in rows))
     return path, len(rows), skipped
