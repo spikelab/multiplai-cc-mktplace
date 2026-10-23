@@ -17,6 +17,7 @@ from build_pipeline import git_ops
 from build_pipeline.config import EpicSettings
 from build_pipeline.epic import coordinator, records, review
 from build_pipeline.epic import lock as epic_lock
+from build_pipeline.findings.loop import review_options
 
 from .epic_row_helpers import (
     CallLog,
@@ -150,6 +151,7 @@ def test_each_built_child_is_reviewed_and_the_result_recorded(tmp_path, monkeypa
         "--trust-repo",
         "--fetch",
         "--extra-finders",
+        *review_options(e.config),
     ]
     assert a.started["head_sha"] == e.head() and a.started["pr_round"] == 0
     r = a.result
@@ -242,7 +244,9 @@ def test_a_head_reviewed_elsewhere_during_a_wait_gets_one_result_with_its_fields
             seconds == review.REVIEW_WAIT and not e.ledger.exists()
         ):  # the other process's review
             subprocess.run(
-                review.review_argv(e.project, N), check=True, capture_output=True
+                review.review_argv(e.project, N, e.config),
+                check=True,
+                capture_output=True,
             )
         await real(clock, seconds)
 
@@ -1039,7 +1043,7 @@ def test_a_reused_review_closes_every_open_record_of_its_head(tmp_path, monkeypa
     plain interrupted result, the last one the review's fields; nothing is
     launched."""
     e = Epic(tmp_path, monkeypatch, answer=CHAIN)
-    argv = review.review_argv(e.project, N)
+    argv = review.review_argv(e.project, N, e.config)
     first, last = (
         records.start(e.dir, "review", "a", argv, head_sha=e.head(), pr_round=0)
         for _ in range(2)

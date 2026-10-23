@@ -507,6 +507,13 @@ Use `--branch <name>` (reviewed against its merge-base with `origin/HEAD`) or
 `--tree [COMMIT] [--path <dir>] [--trim]` or `--dir /abs/path [--trim]` (no
 `--repo`) instead.
 
+`--exclude <glob>` (repeatable, change reviews only) leaves the changed paths
+matching a git glob, read from the top of the repository, out of the diff,
+the file list and every stage; the review's header lists the paths it left
+out. buildme passes its spec change directories and runtime files this way.
+`--model <model>` (on `review` and `resume`) runs every stage on one model for
+that run, over `review.yaml` and `multiplai.conf`.
+
 **For `--tree` and `--dir`, plan first.** Run the same command with
 `--plan-only` in the foreground and paste its total line to the user. When
 `finder calls` is over 20, ask the user to confirm the run and to choose
@@ -836,8 +843,9 @@ place, with a warning) sets `concurrency`, `finder_model`,
 `verifier_model`, `merger_model` (default: the verifier's), `effort`,
 `max_turns`, `explain`, `find_with_facts` and `trim`. `multiplai.conf` keys
 `review_finder_model`, `review_verifier_model`, `review_effort` and
-`review_explain` apply when the file does not set them. By default every
-stage runs on the session's model.
+`review_explain` apply when the file does not set them. `--model` on the
+command line beats both for the three models. By default every stage runs on
+the session's model.
 
 - `explain` (default `false`): before the finders, run an explain stage
   that works out what the code under review does, with the same shared step

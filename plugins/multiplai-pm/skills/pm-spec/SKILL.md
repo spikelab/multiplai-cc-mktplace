@@ -109,7 +109,11 @@ after the third stop runs the consistency check and the handoff.
    `## ADDED/MODIFIED/REMOVED Requirements`; a name for existing behaviour
    must be an existing `specs/registry/` file's, and only such a capability
    may have `MODIFIED` or `REMOVED` requirements (with no registry file,
-   every requirement is `ADDED`).
+   every requirement is `ADDED`). The call answers with the file between
+   the two delimiter lines a rewrite uses; only the text between them is
+   written, and an answer without them, or with anything but blank lines
+   above the first `# Capability:` line, writes nothing and fails the run
+   (exit 1; `resume` asks again).
 11. **Stop:** commit, push, `SPEC:REVIEW:specs`, `SPEC:BRANCH:<branch>`,
    exit 3. The specs are not checked yet. Approved, `resume` runs the check
    and the handoff on the files as they are on the branch, reviewers' edits
@@ -189,10 +193,14 @@ is left alone: pm-spec works in its own worktree.
 
 **A change handed off before pm-spec pushed** (ready in your checkout, its
 `.change.yaml` records no `branch`): `resume <name>` (with `--ticket-ref`
-when the change records no ticket ref) copies its change dir,
-and the sibling child changes it lists, into pm-spec's worktree, commits them there
-(`specs(<name>): moved to <branch>`) and pushes the branch. The originals in
-your checkout are left as they are; delete them when you no longer need them.
+when the change records no ticket ref) copies pm-spec's files of its change
+dir (the ones it commits: proposal, use cases, plans, specs, `prototype/` and
+the like) and its run folder, and the same of the sibling child changes it
+lists, into pm-spec's worktree, commits them there
+(`specs(<name>): moved to <branch>`) and pushes the branch. Any other file
+there (buildme's design, tasks or records, your notes) is not copied. The
+originals in your checkout are left as they are; delete them when you no
+longer need them.
 
 ## Before you run it
 

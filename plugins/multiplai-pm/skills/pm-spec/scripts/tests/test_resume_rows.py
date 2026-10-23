@@ -35,6 +35,7 @@ from conftest import (
     proposal,
     ready_line,
     requirements,
+    rewrite_answer,
     run,
     snapshot,
     source_dir,
@@ -397,7 +398,7 @@ def test_S6_a_ticket_ref_git_refuses_is_refused_and_nothing_is_written(
 
 def test_S7_killed_during_the_specs(repo, model, tmp_path, monkeypatch, capsys):
     two(model)
-    model["spec:specs:ui"] = killer(specs())
+    model["spec:specs:ui"] = killer(rewrite_answer(specs()))
     go(repo, FLOW[:3])
     with pytest.raises(Killed):
         run(repo, *TICKETS)
@@ -547,7 +548,7 @@ def test_S10_a_diverged_branch_is_refused_and_nothing_changes(
 
 def test_S11_the_same_step_stopped_twice(repo, model, tmp_path, monkeypatch):
     two(model)
-    model["spec:specs:ui"] = killer(specs(), times=2)
+    model["spec:specs:ui"] = killer(rewrite_answer(specs()), times=2)
     go(repo, FLOW[:3])
     with pytest.raises(Killed):
         run(repo, *TICKETS)
@@ -566,7 +567,7 @@ def test_S12_a_second_process_is_refused_with_the_holders_pid(
     repo, model, tmp_path, monkeypatch, capsys
 ):
     two(model)
-    model["spec:specs:ui"] = killer(specs())
+    model["spec:specs:ui"] = killer(rewrite_answer(specs()))
     go(repo, FLOW[:3])
     with pytest.raises(Killed):
         run(repo, *TICKETS)

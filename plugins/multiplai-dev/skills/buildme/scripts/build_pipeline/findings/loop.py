@@ -428,6 +428,49 @@ def _review_skill_dir() -> Path:
     return _pr_skill_dir().parent.parent / "review" / "scripts"
 
 
+def review_excludes(config: BuildConfig) -> list[str]:
+    """The git globs, from the top of the repository, that the review of
+    buildme's PR leaves out: the specs' change and archive directories (every
+    pm-spec and buildme document of a change: proposal, specs, design, tasks,
+    rubric, facts.json, mutation.md, review rounds and the rest) and buildme's
+    runtime files wherever they are (`git_ops.BOOKKEEPING_EXCLUDES`). What
+    stays is the code, tests, docs and config the change touches, and
+    `specs/registry/`. The specs directory is placed relative to the
+    repository's top, so a project in a subdirectory gets its own path; when
+    it cannot be placed, only the runtime files are left out."""
+    globs = []
+    top = git_ops.repo_root(config.project_dir)
+    if top is not None:
+        try:
+            rel = Path(config.specs_dir).resolve().relative_to(top.resolve())
+        except ValueError:
+            rel = None
+        if rel is not None:
+            prefix = "" if rel.as_posix() == "." else f"{rel.as_posix()}/"
+            globs += [f"{prefix}changes/**", f"{prefix}archive/**"]
+    globs += [
+        spec.removeprefix(":(exclude,glob)") for spec in git_ops.BOOKKEEPING_EXCLUDES
+    ]
+    return globs
+
+
+def review_options(config: BuildConfig, *, exclude: bool = True) -> list[str]:
+    """What every review buildme launches of its PR adds to the review
+    skill's command line: `--exclude` for each of `review_excludes` (on
+    `review`; a `resume` keeps the files its run chose), and `--model` when
+    the config names the review's model (`configured_model_for("review")`:
+    `models.review` in specs/config.yaml and the like). Without one, the
+    review skill's own review.yaml or multiplai.conf decides."""
+    argv = []
+    if exclude:
+        for glob in review_excludes(config):
+            argv += ["--exclude", glob]
+    model = config.configured_model_for("review")
+    if model:
+        argv += ["--model", model]
+    return argv
+
+
 def review_argv(run: FindingsRun) -> list[str]:
     """`--fetch`: `review` refuses a PR whose head or base is not in the clone,
     and the base moves on GitHub without any fetch here."""
@@ -448,7 +491,7 @@ def review_argv(run: FindingsRun) -> list[str]:
     ]
     if run.trust_repo:
         argv.append("--trust-repo")
-    return argv
+    return argv + review_options(run.config)
 
 
 def resume_argv(run: FindingsRun, target_dir: str) -> list[str]:
@@ -465,7 +508,7 @@ def resume_argv(run: FindingsRun, target_dir: str) -> list[str]:
     ]
     if run.trust_repo:
         argv.append("--trust-repo")
-    return argv
+    return argv + review_options(run.config, exclude=False)
 
 
 # What `review` prints (exit 4) when the ledger shows a run of this target and

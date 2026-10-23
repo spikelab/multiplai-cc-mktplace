@@ -3449,12 +3449,26 @@ async def _run_tdd_engine(config: BuildConfig, args, *, standalone: bool = True)
         spend.calls,
     )
     progress.log_phase("BUDGET", spend.diagnosis())
-    progress.log_phase(
-        "COMPLETE", f"All {total_blocks} blocks implemented successfully"
-    )
+    progress.log_phase("COMPLETE", _completion_line(state.tdd.blocks))
     if standalone:
         state.complete(state_path)
     return EXIT_SUCCESS
+
+
+def _completion_line(blocks: list[BlockInfo]) -> str:
+    """The COMPLETE line of build-progress.md. Past the block loop a block
+    that is not done failed and was skipped (`findings.code.skip_block`), so
+    it is named rather than counted as implemented."""
+    skipped = [b for b in blocks if b.status != BlockStatus.DONE]
+    if not skipped:
+        return f"All {len(blocks)} blocks implemented successfully"
+    names = "; ".join(
+        f"block {b.number} ({b.name}): {b.status.value}, skipped" for b in skipped
+    )
+    return (
+        f"{len(blocks) - len(skipped)} of {len(blocks)} blocks implemented. "
+        f"Not implemented: {names}"
+    )
 
 
 def capture_build_diff(config: BuildConfig, state: BuildState) -> str:

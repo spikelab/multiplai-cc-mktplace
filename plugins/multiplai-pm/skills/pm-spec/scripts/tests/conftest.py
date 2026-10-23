@@ -181,7 +181,8 @@ def default_proposal(prompt: str) -> str:
 
 
 def rewrite_answer(text: str) -> str:
-    """A rewrite answer holding *text* as the file (`rewrite.parse_answer`)."""
+    """A file answer holding *text* between the delimiter lines: a rewrite's
+    (`rewrite.parse_answer`) or a first-pass specs.md's (`artifacts.write_specs`)."""
     from pm_spec_pipeline.rewrite import BEGIN, END
 
     return f"{BEGIN}\n{text.rstrip(chr(10))}\n{END}\n"
@@ -198,7 +199,7 @@ DEFAULTS = {
     "components": SINGLE,
     "spec:proposal": lambda prompt, label, kw: default_proposal(prompt),
     "spec:use-cases": USE_CASES,
-    "spec:specs": lambda prompt, label, kw: specs(),
+    "spec:specs": lambda prompt, label, kw: rewrite_answer(specs()),
     "consistency": NO_FINDINGS,
     "prototype": agent(),
 }
