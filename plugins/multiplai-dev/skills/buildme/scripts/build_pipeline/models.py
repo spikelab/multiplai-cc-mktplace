@@ -568,6 +568,9 @@ class MutationResult(BaseModel):
     candidates: int = 0
     # Mutants dropped by the `max_mutants` cap (deterministic sample).
     sampled_out: int = 0
+    # Mutants left unrun because they lie wholly inside a type annotation
+    # (counted in `candidates`, never in the score).
+    annotation_only: int = 0
     score: float | None = None
     survivors: list[SurvivingMutant] = Field(default_factory=list)
     # True when the tree was not clean after the run — a mutated file

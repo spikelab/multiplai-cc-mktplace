@@ -111,6 +111,13 @@ time, not derived from a tag.
   kebab-case counts as missing requirements, so the build stops before
   planning instead of failing part way.
 
+### Fixed
+- buildme's mutation step no longer runs mutants that lie wholly inside a
+  type annotation (a parameter, return or variable annotation). With
+  `from __future__ import annotations` no test can kill them, so a fully
+  green build failed `mutation.min_score` on them. `mutation.md` gives
+  their number.
+
 ### Removed
 - The refusals of a change dir with uncommitted changes, of a first-wave
   child whose base carried commits outside the epic's change dirs, and of a
