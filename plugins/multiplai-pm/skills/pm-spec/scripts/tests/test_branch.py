@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 import yaml
 from conftest import (
+    TWO,
     change_dir,
     git,
     meta,
@@ -348,6 +349,58 @@ def test_revise_in_a_builds_worktree_commits_there_and_pushes_nothing(
     assert git(build, "status", "--porcelain", "--", "specs") == ""
     assert git(origin(repo), "rev-parse", "ENG-1-throttle") == pushed
     assert git(origin(repo), "branch", "--list", "ENG-1-throttle-a") == ""
+
+
+def test_revise_in_a_builds_worktree_commits_none_of_buildmes_files(
+    repo, model, capsys
+):
+    """A revise on 2026-10-23 committed the component's `.build-state.json`
+    and `.board.json` with the specs: pm-spec commits only its own files, and
+    buildme's stay as buildme left them."""
+    model["components"] = TWO
+    assert run(repo, "new", "throttle", "--auto") == 0
+    build = repo.parent / ".worktrees" / "buildme-throttle-api"
+    git(
+        repo,
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "ENG-1-throttle-api",
+        str(build),
+        "origin/ENG-1-throttle",
+    )
+    cdir = build / "specs" / "changes" / "throttle"
+    comp = cdir / "components" / "api"
+    buildmes = {
+        comp / ".build-state.json": "{}\n",
+        comp / ".board.json": "{}\n",
+        comp / "design.md": "# Design\n",
+        comp / "build-progress.md": "progress\n",
+    }
+    for path, text in buildmes.items():
+        write(path, text)
+    write(
+        comp / "spec-issues.md",
+        "# Spec issues\n\n## Vague\n\nThe wait is not stated.\n",
+    )
+    set_spec_issues(comp, comp / "spec-issues.md")
+    model["consistency"] = resolved()
+    capsys.readouterr()
+
+    assert run(build, "revise", "throttle") == 0
+
+    committed = git(build, "show", "--name-only", "--format=", "HEAD").split()
+    assert committed, "the revise committed nothing"
+    rel = "specs/changes/throttle/components/api/"
+    assert not [p for p in committed if Path(p).name in {p.name for p in buildmes}]
+    assert f"{rel}specs.md" in committed and f"{rel}.change.yaml" in committed
+    assert any(p.startswith(f"{rel}spec-issues.resolved-") for p in committed)
+    untracked = git(build, "status", "--porcelain", "-uall", "--", "specs").splitlines()
+    assert sorted(line.split()[-1] for line in untracked) == sorted(
+        str(p.relative_to(build)) for p in buildmes
+    )
+    assert all(p.read_text() == text for p, text in buildmes.items())
 
 
 def test_revise_in_a_checkout_that_is_not_a_build_works_in_pm_specs_worktree(

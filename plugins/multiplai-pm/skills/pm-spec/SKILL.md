@@ -322,7 +322,11 @@ In `specs/changes/<name>/`: `.change.yaml`, `prd.md`, `ticket.md`,
 own state is in `.pm-spec/` (`state.json`, `progress.md`, `run.lock`), which
 has its own `.gitignore` and is never committed. Each review stop, the ticket
 wait and the handoff commit the change dir and push the feature branch;
-nothing else is pushed, and no pull request is opened.
+nothing else is pushed, and no pull request is opened. A commit holds only
+these files, the issues files `revise` reads and moves aside, and the old
+layout's `requirements/`: never buildme's (`design.md`, `tasks.md`,
+`.build-state.json`, `.board.json` and the rest), which share the change dir
+in a build's worktree.
 
 `tickets.json` is a JSON array, described by `references/tickets.schema.json`.
 For several components: one `epic` item for the change (the proposal's title

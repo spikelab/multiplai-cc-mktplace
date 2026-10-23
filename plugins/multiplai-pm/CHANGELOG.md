@@ -35,6 +35,10 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
   between them is written, and a file answered `UNCHANGED` stays byte for
   byte as it was. An answer of any other shape, or one that adds text above
   the first `# Capability:` line, writes nothing and blocks the step (exit 4).
+- pm-spec commits only its own files in a change dir. A `revise` in a build's
+  worktree committed buildme's `.build-state.json` and `.board.json` with the
+  specs; buildme's files (and anything else pm-spec does not write) are now
+  left out of every pm-spec commit.
 
 ## [0.9.0] - 2026-10-23
 
