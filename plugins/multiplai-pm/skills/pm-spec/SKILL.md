@@ -165,7 +165,10 @@ and hands off again. The issues file may be in the change dir or in a
 component's (`components/<id>/spec-issues.md`, where buildme writes a
 component's issues): name the change, `revise <name>`, never
 `<name>/<component>`, which is refused. An issues file written after that is a
-new round, with its own rewrite. While `spec_issues` is set or a revise is blocked, `resume`
+new round, with its own rewrite. Each rewrite, here and in the check, answers `UNCHANGED` or the whole
+file between two delimiter lines; only the text between them is written, a
+file answered `UNCHANGED` stays byte for byte as it was, and an answer of any
+other shape blocks the revise (exit 4) with nothing written. While `spec_issues` is set or a revise is blocked, `resume`
 refuses with exit 4 and never reports the change ready: run `revise`. In
 `spec-issues.md` each `## ` section is one issue; name the file it concerns
 (`components/<id>/specs.md`), its capability in backticks, or quote the

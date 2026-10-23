@@ -277,16 +277,21 @@ Fix each finding in this file where the fix belongs here. A behaviour two
 places both require belongs to the component whose plan names it: keep it
 there and take it out of the other. Two requirements that contradict
 each other are resolved by stating the one rule the proposal and the use cases
-support. A gap is closed with a requirement and a WHEN/THEN scenario. When none
-of the findings needs a change in this file, return it unchanged.
+support. A gap is closed with a requirement and a WHEN/THEN scenario.
 
 ## Output Format
-The same format as the current file{format_note}: `## ADDED Requirements`,
+When none of the findings needs a change in this file, answer with exactly
+this one line and nothing else:
+
+{unchanged}
+
+Otherwise answer with the whole revised file, with a line `{begin}` above it
+and a line `{end}` below it. Only the text between those two lines is written
+to the file: put no commentary, explanation or summary in it. The file has the
+same format as the current file{format_note}: `## ADDED Requirements`,
 `### Requirement: <name>`, and under each requirement at least one
 `#### Scenario: <name>` with a `- **WHEN** ...` and a `- **THEN** ...` line.
 `## MODIFIED` and `## REMOVED Requirements` only in a capability that has a
 file in specs/registry/; every other capability is new, and all its
 requirements are ADDED.
-
-Output ONLY the whole file as markdown. No commentary.
 """

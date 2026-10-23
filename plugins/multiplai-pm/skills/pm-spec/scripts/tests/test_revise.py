@@ -3,6 +3,7 @@ the same specs files stage 3 writes."""
 
 from __future__ import annotations
 
+import pytest
 from conftest import (
     CAPS,
     TWO,
@@ -11,6 +12,7 @@ from conftest import (
     meta,
     ready_line,
     requirements,
+    rewrite_answer,
     run,
     source_dir,
     specs,
@@ -21,6 +23,7 @@ from conftest import (
 from multiplai_core.specs import is_ready, set_spec_issues
 from pm_spec_pipeline import layout
 from pm_spec_pipeline import revise as R
+from pm_spec_pipeline import rewrite as W
 
 ISSUES = """\
 # Spec issues
@@ -271,3 +274,115 @@ def test_revise_finds_an_archived_change(repo, model, capsys):
     assert f"SPEC:READY:{archived}:" in out
     assert git(wt, "status", "--porcelain", "--", "specs") == ""
 
+
+# --- the rewrite's output contract (real-model run, 2026-10-23) -----------------
+
+# What the model answered for a file no finding touched: its note, then the file.
+# The note became line 1 of the specs.md, and `valid_specs_text` passed it.
+E2E_NOTE = (
+    "The finding belongs to the top-words component (it concerns missing coverage "
+    "in `components/top-words/specs.md`). No finding touches this file's content, "
+    "so it is returned unchanged.\n\n"
+)
+
+VAGUE = "# Spec issues\n\n## Vague\n\nThe wait is not stated.\n"
+
+
+def _issue_naming_no_file(repo, model):
+    """A change with two components and an issue naming no file: revise asks
+    for a rewrite of every specs file."""
+    model["components"] = TWO
+    assert run(repo, "new", "throttle", "--auto") == 0
+    cdir = change_dir(repo)
+    write(cdir / "spec-issues.md", VAGUE)
+    set_spec_issues(cdir, cdir / "spec-issues.md")
+    return cdir
+
+
+def test_parse_answer_keeps_only_the_delimited_file():
+    answer = f"Here it is.\n{W.BEGIN}\n# Capability: a\nbody\n{W.END}\nDone.\n"
+    assert W.parse_answer(answer) == "# Capability: a\nbody\n"
+
+
+def test_parse_answer_reads_unchanged_and_drops_the_note_around_it():
+    assert W.parse_answer("UNCHANGED") is None
+    assert W.parse_answer(E2E_NOTE + "UNCHANGED\n") is None
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        E2E_NOTE + specs(),  # the real-model answer: a note, then the file
+        specs(),  # the file with no delimiters
+        f"{W.BEGIN}\nx\n{W.END}\n{W.BEGIN}\ny\n{W.END}\n",
+        f"{W.BEGIN}\nx\n",
+        f"{W.END}\nx\n{W.BEGIN}\n",
+        f"UNCHANGED\n{W.BEGIN}\nx\n{W.END}\n",
+    ],
+)
+def test_parse_answer_refuses_any_other_shape(answer):
+    with pytest.raises(W.ContractError):
+        W.parse_answer(answer)
+
+
+def test_a_file_the_answer_leaves_unchanged_is_byte_identical(repo, model):
+    cdir = _issue_naming_no_file(repo, model)
+    api = cdir / "components" / "api" / "specs.md"
+    before = api.read_bytes()
+    model["revise:rewrite:api"] = E2E_NOTE + "UNCHANGED\n"
+    model["consistency"] = resolved()
+    assert run(repo, "revise", "throttle") == 0
+    assert [label for label in model.labels() if ":rewrite:" in label] == [
+        "revise:rewrite:api",
+        "revise:rewrite:ui",
+    ]
+    assert api.read_bytes() == before
+    ui = (cdir / "components" / "ui" / "specs.md").read_text()
+    assert ui.startswith("# Capability:") and "the rewritten ui" in ui
+
+
+def test_a_note_outside_the_delimiters_is_not_written(repo, model):
+    cdir = _issue_naming_no_file(repo, model)
+    model["revise:rewrite:ui"] = (
+        "I added the wait.\n"
+        + rewrite_answer(specs(rule="the wait"))
+        + "Hope it helps.\n"
+    )
+    model["revise:rewrite:api"] = "UNCHANGED"
+    model["consistency"] = resolved()
+    assert run(repo, "revise", "throttle") == 0
+    ui = (cdir / "components" / "ui" / "specs.md").read_text()
+    assert ui == specs(rule="the wait")
+    assert "I added" not in ui and "Hope it helps" not in ui
+
+
+def test_the_real_model_answer_is_refused_and_writes_nothing(repo, model, capsys):
+    """A note, then the file, with no delimiters: not written; the revise
+    blocks on it (its one rewrite is spent), and both files stay as they were."""
+    cdir = _issue_naming_no_file(repo, model)
+    files = [cdir / "components" / c / "specs.md" for c in ("api", "ui")]
+    before = [f.read_bytes() for f in files]
+    model["revise:rewrite:api"] = E2E_NOTE + specs()
+    model["revise:rewrite:ui"] = "UNCHANGED"
+    capsys.readouterr()
+    assert run(repo, "revise", "throttle") == 4
+    out = capsys.readouterr().out
+    assert "the rewrite of components/api/specs.md was not written" in out
+    assert [f.read_bytes() for f in files] == before
+    assert meta(cdir)["spec_issues"] == "spec-issues.md"
+
+
+def test_a_rewrite_adding_text_above_the_first_capability_is_refused(
+    repo, model, capsys
+):
+    cdir = _issue_naming_no_file(repo, model)
+    ui = cdir / "components" / "ui" / "specs.md"
+    before = ui.read_bytes()
+    model["revise:rewrite:ui"] = rewrite_answer("A note.\n\n" + specs(rule="x"))
+    model["revise:rewrite:api"] = "UNCHANGED"
+    capsys.readouterr()
+    assert run(repo, "revise", "throttle") == 4
+    assert "changes the text above the first `# Capability:` line" in (
+        capsys.readouterr().out
+    )
+    assert ui.read_bytes() == before

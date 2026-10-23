@@ -235,13 +235,13 @@ async def rewrite_and_publish(
     run: Run, name: str, listed: list[dict], units: list[str], reason: str
 ) -> None:
     """Rewrite *units* for the listed findings; publish, or block on a broken text."""
-    files = await rewrite_units(run, listed, units, label=name)
-    if problems := check_texts(run, files):
+    rewritten = await rewrite_units(run, listed, units, label=name)
+    if problems := rewritten.problems + check_texts(run, rewritten.files):
         blocking, _ = F.recheck_verdict(listed, [], [], deterministic=problems)
         F.block_on_findings(
             run, name, layout.revision(run.config.change_dir), reason, blocking
         )
-    publish(run, name, files)
+    publish(run, name, rewritten.files)
 
 
 def reviewed(run: Run) -> bool:

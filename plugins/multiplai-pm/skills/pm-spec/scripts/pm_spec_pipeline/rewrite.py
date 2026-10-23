@@ -8,12 +8,24 @@ refuses a capability name that is not kebab-case or appears twice). A text
 that fails becomes a deterministic finding, which blocks the step
 (`findings.recheck_verdict`). The caller publishes the passing set as one
 change (`publish.publish`).
+
+Each answer has a strict shape (`parse_answer`): the one line `UNCHANGED`, or
+the whole file between a `BEGIN` and an `END` line. Only the text between them
+is the file; anything outside is dropped, and a `specs.md` may not change the
+text above its first `# Capability:` line. A file the answer leaves as it was
+is not in the set, so it stays byte for byte as it is; an answer of any other
+shape is a deterministic finding too. A real-model run on 2026-10-23 wrote the
+model's "...so it is returned unchanged." note as line 1 of a specs.md, and
+`valid_specs_text` passed it, since it ignores text before the first
+`# Capability:` heading.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
+from typing import NamedTuple
 
 from . import artifacts, layout, sdk
 from .prompts import UNTRUSTED_NOTICE
@@ -21,6 +33,60 @@ from .prompts import spec as P
 from .run import Run
 
 log = logging.getLogger(__name__)
+
+UNCHANGED = "UNCHANGED"
+BEGIN = "=== FILE BEGIN ==="
+END = "=== FILE END ==="
+
+
+_CAPABILITY_RE = re.compile(r"^# Capability:", re.MULTILINE)
+
+
+def preamble(text: str) -> str:
+    """The text of a `specs.md` above its first `# Capability:` line, which
+    `valid_specs_text` does not read."""
+    m = _CAPABILITY_RE.search(text)
+    return (text[: m.start()] if m else text).strip()
+
+
+class ContractError(ValueError):
+    """An answer that is neither `UNCHANGED` nor one delimited file."""
+
+
+class Rewritten(NamedTuple):
+    """`rewrite_units`' result: *files*, `{<spec file>: new text}` for each
+    file whose text changed; *problems*, a deterministic finding for each
+    answer that broke the output contract."""
+
+    files: dict[str, str]
+    problems: list[dict]
+
+
+def parse_answer(answer: str) -> str | None:
+    """The file text a rewrite answer holds, or None for `UNCHANGED`.
+
+    The file is the lines between the one `BEGIN` line and the one `END` line
+    after it; any text outside them is dropped. With no such lines, an answer
+    holding the line `UNCHANGED` is unchanged. Raises `ContractError` for any
+    other answer, and for one that has both a file and `UNCHANGED`."""
+    lines = answer.splitlines()
+    marks = [line.strip() for line in lines]
+    begins = [i for i, m in enumerate(marks) if m == BEGIN]
+    ends = [i for i, m in enumerate(marks) if m == END]
+    unchanged = UNCHANGED in marks
+    if not begins and not ends:
+        if unchanged:
+            return None
+        raise ContractError(
+            f"the answer is neither the line {UNCHANGED} nor a file between "
+            f"{BEGIN} and {END}"
+        )
+    if len(begins) != 1 or len(ends) != 1 or ends[0] < begins[0]:
+        raise ContractError(f"the answer does not hold one {BEGIN} ... {END} file")
+    outside = lines[: begins[0]] + lines[ends[0] + 1 :]
+    if any(line.strip() == UNCHANGED for line in outside):
+        raise ContractError(f"the answer holds both a file and {UNCHANGED}")
+    return "\n".join(lines[begins[0] + 1 : ends[0]]) + "\n"
 
 
 def unit_label(run: Run, unit: str) -> str:
@@ -79,15 +145,18 @@ def findings_lines(findings: list[dict]) -> str:
 
 async def rewrite_units(
     run: Run, findings: list[dict], units: list[str], *, label: str
-) -> dict[str, str]:
-    """`{<spec file>: new text}` for each of *units*, each call shown the
-    findings that cite that file and the findings that cite none."""
+) -> Rewritten:
+    """The new text of each of *units* the answers change (`Rewritten`), each
+    call shown the findings that cite that file and the findings that cite
+    none."""
     change_dir = run.config.change_dir
     everything = layout.all_specs_text(change_dir)
     out: dict[str, str] = {}
+    problems: list[dict] = []
     for unit in units:
         mine = [f for f in findings if unit in (cited_units(change_dir, f) or [unit])]
         specs = Path(unit).name == layout.SPECS_FILE
+        current = (change_dir / unit).read_text()
         prompt = P.REWRITE_SPECS_PROMPT.format(
             notice=UNTRUSTED_NOTICE,
             project_context=run.config.project_context,
@@ -95,19 +164,46 @@ async def rewrite_units(
             use_cases_content=artifacts.use_cases_text(run) or "(not available)",
             specs_content=everything,
             unit=unit,
-            current_content=(change_dir / unit).read_text(),
+            current_content=current,
             findings=findings_lines(mine),
             format_note=", one `# Capability: <kebab-case-name>` line over each capability"
             if specs
             else "",
+            unchanged=UNCHANGED,
+            begin=BEGIN,
+            end=END,
         )
-        out[unit] = await sdk.text_call(
-            prompt,
-            config=run.config,
-            step="spec_artifact",
-            label=f"{label}:rewrite:{unit_label(run, unit)}",
+        call_label = f"{label}:rewrite:{unit_label(run, unit)}"
+        answer = await sdk.text_call(
+            prompt, config=run.config, step="spec_artifact", label=call_label
         )
-    return out
+        try:
+            text = parse_answer(answer)
+            # A text with no capability at all is `check_texts`' to refuse.
+            if (
+                specs
+                and text is not None
+                and _CAPABILITY_RE.search(text)
+                and preamble(text) != preamble(current)
+            ):
+                raise ContractError(
+                    "it changes the text above the first `# Capability:` line"
+                )
+        except ContractError as e:
+            log.warning("%s: %s; answer starts %r", call_label, e, answer[:200])
+            problems.append(
+                {
+                    "category": "format",
+                    "severity": "critical",
+                    "description": f"the rewrite of {unit} was not written: {e}",
+                }
+            )
+            continue
+        if text is None or text.rstrip() == current.rstrip():
+            log.info("%s: unchanged", call_label)
+            continue
+        out[unit] = text
+    return Rewritten(out, problems)
 
 
 def check_texts(run: Run, files: dict[str, str]) -> list[dict]:
