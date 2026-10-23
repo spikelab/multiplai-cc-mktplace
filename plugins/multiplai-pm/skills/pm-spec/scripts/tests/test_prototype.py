@@ -113,3 +113,30 @@ def test_relative_paths_inside_the_dir_are_allowed(tmp_path):
     assert P.files_outside(["../a"], tmp_path / "x") == [
         str((tmp_path / "a").resolve())
     ]
+
+
+def test_the_reviewers_notes_lose_the_status_line_the_gate_read(repo, model):
+    """`STATUS:` is for the gate; the NOTES.md the reviewers get ends with the
+    agent's questions."""
+    model["prototype"] = agent(
+        "- mockup.html: the limits page\n\nQUESTIONS: none\n\n```\nSTATUS: DONE\n```\n"
+    )
+    assert run(repo, "new", "throttle", "--auto") == 0
+    notes = (change_dir(repo) / "prototype" / "NOTES.md").read_text()
+    assert notes == "- mockup.html: the limits page\n\nQUESTIONS: none\n"
+    assert state(change_dir(repo))["steps"]["prototype"]["outcome"] == "passed"
+
+
+def test_the_prompt_keeps_pipeline_remarks_out_of_the_notes(repo, model):
+    assert run(repo, "new", "throttle", "--auto") == 0
+    prompt = model.exactly("prototype")[0]
+    assert "NOTES.md is for the reviewers" in prompt
+    assert "only when you found some" in prompt
+
+
+def test_reviewer_notes_drops_every_status_line_and_its_empty_fence():
+    assert P.reviewer_notes("a\n\n**STATUS**: done_with_concerns\n") == "a\n"
+    assert P.reviewer_notes("STATUS: DONE\n\n# Files\n- a\n") == "# Files\n- a\n"
+    assert P.reviewer_notes("a\n```\nSTATUS: DONE\n```\n\n") == "a\n"
+    assert P.reviewer_notes("a\n```\ncode\n```\n") == "a\n```\ncode\n```\n"
+    assert P.reviewer_notes("a\nThe status: fine\n") == "a\nThe status: fine\n"

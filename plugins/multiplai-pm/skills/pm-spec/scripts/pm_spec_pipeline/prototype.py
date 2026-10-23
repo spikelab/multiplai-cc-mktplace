@@ -12,7 +12,10 @@ with it. Its `NOTES.md` says what each file shows and the questions it raised.
 Every path the agent reports writing is checked against `prototype/` in code,
 and `prototype_gate` checks the result (one retry): a file besides `NOTES.md`,
 and `NOTES.md`; `STATUS: BLOCKED` or `NEEDS_CONTEXT` fails without a retry.
-`--no-prototype` / `prototype: {enabled: false}` turns the step off. Once the
+Once the gate passes on what the agent wrote, the `STATUS:` line it read is
+taken out of `NOTES.md` (`reviewer_notes`): the notes go to reviewers, the
+status was for the gate. `--no-prototype` / `prototype: {enabled: false}`
+turns the step off. Once the
 step has passed or been skipped it never runs again for the change.
 
 Files in `prototype/` are the PM's only when no agent has run. After a failed
@@ -35,6 +38,7 @@ from . import artifacts, layout, sdk
 from . import findings as F
 from .prompts import UNTRUSTED_NOTICE
 from .prompts.prototype import PROTOTYPE_PROMPT
+from .publish import atomic_write
 from .run import EXIT_FAILED, Run, Stop
 
 log = logging.getLogger(__name__)
@@ -85,6 +89,25 @@ def prototype_gate(prototype_dir: Path) -> Gate:
     return Gate(
         True, f"Prototype produced {len(found)} file(s) and NOTES.md", "", found
     )
+
+
+def reviewer_notes(text: str) -> str:
+    """*text* without the `STATUS:` lines the gate reads, and without a code
+    fence that held only such a line, ending in one newline."""
+    out: list[str] = []
+    opened = False  # whether out's last fence line opens a fence
+    for line in text.splitlines():
+        if _STATUS_RE.match(line):
+            continue
+        is_fence = line.strip().startswith(("```", "~~~"))
+        if is_fence and opened and out and out[-1].strip().startswith(("```", "~~~")):
+            out.pop()  # a fence that held only the STATUS line
+            opened = False
+            continue
+        if is_fence:
+            opened = not opened
+        out.append(line)
+    return "\n".join(out).strip("\n").rstrip() + "\n"
 
 
 def files_outside(files_changed: list[str], prototype_dir: Path) -> list[str]:
@@ -177,5 +200,7 @@ async def run_prototype_stage(run: Run) -> None:
     gate = await run_prototype(run)
     if not gate.passed:
         _fail(run, gate.reason)
+    notes = prototype_dir / "NOTES.md"
+    atomic_write(notes, reviewer_notes(notes.read_text()))
     F.record_passed(run, NAME, "", gate.reason)
     run.progress("PROTOTYPE_PASSED", gate.reason)

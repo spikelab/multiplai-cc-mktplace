@@ -87,6 +87,10 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
   code, as a critical finding.
 - Every markdown file pm-spec writes ends in exactly one newline; model text
   with none, or with several, is no longer written as it came.
+- The prototype's `NOTES.md` no longer ends with the agent's `STATUS:` line
+  or a remark that the inputs held no embedded instructions: the line is
+  read by the check and then removed, and the agent mentions embedded
+  instructions only when it found some.
 
 ### Migration
 - A change written in the old layout (`requirements/<capability>.md`) is

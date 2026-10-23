@@ -85,7 +85,9 @@ after the third stop runs the consistency check and the handoff.
    helps people picture the change: screens copied from the current frontend,
    endpoint signatures, sample output. It shows only what things look like,
    with no behaviour and no runnable code, writes `NOTES.md` (each file, and
-   the questions it raised), and writes nowhere else. `--no-prototype` turns
+   the questions it raised), and writes nowhere else. The `STATUS:` line the
+   agent ends `NOTES.md` with is read by the check, then taken out of the
+   file before it is committed. `--no-prototype` turns
    it off. After a failed agent run (exit 1), the next resume checks
    `prototype/` again rather than keeping it unchecked: it goes on once the
    check passes (for example after someone fixed `NOTES.md`), fails again on
