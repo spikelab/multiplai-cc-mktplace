@@ -105,7 +105,9 @@ after the third stop runs the consistency check and the handoff.
    use cases, the other components and the prototype's file list. Each
    `# Capability: <name>` heading sits over that capability's
    `## ADDED/MODIFIED/REMOVED Requirements`; a name for existing behaviour
-   must be an existing `specs/registry/` file's.
+   must be an existing `specs/registry/` file's, and only such a capability
+   may have `MODIFIED` or `REMOVED` requirements (with no registry file,
+   every requirement is `ADDED`).
 11. **Stop:** commit, push, `SPEC:REVIEW:specs`, `SPEC:BRANCH:<branch>`,
    exit 3. The specs are not checked yet. Approved, `resume` runs the check
    and the handoff on the files as they are on the branch, reviewers' edits
@@ -114,7 +116,9 @@ after the third stop runs the consistency check and the handoff.
    cases, the plans and every `specs.md` together, and reports each
    `contradiction`, `gap` or `duplicate` citing both places; a `specs.md`
    that breaks the format (a capability name that is not kebab-case or is
-   used twice, a requirement with no scenario) is a critical finding.
+   used twice, a requirement with no scenario) is a critical finding, and so
+   is a `MODIFIED` or `REMOVED` section in a capability with no
+   `specs/registry/<capability>.md`.
    Critical and major findings get one rewrite of the `specs.md` files
    involved; a recheck must report each of them `resolved`, and a new finding
    blocks only when critical. Otherwise the run stops with

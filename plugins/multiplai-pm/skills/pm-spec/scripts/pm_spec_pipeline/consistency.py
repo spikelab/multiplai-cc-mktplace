@@ -4,8 +4,11 @@ every component's plan and every specs file together.
 It reports findings of type `contradiction`, `gap` or `duplicate`, each citing
 both places. A specs file whose format is broken (a capability name that is
 not kebab-case or is used twice, a requirement with no scenario) is a
-critical `format` finding found in code, before the agent reads anything. The
-step follows the recheck rule in `findings.py`:
+critical `format` finding found in code, before the agent reads anything, and
+so is a `## MODIFIED` or `## REMOVED Requirements` section in a capability that
+has no `specs/registry/<capability>.md` (a critical `registry` finding): there
+is no recorded behaviour for it to change. The step follows the recheck rule in
+`findings.py`:
 
 1. A first check whose findings are all minor passes; minor findings are
    saved, logged and printed as advisory.
@@ -27,8 +30,11 @@ revision the check read, and the handoff marks ready only that revision.
 from __future__ import annotations
 
 import logging
+import re
+from pathlib import Path
 from typing import Literal
 
+from multiplai_core.specs import split_capabilities
 from pydantic import BaseModel, Field, field_validator
 
 from . import artifacts, layout, sdk
@@ -112,6 +118,60 @@ def format_findings(run: Run) -> list[dict]:
     ]
 
 
+_DELTA_HEADING = re.compile(r"^##\s+(MODIFIED|REMOVED)\s+Requirements\b", re.IGNORECASE)
+
+
+def _delta_kinds(text: str) -> list[str]:
+    """`MODIFIED` / `REMOVED` for each such `## ... Requirements` heading in
+    *text*, outside fenced code and HTML comments."""
+    text = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
+    kinds, fenced = [], False
+    for line in text.splitlines():
+        if line.lstrip().startswith(("```", "~~~")):
+            fenced = not fenced
+            continue
+        if not fenced and (m := _DELTA_HEADING.match(line)):
+            kind = m.group(1).upper()
+            if kind not in kinds:
+                kinds.append(kind)
+    return kinds
+
+
+def registry_findings(run: Run) -> list[dict]:
+    """A critical `registry` finding for each capability with a `## MODIFIED` or
+    `## REMOVED Requirements` section and no `specs/registry/<capability>.md`."""
+    change_dir = run.config.change_dir
+    registry = artifacts.registry_dir(run)
+    found = []
+    for unit in layout.units(change_dir):
+        text = (change_dir / unit).read_text()
+        if Path(unit).name == layout.SPECS_FILE:
+            try:
+                sections = split_capabilities(text)
+            except ValueError:
+                continue  # a `format` finding already
+        else:
+            sections = {Path(unit).stem: text}
+        for cap, delta in sections.items():
+            kinds = _delta_kinds(delta)
+            if not kinds or (registry / f"{cap}.md").is_file():
+                continue
+            sections_named = " and ".join(f"`## {k} Requirements`" for k in kinds)
+            found.append(
+                {
+                    "category": "registry",
+                    "severity": "critical",
+                    "description": f"{unit}: capability `{cap}` has {sections_named}, "
+                    f"but there is no specs/registry/{cap}.md recording what the code "
+                    "does today, so there is nothing for it to modify or remove",
+                    "suggestion": "put these requirements under `## ADDED Requirements` "
+                    "(or name a capability that has a specs/registry file)",
+                    "places": [{"file": unit, "where": f"# Capability: {cap}"}],
+                }
+            )
+    return found
+
+
 async def check(run: Run, prior: list[dict] | None = None) -> ConsistencyAnswer:
     """One call of the read-only consistency agent."""
     return await sdk.agent_structured(
@@ -137,7 +197,7 @@ async def recheck(run: Run, name: str, reason: str) -> str:
         listed,
         answer.prior_assessments,
         as_dicts(answer),
-        deterministic=format_findings(run),
+        deterministic=format_findings(run) + registry_findings(run),
     )
     step.repair_findings = F.saved_findings(
         F.assess_listed(listed, answer.prior_assessments)
@@ -185,7 +245,7 @@ async def run_consistency(run: Run) -> None:
         return
     print("PHASE:CONSISTENCY", flush=True)
     answer = await check(run)
-    found = format_findings(run) + as_dicts(answer)
+    found = format_findings(run) + registry_findings(run) + as_dicts(answer)
     actionable, advisory = F.first_check_verdict(found)
     F.record_advisory(run, NAME, advisory)
     if not actionable:

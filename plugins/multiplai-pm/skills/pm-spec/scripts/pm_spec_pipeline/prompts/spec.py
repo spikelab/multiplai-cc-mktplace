@@ -99,8 +99,8 @@ USE_CASES_INSTRUCTION = (
 SPECS_INSTRUCTION = (
     "Create the specs.md of ONE component: what it must do, as requirements grouped by "
     "capability. Start each capability with a `# Capability: <kebab-case-name>` line, then "
-    "its `## ADDED Requirements` (and `## MODIFIED` / `## REMOVED Requirements` for "
-    "behaviour that exists today). "
+    "its `## ADDED Requirements`. `## MODIFIED` and `## REMOVED Requirements` are allowed "
+    "only in a capability that has a file in specs/registry/ (see below). "
     "Use WHEN/THEN format for scenarios. Each requirement MUST have at least one scenario. "
     "Scenarios must be testable — you know when they pass. Specify only this component's "
     "work, as its plan describes it; the other components are specified separately."
@@ -231,6 +231,15 @@ REGISTRY_REQUIREMENTS_RULE = (
     "`## MODIFIED Requirements` with the same `### Requirement:` name as here; a requirement it "
     "removes goes under `## REMOVED Requirements` with that name; only new requirements go under "
     "`## ADDED Requirements`."
+)
+REGISTRY_ONLY_RULE = (
+    "Write `## MODIFIED Requirements` and `## REMOVED Requirements` only in a capability "
+    "listed here: {names}. Every other capability is new: all its requirements go under "
+    "`## ADDED Requirements`."
+)
+REGISTRY_EMPTY_RULE = (
+    "specs/registry has no capability files, so no current behaviour is recorded for this "
+    "change to modify or remove. Write only `## ADDED Requirements`, in every capability."
 )
 REGISTRY_NAMES_RULE = (
     "Each capability below is what the code does today, one file each in specs/registry/. A "

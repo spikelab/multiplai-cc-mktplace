@@ -94,3 +94,17 @@ def test_the_registry_reaches_the_specs_prompt_not_the_proposal(repo, model):
     assert "Capabilities in specs/registry: rate-limit" in prompt
     assert "takes exactly the name listed here" in prompt
     assert "rate-limit" not in model.exactly("spec:proposal")[0]
+    assert (
+        "`## MODIFIED Requirements` and `## REMOVED Requirements` only in a "
+        "capability listed here: rate-limit"
+    ) in prompt
+
+
+def test_with_no_registry_the_specs_prompt_allows_only_added_requirements(repo, model):
+    """With no specs/registry/ file the code's current behaviour is unrecorded,
+    so a MODIFIED or REMOVED requirement has nothing to modify or remove."""
+    assert run(repo, "new", "throttle", "--auto") == 0
+    prompt = model.exactly("spec:specs:throttle")[0]
+    assert "for behaviour that exists today" not in prompt
+    assert "specs/registry has no capability files" in prompt
+    assert "Write only `## ADDED Requirements`" in prompt

@@ -5,6 +5,7 @@ from __future__ import annotations
 from conftest import (
     TWO,
     change_dir,
+    git,
     meta,
     proposal,
     run,
@@ -214,3 +215,63 @@ def test_a_finding_names_its_specs_file_by_path_or_by_capability(repo, model):
         cdir, {"places": [{"file": "specs.md", "where": "ui-page: Requirement"}]}
     ) == ["components/ui/specs.md"]
     assert cited_units(cdir, {"places": [{"file": "proposal.md"}]}) == []
+
+
+def _modified(specs_text: str) -> str:
+    return specs_text.replace(
+        "# Capability: rate-limit\n\n## ADDED Requirements",
+        "# Capability: rate-limit\n\n## MODIFIED Requirements",
+    )
+
+
+def test_modified_on_a_capability_with_no_registry_file_is_a_critical_finding(
+    repo, model
+):
+    """`## MODIFIED` (or `## REMOVED`) needs a specs/registry/<cap>.md to change:
+    found in code, listed as critical, and given the one rewrite."""
+    hand = source_dir(repo)
+    write(hand / "proposal.md", proposal())
+    write(hand / "specs.md", _modified(specs()))
+    model["consistency"] = [{"findings": []}, recheck("resolved")]
+    assert run(repo, "new", "throttle", "--auto") == 0
+    cdir = change_dir(repo)
+    [listed] = state(cdir)["steps"]["consistency"]["repair_findings"]
+    assert (listed["category"], listed["severity"]) == ("registry", "critical")
+    assert "rate-limit" in listed["text"]
+    assert "specs/registry/rate-limit.md" in listed["text"]
+    assert [label for label in model.labels() if ":rewrite:" in label] == [
+        "consistency:rewrite:throttle"
+    ]
+    assert "## MODIFIED" not in (cdir / "specs.md").read_text()
+
+
+def test_removed_in_a_component_with_no_registry_file_blocks_on_the_recheck(
+    repo, model, capsys
+):
+    """A rewrite that leaves the REMOVED section in place still fails the
+    check in code, so the recheck blocks whatever the agent says."""
+    model["components"] = TWO
+    removed = specs().replace(
+        "# Capability: retry-policy\n\n## ADDED Requirements",
+        "# Capability: retry-policy\n\n## REMOVED Requirements",
+    )
+    model["spec:specs"] = lambda prompt, label, kw: removed
+    model["rewrite"] = lambda prompt, label, kw: removed
+    model["consistency"] = [{"findings": []}, recheck("resolved")]
+    assert run(repo, "new", "throttle", "--auto") == 4
+    out = capsys.readouterr().out
+    assert "SPEC:BLOCKED" in out and "retry-policy" in out
+
+
+def test_modified_on_a_capability_with_a_registry_file_is_no_finding(repo, model):
+    write(
+        repo / "specs" / "registry" / "rate-limit.md",
+        "### Requirement: Rate limit holds\nThe system SHALL limit.\n",
+    )
+    git(repo, "add", "specs")
+    git(repo, "commit", "-q", "-m", "registry")
+    git(repo, "push", "-q", "origin", "main")
+    model["spec:specs"] = lambda prompt, label, kw: _modified(specs())
+    assert run(repo, "new", "throttle", "--auto") == 0
+    step = state(change_dir(repo))["steps"]["consistency"]
+    assert step["outcome"] == "passed" and step["repair_attempts"] == 0

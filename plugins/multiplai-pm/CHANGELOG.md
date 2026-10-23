@@ -78,6 +78,14 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
 - A `specs.md` that breaks the format (a capability name that is not
   kebab-case or is used twice) is a critical consistency finding.
 
+### Fixed
+- pm-spec no longer writes `## MODIFIED Requirements` for a capability with
+  no `specs/registry/` file. The specs prompt allows `MODIFIED` and `REMOVED`
+  only in a capability that has one, and names them; with an empty registry
+  it asks for `ADDED` requirements only. The consistency check finds a
+  `MODIFIED` or `REMOVED` section in a capability with no registry file in
+  code, as a critical finding.
+
 ### Migration
 - A change written in the old layout (`requirements/<capability>.md`) is
   still read: `resume` adopts it, and `revise` fixes it in place.

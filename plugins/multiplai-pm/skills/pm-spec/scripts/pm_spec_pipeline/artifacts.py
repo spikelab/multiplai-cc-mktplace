@@ -216,7 +216,7 @@ def prototype_files(change_dir: Path) -> list[str]:
 def registry_section(run: Run) -> str:
     names = registry_names(run)
     if not names:
-        return ""
+        return f"\n\n{P.REGISTRY_HEADING}\n\n{P.REGISTRY_EMPTY_RULE}\n"
     texts = [
         f"### {n} (specs/registry/{n}.md)\n{_read(registry_dir(run) / f'{n}.md')}"
         for n in names
@@ -224,6 +224,7 @@ def registry_section(run: Run) -> str:
     body = "\n\n".join(texts)[:REGISTRY_TEXT_LIMIT]
     return (
         f"\n\n{P.REGISTRY_HEADING}\n\n{P.REGISTRY_NAMES_RULE}\n\n{P.REGISTRY_REQUIREMENTS_RULE}\n\n"
+        f"{P.REGISTRY_ONLY_RULE.format(names=', '.join(names))}\n\n"
         f"Capabilities in specs/registry: {', '.join(names)}\n\n{body}\n"
     )
 
