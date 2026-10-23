@@ -406,6 +406,321 @@ class TestDispatchDictHandler:
         ]
 
 
+# Comparison dispatch: `if args.<dest> == "<name>":` / `match args.<dest>:` branches that return one function.
+CMP_COMMANDS = """\
+def run_open(args):
+    return 0
+
+
+def run_close(config, args):
+    return 0
+
+
+async def run_build(config, args):
+    return 0
+"""
+CMP_MAIN = """\
+import argparse
+import asyncio
+import sys
+
+from .commands import run_close, run_open
+
+
+def build_parser():
+    parser = argparse.ArgumentParser()
+    sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("open")
+    sub.add_parser("close")
+    sub.add_parser("build")
+    sub.add_parser("archive")
+    return parser
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+    if args.command == "build":
+        args.prepared = True
+    if args.command == "open":
+        return run_open(args)
+    elif "close" == args.command:
+        sys.exit(run_close(None, args))
+    elif args.command == "build":
+        from .commands import run_build
+
+        return asyncio.run(run_build(None, args))
+    elif args.command == "archive":
+        print("archived")
+        return 0
+    return 2
+"""
+
+
+def _cmp_tree(tmp_path, main=CMP_MAIN, commands=CMP_COMMANDS, extra=None):
+    files = {"pkg/__init__.py": "", "pkg/cli.py": main, "pkg/commands.py": commands}
+    files.update(extra or {})
+    return make_tree(tmp_path / "snap", files)
+
+
+def _handler(entry):
+    h = entry.handler
+    return None if h is None else (h.path, h.line, h.symbol)
+
+
+class TestComparisonDispatch:
+    def test_if_elif_chain_resolves_each_returned_function(self, tmp_path):
+        disc = discover(_cmp_tree(tmp_path))
+        found = by_name(argparse_entries(disc))
+        for name, symbol, branch in [
+            ("open", "run_open", 'if args.command == "open":'),
+            ("close", "run_close", 'elif "close" == args.command:'),
+        ]:
+            def_line = line_of(CMP_COMMANDS, f"def {symbol}")
+            assert _handler(found[name]) == ("pkg/commands.py", def_line, symbol)
+            assert edges(found[name]) == {
+                ("pkg/cli.py", line_of(CMP_MAIN, branch), "pkg/commands.py", def_line)
+            }
+        assert disc.diagnostics == []
+
+    def test_asyncio_run_of_a_function_imported_in_the_branch(self, tmp_path):
+        e = by_name(argparse_entries(discover(_cmp_tree(tmp_path))))["build"]
+        def_line = line_of(CMP_COMMANDS, "async def run_build")
+        assert _handler(e) == ("pkg/commands.py", def_line, "run_build")
+        # The earlier `if args.command == "build":` returns nothing; the returning branch wins.
+        assert edges(e) == {
+            (
+                "pkg/cli.py",
+                line_of(CMP_MAIN, 'elif args.command == "build":'),
+                "pkg/commands.py",
+                def_line,
+            )
+        }
+
+    def test_inline_branch_keeps_a_null_handler(self, tmp_path):
+        disc = discover(_cmp_tree(tmp_path))
+        e = by_name(argparse_entries(disc))["archive"]
+        assert e.handler is None and e.known_edges == []
+        assert disc.diagnostics == []
+
+    def test_asyncio_run_assigned_then_a_constant_returned(self, tmp_path):
+        main = CMP_MAIN.replace(
+            "        return asyncio.run(run_build(None, args))",
+            "        result = asyncio.run(run_build(None, args))\n"
+            "        print(result)\n"
+            "        return 0",
+        )
+        e = by_name(argparse_entries(discover(_cmp_tree(tmp_path, main))))["build"]
+        assert _handler(e) == (
+            "pkg/commands.py",
+            line_of(CMP_COMMANDS, "async def run_build"),
+            "run_build",
+        )
+
+    def test_module_attribute_reference(self, tmp_path):
+        main = CMP_MAIN.replace(
+            "from .commands import run_close, run_open", "from . import commands"
+        ).replace("return run_open(args)", "return commands.run_open(args)")
+        e = by_name(argparse_entries(discover(_cmp_tree(tmp_path, main))))["open"]
+        assert _handler(e) == (
+            "pkg/commands.py",
+            line_of(CMP_COMMANDS, "def run_open"),
+            "run_open",
+        )
+
+    def test_raise_system_exit(self, tmp_path):
+        main = CMP_MAIN.replace(
+            "sys.exit(run_close(None, args))", "raise SystemExit(run_close(None, args))"
+        )
+        e = by_name(argparse_entries(discover(_cmp_tree(tmp_path, main))))["close"]
+        assert _handler(e)[2] == "run_close"
+
+    def test_match_statement_cases(self, tmp_path):
+        main = """\
+import argparse
+
+from .commands import run_close, run_open
+
+
+def build_parser():
+    parser = argparse.ArgumentParser()
+    sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("open")
+    sub.add_parser("close")
+    sub.add_parser("shut")
+    return parser
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+    match args.command:
+        case "open":
+            return run_open(args)
+        case "close" | "shut":
+            return run_close(None, args)
+    return 2
+"""
+        found = by_name(argparse_entries(discover(_cmp_tree(tmp_path, main))))
+        open_line = line_of(CMP_COMMANDS, "def run_open")
+        close_line = line_of(CMP_COMMANDS, "def run_close")
+        assert edges(found["open"]) == {
+            ("pkg/cli.py", line_of(main, 'case "open":'), "pkg/commands.py", open_line)
+        }
+        assert edges(found["close"]) == {
+            (
+                "pkg/cli.py",
+                line_of(main, 'case "close" | "shut":'),
+                "pkg/commands.py",
+                close_line,
+            )
+        }
+        # Same handler: "shut" merges into "close", as entries sharing a handler always do.
+        assert "shut" not in found
+        assert [(i.name, i.location.line) for i in found["close"].also_invoked_by] == [
+            ("shut", add_parser_line(main, "shut"))
+        ]
+
+    def test_a_dispatcher_is_not_a_handler(self, tmp_path):
+        # walkthrough's shape: `main` hands "check" to `_main`, which dispatches again.
+        main = """\
+import argparse
+
+from .commands import run_open
+
+
+def build_parser():
+    parser = argparse.ArgumentParser()
+    sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("check")
+    sub.add_parser("open")
+    return parser
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+    if args.command == "check":
+        return _main(args)
+    return _main(args)
+
+
+def _check(args):
+    return 0
+
+
+def _main(args):
+    if args.command == "check":
+        return _check(args)
+    if args.command == "open":
+        return run_open(args)
+    return 2
+"""
+        found = by_name(argparse_entries(discover(_cmp_tree(tmp_path, main))))
+        assert _handler(found["check"]) == (
+            "pkg/cli.py",
+            line_of(main, "def _check"),
+            "_check",
+        )
+        assert edges(found["check"]) == {
+            (
+                "pkg/cli.py",
+                line_of(main, 'if args.command == "check":', nth=2),
+                "pkg/cli.py",
+                line_of(main, "def _check"),
+            )
+        }
+
+    def test_a_comparison_on_another_dest_does_not_resolve(self, tmp_path):
+        main = CMP_MAIN.replace('if args.command == "open":', 'if args.verb == "open":')
+        e = by_name(argparse_entries(discover(_cmp_tree(tmp_path, main))))["open"]
+        assert e.handler is None and e.known_edges == []
+
+    def test_subparsers_without_dest_never_resolve_by_comparison(self, tmp_path):
+        main = CMP_MAIN.replace(
+            'add_subparsers(dest="command", required=True)', "add_subparsers()"
+        )
+        found = by_name(argparse_entries(discover(_cmp_tree(tmp_path, main))))
+        assert all(e.handler is None for e in found.values())
+
+    def test_nested_subcommand_resolves_through_its_own_dest(self, tmp_path):
+        main = """\
+import argparse
+
+from .commands import run_close, run_open
+
+
+def build_parser():
+    parser = argparse.ArgumentParser()
+    sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("migrate")
+    db = sub.add_parser("db")
+    db.add_subparsers(dest="db_command").add_parser("migrate")
+    return parser
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+    if args.command == "migrate":
+        return run_open(args)
+    if args.db_command == "migrate":
+        return run_close(None, args)
+    return 2
+"""
+        found = by_name(argparse_entries(discover(_cmp_tree(tmp_path, main))))
+        assert _handler(found["migrate"])[2] == "run_open"
+        assert _handler(found["db migrate"])[2] == "run_close"
+        assert found["db"].handler is None
+
+    def test_out_of_repository_function_is_diagnosed(self, tmp_path):
+        main = CMP_MAIN.replace(
+            "from .commands import run_close, run_open",
+            "from thirdparty import run_open\nfrom .commands import run_close",
+        )
+        disc = discover(_cmp_tree(tmp_path, main))
+        assert by_name(argparse_entries(disc))["open"].handler is None
+        assert [(d.line, d.reason) for d in disc.diagnostics] == [
+            (add_parser_line(main, "open"), "unresolved_handler")
+        ]
+        assert disc.diagnostics[0].detail.endswith(
+            "maps it to run_open, which is imported from outside this repository"
+        )
+
+    def test_set_defaults_and_dispatch_dict_still_win(self, tmp_path):
+        main = CMP_MAIN.replace(
+            '    sub.add_parser("open")\n',
+            '    sub.add_parser("open").set_defaults(func=run_close)\n',
+        ).replace(
+            "def main(argv=None):",
+            'HANDLERS = {"close": run_open}\n\n\ndef main(argv=None):',
+        )
+        found = by_name(argparse_entries(discover(_cmp_tree(tmp_path, main))))
+        assert _handler(found["open"])[2] == "run_close"
+        assert _handler(found["close"])[2] == "run_open"
+
+    def test_dispatch_in_a_module_importing_the_parser(self, tmp_path):
+        # buildme's shape is one file; a `__main__.py` importing `build_parser` is the other common one.
+        parser_mod = CMP_MAIN.split("\n\ndef main(")[0] + "\n"
+        main = """\
+from .cli import build_parser
+from .commands import run_open
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+    if args.command == "open":
+        return run_open(args)
+    return 2
+"""
+        root = _cmp_tree(tmp_path, parser_mod, extra={"pkg/__main__.py": main})
+        e = by_name(argparse_entries(discover(root), "pkg/cli.py"))["open"]
+        assert edges(e) == {
+            (
+                "pkg/__main__.py",
+                line_of(main, 'if args.command == "open":'),
+                "pkg/commands.py",
+                line_of(CMP_COMMANDS, "def run_open"),
+            )
+        }
+
+
 HELPERS = """\
 import argparse
 

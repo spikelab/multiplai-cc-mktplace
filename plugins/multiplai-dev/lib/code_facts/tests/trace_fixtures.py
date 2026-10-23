@@ -50,7 +50,11 @@ def lib(name: str) -> Any:
 def cli_source(
     names: list[str], *, prelude: str = "", dispatch: str = "set_defaults"
 ) -> str:
-    """An argparse CLI: one subcommand per name, each `cmd_<n>` calling a chain of `step<k>_<n>`."""
+    """An argparse CLI: one subcommand per name, each `cmd_<n>` calling a chain of `step<k>_<n>`.
+
+    `dispatch` is `set_defaults`, `comparison` (`if args.command == n: return cmd_<n>(args)`, which
+    discovery resolves) or `inline` (the branch calls `cmd_<n>` but returns a local, which it does not).
+    """
     out = ["import argparse", "", prelude]
     for n in names:
         out += ["", f"def cmd_{n}(args):", f"    return step1_{n}(args)", ""]
@@ -76,7 +80,12 @@ def cli_source(
         out.append("    return args.func(args)")
     else:
         for n in names:
-            out += [f"    if args.command == {n!r}:", f"        return cmd_{n}(args)"]
+            out.append(f"    if args.command == {n!r}:")
+            out += (
+                [f"        code = cmd_{n}(args)", "        return code"]
+                if dispatch == "inline"
+                else [f"        return cmd_{n}(args)"]
+            )
         out.append("    return 1")
     return "\n".join(out) + "\n"
 
