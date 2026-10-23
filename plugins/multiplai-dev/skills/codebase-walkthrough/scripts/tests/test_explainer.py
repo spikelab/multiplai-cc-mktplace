@@ -25,11 +25,11 @@ from walkthrough_pipeline.state import STATE_FILE
 
 H2 = [
     "What it is",
-    "Use cases",
     "How it works",
     "How it stores bookings",
     "What it creates",
     "Configuration",
+    "Use cases",
     "Gotchas",
     "Reference",
     "How this was made",
@@ -121,8 +121,9 @@ def test_a_flow_box_with_an_unknown_cite_is_dropped(
     ws, tmp_path, monkeypatch, fake_fetch
 ):
     md, _, _ = _run(ws, tmp_path, monkeypatch, plant={"flow_node"})
-    flow = section_texts(md, "How it works")[0]
-    diagram = re.search(r"```mermaid\n(.*?)```", flow, re.DOTALL).group(1)
+    # A module's flow diagram sits in What it is, under its paragraphs.
+    summary = section_texts(md, "What it is")[0]
+    diagram = re.search(r"```mermaid\n(.*?)```", summary, re.DOTALL).group(1)
     assert diagram.startswith("flowchart TD") and "Acme sends a booking" in diagram
     assert "A box with no source" not in diagram
     assert "[[c999]] is not a gated citation" in _cut(md)

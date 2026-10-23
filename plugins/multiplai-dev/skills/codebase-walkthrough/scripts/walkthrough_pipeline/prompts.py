@@ -461,3 +461,93 @@ Schema:
 {_schema(schema)}
 
 Answer with ONE JSON object and nothing after it."""
+
+
+# What each open section of the page writer's answer holds, by key.
+PAGE_SECTION_ASKS = {
+    "summary": "two short paragraphs on what the code is and what it does, then the placeholder {{flow}} "
+    "alone in its own paragraph: code draws the flow picture there",
+    "flow": "one short block per stage of the picture, with the same names and in the same order, each "
+    "opening with one sentence that is enough on its own",
+    "core": "the part that does the main job: what it looks at, what it is given, what it produces and what "
+    "checks it; you may place {{flow:core}} alone in a paragraph where its own picture helps",
+    "outputs": "what the code creates, and where",
+    "config": "what can be changed, and what each setting does",
+    "usecases": "when someone would use it, with an example each; do not repeat How it works",
+    "gotchas": "what will catch a newcomer out",
+}
+
+
+def page_writer(
+    name: str,
+    sections: list[tuple[str, str]],
+    material: str,
+    tokens: list[str],
+    schema,
+    *,
+    words_max: int,
+    failures: list[str] | None = None,
+    previous: str | None = None,
+) -> str:
+    """The page writer: one call with no tools that writes the open body of the HTML page as HTML
+    fragments, one per open section, from the gated sections and facts. `gates.page_gate` checks its
+    answer before any of it reaches a file."""
+    redo = ""
+    if failures and previous:
+        redo = (
+            "\nYour previous answer failed these checks. Return the whole answer again, fixed, using only "
+            "the material below:\n"
+            + "\n".join(f"- {f}" for f in failures[:60])
+            + "\n\nPrevious answer:\n"
+            + previous[:40000]
+            + "\n"
+        )
+    asks = "\n".join(
+        f'- "{key}" ("{title}"): {PAGE_SECTION_ASKS.get(key, "")}'
+        for key, title in sections
+    )
+    return f"""You are writing the open body of a web page that explains `{name}` to someone who does not \
+know the code and wants to understand how it works, quickly. It is not a guide to running it.
+
+The page reads like a pyramid. The first screen alone gives a sense of what happens. Each screen below it \
+adds detail to what the reader already has, so the reader can stop at any depth. Most code is a flow, so \
+the page shows the flow as a picture, at the top.
+
+Write these sections, in this order, with exactly these keys:
+{asks}
+
+How to write each section:
+- Open it with a sentence that is enough on its own, then get richer as the reader goes on.
+- The open text carries the explanation. It is as long as understanding needs, and no longer.
+- A layout device earns its place only where it helps the reader. A device repeated on every item \
+becomes noise and stops telling the reader anything: this covers a fold-out, a badge, a chip and an icon. \
+Hide something behind a click (<details>) only when it is long and most readers can skip it.
+- Decide this for each piece of content, from what it holds. Do not give every row the same treatment.
+- The two overview paragraphs of "summary" stay open and above the picture.
+- At most {words_max} visible words in all, outside <details>.
+
+The page contract (a program checks every point; an answer that breaks one is sent back):
+- Each section's "html" is an HTML fragment. Do not write <h2>: code writes each section's title. Use \
+<h3> and <h4> below it.
+- Allowed tags: p ul ol li h3 h4 strong em code a details summary div span table thead tbody tr th td \
+figure figcaption br, and the SVG tags svg g path rect circle line polyline polygon text tspan title defs \
+symbol use. Allowed attributes: class id role aria-* open colspan rowspan, the SVG geometry and paint \
+attributes, and href only as "#..." on a and use. No style attribute, no on* attribute, no comment.
+- Cite with [[cN]] (or a path hop [[pNhK]]) at the end of the sentence it supports, using only the ids of \
+the material. Never cite inside <h3>, <h4> or <summary>.
+- Show code only as [[snippet:cN]] alone in its own <p>. Code puts the cited lines there.
+- Never type a file path with a line number in the text; the citation carries the location.
+- Every <code> text must be a name from the material that occurs in the code.
+- "css" is optional CSS for your fragments. Code nests it inside the page's own block, so write plain \
+rules for your classes. Colours only as var(--token) from this list: {", ".join(tokens) or "(none)"}. No \
+colour literal (#hex, rgb(, hsl(), no url(, no @import.
+
+Material (every item was checked against the code; ids are citation ids):
+{material}
+{redo}
+{EXPLAINER_RULES}
+
+Schema:
+{_schema(schema)}
+
+Answer with ONE JSON object and nothing after it."""

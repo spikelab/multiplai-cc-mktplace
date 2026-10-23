@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
 
 from multiplai_core.citations import check_quote, file_at, lines_at
@@ -946,3 +947,263 @@ def core_part_gate(part, *, citations, corpus, labels) -> list[str]:
         labels=labels,
     )
     return reasons + title_gate(part.name)
+
+
+# --- the page writer's open body (stages/page.py) -------------------------------------------------------
+
+PAGE_TAGS = frozenset(
+    [
+        "p",
+        "ul",
+        "ol",
+        "li",
+        "h3",
+        "h4",
+        "strong",
+        "em",
+        "code",
+        "a",
+        "details",
+        "summary",
+        "div",
+        "span",
+        "table",
+        "thead",
+        "tbody",
+        "tr",
+        "th",
+        "td",
+        "figure",
+        "figcaption",
+        "br",
+        "svg",
+        "g",
+        "path",
+        "rect",
+        "circle",
+        "line",
+        "polyline",
+        "polygon",
+        "text",
+        "tspan",
+        "title",
+        "defs",
+        "symbol",
+        "use",
+    ]
+)
+PAGE_ATTRS = frozenset(("class", "id", "role", "open", "colspan", "rowspan", "href"))
+# SVG geometry and paint attributes, as `html.parser` gives them (lower case).
+SVG_ATTRS = frozenset(
+    [
+        "viewbox",
+        "width",
+        "height",
+        "x",
+        "y",
+        "x1",
+        "y1",
+        "x2",
+        "y2",
+        "cx",
+        "cy",
+        "r",
+        "rx",
+        "ry",
+        "d",
+        "points",
+        "transform",
+        "dx",
+        "dy",
+        "fill",
+        "stroke",
+        "stroke-width",
+        "stroke-linecap",
+        "stroke-linejoin",
+        "stroke-dasharray",
+        "stroke-opacity",
+        "fill-opacity",
+        "opacity",
+        "text-anchor",
+        "dominant-baseline",
+        "font-size",
+        "font-weight",
+        "preserveaspectratio",
+        "xmlns",
+    ]
+)
+FLOW_PLACEHOLDER = "{{flow}}"
+CORE_FLOW_PLACEHOLDER = "{{flow:core}}"
+CSS_BANNED = ("url(", "@import", "expression(", "</")
+CSS_COLOUR = re.compile(r"#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?)\(", re.IGNORECASE)
+WORD = re.compile(r"[A-Za-z0-9][\w'’-]*")
+
+
+class _PageParser(HTMLParser):
+    """What `page_gate` reads from one fragment: tags and attributes outside the allow-list, citations
+    inside a heading or a summary, `<code>` texts, and the visible text."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.bad: list[str] = []
+        self.open: list[str] = []
+        self.codes: list[str] = []
+        self.text: list[str] = []
+        self.heading_cites: list[str] = []
+        self._code: list[str] | None = None
+
+    def handle_starttag(self, tag, attrs):
+        if tag not in PAGE_TAGS:
+            self.bad.append(f"the tag <{tag}> is not allowed")
+        for name, value in attrs:
+            value = value or ""
+            if name == "href":
+                if tag not in ("a", "use") or not value.startswith("#"):
+                    self.bad.append(
+                        f"href={value!r} on <{tag}> is not a link inside the page"
+                    )
+            elif name.startswith("on") or name == "style":
+                self.bad.append(f"the attribute {name} is not allowed")
+            elif not (
+                name in PAGE_ATTRS or name.startswith("aria-") or name in SVG_ATTRS
+            ):
+                self.bad.append(f"the attribute {name} on <{tag}> is not allowed")
+            elif "url(" in value.lower() or "javascript:" in value.lower():
+                self.bad.append(f"the attribute {name} holds {value!r}")
+        if tag not in ("br",):
+            self.open.append(tag)
+        if tag == "code":
+            self._code = []
+
+    def handle_startendtag(self, tag, attrs):
+        self.handle_starttag(tag, attrs)
+        if self.open and self.open[-1] == tag:
+            self.open.pop()
+
+    def handle_endtag(self, tag):
+        if tag == "code" and self._code is not None:
+            self.codes.append("".join(self._code))
+            self._code = None
+        if tag in self.open:
+            while self.open and self.open.pop() != tag:
+                pass
+
+    def handle_data(self, data):
+        if self._code is not None:
+            self._code.append(data)
+        if any(t in ("h3", "h4", "summary") for t in self.open) and CITE_ID.search(
+            data
+        ):
+            self.heading_cites.append(data.strip()[:80])
+        hidden = "details" in self.open and not (self.open and "summary" in self.open)
+        self.text.append((data, hidden))
+
+    def handle_comment(self, data):
+        self.bad.append("an HTML comment is not allowed")
+
+    def handle_decl(self, decl):
+        self.bad.append(f"<!{decl}> is not allowed")
+
+    def handle_pi(self, data):
+        self.bad.append("a processing instruction is not allowed")
+
+
+def _parse_page(html_text: str) -> _PageParser:
+    p = _PageParser()
+    p.feed(html_text)
+    p.close()
+    return p
+
+
+def page_words(html_text: str) -> int:
+    """Visible words of one fragment: not inside `<details>` (its summary counts), with the flow
+    placeholders, snippets and citations taken out first."""
+    plain = CITE_ID.sub(
+        " ",
+        html_text.replace(CORE_FLOW_PLACEHOLDER, " ").replace(FLOW_PLACEHOLDER, " "),
+    )
+    return sum(
+        len(WORD.findall(t)) for t, hidden in _parse_page(plain).text if not hidden
+    )
+
+
+def css_gate(css: str) -> list[str]:
+    """The page writer's CSS: nothing that loads or runs anything, no colour typed as a literal (colours
+    come from the design system's tokens), and braces that balance, so it cannot close the block it is
+    nested in."""
+    reasons = [f"the CSS holds {b!r}" for b in CSS_BANNED if b in css.lower()]
+    plain = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
+    declarations = re.findall(r":([^;{}]*)", plain)
+    for value in declarations:
+        m = CSS_COLOUR.search(value)
+        if m:
+            reasons.append(f"the CSS types the colour {m.group(0)!r}; use var(--token)")
+            break
+    depth = 0
+    for ch in plain:
+        depth += {"{": 1, "}": -1}.get(ch, 0)
+        if depth < 0:
+            break
+    if depth != 0:
+        reasons.append("the CSS braces do not balance")
+    return reasons
+
+
+def page_gate(
+    out,
+    *,
+    open_keys: list[str],
+    core_flow: bool,
+    citations: dict[str, Citation],
+    corpus: Corpus,
+    labels: set[str],
+) -> list[str]:
+    """Failure reasons for the page writer's answer; empty when it passes. Never calls a model.
+
+    The section keys are exactly *open_keys*, in order; `{{flow}}` is in the summary once and nowhere else,
+    and `{{flow:core}}` appears only when the core section has a flow (*core_flow*), at most once; every
+    `[[id]]` and `[[snippet:id]]` is a known citation; no citation sits in a heading or a summary; every
+    tag and attribute is on the allow-list; the CSS passes `css_gate`; every `<code>` text is in the corpus
+    or the labels; no `path:line` is typed in the text."""
+    reasons: list[str] = []
+    keys = [s.key for s in out.sections]
+    if keys != open_keys:
+        reasons.append(
+            f"the sections are {keys}; they must be exactly {open_keys}, in that order"
+        )
+    texts = {s.key: s.html for s in out.sections}
+    joined = "\n".join(texts.values())
+    if (
+        joined.count(FLOW_PLACEHOLDER) != 1
+        or texts.get("summary", "").count(FLOW_PLACEHOLDER) != 1
+    ):
+        reasons.append(f"{FLOW_PLACEHOLDER} must appear exactly once, in the summary")
+    n_core = joined.count(CORE_FLOW_PLACEHOLDER)
+    if n_core and not core_flow:
+        reasons.append(
+            f"{CORE_FLOW_PLACEHOLDER} is used, but the core section has no flow"
+        )
+    elif n_core > 1:
+        reasons.append(f"{CORE_FLOW_PLACEHOLDER} appears {n_core} times; at most once")
+    for cid in dict.fromkeys(CITE_ID.findall(joined)):
+        if cid not in citations:
+            reasons.append(f"[[{cid}]] is not a gated citation")
+    reasons += css_gate(out.css)
+    cited_paths = {c.path for c in citations.values()}
+    for key, text in texts.items():
+        parsed = _parse_page(text)
+        reasons += [f"{key}: {b}" for b in dict.fromkeys(parsed.bad)]
+        reasons += [
+            f"{key}: a citation in a heading or summary: {h!r}"
+            for h in parsed.heading_cites
+        ]
+        for code in dict.fromkeys(parsed.codes):
+            c = code.strip()
+            if c and c not in labels and not _backtick_ok(c, corpus, cited_paths):
+                reasons.append(f"{key}: `{c}` occurs in no snapshot")
+        visible = CITE_ID.sub(" ", " ".join(t for t, _ in parsed.text))
+        for m in PATH_LINE.finditer(visible):
+            reasons.append(
+                f"{key}: {m.group(0)} is a path with a line number typed in the text"
+            )
+    return reasons

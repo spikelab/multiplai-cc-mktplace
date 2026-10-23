@@ -20,9 +20,7 @@ def _md_and_page(done_run) -> tuple[str, str]:
     return md_path.read_text(), md_path.with_suffix(".html").read_text()
 
 
-@pytest.fixture
-def github_run(fresh_ws, tmp_path, monkeypatch, fake_fetch):
-    """`done_run`, with every repo's origin on GitHub, so citations are https links to the commit."""
+def _github_run(fresh_ws, tmp_path, monkeypatch, **fake):
     for key in ("engine", "front", "warehouse"):
         subprocess.run(
             [
@@ -37,7 +35,7 @@ def github_run(fresh_ws, tmp_path, monkeypatch, fake_fetch):
             check=True,
             capture_output=True,
         )
-    agents = FakeAgents()
+    agents = FakeAgents(**fake)
     monkeypatch.setattr(sdk, "agent_call_structured", agents)
     assert main(run_args(fresh_ws, tmp_path)) == 0
     return (
@@ -47,8 +45,22 @@ def github_run(fresh_ws, tmp_path, monkeypatch, fake_fetch):
     )
 
 
-def test_every_https_link_in_the_markdown_is_an_href_in_the_page(github_run):
-    md, page = _md_and_page(github_run)
+@pytest.fixture
+def github_run(fresh_ws, tmp_path, monkeypatch, fake_fetch):
+    """`done_run`, with every repo's origin on GitHub, so citations are https links to the commit."""
+    return _github_run(fresh_ws, tmp_path, monkeypatch)
+
+
+@pytest.fixture
+def github_built_run(fresh_ws, tmp_path, monkeypatch, fake_fetch):
+    """`github_run` whose page writer fails its checks twice, so code builds every section of the page."""
+    return _github_run(fresh_ws, tmp_path, monkeypatch, plant={"page_script:always"})
+
+
+def test_every_https_link_in_the_markdown_is_an_href_in_a_page_built_by_code(
+    github_built_run,
+):
+    md, page = _md_and_page(github_built_run)
     links = set(re.findall(r"\]\((https://[^\s)]+)", md))
     assert any(
         link.startswith("https://github.com/acme/engine/blob/") for link in links
@@ -186,8 +198,8 @@ def test_hop_anchors_are_inside_the_paths_details(done_run):
     assert 'href="#p1h1"' in page
 
 
-def test_payload_examples_are_closed_details(done_run):
-    _, page = _md_and_page(done_run)
+def test_payload_examples_are_closed_details(github_built_run):
+    _, page = _md_and_page(github_built_run)
     outputs = re.search(
         r'<section id="outputs">(.*?)</section>', page, re.DOTALL
     ).group(1)

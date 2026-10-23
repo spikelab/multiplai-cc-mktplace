@@ -1,11 +1,11 @@
 """target → repos → symbols → references → boundary → partition → explore → survey → core → docs → trace
-→ write → render.
+→ write → page → render.
 
 `walkthrough-state.json` is written after every stage; `resume` reloads it and
 continues from the first stage not yet done. Stages up to `partition` are
 code only; the agent stages store each answer as it returns, so a budget
-stop keeps paid work. `survey` asks only for `--scope codebase`; `core` only for a module or a codebase in
-human mode.
+stop keeps paid work. `survey` asks only for `--scope codebase`; `core` and `page` only for a module or a
+codebase in human mode.
 """
 
 from __future__ import annotations
@@ -38,6 +38,7 @@ from .stages import RunContext
 from .stages.core import run_core
 from .stages.docs import run_docs
 from .stages.explore import run_explore
+from .stages.page import run_page
 from .stages.survey import run_survey
 from .stages.trace import PATHS_CACHE, rewind_legacy_trace, run_trace
 from .stages.write import run_write
@@ -397,6 +398,7 @@ STAGES = (
     ("docs", run_docs),
     ("trace", run_trace),
     ("write", run_write),
+    ("page", run_page),
 )
 
 
@@ -562,14 +564,17 @@ NO_CHANGE = object()
 
 def rewind_for_rewrite(state: WalkState, run_dir: Path) -> WalkState:
     """`resume --rewrite`: send a run past its trace stage back to the stage before `write`, dropping what
-    the write stage made (its sections, its answers, its entries in `dropped`). The explore, docs and
-    trace answers are kept, so only the write and render stages run again. Raises WalkError, and changes
+    the write stage made (its sections, its answers, its entries in `dropped`) and the page stage's answers
+    and page. The explore, survey, core, docs and trace answers are kept, so only the write, page and render
+    stages run again. Raises WalkError, and changes
     nothing, when the run has not finished its trace stage."""
     if not state.past("trace"):
         raise WalkError(f"resume --rewrite: {run_dir} has not finished its trace stage")
     state.stage = STAGES_ORDER[STAGES_ORDER.index("write") - 1]
     state.sections = {}
     state.write_answers = {}
+    state.page_answers = {}
+    state.page = {}
     state.dropped = [d for d in state.dropped if not d.stage.startswith("write")]
     return state
 

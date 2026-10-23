@@ -12,6 +12,7 @@ and then the hops `trace_plan` lists for that entry name.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from types import SimpleNamespace
@@ -27,6 +28,7 @@ from walkthrough_pipeline.models import (
     FlowOutput,
     LoopsOutput,
     OutputsOutput,
+    PageOutput,
     ResumeOutput,
     SectionOutput,
     SummaryOutput,
@@ -90,6 +92,7 @@ class FakeAgents:
         stop_write_after: int | None = None,
         stop_survey_after: int | None = None,
         stop_core_after: int | None = None,
+        stop_page_after: int | None = None,
     ):
         self.calls: list[dict] = []
         self.cost = cost
@@ -121,6 +124,13 @@ class FakeAgents:
         # "core_outside_file" (a file outside the target), both in every choice answer.
         self.stop_core_after = stop_core_after
         self.core_calls = 0
+        # Raise BudgetExceededError on page call number stop_page_after + 1. The page plants, each in the
+        # first answer only, or in every answer with ":always" after it: "page_script" (a <script>),
+        # "page_unknown_id" (a citation id that is not in the material), "page_colour" (a colour literal
+        # in the CSS), "page_heading_cite" (a citation inside an <h3>), "page_no_flow" (no {{flow}}) and
+        # "page_long" (an open body over the word limit).
+        self.stop_page_after = stop_page_after
+        self.page_calls = 0
 
     async def __call__(self, prompt: str, schema, **kw):
         from walkthrough_pipeline import sdk
@@ -184,6 +194,16 @@ class FakeAgents:
                 raise budget.BudgetExceededError(
                     "circuit breaker: planted stop during write"
                 )
+        if schema is PageOutput:
+            self.page_calls += 1
+            if (
+                self.stop_page_after is not None
+                and self.page_calls > self.stop_page_after
+            ):
+                raise budget.BudgetExceededError(
+                    "circuit breaker: planted stop during page"
+                )
+            return PageOutput.model_validate(self.page(prompt))
         if schema is SectionOutput:
             return self.write(prompt)
         if schema in STRUCTURED:
@@ -467,6 +487,71 @@ class FakeAgents:
         return SectionOutput.model_validate(
             {"paragraphs": paragraphs, "questions": questions}
         )
+
+    def _planted(self, name: str, prompt: str) -> bool:
+        """*name* is planted in this page answer: the first, or every one with ":always"."""
+        if f"{name}:always" in self.plant:
+            return True
+        return name in self.plant and "Your previous answer failed" not in prompt
+
+    def page(self, prompt: str) -> dict:
+        """The page writer's answer, built from its material: the summary's paragraphs and the flow's
+        steps, one cited sentence for every other open section, a snippet in What it creates and a
+        fold-out in Configuration."""
+        keys = re.findall(r'^- "([a-z]+)" \(', prompt, re.MULTILINE)
+        body = prompt.split('<untrusted-content source="page material">', 1)[1]
+        body = body.split("</untrusted-content>", 1)[0].strip()
+        material = json.loads(body.strip("`").removeprefix("text").strip())
+        tokens = re.search(r"from this list: (--[\w-]+)", prompt)
+        token = tokens.group(1) if tokens else "--fg"
+        ids = [f["id"] for f in material["facts"]] or ["c1"]
+        secs = material["sections"]
+        out = {}
+        for key in keys:
+            if key == "summary":
+                paras = secs["summary"]["paragraphs"]
+                html = "".join(f"<p>{p}</p>" for p in paras) + "<p>{{flow}}</p>"
+                if self._planted("page_script", prompt):
+                    html += "<script>alert(1)</script>"
+                if self._planted("page_no_flow", prompt):
+                    html = html.replace("<p>{{flow}}</p>", "")
+                if self._planted("page_long", prompt):
+                    html += "<p>" + " ".join(["word"] * 1300) + "</p>"
+            elif key == "flow":
+                html = "".join(
+                    f"<h3>{s['title']}</h3><p>{s['summary']}</p>"
+                    for s in secs["flow"]["steps"]
+                )
+                if self._planted("page_heading_cite", prompt):
+                    html = f"<h3>Where it starts [[{ids[0]}]]</h3>" + html
+            elif key == "core":
+                html = f'<p class="lead">{material["core"]["job"]}</p>'
+                if (secs.get("core") or {}).get("flow"):
+                    html += "<p>{{flow:core}}</p>"
+            elif key == "outputs":
+                html = (
+                    f"<p>It saves each booking it is sent. [[{ids[0]}]]</p>"
+                    f"<p>[[snippet:{ids[0]}]]</p>"
+                )
+            elif key == "config":
+                html = (
+                    f"<p>Its settings come from the environment. [[{ids[1 % len(ids)]}]]</p>"
+                    "<details><summary>Every setting</summary><p>"
+                    + " ".join(["hidden"] * 50)
+                    + "</p></details>"
+                )
+                if self._planted("page_unknown_id", prompt):
+                    html += "<p>It has one more. [[c9999]]</p>"
+            else:
+                html = f"<p>The {key} section says one thing. [[{ids[0]}]]</p>"
+            out[key] = html
+        css = f".lead {{ color: var({token}); }}"
+        if self._planted("page_colour", prompt):
+            css += "\n.lead { background: #ff0000; }"
+        return {
+            "css": css,
+            "sections": [{"key": k, "html": h} for k, h in out.items()],
+        }
 
     def explain(self, schema, prompt: str) -> dict:
         """An answer for one of the explainer's structured sections, citing the first ids of its material."""

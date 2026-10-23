@@ -192,11 +192,13 @@ def test_the_mermaid_has_one_shape_per_kind():
 
 
 def test_a_run_draws_the_picture_with_one_box_per_kind_and_no_mermaid(done_run):
+    """The picture sits in What it is, where the page writer put `{{flow}}`."""
     md_path, _, _ = done_run
     html = md_path.with_suffix(".html").read_text()
     assert '<pre class="mermaid">' not in html
-    flow = html.split('<section id="flow">', 1)[1].split("</section>", 1)[0]
-    assert re.findall(r'data-kind="(\w+)"', flow) == ["input", "code", "agent"]
+    summary = html.split('<section id="summary">', 1)[1].split("</section>", 1)[0]
+    assert re.findall(r'data-kind="(\w+)"', summary) == ["input", "code", "agent"]
+    assert "{{flow" not in html
     md = md_path.read_text()
     diagram = re.search(r"```mermaid\n(.*?)```", md, re.DOTALL).group(1)
     assert 'f1(["Acme sends a booking"])' in diagram

@@ -42,6 +42,7 @@ STAGES: tuple[str, ...] = (
     "docs",
     "trace",
     "write",
+    "page",
     "render",
     "done",
 )
@@ -359,6 +360,19 @@ class CoreOutput(_Model):
     flow: FlowOutput | None = None  # for a part with a flow of its own
 
 
+# The page writer's answer (stages/page.py): the HTML page's open body, one fragment per open section.
+
+
+class PageSection(_Model):
+    key: str
+    html: str = ""
+
+
+class PageOutput(_Model):
+    css: str = ""
+    sections: list[PageSection] = Field(default_factory=list)
+
+
 # --- stage records in the state ------------------------------------------------------
 
 
@@ -409,6 +423,12 @@ class WalkState(BaseModel):
     paths_error: str | None = None  # "<ExceptionType>: <message>" when it failed
     sections: dict[str, Section] = Field(default_factory=dict)
     write_answers: dict[str, dict] = Field(default_factory=dict)
+    page_answers: dict[str, dict] = Field(
+        default_factory=dict
+    )  # "page", "page:rewrite" -> PageOutput dump | {"error": ...}
+    page: dict = Field(
+        default_factory=dict
+    )  # the gated open body: {css, sections: {key: html}, words}; empty: the page is drawn by code
     dropped: list[Dropped] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
     lsp: dict = Field(default_factory=dict)

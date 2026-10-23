@@ -26,15 +26,15 @@ from walkthrough_pipeline.state import STATE_FILE, load_state
 
 CODEBASE_H2 = [
     "What it is",
-    "Use cases",
     "How it works",
     "How it stores bookings",
+    "What it creates",
+    "Configuration",
+    "Use cases",
+    "Gotchas",
     "Loops and caps",
     "Exit codes and markers",
     "State and resume",
-    "What it creates",
-    "Configuration",
-    "Gotchas",
     "Reference",
     "How this was made",
 ]

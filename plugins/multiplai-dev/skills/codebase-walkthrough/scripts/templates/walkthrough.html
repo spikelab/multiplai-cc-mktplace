@@ -112,6 +112,11 @@
   details.sub { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 8px 14px; }
   details.sub > summary { color: var(--fg); }
   details.sub > summary h3 { display: inline; margin: 0; font-size: 17px; }
+  /* The detail sections at the bottom of the page, closed until the reader opens one. */
+  details.appendix { margin: 0; }
+  details.appendix > summary { color: var(--fg); font-size: inherit; }
+  details.appendix > summary h2 { display: inline-block; margin: 32px 0 6px; border-top: 0; padding-top: 0; }
+  section:has(> details.appendix) { border-top: 1px solid var(--line); margin-top: 16px; }
   blockquote { border-left: 3px solid var(--accent); background: var(--accent-soft); margin: 12px 0; padding: 4px 14px;
     border-radius: 0 6px 6px 0; }
   @media (max-width: 860px) {
@@ -122,6 +127,7 @@
   }
   @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
 </style>
+<style>{{PAGE_CSS}}</style>
 </head>
 <body>
 <div class="wrap">

@@ -17,7 +17,7 @@ from walkthrough_pipeline import sdk
 from walkthrough_pipeline.__main__ import main
 from walkthrough_pipeline.gates import core_gate
 from walkthrough_pipeline.models import Citation, CoreChoice
-from walkthrough_pipeline.render import markdown_headings
+from walkthrough_pipeline.render import markdown_headings, section_texts
 from walkthrough_pipeline.state import STATE_FILE, load_state
 
 TITLE = "How it stores bookings"
@@ -100,9 +100,10 @@ def test_a_module_run_chooses_the_part_reads_it_and_writes_its_section(done_run)
     html = md_path.with_suffix(".html").read_text()
     h2 = [re.sub(r"<[^>]+>", "", h) for h in re.findall(r"<h2>(.*?)</h2>", html)]
     assert h2[h2.index("How it works") + 1] == TITLE
+    assert "It saves each booking as one row." in section_texts(md, TITLE)[0]
+    # On the page, the page writer wrote the section, from the core choice.
     core = html.split('<section id="core">', 1)[1].split("</section>", 1)[0]
-    assert "It saves each booking as one row." in core
-    assert "<dt>Looks at</dt>" in core
+    assert "It keeps each booking it is sent." in core
 
 
 def test_the_core_section_material_leads_with_the_deep_read(done_run):

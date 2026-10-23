@@ -142,6 +142,7 @@ WRITE_SCHEMAS = {
     "CoreOutput",
     "OutputsOutput",
     "ConfigOutput",
+    "PageOutput",
 }
 KEPT = (
     "facts",
@@ -181,7 +182,7 @@ def test_rewrite_keeps_the_paid_answers_and_asks_only_write_calls(
     monkeypatch.setattr(sdk, "agent_call_structured", agents)
     assert main(["resume", str(run_dir), "--trust-repo", "--rewrite"]) == 0
     assert agents.calls and {c["schema"] for c in agents.calls} <= WRITE_SCHEMAS
-    assert {c["budget_label"] for c in agents.calls} == {"write"}
+    assert {c["budget_label"] for c in agents.calls} == {"write", "page"}
     assert {"UseCasesOutput", "FlowOutput", "SectionOutput"} <= {
         c["schema"] for c in agents.calls
     }

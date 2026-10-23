@@ -71,20 +71,25 @@ log = logging.getLogger(__name__)
 
 MATERIAL_MAX_CHARS = 60_000
 
-# (key, title) of the human-mode H2s, in document order. `write_specs` asks for the structured ones and
-# gotchas; Reference and How this was made hold the sections below, as H3s. The `core` section's title is
-# `state.core["title"]` (`human_sections`); it is left out when the core stage chose nothing.
+# (key, title) of the human-mode H2s, in the order a reader needs them: what it is, how it works, the part
+# that does the main job, what it creates, what can be changed, when to use it, what will catch them out;
+# then the detail, which the HTML page shows as closed fold-outs (`APPENDIX_KEYS`). `write_specs` asks for
+# the structured ones and gotchas; Reference and How this was made hold the sections below, as H3s. The
+# `core` section's title is `state.core["title"]` (`human_sections`); it is left out when the core stage
+# chose nothing.
 HUMAN_SECTIONS = [
     ("summary", "What it is"),
-    ("usecases", "Use cases"),
     ("flow", "How it works"),
     ("core", ""),
     ("outputs", "What it creates"),
     ("config", "Configuration"),
+    ("usecases", "Use cases"),
     ("gotchas", "Gotchas"),
     ("reference", "Reference"),
     ("made", "How this was made"),
 ]
+# The sections the HTML page shows closed, at the bottom.
+APPENDIX_KEYS = ("loops", "exits", "resume", "reference", "made")
 REFERENCE_SUBSECTIONS = [
     "Paths",
     "Module tour",
@@ -103,18 +108,19 @@ CHANGE_SECTIONS = [
     ("reference", "Reference"),
     ("made", "How this was made"),
 ]
-# A codebase run's H2s (`--scope codebase`): a module's, with the three tables of CODEBASE_TABLES.
+# A codebase run's H2s (`--scope codebase`): a module's, with the three tables of CODEBASE_TABLES before
+# Reference.
 CODEBASE_SECTIONS = [
     ("summary", "What it is"),
-    ("usecases", "Use cases"),
     ("flow", "How it works"),
     ("core", ""),
+    ("outputs", "What it creates"),
+    ("config", "Configuration"),
+    ("usecases", "Use cases"),
+    ("gotchas", "Gotchas"),
     ("loops", "Loops and caps"),
     ("exits", "Exit codes and markers"),
     ("resume", "State and resume"),
-    ("outputs", "What it creates"),
-    ("config", "Configuration"),
-    ("gotchas", "Gotchas"),
     ("reference", "Reference"),
     ("made", "How this was made"),
 ]

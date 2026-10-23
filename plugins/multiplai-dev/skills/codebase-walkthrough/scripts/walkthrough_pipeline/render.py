@@ -25,7 +25,13 @@ from . import design
 from .check import LINK
 from .gates import CITE_ID, lines_at_commit, sections_gate
 from .models import Citation, RepoInfo, WalkState, hop_id
-from .stages.write import citations_for_write, human_sections, required_titles
+from .stages.page import OPEN_WORDS_MAX
+from .stages.write import (
+    APPENDIX_KEYS,
+    citations_for_write,
+    human_sections,
+    required_titles,
+)
 from .target import git, github_web_base
 
 LANG = {
@@ -645,12 +651,19 @@ def flow_mermaid(data: dict) -> str:
     return "\n".join(lines)
 
 
+def _picture_in_summary(state: WalkState) -> bool:
+    """A module's or a codebase's flow diagram sits in What it is, under its paragraphs; a change's stays in
+    its flow section."""
+    return state.target.scope != "change"
+
+
 def _md_summary(state: WalkState, lk: Linker) -> MdSection:
     paras = _data(state, "summary").get("paragraphs") or []
-    return MdSection(
-        _join([lk.expand(p) + "\n" for p in paras])
-        or "Nothing about this section passed the checks."
-    )
+    body = [lk.expand(p) + "\n" for p in paras]
+    src = flow_mermaid(_data(state, "flow")) if _picture_in_summary(state) else ""
+    if src:
+        body += ["```mermaid", src, "```"]
+    return MdSection(_join(body) or "Nothing about this section passed the checks.")
 
 
 def _md_usecases(state: WalkState, lk: Linker) -> MdSection:
@@ -683,7 +696,8 @@ def _md_flow(state: WalkState, lk: Linker) -> MdSection:
     body = []
     src = flow_mermaid(data)
     if src:
-        body += ["```mermaid", src, "```", ""]
+        if not _picture_in_summary(state):
+            body += ["```mermaid", src, "```", ""]
         body += ["Where each box is in the code:", ""]
         body += [
             f"- {_cell(n['label'])}: {_cites(lk, [n['cite']])}" for n in data["nodes"]
@@ -1125,6 +1139,14 @@ def _md_made(state: WalkState, out_dir: Path) -> MdSection:
         *scope,
         f"- Depth: `{state.options.get('depth', 'standard')}`",
         f"- Mode: `{state.options.get('mode', 'human')}`",
+        *(
+            [
+                f"- Open body of the HTML page: {state.page['words']:,} words "
+                f"(limit {OPEN_WORDS_MAX:,}), written by one model call"
+            ]
+            if state.page
+            else []
+        ),
         "",
         "Every citation in this file was checked against the commit listed here. "
         "Re-check with `python -m walkthrough_pipeline check <this file>`.",
@@ -1344,14 +1366,18 @@ def first_cites_only(body: str) -> str:
 
         return CITE_UNIT.sub(one, chunk)
 
-    out = "".join(prune(c) for c in re.split(r"(?=<h[23][\s>])", body))
+    return renumber_cites("".join(prune(c) for c in re.split(r"(?=<h[23][\s>])", body)))
+
+
+def renumber_cites(body: str) -> str:
+    """The citation links of *body* numbered from 1 in the order they appear; the same link keeps its number."""
     numbers: dict[tuple[str, str], int] = {}
 
     def renumber(m: re.Match) -> str:
         n = numbers.setdefault((m.group(1), m.group(2)), len(numbers) + 1)
         return f'<a class="cite" href="{m.group(1)}" title="{m.group(2)}">{n}</a>'
 
-    return CITE_LINK.sub(renumber, out)
+    return CITE_LINK.sub(renumber, body)
 
 
 # The pointer `Linker.expand` puts after a hop's citation, ` ([p2h3](#p2h3))`; the page shows it as an arrow.
@@ -1627,30 +1653,49 @@ def flow_picture(
     )
 
 
-def _flow_where(data: dict, lk: Linker, cites: CiteNumbers) -> str:
-    """The fold-out under the picture: each box's place in the code, and what it reads and writes."""
+def _flow_where(
+    data: dict, lk: Linker, cites: CiteNumbers, *, with_cites: bool = True
+) -> str:
+    """The fold-out under the picture: what each box reads and writes and, *with_cites*, where it is in the
+    code. "" when there is nothing to list."""
     items = []
     for n in data.get("nodes") or []:
         rw = _reads_writes(n)
+        if not with_cites and not rw:
+            continue
         items.append(
             f"<li>{html.escape(n['label'])}"
             + (f" — {html.escape(rw)}" if rw else "")
-            + f" {_html_cites(lk, [n['cite']], cites)}</li>"
+            + (f" {_html_cites(lk, [n['cite']], cites)}" if with_cites else "")
+            + "</li>"
         )
-    return (
-        '<details class="more"><summary>What each stage reads and writes, and where it is in the code'
-        f"</summary><ul>{''.join(items)}</ul></details>"
+    if not items:
+        return ""
+    what = "What each stage reads and writes" + (
+        ", and where it is in the code" if with_cites else ""
     )
+    return f'<details class="more"><summary>{what}</summary><ul>{"".join(items)}</ul></details>'
+
+
+def _html_summary(state: WalkState, lk: Linker, cites: CiteNumbers) -> str:
+    """What it is: its paragraphs, then the flow picture and what each stage reads and writes."""
+    paras = _data(state, "summary").get("paragraphs") or []
+    out = [markdown_html(lk.expand(p), cites) for p in paras]
+    data = _data(state, "flow")
+    picture = flow_picture(data) if _picture_in_summary(state) else ""
+    if picture:
+        out += [picture, _flow_where(data, lk, cites)]
+    return "\n".join(out) or "<p>Nothing about this section passed the checks.</p>"
 
 
 def _html_flow(state: WalkState, lk: Linker, cites: CiteNumbers) -> str:
     data = _data(state, "flow")
     out = []
     src = flow_picture(data)
-    if src:
+    if src and not _picture_in_summary(state):
         out += [src, _flow_where(data, lk, cites)]
     steps = data.get("steps") or []
-    if not src and not steps:
+    if not out and not steps:
         return "<p>Nothing about this section passed the checks.</p>"
     if steps:
         out.append('<ol class="steps">')
@@ -1820,6 +1865,7 @@ def render_html(
         )
     }
     builders = {
+        "summary": _html_summary,
         "usecases": _html_usecases,
         "flow": _html_flow,
         "core": _html_core,
@@ -1827,19 +1873,31 @@ def render_html(
         "config": _html_config,
         **{key: _html_table(key) for key in TABLE_COLUMNS},
     }
+    written = (state.page or {}).get("sections") or {}
+    # The detail sections are closed fold-outs at the bottom; a change's page keeps its own layout.
+    appendix = set(APPENDIX_KEYS) if not t.change else set()
     body, nav = [], []
     for key, title in human_sections(state.options, state.core):
         cites = CiteNumbers()
-        if key in builders:
+        heading = f"<h2>{html.escape(title)}</h2>"
+        if key in written:
+            inner = page_section_html(state, lk, title, written[key], cites)
+        elif key in builders:
             inner = builders[key](state, lk, cites)
         elif key in ("reference", "made", "untouched"):
             inner = _html_subs(key, sections[key], swap)
         else:
             inner = markdown_html(sections[key].body, cites)
         nav.append(f'<li><a href="#{key}">{html.escape(title)}</a></li>')
-        body.append(
-            f'<section id="{key}">\n<h2>{html.escape(title)}</h2>\n{inner}\n</section>'
-        )
+        if key in appendix:
+            body.append(
+                f'<section id="{key}"><details class="appendix"><summary>{heading}</summary>\n'
+                f"{inner}\n</details></section>"
+            )
+        else:
+            if key in written:
+                inner = f'<div class="page-body">\n{inner}\n</div>'
+            body.append(f'<section id="{key}">\n{heading}\n{inner}\n</section>')
     tagline = _data(state, "summary").get("tagline")
     header = (
         f'<header class="top"><div class="eyebrow">{"Change" if t.change else "Codebase"} walkthrough</div>'
@@ -1852,16 +1910,61 @@ def render_html(
         + f'<p class="run">{_inline(run_line(state), CiteNumbers())}</p></header>'
     )
     fonts, tokens = styles if styles is not None else design.css(None)
-    page = TEMPLATE.read_text(encoding="utf-8")
-    return (
-        # The design system's CSS first, so text it holds is never taken for a later placeholder's.
-        page.replace("{{FONTS}}", fonts)
-        .replace("{{TOKENS}}", tokens)
-        .replace("{{TITLE}}", html.escape(f"{t.package} walkthrough"))
-        .replace("{{HEADER}}", hide_locations(group_cites(header)))
-        .replace("{{NAV}}", "\n".join(nav))
-        .replace("{{BODY}}", hide_locations(group_cites("\n".join(body))))
+    page_css = (state.page or {}).get("css", "").strip()
+    values = {
+        "FONTS": fonts,
+        "TOKENS": tokens,
+        # The page writer's CSS, nested under its sections' class so it styles nothing else.
+        "PAGE_CSS": f".page-body {{\n{page_css}\n}}" if page_css and written else "",
+        "TITLE": html.escape(f"{t.package} walkthrough"),
+        "HEADER": hide_locations(group_cites(header)),
+        "NAV": "\n".join(nav),
+        "BODY": hide_locations(group_cites("\n".join(body))),
+    }
+    # One pass over the template: text a value holds is never taken for a later placeholder.
+    return PLACEHOLDER.sub(
+        lambda m: values[m.group(1)], TEMPLATE.read_text(encoding="utf-8")
     )
+
+
+PLACEHOLDER = re.compile(r"\{\{(FONTS|TOKENS|PAGE_CSS|TITLE|HEADER|NAV|BODY)\}\}")
+SNIPPET_TOKEN = re.compile(r"(?:<p>\s*)?\[\[snippet:([a-z0-9]+)\]\](?:\s*</p>)?")
+FLOW_SLOT = re.compile(r"(?:<p>\s*)?\{\{flow(:core)?\}\}(?:\s*</p>)?")
+
+
+def page_section_html(
+    state: WalkState, lk: Linker, title: str, text: str, cites: CiteNumbers
+) -> str:
+    """One open section the page writer wrote, ready for the page: each `[[snippet:cN]]` becomes the cited
+    lines, each `[[cN]]` a numbered link, adjacent links one group, only the first citation under each
+    heading is shown, and `{{flow}}` / `{{flow:core}}` become the flow pictures. `page_gate` has passed it."""
+    snippets: list[str] = []
+
+    def keep(m: re.Match) -> str:
+        c = lk.citations.get(m.group(1))
+        snippets.append(markdown_html(lk.snippet(c), cites) if c else "")
+        return f"\x00{len(snippets) - 1}\x00"
+
+    # Snippets are set aside first: the code they show may hold text that looks like a citation.
+    text = SNIPPET_TOKEN.sub(keep, text)
+    text = group_cites(_raw_links(lk.expand(text), cites))
+    heading = f"<h2>{html.escape(title)}</h2>"
+    text = first_cites_only(heading + text)[len(heading) :]
+    text = renumber_cites(
+        re.sub("\x00(\\d+)\x00", lambda m: snippets[int(m.group(1))], text)
+    )
+
+    def flow(m: re.Match) -> str:
+        if m.group(1):
+            data = _data(state, "core").get("flow") or {}
+            return flow_picture(data, caption=state.core.get("title") or "")
+        data = _data(state, "flow")
+        picture = flow_picture(data)
+        return (
+            picture + _flow_where(data, lk, cites, with_cites=False) if picture else ""
+        )
+
+    return FLOW_SLOT.sub(flow, text)
 
 
 def paths_file_for(md: Path) -> Path:
