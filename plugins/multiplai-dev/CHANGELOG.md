@@ -15,6 +15,45 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.106.0] - 2026-10-23
+
+### Added
+- codebase-walkthrough names the part of the code that does its main job and
+  gives it its own section after How it works, titled for that job (for
+  example "How it finds bugs"): what it looks at, what it is given, what it
+  produces and what checks it. One call with no tools chooses the part from
+  the checked claims, and one read-only agent reads its files closely; a code
+  check holds the choice to the target's files and a plain title. Module and
+  codebase scope, human mode.
+- The HTML page's open body is written by one call that sees every checked
+  section and claim at once, so the page no longer repeats itself. A code
+  check passes only allowed HTML tags and attributes, CSS that loads nothing
+  and types no colour, and citations the pipeline checked; it counts the
+  visible words against 1,200 and asks once more when the page fails. A page
+  that still fails is drawn by code, as before. `render` rebuilds the page
+  from the saved answer with no call.
+- The flow picture at the top of the page draws each stage as a box marked as
+  an input, code, an agent, a check, a decision or an output, with stacked
+  cards where many agents run at once; How it works has one block per box, in
+  the picture's order.
+
+### Changed
+- The walkthrough reads What it is (with the flow picture), How it works, the
+  core part, What it creates, Configuration, Use cases, Gotchas. With
+  `--scope codebase` the three tables, Reference and How this was made are
+  closed fold-outs at the bottom of the page.
+- Adjacent citations on the page are one superscript ("1, 2"), and the page
+  shows the first citation under each heading only.
+- The writers follow plain-language rules (no invented names, verbs over
+  nouns, answer first, one idea per sentence), and a title or heading never
+  holds a citation.
+- `resume --rewrite` also asks the page writer again, and keeps the core
+  stage's answers.
+
+### Removed
+- The "Which command to run" table of `--scope codebase`, and the survey agent
+  that wrote it.
+
 ## [0.105.0] - 2026-10-23
 
 ### Added
