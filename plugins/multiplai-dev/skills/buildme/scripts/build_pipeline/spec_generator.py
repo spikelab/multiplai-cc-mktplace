@@ -1066,10 +1066,10 @@ def recheck_verdict(
     """What a recheck after a rewrite blocks on, and what it only reports.
 
     Blocking: a listed finding whose status is not `resolved` (no status is
-    `cannot_verify`); a new finding that is critical or in the
-    `no-new-behaviour` category, as `_blocks_plan` treats that category; and
-    every finding of the deterministic scans. Every other new finding is
-    advisory. A resolved listed finding is in neither list.
+    `cannot_verify`); a new critical finding; and every finding of the
+    deterministic scans. Every other new finding — major or minor, in any
+    category, `no-new-behaviour` included — is advisory, as SKILL.md says.
+    A resolved listed finding is in neither list.
     """
     blocking = [
         f for f in assess_listed(listed, assessments) if f["status"] != "resolved"
@@ -1077,10 +1077,7 @@ def recheck_verdict(
     blocking += [_new_finding(f) for f in deterministic]
     advisory = []
     for finding in new_findings:
-        blocks = (
-            finding.get("severity") == "critical"
-            or finding.get("category") == "no-new-behaviour"
-        )
+        blocks = finding.get("severity") == "critical"
         (blocking if blocks else advisory).append(_new_finding(finding))
     return blocking, advisory
 

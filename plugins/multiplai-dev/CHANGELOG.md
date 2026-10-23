@@ -117,6 +117,11 @@ time, not derived from a tag.
   `from __future__ import annotations` no test can kill them, so a fully
   green build failed `mutation.min_score` on them. `mutation.md` gives
   their number.
+- A planning re-audit after a rewrite no longer stops the run on a new major
+  or minor finding of a block that adds no behaviour; as SKILL.md says, only
+  a new critical finding (or an unresolved listed one, or a finding of
+  buildme's own placeholder and no-behaviour scans) stops it. SKILL.md now
+  names the scans.
 
 ### Removed
 - The refusals of a change dir with uncommitted changes, of a first-wave

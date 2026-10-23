@@ -519,9 +519,10 @@ critical/major gap back into one regeneration pass of `design.md` and
 `tasks.md` before re-auditing once. The plan review
 reads `tasks.md` against the rubric, the constraints and the use cases and
 regenerates `tasks.md` at most once. Each re-audit is told which findings the
-rewrite was asked to fix and stops the run when one is not `resolved` or when
-it finds a new critical problem; new major and minor findings are reported
-only. A stopped step prints those findings with their statuses. Resuming
+rewrite was asked to fix and stops the run when one is not `resolved`, when
+it finds a new critical problem, or when the rewritten `tasks.md` still has a
+placeholder or a block that adds no behaviour by buildme's own scans; new
+major and minor findings are reported only, whatever their category. A stopped step prints those findings with their statuses. Resuming
 without editing the plan stops again at no cost; editing the plan gives the
 step one more rewrite. TDD implementation (test-writer + implementer agents per block),
 integration gates, scored quality reviews, entry point verification, the
