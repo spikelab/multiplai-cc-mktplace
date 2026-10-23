@@ -1,10 +1,10 @@
 """The `findings.json` v1 contract, the `checks.json` v1 contract, the
-`walkthrough.json` v1 contract, and the mailbox rows.
+`summary.json` v1 contract, and the mailbox rows.
 
 These pydantic models are the source of truth. `export-schema` writes them to
 `schema/findings.v1.schema.json`, `schema/checks.v1.schema.json` and
-`schema/walkthrough.v1.schema.json`, which are committed; producers (the review skill, the session writing a
-walkthrough) validate against those files. Every model forbids unknown keys, so a
+`schema/summary.v1.schema.json`, which are committed; producers (the review skill, the session writing a
+summary) validate against those files. Every model forbids unknown keys, so a
 producer that drifts fails validation instead of losing data silently.
 
 Line numbers are 1-based and refer to the file at `head_sha`.
