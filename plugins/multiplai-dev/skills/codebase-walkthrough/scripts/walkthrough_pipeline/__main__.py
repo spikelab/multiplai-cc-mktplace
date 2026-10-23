@@ -169,7 +169,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--mode",
         choices=("human", "agent"),
         default="human",
-        help="human: Markdown walkthrough, HTML page and review-viewer walkthrough.json (a module only); "
+        help="human: Markdown walkthrough and HTML page; "
         "agent: compact Markdown for coding agents (a module only)",
     )
     rn.add_argument(
