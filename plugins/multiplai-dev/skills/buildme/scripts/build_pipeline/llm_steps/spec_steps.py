@@ -22,8 +22,11 @@ from ..change_manager import (
 )
 from ..models import PriorAssessment
 from ..prompts.design_audit import (
+    CAPABILITY_CHECK,
+    COMPONENT_CAPABILITY_CHECK,
     DESIGN_AUDIT_PROMPT,
     TASKS_AUDIT_PROMPT,
+    plan_section,
     prior_findings_section,
 )
 from ..prompts.explainer import EXPLAINER_PROMPT, UNKNOWNS_REGEN_PROMPT
@@ -278,7 +281,11 @@ def _read_plan(config) -> str:
     """The `plan.md` pm-spec wrote for the component (or for a change with one
     component, in the change dir): its scope, what is out of scope and what
     done means."""
-    path = config.change_dir / "plan.md"
+    return _plan_at(config.change_dir)
+
+
+def _plan_at(change_dir: Path) -> str:
+    path = Path(change_dir) / "plan.md"
     return path.read_text() if path.is_file() else "(no plan.md)"
 
 
@@ -404,7 +411,11 @@ async def run_design_audit(
     Returns list of gap dicts with category, severity, description, suggestion.
     With `prior` (the findings a rewrite was asked to fix) it also asks for a
     status for each, returned as `prior_assessments`.
+
+    A component is judged against its `plan.md`: the proposal it reads is its
+    change's, which also holds the other components' capabilities.
     """
+    component = change_root(change_dir) != Path(change_dir)
     proposal = _read_file(change_root(change_dir) / "proposal.md")
     design = _read_file(change_dir / "design.md")
     tasks = _read_file(change_dir / "tasks.md")
@@ -422,10 +433,12 @@ async def run_design_audit(
 
     prompt = DESIGN_AUDIT_PROMPT.format(
         proposal_content=proposal,
+        plan_section=plan_section(_plan_at(change_dir), component=component),
         specs_content=specs_content,
         design_content=design,
         tasks_content=tasks,
         change_type=change_type,
+        capability_check=COMPONENT_CAPABILITY_CHECK if component else CAPABILITY_CHECK,
         spec_ref=spec_issue_ref(change_dir),
     ) + prior_findings_section(prior)
 

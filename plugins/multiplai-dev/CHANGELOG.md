@@ -15,6 +15,16 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.105.1] - 2026-10-23
+
+### Fixed
+- A component's design audit and plan review judge it against its own
+  `plan.md`. They read only the change's proposal and use cases, which cover
+  every component, so the audit of one component reported its sibling's
+  capability as missing (critical), wrote it to `spec-issues.md` and stopped
+  the epic with exit 4. Both now get the component's `plan.md` and are told
+  that what the plan leaves to another component is not a gap.
+
 ## [0.105.0] - 2026-10-23
 
 ### Added

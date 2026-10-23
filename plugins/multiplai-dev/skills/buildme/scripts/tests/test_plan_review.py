@@ -93,6 +93,7 @@ class TestPlanReviewPrompt:
     def test_prompt_formats_with_the_triggers(self):
         rendered = PLAN_REVIEW_PROMPT.format(
             proposal_content="p",
+            plan_section="",
             design_content="d",
             use_cases_content="u",
             tasks_content="t",
@@ -148,6 +149,43 @@ def _change_dir(tmp_path, *, use_cases: bool = True) -> Path:
             "## Personas\nOps.\n\n## Use cases\nExport the log.\n"
         )
     return change_dir
+
+
+class TestPlanReviewComponentScope:
+    """A component's plan is reviewed against its plan.md: the use cases and
+    the proposal it reads are its change's, which cover every component."""
+
+    def _component(self, tmp_path) -> Path:
+        root = _change_dir(tmp_path)
+        comp = root / "components" / "word-frequencies"
+        comp.mkdir(parents=True)
+        (comp / "plan.md").write_text("# Plan\nPLAN-MARKER\n")
+        for name in ("design.md", "tasks.md", "rubric.md"):
+            (comp / name).write_text("x\n")
+        return comp
+
+    @pytest.mark.asyncio
+    async def test_a_component_gets_its_plan_and_the_scope_note(self, tmp_path):
+        from build_pipeline.prompts.design_audit import COMPONENT_SCOPE
+
+        call = AsyncMock(return_value=PlanReviewResult(findings=[]))
+        with patch.object(plan_review_steps, "agent_call_structured", call):
+            await run_plan_review(self._component(tmp_path), _stub_config(tmp_path))
+        prompt = call.await_args.args[0]
+        assert "PLAN-MARKER" in prompt
+        assert COMPONENT_SCOPE in prompt
+        assert "Export the log." in prompt  # the change's use cases, still shown
+
+    @pytest.mark.asyncio
+    async def test_a_change_gets_no_scope_note(self, tmp_path):
+        from build_pipeline.prompts.design_audit import COMPONENT_SCOPE
+
+        call = AsyncMock(return_value=PlanReviewResult(findings=[]))
+        with patch.object(plan_review_steps, "agent_call_structured", call):
+            await run_plan_review(_change_dir(tmp_path), _stub_config(tmp_path))
+        prompt = call.await_args.args[0]
+        assert COMPONENT_SCOPE not in prompt
+        assert "(no plan.md)" in prompt
 
 
 class TestRunPlanReview:
