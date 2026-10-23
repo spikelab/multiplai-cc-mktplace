@@ -155,13 +155,16 @@ def render_interview(
 ) -> str:
     """The text of `interview.md`.
 
-    Sections, each only when it has content: a pointer to `prd.md`, the ticket
-    (already fenced), one `## Context: <name>` per context file (the plan first),
-    `## Interview` for a summary, then `## Questions` / `## Answers` /
+    The summary, when there is one, right under the `# Interview` heading.
+    Then sections, each only when it has content: a pointer to `prd.md`, the
+    ticket (already fenced), one `## Context: <name>` per context file (the
+    plan first), then `## Questions` / `## Answers` /
     `## Assumptions` (self mode) or `## Questions` / `## Replies` (ticket mode).
     An answer with empty `grounded_in` goes under Assumptions, never Answers.
     """
     out = ["# Interview", ""]
+    if summary:
+        out += [summary.rstrip(), ""]
     if (change_dir / "prd.md").is_file():
         out += [
             "## PRD",
@@ -174,8 +177,6 @@ def render_interview(
         out += ["## Ticket", "", ticket.read_text().rstrip(), ""]
     for name, content in contexts or []:
         out += [f"## Context: {name}", "", content.rstrip(), ""]
-    if summary:
-        out += ["## Interview", "", summary.rstrip(), ""]
     if questions:
         out += ["## Questions", ""]
         out += [f"{i}. {q}" for i, q in enumerate(questions, 1)]

@@ -94,6 +94,8 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
 - A list nested under a `## Done means` criterion stays in that criterion's
   `tickets.json` acceptance entry, one sub-item per line with its
   indentation, instead of being run together with " - ".
+- `interview.md` no longer has an `## Interview` heading under its
+  `# Interview` title: the interview summary sits right under the title.
 
 ### Migration
 - A change written in the old layout (`requirements/<capability>.md`) is

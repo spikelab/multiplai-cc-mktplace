@@ -250,7 +250,8 @@ def test_a_failed_self_interview_is_not_fatal(repo, model):
         == 0
     )
     text = (change_dir(repo) / "interview.md").read_text()
-    assert "## Interview" in text and "## Questions" not in text
+    assert "Throttle it." in text and "## Questions" not in text
+    assert "## Interview" not in text
 
 
 def test_user_mode_writes_the_callers_summary(repo, model):
@@ -258,7 +259,10 @@ def test_user_mode_writes_the_callers_summary(repo, model):
         run(repo, "new", "throttle", "--interview-summary", "SUMMARY: sixty a minute.")
         == 3
     )
-    assert "SUMMARY: sixty a minute." in (change_dir(repo) / "interview.md").read_text()
+    text = (change_dir(repo) / "interview.md").read_text()
+    # One `Interview` heading: the summary sits right under it.
+    assert text.startswith("# Interview\n\nSUMMARY: sixty a minute.\n")
+    assert "## Interview" not in text
     assert not any(label.startswith("interview") for label in model.labels())
 
 
@@ -342,12 +346,13 @@ def test_render_interview_puts_each_section_only_when_it_has_content(tmp_path):
         questions=["Q1?"],
         answers=[InterviewAnswer(question="Q1?", answer="A1", grounded_in="x.py:1")],
     )
+    assert text.startswith("# Interview\n\nS\n\n## Context: notes.md\n")
     assert [
         "## Context: notes.md" in text,
         "## Interview" in text,
         "## Answers" in text,
         "## Assumptions" in text,
-    ] == [True, True, True, False]
+    ] == [True, False, True, False]
 
 
 @pytest.mark.parametrize(
