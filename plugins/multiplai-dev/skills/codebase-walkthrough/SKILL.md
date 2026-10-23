@@ -1,6 +1,6 @@
 ---
 name: codebase-walkthrough
-description: Explains a module, or a PR or commit range (--scope pr), end to end with a Python pipeline — every repository that calls it, everything it calls, its data stores and config, and the vendor's docs — and keeps only claims whose cited lines are at the commit. Writes a Markdown walkthrough and an HTML page, or compact Markdown for coding agents.
+description: Explains a module, a whole tool or plugin (--scope codebase), or a PR or commit range (--scope pr), end to end with a Python pipeline — every repository that calls it, everything it calls, its data stores and config, and the vendor's docs — and keeps only claims whose cited lines are at the commit. Writes a Markdown walkthrough and an HTML page, or compact Markdown for coding agents.
 when_to_use: 'Triggers: walk me through this module, explain this codebase, onboard me, codebase tour, walkthrough, /multiplai-dev:codebase-walkthrough'
 disable-model-invocation: true
 ---
@@ -87,8 +87,8 @@ gates never ask a model.
 
 ## What this skill does on the machine
 
-- **Sends the module's repository, and every repository that refers to it, to
-  a model.** Agents read snapshots of those commits with `Read`, `Grep` and
+- **Sends the module's repository, every repository that refers to it, and
+  each `--lib` library's repository, to a model.** Agents read snapshots of those commits with `Read`, `Grep` and
   `Glob` only; the writers get no tools. No agent gets a shell, file edits, or
   web access. This is why it needs `--trust-repo`.
 - **Reads git repositories** with `git rev-parse`, `git show`, `git archive`,
@@ -138,14 +138,15 @@ the repositories next to it, and re-run with `--trust-repo` only on a yes.
 | Arg | Meaning | Default |
 |-----|---------|---------|
 | target | Directory of the module, inside a git repository. With `--scope pr`: the repository | required for a module; for a change, `--repo` or the current directory |
-| `--scope` | `module`, or `pr`: explain a change given by `--pr N` or `--range BASE..HEAD`, read at its head against the merge-base | `module` |
+| `--scope` | `module`; `codebase`: a whole tool or plugin, with four more sections (which command to run, loops and caps, exit codes and markers, state and resume) and its own docs read as input; or `pr`: explain a change given by `--pr N` or `--range BASE..HEAD`, read at its head against the merge-base | `module` |
+| `--lib` | With `--scope codebase` (repeatable): a library directory the code calls, read alongside it and cited like it | none |
 | `--pr` / `--range` | With `--scope pr`, exactly one: a PR number (needs `gh`), or two commits | none |
 | `--repo` | With `--scope pr`: the repository | the current directory |
 | `--fetch` | With `--scope pr`: `git fetch --quiet origin` first | off |
 | `--expect-head` | With `--scope pr`: refuse to start unless the change's head is this sha | none |
 | `--commit` | Module only: read the directory at this commit instead of HEAD | HEAD |
-| `--depth` | `overview` (skips test files), `standard`, `deep` | `standard` |
-| `--mode` | `human` (Markdown and an HTML page) or `agent` (compact Markdown for coding agents; no references, docs or paths; a module only) | `human` |
+| `--depth` | `overview` (skips test files), `standard`, `deep` | `overview` with `--scope codebase`, else `standard` |
+| `--mode` | `human` (Markdown and an HTML page) or `agent` (compact Markdown for coding agents; no references, docs or paths; `--scope module` only) | `human` |
 | `--name` | Base file name | the module directory, lower-cased; `pr-<N>` or `range-<base8>-<head8>` for a change |
 | `--output` | Directory for the walkthrough files | `INBOX/` if it exists, else the current directory |
 | `--search-root` / `--repos` | Where to look for references | the nearest ancestor holding several repositories |
@@ -189,6 +190,28 @@ uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/codebase-walkthrough/scripts \
   run --scope pr --pr 123 --repo /abs/path/to/repo --trust-repo [--fetch] [--expect-head <sha>] \
   [--design-system-dir /abs/design-system]
 ```
+
+For a whole tool or plugin (a skill with its scripts, a CLI with several
+commands), pass `--scope codebase` with the tool's directory, and `--lib
+/abs/path` for each library it calls that should be read too:
+
+```bash
+uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/codebase-walkthrough/scripts \
+  python -m walkthrough_pipeline --session-id "{session_id}" \
+  run /abs/path/to/tool --scope codebase --trust-repo [--lib /abs/path/to/library]
+```
+
+After explore, three more agents each read the whole snapshot for one
+question: every loop and its cap, what the code keeps on disk and what a
+re-run does with it, and which command to run when. Each gets the tool's own
+`SKILL.md`, `README.md`, `CHANGELOG.md` and `CLAUDE.md` (those under the
+directory, and the nearest one of each name above it) and cites them like
+code. The walkthrough adds four tables to a module's sections: Which command
+to run, Loops and caps, Exit codes and markers, and State and resume. Each row
+cites a line that passed the checks; a flag, number or name in no cited quote
+cuts the row (a cap alone is dropped and the row kept). A table with no row
+says so. It reads at `overview` depth (no test files) unless `--depth` says
+otherwise.
 
 A change's walkthrough has six sections: What changed and why, The path
 through the change, Who is affected, What it does not touch (written by code

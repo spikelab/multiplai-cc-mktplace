@@ -55,6 +55,69 @@ Schema:
 Answer with ONE JSON object and nothing after it."""
 
 
+# The survey's three questions (`--scope codebase`). Each agent reads across the whole snapshot.
+SURVEY_QUESTIONS = {
+    "loops": """Find every loop, retry, round and repeat in the code, and for each: what repeats, its cap
+(the constant or argument that limits it, with its value), what ends it well, and what ends it badly
+(the error, exit code or marker it ends with). Also list every exit code and every marker the code
+prints for a caller to read (for example `DONE:` or `RESEARCH:NEEDED`), with what each means.
+Before you state that a limit stops something or that a gate halts a run, read the code that CALLS it:
+when a gate or check can never fire because of how its callers call it (a loop that stops before the
+gate's limit, a caller that ignores the result), report that as a gotcha, citing both the gate and the
+caller.""",
+    "lifecycle": """Find what the code writes as it runs: state and checkpoint files, logs, cost or spend
+records, reports. For each kind of stop (a crash or kill, a budget or round cap, a failed check, Ctrl-C),
+say what is on disk afterwards, what a re-run or resume keeps, what it redoes, and what refuses to
+resume and with which message. Follow the calls into the libraries listed below when the code hands
+logging, state or cost tracking to them.""",
+    "commands": """Read the code's own docs listed below and its command-line entry points. Say which command,
+subcommand, mode or flag to use in which situation, and why; the decision rules and recipes the docs
+state (for example "use X for a trivial change, Y otherwise"); and the pitfalls they warn about. Where
+the docs and the code disagree (a flag the docs name that the code lacks, a different default), report
+that as a gotcha, citing both. In a `CHANGELOG.md` read only the first 200 lines.""",
+}
+
+
+def survey_task(
+    name: str,
+    question: str,
+    files: list[tuple[str, int]],
+    docs: list[str],
+    libs: list[str],
+    schema,
+) -> str:
+    listing = "\n".join(f"- {path} ({n} lines)" for path, n in files)
+    doc_list = "\n".join(f"- {d}" for d in docs) or "- (none found)"
+    lib_list = "\n".join(f"- {d}/" for d in libs) or "- (none given)"
+    return f"""You are explaining the codebase `{name}` to an engineer who has just joined the team.
+Your working directory holds snapshots of one or more repositories at one commit each; every path
+below starts with the repository name. Read across ALL the files below, not one at a time: use Grep to
+find every place that matters, then Read around each.
+
+Survey question: [survey:{question}]
+{SURVEY_QUESTIONS[question]}
+
+Files of `{name}`:
+{listing}
+
+The code's own docs:
+{doc_list}
+
+Libraries the code calls, which you may also read:
+{lib_list}
+
+Return each finding as a fact in `facts`, and each gate that cannot fire or doc that disagrees with the
+code as a fact in `gotchas`, every one with citations. Leave `files`, `interfaces` and `terms` empty.
+
+{CITATION_RULES}
+{UNTRUSTED_RULES}
+
+Schema:
+{_schema(schema)}
+
+Answer with ONE JSON object and nothing after it."""
+
+
 def docs_resource(
     name: str,
     resource: str,
@@ -205,6 +268,24 @@ PR description and the commit subjects when they say why; never guess a reason t
   sentences saying what happens there and what the change altered, `details_paragraphs` (the specifics)
   and `snippet_cites` (one or two citation ids whose lines are worth showing as code).
 Follow the first path listed unless the material shows another goes through more of the change.""",
+    "commands": """Return `rows`: which command to run in which situation, one row per situation, the way a
+teammate would tell a newcomer. Each row has `situation` (when to use it, in plain words), `command` (the
+command line, using ONLY subcommands and flags that appear in the material; write a value the user chooses
+as a placeholder in angle brackets, e.g. `<plan file>`), `why` (one plain sentence) and `cite`: the citation
+id of the doc line or code line that says so. Start with the decision rules the docs state.""",
+    "loops": """Return `rows`: every loop, retry or round in the code. Each row has `what` (what repeats, in
+plain words), `cap` (the limit exactly as the code writes it, with its value, e.g. "3 (`MAX_TRIES`)"),
+`ends_well` (what ends it well), `ends_badly` (what ends it badly: the error, exit code or marker) and
+`cite`: the citation id of the line that sets the cap or runs the loop. Leave `cap` empty when the material
+does not show one.""",
+    "exits": """Return `rows`: every exit code and every marker the code prints for a caller to read. Each row
+has `signal` exactly as the code writes it ("exit 2", or the marker such as "DONE:"), `meaning` (what it
+means, in one plain sentence), `action` (what the reader should do next) and `cite`: the citation id of the
+line that exits or prints it.""",
+    "resume": """Return `rows`: one per kind of stop (a crash or kill, a budget or round cap, a failed check,
+Ctrl-C, a finished run). Each row has `stop` (the kind of stop), `on_disk` (what is on disk afterwards),
+`rerun` (what a re-run or resume keeps, redoes or refuses, and the message it prints when it refuses) and
+`cite`: the citation id of the line that saves or reads that state.""",
     "config": """Return `rows`: the settings, flags, environment variables and config keys that change
 what the code does. Each row has the `name` exactly as the code spells it, its `effect` in one plain
 sentence, its `default` when the material shows it, and `cite`: the citation id of the line that reads

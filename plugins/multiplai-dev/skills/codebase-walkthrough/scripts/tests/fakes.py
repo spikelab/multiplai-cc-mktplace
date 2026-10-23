@@ -18,20 +18,48 @@ from types import SimpleNamespace
 
 from walkthrough_pipeline import budget
 from walkthrough_pipeline.models import (
+    CommandsOutput,
     ConfigOutput,
     DocsOutput,
+    ExitsOutput,
     ExploreOutput,
     FlowOutput,
+    LoopsOutput,
     OutputsOutput,
+    ResumeOutput,
     SectionOutput,
     SummaryOutput,
     UseCasesOutput,
 )
 
+# The explainer's structured schemas, the codebase tables included.
+STRUCTURED = (
+    SummaryOutput,
+    UseCasesOutput,
+    FlowOutput,
+    OutputsOutput,
+    ConfigOutput,
+    CommandsOutput,
+    LoopsOutput,
+    ExitsOutput,
+    ResumeOutput,
+)
+# What the survey answer cites in each file, per question (`--scope codebase`).
+SURVEY_NEEDLES = {
+    "loops": ("MAX_", "range(", "sys.exit(", 'print("'),
+    "lifecycle": ("write_text(", "json.loads(", ".open(", "STATE ="),
+    "commands": ("Use `", "Run `", "exits 2", "| `"),
+}
+SURVEY_MAX_FACTS = 12
+
 
 def _line(cwd: str, path: str, n: int) -> str:
     lines = (Path(cwd) / path).read_text(encoding="utf-8").split("\n")
     return lines[n - 1].strip()
+
+
+def _text(cwd: str, path: str) -> str:
+    return (Path(cwd) / path).read_text(encoding="utf-8")
 
 
 def _first_code_line(cwd: str, path: str) -> int:
@@ -60,6 +88,7 @@ class FakeAgents:
         stop_trace_after: int | None = None,
         plant: set[str] | None = None,
         stop_write_after: int | None = None,
+        stop_survey_after: int | None = None,
     ):
         self.calls: list[dict] = []
         self.cost = cost
@@ -80,6 +109,11 @@ class FakeAgents:
         # Raise BudgetExceededError on write call number stop_write_after + 1.
         self.stop_write_after = stop_write_after
         self.write_calls = 0
+        # Raise BudgetExceededError on survey call number stop_survey_after + 1. The codebase tables'
+        # plants: "command_flag" (a command with a flag the code lacks), "exit_number" (a signal whose
+        # number is in no quote) and "loop_cap" (a cap whose number is in no quote).
+        self.stop_survey_after = stop_survey_after
+        self.survey_calls = 0
 
     async def __call__(self, prompt: str, schema, **kw):
         from walkthrough_pipeline import sdk
@@ -94,6 +128,16 @@ class FakeAgents:
         if self.fail_on and self.fail_on in prompt:
             raise sdk.AgentCallError("planted failure")
         cwd = kw.get("cwd") or ""
+        if schema is ExploreOutput and "Survey question: [survey:" in prompt:
+            self.survey_calls += 1
+            if (
+                self.stop_survey_after is not None
+                and self.survey_calls > self.stop_survey_after
+            ):
+                raise budget.BudgetExceededError(
+                    "circuit breaker: planted stop during survey"
+                )
+            return self.survey(prompt, cwd)
         if schema is ExploreOutput:
             return self.explore(prompt, cwd)
         if schema is DocsOutput:
@@ -110,14 +154,7 @@ class FakeAgents:
             return schema.model_validate(self.trace(prompt, cwd))
         if schema.__name__ == "FallbackAnswer":
             return schema.model_validate(self.fallback(prompt, cwd))
-        if schema in (
-            SectionOutput,
-            SummaryOutput,
-            UseCasesOutput,
-            FlowOutput,
-            OutputsOutput,
-            ConfigOutput,
-        ):
+        if schema is SectionOutput or schema in STRUCTURED:
             self.write_calls += 1
             if (
                 self.stop_write_after is not None
@@ -128,13 +165,7 @@ class FakeAgents:
                 )
         if schema is SectionOutput:
             return self.write(prompt)
-        if schema in (
-            SummaryOutput,
-            UseCasesOutput,
-            FlowOutput,
-            OutputsOutput,
-            ConfigOutput,
-        ):
+        if schema in STRUCTURED:
             return schema.model_validate(self.explain(schema, prompt))
         if schema.__name__ == "TraceOutput":
             # The trace stage from before map_paths: an empty answer, so suites that do not test
@@ -157,7 +188,8 @@ class FakeAgents:
                 files.append(
                     {"path": path, "purpose": "part of bookings", "citation": cit}
                 )
-                if path.endswith("models.py"):
+                # The bookings fixture's models.py (a real tree, as in the free check, has others).
+                if path.endswith("models.py") and "ospite_count" in _text(cwd, path):
                     k = _find(cwd, path, "ospite_count")
                     terms.append(
                         {
@@ -237,6 +269,35 @@ class FakeAgents:
         return ExploreOutput.model_validate(
             {"facts": facts, "files": files, "terms": terms, "gotchas": gotchas}
         )
+
+    def survey(self, prompt: str, cwd: str) -> ExploreOutput:
+        """One fact per line holding one of the question's needles, in the listed files, docs and
+        libraries; for the loops question the first is the cap, and one gotcha cites it."""
+        question = re.search(r"Survey question: \[survey:(\w+)\]", prompt).group(1)
+        listed = re.findall(r"^- (\S+) \(\d+ lines\)$", prompt, re.MULTILINE)
+        docs = re.findall(r"^- (\S+\.md)$", prompt, re.MULTILINE)
+        libs = [
+            f.relative_to(cwd).as_posix()
+            for d in re.findall(r"^- (\S+)/$", prompt, re.MULTILINE)
+            for f in sorted((Path(cwd) / d).rglob("*.py"))
+        ]
+        facts = []
+        for path in docs if question == "commands" else listed + libs:
+            lines = (Path(cwd) / path).read_text(encoding="utf-8").split("\n")
+            for n, line in enumerate(lines, start=1):
+                if any(needle in line for needle in SURVEY_NEEDLES[question]):
+                    cit = {
+                        "path": path,
+                        "line_start": n,
+                        "line_end": n,
+                        "quote": line.strip(),
+                    }
+                    facts.append(
+                        {"claim": f"{question}: {line.strip()}", "citations": [cit]}
+                    )
+        facts = facts[:SURVEY_MAX_FACTS]
+        gotchas = facts[:1] if question == "loops" else []
+        return ExploreOutput.model_validate({"facts": facts, "gotchas": gotchas})
 
     def docs(self, prompt: str, cwd: str) -> DocsOutput:
         pages = re.findall(r"^- (https://\S+) -> file `(\S+)`", prompt, re.MULTILINE)
@@ -351,6 +412,83 @@ class FakeAgents:
         """An answer for one of the explainer's structured sections, citing the first ids of its material."""
         ids = re.findall(r"^- \[([a-z0-9]+)\]", prompt, re.MULTILINE) or ["c1"]
         a, b, c = (ids + ids + ids)[:3]
+
+        def id_with(needle: str) -> str:
+            """The first material id whose line holds *needle*, else the first id."""
+            m = re.search(
+                rf"^- \[([a-z0-9]+)\][^\n]*{re.escape(needle)}", prompt, re.MULTILINE
+            )
+            return m.group(1) if m else a
+
+        if schema is CommandsOutput:
+            rows = [
+                {
+                    "situation": "A full build",
+                    "command": "tool build --run-dir <dir>",
+                    # Cites the docs' table row: its `|` must survive the table cell (check re-reads it).
+                    "why": f"It runs every attempt. [[{id_with('| `tool build`')}]]",
+                    "cite": id_with("build"),
+                }
+            ]
+            if "command_flag" in self.plant:
+                rows.append(
+                    {
+                        "situation": "A fast build",
+                        "command": "tool build --no-such-flag",
+                        "why": "It skips work.",
+                        "cite": id_with("build"),
+                    }
+                )
+            return {"rows": rows}
+        if schema is LoopsOutput:
+            rows = [
+                {
+                    "what": "The build attempts",
+                    "cap": "3 (`MAX_TRIES`)",
+                    "ends_well": "Every attempt is recorded.",
+                    "ends_badly": "An error stops it.",
+                    "cite": id_with("MAX_TRIES ="),
+                }
+            ]
+            if "loop_cap" in self.plant:
+                rows[0]["cap"] = "7 (`MAX_TRIES`)"
+            return {"rows": rows}
+        if schema is ExitsOutput:
+            rows = [
+                {
+                    "signal": "exit 2",
+                    "meaning": "The check found a problem.",
+                    "action": "Read the output and fix it.",
+                    "cite": id_with("sys.exit(2)"),
+                },
+                {
+                    "signal": "DONE:",
+                    "meaning": "The build finished.",
+                    "action": "Nothing.",
+                    "cite": id_with('print("DONE'),
+                },
+            ]
+            if "exit_number" in self.plant:
+                rows.append(
+                    {
+                        "signal": "exit 9",
+                        "meaning": "Something else.",
+                        "action": "Nothing.",
+                        "cite": id_with("sys.exit(2)"),
+                    }
+                )
+            return {"rows": rows}
+        if schema is ResumeOutput:
+            return {
+                "rows": [
+                    {
+                        "stop": "A crash mid build",
+                        "on_disk": "The attempts done so far.",
+                        "rerun": "It skips the attempts already recorded.",
+                        "cite": id_with("write_text("),
+                    }
+                ]
+            }
         if schema is SummaryOutput:
             return {
                 "tagline": f"Bookings takes reservations from Acme. [[{a}]]",
@@ -452,6 +590,19 @@ class FakeAgents:
                         "what": f"A line per poll. [[{c}]]",
                         "written_by_cite": c,
                     },
+                ]
+            }
+        if "| `--run-dir" in prompt:
+            # The plugin fixture: a row citing its docs' flag table, whose `|` must survive the cell.
+            flag = id_with("| `--run-dir")
+            return {
+                "rows": [
+                    {
+                        "name": "--run-dir",
+                        "effect": f"Where the build keeps its state. [[{flag}]]",
+                        "default": "",
+                        "cite": flag,
+                    }
                 ]
             }
         return {

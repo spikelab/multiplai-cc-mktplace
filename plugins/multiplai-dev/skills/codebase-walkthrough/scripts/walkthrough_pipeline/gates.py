@@ -682,3 +682,115 @@ def config_gate(
     default = row.default.strip().strip("`").strip()
     keep_default = bool(default) and _known_word(default, quote, corpus)
     return reasons, keep_default
+
+
+# --- `--scope codebase`: the four tables ------------------------------------------------------
+
+NUMBER = re.compile(r"(?<![\w.])\d+(?:\.\d+)?(?![\w.])")
+IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?::[A-Z_]+)?")
+
+
+def _row_head(
+    row, first: str, texts: tuple[str, ...], *, citations, corpus, labels
+) -> tuple[list[str], str]:
+    """(reasons, cited quote) shared by every table row: a known cite, a first field, and text fields
+    that pass `explainer_text_gate`."""
+    cid = cite_id(row.cite)
+    reasons: list[str] = []
+    if not cid or cid not in citations:
+        reasons.append(
+            f"[[{cid}]] is not a gated citation" if cid else "the row cites nothing"
+        )
+    if not getattr(row, first).strip():
+        reasons.append(f"the row has no {first}")
+    for field in texts:
+        reasons += explainer_text_gate(
+            getattr(row, field), citations=citations, corpus=corpus, labels=labels
+        )
+    return reasons, citations[cid].quote if cid in citations else ""
+
+
+def _unknown_tokens(text: str, quote: str, corpus: Corpus) -> list[str]:
+    """Each number in *text* missing from the cited quote, and each identifier of 3+ characters in
+    neither the quote nor the corpus. Numbers must be in the quote: any snapshot holds every digit."""
+    plain = text.replace("`", " ")
+    out = [n for n in NUMBER.findall(plain) if not _number_in(n, quote)]
+    out += [
+        w
+        for w in IDENT.findall(plain)
+        if len(w) >= 3 and not w.isdigit() and not _known_word(w, quote, corpus)
+    ]
+    return list(dict.fromkeys(out))
+
+
+def _number_in(number: str, quote: str) -> bool:
+    return any(n == number for n in NUMBER.findall(quote))
+
+
+def commands_gate(row, *, citations, corpus, labels) -> list[str]:
+    """A "which command to run" row: its situation and why pass the explainer checks, and every flag and
+    command word of its command is in the cited quote or the corpus."""
+    reasons, quote = _row_head(
+        row,
+        "situation",
+        ("situation", "why"),
+        citations=citations,
+        corpus=corpus,
+        labels=labels,
+    )
+    text = row.command.strip()
+    if not text:
+        reasons.append("the row has no command")
+    elif len(text) > MAX_EXAMPLE_CHARS or len(text.splitlines()) > MAX_EXAMPLE_LINES:
+        reasons.append("the command is too long")
+    for word in example_words("command", text):
+        if not _known_word(word, quote, corpus):
+            reasons.append(
+                f"`{word}` in the command is in no cited quote and no snapshot"
+            )
+    return reasons
+
+
+def loop_gate(row, *, citations, corpus, labels) -> tuple[list[str], bool]:
+    """(reasons the row is cut, whether its cap is kept). The cap is kept only when its numbers are in the
+    cited quote and its identifiers in the quote or the corpus; otherwise it alone is dropped."""
+    reasons, quote = _row_head(
+        row,
+        "what",
+        ("what", "ends_well", "ends_badly"),
+        citations=citations,
+        corpus=corpus,
+        labels=labels,
+    )
+    cap = row.cap.strip()
+    keep_cap = bool(cap) and not _unknown_tokens(cap, quote, corpus)
+    return reasons, keep_cap
+
+
+def exit_gate(row, *, citations, corpus, labels) -> list[str]:
+    """An exit code or marker row: the signal's numbers are in the cited quote and its identifiers in the
+    quote or the corpus; its meaning and action pass the explainer checks."""
+    reasons, quote = _row_head(
+        row,
+        "signal",
+        ("meaning", "action"),
+        citations=citations,
+        corpus=corpus,
+        labels=labels,
+    )
+    for tok in _unknown_tokens(row.signal, quote, corpus):
+        reasons.append(f"`{tok}` in the signal is in no cited quote and no snapshot")
+    return reasons
+
+
+def resume_gate(row, *, citations, corpus, labels) -> list[str]:
+    """A state-and-resume row: a known cite and text that passes the explainer checks."""
+    reasons, _ = _row_head(
+        row,
+        "stop",
+        ("stop", "on_disk", "rerun"),
+        citations=citations,
+        corpus=corpus,
+        labels=labels,
+    )
+    return reasons
