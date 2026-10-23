@@ -1,9 +1,12 @@
 # review-viewer — how it works
 
 `review-viewer` opens a web page for a code change: a GitHub PR, a branch,
-the commits you have not pushed yet, or a commit range. The page shows every
-changed file in full with the diff marked, and a walkthrough of the change
-that your Claude Code session writes. When `/multiplai-dev:review` has
+the commits you have not pushed yet, a commit range, or a directory as it
+stands. The page shows every changed file in full with the diff marked, and
+a summary your Claude Code session writes: its verdicts on the commits and
+the tests, and the risk of merging. It links the codebase-walkthrough page
+of the change or directory once that page exists, and writes it only when
+you ask. When `/multiplai-dev:review` has
 reviewed the same commits, the page shows its findings beside the code too.
 You can ask questions in the page, accept, reject or defer findings, and tick
 files off as viewed; the session answers, and the answers appear in the page.
@@ -38,9 +41,17 @@ runs the browser: click it, or run `open <path>` on a Mac. The page loads
 already authorised. The `url:` lines it also prints are for reference;
 opened directly, they show a "not authorised" banner.
 
-The walkthrough fills in while the session writes it: first the overview and
-the first steps, then the rest. Click a step's file reference to jump the
-code there; `]` and `[` move between steps, `j` and `k` between findings.
+The summary fills in while the session writes it: the measured badges at
+once, the session's assessments as it writes them. `j` and `k` move between
+findings.
+
+The Summary tab's **Full walkthrough** row opens the codebase-walkthrough
+page of what is viewed, at the commit the page shows, in a new tab. When the
+page does not exist yet, **Write the full walkthrough…** opens a dialog that
+says what writing it does: the session runs codebase-walkthrough, which
+sends the repository's code to a model, makes paid model calls stopping at
+$50, searches no other repository, and for a PR runs `gh pr view`. Confirm
+asks the session to run it; nothing runs before you press it.
 
 The **Theme** menu in the header changes colours and type without moving
 anything: Default; Phosphor and Amber are CRT terminals; Turbo is a DOS
@@ -60,20 +71,23 @@ SIL Open Font License), so themes load nothing from the network.
  page ── HTTP + token ──► server ───►│ inbox.jsonl      questions, decisions    │
    ▲                        │        │ outbox.jsonl     answers                 │◄── session
    └──── polls ─────────────┘◄───────│ decisions.json   accept/reject/defer     │    (Monitor
-                                     │ ../walkthrough.json                      │     + CLI)
+                                     │ ../summary.json                          │     + CLI)
+                                     │ full-walkthrough/<head sha>/             │
                                      └──────────────────────────────────────────┘
 ```
 
 - **The server** is a small Python HTTP server started by the session. It
   reads git, serves the page and the code, and reads and writes the files in
   the mailbox directory. **It never calls a model.** Every answer and every
-  walkthrough comes from the Claude Code session that started it; the page
+  summary comes from the Claude Code session that started it; the page
   header names that session.
 - **The session** watches `inbox.jsonl` with a Monitor, answers with
-  `python -m review_viewer reply`, and publishes the walkthrough with
-  `python -m review_viewer walkthrough put`.
+  `python -m review_viewer reply`, and publishes the summary with
+  `python -m review_viewer summary put`. When you confirm the Full
+  walkthrough dialog, it runs codebase-walkthrough, which writes the page
+  into `full-walkthrough/<head sha>/` in the mailbox directory.
 - **The page** is static HTML and JavaScript. It asks the server for data
-  and polls for answers and for the walkthrough.
+  and polls for answers, for the summary and for the full walkthrough.
 
 ## How a question reaches the session and comes back
 
@@ -92,19 +106,19 @@ If the session has ended, questions wait in `inbox.jsonl` and no answer
 comes. A Monitor lasts 30 minutes; the session re-arms it and then runs
 `pending` to answer anything that arrived in between.
 
-## How the walkthrough gets there
+## How the summary gets there
 
-The session reads the diff and writes `walkthrough.json`: an overview, then
-steps, each pointing at the lines it explains, with an optional mermaid
-diagram and links to findings. `walkthrough put` checks it in code before
-the page sees it, and refuses it (exit 2, every problem listed) when:
+The session reads the diff and writes `summary.json`: its assessments of
+the commits and the tests, and the two inputs to the risk score (the tier
+the change touches and whether a revert undoes it). It holds no explanation
+of the code. `summary put` checks it in code before the page sees it, and
+refuses it (exit 2, every problem listed) when:
 
 - it is for different commits than the ones served;
-- a step points at a file that did not change, or at lines that do not
-  exist;
-- it links a finding that is not loaded;
-- it says it is complete but a changed file is neither explained nor listed
-  as skipped, or a confirmed finding is not linked from any step.
+- an assessment repeats a measured badge (`size` or `risk`), has a title
+  over 32 characters, or shares its topic with another;
+- it says it is complete but the `commits` or `tests` assessment or the
+  risk block is missing (a directory needs none of them).
 
 It passes, and the page picks it up on its next poll, without a restart.
 
@@ -131,8 +145,14 @@ the same browser: a request from another web origin gets 403, and every
 server never says yes.
 
 The page also runs under a content security policy: scripts only from the
-server and cdnjs, fonts only from the server, no inline scripts or styles. Diagrams are drawn by mermaid,
-cleaned with DOMPurify and shown as images, so a diagram cannot run code.
+server and cdnjs, fonts only from the server, no inline scripts or styles.
+
+The full walkthrough page is served at a second address that holds its own
+random key, kept like the token. It is a page codebase-walkthrough wrote,
+with inline scripts, so it runs under its own policy: a sandbox that gives
+it an opaque origin, which cannot read this page, its token or its API;
+scripts and styles only inline and from cdnjs; fonts from cdnjs and Google
+Fonts; no network requests of its own.
 
 ## Stopping
 
