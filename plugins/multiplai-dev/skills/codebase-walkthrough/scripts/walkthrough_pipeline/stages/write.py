@@ -14,8 +14,8 @@ example payloads, and its configuration. Each item is checked by a gate in
 fails is cut and listed. Code draws the flow's Mermaid from the gated boxes
 and arrows. The Reference subsections are the prose sections from before.
 
-A codebase run (`--scope codebase`) adds four tables (`CODEBASE_TABLES`): which
-command to run, loops and caps, exit codes and markers, and state and resume.
+A codebase run (`--scope codebase`) adds three tables (`CODEBASE_TABLES`): loops
+and caps, exit codes and markers, and state and resume.
 Their material leads with the survey stage's facts.
 
 The glossary is not written by an agent: it is the gated terms from explore,
@@ -35,7 +35,6 @@ from .. import sdk
 from ..gates import (
     Corpus,
     cite_id,
-    commands_gate,
     config_gate,
     exit_gate,
     explainer_text_gate,
@@ -48,7 +47,6 @@ from ..gates import (
     write_gate,
 )
 from ..models import (
-    CommandsOutput,
     ConfigOutput,
     ExitsOutput,
     Fact,
@@ -101,10 +99,9 @@ CHANGE_SECTIONS = [
     ("reference", "Reference"),
     ("made", "How this was made"),
 ]
-# A codebase run's H2s (`--scope codebase`): a module's, with the four tables of CODEBASE_TABLES.
+# A codebase run's H2s (`--scope codebase`): a module's, with the three tables of CODEBASE_TABLES.
 CODEBASE_SECTIONS = [
     ("summary", "What it is"),
-    ("commands", "Which command to run"),
     ("usecases", "Use cases"),
     ("flow", "How it works"),
     ("loops", "Loops and caps"),
@@ -118,7 +115,6 @@ CODEBASE_SECTIONS = [
 ]
 # Each table's rows: (field naming a row, the gate, the text fields kept, the field a gate may drop alone).
 CODEBASE_TABLES = {
-    "commands": ("situation", commands_gate, ("situation", "command", "why"), ""),
     "loops": ("what", loop_gate, ("what", "cap", "ends_well", "ends_badly"), "cap"),
     "exits": ("signal", exit_gate, ("signal", "meaning", "action"), ""),
     "resume": ("stop", resume_gate, ("stop", "on_disk", "rerun"), ""),
@@ -129,7 +125,6 @@ STRUCTURED = {
     "flow": FlowOutput,
     "outputs": OutputsOutput,
     "config": ConfigOutput,
-    "commands": CommandsOutput,
     "loops": LoopsOutput,
     "exits": ExitsOutput,
     "resume": ResumeOutput,
@@ -509,23 +504,11 @@ def _matching(state: WalkState, pattern: re.Pattern) -> list[Fact]:
 
 
 def _codebase_specs(state: WalkState) -> list[Spec]:
-    """A module's specs, with the four tables in H2 order. Each table's material leads with the survey
+    """A module's specs, with the three tables in H2 order. Each table's material leads with the survey
     answer that asked for it; the lifecycle answer also feeds What it creates."""
     name = state.target.package
-    survey = {
-        q: _facts(state, (f"survey:{q}/",)) for q in ("loops", "lifecycle", "commands")
-    }
+    survey = {q: _facts(state, (f"survey:{q}/",)) for q in ("loops", "lifecycle")}
     tables = {
-        "commands": Spec(
-            "commands",
-            "Which command to run",
-            f"Which command of `{name}` to run in which situation.",
-            _material(
-                _lines(survey["commands"] + _doc_facts(state) + _cli_facts(state))
-                + _entries_block(state)
-            ),
-            kind="commands",
-        ),
         "loops": Spec(
             "loops",
             "Loops and caps",

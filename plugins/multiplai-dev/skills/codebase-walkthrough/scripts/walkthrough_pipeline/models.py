@@ -275,18 +275,7 @@ class ConfigOutput(_Model):
     rows: list[ConfigRow] = Field(default_factory=list)
 
 
-# `--scope codebase` adds four tables. Each row cites one id; its gate is in gates.py.
-
-
-class CommandRow(_Model):
-    situation: str
-    command: str = ""
-    why: str = ""
-    cite: str = ""
-
-
-class CommandsOutput(_Model):
-    rows: list[CommandRow] = Field(default_factory=list)
+# `--scope codebase` adds three tables. Each row cites one id; its gate is in gates.py.
 
 
 class LoopRow(_Model):

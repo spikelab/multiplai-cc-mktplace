@@ -26,7 +26,6 @@ from walkthrough_pipeline.state import STATE_FILE, load_state
 
 CODEBASE_H2 = [
     "What it is",
-    "Which command to run",
     "Use cases",
     "How it works",
     "Loops and caps",
@@ -39,7 +38,6 @@ CODEBASE_H2 = [
     "How this was made",
 ]
 TABLES = {
-    "Which command to run": "`tool build --run-dir <dir>`",
     "Loops and caps": "`3 (MAX_TRIES)`",
     "Exit codes and markers": "`exit 2`",
     "State and resume": "A crash mid build",
@@ -91,7 +89,7 @@ def _facts(run_dir) -> list[tuple]:
     ]
 
 
-def test_codebase_run_writes_the_twelve_sections_and_check_passes(
+def test_codebase_run_writes_the_eleven_sections_and_check_passes(
     pws, tmp_path, monkeypatch, capsys
 ):
     agents = FakeAgents()
@@ -111,21 +109,19 @@ def test_codebase_run_writes_the_twelve_sections_and_check_passes(
     assert "| `--run-dir` | Where the build keeps its state." in _section(
         md, "Configuration"
     )
-    # The three survey questions were asked once each, with the docs and the library listed.
+    # The two survey questions were asked once each, with the docs and the library listed.
     calls = _survey_calls(agents)
     assert sorted(
         re.search(r"\[survey:(\w+)\]", c["prompt"]).group(1) for c in calls
     ) == [
-        "commands",
         "lifecycle",
         "loops",
     ]
     assert {c["budget_label"] for c in calls} == {
-        "survey:commands",
         "survey:lifecycle",
         "survey:loops",
     }
-    commands = next(c for c in calls if "[survey:commands]" in c["prompt"])["prompt"]
+    lifecycle = next(c for c in calls if "[survey:lifecycle]" in c["prompt"])["prompt"]
     tool = "kit/plugins/demo/skills/tool"
     for doc in (
         f"{tool}/SKILL.md",
@@ -133,9 +129,9 @@ def test_codebase_run_writes_the_twelve_sections_and_check_passes(
         "kit/plugins/demo/README.md",
         "kit/plugins/demo/CHANGELOG.md",
     ):
-        assert f"- {doc}\n" in commands, doc
-    assert "- kit/README.md\n" not in commands  # the plugin's README.md is nearer
-    assert "- corelib/corelib/\n" in commands
+        assert f"- {doc}\n" in lifecycle, doc
+    assert "- kit/README.md\n" not in lifecycle  # the plugin's README.md is nearer
+    assert "- corelib/corelib/\n" in lifecycle
     # The overview default skipped the test file.
     run_dir = next((tmp_path / "runs").iterdir())
     state = load_state(run_dir / STATE_FILE)
@@ -161,16 +157,14 @@ def test_codebase_run_writes_the_twelve_sections_and_check_passes(
 
 
 def test_the_planted_rows_are_cut_and_listed(pws, tmp_path, monkeypatch):
-    agents = FakeAgents(plant={"command_flag", "exit_number", "loop_cap"})
+    agents = FakeAgents(plant={"exit_number", "loop_cap"})
     monkeypatch.setattr(sdk, "agent_call_structured", agents)
     assert main(_args(pws, tmp_path)) == 0
     md = (tmp_path / "out" / "tool-walkthrough.md").read_text()
-    assert "--no-such-flag" not in _section(md, "Which command to run")
     assert "exit 9" not in _section(md, "Exit codes and markers")
     loops = _section(md, "Loops and caps")
     assert "The build attempts" in loops and "7 (" not in loops
     cut = md.split("### Cut by the checks", 1)[1]
-    assert "`--no-such-flag` in the command is in no cited quote and no snapshot" in cut
     assert "`9` in the signal is in no cited quote and no snapshot" in cut
     assert "the cap is in no cited quote and no snapshot" in cut
 
@@ -199,7 +193,7 @@ def test_a_module_run_asks_no_survey_question(ws, tmp_path, monkeypatch, fake_fe
     assert main(run_args(ws, tmp_path)) == 0
     assert not _survey_calls(agents)
     md = (tmp_path / "out" / "bookings-walkthrough.md").read_text()
-    assert "Which command to run" not in markdown_headings(md)
+    assert "Loops and caps" not in markdown_headings(md)
     run_dir = next((tmp_path / "runs").iterdir())
     assert run_dir.name.endswith("--human")
     assert load_state(run_dir / STATE_FILE).options["depth"] == "standard"
@@ -222,7 +216,7 @@ def test_s1_a_budget_stop_mid_survey_resumes_to_the_same_facts(
     state = json.loads((run_dir / STATE_FILE).read_text())
     assert state["stage"] == "explore"
     saved = [k for k in state["explore_answers"] if k.startswith("survey:")]
-    assert 1 <= len(saved) <= 2
+    assert len(saved) == 1
 
     agents.stop_survey_after = None
     asked = len(agents.calls)
@@ -232,9 +226,7 @@ def test_s1_a_budget_stop_mid_survey_resumes_to_the_same_facts(
         for c in agents.calls[asked:]
         if "Survey question: [survey:" in c["prompt"]
     ]
-    assert sorted(resumed) == sorted(
-        {"survey:loops", "survey:lifecycle", "survey:commands"} - set(saved)
-    )
+    assert sorted(resumed) == sorted({"survey:loops", "survey:lifecycle"} - set(saved))
     assert _facts(run_dir) == _facts(next((tmp_path / "runs-a").iterdir()))
     assert _no_run_line(
         (tmp_path / "out-b" / "tool-walkthrough.md").read_text()
@@ -266,7 +258,7 @@ def _rewind(run_dir, stage: str) -> None:
 def test_s3_a_kill_after_the_survey_before_its_save_asks_nothing_again(
     pws, tmp_path, monkeypatch
 ):
-    """S3: the three answers are saved but the stage is still `explore`; resume runs the survey again,
+    """S3: the two answers are saved but the stage is still `explore`; resume runs the survey again,
     asks nothing, and writes the same walkthrough."""
     agents = FakeAgents()
     monkeypatch.setattr(sdk, "agent_call_structured", agents)
@@ -305,7 +297,7 @@ def test_s6_rewrite_keeps_the_survey_and_writes_the_tables_again(
     pws, tmp_path, monkeypatch
 ):
     """S6: `resume --rewrite` keeps the explore, survey, docs and trace answers and asks the writers
-    again, the four tables included."""
+    again, the three tables included."""
     agents = FakeAgents()
     monkeypatch.setattr(sdk, "agent_call_structured", agents)
     assert main(_args(pws, tmp_path)) == 0
@@ -314,15 +306,15 @@ def test_s6_rewrite_keeps_the_survey_and_writes_the_tables_again(
     assert main(["resume", str(run_dir), "--trust-repo", "--rewrite"]) == 0
     again = agents.calls[asked:]
     assert not [c for c in again if c["schema"] == "ExploreOutput"]
-    assert {"CommandsOutput", "LoopsOutput", "ExitsOutput", "ResumeOutput"} <= {
+    assert {"LoopsOutput", "ExitsOutput", "ResumeOutput"} <= {
         c["schema"] for c in again
     }
     md = (tmp_path / "out" / "tool-walkthrough.md").read_text()
     assert markdown_headings(md) == CODEBASE_H2
 
 
-def test_s7_render_writes_the_twelve_sections_with_no_call(pws, tmp_path, monkeypatch):
-    """S7: `render` on a finished codebase run writes the same twelve H2s and asks no agent."""
+def test_s7_render_writes_the_eleven_sections_with_no_call(pws, tmp_path, monkeypatch):
+    """S7: `render` on a finished codebase run writes the same eleven H2s and asks no agent."""
     agents = FakeAgents()
     monkeypatch.setattr(sdk, "agent_call_structured", agents)
     assert main(_args(pws, tmp_path)) == 0

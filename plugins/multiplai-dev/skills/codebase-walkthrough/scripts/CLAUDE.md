@@ -54,7 +54,6 @@ cd plugins/multiplai-dev/skills/codebase-walkthrough/scripts && \
 | `flow_gate` | each box cites a known id with a plain label, each arrow joins drawn boxes, at most 14 boxes, one connected graph |
 | `output_gate` / `payload_gate` | the item cites a known id; every key of a JSON or YAML example (or a key or identifier of a Markdown or text one) is in the cited quote or the corpus, else the example alone is dropped |
 | `config_gate` | the row cites a known id and its name is in the cited quote or the corpus; a default that is not is dropped |
-| `commands_gate` | the row cites a known id, its text passes `explainer_text_gate`, and every flag and command word of its command is in the cited quote or the corpus |
 | `loop_gate` | the row cites a known id and its text passes; a cap whose numbers are not in the cited quote, or whose names are in neither the quote nor the corpus, is dropped and the row kept |
 | `exit_gate` | the row cites a known id, its text passes, and every number of its signal is in the cited quote and every name in the quote or the corpus |
 | `resume_gate` | the row cites a known id and its text passes `explainer_text_gate` |

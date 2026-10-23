@@ -55,7 +55,7 @@ Schema:
 Answer with ONE JSON object and nothing after it."""
 
 
-# The survey's three questions (`--scope codebase`). Each agent reads across the whole snapshot.
+# The survey's two questions (`--scope codebase`). Each agent reads across the whole snapshot.
 SURVEY_QUESTIONS = {
     "loops": """Find every loop, retry, round and repeat in the code, and for each: what repeats, its cap
 (the constant or argument that limits it, with its value), what ends it well, and what ends it badly
@@ -70,11 +70,6 @@ records, reports. For each kind of stop (a crash or kill, a budget or round cap,
 say what is on disk afterwards, what a re-run or resume keeps, what it redoes, and what refuses to
 resume and with which message. Follow the calls into the libraries listed below when the code hands
 logging, state or cost tracking to them.""",
-    "commands": """Read the code's own docs listed below and its command-line entry points. Say which command,
-subcommand, mode or flag to use in which situation, and why; the decision rules and recipes the docs
-state (for example "use X for a trivial change, Y otherwise"); and the pitfalls they warn about. Where
-the docs and the code disagree (a flag the docs name that the code lacks, a different default), report
-that as a gotcha, citing both. In a `CHANGELOG.md` read only the first 200 lines.""",
 }
 
 
@@ -268,11 +263,6 @@ PR description and the commit subjects when they say why; never guess a reason t
   sentences saying what happens there and what the change altered, `details_paragraphs` (the specifics)
   and `snippet_cites` (one or two citation ids whose lines are worth showing as code).
 Follow the first path listed unless the material shows another goes through more of the change.""",
-    "commands": """Return `rows`: which command to run in which situation, one row per situation, the way a
-teammate would tell a newcomer. Each row has `situation` (when to use it, in plain words), `command` (the
-command line, using ONLY subcommands and flags that appear in the material; write a value the user chooses
-as a placeholder in angle brackets, e.g. `<plan file>`), `why` (one plain sentence) and `cite`: the citation
-id of the doc line or code line that says so. Start with the decision rules the docs state.""",
     "loops": """Return `rows`: every loop, retry or round in the code. Each row has `what` (what repeats, in
 plain words), `cap` (the limit exactly as the code writes it, with its value, e.g. "3 (`MAX_TRIES`)"),
 `ends_well` (what ends it well), `ends_badly` (what ends it badly: the error, exit code or marker) and

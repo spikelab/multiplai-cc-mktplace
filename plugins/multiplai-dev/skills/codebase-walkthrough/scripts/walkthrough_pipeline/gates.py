@@ -684,7 +684,7 @@ def config_gate(
     return reasons, keep_default
 
 
-# --- `--scope codebase`: the four tables ------------------------------------------------------
+# --- `--scope codebase`: the three tables ------------------------------------------------------
 
 NUMBER = re.compile(r"(?<![\w.])\d+(?:\.\d+)?(?![\w.])")
 IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?::[A-Z_]+)?")
@@ -725,30 +725,6 @@ def _unknown_tokens(text: str, quote: str, corpus: Corpus) -> list[str]:
 
 def _number_in(number: str, quote: str) -> bool:
     return any(n == number for n in NUMBER.findall(quote))
-
-
-def commands_gate(row, *, citations, corpus, labels) -> list[str]:
-    """A "which command to run" row: its situation and why pass the explainer checks, and every flag and
-    command word of its command is in the cited quote or the corpus."""
-    reasons, quote = _row_head(
-        row,
-        "situation",
-        ("situation", "why"),
-        citations=citations,
-        corpus=corpus,
-        labels=labels,
-    )
-    text = row.command.strip()
-    if not text:
-        reasons.append("the row has no command")
-    elif len(text) > MAX_EXAMPLE_CHARS or len(text.splitlines()) > MAX_EXAMPLE_LINES:
-        reasons.append("the command is too long")
-    for word in example_words("command", text):
-        if not _known_word(word, quote, corpus):
-            reasons.append(
-                f"`{word}` in the command is in no cited quote and no snapshot"
-            )
-    return reasons
 
 
 def loop_gate(row, *, citations, corpus, labels) -> tuple[list[str], bool]:

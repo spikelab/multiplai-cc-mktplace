@@ -688,12 +688,6 @@ def _md_config(state: WalkState, lk: Linker) -> MdSection:
 # `--scope codebase`: each table's columns, as (row field, heading, how the cell is shown).
 # "text" may cite `[[cN]]`; "code" is shown as code; "cite" is the row's citation.
 TABLE_COLUMNS = {
-    "commands": [
-        ("situation", "When", "text"),
-        ("command", "Run", "code"),
-        ("why", "Why", "text"),
-        ("cite", "Where", "cite"),
-    ],
     "loops": [
         ("what", "What repeats", "text"),
         ("cap", "Cap", "code"),

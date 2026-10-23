@@ -18,7 +18,6 @@ from types import SimpleNamespace
 
 from walkthrough_pipeline import budget
 from walkthrough_pipeline.models import (
-    CommandsOutput,
     ConfigOutput,
     DocsOutput,
     ExitsOutput,
@@ -39,7 +38,6 @@ STRUCTURED = (
     FlowOutput,
     OutputsOutput,
     ConfigOutput,
-    CommandsOutput,
     LoopsOutput,
     ExitsOutput,
     ResumeOutput,
@@ -47,8 +45,7 @@ STRUCTURED = (
 # What the survey answer cites in each file, per question (`--scope codebase`).
 SURVEY_NEEDLES = {
     "loops": ("MAX_", "range(", "sys.exit(", 'print("'),
-    "lifecycle": ("write_text(", "json.loads(", ".open(", "STATE ="),
-    "commands": ("Use `", "Run `", "exits 2", "| `"),
+    "lifecycle": ("write_text(", "json.loads(", ".open(", "STATE =", "| `--run-dir"),
 }
 SURVEY_MAX_FACTS = 12
 
@@ -110,8 +107,8 @@ class FakeAgents:
         self.stop_write_after = stop_write_after
         self.write_calls = 0
         # Raise BudgetExceededError on survey call number stop_survey_after + 1. The codebase tables'
-        # plants: "command_flag" (a command with a flag the code lacks), "exit_number" (a signal whose
-        # number is in no quote) and "loop_cap" (a cap whose number is in no quote).
+        # plants: "exit_number" (a signal whose number is in no quote) and "loop_cap" (a cap whose number
+        # is in no quote).
         self.stop_survey_after = stop_survey_after
         self.survey_calls = 0
 
@@ -271,10 +268,11 @@ class FakeAgents:
         )
 
     def survey(self, prompt: str, cwd: str) -> ExploreOutput:
-        """One fact per line holding one of the question's needles, in the listed files, docs and
-        libraries; for the loops question the first is the cap, and one gotcha cites it."""
+        """One fact per line holding one of the question's needles, in the listed files and
+        libraries (and, for lifecycle, the docs); for the loops question the first is the cap, and one gotcha cites it."""
         question = re.search(r"Survey question: \[survey:(\w+)\]", prompt).group(1)
         listed = re.findall(r"^- (\S+) \(\d+ lines\)$", prompt, re.MULTILINE)
+        # The lifecycle answer also cites the docs' line on where state is kept.
         docs = re.findall(r"^- (\S+\.md)$", prompt, re.MULTILINE)
         libs = [
             f.relative_to(cwd).as_posix()
@@ -282,7 +280,7 @@ class FakeAgents:
             for f in sorted((Path(cwd) / d).rglob("*.py"))
         ]
         facts = []
-        for path in docs if question == "commands" else listed + libs:
+        for path in listed + libs + (docs if question == "lifecycle" else []):
             lines = (Path(cwd) / path).read_text(encoding="utf-8").split("\n")
             for n, line in enumerate(lines, start=1):
                 if any(needle in line for needle in SURVEY_NEEDLES[question]):
@@ -420,26 +418,6 @@ class FakeAgents:
             )
             return m.group(1) if m else a
 
-        if schema is CommandsOutput:
-            rows = [
-                {
-                    "situation": "A full build",
-                    "command": "tool build --run-dir <dir>",
-                    # Cites the docs' table row: its `|` must survive the table cell (check re-reads it).
-                    "why": f"It runs every attempt. [[{id_with('| `tool build`')}]]",
-                    "cite": id_with("build"),
-                }
-            ]
-            if "command_flag" in self.plant:
-                rows.append(
-                    {
-                        "situation": "A fast build",
-                        "command": "tool build --no-such-flag",
-                        "why": "It skips work.",
-                        "cite": id_with("build"),
-                    }
-                )
-            return {"rows": rows}
         if schema is LoopsOutput:
             rows = [
                 {
