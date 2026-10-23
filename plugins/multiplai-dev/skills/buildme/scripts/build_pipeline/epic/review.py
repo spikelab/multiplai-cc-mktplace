@@ -70,12 +70,17 @@ def _skill(*args: str) -> list[str]:
     ]
 
 
-def review_argv(worktree: Path, number: int) -> list[str]:
+def review_argv(worktree: Path, number: int, config) -> list[str]:
     """`--fetch`: the review needs the PR's head and base commits in the clone.
     A sibling's merge moves the base, and a push from elsewhere moves the
     head, without any launch here fetching them (C.S8). `--extra-finders`: the
     review skill adds one finder per ~600 changed lines on the PR's first
-    round only; later rounds of the same PR run without them."""
+    round only; later rounds of the same PR run without them. Then
+    `findings.loop.review_options` of the epic's *config*: the spec change
+    directories and buildme's runtime files left out, and the configured
+    review model."""
+    from ..findings.loop import review_options
+
     return _skill(
         "review",
         "--repo",
@@ -85,11 +90,16 @@ def review_argv(worktree: Path, number: int) -> list[str]:
         "--trust-repo",
         "--fetch",
         "--extra-finders",
+        *review_options(config),
     )
 
 
-def resume_argv(target_dir: str) -> list[str]:
-    return _skill("resume", target_dir, "--trust-repo")
+def resume_argv(target_dir: str, config) -> list[str]:
+    from ..findings.loop import review_options
+
+    return _skill(
+        "resume", target_dir, "--trust-repo", *review_options(config, exclude=False)
+    )
 
 
 def ledger_lines() -> list[dict]:

@@ -3,6 +3,8 @@
 Precedence, highest first (same order as buildme's config.py: the project's
 own file beats multiplai.conf, which beats the default):
 
+0. `--model` on `review` or `resume` sets the finder, verifier and merger
+   models for that run (`__main__.load_config`).
 1. `review.yaml` in the output directory (`<out>/review.yaml`; for the
    default output directory, the old default's when the new one has none):
    `concurrency`, `finder_model`, `verifier_model`, `merger_model`, `effort`,

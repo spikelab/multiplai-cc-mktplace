@@ -409,8 +409,21 @@ def tree_paths(repo: str | Path, sha: str) -> frozenset[str]:
     )
 
 
-def diff_text(repo: Path, base: str, head: str) -> str:
-    return git(repo, "diff", *_DIFF_FLAGS, f"{base}..{head}").stdout
+def exclude_pathspec(exclude: list[str] | tuple[str, ...] = ()) -> list[str]:
+    """The pathspec that leaves *exclude*'s globs out of a diff: none for no
+    globs, else the whole tree from the top less each glob, read from the top
+    of the repository whatever directory git runs in (`review --exclude`)."""
+    if not exclude:
+        return []
+    return ["--", ":(top)", *(f":(top,exclude,glob){g}" for g in exclude)]
+
+
+def diff_text(
+    repo: Path, base: str, head: str, exclude: list[str] | tuple[str, ...] = ()
+) -> str:
+    return git(
+        repo, "diff", *_DIFF_FLAGS, f"{base}..{head}", *exclude_pathspec(exclude)
+    ).stdout
 
 
 def target_gate(
@@ -556,8 +569,12 @@ def build_target(
     name: str | None = None,
     label: str | None = None,
     needs: list[Need] | None = None,
+    exclude: list[str] | tuple[str, ...] = (),
 ) -> TargetInfo:
     """Everything about the target except files written to disk.
+
+    A change's *exclude* globs (`review --exclude`) leave matching paths out
+    of `files`; the paths the change touches there go to `excluded_files`.
 
     The slug starts with `slug_repo_name()` (`<owner>-<repo>` from origin), the
     label with the directory name. *name* replaces both (a `--dir` review
@@ -601,10 +618,25 @@ def build_target(
     files = [
         f
         for f in git(
-            repo, "diff", *_DIFF_FLAGS, "--name-only", f"{base}..{head}"
+            repo,
+            "diff",
+            *_DIFF_FLAGS,
+            "--name-only",
+            f"{base}..{head}",
+            *exclude_pathspec(exclude),
         ).stdout.splitlines()
         if f
     ]
+    excluded_files = []
+    if exclude:
+        kept = set(files)
+        excluded_files = [
+            f
+            for f in git(
+                repo, "diff", *_DIFF_FLAGS, "--name-only", f"{base}..{head}"
+            ).stdout.splitlines()
+            if f and f not in kept
+        ]
     ref = f"pr-{resolved.pr}" if resolved.kind == "pr" else resolved.ref
     slug = sanitize_slug(f"{slug_repo_name(repo)}--{ref}")
     label = (
@@ -630,6 +662,8 @@ def build_target(
         branch_rules=branch_rules(repo, resolved.base_ref, needs)
         if resolved.base_ref
         else None,
+        excluded=list(exclude),
+        excluded_files=excluded_files,
     )
 
 

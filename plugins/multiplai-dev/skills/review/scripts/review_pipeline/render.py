@@ -584,6 +584,12 @@ def render_review(
         ]
         out.append(f"- **Files changed:** {len(t.files)}")
         out += [f"  - `{f}`" for f in t.files]
+        if t.excluded:
+            globs = ", ".join(f"`{g}`" for g in t.excluded)
+            out.append(
+                f"- **Left out by --exclude ({globs}):** {len(t.excluded_files)} files"
+            )
+            out += [f"  - `{f}`" for f in t.excluded_files]
     if t.deployed_in:
         out.append(f"- **Deployed in {t.deployed_in}:** {deployed or 'unknown'}")
     hidden = not_listed(findings, mode)

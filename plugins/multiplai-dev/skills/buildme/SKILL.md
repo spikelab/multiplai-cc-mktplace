@@ -705,7 +705,15 @@ stopped run left running is not counted in another fixer's share.
 worktree> --pr <n> --trust-repo --fetch --extra-finders`, run as a
 subprocess; `--fetch` brings in a base a sibling's merge moved, and
 `--extra-finders` adds one finder per ~600 changed lines, at most 6, on the
-PR's first review round only), at most once per head:
+PR's first review round only), at most once per head. That review, and the
+one `/multiplai-dev:buildme-findings` runs each round, leaves out the
+change's `specs/changes/**` and `specs/archive/**` documents and buildme's
+runtime files (`--exclude`), so it reads the code, tests, docs and config the
+change touches and `specs/registry/`; and when `specs/config.yaml` names a
+review model (`models.review`, or the `[buildme.review]` model), it runs on
+that model (`--model`, on `resume` too). Without one, the review skill's own
+`review.yaml` or `multiplai.conf` chooses. Each review is started at most
+once per head:
 when the review ledger (`<data_dir>/reviews/ledger.jsonl`) already holds a
 complete review of the PR at its current head, no review starts and the
 record says `reused: true`. While a review of that head is running (its

@@ -125,6 +125,8 @@ class TargetSpec:
         False  # `--extra-finders` was given: accepted, ignored, noticed once
     )
     paths: bool = False  # a tree review also maps its paths (`--paths`); a change review always does
+    # A change review leaves paths matching these git globs out (`--exclude`).
+    exclude: list[str] = field(default_factory=list)
 
 
 def _count_line(counts: dict[str, int]) -> str:
@@ -492,8 +494,13 @@ def prepare(
                 )
         elif resolved.base_sha and resolved.head_sha and not resolved.problem:
             diff = target_mod.diff_text(
-                resolved.repo, resolved.base_sha, resolved.head_sha
+                resolved.repo, resolved.base_sha, resolved.head_sha, spec.exclude
             )
+            if spec.exclude and not diff.strip():
+                raise ReviewError(
+                    f"{spec.repo}: nothing left to review: --exclude "
+                    f"{' '.join(spec.exclude)} leaves out every changed path"
+                )
     except target_mod.TargetError as e:
         raise ReviewError(str(e)) from e
     gate = target_mod.target_gate(resolved, diff, info.files if info else None)
@@ -501,7 +508,11 @@ def prepare(
         raise ReviewError(f"{spec.dir or spec.repo}: {gate.reason}")
     if info is None:
         info = target_mod.build_target(
-            resolved, tickets=spec.tickets, deployed_in=spec.deployed_in, needs=needs
+            resolved,
+            tickets=spec.tickets,
+            deployed_in=spec.deployed_in,
+            needs=needs,
+            exclude=spec.exclude,
         )
     target_dir = (
         import_to if import_to is not None else _choose_folder(out_dir, resolved, lock)

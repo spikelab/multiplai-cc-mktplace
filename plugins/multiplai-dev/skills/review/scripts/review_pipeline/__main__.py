@@ -114,6 +114,15 @@ def _deps_flag(p: argparse.ArgumentParser) -> None:
     )
 
 
+def _model_flag(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--model",
+        default=None,
+        help="Run every stage on this model for this run, over review.yaml and "
+        "multiplai.conf (a family name such as sonnet, or a model ID)",
+    )
+
+
 def _mode_flag(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--mode",
@@ -228,6 +237,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Branch to report whether head is deployed in (origin/<name>)",
     )
     rv.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        metavar="GLOB",
+        help="With --branch, --pr or --range: leave the changed paths matching this git "
+        "glob, read from the top of the repository, out of the review (repeatable; "
+        "e.g. 'specs/changes/**')",
+    )
+    rv.add_argument(
         "--restart",
         action="store_true",
         help="Start over even when the ledger shows an interrupted run of this target and head "
@@ -237,6 +255,7 @@ def build_parser() -> argparse.ArgumentParser:
     _budget_flag(rv)
     _mode_flag(rv)
     _deps_flag(rv)
+    _model_flag(rv)
 
     bt = sub.add_parser(
         "batch",
@@ -273,6 +292,7 @@ def build_parser() -> argparse.ArgumentParser:
     _trust_flag(rs)
     _budget_flag(rs)
     _deps_flag(rs)
+    _model_flag(rs)
 
     po = sub.add_parser(
         "post",
@@ -386,6 +406,10 @@ def main(argv: list[str] | None = None) -> int:
         config = read_config(root, **kwargs)
         if getattr(args, "no_deps", False):
             config.deps = False
+        if getattr(args, "model", None):
+            config.finder_model = config.verifier_model = config.merger_model = (
+                args.model
+            )
         return config
 
     from .post import PostError, post
@@ -463,6 +487,13 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 2
+        if args.exclude and (args.tree is not None or args.dir):
+            print(
+                "ERROR: --exclude goes with --branch, --pr or --range; a tree review "
+                "takes --path",
+                file=sys.stderr,
+            )
+            return 2
         if args.dir:
             try:
                 target.check_out_dir(args.dir, out)  # before anything creates --out
@@ -486,6 +517,7 @@ def main(argv: list[str] | None = None) -> int:
             trim=args.trim,
             extra_finders=args.extra_finders is not None,
             paths=args.paths,
+            exclude=args.exclude,
         )
         if args.plan_only:
             # Reads git only: nothing reaches a model, so no trust is needed and no ledger is kept.
