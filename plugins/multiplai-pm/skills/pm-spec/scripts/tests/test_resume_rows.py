@@ -1,4 +1,4 @@
-"""One test per row S1-S14 of the plan's "Stop and resume states" table.
+"""One test per row S1-S15 of the plan's "Stop and resume states" table.
 
 Each test stops the run at its row, resumes it, and compares the result with a
 run of the same inputs that never stopped (`baseline`): the same files, the
@@ -26,6 +26,7 @@ from conftest import (
     TWO,
     FakeModel,
     Killed,
+    agent,
     change_dir,
     git,
     make_repo,
@@ -683,3 +684,61 @@ def test_S14_a_run_from_before_the_staged_flow_only_checks_and_hands_off(
     # Resumed again: nothing to do, nothing regenerated.
     assert run(repo, *RESUME) == 0
     assert model.labels() == ["consistency"]
+
+
+# --- S15 --------------------------------------------------------------------------
+
+BLOCKED_NOTES = "- mockup.html: half of it\n\nQUESTIONS: which page?\nSTATUS: BLOCKED\n"
+
+
+def test_S15_a_blocked_prototype_is_checked_again_not_taken_as_the_pms(
+    repo, model, tmp_path, monkeypatch, capsys
+):
+    model["prototype"] = [agent(BLOCKED_NOTES), agent()]
+    go(repo, [(AUTO[0][0], 1)])
+    cdir = change_dir(repo)
+    assert state(cdir)["steps"]["prototype"]["outcome"] == "blocked"
+    capsys.readouterr()
+
+    # Still BLOCKED: fails again with the reason; no agent, nothing kept.
+    assert run(repo, *RESUME) == 1
+    assert "STATUS: BLOCKED" in capsys.readouterr().out
+    assert model.calls_to("prototype") == 1
+    assert state(cdir)["steps"]["prototype"]["outcome"] == "blocked"
+    assert "spec:specs" not in " ".join(model.labels())
+
+    # A person answers the agent's question: checked again, kept, and on.
+    write(cdir / "prototype" / "NOTES.md", "- mockup.html: the limits page\nSTATUS: DONE\n")
+    assert run(repo, *RESUME) == 0
+    assert model.calls_to("prototype") == 1
+    assert state(cdir)["steps"]["prototype"]["outcome"] == "passed"
+    assert "STATUS: DONE" in (cdir / "prototype" / "NOTES.md").read_text()
+
+
+def test_S15_a_prototype_without_notes_runs_the_agent_again(
+    repo, model, tmp_path, monkeypatch
+):
+    model["prototype"] = [agent(notes=None), agent(notes=None), agent()]
+    go(repo, [(AUTO[0][0], 1)])
+    cdir = change_dir(repo)
+    assert (cdir / "prototype" / "mockup.html").is_file()
+    assert not (cdir / "prototype" / "NOTES.md").exists()
+
+    assert run(repo, *RESUME) == 0
+    assert model.calls_to("prototype") == 3
+    assert (cdir / "prototype" / "NOTES.md").is_file()
+    other, _ = baseline(tmp_path, monkeypatch, lambda m: None, AUTO)
+    same_as(repo, other, commits=False, run_state_too=False)
+
+
+def test_S15_files_are_the_pms_only_when_no_agent_ran(repo, model):
+    # A write outside prototype/ failed the run; what it left inside is
+    # checked by the gate, never kept unchecked.
+    model["prototype"] = [agent(notes=None, outside=repo.parent / "x.txt"), agent()]
+    go(repo, [(AUTO[0][0], 1)])
+    cdir = change_dir(repo)
+    assert (cdir / "prototype" / "mockup.html").is_file()
+    assert run(repo, *RESUME) == 0
+    assert model.calls_to("prototype") == 2
+    reason = state(cdir)["steps"]["prototype"]["reason"]
+    assert not reason.startswith("Kept the")

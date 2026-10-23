@@ -47,7 +47,10 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
   `prototype: {enabled: false}`) turns it off, after the components are
   approved. It makes whatever helps people picture the change (screens,
   endpoint signatures, sample output), with no behaviour. Files already in
-  `prototype/` are kept and no agent runs. It no longer rewrites the
+  `prototype/` are kept and no agent runs. After a failed prototype run, the
+  next `resume` checks what is in `prototype/` again rather than taking it
+  as the PM's: it goes on once the check passes, fails again on `STATUS:
+  BLOCKED`, and otherwise runs the agent again. It no longer rewrites the
   proposal.
 - `tickets.json` now holds one task per component under the change's epic
   (title, objective and `## Done means` from the component's plan), or, for

@@ -15,6 +15,11 @@ and `NOTES.md`; `STATUS: BLOCKED` or `NEEDS_CONTEXT` fails without a retry.
 `--no-prototype` / `prototype: {enabled: false}` turns the step off. Once the
 step has passed or been skipped it never runs again for the change.
 
+Files in `prototype/` are the PM's only when no agent has run. After a failed
+agent run (`steps.prototype` blocked, row S15) the next run re-checks them with
+`prototype_gate`: passed (a person fixed them), they are kept; `STATUS:
+BLOCKED` or `NEEDS_CONTEXT`, it fails again; otherwise the agent runs again.
+
 Copied from buildme's `llm_steps/prototype_steps.py` and `gates.py`
 (`parse_prototype_notes`, `prototype_gate`), then adapted.
 """
@@ -137,12 +142,27 @@ async def run_prototype(run: Run) -> Gate:
     return gate
 
 
+def _fail(run: Run, reason: str) -> None:
+    F.record_error(run, NAME, reason)
+    print(f"ERROR: prototype: {reason}", flush=True)
+    raise Stop(EXIT_FAILED, reason)
+
+
 async def run_prototype_stage(run: Run) -> None:
     step = run.state.steps.get(NAME)
     if step and step.outcome in ("passed", "skipped"):
         return
     prototype_dir = run.config.change_dir / DIR
-    if files := existing_files(prototype_dir):
+    if step and step.outcome == "blocked":
+        # Row S15: an agent ran and failed; what is in prototype/ is its, not the PM's.
+        gate = prototype_gate(prototype_dir)
+        if gate.passed:
+            F.record_passed(run, NAME, "", f"Checked again: {gate.reason}")
+            run.progress("PROTOTYPE_PASSED", gate.reason)
+            return
+        if gate.action == "blocked":
+            _fail(run, gate.reason)
+    elif files := existing_files(prototype_dir):
         F.record_passed(
             run, NAME, "", f"Kept the {len(files)} file(s) already in prototype/"
         )
@@ -156,8 +176,6 @@ async def run_prototype_stage(run: Run) -> None:
     print("PHASE:PROTOTYPE", flush=True)
     gate = await run_prototype(run)
     if not gate.passed:
-        F.record_error(run, NAME, gate.reason)
-        print(f"ERROR: prototype: {gate.reason}", flush=True)
-        raise Stop(EXIT_FAILED, gate.reason)
+        _fail(run, gate.reason)
     F.record_passed(run, NAME, "", gate.reason)
     run.progress("PROTOTYPE_PASSED", gate.reason)
