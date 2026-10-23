@@ -275,6 +275,54 @@ class ConfigOutput(_Model):
     rows: list[ConfigRow] = Field(default_factory=list)
 
 
+# `--scope codebase` adds four tables. Each row cites one id; its gate is in gates.py.
+
+
+class CommandRow(_Model):
+    situation: str
+    command: str = ""
+    why: str = ""
+    cite: str = ""
+
+
+class CommandsOutput(_Model):
+    rows: list[CommandRow] = Field(default_factory=list)
+
+
+class LoopRow(_Model):
+    what: str
+    cap: str = ""
+    ends_well: str = ""
+    ends_badly: str = ""
+    cite: str = ""
+
+
+class LoopsOutput(_Model):
+    rows: list[LoopRow] = Field(default_factory=list)
+
+
+class ExitRow(_Model):
+    signal: str
+    meaning: str = ""
+    action: str = ""
+    cite: str = ""
+
+
+class ExitsOutput(_Model):
+    rows: list[ExitRow] = Field(default_factory=list)
+
+
+class ResumeRow(_Model):
+    stop: str
+    on_disk: str = ""
+    rerun: str = ""
+    cite: str = ""
+
+
+class ResumeOutput(_Model):
+    rows: list[ResumeRow] = Field(default_factory=list)
+
+
 # --- stage records in the state ------------------------------------------------------
 
 
