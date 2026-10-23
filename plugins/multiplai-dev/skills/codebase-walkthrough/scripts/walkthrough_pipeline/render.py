@@ -733,7 +733,8 @@ def _md_table(state: WalkState, lk: Linker, key: str) -> MdSection:
             if how == "cite":
                 cells.append(_cites(lk, [value]))
             elif how == "code":
-                cells.append(f"`{_cell(value)}`" if value else "")
+                # A writer may backtick names inside the value; the whole cell is code already.
+                cells.append(f"`{_cell(value.replace('`', ''))}`" if value else "")
             else:
                 cells.append(_cell(lk.expand(value)))
         out.append("| " + " | ".join(cells) + " |")
@@ -1658,7 +1659,11 @@ def _html_table(key: str):
                 if how == "cite":
                     cells.append(_html_cites(lk, [value], cites))
                 elif how == "code":
-                    cells.append(f"<code>{html.escape(value)}</code>" if value else "")
+                    cells.append(
+                        f"<code>{html.escape(value.replace('`', ''))}</code>"
+                        if value
+                        else ""
+                    )
                 else:
                     cells.append(_inline(lk.expand(value), cites))
             out.append("<tr>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>")

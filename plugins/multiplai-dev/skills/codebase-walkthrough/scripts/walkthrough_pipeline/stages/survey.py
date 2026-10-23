@@ -82,6 +82,14 @@ async def run_survey(state: WalkState, ctx: RunContext) -> WalkState:
         budget_label=lambda key: key,
         **_ask_kwargs(state, ctx),
     )
+    # Survey answers after every other, in QUESTIONS order: a survey resumed after a stop that saved them
+    # in another order gives the same fact and citation ids as one that never stopped.
+    keys = [survey_key(q) for q in QUESTIONS]
+    answers = state.explore_answers
+    state.explore_answers = {
+        **{k: v for k, v in answers.items() if k not in keys},
+        **{k: answers[k] for k in keys if k in answers},
+    }
     gate_answers(state, ctx)
     ctx.counts = {
         "facts": len([f for f in state.facts if f.source.startswith("survey:")]),
