@@ -336,6 +336,16 @@ def run(repo: Path, *argv: str) -> int:
     return cli.main([command, change, "--project-dir", str(repo), *rest])
 
 
+def resume_to_end(repo: Path, name: str = "throttle", *args: str, limit: int = 4) -> int:
+    """`resume` through each review stop and the ticket wait (exit 3, each time
+    the approval); the first other exit code."""
+    for _ in range(limit):
+        code = run(repo, "resume", name, *args)
+        if code != 3:
+            return code
+    return code
+
+
 def source_dir(repo: Path, name: str = "throttle") -> Path:
     """The change's dir in the user's checkout, which pm-spec copies into its
     worktree when the dir records no branch (`branch.adopt`)."""

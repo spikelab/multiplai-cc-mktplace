@@ -1,5 +1,5 @@
 """The components step: the answer's checks, and the files it writes. Adapted
-from buildme's `test_epic_split.py` (`check_children` cases, the retry with
+from buildme's epic split tests (`check_children` cases, the retry with
 the errors)."""
 
 from __future__ import annotations
