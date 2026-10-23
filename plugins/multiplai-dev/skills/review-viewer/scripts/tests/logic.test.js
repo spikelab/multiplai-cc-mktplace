@@ -112,9 +112,8 @@ test("gate-rejected, low-value and repeat findings are never shown or counted", 
   assert.deepEqual(L.navOrder(fs, {}, false, "c"), ["b", "d", "e"], "j/k never lands on a dropped one");
   // Every count agrees with the list.
   assert.deepEqual(L.undecidedCount(fs, {}), { open: 3, total: 3 });
-  const walk = { risk: { tier: 1, tier_why: "w", revertable: true, revert_why: "x" }, assessments: [] };
-  assert.equal(L.riskInputs({}, walk, fs, {}, []).openHigh, 1, "the repeat and the gate-rejected HIGH do not count");
-  assert.equal(L.walkCoverage({ steps: [], skipped: [] }, [], fs).findingsTotal, 3, "b, d and e");
+  const summary = { risk: { tier: 1, tier_why: "w", revertable: true, revert_why: "x" }, assessments: [] };
+  assert.equal(L.riskInputs({}, summary, fs, {}, []).openHigh, 1, "the repeat and the gate-rejected HIGH do not count");
   // A file written before the assess stage has no labels: nothing is dropped but gate rejections.
   assert.deepEqual(L.findingOrder(L.groupFindings([{ id: "e", severity: "LOW", status: "confirmed" }], {}, false)), ["e"]);
 });
@@ -250,58 +249,11 @@ test("a shrunken outbox resets the read position", () => {
   assert.deepEqual([next.rows.length, next.since, next.reset], [0, 0, true]);
 });
 
-// --- walkthrough -------------------------------------------------------------
+// --- anchors -----------------------------------------------------------------
 
-const WALK = {
-  complete: false,
-  steps: [
-    { id: "purpose", anchors: [{ path: "a.py", side: "head", line_start: 1, line_end: 2 }], finding_ids: [] },
-    { id: "core", anchors: [{ path: "b.py", side: "head", line_start: 5, line_end: 9 }], finding_ids: ["f1"] },
-    { id: "tests", anchors: [{ path: "old.py", side: "base", line_start: 3, line_end: 4 }], finding_ids: ["f1", "f2"] },
-  ],
-  skipped: [{ path: "uv.lock", reason: "generated" }],
-};
-
-test("steps keep the walkthrough's order", () => {
-  assert.deepEqual(L.stepOrder(WALK), ["purpose", "core", "tests"]);
-  assert.deepEqual(L.stepOrder(null), []);
-});
-
-test("[ and ] move one step and stop at the ends", () => {
-  assert.equal(L.moveStep(WALK, "purpose", 1), "core");
-  assert.equal(L.moveStep(WALK, "tests", 1), "tests");
-  assert.equal(L.moveStep(WALK, "purpose", -1), "purpose");
-  assert.equal(L.moveStep(WALK, null, 1), "purpose");
-  assert.equal(L.moveStep(WALK, null, -1), "tests");
-  assert.equal(L.moveStep({ steps: [] }, null, 1), null);
-  assert.deepEqual(L.stepPosition(WALK, "core"), { index: 2, total: 3 });
-});
-
-test("coverage counts anchored or skipped files and linked findings", () => {
-  const cov = L.walkCoverage(WALK, ["a.py", "b.py", "c.py", "uv.lock"], [
-    { id: "f1", status: "confirmed" }, { id: "f3", status: "unverifiable" },
-    { id: "f2", status: "refuted" },
-  ]);
-  assert.deepEqual(cov, { files: 3, filesTotal: 4, findings: 1, findingsTotal: 2 });
-  assert.deepEqual(L.walkCoverage(null, ["a"], []), { files: 0, filesTotal: 1, findings: 0, findingsTotal: 0 });
-});
-
-test("anchors map to rows by new or old line number", () => {
-  const rows = [
-    { k: "ctx", o: null, n: 1 }, { k: "del", o: 3, n: null }, { k: "del", o: 4, n: null },
-    { k: "add", o: null, n: 2 }, { k: "gap", o: null, n: null }, { k: "ctx", o: null, n: 3 },
-  ];
-  assert.deepEqual(L.anchorRows(rows, { side: "head", line_start: 2, line_end: 3 }), [3, 5]);
-  assert.deepEqual(L.anchorRows(rows, { side: "base", line_start: 3, line_end: 4 }), [1, 2]);
+test("a base-side anchor says so in its label", () => {
   assert.equal(L.walkAnchorLabel({ path: "x", side: "base", line_start: 3, line_end: 4 }), "x:3–4 (base)");
-});
-
-test("a finding's steps, and the diagram image source", () => {
-  assert.deepEqual(L.stepsForFinding(WALK, "f1").map((s) => s.id), ["core", "tests"]);
-  assert.deepEqual(L.stepsForFinding(WALK, "zz"), []);
-  const url = L.svgDataUrl('<svg xmlns="http://www.w3.org/2000/svg"><text>a & "b"</text></svg>');
-  assert.ok(url.startsWith("data:image/svg+xml;charset=utf-8,%3Csvg"));
-  assert.ok(!/[<>"&# ]/.test(url.slice(url.indexOf(",") + 1)));
+  assert.equal(L.walkAnchorLabel({ path: "x", side: "head", line_start: 3, line_end: 3 }), "x:3");
 });
 
 test("only github.com links become PR links", () => {
@@ -379,38 +331,50 @@ test("files move in sidebar order, filtered, stopping at both ends", () => {
   assert.equal(L.neighbourFile(order, "gone.md", 1), null);
 });
 
-test("Prev / Next follow the open review step when it spans several files", () => {
-  const files = ["a.py", "b.py", "c.py", "d.py"];
-  const step = { anchors: [{ path: "c.py" }, { path: "a.py" }, { path: "c.py" }, { path: "gone.py" }] };
-  assert.deepEqual(L.navFiles(step, files, "", "a.py"), { order: ["c.py", "a.py"], inStep: true });
-  // A file outside the step, or a one-file step: every changed file.
-  assert.equal(L.navFiles(step, files, "", "b.py").inStep, false);
-  assert.equal(L.navFiles({ anchors: [{ path: "a.py" }] }, files, "", "a.py").inStep, false);
-  assert.deepEqual(L.navFiles(null, files, "", "a.py").order, files);
+// --- the full walkthrough -------------------------------------------------------
+
+const FULL_WALK = { state: "absent", reason: null, kind: "pr", what: "PR #7", commit: "0123456789abcdef0123456789abcdef01234567",
+  request_id: null, url: null };
+
+test("the Full walkthrough row: a button while absent, naming what and the commit", () => {
+  assert.deepEqual(L.fullWalkthroughView(FULL_WALK),
+    { show: "button", text: "Write the full walkthrough…", of: "PR #7 at 01234567" });
+  assert.deepEqual(L.fullWalkthroughView(null), { show: "none" });
 });
 
-test("a file's reviews: steps anchoring it, in order, with the matching anchor", () => {
-  const walk = {
-    steps: [
-      { id: "a", anchors: [{ path: "x.py", line_start: 1, line_end: 2 }] },
-      { id: "b", anchors: [{ path: "y.py", line_start: 3, line_end: 4 }, { path: "x.py", line_start: 9, line_end: 9 }] },
-    ],
-    skipped: [{ path: "uv.lock", reason: "lock file" }],
-  };
-  const hits = L.stepsForFile(walk, "x.py");
-  assert.deepEqual(hits.map((h) => [h.step.id, h.anchor.line_start]), [["a", 1], ["b", 9]]);
-  assert.deepEqual(L.stepsForFile(walk, "z.py"), []);
-  assert.deepEqual(L.stepsForFile(null, "x.py"), []);
-  assert.equal(L.skippedReason(walk, "uv.lock"), "lock file");
-  assert.equal(L.skippedReason(walk, "x.py"), null);
-  assert.deepEqual([...L.stepFiles(walk.steps[1])], ["y.py", "x.py"]);
-  assert.equal(L.stepFiles(null).size, 0);
+test("the Full walkthrough row links only the viewer's own route", () => {
+  const ready = Object.assign({}, FULL_WALK, { state: "ready", url: "/full-walkthrough/KEY/pr-7" });
+  assert.deepEqual(L.fullWalkthroughView(ready),
+    { show: "link", url: "/full-walkthrough/KEY/pr-7", text: "Open the full walkthrough", of: "PR #7 at 01234567" });
+  for (const url of ["https://evil.example/x", "javascript:alert(1)", "//evil.example/full-walkthrough/", null]) {
+    assert.deepEqual(L.fullWalkthroughView(Object.assign({}, ready, { url: url })), { show: "none" }, String(url));
+  }
+});
+
+test("the Full walkthrough row: a spinner while requested, the reason while unavailable", () => {
+  assert.deepEqual(L.fullWalkthroughView(Object.assign({}, FULL_WALK, { state: "requested", request_id: "q-1" })),
+    { show: "waiting", text: "Writing the full walkthrough of PR #7 at 01234567", request: "q-1" });
+  assert.deepEqual(L.fullWalkthroughView(Object.assign({}, FULL_WALK, { state: "unavailable", reason: "several pages in d" })),
+    { show: "note", text: "No full walkthrough: several pages in d" });
+});
+
+test("the Full walkthrough dialog names the model, the $50 ceiling and, for a PR only, gh", () => {
+  const pr = L.fullWalkthroughNotes(FULL_WALK, "Claude").join("\n");
+  assert.match(pr, /Confirm asks Claude to run codebase-walkthrough on PR #7 at 01234567\./);
+  assert.match(pr, /to a model/);
+  assert.match(pr, /stopping at \$50/);
+  assert.match(pr, /no other repository/);
+  assert.match(pr, /gh pr view/);
+  const tree = L.fullWalkthroughNotes(Object.assign({}, FULL_WALK, { kind: "tree", what: "pkg/mod" })).join("\n");
+  assert.match(tree, /Confirm asks the session to run codebase-walkthrough on pkg\/mod/);
+  assert.doesNotMatch(tree, /gh pr view/);
+  assert.doesNotMatch(L.fullWalkthroughNotes(Object.assign({}, FULL_WALK, { kind: "range" })).join("\n"), /gh pr view/);
 });
 
 test("summary badges: measured first, then the session's assessments", () => {
   const stats = { badges: [{ id: "size", label: "Small: 10 lines", level: "good", detail: "d" }] };
-  const walk = { assessments: [{ topic: "tests", verdict: "concern", title: "Thin tests", detail_md: "**why**" }] };
-  const b = L.summaryBadges(stats, walk);
+  const summary = { assessments: [{ topic: "tests", verdict: "concern", title: "Thin tests", detail_md: "**why**" }] };
+  const b = L.summaryBadges(stats, summary);
   assert.deepEqual(b.map((x) => [x.source, x.label, x.level]),
     [["measured", "Small: 10 lines", "good"], ["assessed", "Thin tests", "concern"]]);
   assert.notEqual(b[0].key, b[1].key);
@@ -686,7 +650,7 @@ test("riskLevel Medium rules", () => {
 });
 
 test("riskInputs combines the repo tiers, the session's tier and the findings", () => {
-  const walk = { risk: { tier: 1, tier_why: "one feature", revertable: true, revert_why: "x" },
+  const summary = { risk: { tier: 1, tier_why: "one feature", revertable: true, revert_why: "x" },
     assessments: [{ topic: "tests", verdict: "note" }] };
   const stats = { tiers: { "infra/main.tf": 3 },
     badges: [{ id: "size", level: "concern" }, { id: "checks", level: "good" }] };
@@ -696,17 +660,17 @@ test("riskInputs combines the repo tiers, the session's tier and the findings", 
     { id: "c", status: "refuted", severity: "MEDIUM" },
     { id: "d", status: "confirmed", severity: "MEDIUM" },
   ];
-  const r = L.riskInputs(stats, walk, findings, { b: { decision: "reject" }, a: { decision: "accept" } },
+  const r = L.riskInputs(stats, summary, findings, { b: { decision: "reject" }, a: { decision: "accept" } },
     ["infra/main.tf", "app.py"]);
   assert.deepEqual(r, { tier: 3, tierWhy: "set by the repo's .review-risk.toml", revertable: true,
     revertWhy: "x", tests: "note", checksFailing: false, large: true, openHigh: 1, openMedium: 1 });
   // The file only raises the tier: covering every changed file with a lower
   // tier leaves the session's tier and reason in place.
-  const low = L.riskInputs({ tiers: { "a.md": 0 } }, walk, [], {}, ["a.md"]);
+  const low = L.riskInputs({ tiers: { "a.md": 0 } }, summary, [], {}, ["a.md"]);
   assert.equal(low.tier, 1);
   assert.equal(low.tierWhy, "one feature");
   // With no file the session decides, and its reason is shown.
-  assert.equal(L.riskInputs({}, walk, [], {}, ["app.py"]).tierWhy, "one feature");
+  assert.equal(L.riskInputs({}, summary, [], {}, ["app.py"]).tierWhy, "one feature");
   assert.equal(L.riskInputs({}, { assessments: [] }, [], {}, []), null);
 });
 

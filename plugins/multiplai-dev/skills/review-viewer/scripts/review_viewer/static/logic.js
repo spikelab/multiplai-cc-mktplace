@@ -421,75 +421,11 @@
     return a <= b ? [a, b] : [b, a];
   }
 
-  // --- walkthrough ------------------------------------------------------------
-
-  /* Step ids in the order the walkthrough lists them: that order is the
-   * session's reading order (purpose, core change, callers, tests, config). */
-  function stepOrder(walk) {
-    return ((walk && walk.steps) || []).map(function (s) { return s.id; });
-  }
-
-  /* The step id `delta` steps from `current`, clamped ([ and ]). With no
-   * current step, ] starts at the first and [ at the last. */
-  function moveStep(walk, current, delta) {
-    return stepFinding(stepOrder(walk), current, delta);
-  }
-
-  /* 1-based position of a step and the total, for "Step 2 of 5". */
-  function stepPosition(walk, id) {
-    const order = stepOrder(walk);
-    return { index: order.indexOf(id) + 1, total: order.length };
-  }
-
-  /* Changed files an anchor or a skip covers, and findings that must be
-   * linked (confirmed, unverifiable) that a step links. */
-  function walkCoverage(walk, files, findings) {
-    const covered = new Set();
-    const linked = new Set();
-    for (const s of (walk && walk.steps) || []) {
-      for (const a of s.anchors || []) covered.add(a.path);
-      for (const id of s.finding_ids || []) linked.add(id);
-    }
-    for (const k of (walk && walk.skipped) || []) covered.add(k.path);
-    const must = shownFindings(findings).filter(function (f) {
-      return f.status === "confirmed" || f.status === "unverifiable";
-    });
-    return {
-      files: (files || []).filter(function (f) { return covered.has(f); }).length,
-      filesTotal: (files || []).length,
-      findings: must.filter(function (f) { return linked.has(f.id); }).length,
-      findingsTotal: must.length,
-    };
-  }
-
-  /* Indices of the file-view rows an anchor covers: head-side anchors match
-   * the new line number, base-side ones the old line number. */
-  function anchorRows(rows, anchor) {
-    const key = anchor && anchor.side === "base" ? "o" : "n";
-    const out = [];
-    (rows || []).forEach(function (row, i) {
-      const v = row[key];
-      if (v != null && v >= anchor.line_start && v <= anchor.line_end) out.push(i);
-    });
-    return out;
-  }
+  // --- anchors --------------------------------------------------------------
 
   /* "path:3–5" plus " (base)" for a base-side anchor. */
   function walkAnchorLabel(anchor) {
     return anchorLabel(anchor) + (anchor.side === "base" ? " (base)" : "");
-  }
-
-  /* Steps that link a finding, in walkthrough order. */
-  function stepsForFinding(walk, id) {
-    return ((walk && walk.steps) || []).filter(function (s) {
-      return (s.finding_ids || []).indexOf(id) >= 0;
-    });
-  }
-
-  /* An SVG document as an <img> source. The page's CSP allows `data:` images
-   * and no inline styles, so a diagram is shown as an image, never inlined. */
-  function svgDataUrl(svg) {
-    return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
   }
 
   /* Changed files grouped by directory, in the order each directory first
@@ -619,43 +555,6 @@
     return j >= 0 && j < order.length ? order[j] : null;
   }
 
-  /* Steps with an anchor on `path`, in walkthrough order, each with the
-   * first such anchor: [{step, anchor}]. */
-  function stepsForFile(walk, path) {
-    const out = [];
-    for (const s of (walk && walk.steps) || []) {
-      const a = (s.anchors || []).find(function (x) { return x.path === path; });
-      if (a) out.push({ step: s, anchor: a });
-    }
-    return out;
-  }
-
-  /* The reason a walkthrough gives for not explaining `path`, or null. */
-  function skippedReason(walk, path) {
-    const k = ((walk && walk.skipped) || []).find(function (x) { return x.path === path; });
-    return k ? k.reason : null;
-  }
-
-  /* Where Prev / Next go from `current`: through the open review step's
-   * files, in the order its anchors name them, when it spans more than one
-   * file and `current` is one of them; otherwise through every changed file
-   * as the sidebar lists them. */
-  function navFiles(step, files, filter, current) {
-    if (step) {
-      const seen = [];
-      for (const a of step.anchors || []) {
-        if ((files || []).includes(a.path) && !seen.includes(a.path)) seen.push(a.path);
-      }
-      if (seen.length > 1 && seen.includes(current)) return { order: seen, inStep: true };
-    }
-    return { order: fileOrder(files, filter), inStep: false };
-  }
-
-  /* The files a step's anchors point at. */
-  function stepFiles(step) {
-    return new Set(((step && step.anchors) || []).map(function (a) { return a.path; }));
-  }
-
   const NEED_CAUSES = {
     "no-access": "the review has no access",
     "lookup-failed": "a lookup failed",
@@ -705,16 +604,55 @@
   }
 
   /* Badges for the Summary tab: measured ones from the server, then the
-   * session's assessments, each tagged with where it came from. */
-  function summaryBadges(stats, walk) {
+   * session's assessments from its summary, each tagged with where it came from. */
+  function summaryBadges(stats, summary) {
     const out = [];
     for (const b of (stats && stats.badges) || []) {
       out.push({ key: "m:" + b.id, label: b.label, level: b.level, detail: b.detail, source: "measured" });
     }
-    for (const a of (walk && walk.assessments) || []) {
+    for (const a of (summary && summary.assessments) || []) {
       out.push({ key: "a:" + a.topic + ":" + a.title, label: a.title, level: a.verdict,
         detail: a.detail_md, source: "assessed", topic: a.topic });
     }
+    return out;
+  }
+
+  // --- the full walkthrough -------------------------------------------------------
+
+  const FULL_WALKTHROUGH_PREFIX = "/full-walkthrough/";
+
+  /* What the Summary tab's Full walkthrough row shows, from GET
+   * …/full-walkthrough (null before its first answer): `show` is "link" (the
+   * page exists; `url` opens it), "waiting" (the session is writing it for
+   * request `request`), "note" (it cannot be written: `text` says why),
+   * "button" (it can be asked for) or "none". A url outside the viewer's
+   * full-walkthrough route is never linked. */
+  function fullWalkthroughView(status) {
+    if (!status) return { show: "none" };
+    const of = status.what + " at " + String(status.commit || "").slice(0, 8);
+    if (status.state === "ready") {
+      const url = typeof status.url === "string" && status.url.startsWith(FULL_WALKTHROUGH_PREFIX) ? status.url : null;
+      return url ? { show: "link", url: url, text: "Open the full walkthrough", of: of } : { show: "none" };
+    }
+    if (status.state === "requested") {
+      return { show: "waiting", text: "Writing the full walkthrough of " + of, request: status.request_id };
+    }
+    if (status.state === "unavailable") return { show: "note", text: "No full walkthrough: " + status.reason };
+    return { show: "button", text: "Write the full walkthrough…", of: of };
+  }
+
+  /* The Full walkthrough dialog's lines: what Confirm makes the session do. */
+  function fullWalkthroughNotes(status, agent) {
+    const who = agent || "the session";
+    const out = [
+      "Confirm asks " + who + " to run codebase-walkthrough on " + status.what + " at " +
+        String(status.commit || "").slice(0, 8) + ".",
+      "It sends the repository's code to a model and makes paid model calls, stopping at $50.",
+      "It searches no other repository.",
+    ];
+    if (status.kind === "pr") out.push("For a PR it runs gh pr view, which uses the network.");
+    out.push("It can take a while. The link appears here when the page is written. " +
+      "Pressing Confirm is your go-ahead: nothing is asked again.");
     return out;
   }
 
@@ -735,21 +673,21 @@
     "auth, money, data, shared infra or deploy config"];
 
   /* The inputs to riskLevel, gathered from what the page has: the measured
-   * stats (size, PR checks, the repo's tier file), the walkthrough (the
+   * stats (size, PR checks, the repo's tier file), the summary (the
    * session's tier and revert judgment, the tests verdict) and the findings
-   * with their decisions. Null until the walkthrough has a risk block. A
+   * with their decisions. Null until the summary has a risk block. A
    * finding counts as open while it is confirmed and not rejected. The repo's
    * tier file can only raise the session's tier, never lower it. */
-  function riskInputs(stats, walk, findings, decisions, changed) {
-    if (!walk || !walk.risk) return null;
+  function riskInputs(stats, summary, findings, decisions, changed) {
+    if (!summary || !summary.risk) return null;
     const repoTiers = (stats && stats.tiers) || {};
     const files = changed || [];
     const matched = files.filter((p) => p in repoTiers).map((p) => repoTiers[p]);
     const fileTier = matched.length ? Math.max.apply(null, matched) : -1;
-    const sessionTier = walk.risk.tier;
+    const sessionTier = summary.risk.tier;
     const tier = Math.max(fileTier, sessionTier);
     const badge = (id) => ((stats && stats.badges) || []).find((b) => b.id === id);
-    const tests = ((walk.assessments || []).find((a) => a.topic === "tests") || {}).verdict || null;
+    const tests = ((summary.assessments || []).find((a) => a.topic === "tests") || {}).verdict || null;
     const open = { HIGH: 0, MEDIUM: 0 };
     for (const f of shownFindings(findings)) {
       const d = effectiveDecision(f, decisions);
@@ -759,9 +697,9 @@
     const size = badge("size");
     return {
       tier: tier,
-      tierWhy: fileTier > sessionTier ? "set by the repo's .review-risk.toml" : walk.risk.tier_why,
-      revertable: walk.risk.revertable,
-      revertWhy: walk.risk.revert_why,
+      tierWhy: fileTier > sessionTier ? "set by the repo's .review-risk.toml" : summary.risk.tier_why,
+      revertable: summary.risk.revertable,
+      revertWhy: summary.risk.revert_why,
       tests: tests,
       checksFailing: !!checks && checks.level === "concern",
       large: !!size && size.level === "concern",
@@ -1391,14 +1329,13 @@
     return agentOrder(checks).findIndex((a) => a.stage === "verify" && a.subject === id);
   }
 
-  /* What a finding's detail shows, in order. `context` is "finding" (the
-   * Findings tab) or "step" (under a walkthrough step that links it); `checks`
-   * is checks.json, or null for a review without one.
+  /* What a finding's detail shows, in order. `context` is "finding" on the
+   * Findings tab; `checks` is checks.json, or null for a review without one.
    *
    * On the Findings tab, a finding whose verifier has an entry in `checks`
    * gets `checkedBy`, that entry's index in agentOrder, and no citation lists:
    * the entry shows what the verifier read and cited. Every other case
-   * (no checks.json, no verifier entry, a walkthrough step) gets `checkedBy`
+   * (no checks.json, no verifier entry, another context) gets `checkedBy`
    * -1 and the lists: "cited" (the finding's citations) and, when there are
    * any, "verifier-cited". "absorbed" (the findings the review merged into
    * this one) follows the verdict when there are any. `parts` names the
@@ -1621,6 +1558,7 @@
     agents: "help-agents",
     findings: "help-findings",
     needs: "help-needs",
+    "full-walkthrough": "help-full-walkthrough",
     run: "help-run",
     keys: "help-keys",
     paths: "help-paths",
@@ -1643,15 +1581,12 @@
     shareRequest: shareRequest, assessmentText: assessmentText, explanationText: explanationText,
     stepFinding: stepFinding, anchorLabel: anchorLabel, escapeHtml: escapeHtml,
     splitHighlighted: splitHighlighted, lineRange: lineRange,
-    stepOrder: stepOrder, moveStep: moveStep, stepPosition: stepPosition,
-    walkCoverage: walkCoverage, anchorRows: anchorRows,
-    walkAnchorLabel: walkAnchorLabel, stepsForFinding: stepsForFinding,
-    svgDataUrl: svgDataUrl, safePrUrl: safePrUrl,
+    walkAnchorLabel: walkAnchorLabel, safePrUrl: safePrUrl,
     groupFilesByDir: groupFilesByDir, sidebarGroups: sidebarGroups, dirOpen: dirOpen, shortDir: shortDir, clampWidth: clampWidth,
     foldRows: foldRows, expandFold: expandFold, fileOrder: fileOrder,
-    neighbourFile: neighbourFile, navFiles: navFiles,
-    stepsForFile: stepsForFile, skippedReason: skippedReason, stepFiles: stepFiles,
-    summaryBadges: summaryBadges, needsItems: needsItems, needsGroups: needsGroups,
+    neighbourFile: neighbourFile,
+    summaryBadges: summaryBadges, fullWalkthroughView: fullWalkthroughView,
+    fullWalkthroughNotes: fullWalkthroughNotes, needsItems: needsItems, needsGroups: needsGroups,
     needQuestion: needQuestion,
     diffBlock: diffBlock, formatRef: formatRef, parseRefs: parseRefs, refAnchor: refAnchor,
     completion: completion, matchFiles: matchFiles,
