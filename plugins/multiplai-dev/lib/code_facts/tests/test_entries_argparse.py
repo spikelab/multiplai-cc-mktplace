@@ -565,15 +565,19 @@ def main(argv=None):
         assert edges(found["open"]) == {
             ("pkg/cli.py", line_of(main, 'case "open":'), "pkg/commands.py", open_line)
         }
-        for name in ("close", "shut"):
-            assert edges(found[name]) == {
-                (
-                    "pkg/cli.py",
-                    line_of(main, 'case "close" | "shut":'),
-                    "pkg/commands.py",
-                    close_line,
-                )
-            }
+        assert edges(found["close"]) == {
+            (
+                "pkg/cli.py",
+                line_of(main, 'case "close" | "shut":'),
+                "pkg/commands.py",
+                close_line,
+            )
+        }
+        # Same handler: "shut" merges into "close", as entries sharing a handler always do.
+        assert "shut" not in found
+        assert [(i.name, i.location.line) for i in found["close"].also_invoked_by] == [
+            ("shut", add_parser_line(main, "shut"))
+        ]
 
     def test_a_dispatcher_is_not_a_handler(self, tmp_path):
         # walkthrough's shape: `main` hands "check" to `_main`, which dispatches again.

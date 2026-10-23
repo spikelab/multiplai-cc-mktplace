@@ -89,16 +89,21 @@ def test_argparse_cli_maps_to_a_written_document_whose_hops_reread(tmp_path):
     assert {c.entry for c in call.calls} == {"opal", "ruby"}
 
 
-def test_comparison_dispatch_keeps_the_add_parser_line_and_traces_from_it(tmp_path):
-    snap = cli_snapshot(tmp_path / "repo", ["opal"], dispatch="comparison")
+@pytest.mark.parametrize("dispatch", ["comparison", "inline"])
+def test_comparison_dispatch_keeps_the_add_parser_line_and_traces_from_it(
+    tmp_path, dispatch
+):
+    # A returned `cmd_opal(args)` resolves the handler; an inline branch leaves it null. Either way
+    # the entry stays on its add_parser line and hop 2 connects.
+    snap = cli_snapshot(tmp_path / "repo", ["opal"], dispatch=dispatch)
     line = snap.line(CLI, "add_parser('opal')")
     first = snap.hop(CLI, "main", line=line)
     call = FakeCall(trace=lambda name: {"hops": [first, snap.hop(CLI, "cmd_opal")]})
     (path,) = run_map(snap, call).paths
-    assert (path.entry.kind, path.entry.location.line, path.entry.handler) == (
-        "argparse",
-        line,
-        None,
+    handler = path.entry.handler
+    assert (path.entry.kind, path.entry.location.line) == ("argparse", line)
+    assert (handler.symbol if handler else None) == (
+        "cmd_opal" if dispatch == "comparison" else None
     )
     assert (len(path.hops), path.stops_at) == (2, None)
 
@@ -206,7 +211,7 @@ def test_trace_prompt_of_a_parser_registration_says_to_start_at_its_handler(tmp_
 
 @pytest.mark.parametrize(
     "kind,dispatch",
-    [("argparse_subcommand", "comparison"), ("main_module", "set_defaults")],
+    [("argparse_subcommand", "inline"), ("main_module", "set_defaults")],
 )
 def test_trace_prompt_without_a_resolved_parser_handler_names_no_start(
     tmp_path, kind, dispatch
