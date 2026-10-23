@@ -1,6 +1,6 @@
 ---
 name: codebase-walkthrough
-description: Explains a module, or a PR or commit range (--scope pr), end to end with a Python pipeline — every repository that calls it, everything it calls, its data stores and config, and the vendor's docs — and keeps only claims whose cited lines are at the commit. Writes a Markdown walkthrough and an HTML page (and a review-viewer file), or compact Markdown for coding agents.
+description: Explains a module, or a PR or commit range (--scope pr), end to end with a Python pipeline — every repository that calls it, everything it calls, its data stores and config, and the vendor's docs — and keeps only claims whose cited lines are at the commit. Writes a Markdown walkthrough and an HTML page, or compact Markdown for coding agents.
 when_to_use: 'Triggers: walk me through this module, explain this codebase, onboard me, codebase tour, walkthrough, /multiplai-dev:codebase-walkthrough'
 disable-model-invocation: true
 ---
@@ -111,8 +111,8 @@ gates never ask a model.
 - **Writes files** to the run directory, the output directory and the log
   files. The HTML page loads highlight.js and mermaid from
   `cdnjs.cloudflare.com` when a browser opens it.
-- **Opens the walkthrough in the review-viewer only when the user asks for
-  it** (step 2). That
+- **Opens the review-viewer only when the user asks for it** (step 2), and
+  puts the HTML page where its Summary tab links it. That
   is the multiplai-dev `review-viewer` skill: a local web server on a port in
   8765–8784 that reads the module's repository with git and calls no model.
   Its `SKILL.md` says what it does on the machine.
@@ -145,7 +145,7 @@ the repositories next to it, and re-run with `--trust-repo` only on a yes.
 | `--expect-head` | With `--scope pr`: refuse to start unless the change's head is this sha | none |
 | `--commit` | Module only: read the directory at this commit instead of HEAD | HEAD |
 | `--depth` | `overview` (skips test files), `standard`, `deep` | `standard` |
-| `--mode` | `human` (Markdown, an HTML page and a review-viewer `walkthrough.json`; a change gets no `walkthrough.json`) or `agent` (compact Markdown for coding agents; no references, docs or paths; a module only) | `human` |
+| `--mode` | `human` (Markdown and an HTML page) or `agent` (compact Markdown for coding agents; no references, docs or paths; a module only) | `human` |
 | `--name` | Base file name | the module directory, lower-cased; `pr-<N>` or `range-<base8>-<head8>` for a change |
 | `--output` | Directory for the walkthrough files | `INBOX/` if it exists, else the current directory |
 | `--search-root` / `--repos` | Where to look for references | the nearest ancestor holding several repositories |
@@ -214,7 +214,7 @@ cost (a resume counts only its own calls). Read the
 Coverage section of the Markdown file (`## Coverage` in agent mode,
 `### Coverage` under How this was made in human mode) and paste its table into
 chat as it is, with the list of files that have no surviving fact. Then give the paths of
-the Markdown, `walkthrough.json` and `<name>-paths.json` files.
+the Markdown and `<name>-paths.json` files.
 
 Then, in human mode, give the user the HTML page as a `file://` URL:
 `file://` followed by the absolute path of `<name>-walkthrough.html` exactly
@@ -238,21 +238,34 @@ uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/review-viewer/scripts \
 `<commit>` is the module repository's row in the Markdown's "Commits read"
 table (its first row), `<module dir>` the module's directory relative to that
 repository's root (empty for a whole repository: leave out `--path`), and
-`--repo` that root. From the server's output, publish the walkthrough to the
-`mailbox:` it printed:
+`--repo` that root. From the server's output, read where the viewer looks
+for the page, for the `mailbox:` it printed:
 
 ```bash
 uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/review-viewer/scripts \
-  python -m review_viewer walkthrough put --box <mailbox> --file /abs/path/to/name-walkthrough.json
+  python -m review_viewer summary status --box <mailbox>
 ```
+
+Its `full walkthrough dir:` line names the folder. Write this run's page
+there; `render` makes no model call:
+
+```bash
+uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/codebase-walkthrough/scripts \
+  python -m walkthrough_pipeline render <run dir> --output <full walkthrough dir>
+```
+
+`<run dir>` is this run's `run:` line. `summary status` then prints `full
+walkthrough: ready <page>`, and the page's Summary tab links it. The viewer
+shows the page only for the commit it serves, so `<commit>` must be this
+run's.
 
 Give the user the `open:` line exactly as printed. Never read `server.token`
 or `open.html`, and never rebuild the link yourself (review-viewer
-`SKILL.md`, step 2). Then arm the watch and answer what the user asks from
-the page as that skill's steps 3, 5 and 6 say, and stop the viewer as its
-step 7 says. You do not write a walkthrough there: this file is it. If `put`
-exits 2, tell the user what it printed and give the Markdown path; do not
-edit the JSON by hand.
+`SKILL.md`, step 2). Then follow that skill from its step 3: arm the watch,
+write the summary (its verdicts only; this walkthrough is the explanation),
+answer what the user asks from the page, and stop the viewer as its step 8
+says. If `render` exits 1, tell the user what it printed and give the
+Markdown and HTML paths.
 
 ### 3. Check (any time later)
 
@@ -277,8 +290,7 @@ uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/codebase-walkthrough/scripts \
   python -m walkthrough_pipeline render <run dir> [--output /abs/out]
 ```
 
-It rewrites the Markdown, `walkthrough.json`, `<name>-paths.json` and the
-HTML page from the run's `walkthrough-state.json`. It makes no model call and
+It rewrites the Markdown, `<name>-paths.json` and the HTML page from the run's `walkthrough-state.json`. It makes no model call and
 spends nothing: it prints the same `walkthrough: <path>` lines as `run`, then
 `SPEND:0.000000:0`. Use it to get the HTML page for a run that finished
 before the page existed, or to replace a deleted or edited output; it
