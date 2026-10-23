@@ -35,7 +35,15 @@ def test_every_call_that_carries_fenced_text_carries_the_notice(repo, model, tmp
     prd = write(tmp_path / "prd.md", PRD)
     model["components"] = TWO
     model["consistency"] = [{"findings": [finding()]}, recheck()]
-    argv = ["new", "throttle", "--auto", "--prd", str(prd), "--ticket-file", str(ticket)]
+    argv = [
+        "new",
+        "throttle",
+        "--auto",
+        "--prd",
+        str(prd),
+        "--ticket-file",
+        str(ticket),
+    ]
     assert run(repo, *argv, "--ticket-ref", "EPIC-9") == 0
     labels = {label.split(":")[0] for label in model.labels()}
     assert {"interview", "components", "spec", "prototype", "consistency"} <= labels

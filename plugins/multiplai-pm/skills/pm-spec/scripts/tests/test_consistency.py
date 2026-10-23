@@ -2,7 +2,17 @@
 
 from __future__ import annotations
 
-from conftest import TWO, change_dir, meta, proposal, run, source_dir, specs, state, write
+from conftest import (
+    TWO,
+    change_dir,
+    meta,
+    proposal,
+    run,
+    source_dir,
+    specs,
+    state,
+    write,
+)
 from pm_spec_pipeline.rewrite import cited_units
 
 
@@ -59,7 +69,11 @@ def test_minor_findings_are_advisory_and_pass(repo, model, capsys):
 def test_a_major_finding_rewrites_only_the_cited_specs_once_then_rechecks(repo, model):
     model["components"] = TWO
     model["consistency"] = [
-        {"findings": [finding("duplicate", files=("components/api/specs.md", "proposal.md"))]},
+        {
+            "findings": [
+                finding("duplicate", files=("components/api/specs.md", "proposal.md"))
+            ]
+        },
         recheck(),
     ]
     assert run(repo, "new", "throttle", "--auto") == 0
@@ -67,7 +81,10 @@ def test_a_major_finding_rewrites_only_the_cited_specs_once_then_rechecks(repo, 
         "consistency:rewrite:api"
     ]
     rewrite_prompt = model.prompts("consistency:rewrite:api")[0]
-    assert "CC-F1" in rewrite_prompt and "## The file to revise: components/api/specs.md" in rewrite_prompt
+    assert (
+        "CC-F1" in rewrite_prompt
+        and "## The file to revise: components/api/specs.md" in rewrite_prompt
+    )
     recheck_prompt = model.exactly("consistency")[1]
     assert (
         "Findings the rewrite was asked to fix" in recheck_prompt
@@ -160,7 +177,10 @@ def test_a_broken_specs_file_is_a_finding_not_a_crash(repo, model):
     kept as written, then the check reports it and its one rewrite fixes it."""
     hand = source_dir(repo)
     write(hand / "proposal.md", proposal())
-    write(hand / "specs.md", specs().replace("# Capability: rate-limit", "# Capability: Rate Limit"))
+    write(
+        hand / "specs.md",
+        specs().replace("# Capability: rate-limit", "# Capability: Rate Limit"),
+    )
     model["consistency"] = [
         {"findings": []},
         recheck("resolved"),
@@ -181,12 +201,16 @@ def test_a_finding_names_its_specs_file_by_path_or_by_capability(repo, model):
     model["spec:specs:ui"] = specs(("ui-page",))
     assert run(repo, "new", "throttle", "--auto") == 0
     cdir = change_dir(repo)
-    assert cited_units(cdir, {"places": [{"file": "components/ui/specs.md"}]}) == ["components/ui/specs.md"]
-    assert cited_units(cdir, {"places": [{"file": "specs/changes/throttle/components/api/specs.md"}]}) == [
-        "components/api/specs.md"
-    ]
-    assert cited_units(cdir, {"description": "`ui-page` contradicts itself"}) == ["components/ui/specs.md"]
-    assert cited_units(cdir, {"places": [{"file": "specs.md", "where": "ui-page: Requirement"}]}) == [
+    assert cited_units(cdir, {"places": [{"file": "components/ui/specs.md"}]}) == [
         "components/ui/specs.md"
     ]
+    assert cited_units(
+        cdir, {"places": [{"file": "specs/changes/throttle/components/api/specs.md"}]}
+    ) == ["components/api/specs.md"]
+    assert cited_units(cdir, {"description": "`ui-page` contradicts itself"}) == [
+        "components/ui/specs.md"
+    ]
+    assert cited_units(
+        cdir, {"places": [{"file": "specs.md", "where": "ui-page: Requirement"}]}
+    ) == ["components/ui/specs.md"]
     assert cited_units(cdir, {"places": [{"file": "proposal.md"}]}) == []

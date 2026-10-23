@@ -101,11 +101,15 @@ def specs(caps=CAPS, *, rule: str = "", rules: dict | None = None) -> str:
     """A `specs.md`: one `# Capability:` section per capability."""
     rules = rules or {}
     return "\n".join(
-        f"# Capability: {c}\n\n" + requirements(c, rule=rules.get(c, rule)) for c in caps
+        f"# Capability: {c}\n\n" + requirements(c, rule=rules.get(c, rule))
+        for c in caps
     )
 
 
-def plan(title: str = "Throttle the API", done: tuple = ("A client over its limit is refused.",)) -> str:
+def plan(
+    title: str = "Throttle the API",
+    done: tuple = ("A client over its limit is refused.",),
+) -> str:
     return (
         f"# Plan: {title}\n\n> File: x.md · Date: 2026-10-23\n\n"
         f"**Objective:** {title}, so the server stays up.\n\n"
@@ -141,7 +145,10 @@ ANSWERS = {
     ]
 }
 
-SINGLE = {"reason": "One pull request carries it.", "components": [component("throttle", title="Throttle the API")]}
+SINGLE = {
+    "reason": "One pull request carries it.",
+    "components": [component("throttle", title="Throttle the API")],
+}
 TWO = {
     "reason": "Each is a pull request on its own.",
     "components": [component("api"), component("ui", deps=["api"])],
@@ -336,7 +343,9 @@ def run(repo: Path, *argv: str) -> int:
     return cli.main([command, change, "--project-dir", str(repo), *rest])
 
 
-def resume_to_end(repo: Path, name: str = "throttle", *args: str, limit: int = 4) -> int:
+def resume_to_end(
+    repo: Path, name: str = "throttle", *args: str, limit: int = 4
+) -> int:
     """`resume` through each review stop and the ticket wait (exit 3, each time
     the approval); the first other exit code."""
     for _ in range(limit):

@@ -153,9 +153,7 @@ def build(change_dir: Path, project_dir: Path) -> list[dict]:
     proposal = _read(change_dir / "proposal.md")
     ref = intake.ticket_refs(change_dir)["epic"]
     priority = change_priority(change_dir)
-    links = [f"{rel_dir}/proposal.md"] + (
-        [f"{rel_dir}/use-cases.md"] if (change_dir / "use-cases.md").is_file() else []
-    )
+    links = [f"{rel_dir}/proposal.md"]
     comps = component_dirs(change_dir)
     if not comps:
         plan = _read(change_dir / "plan.md")
@@ -163,12 +161,17 @@ def build(change_dir: Path, project_dir: Path) -> list[dict]:
             accept = done_means(plan)
             links.append(f"{rel_dir}/plan.md")
         else:  # a change in the old layout, adopted: its requirement names
-            accept = [a for text in requirement_texts(change_dir).values() for a in acceptance(text)]
+            accept = [
+                a
+                for text in requirement_texts(change_dir).values()
+                for a in acceptance(text)
+            ]
         item = {
             "id": change,
             "type": "task",
             "title": _title(proposal, change),
-            "description": _section(proposal, "Why") or _section(proposal, "What Changes"),
+            "description": _section(proposal, "Why")
+            or _section(proposal, "What Changes"),
             "priority": priority,
             "labels": [change],
             "parent": None,

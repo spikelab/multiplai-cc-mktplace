@@ -54,7 +54,9 @@ def test_artifact_calls_hold_no_tools(repo, model):
 
 
 def test_invalid_specs_fail_the_run(repo, model, capsys):
-    model["spec:specs"] = "# Capability: Bad Name\n\n### Requirement: no scenario\nThe system SHALL.\n"
+    model["spec:specs"] = (
+        "# Capability: Bad Name\n\n### Requirement: no scenario\nThe system SHALL.\n"
+    )
     assert run(repo, "new", "throttle", "--auto") == 1
     assert "Invalid specs.md for throttle" in capsys.readouterr().out
     assert not (change_dir(repo) / "specs.md").exists()
@@ -79,7 +81,10 @@ def test_files_a_person_wrote_before_the_run_are_kept(repo, model):
 
 
 def test_the_registry_reaches_the_specs_prompt_not_the_proposal(repo, model):
-    write(repo / "specs" / "registry" / "rate-limit.md", "### Requirement: Existing limit\nREGISTRY-BODY\n")
+    write(
+        repo / "specs" / "registry" / "rate-limit.md",
+        "### Requirement: Existing limit\nREGISTRY-BODY\n",
+    )
     git(repo, "add", "specs")
     git(repo, "commit", "-q", "-m", "registry")
     git(repo, "push", "-q", "origin", "main")

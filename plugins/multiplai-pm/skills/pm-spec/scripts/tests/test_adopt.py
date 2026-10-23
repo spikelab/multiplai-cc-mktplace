@@ -56,7 +56,10 @@ def test_adopt_blocked_on_findings_stops_with_exit_4(repo, model, capsys):
 
     cdir = buildme_era_change(repo)
     files_ = ("requirements/rate-limit.md", "requirements/retry-policy.md")
-    model["consistency"] = [{"findings": [finding(files=files_)]}, recheck("still_present")]
+    model["consistency"] = [
+        {"findings": [finding(files=files_)]},
+        recheck("still_present"),
+    ]
     assert run(repo, "resume", "throttle", "--ticket-ref", "ENG-1") == 4
     assert {label.split(":")[0] for label in model.labels()} == {"consistency"}
     assert f"SPEC:BLOCKED:{cdir}" in capsys.readouterr().out

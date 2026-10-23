@@ -77,7 +77,9 @@ def prototype_gate(prototype_dir: Path) -> Gate:
     found = [str(p) for p in existing_files(prototype_dir) if p != notes_path]
     if not found:
         return Gate(False, "Prototype produced no file besides NOTES.md", "retry")
-    return Gate(True, f"Prototype produced {len(found)} file(s) and NOTES.md", "", found)
+    return Gate(
+        True, f"Prototype produced {len(found)} file(s) and NOTES.md", "", found
+    )
 
 
 def files_outside(files_changed: list[str], prototype_dir: Path) -> list[str]:
@@ -123,7 +125,11 @@ async def run_prototype(run: Run) -> Gate:
         except sdk.CallFailed as e:
             return Gate(False, f"Prototype writer failed: {e}")
         if outside := files_outside(answer.files_changed, prototype_dir):
-            return Gate(False, f"Prototype agent wrote outside {prototype_dir}: {outside}", "boundary")
+            return Gate(
+                False,
+                f"Prototype agent wrote outside {prototype_dir}: {outside}",
+                "boundary",
+            )
         gate = prototype_gate(prototype_dir)
         if gate.passed or gate.action == "blocked":
             return gate
@@ -137,7 +143,9 @@ async def run_prototype_stage(run: Run) -> None:
         return
     prototype_dir = run.config.change_dir / DIR
     if files := existing_files(prototype_dir):
-        F.record_passed(run, NAME, "", f"Kept the {len(files)} file(s) already in prototype/")
+        F.record_passed(
+            run, NAME, "", f"Kept the {len(files)} file(s) already in prototype/"
+        )
         log.info("SKIP phase=PROTOTYPE reason=prototype/ already holds files")
         return
     if run.state.options.prototype == "false":

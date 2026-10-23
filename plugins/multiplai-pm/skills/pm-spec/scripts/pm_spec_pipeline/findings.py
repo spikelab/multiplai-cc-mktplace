@@ -33,7 +33,7 @@ log = logging.getLogger(__name__)
 PRIOR_STATUSES = ("resolved", "cannot_verify", "partially_resolved", "still_present")
 SEVERITIES = ("critical", "major", "minor")
 ACTIONABLE = ("critical", "major")
-FINDING_ID_PREFIXES = {"prototype": "PT", "consistency": "CC", "revise": "RV"}
+FINDING_ID_PREFIXES = {"consistency": "CC", "revise": "RV"}
 
 REOPEN_LINE = (
     "Edit the files to fix these and run again; the step then gets one rewrite."

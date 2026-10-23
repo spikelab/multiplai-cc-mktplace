@@ -143,7 +143,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_const",
         const="true",
         default="",
-        help="Run the prototype whatever the change",
+        help="Run the prototype even when specs/config.yaml turns it off",
     )
     proto.add_argument(
         "--no-prototype",
@@ -249,7 +249,10 @@ async def _dispatch(args: argparse.Namespace) -> int:
         for raw in args.ticket:
             component, sep, ref = raw.partition("=")
             if not sep or not component.strip() or not ref.strip():
-                print(f"ERROR: --ticket {raw!r}: expected <component>=<ticket id>", flush=True)
+                print(
+                    f"ERROR: --ticket {raw!r}: expected <component>=<ticket id>",
+                    flush=True,
+                )
                 return EXIT_REFUSED
             refs[component.strip()] = ref.strip()
         return await cmd_resume(

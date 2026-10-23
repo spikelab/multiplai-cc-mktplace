@@ -20,7 +20,10 @@ def validate(items):
 
 def to_ticket_wait(repo, capsys, *new_args) -> str:
     """`new` without --auto, then the two review resumes; the ticket wait's output."""
-    assert run(repo, "new", "throttle", "--interview-summary", "Throttle it.", *new_args) == 3
+    assert (
+        run(repo, "new", "throttle", "--interview-summary", "Throttle it.", *new_args)
+        == 3
+    )
     assert "SPEC:REVIEW:proposal" in capsys.readouterr().out
     assert run(repo, "resume", "throttle") == 3
     assert "SPEC:REVIEW:components" in capsys.readouterr().out
@@ -44,7 +47,7 @@ def test_several_components_are_an_epic_and_one_task_each(repo, model):
         "labels": ["throttle"],
         "parent": None,
         "acceptance": [],
-        "links": ["specs/changes/throttle/proposal.md", "specs/changes/throttle/use-cases.md"],
+        "links": ["specs/changes/throttle/proposal.md"],
         "ref": "ENG-1",
     }
     assert tasks == [
@@ -63,7 +66,10 @@ def test_several_components_are_an_epic_and_one_task_each(repo, model):
     ]
     # --auto skips the wait: the components' tickets stay pending.
     assert state(cdir)["steps"]["tickets"]["outcome"] == "skipped"
-    assert "| api        |             | pending  |" in (cdir / "components.md").read_text()
+    assert (
+        "| api        |             | pending  |"
+        in (cdir / "components.md").read_text()
+    )
 
 
 def test_one_component_is_the_changes_own_ticket_rewritten(repo, model):
@@ -82,7 +88,6 @@ def test_one_component_is_the_changes_own_ticket_rewritten(repo, model):
             "acceptance": ["throttle works."],
             "links": [
                 "specs/changes/throttle/proposal.md",
-                "specs/changes/throttle/use-cases.md",
                 "specs/changes/throttle/plan.md",
             ],
             "ref": "ENG-1",
@@ -90,13 +95,20 @@ def test_one_component_is_the_changes_own_ticket_rewritten(repo, model):
     ]
 
 
-def test_the_wait_takes_every_components_ticket_then_writes_the_specs(repo, model, capsys):
+def test_the_wait_takes_every_components_ticket_then_writes_the_specs(
+    repo, model, capsys
+):
     model["components"] = TWO
     out = to_ticket_wait(repo, capsys)
     cdir = change_dir(repo)
-    assert f"SPEC:TICKETS:{cdir / 'tickets.json'}" in out and "SPEC:BRANCH:ENG-1-throttle" in out
+    assert (
+        f"SPEC:TICKETS:{cdir / 'tickets.json'}" in out
+        and "SPEC:BRANCH:ENG-1-throttle" in out
+    )
     assert state(cdir)["steps"]["tickets"]["outcome"] == "pending"
-    assert (cdir / "prototype" / "mockup.html").is_file() and not (cdir / "components" / "api" / "specs.md").exists()
+    assert (cdir / "prototype" / "mockup.html").is_file() and not (
+        cdir / "components" / "api" / "specs.md"
+    ).exists()
 
     # No flags: refused, naming the flags; nothing written, no call.
     calls = len(model.calls)
@@ -111,11 +123,20 @@ def test_the_wait_takes_every_components_ticket_then_writes_the_specs(repo, mode
     assert "ticket_refs" not in meta(cdir / "components" / "api")
     assert (cdir / "components.md").read_text() == before
     assert len(model.calls) == calls
-    assert run(repo, "resume", "throttle", "--ticket", "api=ENG-2", "--ticket", "ui=ENG-3") == 0
+    assert (
+        run(repo, "resume", "throttle", "--ticket", "api=ENG-2", "--ticket", "ui=ENG-3")
+        == 0
+    )
     for cid, ref in (("api", "ENG-2"), ("ui", "ENG-3")):
-        assert meta(cdir / "components" / cid)["ticket_refs"] == {"epic": ref, "children": []}
+        assert meta(cdir / "components" / cid)["ticket_refs"] == {
+            "epic": ref,
+            "children": [],
+        }
     table = (cdir / "components.md").read_text()
-    assert "| api        |             | ENG-2    |" in table and "| ui         | api         | ENG-3    |" in table
+    assert (
+        "| api        |             | ENG-2    |" in table
+        and "| ui         | api         | ENG-3    |" in table
+    )
     assert [i.get("ref") for i in load(cdir)] == ["ENG-1", "ENG-2", "ENG-3"]
     assert state(cdir)["steps"]["tickets"]["outcome"] == "passed"
 
@@ -148,7 +169,10 @@ def test_one_component_waits_but_needs_no_flag(repo, model, capsys):
 def test_components_with_ticket_children_need_no_flag(repo, model, capsys):
     model["components"] = {
         "reason": "two",
-        "components": [component("api", ticket_ref="T-1"), component("ui", ticket_ref="T-2")],
+        "components": [
+            component("api", ticket_ref="T-1"),
+            component("ui", ticket_ref="T-2"),
+        ],
     }
     to_ticket_wait(repo, capsys, "--ticket-child", "T-1", "--ticket-child", "T-2")
     assert run(repo, "resume", "throttle") == 0
@@ -170,7 +194,12 @@ def test_priority_from_the_ticket_when_the_prd_states_none(repo, model, tmp_path
 
 @pytest.mark.parametrize(
     "text,expected",
-    [("**Priority:** P1\n", "high"), ("priority = low\n", "low"), ("Priority: whenever\n", None), ("", None)],
+    [
+        ("**Priority:** P1\n", "high"),
+        ("priority = low\n", "low"),
+        ("Priority: whenever\n", None),
+        ("", None),
+    ],
 )
 def test_the_priority_line(text, expected):
     assert tickets.stated_priority(text) == expected

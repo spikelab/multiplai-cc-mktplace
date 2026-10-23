@@ -4,7 +4,17 @@ write boundary)."""
 
 from __future__ import annotations
 
-from conftest import TWO, agent, change_dir, git, proposal, run, source_dir, state, write
+from conftest import (
+    TWO,
+    agent,
+    change_dir,
+    git,
+    proposal,
+    run,
+    source_dir,
+    state,
+    write,
+)
 from pm_spec_pipeline import prototype as P
 
 
@@ -13,11 +23,17 @@ def test_the_prototype_runs_after_the_components_and_before_the_specs(repo, mode
     assert run(repo, "new", "throttle", "--auto") == 0
     cdir = change_dir(repo)
     labels = model.labels()
-    assert labels.index("components") < labels.index("prototype") < labels.index("spec:specs:api")
-    assert (cdir / "prototype" / "mockup.html").is_file() and (cdir / "prototype" / "NOTES.md").is_file()
+    assert (
+        labels.index("components")
+        < labels.index("prototype")
+        < labels.index("spec:specs:api")
+    )
+    assert (cdir / "prototype" / "mockup.html").is_file() and (
+        cdir / "prototype" / "NOTES.md"
+    ).is_file()
     assert state(cdir)["steps"]["prototype"]["outcome"] == "passed"
     assert not any(":rewrite:" in label for label in labels)
-    prompt, kw = [(p, kw) for label, p, kw in model.calls if label == "prototype"][0]
+    prompt, kw = next((p, kw) for label, p, kw in model.calls if label == "prototype")
     assert kw["allowed_tools"] == ["Read", "Write", "Glob", "Grep"]
     assert kw["cwd"] == str(cdir / "prototype")
     # It reads the change and the plans, and shows the shape, never behaviour.
@@ -27,7 +43,9 @@ def test_the_prototype_runs_after_the_components_and_before_the_specs(repo, mode
 
 def test_a_backend_change_gets_one_too(repo, model):
     """Whatever helps picture the change: endpoint signatures, for an API."""
-    model["spec:proposal"] = lambda *a: proposal(extra=" Tune the database queue worker.")
+    model["spec:proposal"] = lambda *a: proposal(
+        extra=" Tune the database queue worker."
+    )
     assert run(repo, "new", "throttle", "--auto") == 0
     assert model.calls_to("prototype") == 1
 
@@ -37,10 +55,14 @@ def test_files_already_in_prototype_are_kept_and_no_agent_runs(repo, model):
     assert run(repo, "new", "throttle", "--auto") == 0
     cdir = change_dir(repo)
     assert "prototype" not in model.labels()
-    assert (cdir / "prototype" / "settings.html").read_text() == "<html>the PM's</html>\n"
+    assert (
+        cdir / "prototype" / "settings.html"
+    ).read_text() == "<html>the PM's</html>\n"
     assert not (cdir / "prototype" / "NOTES.md").exists()
     assert "- prototype/settings.html" in model.exactly("spec:specs:throttle")[0]
-    assert git(change_dir(repo).parents[2], "status", "--porcelain", "--", "specs") == ""
+    assert (
+        git(change_dir(repo).parents[2], "status", "--porcelain", "--", "specs") == ""
+    )
 
 
 def test_no_prototype_turns_it_off(repo, model):
@@ -84,5 +106,10 @@ def test_the_gate_reads_the_status_with_markdown_decoration(tmp_path):
 
 
 def test_relative_paths_inside_the_dir_are_allowed(tmp_path):
-    assert P.files_outside(["mockup.html", str(tmp_path / "x" / "a")], tmp_path / "x") == []
-    assert P.files_outside(["../a"], tmp_path / "x") == [str((tmp_path / "a").resolve())]
+    assert (
+        P.files_outside(["mockup.html", str(tmp_path / "x" / "a")], tmp_path / "x")
+        == []
+    )
+    assert P.files_outside(["../a"], tmp_path / "x") == [
+        str((tmp_path / "a").resolve())
+    ]

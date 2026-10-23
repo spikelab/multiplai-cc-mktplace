@@ -134,7 +134,10 @@ async def recheck(run: Run, name: str, reason: str) -> str:
     revision = layout.revision(run.config.change_dir)
     answer = await check(run, prior=listed)
     blocking, advisory = F.recheck_verdict(
-        listed, answer.prior_assessments, as_dicts(answer), deterministic=format_findings(run)
+        listed,
+        answer.prior_assessments,
+        as_dicts(answer),
+        deterministic=format_findings(run),
     )
     step.repair_findings = F.saved_findings(
         F.assess_listed(listed, answer.prior_assessments)

@@ -21,7 +21,9 @@ def test_each_component_and_the_change_get_the_ready_record(repo, model, capsys)
     assert state(cdir)["handoff"]["revision"] == revision
 
 
-def test_an_edit_to_one_components_specs_after_ready_is_checked_again(repo, model, capsys):
+def test_an_edit_to_one_components_specs_after_ready_is_checked_again(
+    repo, model, capsys
+):
     model["components"] = TWO
     assert run(repo, "new", "throttle", "--auto") == 0
     cdir = change_dir(repo)
@@ -34,7 +36,9 @@ def test_an_edit_to_one_components_specs_after_ready_is_checked_again(repo, mode
     assert len(model.exactly("consistency")) == checks + 1
     assert is_ready(ui) == (True, "") and layout.ready(cdir) == (True, "")
     assert f"SPEC:READY:{cdir}:{layout.revision(cdir)}" in capsys.readouterr().out
-    assert git(change_dir(repo).parents[2], "status", "--porcelain", "--", "specs") == ""
+    assert (
+        git(change_dir(repo).parents[2], "status", "--porcelain", "--", "specs") == ""
+    )
 
 
 class TestCommit:
@@ -136,7 +140,9 @@ def test_a_change_between_the_compare_and_the_ready_record_is_checked_again(
 
 # --- never ready while requirements issues are open ------------------------------
 
-ISSUES = "# Spec issues\n\n## Retry header\n\n`retry-policy` lacks the Retry-After header.\n"
+ISSUES = (
+    "# Spec issues\n\n## Retry header\n\n`retry-policy` lacks the Retry-After header.\n"
+)
 
 
 def test_resume_after_a_blocked_revise_refuses_and_never_hands_off(repo, model, capsys):

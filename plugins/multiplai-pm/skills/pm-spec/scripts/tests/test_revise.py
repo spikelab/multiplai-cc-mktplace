@@ -191,12 +191,19 @@ def test_an_issues_file_in_a_component_goes_to_that_components_specs(repo, model
     assert run(repo, "new", "throttle", "--auto") == 0
     cdir = change_dir(repo)
     ui = cdir / "components" / "ui"
-    write(ui / "spec-issues.md", "# Spec issues\n\n## Vague\n\nThe wait is not stated.\n")
+    write(
+        ui / "spec-issues.md", "# Spec issues\n\n## Vague\n\nThe wait is not stated.\n"
+    )
     set_spec_issues(ui, ui / "spec-issues.md")
     model["consistency"] = resolved()
     assert run(repo, "revise", "throttle") == 0
-    assert [label for label in model.labels() if ":rewrite:" in label] == ["revise:rewrite:ui"]
-    assert meta(ui)["spec_issues"] is None and len(list(ui.glob("spec-issues.resolved-*.md"))) == 1
+    assert [label for label in model.labels() if ":rewrite:" in label] == [
+        "revise:rewrite:ui"
+    ]
+    assert (
+        meta(ui)["spec_issues"] is None
+        and len(list(ui.glob("spec-issues.resolved-*.md"))) == 1
+    )
     assert is_ready(ui) == (True, "")
 
 

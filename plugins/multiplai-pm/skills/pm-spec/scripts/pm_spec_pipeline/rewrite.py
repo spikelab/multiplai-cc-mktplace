@@ -42,7 +42,11 @@ def cited_units(change_dir: Path, finding: dict) -> list[str]:
         found.extend(u for u in names if u not in found)
 
     for place in finding.get("places") or []:
-        raw = str(place.get("file", "") if isinstance(place, dict) else place).strip().strip("`")
+        raw = (
+            str(place.get("file", "") if isinstance(place, dict) else place)
+            .strip()
+            .strip("`")
+        )
         where = str(place.get("where", "")) if isinstance(place, dict) else ""
         matched = [u for u in units if raw == u or raw.endswith("/" + u)]
         if not matched and Path(raw).stem in caps:

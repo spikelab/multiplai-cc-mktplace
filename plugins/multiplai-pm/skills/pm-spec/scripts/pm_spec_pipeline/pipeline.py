@@ -223,7 +223,10 @@ async def advance(
         if not stages.done(run, stages.SPECS):
             await artifacts.generate_specs(run)
             F.record_passed(
-                run, stages.SPECS, layout.revision(run.config.change_dir), "specs.md written"
+                run,
+                stages.SPECS,
+                layout.revision(run.config.change_dir),
+                "specs.md written",
             )
     await handoff.check_and_hand_off(run)
     return EXIT_DONE

@@ -165,7 +165,11 @@ def open_issues(run: Run) -> str | None:
     for d in [change_dir, *component_dirs(change_dir)]:
         value = read_change_meta(d).get("spec_issues")
         if value:
-            return layout.rel(change_dir, d / str(value)) if d != change_dir else str(value)
+            return (
+                layout.rel(change_dir, d / str(value))
+                if d != change_dir
+                else str(value)
+            )
     return None
 
 

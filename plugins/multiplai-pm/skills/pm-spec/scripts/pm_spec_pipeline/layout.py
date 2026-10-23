@@ -82,7 +82,9 @@ def capability_units(change_dir: Path) -> dict[str, list[str]]:
 
 def all_specs_text(change_dir: Path) -> str:
     """Every spec file of the change, each under a `### <path>` heading."""
-    parts = [f"### {u}\n{(Path(change_dir) / u).read_text()}" for u in units(change_dir)]
+    parts = [
+        f"### {u}\n{(Path(change_dir) / u).read_text()}" for u in units(change_dir)
+    ]
     return "\n\n".join(parts) or "(none)"
 
 

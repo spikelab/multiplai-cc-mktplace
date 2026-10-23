@@ -64,7 +64,10 @@ def registry_names(run: Run) -> list[str]:
 def intake_hash(run: Run) -> str:
     """The proposal's inputs: the intake files, the interview and the project context."""
     change_dir = run.config.change_dir
-    parts = {name: _read(change_dir / name) for name in ("prd.md", "ticket.md", "interview.md")}
+    parts = {
+        name: _read(change_dir / name)
+        for name in ("prd.md", "ticket.md", "interview.md")
+    }
     parts["context"] = run.config.project_context
     return sha(json.dumps(parts, sort_keys=True))
 
@@ -112,8 +115,12 @@ def _usable(run: Run, key: str) -> bool:
 
 # --- the PRD sources in `## Sources` ------------------------------------------
 
-_SOURCES_RE = re.compile(r"^##\s+Sources\s*$(.*?)(?=^##\s|\Z)", re.MULTILINE | re.DOTALL)
-_PRD_LINE_RE = re.compile(r"^-\s+PRD\s*(?:§\s*)?[\"“']?(.+?)[\"”']?\s*$", re.MULTILINE | re.IGNORECASE)
+_SOURCES_RE = re.compile(
+    r"^##\s+Sources\s*$(.*?)(?=^##\s|\Z)", re.MULTILINE | re.DOTALL
+)
+_PRD_LINE_RE = re.compile(
+    r"^-\s+PRD\s*(?:§\s*)?[\"“']?(.+?)[\"”']?\s*$", re.MULTILINE | re.IGNORECASE
+)
 
 
 def prd_sources(proposal: str) -> list[str]:
@@ -210,7 +217,10 @@ def registry_section(run: Run) -> str:
     names = registry_names(run)
     if not names:
         return ""
-    texts = [f"### {n} (specs/registry/{n}.md)\n{_read(registry_dir(run) / f'{n}.md')}" for n in names]
+    texts = [
+        f"### {n} (specs/registry/{n}.md)\n{_read(registry_dir(run) / f'{n}.md')}"
+        for n in names
+    ]
     body = "\n\n".join(texts)[:REGISTRY_TEXT_LIMIT]
     return (
         f"\n\n{P.REGISTRY_HEADING}\n\n{P.REGISTRY_NAMES_RULE}\n\n{P.REGISTRY_REQUIREMENTS_RULE}\n\n"
@@ -254,7 +264,10 @@ def specs_prompt(run: Run, spec_dir: Path) -> str:
 async def write_proposal(run: Run) -> str:
     """One proposal call, and one more with the problems listed when it cannot be kept."""
     text = await sdk.text_call(
-        proposal_prompt(run), config=run.config, step="spec_artifact", label="spec:proposal"
+        proposal_prompt(run),
+        config=run.config,
+        step="spec_artifact",
+        label="spec:proposal",
     )
     errors = proposal_errors(run, text)
     if errors:
@@ -276,7 +289,10 @@ async def write_specs(run: Run, spec_dir: Path) -> str:
         run.config.change_name if spec_dir == run.config.change_dir else spec_dir.name
     )
     text = await sdk.text_call(
-        specs_prompt(run, spec_dir), config=run.config, step="spec_artifact", label=label
+        specs_prompt(run, spec_dir),
+        config=run.config,
+        step="spec_artifact",
+        label=label,
     )
     if not valid_specs_text(text):
         raise ValueError(
@@ -291,7 +307,10 @@ def _inputs(run: Run, key: str) -> str:
         return intake_hash(run)
     parts = [proposal_text(run), _read(run.config.change_dir / "interview.md")]
     if key != "use-cases":
-        parts += [use_cases_text(run), _read(artifact_path(run, key).parent / layout.PLAN_FILE)]
+        parts += [
+            use_cases_text(run),
+            _read(artifact_path(run, key).parent / layout.PLAN_FILE),
+        ]
     return sha("\0".join(parts))
 
 
@@ -314,7 +333,10 @@ async def produce(run: Run, key: str, spec_dir: Path | None = None) -> None:
         text = await write_proposal(run)
     elif key == "use-cases":
         text = await sdk.text_call(
-            use_cases_prompt(run), config=run.config, step="spec_artifact", label="spec:use-cases"
+            use_cases_prompt(run),
+            config=run.config,
+            step="spec_artifact",
+            label="spec:use-cases",
         )
     else:
         text = await write_specs(run, spec_dir)

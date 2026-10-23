@@ -143,3 +143,101 @@ def test_the_change_yaml_starts_as_draft(repo, model, capsys):
         ]
         is None
     )
+
+
+# --- the feature branch at handoff, as on the samples page ---------------------------
+
+SAMPLE_NESTED = [
+    ".change.yaml",
+    "components.md",
+    "components/timeout-setting/.change.yaml",
+    "components/timeout-setting/plan.md",
+    "components/timeout-setting/specs.md",
+    "components/token-retry/.change.yaml",
+    "components/token-retry/plan.md",
+    "components/token-retry/specs.md",
+    "interview.md",
+    "prototype/NOTES.md",
+    "prototype/mockup.html",
+    "proposal.md",
+    "tickets.json",
+    "use-cases.md",
+]
+SAMPLE_SINGLE = [
+    ".change.yaml",
+    "interview.md",
+    "plan.md",
+    "proposal.md",
+    "prototype/NOTES.md",
+    "prototype/mockup.html",
+    "specs.md",
+    "tickets.json",
+    "use-cases.md",
+]
+
+
+def _sample_run(repo, model, components, tickets) -> tuple[list[str], list[str]]:
+    """The samples page's flow for auth-session (ENG-40): three review pushes
+    and the handoff push. Origin's files under the change dir, and its log."""
+    from conftest import origin, specs
+
+    model["components"] = {
+        "reason": "Each is a pull request on its own.",
+        "components": components,
+    }
+    model["spec:specs:token-retry"] = specs(("session-refresh",))
+    model["spec:specs:timeout-setting"] = specs(("session-length", "account-settings"))
+    new = [
+        "new",
+        "auth-session",
+        "--ticket-ref",
+        "ENG-40",
+        "--interview-summary",
+        "Keep people signed in.",
+    ]
+    for argv, code in [
+        (new, 3),
+        (["resume", "auth-session"], 3),
+        (["resume", "auth-session"], 3),
+    ]:
+        assert run(repo, *argv) == code, argv
+    assert run(repo, "resume", "auth-session", *tickets) == 0
+    branch = "ENG-40-auth-session"
+    files = git(
+        origin(repo),
+        "ls-tree",
+        "-r",
+        "--name-only",
+        branch,
+        "specs/changes/auth-session",
+    )
+    log = git(origin(repo), "log", "--format=%s", branch).splitlines()
+    prefix = "specs/changes/auth-session/"
+    return [f.removeprefix(prefix) for f in files.splitlines()], log
+
+
+def test_the_branch_at_handoff_holds_the_samples_tree_with_components(repo, model):
+    from conftest import component
+
+    files, log = _sample_run(
+        repo,
+        model,
+        [component("token-retry"), component("timeout-setting", deps=("token-retry",))],
+        ["--ticket", "token-retry=ENG-41", "--ticket", "timeout-setting=ENG-42"],
+    )
+    assert files == sorted(SAMPLE_NESTED)
+    assert log == [
+        "specs(auth-session): ready for build",
+        "specs(auth-session): prototype and tickets",
+        "specs(auth-session): components for review",
+        "specs(auth-session): proposal for review",
+        "initial",
+    ]
+
+
+def test_the_branch_at_handoff_holds_the_samples_tree_with_one_component(repo, model):
+    from conftest import component
+
+    files, log = _sample_run(repo, model, [component("auth-session")], [])
+    assert files == sorted(SAMPLE_SINGLE)
+    assert len(log) == 5 and log[0] == "specs(auth-session): ready for build"

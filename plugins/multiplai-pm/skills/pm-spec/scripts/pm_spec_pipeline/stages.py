@@ -66,7 +66,9 @@ def commit_and_push(run: Run, name: str) -> None:
     """Commit the change dir and push the feature branch when origin lacks a commit."""
     message = f"specs({run.config.change_name}): {MESSAGES[name]}"
     try:
-        sha = git_ops.commit_change_dir(run.config.project_dir, run.config.change_dir, message)
+        sha = git_ops.commit_change_dir(
+            run.config.project_dir, run.config.change_dir, message
+        )
     except git_ops.GitError as e:
         run.progress(name.upper() + "_ERROR", f"The commit failed: {e}")
         print(
@@ -123,14 +125,19 @@ def tickets_step(run: Run, refs: dict[str, str], later: bool) -> None:
     """Write `tickets.json`, then wait for the components' tickets (module docstring)."""
     if done(run, TICKETS):
         if refs:
-            print("Note: the tickets step is behind this change; --ticket is ignored.", flush=True)
+            print(
+                "Note: the tickets step is behind this change; --ticket is ignored.",
+                flush=True,
+            )
         return
     change_dir = run.config.change_dir
     path = change_dir / tickets.FILE
     if not path.is_file():
         tickets.write(change_dir, run.config.project_dir)
     if run.state.options.auto:
-        F.record_skipped(run, TICKETS, "", "--auto: the components' tickets stay pending")
+        F.record_skipped(
+            run, TICKETS, "", "--auto: the components' tickets stay pending"
+        )
         return
     step = run.state.steps.get(TICKETS)
     if step is None or step.outcome != "pending":
@@ -154,15 +161,20 @@ def tickets_step(run: Run, refs: dict[str, str], later: bool) -> None:
         # Nothing is written: the refs given are taken with the rest, or not at all.
         print(
             f"ERROR: {', '.join(missing)} have no ticket yet. Nothing was recorded. Pass "
-            "every component's ticket id:\n" + _flag_lines(run, tickets.pending(change_dir)),
+            "every component's ticket id:\n"
+            + _flag_lines(run, tickets.pending(change_dir)),
             flush=True,
         )
         raise Stop(EXIT_REFUSED, "tickets pending")
     if refs:
         tickets.apply_refs(change_dir, refs)
-        run.progress("TICKETS", "Recorded " + ", ".join(f"{c}={r}" for c, r in refs.items()))
+        run.progress(
+            "TICKETS", "Recorded " + ", ".join(f"{c}={r}" for c, r in refs.items())
+        )
     if missing:
-        F.record_skipped(run, TICKETS, "", "--tickets-later: " + ", ".join(missing) + " pending")
+        F.record_skipped(
+            run, TICKETS, "", "--tickets-later: " + ", ".join(missing) + " pending"
+        )
     else:
         F.record_passed(run, TICKETS, "", "Every component has its ticket")
 

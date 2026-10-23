@@ -21,6 +21,61 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-23
+
+### Changed
+- pm-spec now works in three stages and stops for review after the first two,
+  pushing the feature branch each time. Stage 1 writes the interview and the
+  proposal and stops with `SPEC:REVIEW:proposal` (exit 3). `resume` means
+  "approved": stage 2 writes the use cases and the components and stops with
+  `SPEC:REVIEW:components`. The next `resume` runs stage 3: the prototype,
+  `tickets.json`, then the specs, the consistency check and the handoff.
+  `--auto` runs all three with no stop.
+- An epic is no longer split into sibling changes with runs of their own. A
+  change holds its components: `components.md` (component, depends on,
+  ticket) and `components/<id>/` with a `plan.md`, a `.change.yaml` and a
+  `specs.md`, all written by one run. A change with one component has no
+  `components/` folder: its `plan.md` and `specs.md` sit in the change dir.
+  `SPEC:SPLIT` and `SPEC:CHILD` are gone.
+- The specs are one `specs.md` per component, with a `# Capability: <name>`
+  heading over each capability's ADDED/MODIFIED/REMOVED requirements,
+  instead of one `requirements/<capability>.md` per capability. The proposal
+  no longer lists capabilities; with a PRD, its `## Sources` lists the PRD
+  sections it draws on.
+- The prototype runs for every change unless `--no-prototype` (or
+  `prototype: {enabled: false}`) turns it off, after the components are
+  approved. It makes whatever helps people picture the change (screens,
+  endpoint signatures, sample output), with no behaviour. Files already in
+  `prototype/` are kept and no agent runs. It no longer rewrites the
+  proposal.
+- `tickets.json` now holds one task per component under the change's epic
+  (title, objective and `## Done means` from the component's plan), or, for
+  one component, the change's own ticket as a task to rewrite.
+- Every run pulls the feature branch first, so edits reviewers push between
+  stops are kept and read by the later stages. A file that exists is never
+  written again. A branch that cannot fast-forward is refused with the
+  `git pull --rebase` to run.
+- The ready record is written on each component's `.change.yaml` as well as
+  the change's.
+- `--plan-file` is read by the interview and kept in `interview.md`, no
+  longer saved as `plan.md`.
+
+### Added
+- The ticket wait: after the prototype, pm-spec pushes `tickets.json` and
+  stops with `SPEC:TICKETS:<path>` (exit 3). `resume --ticket
+  <component>=<REF>` (once per component) records each component's ticket in
+  its `.change.yaml`, `components.md` and `tickets.json`;
+  `resume --tickets-later` goes on with them pending. Any other resume is
+  refused (exit 2) with the flags it expects.
+- The skill tells Claude what to share at each review stop, and to show the
+  tickets and wait for a yes before creating them.
+- A `specs.md` that breaks the format (a capability name that is not
+  kebab-case or is used twice) is a critical consistency finding.
+
+### Migration
+- A change written in the old layout (`requirements/<capability>.md`) is
+  still read: `resume` adopts it, and `revise` fixes it in place.
+
 ## [0.8.0] - 2026-10-22
 
 ### Changed

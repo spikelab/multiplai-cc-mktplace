@@ -39,7 +39,9 @@ def test_prd_is_saved_and_the_proposal_cites_its_sections(repo, model, tmp_path)
     assert run(repo, "new", "throttle", "--auto", "--prd", str(prd)) == 0
     cdir = change_dir(repo)
     assert (cdir / "prd.md").read_text() == PRD
-    assert artifacts.prd_sources((cdir / "proposal.md").read_text()) == list(PRD_SECTIONS)
+    assert artifacts.prd_sources((cdir / "proposal.md").read_text()) == list(
+        PRD_SECTIONS
+    )
     # The PRD reaches the proposal prompt fenced as untrusted.
     prompt = model.prompts("spec:proposal")[0]
     assert (
@@ -70,7 +72,10 @@ def test_a_proposal_that_does_not_cite_the_prd_is_asked_for_once_more(
     assert run(repo, "new", "throttle", "--auto", "--prd", str(prd)) == 0
     retry = model.prompts("spec:proposal")[1]
     assert "rejected" in retry
-    assert "names the PRD section 'Not a heading', which is not a heading of the PRD" in retry
+    assert (
+        "names the PRD section 'Not a heading', which is not a heading of the PRD"
+        in retry
+    )
     assert (change_dir(repo) / "proposal.md").read_text() == good
 
 
@@ -112,7 +117,10 @@ def test_ticket_file_and_children_write_ticket_md_and_ticket_refs(
 ):
     model["components"] = {
         "reason": "two",
-        "components": [component("api", ticket_ref="T-1"), component("ui", ticket_ref="T-2")],
+        "components": [
+            component("api", ticket_ref="T-1"),
+            component("ui", ticket_ref="T-2"),
+        ],
     }
     ticket = _ticket(tmp_path)
     assert (
@@ -146,11 +154,17 @@ def test_ticket_file_and_children_write_ticket_md_and_ticket_refs(
     assert meta(cdir)["ticket_refs"] == {"epic": "EPIC-9", "children": ["T-1", "T-2"]}
     # The components prompt asks to follow the existing children first.
     assert "T-1, T-2" in model.exactly("components")[0]
-    assert "must be the `ticket_ref` of exactly one component" in model.exactly("components")[0]
+    assert (
+        "must be the `ticket_ref` of exactly one component"
+        in model.exactly("components")[0]
+    )
 
 
 def test_ticket_refs_without_a_ticket_file_are_still_recorded(repo, model):
-    model["components"] = {"reason": "one", "components": [component("throttle", ticket_ref="T-1")]}
+    model["components"] = {
+        "reason": "one",
+        "components": [component("throttle", ticket_ref="T-1")],
+    }
     assert (
         run(
             repo,

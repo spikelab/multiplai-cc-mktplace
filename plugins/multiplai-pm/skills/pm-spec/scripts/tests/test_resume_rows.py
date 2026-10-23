@@ -68,7 +68,9 @@ def baseline(tmp_path, monkeypatch, configure, commands) -> tuple[Path, FakeMode
     fake = FakeModel()
     configure(fake)
     monkeypatch.setattr(sdk, "run_agent", fake)
-    other = make_repo(tmp_path / f"baseline-{len(list(tmp_path.glob('baseline-*')))}" / "proj")
+    other = make_repo(
+        tmp_path / f"baseline-{len(list(tmp_path.glob('baseline-*')))}" / "proj"
+    )
     try:
         for argv, code in commands:
             assert run(other, *argv) == code, argv
@@ -95,7 +97,9 @@ def run_state(cdir: Path) -> dict:
     return data
 
 
-def same_as(repo: Path, other: Path, *, commits: bool = True, run_state_too: bool = True) -> None:
+def same_as(
+    repo: Path, other: Path, *, commits: bool = True, run_state_too: bool = True
+) -> None:
     """The change dir, origin's commits and refs, and the run state match *other*'s."""
     cdir, theirs = change_dir(repo), change_dir(other)
     assert snapshot(cdir) == snapshot(theirs)
@@ -137,7 +141,9 @@ def go(repo: Path, steps) -> None:
 # --- S1 ---------------------------------------------------------------------------
 
 
-def test_S1_the_review_stop_after_the_proposal(repo, model, tmp_path, monkeypatch, capsys):
+def test_S1_the_review_stop_after_the_proposal(
+    repo, model, tmp_path, monkeypatch, capsys
+):
     two(model)
     assert run(repo, *NEW) == 3
     out = capsys.readouterr().out
@@ -171,7 +177,9 @@ def test_S1_the_review_stop_after_the_proposal(repo, model, tmp_path, monkeypatc
 # --- S2 ---------------------------------------------------------------------------
 
 
-def test_S2_killed_after_the_proposal_before_the_commit(repo, model, tmp_path, monkeypatch, capsys):
+def test_S2_killed_after_the_proposal_before_the_commit(
+    repo, model, tmp_path, monkeypatch, capsys
+):
     two(model)
     real = git_ops.commit_change_dir
     kills = {"left": 1}
@@ -224,7 +232,9 @@ def test_S3_the_push_failed(repo, model, tmp_path, monkeypatch, capsys):
     assert run(repo, *RESUME) == 3
     assert "SPEC:REVIEW:proposal" in capsys.readouterr().out
     assert len(model.calls) == calls
-    assert git(wt, "rev-parse", "HEAD") == head == git(origin(repo), "rev-parse", BRANCH)
+    assert (
+        git(wt, "rev-parse", "HEAD") == head == git(origin(repo), "rev-parse", BRANCH)
+    )
 
     go(repo, FLOW[1:])
     other, _ = baseline(tmp_path, monkeypatch, two, FLOW)
@@ -234,7 +244,9 @@ def test_S3_the_push_failed(repo, model, tmp_path, monkeypatch, capsys):
 # --- S4 ---------------------------------------------------------------------------
 
 
-def test_S4_the_review_stop_after_the_components(repo, model, tmp_path, monkeypatch, capsys):
+def test_S4_the_review_stop_after_the_components(
+    repo, model, tmp_path, monkeypatch, capsys
+):
     two(model)
     go(repo, FLOW[:2])
     out = capsys.readouterr().out
@@ -267,7 +279,9 @@ def test_S4_the_review_stop_after_the_components(repo, model, tmp_path, monkeypa
 # --- S5 ---------------------------------------------------------------------------
 
 
-def test_S5_killed_part_way_through_the_component_plans(repo, model, tmp_path, monkeypatch, capsys):
+def test_S5_killed_part_way_through_the_component_plans(
+    repo, model, tmp_path, monkeypatch, capsys
+):
     two(model)
     real = epic.atomic_write
     kills = {"left": 1}
@@ -320,7 +334,10 @@ def test_S6_the_ticket_wait(repo, model, tmp_path, monkeypatch, capsys):
     before, calls = run_dir_files(cdir), len(model.calls)
     for argv in (RESUME, [*RESUME, "--ticket", "api=ENG-2"]):
         assert run(repo, *argv) == 2
-        assert "resume throttle --ticket api=<ID> --ticket ui=<ID>" in capsys.readouterr().out
+        assert (
+            "resume throttle --ticket api=<ID> --ticket ui=<ID>"
+            in capsys.readouterr().out
+        )
     assert run_dir_files(cdir) == before and len(model.calls) == calls
 
     # With them: the refs written, then the specs.
@@ -353,7 +370,10 @@ def test_S7_killed_during_the_specs(repo, model, tmp_path, monkeypatch, capsys):
     calls = len(model.calls)
     assert run(repo, *RESUME) == 0
     assert model.labels()[calls:] == ["spec:specs:ui", "consistency"]
-    assert ready_line(capsys.readouterr().out) == f"SPEC:READY:{cdir}:{layout.revision(cdir)}"
+    assert (
+        ready_line(capsys.readouterr().out)
+        == f"SPEC:READY:{cdir}:{layout.revision(cdir)}"
+    )
     other, _ = baseline(tmp_path, monkeypatch, two, FLOW)
     same_as(repo, other)
 
@@ -384,7 +404,10 @@ def test_S8_the_handoff_commit_failed(repo, model, tmp_path, monkeypatch, capsys
     calls = len(model.calls)
     assert run(repo, *RESUME) == 0
     assert len(model.calls) == calls
-    assert ready_line(capsys.readouterr().out) == f"SPEC:READY:{cdir}:{layout.revision(cdir)}"
+    assert (
+        ready_line(capsys.readouterr().out)
+        == f"SPEC:READY:{cdir}:{layout.revision(cdir)}"
+    )
     assert git(worktree(repo), "status", "--porcelain", "--", "specs") == ""
     other, _ = baseline(tmp_path, monkeypatch, two, AUTO)
     same_as(repo, other)
@@ -430,7 +453,9 @@ def test_S9_edits_between_a_stop_and_the_resume_are_kept(repo, model, tmp_path, 
 
     # An edit after the ready record makes it stale: checked again, ready again.
     old = layout.revision(cdir)
-    push_edit(repo, tmp_path / "dev", "components/ui/specs.md", specs(rule="EDITED rule"))
+    push_edit(
+        repo, tmp_path / "dev", "components/ui/specs.md", specs(rule="EDITED rule")
+    )
     capsys.readouterr()
     checks, written = len(model.exactly("consistency")), model.calls_to("spec:specs")
     assert run(repo, *RESUME) == 0
@@ -438,15 +463,22 @@ def test_S9_edits_between_a_stop_and_the_resume_are_kept(repo, model, tmp_path, 
     assert len(model.exactly("consistency")) == checks + 1
     assert model.calls_to("spec:specs") == written
     assert layout.revision(cdir) != old
-    assert ready_line(capsys.readouterr().out) == f"SPEC:READY:{cdir}:{layout.revision(cdir)}"
+    assert (
+        ready_line(capsys.readouterr().out)
+        == f"SPEC:READY:{cdir}:{layout.revision(cdir)}"
+    )
     assert is_ready(cdir / "components" / "ui") == (True, "")
-    assert git(worktree(repo), "rev-parse", "HEAD") == git(origin(repo), "rev-parse", BRANCH)
+    assert git(worktree(repo), "rev-parse", "HEAD") == git(
+        origin(repo), "rev-parse", BRANCH
+    )
 
 
 # --- S10 --------------------------------------------------------------------------
 
 
-def test_S10_a_diverged_branch_is_refused_and_nothing_changes(repo, model, tmp_path, capsys):
+def test_S10_a_diverged_branch_is_refused_and_nothing_changes(
+    repo, model, tmp_path, capsys
+):
     two(model)
     assert run(repo, *NEW) == 3
     wt, cdir = worktree(repo), change_dir(repo)
@@ -454,7 +486,9 @@ def test_S10_a_diverged_branch_is_refused_and_nothing_changes(repo, model, tmp_p
     git(wt, "add", "-A")
     git(wt, "commit", "-qm", "mine")
     mine = git(wt, "rev-parse", "HEAD")
-    push_edit(repo, tmp_path / "other", "proposal.md", "# Request throttling\n\nTheirs.\n")
+    push_edit(
+        repo, tmp_path / "other", "proposal.md", "# Request throttling\n\nTheirs.\n"
+    )
     capsys.readouterr()
     before, calls = run_dir_files(cdir), len(model.calls)
 
@@ -486,7 +520,9 @@ def test_S11_the_same_step_stopped_twice(repo, model, tmp_path, monkeypatch):
 # --- S12 --------------------------------------------------------------------------
 
 
-def test_S12_a_second_process_is_refused_with_the_holders_pid(repo, model, tmp_path, monkeypatch, capsys):
+def test_S12_a_second_process_is_refused_with_the_holders_pid(
+    repo, model, tmp_path, monkeypatch, capsys
+):
     two(model)
     model["spec:specs:ui"] = killer(specs())
     go(repo, FLOW[:3])

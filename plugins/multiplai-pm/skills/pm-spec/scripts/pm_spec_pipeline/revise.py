@@ -241,7 +241,9 @@ async def run_revise(run: Run, *, from_respec: bool = False) -> None:
         if not all(named)
         else sorted({u for us in named for u in us})
     )
-    files = await rewrite_units(run, run.state.step(NAME).repair_findings, units, label=NAME)
+    files = await rewrite_units(
+        run, run.state.step(NAME).repair_findings, units, label=NAME
+    )
     if problems := check_texts(run, files):
         blocking, _ = F.recheck_verdict(listed, [], [], deterministic=problems)
         F.block_on_findings(run, NAME, revision, BLOCK_REASON, blocking)

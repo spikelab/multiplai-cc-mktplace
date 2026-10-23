@@ -81,12 +81,17 @@ def split_inputs(run: Run) -> str:
         path = change_dir / name
         if path.is_file():
             parts.append(f"## {heading}\n{path.read_text()}")
-    return "\n\n".join(parts) or "## Input\n(no ticket, PRD, interview or proposal was given)"
+    return (
+        "\n\n".join(parts)
+        or "## Input\n(no ticket, PRD, interview or proposal was given)"
+    )
 
 
 def inputs_hash(run: Run) -> str:
     children = intake.ticket_refs(run.config.change_dir)["children"]
-    return sha(json.dumps({"inputs": split_inputs(run), "children": children}, sort_keys=True))
+    return sha(
+        json.dumps({"inputs": split_inputs(run), "children": children}, sort_keys=True)
+    )
 
 
 def _cycle(graph: dict[str, list[str]]) -> list[str] | None:
@@ -111,7 +116,9 @@ def _cycle(graph: dict[str, list[str]]) -> list[str] | None:
     return None
 
 
-def check_answer(answer: SplitAnswer, ticket_children: list[str], *, one: bool = False) -> list[str]:
+def check_answer(
+    answer: SplitAnswer, ticket_children: list[str], *, one: bool = False
+) -> list[str]:
     comps = answer.components
     if not comps:
         return ["the answer gave no component; give at least one, with its plan"]
@@ -121,7 +128,9 @@ def check_answer(answer: SplitAnswer, ticket_children: list[str], *, one: bool =
     seen: set[str] = set()
     for c in comps:
         if not ID_RE.match(c.id):
-            errors.append(f"component id {c.id!r} is not lowercase letters and digits joined by hyphens")
+            errors.append(
+                f"component id {c.id!r} is not lowercase letters and digits joined by hyphens"
+            )
         if c.id in seen:
             errors.append(f"component id {c.id!r} is used twice")
         seen.add(c.id)
@@ -137,11 +146,15 @@ def check_answer(answer: SplitAnswer, ticket_children: list[str], *, one: bool =
                 f"the ticket's child item {ref} has no component: give it one, with `ticket_ref` {ref!r}"
             )
         elif given.count(ref) > 1:
-            errors.append(f"the ticket's child item {ref} is given twice; it belongs to one component")
+            errors.append(
+                f"the ticket's child item {ref} is given twice; it belongs to one component"
+            )
     for c in comps:
         for dep in c.depends_on:
             if dep not in seen:
-                errors.append(f"component {c.id} depends on {dep!r}, which is not a component")
+                errors.append(
+                    f"component {c.id} depends on {dep!r}, which is not a component"
+                )
     if cycle := _cycle({c.id: [d for d in c.depends_on if d in seen] for c in comps}):
         errors.append("the dependencies have a cycle: " + " -> ".join(cycle))
     for c in comps:
@@ -180,7 +193,11 @@ async def ask_split(run: Run, ticket_children: list[str]) -> SplitAnswer:
             else "",
         )
         answer = await sdk.text_structured(
-            prompt, SplitAnswer, config=run.config, step="epic_split", label="components"
+            prompt,
+            SplitAnswer,
+            config=run.config,
+            step="epic_split",
+            label="components",
         )
         errors = check_answer(answer, ticket_children, one=one)
         if not errors:
@@ -189,7 +206,19 @@ async def ask_split(run: Run, ticket_children: list[str]) -> SplitAnswer:
     raise ValueError("The components answer was rejected twice: " + "; ".join(errors))
 
 
-_NUMBER_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"]
+_NUMBER_WORDS = [
+    "zero",
+    "one",
+    "two",
+    "three",
+    "four",
+    "five",
+    "six",
+    "seven",
+    "eight",
+    "nine",
+    "ten",
+]
 
 
 def components_table(rows: list[tuple[str, str, str]]) -> str:
@@ -220,7 +249,9 @@ def components_md(title: str, split: SplitRecord) -> str:
 
 def _proposal_title(run: Run) -> str:
     path = run.config.change_dir / "proposal.md"
-    m = re.search(r"^#\s+(.+?)\s*$", path.read_text() if path.is_file() else "", re.MULTILINE)
+    m = re.search(
+        r"^#\s+(.+?)\s*$", path.read_text() if path.is_file() else "", re.MULTILINE
+    )
     return m.group(1) if m else run.config.change_name
 
 
@@ -250,7 +281,9 @@ def write_files(run: Run, split: SplitRecord) -> None:
         if not (comp / "plan.md").is_file():
             atomic_write(comp / "plan.md", child.plan.rstrip() + "\n")
     if not (change_dir / COMPONENTS_FILE).is_file():
-        atomic_write(change_dir / COMPONENTS_FILE, components_md(_proposal_title(run), split))
+        atomic_write(
+            change_dir / COMPONENTS_FILE, components_md(_proposal_title(run), split)
+        )
     if "children" not in read_change_meta(change_dir):
         write_change_meta(change_dir, {"children": order})
 
@@ -271,7 +304,11 @@ async def run_components(run: Run) -> None:
         run.save()
         run.progress(
             "COMPONENTS",
-            ("One component: " if split.single else f"{len(split.children)} components: ")
+            (
+                "One component: "
+                if split.single
+                else f"{len(split.children)} components: "
+            )
             + split.reason,
         )
     write_files(run, split)
