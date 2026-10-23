@@ -18,7 +18,7 @@ HERE = Path(__file__).resolve().parent
 SCRIPTS = HERE.parent / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from render_report import render, strength_class  # type: ignore[import-not-found]
+from render_report import NEUTRAL, main, render, strength_class  # type: ignore[import-not-found]
 
 
 @pytest.fixture
@@ -29,8 +29,8 @@ def payload() -> dict:
 def test_strength_classes_distinct() -> None:
     assert strength_class("Strong") != strength_class("Worth exploring")
     assert strength_class("Speculative") != strength_class("Strong")
-    assert "emerald" in strength_class("Strong")
-    assert "amber" in strength_class("Worth exploring")
+    assert "--ok" in strength_class("Strong")
+    assert "--warn" in strength_class("Worth exploring")
 
 
 def test_renders_html_with_doctype(payload: dict) -> None:
@@ -88,3 +88,34 @@ def test_glossary_terms_passable_through(payload: dict) -> None:
     html = render(payload)
     for term in ("interface", "seam", "module"):
         assert term in html.lower()
+
+
+def test_default_style_is_the_neutral_design_system(payload: dict) -> None:
+    html = render(payload)
+    assert (NEUTRAL / "tokens.css").read_text(encoding="utf-8") in html
+    assert ':root[data-theme="dark"]' in html  # inlined unescaped
+
+
+def test_a_design_system_dir_is_inlined(payload: dict, tmp_path: Path) -> None:
+    (tmp_path / "tokens.css").write_text(":root { --accent: #123456; }")
+    (tmp_path / "fonts.css").write_text("@import url(https://fonts.example/acme.css);")
+    html = render(payload, design_dir=tmp_path)
+    assert "--accent: #123456;" in html
+    assert html.index("fonts.example") < html.index("--accent: #123456")
+
+
+def test_a_bad_design_system_dir_fails_before_writing(
+    payload: dict, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    src = tmp_path / "in.json"
+    src.write_text(json.dumps(payload))
+    out = tmp_path / "out.html"
+    bad = tmp_path / "acme"
+    bad.mkdir()
+    args = ["--in", str(src), "--out", str(out), "--design-system-dir", str(bad)]
+    assert main(args) == 1
+    assert "tokens.css is missing" in capsys.readouterr().err
+    (bad / "tokens.css").write_text("/* </style><script>x</script> */")
+    assert main(args) == 1
+    assert "contains </style" in capsys.readouterr().err
+    assert not out.exists()

@@ -1,4 +1,4 @@
-"""Assemble the walkthrough from gated sections. Markdown first; the HTML page and walkthrough.json hold the same text.
+"""Assemble the walkthrough from gated sections. Markdown first; the HTML page holds the same text.
 
 Code, not a model, turns `[[cN]]` into `path:line` links and `[[snippet:cN]]`
 into the cited lines read with `git show` at the commit. Each link carries its
@@ -12,21 +12,21 @@ code_facts' `write_paths_file`.
 from __future__ import annotations
 
 import html
-import json
 import os
 import re
-from datetime import UTC, date, datetime
+from datetime import date
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote as url_quote
 
 import code_facts
 from code_facts.paths import PathHop, PathsResult, TracedPath
 
+from . import design
 from .check import LINK
-from .gates import CITE_ID, file_at_commit, lines_at_commit, sections_gate
+from .gates import CITE_ID, lines_at_commit, sections_gate
 from .models import Citation, RepoInfo, WalkState, hop_id
 from .stages.write import citations_for_write, human_sections, required_titles
-from .target import git, github_web_base, tree_files
+from .target import git, github_web_base
 
 LANG = {
     ".py": "python",
@@ -1128,47 +1128,10 @@ def human_markdown(state: WalkState, lk: Linker, out_dir: Path) -> str:
     return "\n".join(md).rstrip() + "\n"
 
 
-# --- walkthrough.json, for the review-viewer ------------------------------------------------
+# --- sections -------------------------------------------------------------------------------
 
-# git's empty tree (`git hash-object -t tree /dev/null`). A walkthrough.json whose base is this
-# opens in the review-viewer as a tree target: every file under the module directory is "changed".
-EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 MERMAID = re.compile(r"```mermaid\n(.*?)```", re.DOTALL)
-# walkthrough.v1.schema.json: Diagram.source maxLength.
-DIAGRAM_MAX_CHARS = 20000
-# Sections that go in overview_md, not in a step: the commits table and the coverage table (agent mode),
-# and How this was made, which holds both (human mode).
-OVERVIEW_SECTIONS = ("Commits read", "Coverage", "How this was made")
-REFERENCE_TITLE = "Reference"
 FENCE = re.compile(r"^(`{3,}|~{3,})")
-
-
-def split_sections(md: str, level: int = 2) -> tuple[str, list[tuple[str, str]]]:
-    """(the text before the first H2, [(H2 title, text under it)]), in order; `level=3` splits on H3s.
-
-    A `## ` line inside a fenced code block (a snippet of a Markdown file) is not a heading.
-    """
-    mark = "#" * level + " "
-    intro: list[str] = []
-    sections: list[tuple[str, list[str]]] = []
-    fence = ""
-    for line in md.split("\n"):
-        m = FENCE.match(line)
-        if fence:
-            if (
-                m
-                and m.group(1)[0] == fence[0]
-                and len(m.group(1)) >= len(fence)
-                and not line[len(m.group(1)) :].strip()
-            ):
-                fence = ""
-        elif m:
-            fence = m.group(1)
-        elif line.startswith(mark):
-            sections.append((line[len(mark) :].strip(), []))
-            continue
-        (sections[-1][1] if sections else intro).append(line)
-    return "\n".join(intro), [(title, "\n".join(body)) for title, body in sections]
 
 
 def section_texts(md: str, title: str) -> list[str]:
@@ -1198,130 +1161,6 @@ def section_texts(md: str, title: str) -> list[str]:
         if level:
             body.append(line)
     return out
-
-
-def _step_id(title: str, used: set[str], n: int) -> str:
-    base = (
-        re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:36].strip("-")
-        or f"step-{n}"
-    )
-    sid, k = base, 2
-    while sid in used:
-        sid, k = f"{base}-{k}", k + 1
-    used.add(sid)
-    return sid
-
-
-def _line_count(text: str) -> int:
-    """Lines the way git and the viewer number them: split on `\\n`, a final newline ends the last line."""
-    lines = text.split("\n")
-    return len(lines) - (1 if lines and lines[-1] == "" else 0)
-
-
-def _anchors(
-    text: str, state: WalkState, in_tree: set[str], counts: dict[str, int | None]
-) -> list[dict]:
-    """The section's links into the module's own repo, under the module directory, as viewer anchors."""
-    t = state.target
-    out: list[dict] = []
-    seen: set[tuple[str, int, int]] = set()
-    for m in LINK.finditer(text):
-        key, _, rel = m.group(1).partition("/")
-        if key != t.repo_key or rel not in in_tree:
-            continue
-        if rel not in counts:
-            body = file_at_commit(state.repos, m.group(1))
-            counts[rel] = None if body is None else _line_count(body)
-        n = counts[rel]
-        start = int(m.group(2))
-        if n is None or start > n:
-            continue
-        end = min(int(m.group(3) or start), n)
-        if (rel, start, end) not in seen:
-            seen.add((rel, start, end))
-            out.append(
-                {"path": rel, "side": "head", "line_start": start, "line_end": end}
-            )
-    return out
-
-
-def _skip_reason(state: WalkState, rel: str) -> str:
-    t = state.target
-    if rel in t.skipped:
-        return f"not read: {t.skipped[rel]}"
-    if "migrations" in PurePosixPath(rel).parts[:-1]:
-        return (
-            "in a migrations directory: not read (the coverage table counts migrations)"
-        )
-    if rel in t.files:
-        return "read, but no step of this walkthrough cites it"
-    return (
-        "not read: not in the snapshot the agents read (secrets, binaries, vendored directories, "
-        "symlinks and files over 2 MB are left out)"
-    )
-
-
-def render_walkthrough_json(state: WalkState, md: str) -> dict:
-    """The walkthrough as a review-viewer `walkthrough.json` (v1) over the module's tree at its commit.
-
-    Each H2 section, and in human mode each H3 of Reference, becomes a step anchored on its links into
-    the module directory. Links into other repos stay in the text. The introduction, the commits and coverage tables, and any
-    section with no link into the module directory go in `overview_md`, because a v1 step needs
-    at least one anchor. Every file under the module directory that no step anchors is listed in
-    `skipped` with the reason, so the viewer counts the walkthrough as covering the whole tree.
-    """
-    t = state.target
-    in_tree = set(tree_files(t.repo_path, t.head_sha, t.subpath))
-    counts: dict[str, int | None] = {}
-    intro, sections = split_sections(md)
-    overview = [intro.strip()]
-    steps: list[dict] = []
-    used: set[str] = set()
-    # Reference's subsections are steps of their own: the viewer shows each beside its code.
-    parts: list[tuple[str, str]] = []
-    for title, text in sections:
-        if title == REFERENCE_TITLE:
-            lead, subs = split_sections(text, level=3)
-            if lead.strip():
-                overview.append(f"## {title}\n\n{lead.strip()}")
-            parts += subs
-        else:
-            parts.append((title, text))
-    for title, text in parts:
-        anchors = (
-            [] if title in OVERVIEW_SECTIONS else _anchors(text, state, in_tree, counts)
-        )
-        if not anchors:
-            overview.append(f"## {title}\n\n{text.strip()}")
-            continue
-        step = {
-            "id": _step_id(title, used, len(steps) + 1),
-            "title": title,
-            "anchors": anchors,
-        }
-        m = MERMAID.search(text)
-        if m and len(m.group(1)) <= DIAGRAM_MAX_CHARS:
-            step["diagram"] = {"kind": "mermaid", "source": m.group(1).rstrip("\n")}
-            # Only the gap the diagram leaves is closed: blank lines inside a snippet are code.
-            text = (
-                text[: m.start()].rstrip("\n") + "\n\n" + text[m.end() :].lstrip("\n")
-            )
-        step["body_md"] = text.strip()
-        steps.append(step)
-    anchored = {a["path"] for s in steps for a in s["anchors"]}
-    return {
-        "schema_version": 1,
-        "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
-        "base_sha": EMPTY_TREE,
-        "head_sha": t.head_sha,
-        "overview_md": "\n\n".join(p for p in overview if p) + "\n",
-        "steps": steps,
-        "skipped": [
-            {"path": f, "reason": _skip_reason(state, f)}
-            for f in sorted(in_tree - anchored)
-        ],
-        "complete": True,
-    }
 
 
 # --- HTML -------------------------------------------------------------------------------
@@ -1689,9 +1528,12 @@ def _html_subs(key: str, sec: MdSection) -> str:
     return "\n".join(out)
 
 
-def render_html(state: WalkState, out_dir: Path) -> str:
+def render_html(
+    state: WalkState, out_dir: Path, styles: tuple[str, str] | None = None
+) -> str:
     """The explainer as one scrolling page with a contents rail. The structured sections are drawn from
-    their gated answers; the others from the same Markdown the .md file holds."""
+    their gated answers; the others from the same Markdown the .md file holds. *styles* is `(fonts, tokens)`
+    CSS from `design.css`; None is the template's own tokens."""
     lk = Linker(state, out_dir)
     t = state.target
     sections = human_md_sections(state, lk, out_dir)
@@ -1726,9 +1568,13 @@ def render_html(state: WalkState, out_dir: Path) -> str:
         )
         + f'<p class="run">{_inline(run_line(state), CiteNumbers())}</p></header>'
     )
+    fonts, tokens = styles if styles is not None else design.css(None)
     page = TEMPLATE.read_text(encoding="utf-8")
     return (
-        page.replace("{{TITLE}}", html.escape(f"{t.package} walkthrough"))
+        # The design system's CSS first, so text it holds is never taken for a later placeholder's.
+        page.replace("{{FONTS}}", fonts)
+        .replace("{{TOKENS}}", tokens)
+        .replace("{{TITLE}}", html.escape(f"{t.package} walkthrough"))
         .replace("{{HEADER}}", hide_locations(header))
         .replace("{{NAV}}", "\n".join(nav))
         .replace("{{BODY}}", hide_locations("\n".join(body)))
@@ -1779,7 +1625,17 @@ def unreadable_commit(state: WalkState) -> str | None:
     return None
 
 
-def write_outputs(state: WalkState, out_dir: Path) -> list[Path]:
+def write_outputs(
+    state: WalkState, out_dir: Path, design_dir: str | Path | None = None
+) -> list[Path]:
+    """Write the run's files to *out_dir*. The page is styled with *design_dir*, else the run's saved
+    `--design-system-dir`, else the template's own tokens; a folder that fails its check raises
+    `design.DesignSystemError` before any file is written."""
+    styles = (
+        design.css(design_dir or state.options.get("design_system_dir"))
+        if state.options.get("mode") != "agent"
+        else None
+    )
     out_dir.mkdir(parents=True, exist_ok=True)
     name = state.target.name
     md = render_markdown(state, out_dir)
@@ -1796,18 +1652,8 @@ def write_outputs(state: WalkState, out_dir: Path) -> list[Path]:
     md_path.write_text(md, encoding="utf-8")
     paths = [md_path]
     if state.options.get("mode") != "agent":
-        if not state.target.change:
-            json_path = out_dir / f"{name}-walkthrough.json"
-            json_path.write_text(
-                json.dumps(
-                    render_walkthrough_json(state, md), indent=2, ensure_ascii=False
-                )
-                + "\n",
-                encoding="utf-8",
-            )
-            paths.append(json_path)
         html_path = out_dir / f"{name}-walkthrough.html"
-        html_path.write_text(render_html(state, out_dir), encoding="utf-8")
+        html_path.write_text(render_html(state, out_dir, styles), encoding="utf-8")
         paths.append(html_path)
         written = write_paths_output(state, md_path)
         if written is not None:

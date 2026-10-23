@@ -353,7 +353,7 @@ def test_main_with_subcommand_argv_lists_that_subcommand_only(tmp_path, argv):
 
 
 def test_dispatch_on_args_command_still_matches(tmp_path):
-    # Comparison dispatch: the entry stays on its add_parser line with no handler.
+    # Comparison dispatch: the entry sits on its add_parser line, and its e2e test still matches.
     main = src("""
         import argparse
 

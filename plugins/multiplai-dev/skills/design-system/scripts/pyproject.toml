@@ -1,0 +1,26 @@
+# The design-system skill's environment: the CLI is the shared library's
+# `python -m design_system`, so this member has no package of its own.
+[project]
+name = "design-system-scripts"
+version = "0.0.0"
+requires-python = ">=3.12"
+dependencies = ["design-system", "multiplai-core"]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-xdist>=3.8"]
+
+[dependency-groups]
+dev = ["pytest", "pytest-xdist>=3.8"]
+
+[tool.uv]
+package = false
+
+# Member-local sources so this directory also resolves standalone — an
+# installed plugin is a copy of the plugin subtree only (no workspace root
+# above it). In-repo, uv resolves through the workspace root and the single
+# uv.lock.
+[tool.uv.sources]
+multiplai-core = { git = "https://github.com/spikelab/multiplai-core", branch = "main" }
+# An editable path source, not `workspace = true`: lib/ sits inside the
+# installed plugin's copy, and uv rejects a member that is also a path source.
+design-system = { path = "../../../lib/design_system", editable = true }

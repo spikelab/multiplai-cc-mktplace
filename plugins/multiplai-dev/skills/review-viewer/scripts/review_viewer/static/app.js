@@ -52,17 +52,16 @@
     pollAgain: false,
     pollGen: 0,
     tab: "summary",
-    fileNote: null,
     ac: null,
     chatOpen: false,
     chatJustOpened: false,
     seen: new Set(),
     badgeOpen: null,
     tabChosen: false,
-    walk: null,
-    walkKey: "",
-    stepId: null,
-    walkFocus: null,
+    summary: null,
+    summaryKey: "",
+    fullWalk: null,
+    fullWalkKey: "",
     viewed: {},
     split: false,
     wrap: false,
@@ -203,77 +202,6 @@
     }
   }
 
-  /* Diagrams. mermaid renders to an SVG string; DOMPurify cleans it (SVG
-   * profile); the result is shown as an <img> with a data: URL. The CSP allows
-   * `data:` images and no inline styles, so the SVG is never put into the page
-   * itself. Any failure shows the diagram source instead. */
-  let mermaidReady = false;
-  let diagramSeq = 0;
-  const diagramCache = new Map();
-
-  function diagramFallback(node, source, why) {
-    node.replaceChildren(
-      el("p", { class: "muted", text: "Diagram not rendered (" + why + "); its source:" }),
-      el("pre", { class: "sketch diagram-fallback", text: source }));
-  }
-
-  function sizedSvg(clean) {
-    const doc = new DOMParser().parseFromString(clean, "image/svg+xml");
-    const svg = doc.documentElement;
-    if (!svg || svg.nodeName !== "svg") throw new Error("not an SVG");
-    const box = (svg.getAttribute("viewBox") || "").split(/[\s,]+/).map(Number);
-    if (box.length === 4 && box[2] > 0 && box[3] > 0) {
-      svg.setAttribute("width", String(Math.ceil(box[2])));
-      svg.setAttribute("height", String(Math.ceil(box[3])));
-    }
-    svg.removeAttribute("style");
-    if (!svg.getAttribute("xmlns")) svg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
-    return new XMLSerializer().serializeToString(svg);
-  }
-
-  async function diagramUrl(source) {
-    if (diagramCache.has(source)) return diagramCache.get(source);
-    // The mode theme.js resolved (the header's button, or the system setting).
-    const mode = document.documentElement.getAttribute("data-mode");
-    const dark = mode ? mode === "dark"
-      : window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
-    if (!mermaidReady) {
-      window.mermaid.initialize({
-        startOnLoad: false, securityLevel: "strict", theme: dark ? "dark" : "default",
-        htmlLabels: false, flowchart: { htmlLabels: false }, fontFamily: "sans-serif",
-      });
-      mermaidReady = true;
-    }
-    const id = "walk-diagram-" + (++diagramSeq);
-    try {
-      const out = await window.mermaid.render(id, source);
-      const clean = window.DOMPurify.sanitize(out.svg, { USE_PROFILES: { svg: true, svgFilters: true } });
-      const url = L.svgDataUrl(sizedSvg(clean));
-      diagramCache.set(source, url);
-      return url;
-    } finally {
-      // mermaid leaves its scratch element behind when a render fails.
-      for (const stray of [document.getElementById(id), document.getElementById("d" + id)]) {
-        if (stray) stray.remove();
-      }
-    }
-  }
-
-  async function renderDiagram(node, diagram) {
-    const source = diagram.source;
-    if (!window.mermaid || !window.DOMPurify) {
-      diagramFallback(node, source, "mermaid did not load");
-      return;
-    }
-    try {
-      const url = await diagramUrl(source);
-      const img = el("img", { class: "diagram", alt: "Diagram for this step", src: url });
-      node.replaceChildren(img);
-    } catch (err) {
-      diagramFallback(node, source, String((err && err.message) || err).split("\n")[0]);
-    }
-  }
-
   // --- loading ---------------------------------------------------------------
 
   async function boot() {
@@ -328,11 +256,10 @@
     state.openRows = new Map();
     state.selected = null;
     state.pick = null;
-    state.walk = null;
-    state.walkKey = "";
-    state.stepId = null;
-    state.walkFocus = null;
-    state.fileNote = null;
+    state.summary = null;
+    state.summaryKey = "";
+    state.fullWalk = null;
+    state.fullWalkKey = "";
     state.badgeOpen = null;
     state.blockPin = null;
     state.targetPathId = null;
@@ -344,19 +271,17 @@
     renderFindingList();
     renderFiles();
     renderTabs();
-    renderWalk();
     renderSummary();
     renderChecked();
     renderPaths();
     schedulePrRefresh();
-    state.walkSince = Date.now();
-    const walkGen = state.pollGen;
+    state.summarySince = Date.now();
+    const summaryGen = state.pollGen;
     setTimeout(() => {
-      if (walkGen !== state.pollGen || state.walk) return;
-      renderWalk();
+      if (summaryGen !== state.pollGen || state.summary) return;
       renderSummary();
-    }, WALK_WAIT_MS + 50);
-    await Promise.all([pollOnce(), pollWalk()]);
+    }, SUMMARY_WAIT_MS + 50);
+    await Promise.all([pollOnce(), pollSummary()]);
     const first = L.findingOrder(L.groupFindings(state.shown, state.detail.decisions, state.showHidden))[0];
     if (first) await selectFinding(first, { stay: true });
     else {
@@ -418,7 +343,7 @@
     updateFindingNav();
   }
 
-  const TABS = { summary: ["tab-summary", "summary"], walk: ["tab-walk", "walkthrough"], finding: ["tab-finding", "finding"],
+  const TABS = { summary: ["tab-summary", "summary"], finding: ["tab-finding", "finding"],
     needs: ["tab-needs", "needs"], checked: ["tab-checked", "checked"], paths: ["tab-paths", "paths"] };
 
   function renderTabs() {
@@ -440,10 +365,6 @@
       $(tab).classList.toggle("active", on);
       $(panel).hidden = !on;
     }
-    const n = state.walk ? state.walk.steps.length : 0;
-    $("walk-count").textContent = state.walk ? String(n) : "";
-    $("walk-count").classList.toggle("live", !state.walk || !state.walk.complete);
-    $("walk-count").title = !state.walk ? "Waiting for the session" : state.walk.complete ? "" : "Still being written";
     // The same number as "N of M findings still need a decision": M.
     const nf = state.detail ? L.undecidedCount(state.shown, state.detail.decisions).total : 0;
     $("finding-count").textContent = nf ? String(nf) : "";
@@ -451,23 +372,15 @@
 
   // --- waiting states ----------------------------------------------------------------
 
-  /* Grey bars where text will be, with a line saying what is being waited for. */
-  function skeleton(caption, widths) {
-    const box = el("div", { class: "skeleton", "aria-busy": "true" },
-      [el("div", { class: "skel-caption" }, [el("span", { class: "spinner" }), caption])]);
-    for (const w of widths || ["w90", "w75", "w90", "w60"]) box.appendChild(el("span", { class: "skel " + w }));
-    return box;
-  }
-
-  /* The page cannot see whether the session is writing a walkthrough. The
+  /* The page cannot see whether the session is writing a summary. The
    * session starts one within a minute or two of serving the page, so after
-   * WALK_WAIT_MS with nothing written, stop claiming it is on the way. */
-  const WALK_WAIT_MS = 3 * 60 * 1000;
-  const NO_WALK_TEXT = "Nothing has been written yet, so the session may not be writing a walkthrough. " +
+   * SUMMARY_WAIT_MS with nothing written, stop claiming it is on the way. */
+  const SUMMARY_WAIT_MS = 3 * 60 * 1000;
+  const NO_SUMMARY_TEXT = "Nothing has been written yet, so the session may not be writing a summary. " +
     "Ask for one in the chat below.";
 
-  function walkOverdue() {
-    return !state.walk && Date.now() - state.walkSince >= WALK_WAIT_MS;
+  function summaryOverdue() {
+    return !state.summary && Date.now() - state.summarySince >= SUMMARY_WAIT_MS;
   }
 
   function emptyState(icon, text) {
@@ -489,9 +402,9 @@
 
   const RISK_BADGE = { high: "concern", medium: "note", low: "good" };
 
-  /* The risk score, or null until the walkthrough has its risk block. */
+  /* The risk score, or null until the summary has its risk block. */
   function currentRisk() {
-    const r = L.riskInputs(state.detail.stats, state.walk, state.shown,
+    const r = L.riskInputs(state.detail.stats, state.summary, state.shown,
       state.detail.decisions, state.detail.findings.target.files_changed);
     return r ? Object.assign({ inputs: r }, L.riskLevel(r)) : null;
   }
@@ -527,7 +440,7 @@
     pill.className = "risk-pill " + (risk ? RISK_BADGE[risk.level] : "pending");
     pill.textContent = risk ? "Risk: " + riskWord(risk.level) : "Risk: not scored yet";
     pill.title = risk ? risk.reasons.join("; ") : "Scored once " + (state.who ? state.who.agent : "the session") +
-      " writes the walkthrough's risk block.";
+      " writes the summary's risk block.";
     pill.onclick = () => {
       state.badgeOpen = risk ? "risk" : null;
       setTab("summary");
@@ -594,7 +507,7 @@
     renderNeeds();
     const agent = state.who ? state.who.agent : "the session";
     const risk = renderRisk();
-    const badges = L.summaryBadges(state.detail.stats, state.walk);
+    const badges = L.summaryBadges(state.detail.stats, state.summary);
     if (risk) {
       badges.unshift({ key: "risk", label: "Risk: " + riskWord(risk.level) + " · " + risk.reasons[0],
         level: RISK_BADGE[risk.level], detail: riskDetail(risk), source: "risk" });
@@ -611,8 +524,12 @@
       if (!mine.length) {
         if (source === "risk") {
           row.appendChild(el("span", { class: "muted small", text: "Scored once " + agent +
-            " writes the walkthrough's risk block." }));
-        } else if (source === "assessed" && (!state.walk || !state.walk.complete) && !walkOverdue()) {
+            " writes the summary's risk block." }));
+        } else if (source === "assessed" && summaryOverdue()) {
+          row.appendChild(el("span", { class: "muted small", text: NO_SUMMARY_TEXT }));
+        } else if (source === "assessed" && (!state.summary || !state.summary.complete)) {
+          row.appendChild(el("div", { class: "skel-caption" }, [el("span", { class: "spinner" }),
+            state.summary ? "Still writing the summary" : "Waiting for the summary"]));
           for (let i = 0; i < 3; i++) row.appendChild(el("span", { class: "skel pill" }));
         } else {
           row.appendChild(el("span", { class: "muted small", text: source === "measured"
@@ -638,30 +555,7 @@
       if (open.source !== "measured") renderMarkdown(detail, open.detail);
       else detail.replaceChildren(el("p", { text: open.detail }));
     }
-    const overview = $("walk-overview");
-    if (!state.walk) {
-      overview.replaceChildren(el("div", { class: "label", text: "Overview" }), walkOverdue()
-        ? emptyState("✎", NO_WALK_TEXT)
-        : skeleton((state.who ? state.who.agent : "The session") + " is reading the diff and writing the overview"));
-    } else {
-      renderMarkdown(overview, state.walk.overview_md);
-      overview.insertBefore(el("div", { class: "label", text: "Overview" }), overview.firstChild);
-      const cov = L.walkCoverage(state.walk, state.detail.files, state.shown);
-      overview.appendChild(el("p", { class: "coverage", text: "The reviews cover " + cov.files + " of " + cov.filesTotal +
-        " changed files" + (cov.findingsTotal ? " and link " + cov.findings + " of " + cov.findingsTotal + " findings" : "") + "." }));
-      if (!state.walk.complete) {
-        overview.appendChild(el("div", { class: "skel-caption" }, [el("span", { class: "spinner" }),
-          "Still writing: " + state.walk.steps.length + " review" + (state.walk.steps.length === 1 ? "" : "s") + " so far"]));
-      }
-      if (state.walk.skipped.length) {
-        const ul = el("ul", { class: "skipped" });
-        for (const k of state.walk.skipped) {
-          ul.appendChild(el("li", {}, [el("span", { class: "mono", text: k.path }), " — " + k.reason]));
-        }
-        overview.appendChild(el("div", { class: "label", text: "Files no review explains, and why" }));
-        overview.appendChild(ul);
-      }
-    }
+    renderFullWalk();
     renderRun();
     const pr = state.detail.pr;
     const desc = $("pr-desc");
@@ -698,191 +592,97 @@
     box.replaceChildren(...children);
   }
 
-  // --- walkthrough -----------------------------------------------------------------
+  // --- summary and full walkthrough -------------------------------------------------
 
-  async function pollWalk() {
+  /* The summary and the full walkthrough's state, read on every poll; the
+   * Summary tab is drawn again only when either changed. */
+  async function pollSummary() {
     const gen = state.pollGen;
-    let walk = null;
+    let summary = null;
+    let fullWalk = null;
     try {
-      walk = await api(targetUrl("/walkthrough"));
+      summary = await api(targetUrl("/summary"));
     } catch (err) {
-      if (err.message !== "no walkthrough yet") return;
+      if (err.message !== "no summary yet") return;
+    }
+    try {
+      fullWalk = await api(targetUrl("/full-walkthrough"));
+    } catch (err) {
+      fullWalk = state.fullWalk;
     }
     if (gen !== state.pollGen) return;
-    const key = walk ? JSON.stringify(walk) : "";
-    if (key === state.walkKey) return;
-    state.walkKey = key;
-    state.walk = walk;
-    if (state.stepId && !L.stepOrder(walk).includes(state.stepId)) state.stepId = null;
-    renderTabs();
-    renderWalk();
+    const key = summary ? JSON.stringify(summary) : "";
+    const fullKey = fullWalk ? JSON.stringify(fullWalk) : "";
+    if (key === state.summaryKey && fullKey === state.fullWalkKey) return;
+    state.summaryKey = key;
+    state.summary = summary;
+    state.fullWalkKey = fullKey;
+    state.fullWalk = fullWalk;
     renderSummary();
-    if (!state.tabChosen && walk && state.tab === "walk" && !state.stepId && walk.steps.length) {
-      await selectStep(walk.steps[0].id, { open: !state.filePath || !state.shown.length });
-    }
   }
 
-  function currentStep() {
-    if (!state.walk || !state.stepId) return null;
-    return state.walk.steps.find((s) => s.id === state.stepId) || null;
-  }
-
-  function renderWalk() {
-    if (state.view) renderFileNav();
-    const list = $("walk-steps");
-    list.replaceChildren();
-    if (!state.walk) {
-      $("walk-step").replaceChildren(walkOverdue()
-        ? emptyState("✎", NO_WALK_TEXT)
-        : skeleton((state.who ? state.who.agent : "The session") + " is writing the reviews",
-          ["w75", "w60", "w75", "w40"]));
-      return;
-    }
-    state.walk.steps.forEach((s, i) => {
-      list.appendChild(el("li", {}, [el("button", {
-        class: "step-item" + (s.id === state.stepId ? " selected" : ""),
-        "data-step": s.id,
-        onclick: async () => {
-          await selectStep(s.id, { open: true });
-          $("walk-step").scrollIntoView({ block: "start", behavior: "smooth" });
-        },
-      }, [el("span", { class: "step-n", text: String(i + 1) }), el("span", { text: s.title })])]));
-    });
-    if (!state.walk.complete) {
-      list.appendChild(el("li", { class: "skel-caption" }, [el("span", { class: "spinner" }), "Writing more reviews…"]));
-    }
-    renderStep();
-  }
-
-  function renderStep() {
-    const box = $("walk-step");
-    box.replaceChildren();
-    const step = currentStep();
-    if (!step) {
-      if (state.fileNote) {
-        const reason = L.skippedReason(state.walk, state.fileNote);
-        box.appendChild(el("p", {}, [el("span", { class: "mono", text: state.fileNote }),
-          reason ? " is not explained: " + reason + "." : " is not explained by any review yet."]));
-      } else if (state.walk && state.walk.steps.length) {
-        box.appendChild(emptyState("☝", "Pick a review above, click a file, or press ] to start."));
-      }
-      return;
-    }
-    const others = state.fileNote ? L.stepsForFile(state.walk, state.fileNote).filter((x) => x.step.id !== step.id) : [];
-    const pos = L.stepPosition(state.walk, step.id);
-    box.appendChild(el("div", { class: "step-nav" }, [
-      el("button", { text: "◀ Previous", disabled: pos.index <= 1, onclick: () => moveStep(-1) }),
-      el("span", { class: "muted", text: "Step " + pos.index + " of " + pos.total }),
-      el("button", { text: "Next ▶", disabled: pos.index >= pos.total, onclick: () => moveStep(1) }),
-    ]));
-    box.appendChild(el("h2", { text: step.title }));
-    if (others.length) {
-      box.appendChild(el("p", { class: "muted small" }, ["Also about this file: ",
-        ...others.map((x, i) => el("button", { class: "cite-link", text: (i ? ", " : "") + x.step.title,
-          onclick: () => showStepAt(x.step.id, x.anchor) }))]));
-    }
-    const anchors = el("div", { class: "step-anchors" });
-    for (const a of step.anchors) {
-      anchors.appendChild(el("button", {
-        class: "cite-link walk-anchor", text: L.walkAnchorLabel(a),
-        onclick: () => openAnchor(a),
-      }));
-    }
-    box.appendChild(anchors);
-    const body = el("div", { class: "md" });
-    renderMarkdown(body, step.body_md);
-    box.appendChild(body);
-    if (step.diagram) {
-      const holder = el("div", { class: "diagram-box" }, [el("p", { class: "muted", text: "Rendering diagram…" })]);
-      box.appendChild(holder);
-      renderDiagram(holder, step.diagram);
-    }
-    const cards = step.finding_ids.map((id) => state.findingsById.get(id)).filter(Boolean);
-    if (cards.length) {
-      box.appendChild(el("div", { class: "label", text: "Findings in this step" }));
-      for (const f of cards) {
-        box.appendChild(el("div", { class: "step-finding" }, [
-          el("button", {
-            class: "finding-item finding-card " + f.severity, "data-id": f.id,
-            title: "Open on the Findings tab to decide",
-            onclick: () => { setTab("finding"); selectFinding(f.id); },
-          }, [
-            el("span", { class: "badge " + f.severity, text: f.severity }),
-            el("span", { class: "badge", text: f.status }),
-            el("span", { class: "claim", text: f.claim }),
-            el("span", { class: "where", text: f.file + ":" + f.line_start }),
-          ]),
-          el("div", { class: "step-finding-facts" }, findingFacts(f, L.findingParts(f, state.detail.checks, "step").parts)),
-        ]));
-      }
-    }
-  }
-
-  async function selectStep(id, opts) {
-    state.stepId = id;
-    state.fileNote = null;
-    if (state.tab !== "walk") {
-      state.tab = "walk";
-      renderTabs();
-    }
-    clearPick();
-    renderWalk();
-    const step = currentStep();
-    if (step && (!opts || opts.open !== false)) await openAnchor(step.anchors[0]);
-    else if (state.view) renderCode();
-    renderFiles();
-    renderThread();
-  }
-
-  /* Show a step with one of its anchors (not necessarily the first). */
-  async function showStepAt(id, anchor) {
-    const note = state.fileNote;
-    await selectStep(id, { open: false });
-    state.fileNote = note;
-    renderWalk();
-    await openAnchor(anchor);
-    renderFiles();
-  }
-
-  /* A file was picked in the sidebar (or scrolled to): show the review that
-   * explains it, or say that none does. */
-  async function showFileReview(path) {
-    const hits = L.stepsForFile(state.walk, path);
-    state.fileNote = path;
-    if (state.tab !== "walk") {
-      state.tab = "walk";
-      state.tabChosen = true;
-      renderTabs();
-    }
-    if (hits.length) {
-      if (state.stepId !== hits[0].step.id) await showStepAt(hits[0].step.id, hits[0].anchor);
-      else { renderWalk(); await openAnchor(hits[0].anchor); }
+  /* The Full walkthrough box on the Summary tab: a link to the page, a
+   * button that opens the dialog, a spinner while the session writes it, or
+   * why it cannot be written. */
+  function renderFullWalk() {
+    const box = $("full-walkthrough");
+    const view = L.fullWalkthroughView(state.fullWalk);
+    box.hidden = view.show === "none";
+    if (box.hidden) { box.replaceChildren(); return; }
+    const children = [sectionLabel("Full walkthrough", "full-walkthrough")];
+    if (view.show === "link") {
+      children.push(el("p", {}, [el("a", { href: view.url, target: "_blank", rel: "noopener noreferrer",
+        class: "ctl primary full-walk-link", text: view.text }), el("span", { class: "muted small", text: " " + view.of })]));
+    } else if (view.show === "button") {
+      children.push(el("p", {}, [el("button", { type: "button", class: "ctl", text: view.text,
+        "aria-haspopup": "dialog", "aria-controls": "full-walk-dlg", onclick: openFullWalk }),
+      el("span", { class: "muted small", text: " " + view.of })]));
+    } else if (view.show === "waiting") {
+      children.push(el("div", { class: "skel-caption" }, [el("span", { class: "spinner" }), view.text]));
     } else {
-      state.stepId = null;
-      state.walkFocus = null;
-      renderWalk();
-      if (state.view) renderCode();
-      renderFiles();
+      children.push(el("p", { class: "muted small", text: view.text }));
     }
-    renderThread();
+    box.replaceChildren(...children);
   }
 
-  function moveStep(delta) {
-    const next = L.moveStep(state.walk, state.stepId, delta);
-    if (next) selectStep(next, { open: true });
-  }
-
-  async function openAnchor(anchor) {
-    state.walkFocus = anchor;
-    if (state.tab !== "walk") {
-      state.tab = "walk";
-      renderTabs();
-    }
-    await openFile(anchor.path);
-    if (state.view && state.view.path === anchor.path) {
-      renderCode();
-      flashRows(L.anchorRows(state.view.rows, anchor));
-    }
+  /* The dialog says what Confirm makes the session do. Confirm writes a
+   * `full_walkthrough` question; the server fixes its text. */
+  function openFullWalk() {
+    const status = state.fullWalk;
+    if (!status || status.state !== "absent") return;
+    const dlg = $("full-walk-dlg");
+    const agent = state.who ? state.who.agent : "the session";
+    const confirm = el("button", { class: "ctl primary", type: "button", text: "Confirm" });
+    confirm.addEventListener("click", async () => {
+      confirm.disabled = true;
+      const text = "Write the full walkthrough of " + status.what + " at " + status.commit.slice(0, 12);
+      try {
+        const res = await api("/api/ask", { target: state.slug, text: text, full_walkthrough: true });
+        state.questions.push({ id: res.id, ts: new Date().toISOString(), kind: "question", text: text,
+          full_walkthrough: true });
+        dlg.close();
+        state.chatJustOpened = true;
+        setChatOpen(true);
+        renderThread();
+        schedulePoll(0);
+        await pollSummary();
+      } catch (err) {
+        showToast("Could not ask: " + err.message);
+        confirm.disabled = false;
+      }
+    });
+    dlg.replaceChildren(
+      el("div", { class: "help-head" }, [
+        el("h2", { id: "full-walk-title", text: "Write the full walkthrough" }),
+        el("button", { class: "ctl", type: "button", "aria-label": "Cancel", text: "Esc", onclick: () => dlg.close() }),
+      ]),
+      el("div", { class: "share-body" }, L.fullWalkthroughNotes(status, agent).map((x) => el("p", { text: x })).concat([
+        el("div", { class: "share-foot" }, [
+          el("button", { class: "ctl", type: "button", text: "Cancel", onclick: () => dlg.close() }), confirm]),
+      ])));
+    if ($("palette").open) $("palette").close();
+    dlg.showModal();
+    confirm.focus();
   }
 
   // --- findings list (top of the Findings tab) -----------------------------------
@@ -1088,7 +888,6 @@
     list.replaceChildren();
     const groups = L.sidebarGroups(state.detail.files, state.showAllFiles ? state.detail.repo_files || [] : null,
       state.fileFilter);
-    const inStep = state.tab === "walk" ? L.stepFiles(currentStep()) : new Set();
     for (const group of groups) {
       const open = !state.showAllFiles || L.dirOpen(group, state.dirToggled, state.fileFilter, state.filePath);
       if (state.showAllFiles) {
@@ -1118,14 +917,13 @@
         box.checked = viewed;
         box.addEventListener("change", () => setViewed(f.path, box.checked));
         list.appendChild(el("li", {
-          class: "file-row" + (f.path === state.filePath ? " selected" : "") + (inStep.has(f.path) ? " in-step" : "") +
-            (viewed ? " viewed" : ""),
+          class: "file-row" + (f.path === state.filePath ? " selected" : "") + (viewed ? " viewed" : ""),
         }, [
           statusMark(info),
           el("button", {
             class: "file-btn", title: f.path + (info ? " (" + (STATUS_WORD[info.status] || info.status) + ")" : ""),
             text: f.name,
-            onclick: async () => { clearPick(); await openFile(f.path); await showFileReview(f.path); },
+            onclick: async () => { clearPick(); await openFile(f.path); },
           }),
           countsNode(info),
           box,
@@ -1469,9 +1267,7 @@
   /* The blocks under a finding's claim, in the order L.findingParts gives:
    * the failure scenario, the expected behaviour, the verdict, the findings
    * merged into it, the cited code, what it needs and the verifier's
-   * citations, each only when it applies.
-   * Shown on the Findings tab and under each walkthrough step that links the
-   * finding. */
+   * citations, each only when it applies. */
   function findingFacts(f, parts) {
     const out = [];
     for (const part of parts) {
@@ -1567,13 +1363,6 @@
       box.appendChild(el("button", { type: "button", class: "check-link", onclick: () => showAgent(vi) },
         [el("span", { text: "The verifier's entry on the Checked tab: what it read and cited" }),
           el("span", { "aria-hidden": "true", text: " →" })]));
-    }
-    const steps = L.stepsForFinding(state.walk, f.id);
-    if (steps.length) {
-      box.appendChild(el("div", { class: "label", text: "Explained in the walkthrough" }));
-      for (const s of steps) {
-        box.appendChild(el("button", { class: "cite-link", text: s.title, onclick: () => selectStep(s.id, { open: true }) }));
-      }
     }
     const onPaths = L.findingPathsSection(f, state.detail.paths);
     if (onPaths) {
@@ -1729,10 +1518,6 @@
 
   // --- threads ---------------------------------------------------------------
 
-  function askingAboutStep() {
-    return state.tab === "walk" && !!currentStep();
-  }
-
   /* What a chat message was about, for its label. */
   function chatContext(q) {
     if (q.kind === "share") {
@@ -1741,11 +1526,8 @@
       if (q.to === "slack") return "Send on Slack to " + q.where + ": " + what;
       return q.where === "line" ? "Comment on GitHub at " + what : "Comment on GitHub PR: " + what;
     }
+    if (q.full_walkthrough) return "Full walkthrough";
     if (q.anchor) return L.walkAnchorLabel(q.anchor);
-    if (q.step_id) {
-      const st = state.walk && state.walk.steps.find((x) => x.id === q.step_id);
-      return "Review: " + (st ? st.title : q.step_id);
-    }
     if (q.finding_id) {
       const f = state.findingsById.get(q.finding_id);
       return "Finding: " + (f ? f.claim : q.finding_id);
@@ -1874,14 +1656,13 @@
     const text = box.value.trim();
     if (!text) return;
     const anchor = L.refAnchor(L.parseRefs(text, state.detail.files));
-    const stepId = anchor ? null : (askingAboutStep() ? state.stepId : null);
-    const body = { target: state.slug, text: text, finding_id: anchor || stepId || state.tab !== "finding" ? null : state.selected,
-      anchor: anchor, step_id: stepId };
+    const body = { target: state.slug, text: text, finding_id: anchor || state.tab !== "finding" ? null : state.selected,
+      anchor: anchor };
     $("send").disabled = true;
     try {
       const res = await api("/api/ask", body);
       state.questions.push({ id: res.id, ts: new Date().toISOString(), kind: "question", text: text,
-        finding_id: body.finding_id, anchor: anchor, step_id: stepId });
+        finding_id: body.finding_id, anchor: anchor });
       state.chatJustOpened = true;
       box.value = "";
       closeAc();
@@ -1936,13 +1717,13 @@
 
   function schedulePoll(delay) {
     clearTimeout(state.pollTimer);
-    // An unfinished walkthrough counts as pending: its steps arrive while the
-    // session writes them.
+    // An unfinished summary counts as pending: its assessments arrive while
+    // the session writes them.
     const pending = state.questions.filter((q) => L.isPending(q.id, state.replies)).length +
-      (state.walk && state.walk.complete ? 0 : 1);
+      (state.summary && state.summary.complete ? 0 : 1);
     const wait = delay != null ? delay : L.pollDelay(pending);
     state.pollTimer = setTimeout(async () => {
-      try { await Promise.all([pollOnce(), pollWalk()]); } catch (err) { /* banner already shown */ }
+      try { await Promise.all([pollOnce(), pollSummary()]); } catch (err) { /* banner already shown */ }
       schedulePoll();
     }, wait);
   }
@@ -2047,11 +1828,9 @@
       if (!dots.has(f.line_start)) dots.set(f.line_start, []);
       dots.get(f.line_start).push(f);
     }
-    const wf = state.tab === "walk" && state.walkFocus && state.walkFocus.path === view.path ? state.walkFocus : null;
-    const walkRows = new Set(wf ? L.anchorRows(view.rows, wf) : []);
     // Rows that must never be folded away: cited lines, the selected finding,
-    // finding dots, the lines picked for a question, the walkthrough anchor.
-    const keep = new Set(walkRows);
+    // finding dots, the lines picked for a question.
+    const keep = new Set();
     for (const [a, b] of cited) for (const i of L.citationRows(view.rows, a, b)) keep.add(i);
     if (selected && selected.file === view.path) {
       for (const i of L.citationRows(view.rows, selected.line_start, selected.line_end)) keep.add(i);
@@ -2078,7 +1857,6 @@
           r.n >= selected.line_start && r.n <= selected.line_end) out.push("focus");
       if (state.pick && state.pick.path === view.path && r.n != null &&
           r.n >= state.pick.start && r.n <= state.pick.end) out.push("picked");
-      if (walkRows.has(ri)) out.push("walk-focus");
       return out;
     };
     const dotCell = (r) => {
@@ -2331,38 +2109,30 @@
 
   // --- moving between files --------------------------------------------------
 
-  function navContext() {
-    return L.navFiles(state.tab === "walk" ? currentStep() : null, state.detail.files,
-      state.fileFilter, state.filePath);
+  /* Prev / Next go through every changed file as the sidebar lists them. */
+  function navOrder() {
+    return L.fileOrder(state.detail.files, state.fileFilter);
   }
 
   /* Prev / Next beside the file name. */
   function renderFileNav() {
-    const nav = navContext();
-    const i = nav.order.indexOf(state.filePath);
-    const where = nav.inStep ? " file in this review" : " file";
+    const order = navOrder();
+    const i = order.indexOf(state.filePath);
     for (const [id, d] of [["file-prev", -1], ["file-next", 1]]) {
-      const path = i < 0 ? null : nav.order[i + d];
+      const path = i < 0 ? null : order[i + d];
       const btn = $(id);
       btn.disabled = !path;
-      btn.title = path ? (d < 0 ? "Previous" : "Next") + where + ": " + path
-        : "No " + (d < 0 ? "previous" : "next") + where;
+      btn.title = path ? (d < 0 ? "Previous" : "Next") + " file: " + path
+        : "No " + (d < 0 ? "previous" : "next") + " file";
     }
-    $("file-pos").textContent = i < 0 ? "" : (i + 1) + " of " + nav.order.length + (nav.inStep ? " in this review" : "");
+    $("file-pos").textContent = i < 0 ? "" : (i + 1) + " of " + order.length;
   }
 
   async function goFile(delta) {
-    const nav = navContext();
-    const path = L.neighbourFile(nav.order, state.filePath, delta);
+    const path = L.neighbourFile(navOrder(), state.filePath, delta);
     if (!path) return;
     clearPickState();
-    if (nav.inStep) {
-      // Stay on the same review step: open the file at its first anchor there.
-      await openAnchor(currentStep().anchors.find((a) => a.path === path));
-      return;
-    }
     await openFile(path);
-    if (state.tab === "walk") await showFileReview(path);
     $("code").scrollTop = 0;
   }
 
@@ -2607,17 +2377,14 @@
   // --- the question box (footer) ---------------------------------------------
 
   /* What the next message is filed under, the same way send() decides:
-   * @lines typed in it, else the open review step, else the open finding,
-   * else the whole change. */
+   * @lines typed in it, else the open finding, else the whole change. */
   function renderAskAbout() {
     const box = $("ask-about");
     if (!box || !state.detail) return;
     const anchor = L.refAnchor(L.parseRefs($("question").value, state.detail.files));
     const f = state.selected && state.findingsById.get(state.selected);
-    const step = askingAboutStep() ? currentStep() : null;
     const what = anchor ? L.walkAnchorLabel(anchor)
-      : step ? step.title
-        : state.tab === "finding" && f ? f.claim : "the whole change";
+      : state.tab === "finding" && f ? f.claim : "the whole change";
     box.replaceChildren(el("span", { class: "muted", text: "Context: " }), what);
     box.title = "Context: " + what + ". Type @ to point at a file and lines instead.";
   }
@@ -2724,9 +2491,6 @@
       const cut = path.lastIndexOf("/");
       out.push({ kind: "file", label: path.slice(cut + 1), sub: cut > 0 ? path.slice(0, cut) : "", path: path });
     }
-    ((state.walk && state.walk.steps) || []).forEach((st, i) => {
-      out.push({ kind: "review", label: st.title, sub: "review " + (i + 1), step: st.id });
-    });
     for (const f of state.shown) {
       if (!state.showHidden && L.isHiddenInCode(f)) continue;
       out.push({ kind: f.severity, label: f.claim, sub: f.file + ":" + f.line_start, finding: f.id });
@@ -2747,7 +2511,7 @@
         onmousedown: (ev) => { ev.preventDefault(); pickPalette(i); },
         onmousemove: () => { if (pal.index !== i) { pal.index = i; markPalette(); } },
       }, [
-        el("span", { class: "kind " + it.kind, text: it.kind === "file" ? "file" : it.kind === "review" ? "review" : it.kind.toLowerCase() }),
+        el("span", { class: "kind " + it.kind, text: it.kind === "file" ? "file" : it.kind.toLowerCase() }),
         el("span", { class: "label", text: it.label }),
         it.sub ? el("span", { class: "sub", text: it.sub }) : null,
       ]));
@@ -2782,8 +2546,7 @@
     const it = state.palette.items[i];
     $("palette").close();
     if (!it) return;
-    if (it.path) { clearPick(); await openFile(it.path); if (state.changed.has(it.path)) await showFileReview(it.path); }
-    else if (it.step) { state.tabChosen = true; await selectStep(it.step, { open: true }); }
+    if (it.path) { clearPick(); await openFile(it.path); }
     else if (it.finding) { setTab("finding"); await selectFinding(it.finding); }
   }
 
@@ -2903,7 +2666,6 @@
     $("ask-lines-close").addEventListener("click", clearPick);
     $("tab-finding").addEventListener("click", () => setTab("finding"));
     $("tab-summary").addEventListener("click", () => setTab("summary"));
-    $("tab-walk").addEventListener("click", () => setTab("walk"));
     $("tab-checked").addEventListener("click", () => setTab("checked"));
     $("tab-paths").addEventListener("click", () => setTab("paths"));
     $("tab-needs").addEventListener("click", () => setTab("needs"));
@@ -2973,9 +2735,6 @@
       if (typing || ev.metaKey || ev.ctrlKey || ev.altKey) return;
       if (ev.key === "j" || ev.key === "k") {
         stepFindingBy(ev.key === "j" ? 1 : -1);
-      } else if (ev.key === "]" || ev.key === "[") {
-        state.tabChosen = true;
-        moveStep(ev.key === "]" ? 1 : -1);
       } else if (ev.key === "/") {
         ev.preventDefault();
         $("file-search").focus();

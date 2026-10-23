@@ -9,10 +9,19 @@ value bound from `add_subparsers(...)`, named by its parents' names and its own,
 space-joined. Parser values are followed through each scope's local names and
 into the parameters of same-module functions they are passed to by name; an
 `add_parser` on a receiver that cannot be followed is diagnosed as
-`unresolved_target`. A handler resolves only through `set_defaults(func=<name>)`,
-or through a dict literal that maps the subcommand's literal name to a function,
-in the parser's module or in a same-repository module it imports. Dispatch on
-`args.command == "x"` is never resolved: the entry stays at its `add_parser` line.
+`unresolved_target`. A handler resolves through `set_defaults(func=<name>)`,
+else through a dict literal that maps the subcommand's literal name to a function,
+in the parser's module or in a same-repository module it imports, else through a
+comparison on the `dest=` of the `add_subparsers` it was added to: an
+`if <x>.<dest> == "<name>":` (either way round, `elif` included) or a
+`match <x>.<dest>:` `case "<name>":` in the parser's module, a same-repository
+module importing it or one it imports. Such a branch resolves to the function its
+top-level `return` (or `sys.exit`, `exit`, `raise SystemExit`) calls, looking
+through `asyncio.run`, else to the one function called inside `asyncio.run(...)`
+at its top level. A function that itself compares the same `dest` is a dispatcher,
+not a handler, and is skipped; the first branch giving a handler wins, and its
+`if`/`elif`/`case` line starts the known edge. A branch of inline code resolves
+nothing: the entry stays at its `add_parser` line.
 
 click and typer. In a module importing either, a `click_command` entry per
 `@click.command`/`@click.group` or `@<group>.command`/`@<group>.group` on a
@@ -78,7 +87,7 @@ import posixpath
 import re
 import tomllib
 from collections.abc import Iterable, Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
@@ -330,6 +339,8 @@ class _Subcommand:
     names: tuple[str, ...]
     line: int
     func: tuple[ast.expr, int] | None = None
+    # The `dest=` of the `add_subparsers` it was added to, when a string literal.
+    dest: str | None = None
 
     @property
     def name(self) -> str:
@@ -345,9 +356,10 @@ class _Parser:
 
 @dataclass(frozen=True)
 class _Subparsers:
-    """The value `add_subparsers()` returns on a parser; `parent` as for `_Parser`."""
+    """The value `add_subparsers()` returns on a parser; `parent` as for `_Parser`, `dest` its string `dest=`."""
 
     parent: _Subcommand | None
+    dest: str | None = None
 
 
 _Value = _Parser | _Subparsers
@@ -448,8 +460,12 @@ class _ParserScan:
     ) -> _Value | None:
         method = callee.attr
         if method == "add_subparsers":
+            dest = next((k.value for k in call.keywords if k.arg == "dest"), None)
             return _Subparsers(
-                receiver.command if isinstance(receiver, _Parser) else None
+                receiver.command if isinstance(receiver, _Parser) else None,
+                dest.value
+                if isinstance(dest, ast.Constant) and isinstance(dest.value, str)
+                else None,
             )
         if method == "add_parser" and isinstance(receiver, _Subparsers):
             return self._add_parser(call, receiver)
@@ -484,7 +500,9 @@ class _ParserScan:
         prefix = subparsers.parent.names if subparsers.parent else ()
         key = ((*prefix, name.value), call.lineno)
         # A helper scanned once per parent it is given may reach one parent's subcommand twice.
-        command = self._commands.setdefault(key, _Subcommand(*key))
+        command = self._commands.setdefault(
+            key, _Subcommand(*key, dest=subparsers.dest)
+        )
         return _Parser(command)
 
     def _untraced_add_parser(self, call: ast.Call, receiver: ast.expr) -> None:
@@ -632,10 +650,18 @@ def _resolve_handler(
     command: _Subcommand,
     siblings: frozenset[str],
 ) -> _Resolution:
-    """Resolve through `set_defaults(func=...)` when the subparser calls it, else through a dispatch dict."""
+    """Resolve through `set_defaults(func=...)` when the subparser calls it, else through a dispatch dict, else
+    through a comparison on the subparsers' `dest`; a problem is reported only when none resolves.
+    """
     if command.func is not None:
         return _set_defaults_handler(index, dispatch, path, command.func)
-    return _dispatch_dict_handler(index, dispatch, path, command, siblings)
+    by_dict = _dispatch_dict_handler(index, dispatch, path, command, siblings)
+    if by_dict[0] is not None:
+        return by_dict
+    compared = _comparison_handler(index, dispatch, path, command)
+    if compared[0] is not None or by_dict[2] is None:
+        return compared
+    return by_dict
 
 
 def _set_defaults_handler(
@@ -673,7 +699,8 @@ def _dispatch_dict_handler(
     When some candidate dict is called as `<DICT>[...](...)`, only such dicts count. Of those left, the dict
     whose keys best match the names of the subcommand's siblings wins, so a nested `db migrate` and a
     top-level `migrate` find their own dicts; then search order. The edge starts at the dict's dispatch call,
-    or at the item's line when there is none. Comparisons such as `args.command == "x"` never resolve.
+    or at the item's line when there is none. Comparisons such as `args.command == "x"` are
+    `_comparison_handler`'s.
     """
     leaf = command.names[-1]
     candidates = [
@@ -701,6 +728,41 @@ def _dispatch_dict_handler(
                 item.value_line,
                 item.value,
             )
+    return None, None, unresolved
+
+
+def _comparison_handler(
+    index: PyIndex, dispatch: _DispatchIndex, path: str, command: _Subcommand
+) -> _Resolution:
+    """The function a branch comparing the subparsers' `dest` with the subcommand's name runs.
+
+    Branches are searched in `dispatch.call_modules(path)` order, then source
+    order. A branch offers the call of its top-level `return`/exit, else its
+    one `asyncio.run(...)` call; a dispatcher (a function comparing the same
+    `dest`) is skipped. The edge starts at the branch's `if`/`elif`/`case` line.
+    """
+    if command.dest is None:
+        return None, None, None
+    leaf = command.names[-1]
+    unresolved = None
+    for module in dispatch.call_modules(path):
+        for branch in dispatch.facts(module).branches:
+            if branch.attr != command.dest or leaf not in branch.names:
+                continue
+            for reference, line in branch.candidates():
+                handler = _function(index, index.resolve_name(module, line, reference))
+                if handler is None:
+                    if unresolved is None:
+                        unresolved = _external_problem(
+                            index,
+                            f"dispatch branch at {module}:{branch.line}",
+                            module,
+                            line,
+                            reference,
+                        )
+                    continue
+                if not dispatch.is_dispatcher(handler, command.dest):
+                    return handler, _edge(module, branch.line, handler), None
     return None, None, unresolved
 
 
@@ -747,14 +809,40 @@ class _DictLiteral:
 
 
 @dataclass(frozen=True)
+class _Branch:
+    """An `if <x>.<attr> == "<name>":` or a `match <x>.<attr>:` case of string names.
+
+    `returned` is the call its top-level `return`/exit makes, past the
+    transparent wrappers; `awaited` the distinct calls inside `asyncio.run(...)`
+    at its top level; each a `(reference, line)`. `scope` is the line of the
+    innermost `def` holding it, if any.
+    """
+
+    attr: str
+    names: frozenset[str]
+    line: int
+    returned: tuple[str, int] | None
+    awaited: tuple[tuple[str, int], ...]
+    scope: int | None
+
+    def candidates(self) -> list[tuple[str, int]]:
+        """The returned call, else the one awaited call, else nothing."""
+        if self.returned is not None:
+            return [self.returned]
+        return list(self.awaited) if len(self.awaited) == 1 else []
+
+
+@dataclass(frozen=True)
 class _DispatchFacts:
     """A module's dispatch sites: the first `args.func(...)` line (`args` bound from `.parse_args(...)`), its
-    dict literals in source order, and the first `<DICT>[...](...)` line per dict name.
+    dict literals in source order, the first `<DICT>[...](...)` line per dict name, and its comparison
+    branches in source order.
     """
 
     func_call: int | None
     dicts: list[_DictLiteral]
     dict_calls: dict[str, int]
+    branches: list[_Branch] = field(default_factory=list)
 
 
 class _DispatchIndex:
@@ -769,7 +857,7 @@ class _DispatchIndex:
         if path not in self._facts:
             tree = self._index.tree(path)
             self._facts[path] = (
-                _dispatch_facts(tree) if tree else _DispatchFacts(None, [], {})
+                _dispatch_facts(tree) if tree else _DispatchFacts(None, [], {}, [])
             )
         return self._facts[path]
 
@@ -785,6 +873,13 @@ class _DispatchIndex:
             ]
             self._call_modules[path] = list(dict.fromkeys(found))
         return self._call_modules[path]
+
+    def is_dispatcher(self, handler: Handler, attr: str) -> bool:
+        """Whether the function `handler` itself holds a branch comparing `<x>.<attr>`."""
+        return any(
+            b.attr == attr and b.scope == handler.line
+            for b in self.facts(handler.path).branches
+        )
 
     def func_call(self, path: str) -> tuple[str, int] | None:
         """`(module, line)` of the first `args.func(...)` dispatch call for the parser module `path`."""
@@ -903,7 +998,119 @@ def _dispatch_facts(tree: ast.Module) -> _DispatchFacts:
             if items:
                 dicts.append(_DictLiteral(dict_names.get(id(node)), node.lineno, items))
     dicts.sort(key=lambda literal: literal.line)
-    return _DispatchFacts(_func_dispatch_line(tree), dicts, dict_calls)
+    branches = sorted(_branches(tree, None), key=lambda branch: branch.line)
+    return _DispatchFacts(_func_dispatch_line(tree), dicts, dict_calls, branches)
+
+
+def _branches(node: ast.AST, scope: int | None) -> Iterator[_Branch]:
+    """Every comparison branch under `node`, each with the line of its innermost enclosing `def`."""
+    for child in ast.iter_child_nodes(node):
+        inner = child.lineno if isinstance(child, _FUNCTION_NODES) else scope
+        if isinstance(child, ast.If) and (compared := _compared(child.test)):
+            yield _branch(*compared, child.lineno, child.body, scope)
+        elif isinstance(child, ast.Match) and (attr := _attr_of(child.subject)):
+            for case in child.cases:
+                names = _case_names(case.pattern)
+                if names:
+                    yield _branch(attr, names, case.pattern.lineno, case.body, scope)
+        yield from _branches(child, inner)
+
+
+def _attr_of(expr: ast.expr) -> str | None:
+    """`attr` for `<name>.<attr>`; None otherwise."""
+    if isinstance(expr, ast.Attribute) and isinstance(expr.value, ast.Name):
+        return expr.attr
+    return None
+
+
+def _compared(test: ast.expr) -> tuple[str, frozenset[str]] | None:
+    """`(attr, {name})` for a test `<x>.<attr> == "<name>"`, either way round."""
+    if not (
+        isinstance(test, ast.Compare)
+        and len(test.ops) == 1
+        and isinstance(test.ops[0], ast.Eq)
+    ):
+        return None
+    for side, other in (
+        (test.left, test.comparators[0]),
+        (test.comparators[0], test.left),
+    ):
+        attr = _attr_of(side)
+        if attr and isinstance(other, ast.Constant) and isinstance(other.value, str):
+            return attr, frozenset({other.value})
+    return None
+
+
+def _case_names(pattern: ast.pattern) -> frozenset[str]:
+    """The string names a `case` pattern matches: one `"x"`, or `"x" | "y"`; empty for any other pattern."""
+    values = pattern.patterns if isinstance(pattern, ast.MatchOr) else [pattern]
+    names = set()
+    for value in values:
+        if not (
+            isinstance(value, ast.MatchValue)
+            and isinstance(value.value, ast.Constant)
+            and isinstance(value.value.value, str)
+        ):
+            return frozenset()
+        names.add(value.value.value)
+    return frozenset(names)
+
+
+def _branch(
+    attr: str, names: frozenset[str], line: int, body: list[ast.stmt], scope: int | None
+) -> _Branch:
+    returned = next(filter(None, map(_returned_call, body)), None)
+    awaited = {
+        call: None
+        for statement in body
+        if (call := _awaited_call(statement)) is not None
+    }
+    return _Branch(attr, names, line, returned, tuple(awaited), scope)
+
+
+def _past_wrappers(expr: ast.expr | None) -> tuple[str, int] | None:
+    """The first call that is not a transparent wrapper, looking through wrappers' first arguments."""
+    while (
+        isinstance(expr, ast.Call)
+        and dotted_reference(expr.func) in _TRANSPARENT_WRAPPERS
+    ):
+        expr = expr.args[0] if expr.args else None
+    if not isinstance(expr, ast.Call):
+        return None
+    reference = dotted_reference(expr.func)
+    return (reference, expr.lineno) if reference else None
+
+
+def _returned_call(statement: ast.stmt) -> tuple[str, int] | None:
+    """The call a top-level `return`, `sys.exit(...)`/`exit(...)` or `raise SystemExit(...)` makes."""
+    if isinstance(statement, ast.Return):
+        return _past_wrappers(statement.value)
+    if isinstance(statement, ast.Raise):
+        exc = statement.exc
+        if isinstance(exc, ast.Call) and dotted_reference(exc.func) == "SystemExit":
+            return _past_wrappers(exc)
+        return None
+    if (
+        isinstance(statement, ast.Expr)
+        and isinstance(statement.value, ast.Call)
+        and dotted_reference(statement.value.func) in {"sys.exit", "exit"}
+    ):
+        return _past_wrappers(statement.value)
+    return None
+
+
+def _awaited_call(statement: ast.stmt) -> tuple[str, int] | None:
+    """The call inside a top-level `asyncio.run(...)` of an assignment or expression statement."""
+    if not isinstance(statement, (ast.Assign, ast.AnnAssign, ast.Expr)):
+        return None
+    value = statement.value
+    if not (
+        isinstance(value, ast.Call)
+        and dotted_reference(value.func) == "asyncio.run"
+        and value.args
+    ):
+        return None
+    return _past_wrappers(value.args[0])
 
 
 # --- click and typer --------------------------------------------------------------------------

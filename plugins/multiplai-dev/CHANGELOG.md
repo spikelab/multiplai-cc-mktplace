@@ -15,7 +15,7 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
-## [0.101.0] - 2026-10-23
+## [0.104.0] - 2026-10-23
 
 ### Added
 - **codebase-walkthrough explains a whole tool or plugin.** `run <dir> --scope
@@ -34,7 +34,63 @@ time, not derived from a tag.
   with its commit. A directory that is missing or outside a git repository
   stops the run before anything is written.
 
-## [0.100.0] - 2026-10-22
+## [0.103.2] - 2026-10-23
+
+### Fixed
+- **Subcommands that dispatch with `if args.command == "x":` now have a
+  handler.** codebase-walkthrough and review trace paths from each argparse
+  subcommand; a subcommand whose CLI compares the subparsers' `dest` with its
+  name (an `if`/`elif` chain or a `match` statement) used to get no handler, so
+  its trace stopped at the `add_parser` line. Discovery now takes the function
+  the branch returns (or exits with, or runs through `asyncio.run`), and starts
+  the known edge at the branch line. `set_defaults(func=...)` and dispatch dicts
+  still come first, and a branch of inline code still has no handler. A trace
+  cached by an earlier run is asked again for each subcommand that gains a
+  handler.
+
+## [0.103.1] - 2026-10-23
+
+### Fixed
+- **Path tracing no longer stops at the first hop of a subcommand or a CI
+  step.** codebase-walkthrough and review trace a path hop by hop, and the
+  gate cut a trace with `unconnected_hop` when hop 2 did not follow from hop 1.
+  It now also connects an `add_parser` line to the handler discovery resolved
+  for it, and a command line in a non-Python file (a shell script, a CI
+  `run:` step, a `SKILL.md`) to the script or `python -m` module it runs. The
+  trace prompt tells the agent to start an `add_parser` entry at its handler's
+  `def` line. Resumed runs re-gate their cached trace answers under the new
+  rule, so a resume picks up the fix with no new model call.
+
+## [0.103.0] - 2026-10-23
+
+### Removed
+- **review-viewer no longer shows a walkthrough the session writes.** The
+  Reviews tab, its steps, the Overview box, the `]`/`[` keys and mermaid are
+  gone, and so are `walkthrough put|status` and `walkthrough.v1`. The session
+  writes no explanation of the code for the viewer.
+- codebase-walkthrough writes no `walkthrough.json` for a module.
+
+### Added
+- **A Full walkthrough row on the review-viewer's Summary tab**, for a PR, a
+  branch, unpushed commits, a range or a directory. When the codebase-walkthrough
+  page of what is viewed exists at the viewed commit, it opens in a new tab,
+  served by the viewer in a sandbox at a second secret address. When it does
+  not, a dialog says what writing it does (the session runs
+  codebase-walkthrough, which sends the repository's code to a model, makes
+  paid model calls stopping at $50, searches no other repository, and for a PR
+  runs `gh pr view`); Confirm asks the session to run it, and the session
+  resumes or re-renders an earlier run of the same commit instead of paying
+  twice.
+
+### Changed
+- **The session writes `summary.json`** (`summary put|status`, schema
+  `summary.v1`): only its assessments of the commits and the tests and the
+  risk block. `summary status` also prints the full walkthrough's state, its
+  folder, an earlier run of the commit and the command that writes it.
+- buildme's `regenerate_walkthroughs` commits the regenerated HTML page and
+  `-paths.json` with the Markdown.
+
+## [0.102.0] - 2026-10-23
 
 ### Added
 - **codebase-walkthrough explains a PR or a commit range.** `run --scope pr
@@ -57,6 +113,47 @@ time, not derived from a tag.
 - review's PR and fetch lookups (`gh pr view`, `git fetch`, `rev-parse`,
   `merge-base`) moved to a new shared library, `lib/git_targets`, which the
   walkthrough also uses. Review behaves as before.
+
+## [0.101.0] - 2026-10-22
+
+### Added
+- **codebase-walkthrough styles its HTML page with your design system.**
+  `run`, `resume` and `render` take `--design-system-dir <folder>`, the
+  folder `/multiplai-dev:design-system`'s `path` command prints. The page then
+  inlines that folder's `fonts.css` and `tokens.css`. The folder is checked
+  before any model call, so a bad one costs nothing. A missing folder, a
+  missing token, or a text colour below WCAG AA exits 1 with
+  `ERROR: design system <path>: …`. A run keeps its folder, and `resume` uses
+  it unless you pass the option again. `render --design-system-dir` restyles a
+  finished run for free, without changing its saved state. Without the
+  option the page looks as before.
+
+## [0.100.0] - 2026-10-22
+
+### Added
+- **`/multiplai-dev:design-system`: one set of design tokens for every HTML
+  page a skill builds.** Keep your design systems in one folder
+  (`MULTIPLAI_DESIGN_SYSTEMS`, an absolute path) and name the default
+  (`MULTIPLAI_DESIGN_SYSTEM`), in the environment or in `multiplai.conf`.
+  With neither set, pages use a neutral theme shipped with the plugin: greys,
+  one blue accent, system fonts, light and dark. Each design system is a
+  `tokens.css` (colours, fonts, type scale, spacing, radius, measure) plus a
+  `README.md`, and optionally `fonts.css` and `components.md`.
+  `python -m design_system list | show | path | check | create`:
+  - `check` fails a token missing from the light block or from either dark
+    block, a text/background pair below WCAG AA (4.5:1), a colour it cannot
+    read, and `</style` in a CSS file, and prints every contrast ratio;
+  - `create` copies the neutral theme to a new name and never overwrites;
+  - a name that does not exist is an error listing the names that do. It
+    never falls back to neutral.
+
+### Changed
+- **learn-stack's guide and deepen's architecture report use the design
+  system's colours and fonts.** learn-stack's page no longer hardcodes a
+  teal accent and dark Prism code blocks, and its code theme follows the
+  reader's light or dark setting. `render_report.py` takes
+  `--design-system-dir`, and without it uses the neutral theme. The report
+  now follows the reader's light or dark setting too.
 
 ## [0.99.0] - 2026-10-22
 

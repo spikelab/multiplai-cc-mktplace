@@ -17,7 +17,6 @@ from walkthrough_pipeline.state import STATE_FILE
 # In the order `write_outputs` returns them, which is the order the `walkthrough:` lines print.
 OUTPUTS = (
     "bookings-walkthrough.md",
-    "bookings-walkthrough.json",
     "bookings-walkthrough.html",
     "bookings-paths.json",
 )

@@ -172,7 +172,7 @@ def paths_trace(
     )
     shown_places = sorted(f"{p.path}:{p.line}" for p in places)
     return f"""You are tracing one code path, from an entry point to its last effect, for an engineer reviewing it.
-{_snapshot_and_entry(entry, commit)}
+{_snapshot_and_entry(entry, commit)}{_start_at_handler(entry)}
 
 {scope}
 
@@ -183,6 +183,17 @@ Known places: framework boundaries a hop may land on:
 {_bullets(shown_places)}
 
 {_trace_task(hop_limit)}"""
+
+
+def _start_at_handler(entry: Entry) -> str:
+    """For an `add_parser` entry whose handler resolved, the line telling hop 1 to cite that handler; else ""."""
+    handler = entry.handler
+    if entry.kind != "argparse_subcommand" or handler is None:
+        return ""
+    return (
+        f"\nThis entry point is a parser registration: start hop 1 at its handler's `def` line, "
+        f"{handler.path}:{handler.line}, not at the `add_parser` line."
+    )
 
 
 def paths_reask(

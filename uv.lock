@@ -11,6 +11,7 @@ resolution-markers = [
 members = [
     "build-pipeline",
     "deepen-scripts",
+    "design-system-scripts",
     "gmail-scripts",
     "multiplai-context-scripts",
     "multiplai-marketplace",
@@ -429,6 +430,64 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "jinja2", specifier = ">=3.0" }]
+
+[[package]]
+name = "design-system"
+version = "0.1.0"
+source = { editable = "plugins/multiplai-dev/lib/design_system" }
+dependencies = [
+    { name = "multiplai-core" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "multiplai-core", git = "https://github.com/spikelab/multiplai-core?branch=main" },
+    { name = "pytest", marker = "extra == 'dev'" },
+    { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.8" },
+]
+provides-extras = ["dev"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-xdist", specifier = ">=3.8" },
+]
+
+[[package]]
+name = "design-system-scripts"
+version = "0.0.0"
+source = { virtual = "plugins/multiplai-dev/skills/design-system/scripts" }
+dependencies = [
+    { name = "design-system" },
+    { name = "multiplai-core" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-xdist" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-xdist" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "design-system", editable = "plugins/multiplai-dev/lib/design_system" },
+    { name = "multiplai-core", git = "https://github.com/spikelab/multiplai-core?branch=main" },
+    { name = "pytest", marker = "extra == 'dev'" },
+    { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.8" },
+]
+provides-extras = ["dev"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-xdist", specifier = ">=3.8" },
+]
 
 [[package]]
 name = "distro"
@@ -2458,6 +2517,7 @@ version = "0.1.0"
 source = { editable = "plugins/multiplai-dev/skills/codebase-walkthrough/scripts" }
 dependencies = [
     { name = "code-facts" },
+    { name = "design-system" },
     { name = "git-targets" },
     { name = "httpx" },
     { name = "markdown" },
@@ -2486,6 +2546,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "code-facts", editable = "plugins/multiplai-dev/lib/code_facts" },
+    { name = "design-system", editable = "plugins/multiplai-dev/lib/design_system" },
     { name = "git-targets", editable = "plugins/multiplai-dev/lib/git_targets" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "jsonschema", marker = "extra == 'dev'", specifier = ">=4" },

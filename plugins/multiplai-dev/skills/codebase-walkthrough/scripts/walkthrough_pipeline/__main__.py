@@ -87,6 +87,14 @@ def _run_flags(p: argparse.ArgumentParser) -> None:
     )
 
 
+def _design_flag(p: argparse.ArgumentParser, help_text: str) -> None:
+    p.add_argument("--design-system-dir", metavar="PATH", help=help_text)
+
+
+def _abs(path: str | None) -> str | None:
+    return str(Path(path).expanduser().resolve()) if path else None
+
+
 def _repo_key(text: str) -> str:
     """A key is a snapshot directory's name and the first segment of every citation."""
     if text in (".", "..") or not re.fullmatch(r"[^/\\|`\s]+", text):
@@ -188,7 +196,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--mode",
         choices=("human", "agent"),
         default="human",
-        help="human: Markdown walkthrough, HTML page and review-viewer walkthrough.json (a module only); "
+        help="human: Markdown walkthrough and HTML page; "
         "agent: compact Markdown for coding agents (a module only)",
     )
     rn.add_argument(
@@ -252,6 +260,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=300.0,
         help="Seconds pyright-langserver gets for references (default 300; 0 = skip LSP)",
     )
+    _design_flag(
+        rn,
+        "Design-system folder the HTML page is styled with (tokens.css, README.md, optional fonts.css); "
+        "checked before any model call. Default: the page's own tokens",
+    )
     _run_flags(rn)
 
     rs = sub.add_parser(
@@ -272,6 +285,10 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Write the walkthrough again from a run past its trace stage: keeps the explore, docs and "
         "trace answers and runs only the write and render stages (their model calls are paid)",
+    )
+    _design_flag(
+        rs,
+        "Replace the run's saved --design-system-dir (default: keep it); checked before any model call",
     )
     _run_flags(rs)
 
@@ -302,6 +319,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--output",
         help="Directory for the walkthrough files (default: the run's saved --output, "
         "else the run directory)",
+    )
+    _design_flag(
+        rd,
+        "Style the page with this design-system folder instead of the run's saved one; the state is not changed",
     )
     rd.add_argument(
         "--trust-repo",
@@ -406,7 +427,7 @@ def _main(args: argparse.Namespace) -> int:
     if getattr(args, "trust_repo", False):
         os.environ["WALKTHROUGH_TRUST_REPO"] = "1"
 
-    from . import budget, orchestrator, sdk, target
+    from . import budget, design, orchestrator, sdk, target
     from .config import load_config
 
     if not sdk.repo_is_trusted():
@@ -453,6 +474,7 @@ def _main(args: argparse.Namespace) -> int:
                 api_collection=args.api_collection,
                 unit_lines=args.unit_lines,
                 lsp_timeout=args.lsp_timeout,
+                design_system_dir=_abs(args.design_system_dir),
                 **(
                     {}
                     if args.scenarios is None
@@ -483,12 +505,17 @@ def _main(args: argparse.Namespace) -> int:
                     session_id=args.session_id,
                     docs=docs,
                     rewrite=args.rewrite,
+                    design_system_dir=_abs(args.design_system_dir),
                 )
             )
         for p in paths:
             print(f"walkthrough: {p}")
         return 0
-    except (orchestrator.WalkError, target.MissingToolError) as e:
+    except (
+        orchestrator.WalkError,
+        target.MissingToolError,
+        design.DesignSystemError,
+    ) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 1
     except sdk.RepoTrustError:
@@ -510,7 +537,7 @@ def _main(args: argparse.Namespace) -> int:
 def _render(args: argparse.Namespace) -> int:
     """Write the outputs of a run past its write stage from walkthrough-state.json. No agent, no ledger;
     the state file and progress.log are left as they are."""
-    from . import render, target
+    from . import design, render, target
     from .state import STATE_FILE, load_state
 
     run_dir = Path(args.run_dir).expanduser().resolve()
@@ -531,8 +558,10 @@ def _render(args: argparse.Namespace) -> int:
         else Path(state.options.get("output") or run_dir)
     )
     try:
-        paths = render.write_outputs(state, out_dir)
-    except (target.TargetError, OSError) as e:
+        paths = render.write_outputs(
+            state, out_dir, design_dir=_abs(args.design_system_dir)
+        )
+    except (target.TargetError, OSError, design.DesignSystemError) as e:
         print(f"render: {e}", file=sys.stderr)
         return 1
     for p in paths:

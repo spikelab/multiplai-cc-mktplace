@@ -7,11 +7,17 @@ from pydantic import ValidationError
 from trace_fixtures import (
     CHAIN_LEN,
     CLI,
+    PR_COMMANDS,
+    PR_GITHUB,
+    PR_MAIN,
+    PR_SKILL,
     chain_hops,
     chain_source,
     cli_source,
     commit_snapshot,
     lib,
+    pr_edit_hops,
+    pr_snapshot,
 )
 
 DOC = "docs/run.md"
@@ -311,6 +317,88 @@ def test_non_python_hop_connects_by_whole_word_in_its_quote(snap, needle, expect
     first = snap.hop(DOC, "pkg", line=line, called="pkg")
     second = snap.hop(CLI, "main", called="pkg.cli.main")
     assert outcome(gate(snap, [first, second], ent)) == expected
+
+
+# --- argparse registrations and command lines -------------------------------------------------
+
+
+@pytest.fixture
+def pr(tmp_path):
+    return pr_snapshot(tmp_path / "pr")
+
+
+def discovered(snap, name):
+    return next(e for e in lib("discover_entries")(snap.root).entries if e.name == name)
+
+
+def test_pr_295_edit_trace_from_its_add_parser_line_keeps_every_hop(pr):
+    # `build_parser` never names `cmd_edit`, and the entry's known edge starts at `commands.run`'s dispatch.
+    ent = discovered(pr, "edit")
+    hops = pr_edit_hops(pr)
+    assert outcome(gate(pr, hops, ent, edges=ent.known_edges)) == (
+        None,
+        None,
+        len(hops),
+    )
+
+
+def test_add_parser_line_connects_only_to_its_own_entrys_handler(pr):
+    ent = discovered(pr, "edit")
+    first = pr_edit_hops(pr)[0]
+    wrong = pr.hop(PR_COMMANDS, "cmd_open")
+    assert outcome(gate(pr, [first, wrong], ent, edges=ent.known_edges)) == (
+        2,
+        "unconnected_hop",
+        1,
+    )
+
+
+def model_entry(snap, path, needle, name):
+    """An entry as the model fallback adds one: no handler and no known edges."""
+    return entry(kind="model", name=name, path=path, line=snap.line(path, needle))
+
+
+SKILL_FIRST_LINE = "python -m pr_pipeline open"
+
+
+@pytest.mark.parametrize("lines", [1, 2], ids=["continued-line", "whole-command"])
+def test_skill_md_hop_1_connects_to_the_module_its_command_runs(pr, lines):
+    ent = model_entry(pr, PR_SKILL, SKILL_FIRST_LINE, "pr: pr_pipeline open")
+    line = ent.location.line
+    quote = "\n".join(pr.files[PR_SKILL].splitlines()[line - 1 : line - 1 + lines])
+    first = pr.hop(
+        PR_SKILL, "pr_pipeline", line=line, end=line + lines - 1, quote=quote
+    )
+    second = pr.hop(PR_MAIN, "main")
+    assert outcome(gate(pr, [first, second], ent)) == (None, None, 2)
+
+
+def test_skill_md_hop_1_does_not_connect_to_a_file_its_command_does_not_run(pr):
+    ent = model_entry(pr, PR_SKILL, SKILL_FIRST_LINE, "pr: pr_pipeline open")
+    first = pr.hop(PR_SKILL, "pr_pipeline", line=ent.location.line)
+    assert outcome(gate(pr, [first, pr.hop(PR_GITHUB, "run_write")], ent)) == (
+        2,
+        "unconnected_hop",
+        1,
+    )
+
+
+def test_ci_step_hop_1_connects_to_the_script_its_run_line_names(tmp_path):
+    ci = ".github/workflows/ci.yml"
+    snap = commit_snapshot(
+        tmp_path / "ci",
+        {
+            ci: "jobs:\n  check:\n    steps:\n      - run: python scripts/check.py --all\n",
+            "scripts/check.py": "def main():\n    return 0\n",
+        },
+    )
+    ent = model_entry(snap, ci, "run: python", "CI job check")
+    first = snap.hop(ci, "check", line=ent.location.line)
+    assert outcome(gate(snap, [first, snap.hop("scripts/check.py", "main")], ent)) == (
+        None,
+        None,
+        2,
+    )
 
 
 # --- order and stopping ------------------------------------------------------------------------

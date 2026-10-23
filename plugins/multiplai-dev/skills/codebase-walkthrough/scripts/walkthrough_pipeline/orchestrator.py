@@ -20,7 +20,7 @@ from pathlib import Path
 
 from multiplai_core.log_utils import log_event
 
-from . import budget, lsp, references
+from . import budget, design, lsp, references
 from . import change as change_mod
 from . import docs as docs_mod
 from . import repos as repos_mod
@@ -98,6 +98,9 @@ class RunOptions:
     range: str | None = None
     fetch: bool = False
     expect_head: str | None = None
+    design_system_dir: str | None = (
+        None  # `--design-system-dir`: the page's design-system folder; None is the template's own tokens
+    )
 
 
 def _keep_previous_progress(run_dir: Path) -> None:
@@ -138,6 +141,11 @@ def prepare(opts: RunOptions, runs_dir: Path) -> tuple[WalkState, Path]:
     A change is resolved (gh, merge-base, --expect-head) before the run directory exists, so a
     refusal leaves nothing behind.
     """
+    try:
+        # First, before the run directory or its state is touched: a bad folder costs nothing.
+        design.check(opts.design_system_dir)
+    except design.DesignSystemError as e:
+        raise WalkError(str(e)) from e
     if opts.scope == "pr":
         return _prepare_change(opts, runs_dir)
     try:
@@ -570,12 +578,20 @@ async def resume(
     session_id: str = "",
     docs: str | None | object = NO_CHANGE,
     rewrite: bool = False,
+    design_system_dir: str | None = None,
 ) -> list[Path]:
     """Continue a saved run. *docs* replaces the saved `--docs` URL (None drops the docs). *rewrite* runs the
-    write and render stages again on a run past its trace stage (`rewind_for_rewrite`)."""
+    write and render stages again on a run past its trace stage (`rewind_for_rewrite`). *design_system_dir*
+    replaces the saved `--design-system-dir`; the folder in use is checked before anything else."""
     state = load_state(run_dir / STATE_FILE)
     if state is None:
         raise WalkError(f"no readable {STATE_FILE} in {run_dir}")
+    if design_system_dir is not None:
+        state.options["design_system_dir"] = design_system_dir
+    try:
+        design.check(state.options.get("design_system_dir"))
+    except design.DesignSystemError as e:
+        raise WalkError(str(e)) from e
     if docs is not NO_CHANGE:
         if state.past("docs"):
             raise WalkError(
