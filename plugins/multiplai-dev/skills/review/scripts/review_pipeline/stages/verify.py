@@ -59,7 +59,7 @@ from ..models import (
     lower_severity,
 )
 from ..prompts import verify as prompt
-from . import RunContext, bounded, fix_citation
+from . import RunContext, bounded, fix_citation, save
 from .find import critical_paths
 
 log = logging.getLogger(__name__)
@@ -273,12 +273,13 @@ async def run_verify(state: ReviewState, ctx: RunContext) -> ReviewState:
         return verdict, check, gate_check
 
     async def one(finding: Finding) -> Verdict | None:
-        # Stored as each answer arrives: a budget stop mid-stage keeps what
-        # was already paid for, and the checkpoint saved then carries it.
+        # Stored and saved as each answer arrives, so a stop mid-stage, a
+        # budget stop or a kill, keeps what was already paid for.
         verdict, check, gate_check = await _one(finding)
         state.checks.append(check)
         if verdict is None:
             failed[finding.id] = check.error
+            save(state, ctx)
             return None
         state.verdicts[verdict.finding_id] = verdict
         if gate_check:
@@ -298,6 +299,7 @@ async def run_verify(state: ReviewState, ctx: RunContext) -> ReviewState:
                 for n in verdict.needs
                 if n.what.strip()
             )
+        save(state, ctx)
         return verdict
 
     await bounded(todo, one, cfg.concurrency)

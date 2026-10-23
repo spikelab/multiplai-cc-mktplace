@@ -45,7 +45,7 @@ from .. import sdk
 from .. import target as target_mod
 from ..facts import resolver, scope_for, write_facts_file
 from ..models import ExplainedFacts, ReviewState, TargetInfo
-from . import RunContext
+from . import RunContext, save
 
 # Lines per explore unit; codebase-walkthrough's default `unit_lines`.
 UNIT_LINES = 6000
@@ -182,6 +182,7 @@ async def run_explain(state: ReviewState, ctx: RunContext) -> ReviewState:
         recoverable=(sdk.AgentCallError,),
         fatal=(sdk.RepoTrustError, sdk.UsageLimitError),
         progress=ctx.progress.line if ctx.progress else None,
+        on_answer=lambda: save(state, ctx),
     )
     keep = keeper(t, ctx)
     try:

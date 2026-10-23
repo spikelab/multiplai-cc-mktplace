@@ -64,8 +64,7 @@ from ..prompts import find as prompt
 from ..prompts.convert import build_convert
 from ..prompts.path import build_path
 from ..prompts.piece import build_piece
-from ..state import save_state
-from . import RunContext, bounded, fix_citation, relative_path
+from . import RunContext, bounded, fix_citation, relative_path, save
 
 log = logging.getLogger(__name__)
 
@@ -405,11 +404,6 @@ def _relative(out: ConvertOutput, target: TargetInfo, snapshot: Path) -> Convert
     return ConvertOutput(items=items)
 
 
-def _save(state: ReviewState, ctx: RunContext) -> None:
-    if ctx.target_dir is not None:
-        save_state(state, ctx.target_dir)
-
-
 def _first_line(e: BaseException) -> str:
     return (str(e).splitlines() or [type(e).__name__])[0][:300]
 
@@ -500,7 +494,7 @@ async def run_reported(
         drop_coverage(state, stage="find", subject=key, reason="finder-failed")
         rep = FinderReport(key=key, text=text)
         state.finder_reports[key] = rep
-        _save(state, ctx)
+        save(state, ctx)
         if ctx.target_dir is not None:
             write_report_file(ctx.target_dir, key, text)
         if ctx.progress:
@@ -509,7 +503,7 @@ async def run_reported(
         return
     if rep.text.strip() in EMPTY_REPORTS:
         rep.converted, rep.convert_error = True, None
-        _save(state, ctx)
+        save(state, ctx)
         return
 
     label = f"find:{kind}-convert"
@@ -558,7 +552,7 @@ async def run_reported(
                 detail=error,
             ),
         )
-        _save(state, ctx)
+        save(state, ctx)
         return
     rep.items, rep.findings = map_converted(key, _relative(out, target, ctx.snapshot))
     rep.converted, rep.convert_error = True, None
@@ -572,7 +566,7 @@ async def run_reported(
         f"{len(rep.findings)} finding{'' if len(rep.findings) == 1 else 's'}"
     )
     state.checks.append(check)
-    _save(state, ctx)
+    save(state, ctx)
     if ctx.progress:
         ctx.progress.line(f"  convert {key}: {check.outcome}")
 
@@ -766,8 +760,8 @@ async def run_find(state: ReviewState, ctx: RunContext) -> ReviewState:
         ), check
 
     async def one(pair: tuple[str, str, int]) -> None:
-        # Stored as each finder returns: a budget stop mid-stage keeps what
-        # was already paid for, and the checkpoint saved then carries it.
+        # Stored and saved as each finder returns, so a stop mid-stage, a
+        # budget stop or a kill, keeps what was already paid for.
         # A tree review runs one dimension's groups at once, so each call ends
         # the interval it opened; the row's time is then the sum over its groups.
         interval = timings.open_interval(state, f"find:{pair[1]}")
@@ -777,6 +771,7 @@ async def run_find(state: ReviewState, ctx: RunContext) -> ReviewState:
             interval.ended_at = timings.now()  # a budget stop still ends the interval
         state.finder_results[pair[0]] = result
         state.checks.append(check)
+        save(state, ctx)
 
     async def one_reported(job: tuple[str, str, list[str], dict]) -> None:
         key, text, given, piece_hunks = job

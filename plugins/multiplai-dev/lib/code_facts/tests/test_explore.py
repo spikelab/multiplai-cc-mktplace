@@ -211,6 +211,30 @@ def test_run_tasks_skips_answered_keys():
     assert set(answers) == {"unit:u1", "unit:u2"}
 
 
+def test_run_tasks_calls_on_answer_after_each_stored_answer():
+    seen: list[set[str]] = []
+
+    async def call(prompt, schema, **kw):
+        if prompt == "p2":
+            raise ValueError("no answer")
+        return schema()
+
+    answers: dict[str, dict] = {}
+    asyncio.run(
+        run_tasks(
+            [("unit:u1", "p1"), ("unit:u2", "p2")],
+            call,
+            answers,
+            concurrency=1,
+            on_answer=lambda: seen.append(set(answers)),
+            call_kwargs={},
+            errors=[],
+            recoverable=(ValueError,),
+        )
+    )
+    assert seen == [{"unit:u1"}, {"unit:u1", "unit:u2"}]
+
+
 def test_reask_names_missed_files_once():
     units = [
         Unit(id="u1", files=["a.py", "b.py"], lines=10),

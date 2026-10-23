@@ -648,6 +648,16 @@ async def test_earlier_status_resume_s1_asks_only_the_findings_with_no_stored_an
     assert outcome(target_dir) == expected
 
 
+async def test_a_killed_recheck_keeps_the_answers_on_disk(tmp_path, agents):
+    """The stage saves each answer itself: the stop escapes `run_recheck` with no orchestrator to save."""
+    _, target_dir, state = scenario(tmp_path)
+    agents(stop_at=2)
+    with pytest.raises(budget.BudgetExceededError):
+        await run_recheck(state, ctx_for(target_dir, state.target))
+    saved = load_state(target_dir / "review-state.json")
+    assert saved.stage == "verify" and list(saved.recheck_answers) == [E1.id]
+
+
 async def test_earlier_status_resume_s2_skips_a_finished_recheck(
     tmp_path, agents, monkeypatch
 ):
