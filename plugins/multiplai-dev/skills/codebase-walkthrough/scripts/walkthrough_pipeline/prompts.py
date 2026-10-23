@@ -168,12 +168,35 @@ Writing rules (a program checks every paragraph; one that fails is cut from the 
   the word "think". Use only what the facts say."""
 
 
+# Rules 2 to 8 of the Clear Writing output style, copied here, not read at run time: the plugin runs on
+# machines that do not have that file.
 EXPLAINER_RULES = """\
 Writing rules (a program checks every sentence, example, box and key; what fails is cut):
 - Write for someone who has never seen this code: plain words, short sentences. Say what something
   does before how it does it. No code-speak in the text; name a function only when the reader needs it.
+- Never invent a name for a thing. Say what it does, using a verb. When something has no name yet, do
+  not compress the explanation into a noun phrase made up on the spot and then use it as if the reader
+  knew it. Write "it now checks only the text just written", not "diff-scoping is the fix". A term is
+  safe only if it appears in the material; otherwise describe the thing every time, even when that costs
+  more words. Being understood on the first read beats saving words inside a sentence. No metaphor in
+  place of an explanation: "the only setting worth changing" names a setting, "the only knob worth
+  considering" names nothing.
+- Prefer a verb to a noun built from a verb: "it blocks the edit", not "the blocking behaviour"; "it
+  fired 48 times", not "the firing rate was high". A noun built from a verb hides who does what to what.
+- Answer first: the first sentence says the thing the reader came for. Reasons come after.
+- One idea per sentence, at most 50 words. Two ideas welded into one short sentence is the failure to
+  avoid.
+- Concrete subject, active verb: "the script exits 2", not "the failure mode here is a non-zero exit".
+  Never put an abstract noun in the subject slot.
+- Say the thing; do not announce it. Never write "the key insight is", "crucially", "worth noting",
+  "importantly" or "the mechanism behind".
+- Numbers and names, not adjectives: "72% of tool-output bytes", not "the dominant cost".
+- Explain each internal term of the code (gate, verdict, piece, head, snapshot and the like) in plain
+  words before you use it, or avoid it.
+- Each section opens with a sentence that is enough on its own; the sentences after it add detail.
 - Cite with the citation id in double brackets at the END of the sentence it supports, e.g.
-  "It saves its progress after every phase. [[c12]]". Never put a citation in the middle of a phrase.
+  "It saves its progress after every phase. [[c12]]". Never put a citation in the middle of a phrase,
+  and never in a title or heading.
 - Never type a file path with a line number; the program turns each id into a link.
 - Backtick only identifiers that appear in the material (function, class, setting, flag names).
   Do not invent names.

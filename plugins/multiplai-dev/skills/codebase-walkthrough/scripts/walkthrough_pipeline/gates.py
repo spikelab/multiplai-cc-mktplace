@@ -394,6 +394,14 @@ def explainer_text_gate(
     return reasons
 
 
+TITLE_CITATION = "citation in a title"
+
+
+def title_gate(text: str) -> list[str]:
+    """A title or heading holds no citation: the page writes it as a heading, where a link is noise."""
+    return [TITLE_CITATION] if "[[" in text else []
+
+
 def _quotes(ids: list[str], citations: dict[str, Citation]) -> str:
     return " ".join(citations[i].quote for i in ids if i in citations)
 
@@ -450,6 +458,7 @@ def usecase_gate(
     if not ids:
         reasons.append("the use case cites nothing")
     reasons += [f"[[{i}]] is not a gated citation" for i in ids if i not in citations]
+    reasons += title_gate(case.title)
     for field in ("title", "who", "when", "what_happens", "result"):
         reasons += explainer_text_gate(
             getattr(case, field), citations=citations, corpus=corpus, labels=labels
@@ -624,8 +633,10 @@ def flow_gate(
                 + ", ".join(repr(x) for x in alone)
             )
     for s in flow.steps:
-        why = explainer_text_gate(s.title, **gate) + explainer_text_gate(
-            s.summary, **gate
+        why = (
+            title_gate(s.title)
+            + explainer_text_gate(s.title, **gate)
+            + explainer_text_gate(s.summary, **gate)
         )
         if not s.summary.strip():
             why.append("the step has no summary")
@@ -757,6 +768,7 @@ def output_gate(
         )
     if not item.name.strip():
         reasons.append("the item has no name")
+    reasons += title_gate(item.name)
     example: list[str] = []
     if not reasons and item.example is not None:
         example = payload_gate(item.example, citations[cid].quote, corpus)
