@@ -10,6 +10,8 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from multiplai_core.specs import change_root
+
 from build_pipeline.budget import BudgetExceededError
 
 from ..models import PlanReviewFinding, PlanReviewResult
@@ -370,10 +372,12 @@ async def run_plan_review(
     raises (the required stage records a blocked outcome). With `prior` (the
     findings a rewrite was asked to fix) it also asks for a status for each.
     """
-    use_cases = _read(change_dir / "use-cases.md", NO_USE_CASES)
+    # A component's proposal and use cases are its change's.
+    root = change_root(change_dir)
+    use_cases = _read(root / "use-cases.md", NO_USE_CASES)
 
     prompt = PLAN_REVIEW_PROMPT.format(
-        proposal_content=_read(change_dir / "proposal.md", "(no proposal)"),
+        proposal_content=_read(root / "proposal.md", "(no proposal)"),
         design_content=_read(change_dir / "design.md", "(no design)"),
         use_cases_content=use_cases,
         tasks_content=_read(change_dir / "tasks.md", "(no tasks)"),

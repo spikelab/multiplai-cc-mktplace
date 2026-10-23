@@ -447,6 +447,13 @@ class Coordinator:
     conflict: list[str] | None = (
         None  # the files a merge of main into the branch conflicted in
     )
+    nested: bool = False  # the children are components nested in the change
+
+    def change(self, cid: str) -> str:
+        """The `--change` the child *cid* builds as (`phase.child_change`)."""
+        from .phase import child_change
+
+        return child_change(self.epic.name, cid, self.nested)
 
     def __post_init__(self) -> None:
         self.project_dir = Path(self.config.project_dir)
@@ -490,7 +497,7 @@ class Coordinator:
             getattr(self.args, "session_id", "") or "",
             "build",
             "--change",
-            f"{self.epic.name}-{cid}",
+            self.change(cid),
             "--auto",
             "--trust-repo",
             "--epic-child",
@@ -1274,7 +1281,7 @@ class Coordinator:
         every review (Spike, 2026-10-15). Every round in the change's findings
         state, finished or not, plus one: `findings` resumes an open round
         first, and stops at the count."""
-        return fix.rounds_started(project, f"{self.epic.name}-{c.id}") + 1
+        return fix.rounds_started(project, self.change(c.id)) + 1
 
     async def _run_fix(
         self, c: Child, head: str, number: int, rounds: int, *, final: bool = False
@@ -1294,7 +1301,7 @@ class Coordinator:
         its share recomputed (D2.S19). *final*: the final fix (`--no-review`),
         whose result keeps `final_head`, the HEAD it left in `<P>`."""
         project = self._child_project(c)
-        change = f"{self.epic.name}-{c.id}"
+        change = self.change(c.id)
         if not await self._fixer_gone(c, number):
             return False
         ceiling = self.settings.max_usd
@@ -2492,6 +2499,8 @@ class Coordinator:
             )
         if self.conflict is not None:  # nothing more was launched
             return feature_branch.conflict_exit(self.branch, self.conflict)
+        if self.nested and all(c.status == "merged" for c in self.children.values()):
+            return self._archive()
         if (
             self.budget_stop is not None
         ):  # the spend at exit, the running children's included
@@ -2512,6 +2521,38 @@ class Coordinator:
             )
             return 3
         return 1 if bad or unreviewed else 0
+
+    def _archive(self) -> int:
+        """Every component merged into the feature branch: archive the change
+        there once (`feature_branch.archive_on`), merging its components'
+        capabilities into specs/registry/. 0 when it is archived, or already
+        was; 1 when that failed, and the next run tries again."""
+        specs_rel = feature_branch.rel_to(self.repo, Path(self.config.specs_dir))
+        if specs_rel is None:
+            print(
+                f"ERROR: {self.config.specs_dir} is not inside {self.repo}; "
+                f"archive {self.epic.name} with `buildme archive --change {self.epic.name}`",
+                file=sys.stderr,
+                flush=True,
+            )
+            return 1
+        done = feature_branch.archive_on(
+            self.repo, self.branch, specs_rel, self.epic.name
+        )
+        if done.outcome == "failed":
+            log.error("EPIC %s: archive failed: %s", self.epic.name, done.error)
+            print(
+                f"ERROR: archiving {self.epic.name} on {self.branch} failed: {done.error}; "
+                "the next run tries again",
+                file=sys.stderr,
+                flush=True,
+            )
+            return 1
+        log.info(
+            "EPIC %s: archived on %s (%s)", self.epic.name, self.branch, done.outcome
+        )
+        print("PHASE:ARCHIVE:COMPLETE", flush=True)
+        return 0
 
     def _unreviewed(self, c: Child) -> bool:
         """*c*'s review step ran in this invocation, yet its PR's head, last
@@ -2626,17 +2667,29 @@ def _new_run_dir(epic_dir: Path) -> Path:
     return path
 
 
-async def run_epic(config, args, epic_dir: Path, epic: store.Epic, branch: str) -> int:
+async def run_epic(
+    config,
+    args,
+    epic_dir: Path,
+    epic: store.Epic,
+    branch: str,
+    *,
+    nested: bool = False,
+) -> int:
     """Build an epic's children (item 11) from its feature branch *branch*,
     which holds their ready specs. Returns 0 when nothing is
     left to do, 1 when a child failed or its state is unknown, or a child's PR
     head has no finished review (`Coordinator._unreviewed`), 3 with `EPIC:MERGE_WAITING:<urls>` while a
     child waits on an open PR, with `EPIC:BUDGET:<spent>` once `epic.max_usd` is reached
     or with `FEATURE_BRANCH:CONFLICT:<branch>:<files>` when merging origin's default
-    branch into *branch* conflicts, 128 + the signal when stopped."""
+    branch into *branch* conflicts, 128 + the signal when stopped. *nested*: the
+    children are the change's components, which build as `<change>/<id>`; once
+    every one merged, the change is archived on *branch* (`Coordinator._archive`)."""
     from . import lock as epic_lock
 
     assert epic_lock.held(epic_dir), (
         "the coordinator runs under the epic lock its build holds"
     )
-    return await Coordinator(config, args, Path(epic_dir), epic, branch).run()
+    return await Coordinator(
+        config, args, Path(epic_dir), epic, branch, nested=nested
+    ).run()

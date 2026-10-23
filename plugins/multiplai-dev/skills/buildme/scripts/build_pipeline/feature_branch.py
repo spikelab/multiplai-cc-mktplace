@@ -27,6 +27,8 @@ pull requests target it:
   `merge_default_into` does the same in a single change's own build worktree
   when a run resumes it, and pushes nothing: the build's push takes it.
 - `specs_at` reads a change dir as `origin/<branch>` holds it.
+- `archive_on` archives a change with components on the branch, once every
+  component merged into it, in the same detached worktree, and pushes it.
 
 An epic's pull request from the feature branch to the default branch is the
 user's: nothing here opens one. Never forces a push. `shell=False`, fixed argv.
@@ -250,11 +252,19 @@ def own_ticket(meta: dict) -> str:
 
 def tickets_at(repo: Path, ref: str, changes_rel: str, change: str) -> list[str]:
     """The change's own ticket ref, then each parent's, nearest first, as
-    *ref* holds `<changes_rel>/<name>/.change.yaml`: `[]` for none."""
-    from .change_manager import normalize_change_name
+    *ref* holds `<changes_rel>/<name>/.change.yaml`: `[]` for none. A
+    component `<change>/<id>` reads `<change>/components/<id>` first, then
+    its change."""
+    from .change_manager import normalize_change_name, split_component
 
     found: list[str] = []
     here, seen = normalize_change_name(change), set()
+    if component := split_component(change):
+        rel = f"{component[0]}/components/{component[1]}"
+        meta = _meta_at(repo, ref, f"{changes_rel}/{rel}" if changes_rel else rel)
+        if own := own_ticket(meta):
+            found.append(own)
+        here = component[0]
     while here and here not in seen and len(seen) < 10:
         seen.add(here)
         meta = _meta_at(repo, ref, f"{changes_rel}/{here}" if changes_rel else here)
@@ -266,19 +276,23 @@ def tickets_at(repo: Path, ref: str, changes_rel: str, change: str) -> list[str]
 
 
 def tickets_in(change_dir: Path) -> list[str]:
-    """`tickets_at` for a change dir on disk (its parents beside it)."""
-    from multiplai_core.specs import read_change_meta
+    """`tickets_at` for a change dir on disk (its parents beside it; a
+    component's change above it)."""
+    from multiplai_core.specs import change_root, read_change_meta
 
     found: list[str] = []
     here, seen = Path(change_dir), set()
-    while here.name not in seen and len(seen) < 10:
-        seen.add(here.name)
+    while here not in seen and len(seen) < 10:
+        seen.add(here)
         try:
             meta = read_change_meta(here) if here.is_dir() else {}
         except (OSError, UnicodeError, ValueError):
             meta = {}
         if (own := own_ticket(meta)) and own not in found:
             found.append(own)
+        if change_root(here) != here:
+            here = change_root(here)
+            continue
         parent = meta.get("parent")
         if not isinstance(parent, str) or not parent:
             break
@@ -495,6 +509,79 @@ def merge_default(repo: Path, branch: str) -> Merged:
     log.info(
         "FEATURE_BRANCH merged origin/%s into %s at %s and pushed",
         default,
+        branch,
+        (sha or "")[:12],
+    )
+    return Merged("merged", sha=sha)
+
+
+def archive_on(repo: Path, branch: str, specs_rel: str, change: str) -> Merged:
+    """Archive the change *change* on `origin/<branch>` and push it: in the
+    detached worktree `merge_default` uses, `multiplai_core.specs.archive_change`
+    merges the capabilities of the change and of each of its components into
+    `<specs_rel>/registry/` and moves the change dir to
+    `<specs_rel>/archive/<date>-<change>/`; that is committed as
+    `chore(specs): archive <change>` and pushed to *branch* (never forced).
+    Fetches first. `up to date` when the branch no longer holds the change
+    dir (an earlier run archived it), `merged` once pushed, else `failed`."""
+    from multiplai_core.specs import archive_change
+
+    repo = Path(repo)
+    failed = fetch(repo)
+    if failed is not None:
+        return Merged("failed", error=f"git fetch origin failed: {failed}")
+    tip = _remote_sha(repo, branch)
+    if tip is None:
+        return Merged("failed", error=f"origin has no {branch}")
+    rel = f"{specs_rel}/changes/{change}"
+    held = _git(repo, "ls-tree", "--name-only", tip, "--", f"{rel}/.change.yaml")
+    if not held.ok:
+        return Merged(
+            "failed", error=f"{held.command} failed: {held.stderr.strip()[-300:]}"
+        )
+    if not held.stdout.strip():
+        return Merged("up to date", sha=tip)
+    w = worktree_path(repo, branch)
+    why = _checkout(repo, w, tip)
+    if why:
+        return Merged("failed", error=why)
+    specs = w / specs_rel
+    try:
+        dest = archive_change(specs / "changes" / change, specs)
+    except (OSError, ValueError) as e:
+        _git(w, "checkout", "-q", "--detach", "--force", tip)
+        _git(w, "clean", "-fdq")
+        return Merged("failed", error=f"archiving {rel} failed: {e}")
+    paths = [rel, dest.relative_to(w).as_posix(), f"{specs_rel}/registry"]
+    added = _git(w, "add", "-A", "--", *paths)
+    message = f"chore(specs): archive {change}"
+    committed = (
+        _git(w, "commit", "-q", "-m", message, "--", *paths) if added.ok else added
+    )
+    if not committed.ok:
+        return Merged(
+            "failed",
+            error=f"{committed.command} failed: {(committed.stderr or committed.stdout).strip()[-400:]}",
+        )
+    sha = git_ops.rev_parse_head(w)
+    pushed = _git(
+        w, "push", "origin", f"HEAD:refs/heads/{branch}", timeout=git_ops._PUSH_TIMEOUT
+    )
+    if not pushed.ok:
+        return Merged(
+            "failed",
+            error=f"git push origin {branch} failed: {(pushed.stderr or pushed.stdout).strip()[-400:]}",
+        )
+    _git(
+        repo,
+        "fetch",
+        "origin",
+        f"+refs/heads/{branch}:refs/remotes/origin/{branch}",
+        timeout=git_ops._PUSH_TIMEOUT,
+    )
+    log.info(
+        "FEATURE_BRANCH archived %s on %s at %s and pushed",
+        change,
         branch,
         (sha or "")[:12],
     )

@@ -25,7 +25,7 @@ from build_pipeline.budget import BudgetExceededError
 
 from . import board, git_ops, readiness, review_rounds, walkthroughs
 from . import budget as budget_mod
-from .change_manager import ChangeManager
+from .change_manager import ChangeManager, registry_names
 from .config import BuildConfig
 from .models import BoardColumn, BuildPhase
 from .progress import ProgressWriter
@@ -467,15 +467,24 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
 
             assert_plan_current(config, state)
         state.advance_to(BuildPhase.PUBLISH, state_path)
-        if config.auto:
+        from multiplai_core.specs import change_root
+
+        if change_root(config.change_dir) != config.change_dir:
+            # A component: its change archives once, after its last component
+            # merged into the feature branch (`epic.coordinator`).
+            log.info(
+                "SKIP phase=ARCHIVE reason=component change=%s", config.change_name
+            )
+            publish_docs_dir = config.change_dir
+        elif config.auto:
             if config.change_dir.exists():
                 log.info("START phase=ARCHIVE reason=--auto")
                 # The checkpoint travels with the move (commit_stage's
                 # bookkeeping excludes keep it out of the archive commit).
                 change_path = config.change_dir
                 registry_paths = [
-                    config.specs_dir / "registry" / path.name
-                    for path in (change_path / "requirements").glob("*.md")
+                    config.specs_dir / "registry" / f"{name}.md"
+                    for name in registry_names(change_path)
                 ]
                 archive_dest = cm.archive_change(change_path)
                 log.info("DONE phase=ARCHIVE dest=%s", archive_dest)
@@ -766,7 +775,7 @@ def _find_tickets(config: BuildConfig, repo: Path | None) -> None:
     found: list[str] = []
     branch = config.feature_branch
     if repo is not None and branch and feature_branch.on_origin(repo, branch):
-        rel = feature_branch.rel_to(repo, Path(config.change_dir).parent)
+        rel = feature_branch.rel_to(repo, _changes_dir(config))
         if rel is not None:
             found = feature_branch.tickets_at(
                 repo, f"refs/remotes/origin/{branch}", rel, config.change_name
@@ -774,6 +783,13 @@ def _find_tickets(config: BuildConfig, repo: Path | None) -> None:
     if not found:
         found = feature_branch.tickets_in(config.change_dir)
     config.tickets = tuple(found)
+
+
+def _changes_dir(config: BuildConfig) -> Path:
+    """`specs/changes/`, the dir above the change (a component's change's)."""
+    from multiplai_core.specs import change_root
+
+    return change_root(Path(config.change_dir)).parent
 
 
 def _find_tickets_at(config: BuildConfig, commit: str) -> None:
@@ -784,7 +800,7 @@ def _find_tickets_at(config: BuildConfig, commit: str) -> None:
     from . import feature_branch
 
     repo = git_ops.repo_root(config.project_dir)
-    rel = feature_branch.rel_to(repo, Path(config.change_dir).parent) if repo else None
+    rel = feature_branch.rel_to(repo, _changes_dir(config)) if repo else None
     if rel is None:
         return
     found = feature_branch.tickets_at(repo, commit, rel, config.change_name)
@@ -919,7 +935,7 @@ def _refuse_unless_ready(config: BuildConfig, state_path: Path) -> int | None:
                 config.change_name,
                 reason,
                 advice=(
-                    f"Copy proposal.md, use-cases.md, requirements/ and .change.yaml from {source} "
+                    f"Copy proposal.md, use-cases.md, specs.md or requirements/, and .change.yaml from {source} "
                     f"into {change_dir}, commit them there, then run the build again"
                 ),
             )
@@ -931,9 +947,7 @@ def _refuse_unless_ready(config: BuildConfig, state_path: Path) -> int | None:
             ).get("spec_status") is not None
         except (OSError, UnicodeError, ValueError):
             marked = False
-        on_disk = (change_dir / "proposal.md").is_file() and any(
-            (change_dir / "requirements").glob("*.md")
-        )
+        on_disk = _specs_on_disk(change_dir)
         early = (
             prior is not None
             and prior.tdd is None
@@ -957,6 +971,17 @@ def _refuse_unless_ready(config: BuildConfig, state_path: Path) -> int | None:
         )
         return readiness.refuse_issues(issues)
     return None
+
+
+def _specs_on_disk(change_dir: Path) -> bool:
+    """A proposal (a component's change's) and requirements are on disk:
+    `specs.md` or `requirements/*.md`."""
+    from multiplai_core.specs import change_root
+
+    return (change_root(change_dir) / "proposal.md").is_file() and (
+        (change_dir / "specs.md").is_file()
+        or any((change_dir / "requirements").glob("*.md"))
+    )
 
 
 def _old_handoff_reason(config: BuildConfig, change_dir: Path) -> str | None:
@@ -1028,9 +1053,7 @@ def _refuse_unless_ready_at_base(config: BuildConfig) -> int | None:
                 marked = read_change_meta(copy).get("spec_status") is not None
             except (OSError, UnicodeError, ValueError):
                 marked = False
-            on_disk = (copy / "proposal.md").is_file() and any(
-                (copy / "requirements").glob("*.md")
-            )
+            on_disk = _specs_on_disk(copy)
             log.error(
                 "REFUSED change=%s reason=spec-not-ready base=%s detail=%s",
                 name,
@@ -2458,17 +2481,22 @@ def _pr_base_branch(repo: Path, base_ref: str) -> str | None:
 def pr_title(target: str, tickets: tuple[str, ...], docs_dir: Path, change: str) -> str:
     """`[<target branch>] <TICKET> <title>`: the branch the PR goes against,
     the change's ticket id (none when it has none) and its title, the first
-    `# ` heading of its proposal (else the change's name)."""
+    `# ` heading of its proposal (a component, which has none: of its
+    `plan.md`, less `Plan: `; else the change's name)."""
     import re
 
     title = ""
-    try:
-        text = (Path(docs_dir) / "proposal.md").read_text()
-    except (OSError, UnicodeError):
-        text = ""
-    m = re.search(r"^#\s+(.+?)\s*$", text, re.MULTILINE)
-    if m and not m.group(1).startswith("<!--"):
-        title = m.group(1).strip()
+    for name in ("proposal.md", "plan.md"):
+        try:
+            text = (Path(docs_dir) / name).read_text()
+        except (OSError, UnicodeError):
+            continue
+        m = re.search(r"^#\s+(.+?)\s*$", text, re.MULTILINE)
+        if m and not m.group(1).startswith("<!--"):
+            title = m.group(1).strip()
+            if name == "plan.md":
+                title = re.sub(r"^Plan:\s*", "", title)
+        break
     words = [f"[{target}]", *(tickets[:1]), title or change]
     return " ".join(w for w in words if w)
 

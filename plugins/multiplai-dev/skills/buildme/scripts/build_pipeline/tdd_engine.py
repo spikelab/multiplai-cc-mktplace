@@ -23,7 +23,11 @@ from typing import NamedTuple
 from . import board, git_ops, review_rounds, stop_record
 from . import budget as budget_mod
 from .budget import BudgetExceededError
-from .change_manager import extract_global_constraints
+from .change_manager import (
+    extract_global_constraints,
+    requirement_sources,
+    requirement_texts,
+)
 from .config import BuildConfig
 from .gates import (
     _repo_trusted,
@@ -739,6 +743,41 @@ def _global_constraints_text(config: BuildConfig) -> str:
     return extract_global_constraints(config.design_path.read_text())
 
 
+PROTOTYPE_RULE = (
+    "When this block writes UI or API code, match the prototype: read the files "
+    "below and copy what they show (screens, layout, names, endpoint signatures, "
+    "output formats). They show only what things look like; the requirements say "
+    "how they behave."
+)
+
+
+def prototype_section(config: BuildConfig) -> str:
+    """`## Prototype`: `PROTOTYPE_RULE` and the files under
+    `change_root(change_dir)/prototype/`, relative to the project when they
+    are inside it; "" when there are none."""
+    from multiplai_core.specs import change_root
+
+    proto = change_root(Path(config.change_dir)) / "prototype"
+    if not proto.is_dir():
+        return ""
+    files = sorted(p for p in proto.rglob("*") if p.is_file())
+    if not files:
+        return ""
+
+    def shown(p: Path) -> str:
+        try:
+            return p.relative_to(config.project_dir).as_posix()
+        except ValueError:
+            return str(p)
+
+    return (
+        "\n## Prototype\n"
+        + PROTOTYPE_RULE
+        + "\n\n"
+        + "\n".join(f"- {shown(p)}" for p in files)
+    )
+
+
 def assemble_context(
     block: BlockInfo,
     config: BuildConfig,
@@ -748,7 +787,8 @@ def assemble_context(
     """Build the context bundle for an agent prompt.
 
     Includes: block info, global constraints, cross-block interfaces, design
-    doc, specs, rubric, memory files, reference docs. The role parameter
+    doc, specs, the prototype's files (`prototype_section`), rubric, memory
+    files, reference docs. The role parameter
     ("test_writer", "implementer", "refactorer") controls which files are
     included. ``blocks`` (the full block list) threads earlier blocks'
     Produces signatures into this block's context.
@@ -793,18 +833,24 @@ def assemble_context(
     if config.design_path.exists():
         parts.append(f"\n## Design Document\n{config.design_path.read_text()}")
 
-    # Requirement files (BDD scenarios — one per capability).
+    # Requirements (BDD scenarios — one section per capability, from
+    # specs.md or requirements/<cap>.md).
     # The test_writer already receives these verbatim through its dedicated
     # ``specs`` slot (built by the caller in run_block_tdd / the quality+RED
     # retries), so including them here too would ship the full requirements
     # set TWICE inside a single prompt — pure intra-call duplication that the
     # prompt cache cannot dedupe. Implementer/refactorer/reviewer get them
     # only via this bundle, so keep them for every role except test_writer.
-    req_dir = config.change_dir / "requirements"
-    if role != "test_writer" and req_dir.exists():
-        for req_file in sorted(req_dir.glob("*.md")):
-            rel = req_file.relative_to(config.change_dir)
-            parts.append(f"\n## Requirements: {rel}\n{req_file.read_text()}")
+    if role != "test_writer":
+        for rel, text in requirement_sources(config.change_dir).items():
+            parts.append(f"\n## Requirements: {rel}\n{text}")
+
+    # The prototype pm-spec made (a component's: its change's): the agents
+    # that write the code and its tests match what it shows of a UI or API.
+    if role in ("test_writer", "implementer"):
+        prototype = prototype_section(config)
+        if prototype:
+            parts.append(prototype)
 
     # Unknowns — the explainer document for dependencies new to this project.
     # test_writer ONLY: the payoff of the B1 gate is that the documented edge
@@ -1709,10 +1755,8 @@ async def run_block_tdd(
     )
 
     specs = ""
-    req_dir = config.change_dir / "requirements"
-    if req_dir.exists():
-        for req_file in sorted(req_dir.glob("*.md")):
-            specs += f"\n### {req_file.name}\n{req_file.read_text()}"
+    for cap, text in requirement_texts(config.change_dir).items():
+        specs += f"\n### {cap}.md\n{text}"
 
     # A resumed block whose tests an earlier run committed does not write them
     # again: "red" skips to the implementer, "committed" re-runs the gates.
@@ -3116,11 +3160,10 @@ async def _run_quality_review(
         spec_context += f"\nSatisfies: {', '.join(block.satisfies)}"
         # The satisfied capabilities' spec scenarios, verbatim — the reviewer
         # judges Missing/Extra/Misunderstood against these, not a paraphrase.
-        req_dir = config.change_dir / "requirements"
+        texts = requirement_texts(config.change_dir)
         for cap in block.satisfies:
-            req_file = req_dir / f"{cap}.md"
-            if req_file.exists():
-                spec_context += f"\n\n### Requirement: {cap}\n{req_file.read_text()}"
+            if cap in texts:
+                spec_context += f"\n\n### Requirement: {cap}\n{texts[cap]}"
 
     # Global constraints are review criteria too — a block that violates one
     # is non-compliant even when its local behavior is correct.

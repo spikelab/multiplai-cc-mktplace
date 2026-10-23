@@ -1559,16 +1559,18 @@ class BuildConfig:
         # Normalize the change name so a hostile/careless --change value
         # (e.g. '../../foo') can't escape specs/changes/ — archive() will
         # shutil.move this directory, so an out-of-tree path is dangerous.
-        from .change_manager import normalize_change_name
+        # A component, `<change>/<id>`, is specs/changes/<change>/components/<id>.
+        from .change_manager import change_path
 
-        return self.specs_dir / "changes" / normalize_change_name(self.change_name)
+        return change_path(self.specs_dir, self.change_name)
 
     @change_dir.setter
     def change_dir(self, value: Path | str | None) -> None:
         """Point `change_dir` at another change directory; None or "" restores
         the default. The target must be one directory directly under
-        `specs/changes/` or `specs/archive/` (ValueError otherwise), the same
-        bound the default path keeps through `normalize_change_name`."""
+        `specs/changes/` or `specs/archive/`, or a component's,
+        `specs/changes/<change>/components/<id>` (ValueError otherwise), the
+        same bound the default path keeps through `normalize_change_name`."""
         if value is None or str(value) == "":
             self._change_dir_override = ""
             return
@@ -1580,11 +1582,15 @@ class BuildConfig:
             raise ValueError(
                 f"change_dir {value} is not inside {self.specs_dir}"
             ) from None
+        component = (
+            len(rel.parts) == 4
+            and rel.parts[0] == "changes"
+            and rel.parts[2] == "components"
+        )
         if (
-            len(rel.parts) != 2
-            or rel.parts[0] not in ("changes", "archive")
-            or rel.parts[1].startswith(".")
-        ):
+            not component
+            and (len(rel.parts) != 2 or rel.parts[0] not in ("changes", "archive"))
+        ) or any(part.startswith(".") for part in rel.parts[1:]):
             raise ValueError(
                 f"change_dir {value} must be a directory directly under "
                 f"{self.specs_dir / 'changes'} or {self.specs_dir / 'archive'}"

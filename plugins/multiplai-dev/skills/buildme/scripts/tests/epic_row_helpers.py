@@ -396,7 +396,8 @@ def git(*a, cwd):
 
 
 change = opt("--change")
-cid = change.split("-", 1)[1]       # `<parent>-<id>`; the tests' parent names have no hyphen
+slug = change.replace("/", "-")     # a nested component `<parent>/<id>` is named as a child is
+cid = slug.split("-", 1)[1]         # `<parent>-<id>`; the tests' parent names have no hyphen
 counts = root / "attempts"
 counts.mkdir(exist_ok=True)
 n = len(list(counts.glob(cid + ".*"))) + 1
@@ -419,8 +420,8 @@ if git("status", "--porcelain", "--untracked-files=no", cwd=top).stdout.strip():
     print(f"ERROR:{{top}} has uncommitted changes in tracked files. Commit or stash them.",
           file=sys.stderr, flush=True)
     sys.exit(1)
-wt = pathlib.Path(os.environ["WORKSPACE"]) / ".worktrees" / f"buildme-{{change}}"
-branch = f"buildme/{{change}}"
+wt = pathlib.Path(os.environ["WORKSPACE"]) / ".worktrees" / f"buildme-{{slug}}"
+branch = f"buildme/{{slug}}"
 if wt.exists():
     print(f"WORKTREE:{{wt}}", flush=True)
 else:
@@ -459,7 +460,7 @@ if step.get("exit"):
 if step.get("no_pr"):
     sys.exit(0)
 repo = pathlib.Path(git("remote", "get-url", "origin", cwd=top).stdout.strip()).stem   # PR F: `r` or another
-url = f"https://example.invalid/o/{{repo}}/pull/{{step.get('pr_number', change)}}"
+url = f"https://example.invalid/o/{{repo}}/pull/{{step.get('pr_number', slug)}}"
 prs_file = root / "prs.json"
 import fcntl
 with (root / "prs.lock").open("a") as held:     # two builds ending at once both keep their PR

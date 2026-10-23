@@ -432,6 +432,16 @@ def _main(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 1
+        from multiplai_core.specs import change_root
+
+        if change_root(change_dir) != change_dir:
+            # A change with components archives once, all of them together.
+            print(
+                f"ERROR: '{args.change}' is a component; archive its change: "
+                f"--change {change_root(change_dir).name}",
+                file=sys.stderr,
+            )
+            return 1
         dest = cm.archive_change(change_dir, merge_specs=not args.no_merge)
         print(f"Archived to: {dest}")
         return 0

@@ -10,8 +10,12 @@ Directory layout:
         .change.yaml       — pm-spec's record, `spec_status: ready` included
         proposal.md        — pm-spec's (an input buildme checks for)
         use-cases.md       — pm-spec's: personas + the use cases they must observe
-        requirements/      — pm-spec's: BDD scenarios (one file per capability)
-          <capability>.md
+        specs.md           — pm-spec's: `# Capability: <cap>` sections of BDD
+                             scenarios (an older change: requirements/<cap>.md)
+        components/<id>/   — a change of several components: each has its own
+          .change.yaml       plan.md, specs.md and ready record, and is built
+          plan.md            as `<name>/<id>`; buildme's files for it go here
+          specs.md
         design.md          — buildme's, from here down
         unknowns.md
         tasks.md
@@ -24,6 +28,7 @@ Directory layout:
 from __future__ import annotations
 
 import logging
+import os
 import re
 from datetime import date
 from pathlib import Path
@@ -37,16 +42,93 @@ from multiplai_core.specs import (
 )
 from multiplai_core.specs import (
     archived_change_dirs,  # noqa: F401
+    change_root,
+    component_dirs,
     expected_capabilities,
     merge_delta_requirements,
-    normalize_change_name,
     valid_requirement,
     valid_requirement_text,  # noqa: F401
+    valid_specs_text,
 )
+from multiplai_core.specs import normalize_change_name as _normalize
+from multiplai_core.specs import requirement_texts as _requirement_texts
 
 from .models import ArtifactInfo, ArtifactStatus, ChangeStatus
 
 log = logging.getLogger(__name__)
+
+
+def split_component(name: str) -> tuple[str, str] | None:
+    """`(<change>, <id>)` for a component's name `<change>/<id>`, each
+    normalised, else None. Only one `/` with something usable on both sides
+    names a component; anything else is a change name."""
+    change, sep, cid = name.partition("/")
+    if not sep or "/" in cid:
+        return None
+    change, cid = _normalize_quiet(change), _normalize_quiet(cid)
+    return (change, cid) if change and cid else None
+
+
+def _normalize_quiet(name: str) -> str:
+    try:
+        return _normalize(name)
+    except ValueError:
+        return ""
+
+
+def normalize_change_name(name: str) -> str:
+    """`multiplai_core.specs.normalize_change_name`, except that a component
+    `<change>/<id>` becomes `<change>-<id>`: the name an epic's sibling child
+    has, so its branch (`<TICKET>-<change>-<id>`), worktree and board card are
+    named as a child's are."""
+    parts = split_component(name)
+    return f"{parts[0]}-{parts[1]}" if parts else _normalize(name)
+
+
+def change_ref(name: str) -> str:
+    """The name `--change` takes, normalised: `<change>/<id>` for a
+    component, else `normalize_change_name`."""
+    parts = split_component(name)
+    return f"{parts[0]}/{parts[1]}" if parts else _normalize(name)
+
+
+def change_path(specs_dir: Path, name: str) -> Path:
+    """Where the change *name* lives: `specs/changes/<change>/components/<id>`
+    for a component `<change>/<id>`, else `specs/changes/<name>`."""
+    parts = split_component(name)
+    if parts:
+        return Path(specs_dir) / "changes" / parts[0] / "components" / parts[1]
+    return Path(specs_dir) / "changes" / _normalize(name)
+
+
+def requirement_texts(change_dir: Path) -> dict[str, str]:
+    """`multiplai_core.specs.requirement_texts`: `{capability: delta}` from
+    `specs.md`, else `requirements/*.md`. A `specs.md` whose `# Capability:`
+    headings are not kebab-case or repeat a name gives `{}` and a warning: the
+    inputs check (`ChangeManager.missing_inputs`) refuses it."""
+    try:
+        return _requirement_texts(Path(change_dir))
+    except ValueError as e:
+        log.warning("Cannot read the capabilities in %s: %s", change_dir, e)
+        return {}
+
+
+def requirement_sources(change_dir: Path) -> dict[str, str]:
+    """`{label: delta}` for prompts: `requirements/<cap>.md` for a change with
+    one file per capability, `specs.md#<cap>` for a section of `specs.md`."""
+    texts = requirement_texts(change_dir)
+    if (Path(change_dir) / "specs.md").is_file():
+        return {f"specs.md#{cap}": text for cap, text in texts.items()}
+    return {f"requirements/{cap}.md": text for cap, text in texts.items()}
+
+
+def registry_names(change_dir: Path) -> list[str]:
+    """The capabilities archiving *change_dir* writes into specs/registry/:
+    its own and each component's (`component_dirs`), in order, once each."""
+    names: list[str] = []
+    for source in [Path(change_dir), *component_dirs(Path(change_dir))]:
+        names += [n for n in requirement_texts(source) if n not in names]
+    return names
 
 
 # The spec-driven artifact DAG — hardcoded since we only use one schema.
@@ -220,8 +302,8 @@ class ChangeManager:
 
     def create_change(self, name: str) -> Path:
         """Create a change directory with metadata."""
-        name = self._normalize_name(name)
-        change_dir = self.changes_dir / name
+        name = change_ref(name)
+        change_dir = change_path(self.specs_dir, name)
         metadata_path = change_dir / ".change.yaml"
         if change_dir.exists() and metadata_path.exists():
             log.info("Change '%s' already exists", name)
@@ -325,7 +407,14 @@ class ChangeManager:
         dep_paths: dict[str, str] = {}
         for dep_id in spec.get("requires", []):
             dep_generates = _generates(dep_id)
-            if "*" in dep_generates:
+            if dep_id == "requirements" and (change_dir / "specs.md").is_file():
+                dep_paths[dep_id] = "specs.md"
+            elif dep_id in ("proposal", "use-cases"):
+                # A component's proposal and use cases are its change's.
+                dep_paths[dep_id] = os.path.relpath(
+                    change_root(change_dir) / dep_generates, change_dir
+                )
+            elif "*" in dep_generates:
                 matches = list(change_dir.glob(dep_generates))
                 dep_paths[dep_id] = ", ".join(
                     str(m.relative_to(change_dir)) for m in matches
@@ -369,8 +458,17 @@ class ChangeManager:
     # --- Internal helpers ---
 
     def _artifact_exists(self, change_dir: Path, generates: str) -> bool:
-        """Check if an artifact's output file(s) exist."""
+        """Check if an artifact's output file(s) exist.
+
+        The requirements are there when `specs.md` holds valid capability
+        sections (`valid_specs_text`), or, in a change with no `specs.md`,
+        every capability the proposal names has a valid `requirements/<cap>.md`.
+        The proposal and use cases of a component are its change's
+        (`change_root`)."""
         if generates == "requirements/*.md":
+            specs = change_dir / "specs.md"
+            if specs.is_file():
+                return valid_specs_text(specs.read_text())
             proposal = change_dir / "proposal.md"
             if not proposal.is_file():
                 return False
@@ -379,12 +477,10 @@ class ChangeManager:
                 valid_requirement(change_dir / "requirements" / f"{name}.md")
                 for name in capabilities
             )
+        if generates in (INPUTS["proposal"], INPUTS["use-cases"]):
+            change_dir = change_root(change_dir)
         path = change_dir / generates
         return path.is_file() and bool(path.read_text().strip())
-
-    def _normalize_name(self, name: str) -> str:
-        """Normalize a change name to kebab-case."""
-        return normalize_change_name(name)
 
     def _merge_delta_requirements(self, change_dir: Path) -> None:
         """Merge the change's delta requirements into registry/:

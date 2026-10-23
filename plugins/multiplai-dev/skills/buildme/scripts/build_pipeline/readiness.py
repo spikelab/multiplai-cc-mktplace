@@ -79,8 +79,10 @@ def stop_on_issues(change_dir: Path, found: SpecIssuesFound, *, change: str) -> 
 
 def change_project(change_dir: Path) -> Path | None:
     """The repository *change_dir* belongs to when it is
-    `<repo>/specs/changes/<change>`, else None."""
-    change_dir = Path(change_dir)
+    `<repo>/specs/changes/<change>` (or a component of one), else None."""
+    from multiplai_core.specs import change_root
+
+    change_dir = change_root(Path(change_dir))
     if change_dir.parent.name == "changes" and change_dir.parent.parent.name == "specs":
         return change_dir.parent.parent.parent
     return None
@@ -93,6 +95,9 @@ def pm_spec_line(
     project_dir: Path | None = None,
     ticket_ref: bool = False,
 ) -> str:
+    """The pm-spec command for *name*; for a component, `<change>/<id>`,
+    the change's, since pm-spec writes a change's components in one run."""
+    name = name.split("/", 1)[0]
     where = f" --project-dir {project_dir}" if project_dir else ""
     ticket = " --ticket-ref <ticket id>" if ticket_ref else ""
     return f"Run /multiplai-pm:pm-spec {'resume ' if resume else ''}{name}{where}{ticket} first"
@@ -148,11 +153,13 @@ def refuse_issues(path: Path) -> int:
     `--project-dir` when the change dir is `<repo>/specs/changes/<change>`."""
     path = Path(path)
     print(f"{MARKER_ISSUES}:{path}", flush=True)
+    from multiplai_core.specs import change_root
+
     change_dir = path.parent
     repo = change_project(change_dir)
     where = f" --project-dir {repo}" if repo else ""
     print(
-        f"Run /multiplai-pm:pm-spec revise {change_dir.name}{where}, then run the build again",
+        f"Run /multiplai-pm:pm-spec revise {change_root(change_dir).name}{where}, then run the build again",
         flush=True,
     )
     return EXIT_SPEC_ISSUES
@@ -164,7 +171,8 @@ def refuse_issues_at(shown: str, name: str) -> int:
     the revise line names no `--project-dir`."""
     print(f"{MARKER_ISSUES}:{shown}", flush=True)
     print(
-        f"Run /multiplai-pm:pm-spec revise {name}, then run the build again", flush=True
+        f"Run /multiplai-pm:pm-spec revise {name.split('/', 1)[0]}, then run the build again",
+        flush=True,
     )
     return EXIT_SPEC_ISSUES
 
@@ -183,9 +191,14 @@ def specs_at(repo: Path, rev: str, rel: str, dest: Path) -> Path | None:
     """Write the change dir *rel* (relative to *repo*, POSIX form) as commit
     *rev* holds it to `<dest>/<rel>`, byte for byte, and return that copy:
     what a worktree cut from *rev* would hold. None when *rev* does not hold
-    *rel*. Raises `git_ops.GitLifecycleError` when git cannot read *rev*."""
+    *rel*. For a component, the whole change above it is written, since its
+    ready record covers the change's proposal and use cases too. Raises
+    `git_ops.GitLifecycleError` when git cannot read *rev*."""
+    from multiplai_core.specs import change_root
+
+    root = change_root(Path(rel)).as_posix()
     res = git_ops._run(
-        ["git", "ls-tree", "-r", "-z", rev, "--", f"{rel}/"],
+        ["git", "ls-tree", "-r", "-z", rev, "--", f"{root}/"],
         cwd=repo,
         errors="surrogateescape",
     )
@@ -212,7 +225,8 @@ def specs_at(repo: Path, rev: str, rel: str, dest: Path) -> Path | None:
         target = Path(dest) / path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(blob.stdout)
-    return Path(dest) / rel
+    copy = Path(dest) / rel
+    return copy if root == rel or copy.is_dir() else None
 
 
 def saved_revision_at(repo: Path, rev: str, rel: str) -> str | None:

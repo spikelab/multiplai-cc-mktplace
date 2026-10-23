@@ -8,6 +8,15 @@ records, as `origin/<feature branch>` holds them (`is_epic` too), never
 pm-spec's own state, and never scans for `parent`: the list says which
 children the epic has.
 
+A change pm-spec gave components instead nests them:
+`specs/changes/<parent>/components/<id>/` (`component_dirs`), each with its
+own `.change.yaml` whose `depends_on` lists sibling ids. The coordinator runs
+them the same way, each building as `<parent>/<id>`, in `depends_on` order. A
+component merged into the feature branch keeps its dir there; the saved
+epic.json says it merged. Once every component has merged, the coordinator
+archives the whole change on the feature branch, once; a later run reads the
+change from the branch's `specs/archive/` and archives nothing more.
+
 `run_epic_from_specs` checks, writing nothing until every check passes:
 
 - the parent is on a feature branch (`config.feature_branch`); one ready
@@ -35,7 +44,13 @@ import sys
 import tempfile
 from pathlib import Path
 
-from multiplai_core.specs import archived_change_dirs, is_ready, read_change_meta
+from multiplai_core.specs import (
+    archived_change_dirs,
+    change_root,
+    component_dirs,
+    is_ready,
+    read_change_meta,
+)
 
 from .. import feature_branch, git_ops, readiness
 from . import lock as epic_lock
@@ -73,17 +88,34 @@ def _specs_rel(config) -> tuple[Path, str] | None:
 
 def is_epic(config) -> bool:
     """True when the change's `.change.yaml` lists a non-empty `children`
-    (pm-spec split it): on `origin/<feature branch>` when the change has one,
-    else in the checkout."""
+    (pm-spec split it, or gave it components): on `origin/<feature branch>`
+    when the change has one, else in the checkout. A component never is."""
+    if change_root(Path(config.change_dir)) != Path(config.change_dir):
+        return False
     where = _specs_rel(config) if config.feature_branch else None
     if where is None:
-        return bool(_children(Path(config.change_dir)))
+        return _has_children(Path(config.change_dir))
     repo, rel = where
     name = Path(config.change_dir).name
     with feature_branch.Copy(
         repo, config.feature_branch, f"{rel}/changes/{name}"
     ) as copy:
-        return copy is not None and bool(_children(copy))
+        if copy is not None:
+            return _has_children(copy)
+    # A change with components that its coordinator archived on the branch.
+    with feature_branch.Copy(repo, config.feature_branch, f"{rel}/archive") as copy:
+        return copy is not None and _archived_components(copy.parent, name) is not None
+
+
+def _has_children(change_dir: Path) -> bool:
+    return bool(_children(change_dir) or component_dirs(change_dir))
+
+
+def _archived_components(specs: Path, name: str) -> Path | None:
+    """The newest `specs/archive/<date>-<name>/` when it holds components,
+    else None."""
+    archived = archived_change_dirs(specs, name)
+    return archived[-1] if archived and component_dirs(archived[-1]) else None
 
 
 def _cycle(graph: dict[str, list[str]]) -> list[str] | None:
@@ -212,6 +244,60 @@ def _read_children(
     return children, None, merged
 
 
+def _read_components(
+    name: str, change_dir: Path
+) -> tuple[list[store.EpicChild], tuple[str, str] | None]:
+    """The components of the change *name* (`component_dirs`, each
+    `components/<id>/` holding a `plan.md`) as `EpicChild`s, their
+    `depends_on` the sibling ids their `.change.yaml` lists, or the refusal
+    `(advice change, reason)` for the first check that fails: an id that is
+    not kebab-case, a `depends_on` that is not a list of ids or names an id
+    the change has no component for, a dependency cycle. Listed in
+    dependency order, then by id."""
+    children: list[store.EpicChild] = []
+    dirs = component_dirs(change_dir)
+    ids = [d.name for d in dirs]
+    for d in dirs:
+        cid = d.name
+        if not ID_RE.match(cid):
+            return [], (name, f"component {cid} of {name}: its id is not kebab-case")
+        try:
+            deps = read_change_meta(d).get("depends_on")
+        except (OSError, UnicodeError, ValueError) as e:
+            return [], (name, f"component {name}/{cid}: {e}")
+        deps = [] if deps is None else deps
+        if not isinstance(deps, list) or not all(isinstance(x, str) for x in deps):
+            return [], (
+                name,
+                f"component {name}/{cid}: depends_on in its .change.yaml is not a list "
+                "of component ids",
+            )
+        for dep in deps:
+            if dep not in ids:
+                return [], (
+                    name,
+                    f"component {name}/{cid} depends on {dep}, which is not a component "
+                    f"of {name}",
+                )
+        children.append(store.EpicChild(id=cid, depends_on=list(dict.fromkeys(deps))))
+    cycle = _cycle({c.id: c.depends_on for c in children})
+    if cycle:
+        return [], (
+            name,
+            f"the components of {name} depend on each other in a cycle: "
+            + " -> ".join(cycle),
+        )
+    level: dict[str, int] = {}
+
+    def depth(cid: str) -> int:
+        if cid not in level:
+            deps = next(c.depends_on for c in children if c.id == cid)
+            level[cid] = 1 + max((depth(d) for d in deps), default=-1)
+        return level[cid]
+
+    return sorted(children, key=lambda c: (depth(c.id), c.id)), None
+
+
 async def run_epic_from_specs(config, args) -> int:
     """Build the children pm-spec split *config*'s change into, in dependency
     order, with the coordinator's review, fix and merge loops. Returns the
@@ -251,18 +337,41 @@ async def run_epic_from_specs(config, args) -> int:
                 name, f"cannot read {rel} on origin/{branch}: {e}"
             )
         changes = Path(tmp) / rel / "changes"
-        children, refused, merged = _read_children(
-            name, _children(changes / name), changes, _saved(epic_dir)
-        )
+        # A change whose components all merged is archived on the branch by
+        # the coordinator; a later run reads it there.
+        source = changes / name
+        if not source.is_dir():
+            source = _archived_components(changes.parent, name) or source
+        nested = bool(component_dirs(source))
+        if nested:
+            # pm-spec nested the components in the change: each builds as
+            # `<name>/<id>`; one merged into the feature branch, as the saved
+            # epic.json says, is not checked again.
+            children, refused = _read_components(name, source)
+            saved = _saved(epic_dir)
+            merged = {
+                f"{name}/{c.id}"
+                for c in children
+                if saved is not None
+                and (was := saved.child_status.get(c.id)) is not None
+                and was.status == "merged"
+            }
+        else:
+            children, refused, merged = _read_children(
+                name, _children(changes / name), changes, _saved(epic_dir)
+            )
         if refused:
             return readiness.refuse_not_ready(*refused)
-        live = [c for c in children if f"{name}-{c.id}" not in merged]
+        live = [c for c in children if child_change(name, c.id, nested) not in merged]
         for c in live:
-            child = f"{name}-{c.id}"
-            ready, why = is_ready(changes / child)
+            child = child_change(name, c.id, nested)
+            ready, why = is_ready(
+                source / "components" / c.id if nested else changes / child
+            )
             if not ready:
                 return readiness.refuse_not_ready(
-                    child, f"child {child} on origin/{branch}: {why}"
+                    child,
+                    f"{'component' if nested else 'child'} {child} on origin/{branch}: {why}",
                 )
 
     try:
@@ -294,13 +403,21 @@ async def run_epic_from_specs(config, args) -> int:
     from . import coordinator
 
     try:
-        return await coordinator.run_epic(config, args, epic_dir, epic, branch)
+        return await coordinator.run_epic(
+            config, args, epic_dir, epic, branch, nested=nested
+        )
     except (
         Exception
     ) as e:  # the summary is written; exit 1 as any build's unexpected error
         log.error("FAIL epic change=%s error=%s", name, e, exc_info=True)
         print(f"ERROR:{e}", file=sys.stderr, flush=True)
         return 1
+
+
+def child_change(name: str, cid: str, nested: bool) -> str:
+    """The `--change` a child builds as: `<name>/<id>` for a component
+    nested in the change, `<name>-<id>` for a sibling child change."""
+    return f"{name}/{cid}" if nested else f"{name}-{cid}"
 
 
 def _saved(epic_dir: Path) -> store.Epic | None:

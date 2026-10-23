@@ -54,6 +54,7 @@ import sys
 import tomllib
 from pathlib import Path
 
+from multiplai_core.specs import change_root
 from pydantic import BaseModel, Field
 
 log = logging.getLogger(__name__)
@@ -805,7 +806,9 @@ def detect_new_dependencies(change_dir: Path, project_dir: Path) -> list[NewDepe
     dependency. Returns one entry per surviving name, sorted, each carrying its
     mention sites and the manifest evidence of absence.
     """
-    proposal = _read(change_dir / "proposal.md")
+    proposal = _read(
+        change_root(change_dir) / "proposal.md"
+    )  # a component's: its change's
     design = _read(change_dir / "design.md")
 
     sources = [

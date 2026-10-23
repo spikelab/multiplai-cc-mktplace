@@ -23,7 +23,12 @@ import sys
 from pathlib import Path
 
 from .. import git_ops
-from ..change_manager import archived_change_dirs, normalize_change_name
+from ..change_manager import (
+    archived_change_dirs,
+    change_path,
+    change_ref,
+    normalize_change_name,
+)
 from ..config import BuildConfig
 from . import fetch
 from .loop import FindingsRun, run_findings
@@ -84,10 +89,11 @@ def names_at(root: Path, head: str, specs_rel: str) -> list[str]:
 
 
 def change_name_for(change: str, head: str, names: list[str] | tuple = ()) -> str:
-    """`--change`, else the change *head* is named for: `<TICKET>-<name>` for
-    one of *names* (the longest), else `buildme/<name>`."""
+    """`--change` (`<change>/<id>` for a component), else the change *head*
+    is named for: `<TICKET>-<name>` for one of *names* (the longest), else
+    `buildme/<name>`."""
     if change:
-        return normalize_change_name(change)
+        return change_ref(change)
     if head.startswith(BRANCH_PREFIX) and head[len(BRANCH_PREFIX) :]:
         return normalize_change_name(head[len(BRANCH_PREFIX) :])
     named = [n for n in names if len(head) > len(n) + 1 and head.endswith(f"-{n}")]
@@ -100,7 +106,7 @@ def change_name_for(change: str, head: str, names: list[str] | tuple = ()) -> st
 
 
 def change_dir_for(specs_dir: Path, name: str) -> Path:
-    active = specs_dir / "changes" / name
+    active = change_path(specs_dir, name)
     if active.is_dir():
         return active
     archived = archived_change_dirs(specs_dir, name)
@@ -116,7 +122,9 @@ def worktree_for(root: Path, branch: str, name: str) -> Path:
     existing = git_ops.worktree_for_branch(root, branch)
     if existing is not None:
         return existing
-    dest = git_ops.worktrees_root(root) / f"buildme-findings-{name}"
+    dest = (
+        git_ops.worktrees_root(root) / f"buildme-findings-{normalize_change_name(name)}"
+    )
     if dest.exists():
         raise ResolveError(
             f"{dest} exists but does not have {branch} checked out; "

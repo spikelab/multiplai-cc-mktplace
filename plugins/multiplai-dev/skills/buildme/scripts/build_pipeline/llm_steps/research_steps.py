@@ -9,8 +9,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from multiplai_core.specs import change_root
 from pydantic import BaseModel, Field
 
+from ..change_manager import requirement_sources
 from ..prompts.research import RESEARCH_DECISION_PROMPT, UNTRUSTED_NOTICE
 from ..sdk import llm_call_structured
 
@@ -22,18 +24,18 @@ class ResearchDecision(BaseModel):
 
 
 def specs_summary(change_dir: Path) -> str:
-    """What the decision reads: the change's proposal, use cases and requirements."""
+    """What the decision reads: the change's proposal, use cases (a
+    component's change's) and requirements."""
     change_dir = Path(change_dir)
+    root = change_root(change_dir)
     parts = []
-    for path in [
-        change_dir / "proposal.md",
-        change_dir / "use-cases.md",
-        *sorted((change_dir / "requirements").glob("*.md")),
-    ]:
+    for path in [root / "proposal.md", root / "use-cases.md"]:
         if path.is_file():
-            parts.append(
-                f"### {path.relative_to(change_dir).as_posix()}\n{path.read_text()}"
-            )
+            parts.append(f"### {path.name}\n{path.read_text()}")
+    parts += [
+        f"### {label}\n{text}"
+        for label, text in requirement_sources(change_dir).items()
+    ]
     return "\n\n".join(parts)
 
 
