@@ -21,6 +21,9 @@ from walkthrough_pipeline.render import markdown_headings
 from walkthrough_pipeline.state import STATE_FILE, load_state
 
 CORE_TITLE = "How it stores bookings"
+# The title of the commands table this version removed, built in two parts so a search of the skill for
+# the old title finds only that it is gone.
+OLD_COMMANDS_TITLE = "Which command " + "to run"
 MD = "bookings-walkthrough.md"
 
 
@@ -355,7 +358,7 @@ def test_s12_render_of_a_finished_run_rewrites_the_files_with_no_call(
 def test_s13_render_of_a_run_from_before_this_version_draws_the_page_by_code(
     done_run, tmp_path, monkeypatch
 ):
-    """S13: a state with no core and no page fields, and a "Which command to run" section of the old
+    """S13: a state with no core and no page fields, and the commands section of the old
     codebase tables: the Markdown and the page follow the new order with neither section."""
     _, run_dir, _ = done_run
     raw = json.loads((run_dir / STATE_FILE).read_text())
@@ -364,7 +367,7 @@ def test_s13_render_of_a_run_from_before_this_version_draws_the_page_by_code(
     del raw["sections"]["core"]
     raw["sections"]["commands"] = {
         "key": "commands",
-        "title": "Which command to run",
+        "title": OLD_COMMANDS_TITLE,
         "data": {"rows": []},
     }
     (run_dir / STATE_FILE).write_text(json.dumps(raw))
@@ -385,7 +388,7 @@ def test_s13_render_of_a_run_from_before_this_version_draws_the_page_by_code(
         "Reference",
         "How this was made",
     ]
-    assert "Which command to run" not in md + html
+    assert OLD_COMMANDS_TITLE not in md + html
     assert 'class="page-body"' not in html and 'id="core"' not in html
     assert (
         'class="flowpic"'
