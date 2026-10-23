@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import logging
 import tempfile
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -83,16 +84,29 @@ def on_origin(repo: Path, branch: str) -> bool:
     return _remote_sha(repo, branch) is not None
 
 
+# git's words when another git updated a ref this fetch was updating: the
+# coordinator and an epic's children (in worktrees of the same repository)
+# share one ref store. The other git finishes in moments, so the fetch is run
+# again, at most FETCH_ATTEMPTS times in all.
+REF_LOCK_LOST = "cannot lock ref"
+FETCH_ATTEMPTS = 3
+
+
 def fetch(repo: Path) -> str | None:
-    """`git fetch origin`; None when it worked, else git's words."""
-    res = git_ops._run(
-        ["git", "fetch", "origin"], cwd=repo, timeout=git_ops._PUSH_TIMEOUT
-    )
-    return (
-        None
-        if res.ok
-        else ((res.stderr or res.stdout).strip()[-400:] or f"exit {res.returncode}")
-    )
+    """`git fetch origin`; None when it worked, else git's words. Run again
+    when it lost a ref lock to another git (`REF_LOCK_LOST`)."""
+    for attempt in range(1, FETCH_ATTEMPTS + 1):
+        res = git_ops._run(
+            ["git", "fetch", "origin"], cwd=repo, timeout=git_ops._PUSH_TIMEOUT
+        )
+        if res.ok:
+            return None
+        why = (res.stderr or res.stdout).strip()[-400:] or f"exit {res.returncode}"
+        if REF_LOCK_LOST not in why or attempt == FETCH_ATTEMPTS:
+            return why
+        log.warning("git fetch origin lost a ref lock (attempt %d): %s", attempt, why)
+        time.sleep(0.5 * attempt)
+    return why
 
 
 def recorded(change_dir: Path) -> str:

@@ -209,6 +209,23 @@ def _gh(repo: Path, *args: str) -> object | None:
 
 
 async def _fetch_origin(repo: Path) -> str | None:
+    """`git fetch origin` (`_fetch_once`), run again when it lost a ref lock to
+    another git, as `feature_branch.fetch` does. None when it worked, else why
+    not."""
+    for attempt in range(1, feature_branch.FETCH_ATTEMPTS + 1):
+        why = await _fetch_once(repo)
+        if (
+            why is None
+            or feature_branch.REF_LOCK_LOST not in why
+            or attempt == feature_branch.FETCH_ATTEMPTS
+        ):
+            return why
+        log.warning("git fetch origin lost a ref lock (attempt %d): %s", attempt, why)
+        await asyncio.sleep(0.5 * attempt)
+    return why
+
+
+async def _fetch_once(repo: Path) -> str | None:
     """`git fetch origin` as a subprocess the event loop awaits, so a signal or
     a running child's exit is handled while it runs. It is killed after
     FETCH_TIMEOUT seconds, or when the run is stopped. None when it worked,

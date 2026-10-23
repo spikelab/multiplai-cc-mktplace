@@ -125,6 +125,9 @@ time, not derived from a tag.
 - A project whose `specs/config.yaml` sets `tdd.test_command` gets its
   stack's reference docs again. The stack was detected only while
   discovering a test command, so such a build printed `REFERENCES:(none)`.
+- An epic run no longer marks a child `unknown` because `git fetch origin`
+  lost a ref lock to another git sharing the repository (a child pushing
+  from its worktree): the fetch is run again, up to three times.
 
 ### Removed
 - The refusals of a change dir with uncommitted changes, of a first-wave
