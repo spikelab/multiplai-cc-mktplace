@@ -86,15 +86,20 @@ after the third stop runs the consistency check and the handoff.
    endpoint signatures, sample output. It shows only what things look like,
    with no behaviour and no runnable code, writes `NOTES.md` (each file, and
    the questions it raised), and writes nowhere else. `--no-prototype` turns
-   it off.
+   it off. After a failed agent run (exit 1), the next resume checks
+   `prototype/` again rather than keeping it unchecked: it goes on once the
+   check passes (for example after someone fixed `NOTES.md`), fails again on
+   `STATUS: BLOCKED` or `NEEDS_CONTEXT`, and otherwise runs the agent again.
 9. **Tickets.** Writes `tickets.json` (below), commits, pushes, prints
    `SPEC:TICKETS:<path>` and `SPEC:BRANCH:<branch>`, and waits, exit 3. Resume
    with `--ticket <component>=<REF>` for every component that has no ticket
    yet: each goes into the component's `.change.yaml` (`ticket_refs`), the
    Ticket column of `components.md`, and `tickets.json`. Or resume with
    `--tickets-later` to go on with them `pending`. Any other resume is
-   refused (exit 2), printing the flags it expects, and records nothing. A
-   change with one component needs no flag: its ticket is the change's own.
+   refused (exit 2), printing the flags it expects, and records nothing. So
+   is a `--ticket` id git refuses in a branch name (a space, `..`, `~`, a
+   leading `-`), with the reason. A change with one component needs no
+   flag: its ticket is the change's own.
 10. **Specs.** `specs.md` per component (or in the change dir, for one), each
    from a call with no tools given the component's plan, the proposal, the
    use cases, the other components and the prototype's file list. Each
@@ -269,7 +274,10 @@ change whose specs were written without pm-spec (for example by buildme before
 pm-spec existed) takes them as they stand and runs only the consistency check
 and the handoff: no interview, no components, no other model call, no new
 spec file. It needs a `proposal.md` and either `specs.md` files or the old
-`requirements/<capability>.md` files.
+`requirements/<capability>.md` files. A change pm-spec 0.8.0 or earlier
+started keeps its run: `resume` records the three stages skipped ("before
+the staged flow"), checks the change again when it changed since its
+handoff, and hands it off.
 
 Models and efforts come from `specs/config.yaml`: `models:` and `efforts:`
 keyed by `interview`, `spec` (the artifacts, the components and the check),

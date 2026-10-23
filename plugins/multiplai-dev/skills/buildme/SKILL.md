@@ -568,7 +568,9 @@ has none), from and into the feature branch, and the checks below apply to
 the components as they do to children (an id that is not kebab-case, a
 `depends_on` naming no component, a cycle, specs not ready). A component
 reads its capabilities from the `# Capability:` sections of its `specs.md`,
-and its proposal and use cases from the change. A merged component's dir
+and its proposal and use cases from the change; its design and tasks agents
+also get its `plan.md` (what it builds, what is out of scope, what done
+means). A merged component's dir
 stays on the branch (the saved `epic.json` says it merged), and no component
 archives itself: once every component has merged, the run archives the whole
 change on the feature branch, once (every component's capabilities merge
