@@ -93,9 +93,8 @@ with use_db(session, WorkDB.Mode.open) as db:
 # config at the project root. Not `config.stack`, which cannot answer the
 # question — test-command discovery records the FIRST marker it finds, so a
 # project with both `pytest.ini` and `pyproject.toml` is stack "pytest" and a
-# `setup.py` project is "setup"; a `tdd.test_command` in specs/config.yaml
-# skips discovery and leaves stack ""; and `memory_files.stacks` names it
-# freely ("python", "django", ...).
+# `setup.py` project is "setup"; and `memory_files.stacks` names it freely
+# ("python", "django", ...).
 PYTHON_MARKERS = (
     "pyproject.toml",
     "setup.py",

@@ -120,6 +120,34 @@ class TestTestCommandDiscovery:
         config._discover_test_command()
         assert config.test_command == "npm test"
 
+    def test_a_configured_test_command_still_detects_the_stack(self, tmp_path):
+        """`tdd.test_command` in specs/config.yaml sets the command, not the
+        stack: the stack still comes from the root file, so the reference docs
+        are found (a real run printed REFERENCES:(none) here)."""
+        (tmp_path / "pyproject.toml").write_text("[project]\nname='test'\n")
+        ref = tmp_path / "cfg" / "reference" / "dev"
+        ref.mkdir(parents=True)
+        (ref / "python-project-structure.md").write_text("# Structure\n")
+        config = BuildConfig(
+            project_dir=tmp_path,
+            test_command="uv run pytest -q",
+            config_dir=tmp_path / "cfg",
+        )
+        config._discover_test_command()
+        assert config.test_command == "uv run pytest -q"
+        assert config.test_command_discovered_from == ""
+        assert config.stack == "pyproject"
+        assert [p.name for p in config.stack_reference_docs()] == [
+            "python-project-structure.md"
+        ]
+
+    def test_a_stack_from_memory_files_is_kept(self, tmp_path):
+        (tmp_path / "pyproject.toml").write_text("[project]\nname='test'\n")
+        config = BuildConfig(project_dir=tmp_path, test_command="make test")
+        config.stack = "django"
+        config._discover_test_command()
+        assert config.stack == "django"
+
     def test_no_test_command_if_no_markers(self, tmp_path):
         config = BuildConfig(project_dir=tmp_path)
         config._discover_test_command()

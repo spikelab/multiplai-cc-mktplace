@@ -160,7 +160,8 @@ sessions — the two cover different phases and neither replaces the other.
 Resolution, in order:
 
 1. **Stack** — the manifest filename (`pyproject`, `package`, `Package`,
-   `Cargo`, `go`).
+   `Cargo`, `go`), also when `tdd.test_command` in `specs/config.yaml` sets
+   the test command.
 2. **Frameworks** — read out of the manifests, not their names, because a
    Django app and a plain library are both `pyproject.toml`: `manage.py` or a
    `django` dependency → `django`; a `fastapi` dependency → `fastapi`; a

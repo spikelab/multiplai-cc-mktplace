@@ -122,6 +122,9 @@ time, not derived from a tag.
   a new critical finding (or an unresolved listed one, or a finding of
   buildme's own placeholder and no-behaviour scans) stops it. SKILL.md now
   names the scans.
+- A project whose `specs/config.yaml` sets `tdd.test_command` gets its
+  stack's reference docs again. The stack was detected only while
+  discovering a test command, so such a build printed `REFERENCES:(none)`.
 
 ### Removed
 - The refusals of a change dir with uncommitted changes, of a first-wave

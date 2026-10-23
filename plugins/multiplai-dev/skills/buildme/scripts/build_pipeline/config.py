@@ -1541,16 +1541,19 @@ class BuildConfig:
         )
 
     def _discover_test_command(self) -> None:
-        """Auto-detect test command if not specified in config."""
+        """Auto-detect the test command if not specified in config, and the
+        stack from the same root file either way (a stack already set, from
+        `memory_files.stacks`, is kept): the stack picks the reference docs."""
+        found = discover_test_command(self.project_dir)
+        if not found:
+            return
+        cmd, marker = found
+        self.stack = self.stack or marker.split(".")[0]
         if self.test_command:
             return
-        found = discover_test_command(self.project_dir)
-        if found:
-            cmd, marker = found
-            self.test_command = cmd
-            self.test_command_discovered_from = marker
-            self.stack = self.stack or marker.split(".")[0]
-            log.info("Discovered test command: %s", cmd)
+        self.test_command = cmd
+        self.test_command_discovered_from = marker
+        log.info("Discovered test command: %s", cmd)
 
     @property
     def change_dir(self) -> Path:
