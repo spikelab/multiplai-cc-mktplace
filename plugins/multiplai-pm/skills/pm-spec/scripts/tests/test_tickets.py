@@ -218,6 +218,49 @@ def test_done_means_and_objective_are_read_from_a_plan():
     ]
 
 
+def test_a_nested_list_under_a_criterion_keeps_its_nesting():
+    """A real-model plan: a criterion with a list under it, and a list under
+    that. Each criterion stays one acceptance entry, its sub-items on their own
+    indented lines, not run together with " - "."""
+    plan = (
+        "# Plan: Report\n\n## Done means\n\n"
+        "1. The header has a Due column.\n"
+        "2. With today injected as 2026-10-23:\n"
+        "   - the row for an open task due 2026-10-22 has class `overdue`\n"
+        "   - the rows for these tasks do not have class\n"
+        "     `overdue`:\n"
+        "     - an open task due 2026-10-23\n"
+        "     - a completed task due 2026-10-01\n"
+        "   1. a numbered sub-item\n"
+        "3. The tests pass whatever the system date.\n"
+    )
+    assert tickets.done_means(plan) == [
+        "The header has a Due column.",
+        (
+            "With today injected as 2026-10-23:\n"
+            "- the row for an open task due 2026-10-22 has class `overdue`\n"
+            "- the rows for these tasks do not have class `overdue`:\n"
+            "  - an open task due 2026-10-23\n"
+            "  - a completed task due 2026-10-01\n"
+            "1. a numbered sub-item"
+        ),
+        "The tests pass whatever the system date.",
+    ]
+    schema = json.loads(SCHEMA.read_text())
+    item = {
+        "id": "x",
+        "type": "task",
+        "title": "t",
+        "description": "",
+        "priority": "none",
+        "labels": [],
+        "parent": None,
+        "acceptance": tickets.done_means(plan),
+        "links": [],
+    }
+    jsonschema.validate([item], schema)
+
+
 def test_the_schema_rejects_a_ticket_system_shaped_item():
     schema = json.loads(SCHEMA.read_text())
     bad = [

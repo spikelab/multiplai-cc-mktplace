@@ -27,7 +27,7 @@
       "acceptance": {
         "type": "array",
         "items": {"type": "string", "minLength": 1},
-        "description": "A checklist: the numbered criteria of the component's plan, under ## Done means."
+        "description": "A checklist: the numbered criteria of the component's plan, under ## Done means, one entry each. A list nested under a criterion stays in its entry, one sub-item per line, indented as in the plan."
       },
       "links": {
         "type": "array",

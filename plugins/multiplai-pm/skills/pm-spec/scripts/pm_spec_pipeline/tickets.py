@@ -117,13 +117,29 @@ def objective(plan: str) -> str:
     return _oneline(m.group(1)) if m else ""
 
 
+_LIST_ITEM_RE = re.compile(r"^(\s*)(?:[-*+]|\d+[.)]|[a-z][.)])\s+\S")
+
+
 def done_means(plan: str) -> list[str]:
-    """The numbered criteria of the plan's `## Done means`, each on one line."""
+    """The numbered criteria of the plan's `## Done means`, one entry each.
+
+    A wrapped line joins the line above it with a space. A list nested under
+    a criterion stays in that criterion's entry, each sub-item on its own line,
+    indented as in the plan less the criterion's own indent. A numbered line is
+    a new criterion unless it is indented as far as the criterion's text."""
     items: list[str] = []
+    indent = 0  # where the current criterion's text starts
     for line in _section(plan, "Done means").splitlines():
-        if m := re.match(r"^\s*\d+[.)]\s+(.*)$", line):
-            items.append(m.group(1).strip())
-        elif line.strip() and items:
+        top = re.match(r"^(\s*)\d+[.)]\s+(.*)$", line)
+        if top and (not items or len(top.group(1)) < indent):
+            items.append(top.group(2).strip())
+            indent = top.start(2)
+        elif not line.strip() or not items:
+            continue
+        elif m := _LIST_ITEM_RE.match(line):
+            depth = max(len(m.group(1)) - indent, 0)
+            items[-1] += "\n" + " " * depth + line.strip()
+        else:
             items[-1] += " " + line.strip()
     return items
 
