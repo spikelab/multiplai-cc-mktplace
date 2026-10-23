@@ -16,8 +16,8 @@ The specs are written on the change's feature branch (`<TICKET>-<change>`, or
 it, and pushed to origin (`branch.py`). A change with no ticket ref, of its
 own or a parent's, is refused (exit 2) until `--ticket-ref` names one.
 
-pm-spec stops for review after the proposal and after the components
-(`SPEC:REVIEW:<stage>`), and waits for the components' tickets
+pm-spec stops for review after the proposal, after the components and after
+the specs (`SPEC:REVIEW:<stage>`), and waits for the components' tickets
 (`SPEC:TICKETS:<path>`); `resume` goes on. `--auto` never stops.
 
 Exit codes: 0 ready, 1 failed, 2 refused, 3 waiting (for a review, the

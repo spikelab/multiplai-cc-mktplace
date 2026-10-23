@@ -138,24 +138,33 @@ async def test_pm_spec_ready_specs_build_to_tdd_and_an_edit_refuses(
     prd = tmp_path / "prd.md"
     prd.write_text(PRD)
 
-    # pm-spec: the specs, checked, marked ready, committed for
-    # <TICKET>-<change> in its own worktree, and pushed.
+    # pm-spec: the specs, through its three review stops and the ticket
+    # wait (each a push, exit 3, and a resume as the approval), then
+    # checked, marked ready, committed for <TICKET>-<change> in its own
+    # worktree, and pushed.
+    common = ["--project-dir", str(repo), "--trust-repo"]
     proc = _pm_spec(
         tmp_path,
         repo,
         "new",
         CHANGE,
-        "--project-dir",
-        str(repo),
+        *common,
         "--prd",
         str(prd),
-        "--auto",
-        "--trust-repo",
+        "--interview-summary",
+        "Return a value.",
         "--no-prototype",
         "--no-epic-split",
         "--ticket-ref",
         "ENG-1",
     )
+    for marker in ("SPEC:REVIEW:proposal", "SPEC:REVIEW:components", "SPEC:TICKETS:"):
+        assert proc.returncode == 3, proc.stdout[-3000:] + proc.stderr[-3000:]
+        assert marker in proc.stdout, proc.stdout[-3000:]
+        proc = _pm_spec(tmp_path, repo, "resume", CHANGE, *common)
+    assert proc.returncode == 3, proc.stdout[-3000:] + proc.stderr[-3000:]
+    assert "SPEC:REVIEW:specs" in proc.stdout, proc.stdout[-3000:]
+    proc = _pm_spec(tmp_path, repo, "resume", CHANGE, *common)
     assert proc.returncode == 0, proc.stdout[-3000:] + proc.stderr[-3000:]
     branch = f"ENG-1-{CHANGE}"
     spec_tree = tmp_path / ".worktrees" / f"pm-spec-{branch}"

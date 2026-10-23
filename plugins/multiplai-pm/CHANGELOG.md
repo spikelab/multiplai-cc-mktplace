@@ -24,13 +24,14 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
 ## [0.9.0] - 2026-10-23
 
 ### Changed
-- pm-spec now works in three stages and stops for review after the first two,
+- pm-spec now works in three stages and stops for review after each one,
   pushing the feature branch each time. Stage 1 writes the interview and the
   proposal and stops with `SPEC:REVIEW:proposal` (exit 3). `resume` means
   "approved": stage 2 writes the use cases and the components and stops with
   `SPEC:REVIEW:components`. The next `resume` runs stage 3: the prototype,
-  `tickets.json`, then the specs, the consistency check and the handoff.
-  `--auto` runs all three with no stop.
+  `tickets.json`, then the specs, and stops with `SPEC:REVIEW:specs`. The
+  `resume` after that runs the consistency check and the handoff on the
+  files as reviewed. `--auto` runs it all with no stop.
 - An epic is no longer split into sibling changes with runs of their own. A
   change holds its components: `components.md` (component, depends on,
   ticket) and `components/<id>/` with a `plan.md`, a `.change.yaml` and a

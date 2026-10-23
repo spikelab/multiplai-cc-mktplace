@@ -177,7 +177,7 @@ SAMPLE_SINGLE = [
 
 
 def _sample_run(repo, model, components, tickets) -> tuple[list[str], list[str]]:
-    """The samples page's flow for auth-session (ENG-40): three review pushes
+    """The samples page's flow for auth-session (ENG-40): four review pushes
     and the handoff push. Origin's files under the change dir, and its log."""
     from conftest import origin, specs
 
@@ -201,7 +201,8 @@ def _sample_run(repo, model, components, tickets) -> tuple[list[str], list[str]]
         (["resume", "auth-session"], 3),
     ]:
         assert run(repo, *argv) == code, argv
-    assert run(repo, "resume", "auth-session", *tickets) == 0
+    assert run(repo, "resume", "auth-session", *tickets) == 3
+    assert run(repo, "resume", "auth-session") == 0
     branch = "ENG-40-auth-session"
     files = git(
         origin(repo),
@@ -228,6 +229,7 @@ def test_the_branch_at_handoff_holds_the_samples_tree_with_components(repo, mode
     assert files == sorted(SAMPLE_NESTED)
     assert log == [
         "specs(auth-session): ready for build",
+        "specs(auth-session): specs for review",
         "specs(auth-session): prototype and tickets",
         "specs(auth-session): components for review",
         "specs(auth-session): proposal for review",
@@ -240,4 +242,4 @@ def test_the_branch_at_handoff_holds_the_samples_tree_with_one_component(repo, m
 
     files, log = _sample_run(repo, model, [component("auth-session")], [])
     assert files == sorted(SAMPLE_SINGLE)
-    assert len(log) == 5 and log[0] == "specs(auth-session): ready for build"
+    assert len(log) == 6 and log[0] == "specs(auth-session): ready for build"

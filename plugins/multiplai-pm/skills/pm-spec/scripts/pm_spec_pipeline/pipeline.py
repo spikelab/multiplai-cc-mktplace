@@ -10,8 +10,9 @@ In order, each skipped when the run state or the files say it is done:
 5. stage 2: `use-cases.md`, the components and their plans, then the review
    stop (rows S4, S5): `SPEC:REVIEW:components`, exit 3;
 6. stage 3: the prototype, `tickets.json` and the ticket wait (row S6:
-   `SPEC:TICKETS:<path>`, exit 3), then each component's `specs.md` (row S7);
-7. the consistency check, then the handoff (row S8).
+   `SPEC:TICKETS:<path>`, exit 3), then each component's `specs.md` (row S7),
+   then the review stop (row S13): `SPEC:REVIEW:specs`, exit 3;
+7. on the resume after it, the consistency check, then the handoff (row S8).
 
 `--auto` makes no stop and no ticket wait. Every file on disk is kept, whoever
 wrote it: an edit pulled from the branch at a stop is an input of the stages
@@ -222,12 +223,8 @@ async def advance(
         stages.tickets_step(run, tickets_in.refs, tickets_in.later)
         if not stages.done(run, stages.SPECS):
             await artifacts.generate_specs(run)
-            F.record_passed(
-                run,
-                stages.SPECS,
-                layout.revision(run.config.change_dir),
-                "specs.md written",
-            )
+        stages.review_stop(run, stages.SPECS)
+    # The check and the handoff, once the specs are approved.
     await handoff.check_and_hand_off(run)
     return EXIT_DONE
 

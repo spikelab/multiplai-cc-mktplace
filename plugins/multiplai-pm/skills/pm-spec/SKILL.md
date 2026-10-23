@@ -1,6 +1,6 @@
 ---
 name: pm-spec
-description: Writes the "what" of a change before anyone builds it, in three stages it stops between for review, pushing the change's feature branch (named after its ticket) at each stop — an interview and a proposal; use cases and the components, each with a plan; a prototype, a tickets.json it waits on, and a specs.md per component — then checks with one read-only agent that the specs agree with each other and hands off a ready record and a commit of the change dir for /multiplai-dev:buildme to build from. Takes a PRD and a ticket's text (with its child items) as inputs. revise fixes requirements issues buildme raised later.
+description: Writes the "what" of a change before anyone builds it, in three stages, each ending in a stop for review that pushes the change's feature branch (named after its ticket) — an interview and a proposal; use cases and the components, each with a plan; a prototype, a tickets.json it waits on, and a specs.md per component — then, once the specs are approved, checks with one read-only agent that the specs agree with each other and hands off a ready record and a commit of the change dir for /multiplai-dev:buildme to build from. Takes a PRD and a ticket's text (with its child items) as inputs. revise fixes requirements issues buildme raised later.
 when_to_use: 'Triggers: pm-spec, write the spec, spec this change, specify a feature, turn this PRD into specs, spec this ticket, revise the specs, fix spec-issues.md, /multiplai-pm:pm-spec'
 ---
 
@@ -32,9 +32,10 @@ opens no pull request and calls no ticket system: reviewers comment and edit
 on the branch, buildme builds each component's pull request against it, and
 the pull request from it to your default branch is yours.
 
-It works in three stages and stops for review after the first two, pushing
-the feature branch at each stop. `resume` means "approved" and runs the next
-stage, after pulling the branch, so edits reviewers pushed are kept and read.
+It works in three stages and stops for review after each, pushing the feature
+branch at each stop. `resume` means "approved" and runs the next step, after
+pulling the branch, so edits reviewers pushed are kept and read. The resume
+after the third stop runs the consistency check and the handoff.
 
 **Stage 1: the problem.**
 
@@ -100,7 +101,11 @@ stage, after pulling the branch, so edits reviewers pushed are kept and read.
    `# Capability: <name>` heading sits over that capability's
    `## ADDED/MODIFIED/REMOVED Requirements`; a name for existing behaviour
    must be an existing `specs/registry/` file's.
-11. **Consistency check.** One read-only agent reads the proposal, the use
+11. **Stop:** commit, push, `SPEC:REVIEW:specs`, `SPEC:BRANCH:<branch>`,
+   exit 3. The specs are not checked yet. Approved, `resume` runs the check
+   and the handoff on the files as they are on the branch, reviewers' edits
+   to `specs.md` and `prototype/` included.
+12. **Consistency check.** One read-only agent reads the proposal, the use
    cases, the plans and every `specs.md` together, and reports each
    `contradiction`, `gap` or `duplicate` citing both places; a `specs.md`
    that breaks the format (a capability name that is not kebab-case or is
@@ -112,7 +117,7 @@ stage, after pulling the branch, so edits reviewers pushed are kept and read.
    `spec_status` still `draft`. Running again with the files unchanged
    refuses with no model call; after you edit the files the check gets its
    one rewrite back.
-12. **Handoff.** Only for the files the check read: if they changed after the
+13. **Handoff.** Only for the files the check read: if they changed after the
    check read them, the change goes back to `draft` and is checked again.
    Writes the ready record (`spec_status: ready` and `spec_revision`) on each
    component's `.change.yaml` and on the change's, commits
@@ -198,6 +203,12 @@ your checkout are left as they are; delete them when you no longer need them.
   component there is nothing to create: on a yes, rewrite the change's own
   ticket (`ref`) with the task's title, description and acceptance, then run
   `resume <name>`.
+- **`SPEC:REVIEW:specs`.** Tell the user the specs and the prototype are
+  pushed on `<branch>` and are ready to share for review: each `specs.md`
+  (in `components/<id>/`, or in the change dir for one component) and the
+  files in `prototype/`, with `NOTES.md`'s questions for the reviewers.
+  Reviewers comment and edit on the branch. Approved: `resume <name>`, which
+  checks the specs and hands them off.
 - **`SPEC:READY`.** The specs are pushed and ready: tell the user that
   `/multiplai-dev:buildme <name>` builds them, and that the prototype and the
   specs are on the branch for anyone to read.
@@ -299,6 +310,6 @@ calls cost.
 | 0 | Ready (`SPEC:READY:...`, then `SPEC:BRANCH:<branch>`). |
 | 1 | Failed: a model call, an answer rejected twice, the prototype, `git fetch`, the commit or the push (the ready record is kept; `resume` retries only the commit or the push while the files are unchanged), or the spend cap. |
 | 2 | Refused: an input file missing, an untrusted repository, no ticket ref (or one git cannot start a branch name with), a `--branch` not starting with `<TICKET>-`, no `origin` remote, pm-spec's worktree diverged from `origin/<branch>` (the `git pull --rebase` to run is printed), a run that exists (`new`) or does not (`resume`), no issues to revise, a resume at the ticket wait without every component's `--ticket` (or `--tickets-later`), or a `--ticket` naming no component. |
-| 3 | Waiting: for review (`SPEC:REVIEW:proposal` or `SPEC:REVIEW:components`), for the components' tickets (`SPEC:TICKETS:<path>`), or for the ticket replies (`INTERVIEW:WAITING:<path>`). Each but the last is pushed (`SPEC:BRANCH:<branch>`). |
+| 3 | Waiting: for review (`SPEC:REVIEW:proposal`, `SPEC:REVIEW:components` or `SPEC:REVIEW:specs`), for the components' tickets (`SPEC:TICKETS:<path>`), or for the ticket replies (`INTERVIEW:WAITING:<path>`). Each but the last is pushed (`SPEC:BRANCH:<branch>`). |
 | 4 | Blocked on findings (`SPEC:BLOCKED:<change_dir>`). Edit the files, then run again. Also `resume` while requirements issues are open or a revise is blocked: run `revise`. |
 | 5 | Another process holds the change's lock; the message names its pid, host and start time. |

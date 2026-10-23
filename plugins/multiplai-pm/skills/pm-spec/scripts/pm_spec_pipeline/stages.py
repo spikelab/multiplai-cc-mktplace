@@ -1,7 +1,7 @@
 """The review stops between the stages, and the ticket wait in stage 3.
 
-A stop (`review_stop`), at the end of stage 1 (`proposal`) and stage 2
-(`components`): the change dir is committed (`git_ops.commit_change_dir`, the
+A stop (`review_stop`), at the end of stage 1 (`proposal`), stage 2
+(`components`) and stage 3 (`specs`, before the consistency check): the change dir is committed (`git_ops.commit_change_dir`, the
 change dir alone), the feature branch is pushed when origin lacks the commit,
 the step is recorded `passed`, then `SPEC:REVIEW:<stage>` and
 `SPEC:BRANCH:<branch>` are printed and the run exits 3. The push means "ready
@@ -54,6 +54,7 @@ MESSAGES = {
     PROPOSAL: "proposal for review",
     COMPONENTS: "components for review",
     TICKETS: "prototype and tickets",
+    SPECS: "specs for review",
 }
 
 

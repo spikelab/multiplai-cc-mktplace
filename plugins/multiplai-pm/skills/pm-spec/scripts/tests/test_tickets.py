@@ -125,7 +125,7 @@ def test_the_wait_takes_every_components_ticket_then_writes_the_specs(
     assert len(model.calls) == calls
     assert (
         run(repo, "resume", "throttle", "--ticket", "api=ENG-2", "--ticket", "ui=ENG-3")
-        == 0
+        == 3
     )
     for cid, ref in (("api", "ENG-2"), ("ui", "ENG-3")):
         assert meta(cdir / "components" / cid)["ticket_refs"] == {
@@ -144,7 +144,7 @@ def test_the_wait_takes_every_components_ticket_then_writes_the_specs(
 def test_tickets_later_goes_on_with_the_tickets_pending(repo, model, capsys):
     model["components"] = TWO
     to_ticket_wait(repo, capsys)
-    assert run(repo, "resume", "throttle", "--tickets-later") == 0
+    assert run(repo, "resume", "throttle", "--tickets-later") == 3
     cdir = change_dir(repo)
     step = state(cdir)["steps"]["tickets"]
     assert step["outcome"] == "skipped" and "api, ui pending" in step["reason"]
@@ -162,7 +162,7 @@ def test_a_ticket_for_no_such_component_is_refused(repo, model, capsys):
 def test_one_component_waits_but_needs_no_flag(repo, model, capsys):
     out = to_ticket_wait(repo, capsys)
     assert "SPEC:TICKETS:" in out
-    assert run(repo, "resume", "throttle") == 0
+    assert run(repo, "resume", "throttle") == 3
     assert state(change_dir(repo))["steps"]["tickets"]["outcome"] == "passed"
 
 
@@ -175,7 +175,7 @@ def test_components_with_ticket_children_need_no_flag(repo, model, capsys):
         ],
     }
     to_ticket_wait(repo, capsys, "--ticket-child", "T-1", "--ticket-child", "T-2")
-    assert run(repo, "resume", "throttle") == 0
+    assert run(repo, "resume", "throttle") == 3
     assert [i.get("ref") for i in load(change_dir(repo))] == ["ENG-1", "T-1", "T-2"]
 
 

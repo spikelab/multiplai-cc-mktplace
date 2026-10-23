@@ -1,4 +1,4 @@
-"""One test per row S1-S12 of the plan's "Stop and resume states" table.
+"""One test per row S1-S13 of the plan's "Stop and resume states" table.
 
 Each test stops the run at its row, resumes it, and compares the result with a
 run of the same inputs that never stopped (`baseline`): the same files, the
@@ -10,7 +10,8 @@ code can swallow it.
 
 Most rows use a change with two components (`TWO`) and the stops a person
 sees: `new` stops for the proposal's review, `resume` for the components',
-`resume` at the ticket wait, and `resume --ticket ...` hands off (`FLOW`)."""
+`resume` at the ticket wait, `resume --ticket ...` for the specs' review,
+and `resume` hands off (`FLOW`)."""
 
 from __future__ import annotations
 
@@ -43,7 +44,7 @@ from pm_spec_pipeline import epic, git_ops, handoff, layout, runlock, sdk
 NEW = ["new", "throttle", "--interview-summary", "Throttle it."]
 RESUME = ["resume", "throttle"]
 TICKETS = [*RESUME, "--ticket", "api=ENG-2", "--ticket", "ui=ENG-3"]
-FLOW = [(NEW, 3), (RESUME, 3), (RESUME, 3), (TICKETS, 0)]
+FLOW = [(NEW, 3), (RESUME, 3), (RESUME, 3), (TICKETS, 3), (RESUME, 0)]
 AUTO = [(["new", "throttle", "--auto"], 0)]
 AUTO_LIKE_NEW = [([*NEW, "--auto", "--interview-mode", "user"], 0)]
 
@@ -169,7 +170,7 @@ def test_S1_the_review_stop_after_the_proposal(
 
     # The files are the ones a run with no stop writes; the commits are not
     # (a stop pushes for review).
-    go(repo, [(RESUME, 3), ([*RESUME, "--tickets-later"], 0)])
+    go(repo, [(RESUME, 3), ([*RESUME, "--tickets-later"], 3), (RESUME, 0)])
     other, _ = baseline(tmp_path, monkeypatch, two, AUTO_LIKE_NEW)
     same_as(repo, other, commits=False, run_state_too=False)
 
@@ -271,7 +272,7 @@ def test_S4_the_review_stop_after_the_components(
     assert run(repo, *RESUME) == 3
     assert model.labels()[calls:] == ["prototype"]
 
-    go(repo, [([*RESUME, "--tickets-later"], 0)])
+    go(repo, [([*RESUME, "--tickets-later"], 3), (RESUME, 0)])
     other, _ = baseline(tmp_path, monkeypatch, two, AUTO_LIKE_NEW)
     same_as(repo, other, commits=False, run_state_too=False)
 
@@ -340,15 +341,17 @@ def test_S6_the_ticket_wait(repo, model, tmp_path, monkeypatch, capsys):
         )
     assert run_dir_files(cdir) == before and len(model.calls) == calls
 
-    # With them: the refs written, then the specs.
-    assert run(repo, *TICKETS) == 0
-    assert model.labels()[calls:] == ["spec:specs:api", "spec:specs:ui", "consistency"]
+    # With them: the refs written, then the specs, then their review stop.
+    assert run(repo, *TICKETS) == 3
+    assert "SPEC:REVIEW:specs" in capsys.readouterr().out
+    assert model.labels()[calls:] == ["spec:specs:api", "spec:specs:ui"]
+    assert run(repo, *RESUME) == 0
     other, _ = baseline(tmp_path, monkeypatch, two, FLOW)
     same_as(repo, other)
 
     # --tickets-later instead: the same, with the tickets pending.
     later = make_repo(tmp_path / "later" / "proj")
-    go(later, [*FLOW[:3], ([*RESUME, "--tickets-later"], 0)])
+    go(later, [*FLOW[:3], ([*RESUME, "--tickets-later"], 3), (RESUME, 0)])
     assert state(change_dir(later))["steps"]["tickets"]["outcome"] == "skipped"
     assert "ticket_refs" not in meta(change_dir(later) / "components" / "ui")
 
@@ -366,8 +369,11 @@ def test_S7_killed_during_the_specs(repo, model, tmp_path, monkeypatch, capsys):
     assert (cdir / "components" / "api" / "specs.md").is_file()
     assert not (cdir / "components" / "ui" / "specs.md").exists()
 
-    # Writes the missing one only, then checks and hands off.
+    # Writes the missing one only, then stops for the specs' review (S13).
     calls = len(model.calls)
+    assert run(repo, *RESUME) == 3
+    assert model.labels()[calls:] == ["spec:specs:ui"]
+    assert "SPEC:REVIEW:specs" in capsys.readouterr().out
     assert run(repo, *RESUME) == 0
     assert model.labels()[calls:] == ["spec:specs:ui", "consistency"]
     assert (
@@ -511,7 +517,7 @@ def test_S11_the_same_step_stopped_twice(repo, model, tmp_path, monkeypatch):
         run(repo, *TICKETS)
     with pytest.raises(Killed):
         run(repo, *RESUME)
-    assert run(repo, *RESUME) == 0
+    go(repo, [(RESUME, 3), (RESUME, 0)])
     assert model.calls_to("spec:specs:api") == 1 and model.calls_to("prototype") == 1
     other, _ = baseline(tmp_path, monkeypatch, two, FLOW)
     same_as(repo, other)
@@ -537,6 +543,66 @@ def test_S12_a_second_process_is_refused_with_the_holders_pid(
     assert len(model.calls) == calls and run_dir_files(cdir) == before
 
     # Once the holder is gone the run resumes as if nothing happened.
-    assert run(repo, *RESUME) == 0
+    go(repo, [(RESUME, 3), (RESUME, 0)])
     other, _ = baseline(tmp_path, monkeypatch, two, FLOW)
     same_as(repo, other)
+
+
+# --- S13 --------------------------------------------------------------------------
+
+
+def test_S13_the_review_stop_after_the_specs(
+    repo, model, tmp_path, monkeypatch, capsys
+):
+    two(model)
+    go(repo, FLOW[:4])
+    out = capsys.readouterr().out
+    cdir = change_dir(repo)
+    assert "SPEC:REVIEW:specs" in out and f"SPEC:BRANCH:{BRANCH}" in out
+    assert "SPEC:READY" not in out
+    # The specs, and the tickets the resume recorded.
+    assert pushed(repo)[:8] == [
+        "@ specs(throttle): specs for review",
+        "specs/changes/throttle/components.md",
+        "specs/changes/throttle/components/api/.change.yaml",
+        "specs/changes/throttle/components/api/specs.md",
+        "specs/changes/throttle/components/ui/.change.yaml",
+        "specs/changes/throttle/components/ui/specs.md",
+        "specs/changes/throttle/tickets.json",
+        "@ specs(throttle): prototype and tickets",
+    ]
+    assert state(cdir)["steps"]["specs"]["outcome"] == "passed"
+    assert "consistency" not in model.labels() and state(cdir)["handoff"] is None
+    assert meta(cdir)["spec_status"] == "draft"
+
+    # Resume pulls, then runs the check and the handoff only.
+    calls = len(model.calls)
+    assert run(repo, *RESUME) == 0
+    assert model.labels()[calls:] == ["consistency"]
+    assert (
+        ready_line(capsys.readouterr().out)
+        == f"SPEC:READY:{cdir}:{layout.revision(cdir)}"
+    )
+    other, _ = baseline(tmp_path, monkeypatch, two, FLOW)
+    same_as(repo, other)
+
+    # A reviewer's edit to a specs.md and to the prototype, pushed at the
+    # stop: kept, and what the check reads.
+    edited = make_repo(tmp_path / "edited" / "proj")
+    go(edited, FLOW[:4])
+    rule, mock = specs(rule="EDITED by a reviewer"), "<html>the reviewer's</html>\n"
+    mine = clone(edited, tmp_path / "reviewer")
+    write(
+        mine / "specs" / "changes" / "throttle" / "components" / "ui" / "specs.md", rule
+    )
+    write(mine / "specs" / "changes" / "throttle" / "prototype" / "mockup.html", mock)
+    git(mine, "commit", "-qam", "review edits")
+    git(mine, "push", "-q", "origin", BRANCH)
+    written = model.calls_to("spec:specs")
+    assert run(edited, *RESUME) == 0
+    ecdir = change_dir(edited)
+    assert (ecdir / "components" / "ui" / "specs.md").read_text() == rule
+    assert (ecdir / "prototype" / "mockup.html").read_text() == mock
+    assert "EDITED by a reviewer" in model.exactly("consistency")[-1]
+    assert model.calls_to("spec:specs") == written
+    assert layout.ready(ecdir) == (True, "")
