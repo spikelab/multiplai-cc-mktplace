@@ -1,4 +1,4 @@
-"""The handoff once the check passes (item 13, row S6).
+"""The handoff once the check passes (row S8).
 
 The ready record covers only the files the check read. The consistency step
 records the revision it read (taken before its agent call); the handoff first
@@ -8,20 +8,23 @@ change back to `draft` and returns False, so the caller checks again and no
 files once more, and a revision other than the checked one is treated the
 same way.
 
-In order: `tickets.json` is written; `.change.yaml` records the feature
-branch (`branch`); the ready record is written with
-`multiplai_core.specs.mark_ready`, and the revision it recorded is saved in
-the run state with `committed: false`; the change dir alone is committed
+The revision is `layout.revision`: the change dir's `spec_revision` with each
+component's, as the change dir's ready record does not cover its components.
+In order: `tickets.json` is written when it is missing (an adopted change);
+`.change.yaml` records the feature branch (`branch`); the ready record is
+written on each component and then on the change dir with
+`multiplai_core.specs.mark_ready` (`layout.mark_all_ready`), and the revision
+is saved in the run state with `committed: false`; the change dir alone is committed
 (`git_ops.commit_change_dir`, an isolated index); the run state records the
 commit; the feature branch is pushed (`branch.push`, never with force) and the
-run state records that; `SPEC:READY:<change_dir>:<spec_revision>` is printed,
+run state records that; `SPEC:READY:<change_dir>:<revision>` is printed,
 then `SPEC:BRANCH:<branch>`. In a build's worktree (`branch.Place.push`
 False) nothing is pushed: the revision reaches the feature branch with that
 build's push (a single change's build is on the feature branch) or through its
 pull request (an epic child's).
 
-Row S6, the commit or the push failed after the ready record was written: a
-resume recomputes the revision (`is_ready`). When it still matches, only what
+Row S8, the commit or the push failed after the ready record was written: a
+resume recomputes the revision (`layout.ready`). When it still matches, only what
 failed is retried: the commit and then the push, or the push alone. When it
 does not (the files changed since), the change is set back to `draft` and the
 consistency check runs again before a new handoff.
@@ -34,15 +37,9 @@ from __future__ import annotations
 
 import logging
 
-from multiplai_core.specs import (
-    is_ready,
-    mark_draft,
-    mark_ready,
-    read_change_meta,
-    spec_revision,
-)
+from multiplai_core.specs import component_dirs, read_change_meta
 
-from . import branch, consistency, tickets
+from . import branch, consistency, layout, tickets
 from .git_ops import GitError, commit_change_dir
 from .run import (
     EXIT_BLOCKED,
@@ -136,7 +133,7 @@ def commit_ticket(run: Run) -> None:
 
 
 def _push(run: Run) -> None:
-    """Push the feature branch (row S6), then print `SPEC:READY` and the branch.
+    """Push the feature branch (row S8), then print `SPEC:READY` and the branch.
     A failed push keeps the ready record and the commit, and stops with exit 1."""
     handoff = run.state.handoff
     where = run.config.place
@@ -162,9 +159,14 @@ MAX_CHECKS = 3
 
 
 def open_issues(run: Run) -> str | None:
-    """The `spec_issues` path in `.change.yaml`, or None when no issue is open."""
-    value = read_change_meta(run.config.change_dir).get("spec_issues")
-    return str(value) if value else None
+    """The first `spec_issues` path recorded in the change's `.change.yaml` or a
+    component's, relative to the change dir; None when no issue is open."""
+    change_dir = run.config.change_dir
+    for d in [change_dir, *component_dirs(change_dir)]:
+        value = read_change_meta(d).get("spec_issues")
+        if value:
+            return layout.rel(change_dir, d / str(value)) if d != change_dir else str(value)
+    return None
 
 
 def refuse_open_issues(run: Run) -> None:
@@ -184,7 +186,7 @@ def refuse_open_issues(run: Run) -> None:
 
 def _stale(run: Run, why: str) -> bool:
     log.info("handoff: %s; back to draft and checking again", why)
-    mark_draft(run.config.change_dir)
+    layout.mark_all_draft(run.config.change_dir)
     run.state.handoff = None
     run.save()
     run.progress("HANDOFF_STALE", f"{why}; set to draft and checking again.")
@@ -192,7 +194,7 @@ def _stale(run: Run, why: str) -> bool:
 
 
 def handoff(run: Run) -> bool:
-    """Write tickets.json and the ready record, commit the change dir, print SPEC:READY.
+    """The ready record, the commit of the change dir, SPEC:READY.
     False (and `draft`) when the files are not the ones the check passed."""
     refuse_open_issues(run)
     change_dir = run.config.change_dir
@@ -200,13 +202,13 @@ def handoff(run: Run) -> bool:
     checked = step.revision if step and step.outcome == "passed" else ""
     if not checked:
         return _stale(run, "the consistency check has not passed")
-    if spec_revision(change_dir) != checked:
+    if layout.revision(change_dir) != checked:
         return _stale(run, "the files changed after the check read them")
-    path = tickets.write(change_dir, run.config.project_dir)
-    log.info("Wrote %s", path)
+    if not (change_dir / tickets.FILE).is_file():
+        log.info("Wrote %s", tickets.write(change_dir, run.config.project_dir))
     if run.config.place is not None:
         branch.record(change_dir, run.config.place.branch)
-    revision = mark_ready(change_dir)
+    revision = layout.mark_all_ready(change_dir)
     if revision != checked:
         return _stale(run, "the files changed while the ready record was written")
     run.state.handoff = Handoff(revision=revision)
@@ -231,21 +233,21 @@ async def check_and_hand_off(run: Run) -> None:
 
 
 def pending_commit(run: Run) -> bool:
-    """Row S6 on resume: True when only the commit, or only the push, is left
+    """Row S8 on resume: True when only the commit, or only the push, is left
     to do (it is then retried by `retry_commit`). A ready record gone stale is
     set back to draft, the handoff forgotten, and False returned, so the check
     runs again."""
     handoff_state = run.state.handoff
     if handoff_state is None or (handoff_state.committed and handoff_state.pushed):
         return False
-    ready, reason = is_ready(run.config.change_dir)
+    ready, reason = layout.ready(run.config.change_dir)
     if ready:
         return True
     log.info(
         "handoff: the ready record no longer matches the files (%s); back to draft",
         reason,
     )
-    mark_draft(run.config.change_dir)
+    layout.mark_all_draft(run.config.change_dir)
     run.state.handoff = None
     run.save()
     run.progress(

@@ -1,14 +1,17 @@
-"""The consistency check: one read-only agent reads the proposal, the use cases
-and every requirements file together (item 12, row S5).
+"""The consistency check: one read-only agent reads the proposal, the use cases,
+every component's plan and every specs file together.
 
 It reports findings of type `contradiction`, `gap` or `duplicate`, each citing
-both places. The step follows the recheck rule in `findings.py`:
+both places. A specs file whose format is broken (a capability name that is
+not kebab-case or is used twice, a requirement with no scenario) is a
+critical `format` finding found in code, before the agent reads anything. The
+step follows the recheck rule in `findings.py`:
 
 1. A first check whose findings are all minor passes; minor findings are
    saved, logged and printed as advisory.
 2. Critical and major findings are numbered `CC-F<n>` and saved as the step's
-   one rewrite is admitted. The requirements files they cite are rewritten
-   (`rewrite.rewrite_requirements`), checked, and published as one change.
+   one rewrite is admitted. The specs files they cite are rewritten
+   (`rewrite.rewrite_units`), checked, and published as one change.
 3. The recheck is the same agent, shown the listed findings: each must come
    back `resolved`; a new finding blocks only when critical.
 4. A block saves the findings with ids and statuses and stops with exit 4
@@ -16,8 +19,8 @@ both places. The step follows the recheck rule in `findings.py`:
    files unchanged refuses with no model call and prints them; running after
    an edit gives the step its rewrite back.
 
-The step's revision is `multiplai_core.specs.spec_revision` of the change dir,
-taken before each agent call (the first check and the recheck): it is the
+The step's revision is `layout.revision` of the change (the change dir's and
+every component's `spec_revision`), taken before each agent call (the first check and the recheck): it is the
 revision the check read, and the handoff marks ready only that revision.
 """
 
@@ -26,15 +29,14 @@ from __future__ import annotations
 import logging
 from typing import Literal
 
-from multiplai_core.specs import spec_revision
 from pydantic import BaseModel, Field, field_validator
 
-from . import artifacts, sdk
+from . import artifacts, layout, sdk
 from . import findings as F
 from .prompts import UNTRUSTED_NOTICE
 from .prompts.consistency import CONSISTENCY_PROMPT, prior_findings_section
 from .publish import publish
-from .rewrite import change_caps, check_texts, cited_caps, rewrite_requirements
+from .rewrite import check_texts, cited_units, rewrite_units
 from .run import Run
 
 log = logging.getLogger(__name__)
@@ -81,15 +83,33 @@ def as_dicts(answer: ConsistencyAnswer) -> list[dict]:
 
 def check_prompt(run: Run, prior: list[dict] | None = None) -> str:
     change_dir = run.config.change_dir
-    use_cases = change_dir / "use-cases.md"
     return CONSISTENCY_PROMPT.format(
         notice=UNTRUSTED_NOTICE,
         project_context=run.config.project_context,
         proposal_content=artifacts.proposal_text(run) or "(missing)",
-        use_cases_content=use_cases.read_text() if use_cases.is_file() else "(missing)",
-        requirements_content=artifacts.all_requirements_text(change_dir),
+        use_cases_content=artifacts.use_cases_text(run) or "(missing)",
+        plans_content=layout.plans_text(change_dir),
+        specs_content=layout.all_specs_text(change_dir),
         prior_section=prior_findings_section(prior),
     )
+
+
+def format_findings(run: Run) -> list[dict]:
+    """A critical `format` finding for each specs file whose format is broken."""
+    change_dir = run.config.change_dir
+    return [
+        {
+            "category": "format",
+            "severity": "critical",
+            "description": f"{unit} is not a valid specs file: every capability needs a "
+            "kebab-case `# Capability:` name used once, and every requirement a name and a "
+            "scenario with WHEN and THEN",
+            "suggestion": "fix the format, keeping the requirements as they are",
+            "places": [{"file": unit, "where": "the whole file"}],
+        }
+        for unit in layout.units(change_dir)
+        if not layout.unit_text_valid(unit, (change_dir / unit).read_text())
+    ]
 
 
 async def check(run: Run, prior: list[dict] | None = None) -> ConsistencyAnswer:
@@ -111,10 +131,10 @@ async def recheck(run: Run, name: str, reason: str) -> str:
     read them, so an edit made while it reads is never counted as checked."""
     step = run.state.step(name)
     listed = step.repair_findings
-    revision = spec_revision(run.config.change_dir)
+    revision = layout.revision(run.config.change_dir)
     answer = await check(run, prior=listed)
     blocking, advisory = F.recheck_verdict(
-        listed, answer.prior_assessments, as_dicts(answer)
+        listed, answer.prior_assessments, as_dicts(answer), deterministic=format_findings(run)
     )
     step.repair_findings = F.saved_findings(
         F.assess_listed(listed, answer.prior_assessments)
@@ -133,14 +153,14 @@ async def recheck(run: Run, name: str, reason: str) -> str:
 
 
 async def rewrite_and_publish(
-    run: Run, name: str, listed: list[dict], caps: list[str], reason: str
+    run: Run, name: str, listed: list[dict], units: list[str], reason: str
 ) -> None:
-    """Rewrite *caps* for the listed findings; publish, or block on a broken text."""
-    files = await rewrite_requirements(run, listed, caps, label=name)
+    """Rewrite *units* for the listed findings; publish, or block on a broken text."""
+    files = await rewrite_units(run, listed, units, label=name)
     if problems := check_texts(run, files):
         blocking, _ = F.recheck_verdict(listed, [], [], deterministic=problems)
         F.block_on_findings(
-            run, name, spec_revision(run.config.change_dir), reason, blocking
+            run, name, layout.revision(run.config.change_dir), reason, blocking
         )
     publish(run, name, files)
 
@@ -148,7 +168,7 @@ async def rewrite_and_publish(
 async def run_consistency(run: Run) -> None:
     """The stage. Returns when the specs agree; raises `run.Stop` (exit 4) on a block."""
     change_dir = run.config.change_dir
-    revision = spec_revision(change_dir)
+    revision = layout.revision(change_dir)
     F.restart_if_passed_earlier(run, NAME, revision)
     step = run.state.steps.get(NAME)
     if step and step.outcome == "passed" and step.revision == revision:
@@ -162,7 +182,7 @@ async def run_consistency(run: Run) -> None:
         return
     print("PHASE:CONSISTENCY", flush=True)
     answer = await check(run)
-    found = as_dicts(answer)
+    found = format_findings(run) + as_dicts(answer)
     actionable, advisory = F.first_check_verdict(found)
     F.record_advisory(run, NAME, advisory)
     if not actionable:
@@ -176,15 +196,15 @@ async def run_consistency(run: Run) -> None:
         )
     numbered = F.number_findings(NAME, actionable)
     F.admit_repair(run, NAME, revision, numbered)
-    # The requirements files the findings cite; every file when one cites none
+    # The specs files the findings cite; every file when one cites none
     # (a finding between the proposal and the use cases, say).
-    named = [cited_caps(change_dir, f) for f in numbered]
-    caps = (
-        change_caps(change_dir)
+    named = [cited_units(change_dir, f) for f in numbered]
+    units = (
+        layout.units(change_dir)
         if not all(named)
-        else sorted({c for cs in named for c in cs})
+        else sorted({u for us in named for u in us})
     )
     await rewrite_and_publish(
-        run, NAME, run.state.step(NAME).repair_findings, caps, BLOCK_REASON
+        run, NAME, run.state.step(NAME).repair_findings, units, BLOCK_REASON
     )
     await recheck(run, NAME, BLOCK_REASON)

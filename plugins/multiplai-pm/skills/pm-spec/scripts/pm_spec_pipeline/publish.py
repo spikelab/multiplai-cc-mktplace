@@ -10,13 +10,10 @@ never leaves a mix of old and new: the same idea as buildme's
 `.plan-publication.json`, restated. A file that is neither its "before" nor its
 "after" text was edited by someone since, and the run stops rather than
 overwrite it.
-
-An "after" of None moves the file aside into `superseded-requirements/`.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os
@@ -42,24 +39,11 @@ def atomic_write(path: Path, text: str) -> None:
         raise
 
 
-def supersede(change_dir: Path, rel: str) -> Path | None:
-    """Move `<change_dir>/<rel>` to `superseded-requirements/<stem>-<sha256>.md`."""
-    path = change_dir / rel
-    if not path.is_file():
-        return None
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    dest = change_dir / "superseded-requirements" / f"{path.stem}-{digest}.md"
-    dest.parent.mkdir(exist_ok=True)
-    os.replace(path, dest)
-    log.info("Moved superseded %s to %s", rel, dest)
-    return dest
-
-
 def _read(path: Path) -> str | None:
     return path.read_text() if path.is_file() else None
 
 
-def publish(run: Run, step: str, files: dict[str, str | None]) -> None:
+def publish(run: Run, step: str, files: dict[str, str]) -> None:
     """Write *files* (paths relative to the change dir) as one publication of *step*'s rewrite."""
     change_dir = run.config.change_dir
     entries = {
@@ -91,10 +75,7 @@ def finish(run: Run) -> bool:
                 f"since; save your edit, then delete {journal} to go on"
             )
     for rel, item in files.items():
-        if item["after"] is None:
-            supersede(change_dir, rel)
-        else:
-            atomic_write(change_dir / rel, item["after"])
+        atomic_write(change_dir / rel, item["after"])
     record_current(run)
     step = data.get("step")
     if step:

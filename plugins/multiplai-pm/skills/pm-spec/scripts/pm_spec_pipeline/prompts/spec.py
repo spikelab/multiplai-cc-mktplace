@@ -1,11 +1,12 @@
-"""Prompts, templates and instructions for the proposal, use cases and requirements.
+"""Prompts, templates and instructions for the proposal, the use cases and each component's specs.
 
 Copied from buildme's `prompts/spec_generation.py`, `change_manager.py`
 (`TEMPLATES`, `INSTRUCTIONS`) and `spec_generator.USE_CASES_PROMPT`, then
 adapted: the proposal opens with a `# <title>` line (the epic's title in
-`tickets.json`) and, when a PRD or ticket children were given, closes with a
-`## Sources` section that names, per capability, the PRD section or ticket
-it comes from.
+`tickets.json`), names no capability (only a component's `specs.md` does),
+and, when a PRD was given, closes with a `## Sources` section naming the PRD
+sections it comes from. A component's `specs.md` holds one
+`# Capability: <name>` section per capability, each in the delta format.
 """
 
 PROPOSAL_TEMPLATE = """\
@@ -21,16 +22,6 @@ PROPOSAL_TEMPLATE = """\
      Goals — what this change aims to achieve.
      Non-Goals — what is deliberately out of scope. -->
 
-## Capabilities
-
-### New Capabilities
-<!-- kebab-case names only, one per line, no descriptions — use-cases.md
-     already carries the intent. Each creates requirements/<name>.md -->
-- `<capability-name>`
-
-### Modified Capabilities
-<!-- Existing capabilities whose REQUIREMENTS are changing. Leave empty if none. -->
-
 ## Impact
 
 <!-- Affected code, APIs, dependencies, systems. Facts about the codebase, not
@@ -41,8 +32,8 @@ PROPOSAL_TEMPLATE = """\
 SOURCES_TEMPLATE = """
 ## Sources
 
-<!-- One line per capability, naming where it comes from:
-     - `<capability-name>`: {source_forms} -->
+<!-- One line per PRD section this change comes from:
+     - PRD "<the exact text of the PRD heading>" -->
 """
 
 USE_CASES_TEMPLATE = """\
@@ -66,7 +57,9 @@ USE_CASES_TEMPLATE = """\
 - <persona> wants <goal> so that <observable outcome>
 """
 
-REQUIREMENTS_TEMPLATE = """\
+SPECS_TEMPLATE = """\
+# Capability: <capability-name>
+
 ## ADDED Requirements
 
 ### Requirement: <!-- requirement name -->
@@ -81,11 +74,11 @@ PROPOSAL_INSTRUCTION = (
     "Create the proposal document that establishes WHY this change is needed. "
     "Start with a `# <title>` line. Sections: Why; What Changes (which states Goals — what "
     "this change aims to achieve — and Non-Goals — what is deliberately out of scope — "
-    "explicitly); Capabilities (kebab-case names only, no descriptions, each "
-    "becoming requirements/<name>.md); Impact (facts about the codebase — "
+    "explicitly); Impact (facts about the codebase — "
     "affected code, APIs, dependencies, systems — not a restatement of What "
     "Changes, with every dependency name in backticks). "
-    "Personas and use cases live in use-cases.md, not here. "
+    "Personas and use cases live in use-cases.md, and capabilities and requirements in "
+    "each component's specs.md, not here. "
     "Keep concise (1-2 pages). Focus on the 'why' not the 'how'."
 )
 
@@ -103,24 +96,20 @@ USE_CASES_INSTRUCTION = (
     "the persona observes."
 )
 
-REQUIREMENTS_INSTRUCTION = (
-    "Create one requirements file per capability listed in the proposal, "
-    "at requirements/<capability>.md. "
+SPECS_INSTRUCTION = (
+    "Create the specs.md of ONE component: what it must do, as requirements grouped by "
+    "capability. Start each capability with a `# Capability: <kebab-case-name>` line, then "
+    "its `## ADDED Requirements` (and `## MODIFIED` / `## REMOVED Requirements` for "
+    "behaviour that exists today). "
     "Use WHEN/THEN format for scenarios. Each requirement MUST have at least one scenario. "
-    "Scenarios must be testable — you know when they pass."
+    "Scenarios must be testable — you know when they pass. Specify only this component's "
+    "work, as its plan describes it; the other components are specified separately."
 )
 
 PRD_RULE = """\
-The PRD below is the primary source. Every capability comes from a section of
-it: in `## Sources`, write one line per capability, `- \\`<capability>\\`: PRD
-"<the exact text of the PRD heading it comes from>"`. Name only headings that
-are in the PRD."""
-
-TICKET_CHILDREN_RULE = """\
-The ticket lists these child items: {children}. A capability that delivers one
-of them names it in `## Sources`: `- \\`<capability>\\`: ticket <ref>`, with the ref
-exactly as listed. A capability can name a PRD heading and a ticket on one line,
-separated by `; `."""
+The PRD below is the primary source. In `## Sources`, write one line per PRD
+section this change comes from, `- PRD "<the exact text of the PRD heading>"`.
+Name only headings that are in the PRD."""
 
 PROPOSAL_PROMPT = """\
 You are generating a proposal document for a spec-driven change.
@@ -143,8 +132,7 @@ Generate the proposal as markdown following this template structure:
 
 Rules:
 - Keep concise (1-2 pages)
-- Capability names MUST be kebab-case (e.g., `user-auth`, `data-export`)
-- Each capability listed under "New Capabilities" will become a requirements/<name>.md file
+- Name no capabilities and write no requirements: those come later, per component
 - Focus on WHY, not HOW — the build that follows decides the design
 - Be specific about what changes — vague proposals create vague specs
 
@@ -194,35 +182,45 @@ Rules:
 Output ONLY the markdown content. No commentary.
 """
 
-REQUIREMENTS_PROMPT = """\
-You are generating a requirements file for a single capability in a spec-driven change.
+SPECS_PROMPT = """\
+You are writing the specs of one component of a spec-driven change.
 
 {notice}
 
 ## Project Context
 {project_context}
 
-## Proposal
+## Proposal (the whole change)
 {proposal_content}
 
-## Capability to Specify
-{capability_name}
+## Use cases (the whole change)
+{use_cases_content}
+
+## The component: {component}
+{plan_content}
+
+## Other components of this change (specified separately)
+{other_components}
+
+## Prototype
+{prototype_files}
 
 ## Instructions
 {instruction}
 
 ## Output Format
-Generate the spec as markdown following this template structure:
+Generate specs.md as markdown following this template structure, with one
+`# Capability:` section per capability:
 
 {template}
 
 Rules:
+- Capability names MUST be kebab-case (e.g., `user-auth`, `data-export`)
 - Every requirement MUST have at least one WHEN/THEN scenario
 - Scenarios must be testable — unambiguous pass/fail
-- Use ADDED Requirements section header for new specs
 - Requirements should be atomic — one behavior per requirement
 - Include edge cases and error scenarios, not just happy path
-- Reference the proposal for context but add detail it lacks
+- The prototype shows what things look like; the behaviour is yours to state here
 
 Output ONLY the markdown content. No commentary.
 """
@@ -234,44 +232,15 @@ REGISTRY_REQUIREMENTS_RULE = (
     "removes goes under `## REMOVED Requirements` with that name; only new requirements go under "
     "`## ADDED Requirements`."
 )
-REGISTRY_PROPOSAL_RULE = (
-    "These capabilities are what the code does today, one file each in specs/registry/. A "
-    "capability this change alters goes under `### Modified Capabilities` with exactly the name "
-    "listed here, so its requirements are written against that file; a new capability goes under "
-    "`### New Capabilities` with a name not listed here."
+REGISTRY_NAMES_RULE = (
+    "Each capability below is what the code does today, one file each in specs/registry/. A "
+    "capability whose behaviour exists today takes exactly the name listed here, so its "
+    "requirements are written against that file; a new capability takes a name not listed here."
 )
 
-REWRITE_PROPOSAL_PROMPT = """\
-You are revising the proposal of a spec-driven change to fix the findings
-listed below. Keep everything the findings do not touch as it is.
-
-{notice}
-
-## Project Context
-{project_context}
-
-## Interview
-{interview}
-{prd_section}
-## Current proposal
-{proposal_content}
-
-## Current requirements
-{requirements_content}
-
-## Findings to fix
-{findings}
-
-## Output Format
-Keep the proposal's structure: a `# <title>` line, `## Why`, `## What Changes`,
-`## Capabilities` (kebab-case names in backticks, one per line), `## Impact`{sources_note}.
-
-Output ONLY the whole revised proposal as markdown. No commentary.
-"""
-
-REWRITE_REQUIREMENTS_PROMPT = """\
-You are revising one capability's requirements file in a spec-driven change to
-fix the findings listed below. Keep every requirement the findings do not touch
+REWRITE_SPECS_PROMPT = """\
+You are revising one specs file of a spec-driven change to fix the findings
+listed below. Keep every requirement the findings do not touch
 as it is, word for word.
 
 {notice}
@@ -285,10 +254,10 @@ as it is, word for word.
 ## Use cases
 {use_cases_content}
 
-## Every requirements file of the change
-{requirements_content}
+## Every specs file of the change
+{specs_content}
 
-## The file to revise: requirements/{capability_name}.md
+## The file to revise: {unit}
 {current_content}
 
 ## Findings to fix
@@ -296,16 +265,16 @@ as it is, word for word.
 
 ## Instructions
 Fix each finding in this file where the fix belongs here. A behaviour two
-capabilities both require belongs to the capability the proposal names for it:
-keep it there and take it out of the other. Two requirements that contradict
+places both require belongs to the component whose plan names it: keep it
+there and take it out of the other. Two requirements that contradict
 each other are resolved by stating the one rule the proposal and the use cases
 support. A gap is closed with a requirement and a WHEN/THEN scenario. When none
 of the findings needs a change in this file, return it unchanged.
 
 ## Output Format
-The same format as the current file: `## ADDED Requirements` (or MODIFIED /
-REMOVED), `### Requirement: <name>`, and under each requirement at least one
-`#### Scenario: <name>` with a `- **WHEN** ...` and a `- **THEN** ...` line.
+The same format as the current file{format_note}: `## ADDED Requirements` (or
+MODIFIED / REMOVED), `### Requirement: <name>`, and under each requirement at
+least one `#### Scenario: <name>` with a `- **WHEN** ...` and a `- **THEN** ...` line.
 
 Output ONLY the whole file as markdown. No commentary.
 """

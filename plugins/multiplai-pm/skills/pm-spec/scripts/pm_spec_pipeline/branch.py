@@ -25,8 +25,9 @@ checkout it was started from (`--project-dir`) is never touched:
 - `prepare` needs an `origin` remote and fetches it. It creates pm-spec's
   worktree when missing, with a detached HEAD (no local branch, so a build can
   check the branch out): at `origin/<branch>`, else at `origin/<default>`.
-  Then it fast-forwards the checkout to `origin/<branch>`, and refuses one
-  that has diverged from it, naming both shas.
+  Then it fast-forwards the checkout to `origin/<branch>` (the pull before
+  every step, row S10), and refuses one that has diverged from it (exit 2),
+  naming the branch, both shas and the `git pull --rebase` to run.
 - `adopt` takes a change dir in `--project-dir` that records no branch (one
   handed off before pm-spec used a branch, or specs written by hand): it
   copies the change dir, and the children it lists, into the worktree when
@@ -380,7 +381,9 @@ def prepare(where: Place) -> None:
     if not _ancestor(checkout, head, remote):
         _refuse(
             f"{checkout} has diverged from origin/{branch}: its HEAD {head} and origin/{branch} "
-            f"{remote} each hold commits the other lacks. Merge or rebase them there, then run again"
+            f"{remote} each hold commits the other lacks. Nothing was changed. Rebase the "
+            f"checkout's commits onto the branch, then run again:\n"
+            f"  git -C {checkout} pull --rebase origin {branch}"
         )
     merged = git_ops._git(
         ["merge", "--ff-only", "-q", f"refs/remotes/origin/{branch}"], checkout

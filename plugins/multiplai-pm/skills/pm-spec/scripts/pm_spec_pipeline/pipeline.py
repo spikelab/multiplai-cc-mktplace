@@ -1,27 +1,30 @@
 """The three commands, `new`, `resume` and `revise`, as stages over one run.
 
-Stages, in order, each skipped when the run state says it is done:
+In order, each skipped when the run state or the files say it is done:
 
 1. finish a rewrite whose publication was interrupted (`publish.finish`);
-2. the handoff left part way (row S6) or a ready record gone stale (row S7);
-3. the interview (row S1);
-4. the epic split (row S3): a split change stops here, its children each
-   specified by their own run;
-5. the artifacts (row S2), until the prototype step is first recorded: after
-   that, an edit is the user's and the check below judges it;
-6. the prototype (row S4);
-7. the consistency check (row S5);
-8. the handoff (row S6), which checks again when the files changed after the
-   check read them.
+2. the handoff left part way, or a ready record gone stale (row S8);
+3. the interview;
+4. stage 1: `proposal.md`, then the review stop (rows S1-S3): commit, push,
+   `SPEC:REVIEW:proposal`, exit 3;
+5. stage 2: `use-cases.md`, the components and their plans, then the review
+   stop (rows S4, S5): `SPEC:REVIEW:components`, exit 3;
+6. stage 3: the prototype, `tickets.json` and the ticket wait (row S6:
+   `SPEC:TICKETS:<path>`, exit 3), then each component's `specs.md` (row S7);
+7. the consistency check, then the handoff (row S8).
 
-A change adopted as it stands (specs pm-spec did not write) runs only 7 and 8.
-While `spec_issues` is set or a revise is blocked, a resume refuses (exit 4)
-and hands nothing off; a revise whose rewrite is admitted is carried on.
+`--auto` makes no stop and no ticket wait. Every file on disk is kept, whoever
+wrote it: an edit pulled from the branch at a stop is an input of the stages
+after it (rows S9, S11). A change adopted as it stands (specs pm-spec did not
+write) runs only 7. While `spec_issues` is set or a revise is blocked, a
+resume refuses (exit 4) and hands nothing off; a revise whose rewrite is
+admitted is carried on.
 
-The run lock (row S8) is held for the whole command. Before it, `__main__`
-places the run on the change's feature branch (`branch.place`, `branch.prepare`):
-`config.project_dir` is the checkout pm-spec writes in, its own worktree
-unless `--project-dir` is on that branch or is a build's worktree.
+The run lock (row S12) is held for the whole command. Before it, `__main__`
+places the run on the change's feature branch and pulls it (`branch.place`,
+`branch.prepare`; row S10): `config.project_dir` is the checkout pm-spec
+writes in, its own worktree unless `--project-dir` is on that branch or is a
+build's worktree.
 """
 
 from __future__ import annotations
@@ -30,7 +33,7 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from multiplai_core.specs import is_ready, mark_draft, write_change_meta
+from multiplai_core.specs import write_change_meta
 
 from . import (
     artifacts,
@@ -39,11 +42,13 @@ from . import (
     handoff,
     intake,
     interview,
+    layout,
     prototype,
     publish,
     revise,
     runlock,
     sdk,
+    stages,
 )
 from . import findings as F
 from . import state as state_mod
@@ -105,7 +110,10 @@ def intake_new(config: SpecConfig, inputs: NewInputs) -> RunState:
     if "--prd" in files:
         intake.save_copy(change_dir, files["--prd"], "prd.md")
     if "--plan-file" in files:
-        intake.save_copy(change_dir, files["--plan-file"], "plan.md")
+        # The plan is an input, read by the interview and kept in interview.md:
+        # `plan.md` in a change dir is a component's plan, written in stage 2.
+        path = files["--plan-file"]
+        contexts.insert(0, (path.name, path.read_text()))
     if "--ticket-file" in files:
         intake.save_ticket(
             change_dir,
@@ -143,7 +151,8 @@ def intake_new(config: SpecConfig, inputs: NewInputs) -> RunState:
 
 
 def _ready_again(run: Run) -> bool:
-    """Row S6 and S7 on resume. True when the run has nothing left to do."""
+    """Row S8, and an edit after the ready record (row S9). True when the run
+    has nothing left to do."""
     h = run.state.handoff
     if h is None:
         return False
@@ -152,14 +161,14 @@ def _ready_again(run: Run) -> bool:
             handoff.retry_commit(run)
             return True
         return False
-    ready, reason = is_ready(run.config.change_dir)
+    ready, reason = layout.ready(run.config.change_dir)
     if ready:
         handoff.commit_ticket(run)
         return True
     log.info(
         "The change was ready and its files changed since (%s); checking again", reason
     )
-    mark_draft(run.config.change_dir)
+    layout.mark_all_draft(run.config.change_dir)
     run.state.handoff = None
     run.save()
     return False
@@ -177,7 +186,18 @@ def _refuse_while_issues_are_open(run: Run) -> None:
         raise Stop(EXIT_BLOCKED, "revise blocked")
 
 
-async def advance(run: Run, *, replies_file: str = "") -> int:
+@dataclass
+class TicketInputs:
+    """`resume --ticket <component>=<REF>` (repeatable) and `--tickets-later`."""
+
+    refs: dict[str, str] = field(default_factory=dict)
+    later: bool = False
+
+
+async def advance(
+    run: Run, *, replies_file: str = "", tickets_in: TicketInputs | None = None
+) -> int:
+    tickets_in = tickets_in or TicketInputs()
     publish.finish(run)
     if (from_respec := revise.in_flight(run)) is not None:
         log.info("A revise is in flight; resuming it")
@@ -188,11 +208,23 @@ async def advance(run: Run, *, replies_file: str = "") -> int:
         return EXIT_DONE
     if not run.state.adopted:
         await interview.run_interview(run, replies_file=replies_file)
-        if await epic.run_epic_split(run):
-            return EXIT_DONE
-        if prototype.NAME not in run.state.steps:
-            await artifacts.generate_artifacts(run)
+        # Stage 1: the problem.
+        if not stages.done(run, stages.PROPOSAL):
+            await artifacts.generate_proposal(run)
+        stages.review_stop(run, stages.PROPOSAL)
+        # Stage 2: the components.
+        if not stages.done(run, stages.COMPONENTS):
+            await artifacts.generate_use_cases(run)
+            await epic.run_components(run)
+        stages.review_stop(run, stages.COMPONENTS)
+        # Stage 3: the prototype, the tickets, the specs.
         await prototype.run_prototype_stage(run)
+        stages.tickets_step(run, tickets_in.refs, tickets_in.later)
+        if not stages.done(run, stages.SPECS):
+            await artifacts.generate_specs(run)
+            F.record_passed(
+                run, stages.SPECS, layout.revision(run.config.change_dir), "specs.md written"
+            )
     await handoff.check_and_hand_off(run)
     return EXIT_DONE
 
@@ -271,7 +303,12 @@ def _adopt(config: SpecConfig, max_usd: float | None) -> Run:
 
 
 def _adoptable(config: SpecConfig) -> bool:
-    return (config.change_dir / "proposal.md").is_file()
+    """A proposal, and specs: a `specs.md` (the change's or a component's) or
+    the old layout's capability files."""
+    change_dir = config.change_dir
+    if not (change_dir / "proposal.md").is_file():
+        return False
+    return bool(layout.units(change_dir))
 
 
 async def cmd_resume(
@@ -279,6 +316,7 @@ async def cmd_resume(
     *,
     replies_file: str = "",
     max_usd: float | None = sdk.DEFAULT_MAX_USD,
+    tickets_in: TicketInputs | None = None,
 ) -> int:
     if _load(config) is None and not _adoptable(config):
         _no_run(config)
@@ -289,7 +327,7 @@ async def cmd_resume(
             if _load(config) is not None
             else _adopt(config, max_usd)
         )
-        return await advance(run, replies_file=replies_file)
+        return await advance(run, replies_file=replies_file, tickets_in=tickets_in)
 
 
 async def cmd_revise(

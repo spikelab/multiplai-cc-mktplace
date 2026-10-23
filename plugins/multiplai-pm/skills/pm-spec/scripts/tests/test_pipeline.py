@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from conftest import CAPS, change_dir, committed, git, meta, ready_line, run, state
+from conftest import change_dir, committed, git, meta, ready_line, run, state
 from multiplai_core.specs import is_ready, spec_revision
 
 
@@ -21,10 +21,13 @@ def test_new_runs_to_ready_and_commits_only_the_change_dir(repo, model, capsys):
         "proposal.md",
         "use-cases.md",
         "interview.md",
+        "plan.md",
+        "specs.md",
+        "prototype/NOTES.md",
         "tickets.json",
-        *(f"requirements/{c}.md" for c in CAPS),
     ):
         assert (cdir / name).is_file(), name
+    assert not (cdir / "components").exists() and not (cdir / "components.md").exists()
     # Only the change dir is in the commit, the run folder is not, and the
     # user's staged file stays staged and uncommitted.
     paths = committed(repo, cdir)
@@ -41,10 +44,11 @@ def test_the_order_of_the_calls(repo, model):
     assert model.labels() == [
         "interview:questions",
         "interview:answers",
-        "epic_split",
         "spec:proposal",
         "spec:use-cases",
-        *(f"spec:requirements:{c}" for c in CAPS),
+        "components",
+        "prototype",
+        "spec:specs:throttle",
         "consistency",
     ]
 
@@ -104,13 +108,15 @@ def test_an_untrusted_repository_is_refused_before_any_tool_call(
     assert run(repo, "resume", "throttle", "--trust-repo") == 0
 
 
-def test_user_mode_needs_no_trust_until_the_check(repo, model, monkeypatch):
-    """The user-mode interview, the split and the artifacts hold no tools; the
-    consistency agent reads the repository, so it needs trust."""
+def test_user_mode_needs_no_trust_until_the_prototype(repo, model, monkeypatch):
+    """The user-mode interview, the proposal, the use cases and the components
+    hold no tools; the prototype agent reads the repository, so it needs trust."""
     monkeypatch.delenv("PM_SPEC_TRUST_REPO")
-    assert run(repo, "new", "throttle", "--interview-summary", "Throttle the API.") == 2
-    assert "consistency" not in model.labels()
-    assert model.labels()[-1] == f"spec:requirements:{CAPS[-1]}"
+    assert run(repo, "new", "throttle", "--interview-summary", "Throttle the API.") == 3
+    assert run(repo, "resume", "throttle") == 3
+    assert run(repo, "resume", "throttle") == 2
+    assert "prototype" not in model.labels()
+    assert model.labels()[-1] == "components"
 
 
 def test_models_come_from_specs_config(repo, model):

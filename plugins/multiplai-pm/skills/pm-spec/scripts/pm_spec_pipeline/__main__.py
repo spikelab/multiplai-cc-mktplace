@@ -6,7 +6,8 @@
         [--interview-mode self|user|ticket] [--interview-replies FILE] [--auto]
         [--prototype | --no-prototype] [--no-epic-split] [--trust-repo] [--max-usd USD]
     python -m pm_spec_pipeline resume <change> [--project-dir DIR] [--branch NAME]
-        [--ticket-ref REF] [--interview-replies FILE] [--trust-repo] [--max-usd USD]
+        [--ticket-ref REF] [--ticket COMPONENT=REF ...] [--tickets-later]
+        [--interview-replies FILE] [--trust-repo] [--max-usd USD]
     python -m pm_spec_pipeline revise <change> [--project-dir DIR] [--branch NAME]
         [--ticket-ref REF] [--from-respec] [--trust-repo] [--max-usd USD]
 
@@ -15,9 +16,13 @@ The specs are written on the change's feature branch (`<TICKET>-<change>`, or
 it, and pushed to origin (`branch.py`). A change with no ticket ref, of its
 own or a parent's, is refused (exit 2) until `--ticket-ref` names one.
 
-Exit codes: 0 done (ready, or split into children), 1 failed, 2 refused,
-3 waiting for interview replies, 4 blocked on findings, 5 another run holds
-the lock. The last line is `SPEND:<usd>:<tokens>`, what this process's model
+pm-spec stops for review after the proposal and after the components
+(`SPEC:REVIEW:<stage>`), and waits for the components' tickets
+(`SPEC:TICKETS:<path>`); `resume` goes on. `--auto` never stops.
+
+Exit codes: 0 ready, 1 failed, 2 refused, 3 waiting (for a review, the
+tickets or interview replies), 4 blocked on findings, 5 another run holds the
+lock. The last line is `SPEND:<usd>:<tokens>`, what this process's model
 calls cost.
 """
 
@@ -36,7 +41,7 @@ from multiplai_core.specs import normalize_change_name
 from . import branch, runlock, sdk
 from . import state as state_mod
 from .config import INTERVIEW_MODES, SpecConfig, read_specs_config
-from .pipeline import NewInputs, cmd_new, cmd_resume, cmd_revise
+from .pipeline import NewInputs, TicketInputs, cmd_new, cmd_resume, cmd_revise
 from .run import EXIT_FAILED, EXIT_LOCKED, EXIT_REFUSED, Stop
 
 log = logging.getLogger("pm_spec_pipeline")
@@ -148,7 +153,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Never run the prototype",
     )
     new.add_argument(
-        "--no-epic-split", action="store_true", help="Keep the work as one change"
+        "--no-epic-split", action="store_true", help="Keep the work as one component"
     )
 
     resume = sub.add_parser(
@@ -160,6 +165,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--interview-replies",
         default="",
         help="ticket mode: the replies to the questions",
+    )
+    resume.add_argument(
+        "--ticket",
+        action="append",
+        default=[],
+        metavar="COMPONENT=REF",
+        help="At the ticket wait: the ticket created for a component; once per component",
+    )
+    resume.add_argument(
+        "--tickets-later",
+        action="store_true",
+        help="At the ticket wait: go on, the components' tickets left pending",
     )
 
     revise = sub.add_parser(
@@ -228,7 +245,19 @@ async def _dispatch(args: argparse.Namespace) -> int:
         )
         return await cmd_new(config, inputs, replies_file=replies, max_usd=args.max_usd)
     if args.command == "resume":
-        return await cmd_resume(config, replies_file=replies, max_usd=args.max_usd)
+        refs = {}
+        for raw in args.ticket:
+            component, sep, ref = raw.partition("=")
+            if not sep or not component.strip() or not ref.strip():
+                print(f"ERROR: --ticket {raw!r}: expected <component>=<ticket id>", flush=True)
+                return EXIT_REFUSED
+            refs[component.strip()] = ref.strip()
+        return await cmd_resume(
+            config,
+            replies_file=replies,
+            max_usd=args.max_usd,
+            tickets_in=TicketInputs(refs=refs, later=args.tickets_later),
+        )
     return await cmd_revise(config, from_respec=args.from_respec, max_usd=args.max_usd)
 
 

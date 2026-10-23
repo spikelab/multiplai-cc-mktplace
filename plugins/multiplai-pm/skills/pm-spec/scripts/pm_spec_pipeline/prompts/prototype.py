@@ -1,12 +1,12 @@
-"""The UI or output-format prototype, copied from buildme's `prompts/prototype.py`
-and adapted: it runs before the requirements are final, on the proposal and
-the requirements (there is no design yet), and its notes feed a rewrite of
-those two."""
+"""The prototype prompt, copied from buildme's `prompts/prototype.py` and
+adapted: it runs after the components are approved and before the specs, and
+makes whatever helps people picture the change, showing only what things look
+like."""
 
 PROTOTYPE_PROMPT = """\
-You are a prototyping agent. Your job is to produce the cheapest artifact that
-proves the *shape* of this change — what it looks like, what it outputs —
-before its requirements are final.
+You are a prototyping agent. Your job is to help the people reviewing this
+change picture it: what it will look like once it is built. You show the
+shape, never the behaviour, which the specs state later.
 
 {notice}
 
@@ -15,8 +15,16 @@ before its requirements are final.
 ## Proposal
 {proposal_content}
 
-## Requirements
-{requirements_content}
+## Use cases
+{use_cases_content}
+
+## Component plans
+{plans_content}
+
+## The repository
+{project_dir}
+Read it (Read, Glob, Grep) to copy what exists today: the current frontend's
+pages and styles, the current API's shapes, the current output formats.
 
 ## Where to write
 Write every file inside this directory and nowhere else:
@@ -25,38 +33,31 @@ Write every file inside this directory and nowhere else:
 
 Do not create, edit, or delete anything outside it — no repo source files, no
 config, no tests. The pipeline checks the paths you report against this
-directory and fails the stage when a file lands outside.
+directory and fails the step when a file lands outside.
 
-## What to build
-Pick the ONE form that proves the most about this change for the least work:
+## What to make
+Whatever helps a reviewer picture the change, for example:
 
-- **A user interface** → a single self-contained `mockup.html` file: inline CSS,
-  inline JS if it truly needs interaction, hardcoded sample data, no framework,
-  no build step, no external requests. It must open straight from disk.
-- **An output format** (report, export, CLI output, document) → a
-  `sample-output.<ext>` file containing realistic example output, filled with
-  plausible values rather than placeholders.
-- **A command-line or API exchange** → a hand-written `transcript.md` showing
-  the exact commands/requests and the exact responses, as they would look.
+- **Screens** → a self-contained `.html` file per screen, copied from the
+  current frontend's markup and styles, with the change drawn in: inline CSS,
+  hardcoded sample data, no scripts, no external requests. It must open
+  straight from disk.
+- **An API** → the endpoint signatures: methods, paths, request and response
+  bodies with example values, as a markdown file.
+- **Anything else** → sample output, a command transcript, or a short markdown
+  file saying what the person sees, such as "no screen changes".
 
-Hardcode everything. Fake data is the point — this artifact exists to be looked
-at and argued with, not to run. Keep it to one file plus NOTES.md where you can.
+No behaviour and no runnable code: nothing here is executed or built from.
+Keep it as small as picturing the change allows.
 
 ## Then write {prototype_dir}/NOTES.md
-End NOTES.md with these REQUIRED slots, each on its own line:
+List each file you wrote and what it shows, then the questions it raised for
+the reviewers. End with this line:
 
 ```
-PROVES: <what the artifact settles about the shape — layout, fields, wording,
-  the exact output format, the exact command sequence>
-DISPROVES: <what building it showed was wrong or unworkable in the proposal or
-  the requirements, or "none">
-OPEN_QUESTIONS: <what a person still has to decide after looking at it, or "none">
 STATUS: <DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED>
 ```
 
-`DISPROVES:` and `OPEN_QUESTIONS:` are the valuable slots: what you write there
-is fed straight back into the proposal and the requirements. Writing "none"
-when the prototype genuinely surfaced nothing is a real answer. Report
-`NEEDS_CONTEXT` or `BLOCKED` if the proposal and the requirements do not say
-enough to draw the shape at all — say what is missing in that case.
+Report `NEEDS_CONTEXT` or `BLOCKED` if the proposal and the plans do not say
+enough to draw the change at all, and say what is missing in that case.
 """

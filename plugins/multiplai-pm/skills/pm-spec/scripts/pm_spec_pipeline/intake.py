@@ -4,7 +4,9 @@
 - `ticket.md` — a ticket (an epic or work item and its children) passed as
   text with `--ticket-file`, fenced as untrusted; its refs (`--ticket-ref`,
   `--ticket-child`) are kept in `.change.yaml` as `ticket_refs`, opaque strings
-- `plan.md`  — a plan passed as `--plan-file`
+- a plan passed as `--plan-file` is not saved as a file: it is read like a
+  context file, and the interview keeps it in `interview.md` (`plan.md` in a
+  change dir is a component's plan, written in stage 2)
 - `interview.md` and `interview-questions.md` — written by the interview
 
 Copied from buildme's `intake.py` (`save_ticket`, `save_plan`,
@@ -126,7 +128,7 @@ def prd_headings(text: str) -> list[str]:
 def interview_inputs(
     change_dir: Path, summary: str, contexts: list[tuple[str, str]]
 ) -> str:
-    """What the interview is about: PRD (fenced), ticket (already fenced), plan, context, summary."""
+    """What the interview is about: PRD (fenced), ticket (already fenced), context (the plan first), summary."""
     parts = []
     prd = prd_text(change_dir)
     if prd:
@@ -134,9 +136,6 @@ def interview_inputs(
     ticket = change_dir / "ticket.md"
     if ticket.is_file():
         parts.append("## Ticket\n" + ticket.read_text())
-    plan = change_dir / "plan.md"
-    if plan.is_file():
-        parts.append("## Plan\n" + plan.read_text())
     for name, content in contexts:
         parts.append(f"## Context: {name}\n{content}")
     if summary:
@@ -157,7 +156,7 @@ def render_interview(
     """The text of `interview.md`.
 
     Sections, each only when it has content: a pointer to `prd.md`, the ticket
-    (already fenced), `## Plan`, one `## Context: <name>` per context file,
+    (already fenced), one `## Context: <name>` per context file (the plan first),
     `## Interview` for a summary, then `## Questions` / `## Answers` /
     `## Assumptions` (self mode) or `## Questions` / `## Replies` (ticket mode).
     An answer with empty `grounded_in` goes under Assumptions, never Answers.
@@ -173,9 +172,6 @@ def render_interview(
     ticket = change_dir / "ticket.md"
     if ticket.is_file():
         out += ["## Ticket", "", ticket.read_text().rstrip(), ""]
-    plan = change_dir / "plan.md"
-    if plan.is_file():
-        out += ["## Plan", "", plan.read_text().rstrip(), ""]
     for name, content in contexts or []:
         out += [f"## Context: {name}", "", content.rstrip(), ""]
     if summary:
