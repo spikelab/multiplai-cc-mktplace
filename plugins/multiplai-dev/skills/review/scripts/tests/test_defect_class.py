@@ -19,6 +19,7 @@ from conftest import (
     SCHEMA,
     high_finding,
     medium_finding,
+    pieces_of,
 )
 from fixture_repo import KEYWORD_USE_LINE
 from review_pipeline import sdk
@@ -39,8 +40,8 @@ from review_pipeline.paths_io import PathView
 from review_pipeline.post import inline_comment, review_body
 from review_pipeline.prompts import convert as convert_prompt
 from review_pipeline.prompts import find as find_prompt
+from review_pipeline.prompts.find import CLASS_AND_PLACES, build_report
 from review_pipeline.prompts.path import build_path
-from review_pipeline.prompts.piece import CLASS_AND_PLACES, build_piece
 from review_pipeline.render import class_line, finding_section
 from review_pipeline.stages import RunContext
 from review_pipeline.stages.find import map_converted, run_find
@@ -69,7 +70,10 @@ class Canned:
 
 
 @pytest.fixture
-def ctx(target_info, tmp_path) -> RunContext:
+def ctx(target_info, tmp_path, monkeypatch) -> RunContext:
+    monkeypatch.setenv(
+        "REVIEW_TRUST_REPO", "1"
+    )  # the report calls check it, as the real one does
     snapshot = tmp_path / "tree"
     snapshot.mkdir()
     return RunContext(
@@ -124,18 +128,14 @@ def test_defect_class_and_other_locations_carry_through_convert():
 # --- prompts ----------------------------------------------------------------------
 
 
-def test_defect_class_sentence_is_in_both_file_rules_and_both_schemas(target_info):
-    assert SENTENCE in find_prompt.FILE_RULE and SENTENCE in find_prompt.FILE_RULE_TREE
-    change = find_prompt.build(target_info, "diff-bugs", "diff")
+def test_defect_class_sentence_is_in_the_tree_rule_and_schema_and_the_convert_schema(
+    target_info,
+):
+    assert SENTENCE in find_prompt.FILE_RULE_TREE
     tree = find_prompt.build(
-        target_info.model_copy(update={"kind": "tree"}), "diff-bugs", "", files=["a.py"]
+        target_info.model_copy(update={"kind": "tree"}), "diff-bugs", files=["a.py"]
     )
-    for text in (change, tree):
-        assert (
-            SENTENCE in text
-            and '"defect_class"' in text
-            and '"other_locations"' in text
-        )
+    assert SENTENCE in tree and '"defect_class"' in tree and '"other_locations"' in tree
     assert (
         '"defect_class"' in convert_prompt.SCHEMA
         and '"other_locations"' in convert_prompt.SCHEMA
@@ -143,8 +143,16 @@ def test_defect_class_sentence_is_in_both_file_rules_and_both_schemas(target_inf
     assert "`Also at:`" in convert_prompt.build_convert("piece@1", "report")
 
 
-def test_defect_class_and_other_locations_are_asked_of_piece_and_path_finders():
-    piece = build_piece(Piece(id=1, group="", files=["a.py"]), "diff", workspace="ws")
+def test_defect_class_and_other_locations_are_asked_of_dimension_and_path_finders(
+    target_info,
+):
+    piece = build_report(
+        target_info,
+        "callers",
+        Piece(id=1, group="", files=["a.py"]),
+        "diff",
+        workspace="ws",
+    )
     view = PathView(
         id="p1",
         name="entry",
@@ -226,7 +234,12 @@ async def test_locations_gate_runs_in_find_with_a_line_in_errors(
         }
     )
     monkeypatch.setattr(sdk, "agent_call_structured", canned)
-    state = await run_find(ReviewState(target=target_info), ctx)
+    state = ReviewState(
+        target=target_info,
+        pieces=pieces_of(target_info),
+        dimensions=["diff-bugs", "callers", "trim"],
+    )
+    state = await run_find(state, ctx)
     (kept,) = state.findings
     assert kept.id == high.id and kept.defect_class == CLASS
     assert kept.other_locations == [GOOD]  # made repo-relative, then checked
@@ -462,12 +475,14 @@ async def test_other_locations_of_any_json_type_keep_the_finding(
 
     repo = tmp_path / "repo"
     base, head = build(repo)
+    # The finder route is a tree review's: a change review's finders answer a report, which converts.
     target = TargetInfo(
         repo_path=str(repo),
         base_sha=base,
         head_sha=head,
         slug="test",
         files=["rateplan_service.py"],
+        kind="tree" if route == "finder" else "range",
     )
     original = high_finding()
     data = original.model_dump()

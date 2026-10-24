@@ -682,11 +682,17 @@ def _facts() -> list[Fact]:
 
 
 def test_the_finder_prompt_lists_facts_with_their_ids_only_when_given(target_info):
+    from review_pipeline.models import Piece
     from review_pipeline.prompts import find as find_prompt
 
-    plain = find_prompt.build(target_info, "diff-bugs", "the diff")
+    piece = Piece(id=1, group="", files=["settings.py"])
+    plain = find_prompt.build_report(
+        target_info, "diff-bugs", piece, "the diff", workspace=""
+    )
     assert find_prompt.FACTS_INTRO not in plain
-    with_facts = find_prompt.build(target_info, "diff-bugs", "the diff", facts=_facts())
+    with_facts = find_prompt.build_report(
+        target_info, "diff-bugs", piece, "the diff", workspace="", facts=_facts()
+    )
     assert find_prompt.FACTS_INTRO in with_facts
     assert "- f1: KEYWORD filters rate plans [c1 rateplan_service.py:1-1]" in with_facts
     assert (
@@ -694,11 +700,11 @@ def test_the_finder_prompt_lists_facts_with_their_ids_only_when_given(target_inf
         in with_facts
     )
     assert '<untrusted-content source="explain stage facts">' in with_facts
-    # after the diff, before the rules that close the prompt
+    # after the diff, before the report format that closes the prompt
     assert (
         with_facts.index("the diff")
         < with_facts.index(find_prompt.FACTS_INTRO)
-        < with_facts.index("Severity:")
+        < with_facts.index(find_prompt.REPORT_FORMAT)
     )
 
 
@@ -717,6 +723,7 @@ def test_the_facts_section_is_cut_at_its_budget(target_info, monkeypatch):
 async def test_find_gives_the_facts_to_finders_only_with_find_with_facts(
     target_info, tmp_path, monkeypatch
 ):
+    from conftest import pieces_of
     from review_pipeline.models import ExplainedFacts, FinderOutput
     from review_pipeline.prompts import find as find_prompt
     from review_pipeline.stages.find import run_find
@@ -728,6 +735,7 @@ async def test_find_gives_the_facts_to_finders_only_with_find_with_facts(
         return FinderOutput()
 
     monkeypatch.setattr(sdk, "agent_call_structured", finder)
+    monkeypatch.setenv("REVIEW_TRUST_REPO", "1")
     snapshot = tmp_path / "tree"
     snapshot.mkdir()
     for on in (False, True):
@@ -742,9 +750,14 @@ async def test_find_gives_the_facts_to_finders_only_with_find_with_facts(
             snapshot=snapshot,
             diff=Path(target_info.diff_path).read_text(),
         )
-        state = ReviewState(target=target_info, facts=ExplainedFacts(facts=_facts()))
+        state = ReviewState(
+            target=target_info,
+            facts=ExplainedFacts(facts=_facts()),
+            pieces=pieces_of(target_info),
+            dimensions=["diff-bugs", "trim"],
+        )
         state = await run_find(state, ctx)
-        assert len(prompts) == 2  # diff-bugs, then trim
+        assert len(prompts) == 2  # diff-bugs, then trim, on the one piece
         assert (find_prompt.FACTS_INTRO in prompts[0]) is on
         assert ("checked facts (2)" in state.checks[0].given) is on
 

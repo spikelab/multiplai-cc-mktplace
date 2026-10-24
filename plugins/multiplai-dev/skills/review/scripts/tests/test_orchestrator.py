@@ -10,7 +10,7 @@ import pytest
 from conftest import DEF_CITATION, KEYWORD_CITATION, SCHEMA, high_finding
 from review_pipeline import budget, orchestrator, sdk
 from review_pipeline.__main__ import main
-from review_pipeline.config import DIMENSIONS
+from review_pipeline.config import DIMENSIONS, TRIM_DIMENSION
 from review_pipeline.models import (
     AssessOutput,
     DuplicateSet,
@@ -434,11 +434,15 @@ def test_a_budget_stop_during_find_keeps_finished_finders_and_resume_runs_the_re
     # task group cancels them; the stopped one never has a result.
     # Saved before find completed: at `target`, or at `paths` once that stage runs before find.
     assert not saved.past("find") and saved.findings == []
-    assert "history" not in saved.finder_results
-    assert [f.id for f in saved.finder_results["diff-bugs"].findings] == [
+    assert "history@1" not in saved.finder_reports
+    assert [f.id for f in saved.finder_reports["diff-bugs@1"].findings] == [
         high_finding().id
     ]
-    missing = [f"find:{d}" for d in DIMENSIONS if d not in saved.finder_results]
+    missing = [
+        f"find:{d}"
+        for d in (*DIMENSIONS, TRIM_DIMENSION)
+        if f"{d}@1" not in saved.finder_reports
+    ]
     assert resumed == missing + ["verify", "verify", "merge"]
 
 

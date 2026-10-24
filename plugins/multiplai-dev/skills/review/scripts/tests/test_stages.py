@@ -14,6 +14,7 @@ from conftest import (
     cite,
     high_finding,
     medium_finding,
+    pieces_of,
 )
 from review_pipeline import sdk, target
 from review_pipeline.config import ReviewConfig
@@ -21,7 +22,6 @@ from review_pipeline.models import (
     Citation,
     DuplicateSet,
     FinderOutput,
-    FinderResult,
     Finding,
     MergeOutput,
     ReviewState,
@@ -69,13 +69,26 @@ class Canned:
 
 
 @pytest.fixture
-def ctx(target_info, tmp_path) -> RunContext:
+def ctx(target_info, tmp_path, monkeypatch) -> RunContext:
+    monkeypatch.setenv(
+        "REVIEW_TRUST_REPO", "1"
+    )  # the report calls check it, as the real one does
     snapshot = tmp_path / "tree"
     snapshot.mkdir()
     return RunContext(
         config=ReviewConfig(concurrency=2, dimensions=("diff-bugs", "callers")),
         snapshot=snapshot,
         diff=Path(target_info.diff_path).read_text(),
+    )
+
+
+def change_state(target_info, **kwargs) -> ReviewState:
+    """A change review's state as `prepare` leaves it, running `diff-bugs`, `callers` and `trim`."""
+    return ReviewState(
+        target=target_info,
+        pieces=pieces_of(target_info),
+        dimensions=["diff-bugs", "callers", "trim"],
+        **kwargs,
     )
 
 
@@ -108,7 +121,7 @@ async def test_find_dedupes_gates_and_normalises_paths(target_info, ctx, monkeyp
             "find:trim": [FinderOutput()],
         },
     )
-    state = await run_find(ReviewState(target=target_info), ctx)
+    state = await run_find(change_state(target_info), ctx)
     assert [f.id for f in state.findings] == [high.id]
     assert state.findings[0].file == "rateplan_service.py"
     assert state.findings[0].citations[0].path == "rateplan_service.py"
@@ -135,10 +148,8 @@ async def test_find_survives_one_failed_finder_but_not_all(
             "find:trim": [FinderOutput()],
         },
     )
-    state = await run_find(ReviewState(target=target_info), ctx)
-    assert (
-        state.stage == "find" and state.errors and "finder diff-bugs" in state.errors[0]
-    )
+    state = await run_find(change_state(target_info), ctx)
+    assert state.stage == "find" and state.errors and "diff-bugs@1" in state.errors[0]
 
     use(
         monkeypatch,
@@ -149,7 +160,7 @@ async def test_find_survives_one_failed_finder_but_not_all(
         },
     )
     with pytest.raises(sdk.AgentCallError):
-        await run_find(ReviewState(target=target_info), ctx)
+        await run_find(change_state(target_info), ctx)
 
 
 async def test_trust_error_escapes(target_info, ctx, monkeypatch):
@@ -161,7 +172,7 @@ async def test_trust_error_escapes(target_info, ctx, monkeypatch):
         },
     )
     with pytest.raises(sdk.RepoTrustError):
-        await run_find(ReviewState(target=target_info), ctx)
+        await run_find(change_state(target_info), ctx)
 
 
 async def test_a_budget_stop_during_find_keeps_finished_finders_and_resume_runs_the_rest(
@@ -170,7 +181,7 @@ async def test_a_budget_stop_during_find_keeps_finished_finders_and_resume_runs_
     from review_pipeline import budget
 
     ctx.config.concurrency = 1
-    state = ReviewState(target=target_info)
+    state = change_state(target_info)
     use(
         monkeypatch,
         {
@@ -182,8 +193,8 @@ async def test_a_budget_stop_during_find_keeps_finished_finders_and_resume_runs_
     with pytest.raises(budget.BudgetExceededError):
         await run_find(state, ctx)
     assert state.stage == "target" and state.findings == []
-    assert list(state.finder_results) == ["diff-bugs", "trim"]
-    assert [f.id for f in state.finder_results["diff-bugs"].findings] == [
+    assert list(state.finder_reports) == ["diff-bugs@1", "trim@1"]
+    assert [f.id for f in state.finder_reports["diff-bugs@1"].findings] == [
         high_finding().id
     ]
 
@@ -194,41 +205,49 @@ async def test_a_budget_stop_during_find_keeps_finished_finders_and_resume_runs_
     assert [label for label, _ in canned.calls] == ["find:callers"]
     assert [f.id for f in state.findings] == [high_finding().id]
     assert state.findings[0].finders == ["diff-bugs", "callers"]
-    assert state.finder_results["diff-bugs"].findings[0].finders == ["diff-bugs"]
+    assert state.finder_reports["diff-bugs@1"].findings[0].finders == ["diff-bugs"]
 
 
-async def test_a_failed_finder_is_not_asked_again_on_resume_unless_every_finder_failed(
+async def test_a_failed_finder_is_asked_again_on_resume_and_the_others_are_not(
     target_info, ctx, monkeypatch
 ):
-    state = ReviewState(
-        target=target_info,
-        finder_results={
-            "diff-bugs": FinderResult(error="finder diff-bugs: bad answer")
-        },
-    )
-    canned = use(
-        monkeypatch, {"find:callers": [FinderOutput()], "find:trim": [FinderOutput()]}
-    )
-    state = await run_find(state, ctx)
-    assert [label for label, _ in canned.calls] == ["find:callers", "find:trim"]
-    assert state.errors == ["finder diff-bugs: bad answer"]
-
-    state = ReviewState(
-        target=target_info,
-        finder_results={
-            "diff-bugs": FinderResult(error="finder diff-bugs: bad answer")
-        },
-    )
+    """Row S2: a resume asks only the keys with no converted report, and a failed report left none."""
+    ctx.config.concurrency = 1
+    state = change_state(target_info)
     use(
         monkeypatch,
         {
+            "find:diff-bugs": [sdk.AgentCallError("bad answer")],
+            "find:callers": [FinderOutput()],
+            "find:trim": [FinderOutput()],
+        },
+    )
+    state = await run_find(state, ctx)
+    assert "diff-bugs@1" not in state.finder_reports
+    assert any(e.startswith("diff-bugs@1: ") for e in state.errors)
+
+    state.stage = "paths"  # a resume of the stage, with the failed finder's record kept
+    canned = use(monkeypatch, {"find:diff-bugs": [FinderOutput()]})
+    state = await run_find(state, ctx)
+    assert [label for label, _ in canned.calls] == ["find:diff-bugs"]
+    assert not any(c.subject == "diff-bugs@1" for c in state.coverage)
+
+
+async def test_every_finder_failing_fails_the_stage_and_keeps_nothing_to_skip(
+    target_info, ctx, monkeypatch
+):
+    state = change_state(target_info)
+    use(
+        monkeypatch,
+        {
+            "find:diff-bugs": [sdk.AgentCallError("x")],
             "find:callers": [sdk.AgentCallError("y")],
             "find:trim": [sdk.AgentCallError("z")],
         },
     )
     with pytest.raises(sdk.AgentCallError, match="every finder failed"):
         await run_find(state, ctx)
-    assert state.finder_results == {}  # the next run asks every finder again
+    assert state.finder_reports == {}  # the next run asks every finder again
 
 
 async def test_stage_already_done_makes_no_calls(target_info, ctx, monkeypatch):
@@ -940,7 +959,7 @@ async def test_a_usage_limit_stops_find_and_stores_nothing_for_that_finder(
     target_info, ctx, monkeypatch
 ):
     ctx.config.concurrency = 1
-    state = ReviewState(target=target_info)
+    state = change_state(target_info)
     use(
         monkeypatch,
         {
@@ -951,8 +970,9 @@ async def test_a_usage_limit_stops_find_and_stores_nothing_for_that_finder(
     )
     with pytest.raises(sdk.UsageLimitError):
         await run_find(state, ctx)
-    assert "callers" not in state.finder_results and not state.past("find")
-    assert [f.id for f in state.finder_results["diff-bugs"].findings] == [
+    assert "callers@1" not in state.finder_reports and not state.past("find")
+    assert not any(c.subject == "callers@1" for c in state.coverage)
+    assert [f.id for f in state.finder_reports["diff-bugs@1"].findings] == [
         high_finding().id
     ]
 
@@ -984,10 +1004,11 @@ async def test_a_killed_find_keeps_the_finders_that_answered(
         },
     )
     with pytest.raises(sdk.RepoTrustError):
-        await run_find(ReviewState(target=target_info), ctx)
+        await run_find(change_state(target_info), ctx)
     saved = load_state(ctx.target_dir / STATE_FILE)
-    assert list(saved.finder_results) == ["diff-bugs"]
-    assert [c.subject for c in saved.checks] == ["diff-bugs"]
+    assert list(saved.finder_reports) == ["diff-bugs@1"]
+    assert saved.finder_reports["diff-bugs@1"].converted
+    assert [c.subject for c in saved.checks] == ["diff-bugs@1", "diff-bugs@1 convert"]
 
 
 async def test_a_killed_verify_keeps_the_verdicts_and_their_spend(

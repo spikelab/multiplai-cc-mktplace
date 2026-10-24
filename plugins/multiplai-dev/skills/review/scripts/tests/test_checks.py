@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import jsonschema
+import paths_stub
 import pytest
 from conftest import (
     KEYWORD_CITATION,
@@ -14,6 +15,7 @@ from conftest import (
     SCHEMA,
     high_finding,
     medium_finding,
+    pieces_of,
     rejected_finding,
 )
 from multiplai_core.agent_runner import ToolCall
@@ -23,6 +25,7 @@ from review_pipeline.export import to_checks_file, to_findings_file, write_check
 from review_pipeline.models import (
     AgentCheck,
     Citation,
+    ConvertOutput,
     DuplicateSet,
     FinderOutput,
     GateCheck,
@@ -288,11 +291,10 @@ def test_prompt_labels(target_info):
     labels = checks.prompt_labels(
         pr,
         diff="x" * 10,
-        diff_limit=5,
         rules=[("CLAUDE.md", True), ("a/CLAUDE.md", False)],
     )
     assert labels == [
-        f"diff ({len(pr.files)} files, cut at 5 characters)",
+        f"diff ({len(pr.files)} files)",
         "commit subjects (1)",
         "PR description",
         "branch rules",
@@ -310,7 +312,14 @@ def test_prompt_labels(target_info):
 
 
 class Recorded:
-    """Stands in for sdk.agent_call_structured and feeds the recorder like `_run` does."""
+    """Stands in for sdk.agent_call_structured and feeds the recorder like `_run` does.
+
+    A dimension finder's report call reaches it through `paths_stub.stub_agent_call_text` with its
+    `find:<dimension>` label; its convert call decodes that report (`calls["find:<dimension>-convert"]`
+    are the convert call's tool calls).
+    """
+
+    decodes_reports = True
 
     def __init__(
         self, answers: dict[str, list], calls: dict[str, list[ToolCall]] | None = None
@@ -322,14 +331,29 @@ class Recorded:
         sdk._note(
             _result("", *self.tool_calls.get(budget_label, ()), cost=0.25, turns=2)
         )
+        if schema is ConvertOutput:
+            return paths_stub.decoded(prompt)
         answer = self.answers[budget_label].pop(0)
         if isinstance(answer, Exception):
             raise answer
         return schema.model_validate(answer.model_dump())
 
 
+def change_state(target_info, **kwargs) -> ReviewState:
+    """A change review's state as `prepare` leaves it, running diff-bugs, callers and trim on every piece."""
+    return ReviewState(
+        target=target_info,
+        pieces=pieces_of(target_info),
+        dimensions=["diff-bugs", "callers", "trim"],
+        **kwargs,
+    )
+
+
 @pytest.fixture
-def ctx(target_info, tmp_path) -> RunContext:
+def ctx(target_info, tmp_path, monkeypatch) -> RunContext:
+    monkeypatch.setenv(
+        "REVIEW_TRUST_REPO", "1"
+    )  # the report calls check it, as the real one does
     snapshot = tmp_path / "tree"
     snapshot.mkdir()
     return RunContext(
@@ -355,25 +379,30 @@ async def test_find_records_one_check_per_finder_with_fates_and_gate_results(
             ],  # high again: deduped
             "find:trim": [FinderOutput()],
         },
-        {"find:diff-bugs": reads},
+        {"find:diff-bugs": reads, "find:diff-bugs-convert": reads},
     )
     monkeypatch.setattr(sdk, "agent_call_structured", recorded)
-    state = await run_find(ReviewState(target=target_info), ctx)
+    state = await run_find(change_state(target_info), ctx)
 
+    # One piece: each dimension's report, then its convert; trim found nothing, so it has no convert.
     assert [(c.stage, c.subject) for c in state.checks] == [
-        ("find", "diff-bugs"),
-        ("find", "callers"),
-        ("find", "trim"),
+        ("find", "diff-bugs@1"),
+        ("find", "diff-bugs@1 convert"),
+        ("find", "callers@1"),
+        ("find", "callers@1 convert"),
+        ("find", "trim@1"),
     ]
-    first, second, _ = state.checks
-    assert first.calls[0] == {
+    report, first, _, second, _ = state.checks
+    assert report.calls[0] == {
         "tool": "Read",
         "target": "rateplan_service.py",
         "detail": "whole file",
     }
-    assert first.calls[1]["detail"] == "in ."
-    assert (first.turns, first.cost_usd, first.outcome) == (2, 0.25, "2 findings")
-    assert first.given[0].startswith("diff (") and "commit subjects (1)" in first.given
+    assert report.calls[1]["detail"] == "in ."
+    assert (report.turns, report.cost_usd) == (2, 0.25)
+    assert report.outcome.startswith("report (")
+    assert report.given[0].startswith("diff-bugs on piece 1 (")
+    assert first.outcome == "2 items, 2 findings"
     assert first.started_at <= first.ended_at
     by_id = {e["id"]: e for e in first.findings}
     assert by_id[high.id]["fate"] == "kept"
@@ -413,13 +442,13 @@ async def test_a_failed_finder_is_recorded_with_its_error(
             }
         ),
     )
-    state = await run_find(ReviewState(target=target_info), ctx)
+    state = await run_find(change_state(target_info), ctx)
     failed = state.checks[0]
-    assert failed.subject == "diff-bugs" and failed.error.startswith(
-        "finder diff-bugs: agent call failed"
+    assert failed.subject == "diff-bugs@1" and failed.error.startswith(
+        "diff-bugs@1: agent call failed"
     )
     assert failed.outcome == "failed: timeout" and failed.findings == []
-    assert state.checks[1].outcome == "0 findings"
+    assert state.checks[1].outcome == "no findings"
 
 
 async def test_a_resumed_find_does_not_record_a_finder_twice(
@@ -427,7 +456,7 @@ async def test_a_resumed_find_does_not_record_a_finder_twice(
 ):
     from review_pipeline import budget
 
-    state = ReviewState(target=target_info)
+    state = change_state(target_info)
     monkeypatch.setattr(
         sdk,
         "agent_call_structured",
@@ -441,13 +470,22 @@ async def test_a_resumed_find_does_not_record_a_finder_twice(
     )
     with pytest.raises(budget.BudgetExceededError):
         await run_find(state, ctx)
-    assert [c.subject for c in state.checks] == ["diff-bugs", "trim"]
+    assert [c.subject for c in state.checks] == [
+        "diff-bugs@1",
+        "diff-bugs@1 convert",
+        "trim@1",
+    ]
     reloaded = load_state(save_state(state, ctx.snapshot.parent))
     monkeypatch.setattr(
         sdk, "agent_call_structured", Recorded({"find:callers": [FinderOutput()]})
     )
     reloaded = await run_find(reloaded, ctx)
-    assert [c.subject for c in reloaded.checks] == ["diff-bugs", "trim", "callers"]
+    assert [c.subject for c in reloaded.checks] == [
+        "diff-bugs@1",
+        "diff-bugs@1 convert",
+        "trim@1",
+        "callers@1",
+    ]
 
 
 async def test_verify_records_the_verdict_its_citations_and_the_gate(
@@ -540,7 +578,7 @@ async def test_merge_records_the_group_and_marks_merged_findings_in_their_finder
             }
         ),
     )
-    state = await run_find(ReviewState(target=target_info), ctx)
+    state = await run_find(change_state(target_info), ctx)
     state.verdicts = {
         f.id: Verdict(finding_id=f.id, status="confirmed", reason="r")
         for f in state.findings

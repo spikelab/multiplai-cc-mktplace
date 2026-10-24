@@ -531,7 +531,10 @@ async def run_reported(
                 ConvertOutput,
                 cwd=str(ctx.snapshot),
                 budget_label=label,
-                **common,
+                **{
+                    **common,
+                    "allowed_tools": READ_ONLY,
+                },  # a convert never needs the web
             )
         except (sdk.RepoTrustError, sdk.UsageLimitError, budget.BudgetExceededError):
             raise

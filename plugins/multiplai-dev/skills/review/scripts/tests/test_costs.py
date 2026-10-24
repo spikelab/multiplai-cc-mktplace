@@ -1,4 +1,5 @@
-"""What the piece and path finders are expected to cost: the plan line, the budget WARNING and the default NOTICE.
+"""What the dimension and path finders are expected to cost: the plan line, the budget WARNING and the default
+NOTICE.
 
 The estimate is arithmetic on the stored pieces and path ids (`costs.py`): it
 makes no model call, no `map_paths` call and no ledger entry, and nothing it
@@ -20,20 +21,23 @@ from review_pipeline.models import FinderReport, Piece, ReviewState
 from test_reported_finders import git, mapped, model, review, saved  # noqa: F401
 
 SKILL_MD = Path(__file__).resolve().parents[2] / "SKILL.md"
+# Groups: pieces, dimensions per piece, paths, path count, total.
 COST_LINE = re.compile(
-    r"cost \(approximate\): (?:pieces \$(\d+) \+ )?paths \$(\d+) \(up to (\d+) paths\) = \$(\d+); "
-    r"excludes dimension finders, verification and paths mapping"
+    r"cost \(approximate\): (?:pieces \$(\d+) \((\d+) dimensions each\) \+ )?paths \$(\d+) "
+    r"\(up to (\d+) paths\) = \$(\d+); excludes verification and paths mapping"
 )
 WARNING = re.compile(
-    r"WARNING: estimated \$(\d+) for piece and path finders, plus dimension finders, verification "
-    r"and mapping, is expected to exceed the remaining budget of \$(\d+); the run will stop partway; "
-    r"continue with resume and a higher --max-cost-usd\."
+    r"WARNING: estimated \$(\d+) for the dimension and path finders, plus verification and mapping, is "
+    r"expected to exceed the remaining budget of \$(\d+); the run will stop partway; continue with resume "
+    r"and a higher --max-cost-usd\."
 )
 NOTICE = (
-    "NOTICE: the default 50 USD budget can stop a large change review partway, because dimension finders "
-    "and verification add to the piece and path cost; resume with a higher --max-cost-usd continues without "
-    "losing paid results."
+    "NOTICE: the default 150 USD budget can stop a large change review partway, because verification adds "
+    "to the finders' cost; resume with a higher --max-cost-usd continues without losing paid results."
 )
+# Every dimension runs on every piece of a change review: diff-bugs, callers, history, conventions, tests, trim.
+DIMENSIONS = ("diff-bugs", "callers", "history", "conventions", "tests", "trim")
+D = len(DIMENSIONS)
 
 
 def costs():
@@ -93,21 +97,64 @@ def warned(out: list[str]) -> tuple[int, int] | None:
 # --- the arithmetic ---------------------------------------------------------------------------------------------
 
 
-def test_the_reference_diff_costs_about_14_for_pieces_24_for_paths_and_38_together(
+def test_the_reference_diff_costs_about_14_per_dimension_24_for_paths_and_108_together(
     target_info,
 ):
     est = costs().estimate(state_of(target_info, [100_000, 127_000]))
-    assert est.pieces_usd == pytest.approx(14, abs=1)
+    assert est.pieces_usd == pytest.approx(14 * D, abs=1)
     assert est.paths_usd == pytest.approx(24, abs=1) and est.path_count == 21
     assert (
-        est.total == pytest.approx(38, abs=2)
+        est.total == pytest.approx(108, abs=2)
         and est.total == est.pieces_usd + est.paths_usd
     )
 
 
 def test_half_the_diff_costs_about_half_for_pieces(target_info):
     est = costs().estimate(state_of(target_info, [113_000]))
-    assert est.pieces_usd == pytest.approx(costs().piece_usd(227_000) / 2, abs=1)
+    assert est.pieces_usd == pytest.approx(D * costs().piece_usd(227_000) / 2, abs=1)
+
+
+def test_three_pieces_price_one_report_and_one_convert_per_dimension_and_path(
+    target_info,
+):
+    est = costs().estimate(state_of(target_info, [1_000, 2_000, 3_000]))
+    assert est.calls == 2 * (3 * D + 21) == 78
+    state = state_of(target_info, [1_000, 2_000, 3_000])
+    state.dimensions = ["diff-bugs", "callers"]
+    assert costs().estimate(state).calls == 2 * (3 * 2 + 21)
+    assert costs().estimate(state).pieces_usd == pytest.approx(
+        2 * costs().piece_usd(6_000)
+    )
+
+
+def test_a_split_piece_is_priced_by_its_halves_for_the_dimension_it_was_split_for(
+    target_info,
+):
+    state = state_of(target_info, [1_000])
+    state.dimensions = ["diff-bugs", "callers"]
+    whole = state.pieces[0]
+    whole.split_into = [2, 3]
+    state.pieces += [
+        Piece(
+            id=2,
+            group="g1",
+            files=["g1/m.py"],
+            chars=400,
+            split_from=1,
+            split_for=["callers"],
+        ),
+        Piece(
+            id=3,
+            group="g1",
+            files=["g1/m.py"],
+            chars=600,
+            split_from=1,
+            split_for=["callers"],
+        ),
+    ]
+    est = costs().estimate(state)
+    assert est.calls == 2 * (1 + 2 + 21)  # diff-bugs@1, callers@2, callers@3, the paths
+    assert est.pieces_usd == pytest.approx(2 * costs().piece_usd(1_000))
 
 
 def test_the_constants_are_the_calibration_the_design_gives():
@@ -141,7 +188,7 @@ def test_a_tree_review_without_paths_has_no_estimate_and_with_paths_only_the_pat
         default=True,
     )
     (line,) = [m for m in map(COST_LINE.fullmatch, with_paths) if m]
-    assert line.group(1) is None and line.groups()[1:] == ("24", "21", "24")
+    assert line.group(1) is None and line.groups()[2:] == ("24", "21", "24")
     assert (
         NOTICE not in with_paths
     )  # a tree review's estimate is paths only: no default notice
@@ -153,15 +200,20 @@ def test_a_tree_review_without_paths_has_no_estimate_and_with_paths_only_the_pat
 @pytest.mark.parametrize(
     ("chars", "path_ids", "budget_usd", "warns"),
     [
-        ([227_000], None, 20, (38, 20)),  # 38 vs 20
-        ([162_143], [], 50, None),  # 10 vs 50
-        ([227_000], None, 120, None),  # 38 vs 120
+        ([227_000], None, 20, (108, 20)),  # 108 vs 20
+        ([162_143], [], 100, None),  # 60 vs 100
         (
             [227_000],
             None,
-            50,
-            (38, 50),
-        ),  # the reference under the default: 38 * 1.35 >= 50
+            150,
+            None,
+        ),  # the reference under the default: 108 * 1.35 < 150
+        (
+            [227_000, 227_000],
+            None,
+            150,
+            (192, 150),
+        ),  # twice the reference under the default: 192 * 1.35 >= 150
         ([227_000], None, 0, None),  # no ceiling
     ],
 )
@@ -179,7 +231,9 @@ def test_on_resume_only_what_is_not_stored_counts_and_a_stored_unconverted_key_c
     state = state_of(
         target_info, [227_000], path_ids=[f"p{i}" for i in range(1, 21)], spent=50.0
     )
-    stored(state, "piece@1", *(f"path@p{i}" for i in range(1, 11)))
+    stored(
+        state, *(f"{d}@1" for d in DIMENSIONS), *(f"path@p{i}" for i in range(1, 11))
+    )
     left = costs().remaining(state)
     assert left.pieces_usd == 0 and left.paths_usd == pytest.approx(
         costs().path_usd(10)
@@ -197,7 +251,9 @@ def test_a_resume_with_enough_budget_is_silent_and_never_repeats_the_notice(
     state = state_of(
         target_info, [227_000], path_ids=[f"p{i}" for i in range(1, 21)], spent=50.0
     )
-    stored(state, "piece@1", *(f"path@p{i}" for i in range(1, 11)))
+    stored(
+        state, *(f"{d}@1" for d in DIMENSIONS), *(f"path@p{i}" for i in range(1, 11))
+    )
     out = lines(state, budget_usd=100, default=True, resuming=True)
     assert warned(out) is None and NOTICE not in out
 
@@ -206,8 +262,14 @@ def test_a_resume_with_too_little_budget_warns_with_what_is_left(target_info):
     state = state_of(
         target_info, [227_000], path_ids=[f"p{i}" for i in range(1, 22)], spent=50.0
     )
-    stored(state, "piece@1")
+    stored(state, *(f"{d}@1" for d in DIMENSIONS))
     assert warned(lines(state, budget_usd=55, resuming=True)) == (24, 5)
+    stored(
+        state, "trim@1", converted=False
+    )  # its convert is left: a share of one finder's price
+    assert costs().remaining(state).pieces_usd == pytest.approx(
+        0.15 * costs().piece_usd(227_000)
+    )
 
 
 # --- the NOTICE -----------------------------------------------------------------------------------------------------
@@ -217,8 +279,9 @@ def test_the_default_budget_notice_prints_on_a_change_review_even_under_the_budg
     target_info,
 ):
     small = state_of(target_info, [1_000], path_ids=[])
-    assert NOTICE in lines(small, budget_usd=50, default=True)
-    assert NOTICE not in lines(small, budget_usd=50, default=False)
+    assert NOTICE in lines(small, budget_usd=150, default=True)
+    assert NOTICE not in lines(small, budget_usd=150, default=False)
+    assert NOTICE == costs().NOTICE
 
 
 # --- through the command line ------------------------------------------------------------------------------------
@@ -296,11 +359,12 @@ def test_plan_only_prints_the_reference_estimate_and_spends_nothing(
     err = capsys.readouterr().err.splitlines()
     (line,) = [m for m in map(COST_LINE.fullmatch, err) if m]
     assert (
-        abs(int(line.group(1)) - 14) <= 1
-        and line.group(2) == "24"
-        and line.group(3) == "21"
+        abs(int(line.group(1)) - 14 * D) <= D
+        and line.group(2) == str(D)
+        and line.group(3) == "24"
+        and line.group(4) == "21"
     )
-    assert abs(int(line.group(4)) - 38) <= 2
+    assert abs(int(line.group(5)) - 108) <= D + 1
     assert warned(err) is not None and warned(err)[1] == 20
     assert NOTICE not in err
     assert budget.get_budget().calls == 0 and budget.get_budget().cost_usd == 0
@@ -312,7 +376,7 @@ def test_a_lockfile_does_not_count_towards_the_estimate(tmp_path, capsys, no_spe
     (line,) = [
         m for m in map(COST_LINE.fullmatch, capsys.readouterr().err.splitlines()) if m
     ]
-    assert int(line.group(1)) == round(costs().piece_usd(50_000))
+    assert abs(int(line.group(1)) - D * costs().piece_usd(50_000)) <= 1
 
 
 def test_plan_only_shows_the_notice_under_the_default_and_exits_the_same_with_or_without_a_warning(
@@ -350,7 +414,7 @@ def test_plan_only_on_a_tree_review(tmp_path, capsys, no_spend):
     (line,) = [
         m for m in map(COST_LINE.fullmatch, capsys.readouterr().err.splitlines()) if m
     ]
-    assert line.group(1) is None and line.group(2) == "24"
+    assert line.group(1) is None and line.group(3) == "24"
 
 
 def test_a_5_usd_run_warns_starts_and_stops_only_at_the_ledger(
@@ -411,7 +475,7 @@ def test_the_warning_prints_before_the_paths_stage(
         [(n, spy if n == "paths" else f) for n, f in orchestrator.STAGE_FUNCTIONS],
     )
     assert review(repo, base, head, tmp_path / "out", "--max-cost-usd", "20") == 0
-    assert len(seen) == 1 and warned(seen[0].splitlines()) == (38, 20)
+    assert len(seen) == 1 and warned(seen[0].splitlines())[1] == 20
 
 
 # --- SKILL.md ---------------------------------------------------------------------------------------------------------
@@ -422,15 +486,15 @@ def test_skill_md_states_the_reference_figures_the_constants_hold():
     section = " ".join(
         text.split("\n## Cost\n", 1)[1].split("\n## ", 1)[0].split()
     )  # prose: lines rewrap
-    piece = re.search(r"about \$(\d+) for the piece finders", section)
+    piece = re.search(r"about \$(\d+) for each dimension finder", section)
     path = re.search(r"about \$(\d+) for the path finders", section)
     assert piece and path and "227 KB" in section
     assert int(piece.group(1)) == round(costs().PIECE_REF_USD) and int(
         path.group(1)
     ) == round(costs().PATH_REF_USD)
-    assert "before the dimension finders and verification" in section
+    assert "before verification" in section
     assert (
-        re.search(r"50 USD default .*stop", section)
+        re.search(r"150 USD default .*stop", section)
         and "resume" in section
         and "--max-cost-usd" in section
     )

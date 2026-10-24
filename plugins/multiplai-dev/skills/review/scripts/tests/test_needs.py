@@ -14,6 +14,7 @@ from conftest import (
     SCHEMA,
     high_finding,
     medium_finding,
+    pieces_of,
 )
 from review_pipeline import orchestrator, sdk, target
 from review_pipeline.config import ReviewConfig
@@ -27,6 +28,7 @@ from review_pipeline.models import (
     ReviewState,
     Verdict,
 )
+from review_pipeline.prompts import convert as convert_prompt
 from review_pipeline.render import render_review, render_summary
 from review_pipeline.stages import RunContext
 from review_pipeline.stages.find import run_find
@@ -40,7 +42,10 @@ TAVILY_NEED = NeedAsk(
 
 
 @pytest.fixture
-def ctx(target_info, tmp_path) -> RunContext:
+def ctx(target_info, tmp_path, monkeypatch) -> RunContext:
+    monkeypatch.setenv(
+        "REVIEW_TRUST_REPO", "1"
+    )  # the report calls check it, as the real one does
     snapshot = tmp_path / "tree"
     snapshot.mkdir()
     return RunContext(
@@ -381,8 +386,17 @@ async def test_finder_needs_are_stored_as_blocking_the_review(
             "find:trim": [FinderOutput(findings=[])],
         },
     )
-    state = await run_find(ReviewState(target=target_info), ctx)
-    assert "Never write a finding to say you could not check something" in prompts[0]
+    state = ReviewState(
+        target=target_info,
+        pieces=pieces_of(target_info),
+        dimensions=["diff-bugs", "callers", "trim"],
+    )
+    state = await run_find(state, ctx)
+    # The report asks for one `Could not check:` paragraph, which the convert call turns into a need.
+    assert "`Could not check:` instead of guessing" in prompts[0]
+    assert "Each paragraph of the report starting `Could not check:`" in (
+        convert_prompt.build_convert("diff-bugs@1", "report")
+    )
     assert state.needs == [
         Need(
             what=TAVILY_NEED.what,
@@ -392,7 +406,7 @@ async def test_finder_needs_are_stored_as_blocking_the_review(
             source="finder",
         )
     ]
-    assert state.finder_results["diff-bugs"].needs == [TAVILY_NEED]
+    assert state.finder_reports["diff-bugs@1"].needs == [TAVILY_NEED]
 
 
 async def test_a_need_without_a_command_carries_where_to_look_into_the_file_and_the_summary(

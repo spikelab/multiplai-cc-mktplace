@@ -610,13 +610,13 @@ def test_plan_only_lists_each_piece_and_the_piece_and_path_calls(
     assert pieces[0].startswith("piece 1: 1 file, ") and pieces[0].endswith(
         " [.] root.py"
     )
+    # Every dimension runs on each of the 3 pieces with a file; the meta piece holds only a lockfile.
     assert (
-        "piece and path finder calls: 4 pieces + up to 21 paths (each one report call and one convert call)"
-        in lines
-    )
-    # The dimension total is unchanged: the pieces are not counted in it.
-    (total,) = [line for line in lines if line.startswith("groups: ")]
-    assert "finder calls: 6 " in total + " "
+        "finder calls: 3 pieces x 6 dimensions (diff-bugs, callers, history, conventions, tests, trim) "
+        "+ up to 21 paths (each one report call and one convert call); 78 calls at most"
+    ) in lines
+    assert not [line for line in lines if line.startswith("groups: ")]
+    assert "files: 6  files skipped: 0" in lines
 
 
 def test_plan_only_on_a_tree_lists_no_pieces(change_repo, tmp_path, capsys):
