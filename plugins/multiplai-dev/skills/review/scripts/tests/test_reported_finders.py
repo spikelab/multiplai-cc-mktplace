@@ -1456,3 +1456,94 @@ def test_hostile_path_data_stays_inside_one_fence():
     assert text.count("<untrusted-content") == 1 and text.count(CLOSE) == 1
     opened, closed = text.index("<untrusted-content"), text.index(CLOSE)
     assert opened < text.index("ignore previous instructions") < closed
+
+
+# --- the turn limit: a piece cut in two ------------------------------------------------------------------------
+
+
+def two_file_repo(tmp_path: Path) -> tuple[Path, str, str]:
+    """As `make_repo(tmp_path, 3)`, but `p02/` changes two modules, `m.py` and `n.py`, so its piece can be
+    cut between them."""
+    repo, _, _ = make_repo(tmp_path, 3)
+    base = git(repo, "rev-parse", "HEAD~1")
+    git(repo, "checkout", "-q", "-b", "two", base)
+    (repo / "p02" / "n.py").write_text("p02_n1 = 1\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "base with n.py")
+    base = git(repo, "rev-parse", "HEAD")
+    for i in (1, 2, 3):
+        (repo / name(i) / "m.py").write_text(f"{name(i)}_1 = 1\n{name(i)}_2 = 2\n")
+    (repo / "p02" / "n.py").write_text("p02_n1 = 1\np02_n2 = 2\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "head")
+    return repo, base, git(repo, "rev-parse", "HEAD")
+
+
+def not_reviewed_text(target_dir: Path) -> str:
+    (review_md,) = target_dir.glob("review-*.md")
+    text = review_md.read_text()
+    return (
+        text.split("## Not reviewed", 1)[1].split("\n## ", 1)[0]
+        if "## Not reviewed" in text
+        else ""
+    )
+
+
+def test_a_turn_limit_on_callers_cuts_the_piece_in_two_and_asks_callers_on_both_in_the_same_run(
+    tmp_path, model
+):
+    repo, base, head = two_file_repo(tmp_path)
+    fake = model(turn_limit=("callers@2",))
+    assert review(repo, base, head, tmp_path / "out") == 0
+    target_dir, state = saved(tmp_path / "out")
+    by_id = {p.id: p for p in state.pieces}
+    assert by_id[2].files == ["p02/m.py", "p02/n.py"] and by_id[2].split_into == [4, 5]
+    halves = [by_id[4], by_id[5]]
+    assert [h.files for h in halves] == [["p02/m.py"], ["p02/n.py"]]
+    assert all(h.split_from == 2 and h.split_for == ["callers"] for h in halves)
+    asked = [c["key"] for c in fake.report_calls]
+    assert asked.count("callers@2") == 1
+    assert [k for k in asked if k.endswith(("@4", "@5"))] == ["callers@4", "callers@5"]
+    assert state.finder_reports["callers@4"].converted
+    assert state.finder_reports["callers@5"].converted
+    assert "callers@2" not in state.finder_reports
+    assert not_reviewed_text(target_dir) == ""  # the halves reviewed every file
+    assert (target_dir / "report-callers-4.md").exists()
+
+
+def test_a_half_that_stops_at_the_turn_limit_again_is_not_cut_and_its_files_are_not_reviewed(
+    tmp_path, model
+):
+    repo, base, head = two_file_repo(tmp_path)
+    fake = model(turn_limit=("callers@2", "callers@4"))
+    assert review(repo, base, head, tmp_path / "out") == 0
+    target_dir, state = saved(tmp_path / "out")
+    assert [p.id for p in state.pieces] == [1, 2, 3, 4, 5]
+    assert [c["key"] for c in fake.report_calls].count("callers@4") == 1
+    section = not_reviewed_text(target_dir)
+    assert "**callers:** `p02/m.py` (callers@4: turn limit)" in section
+    assert "p02/n.py" not in section
+
+
+def test_a_one_hunk_file_at_the_turn_limit_is_not_cut(tmp_path, model):
+    repo, base, head = make_repo(tmp_path, 3)
+    fake = model(turn_limit=("callers@2",))
+    assert review(repo, base, head, tmp_path / "out") == 0
+    target_dir, state = saved(tmp_path / "out")
+    assert len(state.pieces) == 3 and state.pieces[1].split_into == []
+    assert [c["key"] for c in fake.report_calls].count("callers@2") == 1
+    assert "**callers:** `p02/m.py` (callers@2: turn limit)" in not_reviewed_text(
+        target_dir
+    )
+
+
+def test_another_failure_is_not_cut(tmp_path, model):
+    repo, base, head = two_file_repo(tmp_path)
+    fake = model(fail_keys=("callers@2",))
+    assert review(repo, base, head, tmp_path / "out") == 0
+    target_dir, state = saved(tmp_path / "out")
+    assert len(state.pieces) == 3 and state.pieces[1].split_into == []
+    assert not [c for c in fake.report_calls if c["key"].endswith(("@4", "@5"))]
+    assert "`p02/m.py`, `p02/n.py` (callers@2: timeout)" in not_reviewed_text(
+        target_dir
+    )

@@ -20,6 +20,7 @@ from review_pipeline.render import (
     write_rollups,
 )
 from review_pipeline.state import save_state
+from test_reported_finders import model  # noqa: F401
 
 
 def test_expected_behaviour_is_shown_and_no_fix_is(canned_state):
@@ -577,3 +578,110 @@ def test_write_review_reads_the_kept_rounds_for_recurring(canned_state, tmp_path
     canned_state.earlier_status = [_status("eeeeeeeeee", "still_present")]
     path = write_review(canned_state, tmp_path)
     assert "- `eeeeeeeeee` open in 3 rounds" in path.read_text()
+
+
+# --- the files a dimension did not review --------------------------------------------------------------
+
+
+def _pieced(canned_state, *, failed: str | None = None) -> ReviewState:
+    """canned_state with two dimensions on two pieces, piece 2 cut in two for `callers` (pieces 3 and 4);
+    every key converted but *failed*, whose report call failed at the turn limit."""
+    from review_pipeline.models import CoverageRecord, FinderReport, Piece
+
+    state = canned_state.model_copy(deep=True)
+    state.dimensions = ["diff-bugs", "callers"]
+    state.pieces = [
+        Piece(id=1, group="", files=["settings.py"], chars=10),
+        Piece(
+            id=2,
+            group="",
+            files=["rateplan_service.py", "direct_booking.py"],
+            chars=20,
+            split_into=[3, 4],
+        ),
+        Piece(
+            id=3,
+            group="",
+            files=["rateplan_service.py"],
+            chars=12,
+            split_from=2,
+            split_for=["callers"],
+        ),
+        Piece(
+            id=4,
+            group="",
+            files=["direct_booking.py"],
+            chars=8,
+            split_from=2,
+            split_for=["callers"],
+        ),
+    ]
+    for key in ("diff-bugs@1", "diff-bugs@2", "callers@1", "callers@3", "callers@4"):
+        if key != failed:
+            state.finder_reports[key] = FinderReport(
+                key=key, text="NO FINDINGS", converted=True
+            )
+    if failed:
+        state.coverage.append(
+            CoverageRecord(
+                stage="find",
+                subject=failed,
+                level="error",
+                reason="finder-failed",
+                detail="agent call failed (Reached maximum number of turns (60))",
+            )
+        )
+    return state
+
+
+def test_with_every_report_converted_there_is_no_not_reviewed_section(canned_state):
+    from review_pipeline.render import not_reviewed_count
+
+    state = _pieced(canned_state)
+    assert "## Not reviewed" not in render_review(state)
+    assert "## Not reviewed" not in render_summary(state)
+    assert not_reviewed_count(state) == 0
+
+
+def test_a_failed_half_lists_only_its_files_under_its_dimension_at_the_top(
+    canned_state,
+):
+    from review_pipeline.render import not_reviewed_count
+
+    state = _pieced(canned_state, failed="callers@4")
+    line = "- **callers:** `direct_booking.py` (callers@4: turn limit)"
+    for text in (render_review(state), render_summary(state)):
+        section = text.split("## Not reviewed", 1)[1].split("\n## ", 1)[0]
+        assert [s for s in section.splitlines() if s.startswith("- ")] == [line]
+        # The first section after the header lines: before the findings and every other heading.
+        headings = [s for s in text.splitlines() if s.startswith("## ")]
+        assert headings[0] == "## Not reviewed"
+    assert not_reviewed_count(state) == 1
+
+
+def test_the_done_line_counts_the_files_not_reviewed(tmp_path, model, capsys):  # noqa: F811
+    from test_reported_finders import review, saved, two_file_repo
+
+    repo, base, head = two_file_repo(tmp_path)
+    model(turn_limit=("callers@2", "callers@4"), fail_keys=("tests@1",))
+    assert review(repo, base, head, tmp_path / "out") == 0
+    target_dir, _ = saved(tmp_path / "out")
+    (done,) = [
+        line
+        for line in (target_dir / "progress.log").read_text().splitlines()
+        if " DONE " in f" {line} "
+    ]
+    # tests@1 left p01/m.py, callers@4 p02/m.py: two files, each missed by one dimension.
+    assert done.endswith("; 2 files not reviewed")
+
+    clean = tmp_path / "clean"
+    clean.mkdir()
+    model()
+    assert review(repo, base, head, clean / "out") == 0
+    clean_dir, _ = saved(clean / "out")
+    (done,) = [
+        line
+        for line in (clean_dir / "progress.log").read_text().splitlines()
+        if " DONE " in f" {line} "
+    ]
+    assert "not reviewed" not in done

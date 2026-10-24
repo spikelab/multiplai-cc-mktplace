@@ -545,11 +545,13 @@ def not_reviewed_count(state: ReviewState) -> int:
 
 
 def not_reviewed_section(state: ReviewState) -> list[str]:
-    """`## Not reviewed`, one line per dimension that left files unreviewed; [] when nothing is missing."""
+    """`## Not reviewed`, one line per dimension that left files unreviewed, after a blank line; [] when
+    nothing is missing. It goes right after the header lines, before every other section."""
     rows = not_reviewed(state)
     if not rows:
         return []
     out = [
+        "",
         "## Not reviewed",
         "",
         "These finders' calls failed, so the files listed were not reviewed for that dimension and their "
@@ -562,7 +564,7 @@ def not_reviewed_section(state: ReviewState) -> list[str]:
             for files, why in groups
         )
         out.append(f"- **{name}:** {listed_}")
-    return out + [""]
+    return out
 
 
 def render_paths_section(
@@ -645,7 +647,6 @@ def render_review(
         else (lambda sha: f"`{sha[:10]}`")
     )
     out = [f"# Review — {t.label or t.slug}", ""]
-    out += not_reviewed_section(state)
     out.append(
         f"- **Repo:** {Path(t.repo_path).name}"
         + (f" ({web})" if web else f" (`{t.repo_path}`)")
@@ -691,6 +692,7 @@ def render_review(
         out.append(
             "- **Agent failures:** " + "; ".join(_one_line(e) for e in state.errors)
         )
+    out += not_reviewed_section(state)
     review_needs = [n for n in data.get("needs", []) if n["blocks"] == "review"]
     if review_needs:
         out += [
@@ -852,7 +854,6 @@ def render_summary(state: ReviewState, *, findings_file: dict | None = None) -> 
     shown_ids = {f["id"] for f in shown}
 
     out = [f"# Review summary — {t.label or t.slug}", ""]
-    out += not_reviewed_section(state)
     if t.is_tree:
         out.append(
             f"{len(t.files)} files reviewed as they stand at {t.head_sha[:10]}, {len(t.skipped)} skipped."
@@ -875,6 +876,7 @@ def render_summary(state: ReviewState, *, findings_file: dict | None = None) -> 
     )
     if earlier_line(data):
         out.append(f"Against earlier rounds: {earlier_line(data)}.")
+    out += not_reviewed_section(state)
     needs = [
         n
         for n in data.get("needs", [])

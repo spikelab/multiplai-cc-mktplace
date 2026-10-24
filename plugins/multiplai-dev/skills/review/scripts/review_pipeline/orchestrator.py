@@ -422,7 +422,11 @@ async def _run_stages(
     missing = not_reviewed_count(state)
     progress.done(
         f"{message} (${ledger.cost_usd:.2f})"
-        + (f"; {missing} files not reviewed" if missing else "")
+        + (
+            f"; {missing} file{'' if missing == 1 else 's'} not reviewed"
+            if missing
+            else ""
+        )
     )
     print(f"{t.slug}: {message}; output in {target_dir}", flush=True)
     print(f"summary: {summary_path(state, target_dir)}", flush=True)

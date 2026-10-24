@@ -21,6 +21,7 @@ from review_pipeline.models import (
     AssessOutput,
     FinderOutput,
     MergeOutput,
+    Piece,
     RepeatsOutput,
     ReviewState,
 )
@@ -646,3 +647,64 @@ def test_diff_files_reads_each_files_changed_lines_in_diff_order():
         and "+new\n" in files[0].text
     )
     assert "gone.py" not in files[0].text and "a.py" not in files[2].text
+
+
+# --- cutting a piece in two at the turn limit ---------------------------------------------------------
+
+
+def _file_diff(path: str, hunks: list[tuple[int, list[str]]]) -> str:
+    """A modified file's diff with one hunk per (head line, added lines)."""
+    out = f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n"
+    for start, added in hunks:
+        out += f"@@ -{start},1 +{start},{1 + len(added)} @@\n ctx{start}\n" + "".join(
+            f"+{line}\n" for line in added
+        )
+    return out
+
+
+def test_a_two_file_piece_is_cut_between_its_files_and_each_half_names_its_parent():
+    from review_pipeline.chunks import split_piece
+
+    diff = _file_diff("pkg/a.py", [(1, ["a = 1"] * 30)]) + _file_diff(
+        "pkg/b.py", [(1, ["b = 2"] * 30)]
+    )
+    whole = Piece(id=2, group="pkg", files=["pkg/a.py", "pkg/b.py"], chars=len(diff))
+    left, right = split_piece(whole, diff, 7)
+    assert (left.id, left.files, right.id, right.files) == (
+        7,
+        ["pkg/a.py"],
+        8,
+        ["pkg/b.py"],
+    )
+    assert (
+        left.split_from == right.split_from == 2 and left.hunks is right.hunks is None
+    )
+    assert left.chars + right.chars == len(diff)
+
+
+def test_a_one_file_piece_is_cut_at_a_hunk_and_each_half_holds_the_header_and_its_hunks():
+    from review_pipeline.chunks import piece_diff_text, split_piece
+
+    diff = _file_diff(
+        "pkg/a.py",
+        [(1, ["one = 1"]), (20, ["two = 2"]), (40, ["three = 3"]), (60, ["four = 4"])],
+    )
+    whole = Piece(id=1, group="pkg", files=["pkg/a.py"], chars=len(diff))
+    left, right = split_piece(whole, diff, 2)
+    assert (left.hunks, right.hunks) == ([0, 2], [2, 4])
+    first, second = piece_diff_text(diff, left), piece_diff_text(diff, right)
+    for text in (first, second):
+        assert text.startswith(
+            "diff --git a/pkg/a.py b/pkg/a.py\n--- a/pkg/a.py\n+++ b/pkg/a.py\n"
+        )
+    assert "+one = 1" in first and "+two = 2" in first and "+three = 3" not in first
+    assert "+three = 3" in second and "+four = 4" in second and "+one = 1" not in second
+    assert (left.chars, right.chars) == (len(first), len(second))
+
+
+def test_a_one_hunk_file_and_an_empty_piece_are_not_cut():
+    from review_pipeline.chunks import split_piece
+
+    diff = _file_diff("pkg/a.py", [(1, ["a = 1"] * 500)])
+    assert split_piece(Piece(id=1, group="pkg", files=["pkg/a.py"]), diff, 2) is None
+    assert split_piece(Piece(id=1, group="", files=[]), diff, 2) is None

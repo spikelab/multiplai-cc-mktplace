@@ -16,18 +16,23 @@ from conftest import (
     medium_finding,
     pieces_of,
 )
+from paths_stub import stub_result
 from review_pipeline import sdk, target
+from review_pipeline.chunks import piece_diff_text
 from review_pipeline.config import ReviewConfig
 from review_pipeline.models import (
     Citation,
+    ConvertOutput,
     DuplicateSet,
     FinderOutput,
     Finding,
     MergeOutput,
+    Piece,
     ReviewState,
     Verdict,
     VerifierAnswer,
 )
+from review_pipeline.paths_io import PATHS_FILE
 from review_pipeline.stages import RunContext
 from review_pipeline.stages import find as find_stage
 from review_pipeline.stages import merge as merge_stage
@@ -248,6 +253,106 @@ async def test_every_finder_failing_fails_the_stage_and_keeps_nothing_to_skip(
     with pytest.raises(sdk.AgentCallError, match="every finder failed"):
         await run_find(state, ctx)
     assert state.finder_reports == {}  # the next run asks every finder again
+
+
+# --- every dimension on every piece -----------------------------------------------------------------
+
+FIXTURE_FILES = ("direct_booking.py", "rateplan_service.py", "settings.py")
+ALL_SIX = ("diff-bugs", "callers", "history", "conventions", "tests", "trim")
+
+
+def one_piece_per_file(info) -> list[Piece]:
+    """The fixture's three changed modules as three pieces, sized as `split_pieces` sizes them."""
+    diff = Path(info.diff_path).read_text()
+    out = []
+    for i, f in enumerate(FIXTURE_FILES, 1):
+        piece = Piece(id=i, group="", files=[f])
+        out.append(
+            piece.model_copy(update={"chars": len(piece_diff_text(diff, piece))})
+        )
+    return out
+
+
+class Finders:
+    """Both SDK calls of a change review's finders: a report call answers one advice line, a convert call
+    one item per report; any structured call that is not a convert fails the test."""
+
+    def __init__(self):
+        self.reports: list[tuple[str, str]] = []  # (budget label, prompt)
+        self.converts: list[str] = []
+        self.tools: list[list[str]] = []
+
+    async def text(self, prompt, *, budget_label="", allowed_tools=(), **kwargs):
+        sdk.require_trusted_repo()
+        self.reports.append((budget_label, prompt))
+        self.tools.append(list(allowed_tools))
+        return "settings.py:1 Kind: advice\nName the setting."
+
+    async def structured(self, prompt, schema, *, budget_label="", **kwargs):
+        assert schema is ConvertOutput, f"{budget_label} asked for {schema.__name__}"
+        self.converts.append(budget_label)
+        return ConvertOutput()
+
+
+@pytest.fixture
+def finders(monkeypatch) -> Finders:
+    fake = Finders()
+    monkeypatch.setattr(sdk, "agent_call_text", fake.text)
+    monkeypatch.setattr(sdk, "agent_call_structured", fake.structured)
+    return fake
+
+
+def with_one_path(state: ReviewState, ctx: RunContext, tmp_path: Path) -> None:
+    """The paths stage's output for one path, as `run_paths` leaves it."""
+    ctx.target_dir = tmp_path / "out"
+    ctx.target_dir.mkdir(exist_ok=True)
+    result = stub_result(commit=state.target.head_sha, scoped=True, cap=21)
+    (ctx.target_dir / PATHS_FILE).write_text(result.model_dump_json())
+    state.paths_status, state.path_ids = "ok", ["p1"]
+
+
+async def test_three_pieces_ask_every_dimension_once_each_plus_one_pair_per_path(
+    target_info, ctx, finders, tmp_path
+):
+    state = ReviewState(target=target_info, pieces=one_piece_per_file(target_info))
+    with_one_path(state, ctx, tmp_path)
+    state = await run_find(state, ctx)
+    dims = [label.removeprefix("find:") for label, _ in finders.reports]
+    assert sorted(dims) == sorted([*ALL_SIX * 3, "path"])
+    assert sorted(finders.converts) == sorted(
+        [*(f"find:{d}-convert" for d in ALL_SIX * 3), "find:path-convert"]
+    )
+    assert sorted(state.finder_reports) == sorted(
+        [*(f"{d}@{i}" for d in ALL_SIX for i in (1, 2, 3)), "path@p1"]
+    )
+    assert state.finder_results == {}  # no dimension answered the old JSON call
+
+
+async def test_the_dimensions_key_limits_the_finders_on_every_piece(
+    target_info, ctx, finders
+):
+    state = ReviewState(
+        target=target_info,
+        pieces=one_piece_per_file(target_info),
+        dimensions=["diff-bugs", "callers"],
+    )
+    state = await run_find(state, ctx)
+    assert len(finders.reports) == len(finders.converts) == 3 * 2
+    assert sorted(state.finder_reports) == sorted(
+        f"{d}@{i}" for d in ("diff-bugs", "callers") for i in (1, 2, 3)
+    )
+
+
+async def test_a_one_piece_change_asks_one_report_per_dimension(
+    target_info, ctx, finders
+):
+    state = ReviewState(target=target_info, pieces=pieces_of(target_info))
+    assert len([p for p in state.pieces if p.files]) == 1
+    await run_find(state, ctx)
+    assert sorted(label for label, _ in finders.reports) == sorted(
+        f"find:{d}" for d in ALL_SIX
+    )
+    assert all(t == list(sdk.FINDER_TOOLS) for t in finders.tools)
 
 
 async def test_stage_already_done_makes_no_calls(target_info, ctx, monkeypatch):
