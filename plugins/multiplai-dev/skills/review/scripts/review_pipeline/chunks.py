@@ -347,7 +347,7 @@ def _fill(units: Iterable[list[FileChange]], sizes: dict[str, int]) -> list[list
 def split_pieces(
     diff: str, *, head_tree: frozenset[str], base_tree: frozenset[str]
 ) -> list[Piece]:
-    """A change review's diff as pieces for the piece finders, ids 1..K, in a fixed order.
+    """A change review's diff as pieces for the dimension finders, ids 1..K, in a fixed order.
 
     *head_tree* and *base_tree* are every path at head and at base (one
     `git ls-tree -r --name-only` each), where the group markers are looked up:

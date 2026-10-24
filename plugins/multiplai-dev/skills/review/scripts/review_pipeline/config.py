@@ -31,8 +31,8 @@ list without `trim` turns the trim finder off. An unknown name raises
 `ConfigError`, which names the valid ones. A change review keeps the list it
 started with (`ReviewState.dimensions`), so `resume` runs the same finders.
 
-`extra_finders` is accepted and ignored, whatever its value: the piece finders
-that replaced the extra finders run on every change review. `ReviewConfig.extra_finders`
+`extra_finders` is accepted and ignored, whatever its value: every dimension
+finder runs on every piece of a change review. `ReviewConfig.extra_finders`
 says only that the key is there, so the review prints its one-line notice.
 
 `deps` (default true; `review --no-deps` turns it off for one run) extracts the

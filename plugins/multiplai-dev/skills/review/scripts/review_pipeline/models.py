@@ -517,7 +517,7 @@ class ExplainedFacts(BaseModel):
 
 
 class Piece(BaseModel):
-    """One piece of a change review's diff, for one piece finder (`chunks.split_pieces`).
+    """One piece of a change review's diff, which every dimension finder reviews (`chunks.split_pieces`).
 
     Files only, in piece order (head paths; a deleted file's base path); the
     finder's diff is rebuilt from the stored `diff.patch` when its prompt is
