@@ -15,7 +15,7 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
-## [0.106.0] - 2026-10-23
+## [0.106.0] - 2026-10-24
 
 ### Added
 - codebase-walkthrough names the part of the code that does its main job and
@@ -72,6 +72,14 @@ time, not derived from a tag.
 ### Removed
 - The "Which command to run" table of `--scope codebase`, and the survey agent
   that wrote it.
+
+## [0.105.3] - 2026-10-24
+
+### Removed
+- buildme's epic run no longer passes `--extra-finders` when it reviews a
+  child's PR. The review skill ignored the flag and printed
+  `review: --extra-finders has no effect; per-piece finders now run by default`
+  on every review; the review itself is unchanged.
 
 ## [0.105.2] - 2026-10-23
 
