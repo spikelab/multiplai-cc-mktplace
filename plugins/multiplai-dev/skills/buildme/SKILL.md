@@ -702,10 +702,8 @@ stopped run left running is not counted in another fixer's share.
 
 **Reviewing the children's PRs.** Each child's open PR is reviewed with
 `/multiplai-dev:review` (`python -m review_pipeline review --repo <child
-worktree> --pr <n> --trust-repo --fetch --extra-finders`, run as a
-subprocess; `--fetch` brings in a base a sibling's merge moved, and
-`--extra-finders` adds one finder per ~600 changed lines, at most 6, on the
-PR's first review round only), at most once per head. That review, and the
+worktree> --pr <n> --trust-repo --fetch`, run as a subprocess; `--fetch`
+brings in a base a sibling's merge moved), at most once per head. That review, and the
 one `/multiplai-dev:buildme-findings` runs each round, leaves out the
 change's `specs/changes/**` and `specs/archive/**` documents and buildme's
 runtime files (`--exclude`), so it reads the code, tests, docs and config the

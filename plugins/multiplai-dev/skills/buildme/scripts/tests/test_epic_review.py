@@ -150,7 +150,6 @@ def test_each_built_child_is_reviewed_and_the_result_recorded(tmp_path, monkeypa
         str(N),
         "--trust-repo",
         "--fetch",
-        "--extra-finders",
         *review_options(e.config),
     ]
     assert a.started["head_sha"] == e.head() and a.started["pr_round"] == 0
