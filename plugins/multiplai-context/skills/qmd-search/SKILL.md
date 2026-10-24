@@ -1,6 +1,7 @@
 ---
 name: qmd-search
 description: "Manually search the user's resources knowledge base via qmd (semantic + keyword). Use when asked to 'search my resources', 'find that research about X', or when the automatic resources retrieval missed something."
+effort: low
 ---
 
 # qmd-search — manual resources retrieval

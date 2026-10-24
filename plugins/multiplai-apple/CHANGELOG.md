@@ -10,6 +10,15 @@ Version numbers are this plugin's version in the marketplace manifest
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-24
+
+### Changed
+- Skills set `effort:` in their frontmatter again (still no `model:`), so
+  each runs at an effort that fits its work rather than whatever the
+  session happens to be set to. The level applies only while the skill
+  runs; `CLAUDE_CODE_EFFORT_LEVEL` still overrides it.
+  - `medium`: swift-build
+
 ## [0.2.0] - 2026-10-16
 
 ### Changed

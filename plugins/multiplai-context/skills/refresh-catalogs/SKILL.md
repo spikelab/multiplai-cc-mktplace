@@ -1,6 +1,7 @@
 ---
 name: refresh-catalogs
 description: "Manually regenerate catalog indexes with support for --force, --dry-run, and --only flags"
+effort: low
 ---
 
 # Refresh Catalogs

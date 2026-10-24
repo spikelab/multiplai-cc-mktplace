@@ -15,6 +15,18 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.108.0] - 2026-10-24
+
+### Changed
+- Skills set `effort:` in their frontmatter again (still no `model:`), so
+  each runs at an effort that fits its work rather than whatever the
+  session happens to be set to. The level applies only while the skill
+  runs; `CLAUDE_CODE_EFFORT_LEVEL` still overrides it.
+  - `medium`: analyze-context-router, buildme, buildme-findings, codebase-walkthrough, design-system, learn-stack, plan, pr, propose-skill, review-viewer, spec-extract
+  - `high`: deepen, devops-gcp, e2e-test, review, skill-creator, think
+- `review` runs at `high` until comparisons show whether `medium` finds as
+  many bugs.
+
 ## [0.107.0] - 2026-10-24
 
 ### Changed

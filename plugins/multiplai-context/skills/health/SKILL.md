@@ -1,6 +1,7 @@
 ---
 name: health
 description: "Memory audit — checks completeness and staleness of memory files, plugin infrastructure, and active configuration"
+effort: medium
 ---
 
 # Multiplai Health — Memory Audit

@@ -1,6 +1,7 @@
 ---
 name: config-audit
 description: "Subtractive review of the active Claude/multiplai configuration on a ~60-day cadence — classifies every standing rule as still-serving, obsolete, or model-constraining, and writes a removals-first proposal to .multiplai/dreams/ for user review. Does NOT apply changes."
+effort: medium
 ---
 
 # Multiplai Config Audit — Subtractive Rule/Config Review

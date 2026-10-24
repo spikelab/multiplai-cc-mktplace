@@ -6,6 +6,7 @@ description: |
   Uses the interviewer skill (multiplai-research) for discovery when available, applies evidence-based conversion frameworks.
   Triggers on "landing page", "create a landing page", "landing page copy",
   "review this landing page", "optimize this landing page", "landing page audit".
+effort: medium
 ---
 
 # Landing Page — Dispatcher

@@ -3,6 +3,7 @@ name: codebase-walkthrough
 description: Explains a module, a whole tool or plugin (--scope codebase), or a PR or commit range (--scope pr), end to end with a Python pipeline — every repository that calls it, everything it calls, its data stores and config, and the vendor's docs — and keeps only claims whose cited lines are at the commit. Writes a Markdown walkthrough and an HTML page, or compact Markdown for coding agents.
 when_to_use: 'Triggers: walk me through this module, explain this codebase, onboard me, codebase tour, walkthrough, /multiplai-dev:codebase-walkthrough'
 disable-model-invocation: true
+effort: medium
 ---
 
 # Codebase Walkthrough

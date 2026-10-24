@@ -8,6 +8,7 @@ description: >-
   message. Triggers on "read this Slack thread", "what did X say in Slack",
   "check #channel", "search Slack for …", "post to #channel", "DM X on Slack",
   "send a Slack message", "sync my Slack", or a pasted Slack permalink.
+effort: low
 ---
 
 # Slack

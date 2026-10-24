@@ -21,6 +21,16 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-24
+
+### Changed
+- Skills set `effort:` in their frontmatter again (still no `model:`), so
+  each runs at an effort that fits its work rather than whatever the
+  session happens to be set to. The level applies only while the skill
+  runs; `CLAUDE_CODE_EFFORT_LEVEL` still overrides it.
+  - `low`: plane
+  - `medium`: job-application, landing-page, pm-jtbd-synthesis, pm-persona-codifier, pm-pr-faq, pm-spec, pm-strategy-memo
+
 ## [0.9.2] - 2026-10-23
 
 ### Fixed

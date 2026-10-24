@@ -1,6 +1,7 @@
 ---
 name: log-doctor
 description: Analyze the multiplai runtime logs to find failures, anomalies, and degradation across subsystems (context_manager, extract_learnings, backfill, dream, session lifecycle hooks, etc.), verify root causes against source code, and produce a fix-recommendation report. Can focus on a single subsystem, and can actively exercise a functionality (probe mode) to verify its expected logs appear. Triggers on "check the logs", "why is X failing", "log doctor", "analyze multiplai logs", "what's broken in multiplai", "log health report", "verify X logs correctly", "exercise X and check the logs".
+effort: high
 ---
 
 # log-doctor

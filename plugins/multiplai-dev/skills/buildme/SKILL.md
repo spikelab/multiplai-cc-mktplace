@@ -2,6 +2,7 @@
 name: buildme
 description: Builds a change from the specs /multiplai-pm:pm-spec marked ready - research, codebase analysis, design, tasks, audits and autonomous TDD implementation via a deterministic Python pipeline, ending in a PR. Refuses specs that are not ready, and sends requirements problems back to pm-spec in spec-issues.md.
 when_to_use: 'Triggers: build me, buildme, bootstrap, full build, /buildme'
+effort: medium
 ---
 
 # BuildMe

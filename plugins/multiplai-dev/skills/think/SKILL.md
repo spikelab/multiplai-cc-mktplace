@@ -1,6 +1,7 @@
 ---
 name: think
 description: Critical thinking toolkit — audit conversations for assumptions, biases, unchecked facts, premature convergence, and missed framings. Three modes. Quick (default, no args) — read the conversation and deliver a concise critical audit report, non-interactive. Focused (`/think focused` or `/think about X`) — interactive critical thinking on a specific problem, 10-15 exchanges applying Skeptic/Sage/Strategist lenses. Deep (`/think deep`) — full structured decision process for big life/career/strategy decisions with phased document. Triggers on "/think", "check my thinking", "audit this conversation", "am I missing something", "what am I not seeing", "sanity check this". Complements /interviewer (which extracts hidden info) — this skill examines and stress-tests info already on the table.
+effort: high
 ---
 
 # Think — Critical Thinking Toolkit

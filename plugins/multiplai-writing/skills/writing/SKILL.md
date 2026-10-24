@@ -1,6 +1,7 @@
 ---
 name: writing
 description: Content creation toolkit with 6 modes — brief (extract structure from braindump), cmd-brief (resolve commands in briefs), draft (transform brief into full draft), editor (copy edit for style and AI-tells), linkedin (LinkedIn posts), imagen (image prompt generation).
+effort: medium
 ---
 
 # Writing — Dispatcher

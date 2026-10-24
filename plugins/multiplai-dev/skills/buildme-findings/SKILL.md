@@ -2,6 +2,7 @@
 name: buildme-findings
 description: Fixes a pull request's review comments through buildme's own process. Reads the PR's unresolved review threads and new top-level comments from allowed authors, sorts each into code fix, spec change, question or not a defect, records each requirements change a finding asks for in spec-issues.md for /multiplai-pm:pm-spec revise (it never edits requirements), fixes each code defect with a failing test first under buildme's TDD gates, pushes, refreshes the PR description through /multiplai-dev:pr, replies in each thread, and re-runs /multiplai-dev:review until a round brings nothing new or findings.max_rounds is reached.
 when_to_use: 'Triggers: fix the review comments, address the PR findings, buildme findings, fix the findings on PR, /multiplai-dev:buildme-findings'
+effort: medium
 ---
 
 # buildme findings

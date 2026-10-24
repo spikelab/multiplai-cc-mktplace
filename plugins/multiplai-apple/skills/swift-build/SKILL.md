@@ -9,6 +9,7 @@ description: |
   never touches SSH directly.
 when_to_use: 'Triggers: swift build, swift test, run tests (Swift project context), simulator, xcodebuild'
 disable-model-invocation: false
+effort: medium
 ---
 
 # Swift Build Skill

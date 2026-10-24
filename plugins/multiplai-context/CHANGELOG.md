@@ -16,6 +16,17 @@ are the release dates recorded at the time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.59.0] - 2026-10-24
+
+### Changed
+- Skills set `effort:` in their frontmatter again (still no `model:`), so
+  each runs at an effort that fits its work rather than whatever the
+  session happens to be set to. The level applies only while the skill
+  runs; `CLAUDE_CODE_EFFORT_LEVEL` still overrides it.
+  - `low`: fleet-status, now, qmd-search, refresh-catalogs
+  - `medium`: backfill, config-audit, costs, dream, dream-remember, health, memory-bank, memory-health-audit, setup
+  - `high`: log-doctor
+
 ## [0.58.0] - 2026-10-20
 
 ### Changed

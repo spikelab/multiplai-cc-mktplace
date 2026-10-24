@@ -2,6 +2,7 @@
 name: pr
 description: Opens and edits GitHub pull requests whose description follows the repository's PR template. Code fills the sections the change's files answer (why, blocks, updated docs, companion artifacts, ticket, size), one no-tools model call writes any other template section, and gates in code check that every template heading and checkbox is kept and the description stays under 2,500 words. On an edit it rewrites only the sections it wrote.
 when_to_use: 'Triggers: open a PR, open a pull request, edit the PR description, update the PR body, refresh the PR description, /multiplai-dev:pr'
+effort: medium
 ---
 
 # PR
