@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from . import rounds
+from .checks import failure_kind
 from .export import to_checks_file, to_findings_file
 from .models import (
     CRITICAL_IMPACTS,
@@ -28,6 +29,7 @@ from .models import (
     section_of,
 )
 from .paths_io import load_paths, views
+from .stages.find import change_dimensions, covering, is_converted, top_pieces
 from .target import github_web_base, object_folders, review_children
 
 if TYPE_CHECKING:
@@ -482,6 +484,87 @@ def gap_line(records: list[CoverageRecord]) -> str:
     return f"Gaps: {'; '.join(clauses)}." if clauses else ""
 
 
+def _why(state: ReviewState, key: str) -> str:
+    """Why *key* has no converted report, as a short kind (`checks.failure_kind`), never the error's text."""
+    rep = state.finder_reports.get(key)
+    if rep is not None:
+        return f"convert: {failure_kind(rep.convert_error or '')}"
+    for record in state.coverage:
+        if record.subject == key and record.reason == "finder-failed":
+            return failure_kind(record.detail)
+    return "not asked"
+
+
+def not_reviewed(state: ReviewState) -> list[tuple[str, list[tuple[list[str], str]]]]:
+    """(dimension, [(files, the failed keys with why)]) for every dimension that left a file unreviewed,
+    then ("paths", [([path id], why)]) for failed path finders. A file is not reviewed by a dimension when
+    no key of that dimension covering it has a converted report: the piece holding it, or the halves
+    holding it when the piece was split for that dimension. A tree review has none."""
+    if state.target.is_tree:
+        return []
+    out = []
+    for d in change_dimensions(state):
+        groups: dict[tuple[str, ...], list[str]] = {}
+        for piece in top_pieces(state):
+            parts = covering(state, piece, d)
+            for f in piece.files:
+                keys = [f"{d}@{x.id}" for x in parts if f in x.files]
+                if keys and not any(is_converted(state, k) for k in keys):
+                    groups.setdefault(tuple(keys), []).append(f)
+        if groups:
+            out.append(
+                (
+                    d,
+                    [
+                        (files, ", ".join(f"{k}: {_why(state, k)}" for k in keys))
+                        for keys, files in groups.items()
+                    ],
+                )
+            )
+    paths = [
+        ([pid], _why(state, f"path@{pid}"))
+        for pid in state.path_ids
+        if not is_converted(state, f"path@{pid}")
+    ]
+    if paths:
+        out.append(("paths", paths))
+    return out
+
+
+def not_reviewed_count(state: ReviewState) -> int:
+    """Distinct changed files that at least one dimension did not review."""
+    return len(
+        {
+            f
+            for name, groups in not_reviewed(state)
+            if name != "paths"
+            for files, _ in groups
+            for f in files
+        }
+    )
+
+
+def not_reviewed_section(state: ReviewState) -> list[str]:
+    """`## Not reviewed`, one line per dimension that left files unreviewed; [] when nothing is missing."""
+    rows = not_reviewed(state)
+    if not rows:
+        return []
+    out = [
+        "## Not reviewed",
+        "",
+        "These finders' calls failed, so the files listed were not reviewed for that dimension and their "
+        "findings are missing. A failed path finder is listed by path id.",
+        "",
+    ]
+    for name, groups in rows:
+        listed_ = "; ".join(
+            ", ".join(f"`{f}`" if name != "paths" else f for f in files) + f" ({why})"
+            for files, why in groups
+        )
+        out.append(f"- **{name}:** {listed_}")
+    return out + [""]
+
+
 def render_paths_section(
     state: ReviewState, result: PathsResult | None, findings: list[dict]
 ) -> str:
@@ -562,6 +645,7 @@ def render_review(
         else (lambda sha: f"`{sha[:10]}`")
     )
     out = [f"# Review — {t.label or t.slug}", ""]
+    out += not_reviewed_section(state)
     out.append(
         f"- **Repo:** {Path(t.repo_path).name}"
         + (f" ({web})" if web else f" (`{t.repo_path}`)")
@@ -768,6 +852,7 @@ def render_summary(state: ReviewState, *, findings_file: dict | None = None) -> 
     shown_ids = {f["id"] for f in shown}
 
     out = [f"# Review summary — {t.label or t.slug}", ""]
+    out += not_reviewed_section(state)
     if t.is_tree:
         out.append(
             f"{len(t.files)} files reviewed as they stand at {t.head_sha[:10]}, {len(t.skipped)} skipped."

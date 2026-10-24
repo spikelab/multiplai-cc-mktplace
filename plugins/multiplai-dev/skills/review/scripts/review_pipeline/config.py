@@ -8,8 +8,8 @@ own file beats multiplai.conf, which beats the default):
 1. `review.yaml` in the output directory (`<out>/review.yaml`; for the
    default output directory, the old default's when the new one has none):
    `concurrency`, `finder_model`, `verifier_model`, `merger_model`, `effort`,
-   `max_turns`, `explain`, `find_with_facts`, `trim`, `extra_finders`, `deps`,
-   `deps_max_mb`.
+   `max_turns`, `explain`, `find_with_facts`, `trim`, `dimensions`,
+   `extra_finders`, `deps`, `deps_max_mb`.
 2. `multiplai.conf` keys `review_finder_model`, `review_verifier_model`,
    `review_effort` (the merger uses the verifier's), `review_explain`.
 3. Default: no model and no effort passed, so every stage runs on the
@@ -24,6 +24,12 @@ by default until real runs are compared.
 review: it judges the tests and comments the change adds or edits, and its
 findings go to the advisory Trim section. A tree review runs it only with
 `--trim`, which the review's state keeps (`ReviewState.trim`).
+
+`dimensions` (default: every one of `DIMENSIONS`, and `trim` unless
+`trim: false`) names the finders that run, from `DIMENSIONS` and `trim`; a
+list without `trim` turns the trim finder off. An unknown name raises
+`ConfigError`, which names the valid ones. A change review keeps the list it
+started with (`ReviewState.dimensions`), so `resume` runs the same finders.
 
 `extra_finders` is accepted and ignored, whatever its value: the piece finders
 that replaced the extra finders run on every change review. `ReviewConfig.extra_finders`
@@ -63,7 +69,11 @@ DIMENSIONS: tuple[str, ...] = (
 )
 # Not one of DIMENSIONS: `finder_dimensions` adds it when the review runs it.
 TRIM_DIMENSION = "trim"
-DEFAULT_CONCURRENCY = 4
+DEFAULT_CONCURRENCY = 8
+
+
+class ConfigError(ValueError):
+    """`review.yaml` holds a value the review cannot run with."""
 
 
 @dataclass
@@ -105,6 +115,24 @@ def _flag(value, key: str, where) -> bool | None:
 
 
 CONFIG_FILE = "review.yaml"
+
+
+def _dimensions(value, where) -> tuple[tuple[str, ...], bool]:
+    """`dimensions` as (the ones of `DIMENSIONS` it names, in their order; whether it names `trim`)."""
+    valid = (*DIMENSIONS, TRIM_DIMENSION)
+    names = value if isinstance(value, list) else None
+    if not names or not all(isinstance(n, str) for n in names):
+        raise ConfigError(
+            f"{where}: dimensions must be a list naming at least one of: {', '.join(valid)}"
+        )
+    unknown = [n for n in names if n.strip() not in valid]
+    if unknown:
+        raise ConfigError(
+            f"{where}: unknown dimension{'' if len(unknown) == 1 else 's'} "
+            f"{', '.join(repr(n) for n in unknown)}; the valid ones are: {', '.join(valid)}"
+        )
+    wanted = {n.strip() for n in names}
+    return tuple(d for d in DIMENSIONS if d in wanted), TRIM_DIMENSION in wanted
 
 
 def _yaml_path(out_dir: Path | None) -> Path | None:
@@ -174,6 +202,9 @@ def load_config(
         value = _flag(data.get(key), key, yaml_path)
         if value is not None:
             setattr(cfg, key, value)
+    if "dimensions" in data:
+        cfg.dimensions, listed_trim = _dimensions(data["dimensions"], yaml_path)
+        cfg.trim = cfg.trim and listed_trim
     if cfg.find_with_facts and not cfg.explain:
         log.warning("find_with_facts needs explain: true; the finders get no facts")
         cfg.find_with_facts = False

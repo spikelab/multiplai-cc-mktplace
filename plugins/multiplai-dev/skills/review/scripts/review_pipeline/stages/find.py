@@ -1,21 +1,25 @@
-"""find: one agent per dimension, then dedupe, then `finding_gate`.
+"""find: every finder, then dedupe, then `finding_gate`.
+
+A change review runs each of its dimensions (`state.dimensions`: `diff-bugs`,
+`callers`, `history`, `conventions`, `tests` and `trim` by default) once per
+stored piece of its diff (`state.pieces`, from `chunks.split_pieces`), keyed
+`"<dimension>@<piece id>"`, and every review with mapped paths one path finder
+per path (`state.path_ids`, read back from `paths.json`), keyed `"path@<id>"`.
+Path finders start first, then the pieces, largest first, all dimensions of a
+piece together. Each writes a plain-text report (`sdk.agent_call_text`), stored
+in `state.finder_reports` and written as `report-<dimension>-<id>.md` or
+`report-path-<id>.md` before a second call converts it into findings
+(`run_reported`). A dimension finder that stops at the turn limit has its piece
+split in two (`chunks.split_piece`), and that dimension alone is asked on both
+halves, in the same job; a half is not split again. Only `RepoTrustError`, a
+hit usage limit and a budget stop end the stage; a failed report or convert
+call is recorded in coverage and the others go on, and `resume` asks only for
+the missing report or convert.
 
 A tree target (a whole repository or a directory, not a change) does not fit
 in one prompt, so its files are split into groups by `file_groups` and each
-dimension runs once per group, keyed `"<dimension>@<group index>"`. It has no
-commits, so `history` does not run.
-
-A change review also runs one piece finder per stored piece of its diff
-(`state.pieces`, from `chunks.split_pieces`), keyed `"piece@<id>"`, after the
-dimension finders, and every review with mapped paths one path finder per
-path (`state.path_ids`, read back from `paths.json`), keyed `"path@<id>"`,
-last. Each writes a plain-text report
-(`sdk.agent_call_text`), stored in `state.finder_reports` and written as
-`report-piece-<id>.md` or `report-path-<id>.md` before a second call converts it into findings
-(`run_reported`). Its findings then go through the same dedupe and
-`finding_gate` as the dimension finders'. Only `RepoTrustError`, a hit usage
-limit and a budget stop end the stage; a failed report or convert call is recorded in coverage
-and the others go on, and `resume` asks only for the missing report or convert.
+dimension runs once per group, keyed `"<dimension>@<group index>"`, answering
+JSON. It has no commits, so `history` does not run.
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+from collections.abc import Awaitable, Callable
 from pathlib import Path, PurePosixPath
 
 from code_facts import Fact
@@ -32,8 +37,8 @@ from pydantic import ValidationError
 
 from .. import budget, checks, sdk, timings
 from ..checks import add_coverage, drop_coverage
-from ..chunks import piece_diff_text
-from ..config import TRIM_DIMENSION, ReviewConfig
+from ..chunks import piece_diff_text, split_piece
+from ..config import DIMENSIONS, TRIM_DIMENSION, ReviewConfig
 from ..gates import file_at_head, finding_gate, gated_locations, gated_need, reason_kind
 from ..linked_docs import LinkSource, linked_docs, not_included_line
 from ..models import (
@@ -47,13 +52,13 @@ from ..models import (
     Finding,
     GateCheck,
     Need,
+    Piece,
     Rejected,
     ReviewState,
     TargetInfo,
 )
 from ..paths_io import load_paths, views
 from ..prompts import (
-    DIFF_PROMPT_CHARS,
     commits_block,
     deps_block,
     description_block,
@@ -63,7 +68,6 @@ from ..prompts import (
 from ..prompts import find as prompt
 from ..prompts.convert import build_convert
 from ..prompts.path import build_path
-from ..prompts.piece import build_piece
 from . import RunContext, bounded, fix_citation, relative_path, save
 
 log = logging.getLogger(__name__)
@@ -74,8 +78,12 @@ CONVENTIONS_MAX_CHARS = 40_000
 GROUP_MAX_CHARS = 100_000
 # Dimensions a tree review does not run: there are no commits to compare against.
 TREE_SKIPPED_DIMENSIONS = ("history",)
-# The piece and path finders' tools, for the report and the convert call alike: no web.
+# The path finders' tools, for the report and the convert call alike: no web. Dimension finders get
+# `sdk.FINDER_TOOLS`, web included, as their JSON calls had.
 READ_ONLY = ["Read", "Grep", "Glob"]
+# What a change review runs on every piece when its state names no dimensions (a checkpoint written
+# before `ReviewState.dimensions` existed).
+DEFAULT_CHANGE_DIMENSIONS = (*DIMENSIONS, TRIM_DIMENSION)
 # A report that is one of these (stripped) has no item to convert.
 EMPTY_REPORTS = ("", "NO FINDINGS")
 
@@ -315,11 +323,11 @@ def group_facts(facts: list[Fact], group: list[str] | None) -> list[Fact]:
     return [f for f in facts if any(c.path in files for c in f.citations)]
 
 
-# --- report-then-convert: the piece and path finders -----------------------------------------------
+# --- report-then-convert: the dimension and path finders -------------------------------------------
 
 
 def report_file_name(key: str) -> str:
-    """`piece@3` -> `report-piece-3.md`, `path@p7` -> `report-path-p7.md`."""
+    """`callers@3` -> `report-callers-3.md`, `path@p7` -> `report-path-p7.md`."""
     kind, _, ident = key.partition("@")
     return f"report-{kind}-{ident}.md"
 
@@ -341,8 +349,9 @@ def map_converted(
 ) -> tuple[list[ConvertedItem], list[Finding]]:
     """Every converted item as a `ConvertedItem`, and a `Finding` for each one that has a location.
 
-    A missing severity is LOW. A finding's dimension and finder are the key's
-    kind (`piece` or `path`). An item with no file, line or citation, or one
+    A missing severity is LOW. A finding's finder is the key's kind (the
+    dimension, or `path`), and so is its dimension, except "pre-existing" for
+    an item the report marks so. An item with no file, line or citation, or one
     whose location does not validate, stays an item with `finding_id` None.
     """
     kind = key.partition("@")[0]
@@ -356,7 +365,7 @@ def map_converted(
                 finding = Finding(
                     claim=it.claim,
                     severity=severity,
-                    dimension=kind,
+                    dimension="pre-existing" if it.pre_existing else kind,
                     file=it.file,
                     line_start=it.line_start,
                     line_end=it.line_end or it.line_start,
@@ -401,7 +410,7 @@ def _relative(out: ConvertOutput, target: TargetInfo, snapshot: Path) -> Convert
                 }
             )
         )
-    return ConvertOutput(items=items)
+    return ConvertOutput(items=items, needs=out.needs)
 
 
 def _first_line(e: BaseException) -> str:
@@ -416,20 +425,23 @@ async def run_reported(
     *,
     given: list[str] | None = None,
     hunks: dict | None = None,
+    tools: list[str] = READ_ONLY,
+    split: Callable[[], Awaitable[None]] | None = None,
 ) -> None:
-    """One piece or path finder: its report call, then its convert call, each skipped when already done.
+    """One dimension or path finder: its report call, then its convert call, each skipped when already done.
 
     The report is stored in `state.finder_reports`, saved and written to its
     file before the convert call starts, so a stop between the two calls loses
     nothing paid for. Both calls are charged to the ledger (`find:<kind>` and
-    `find:<kind>-convert`). A failed call is recorded in coverage (`finder-failed`
-    or `convert-failed`) and the stage goes on; a failed convert stays pending
-    for `resume`.
+    `find:<kind>-convert`) and get *tools*. A failed call is recorded in
+    coverage (`finder-failed` or `convert-failed`) and the stage goes on; a
+    failed convert stays pending for `resume`. A report call that stops at the
+    turn limit is recorded the same way, and then *split* runs, when given.
     """
     target, cfg = state.target, ctx.config
     kind = key.partition("@")[0]
     common = {
-        "allowed_tools": READ_ONLY,
+        "allowed_tools": tools,
         "model": cfg.finder_model,
         "effort": cfg.effort,
         "max_turns": cfg.max_turns,
@@ -438,7 +450,7 @@ async def run_reported(
     if rep is None:
         label = f"find:{kind}"
         interval = timings.open_interval(state, label)
-        started, error, text = checks.now(), "", ""
+        started, error, text, turn_limit = checks.now(), "", "", False
         with sdk.recording() as rec:
             try:
                 text = await sdk.agent_call_text(
@@ -457,6 +469,7 @@ async def run_reported(
             except Exception as e:  # one failed finder must not stop the others
                 log.error("finder %s failed for %s", key, target.slug, exc_info=True)
                 error = _first_line(e)
+                turn_limit = isinstance(e, sdk.MaxTurnsError)
             finally:
                 interval.ended_at = timings.now()
         check = AgentCheck(
@@ -487,6 +500,8 @@ async def run_reported(
                     detail=error,
                 ),
             )
+            if turn_limit and split is not None:
+                await split()
             return
         empty = text.strip() in EMPTY_REPORTS
         check.outcome = "no findings" if empty else f"report ({len(text)} characters)"
@@ -554,7 +569,9 @@ async def run_reported(
         )
         save(state, ctx)
         return
-    rep.items, rep.findings = map_converted(key, _relative(out, target, ctx.snapshot))
+    out = _relative(out, target, ctx.snapshot)
+    rep.items, rep.findings = map_converted(key, out)
+    rep.needs = [n for n in out.needs if n.what.strip()]
     rep.converted, rep.convert_error = True, None
     drop_coverage(state, stage="find", subject=key, reason="convert-failed")
     check.items = [i.model_dump(mode="json") for i in rep.items]
@@ -571,12 +588,15 @@ async def run_reported(
         ctx.progress.line(f"  convert {key}: {check.outcome}")
 
 
-def shared_blocks(target: TargetInfo) -> str:
-    """What every piece and path finder is told about the snapshot and the change, before its own part."""
+def shared_blocks(target: TargetInfo, *, web: bool = False) -> str:
+    """What every dimension and path finder is told about the snapshot and the change, before its own part.
+
+    *web* adds the rules for WebFetch and WebSearch, which the dimension finders have.
+    """
     return "\n\n".join(
         p
         for p in (
-            workspace_block(target),
+            workspace_block(target, web=web),
             deps_block(target),
             commits_block(target),
             description_block(target),
@@ -586,54 +606,204 @@ def shared_blocks(target: TargetInfo) -> str:
     )
 
 
-def reported_finders(
+def change_dimensions(state: ReviewState) -> tuple[str, ...]:
+    """The dimensions a change review runs on every piece: the stored ones, or the default set."""
+    if state.dimensions is None:
+        return DEFAULT_CHANGE_DIMENSIONS
+    return tuple(state.dimensions)
+
+
+def top_pieces(state: ReviewState) -> list[Piece]:
+    """The pieces `prepare` stored that hold a file (a meta piece holding only lockfiles has nothing to
+    review), in piece order; halves made by a split are not among them."""
+    return [p for p in state.pieces or [] if p.files and p.split_from is None]
+
+
+def covering(state: ReviewState, piece: Piece, dimension: str) -> list[Piece]:
+    """The pieces whose `<dimension>@<id>` key reviews *piece*'s files: its halves when it was split for
+    *dimension*, else *piece* itself."""
+    by_id = {p.id: p for p in state.pieces or []}
+    halves = [
+        by_id[i]
+        for i in piece.split_into
+        if i in by_id and dimension in by_id[i].split_for
+    ]
+    return halves or [piece]
+
+
+def is_converted(state: ReviewState, key: str) -> bool:
+    rep = state.finder_reports.get(key)
+    return rep is not None and rep.converted
+
+
+def adopt_legacy_reports(state: ReviewState) -> dict[str, str]:
+    """A checkpoint written before every dimension ran per piece: each converted `piece@<id>` report
+    becomes `diff-bugs@<id>`'s, unless that key has one. Returns {new key: old key}, for the record."""
+    renamed: dict[str, str] = {}
+    for key, rep in list(state.finder_reports.items()):
+        kind, _, ident = key.partition("@")
+        new = f"diff-bugs@{ident}"
+        if kind != "piece" or not rep.converted or new in state.finder_reports:
+            continue
+        state.finder_reports[new] = rep.model_copy(update={"key": new})
+        del state.finder_reports[key]
+        renamed[new] = key
+    return renamed
+
+
+def path_jobs(
     state: ReviewState, ctx: RunContext
 ) -> list[tuple[str, str, list[str], dict]]:
-    """(key, prompt, given labels, diff hunks) of each piece finder, then each path finder.
+    """(key, prompt, given labels, diff hunks) of each path finder, in `paths.json` order.
 
-    Pieces run on a change review only, in piece order; a piece with no file
-    (a meta piece holding only omitted lockfiles) has nothing to review. Path
-    finders run for each id in `state.path_ids`, in `paths.json` order, when
-    the paths stage produced the file (`paths_io.load_paths`); a resumed run
-    reads the stored file and maps nothing again.
+    They run for each id in `state.path_ids` when the paths stage produced
+    the file (`paths_io.load_paths`); a resumed run reads the stored file and
+    maps nothing again.
     """
     target = state.target
-    shared = shared_blocks(target)
-    out = []
-    for p in [] if target.is_tree else state.pieces or []:
-        if not p.files:
-            continue
-        diff = piece_diff_text(ctx.diff, p)
-        labels = [
-            f"piece {p.id} ({len(p.files)} file{'' if len(p.files) == 1 else 's'}, {p.chars} characters)"
-        ]
-        given = checks.prompt_labels(target, extra=labels)
-        out.append(
-            (
-                f"piece@{p.id}",
-                build_piece(p, diff, workspace=shared),
-                given,
-                checks.diff_hunks(diff),
-            )
-        )
     result = (
         load_paths(ctx.target_dir, state)
         if ctx.target_dir is not None and state.path_ids
         else None
     )
-    if result is not None:
-        wanted = set(state.path_ids)
-        hunks = checks.diff_hunks(ctx.diff[:DIFF_PROMPT_CHARS]) if ctx.diff else {}
-        for view in views(result):
-            if view.id not in wanted:
-                continue
-            given = checks.prompt_labels(
-                target, extra=[f"path {view.id} ({len(view.hops)} hops)"]
-            )
-            out.append(
-                (f"path@{view.id}", build_path(view, workspace=shared), given, hunks)
-            )
+    if result is None:
+        return []
+    shared = shared_blocks(target)
+    wanted = set(state.path_ids)
+    hunks = checks.diff_hunks(ctx.diff) if ctx.diff else {}
+    out = []
+    for view in views(result):
+        if view.id not in wanted:
+            continue
+        given = checks.prompt_labels(
+            target, extra=[f"path {view.id} ({len(view.hops)} hops)"]
+        )
+        out.append(
+            (f"path@{view.id}", build_path(view, workspace=shared), given, hunks)
+        )
     return out
+
+
+class PieceFinders:
+    """The jobs of a change review's dimension finders: one per (piece, dimension), each asking its key,
+    or the keys of the piece's halves when the piece was split for that dimension."""
+
+    def __init__(self, state: ReviewState, ctx: RunContext, dims: tuple[str, ...]):
+        self.state, self.ctx, self.dims = state, ctx, dims
+        self.shared = shared_blocks(state.target, web=True)
+        facts = state.facts.facts if ctx.config.find_with_facts and state.facts else []
+        self.facts = group_facts(facts, None)
+        self._rules: dict[int, list[tuple[str, bool, str]]] = {}
+
+    def rules(self, piece: Piece) -> list[tuple[str, bool, str]]:
+        """`conventions_blocks` for *piece*'s files, once per piece; a doc left out is recorded once."""
+        if piece.id not in self._rules:
+            skipped: list[CoverageRecord] = []
+            self._rules[piece.id] = conventions_blocks(
+                self.state.target, piece.files, coverage=skipped
+            )
+            for record in skipped:  # once, however many pieces or resumed runs link it
+                if record not in self.state.coverage:
+                    add_coverage(self.state, record)
+        return self._rules[piece.id]
+
+    def keys(self) -> list[str]:
+        """Every key that makes up the review, halves in place of a piece split for that dimension."""
+        return [
+            f"{d}@{part.id}"
+            for p in top_pieces(self.state)
+            for d in self.dims
+            for part in covering(self.state, p, d)
+        ]
+
+    def jobs(self) -> list[tuple[Piece, str]]:
+        """(piece, dimension) still to ask, largest piece first, all dimensions of a piece together."""
+        pieces = sorted(top_pieces(self.state), key=lambda p: (-p.chars, p.id))
+        return [
+            (p, d)
+            for p in pieces
+            for d in self.dims
+            if not all(
+                is_converted(self.state, f"{d}@{part.id}")
+                for part in covering(self.state, p, d)
+            )
+        ]
+
+    async def run(self, piece: Piece, dimension: str) -> None:
+        for part in covering(self.state, piece, dimension):
+            if not is_converted(self.state, f"{dimension}@{part.id}"):
+                await self.ask(part, dimension)
+
+    async def ask(self, piece: Piece, dimension: str) -> None:
+        target = self.state.target
+        diff = piece_diff_text(self.ctx.diff, piece)
+        rules = self.rules(piece) if dimension == "conventions" else []
+        label = (
+            f"{dimension} on piece {piece.id} ({len(piece.files)} "
+            f"file{'' if len(piece.files) == 1 else 's'}, {piece.chars} characters)"
+        )
+        extra = [label] + ([f"checked facts ({len(self.facts)})"] if self.facts else [])
+        given = checks.prompt_labels(
+            target,
+            rules=[(path, included) for path, included, _ in rules]
+            if dimension == "conventions"
+            else None,
+            extra=extra,
+        )
+        text = prompt.build_report(
+            target,
+            dimension,
+            piece,
+            diff,
+            workspace=self.shared,
+            conventions="\n".join(block for _, _, block in rules if block),
+            facts=self.facts,
+        )
+
+        async def split() -> None:
+            await self.split(piece, dimension)
+
+        await run_reported(
+            f"{dimension}@{piece.id}",
+            text,
+            self.state,
+            self.ctx,
+            given=given,
+            hunks=checks.diff_hunks(diff),
+            tools=sdk.FINDER_TOOLS,
+            split=split if piece.split_from is None else None,
+        )
+
+    async def split(self, piece: Piece, dimension: str) -> None:
+        """*dimension* stopped at the turn limit on *piece*: cut it in two (once, whichever dimension
+        stopped first) and ask *dimension* on both halves, one after the other."""
+        state = self.state
+        if not piece.split_into:
+            halves = split_piece(
+                piece, self.ctx.diff, max(p.id for p in state.pieces or []) + 1
+            )
+            if halves is None:
+                if self.ctx.progress:
+                    self.ctx.progress.line(
+                        f"  finder {dimension}@{piece.id}: turn limit; one hunk, not split"
+                    )
+                return
+            piece.split_into = [h.id for h in halves]
+            state.pieces = [*(state.pieces or []), *halves]
+        by_id = {p.id: p for p in state.pieces or []}
+        halves = [by_id[i] for i in piece.split_into]
+        for half in halves:
+            if dimension not in half.split_for:
+                half.split_for.append(dimension)
+        save(state, self.ctx)
+        if self.ctx.progress:
+            self.ctx.progress.line(
+                f"  finder {dimension}@{piece.id}: turn limit; asking it on pieces "
+                + " and ".join(str(h.id) for h in halves)
+            )
+        for half in halves:
+            if not is_converted(state, f"{dimension}@{half.id}"):
+                await self.ask(half, dimension)
 
 
 def _reported_result(state: ReviewState, key: str) -> FinderResult:
@@ -645,25 +815,20 @@ def _reported_result(state: ReviewState, key: str) -> FinderResult:
         return FinderResult(
             error=f"{key} convert: {rep.convert_error or 'not converted'}"
         )
-    return FinderResult(findings=list(rep.findings))
+    return FinderResult(findings=list(rep.findings), needs=list(rep.needs))
 
 
-async def run_find(state: ReviewState, ctx: RunContext) -> ReviewState:
-    if state.past("find"):
-        return state
+async def _find_tree(
+    state: ReviewState, ctx: RunContext
+) -> tuple[list[tuple[str, str, FinderResult]], list[str]]:
+    """A tree review's finders: each dimension once per file group, answering JSON, then the path
+    finders. Returns (key, record subject, result) of every finder, and the group keys."""
     target, cfg = state.target, ctx.config
     dims = finder_dimensions(target, cfg, tree_trim=state.trim)
-    if target.is_tree:
-        groups = file_groups(target)
-        # (key, dimension, group index): "<dimension>@<group>" so a resumed run asks only the missing pairs.
-        pairs = [(f"{d}@{i}", d, i) for i in range(len(groups)) for d in dims]
-    else:
-        groups = [
-            None
-        ]  # the change path: every changed file, one prompt per dimension, as before
-        pairs = [(d, d, 0) for d in dims]
-    # After the dimensions, so a budget stop mid-pieces has already asked every dimension.
-    reported = reported_finders(state, ctx)
+    groups = file_groups(target)
+    # (key, dimension, group index): "<dimension>@<group>" so a resumed run asks only the missing pairs.
+    pairs = [(f"{d}@{i}", d, i) for i in range(len(groups)) for d in dims]
+    reported = path_jobs(state, ctx)
     rules: dict[int, list[tuple[str, bool, str]]] = {}
     if "conventions" in dims:
         for i, group in enumerate(groups):
@@ -679,37 +844,28 @@ async def run_find(state: ReviewState, ctx: RunContext) -> ReviewState:
                 ) in skipped_docs:  # once, however many groups or resumed runs link it
                     if record not in state.coverage:
                         add_coverage(state, record)
-    hunks = checks.diff_hunks(ctx.diff[:DIFF_PROMPT_CHARS])
     todo = [p for p in pairs if p[0] not in state.finder_results]
     facts = state.facts.facts if cfg.find_with_facts and state.facts else []
 
     async def _one(
         key: str, dimension: str, index: int
     ) -> tuple[FinderResult, AgentCheck]:
-        shown = hunks
         group_rules = rules.get(index, [])
         conventions = "\n".join(block for _, _, block in group_rules if block)
-        extra = (
-            [f"files ({len(groups[index])}, group {index + 1} of {len(groups)})"]
-            if target.is_tree
-            else []
-        )
+        extra = [f"files ({len(groups[index])}, group {index + 1} of {len(groups)})"]
         given_facts = group_facts(facts, groups[index])
         if given_facts:
             extra.append(f"checked facts ({len(given_facts)})")
         given = checks.prompt_labels(
             target,
-            diff=None if target.is_tree else ctx.diff,
-            diff_limit=DIFF_PROMPT_CHARS,
             rules=[(path, included) for path, included, _ in group_rules]
             if dimension == "conventions"
             else None,
-            extra=extra or None,
+            extra=extra,
         )
         text = prompt.build(
             target,
             dimension,
-            ctx.diff,
             conventions,
             files=groups[index],
             facts=given_facts,
@@ -753,7 +909,7 @@ async def run_find(state: ReviewState, ctx: RunContext) -> ReviewState:
         findings = [_normalise(f, dimension, target, ctx) for f in out.findings]
         check.outcome = f"{len(findings)} finding{'' if len(findings) == 1 else 's'}"
         check.findings = [
-            finding_entry(f, rec.tool_calls, shown, target, ctx) for f in findings
+            finding_entry(f, rec.tool_calls, {}, target, ctx) for f in findings
         ]
         return FinderResult(
             findings=findings, needs=[n for n in out.needs if n.what.strip()]
@@ -774,15 +930,11 @@ async def run_find(state: ReviewState, ctx: RunContext) -> ReviewState:
         save(state, ctx)
 
     async def one_reported(job: tuple[str, str, list[str], dict]) -> None:
-        key, text, given, piece_hunks = job
-        await run_reported(key, text, state, ctx, given=given, hunks=piece_hunks)
-
-    def is_done(key: str) -> bool:
-        rep = state.finder_reports.get(key)
-        return rep is not None and rep.converted
+        key, text, given, path_hunks = job
+        await run_reported(key, text, state, ctx, given=given, hunks=path_hunks)
 
     jobs = [(one, p) for p in todo] + [
-        (one_reported, r) for r in reported if not is_done(r[0])
+        (one_reported, r) for r in reported if not is_converted(state, r[0])
     ]
 
     async def run_job(job) -> None:
@@ -790,41 +942,88 @@ async def run_find(state: ReviewState, ctx: RunContext) -> ReviewState:
         await fn(arg)
 
     await bounded(jobs, run_job, cfg.concurrency)
-
-    # (key, dimension, result) of every finder: the dimensions', then the reported ones'.
-    outcomes = [(key, d, state.finder_results[key]) for key, d, _ in pairs]
+    outcomes = [(key, key, state.finder_results[key]) for key, _, _ in pairs]
     outcomes += [
-        (key, key.partition("@")[0], _reported_result(state, key))
+        (key, f"{key} convert", _reported_result(state, key))
         for key, _, _, _ in reported
     ]
+    return outcomes, [key for key, _, _ in pairs]
+
+
+async def _find_change(
+    state: ReviewState, ctx: RunContext
+) -> list[tuple[str, str, FinderResult]]:
+    """A change review's finders: the path finders, then every dimension on every piece, each a report
+    then a convert. Returns (key, record subject, result) of every finder."""
+    renamed = adopt_legacy_reports(state)
+    finders = PieceFinders(state, ctx, change_dimensions(state))
+    paths = path_jobs(state, ctx)
+
+    def path_job(key: str, text: str, given: list[str], hunks: dict):
+        return lambda: run_reported(key, text, state, ctx, given=given, hunks=hunks)
+
+    def piece_job(piece: Piece, dimension: str):
+        return lambda: finders.run(piece, dimension)
+
+    jobs = [path_job(*job) for job in paths if not is_converted(state, job[0])]
+    jobs += [piece_job(*job) for job in finders.jobs()]
+
+    async def run_job(job: Callable[[], Awaitable[None]]) -> None:
+        await job()
+
+    await bounded(jobs, run_job, ctx.config.concurrency)
+
+    # A checkpoint from before every dimension ran per piece keeps its whole-diff finders' results.
+    outcomes = [
+        (key, key, result)
+        for key, result in state.finder_results.items()
+        if "@" not in key
+    ]
+    outcomes += [
+        (key, f"{renamed.get(key, key)} convert", _reported_result(state, key))
+        for key in finders.keys() + [job[0] for job in paths]
+    ]
+    return outcomes
+
+
+async def run_find(state: ReviewState, ctx: RunContext) -> ReviewState:
+    if state.past("find"):
+        return state
+    target = state.target
+    group_keys: list[str] = []
+    if target.is_tree:
+        outcomes, group_keys = await _find_tree(state, ctx)
+    else:
+        outcomes = await _find_change(state, ctx)
+
     results = [r for _, _, r in outcomes]
+    # A reported finder's failure is already in state.errors, through its coverage record.
     failures = [
-        state.finder_results[key].error
-        for key, _, _ in pairs
-        if state.finder_results[key].error
+        r.error
+        for key, subject, r in outcomes
+        if r.error and not subject.endswith(" convert")
     ]
     failed = [r.error for r in results if r.error]
     # The trim finder is advisory: its answer alone is not a review.
-    defects = [r for _, d, r in outcomes if d != TRIM_DIMENSION] or results
+    defects = [
+        r for key, _, r in outcomes if key.partition("@")[0] != TRIM_DIMENSION
+    ] or results
     if all(r.error for r in defects):
-        for key, _, _ in pairs:
+        for key in group_keys:
             del state.finder_results[key]  # a later run tries every finder again
         raise sdk.AgentCallError("every finder failed: " + "; ".join(failed))
 
-    # The record's entry for each finder's stored result (keyed like
-    # finder_results): the last successful call (a failed earlier attempt has
-    # no findings). A reported finder's findings are on its convert entry.
+    # The record's entry for each finder's stored result: the last successful
+    # call (a failed earlier attempt has no findings). A reported finder's
+    # findings are on its convert entry.
     entries = {
         c.subject: c.findings for c in state.checks if c.stage == "find" and not c.error
     }
-    reported_keys = {key for key, _, _, _ in reported}
 
     seen: dict[tuple[str, int, str], Finding] = {}
     kept: list[Finding] = []
-    for pair_key, _, result in outcomes:
-        recorded = entries.get(
-            f"{pair_key} convert" if pair_key in reported_keys else pair_key, []
-        )
+    for _, subject, result in outcomes:
+        recorded = entries.get(subject, [])
         for i, finding in enumerate(result.findings):
             entry = recorded[i] if i < len(recorded) else {}
             finding = finding.model_copy(
@@ -885,7 +1084,6 @@ async def run_find(state: ReviewState, ctx: RunContext) -> ReviewState:
         "rejected": len([r for r in state.rejected if r.stage == "find"]),
         "finder_failures": len(failed),
     }
-    # A reported finder's failure is already in state.errors, through its coverage record.
     state.errors.extend(failures)
     state.stage = "find"
     return state

@@ -21,12 +21,12 @@ from pathlib import Path
 import yaml
 from multiplai_core.log_utils import log_event
 
-from . import budget, deps, rounds, runlock, sdk, timings
+from . import budget, deps, rounds, runlock, sdk, timings, window
 from . import ledger as review_ledger
 from . import target as target_mod
 from .chunks import split_pieces
 from .config import ReviewConfig, run_config
-from .costs import cost_lines, kept_line
+from .costs import cost_lines, estimate, kept_line
 from .export import (
     producer,
     run_record,
@@ -41,6 +41,7 @@ from .progress import ProgressWriter
 from .render import (
     count_line,
     listed,
+    not_reviewed_count,
     summary_path,
     write_review,
     write_rollups,
@@ -49,7 +50,14 @@ from .render import (
 from .stages import RunContext
 from .stages.assess import reconcile_earlier, run_assess
 from .stages.explain import run_explain
-from .stages.find import file_chars, file_groups, finder_dimensions, run_find
+from .stages.find import (
+    DEFAULT_CHANGE_DIMENSIONS,
+    change_dimensions,
+    file_chars,
+    file_groups,
+    finder_dimensions,
+    run_find,
+)
 from .stages.merge import run_merge
 from .stages.paths import PATH_CAP, run_paths
 from .stages.recheck import run_recheck
@@ -253,6 +261,7 @@ async def _run_stages(
     t = state.target
     ledger = budget.start(config.max_cost_usd, state.budget)
     progress = ProgressWriter(target_dir / "progress.log")
+    window.progress_line = progress.line  # the usage window's readings and NOTICE
     if state.stage == "target":
         progress.started(
             t.label or t.slug,
@@ -410,7 +419,11 @@ async def _run_stages(
     shown = listed(rows, state.mode)
     counts = {s: sum(1 for f in shown if f["severity"] == s) for s in SEVERITIES}
     message = f"review finished: {count_line(rows, state.mode)}"
-    progress.done(f"{message} (${ledger.cost_usd:.2f})")
+    missing = not_reviewed_count(state)
+    progress.done(
+        f"{message} (${ledger.cost_usd:.2f})"
+        + (f"; {missing} files not reviewed" if missing else "")
+    )
     print(f"{t.slug}: {message}; output in {target_dir}", flush=True)
     print(f"summary: {summary_path(state, target_dir)}", flush=True)
     log_event(
@@ -683,26 +696,26 @@ def _resumable(target_dir: Path, head_sha: str) -> bool:
 
 
 def plan_text(state: ReviewState, config: ReviewConfig) -> str:
-    """What a review of this target would run: one line per file group, then the total line."""
+    """What a review of this target would run: a tree's file groups or a change's pieces, then the totals."""
     t = state.target
-    groups = file_groups(t)
-    dims = finder_dimensions(t, config, tree_trim=state.trim)
-    lines = []
-    for i, group in enumerate(groups, 1):
-        chars = sum(file_chars(t, f) for f in group)
-        where = (
-            f" ({group[0]} .. {group[-1]})"
-            if len(group) > 1
-            else (f" ({group[0]})" if group else "")
-        )
-        lines.append(f"group {i}: {len(group)} files, {chars} characters{where}")
-    calls = len(groups) * len(dims)
-    total = (
-        f"groups: {len(groups)}  finder calls: {calls}  files skipped: {len(t.skipped)}"
-    )
     found = (
         deps.locked_git_deps(t) if config.deps else []
     )  # read from git only; nothing is fetched
+    lines = []
+    if t.is_tree:
+        groups = file_groups(t)
+        dims = finder_dimensions(t, config, tree_trim=state.trim)
+        for i, group in enumerate(groups, 1):
+            chars = sum(file_chars(t, f) for f in group)
+            where = (
+                f" ({group[0]} .. {group[-1]})"
+                if len(group) > 1
+                else (f" ({group[0]})" if group else "")
+            )
+            lines.append(f"group {i}: {len(group)} files, {chars} characters{where}")
+        total = f"groups: {len(groups)}  finder calls: {len(groups) * len(dims)}  files skipped: {len(t.skipped)}"
+    else:
+        total = f"files: {len(t.files)}  files skipped: {len(t.skipped)}"
     if found:
         total += f"  git dependencies: {len(found)}"
     lines.append(total)
@@ -711,7 +724,7 @@ def plan_text(state: ReviewState, config: ReviewConfig) -> str:
 
 
 def piece_plan_lines(state: ReviewState) -> list[str]:
-    """One line per piece, then the piece and path finder calls (a tree review: path finders with --paths)."""
+    """One line per piece, then the finder calls (a tree review: path finders with --paths)."""
     lines = []
     for p in state.pieces or []:
         label = "meta" if p.meta else (p.group or ".")
@@ -724,12 +737,44 @@ def piece_plan_lines(state: ReviewState) -> list[str]:
         lines.append(" ".join(parts))
     each = "(each one report call and one convert call)"
     if not state.target.is_tree:
+        dims = change_dimensions(state)
+        pieces = len([p for p in state.pieces or [] if p.files])
         lines.append(
-            f"piece and path finder calls: {len(state.pieces or [])} pieces + up to {PATH_CAP} paths {each}"
+            f"finder calls: {pieces} pieces x {len(dims)} dimensions ({', '.join(dims)}) + up to "
+            f"{PATH_CAP} paths {each}; {estimate(state).calls} calls at most"
         )
     elif state.paths_enabled:
         lines.append(f"path finder calls: up to {PATH_CAP} paths {each}")
     return lines
+
+
+def change_review_dimensions(state: ReviewState, config: ReviewConfig) -> None:
+    """Store the dimensions a change review runs on every piece, from `review.yaml`, before its first save."""
+    if not state.target.is_tree:
+        state.dimensions = list(finder_dimensions(state.target, config))
+
+
+DIMENSIONS_NOTICE = (
+    "NOTICE: dimensions {saved} kept from the stopped run; review.yaml says {new}"
+)
+
+
+def kept_dimensions(state: ReviewState, config: ReviewConfig) -> None:
+    """On resume: a checkpoint with no dimensions runs the default set, and a stored list wins over a
+    changed `review.yaml`, with one NOTICE."""
+    if state.target.is_tree:
+        return
+    if state.dimensions is None:
+        state.dimensions = list(DEFAULT_CHANGE_DIMENSIONS)
+    new = list(finder_dimensions(state.target, config))
+    if new != state.dimensions:
+        print(
+            DIMENSIONS_NOTICE.format(
+                saved=", ".join(state.dimensions), new=", ".join(new)
+            ),
+            file=sys.stderr,
+            flush=True,
+        )
 
 
 def plan_only(
@@ -739,6 +784,7 @@ def plan_only(
     extra_finders_notice(config, spec)
     with contextlib.ExitStack() as lock:
         state, target_dir = prepare(spec, out_dir, lock=lock)
+        change_review_dimensions(state, config)
         print_cost_lines(state, config, resuming=False)
         text = plan_text(state, config)
         path = target_dir / "plan.txt"
@@ -808,6 +854,7 @@ async def review(
     extra_finders_notice(config, spec)
     with contextlib.ExitStack() as lock:
         state, target_dir = prepare(spec, out_dir, check_interrupted=True, lock=lock)
+        change_review_dimensions(state, config)
         print_cost_lines(
             state, config, resuming=False
         )  # after the pieces, before the paths stage
@@ -832,6 +879,7 @@ async def resume(
         if state is None:
             raise ReviewError(f"no readable review-state.json in {target_dir}")
         extra_finders_notice(config)
+        kept_dimensions(state, config)
         if not state.past("find"):
             print_cost_lines(state, config, resuming=True)
         return await run_state(state, target_dir, config, session_id=session_id)

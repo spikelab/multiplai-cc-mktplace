@@ -400,10 +400,14 @@ def main(argv: list[str] | None = None) -> int:
         os.environ["REVIEW_TRUST_REPO"] = "1"
 
     from . import orchestrator, render, rounds, sdk, target
+    from .config import ConfigError
     from .config import load_config as read_config
 
     def load_config(root: Path, **kwargs):
-        config = read_config(root, **kwargs)
+        try:
+            config = read_config(root, **kwargs)
+        except ConfigError as e:
+            raise orchestrator.ReviewError(str(e)) from e
         if getattr(args, "no_deps", False):
             config.deps = False
         if getattr(args, "model", None):

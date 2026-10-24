@@ -537,6 +537,13 @@ class Piece(BaseModel):
         default_factory=list
     )  # files in `files` whose change is binary
     chars: int = 0  # characters of diff, headers included; binary files count 0
+    # A half made when a finder hit the turn limit on piece `split_from` (`chunks.split_piece`); it runs only
+    # the dimensions in `split_for`. The piece it was cut from lists its halves' ids in `split_into`.
+    split_from: int | None = None
+    split_into: list[int] = Field(default_factory=list)
+    split_for: list[str] = Field(default_factory=list)
+    # A half of a one-file piece: the [first, end) indices of the file's hunks it holds; None for whole files.
+    hunks: list[int] | None = None
 
 
 class ConvertedItem(BaseModel):
@@ -552,7 +559,7 @@ class ConvertedItem(BaseModel):
 class FinderReport(BaseModel):
     """A piece or path finder's plain-text report, stored as soon as it returns, and what convert made of it."""
 
-    key: str  # "piece@3" | "path@p7"
+    key: str  # "callers@3" | "path@p7" ("piece@3" in checkpoints written before multiplai-dev 0.106)
     text: str
     converted: bool = False
     convert_error: str | None = (
@@ -560,6 +567,9 @@ class FinderReport(BaseModel):
     )
     items: list[ConvertedItem] = Field(default_factory=list)
     findings: list[Finding] = Field(default_factory=list)
+    needs: list[NeedAsk] = Field(
+        default_factory=list
+    )  # what the report says it could not check
 
 
 class CoverageRecord(BaseModel):
@@ -599,6 +609,10 @@ class ReviewState(BaseModel):
     # A change review's pieces (`chunks.split_pieces`), computed once by `prepare` and reused by
     # `resume`; None for a tree review and in checkpoints written before pieces existed.
     pieces: list[Piece] | None = None
+    # The finder dimensions a change review runs on every piece (`review.yaml` `dimensions`), set by
+    # `prepare` and kept by `resume`; None in checkpoints written before multiplai-dev 0.106 (read as the
+    # default set, `stages/find.DEFAULT_CHANGE_DIMENSIONS`).
+    dimensions: list[str] | None = None
     # The piece and path finders' reports by key (`stages/find.run_reported`). A fresh round
     # starts empty; `resume` converts what is stored and asks only for what is missing.
     finder_reports: dict[str, FinderReport] = Field(default_factory=dict)
@@ -687,6 +701,7 @@ class ConvertItem(_Model):
     citations: list[Citation] = Field(default_factory=list)
     defect_class: str = ""
     other_locations: list[str] = Field(default_factory=list)
+    pre_existing: bool = False  # the report marks it `Pre-existing: yes`
 
     @field_validator("defect_class", mode="before")
     @classmethod
@@ -698,11 +713,17 @@ class ConvertItem(_Model):
     def _locations_list(cls, value):
         return locations_list(value)
 
+    @field_validator("pre_existing", mode="before")
+    @classmethod
+    def _pre_existing_flag(cls, value):
+        return bool(value) if value is not None else False
+
 
 class ConvertOutput(_Model):
-    """The convert call's answer: one item per defect or advice in the report."""
+    """The convert call's answer: one item per defect or advice in the report, and what it could not check."""
 
     items: list[ConvertItem] = Field(default_factory=list)
+    needs: list[NeedAsk] = Field(default_factory=list)
 
 
 class MergeOutput(_Model):

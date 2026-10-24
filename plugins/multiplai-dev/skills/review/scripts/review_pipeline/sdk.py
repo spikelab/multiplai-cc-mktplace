@@ -22,6 +22,11 @@ Every stage gets `Read`, `Grep` and `Glob`; finders and verifiers also get
 the repository pins. No stage can run a command or write, so the pipeline is
 read-only over the reviewed code by construction. `read_roots=[cwd]` makes
 multiplai-core deny any `Read`, `Grep` or `Glob` outside the stage's snapshot.
+
+Every call waits in `window.admit` until the Claude usage window can pay for it
+and for every call already running (`window.py`), and leaves it when it ends.
+A run that stopped at the turn limit raises `MaxTurnsError`, so the find stage
+can split the piece and ask again.
 """
 
 from __future__ import annotations
@@ -44,7 +49,7 @@ from multiplai_core.agent_runner import (
 from multiplai_core.structured import parse_answer, reformat_prompt
 from pydantic import BaseModel, ValidationError
 
-from . import budget
+from . import budget, window
 
 log = logging.getLogger(__name__)
 
@@ -126,6 +131,27 @@ class UsageLimitError(AgentCallError):
         self.resets = resets
 
 
+class WindowFullError(UsageLimitError):
+    """No call is in flight and the next one does not fit what the usage window has left (`window.admit`).
+    `limit` is the window's name (`five_hour`, `seven_day`) and `resets` its reset time."""
+
+
+class MaxTurnsError(AgentCallError):
+    """The agent stopped at `max_turns` before it answered."""
+
+
+# multiplai-core's AgentRunError keeps no result subtype (`error_max_turns`), only the CLI's text in
+# `reason` ("failed: Claude Code returned an error result: Reached maximum number of turns (60) ...").
+MAX_TURNS_TEXT = "Reached maximum number of turns"
+
+
+def _is_max_turns(e: AgentRunError) -> bool:
+    return any(
+        MAX_TURNS_TEXT in (text or "")
+        for text in (getattr(e, "reason", ""), getattr(e, "stderr_tail", ""))
+    )
+
+
 def _usage_limit(e: AgentRunError) -> UsageLimitError:
     limit, resets = getattr(e, "limit", "") or "", getattr(e, "resets", "") or ""
     message = f"the Claude {limit + ' ' if limit else ''}usage limit was hit"
@@ -172,32 +198,43 @@ async def _run(
 ) -> str:
     require_trusted_repo()
     budget.check(stage=budget_label)
+    estimate = await window.admit(budget_label)
     try:
-        result = await run_agent(
-            prompt,
-            allowed_tools=list(allowed_tools),
-            max_turns=max_turns,
-            model=model,
-            effort=effort,
-            cwd=cwd,
-            timeout_s=call_timeout,
-            label=run_label or budget_label or "review",
-            component="review",
-            # Reads stop at the snapshot; with no cwd there is nothing to read.
-            read_roots=[cwd] if cwd is not None else [],
-        )
-    except AgentRunError as e:
-        partial = getattr(e, "partial", None)
-        if partial is not None:
-            budget.record(partial.usage, label=budget_label)
-            _note(partial)
-        if is_usage_limit(e):
-            raise _usage_limit(e) from e
-        kind = "timeout" if isinstance(e, AgentRunTimeout) else e.reason
-        raise AgentCallError(f"agent call failed ({kind})\n{e.stderr_tail}") from e
-    budget.record(result.usage, label=budget_label)
-    _note(result)
+        try:
+            result = await run_agent(
+                prompt,
+                allowed_tools=list(allowed_tools),
+                max_turns=max_turns,
+                model=model,
+                effort=effort,
+                cwd=cwd,
+                timeout_s=call_timeout,
+                label=run_label or budget_label or "review",
+                component="review",
+                # Reads stop at the snapshot; with no cwd there is nothing to read.
+                read_roots=[cwd] if cwd is not None else [],
+            )
+        except AgentRunError as e:
+            partial = getattr(e, "partial", None)
+            if partial is not None:
+                budget.record(partial.usage, label=budget_label)
+                _note(partial)
+                window.spent(_cost(partial))
+            if is_usage_limit(e):
+                raise _usage_limit(e) from e
+            kind = "timeout" if isinstance(e, AgentRunTimeout) else e.reason
+            error = MaxTurnsError if _is_max_turns(e) else AgentCallError
+            raise error(f"agent call failed ({kind})\n{e.stderr_tail}") from e
+        budget.record(result.usage, label=budget_label)
+        _note(result)
+        window.spent(_cost(result))
+    finally:
+        window.release(estimate)
     return result.text
+
+
+def _cost(result) -> float:
+    return float(getattr(getattr(result, "usage", None), "cost_usd", 0.0) or 0.0)
 
 
 async def agent_call_text(
