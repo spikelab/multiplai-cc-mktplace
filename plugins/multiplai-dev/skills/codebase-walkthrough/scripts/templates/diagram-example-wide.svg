@@ -69,7 +69,7 @@
 </g>
 <path class="wd-arrow-bad" d="M828 130 V46" marker-end="url(#ah-bad)"/>
 <g class="wd-reject">
-<rect x="778" y="14" width="100" height="28" rx="14"/>
+<rect x="768" y="14" width="120" height="28" rx="14"/>
 <text x="828" y="33" text-anchor="middle">no: set aside</text>
 </g>
 <path class="wd-arrow" d="M848 170 H960 V330 H135 V370" marker-end="url(#ah)"/>

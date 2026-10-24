@@ -1,4 +1,4 @@
-<svg class="wd-root" viewBox="0 0 420 1190" xmlns="http://www.w3.org/2000/svg">
+<svg class="wd-root wd-tall" viewBox="0 0 420 1190" xmlns="http://www.w3.org/2000/svg">
 <title>How it works</title>
 <desc>You point it at a folder, a branch or a commit. Code copies the code. One model agent plans the work. Many finder agents work at once, and code sets aside any result whose quotes are not in the code. One agent per result checks it again. Code writes the files, and you decide what to keep; a later run starts from your decisions.</desc>
 <defs>

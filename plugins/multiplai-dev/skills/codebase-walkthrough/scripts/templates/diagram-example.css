@@ -40,3 +40,7 @@
 .wd-head { fill: var(--muted); }
 .wd-head-bad { fill: var(--bad); }
 .wd-head-loop { fill: var(--accent); }
+.wd-tall .wd-title, .wd-tall .wd-num { font-size: 17px; }
+.wd-tall .wd-sub, .wd-tall .wd-gate, .wd-tall .wd-loop-t { font-size: 16px; }
+.wd-tall .wd-pills text, .wd-tall .wd-chips text, .wd-tall .wd-rows text { font-size: 16px; }
+.wd-tall .wd-kind { font-size: 13px; }

@@ -622,7 +622,8 @@ dashed line drawn around the boxes, never across one, with a short label saying 
 - "wide" is for screens of 700 px and more: viewBox="0 0 1000 H", in two or three rows when the boxes do not \
 fit in one, joined by an arrow that turns down at the end of a row. "tall" is for phones: viewBox="0 0 420 \
 H", one column, top to bottom.
-- Every label is at least 14 units high; only a kind's small tag may be 12. Leave 15% spare room in every \
+- Every label is at least 14 units high in "wide" and 16 in "tall" (a phone shows the tall picture about \
+330 px wide, so 16 units there read as 12.5 px); only a kind's small tag may be 2 units smaller. Leave 15% spare room in every \
 box around its text: the reader's browser draws text in another font, wider or narrower than yours. No text \
 touches or crosses a box edge, an arrow or other text.
 
