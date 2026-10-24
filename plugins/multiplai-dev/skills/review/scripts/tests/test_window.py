@@ -335,7 +335,7 @@ def test_a_full_window_saves_the_state_prints_resume_and_the_reset_and_resume_as
     real_read[0] += 60
     assert resume(target_dir) == 0
     # 2 pieces x 6 dimensions, and the one path the stub mapping gives, each asked once.
-    assert len(finder_labels(run_agent)) == 2 * 6 + 1
+    assert len(finder_labels(run_agent)) == 2 * len(DIMENSIONS) + 1
     _, finished = saved(tmp_path / "out")
     assert finished.past("find")
     assert sorted(finished.finder_reports) == sorted(
@@ -362,5 +362,5 @@ def test_an_unreadable_endpoint_runs_the_review_with_one_notice(
     progress = (target_dir / "progress.log").read_text()
     notice = "NOTICE: usage window not readable (HTTP 401)"
     assert out.err.count(notice) == 1 and progress.count(notice) == 1
-    assert len(finder_labels(run_agent)) == 2 * 6 + 1
+    assert len(finder_labels(run_agent)) == 2 * len(DIMENSIONS) + 1
     assert TOKEN not in caplog.text + out.err + out.out + progress

@@ -20,14 +20,16 @@ over the diff, written to `facts.json`. `find_with_facts` (default false,
 needs `explain`) also puts those facts in each finder's prompt. Both stay off
 by default until real runs are compared.
 
-`trim` (default true) runs the trim finder (`TRIM_DIMENSION`) on a change
+`trim` (default false) runs the trim finder (`TRIM_DIMENSION`) on a change
 review: it judges the tests and comments the change adds or edits, and its
 findings go to the advisory Trim section. A tree review runs it only with
 `--trim`, which the review's state keeps (`ReviewState.trim`).
 
-`dimensions` (default: every one of `DIMENSIONS`, and `trim` unless
-`trim: false`) names the finders that run, from `DIMENSIONS` and `trim`; a
-list without `trim` turns the trim finder off. An unknown name raises
+`dimensions` names the finders that run, from `DIMENSIONS` and `trim`; a
+list without `trim` turns the trim finder off, and a list naming it turns it
+on unless `trim: false`. Without the key, a change review runs `DIMENSIONS`
+less `CHANGE_DEFAULT_OFF` (so not `tests`), and `trim` only with `trim: true`;
+a tree review runs every one of `DIMENSIONS` it can. An unknown name raises
 `ConfigError`, which names the valid ones. A change review keeps the list it
 started with (`ReviewState.dimensions`), so `resume` runs the same finders.
 
@@ -69,6 +71,9 @@ DIMENSIONS: tuple[str, ...] = (
 )
 # Not one of DIMENSIONS: `finder_dimensions` adds it when the review runs it.
 TRIM_DIMENSION = "trim"
+# A change review runs these only when review.yaml asks: `tests` named in `dimensions`, `trim: true`
+# or `trim` named. On PR #295 neither found a root of the answer key in five runs.
+CHANGE_DEFAULT_OFF: tuple[str, ...] = ("tests", TRIM_DIMENSION)
 DEFAULT_CONCURRENCY = 16
 
 
@@ -89,9 +94,10 @@ class ReviewConfig:
     # prints then). No config file sets the budget today; "config" is kept for when one does.
     max_cost_source: Literal["default", "cli", "config"] = "default"
     dimensions: tuple[str, ...] = field(default=DIMENSIONS)
+    dimensions_listed: bool = False  # review.yaml has `dimensions`
     explain: bool = False
     find_with_facts: bool = False
-    trim: bool = True
+    trim: bool = False  # a change review's trim finder; a tree review's is `--trim`
     extra_finders: bool = False  # the key is in review.yaml; its value is ignored
     deps: bool = True
     deps_max_mb: int = 50
@@ -204,7 +210,10 @@ def load_config(
             setattr(cfg, key, value)
     if "dimensions" in data:
         cfg.dimensions, listed_trim = _dimensions(data["dimensions"], yaml_path)
-        cfg.trim = cfg.trim and listed_trim
+        cfg.dimensions_listed = True
+        cfg.trim = (
+            listed_trim and _flag(data.get("trim"), "trim", yaml_path) is not False
+        )
     if cfg.find_with_facts and not cfg.explain:
         log.warning("find_with_facts needs explain: true; the finders get no facts")
         cfg.find_with_facts = False

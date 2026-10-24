@@ -61,7 +61,13 @@ ENV = dict(
 )
 READ_ONLY = ["Read", "Grep", "Glob"]
 FINDER_TOOLS = [*READ_ONLY, "WebFetch", "WebSearch"]
-DIMENSIONS = ("diff-bugs", "callers", "history", "conventions", "tests", "trim")
+# A change review's default dimensions: tests and trim are off unless review.yaml asks.
+DIMENSIONS = ("diff-bugs", "callers", "history", "conventions")
+ALL_DIMENSIONS = (
+    *DIMENSIONS,
+    "tests",
+    "trim",
+)  # tests and trim run when review.yaml asks
 DIMENSION_FINDERS = len(DIMENSIONS)
 NOTICE = "review: --extra-finders has no effect; per-piece finders now run by default"
 CLOSE = "</untrusted-content>"
@@ -583,7 +589,7 @@ HOSTILE_DIFF = (
 )
 
 
-@pytest.mark.parametrize("dimension", DIMENSIONS)
+@pytest.mark.parametrize("dimension", ALL_DIMENSIONS)
 def test_the_report_prompt_names_its_files_fences_its_diff_and_lets_the_finder_read_anything(
     target_info, dimension
 ):

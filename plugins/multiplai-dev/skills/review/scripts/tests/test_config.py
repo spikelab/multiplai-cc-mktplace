@@ -24,9 +24,21 @@ def test_sixteen_calls_run_at_once_by_default(tmp_path):
     assert config(tmp_path, "concurrency: 3\n").concurrency == 3
 
 
-def test_without_the_key_every_dimension_and_trim_run(tmp_path):
+def test_without_the_key_a_change_review_leaves_tests_and_trim_off(tmp_path):
     cfg = load_config(tmp_path)
-    assert cfg.dimensions == DIMENSIONS and cfg.trim is True
+    assert cfg.dimensions == DIMENSIONS and not cfg.dimensions_listed
+    assert cfg.trim is False
+
+
+def test_trim_true_alone_turns_the_trim_finder_on(tmp_path):
+    cfg = config(tmp_path, "trim: true\n")
+    assert cfg.trim is True and not cfg.dimensions_listed
+
+
+def test_a_list_naming_tests_and_trim_turns_both_on(tmp_path):
+    cfg = config(tmp_path, "dimensions: [diff-bugs, tests, trim]\n")
+    assert cfg.dimensions == ("diff-bugs", "tests") and cfg.dimensions_listed
+    assert cfg.trim is True
 
 
 def test_a_list_names_the_dimensions_that_run_in_their_usual_order(tmp_path):

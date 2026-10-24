@@ -663,7 +663,7 @@ def test_the_done_line_counts_the_files_not_reviewed(tmp_path, model, capsys):  
     from test_reported_finders import review, saved, two_file_repo
 
     repo, base, head = two_file_repo(tmp_path)
-    model(turn_limit=("callers@2", "callers@4"), fail_keys=("tests@1",))
+    model(turn_limit=("callers@2", "callers@4"), fail_keys=("history@1",))
     assert review(repo, base, head, tmp_path / "out") == 0
     target_dir, _ = saved(tmp_path / "out")
     (done,) = [
@@ -671,7 +671,7 @@ def test_the_done_line_counts_the_files_not_reviewed(tmp_path, model, capsys):  
         for line in (target_dir / "progress.log").read_text().splitlines()
         if " DONE " in f" {line} "
     ]
-    # tests@1 left p01/m.py, callers@4 p02/m.py: two files, each missed by one dimension.
+    # history@1 left p01/m.py, callers@4 p02/m.py: two files, each missed by one dimension.
     assert done.endswith("; 2 files not reviewed")
 
     clean = tmp_path / "clean"

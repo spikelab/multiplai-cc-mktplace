@@ -340,12 +340,12 @@ def test_s9_resume_keeps_the_stopped_runs_dimensions_over_a_changed_review_yaml(
     out = tmp_path / "out"
     assert review(repo, base, head, out, yaml=TWO_DIMENSIONS) == 4
     target_dir, _ = saved(out)
-    (out / "review.yaml").write_text("concurrency: 1\n")  # every dimension now
+    (out / "review.yaml").write_text("concurrency: 1\n")  # the default dimensions now
     capsys.readouterr()
     assert resume(target_dir) == 0
     assert (
         "NOTICE: dimensions diff-bugs, callers kept from the stopped run; review.yaml says "
-        "diff-bugs, callers, history, conventions, tests, trim"
+        "diff-bugs, callers, history, conventions"
     ) in capsys.readouterr().err
     assert shape(out) == whole
     assert {k.partition("@")[0] for k in asked(fake)} == {"diff-bugs", "callers"}

@@ -136,6 +136,19 @@ class FakeAgents:
         raise AssertionError(budget_label)
 
 
+EVERY_DIMENSION = (
+    "dimensions: [diff-bugs, callers, history, conventions, tests, trim]\n"
+)
+
+
+@pytest.fixture
+def every_dimension(tmp_path):
+    """These tests count calls by position, as when every dimension ran by default: name all six."""
+    out = tmp_path / "out"
+    out.mkdir(exist_ok=True)
+    (out / "review.yaml").write_text(EVERY_DIMENSION)
+
+
 @pytest.fixture
 def agents(monkeypatch):
     def install(**kwargs) -> FakeAgents:
@@ -423,6 +436,7 @@ def _stop_then_resume(fixture_repo, tmp_path, agents, capsys, stop_at: int, **kw
     return saved, before, fake.calls[first_run:]
 
 
+@pytest.mark.usefixtures("every_dimension")
 def test_a_budget_stop_during_find_keeps_finished_finders_and_resume_runs_the_rest(
     fixture_repo, tmp_path, agents, capsys
 ):
@@ -446,6 +460,7 @@ def test_a_budget_stop_during_find_keeps_finished_finders_and_resume_runs_the_re
     assert resumed == missing + ["verify", "verify", "merge"]
 
 
+@pytest.mark.usefixtures("every_dimension")
 def test_a_budget_stop_during_verify_keeps_the_verdicts_and_resume_asks_only_the_rest(
     fixture_repo, tmp_path, agents, capsys
 ):
@@ -457,6 +472,7 @@ def test_a_budget_stop_during_verify_keeps_the_verdicts_and_resume_asks_only_the
     assert resumed == ["verify", "merge"]
 
 
+@pytest.mark.usefixtures("every_dimension")
 def test_a_budget_stop_during_merge_keeps_the_answers_and_resume_asks_only_the_rest(
     fixture_repo, tmp_path, agents, capsys
 ):
@@ -469,6 +485,7 @@ def test_a_budget_stop_during_merge_keeps_the_answers_and_resume_asks_only_the_r
     assert resumed == ["merge", "assess"]  # three findings remain, so assess runs once
 
 
+@pytest.mark.usefixtures("every_dimension")
 def test_a_usage_limit_during_verify_saves_the_checkpoint_exits_6_and_resume_asks_only_the_rest(
     fixture_repo, tmp_path, agents, capsys
 ):
@@ -656,6 +673,7 @@ def test_default_out_is_the_data_dir_never_the_workspace_inbox_or_home_or_cwd(
     assert default_out() == tmp_path / "data" / "reviews"
 
 
+@pytest.mark.usefixtures("every_dimension")
 def test_a_resumed_run_adds_an_interval_instead_of_overwriting(
     fixture_repo, tmp_path, agents, capsys
 ):

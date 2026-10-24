@@ -340,8 +340,9 @@ The find stage runs two kinds of finder on a change review. A `--tree` or
 `--paths`.
 
 - **Dimension finders** (`diff-bugs`, `callers`, `history`, `conventions`,
-  `tests`, `trim`), keyed `<dimension>@<piece id>`: every dimension runs on
-  every piece of the diff, with no cap on how many pieces. The diff is split
+  and, only when `review.yaml` asks, `tests` and `trim`), keyed
+  `<dimension>@<piece id>`: every dimension that runs, runs on every piece of
+  the diff, with no cap on how many pieces. The diff is split
   at file boundaries into pieces of related files: the files of one package
   or skill directory (the nearest directory holding a `pyproject.toml`,
   `package.json`, `Cargo.toml`, `go.mod` or `SKILL.md`), a module beside its
@@ -813,8 +814,8 @@ A change to the format changes `v`.
 
 On the reference change (PR #295, a 227 KB diff) one finder on every piece
 costs about $14 for each dimension finder and about $24 for the path finders
-(21 paths). With all six dimensions that is about $84 for the pieces and $108
-together. That is before verification (and the paths mapping), so a whole
+(21 paths). With the four default dimensions that is about $56 for the pieces
+and $80 together; with all six, $84 and $108. That is before verification (and the paths mapping), so a whole
 review of a change that size costs more. The piece figure scales with the
 characters of diff the pieces hold (lockfiles and binary files count for
 nothing) and with the number of dimensions, the path figure with the number
@@ -822,8 +823,8 @@ of paths. Each piece and each path is one report call and one convert call,
 so `2 x (pieces x dimensions + paths)` calls at most.
 
 `--plan-only`, the start of a review, and `resume` print the estimate on
-stderr as `cost (approximate): pieces $84 (6 dimensions each) + paths $24 (up
-to 21 paths) = $108; excludes verification and paths mapping` (a tree review
+stderr as `cost (approximate): pieces $56 (4 dimensions each) + paths $24 (up
+to 21 paths) = $80; excludes verification and paths mapping` (a tree review
 with `--paths`: paths only; without it, nothing). When the estimate, with a
 third added for what it leaves out, reaches the budget left, a `WARNING:`
 line says the run will stop partway. A change review on the 150 USD default
@@ -917,12 +918,16 @@ the session's model.
   those facts, with their ids, in every finder's prompt. Whether that makes
   the finders find more real problems has not been measured, so it stays
   off until real runs on real PRs are compared.
-- `trim` (default `true`): run the trim finder on a change review (see
+- `trim` (default `false`): run the trim finder on a change review (see
   "Trim"). A tree review runs it only with `--trim`.
-- `dimensions` (default: all six): the dimension finders that run, a list of
-  `diff-bugs`, `callers`, `history`, `conventions`, `tests` and `trim`, for
-  example `dimensions: [diff-bugs, callers]`. A list without `trim` turns the
-  trim finder off, and `trim: false` turns it off whatever the list says. An
+- `dimensions` (default on a change review: `diff-bugs`, `callers`, `history`,
+  `conventions`; a tree review runs every one it can): the dimension finders
+  that run, a list of `diff-bugs`, `callers`, `history`, `conventions`,
+  `tests` and `trim`, for example `dimensions: [diff-bugs, callers]`. `tests`
+  and `trim` are off by default: on PR #295 neither found a real bug the
+  others missed in five runs, though that test cannot measure test gaps or
+  removable code. A list without `trim` turns the trim finder off, a list
+  naming it turns it on, and `trim: false` turns it off whatever the list says. An
   unknown name exits `2` with the valid names. A change review keeps the list
   it started with: `resume` runs the same finders and prints a `NOTICE:` when
   `review.yaml` now says otherwise.

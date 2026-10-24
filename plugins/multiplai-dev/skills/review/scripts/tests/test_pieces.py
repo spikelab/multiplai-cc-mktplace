@@ -613,8 +613,8 @@ def test_plan_only_lists_each_piece_and_the_piece_and_path_calls(
     )
     # Every dimension runs on each of the 3 pieces with a file; the meta piece holds only a lockfile.
     assert (
-        "finder calls: 3 pieces x 6 dimensions (diff-bugs, callers, history, conventions, tests, trim) "
-        "+ up to 21 paths (each one report call and one convert call); 78 calls at most"
+        "finder calls: 3 pieces x 4 dimensions (diff-bugs, callers, history, conventions) "
+        "+ up to 21 paths (each one report call and one convert call); 66 calls at most"
     ) in lines
     assert not [line for line in lines if line.startswith("groups: ")]
     assert "files: 6  files skipped: 0" in lines

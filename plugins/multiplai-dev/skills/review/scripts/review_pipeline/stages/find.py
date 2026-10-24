@@ -38,7 +38,7 @@ from pydantic import ValidationError
 from .. import budget, checks, sdk, timings
 from ..checks import add_coverage, drop_coverage
 from ..chunks import piece_diff_text, split_piece
-from ..config import DIMENSIONS, TRIM_DIMENSION, ReviewConfig
+from ..config import CHANGE_DEFAULT_OFF, DIMENSIONS, TRIM_DIMENSION, ReviewConfig
 from ..gates import file_at_head, finding_gate, gated_locations, gated_need, reason_kind
 from ..linked_docs import LinkSource, linked_docs, not_included_line
 from ..models import (
@@ -83,7 +83,7 @@ TREE_SKIPPED_DIMENSIONS = ("history",)
 READ_ONLY = ["Read", "Grep", "Glob"]
 # What a change review runs on every piece when its state names no dimensions (a checkpoint written
 # before `ReviewState.dimensions` existed).
-DEFAULT_CHANGE_DIMENSIONS = (*DIMENSIONS, TRIM_DIMENSION)
+DEFAULT_CHANGE_DIMENSIONS = tuple(d for d in DIMENSIONS if d not in CHANGE_DEFAULT_OFF)
 # A report that is one of these (stripped) has no item to convert.
 EMPTY_REPORTS = ("", "NO FINDINGS")
 
@@ -134,9 +134,12 @@ def finder_dimensions(
     target: TargetInfo, config: ReviewConfig, *, tree_trim: bool = False
 ) -> tuple[str, ...]:
     """The dimensions the finders run for this target, the trim finder last when it runs:
-    on a change unless `config.trim` is off, on a tree only with *tree_trim* (`--trim`)."""
+    on a change only with `config.trim`, on a tree only with *tree_trim* (`--trim`). A change
+    review without `dimensions` in review.yaml leaves out `CHANGE_DEFAULT_OFF`."""
     if not target.is_tree:
         dims = tuple(config.dimensions)
+        if not config.dimensions_listed:
+            dims = tuple(d for d in dims if d not in CHANGE_DEFAULT_OFF)
     else:
         dims = tuple(d for d in config.dimensions if d not in TREE_SKIPPED_DIMENSIONS)
     if tree_trim if target.is_tree else config.trim:

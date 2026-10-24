@@ -11,7 +11,7 @@ import pytest
 from conftest import SCHEMA, pieces_of
 from review_pipeline import gates, orchestrator, sdk, target
 from review_pipeline.__main__ import main
-from review_pipeline.config import DIMENSIONS, TRIM_DIMENSION, ReviewConfig
+from review_pipeline.config import DIMENSIONS, ReviewConfig
 from review_pipeline.models import (
     Citation,
     FinderOutput,
@@ -510,7 +510,7 @@ async def test_a_change_review_runs_every_dimension_once_per_piece(
     state = ReviewState(target=target_info, pieces=pieces_of(target_info))
     await run_find(state, _ctx(tmp_path))
     ids = [p.id for p in state.pieces if p.files]
-    dims = (*DIMENSIONS, TRIM_DIMENSION)
+    dims = find_stage.DEFAULT_CHANGE_DIMENSIONS
     assert sorted(label for label, _ in fake.calls) == sorted(
         f"find:{d}" for d in dims for _ in ids
     )

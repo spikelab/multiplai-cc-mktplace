@@ -18,8 +18,8 @@ time, not derived from a tag.
 ## [0.107.0] - 2026-10-24
 
 ### Changed
-- A change review now runs every dimension finder (`diff-bugs`, `callers`,
-  `history`, `conventions`, `tests`, `trim`) on every piece of the diff, each
+- A change review now runs its dimension finders (`diff-bugs`, `callers`,
+  `history` and `conventions` by default) on every piece of the diff, each
   given its piece's whole diff. Before, each dimension read the whole diff in
   one call, cut at 120,000 characters, so on a large change it never saw the
   rest. `diff-bugs` takes over the broad review the piece finders did, and
@@ -27,8 +27,11 @@ time, not derived from a tag.
   (`report-<dimension>-<id>.md`) that a second call turns into findings, as
   the piece finders' did. `--plan-only` prints the calls as
   `<P> pieces x <D> dimensions + up to 21 paths`.
+- The `tests` and `trim` finders are off by default on a change review. Name
+  them in `dimensions`, or set `trim: true`, to run them. On PR #295 they
+  found no real bug the others missed and made the review about $25 dearer.
 - A review costs more: about $14 per dimension on a 227 KB diff, so about
-  $108 with the path finders before verification. The default
+  $80 with the path finders before verification. The default
   `--max-cost-usd` is now 150 USD (was 50), and the cost line says how many
   dimensions each piece runs.
 - Sixteen calls run at once by default (was four).

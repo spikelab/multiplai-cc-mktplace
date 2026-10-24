@@ -314,7 +314,11 @@ def with_one_path(state: ReviewState, ctx: RunContext, tmp_path: Path) -> None:
 async def test_three_pieces_ask_every_dimension_once_each_plus_one_pair_per_path(
     target_info, ctx, finders, tmp_path
 ):
-    state = ReviewState(target=target_info, pieces=one_piece_per_file(target_info))
+    state = ReviewState(
+        target=target_info,
+        pieces=one_piece_per_file(target_info),
+        dimensions=list(ALL_SIX),
+    )
     with_one_path(state, ctx, tmp_path)
     state = await run_find(state, ctx)
     dims = [label.removeprefix("find:") for label, _ in finders.reports]
@@ -350,7 +354,7 @@ async def test_a_one_piece_change_asks_one_report_per_dimension(
     assert len([p for p in state.pieces if p.files]) == 1
     await run_find(state, ctx)
     assert sorted(label for label, _ in finders.reports) == sorted(
-        f"find:{d}" for d in ALL_SIX
+        f"find:{d}" for d in find_stage.DEFAULT_CHANGE_DIMENSIONS
     )
     assert all(t == list(sdk.FINDER_TOOLS) for t in finders.tools)
 

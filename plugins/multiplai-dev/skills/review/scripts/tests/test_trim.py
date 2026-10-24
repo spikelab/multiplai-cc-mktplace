@@ -275,6 +275,10 @@ def test_a_change_review_lists_trim_findings_in_their_own_advisory_section(
 
     repo, base, head = trim_repo
     out = tmp_path / "out"
+    out.mkdir()
+    (out / "review.yaml").write_text(
+        "trim: true\n"
+    )  # off by default on a change review
     # The verifier labels the comment finding `code`: its section still comes from the finder, so it is
     # neither listed under Code nor posted at LOW, as a Code finding would be.
     fake = agents(
@@ -324,6 +328,8 @@ def test_review_yaml_trim_false_runs_no_trim_finder(trim_repo, tmp_path, agents)
 
 
 def test_load_config_reads_trim(tmp_path):
+    assert load_config(tmp_path).trim is False
+    (tmp_path / "review.yaml").write_text("trim: yes\n")
     assert load_config(tmp_path).trim is True
     (tmp_path / "review.yaml").write_text("trim: no\n")
     assert load_config(tmp_path).trim is False
@@ -764,14 +770,12 @@ def test_the_trim_finder_has_change_and_tree_wording():
 # --- finders: which reviews run trim -------------------------------------------------------------------
 
 
-def test_finder_dimensions_runs_trim_on_a_change_by_default_and_on_a_tree_only_when_asked(
+def test_finder_dimensions_runs_trim_on_a_change_only_with_trim_true_and_on_a_tree_only_when_asked(
     target_info,
 ):
     tree = target_info.model_copy(update={"kind": "tree"})
-    assert finder_dimensions(target_info, ReviewConfig())[-1] == TRIM_DIMENSION
-    assert TRIM_DIMENSION not in finder_dimensions(
-        target_info, ReviewConfig(trim=False)
-    )
+    assert finder_dimensions(target_info, ReviewConfig(trim=True))[-1] == TRIM_DIMENSION
+    assert TRIM_DIMENSION not in finder_dimensions(target_info, ReviewConfig())
     assert TRIM_DIMENSION not in finder_dimensions(tree, ReviewConfig())
     assert finder_dimensions(tree, ReviewConfig(), tree_trim=True)[-1] == TRIM_DIMENSION
 

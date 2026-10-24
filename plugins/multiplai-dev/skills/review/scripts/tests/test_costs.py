@@ -35,8 +35,8 @@ NOTICE = (
     "NOTICE: the default 150 USD budget can stop a large change review partway, because verification adds "
     "to the finders' cost; resume with a higher --max-cost-usd continues without losing paid results."
 )
-# Every dimension runs on every piece of a change review: diff-bugs, callers, history, conventions, tests, trim.
-DIMENSIONS = ("diff-bugs", "callers", "history", "conventions", "tests", "trim")
+# What a change review runs on every piece by default: tests and trim are off unless review.yaml asks.
+DIMENSIONS = ("diff-bugs", "callers", "history", "conventions")
 D = len(DIMENSIONS)
 
 
@@ -97,14 +97,14 @@ def warned(out: list[str]) -> tuple[int, int] | None:
 # --- the arithmetic ---------------------------------------------------------------------------------------------
 
 
-def test_the_reference_diff_costs_about_14_per_dimension_24_for_paths_and_108_together(
+def test_the_reference_diff_costs_about_14_per_dimension_24_for_paths_and_80_together(
     target_info,
 ):
     est = costs().estimate(state_of(target_info, [100_000, 127_000]))
     assert est.pieces_usd == pytest.approx(14 * D, abs=1)
     assert est.paths_usd == pytest.approx(24, abs=1) and est.path_count == 21
     assert (
-        est.total == pytest.approx(108, abs=2)
+        est.total == pytest.approx(80, abs=2)
         and est.total == est.pieces_usd + est.paths_usd
     )
 
@@ -118,7 +118,7 @@ def test_three_pieces_price_one_report_and_one_convert_per_dimension_and_path(
     target_info,
 ):
     est = costs().estimate(state_of(target_info, [1_000, 2_000, 3_000]))
-    assert est.calls == 2 * (3 * D + 21) == 78
+    assert est.calls == 2 * (3 * D + 21) == 66
     state = state_of(target_info, [1_000, 2_000, 3_000])
     state.dimensions = ["diff-bugs", "callers"]
     assert costs().estimate(state).calls == 2 * (3 * 2 + 21)
@@ -200,20 +200,20 @@ def test_a_tree_review_without_paths_has_no_estimate_and_with_paths_only_the_pat
 @pytest.mark.parametrize(
     ("chars", "path_ids", "budget_usd", "warns"),
     [
-        ([227_000], None, 20, (108, 20)),  # 108 vs 20
-        ([162_143], [], 100, None),  # 60 vs 100
+        ([227_000], None, 20, (80, 20)),  # 80 vs 20
+        ([162_143], [], 100, None),  # 40 vs 100
         (
             [227_000],
             None,
             150,
             None,
-        ),  # the reference under the default: 108 * 1.35 < 150
+        ),  # the reference under the default: 80 * 1.35 < 150
         (
             [227_000, 227_000],
             None,
             150,
-            (192, 150),
-        ),  # twice the reference under the default: 192 * 1.35 >= 150
+            (136, 150),
+        ),  # twice the reference under the default: 136 * 1.35 >= 150
         ([227_000], None, 0, None),  # no ceiling
     ],
 )
@@ -265,7 +265,7 @@ def test_a_resume_with_too_little_budget_warns_with_what_is_left(target_info):
     stored(state, *(f"{d}@1" for d in DIMENSIONS))
     assert warned(lines(state, budget_usd=55, resuming=True)) == (24, 5)
     stored(
-        state, "trim@1", converted=False
+        state, "conventions@1", converted=False
     )  # its convert is left: a share of one finder's price
     assert costs().remaining(state).pieces_usd == pytest.approx(
         0.15 * costs().piece_usd(227_000)
@@ -364,7 +364,7 @@ def test_plan_only_prints_the_reference_estimate_and_spends_nothing(
         and line.group(3) == "24"
         and line.group(4) == "21"
     )
-    assert abs(int(line.group(5)) - 108) <= D + 1
+    assert abs(int(line.group(5)) - 80) <= D + 1
     assert warned(err) is not None and warned(err)[1] == 20
     assert NOTICE not in err
     assert budget.get_budget().calls == 0 and budget.get_budget().cost_usd == 0
