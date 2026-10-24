@@ -314,7 +314,9 @@ def test_page_figure_makes_every_id_unique_and_keeps_its_references():
     roots = re.findall(r"<svg\b[^>]*>", fig)
     assert len(roots) == 2
     assert 'class="dg-wide wd-root" role="img" aria-label="Six steps."' in roots[0]
-    assert 'class="dg-tall wd-root wd-tall" role="img" aria-label="Six steps."' in roots[1]
+    assert (
+        'class="dg-tall wd-root wd-tall" role="img" aria-label="Six steps."' in roots[1]
+    )
 
 
 # --- the stage ---------------------------------------------------------------------------------------------
