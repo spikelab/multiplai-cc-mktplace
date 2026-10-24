@@ -25,10 +25,11 @@ from walkthrough_pipeline.state import STATE_FILE
 
 H2 = [
     "What it is",
-    "Use cases",
     "How it works",
+    "How it stores bookings",
     "What it creates",
     "Configuration",
+    "Use cases",
     "Gotchas",
     "Reference",
     "How this was made",
@@ -120,8 +121,9 @@ def test_a_flow_box_with_an_unknown_cite_is_dropped(
     ws, tmp_path, monkeypatch, fake_fetch
 ):
     md, _, _ = _run(ws, tmp_path, monkeypatch, plant={"flow_node"})
-    flow = section_texts(md, "How it works")[0]
-    diagram = re.search(r"```mermaid\n(.*?)```", flow, re.DOTALL).group(1)
+    # A module's flow diagram sits in What it is, under its paragraphs.
+    summary = section_texts(md, "What it is")[0]
+    diagram = re.search(r"```mermaid\n(.*?)```", summary, re.DOTALL).group(1)
     assert diagram.startswith("flowchart TD") and "Acme sends a booking" in diagram
     assert "A box with no source" not in diagram
     assert "[[c999]] is not a gated citation" in _cut(md)
@@ -331,4 +333,49 @@ def test_payload_gate_checks_yaml_keys_and_drops_what_does_not_parse():
     )
     assert payload_gate(Payload(format="json", text="{not json"), "", corpus) == [
         "the json does not parse: JSONDecodeError"
+    ]
+
+
+def test_the_explainer_rules_hold_clear_writing_rules_two_to_eight():
+    from walkthrough_pipeline.prompts import EXPLAINER_RULES
+
+    for sentence in (
+        "Never invent a name for a thing. Say what it does, using a verb.",
+        "Prefer a verb to a noun built from a verb",
+        "Answer first",
+        "One idea per sentence, at most 50 words.",
+        "Concrete subject, active verb",
+        "Say the thing; do not announce it.",
+        "Numbers and names, not adjectives",
+        "never in a title or heading",
+    ):
+        assert sentence in EXPLAINER_RULES, sentence
+    # Reader-facing: the rules speak of the reader, never of "the user".
+    assert "the user" not in EXPLAINER_RULES
+
+
+def test_a_citation_in_a_step_title_fails_the_flow_gate():
+    from walkthrough_pipeline.gates import flow_gate
+    from walkthrough_pipeline.models import FlowOutput
+
+    cit = {
+        "c1": Citation(
+            path="engine/a.py", line_start=3, line_end=3, quote="x = 1", id="c1"
+        )
+    }
+    flow = FlowOutput.model_validate(
+        {
+            "nodes": [{"id": "a", "label": "Read it", "cite": "c1"}],
+            "steps": [
+                {"node": "a", "title": "Read it [[c1]]", "summary": "It reads. [[c1]]"}
+            ],
+        }
+    )
+    g = flow_gate(flow, citations=cit, corpus=_Corpus(set()), labels=set())
+    assert g["steps"] == []
+    assert g["cut"] == [
+        {
+            "text": "step 'Read it [[c1]]': It reads. [[c1]]",
+            "reasons": ["citation in a title"],
+        }
     ]

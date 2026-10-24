@@ -1,0 +1,105 @@
+<svg class="wd-root wd-tall" viewBox="0 0 420 1190" xmlns="http://www.w3.org/2000/svg">
+<title>How it works</title>
+<desc>You point it at a folder, a branch or a commit. Code copies the code. One model agent plans the work. Many finder agents work at once, and code sets aside any result whose quotes are not in the code. One agent per result checks it again. Code writes the files, and you decide what to keep; a later run starts from your decisions.</desc>
+<defs>
+<marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="wd-head" d="M0 0 L10 5 L0 10 z"/></marker>
+<marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="wd-head-bad" d="M0 0 L10 5 L0 10 z"/></marker>
+<marker id="ah-loop" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="wd-head-loop" d="M0 0 L10 5 L0 10 z"/></marker>
+</defs>
+<g class="wd-box wd-input">
+<rect x="20" y="16" width="380" height="110" rx="10"/>
+<use href="#i-input" class="wd-ic" x="34" y="28" width="16" height="16"/>
+<text class="wd-kind" x="56" y="41">INPUT</text>
+<text class="wd-title" x="34" y="66">Input</text>
+<g class="wd-pills">
+<rect x="34" y="82" width="108" height="28" rx="14"/><text x="88" y="101" text-anchor="middle">A folder</text>
+<rect x="156" y="82" width="108" height="28" rx="14"/><text x="210" y="101" text-anchor="middle">A branch</text>
+<rect x="278" y="82" width="108" height="28" rx="14"/><text x="332" y="101" text-anchor="middle">A commit</text>
+</g>
+</g>
+<path class="wd-arrow" d="M210 126 V150" marker-end="url(#ah)"/>
+<g class="wd-box wd-code">
+<rect x="20" y="154" width="380" height="84" rx="10"/>
+<use href="#i-code" class="wd-ic" x="34" y="166" width="16" height="16"/>
+<text class="wd-kind" x="56" y="179">CODE</text>
+<text class="wd-num" x="34" y="204">1</text><text class="wd-title" x="50" y="204">Copy the code</text>
+<text class="wd-sub" x="34" y="226">a read-only copy of one commit</text>
+</g>
+<path class="wd-arrow" d="M210 238 V262" marker-end="url(#ah)"/>
+<g class="wd-box wd-agent">
+<rect x="20" y="266" width="380" height="84" rx="10"/>
+<use href="#i-agent" class="wd-ic" x="34" y="278" width="16" height="16"/>
+<text class="wd-kind" x="56" y="291">MODEL AGENT</text>
+<text class="wd-num" x="34" y="316">2</text><text class="wd-title" x="50" y="316">Plan the work</text>
+<text class="wd-sub" x="34" y="338">decides what to look at first</text>
+</g>
+<path class="wd-arrow" d="M210 350 V374" marker-end="url(#ah)"/>
+<g class="wd-box wd-agent">
+<rect x="20" y="378" width="380" height="220" rx="12"/>
+<use href="#i-agent" class="wd-ic" x="34" y="390" width="16" height="16"/>
+<text class="wd-kind" x="56" y="403">AGENTS · AT ONCE</text>
+<text class="wd-num" x="34" y="430">3</text><text class="wd-title" x="50" y="430">Finders × N</text>
+<g class="wd-fan">
+<path d="M44 456 V572"/>
+<path d="M44 456 H60"/><path d="M44 486 H60"/><path d="M44 516 H60"/><path d="M44 546 H60"/><path d="M44 572 H60"/>
+</g>
+<g class="wd-chips">
+<rect x="60" y="444" width="300" height="24" rx="6"/><text x="72" y="461">aspect one</text>
+<rect x="60" y="474" width="300" height="24" rx="6"/><text x="72" y="491">aspect two</text>
+<rect x="60" y="504" width="300" height="24" rx="6"/><text x="72" y="521">aspect three</text>
+<rect x="60" y="534" width="300" height="24" rx="6"/><text x="72" y="551">aspect four</text>
+<rect class="wd-many" x="60" y="560" width="300" height="24" rx="6"/><text x="72" y="577">one per piece</text>
+</g>
+</g>
+<path class="wd-arrow" d="M210 598 V622" marker-end="url(#ah)"/>
+<g class="wd-box wd-check">
+<rect x="190" y="626" width="40" height="36" rx="18"/>
+<use href="#i-check" class="wd-ic" x="200" y="634" width="20" height="20"/>
+<text class="wd-gate" x="180" y="641" text-anchor="end">quotes match</text>
+<text class="wd-gate" x="180" y="658" text-anchor="end">the code?</text>
+</g>
+<path class="wd-arrow-bad" d="M230 644 H278" marker-end="url(#ah-bad)"/>
+<g class="wd-reject">
+<rect x="282" y="630" width="118" height="28" rx="14"/>
+<text x="341" y="649" text-anchor="middle">no: set aside</text>
+</g>
+<path class="wd-arrow" d="M210 662 V686" marker-end="url(#ah)"/>
+<g class="wd-box wd-agent">
+<rect x="20" y="690" width="380" height="130" rx="10"/>
+<use href="#i-agent" class="wd-ic" x="34" y="702" width="16" height="16"/>
+<text class="wd-kind" x="56" y="715">ONE AGENT PER RESULT</text>
+<text class="wd-num" x="34" y="740">4</text><text class="wd-title" x="50" y="740">Check each result</text>
+<text class="wd-sub" x="34" y="766">each one answers</text>
+<g class="wd-verdicts">
+<rect class="wd-yes" x="34" y="780" width="110" height="24" rx="12"/><text class="wd-yes-t" x="89" y="797" text-anchor="middle">kept</text>
+<rect class="wd-no" x="154" y="780" width="110" height="24" rx="12"/><text class="wd-no-t" x="209" y="797" text-anchor="middle">dropped</text>
+</g>
+</g>
+<path class="wd-arrow" d="M210 820 V856" marker-end="url(#ah)"/>
+<g class="wd-box wd-check">
+<circle cx="210" cy="838" r="11"/>
+<use href="#i-check" class="wd-ic" x="203" y="831" width="14" height="14"/>
+</g>
+<g class="wd-box wd-output">
+<path d="M20 866 a6 6 0 0 1 6 -6 H380 L400 880 V984 a6 6 0 0 1 -6 6 H26 a6 6 0 0 1 -6 -6 Z"/>
+<path class="wd-fold" d="M380 860 V880 H400"/>
+<use href="#i-output" class="wd-ic" x="34" y="872" width="16" height="16"/>
+<text class="wd-kind" x="56" y="885">FILES WRITTEN</text>
+<text class="wd-num" x="34" y="910">5</text><text class="wd-title" x="50" y="910">Write the files</text>
+<g class="wd-rows">
+<rect x="34" y="922" width="352" height="28" rx="5"/><text x="44" y="941">Summary</text><text class="wd-note" x="376" y="941" text-anchor="end">read first</text>
+<rect x="34" y="954" width="352" height="28" rx="5"/><text x="44" y="973">Data file</text><text class="wd-note" x="376" y="973" text-anchor="end">for tools</text>
+</g>
+</g>
+<path class="wd-arrow" d="M210 990 V1014" marker-end="url(#ah)"/>
+<g class="wd-box wd-decision">
+<rect x="20" y="1018" width="380" height="110" rx="14"/>
+<use href="#i-decision" class="wd-ic" x="34" y="1030" width="16" height="16"/>
+<text class="wd-kind" x="56" y="1043">DECISION</text>
+<text class="wd-num" x="34" y="1068">6</text><text class="wd-title" x="50" y="1068">Decide what to keep</text>
+<text class="wd-sub" x="34" y="1094">· accept or reject each result</text>
+<text class="wd-sub" x="34" y="1116">· a later run starts from here</text>
+</g>
+<path class="wd-loop" d="M370 1128 V1168 H410 V755 H404" marker-end="url(#ah-loop)"/>
+<text class="wd-loop-t" x="190" y="1160" text-anchor="middle">next run: earlier answers come back</text>
+</svg>

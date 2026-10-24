@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
 
 from multiplai_core.citations import check_quote, file_at, lines_at
@@ -355,6 +356,9 @@ def target_files_ws(target: TargetInfo) -> list[str]:
 
 MAX_FLOW_NODES = 14
 MAX_LABEL_CHARS = 60
+MAX_DOES_CHARS = 80
+# Boxes a step need not explain: what goes in and what comes out.
+FLOW_ENDS = ("input", "output")
 MAX_EXAMPLE_LINES = 80
 MAX_EXAMPLE_CHARS = 4000
 FLAG = re.compile(r"-{1,2}[A-Za-z][\w-]*")
@@ -389,6 +393,14 @@ def explainer_text_gate(
     if "```" in text or "~~~" in text:
         reasons.append("the text holds a code block; the program inserts code")
     return reasons
+
+
+TITLE_CITATION = "citation in a title"
+
+
+def title_gate(text: str) -> list[str]:
+    """A title or heading holds no citation: the page writes it as a heading, where a link is noise."""
+    return [TITLE_CITATION] if "[[" in text else []
 
 
 def _quotes(ids: list[str], citations: dict[str, Citation]) -> str:
@@ -447,6 +459,7 @@ def usecase_gate(
     if not ids:
         reasons.append("the use case cites nothing")
     reasons += [f"[[{i}]] is not a gated citation" for i in ids if i not in citations]
+    reasons += title_gate(case.title)
     for field in ("title", "who", "when", "what_happens", "result"):
         reasons += explainer_text_gate(
             getattr(case, field), citations=citations, corpus=corpus, labels=labels
@@ -482,17 +495,79 @@ def _plain_label(label: str) -> str | None:
     return None
 
 
+def _box_extras(n, cid: str, gate: dict) -> tuple[dict, list[dict]]:
+    """A kept box's `does`, `reads`, `writes` and `fan_out` that pass, and a cut entry for each one dropped.
+
+    Each is dropped alone, the box kept: `does` when it fails `explainer_text_gate` or is over 80
+    characters; a `reads` or `writes` entry when it fails `explainer_text_gate`; `fan_out` when it fails
+    `explainer_text_gate` or holds a number in neither the cited quote nor the corpus (as `loop_gate`
+    drops a cap)."""
+    cut: list[dict] = []
+    label = n.label.strip()
+    does = n.does.strip()
+    if does:
+        why = explainer_text_gate(does, **gate)
+        if len(does) > MAX_DOES_CHARS:
+            why.append(f"over {MAX_DOES_CHARS} characters")
+        if why:
+            cut.append({"text": f"what box {label!r} does: {does!r}", "reasons": why})
+            does = ""
+    lists = {}
+    for field in ("reads", "writes"):
+        kept = []
+        for item in getattr(n, field):
+            item = item.strip()
+            if not item:
+                continue
+            why = explainer_text_gate(item, **gate)
+            if why:
+                cut.append(
+                    {"text": f"{field} of box {label!r}: {item!r}", "reasons": why}
+                )
+            else:
+                kept.append(item)
+        lists[field] = kept
+    fan_out = n.fan_out.strip()
+    if fan_out:
+        quote = gate["citations"][cid].quote
+        why = explainer_text_gate(fan_out, **gate)
+        why += [
+            f"`{x}` is in no cited quote and no snapshot"
+            for x in NUMBER.findall(fan_out)
+            if not _number_in(x, quote) and not gate["corpus"].contains(x)
+        ]
+        if why:
+            cut.append(
+                {
+                    "text": f"fan-out of box {label!r}: {fan_out!r} (the box is kept)",
+                    "reasons": why,
+                }
+            )
+            fan_out = ""
+    return {"does": does, **lists, "fan_out": fan_out}, cut
+
+
 def flow_gate(
-    flow, *, citations: dict[str, Citation], corpus: Corpus, labels: set[str]
+    flow,
+    *,
+    citations: dict[str, Citation],
+    corpus: Corpus,
+    labels: set[str],
+    steps_follow_boxes: bool = False,
 ) -> dict:
     """The flow's gated parts: `nodes`, `edges` and `steps` that passed, `cut` ({text, reasons}) for each
-    part dropped, and `graph` (reasons the graph as a whole fails: no node, over 14 nodes, not connected).
+    part dropped, `graph` (reasons the graph as a whole fails: no node, over 14 nodes, not connected) and
+    `order` (reasons the steps do not match the boxes; nothing is cut for them).
 
-    A node is dropped when its cite is unknown or its label is not plain words; an edge when it joins an
-    unknown node (its label alone is dropped when not plain); a step when its summary fails, a details
-    paragraph when it fails, a snippet cite when it is unknown."""
+    A node is dropped when its cite is unknown or its label is not plain words; its `does`, `reads`,
+    `writes` and `fan_out` are checked by `_box_extras`. An edge is dropped when it joins an unknown node
+    (its label alone is dropped when not plain); a step when its summary fails, a details paragraph when it
+    fails, a snippet cite when it is unknown. With *steps_follow_boxes* (module and codebase scope), each
+    step's `node` must name a drawn box, every drawn box that is not `input` or `output` must have exactly
+    one step, and the steps must follow the boxes' order."""
     nodes, edges, steps, cut = [], [], [], []
     seen: set[str] = set()
+    gate = {"citations": citations, "corpus": corpus, "labels": labels}
     for n in flow.nodes:
         nid = n.id.strip()
         why = []
@@ -512,7 +587,11 @@ def flow_gate(
             cut.append({"text": f"diagram box {n.label!r}", "reasons": why})
             continue
         seen.add(nid)
-        nodes.append({"id": nid, "label": n.label.strip(), "cite": cid})
+        extras, dropped = _box_extras(n, cid, gate)
+        cut += dropped
+        nodes.append(
+            {"id": nid, "label": n.label.strip(), "cite": cid, "kind": n.kind, **extras}
+        )
     for e in flow.edges:
         a, b = e.source.strip(), e.to.strip()
         if a not in seen or b not in seen:
@@ -554,10 +633,11 @@ def flow_gate(
                 "the diagram is not connected: no arrow reaches "
                 + ", ".join(repr(x) for x in alone)
             )
-    gate = {"citations": citations, "corpus": corpus, "labels": labels}
     for s in flow.steps:
-        why = explainer_text_gate(s.title, **gate) + explainer_text_gate(
-            s.summary, **gate
+        why = (
+            title_gate(s.title)
+            + explainer_text_gate(s.title, **gate)
+            + explainer_text_gate(s.summary, **gate)
         )
         if not s.summary.strip():
             why.append("the step has no summary")
@@ -586,9 +666,45 @@ def flow_gate(
                 "summary": s.summary,
                 "details": details,
                 "snippets": snippets,
+                "node": s.node.strip(),
             }
         )
-    return {"nodes": nodes, "edges": edges, "steps": steps, "cut": cut, "graph": graph}
+    order = _step_order(nodes, steps) if steps_follow_boxes else []
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "steps": steps,
+        "cut": cut,
+        "graph": graph,
+        "order": order,
+    }
+
+
+def _step_order(nodes: list[dict], steps: list[dict]) -> list[str]:
+    """Why the steps do not walk the boxes one by one: a step naming no drawn box, a box that is not an
+    input or an output with no step or with several, or steps out of the boxes' order."""
+    reasons: list[str] = []
+    position = {n["id"]: i for i, n in enumerate(nodes)}
+    named = []
+    for s in steps:
+        if s["node"] in position:
+            named.append(s["node"])
+        else:
+            reasons.append(
+                f"step {s['title']!r} names no drawn box"
+                + (f" ({s['node']!r})" if s["node"] else "")
+            )
+    for n in nodes:
+        if n["kind"] in FLOW_ENDS:
+            continue
+        k = named.count(n["id"])
+        if k != 1:
+            reasons.append(
+                f"box {n['label']!r} has {k} steps; each box that is not an input or an output has one"
+            )
+    if named != sorted(named, key=position.get):
+        reasons.append("the steps are not in the order of the boxes")
+    return reasons
 
 
 def _keys(value) -> list[str]:
@@ -653,6 +769,7 @@ def output_gate(
         )
     if not item.name.strip():
         reasons.append("the item has no name")
+    reasons += title_gate(item.name)
     example: list[str] = []
     if not reasons and item.example is not None:
         example = payload_gate(item.example, citations[cid].quote, corpus)
@@ -684,7 +801,7 @@ def config_gate(
     return reasons, keep_default
 
 
-# --- `--scope codebase`: the four tables ------------------------------------------------------
+# --- `--scope codebase`: the three tables ------------------------------------------------------
 
 NUMBER = re.compile(r"(?<![\w.])\d+(?:\.\d+)?(?![\w.])")
 IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?::[A-Z_]+)?")
@@ -725,30 +842,6 @@ def _unknown_tokens(text: str, quote: str, corpus: Corpus) -> list[str]:
 
 def _number_in(number: str, quote: str) -> bool:
     return any(n == number for n in NUMBER.findall(quote))
-
-
-def commands_gate(row, *, citations, corpus, labels) -> list[str]:
-    """A "which command to run" row: its situation and why pass the explainer checks, and every flag and
-    command word of its command is in the cited quote or the corpus."""
-    reasons, quote = _row_head(
-        row,
-        "situation",
-        ("situation", "why"),
-        citations=citations,
-        corpus=corpus,
-        labels=labels,
-    )
-    text = row.command.strip()
-    if not text:
-        reasons.append("the row has no command")
-    elif len(text) > MAX_EXAMPLE_CHARS or len(text.splitlines()) > MAX_EXAMPLE_LINES:
-        reasons.append("the command is too long")
-    for word in example_words("command", text):
-        if not _known_word(word, quote, corpus):
-            reasons.append(
-                f"`{word}` in the command is in no cited quote and no snapshot"
-            )
-    return reasons
 
 
 def loop_gate(row, *, citations, corpus, labels) -> tuple[list[str], bool]:
@@ -793,4 +886,589 @@ def resume_gate(row, *, citations, corpus, labels) -> list[str]:
         corpus=corpus,
         labels=labels,
     )
+    return reasons
+
+
+# --- the part of the code that does its main job (the core stage and its section) -----------------------
+
+MAX_CORE_TITLE_CHARS = 60
+
+
+def core_gate(
+    choice,
+    *,
+    target_files: set[str],
+    citations: dict[str, Citation],
+    corpus: Corpus,
+    labels: set[str],
+) -> list[str]:
+    """The core stage's choice: a plain title of at most 60 characters (no backticks, citation or path), at
+    least one file and every file one of the target's (workspace paths), every cite a known id, and a `job`
+    and a `why` that pass `explainer_text_gate`."""
+    reasons: list[str] = []
+    title = choice.title.strip()
+    if not title:
+        reasons.append("the title is empty")
+    elif len(title) > MAX_CORE_TITLE_CHARS:
+        reasons.append(f"the title is over {MAX_CORE_TITLE_CHARS} characters")
+    if "`" in title:
+        reasons.append("the title holds backticks")
+    reasons += title_gate(title)
+    if PATH_LINE.search(title) or "/" in title or FILE_SUFFIX.search(title):
+        reasons.append("the title holds a path")
+    files = [f.strip() for f in choice.files if f.strip()]
+    if not files:
+        reasons.append("no file is named")
+    reasons += [
+        f"{f} is not a file of the target" for f in files if f not in target_files
+    ]
+    for raw in choice.cites:
+        cid = cite_id(raw)
+        if cid not in citations:
+            reasons.append(f"[[{cid}]] is not a gated citation")
+    gate = {"citations": citations, "corpus": corpus, "labels": labels}
+    for field in ("job", "why"):
+        text = getattr(choice, field).strip()
+        if not text:
+            reasons.append(f"the {field} is empty")
+        reasons += explainer_text_gate(text, **gate)
+    return reasons
+
+
+def core_part_gate(part, *, citations, corpus, labels) -> list[str]:
+    """A part of the core section: a known cite, a name with no citation, and text that passes the explainer
+    checks."""
+    reasons, _ = _row_head(
+        part,
+        "name",
+        ("name", "looks_at", "given", "produces", "checked_by"),
+        citations=citations,
+        corpus=corpus,
+        labels=labels,
+    )
+    return reasons + title_gate(part.name)
+
+
+# --- the page writer's open body (stages/page.py) -------------------------------------------------------
+
+PAGE_TAGS = frozenset(
+    [
+        "p",
+        "ul",
+        "ol",
+        "li",
+        "h3",
+        "h4",
+        "strong",
+        "em",
+        "code",
+        "a",
+        "details",
+        "summary",
+        "div",
+        "span",
+        "table",
+        "thead",
+        "tbody",
+        "tr",
+        "th",
+        "td",
+        "figure",
+        "figcaption",
+        "br",
+        "svg",
+        "g",
+        "path",
+        "rect",
+        "circle",
+        "line",
+        "polyline",
+        "polygon",
+        "text",
+        "tspan",
+        "title",
+        "defs",
+        "symbol",
+        "use",
+    ]
+)
+PAGE_ATTRS = frozenset(("class", "id", "role", "open", "colspan", "rowspan", "href"))
+# SVG geometry and paint attributes, as `html.parser` gives them (lower case).
+SVG_ATTRS = frozenset(
+    [
+        "viewbox",
+        "width",
+        "height",
+        "x",
+        "y",
+        "x1",
+        "y1",
+        "x2",
+        "y2",
+        "cx",
+        "cy",
+        "r",
+        "rx",
+        "ry",
+        "d",
+        "points",
+        "transform",
+        "dx",
+        "dy",
+        "fill",
+        "stroke",
+        "stroke-width",
+        "stroke-linecap",
+        "stroke-linejoin",
+        "stroke-dasharray",
+        "stroke-opacity",
+        "fill-opacity",
+        "opacity",
+        "text-anchor",
+        "dominant-baseline",
+        "font-size",
+        "font-weight",
+        "preserveaspectratio",
+        "xmlns",
+    ]
+)
+FLOW_PLACEHOLDER = "{{flow}}"
+CORE_FLOW_PLACEHOLDER = "{{flow:core}}"
+CSS_BANNED = ("url(", "@import", "expression(", "</")
+CSS_COLOUR = re.compile(r"#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?)\(", re.IGNORECASE)
+WORD = re.compile(r"[A-Za-z0-9][\w'’-]*")
+
+
+class _PageParser(HTMLParser):
+    """What `page_gate` reads from one fragment: tags and attributes outside the allow-list, citations
+    inside a heading or a summary, `<code>` texts, and the visible text."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.bad: list[str] = []
+        self.open: list[str] = []
+        self.codes: list[str] = []
+        self.text: list[str] = []
+        self.heading_cites: list[str] = []
+        self._code: list[str] | None = None
+
+    def handle_starttag(self, tag, attrs):
+        if tag not in PAGE_TAGS:
+            self.bad.append(f"the tag <{tag}> is not allowed")
+        for name, value in attrs:
+            value = value or ""
+            if name == "href":
+                if tag not in ("a", "use") or not value.startswith("#"):
+                    self.bad.append(
+                        f"href={value!r} on <{tag}> is not a link inside the page"
+                    )
+            elif name.startswith("on") or name == "style":
+                self.bad.append(f"the attribute {name} is not allowed")
+            elif not (
+                name in PAGE_ATTRS or name.startswith("aria-") or name in SVG_ATTRS
+            ):
+                self.bad.append(f"the attribute {name} on <{tag}> is not allowed")
+            elif "url(" in value.lower() or "javascript:" in value.lower():
+                self.bad.append(f"the attribute {name} holds {value!r}")
+        if tag not in ("br",):
+            self.open.append(tag)
+        if tag == "code":
+            self._code = []
+
+    def handle_startendtag(self, tag, attrs):
+        self.handle_starttag(tag, attrs)
+        if self.open and self.open[-1] == tag:
+            self.open.pop()
+
+    def handle_endtag(self, tag):
+        if tag == "code" and self._code is not None:
+            self.codes.append("".join(self._code))
+            self._code = None
+        if tag in self.open:
+            while self.open and self.open.pop() != tag:
+                pass
+
+    def handle_data(self, data):
+        if self._code is not None:
+            self._code.append(data)
+        if any(t in ("h3", "h4", "summary") for t in self.open) and CITE_ID.search(
+            data
+        ):
+            self.heading_cites.append(data.strip()[:80])
+        hidden = "details" in self.open and not (self.open and "summary" in self.open)
+        self.text.append((data, hidden))
+
+    def handle_comment(self, data):
+        self.bad.append("an HTML comment is not allowed")
+
+    def handle_decl(self, decl):
+        self.bad.append(f"<!{decl}> is not allowed")
+
+    def handle_pi(self, data):
+        self.bad.append("a processing instruction is not allowed")
+
+
+def _parse_page(html_text: str) -> _PageParser:
+    p = _PageParser()
+    p.feed(html_text)
+    p.close()
+    return p
+
+
+def page_words(html_text: str) -> int:
+    """Visible words of one fragment: not inside `<details>` (its summary counts), with the flow
+    placeholders, snippets and citations taken out first."""
+    plain = CITE_ID.sub(
+        " ",
+        html_text.replace(CORE_FLOW_PLACEHOLDER, " ").replace(FLOW_PLACEHOLDER, " "),
+    )
+    return sum(
+        len(WORD.findall(t)) for t, hidden in _parse_page(plain).text if not hidden
+    )
+
+
+def css_gate(css: str) -> list[str]:
+    """The page writer's CSS: nothing that loads or runs anything, no colour typed as a literal (colours
+    come from the design system's tokens), and braces that balance, so it cannot close the block it is
+    nested in."""
+    reasons = [f"the CSS holds {b!r}" for b in CSS_BANNED if b in css.lower()]
+    plain = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
+    declarations = re.findall(r":([^;{}]*)", plain)
+    for value in declarations:
+        m = CSS_COLOUR.search(value)
+        if m:
+            reasons.append(f"the CSS types the colour {m.group(0)!r}; use var(--token)")
+            break
+    depth = 0
+    for ch in plain:
+        depth += {"{": 1, "}": -1}.get(ch, 0)
+        if depth < 0:
+            break
+    if depth != 0:
+        reasons.append("the CSS braces do not balance")
+    return reasons
+
+
+def page_gate(
+    out,
+    *,
+    open_keys: list[str],
+    core_flow: bool,
+    citations: dict[str, Citation],
+    corpus: Corpus,
+    labels: set[str],
+) -> list[str]:
+    """Failure reasons for the page writer's answer; empty when it passes. Never calls a model.
+
+    The section keys are exactly *open_keys*, in order; `{{flow}}` is in the summary once and nowhere else,
+    and `{{flow:core}}` appears only when the core section has a flow (*core_flow*), at most once; every
+    `[[id]]` and `[[snippet:id]]` is a known citation; no citation sits in a heading or a summary; every
+    tag and attribute is on the allow-list; the CSS passes `css_gate`; every `<code>` text is in the corpus
+    or the labels; no `path:line` is typed in the text."""
+    reasons: list[str] = []
+    keys = [s.key for s in out.sections]
+    if keys != open_keys:
+        reasons.append(
+            f"the sections are {keys}; they must be exactly {open_keys}, in that order"
+        )
+    texts = {s.key: s.html for s in out.sections}
+    joined = "\n".join(texts.values())
+    if (
+        joined.count(FLOW_PLACEHOLDER) != 1
+        or texts.get("summary", "").count(FLOW_PLACEHOLDER) != 1
+    ):
+        reasons.append(f"{FLOW_PLACEHOLDER} must appear exactly once, in the summary")
+    n_core = joined.count(CORE_FLOW_PLACEHOLDER)
+    if n_core and not core_flow:
+        reasons.append(
+            f"{CORE_FLOW_PLACEHOLDER} is used, but the core section has no flow"
+        )
+    elif n_core > 1:
+        reasons.append(f"{CORE_FLOW_PLACEHOLDER} appears {n_core} times; at most once")
+    for cid in dict.fromkeys(CITE_ID.findall(joined)):
+        if cid not in citations:
+            reasons.append(f"[[{cid}]] is not a gated citation")
+    reasons += css_gate(out.css)
+    cited_paths = {c.path for c in citations.values()}
+    for key, text in texts.items():
+        parsed = _parse_page(text)
+        reasons += [f"{key}: {b}" for b in dict.fromkeys(parsed.bad)]
+        reasons += [
+            f"{key}: a citation in a heading or summary: {h!r}"
+            for h in parsed.heading_cites
+        ]
+        for code in dict.fromkeys(parsed.codes):
+            c = code.strip()
+            if c and c not in labels and not _backtick_ok(c, corpus, cited_paths):
+                reasons.append(f"{key}: `{c}` occurs in no snapshot")
+        visible = CITE_ID.sub(" ", " ".join(t for t, _ in parsed.text))
+        for m in PATH_LINE.finditer(visible):
+            reasons.append(
+                f"{key}: {m.group(0)} is a path with a line number typed in the text"
+            )
+    return reasons
+
+
+# --- the diagram stage's picture (stages/diagram.py) ------------------------------------------------------
+
+DIAGRAM_TAGS = frozenset(
+    [
+        "svg",
+        "g",
+        "path",
+        "rect",
+        "circle",
+        "ellipse",
+        "line",
+        "polyline",
+        "polygon",
+        "text",
+        "tspan",
+        "title",
+        "desc",
+        "defs",
+        "marker",
+        "use",
+        "a",
+    ]
+)
+DIAGRAM_ATTRS = frozenset(
+    (
+        "class",
+        "id",
+        "role",
+        "href",
+        "markerwidth",
+        "markerheight",
+        "refx",
+        "refy",
+        "orient",
+        "markerunits",
+        "marker-start",
+        "marker-end",
+    )
+)
+# The viewBox width of each layout: wide for screens of 700 px and more, tall for phones.
+DIAGRAM_WIDTHS = {"wide": 1000, "tall": 420}
+DIAGRAM_MAX_CHARS = 40_000
+DIAGRAM_ID = re.compile(r"[a-z][a-z0-9-]*")
+DIAGRAM_REF = re.compile(r"url\(#([^)]*)\)")
+# A token of a label that looks like code: an underscore or a call, camelCase, or a dot or slash between
+# word characters.
+CODE_TOKEN = re.compile(r"_|\(|[a-z][A-Z]|\w[./]\w")
+NUMBER = re.compile(r"[\d.,]+%?")
+
+
+class _SvgParser(HTMLParser):
+    """What `diagram_gate` reads from one SVG: the elements at the top level, tags and attributes outside
+    the allow-list, the ids, every `#id` reference, and the text inside `<text>`, `<title>` and `<desc>`."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.bad: list[str] = []
+        self.roots: list[tuple[str, dict[str, str]]] = []
+        self.stray = False
+        self.ids: list[str] = []
+        self.refs: list[str] = []
+        self.texts: list[str] = []
+        self.depth = 0
+        self._in_text = 0
+
+    def handle_starttag(self, tag, attrs):
+        values = {name: value or "" for name, value in attrs}
+        if self.depth == 0:
+            self.roots.append((tag, values))
+        if tag not in DIAGRAM_TAGS:
+            self.bad.append(f"the tag <{tag}> is not allowed")
+        for name, value in values.items():
+            low = value.lower()
+            if name.startswith("on") or name == "style":
+                self.bad.append(f"the attribute {name} is not allowed")
+            elif not (
+                name in DIAGRAM_ATTRS or name.startswith("aria-") or name in SVG_ATTRS
+            ):
+                self.bad.append(f"the attribute {name} on <{tag}> is not allowed")
+            elif name == "href":
+                if not value.startswith("#"):
+                    self.bad.append(f"href={value!r} is not a reference inside the SVG")
+                else:
+                    self.refs.append(value[1:])
+            elif name in ("marker-start", "marker-end"):
+                m = DIAGRAM_REF.fullmatch(value.strip())
+                if m:
+                    self.refs.append(m.group(1))
+                else:
+                    self.bad.append(f"{name}={value!r} is not url(#id)")
+            elif name in ("fill", "stroke") and low.strip() not in (
+                "none",
+                "currentcolor",
+            ):
+                self.bad.append(
+                    f"{name}={value!r} on <{tag}>: a colour goes in the CSS as var(--token)"
+                )
+            elif "url(" in low or "javascript:" in low:
+                self.bad.append(f"the attribute {name} holds {value!r}")
+            if name == "id":
+                self.ids.append(value)
+        self.depth += 1
+        if tag in ("text", "title", "desc"):
+            self._in_text += 1
+
+    def handle_startendtag(self, tag, attrs):
+        self.handle_starttag(tag, attrs)
+        self.handle_endtag(tag)
+
+    def handle_endtag(self, tag):
+        self.depth = max(0, self.depth - 1)
+        if tag in ("text", "title", "desc") and self._in_text:
+            self._in_text -= 1
+            self.texts.append("\n")
+
+    def handle_data(self, data):
+        if self.depth == 0 and data.strip():
+            self.stray = True
+        elif self._in_text:
+            self.texts.append(data)
+
+    def handle_comment(self, data):
+        self.bad.append("a comment is not allowed")
+
+    def handle_decl(self, decl):
+        self.bad.append(f"<!{decl}> is not allowed")
+
+    def unknown_decl(self, data):
+        self.bad.append(f"<![{data[:20]}> is not allowed")
+
+    def handle_pi(self, data):
+        self.bad.append("a processing instruction is not allowed")
+
+
+def _view_box_width(value: str) -> float | None:
+    parts = value.replace(",", " ").split()
+    try:
+        return float(parts[2]) if len(parts) == 4 else None
+    except ValueError:
+        return None
+
+
+def _code_tokens(text: str) -> list[str]:
+    """The tokens of a label that look like code, with the punctuation around a word taken off."""
+    out = []
+    for raw in text.split():
+        t = raw.lstrip("(\"'“‘").rstrip(".,;:!?\"'”’…")
+        if t.endswith(")") and "(" not in t:
+            t = t.rstrip(")")
+        if t and not NUMBER.fullmatch(t) and CODE_TOKEN.search(t):
+            out.append(t)
+    return out
+
+
+def diagram_css_gate(css: str) -> list[str]:
+    """`css_gate`, and every selector starts with `.wd-`, so the diagram's CSS styles only the diagram."""
+    reasons = css_gate(css)
+    plain = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
+    depth, prelude = 0, []
+    for ch in plain:
+        if ch == "{":
+            if depth == 0:
+                for sel in "".join(prelude).split(","):
+                    sel = sel.strip()
+                    if not sel.startswith(".wd-"):
+                        reasons.append(
+                            f"the CSS selector {sel[:60]!r} does not start with .wd-"
+                        )
+            depth += 1
+            prelude = []
+        elif ch == "}":
+            depth = max(0, depth - 1)
+            prelude = []
+        elif depth == 0:
+            prelude.append(ch)
+    return reasons
+
+
+def diagram_svg_text(svg: str) -> str:
+    """The text of one SVG's `<text>`, `<title>` and `<desc>` elements, whitespace collapsed."""
+    p = _SvgParser()
+    p.feed(svg)
+    p.close()
+    return " ".join("".join(p.texts).split())
+
+
+def diagram_gate(
+    out, *, labels: set[str], corpus: Corpus, box_labels: list[str]
+) -> list[str]:
+    """Failure reasons for the diagram writer's (or a look's) SVGs and CSS; empty when they pass. Never
+    calls a model.
+
+    Each of `wide` and `tall` is one well-formed root `<svg>` with a viewBox of the layout's width
+    (`DIAGRAM_WIDTHS`), at most `DIAGRAM_MAX_CHARS` characters; tags and attributes are on the allow-list
+    (no script, style, foreignObject, image, `on*` or comment; `href` only `#…`; `marker-*` only `url(#id)`;
+    `fill` and `stroke` only `none` or `currentColor`); ids are unique, lower case and every reference points
+    at one of them or at an icon of `render.ICON_SPRITE`; the text holds no `path:line`, and every token
+    that looks like code is in *labels* or the corpus; every flow box label (*box_labels*) is in the text;
+    and the CSS passes `diagram_css_gate`. Parsed with `html.parser`."""
+    import xml.etree.ElementTree as ET
+
+    # Imported here: render imports this module.
+    from .render import ICON_SPRITE
+
+    icons = set(re.findall(r'<symbol id="(i-[a-z]+)"', ICON_SPRITE))
+    reasons: list[str] = []
+    for layout, width in DIAGRAM_WIDTHS.items():
+        svg = getattr(out, layout).strip()
+        if not svg:
+            reasons.append(f"{layout}: the SVG is empty")
+            continue
+        if len(svg) > DIAGRAM_MAX_CHARS:
+            reasons.append(
+                f"{layout}: the SVG is {len(svg):,} characters; at most {DIAGRAM_MAX_CHARS:,}"
+            )
+        p = _SvgParser()
+        p.feed(svg)
+        p.close()
+        reasons += [f"{layout}: {b}" for b in dict.fromkeys(p.bad)]
+        if len(p.roots) != 1 or p.roots[0][0] != "svg" or p.stray:
+            reasons.append(f"{layout}: it must be exactly one root <svg> element")
+        else:
+            got = _view_box_width(p.roots[0][1].get("viewbox", ""))
+            if got != width:
+                reasons.append(
+                    f'{layout}: the root <svg> needs viewBox="0 0 {width} H" (width {width})'
+                )
+        if "<!" not in svg and "<?" not in svg:
+            try:
+                ET.fromstring(svg)
+            except ET.ParseError as e:
+                reasons.append(f"{layout}: the SVG is not well-formed XML ({e})")
+        ids = set(p.ids)
+        for i in dict.fromkeys(p.ids):
+            if not DIAGRAM_ID.fullmatch(i):
+                reasons.append(
+                    f"{layout}: the id {i!r} is not lower-case letters, digits and -"
+                )
+            if p.ids.count(i) > 1:
+                reasons.append(f"{layout}: the id {i!r} is used more than once")
+        for ref in dict.fromkeys(p.refs):
+            if ref not in ids and ref not in icons:
+                reasons.append(
+                    f"{layout}: #{ref} points at no id of this SVG and no icon"
+                )
+        text = " ".join("".join(p.texts).split())
+        for m in PATH_LINE.finditer(text):
+            reasons.append(
+                f"{layout}: {m.group(0)} is a path with a line number typed in the text"
+            )
+        for tok in dict.fromkeys(_code_tokens(text)):
+            if tok not in labels and not _backtick_ok(tok, corpus, set()):
+                reasons.append(
+                    f"{layout}: {tok!r} looks like code and occurs in no snapshot"
+                )
+        low = text.lower()
+        for label in box_labels:
+            if " ".join(label.split()).lower() not in low:
+                reasons.append(
+                    f"{layout}: the box label {label!r} is not in the picture's text"
+                )
+    reasons += diagram_css_gate(out.css)
     return reasons

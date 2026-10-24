@@ -15,6 +15,64 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.106.0] - 2026-10-24
+
+### Added
+- codebase-walkthrough names the part of the code that does its main job and
+  gives it its own section after How it works, titled for that job (for
+  example "How it finds bugs"): what it looks at, what it is given, what it
+  produces and what checks it. One call with no tools chooses the part from
+  the checked claims, and one read-only agent reads its files closely; a code
+  check holds the choice to the target's files and a plain title. Module and
+  codebase scope, human mode.
+- The HTML page's open body is written by one call that sees every checked
+  section and claim at once, so the page no longer repeats itself. A code
+  check passes only allowed HTML tags and attributes, CSS that loads nothing
+  and types no colour, and citations the pipeline checked; it counts the
+  visible words against 3,600 and asks once more when the page fails. A page
+  that still fails is drawn by code, as before. `render` rebuilds the page
+  from the saved answer with no call.
+- The page writer lays out its sections with the page's components: numbered
+  stage cards with an icon for each kind of stage, a callout for the check on
+  a stage's result, cards side by side and trap cards. Their colours come from
+  the design system's tokens.
+- `resume --repage` writes only the HTML page again, for the cost of the page
+  call.
+- The "How it works" picture on the HTML page is drawn by a model as SVG, in
+  the style of a hand-drawn diagram: a colour and an icon for each kind of
+  stage, stacked cards where many agents run at once, checks drawn small, and
+  a dashed arrow back for a loop, with a wide layout for screens and a tall
+  one for phones, in the page's light and dark themes. Code renders it to PNG
+  and a model looks at it and corrects it, up to three times; code checks
+  every version for allowed SVG only, colours from the design system and every
+  stage labelled. When drawing fails, or `resvg-py` has no wheel for the
+  platform, the page shows the boxes code draws. This adds two to five model
+  calls to a run.
+- `resume --redraw` draws only the page's picture again, keeping every other
+  answer.
+- The flow picture at the top of the page draws each stage as a box marked as
+  an input, code, an agent, a check, a decision or an output, with stacked
+  cards where many agents run at once, and each check drawn small between the
+  boxes around it; How it works has one stage card per box, in the picture's
+  order.
+
+### Changed
+- The walkthrough reads What it is (with the flow picture), How it works, the
+  core part, What it creates, Configuration, Use cases, Gotchas. With
+  `--scope codebase` the three tables, Reference and How this was made are
+  closed fold-outs at the bottom of the page.
+- Adjacent citations on the page are one superscript ("1, 2"), and the page
+  shows the first citation under each heading only.
+- The writers follow plain-language rules (no invented names, verbs over
+  nouns, answer first, one idea per sentence), and a title or heading never
+  holds a citation.
+- `resume --rewrite` also asks the page writer again, and keeps the core
+  stage's answers.
+
+### Removed
+- The "Which command to run" table of `--scope codebase`, and the survey agent
+  that wrote it.
+
 ## [0.105.3] - 2026-10-24
 
 ### Removed

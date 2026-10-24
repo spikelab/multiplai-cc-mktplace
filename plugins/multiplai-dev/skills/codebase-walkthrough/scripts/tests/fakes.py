@@ -12,20 +12,25 @@ and then the hops `trace_plan` lists for that entry name.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from types import SimpleNamespace
 
 from walkthrough_pipeline import budget
 from walkthrough_pipeline.models import (
-    CommandsOutput,
     ConfigOutput,
+    CoreChoice,
+    CoreOutput,
+    DiagramLook,
+    DiagramOutput,
     DocsOutput,
     ExitsOutput,
     ExploreOutput,
     FlowOutput,
     LoopsOutput,
     OutputsOutput,
+    PageOutput,
     ResumeOutput,
     SectionOutput,
     SummaryOutput,
@@ -39,7 +44,7 @@ STRUCTURED = (
     FlowOutput,
     OutputsOutput,
     ConfigOutput,
-    CommandsOutput,
+    CoreOutput,
     LoopsOutput,
     ExitsOutput,
     ResumeOutput,
@@ -47,8 +52,7 @@ STRUCTURED = (
 # What the survey answer cites in each file, per question (`--scope codebase`).
 SURVEY_NEEDLES = {
     "loops": ("MAX_", "range(", "sys.exit(", 'print("'),
-    "lifecycle": ("write_text(", "json.loads(", ".open(", "STATE ="),
-    "commands": ("Use `", "Run `", "exits 2", "| `"),
+    "lifecycle": ("write_text(", "json.loads(", ".open(", "STATE =", "| `--run-dir"),
 }
 SURVEY_MAX_FACTS = 12
 
@@ -89,6 +93,10 @@ class FakeAgents:
         plant: set[str] | None = None,
         stop_write_after: int | None = None,
         stop_survey_after: int | None = None,
+        stop_core_after: int | None = None,
+        stop_page_after: int | None = None,
+        stop_diagram_after: int | None = None,
+        look_plan: dict[int, str] | None = None,
     ):
         self.calls: list[dict] = []
         self.cost = cost
@@ -104,16 +112,36 @@ class FakeAgents:
         self.trace_calls = 0
         # Failures planted in the explainer's structured answers: "usecase_flag" (a use case with a flag
         # the code does not have), "flow_node" (a box citing an unknown id), "flow_disconnected" (two boxes,
-        # no arrow), "output_key" (a JSON example with a key the code does not have).
+        # no arrow), "output_key" (a JSON example with a key the code does not have), "flow_fan_number" (a
+        # fan-out whose number is in no quote and no snapshot), "flow_step_order" (the steps swapped).
         self.plant = plant or set()
         # Raise BudgetExceededError on write call number stop_write_after + 1.
         self.stop_write_after = stop_write_after
         self.write_calls = 0
         # Raise BudgetExceededError on survey call number stop_survey_after + 1. The codebase tables'
-        # plants: "command_flag" (a command with a flag the code lacks), "exit_number" (a signal whose
-        # number is in no quote) and "loop_cap" (a cap whose number is in no quote).
+        # plants: "exit_number" (a signal whose number is in no quote) and "loop_cap" (a cap whose number
+        # is in no quote).
         self.stop_survey_after = stop_survey_after
         self.survey_calls = 0
+        # Raise BudgetExceededError on core call number stop_core_after + 1 (the choice, its re-ask and
+        # the deep read count). The core plants: "core_title_cite" (a title holding a citation) and
+        # "core_outside_file" (a file outside the target), both in every choice answer.
+        self.stop_core_after = stop_core_after
+        self.core_calls = 0
+        # Raise BudgetExceededError on page call number stop_page_after + 1. The page plants, each in the
+        # first answer only, or in every answer with ":always" after it: "page_script" (a <script>),
+        # "page_unknown_id" (a citation id that is not in the material), "page_colour" (a colour literal
+        # in the CSS), "page_heading_cite" (a citation inside an <h3>), "page_no_flow" (no {{flow}}) and
+        # "page_long" (an open body over the word limit).
+        self.stop_page_after = stop_page_after
+        self.page_calls = 0
+        # Raise BudgetExceededError on diagram call number stop_diagram_after + 1 (the draw, its re-ask and
+        # each look count). The draw's plants, in the first answer only or in every answer with ":always":
+        # "diagram_script" (a <script> in the wide SVG). *look_plan* gives look n's answer: "ok" (the
+        # default), "fix" (a corrected picture that passes the gate) or "fix_bad" (one that fails it).
+        self.stop_diagram_after = stop_diagram_after
+        self.diagram_calls = 0
+        self.look_plan = look_plan or {}
 
     async def __call__(self, prompt: str, schema, **kw):
         from walkthrough_pipeline import sdk
@@ -128,6 +156,20 @@ class FakeAgents:
         if self.fail_on and self.fail_on in prompt:
             raise sdk.AgentCallError("planted failure")
         cwd = kw.get("cwd") or ""
+        if schema is CoreChoice or (
+            schema is ExploreOutput and "Core part: [core:read]" in prompt
+        ):
+            self.core_calls += 1
+            if (
+                self.stop_core_after is not None
+                and self.core_calls > self.stop_core_after
+            ):
+                raise budget.BudgetExceededError(
+                    "circuit breaker: planted stop during core"
+                )
+            if schema is CoreChoice:
+                return CoreChoice.model_validate(self.core_choice(prompt))
+            return self.core_read(prompt, cwd)
         if schema is ExploreOutput and "Survey question: [survey:" in prompt:
             self.survey_calls += 1
             if (
@@ -163,6 +205,28 @@ class FakeAgents:
                 raise budget.BudgetExceededError(
                     "circuit breaker: planted stop during write"
                 )
+        if schema is PageOutput:
+            self.page_calls += 1
+            if (
+                self.stop_page_after is not None
+                and self.page_calls > self.stop_page_after
+            ):
+                raise budget.BudgetExceededError(
+                    "circuit breaker: planted stop during page"
+                )
+            return PageOutput.model_validate(self.page(prompt))
+        if schema in (DiagramOutput, DiagramLook):
+            self.diagram_calls += 1
+            if (
+                self.stop_diagram_after is not None
+                and self.diagram_calls > self.stop_diagram_after
+            ):
+                raise budget.BudgetExceededError(
+                    "circuit breaker: planted stop during diagram"
+                )
+            if schema is DiagramOutput:
+                return DiagramOutput.model_validate(self.diagram(prompt))
+            return DiagramLook.model_validate(self.look(prompt))
         if schema is SectionOutput:
             return self.write(prompt)
         if schema in STRUCTURED:
@@ -271,10 +335,11 @@ class FakeAgents:
         )
 
     def survey(self, prompt: str, cwd: str) -> ExploreOutput:
-        """One fact per line holding one of the question's needles, in the listed files, docs and
-        libraries; for the loops question the first is the cap, and one gotcha cites it."""
+        """One fact per line holding one of the question's needles, in the listed files and
+        libraries (and, for lifecycle, the docs); for the loops question the first is the cap, and one gotcha cites it."""
         question = re.search(r"Survey question: \[survey:(\w+)\]", prompt).group(1)
         listed = re.findall(r"^- (\S+) \(\d+ lines\)$", prompt, re.MULTILINE)
+        # The lifecycle answer also cites the docs' line on where state is kept.
         docs = re.findall(r"^- (\S+\.md)$", prompt, re.MULTILINE)
         libs = [
             f.relative_to(cwd).as_posix()
@@ -282,7 +347,7 @@ class FakeAgents:
             for f in sorted((Path(cwd) / d).rglob("*.py"))
         ]
         facts = []
-        for path in docs if question == "commands" else listed + libs:
+        for path in listed + libs + (docs if question == "lifecycle" else []):
             lines = (Path(cwd) / path).read_text(encoding="utf-8").split("\n")
             for n, line in enumerate(lines, start=1):
                 if any(needle in line for needle in SURVEY_NEEDLES[question]):
@@ -298,6 +363,44 @@ class FakeAgents:
         facts = facts[:SURVEY_MAX_FACTS]
         gotchas = facts[:1] if question == "loops" else []
         return ExploreOutput.model_validate({"facts": facts, "gotchas": gotchas})
+
+    def core_choice(self, prompt: str) -> dict:
+        """The first `.py` file listed that is not an `__init__.py`, citing the first fact id of the material."""
+        files = [
+            f
+            for f in re.findall(r"^- (\S+) \(\d+ lines\)$", prompt, re.MULTILINE)
+            if f.endswith(".py") and not f.endswith("__init__.py")
+        ]
+        ids = re.findall(r"^- \[([a-z0-9]+)\]", prompt, re.MULTILINE) or ["c1"]
+        title = "How it stores bookings"
+        if "core_title_cite" in self.plant:
+            title += f" [[{ids[0]}]]"
+        chosen = files[:1] + (
+            ["elsewhere/not_the_target.py"] if "core_outside_file" in self.plant else []
+        )
+        return {
+            "title": title,
+            "job": f"It keeps each booking it is sent. [[{ids[0]}]]",
+            "files": chosen,
+            "why": "That file holds the code that saves them.",
+            "cites": [ids[0]],
+        }
+
+    def core_read(self, prompt: str, cwd: str) -> ExploreOutput:
+        """One fact per `def ` or `class ` line of each listed file, and one gotcha on the first."""
+        facts = []
+        for path in re.findall(r"^- (\S+) \(\d+ lines\)$", prompt, re.MULTILINE):
+            lines = (Path(cwd) / path).read_text(encoding="utf-8").split("\n")
+            for n, line in enumerate(lines, start=1):
+                if line.lstrip().startswith(("def ", "class ")):
+                    cit = {
+                        "path": path,
+                        "line_start": n,
+                        "line_end": n,
+                        "quote": line.strip(),
+                    }
+                    facts.append({"claim": f"core: {line.strip()}", "citations": [cit]})
+        return ExploreOutput.model_validate({"facts": facts, "gotchas": facts[:1]})
 
     def docs(self, prompt: str, cwd: str) -> DocsOutput:
         pages = re.findall(r"^- (https://\S+) -> file `(\S+)`", prompt, re.MULTILINE)
@@ -408,6 +511,137 @@ class FakeAgents:
             {"paragraphs": paragraphs, "questions": questions}
         )
 
+    def _planted(self, name: str, prompt: str) -> bool:
+        """*name* is planted in this page answer: the first, or every one with ":always"."""
+        if f"{name}:always" in self.plant:
+            return True
+        return name in self.plant and "Your previous answer failed" not in prompt
+
+    def page(self, prompt: str) -> dict:
+        """The page writer's answer, built from its material: the summary's paragraphs and the flow's
+        steps, one cited sentence for every other open section, a snippet in What it creates and a
+        fold-out in Configuration."""
+        keys = re.findall(r'^- "([a-z]+)" \(', prompt, re.MULTILINE)
+        body = prompt.split('<untrusted-content source="page material">', 1)[1]
+        body = body.split("</untrusted-content>", 1)[0].strip()
+        material = json.loads(body.strip("`").removeprefix("text").strip())
+        tokens = re.search(r"from this list: (--[\w-]+)", prompt)
+        token = tokens.group(1) if tokens else "--fg"
+        ids = [f["id"] for f in material["facts"]] or ["c1"]
+        secs = material["sections"]
+        out = {}
+        for key in keys:
+            if key == "summary":
+                paras = secs["summary"]["paragraphs"]
+                html = "".join(f"<p>{p}</p>" for p in paras) + "<p>{{flow}}</p>"
+                if self._planted("page_script", prompt):
+                    html += "<script>alert(1)</script>"
+                if self._planted("page_no_flow", prompt):
+                    html = html.replace("<p>{{flow}}</p>", "")
+                if self._planted("page_long", prompt):
+                    html += "<p>" + " ".join(["word"] * 3700) + "</p>"
+            elif key == "flow":
+                html = "".join(
+                    f"<h3>{s['title']}</h3><p>{s['summary']}</p>"
+                    for s in secs["flow"]["steps"]
+                )
+                if self._planted("page_heading_cite", prompt):
+                    html = f"<h3>Where it starts [[{ids[0]}]]</h3>" + html
+            elif key == "core":
+                html = f'<p class="lead">{material["core"]["job"]}</p>'
+                if (secs.get("core") or {}).get("flow"):
+                    html += "<p>{{flow:core}}</p>"
+            elif key == "outputs":
+                html = (
+                    f"<p>It saves each booking it is sent. [[{ids[0]}]]</p>"
+                    f"<p>[[snippet:{ids[0]}]]</p>"
+                )
+            elif key == "config":
+                html = (
+                    f"<p>Its settings come from the environment. [[{ids[1 % len(ids)]}]]</p>"
+                    "<details><summary>Every setting</summary><p>"
+                    + " ".join(["hidden"] * 50)
+                    + "</p></details>"
+                )
+                if self._planted("page_unknown_id", prompt):
+                    html += "<p>It has one more. [[c9999]]</p>"
+            else:
+                html = f"<p>The {key} section says one thing. [[{ids[0]}]]</p>"
+            out[key] = html
+        css = f".lead {{ color: var({token}); }}"
+        if self._planted("page_colour", prompt):
+            css += "\n.lead { background: #ff0000; }"
+        return {
+            "css": css,
+            "sections": [{"key": k, "html": h} for k, h in out.items()],
+        }
+
+    @staticmethod
+    def _boxes(prompt: str) -> list[str]:
+        body = prompt.split('<untrusted-content source="diagram material">', 1)[1]
+        body = body.split("</untrusted-content>", 1)[0].strip()
+        material = json.loads(body.strip("`").removeprefix("text").strip())
+        return [n["label"] for n in material["flow"]["nodes"]]
+
+    @staticmethod
+    def _svg(width: int, boxes: list[str], tag: str = "") -> str:
+        """One box per label, one under the other, each with the kind icon and an arrow to the next."""
+        rows = []
+        for i, label in enumerate(boxes):
+            y = 20 + 70 * i
+            rows.append(
+                f'<g class="wd-box"><rect x="10" y="{y}" width="{width - 20}" height="50" rx="8"/>'
+                f'<use href="#i-code" class="wd-ic" x="20" y="{y + 17}" width="16" height="16"/>'
+                f'<text class="wd-title{tag}" x="44" y="{y + 30}">{label}</text></g>'
+                + (
+                    f'<path class="wd-arrow" d="M{width // 2} {y + 50} V{y + 68}" '
+                    'marker-end="url(#ah)"/>'
+                    if i < len(boxes) - 1
+                    else ""
+                )
+            )
+        return (
+            f'<svg class="wd-root" viewBox="0 0 {width} {40 + 70 * len(boxes)}">'
+            '<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" '
+            'markerHeight="7" orient="auto"><path class="wd-head" d="M0 0 L10 5 L0 10 z"/></marker></defs>'
+            + "".join(rows)
+            + "</svg>"
+        )
+
+    def diagram(self, prompt: str) -> dict:
+        """The diagram writer's answer: both layouts drawn from the material's box labels."""
+        boxes = self._boxes(prompt)
+        wide = self._svg(1000, boxes)
+        if self._planted("diagram_script", prompt):
+            wide = wide.replace("</svg>", "<script>alert(1)</script></svg>")
+        return {
+            "wide": wide,
+            "tall": self._svg(420, boxes),
+            "css": ".wd-root { fill: var(--fg); }\n.wd-box rect { fill: var(--surface); stroke: var(--line); }",
+            "alt": f"{len(boxes)} boxes, one after the other.",
+        }
+
+    def look(self, prompt: str) -> dict:
+        """Look n's answer from *look_plan*. Every PNG it is told to open must be on disk."""
+        n = int(re.search(r"This is look (\d) of", prompt).group(1))
+        for path in re.findall(r"^- (/\S+\.png)$", prompt, re.MULTILINE):
+            assert Path(path).read_bytes().startswith(b"\x89PNG"), path
+        verdict = self.look_plan.get(n, "ok")
+        if verdict == "ok":
+            return {"verdict": "ok"}
+        boxes = self._boxes(prompt)
+        tag = f" wd-round-{n}"
+        wide = self._svg(1000, boxes, tag)
+        if verdict == "fix_bad":
+            wide = wide.replace("</svg>", "<image/></svg>")
+        return {
+            "verdict": "fix",
+            "problems": [f"look {n}: the labels touch the box edge"],
+            "wide": wide,
+            "tall": self._svg(420, boxes, tag),
+            "css": ".wd-root { fill: var(--fg); }",
+        }
+
     def explain(self, schema, prompt: str) -> dict:
         """An answer for one of the explainer's structured sections, citing the first ids of its material."""
         ids = re.findall(r"^- \[([a-z0-9]+)\]", prompt, re.MULTILINE) or ["c1"]
@@ -420,26 +654,23 @@ class FakeAgents:
             )
             return m.group(1) if m else a
 
-        if schema is CommandsOutput:
-            rows = [
-                {
-                    "situation": "A full build",
-                    "command": "tool build --run-dir <dir>",
-                    # Cites the docs' table row: its `|` must survive the table cell (check re-reads it).
-                    "why": f"It runs every attempt. [[{id_with('| `tool build`')}]]",
-                    "cite": id_with("build"),
-                }
-            ]
-            if "command_flag" in self.plant:
-                rows.append(
+        if schema is CoreOutput:
+            return {
+                "summary": f"It saves each booking as one row. [[{a}]]",
+                "paragraphs": [
+                    {"text": f"The view writes the row and returns. [[{b}]]"}
+                ],
+                "parts": [
                     {
-                        "situation": "A fast build",
-                        "command": "tool build --no-such-flag",
-                        "why": "It skips work.",
-                        "cite": id_with("build"),
+                        "name": "The model",
+                        "looks_at": "The booking it is given.",
+                        "given": "The guest and the count.",
+                        "produces": "One saved row.",
+                        "checked_by": f"The database schema. [[{a}]]",
+                        "cite": a,
                     }
-                )
-            return {"rows": rows}
+                ],
+            }
         if schema is LoopsOutput:
             rows = [
                 {
@@ -536,9 +767,32 @@ class FakeAgents:
             return {"cases": cases}
         if schema is FlowOutput:
             nodes = [
-                {"id": "n1", "label": "Acme sends a booking", "cite": a},
-                {"id": "n2", "label": "The view stores it", "cite": f"[[{b}]]"},
-                {"id": "n3", "label": "The task acknowledges it", "cite": c},
+                {
+                    "id": "n1",
+                    "label": "Acme sends a booking",
+                    "cite": a,
+                    "kind": "Input",
+                    "does": "A webhook call",
+                },
+                {
+                    "id": "n2",
+                    "label": "The view stores it",
+                    "cite": f"[[{b}]]",
+                    "kind": "code",
+                    "does": "Saves one row",
+                    "reads": ["the booking"],
+                    "writes": ["a reservation row"],
+                },
+                {
+                    "id": "n3",
+                    "label": "The task acknowledges it",
+                    "cite": c,
+                    "kind": "agent",
+                    "does": "Tells Acme it arrived",
+                    "fan_out": "987654 workers"
+                    if "flow_fan_number" in self.plant
+                    else "",
+                },
             ]
             edges = [
                 {"from": "n1", "to": "n2", "label": "webhook"},
@@ -553,18 +807,22 @@ class FakeAgents:
                 edges = []
             steps = [
                 {
+                    "node": "n2",
                     "title": "Receive",
                     "summary": f"A booking arrives. [[{a}]]",
                     "details_paragraphs": [f"The handler reads the body. [[{b}]]"],
                     "snippet_cites": [a],
                 },
                 {
+                    "node": "n3",
                     "title": "Store",
                     "summary": f"It is saved. [[{c}]]",
                     "details_paragraphs": [],
                     "snippet_cites": [],
                 },
             ]
+            if "flow_step_order" in self.plant:
+                steps.reverse()
             return {"nodes": nodes, "edges": edges, "steps": steps}
         if schema is OutputsOutput:
             key = "zz_not_in_the_code" if "output_key" in self.plant else "ospite_count"
