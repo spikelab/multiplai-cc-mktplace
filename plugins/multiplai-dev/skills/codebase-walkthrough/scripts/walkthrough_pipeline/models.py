@@ -43,6 +43,7 @@ STAGES: tuple[str, ...] = (
     "trace",
     "write",
     "page",
+    "diagram",
     "render",
     "done",
 )
@@ -373,6 +374,25 @@ class PageOutput(_Model):
     sections: list[PageSection] = Field(default_factory=list)
 
 
+# The diagram stage's answers (stages/diagram.py): the "How it works" picture as two SVGs, and a look at it.
+
+
+class DiagramOutput(_Model):
+    wide: str = ""  # the SVG for screens of 700 px and more, viewBox width 1000
+    tall: str = ""  # the SVG for phones, viewBox width 420
+    css: str = ""  # rules for the SVGs' `wd-` classes
+    alt: str = ""  # one sentence: the picture's text alternative
+
+
+class DiagramLook(_Model):
+    verdict: Literal["ok", "fix"] = "ok"
+    problems: list[str] = Field(default_factory=list)
+    # The whole corrected SVGs and CSS when the verdict is "fix"; empty when it is "ok".
+    wide: str = ""
+    tall: str = ""
+    css: str = ""
+
+
 # --- stage records in the state ------------------------------------------------------
 
 
@@ -429,6 +449,12 @@ class WalkState(BaseModel):
     page: dict = Field(
         default_factory=dict
     )  # the gated open body: {css, sections: {key: html}, words}; empty: the page is drawn by code
+    diagram_answers: dict[str, dict] = Field(
+        default_factory=dict
+    )  # "draw", "draw:rewrite", "look:1".."look:3" -> DiagramOutput / DiagramLook dump | {"error": ...}
+    diagram: dict = Field(
+        default_factory=dict
+    )  # the gated picture: {wide, tall, css, alt, looks, approved}; empty: code draws the picture
     dropped: list[Dropped] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
     lsp: dict = Field(default_factory=dict)

@@ -1207,3 +1207,268 @@ def page_gate(
                 f"{key}: {m.group(0)} is a path with a line number typed in the text"
             )
     return reasons
+
+
+# --- the diagram stage's picture (stages/diagram.py) ------------------------------------------------------
+
+DIAGRAM_TAGS = frozenset(
+    [
+        "svg",
+        "g",
+        "path",
+        "rect",
+        "circle",
+        "ellipse",
+        "line",
+        "polyline",
+        "polygon",
+        "text",
+        "tspan",
+        "title",
+        "desc",
+        "defs",
+        "marker",
+        "use",
+        "a",
+    ]
+)
+DIAGRAM_ATTRS = frozenset(
+    (
+        "class",
+        "id",
+        "role",
+        "href",
+        "markerwidth",
+        "markerheight",
+        "refx",
+        "refy",
+        "orient",
+        "markerunits",
+        "marker-start",
+        "marker-end",
+    )
+)
+# The viewBox width of each layout: wide for screens of 700 px and more, tall for phones.
+DIAGRAM_WIDTHS = {"wide": 1000, "tall": 420}
+DIAGRAM_MAX_CHARS = 40_000
+DIAGRAM_ID = re.compile(r"[a-z][a-z0-9-]*")
+DIAGRAM_REF = re.compile(r"url\(#([^)]*)\)")
+# A token of a label that looks like code: an underscore or a call, camelCase, or a dot or slash between
+# word characters.
+CODE_TOKEN = re.compile(r"_|\(|[a-z][A-Z]|\w[./]\w")
+NUMBER = re.compile(r"[\d.,]+%?")
+
+
+class _SvgParser(HTMLParser):
+    """What `diagram_gate` reads from one SVG: the elements at the top level, tags and attributes outside
+    the allow-list, the ids, every `#id` reference, and the text inside `<text>`, `<title>` and `<desc>`."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.bad: list[str] = []
+        self.roots: list[tuple[str, dict[str, str]]] = []
+        self.stray = False
+        self.ids: list[str] = []
+        self.refs: list[str] = []
+        self.texts: list[str] = []
+        self.depth = 0
+        self._in_text = 0
+
+    def handle_starttag(self, tag, attrs):
+        values = {name: value or "" for name, value in attrs}
+        if self.depth == 0:
+            self.roots.append((tag, values))
+        if tag not in DIAGRAM_TAGS:
+            self.bad.append(f"the tag <{tag}> is not allowed")
+        for name, value in values.items():
+            low = value.lower()
+            if name.startswith("on") or name == "style":
+                self.bad.append(f"the attribute {name} is not allowed")
+            elif not (
+                name in DIAGRAM_ATTRS or name.startswith("aria-") or name in SVG_ATTRS
+            ):
+                self.bad.append(f"the attribute {name} on <{tag}> is not allowed")
+            elif name == "href":
+                if not value.startswith("#"):
+                    self.bad.append(f"href={value!r} is not a reference inside the SVG")
+                else:
+                    self.refs.append(value[1:])
+            elif name in ("marker-start", "marker-end"):
+                m = DIAGRAM_REF.fullmatch(value.strip())
+                if m:
+                    self.refs.append(m.group(1))
+                else:
+                    self.bad.append(f"{name}={value!r} is not url(#id)")
+            elif name in ("fill", "stroke") and low.strip() not in (
+                "none",
+                "currentcolor",
+            ):
+                self.bad.append(
+                    f"{name}={value!r} on <{tag}>: a colour goes in the CSS as var(--token)"
+                )
+            elif "url(" in low or "javascript:" in low:
+                self.bad.append(f"the attribute {name} holds {value!r}")
+            if name == "id":
+                self.ids.append(value)
+        self.depth += 1
+        if tag in ("text", "title", "desc"):
+            self._in_text += 1
+
+    def handle_startendtag(self, tag, attrs):
+        self.handle_starttag(tag, attrs)
+        self.handle_endtag(tag)
+
+    def handle_endtag(self, tag):
+        self.depth = max(0, self.depth - 1)
+        if tag in ("text", "title", "desc") and self._in_text:
+            self._in_text -= 1
+            self.texts.append("\n")
+
+    def handle_data(self, data):
+        if self.depth == 0 and data.strip():
+            self.stray = True
+        elif self._in_text:
+            self.texts.append(data)
+
+    def handle_comment(self, data):
+        self.bad.append("a comment is not allowed")
+
+    def handle_decl(self, decl):
+        self.bad.append(f"<!{decl}> is not allowed")
+
+    def unknown_decl(self, data):
+        self.bad.append(f"<![{data[:20]}> is not allowed")
+
+    def handle_pi(self, data):
+        self.bad.append("a processing instruction is not allowed")
+
+
+def _view_box_width(value: str) -> float | None:
+    parts = value.replace(",", " ").split()
+    try:
+        return float(parts[2]) if len(parts) == 4 else None
+    except ValueError:
+        return None
+
+
+def _code_tokens(text: str) -> list[str]:
+    """The tokens of a label that look like code, with the punctuation around a word taken off."""
+    out = []
+    for raw in text.split():
+        t = raw.lstrip("(\"'“‘").rstrip(".,;:!?\"'”’…")
+        if t.endswith(")") and "(" not in t:
+            t = t.rstrip(")")
+        if t and not NUMBER.fullmatch(t) and CODE_TOKEN.search(t):
+            out.append(t)
+    return out
+
+
+def diagram_css_gate(css: str) -> list[str]:
+    """`css_gate`, and every selector starts with `.wd-`, so the diagram's CSS styles only the diagram."""
+    reasons = css_gate(css)
+    plain = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
+    depth, prelude = 0, []
+    for ch in plain:
+        if ch == "{":
+            if depth == 0:
+                for sel in "".join(prelude).split(","):
+                    sel = sel.strip()
+                    if not sel.startswith(".wd-"):
+                        reasons.append(
+                            f"the CSS selector {sel[:60]!r} does not start with .wd-"
+                        )
+            depth += 1
+            prelude = []
+        elif ch == "}":
+            depth = max(0, depth - 1)
+            prelude = []
+        elif depth == 0:
+            prelude.append(ch)
+    return reasons
+
+
+def diagram_svg_text(svg: str) -> str:
+    """The text of one SVG's `<text>`, `<title>` and `<desc>` elements, whitespace collapsed."""
+    p = _SvgParser()
+    p.feed(svg)
+    p.close()
+    return " ".join("".join(p.texts).split())
+
+
+def diagram_gate(
+    out, *, labels: set[str], corpus: Corpus, box_labels: list[str]
+) -> list[str]:
+    """Failure reasons for the diagram writer's (or a look's) SVGs and CSS; empty when they pass. Never
+    calls a model.
+
+    Each of `wide` and `tall` is one well-formed root `<svg>` with a viewBox of the layout's width
+    (`DIAGRAM_WIDTHS`), at most `DIAGRAM_MAX_CHARS` characters; tags and attributes are on the allow-list
+    (no script, style, foreignObject, image, `on*` or comment; `href` only `#…`; `marker-*` only `url(#id)`;
+    `fill` and `stroke` only `none` or `currentColor`); ids are unique, lower case and every reference points
+    at one of them or at an icon of `render.ICON_SPRITE`; the text holds no `path:line`, and every token
+    that looks like code is in *labels* or the corpus; every flow box label (*box_labels*) is in the text;
+    and the CSS passes `diagram_css_gate`. Parsed with `html.parser`."""
+    import xml.etree.ElementTree as ET
+
+    # Imported here: render imports this module.
+    from .render import ICON_SPRITE
+
+    icons = set(re.findall(r'<symbol id="(i-[a-z]+)"', ICON_SPRITE))
+    reasons: list[str] = []
+    for layout, width in DIAGRAM_WIDTHS.items():
+        svg = getattr(out, layout).strip()
+        if not svg:
+            reasons.append(f"{layout}: the SVG is empty")
+            continue
+        if len(svg) > DIAGRAM_MAX_CHARS:
+            reasons.append(
+                f"{layout}: the SVG is {len(svg):,} characters; at most {DIAGRAM_MAX_CHARS:,}"
+            )
+        p = _SvgParser()
+        p.feed(svg)
+        p.close()
+        reasons += [f"{layout}: {b}" for b in dict.fromkeys(p.bad)]
+        if len(p.roots) != 1 or p.roots[0][0] != "svg" or p.stray:
+            reasons.append(f"{layout}: it must be exactly one root <svg> element")
+        else:
+            got = _view_box_width(p.roots[0][1].get("viewbox", ""))
+            if got != width:
+                reasons.append(
+                    f'{layout}: the root <svg> needs viewBox="0 0 {width} H" (width {width})'
+                )
+        if "<!" not in svg and "<?" not in svg:
+            try:
+                ET.fromstring(svg)
+            except ET.ParseError as e:
+                reasons.append(f"{layout}: the SVG is not well-formed XML ({e})")
+        ids = set(p.ids)
+        for i in dict.fromkeys(p.ids):
+            if not DIAGRAM_ID.fullmatch(i):
+                reasons.append(
+                    f"{layout}: the id {i!r} is not lower-case letters, digits and -"
+                )
+            if p.ids.count(i) > 1:
+                reasons.append(f"{layout}: the id {i!r} is used more than once")
+        for ref in dict.fromkeys(p.refs):
+            if ref not in ids and ref not in icons:
+                reasons.append(
+                    f"{layout}: #{ref} points at no id of this SVG and no icon"
+                )
+        text = " ".join("".join(p.texts).split())
+        for m in PATH_LINE.finditer(text):
+            reasons.append(
+                f"{layout}: {m.group(0)} is a path with a line number typed in the text"
+            )
+        for tok in dict.fromkeys(_code_tokens(text)):
+            if tok not in labels and not _backtick_ok(tok, corpus, set()):
+                reasons.append(
+                    f"{layout}: {tok!r} looks like code and occurs in no snapshot"
+                )
+        low = text.lower()
+        for label in box_labels:
+            if " ".join(label.split()).lower() not in low:
+                reasons.append(
+                    f"{layout}: the box label {label!r} is not in the picture's text"
+                )
+    reasons += diagram_css_gate(out.css)
+    return reasons
