@@ -7,6 +7,7 @@ description: >-
   transcript, or asks things like "list my meetings from last week", "pull the
   transcript of the X call", "what was said in that meeting". Triggers on
   "fireflies", "meeting transcript", "pull the transcript", "list my meetings".
+effort: low
 ---
 
 # Fireflies

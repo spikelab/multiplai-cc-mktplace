@@ -1,6 +1,7 @@
 ---
 name: fleet-status
 description: "One ranked snapshot of everything in flight — agent sessions that need an answer, open PRs with CI and review state, dirty or unpushed repos, background jobs, and the pending backlog. Use when the user asks what's going on, what needs them, what's still running, what's open, or is walking away and wants the state out of their head. Triggers on 'fleet status', 'what's running', 'what needs me', 'what's open', 'status of everything', 'where did I leave things'."
+effort: low
 ---
 
 # Fleet status

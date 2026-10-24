@@ -1,6 +1,7 @@
 ---
 name: deep-research
 description: Conduct web research using a code-driven pipeline (plan, diverge, challenge, search, triage, read, reassess, synthesize). Asks clarifying questions first, searches via Brave/Tavily/Exa/Serper/You.com, follows links by default, and outputs at three detail levels (gist, structured, detailed).
+effort: medium
 ---
 
 # Deep Research — Thin Dispatcher

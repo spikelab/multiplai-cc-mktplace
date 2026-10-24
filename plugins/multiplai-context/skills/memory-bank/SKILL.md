@@ -1,6 +1,7 @@
 ---
 name: memory-bank
 description: "Work with shared memory banks — git repositories of memory files a team or household shares. List and sync subscribed banks, report cross-bank collisions, turn dream-proposal items into a pull request on a bank, and run the adopt migration that moves personal memory into a bank and deletes the local copy. Triggers on 'memory bank', 'shared memory', 'team memory', 'subscribe to a bank', 'contribute to the bank', 'adopt into the bank', 'sync banks', 'why is this memory duplicated'."
+effort: medium
 ---
 
 # Memory banks

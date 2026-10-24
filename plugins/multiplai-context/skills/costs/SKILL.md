@@ -1,6 +1,7 @@
 ---
 name: costs
 description: "Report API-equivalent costs for Claude Code usage — per chat, skill, subagent, project, model, day, git branch, or PR. Collects fresh data from session transcripts, then reports from the cost ledger. Triggers on 'what did this chat cost', 'how much did X cost', 'costs this month', 'token spend', 'cost report', 'what did that PR/branch cost'."
+effort: medium
 ---
 
 # Costs — Usage Cost Accounting

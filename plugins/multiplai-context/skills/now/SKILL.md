@@ -1,6 +1,7 @@
 ---
 name: now
 description: "Rebuild per-project now/ status snapshots from recent diary entries. Run after a backfill, or any time the injected project state looks stale."
+effort: low
 ---
 
 # Now — Rebuild Project Status Snapshots

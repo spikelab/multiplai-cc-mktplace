@@ -2,6 +2,7 @@
 name: review-viewer
 description: Opens a local web page for a GitHub PR, a branch, unpushed commits, a commit range or a directory, with a summary this session writes (assessments and risk, no explanation of the code) and a link to the codebase-walkthrough page of what is viewed, written only on request; loads a code review's findings.json beside the code when a review of the same commits exists; and routes questions and accept/reject/defer decisions typed into the page to this Claude Code session, whose answers appear back in the page.
 when_to_use: 'Triggers: walk me through this PR, explain this PR, show me PR, look at this branch, view the review, open the findings, show the diff in the browser, /multiplai-dev:review-viewer'
+effort: medium
 ---
 
 # Review viewer

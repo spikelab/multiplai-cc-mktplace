@@ -1,6 +1,7 @@
 ---
 name: setup
 description: "Onboarding — a 2-question quick setup by default; pass `full` for the complete interview. Populates memory files from starter templates."
+effort: medium
 ---
 
 # Multiplai Setup — Onboarding

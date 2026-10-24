@@ -1,6 +1,7 @@
 ---
 name: dream
 description: "Generate a processed-learnings proposal from the pending backlog and write it to .multiplai/dreams/ for review. Does NOT apply changes — run /multiplai-context:dream-remember to review and apply."
+effort: medium
 ---
 
 # Multiplai Dream — Generate Learnings Proposal

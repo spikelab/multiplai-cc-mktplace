@@ -2,6 +2,7 @@
 name: pm-spec
 description: Writes the "what" of a change before anyone builds it, in three stages, each ending in a stop for review that pushes the change's feature branch (named after its ticket) — an interview and a proposal; use cases and the components, each with a plan; a prototype, a tickets.json it waits on, and a specs.md per component — then, once the specs are approved, checks with one read-only agent that the specs agree with each other and hands off a ready record and a commit of the change dir for /multiplai-dev:buildme to build from. Takes a PRD and a ticket's text (with its child items) as inputs. revise fixes requirements issues buildme raised later.
 when_to_use: 'Triggers: pm-spec, write the spec, spec this change, specify a feature, turn this PRD into specs, spec this ticket, revise the specs, fix spec-issues.md, /multiplai-pm:pm-spec'
+effort: medium
 ---
 
 # pm-spec

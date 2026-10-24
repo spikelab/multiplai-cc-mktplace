@@ -1,6 +1,7 @@
 ---
 name: plan
 description: Author self-contained, executable implementation plans that carry their own completion contract — verifiable "Done means" criteria, explicit constraints/out-of-scope, stop-and-ask gates, and a table of what is on disk and what resume does at every point a step can stop. The resulting plan file can be handed to a fresh session ("implement the plan"), fed to a goal runner, or used as pm-spec input (the specs buildme builds from), with no conversation context needed. Triggers on "write a plan", "make a plan", "implementation plan", "plan this out", "draft a plan for", or explicit /plan invocation.
+effort: medium
 ---
 
 # Plan

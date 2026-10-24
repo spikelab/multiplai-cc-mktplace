@@ -1,6 +1,7 @@
 ---
 name: deepen
 description: Find deepening opportunities in a codebase — places where shallow modules can be collapsed into deep ones with cleaner seams, better tests, and clearer AI-navigability. Informed by the project's domain language (CONTEXT.md) and prior decisions (docs/adr/). Works across languages, with idiom packs for Python, Swift, TypeScript, and React. Use when the user wants to improve architecture, audit for refactoring opportunities, consolidate tightly-coupled modules, or harden a codebase before letting agents loose on it.
+effort: high
 ---
 
 # Deepen

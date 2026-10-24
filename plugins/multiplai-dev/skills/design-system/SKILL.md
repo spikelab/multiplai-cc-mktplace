@@ -2,6 +2,7 @@
 name: design-system
 description: Supplies the design tokens (colours, fonts, type scale, spacing, radius) an HTML page is styled with, from a folder of design systems the user keeps, or a neutral theme shipped here when none is configured. Lists, shows and checks a design system (every required token in light and both dark blocks, WCAG AA contrast for each text/background pair), and creates a new one from the neutral theme.
 when_to_use: 'Triggers: before building an HTML page or report, use my design system, which design system, list design systems, check my design system, create a design system, /multiplai-dev:design-system'
+effort: medium
 ---
 
 # Design system
