@@ -441,3 +441,40 @@ async def test_every_stage_call_gets_the_configured_then_multiplai_then_the_sess
     assert [(o["model"], o.get("effort")) for o in options] == [sent] * len(
         STAGE_MODELS
     )
+
+
+# --- the turn limit ---------------------------------------------------------------------------------------
+
+TURN_LIMIT_REASON = "failed: Claude Code returned an error result: Reached maximum number of turns (60) (exit code: 1)"
+
+
+async def test_a_report_call_stopped_at_the_turn_limit_raises_max_turns(
+    trusted, fake_run, monkeypatch
+):
+    """The text DolceBot PR #4's turn-limit failures carried in `reason`, the only place core keeps it."""
+    import paths_stub
+
+    monkeypatch.setattr(sdk, "agent_call_text", paths_stub.REAL_AGENT_CALL_TEXT)
+    calls, replies = fake_run
+    replies.append(
+        AgentRunError("run_agent [find:callers] failed", reason=TURN_LIMIT_REASON)
+    )
+    with pytest.raises(sdk.MaxTurnsError) as exc:
+        await sdk.agent_call_text(
+            "p", allowed_tools=sdk.FINDER_TOOLS, budget_label="find:callers"
+        )
+    assert isinstance(exc.value, sdk.AgentCallError) and len(calls) == 1
+    assert "Reached maximum number of turns (60)" in str(exc.value)
+
+
+async def test_another_failed_run_is_not_a_turn_limit(trusted, fake_run, monkeypatch):
+    import paths_stub
+
+    monkeypatch.setattr(sdk, "agent_call_text", paths_stub.REAL_AGENT_CALL_TEXT)
+    _, replies = fake_run
+    replies.append(AgentRunError("run_agent failed", reason="failed: exit code 1"))
+    with pytest.raises(sdk.AgentCallError) as exc:
+        await sdk.agent_call_text(
+            "p", allowed_tools=sdk.FINDER_TOOLS, budget_label="find:tests"
+        )
+    assert not isinstance(exc.value, sdk.MaxTurnsError)

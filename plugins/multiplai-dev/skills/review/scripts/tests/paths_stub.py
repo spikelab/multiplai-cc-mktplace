@@ -7,11 +7,18 @@ installs this stub for each of them, and the subprocess drivers in
 `test_data_dir.py` install it themselves. `test_paths_stage.py` replaces it with
 its own fakes.
 
-Every change review also runs one piece finder per piece of its diff, a
-plain-text call (`sdk.agent_call_text`) the older fakes do not answer either:
-`stub_agent_call_text` checks trust as the real call does and reports
-`NO FINDINGS`, so no convert call follows. `test_reported_finders.py`
-replaces it with its own fake.
+Every change review also runs each dimension finder once per piece of its
+diff, as a plain-text report (`sdk.agent_call_text`) and a convert call, and
+the older fakes answer only the JSON call each dimension made before
+(`sdk.agent_call_structured` with `FinderOutput`, by budget label).
+`stub_agent_call_text` checks trust as the real call does, then asks that
+fake for a dimension's report call and writes its answer into the report,
+encoded; it reports `NO FINDINGS` for any other text call, and when the fake
+finds nothing, so no convert call follows. The first time it encodes an
+answer it wraps the installed `sdk.agent_call_structured` so the convert
+call of that report decodes it into items (`with_reports`); the test's
+monkeypatch undoes the wrapper with the fake. `test_reported_finders.py`
+replaces the stub with its own fake.
 
 The map_paths stub keeps the real function's contract: keyword-only
 arguments, a real `PathsResult` back (one path, so the stage records no
@@ -21,7 +28,9 @@ error), no model call, and the answer cache directory created under
 
 from __future__ import annotations
 
+import base64
 import importlib
+import re
 
 import code_facts
 import code_facts.paths as code_facts_paths
@@ -35,6 +44,7 @@ from code_facts.paths import (
     TracedPath,
 )
 from review_pipeline import sdk
+from review_pipeline.models import ConvertItem, ConvertOutput, FinderOutput
 
 ANSWERS_DIR = "paths-answers"
 # The real text call, saved before any test replaces it, for the tests of that call.
@@ -84,9 +94,70 @@ async def stub_map_paths(
     return stub_result(commit=commit, scoped=changed_lines is not None, cap=cap)
 
 
-async def stub_agent_call_text(prompt, **kwargs) -> str:
+REPORT_MARK = "ENCODED-FINDER-OUTPUT:"
+_ENCODED = re.compile(re.escape(REPORT_MARK) + r"([A-Za-z0-9+/=]+)")
+_DIMENSION_REPORT = re.compile(
+    r"looking at one aspect: (\S+)\. Each reviewer of this aspect"
+)
+
+
+def _items(out: FinderOutput) -> ConvertOutput:
+    return ConvertOutput(
+        items=[
+            ConvertItem(
+                kind="defect",
+                severity=f.severity,
+                file=f.file,
+                line_start=f.line_start,
+                line_end=f.line_end,
+                claim=f.claim,
+                failure_scenario=f.failure_scenario,
+                citations=f.citations,
+                defect_class=f.defect_class,
+                other_locations=f.other_locations,
+                pre_existing=f.dimension == "pre-existing",
+            )
+            for f in out.findings
+        ],
+        needs=out.needs,
+    )
+
+
+def decoded(prompt: str) -> ConvertOutput:
+    """The convert answer to a report `stub_agent_call_text` encoded; no items when the prompt holds none."""
+    m = _ENCODED.search(prompt)
+    if m is None:
+        return ConvertOutput()
+    return _items(FinderOutput.model_validate_json(base64.b64decode(m.group(1))))
+
+
+def with_reports(fake):
+    """*fake*, answering the convert call of a report `stub_agent_call_text` encoded, and delegating the rest."""
+    if getattr(fake, "decodes_reports", False):
+        return fake
+
+    async def structured(prompt, schema, **kwargs):
+        if schema is ConvertOutput and _ENCODED.search(prompt):
+            return decoded(prompt)
+        return await fake(prompt, schema, **kwargs)
+
+    structured.decodes_reports = True
+    return structured
+
+
+async def stub_agent_call_text(prompt, *, budget_label="", **kwargs) -> str:
     sdk.require_trusted_repo()
-    return "NO FINDINGS"
+    if not _DIMENSION_REPORT.search(prompt):
+        return "NO FINDINGS"
+    if kwargs.get("cwd") is not None:
+        kwargs["cwd"] = str(kwargs["cwd"])  # as the JSON finder call was given it
+    out = await sdk.agent_call_structured(
+        prompt, FinderOutput, budget_label=budget_label, **kwargs
+    )
+    if not isinstance(out, FinderOutput) or not (out.findings or out.needs):
+        return "NO FINDINGS"
+    sdk.agent_call_structured = with_reports(sdk.agent_call_structured)
+    return REPORT_MARK + base64.b64encode(out.model_dump_json().encode()).decode()
 
 
 def install(patch=None) -> None:

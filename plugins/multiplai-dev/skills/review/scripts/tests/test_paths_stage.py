@@ -942,6 +942,9 @@ def test_clear_stale_outputs_removes_only_the_last_runs_reports_and_paths_files(
         "report-piece-1.md",
         "report-piece-12.md",
         "report-path-p3.md",
+        "report-diff-bugs-1.md",
+        "report-callers-12.md",
+        "report-trim-4.md",
         "paths.json",
         "paths-cache/paths-answers/k.json",
     ]
@@ -950,6 +953,7 @@ def test_clear_stale_outputs_removes_only_the_last_runs_reports_and_paths_files(
         "review-state.json",
         "notes-report-piece-1.md",
         "report-piece-1.txt",
+        "report-something-else-1.md",
         "rounds/01-abc/paths.json",
         "rounds/01-abc/report-path-p1.md",
     ]

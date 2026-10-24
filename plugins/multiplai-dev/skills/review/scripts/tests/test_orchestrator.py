@@ -10,7 +10,7 @@ import pytest
 from conftest import DEF_CITATION, KEYWORD_CITATION, SCHEMA, high_finding
 from review_pipeline import budget, orchestrator, sdk
 from review_pipeline.__main__ import main
-from review_pipeline.config import DIMENSIONS
+from review_pipeline.config import DIMENSIONS, TRIM_DIMENSION
 from review_pipeline.models import (
     AssessOutput,
     DuplicateSet,
@@ -134,6 +134,19 @@ class FakeAgents:
                 status="cannot_verify", reason="the fake reads no code"
             )
         raise AssertionError(budget_label)
+
+
+EVERY_DIMENSION = (
+    "dimensions: [diff-bugs, callers, history, conventions, tests, trim]\n"
+)
+
+
+@pytest.fixture
+def every_dimension(tmp_path):
+    """These tests count calls by position, as when every dimension ran by default: name all six."""
+    out = tmp_path / "out"
+    out.mkdir(exist_ok=True)
+    (out / "review.yaml").write_text(EVERY_DIMENSION)
 
 
 @pytest.fixture
@@ -423,6 +436,7 @@ def _stop_then_resume(fixture_repo, tmp_path, agents, capsys, stop_at: int, **kw
     return saved, before, fake.calls[first_run:]
 
 
+@pytest.mark.usefixtures("every_dimension")
 def test_a_budget_stop_during_find_keeps_finished_finders_and_resume_runs_the_rest(
     fixture_repo, tmp_path, agents, capsys
 ):
@@ -434,14 +448,19 @@ def test_a_budget_stop_during_find_keeps_finished_finders_and_resume_runs_the_re
     # task group cancels them; the stopped one never has a result.
     # Saved before find completed: at `target`, or at `paths` once that stage runs before find.
     assert not saved.past("find") and saved.findings == []
-    assert "history" not in saved.finder_results
-    assert [f.id for f in saved.finder_results["diff-bugs"].findings] == [
+    assert "history@1" not in saved.finder_reports
+    assert [f.id for f in saved.finder_reports["diff-bugs@1"].findings] == [
         high_finding().id
     ]
-    missing = [f"find:{d}" for d in DIMENSIONS if d not in saved.finder_results]
+    missing = [
+        f"find:{d}"
+        for d in (*DIMENSIONS, TRIM_DIMENSION)
+        if f"{d}@1" not in saved.finder_reports
+    ]
     assert resumed == missing + ["verify", "verify", "merge"]
 
 
+@pytest.mark.usefixtures("every_dimension")
 def test_a_budget_stop_during_verify_keeps_the_verdicts_and_resume_asks_only_the_rest(
     fixture_repo, tmp_path, agents, capsys
 ):
@@ -453,6 +472,7 @@ def test_a_budget_stop_during_verify_keeps_the_verdicts_and_resume_asks_only_the
     assert resumed == ["verify", "merge"]
 
 
+@pytest.mark.usefixtures("every_dimension")
 def test_a_budget_stop_during_merge_keeps_the_answers_and_resume_asks_only_the_rest(
     fixture_repo, tmp_path, agents, capsys
 ):
@@ -465,6 +485,7 @@ def test_a_budget_stop_during_merge_keeps_the_answers_and_resume_asks_only_the_r
     assert resumed == ["merge", "assess"]  # three findings remain, so assess runs once
 
 
+@pytest.mark.usefixtures("every_dimension")
 def test_a_usage_limit_during_verify_saves_the_checkpoint_exits_6_and_resume_asks_only_the_rest(
     fixture_repo, tmp_path, agents, capsys
 ):
@@ -652,6 +673,7 @@ def test_default_out_is_the_data_dir_never_the_workspace_inbox_or_home_or_cwd(
     assert default_out() == tmp_path / "data" / "reviews"
 
 
+@pytest.mark.usefixtures("every_dimension")
 def test_a_resumed_run_adds_an_interval_instead_of_overwriting(
     fixture_repo, tmp_path, agents, capsys
 ):

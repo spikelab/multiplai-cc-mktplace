@@ -8,15 +8,16 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from conftest import SCHEMA
+from conftest import SCHEMA, pieces_of
 from review_pipeline import gates, orchestrator, sdk, target
 from review_pipeline.__main__ import main
-from review_pipeline.config import DIMENSIONS, TRIM_DIMENSION, ReviewConfig
+from review_pipeline.config import DIMENSIONS, ReviewConfig
 from review_pipeline.models import (
     Citation,
     FinderOutput,
     Finding,
     MergeOutput,
+    Piece,
     ReviewState,
     Verdict,
 )
@@ -500,17 +501,21 @@ async def test_overlapping_calls_of_one_dimension_each_close_their_own_interval(
     assert len(intervals) == len(every) == 3 and all(i.ended_at for i in intervals)
 
 
-async def test_a_change_review_still_makes_five_finder_calls(
+async def test_a_change_review_runs_every_dimension_once_per_piece(
     target_info, tmp_path, monkeypatch
 ):
+    monkeypatch.setenv("REVIEW_TRUST_REPO", "1")
     fake = Fake()
     monkeypatch.setattr(sdk, "agent_call_structured", fake)
-    state = ReviewState(target=target_info)
+    state = ReviewState(target=target_info, pieces=pieces_of(target_info))
     await run_find(state, _ctx(tmp_path))
+    ids = [p.id for p in state.pieces if p.files]
+    dims = find_stage.DEFAULT_CHANGE_DIMENSIONS
     assert sorted(label for label, _ in fake.calls) == sorted(
-        f"find:{d}" for d in (*DIMENSIONS, TRIM_DIMENSION)
+        f"find:{d}" for d in dims for _ in ids
     )
-    assert sorted(state.finder_results) == sorted((*DIMENSIONS, TRIM_DIMENSION))
+    assert sorted(state.finder_reports) == sorted(f"{d}@{i}" for d in dims for i in ids)
+    assert state.finder_results == {}
 
 
 # --- prompts ---------------------------------------------------------------------
@@ -520,7 +525,7 @@ def test_the_tree_prompt_lists_the_group_and_has_no_diff(tmp_path):
     repo = tree_repo(tmp_path)
     info = _tree_state(repo).target
     text = find_prompt.build(
-        info, "conventions", "", "### CLAUDE.md\n\nrule", files=["pkg/cart.py"]
+        info, "conventions", "### CLAUDE.md\n\nrule", files=["pkg/cart.py"]
     )
     assert (
         "```diff" not in text
@@ -539,7 +544,7 @@ def test_the_tree_prompt_and_finding_gate_agree_on_which_file_a_finding_may_name
 ):
     repo = tree_repo(tmp_path)
     info = _tree_state(repo).target
-    text = find_prompt.build(info, "diff-bugs", "", files=["pkg/cart.py"])
+    text = find_prompt.build(info, "diff-bugs", files=["pkg/cart.py"])
     assert "`file` must be one of the files under review listed above" in text
     assert (
         "including a file the review skipped" in text
@@ -568,8 +573,12 @@ def test_the_tree_prompt_and_finding_gate_agree_on_which_file_a_finding_may_name
 
 
 def test_a_change_prompt_is_unchanged_by_the_tree_wording(target_info):
-    text = find_prompt.build(target_info, "tests", "+x = 1\n")
-    assert "```diff" in text and "Open each one with Read" not in text
+    piece = Piece(id=1, group="", files=["settings.py"])
+    text = find_prompt.build_report(
+        target_info, "tests", piece, "+x = 1\n", workspace=""
+    )
+    assert "diff of piece 1" in text and "+x = 1" in text
+    assert "Open each one with Read" not in text
     assert "the same change independently" in merge_prompt.build(target_info, [])
 
 

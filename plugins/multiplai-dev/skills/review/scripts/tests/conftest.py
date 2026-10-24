@@ -17,7 +17,7 @@ from fixture_repo import (
     SETTINGS_DEF_LINE,
 )
 from fixture_repo import build as build_repo
-from review_pipeline import budget, deps, ledger, target
+from review_pipeline import budget, deps, ledger, target, window
 from review_pipeline.models import Citation, Finding, Rejected, ReviewState, Verdict
 
 SCHEMA = TESTS.parents[2] / "review-viewer" / "schema" / "findings.v1.schema.json"
@@ -37,6 +37,18 @@ REAL_LEGACY_REVIEWS_ROOT = ledger.legacy_reviews_root
 @pytest.fixture(autouse=True)
 def no_gh_branch_rules(monkeypatch):
     monkeypatch.setattr(target, "branch_rules", lambda repo, branch, needs=None: None)
+
+
+# The real usage-window read, for `test_window.py`; every other test reads a window that cannot be
+# priced, so no test sends a request and every call is admitted.
+REAL_WINDOW_READ = window.read
+
+
+@pytest.fixture(autouse=True)
+def no_usage_window(monkeypatch):
+    monkeypatch.setattr(window, "read", list)
+    monkeypatch.setattr(window, "_cache", None)
+    monkeypatch.setattr(window, "progress_line", None)
 
 
 @pytest.fixture(autouse=True)
@@ -85,6 +97,17 @@ def target_info(fixture_repo, tmp_path):
     info = target.build_target(resolved, tickets=["DB-2038"])
     return target.write_target_files(
         info, target.diff_text(resolved.repo, base, head), tmp_path / info.slug
+    )
+
+
+def pieces_of(info) -> list:
+    """The pieces `prepare` stores for a change target, for the tests that build a state by hand."""
+    from review_pipeline.chunks import split_pieces
+
+    return split_pieces(
+        Path(info.diff_path).read_text(),
+        head_tree=target.tree_paths(info.repo_path, info.head_sha),
+        base_tree=target.tree_paths(info.repo_path, info.base_sha),
     )
 
 

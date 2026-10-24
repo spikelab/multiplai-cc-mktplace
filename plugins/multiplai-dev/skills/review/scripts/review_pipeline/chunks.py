@@ -7,6 +7,9 @@ diff each unless one file alone is larger, with release metadata in meta
 pieces placed last and lockfile text left out. There is no cap on the number
 of pieces.
 
+`split_piece` halves a piece whose finder hit the turn limit: by files, or a
+one-file piece at the hunk boundary nearest its middle.
+
 `head_changed_lines` gives the paths stage each file's added lines at head.
 """
 
@@ -344,7 +347,7 @@ def _fill(units: Iterable[list[FileChange]], sizes: dict[str, int]) -> list[list
 def split_pieces(
     diff: str, *, head_tree: frozenset[str], base_tree: frozenset[str]
 ) -> list[Piece]:
-    """A change review's diff as pieces for the piece finders, ids 1..K, in a fixed order.
+    """A change review's diff as pieces for the dimension finders, ids 1..K, in a fixed order.
 
     *head_tree* and *base_tree* are every path at head and at base (one
     `git ls-tree -r --name-only` each), where the group markers are looked up:
@@ -416,7 +419,113 @@ def split_pieces(
     return pieces
 
 
+def file_hunks(text: str) -> tuple[str, list[str]]:
+    """One file's part of the diff as its header lines (`diff --git`, `---`, `+++`, ...) and its hunks."""
+    header: list[str] = []
+    hunks: list[list[str]] = []
+    for line in _split_lines(text):
+        if line.startswith("@@"):
+            hunks.append([line])
+        elif hunks:
+            hunks[-1].append(line)
+        else:
+            header.append(line)
+    return "".join(header), ["".join(h) for h in hunks]
+
+
 def piece_diff_text(diff: str, piece: Piece) -> str:
-    """The diff of *piece*'s files, in the piece's order (a lockfile's text is never in it)."""
+    """The diff of *piece*'s files, in the piece's order (a lockfile's text is never in it).
+
+    A half of a one-file piece (`piece.hunks`) holds the file's header lines and only its own hunks.
+    """
     texts = {f.path: f.text for f in diff_files(diff)}
+    if piece.hunks is not None and len(piece.files) == 1:
+        header, hunks = file_hunks(texts.get(piece.files[0], ""))
+        first, end = piece.hunks
+        return header + "".join(hunks[first:end])
     return "".join(texts.get(path, "") for path in piece.files)
+
+
+def _half(
+    piece: Piece, piece_id: int, files: list[str], chars: int, hunks=None
+) -> Piece:
+    return Piece(
+        id=piece_id,
+        group=piece.group,
+        meta=piece.meta,
+        files=files,
+        binary=[p for p in piece.binary if p in files],
+        chars=chars,
+        split_from=piece.id,
+        hunks=hunks,
+    )
+
+
+def _file_cut(files: list[str], sizes: dict[str, int]) -> int:
+    """Where to cut *files* in two: the boundary nearest half their characters that keeps a module with its
+    tests (`tested_module`), or the nearest boundary when every one parts them."""
+    total = sum(sizes[f] for f in files)
+    names = {posixpath.basename(f): f for f in files}
+
+    def parts_pair(i: int) -> bool:
+        left = set(files[:i])
+        return any(
+            (module := names.get(tested_module(f) or ""))
+            and (f in left) != (module in left)
+            for f in files
+        )
+
+    def distance(i: int) -> int:
+        return abs(2 * sum(sizes[f] for f in files[:i]) - total)
+
+    cuts = sorted(range(1, len(files)), key=lambda i: (distance(i), i))
+    kept = [i for i in cuts if not parts_pair(i)]
+    return (kept or cuts)[0]
+
+
+def split_piece(piece: Piece, diff: str, next_id: int) -> tuple[Piece, Piece] | None:
+    """*piece* in two halves with ids *next_id* and *next_id* + 1, or None when it cannot be split.
+
+    Files are halved by characters, in order (`_file_cut`). A one-file piece is
+    halved at the hunk boundary nearest its middle, each half repeating the
+    file's header lines; a one-hunk file is not split. A half is never split
+    again: it is cut from the stored diff, not from the halves.
+    """
+    sizes = {
+        f.path: 0 if f.status == "binary" else len(f.text) for f in diff_files(diff)
+    }
+    if len(piece.files) >= 2:
+        sizes = {f: sizes.get(f, 0) for f in piece.files}
+        i = _file_cut(piece.files, sizes)
+        left, right = piece.files[:i], piece.files[i:]
+        return (
+            _half(piece, next_id, left, sum(sizes[f] for f in left)),
+            _half(piece, next_id + 1, right, sum(sizes[f] for f in right)),
+        )
+    if len(piece.files) != 1:
+        return None
+    header, hunks = file_hunks(piece_diff_text(diff, piece))
+    if len(hunks) < 2:
+        return None
+    total = sum(len(h) for h in hunks)
+    cut = min(
+        range(1, len(hunks)),
+        key=lambda i: (abs(2 * sum(len(h) for h in hunks[:i]) - total), i),
+    )
+    path = piece.files[0]
+    return (
+        _half(
+            piece,
+            next_id,
+            [path],
+            len(header) + sum(len(h) for h in hunks[:cut]),
+            [0, cut],
+        ),
+        _half(
+            piece,
+            next_id + 1,
+            [path],
+            len(header) + sum(len(h) for h in hunks[cut:]),
+            [cut, len(hunks)],
+        ),
+    )

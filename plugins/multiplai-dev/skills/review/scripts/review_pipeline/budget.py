@@ -25,7 +25,9 @@ from multiplai_core.budget import (  # noqa: F401 — re-exported for the pipeli
 
 # Per target. Past reviews spent $1-11 for up to 18 changed files, and $60 for
 # 52; the finders cost about $0.40-0.50 per changed file on the larger ones.
-DEFAULT_MAX_USD = 50.0
+# Every dimension runs once per piece since multiplai-dev 0.106, about six times
+# the finder calls of a large change, so the default is three times the old $50.
+DEFAULT_MAX_USD = 150.0
 
 
 @dataclass

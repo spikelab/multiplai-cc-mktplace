@@ -334,24 +334,31 @@ ecosystems' lock files are not read; for those the agents have `WebFetch`.
 
 ## The kinds of finder
 
-The find stage runs three kinds of finder on a change review. A `--tree` or
-`--dir` review runs the dimension finders, and the path finders only with
+The find stage runs two kinds of finder on a change review. A `--tree` or
+`--dir` review runs each dimension once per group of files instead (see
+"Reviewing code that is not a change"), and the path finders only with
 `--paths`.
 
 - **Dimension finders** (`diff-bugs`, `callers`, `history`, `conventions`,
-  `tests`, `trim`): each reads the whole change for one aspect and answers
-  with findings directly. They work as they always have.
-- **Piece finders**, keyed `piece@<id>`: one per piece of the diff, with no
-  cap on how many. The diff is split at file boundaries into pieces of
-  related files: the files of one package or skill directory (the nearest
-  directory holding a `pyproject.toml`, `package.json`, `Cargo.toml`,
-  `go.mod` or `SKILL.md`), a module beside its tests, at most 50,000
-  characters of diff each unless one file alone is larger. Release metadata
-  (changelogs, manifests, `.github/`) goes in pieces of its own, last;
-  lockfiles are left out. `--plan-only` lists the pieces. A piece finder is
-  given its piece's whole diff and owns the defects in or caused by those
-  changes, but may read any file of the snapshot; it reports every severity,
-  LOW included, and advice.
+  and, only when `review.yaml` asks, `tests` and `trim`), keyed
+  `<dimension>@<piece id>`: every dimension that runs, runs on every piece of
+  the diff, with no cap on how many pieces. The diff is split
+  at file boundaries into pieces of related files: the files of one package
+  or skill directory (the nearest directory holding a `pyproject.toml`,
+  `package.json`, `Cargo.toml`, `go.mod` or `SKILL.md`), a module beside its
+  tests, at most 50,000 characters of diff each unless one file alone is
+  larger. Release metadata (changelogs, manifests, `.github/`) goes in pieces
+  of its own, last; lockfiles are left out. `--plan-only` lists the pieces.
+  Each finder is given its piece's whole diff, never cut, and owns the
+  defects in or caused by those changes for its one aspect, but may read any
+  file of the snapshot; it reports every severity, LOW included, and advice.
+  `diff-bugs` reviews its piece broadly, as the piece finders of
+  multiplai-dev 0.82 to 0.105 did; the others keep their own task. A finder
+  can mark a defect that the change did not cause (`Pre-existing: yes`) and
+  say what it could not check (`Could not check:`), which becomes a need.
+  `review.yaml`'s `dimensions` key chooses which dimensions run (see
+  "Configuration"). A piece's dimensions are started together, largest
+  piece first.
 - **Path finders**, keyed `path@<id>`: one per path in `paths.json` (see "The
   paths stage"), in its order, at most 21. Each is given its path (the entry
   point and who invokes it, every hop with its file and line, the changed
@@ -363,24 +370,42 @@ The find stage runs three kinds of finder on a change review. A `--tree` or
   and the finder reads on from there. No path finder runs when the mapping
   failed or found no path; the other finders run as usual.
 
-A piece or path finder writes a plain-text report, which is saved in the
-run's state and as `report-piece-<id>.md` or `report-path-<id>.md` beside
-`findings.json` as soon as it returns.
+A dimension or path finder writes a plain-text report, which is saved in the
+run's state and as `report-<dimension>-<id>.md` or `report-path-<id>.md`
+beside `findings.json` as soon as it returns.
 A second call then turns the report into findings: it opens the files the
 report names to copy exact quotes, keeps one finding per item, and judges
 none (an item without a stated severity, advice included, is LOW). Those
 findings go through the same gates, verification and merge as every other
 finding. Whether each item was a defect or advice is recorded only in
-`checks.json`, on the `<key> convert` entry. Both calls have only
-`Read`, `Grep` and `Glob`, and both count towards `--max-cost-usd`. A report
-of `NO FINDINGS` needs no second call.
+`checks.json`, on the `<key> convert` entry. A dimension finder's report call
+has `Read`, `Grep`, `Glob`, `WebFetch` and `WebSearch`; a path finder's
+report call and every convert call have only `Read`, `Grep` and `Glob`. All
+of them count towards `--max-cost-usd`. A report of `NO FINDINGS` needs no
+second call.
+
+A dimension finder that stops at the turn limit (`max_turns`, 60 by default)
+on a piece is asked again on two halves of that piece, one after the other,
+in the same run. A piece of several files is cut between its files, near the
+middle of its characters and, where another cut exists, not between a
+module and its tests; a
+one-file piece is cut at the hunk boundary nearest its middle, each half
+holding the file's header. The halves get the next free piece ids, and only
+that dimension is asked on them; another dimension that stops on the same
+piece uses the same halves. A half is never cut again, and a file with one
+hunk is not cut.
 
 A failed report or convert call is listed in the review's errors and its
-coverage, and the other finders go on. After a stop, `resume` asks only for
-what is missing: a stored report is never asked again, only its convert
-call, and the path finders are built from the stored `paths.json`. Every
-review round runs the piece and path finders again, under the same keys; a
-kept round keeps its reports.
+coverage, and the other finders go on. A file that a dimension did not
+review, because every call of that dimension covering it failed, is listed
+under `## Not reviewed` near the top of `review-<slug>.md` and
+`summary-<slug>.md`, by dimension, with why (`turn limit`, `timeout`, a
+failed convert, and so on); a failed path finder is listed by path id. The
+`DONE` line of `progress.log` then ends `; <n> files not reviewed`. After a
+stop, `resume` asks only for what is missing: a stored report is never asked
+again, only its convert call, a piece cut in two is not cut again, and the
+path finders are built from the stored `paths.json`. Every review round runs
+the finders again, under the same keys; a kept round keeps its reports.
 
 `--extra-finders` (with or without a number) and `extra_finders` in
 `review.yaml` are still accepted and do nothing: the review prints
@@ -426,13 +451,13 @@ over the existing tests and comments, as a separate cleanup (see "Trim").
 
 `--plan-only` resolves the target, prints one line per group and a total line
 (`groups: <n>  finder calls: <n>  files skipped: <n>`; the dimension finders'
-calls). A change
-review also prints one line per piece of its diff
-(`piece <n>: <k> files, <C> characters [<group>] <file>, ...`, `[.]` for files
-outside any package or skill directory, `[meta]` for release metadata, with the
-lockfiles whose text is left out after `omitted:`) and
-`piece and path finder calls: <P> pieces + up to 21 paths (each one report call and one convert call)`. It writes
-`<out>/<repo>/<object>/plan.txt`, and stops before any model call.
+calls). A change review prints `files: <n>  files skipped: <n>`, one line per
+piece of its diff (`piece <n>: <k> files, <C> characters [<group>] <file>,
+...`, `[.]` for files outside any package or skill directory, `[meta]` for
+release metadata, with the lockfiles whose text is left out after
+`omitted:`) and `finder calls: <P> pieces x <D> dimensions (<names>) + up to
+21 paths (each one report call and one convert call); <N> calls at most`. It
+writes `<out>/<repo>/<object>/plan.txt`, and stops before any model call.
 
 ## What this skill does on the machine
 
@@ -454,12 +479,19 @@ lockfiles whose text is left out after `omitted:`) and
   that commit into the snapshot's `.review-deps/`. Their text reaches the model
   the same way the repository's does, so `--trust-repo` covers them too.
   `--no-deps` turns this off.
+- **Reads the Claude login token** (`claudeAiOauth.accessToken` in
+  `$CLAUDE_CONFIG_DIR/.credentials.json`, or `~/.claude/.credentials.json`)
+  to ask `https://api.anthropic.com/api/oauth/usage` how much of the usage
+  window is left (see "Usage window"). The token goes only into that request;
+  it is never logged, printed or saved. Without the file the review runs with
+  a `NOTICE:`.
 - **Reads git history** of the reviewed repository (`git rev-parse`,
   `git diff`, `git log`, `git show`, `git archive`). It never
   checks out, merges, commits or writes to it, and fetches only with
   `--fetch`.
-- **Uses the network** through the model calls, the agents' `WebFetch` and
-  `WebSearch`, the dependency clones above, and the GitHub CLI: for `--pr`, `gh pr view` (shas, title,
+- **Uses the network** through the model calls, the usage-window request
+  above, the agents' `WebFetch` and `WebSearch`, the dependency clones above,
+  and the GitHub CLI: for `--pr`, `gh pr view` (shas, title,
   body) and `gh api repos/{owner}/{repo}/rules/branches/<base>` (the rules on
   the base branch, so the agents know whether CI blocks a merge); and
   for `post`, `gh api` to read the PR's review comments and reviews and to
@@ -517,9 +549,9 @@ that run, over `review.yaml` and `multiplai.conf`.
 **For `--tree` and `--dir`, plan first.** Run the same command with
 `--plan-only` in the foreground and paste its total line to the user. When
 `finder calls` is over 20, ask the user to confirm the run and to choose
-`--max-cost-usd` before starting it. Say that the 50 USD default stops a large
+`--max-cost-usd` before starting it. Say that the 150 USD default stops a large
 run part way, and that `resume` continues it with a higher ceiling. Every
-change review prints the piece and path finders' estimate when it starts
+change review prints the dimension and path finders' estimate when it starts
 (see Cost); pass any `WARNING:` or `NOTICE:` line on to the user. A batch is a YAML list of
 `{repo, branch|pr|range, tickets, deployed_in, mode}` (`batch --mode` sets
 the default for entries without one):
@@ -602,7 +634,7 @@ background task's own completion notice also ends the wait.
 Exit codes: `0` done; `1` a batch target or every finder failed (the message
 says which); `2` bad input, a target that does not resolve, or a target another
 process is reviewing now (no output is written); `3` repository not trusted; `4` the budget circuit breaker stopped
-the run at `--max-cost-usd` (default 50 per target), or the ledger shows an
+the run at `--max-cost-usd` (default 150 per target), or the ledger shows an
 interrupted run of the same target and head (the message names the
 `resume` command). On a budget `4`, report the spend
 and the partial state; resume only if the user raises the ceiling:
@@ -612,10 +644,12 @@ and the partial state; resume only if the user raises the ceiling:
 each; the message lists them, and the other verdicts are kept. Tell the user,
 then run `python -m review_pipeline resume <out>/<repo>/<object> --trust-repo`, which
 asks again only for those findings.
-`6` the Claude usage limit (session, weekly, ...) was hit. The first call that
-reports it stops the run: no stage tries that call again or starts another,
-and the checkpoint keeps every answer that came back. The message gives the
-reset time when the CLI gave one, and the `resume` command of each target it
+`6` the Claude usage limit (session, weekly, ...) was hit, or the usage window
+cannot pay for the next call while no call is running (see "Usage window").
+The first call that reports it stops the run: no stage tries that call again
+or starts another, and the checkpoint keeps every answer that came back. The
+message gives the reset time when the CLI or the window gave one, and the
+`resume` command of each target it
 stopped, with the run's `--max-cost-usd` and `--no-deps`. Tell the user both,
 and **do not resume or start another review before the reset**: every call
 until then fails the same way. After the reset, run that `resume`: only
@@ -778,26 +812,47 @@ A change to the format changes `v`.
 
 ## Cost
 
-On the reference change (PR #295, a 227 KB diff) the new finders cost about
-$14 for the piece finders and about $24 for the path finders (21 paths),
-about $38 together. That is before the dimension finders and verification
-(and the paths mapping), so a whole review of a change that size costs more.
-The piece figure scales with the characters of diff the pieces hold
-(lockfiles and binary files count for nothing), the path figure with the
-number of paths.
+On the reference change (PR #295, a 227 KB diff) one finder on every piece
+costs about $14 for each dimension finder and about $24 for the path finders
+(21 paths). With the four default dimensions that is about $56 for the pieces
+and $80 together; with all six, $84 and $108. That is before verification (and the paths mapping), so a whole
+review of a change that size costs more. The piece figure scales with the
+characters of diff the pieces hold (lockfiles and binary files count for
+nothing) and with the number of dimensions, the path figure with the number
+of paths. Each piece and each path is one report call and one convert call,
+so `2 x (pieces x dimensions + paths)` calls at most.
 
 `--plan-only`, the start of a review, and `resume` print the estimate on
-stderr as `cost (approximate): pieces $14 + paths $24 (up to 21 paths) =
-$38; ...` (a tree review with `--paths`: paths only; without it, nothing).
-When the estimate, with a third added for what it leaves out, reaches the
-budget left, a `WARNING:` line says the run will stop partway. A change
-review on the 50 USD default also prints a `NOTICE:`: the 50 USD default can
-stop a large change review partway, the reference change among them. A
-stopped review keeps every finder report it paid for; continue it with
-`python -m review_pipeline resume <out>/<repo>/<object> --trust-repo
+stderr as `cost (approximate): pieces $56 (4 dimensions each) + paths $24 (up
+to 21 paths) = $80; excludes verification and paths mapping` (a tree review
+with `--paths`: paths only; without it, nothing). When the estimate, with a
+third added for what it leaves out, reaches the budget left, a `WARNING:`
+line says the run will stop partway. A change review on the 150 USD default
+also prints a `NOTICE:`: the 150 USD default can stop a large change review
+partway. A stopped review keeps every finder report it paid for; continue it
+with `python -m review_pipeline resume <out>/<repo>/<object> --trust-repo
 --max-cost-usd <higher>`, which asks only for what is missing. The review
 warns about cost but never refuses to start: the `--max-cost-usd` ledger is
 the only stop, and `--plan-only` exits the same either way.
+
+## Usage window
+
+Sixteen calls run at once by default (`concurrency`). Before each model call
+starts, the review reads the Claude usage windows (`five_hour` and
+`seven_day`: utilization from 0 to 100, reset time, and `remaining_dollars`
+when the account has one) from `GET https://api.anthropic.com/api/oauth/usage`,
+an internal endpoint that may change, at most once every 30 seconds. It
+starts the call only when the estimated cost of the calls already running
+plus this one stays under 90% of what the tightest window has left;
+otherwise the call waits until a running one ends. What a window has left is
+`remaining_dollars`, or, once utilization has risen 2 points during the run,
+this run's spend per point times the points left (preferred when both
+exist); `progress.log` has a `WINDOW` line with both. With no call running
+and the next one still too large, the review stops with exit `6`, keeps every
+answer, and prints the window, the reset time and the `resume` command. When
+the endpoint cannot be read (no token, an error, a 5 s timeout), the review
+prints one `NOTICE: usage window not readable (...)` and limits calls by
+`concurrency` alone.
 
 ## What a review cost: `run` and `runs.jsonl`
 
@@ -839,9 +894,9 @@ jq -s '[.[].run.stages[]] | group_by(.stage) | map({stage: .[0].stage, cost_usd:
 
 `review.yaml` in the output directory (for the default one, the old
 default's `INBOX/reviews/review.yaml` until a `review.yaml` exists in the new
-place, with a warning) sets `concurrency`, `finder_model`,
+place, with a warning) sets `concurrency` (default `16`), `finder_model`,
 `verifier_model`, `merger_model` (default: the verifier's), `effort`,
-`max_turns`, `explain`, `find_with_facts` and `trim`. `multiplai.conf` keys
+`max_turns`, `explain`, `find_with_facts`, `trim` and `dimensions`. `multiplai.conf` keys
 `review_finder_model`, `review_verifier_model`, `review_effort` and
 `review_explain` apply when the file does not set them. `--model` on the
 command line beats both for the three models. By default every stage runs on
@@ -863,8 +918,19 @@ the session's model.
   those facts, with their ids, in every finder's prompt. Whether that makes
   the finders find more real problems has not been measured, so it stays
   off until real runs on real PRs are compared.
-- `trim` (default `true`): run the trim finder on a change review (see
+- `trim` (default `false`): run the trim finder on a change review (see
   "Trim"). A tree review runs it only with `--trim`.
+- `dimensions` (default on a change review: `diff-bugs`, `callers`, `history`,
+  `conventions`; a tree review runs every one it can): the dimension finders
+  that run, a list of `diff-bugs`, `callers`, `history`, `conventions`,
+  `tests` and `trim`, for example `dimensions: [diff-bugs, callers]`. `tests`
+  and `trim` are off by default: on PR #295 neither found a real bug the
+  others missed in five runs, though that test cannot measure test gaps or
+  removable code. A list without `trim` turns the trim finder off, a list
+  naming it turns it on, and `trim: false` turns it off whatever the list says. An
+  unknown name exits `2` with the valid names. A change review keeps the list
+  it started with: `resume` runs the same finders and prints a `NOTICE:` when
+  `review.yaml` now says otherwise.
 - `extra_finders`: accepted and ignored (see "The kinds of finder").
 - `deps` (default `true`): clone the git dependencies `uv.lock` pins into the
   snapshot (see "Dependency source"); `false` is what `--no-deps` does.

@@ -8,7 +8,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from conftest import SCHEMA, high_finding, medium_finding
+from conftest import SCHEMA, high_finding, medium_finding, pieces_of
 from review_pipeline import budget, post, sdk
 from review_pipeline import target as target_mod
 from review_pipeline.__main__ import main
@@ -275,6 +275,10 @@ def test_a_change_review_lists_trim_findings_in_their_own_advisory_section(
 
     repo, base, head = trim_repo
     out = tmp_path / "out"
+    out.mkdir()
+    (out / "review.yaml").write_text(
+        "trim: true\n"
+    )  # off by default on a change review
     # The verifier labels the comment finding `code`: its section still comes from the finder, so it is
     # neither listed under Code nor posted at LOW, as a Code finding would be.
     fake = agents(
@@ -324,6 +328,8 @@ def test_review_yaml_trim_false_runs_no_trim_finder(trim_repo, tmp_path, agents)
 
 
 def test_load_config_reads_trim(tmp_path):
+    assert load_config(tmp_path).trim is False
+    (tmp_path / "review.yaml").write_text("trim: yes\n")
     assert load_config(tmp_path).trim is True
     (tmp_path / "review.yaml").write_text("trim: no\n")
     assert load_config(tmp_path).trim is False
@@ -615,9 +621,17 @@ def test_a_comment_finding_is_never_labelled_important_whatever_its_topic(trim_r
 async def test_every_defect_finder_failing_fails_the_find_stage_even_when_trim_returns(
     target_info, tmp_path, monkeypatch
 ):
+    monkeypatch.setenv("REVIEW_TRUST_REPO", "1")
     snapshot = tmp_path / "tree"
     snapshot.mkdir()
     diff = Path(target_info.diff_path).read_text()
+
+    def fresh() -> ReviewState:
+        return ReviewState(
+            target=target_info,
+            pieces=pieces_of(target_info),
+            dimensions=["diff-bugs", "callers", TRIM_DIMENSION],
+        )
 
     def ctx() -> RunContext:
         return RunContext(
@@ -641,23 +655,21 @@ async def test_every_defect_finder_failing_fails_the_find_stage_even_when_trim_r
         )
 
     monkeypatch.setattr(sdk, "agent_call_structured", finder)
-    state = ReviewState(target=target_info)
+    state = fresh()
     with pytest.raises(sdk.AgentCallError, match="every finder failed"):
         await run_find(state, ctx())
-    assert (
-        state.finder_results == {} and state.findings == []
-    )  # a later run asks every finder again
+    assert state.findings == [] and not any(
+        k.startswith(("diff-bugs@", "callers@")) for k in state.finder_reports
+    )  # a later run asks every failed finder again
     # Resumed once the finders answer, it ends as a run that never failed did.
     failing.clear()
     calls.clear()
     state = await run_find(state, ctx())
     resumed, calls[:] = list(calls), []
-    whole = await run_find(ReviewState(target=target_info), ctx())
-    assert (
-        sorted(resumed)
-        == sorted(calls)
-        == ["find:callers", "find:diff-bugs", f"find:{TRIM_DIMENSION}"]
-    )
+    whole = await run_find(fresh(), ctx())
+    # The trim report stored before the stop is not asked again.
+    assert sorted(resumed) == ["find:callers", "find:diff-bugs"]
+    assert sorted(calls) == ["find:callers", "find:diff-bugs", f"find:{TRIM_DIMENSION}"]
     assert (
         [f.id for f in state.findings]
         == [f.id for f in whole.findings]
@@ -669,6 +681,7 @@ async def test_a_trim_finding_word_for_word_another_finders_is_folded_into_it(
     target_info, tmp_path, monkeypatch
 ):
     """Both copies would share one id (file, line and claim), and verdicts are keyed by id."""
+    monkeypatch.setenv("REVIEW_TRUST_REPO", "1")
     snapshot = tmp_path / "tree"
     snapshot.mkdir()
 
@@ -681,7 +694,11 @@ async def test_a_trim_finding_word_for_word_another_finders_is_folded_into_it(
 
     monkeypatch.setattr(sdk, "agent_call_structured", finder)
     state = await run_find(
-        ReviewState(target=target_info),
+        ReviewState(
+            target=target_info,
+            pieces=pieces_of(target_info),
+            dimensions=["diff-bugs", "callers", TRIM_DIMENSION],
+        ),
         RunContext(
             config=ReviewConfig(dimensions=("diff-bugs", "callers")),
             snapshot=snapshot,
@@ -753,14 +770,12 @@ def test_the_trim_finder_has_change_and_tree_wording():
 # --- finders: which reviews run trim -------------------------------------------------------------------
 
 
-def test_finder_dimensions_runs_trim_on_a_change_by_default_and_on_a_tree_only_when_asked(
+def test_finder_dimensions_runs_trim_on_a_change_only_with_trim_true_and_on_a_tree_only_when_asked(
     target_info,
 ):
     tree = target_info.model_copy(update={"kind": "tree"})
-    assert finder_dimensions(target_info, ReviewConfig())[-1] == TRIM_DIMENSION
-    assert TRIM_DIMENSION not in finder_dimensions(
-        target_info, ReviewConfig(trim=False)
-    )
+    assert finder_dimensions(target_info, ReviewConfig(trim=True))[-1] == TRIM_DIMENSION
+    assert TRIM_DIMENSION not in finder_dimensions(target_info, ReviewConfig())
     assert TRIM_DIMENSION not in finder_dimensions(tree, ReviewConfig())
     assert finder_dimensions(tree, ReviewConfig(), tree_trim=True)[-1] == TRIM_DIMENSION
 

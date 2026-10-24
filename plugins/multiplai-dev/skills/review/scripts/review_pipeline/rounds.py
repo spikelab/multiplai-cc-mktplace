@@ -41,6 +41,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from .config import DIMENSIONS, TRIM_DIMENSION
 from .paths_io import PATHS_FILE
 
 log = logging.getLogger(__name__)
@@ -75,7 +76,10 @@ NOT_KEPT = frozenset(
 )
 # Written by one run and read by the next only through a kept round: `clear_stale_outputs`
 # deletes them, and `PATHS_FILE`, when a fresh run starts.
-STALE_REPORTS = ("report-piece-*.md", "report-path-*.md")
+STALE_REPORTS = tuple(
+    f"report-{kind}-*.md"
+    for kind in (*DIMENSIONS, TRIM_DIMENSION, "path", "piece")  # piece: before 0.106
+)
 ROLLUP_FILES = frozenset(
     {"HIGH-only.md", "MEDIUM-only.md", "LOW-only.md", "runs.jsonl"}
 )

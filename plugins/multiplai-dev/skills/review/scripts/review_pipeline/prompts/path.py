@@ -4,14 +4,14 @@ The path comes from `paths.json` through `paths_io.views`, and all of it
 (names, invokers, hops, test ids) sits inside one untrusted fence: an earlier
 model mapped it from the repository's own text. The finder reports defects on
 the path or in how the path uses changed code, in the same plain-text report
-format as a piece finder (`prompts/piece.REPORT_FORMAT`), converted the same
+format as a dimension finder on a piece (`prompts/find.REPORT_FORMAT`), converted the same
 way.
 """
 
 from __future__ import annotations
 
 from ..paths_io import PathView
-from .piece import CLASS_AND_PLACES, REPORT_FORMAT, REVIEW_BRIEF
+from .find import CLASS_AND_PLACES, REPORT_FORMAT, REVIEW_BRIEF
 from .untrusted import fenced
 
 NO_E2E = "No e2e test is listed for this path."

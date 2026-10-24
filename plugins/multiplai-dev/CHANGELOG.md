@@ -15,6 +15,50 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.107.0] - 2026-10-24
+
+### Changed
+- A change review now runs its dimension finders (`diff-bugs`, `callers`,
+  `history` and `conventions` by default) on every piece of the diff, each
+  given its piece's whole diff. Before, each dimension read the whole diff in
+  one call, cut at 120,000 characters, so on a large change it never saw the
+  rest. `diff-bugs` takes over the broad review the piece finders did, and
+  there is no separate piece finder any more. Each finder writes a report
+  (`report-<dimension>-<id>.md`) that a second call turns into findings, as
+  the piece finders' did. `--plan-only` prints the calls as
+  `<P> pieces x <D> dimensions + up to 21 paths`.
+- The `tests` and `trim` finders are off by default on a change review. Name
+  them in `dimensions`, or set `trim: true`, to run them. On PR #295 they
+  found no real bug the others missed and made the review about $25 dearer.
+- A review costs more: about $14 per dimension on a 227 KB diff, so about
+  $80 with the path finders before verification. The default
+  `--max-cost-usd` is now 150 USD (was 50), and the cost line says how many
+  dimensions each piece runs.
+- Sixteen calls run at once by default (was four).
+
+### Added
+- `dimensions` in `review.yaml` chooses which dimension finders run, for
+  example `dimensions: [diff-bugs, callers]`. An unknown name stops the
+  review with the valid names. `resume` keeps the list the run started with.
+- A finder that stops at the turn limit on a piece is asked again on two
+  halves of that piece, in the same run, instead of losing the piece.
+- `## Not reviewed`, near the top of the review and the summary, lists the
+  files a dimension did not review because its calls failed, and why. The
+  `DONE` line in `progress.log` ends `; <n> files not reviewed`.
+- Before each model call the review checks how much of the Claude usage
+  window is left (an internal endpoint, read with the login token in
+  `.credentials.json`; the token goes into that request only). It holds a
+  call back while the calls already running would use up the window, and
+  stops with exit `6`, the reset time and the `resume` command when even one
+  call does not fit. When the window cannot be read, it prints one `NOTICE:`
+  and runs as before.
+- A finder can mark a defect the change did not cause (`Pre-existing: yes`)
+  and say what it could not check, which the review lists as a need.
+
+### Fixed
+- A fresh round now removes the last round's `report-<dimension>-*.md` files
+  after keeping them, as it already did for the piece and path reports.
+
 ## [0.106.0] - 2026-10-24
 
 ### Added
