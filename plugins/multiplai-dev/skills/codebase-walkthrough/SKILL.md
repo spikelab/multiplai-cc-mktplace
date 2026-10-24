@@ -56,10 +56,12 @@ Run a walkthrough as a pipeline: code finds and checks, agents read and write.
    `path:line` links and inserts the code snippets from the commit.
 8. **page** (human mode, module or codebase) — one call with no tools gets
    every checked section and claim at once and writes the HTML page's open
-   sections as HTML fragments, with optional CSS. `page_gate` checks them in
+   sections as HTML fragments, with optional CSS. It lays them out with the
+   page's own components: numbered stage cards with an icon for each kind of
+   stage, a callout for a check, cards and trap cards. `page_gate` checks them in
    code: only allowed tags and attributes, no link out of the page, CSS that
    loads nothing and types no colour, only checked citation ids and none in a
-   heading. Code counts the visible words outside fold-outs against 1,200. A
+   heading. Code counts the visible words outside fold-outs against 3,600. A
    failure gets one re-ask. A page that still fails, or a failed call, is
    listed under "Warnings and errors" in Coverage, and code draws every
    section of the page itself. The Markdown is never written from this call.
@@ -391,6 +393,21 @@ part-way through (exit 2) is continued with a plain `resume`. `--max-usd` is
 the ceiling for the run's whole spend, the earlier stages included: a run that
 spent $20 and is resumed with `--max-usd 25` stops after $5 more. Run it in
 the background and report as in steps 1 and 2.
+
+To write only the HTML page again, pass `--repage` in place of `--rewrite`:
+
+```bash
+uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/codebase-walkthrough/scripts \
+  python -m walkthrough_pipeline --session-id "{session_id}" \
+  resume <run dir> --repage --trust-repo [--max-usd <n>]
+```
+
+It runs the page and render stages again on a run past its write stage and
+keeps every other answer, so it pays for one page call, and one more when the
+page fails its checks. The Markdown does not change. It exits 1 with
+`resume --repage: <run dir> has not finished its write stage` for a run that
+has not got that far, and writes nothing. `--rewrite` and `--repage` cannot be
+given together.
 
 ## Configuration
 

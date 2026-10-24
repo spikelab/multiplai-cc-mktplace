@@ -32,7 +32,8 @@ from .write import APPENDIX_KEYS, citations_for_write, human_sections
 
 log = logging.getLogger(__name__)
 
-OPEN_WORDS_MAX = 1200
+# v3 of the review walkthrough, the page this stage aims at, has 3,562 open words by `page_words`.
+OPEN_WORDS_MAX = 3600
 KEY = "page"
 TOKEN = re.compile(r"(--[\w-]+)\s*:")
 
@@ -149,6 +150,8 @@ async def run_page(state: WalkState, ctx: RunContext) -> WalkState:
         | {e.name for e in state.symbols},
     }
     material, tokens = page_material(state), _tokens(state)
+    summary = state.sections.get("summary")
+    tagline = (summary.data.get("tagline") if summary else "") or ""
 
     def prompt(**redo) -> str:
         return page_writer(
@@ -158,6 +161,7 @@ async def run_page(state: WalkState, ctx: RunContext) -> WalkState:
             tokens,
             PageOutput,
             words_max=OPEN_WORDS_MAX,
+            tagline=tagline,
             **redo,
         )
 

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import re
+
 from code_facts.prompts import UNTRUSTED_RULES, citation_rules, explore_unit  # noqa: F401  (explore_unit: re-export)
 from code_facts.prompts import schema_json as _schema
 
@@ -467,8 +470,9 @@ Answer with ONE JSON object and nothing after it."""
 PAGE_SECTION_ASKS = {
     "summary": "two short paragraphs on what the code is and what it does, then the placeholder {{flow}} "
     "alone in its own paragraph: code draws the flow picture there",
-    "flow": "one short block per stage of the picture, with the same names and in the same order, each "
-    "opening with one sentence that is enough on its own",
+    "flow": "the stages of the picture as stage cards, named as in the picture and in its order, each "
+    "opening with one sentence that is enough on its own; a code check on the stage before it goes inside "
+    "that stage's card as a checkline, not a card of its own",
     "core": "the part that does the main job: what it looks at, what it is given, what it produces and what "
     "checks it; you may place {{flow:core}} alone in a paragraph where its own picture helps",
     "outputs": "what the code creates, and where",
@@ -476,6 +480,22 @@ PAGE_SECTION_ASKS = {
     "usecases": "when someone would use it, with an example each; do not repeat How it works",
     "gotchas": "what will catch a newcomer out",
 }
+
+
+# The icons and kind classes the page's stylesheet draws (`render.ICON_SPRITE`, `templates/walkthrough.html`).
+PAGE_KINDS = ("input", "code", "agent", "check", "decision", "output")
+PAGE_ICONS = (*PAGE_KINDS, "warn")
+
+
+def _tagline(tagline: str) -> str:
+    """The line the page's header shows under its title, without its citations, for the writer not to repeat."""
+    line = re.sub(r"\s*\[\[[^\]]+\]\]", "", tagline).strip()
+    if not line:
+        return ""
+    return (
+        " The header already shows this line under the title, so do not repeat it: "
+        + json.dumps(line, ensure_ascii=False)
+    )
 
 
 def page_writer(
@@ -486,6 +506,7 @@ def page_writer(
     schema,
     *,
     words_max: int,
+    tagline: str = "",
     failures: list[str] | None = None,
     previous: str | None = None,
 ) -> str:
@@ -518,13 +539,29 @@ Write these sections, in this order, with exactly these keys:
 
 How to write each section:
 - Open it with a sentence that is enough on its own, then get richer as the reader goes on.
-- The open text carries the explanation. It is as long as understanding needs, and no longer.
-- A layout device earns its place only where it helps the reader. A device repeated on every item \
-becomes noise and stops telling the reader anything: this covers a fold-out, a badge, a chip and an icon. \
-Hide something behind a click (<details>) only when it is long and most readers can skip it.
-- Decide this for each piece of content, from what it holds. Do not give every row the same treatment.
-- The two overview paragraphs of "summary" stay open and above the picture.
+- The open text carries the explanation. It is as long as understanding needs, and no longer: give a \
+stage or a part two or three short paragraphs when the material has that much to say, and one sentence \
+when it has not.
+- Hide something behind a click (<details class="fold">) only when it is long and most readers can skip it.
+- Draw content that has a shape with the page's components below: steps in order as stage cards, things \
+that sit side by side as cards, the traps as trap cards. Plain paragraphs suit an argument.
+- The two overview paragraphs of "summary" stay open and above the picture.{_tagline(tagline)}
 - At most {words_max} visible words in all, outside <details>.
+
+The page's components. Its stylesheet draws them in both themes and at phone width, so use these classes \
+rather than writing CSS for the same thing:
+- An icon: <svg class="ic"><use href="#i-KIND"/></svg>, where KIND is one of {", ".join(PAGE_ICONS)}.
+- The kind classes {", ".join("k-" + k for k in PAGE_KINDS)} colour a stage card or a card like the \
+picture's boxes of that kind.
+- Stage cards, for steps in order: <ol class="stages"><li class="k-agent"><div><span class="badge">\
+<svg class="ic"><use href="#i-agent"/></svg><span class="num">2</span></span></div><div class="stage-body">\
+<p class="stage-kind">Model agent</p><h3>…</h3><p>…</p></div></li></ol>
+- A check on a step's result, inside that step's card: <div class="checkline"><svg class="ic"><use \
+href="#i-check"/></svg><p><strong>Code checks the result.</strong> …</p></div>
+- Cards side by side: <div class="cards"><div class="card k-output"><h3>…</h3><p>…</p></div></div>
+- Trap cards: <ul class="traps"><li><svg class="ic"><use href="#i-warn"/></svg><div><strong>…</strong> …\
+</div></li></ul>
+- A lead sentence under a section's title: <p class="lead">…</p>
 
 The page contract (a program checks every point; an answer that breaks one is sent back):
 - Each section's "html" is an HTML fragment. Do not write <h2>: code writes each section's title. Use \

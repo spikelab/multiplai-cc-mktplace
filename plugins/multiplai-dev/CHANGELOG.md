@@ -29,13 +29,20 @@ time, not derived from a tag.
   section and claim at once, so the page no longer repeats itself. A code
   check passes only allowed HTML tags and attributes, CSS that loads nothing
   and types no colour, and citations the pipeline checked; it counts the
-  visible words against 1,200 and asks once more when the page fails. A page
+  visible words against 3,600 and asks once more when the page fails. A page
   that still fails is drawn by code, as before. `render` rebuilds the page
   from the saved answer with no call.
+- The page writer lays out its sections with the page's components: numbered
+  stage cards with an icon for each kind of stage, a callout for the check on
+  a stage's result, cards side by side and trap cards. Their colours come from
+  the design system's tokens.
+- `resume --repage` writes only the HTML page again, for the cost of the page
+  call.
 - The flow picture at the top of the page draws each stage as a box marked as
   an input, code, an agent, a check, a decision or an output, with stacked
-  cards where many agents run at once; How it works has one block per box, in
-  the picture's order.
+  cards where many agents run at once, and each check drawn small between the
+  boxes around it; How it works has one stage card per box, in the picture's
+  order.
 
 ### Changed
 - The walkthrough reads What it is (with the flow picture), How it works, the

@@ -579,6 +579,20 @@ def rewind_for_rewrite(state: WalkState, run_dir: Path) -> WalkState:
     return state
 
 
+def rewind_for_repage(state: WalkState, run_dir: Path) -> WalkState:
+    """`resume --repage`: send a finished run back to the stage before `page`, dropping the page stage's
+    answers and page. Every other answer is kept, so only the page and render stages run again: one page
+    call, and one more when the page fails its checks. Raises WalkError, and changes nothing, when the run
+    has not finished its write stage."""
+    if not state.past("write"):
+        raise WalkError(f"resume --repage: {run_dir} has not finished its write stage")
+    state.stage = STAGES_ORDER[STAGES_ORDER.index("page") - 1]
+    state.page_answers = {}
+    state.page = {}
+    state.errors = [e for e in state.errors if not e.startswith("page:")]
+    return state
+
+
 async def resume(
     run_dir: Path,
     config: WalkConfig,
@@ -586,10 +600,12 @@ async def resume(
     session_id: str = "",
     docs: str | None | object = NO_CHANGE,
     rewrite: bool = False,
+    repage: bool = False,
     design_system_dir: str | None = None,
 ) -> list[Path]:
     """Continue a saved run. *docs* replaces the saved `--docs` URL (None drops the docs). *rewrite* runs the
-    write and render stages again on a run past its trace stage (`rewind_for_rewrite`). *design_system_dir*
+    write and render stages again on a run past its trace stage (`rewind_for_rewrite`); *repage* runs the page
+    and render stages again on a run past its write stage (`rewind_for_repage`). *design_system_dir*
     replaces the saved `--design-system-dir`; the folder in use is checked before anything else."""
     state = load_state(run_dir / STATE_FILE)
     if state is None:
@@ -610,5 +626,7 @@ async def resume(
     if rewrite:
         # Saved at once: a stop before the first write call leaves a run a plain `resume` finishes.
         save_state(rewind_for_rewrite(state, run_dir), run_dir)
+    elif repage:
+        save_state(rewind_for_repage(state, run_dir), run_dir)
     rewind_legacy_trace(state)
     return await run_state(state, run_dir, config, session_id=session_id)

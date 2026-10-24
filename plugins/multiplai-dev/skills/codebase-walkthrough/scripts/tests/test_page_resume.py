@@ -18,6 +18,7 @@ from test_pipeline import run_args
 from walkthrough_pipeline import budget, orchestrator, sdk
 from walkthrough_pipeline.__main__ import main
 from walkthrough_pipeline.render import markdown_headings
+from walkthrough_pipeline.stages.page import OPEN_WORDS_MAX
 from walkthrough_pipeline.state import STATE_FILE, load_state
 
 CORE_TITLE = "How it stores bookings"
@@ -290,6 +291,43 @@ def test_s9_a_page_that_fails_is_drawn_by_code_and_asked_again_only_on_rewrite(
     assert _state(b).page
 
 
+def test_resume_repage_asks_only_the_page_call_again(
+    ws, tmp_path, monkeypatch, fake_fetch
+):
+    b = tmp_path / "b"
+    assert _go(ws, b, monkeypatch, FakeAgents(plant={"page_script:always"})) == 0
+    before = _state(b)
+    assert before.page == {} and any(e.startswith("page: ") for e in before.errors)
+    agents = FakeAgents()
+    assert _resume(b, monkeypatch, agents, "--repage") == 0
+    assert _schemas(agents) == ["PageOutput"]
+    after = _state(b)
+    assert after.page and list(after.page_answers) == ["page"]
+    assert not [e for e in after.errors if e.startswith("page:")]
+    assert after.write_answers == before.write_answers
+    assert [f.id for f in after.facts] == [f.id for f in before.facts]
+    assert 'class="page-body"' in (b / "out" / MD).with_suffix(".html").read_text()
+
+
+def test_resume_repage_refuses_a_run_that_has_not_written(
+    ws, tmp_path, monkeypatch, fake_fetch
+):
+    b = tmp_path / "b"
+    _killed(lambda: _go(ws, b, monkeypatch, KillingAgents("friendly explainer")))
+    before = _raw(b)
+    agents = FakeAgents()
+    assert _resume(b, monkeypatch, agents, "--repage") == 1
+    assert not agents.calls and _raw(b) == before
+
+
+def test_resume_takes_rewrite_or_repage_not_both(ws, tmp_path, monkeypatch, fake_fetch):
+    b = tmp_path / "b"
+    assert _go(ws, b, monkeypatch, FakeAgents()) == 0
+    with pytest.raises(SystemExit) as e:
+        _resume(b, monkeypatch, FakeAgents(), "--rewrite", "--repage")
+    assert e.value.code == 2
+
+
 def test_s10_a_page_over_the_limit_is_written_with_its_count_and_not_asked_again(
     ws, tmp_path, monkeypatch, fake_fetch
 ):
@@ -298,8 +336,8 @@ def test_s10_a_page_over_the_limit_is_written_with_its_count_and_not_asked_again
     assert _go(ws, b, monkeypatch, FakeAgents(plant=plant)) == 0
     state = _state(b)
     words = state.page["words"]
-    assert words > 1200
-    assert f"page: open body {words} words, limit 1200" in state.errors
+    assert words > OPEN_WORDS_MAX
+    assert f"page: open body {words} words, limit {OPEN_WORDS_MAX}" in state.errors
     assert (
         f"Open body of the HTML page: {words:,} words" in (b / "out" / MD).read_text()
     )

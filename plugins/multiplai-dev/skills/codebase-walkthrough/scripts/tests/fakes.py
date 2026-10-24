@@ -516,7 +516,7 @@ class FakeAgents:
                 if self._planted("page_no_flow", prompt):
                     html = html.replace("<p>{{flow}}</p>", "")
                 if self._planted("page_long", prompt):
-                    html += "<p>" + " ".join(["word"] * 1300) + "</p>"
+                    html += "<p>" + " ".join(["word"] * 3700) + "</p>"
             elif key == "flow":
                 html = "".join(
                     f"<h3>{s['title']}</h3><p>{s['summary']}</p>"

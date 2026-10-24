@@ -161,6 +161,18 @@ def test_an_arrow_back_is_a_note_on_the_box_and_reads_and_writes_are_its_tooltip
     assert 'title="Reads: the diff. Writes: candidate findings"' in page
 
 
+def test_a_check_is_drawn_small_with_what_it_does_in_its_tooltip():
+    flow = _flow()
+    flow["nodes"][2]["does"] = "Drops a quote that is not there"
+    page = flow_picture(_gate(flow))
+    cell = page.split('<li class="fp-stage fp-gate">', 1)[1].split("</li>", 1)[0]
+    assert 'data-kind="check"' in cell
+    assert 'title="Drops a quote that is not there"' in cell
+    assert 'class="fp-does"' not in cell
+    # Any other box keeps its line in view.
+    assert '<span class="fp-does">Many finders read the change</span>' in page
+
+
 def test_the_inputs_are_drawn_first_whatever_their_order_in_the_answer():
     flow = _flow()
     flow["nodes"] = flow["nodes"][1:3] + flow["nodes"][3:] + flow["nodes"][:1]

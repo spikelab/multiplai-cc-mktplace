@@ -18,6 +18,7 @@ from walkthrough_pipeline import sdk
 from walkthrough_pipeline.__main__ import main
 from walkthrough_pipeline.gates import css_gate, page_gate, page_words
 from walkthrough_pipeline.models import Citation, PageOutput
+from walkthrough_pipeline.prompts import PAGE_ICONS
 from walkthrough_pipeline.stages.page import OPEN_WORDS_MAX
 from walkthrough_pipeline.state import STATE_FILE, load_state
 
@@ -99,6 +100,24 @@ def test_a_citation_in_a_heading_or_a_summary_fails():
     )
     assert "flow: a citation in a heading or summary: 'Read [[c2]]'" in reasons
     assert "flow: a citation in a heading or summary: 'More [[c1]]'" in reasons
+
+
+def test_the_components_the_prompt_shows_pass_the_gate():
+    stages = (
+        '<ol class="stages"><li class="k-agent"><div><span class="badge"><svg class="ic">'
+        '<use href="#i-agent"/></svg><span class="num">1</span></span></div><div class="stage-body">'
+        '<p class="stage-kind">Model agent</p><h3>Read</h3><p>It reads the diff. [[c2]]</p>'
+        '<div class="checkline"><svg class="ic"><use href="#i-check"/></svg><p><strong>Code checks '
+        "the result.</strong> It drops a quote that is not there.</p></div></div></li></ol>"
+    )
+    cards = (
+        '<p class="lead">It writes one file.</p><div class="cards"><div class="card k-output">'
+        "<h3>The review</h3><p>One file. [[c1]]</p></div></div>"
+        '<ul class="traps"><li><svg class="ic"><use href="#i-warn"/></svg><div><strong>Slow'
+        "</strong> It reads every file.</div></li></ul>"
+        '<details class="fold"><summary>Every file</summary><p>All of them.</p></details>'
+    )
+    assert _check(_page(flow=stages, outputs=cards)) == []
 
 
 @pytest.mark.parametrize(
@@ -236,7 +255,43 @@ def test_the_page_shows_the_writer_html_with_its_placeholders_filled(done_run):
     assert "<details><summary>Every setting</summary>" in _section(html, "config")
     made = _section(html, "made")
     words = load_state(run_dir / STATE_FILE).page["words"]
-    assert f"Open body of the HTML page: {words:,} words (limit 1,200)" in made
+    assert (
+        f"Open body of the HTML page: {words:,} words (limit {OPEN_WORDS_MAX:,})"
+        in made
+    )
+
+
+def test_the_prompt_shows_the_components_and_the_header_line(done_run):
+    _, _, agents = done_run
+    (call,) = _page_calls(agents)
+    prompt = call["prompt"]
+    assert f"KIND is one of {', '.join(PAGE_ICONS)}" in prompt
+    for cls in (
+        'class="stages"',
+        'class="checkline"',
+        'class="cards"',
+        'class="traps"',
+    ):
+        assert cls in prompt
+    # No rule against a badge or an icon on every item: the stage cards carry one each.
+    assert "becomes noise" not in prompt
+    assert 'do not repeat it: "Bookings takes reservations from Acme."' in prompt
+
+
+def test_the_page_carries_one_symbol_per_icon_and_the_component_styles(done_run):
+    md_path, _, _ = done_run
+    html = md_path.with_suffix(".html").read_text()
+    for kind in PAGE_ICONS:
+        assert html.count(f'<symbol id="i-{kind}"') == 1, kind
+    for rule in (
+        "ol.stages",
+        ".badge",
+        ".checkline",
+        ".cards",
+        "ul.traps",
+        "details.fold",
+    ):
+        assert rule in html, rule
 
 
 def test_every_cite_the_writer_page_shows_is_a_checked_citation(done_run):
@@ -324,9 +379,11 @@ def test_a_page_over_the_limit_after_the_reask_is_kept_and_recorded(
     state = load_state(run_dir / STATE_FILE)
     words = state.page["words"]
     assert words > OPEN_WORDS_MAX
-    assert f"page: open body {words} words, limit 1200" in state.errors
+    assert f"page: open body {words} words, limit {OPEN_WORDS_MAX}" in state.errors
     md = md_path.read_text()
-    assert f"Open body of the HTML page: {words:,} words (limit 1,200)" in md
+    assert (
+        f"Open body of the HTML page: {words:,} words (limit {OPEN_WORDS_MAX:,})" in md
+    )
 
 
 def test_render_rebuilds_the_page_with_no_call(done_run, monkeypatch, capsys):

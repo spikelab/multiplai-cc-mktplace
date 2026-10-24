@@ -2,7 +2,8 @@
 
   run     — explain one module end to end, a whole plugin or repository (`--scope codebase`), or a
             change (`--scope pr`: a PR or a commit range)
-  resume  — continue a run from its walkthrough-state.json (`--rewrite`: write it again after trace)
+  resume  — continue a run from its walkthrough-state.json (`--rewrite`: write it again after trace;
+            `--repage`: write only the HTML page again)
   check   — re-check every `path:line` and snippet in a finished walkthrough
   render  — rewrite a finished run's walkthrough files from its state; no model call
 
@@ -280,11 +281,18 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Go on without vendor docs (after a docs-gate stop)",
     )
-    rs.add_argument(
+    rs_again = rs.add_mutually_exclusive_group()
+    rs_again.add_argument(
         "--rewrite",
         action="store_true",
         help="Write the walkthrough again from a run past its trace stage: keeps the explore, docs and "
         "trace answers and runs only the write and render stages (their model calls are paid)",
+    )
+    rs_again.add_argument(
+        "--repage",
+        action="store_true",
+        help="Write the HTML page again from a run past its write stage: keeps every other answer and runs "
+        "only the page and render stages (one or two paid model calls)",
     )
     _design_flag(
         rs,
@@ -505,6 +513,7 @@ def _main(args: argparse.Namespace) -> int:
                     session_id=args.session_id,
                     docs=docs,
                     rewrite=args.rewrite,
+                    repage=args.repage,
                     design_system_dir=_abs(args.design_system_dir),
                 )
             )

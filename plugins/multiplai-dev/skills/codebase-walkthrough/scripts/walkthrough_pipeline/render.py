@@ -1569,6 +1569,21 @@ FLOW_ICONS = {
 }
 
 
+# The page's icon set: one <symbol> per kind, plus the trap icon, for `<use href="#i-KIND"/>` in the page
+# writer's HTML (`prompts.PAGE_ICONS`).
+ICON_SPRITE = (
+    '<svg class="sprite" aria-hidden="true" focusable="false">'
+    + "".join(
+        f'<symbol id="i-{k}" viewBox="0 0 16 16"><path d="{d}"/></symbol>'
+        for k, d in {
+            **FLOW_ICONS,
+            "warn": "M8 2L1.5 13.5h13zM8 6.5v3M8 11.5v.5",
+        }.items()
+    )
+    + "</svg>"
+)
+
+
 def _icon(kind: str) -> str:
     return (
         '<svg class="fp-icon" viewBox="0 0 16 16" aria-hidden="true">'
@@ -1587,6 +1602,9 @@ def _reads_writes(n: dict) -> str:
 def _picture_box(n: dict, back: list[str], names: dict[str, str]) -> str:
     kind = n.get("kind") or "code"
     title = _reads_writes(n)
+    # A check is drawn small, between the boxes it sits between; what it does goes in its tooltip.
+    if kind == "check" and n.get("does"):
+        title = ". ".join(x for x in (n["does"], title) if x)
     stack = " fp-stack" if n.get("fan_out") else ""
     out = [
         f'<div class="fp-box k-{kind}{stack}" data-kind="{kind}"'
@@ -1595,7 +1613,7 @@ def _picture_box(n: dict, back: list[str], names: dict[str, str]) -> str:
         f'<span class="fp-kind">{_icon(kind)}{html.escape(names[kind])}</span>',
         f'<strong class="fp-label">{html.escape(n["label"])}</strong>',
     ]
-    if n.get("does"):
+    if n.get("does") and kind != "check":
         out.append(f'<span class="fp-does">{html.escape(n["does"])}</span>')
     if n.get("fan_out"):
         out.append(f'<span class="fp-fan">&#215; {html.escape(n["fan_out"])}</span>')
@@ -1610,8 +1628,8 @@ def flow_picture(
 ) -> str:
     """The flow as a picture: the inputs together at the start, the stages in box order, the outputs together
     at the end. Each box shows its kind (an icon and a colour from the design-system tokens), its label and
-    what it does; a box with a fan-out is drawn as stacked cards; an arrow back to an earlier box is a note
-    on the box, not a line. The layout is left to right on a wide screen and top to bottom on a narrow one
+    what it does; a check is drawn small, with what it does in its tooltip; a box with a fan-out is drawn as
+    stacked cards; an arrow back to an earlier box is a note on the box, not a line. The layout is left to right on a wide screen and top to bottom on a narrow one
     (CSS in `templates/walkthrough.html`). *names* replaces what the picture calls a kind. "" when the
     diagram was cut."""
     nodes = data.get("nodes") or []
@@ -1632,7 +1650,10 @@ def flow_picture(
     cells = []
     for group, cls in (
         (ins, "fp-in"),
-        *(([n], "fp-stage") for n in middle),
+        *(
+            ([n], "fp-stage fp-gate" if n.get("kind") == "check" else "fp-stage")
+            for n in middle
+        ),
         (outs, "fp-out"),
     ):
         if group:
@@ -1919,7 +1940,7 @@ def render_html(
         "TITLE": html.escape(f"{t.package} walkthrough"),
         "HEADER": hide_locations(group_cites(header)),
         "NAV": "\n".join(nav),
-        "BODY": hide_locations(group_cites("\n".join(body))),
+        "BODY": ICON_SPRITE + hide_locations(group_cites("\n".join(body))),
     }
     # One pass over the template: text a value holds is never taken for a later placeholder.
     return PLACEHOLDER.sub(
