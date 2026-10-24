@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 
 from code_facts.prompts import UNTRUSTED_RULES, citation_rules, explore_unit  # noqa: F401  (explore_unit: re-export)
 from code_facts.prompts import schema_json as _schema
@@ -583,6 +584,169 @@ Material (every item was checked against the code; ids are citation ids):
 {material}
 {redo}
 {EXPLAINER_RULES}
+
+Schema:
+{_schema(schema)}
+
+Answer with ONE JSON object and nothing after it."""
+
+
+# --- the diagram stage (stages/diagram.py) ---------------------------------------------------------------
+
+# The style example the diagram writer is shown: a neutral flow drawn as v3 of the review walkthrough drew
+# its picture. `tests/test_diagram.py` holds it to `gates.diagram_gate`.
+_TEMPLATES = Path(__file__).resolve().parents[1] / "templates"
+DIAGRAM_EXAMPLE = {
+    "wide": (_TEMPLATES / "diagram-example-wide.svg").read_text(encoding="utf-8"),
+    "tall": (_TEMPLATES / "diagram-example-tall.svg").read_text(encoding="utf-8"),
+    "css": (_TEMPLATES / "diagram-example.css").read_text(encoding="utf-8"),
+}
+
+
+def _diagram_rules(tokens: list[str]) -> str:
+    """The picture's look and its contract, shared by the writer and the looker."""
+    return f"""How the picture looks (the example below shows all of it):
+- One box per box of the flow in the material, in the order its arrows run, numbered from 1 (inputs and \
+outputs are not numbered). Each box shows a small tag in capitals naming its kind, its number, its label \
+exactly as the material gives it (you may break it over lines at a space), and one or two short lines of \
+what it does.
+- Each kind has its colour and its icon. Kinds: {", ".join(PAGE_KINDS)}. The icon of kind KIND is \
+<use href="#i-KIND" class="..." x=".." y=".." width="16" height="16"/>. An icon is one path in a 16 by 16 \
+box with no paint of its own, so give the <use> a class whose CSS sets fill: none and a stroke colour.
+- A box with a fan-out (many agents or items at once) is drawn as a stack of small cards or a row of small \
+tags, one per kind of worker the material names, with a dashed card for "one per ...".
+- A check is drawn small, as a narrow pill with the check icon, between the two boxes it sits between, with \
+its label under or beside it. What happens to what fails it goes in a small tag, joined by a dashed arrow.
+- One arrow per arrow of the flow, ending in an arrowhead (<marker>). An arrow back to an earlier box is a \
+dashed line drawn around the boxes, never across one, with a short label saying when it runs.
+- "wide" is for screens of 700 px and more: viewBox="0 0 1000 H", in two or three rows when the boxes do not \
+fit in one, joined by an arrow that turns down at the end of a row. "tall" is for phones: viewBox="0 0 420 \
+H", one column, top to bottom.
+- Every label is at least 14 units high; only a kind's small tag may be 12. Leave 15% spare room in every \
+box around its text: the reader's browser draws text in another font, wider or narrower than yours. No text \
+touches or crosses a box edge, an arrow or other text.
+
+The contract (a program checks every point; an answer that breaks one is sent back):
+- "wide" and "tall" are each exactly one <svg> element with a viewBox: width 1000 for wide, 420 for tall. At \
+most 40,000 characters each.
+- Allowed tags: svg g path rect circle ellipse line polyline polygon text tspan title desc defs marker use a. \
+No <style>, <script>, <foreignObject> or <image>, no comment, no <!DOCTYPE>. Well-formed XML: close every tag.
+- Allowed attributes: class, id, role, aria-*, the geometry and paint attributes (x y width height rx ry cx cy \
+r d points transform viewBox text-anchor font-size font-weight stroke-dasharray and the like), and on \
+<marker> markerWidth markerHeight refX refY orient markerUnits; marker-start and marker-end only as \
+url(#id). href only as "#id". No style attribute, no on* attribute.
+- fill and stroke attributes only as none or currentColor: every colour goes in "css".
+- Ids are lower-case letters, digits and -, each used once in its SVG; every #id and url(#id) points at an id \
+in the same SVG or at an icon i-KIND.
+- Every box label of the flow appears in the text of both SVGs.
+- No file path with a line number in the text. A word that looks like code (with _ . ( or /, or camelCase) \
+must be a name from the material that occurs in the code.
+- "css" styles your SVGs. Every selector starts with a class that starts with .wd- (for example \
+".wd-agent > rect"); no element selector on its own, no @media. Give the root <svg> the class wd-root and \
+set its fill to var(--fg) and its font-family to var(--font-body): the page is dark for some readers, and \
+text with no fill would be black. Colours only as var(--token) from this list: {", ".join(tokens) or "(none)"}. \
+No colour literal (#hex, rgb(, hsl(), no url(, no @import.
+- "alt" is one sentence that says what the picture shows, for a reader who cannot see it."""
+
+
+def diagram_writer(
+    name: str,
+    material: str,
+    tokens: list[str],
+    schema,
+    *,
+    failures: list[str] | None = None,
+    previous: str | None = None,
+) -> str:
+    """The diagram writer: one call with no tools that draws the "How it works" picture of the page as two
+    SVGs and their CSS. `gates.diagram_gate` checks its answer before any of it is used."""
+    redo = ""
+    if failures and previous:
+        redo = (
+            "\nYour previous answer failed these checks. Return the whole answer again, fixed:\n"
+            + "\n".join(f"- {f}" for f in failures[:60])
+            + "\n\nPrevious answer:\n"
+            + previous[:90000]
+            + "\n"
+        )
+    return f"""You are drawing the "How it works" picture of a web page that explains `{name}` to someone who \
+does not know the code. The picture sits at the top of the page, under two short paragraphs, and is the \
+first thing that shows how the code works: what goes in, each stage in order, what each stage is (code, a \
+model agent, a check, a decision), where many things run at once, where a check sends something back, and \
+what comes out.
+
+{_diagram_rules(tokens)}
+
+The example: a made-up flow, drawn in the style to follow. Copy its look, not its boxes.
+Example "wide":
+{DIAGRAM_EXAMPLE["wide"]}
+Example "tall":
+{DIAGRAM_EXAMPLE["tall"]}
+Example "css":
+{DIAGRAM_EXAMPLE["css"]}
+
+Material (every item was checked against the code):
+{material}
+{redo}
+Draw only what the material says. Use plain words, not code-speak; name a function only when the reader \
+needs it.
+
+Schema:
+{_schema(schema)}
+
+Answer with ONE JSON object and nothing after it."""
+
+
+def diagram_looker(
+    name: str,
+    material: str,
+    current: str,
+    pngs: list[str],
+    schema,
+    round_no: int,
+    *,
+    tokens: list[str],
+    failures: list[str] | None = None,
+) -> str:
+    """Look *round_no*: the model reads the PNGs code drew of the current picture and answers ok, or fix
+    with the whole corrected SVGs and CSS, which `gates.diagram_gate` checks before they are used."""
+    redo = ""
+    if failures:
+        redo = (
+            "\nThe corrected version of your last look failed these checks, so the picture below is still "
+            "the one before it. Fix these too if you answer fix:\n"
+            + "\n".join(f"- {f}" for f in failures[:60])
+            + "\n"
+        )
+    files = "\n".join(f"- {p}" for p in pngs)
+    return f"""You are checking the "How it works" picture of a web page that explains `{name}`. A program \
+drew the picture below as PNG files. This is look {round_no} of at most 3.
+
+Open each file with the Read tool, and look at it:
+{files}
+They are the wide layout in the light theme, the wide layout in the dark theme, and the tall layout (for \
+phones) in the light theme. The page shows the wide one 700 to 1000 px wide and the tall one about 360 px \
+wide, so text in the tall one is drawn smaller than in its PNG.
+
+Check each of these, in each file:
+- text overlapping other text, an arrow or a box edge, or touching a box edge
+- text cut off at a box edge or at the edge of the picture
+- an arrow crossing a box, or pointing at nothing, or no arrowhead
+- a box of the flow missing, or boxes in an order the arrows of the material do not follow
+- text or lines too faint to read, above all in the dark theme
+- labels too small to read on the tall layout
+- an icon drawn as a filled black shape (its <use> needs fill: none and a stroke colour)
+
+Answer "ok" when none of these is wrong. Otherwise answer "fix", list the problems you saw, and return the \
+whole corrected "wide", "tall" and "css" (all three, even one you did not change).
+{redo}
+{_diagram_rules(tokens)}
+
+The picture now (the JSON code drew the PNGs from):
+{current}
+
+Material (every item was checked against the code):
+{material}
 
 Schema:
 {_schema(schema)}

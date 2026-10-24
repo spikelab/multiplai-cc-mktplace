@@ -9,8 +9,15 @@ import sys
 from pathlib import Path
 
 import pytest
+from fakes import FakeAgents
+from test_change_scope import _args as change_args
+from test_change_scope import change  # noqa: F401  (the fixture)
+from test_codebase_scope import _args as codebase_args
+from test_codebase_scope import pws  # noqa: F401  (the fixture)
 from test_explainer import _Corpus
-from walkthrough_pipeline import design
+from test_pipeline import run_args
+from walkthrough_pipeline import design, sdk
+from walkthrough_pipeline.__main__ import main
 from walkthrough_pipeline.diagram import (
     DiagramUnavailable,
     page_figure,
@@ -19,6 +26,8 @@ from walkthrough_pipeline.diagram import (
 )
 from walkthrough_pipeline.gates import diagram_gate
 from walkthrough_pipeline.models import DiagramOutput
+from walkthrough_pipeline.stages.diagram import UNAVAILABLE
+from walkthrough_pipeline.state import STATE_FILE, load_state
 
 TEMPLATES = Path(__file__).resolve().parents[1] / "templates"
 WIDE = (TEMPLATES / "diagram-example-wide.svg").read_text()
@@ -306,3 +315,193 @@ def test_page_figure_makes_every_id_unique_and_keeps_its_references():
     assert len(roots) == 2
     assert 'class="dg-wide wd-root" role="img" aria-label="Six steps."' in roots[0]
     assert 'class="dg-tall wd-root" role="img" aria-label="Six steps."' in roots[1]
+
+
+# --- the stage ---------------------------------------------------------------------------------------------
+
+
+def _run(ws, tmp_path, monkeypatch, *extra, **fake):
+    """A module run with FakeAgents(**fake): (state, html, agents)."""
+    agents = FakeAgents(**fake)
+    monkeypatch.setattr(sdk, "agent_call_structured", agents)
+    assert main(run_args(ws, tmp_path, *extra)) == 0
+    run_dir = next((tmp_path / "runs").iterdir())
+    html = (tmp_path / "out" / "bookings-walkthrough.html").read_text()
+    return load_state(run_dir / STATE_FILE), html, agents
+
+
+def _diagram_calls(agents: FakeAgents) -> list[dict]:
+    return [c for c in agents.calls if c["schema"] in ("DiagramOutput", "DiagramLook")]
+
+
+def _schemas(agents: FakeAgents) -> list[str]:
+    return [c["schema"] for c in _diagram_calls(agents)]
+
+
+def _summary(html: str) -> str:
+    return html.split('<section id="summary">', 1)[1].split("</section>", 1)[0]
+
+
+def _errors(state) -> list[str]:
+    return [e for e in state.errors if e.startswith("diagram:")]
+
+
+def test_ok_on_the_first_look_puts_the_drawn_picture_on_the_page(
+    ws, tmp_path, monkeypatch, fake_fetch
+):
+    state, html, agents = _run(ws, tmp_path, monkeypatch)
+    assert _schemas(agents) == ["DiagramOutput", "DiagramLook"]
+    draw, look = _diagram_calls(agents)
+    assert draw["allowed_tools"] == [] and draw["budget_label"] == "diagram"
+    assert '<untrusted-content source="diagram material">' in draw["prompt"]
+    assert (
+        "diagram-example" not in draw["prompt"] and "AGENTS · AT ONCE" in draw["prompt"]
+    )
+    folder = next((tmp_path / "runs").iterdir()) / "diagram"
+    assert look["allowed_tools"] == ["Read"] and look["read_roots"] == [str(folder)]
+    assert sorted(p.name for p in folder.iterdir()) == [
+        "round-1-dark-wide.png",
+        "round-1-light-tall.png",
+        "round-1-light-wide.png",
+    ]
+    for p in folder.iterdir():
+        assert f"- {p}" in look["prompt"]
+    assert state.diagram["approved"] is True and state.diagram["looks"] == 1
+    assert state.diagram["wide"] == state.diagram_answers["draw"]["wide"]
+    assert list(state.diagram_answers) == ["draw", "look:1"]
+    assert _errors(state) == []
+    summary = _summary(html)
+    assert '<figure class="diagram"' in summary and 'class="flowpic"' not in summary
+    assert 'class="dg-wide wd-root" role="img"' in summary
+    # The fold-out of what each stage reads and writes stays under the picture.
+    assert summary.index('<figure class="diagram"') < summary.index(
+        "What each stage reads"
+    )
+    assert "figure.diagram {\n.wd-root { fill: var(--fg); }" in html
+
+
+def test_a_fix_that_passes_the_gate_is_used_and_looked_at_again(
+    ws, tmp_path, monkeypatch, fake_fetch
+):
+    state, html, agents = _run(ws, tmp_path, monkeypatch, look_plan={1: "fix"})
+    assert _schemas(agents) == ["DiagramOutput", "DiagramLook", "DiagramLook"]
+    assert "wd-round-1" in state.diagram["wide"] and "wd-round-1" in html
+    assert state.diagram["looks"] == 2 and state.diagram["approved"] is True
+    assert _errors(state) == []
+
+
+def test_a_fix_that_fails_the_gate_keeps_the_picture_and_tells_the_next_look(
+    ws, tmp_path, monkeypatch, fake_fetch
+):
+    state, _, agents = _run(ws, tmp_path, monkeypatch, look_plan={1: "fix_bad"})
+    assert _schemas(agents) == ["DiagramOutput", "DiagramLook", "DiagramLook"]
+    assert "wd-round-1" not in state.diagram["wide"]
+    assert state.diagram["wide"] == state.diagram_answers["draw"]["wide"]
+    second = _diagram_calls(agents)[2]["prompt"]
+    assert "wide: the tag <image> is not allowed" in second
+    assert state.diagram["looks"] == 2 and state.diagram["approved"] is True
+
+
+def test_a_failed_look_ends_the_loop_and_keeps_the_last_version(
+    ws, tmp_path, monkeypatch, fake_fetch
+):
+    state, html, agents = _run(
+        ws, tmp_path, monkeypatch, look_plan={1: "fix"}, fail_on="This is look 2 of"
+    )
+    assert _schemas(agents) == ["DiagramOutput", "DiagramLook", "DiagramLook"]
+    assert "wd-round-1" in state.diagram["wide"]
+    assert state.diagram["looks"] == 1 and state.diagram["approved"] is False
+    assert state.diagram_answers["look:2"] == {"error": "planted failure"}
+    assert _errors(state) == ["diagram: look 2: planted failure"]
+    assert '<figure class="diagram"' in html
+
+
+def test_a_picture_never_approved_is_used_after_three_looks(
+    ws, tmp_path, monkeypatch, fake_fetch
+):
+    state, html, agents = _run(
+        ws, tmp_path, monkeypatch, look_plan={1: "fix", 2: "fix", 3: "fix"}
+    )
+    assert _schemas(agents) == ["DiagramOutput", *["DiagramLook"] * 3]
+    assert "wd-round-3" in state.diagram["wide"]
+    assert state.diagram["looks"] == 3 and state.diagram["approved"] is False
+    assert _errors(state) == ["diagram: not approved after 3 looks"]
+    assert "wd-round-3" in html
+
+
+def test_a_draw_that_fails_twice_leaves_the_picture_code_draws(
+    ws, tmp_path, monkeypatch, fake_fetch
+):
+    state, html, agents = _run(
+        ws, tmp_path, monkeypatch, plant={"diagram_script:always"}
+    )
+    assert _schemas(agents) == ["DiagramOutput", "DiagramOutput"]
+    assert (
+        "wide: the tag <script> is not allowed" in _diagram_calls(agents)[1]["prompt"]
+    )
+    assert list(state.diagram_answers) == ["draw", "draw:rewrite"]
+    assert state.diagram == {}
+    (error,) = _errors(state)
+    assert error.startswith("diagram: wide: the tag <script> is not allowed")
+    assert 'class="flowpic"' in _summary(html) and "<script>alert" not in html
+    assert '<figure class="diagram"' not in html and "figure.diagram {\n" not in html
+
+
+def test_a_draw_that_passes_on_the_reask_is_looked_at(
+    ws, tmp_path, monkeypatch, fake_fetch
+):
+    state, _, agents = _run(ws, tmp_path, monkeypatch, plant={"diagram_script"})
+    assert _schemas(agents) == ["DiagramOutput", "DiagramOutput", "DiagramLook"]
+    assert state.diagram["wide"] == state.diagram_answers["draw:rewrite"]["wide"]
+    assert _errors(state) == []
+
+
+def test_without_resvg_no_look_is_made_and_code_draws_the_picture(
+    ws, tmp_path, monkeypatch, fake_fetch
+):
+    monkeypatch.setitem(sys.modules, "resvg_py", None)
+    state, html, agents = _run(ws, tmp_path, monkeypatch)
+    assert _schemas(agents) == ["DiagramOutput"]
+    assert state.diagram == {} and _errors(state) == [UNAVAILABLE]
+    assert 'class="flowpic"' in _summary(html)
+
+
+def test_agent_mode_makes_no_diagram_call(ws, tmp_path, monkeypatch, fake_fetch):
+    agents = FakeAgents()
+    monkeypatch.setattr(sdk, "agent_call_structured", agents)
+    assert main(run_args(ws, tmp_path, "--mode", "agent")) == 0
+    state = load_state(next((tmp_path / "runs").iterdir()) / STATE_FILE)
+    assert _diagram_calls(agents) == [] and state.diagram == {}
+
+
+def test_a_change_makes_no_diagram_call(change, tmp_path, monkeypatch):  # noqa: F811
+    ws, base, head = change
+    agents = FakeAgents()
+    monkeypatch.setattr(sdk, "agent_call_structured", agents)
+    assert main(change_args(ws, tmp_path, "--range", f"{base}..{head}")) == 0
+    state = load_state(next((tmp_path / "runs").iterdir()) / STATE_FILE)
+    assert _diagram_calls(agents) == [] and state.diagram == {}
+
+
+def test_a_codebase_page_shows_the_drawn_picture(pws, tmp_path, monkeypatch):  # noqa: F811
+    agents = FakeAgents()
+    monkeypatch.setattr(sdk, "agent_call_structured", agents)
+    assert main(codebase_args(pws, tmp_path)) == 0
+    html = (tmp_path / "out" / "tool-walkthrough.html").read_text()
+    assert _schemas(agents) == ["DiagramOutput", "DiagramLook"]
+    assert '<figure class="diagram"' in _summary(html)
+
+
+def test_render_draws_the_page_from_the_saved_picture_with_no_call(
+    done_run, tmp_path, monkeypatch
+):
+    md_path, run_dir, _ = done_run
+    html = md_path.with_suffix(".html").read_text()
+    agents = FakeAgents()
+    monkeypatch.setattr(sdk, "agent_call_structured", agents)
+    assert main(["render", str(run_dir), "--output", str(tmp_path / "again")]) == 0
+    again = (tmp_path / "again" / md_path.name).with_suffix(".html").read_text()
+    assert not agents.calls
+    assert '<figure class="diagram"' in again
+    strip = re.compile(r'<p class="run">.*?</p>|href="[^"]*"')
+    assert strip.sub("", again) == strip.sub("", html)

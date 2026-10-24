@@ -203,7 +203,7 @@ def test_a_folder_broken_during_a_run_keeps_the_write_and_page_stages(
     assert main(run_args(ws, tmp_path, "--design-system-dir", str(acme))) == 1
     assert "is missing --radius" in capsys.readouterr().err
     run_dir = next((tmp_path / "runs").iterdir())
-    assert json.loads((run_dir / STATE_FILE).read_text())["stage"] == "page"
+    assert json.loads((run_dir / STATE_FILE).read_text())["stage"] == "diagram"
     assert not (tmp_path / "out" / "bookings-walkthrough.md").exists()
 
     monkeypatch.setattr(orchestrator, "write_outputs", real)

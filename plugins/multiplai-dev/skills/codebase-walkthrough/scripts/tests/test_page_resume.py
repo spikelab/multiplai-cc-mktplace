@@ -22,6 +22,8 @@ from walkthrough_pipeline.stages.page import OPEN_WORDS_MAX
 from walkthrough_pipeline.state import STATE_FILE, load_state
 
 CORE_TITLE = "How it stores bookings"
+# The diagram stage's calls, made after the page stage's: the draw and one look that says ok.
+DIAGRAM_CALLS = ["DiagramOutput", "DiagramLook"]
 # The title of the commands table this version removed, built in two parts so a search of the skill for
 # the old title finds only that it is gone.
 OLD_COMMANDS_TITLE = "Which command " + "to run"
@@ -170,7 +172,10 @@ def test_s3_a_core_choice_that_fails_twice_completes_the_stage_and_is_not_asked_
     assert [d.stage for d in state.dropped if d.stage == "core"] == ["core"]
     agents = FakeAgents(plant=plant)
     assert _resume(b, monkeypatch, agents) == 0
-    assert _core_calls(agents) == [] and _schemas(agents) == ["PageOutput"]
+    assert _core_calls(agents) == [] and _schemas(agents) == [
+        "PageOutput",
+        *DIAGRAM_CALLS,
+    ]
     assert _result(b) == want
 
 
@@ -189,7 +194,10 @@ def test_s4_a_failed_deep_read_completes_the_stage_and_writes_the_section_from_t
     assert not [f for f in state.facts if f.source.startswith("core:read/")]
     again = FakeAgents()
     assert _resume(b, monkeypatch, again) == 0
-    assert _core_calls(again) == [] and _schemas(again) == ["PageOutput"]
+    assert _core_calls(again) == [] and _schemas(again) == [
+        "PageOutput",
+        *DIAGRAM_CALLS,
+    ]
     assert CORE_TITLE in markdown_headings((b / "out" / MD).read_text())
 
 
@@ -222,7 +230,7 @@ def test_s6_a_stop_after_the_first_page_answer_asks_only_the_reask(
     agents = FakeAgents(plant=plant)
     assert _resume(b, monkeypatch, agents) == 0
     (call,) = _page_calls(agents)
-    assert _schemas(agents) == ["PageOutput"]
+    assert _schemas(agents) == ["PageOutput", *DIAGRAM_CALLS]
     assert "the tag <script> is not allowed" in call["prompt"]
     assert _result(b) == want
 
@@ -237,7 +245,7 @@ def test_s7_a_stop_before_the_first_page_answer_asks_the_page_call(
     assert raw["stage"] == "write" and raw["page_answers"] == {}
     agents = FakeAgents()
     assert _resume(b, monkeypatch, agents) == 0
-    assert _schemas(agents) == ["PageOutput"]
+    assert _schemas(agents) == ["PageOutput", *DIAGRAM_CALLS]
     assert _result(b) == want
 
 
@@ -251,7 +259,7 @@ def test_s8_a_kill_mid_page_loses_its_answers_and_asks_the_page_call_again(
     assert raw["stage"] == "write" and raw["page_answers"] == {}
     agents = FakeAgents()
     assert _resume(b, monkeypatch, agents) == 0
-    assert _schemas(agents) == ["PageOutput"]
+    assert _schemas(agents) == ["PageOutput", *DIAGRAM_CALLS]
     assert _result(b) == want
 
 
@@ -300,6 +308,7 @@ def test_resume_repage_asks_only_the_page_call_again(
     assert before.page == {} and any(e.startswith("page: ") for e in before.errors)
     agents = FakeAgents()
     assert _resume(b, monkeypatch, agents, "--repage") == 0
+    # The diagram stage runs again from its stored answers, with no call.
     assert _schemas(agents) == ["PageOutput"]
     after = _state(b)
     assert after.page and list(after.page_answers) == ["page"]
@@ -361,7 +370,7 @@ def test_s11_a_kill_after_the_page_stage_writes_the_files_with_no_call(
 
     monkeypatch.setattr(orchestrator, "write_outputs", killed)
     _killed(lambda: _go(ws, b, monkeypatch, FakeAgents()))
-    assert _raw(b)["stage"] == "page" and not (b / "out" / MD).exists()
+    assert _raw(b)["stage"] == "diagram" and not (b / "out" / MD).exists()
     monkeypatch.setattr(orchestrator, "write_outputs", real)
     agents = FakeAgents()
     assert _resume(b, monkeypatch, agents) == 0
@@ -400,7 +409,14 @@ def test_s13_render_of_a_run_from_before_this_version_draws_the_page_by_code(
     codebase tables: the Markdown and the page follow the new order with neither section."""
     _, run_dir, _ = done_run
     raw = json.loads((run_dir / STATE_FILE).read_text())
-    for field in ("core", "core_answers", "page", "page_answers"):
+    for field in (
+        "core",
+        "core_answers",
+        "page",
+        "page_answers",
+        "diagram",
+        "diagram_answers",
+    ):
         del raw[field]
     del raw["sections"]["core"]
     raw["sections"]["commands"] = {
@@ -439,7 +455,14 @@ def test_s13_render_of_a_run_from_before_this_version_draws_the_page_by_code(
 
 def _strip_new_fields(base) -> None:
     raw = _raw(base)
-    for field in ("core", "core_answers", "page", "page_answers"):
+    for field in (
+        "core",
+        "core_answers",
+        "page",
+        "page_answers",
+        "diagram",
+        "diagram_answers",
+    ):
         raw.pop(field, None)
     (_run_dir(base) / STATE_FILE).write_text(json.dumps(raw))
 
@@ -455,7 +478,7 @@ def test_s14_a_state_from_before_this_version_stopped_at_survey_runs_core_and_pa
     agents = FakeAgents()
     assert _resume(b, monkeypatch, agents) == 0
     assert _core_calls(agents) == ["choice", "read"]
-    assert _schemas(agents)[-1] == "PageOutput"
+    assert _schemas(agents)[-3:] == ["PageOutput", *DIAGRAM_CALLS]
     assert _result(b) == want
 
 
@@ -487,7 +510,7 @@ def test_s15_a_state_from_before_this_version_past_survey_skips_core_and_runs_pa
     agents = FakeAgents()
     assert _resume(b, monkeypatch, agents) == 0
     assert _core_calls(agents) == []
-    assert _schemas(agents)[-1] == "PageOutput"
+    assert _schemas(agents)[-3:] == ["PageOutput", *DIAGRAM_CALLS]
     state = _state(b)
     assert state.core == {} and state.page
     md = (b / "out" / MD).read_text()
@@ -506,7 +529,7 @@ def test_s16_rewrite_keeps_the_core_and_asks_only_the_write_and_page_calls(
     }
     agents = FakeAgents()
     assert _resume(a, monkeypatch, agents, "--rewrite") == 0
-    assert set(_schemas(agents)) - {"PageOutput"} <= {
+    assert set(_schemas(agents)) - {"PageOutput", *DIAGRAM_CALLS} <= {
         "SectionOutput",
         "SummaryOutput",
         "UseCasesOutput",
@@ -579,5 +602,5 @@ def test_s19_a_page_step_stopped_twice_continues_from_the_last_saved_answer(
     assert list(_raw(b)["page_answers"]) == ["page"]
     agents = FakeAgents(plant=plant)
     assert _resume(b, monkeypatch, agents) == 0
-    assert _schemas(agents) == ["PageOutput"]
+    assert _schemas(agents) == ["PageOutput", *DIAGRAM_CALLS]
     assert _result(b) == want

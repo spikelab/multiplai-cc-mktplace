@@ -203,10 +203,15 @@ def test_the_mermaid_has_one_shape_per_kind():
 # --- through a run ------------------------------------------------------------------------------------
 
 
-def test_a_run_draws_the_picture_with_one_box_per_kind_and_no_mermaid(done_run):
-    """The picture sits in What it is, where the page writer put `{{flow}}`."""
-    md_path, _, _ = done_run
+def test_a_run_draws_the_picture_with_one_box_per_kind_and_no_mermaid(
+    ws, tmp_path, monkeypatch, fake_fetch
+):
+    """The picture sits in What it is, where the page writer put `{{flow}}`. With no picture from the
+    diagram stage (its draw fails its checks here), it is the boxes code draws."""
+    _run(ws, tmp_path, monkeypatch, plant={"diagram_script:always"})
+    md_path = tmp_path / "out" / "bookings-walkthrough.md"
     html = md_path.with_suffix(".html").read_text()
+    assert '<figure class="diagram"' not in html
     assert '<pre class="mermaid">' not in html
     summary = html.split('<section id="summary">', 1)[1].split("</section>", 1)[0]
     assert re.findall(r'data-kind="(\w+)"', summary) == ["input", "code", "agent"]

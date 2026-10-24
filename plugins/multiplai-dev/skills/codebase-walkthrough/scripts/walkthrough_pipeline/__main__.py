@@ -3,7 +3,7 @@
   run     — explain one module end to end, a whole plugin or repository (`--scope codebase`), or a
             change (`--scope pr`: a PR or a commit range)
   resume  — continue a run from its walkthrough-state.json (`--rewrite`: write it again after trace;
-            `--repage`: write only the HTML page again)
+            `--repage`: write only the HTML page again; `--redraw`: draw only its picture again)
   check   — re-check every `path:line` and snippet in a finished walkthrough
   render  — rewrite a finished run's walkthrough files from its state; no model call
 
@@ -294,6 +294,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Write the HTML page again from a run past its write stage: keeps every other answer and runs "
         "only the page and render stages (one or two paid model calls)",
     )
+    rs_again.add_argument(
+        "--redraw",
+        action="store_true",
+        help="Draw the HTML page's How it works picture again from a run past its page stage: keeps every "
+        "other answer and runs only the diagram and render stages (two to five paid model calls)",
+    )
     _design_flag(
         rs,
         "Replace the run's saved --design-system-dir (default: keep it); checked before any model call",
@@ -514,6 +520,7 @@ def _main(args: argparse.Namespace) -> int:
                     docs=docs,
                     rewrite=args.rewrite,
                     repage=args.repage,
+                    redraw=args.redraw,
                     design_system_dir=_abs(args.design_system_dir),
                 )
             )

@@ -23,6 +23,7 @@ from code_facts.paths import PathHop, PathsResult, TracedPath
 
 from . import design
 from .check import LINK
+from .diagram import page_figure
 from .gates import CITE_ID, lines_at_commit, sections_gate
 from .models import Citation, RepoInfo, WalkState, hop_id
 from .stages.page import OPEN_WORDS_MAX
@@ -1674,6 +1675,14 @@ def flow_picture(
     )
 
 
+def main_picture(state: WalkState, data: dict) -> str:
+    """The "How it works" picture: the diagram stage's SVGs when it drew them (`state.diagram`), else the
+    boxes `flow_picture` draws from the flow's gated data. "" when there is neither."""
+    if state.diagram and data.get("nodes"):
+        return page_figure(state.diagram)
+    return flow_picture(data)
+
+
 def _flow_where(
     data: dict, lk: Linker, cites: CiteNumbers, *, with_cites: bool = True
 ) -> str:
@@ -1703,7 +1712,7 @@ def _html_summary(state: WalkState, lk: Linker, cites: CiteNumbers) -> str:
     paras = _data(state, "summary").get("paragraphs") or []
     out = [markdown_html(lk.expand(p), cites) for p in paras]
     data = _data(state, "flow")
-    picture = flow_picture(data) if _picture_in_summary(state) else ""
+    picture = main_picture(state, data) if _picture_in_summary(state) else ""
     if picture:
         out += [picture, _flow_where(data, lk, cites)]
     return "\n".join(out) or "<p>Nothing about this section passed the checks.</p>"
@@ -1712,7 +1721,7 @@ def _html_summary(state: WalkState, lk: Linker, cites: CiteNumbers) -> str:
 def _html_flow(state: WalkState, lk: Linker, cites: CiteNumbers) -> str:
     data = _data(state, "flow")
     out = []
-    src = flow_picture(data)
+    src = main_picture(state, data)
     if src and not _picture_in_summary(state):
         out += [src, _flow_where(data, lk, cites)]
     steps = data.get("steps") or []
@@ -1932,11 +1941,14 @@ def render_html(
     )
     fonts, tokens = styles if styles is not None else design.css(None)
     page_css = (state.page or {}).get("css", "").strip()
+    diagram_css = (state.diagram or {}).get("css", "").strip()
     values = {
         "FONTS": fonts,
         "TOKENS": tokens,
         # The page writer's CSS, nested under its sections' class so it styles nothing else.
         "PAGE_CSS": f".page-body {{\n{page_css}\n}}" if page_css and written else "",
+        # The diagram's CSS, nested under its figure; `diagram_gate` holds every selector to a `.wd-` class.
+        "DIAGRAM_CSS": f"figure.diagram {{\n{diagram_css}\n}}" if diagram_css else "",
         "TITLE": html.escape(f"{t.package} walkthrough"),
         "HEADER": hide_locations(group_cites(header)),
         "NAV": "\n".join(nav),
@@ -1948,7 +1960,9 @@ def render_html(
     )
 
 
-PLACEHOLDER = re.compile(r"\{\{(FONTS|TOKENS|PAGE_CSS|TITLE|HEADER|NAV|BODY)\}\}")
+PLACEHOLDER = re.compile(
+    r"\{\{(FONTS|TOKENS|PAGE_CSS|DIAGRAM_CSS|TITLE|HEADER|NAV|BODY)\}\}"
+)
 SNIPPET_TOKEN = re.compile(r"(?:<p>\s*)?\[\[snippet:([a-z0-9]+)\]\](?:\s*</p>)?")
 FLOW_SLOT = re.compile(r"(?:<p>\s*)?\{\{flow(:core)?\}\}(?:\s*</p>)?")
 
@@ -1958,7 +1972,8 @@ def page_section_html(
 ) -> str:
     """One open section the page writer wrote, ready for the page: each `[[snippet:cN]]` becomes the cited
     lines, each `[[cN]]` a numbered link, adjacent links one group, only the first citation under each
-    heading is shown, and `{{flow}}` / `{{flow:core}}` become the flow pictures. `page_gate` has passed it."""
+    heading is shown, and `{{flow}}` / `{{flow:core}}` become the flow pictures (`{{flow}}` the diagram stage's SVGs when
+    it drew them). `page_gate` has passed it."""
     snippets: list[str] = []
 
     def keep(m: re.Match) -> str:
@@ -1980,7 +1995,7 @@ def page_section_html(
             data = _data(state, "core").get("flow") or {}
             return flow_picture(data, caption=state.core.get("title") or "")
         data = _data(state, "flow")
-        picture = flow_picture(data)
+        picture = main_picture(state, data)
         return (
             picture + _flow_where(data, lk, cites, with_cites=False) if picture else ""
         )

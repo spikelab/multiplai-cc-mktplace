@@ -96,6 +96,14 @@
     ol.fp > li, ol.fp > li.fp-gate { max-width: none; flex: none; }
     ol.fp > li + li::before { content: "\2193"; left: 50%; top: -22px; transform: translateX(-50%); }
   }
+  /* The diagram stage's picture (diagram.page_figure): the wide SVG at 700 px and up, the tall one below. */
+  figure.diagram { padding: 12px; }
+  figure.diagram svg { display: block; width: 100%; height: auto; }
+  figure.diagram svg.dg-tall { display: none; max-width: 480px; margin: 0 auto; }
+  @media (max-width: 699px) {
+    figure.diagram svg.dg-wide { display: none; }
+    figure.diagram svg.dg-tall { display: block; }
+  }
   .cases { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 16px; margin: 12px 0; }
   .case, .item { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 4px 16px 8px; }
   .item { margin: 12px 0; }
@@ -175,6 +183,7 @@
   @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
 </style>
 <style>{{PAGE_CSS}}</style>
+<style>{{DIAGRAM_CSS}}</style>
 </head>
 <body>
 <div class="wrap">

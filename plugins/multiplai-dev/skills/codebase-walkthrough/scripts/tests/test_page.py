@@ -243,7 +243,7 @@ def test_the_page_shows_the_writer_html_with_its_placeholders_filled(done_run):
     md_path, run_dir, _ = done_run
     html = md_path.with_suffix(".html").read_text()
     summary = _section(html, "summary")
-    assert '<div class="page-body">' in summary and 'class="flowpic"' in summary
+    assert '<div class="page-body">' in summary and '<figure class="diagram"' in summary
     assert "{{" not in html and "[[" not in html
     # The snippet the writer asked for, drawn from the commit.
     outputs = _section(html, "outputs")
@@ -350,8 +350,8 @@ def test_a_page_that_fails_twice_is_drawn_by_code(
     html = md_path.with_suffix(".html").read_text()
     assert "<script>alert" not in html and 'class="page-body"' not in html
     assert ".page-body" not in html.split("</style>", 2)[1]
-    # Code draws every section, the picture in What it is.
-    assert 'class="flowpic"' in _section(html, "summary")
+    # Code draws every section, with the diagram stage's picture in What it is.
+    assert '<figure class="diagram"' in _section(html, "summary")
     assert "Open body of the HTML page" not in html
 
 
@@ -404,7 +404,8 @@ def test_a_codebase_page_has_the_open_sections_then_the_closed_appendices(
     tmp_path,
     monkeypatch,
 ):
-    agents = FakeAgents()
+    # The diagram is not drawn, so the picture is the boxes code draws, one per box of the flow.
+    agents = FakeAgents(plant={"diagram_script:always"})
     monkeypatch.setattr(sdk, "agent_call_structured", agents)
     assert main(codebase_args(pws, tmp_path)) == 0
     html = (tmp_path / "out" / "tool-walkthrough.html").read_text()

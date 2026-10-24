@@ -22,6 +22,8 @@ from walkthrough_pipeline.models import (
     ConfigOutput,
     CoreChoice,
     CoreOutput,
+    DiagramLook,
+    DiagramOutput,
     DocsOutput,
     ExitsOutput,
     ExploreOutput,
@@ -93,6 +95,8 @@ class FakeAgents:
         stop_survey_after: int | None = None,
         stop_core_after: int | None = None,
         stop_page_after: int | None = None,
+        stop_diagram_after: int | None = None,
+        look_plan: dict[int, str] | None = None,
     ):
         self.calls: list[dict] = []
         self.cost = cost
@@ -131,6 +135,13 @@ class FakeAgents:
         # "page_long" (an open body over the word limit).
         self.stop_page_after = stop_page_after
         self.page_calls = 0
+        # Raise BudgetExceededError on diagram call number stop_diagram_after + 1 (the draw, its re-ask and
+        # each look count). The draw's plants, in the first answer only or in every answer with ":always":
+        # "diagram_script" (a <script> in the wide SVG). *look_plan* gives look n's answer: "ok" (the
+        # default), "fix" (a corrected picture that passes the gate) or "fix_bad" (one that fails it).
+        self.stop_diagram_after = stop_diagram_after
+        self.diagram_calls = 0
+        self.look_plan = look_plan or {}
 
     async def __call__(self, prompt: str, schema, **kw):
         from walkthrough_pipeline import sdk
@@ -204,6 +215,18 @@ class FakeAgents:
                     "circuit breaker: planted stop during page"
                 )
             return PageOutput.model_validate(self.page(prompt))
+        if schema in (DiagramOutput, DiagramLook):
+            self.diagram_calls += 1
+            if (
+                self.stop_diagram_after is not None
+                and self.diagram_calls > self.stop_diagram_after
+            ):
+                raise budget.BudgetExceededError(
+                    "circuit breaker: planted stop during diagram"
+                )
+            if schema is DiagramOutput:
+                return DiagramOutput.model_validate(self.diagram(prompt))
+            return DiagramLook.model_validate(self.look(prompt))
         if schema is SectionOutput:
             return self.write(prompt)
         if schema in STRUCTURED:
@@ -551,6 +574,72 @@ class FakeAgents:
         return {
             "css": css,
             "sections": [{"key": k, "html": h} for k, h in out.items()],
+        }
+
+    @staticmethod
+    def _boxes(prompt: str) -> list[str]:
+        body = prompt.split('<untrusted-content source="diagram material">', 1)[1]
+        body = body.split("</untrusted-content>", 1)[0].strip()
+        material = json.loads(body.strip("`").removeprefix("text").strip())
+        return [n["label"] for n in material["flow"]["nodes"]]
+
+    @staticmethod
+    def _svg(width: int, boxes: list[str], tag: str = "") -> str:
+        """One box per label, one under the other, each with the kind icon and an arrow to the next."""
+        rows = []
+        for i, label in enumerate(boxes):
+            y = 20 + 70 * i
+            rows.append(
+                f'<g class="wd-box"><rect x="10" y="{y}" width="{width - 20}" height="50" rx="8"/>'
+                f'<use href="#i-code" class="wd-ic" x="20" y="{y + 17}" width="16" height="16"/>'
+                f'<text class="wd-title{tag}" x="44" y="{y + 30}">{label}</text></g>'
+                + (
+                    f'<path class="wd-arrow" d="M{width // 2} {y + 50} V{y + 68}" '
+                    'marker-end="url(#ah)"/>'
+                    if i < len(boxes) - 1
+                    else ""
+                )
+            )
+        return (
+            f'<svg class="wd-root" viewBox="0 0 {width} {40 + 70 * len(boxes)}">'
+            '<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" '
+            'markerHeight="7" orient="auto"><path class="wd-head" d="M0 0 L10 5 L0 10 z"/></marker></defs>'
+            + "".join(rows)
+            + "</svg>"
+        )
+
+    def diagram(self, prompt: str) -> dict:
+        """The diagram writer's answer: both layouts drawn from the material's box labels."""
+        boxes = self._boxes(prompt)
+        wide = self._svg(1000, boxes)
+        if self._planted("diagram_script", prompt):
+            wide = wide.replace("</svg>", "<script>alert(1)</script></svg>")
+        return {
+            "wide": wide,
+            "tall": self._svg(420, boxes),
+            "css": ".wd-root { fill: var(--fg); }\n.wd-box rect { fill: var(--surface); stroke: var(--line); }",
+            "alt": f"{len(boxes)} boxes, one after the other.",
+        }
+
+    def look(self, prompt: str) -> dict:
+        """Look n's answer from *look_plan*. Every PNG it is told to open must be on disk."""
+        n = int(re.search(r"This is look (\d) of", prompt).group(1))
+        for path in re.findall(r"^- (/\S+\.png)$", prompt, re.MULTILINE):
+            assert Path(path).read_bytes().startswith(b"\x89PNG"), path
+        verdict = self.look_plan.get(n, "ok")
+        if verdict == "ok":
+            return {"verdict": "ok"}
+        boxes = self._boxes(prompt)
+        tag = f" wd-round-{n}"
+        wide = self._svg(1000, boxes, tag)
+        if verdict == "fix_bad":
+            wide = wide.replace("</svg>", "<image/></svg>")
+        return {
+            "verdict": "fix",
+            "problems": [f"look {n}: the labels touch the box edge"],
+            "wide": wide,
+            "tall": self._svg(420, boxes, tag),
+            "css": ".wd-root { fill: var(--fg); }",
         }
 
     def explain(self, schema, prompt: str) -> dict:
