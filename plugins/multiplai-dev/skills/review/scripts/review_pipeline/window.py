@@ -237,7 +237,7 @@ class Gate:
             return
         self.noticed = True
         text = NOTICE.format(reason=last_error or "unknown")
-        log.warning("%s", text)
+        log.info("%s", text)  # not a warning: the stderr log handler would print it a second time
         print(text, file=sys.stderr, flush=True)
         if progress_line is not None:
             progress_line(text)
