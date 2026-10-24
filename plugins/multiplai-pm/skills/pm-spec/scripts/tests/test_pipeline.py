@@ -179,14 +179,16 @@ SAMPLE_SINGLE = [
 def _sample_run(repo, model, components, tickets) -> tuple[list[str], list[str]]:
     """The samples page's flow for auth-session (ENG-40): four review pushes
     and the handoff push. Origin's files under the change dir, and its log."""
-    from conftest import origin, specs
+    from conftest import origin, rewrite_answer, specs
 
     model["components"] = {
         "reason": "Each is a pull request on its own.",
         "components": components,
     }
-    model["spec:specs:token-retry"] = specs(("session-refresh",))
-    model["spec:specs:timeout-setting"] = specs(("session-length", "account-settings"))
+    model["spec:specs:token-retry"] = rewrite_answer(specs(("session-refresh",)))
+    model["spec:specs:timeout-setting"] = rewrite_answer(
+        specs(("session-length", "account-settings"))
+    )
     new = [
         "new",
         "auth-session",

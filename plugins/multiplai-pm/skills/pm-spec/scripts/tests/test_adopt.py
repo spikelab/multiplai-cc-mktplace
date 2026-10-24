@@ -9,12 +9,14 @@ from conftest import (
     CAPS,
     TWO,
     change_dir,
+    git,
     meta,
     proposal,
     requirements,
     run,
     source_dir,
     specs,
+    worktree,
     write,
 )
 from multiplai_core.specs import is_ready
@@ -49,6 +51,35 @@ def test_adopt_runs_only_the_check_then_marks_ready(repo, model, capsys):
     assert "SPEC:READY:" in capsys.readouterr().out and is_ready(cdir) == (True, "")
     assert files(cdir) == sorted(before + ["tickets.json"])
     assert not (cdir / "interview.md").exists()
+
+
+def test_only_pm_spec_files_are_adopted(repo, model):
+    """A change dir also holds buildme's files and anyone else's; copied into
+    pm-spec's worktree, they were left there uncommitted. Only the files
+    pm-spec commits (`git_ops.owned`) and its run folder are copied; the
+    originals all stay where they are."""
+    cdir = buildme_era_change(repo)
+    hand = source_dir(repo)
+    owned = files(hand)
+    foreign = [
+        "design.md",
+        "tasks.md",
+        "notes.txt",
+        ".board.json",
+        ".build-state.json",
+        "reviews/block-01-round-1.json",
+        "requirements-draft/x.md",
+    ]
+    for rel in foreign:
+        write(hand / rel, f"{rel}\n")
+    assert run(repo, "resume", "throttle", "--ticket-ref", "ENG-1") == 0
+    assert files(cdir) == sorted(owned + ["tickets.json"])
+    assert all((hand / rel).is_file() for rel in foreign)
+    rel = cdir.relative_to(worktree(repo)).as_posix()
+    status = git(
+        worktree(repo), "status", "--porcelain", "--untracked-files=all", "--", rel
+    )
+    assert [line for line in status.splitlines() if "/.pm-spec/" not in line] == []
 
 
 def test_adopt_blocked_on_findings_stops_with_exit_4(repo, model, capsys):

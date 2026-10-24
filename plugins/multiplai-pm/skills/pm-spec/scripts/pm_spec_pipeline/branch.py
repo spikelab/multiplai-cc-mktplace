@@ -30,9 +30,10 @@ checkout it was started from (`--project-dir`) is never touched:
   naming the branch, both shas and the `git pull --rebase` to run.
 - `adopt` takes a change dir in `--project-dir` that records no branch (one
   handed off before pm-spec used a branch, or specs written by hand): it
-  copies the change dir, and the children it lists, into the worktree when
-  the worktree lacks it, and commits them there. The originals are never
-  deleted.
+  copies the change dir's pm-spec files (the ones `commit_change_dir`
+  commits) and its run folder, and the children's, into the worktree when
+  the worktree lacks it, and commits them there. Every other file stays only
+  in `--project-dir`; the originals are never deleted.
 - `push` runs `git push origin HEAD:refs/heads/<branch>`, never with force.
 
 `shell=False`, fixed argv, through `git_ops._git`.
@@ -54,7 +55,9 @@ from multiplai_core.specs import (
 )
 
 from . import git_ops
+from .config import RUN_DIR
 from .run import EXIT_FAILED, EXIT_REFUSED, Stop
+from .runlock import LOCK_FILE
 
 log = logging.getLogger(__name__)
 
@@ -418,9 +421,31 @@ def record_ticket(change_dir: Path, ticket: str) -> None:
     )
 
 
+def _copy_owned(source: Path, dest: Path) -> None:
+    """Copy the files of the change dir *source* that pm-spec commits
+    (`git_ops.owned`, the set `commit_change_dir` uses) and its run folder
+    (`config.RUN_DIR`, which a resumed run reads), to *dest*. Anything else
+    (buildme's design, tasks and records, a person's notes) stays only in
+    *source*: copied, it was left uncommitted in pm-spec's worktree. The run
+    lock is the holder's in the source, never the copy's."""
+    dest.mkdir(parents=True, exist_ok=True)
+    for path in sorted(source.rglob("*")):
+        if path.is_dir() and not path.is_symlink():
+            continue
+        rel = path.relative_to(source)
+        run_folder = rel.parts[0] == RUN_DIR
+        if run_folder and path.name == LOCK_FILE:
+            continue
+        if not run_folder and not git_ops.owned(rel.as_posix()):
+            continue
+        (dest / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, dest / rel, follow_symlinks=False)
+
+
 def adopt(where: Place, source: Path, change: str, ticket: str = "") -> bool:
-    """Copy a change dir that records no branch from *source*
-    (`--project-dir`) into pm-spec's worktree, with the children its
+    """Copy pm-spec's files of a change dir that records no branch
+    (`_copy_owned`) from *source* (`--project-dir`) into pm-spec's worktree,
+    with the children its
     `.change.yaml` lists, record the branch in each (and *ticket*,
     `--ticket-ref`, in the change's when it has no ticket ref) and commit
     each there. False, with nothing written, when there is nothing to adopt:
@@ -443,13 +468,7 @@ def adopt(where: Place, source: Path, change: str, ticket: str = "") -> bool:
     for name in names:
         if not (origin / name).is_dir() or (target / name).exists():
             continue
-        # The run lock is the holder's in the source, never the copy's.
-        shutil.copytree(
-            origin / name,
-            target / name,
-            symlinks=True,
-            ignore=shutil.ignore_patterns("run.lock"),
-        )
+        _copy_owned(origin / name, target / name)
         record(target / name, where.branch)
         if name == change:
             record_ticket(target / name, ticket)

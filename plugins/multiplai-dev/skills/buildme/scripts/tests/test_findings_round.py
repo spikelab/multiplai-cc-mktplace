@@ -2868,6 +2868,7 @@ class TestReviewInterrupted:
             str(PR),
             "--fetch",
             "--trust-repo",
+            *loop.review_options(config),
         ]
         assert calls[1][calls[1].index("review_pipeline") + 1 :] == [
             "resume",

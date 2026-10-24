@@ -21,6 +21,19 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-10-23
+
+### Fixed
+- pm-spec's first `specs.md` of each component no longer keeps the model's
+  commentary. The answer now holds the file between the same two delimiter
+  lines a rewrite uses, and only the text between them is written. An
+  answer without them, or with text above the first `# Capability:` line,
+  writes nothing and fails the run, so `resume` asks again.
+- `resume` of a change handed off before pm-spec pushed copies only
+  pm-spec's own files (the ones it commits) and its run folder into its
+  worktree. It copied the whole change dir, and every other file (buildme's
+  design, tasks and records, a person's notes) was left there uncommitted.
+
 ## [0.9.1] - 2026-10-23
 
 ### Fixed

@@ -61,6 +61,42 @@ time, not derived from a tag.
 - The "Which command to run" table of `--scope codebase`, and the survey agent
   that wrote it.
 
+## [0.105.2] - 2026-10-23
+
+### Fixed
+- buildme's RED gate accepts a test that fails through pytest's own
+  `Failed`: `pytest.fail()`, and `pytest.raises` / `pytest.warns` that saw
+  nothing (`DID NOT RAISE`). It also reads `--tb=line` and `-rf` output, where
+  an assertion is printed as `path:line: assert ...` or
+  `FAILED <id> - assert ...`. Such tests were rejected as having "no
+  recognizable test-failure signature" and sent back to the test writer.
+  A `pytest.fail()` in a fixture or at module level is still a setup or
+  collection error, and NameError or TypeError from the test's own code is
+  still not a right reason.
+- A findings round whose fix block failed and was skipped no longer writes
+  "All N blocks implemented successfully" to `build-progress.md`. The
+  COMPLETE line now says how many blocks were implemented and names each
+  failed, skipped block.
+- The review buildme runs of its PR (the epic coordinator's and each
+  `/multiplai-dev:buildme-findings` round's) reads only the code, tests,
+  docs and config the change touches, and `specs/registry/`. It leaves out
+  the change's `specs/changes/**` and `specs/archive/**` documents and
+  buildme's runtime files, which made a 30-line change a 2,090-line review
+  ($9.22 over 55 calls on the word-freq run).
+- That review runs on the review model `specs/config.yaml` names
+  (`models.review`, or `[buildme.review] MODEL=`), on `resume` too. It ran on
+  the review skill's own setting, Opus on that run, although
+  `models.review: sonnet` was set. With no review model named, the review
+  skill's `review.yaml` or `multiplai.conf` still chooses.
+
+### Added
+- `/multiplai-dev:review --exclude <glob>` (repeatable, change reviews only)
+  leaves the changed paths matching a git glob, read from the repository's
+  top, out of the review; the review's header lists what it left out.
+- `/multiplai-dev:review --model <model>` (on `review` and `resume`) runs
+  every stage on one model for that run, over `review.yaml` and
+  `multiplai.conf`.
+
 ## [0.105.1] - 2026-10-23
 
 ### Fixed

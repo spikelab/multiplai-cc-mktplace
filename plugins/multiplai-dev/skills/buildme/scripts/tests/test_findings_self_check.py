@@ -666,6 +666,32 @@ class TestSelfCheck:
         assert not [s for s in _subjects(repo) if "block-2" in s]
 
     @pytest.mark.asyncio
+    async def test_a_skipped_block_is_not_reported_as_implemented(self, built, fake_pr):
+        """The engine run after block k failed and was skipped reaches the end
+        of its block loop; its COMPLETE line names the failed block instead of
+        saying every block was implemented."""
+        repo, change, config = built
+        stubs = block_stubs(repo)
+        writer = next(p for p in stubs if p.attribute == "run_test_writer")
+        real = writer.kwargs["side_effect"]
+
+        async def test_writer(*a, **kw):
+            if kw.get("block_name", "").startswith("Fix what the check"):
+                return AgentResult(success=True, output="Cannot.\n\nSTATUS: BLOCKED\n")
+            return await real(*a, **kw)
+
+        writer.kwargs["side_effect"] = test_writer
+        exit_code, lines = await _one_round(
+            built, fake_pr, FakeCheck([PROBLEM, PROBLEM]), stubs=stubs
+        )
+        assert exit_code == 0, lines
+        progress = config.progress_file_path().read_text()
+        last = progress.rsplit("] COMPLETE\n", 1)[1].splitlines()[0]
+        assert "All 2 blocks implemented successfully" not in progress
+        assert last.startswith("1 of 2 blocks implemented"), last
+        assert "block 2" in last and "failed" in last and "skipped" in last
+
+    @pytest.mark.asyncio
     async def test_block_k_skips_the_whole_change_refactor_and_mutation(
         self, built, fake_pr
     ):

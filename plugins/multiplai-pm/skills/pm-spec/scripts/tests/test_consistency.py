@@ -206,7 +206,7 @@ def test_a_broken_specs_file_is_a_finding_not_a_crash(repo, model):
 
 def test_a_finding_names_its_specs_file_by_path_or_by_capability(repo, model):
     model["components"] = TWO
-    model["spec:specs:ui"] = specs(("ui-page",))
+    model["spec:specs:ui"] = rewrite_answer(specs(("ui-page",)))
     assert run(repo, "new", "throttle", "--auto") == 0
     cdir = change_dir(repo)
     assert cited_units(cdir, {"places": [{"file": "components/ui/specs.md"}]}) == [
@@ -262,7 +262,7 @@ def test_removed_in_a_component_with_no_registry_file_blocks_on_the_recheck(
         "# Capability: retry-policy\n\n## ADDED Requirements",
         "# Capability: retry-policy\n\n## REMOVED Requirements",
     )
-    model["spec:specs"] = lambda prompt, label, kw: removed
+    model["spec:specs"] = lambda prompt, label, kw: rewrite_answer(removed)
     model["rewrite"] = lambda prompt, label, kw: rewrite_answer(removed)
     model["consistency"] = [{"findings": []}, recheck("resolved")]
     assert run(repo, "new", "throttle", "--auto") == 4
@@ -278,7 +278,7 @@ def test_modified_on_a_capability_with_a_registry_file_is_no_finding(repo, model
     git(repo, "add", "specs")
     git(repo, "commit", "-q", "-m", "registry")
     git(repo, "push", "-q", "origin", "main")
-    model["spec:specs"] = lambda prompt, label, kw: _modified(specs())
+    model["spec:specs"] = lambda prompt, label, kw: rewrite_answer(_modified(specs()))
     assert run(repo, "new", "throttle", "--auto") == 0
     step = state(change_dir(repo))["steps"]["consistency"]
     assert step["outcome"] == "passed" and step["repair_attempts"] == 0

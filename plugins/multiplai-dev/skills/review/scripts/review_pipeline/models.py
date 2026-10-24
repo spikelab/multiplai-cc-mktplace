@@ -355,6 +355,10 @@ class TargetInfo(BaseModel):
     # Tree targets only: (file, reason) for each file at head left out of the
     # review (binary, too large, a lockfile, generated or vendored).
     skipped: list[tuple[str, str]] = Field(default_factory=list)
+    # Change targets only: the `--exclude` globs, and the changed paths they
+    # left out of `files` and of the diff.
+    excluded: list[str] = Field(default_factory=list)
+    excluded_files: list[str] = Field(default_factory=list)
     # The git dependencies whose source this run extracted into the snapshot
     # (`deps.ensure`, set again on every run and resume); the gates re-read a
     # citation of one from its `cache` at its `commit`.

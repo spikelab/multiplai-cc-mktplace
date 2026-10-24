@@ -18,8 +18,12 @@ the call and completed after the write.
 - `specs.md`, per component (`components/<id>/specs.md`, or `specs.md` in the
   change dir for a change with one component): from the component's
   `plan.md`, the change's proposal and use cases, the names of the other
-  components, the prototype's file list and the registry. It must pass
-  `multiplai_core.specs.valid_specs_text`.
+  components, the prototype's file list and the registry. The answer holds
+  the file between the rewrite's delimiter lines (`rewrite.BEGIN` /
+  `rewrite.END`, read by `rewrite.parse_answer`); only that text is written,
+  it may hold nothing but blank lines above its first `# Capability:` line,
+  and it must pass `multiplai_core.specs.valid_specs_text`, which does not
+  read that text. A real-model run on 2026-10-23 wrote the model's note there.
 """
 
 from __future__ import annotations
@@ -32,7 +36,7 @@ from pathlib import Path
 
 from multiplai_core.specs import valid_specs_text
 
-from . import intake, layout, sdk
+from . import intake, layout, rewrite, sdk
 from .prompts import UNTRUSTED_NOTICE
 from .prompts import spec as P
 from .publish import atomic_write, markdown_text
@@ -256,6 +260,8 @@ def specs_prompt(run: Run, spec_dir: Path) -> str:
         prototype_files=prototype,
         instruction=P.SPECS_INSTRUCTION,
         template=P.SPECS_TEMPLATE,
+        begin=rewrite.BEGIN,
+        end=rewrite.END,
     ) + registry_section(run)
 
 
@@ -289,12 +295,28 @@ async def write_specs(run: Run, spec_dir: Path) -> str:
     label = "spec:specs:" + (
         run.config.change_name if spec_dir == run.config.change_dir else spec_dir.name
     )
-    text = await sdk.text_call(
+    answer = await sdk.text_call(
         specs_prompt(run, spec_dir),
         config=run.config,
         step="spec_artifact",
         label=label,
     )
+    try:
+        text = rewrite.parse_answer(answer)
+        if text is None:
+            raise rewrite.ContractError(
+                f"the answer is {rewrite.UNCHANGED}, but there is no file yet"
+            )
+        if rewrite.preamble(text):
+            raise rewrite.ContractError(
+                "it holds text above the first `# Capability:` line"
+            )
+    except rewrite.ContractError as e:
+        log.warning("%s: %s; answer starts %r", label, e, answer[:200])
+        raise ValueError(
+            f"The specs.md for {spec_dir.name} was not written: {e}"
+        ) from e
+    text = text.lstrip()  # only blank lines are above the first capability
     if not valid_specs_text(text):
         raise ValueError(
             f"Invalid specs.md for {spec_dir.name}: expected `# Capability: <kebab-name>` "

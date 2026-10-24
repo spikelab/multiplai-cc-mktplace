@@ -1078,6 +1078,32 @@ class BuildConfig:
             return self.model or default_model()
         return spec.model if spec.is_anthropic else spec.qualified
 
+    def configured_model_for(self, step: str) -> str | None:
+        """The model the config names for *step*, or None when it names none.
+
+        Links 1-3 of ``model_for`` only: ``models.<step>``, ``models.<stage>``
+        and the per-stage field (``review_model`` for ``review``, from
+        ``[buildme.review] MODEL=`` or ``BUILDME_REVIEW_MODEL``). For a call
+        buildme hands to another skill that has model settings of its own: the
+        PR review it launches (``findings.loop.review_argv``,
+        ``epic.review.review_argv``), whose ``review.yaml`` and
+        ``multiplai.conf`` ``review_*`` keys ``models.default``, ``[buildme]
+        MODEL=`` and the session's model must not override.
+
+        Raises:
+            KeyError: *step* is not in ``STEP_STAGES``.
+        """
+        step = self.step_aliases.get(step, step)
+        stage = STEP_STAGES[step]
+        spec = resolve_model_spec(
+            [self.model_specs.get(step), self.model_specs.get(stage)]
+        )
+        if spec is not None:
+            return spec.model if spec.is_anthropic else spec.qualified
+        return self._explicit_field_model(
+            _STEP_MODEL_FIELDS.get(step) or _STAGE_MODEL_FIELDS[stage]
+        )
+
     def effort_for(self, step: str) -> str | None:
         """The effort one step runs at, or None (the CLI's default).
 

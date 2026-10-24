@@ -1056,7 +1056,7 @@ class Coordinator:
         if open_:
             records.finish(open_[-1], None, interrupted=True, extra=fields)
         elif not any("blocking" in a.result for a in tries):
-            argv = review.review_argv(self._worktree(c), number)
+            argv = review.review_argv(self._worktree(c), number, self.config)
             a = records.start(
                 self.epic_dir, "review", c.id, argv, head_sha=head, pr_round=c.pr_round
             )
@@ -1137,7 +1137,10 @@ class Coordinator:
                     if a.child == c.id and a.kind in REVIEW_KINDS and a.result is None
                 ]
                 code, out = await self._run_review(
-                    c, "review", review.review_argv(self._worktree(c), number), head
+                    c,
+                    "review",
+                    review.review_argv(self._worktree(c), number, self.config),
+                    head,
                 )
                 if code == 2 and review.RUNNING_NOW in out:  # C.S2: never two at once
                     records.finish(c.rattempt, code, interrupted=False)
@@ -1152,7 +1155,10 @@ class Coordinator:
                         c.status, c.reason = "built", ""
                         return
                     code, out = await self._run_review(
-                        c, "resume", review.resume_argv(hint.group(1).strip()), head
+                        c,
+                        "resume",
+                        review.resume_argv(hint.group(1).strip(), self.config),
+                        head,
                     )
                     if code == 2 and review.RUNNING_NOW in out:
                         records.finish(c.rattempt, code, interrupted=False)
