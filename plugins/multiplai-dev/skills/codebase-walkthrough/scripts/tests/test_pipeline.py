@@ -37,7 +37,8 @@ def test_run_writes_markdown_and_html_with_the_same_headings(done_run):
     md = md_path.read_text()
     html = md_path.with_suffix(".html").read_text()
     assert not md_path.with_suffix(".json").exists()
-    assert "<svg" not in html
+    # Code draws every diagram of the page itself; no Mermaid is left for the browser to draw.
+    assert '<pre class="mermaid">' not in html
     md_heads = markdown_headings(md)
     html_heads = [
         re.sub(r"<[^>]+>", "", h) for h in re.findall(r"<h2>(.*?)</h2>", html)
@@ -47,10 +48,11 @@ def test_run_writes_markdown_and_html_with_the_same_headings(done_run):
         == html_heads
         == [
             "What it is",
-            "Use cases",
             "How it works",
+            "How it stores bookings",
             "What it creates",
             "Configuration",
+            "Use cases",
             "Gotchas",
             "Reference",
             "How this was made",

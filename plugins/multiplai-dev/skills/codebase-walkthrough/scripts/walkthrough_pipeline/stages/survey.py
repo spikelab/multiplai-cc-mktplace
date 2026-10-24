@@ -1,12 +1,11 @@
-"""survey (`--scope codebase` only): three agents, each reading across the whole snapshot.
+"""survey (`--scope codebase` only): two agents, each reading across the whole snapshot.
 
 An explore agent reads one slice of the code, so it cannot see that a gate in one file is never reached
-from a loop in another, and it reads a doc only when the doc falls in its slice. The survey asks three
-questions of the whole snapshot (`prompts.SURVEY_QUESTIONS`): loops, caps, exits and gates that cannot
-fire; state, logs and resume, reading the `--lib` directories too; and which command to run, from the
-target's own docs. Their answers are stored in `state.explore_answers` under `survey:<question>` and go
-through the same citation gate as explore's (`explore.gate_answers`), so their facts get ids after
-explore's. Any other scope passes through without a call.
+from a loop in another. The survey asks two questions of the whole snapshot (`prompts.SURVEY_QUESTIONS`):
+loops, caps, exits and gates that cannot fire; and state, logs and resume, reading the `--lib` directories
+too. Both list the target's own docs. Their answers are stored in `state.explore_answers` under
+`survey:<question>` and go through the same citation gate as explore's (`explore.gate_answers`), so their
+facts get ids after explore's. Any other scope passes through without a call.
 """
 
 from __future__ import annotations
@@ -21,7 +20,7 @@ from ..prompts import survey_task
 from . import RunContext
 from .explore import _ask_kwargs, gate_answers
 
-QUESTIONS = ("loops", "lifecycle", "commands")
+QUESTIONS = ("loops", "lifecycle")
 DOC_NAMES = ("SKILL.md", "README.md", "CHANGELOG.md", "CLAUDE.md")
 
 

@@ -63,11 +63,57 @@
     padding: 16px; margin: 12px 0 18px; }
   .diagram pre.mermaid { margin: 0; background: none; border: 0; text-align: center; padding: 0; }
   pre.mermaid svg { max-width: 100%; height: auto; }
+  /* The flow picture (render.flow_picture): one box per stage, coloured by its kind, left to right on a wide screen. */
+  .flowpic { margin: 16px 0 8px; }
+  ol.fp { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; align-items: stretch; gap: 14px 30px; }
+  ol.fp > li { position: relative; flex: 1 1 140px; max-width: 230px; margin: 0; display: grid; gap: 8px; align-content: center; }
+  ol.fp > li + li::before { content: "\2192"; position: absolute; left: -23px; top: 50%; transform: translateY(-50%);
+    color: var(--muted); font-size: 18px; line-height: 1; }
+  .fp-box { --k: var(--muted); --k-bg: var(--surface); position: relative; display: grid; gap: 3px; padding: 8px 10px;
+    background: var(--k-bg); border: 1px solid var(--line); border-top: 3px solid var(--k); border-radius: var(--radius, 6px);
+    font-size: 14px; line-height: 1.35; }
+  .fp-box[title] { cursor: help; }
+  .k-agent { --k: var(--accent); --k-bg: var(--accent-soft); }
+  .k-check { --k: var(--ok); --k-bg: var(--ok-soft); }
+  .k-decision { --k: var(--warn); --k-bg: var(--warn-soft); }
+  .k-code { --k: var(--muted); --k-bg: var(--surface); }
+  .k-input, .k-output { --k: var(--fg); --k-bg: var(--sunk); }
+  .fp-stack { box-shadow: 4px 4px 0 -1px var(--k-bg), 4px 4px 0 0 var(--k), 8px 8px 0 -1px var(--k-bg), 8px 8px 0 0 var(--k);
+    margin: 0 8px 8px 0; }
+  .fp-kind, .fp-key { display: inline-flex; align-items: center; gap: 4px; font-family: var(--font-mono); font-size: 11px;
+    letter-spacing: .04em; text-transform: uppercase; color: var(--k); }
+  .fp-icon { width: 14px; height: 14px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.6;
+    stroke-linecap: round; stroke-linejoin: round; }
+  .fp-label { font-family: var(--font-display); font-weight: 600; font-size: 15px; color: var(--fg); }
+  .fp-does, .fp-back { color: var(--muted); font-size: 13px; }
+  .fp-fan { font-size: 13px; font-weight: 600; color: var(--k); }
+  .fp-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 12px; }
+  ol.fp > li.fp-gate { flex: 0 1 110px; max-width: 140px; }
+  .fp-gate .fp-box { padding: 6px 8px; }
+  .fp-gate .fp-label { font-size: 13px; }
+  @media (max-width: 640px) {
+    ol.fp { flex-direction: column; gap: 26px; }
+    ol.fp > li, ol.fp > li.fp-gate { max-width: none; flex: none; }
+    ol.fp > li + li::before { content: "\2193"; left: 50%; top: -22px; transform: translateX(-50%); }
+  }
+  /* The diagram stage's picture (diagram.page_figure): the wide SVG at 700 px and up, the tall one below. */
+  figure.diagram { padding: 12px; }
+  figure.diagram svg { display: block; width: 100%; height: auto; }
+  figure.diagram svg.dg-tall { display: none; max-width: 480px; margin: 0 auto; }
+  @media (max-width: 699px) {
+    figure.diagram { padding: 4px; }
+    figure.diagram svg.dg-wide { display: none; }
+    figure.diagram svg.dg-tall { display: block; }
+  }
   .cases { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 16px; margin: 12px 0; }
   .case, .item { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 4px 16px 8px; }
   .item { margin: 12px 0; }
   .case h3, .item h3 { margin-top: 12px; }
   .meta { font-size: 14px; color: var(--muted); }
+  dl.part { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 14px; margin: 8px 0; font-size: 15px; }
+  dl.part dt { font-weight: 600; color: var(--muted); }
+  dl.part dd { margin: 0; }
+  @media (max-width: 640px) { dl.part { grid-template-columns: minmax(0, 1fr); } dl.part dd { margin-bottom: 6px; } }
   ol.steps { padding-left: 22px; }
   ol.steps > li { max-width: none; margin: 0 0 12px; }
   ol.steps > li::marker { font-family: var(--font-display); font-weight: 600; color: var(--accent); }
@@ -78,6 +124,55 @@
   details.sub { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 8px 14px; }
   details.sub > summary { color: var(--fg); }
   details.sub > summary h3 { display: inline; margin: 0; font-size: 17px; }
+  /* The detail sections at the bottom of the page, closed until the reader opens one. */
+  details.appendix { margin: 0; }
+  details.appendix > summary { color: var(--fg); font-size: inherit; }
+  details.appendix > summary h2 { display: inline-block; margin: 32px 0 6px; border-top: 0; padding-top: 0; }
+  section:has(> details.appendix) { border-top: 1px solid var(--line); margin-top: 16px; }
+  /* The page writer's components (prompts.page_writer lists them). Colours come only from the tokens and the
+     kind classes above, so a design system restyles them. */
+  svg.sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
+  .ic { width: 18px; height: 18px; flex: none; display: inline-block; vertical-align: -3px; fill: none;
+    stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  p.lead { font-size: 17px; color: var(--muted); margin: 0 0 18px; }
+  ol.stages { list-style: none; margin: 18px 0; padding: 0; }
+  ol.stages > li { position: relative; display: grid;
+    grid-template-columns: 44px minmax(0, 1fr); gap: 0 16px; max-width: none; padding-bottom: 24px; }
+  ol.stages > li::before { content: ""; position: absolute; left: 21px; top: 44px; bottom: 0; width: 2px;
+    background: var(--line); }
+  ol.stages > li:last-child::before { display: none; }
+  .badge { position: relative; z-index: 1; width: 44px; height: 44px; border-radius: 12px; display: grid;
+    place-items: center; background: var(--k-bg, var(--surface)); border: 1.5px solid var(--k, var(--muted));
+    color: var(--k, var(--muted)); }
+  .badge .ic { width: 22px; height: 22px; }
+  .badge .num { position: absolute; right: -6px; bottom: -6px; min-width: 19px; height: 19px; padding: 0 4px;
+    display: grid; place-items: center; border-radius: 999px; background: var(--surface); border: 1px solid var(--line);
+    color: var(--fg); font-size: 11px; font-weight: 700; line-height: 1; }
+  .stage-kind { margin: 0 0 2px; font-family: var(--font-mono); font-size: 12px; letter-spacing: .05em;
+    text-transform: uppercase; color: var(--k, var(--muted)); }
+  .stage-body { min-width: 0; padding-top: 2px; }
+  .stage-body h3 { margin: 0 0 6px; }
+  .stage-body p { margin: 0 0 10px; }
+  .checkline { display: flex; gap: 10px; align-items: flex-start; max-width: 75ch; margin: 4px 0 10px;
+    padding: 10px 12px; background: var(--ok-soft); border: 1px solid var(--ok); border-radius: 10px; font-size: 15px; }
+  .checkline .ic { color: var(--ok); margin-top: 3px; }
+  .checkline p { margin: 0; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); gap: 12px;
+    margin: 16px 0; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-left: 4px solid var(--k, var(--line));
+    border-radius: 10px; padding: 12px 14px; font-size: 15px; }
+  .card h3, .card h4 { display: flex; gap: 8px; align-items: center; margin: 0 0 4px; font-size: 16px; }
+  .card .ic { color: var(--k, var(--muted)); }
+  .card p { margin: 0 0 6px; }
+  .card p:last-child { margin-bottom: 0; }
+  ul.traps { list-style: none; margin: 12px 0; padding: 0; display: grid; gap: 10px; }
+  ul.traps > li { max-width: none; display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 10px;
+    background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  ul.traps .ic { color: var(--warn); width: 20px; height: 20px; margin-top: 2px; }
+  ul.traps strong { display: block; margin-bottom: 2px; }
+  details.fold { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; margin: 14px 0;
+    padding: 10px 16px; }
+  details.fold > summary { color: var(--fg); font-weight: 600; font-size: inherit; }
   blockquote { border-left: 3px solid var(--accent); background: var(--accent-soft); margin: 12px 0; padding: 4px 14px;
     border-radius: 0 6px 6px 0; }
   @media (max-width: 860px) {
@@ -88,6 +183,8 @@
   }
   @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
 </style>
+<style>{{PAGE_CSS}}</style>
+<style>{{DIAGRAM_CSS}}</style>
 </head>
 <body>
 <div class="wrap">

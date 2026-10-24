@@ -38,9 +38,12 @@ STAGES: tuple[str, ...] = (
     "partition",
     "explore",
     "survey",
+    "core",
     "docs",
     "trace",
     "write",
+    "page",
+    "diagram",
     "render",
     "done",
 )
@@ -217,10 +220,25 @@ class UseCasesOutput(_Model):
     cases: list[UseCase] = Field(default_factory=list)
 
 
+FlowKind = Literal["input", "code", "agent", "check", "decision", "output"]
+
+
 class FlowNode(_Model):
+    """One stage of the flow picture: what kind of step it is, what it does, and what it reads and writes."""
+
     id: str
     label: str
     cite: str = ""
+    kind: FlowKind = "code"
+    does: str = ""  # one plain line, at most 80 characters
+    reads: list[str] = Field(default_factory=list)
+    writes: list[str] = Field(default_factory=list)
+    fan_out: str = ""  # plain words for work run in parallel, e.g. "5 aspect finders, plus 1 per piece"
+
+    @field_validator("kind", mode="before")
+    @classmethod
+    def _kind(cls, v):
+        return _lower(v)
 
 
 class FlowEdge(_Model):
@@ -233,6 +251,7 @@ class FlowEdge(_Model):
 class FlowStep(_Model):
     title: str
     summary: str
+    node: str = ""  # the id of the box this step explains
     details_paragraphs: list[str] = Field(default_factory=list)
     snippet_cites: list[str] = Field(default_factory=list)
 
@@ -275,18 +294,7 @@ class ConfigOutput(_Model):
     rows: list[ConfigRow] = Field(default_factory=list)
 
 
-# `--scope codebase` adds four tables. Each row cites one id; its gate is in gates.py.
-
-
-class CommandRow(_Model):
-    situation: str
-    command: str = ""
-    why: str = ""
-    cite: str = ""
-
-
-class CommandsOutput(_Model):
-    rows: list[CommandRow] = Field(default_factory=list)
+# `--scope codebase` adds three tables. Each row cites one id; its gate is in gates.py.
 
 
 class LoopRow(_Model):
@@ -321,6 +329,68 @@ class ResumeRow(_Model):
 
 class ResumeOutput(_Model):
     rows: list[ResumeRow] = Field(default_factory=list)
+
+
+# The part of the code that does its main job (module and codebase scope, human mode): the core stage
+# chooses it, a deep read explains it, and the write stage gives it its own section.
+
+
+class CoreChoice(_Model):
+    title: str = ""  # the section's heading in plain words, e.g. "How it finds bugs"
+    job: str = ""  # one sentence: what the code exists to do
+    files: list[str] = Field(
+        default_factory=list
+    )  # workspace paths of the files that do it
+    why: str = ""  # one sentence: why these files are the ones that do it
+    cites: list[str] = Field(default_factory=list)
+
+
+class CorePart(_Model):
+    name: str
+    looks_at: str = ""
+    given: str = ""
+    produces: str = ""
+    checked_by: str = ""
+    cite: str = ""
+
+
+class CoreOutput(_Model):
+    summary: str = ""  # one sentence that is enough on its own
+    paragraphs: list[Paragraph] = Field(default_factory=list)
+    parts: list[CorePart] = Field(default_factory=list)
+    flow: FlowOutput | None = None  # for a part with a flow of its own
+
+
+# The page writer's answer (stages/page.py): the HTML page's open body, one fragment per open section.
+
+
+class PageSection(_Model):
+    key: str
+    html: str = ""
+
+
+class PageOutput(_Model):
+    css: str = ""
+    sections: list[PageSection] = Field(default_factory=list)
+
+
+# The diagram stage's answers (stages/diagram.py): the "How it works" picture as two SVGs, and a look at it.
+
+
+class DiagramOutput(_Model):
+    wide: str = ""  # the SVG for screens of 700 px and more, viewBox width 1000
+    tall: str = ""  # the SVG for phones, viewBox width 420
+    css: str = ""  # rules for the SVGs' `wd-` classes
+    alt: str = ""  # one sentence: the picture's text alternative
+
+
+class DiagramLook(_Model):
+    verdict: Literal["ok", "fix"] = "ok"
+    problems: list[str] = Field(default_factory=list)
+    # The whole corrected SVGs and CSS when the verdict is "fix"; empty when it is "ok".
+    wide: str = ""
+    tall: str = ""
+    css: str = ""
 
 
 # --- stage records in the state ------------------------------------------------------
@@ -361,12 +431,30 @@ class WalkState(BaseModel):
     terms: list[Term] = Field(default_factory=list)
     uncovered_files: list[str] = Field(default_factory=list)
     uncovered_entries: list[str] = Field(default_factory=list)
+    core_answers: dict[str, dict] = Field(
+        default_factory=dict
+    )  # "core:choice", "core:choice:rewrite" -> CoreChoice dump | {"error": ...}
+    core: dict = Field(
+        default_factory=dict
+    )  # the gated choice: {title, job, why, files, cites}; empty when there is none
     docs: dict = Field(default_factory=dict)
     docs_answers: dict[str, dict] = Field(default_factory=dict)
     paths: PathsResult | None = None  # the trace stage's map_paths result
     paths_error: str | None = None  # "<ExceptionType>: <message>" when it failed
     sections: dict[str, Section] = Field(default_factory=dict)
     write_answers: dict[str, dict] = Field(default_factory=dict)
+    page_answers: dict[str, dict] = Field(
+        default_factory=dict
+    )  # "page", "page:rewrite" -> PageOutput dump | {"error": ...}
+    page: dict = Field(
+        default_factory=dict
+    )  # the gated open body: {css, sections: {key: html}, words}; empty: the page is drawn by code
+    diagram_answers: dict[str, dict] = Field(
+        default_factory=dict
+    )  # "draw", "draw:rewrite", "look:1".."look:3" -> DiagramOutput / DiagramLook dump | {"error": ...}
+    diagram: dict = Field(
+        default_factory=dict
+    )  # the gated picture: {wide, tall, css, alt, looks, approved}; empty: code draws the picture
     dropped: list[Dropped] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
     lsp: dict = Field(default_factory=dict)

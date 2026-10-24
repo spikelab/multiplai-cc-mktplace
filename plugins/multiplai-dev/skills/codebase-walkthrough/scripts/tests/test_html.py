@@ -20,9 +20,7 @@ def _md_and_page(done_run) -> tuple[str, str]:
     return md_path.read_text(), md_path.with_suffix(".html").read_text()
 
 
-@pytest.fixture
-def github_run(fresh_ws, tmp_path, monkeypatch, fake_fetch):
-    """`done_run`, with every repo's origin on GitHub, so citations are https links to the commit."""
+def _github_run(fresh_ws, tmp_path, monkeypatch, **fake):
     for key in ("engine", "front", "warehouse"):
         subprocess.run(
             [
@@ -37,7 +35,7 @@ def github_run(fresh_ws, tmp_path, monkeypatch, fake_fetch):
             check=True,
             capture_output=True,
         )
-    agents = FakeAgents()
+    agents = FakeAgents(**fake)
     monkeypatch.setattr(sdk, "agent_call_structured", agents)
     assert main(run_args(fresh_ws, tmp_path)) == 0
     return (
@@ -47,8 +45,22 @@ def github_run(fresh_ws, tmp_path, monkeypatch, fake_fetch):
     )
 
 
-def test_every_https_link_in_the_markdown_is_an_href_in_the_page(github_run):
-    md, page = _md_and_page(github_run)
+@pytest.fixture
+def github_run(fresh_ws, tmp_path, monkeypatch, fake_fetch):
+    """`done_run`, with every repo's origin on GitHub, so citations are https links to the commit."""
+    return _github_run(fresh_ws, tmp_path, monkeypatch)
+
+
+@pytest.fixture
+def github_built_run(fresh_ws, tmp_path, monkeypatch, fake_fetch):
+    """`github_run` whose page writer fails its checks twice, so code builds every section of the page."""
+    return _github_run(fresh_ws, tmp_path, monkeypatch, plant={"page_script:always"})
+
+
+def test_every_https_link_in_the_markdown_is_an_href_in_a_page_built_by_code(
+    github_built_run,
+):
+    md, page = _md_and_page(github_built_run)
     links = set(re.findall(r"\]\((https://[^\s)]+)", md))
     assert any(
         link.startswith("https://github.com/acme/engine/blob/") for link in links
@@ -186,8 +198,8 @@ def test_hop_anchors_are_inside_the_paths_details(done_run):
     assert 'href="#p1h1"' in page
 
 
-def test_payload_examples_are_closed_details(done_run):
-    _, page = _md_and_page(done_run)
+def test_payload_examples_are_closed_details(github_built_run):
+    _, page = _md_and_page(github_built_run)
     outputs = re.search(
         r'<section id="outputs">(.*?)</section>', page, re.DOTALL
     ).group(1)
@@ -243,3 +255,51 @@ def test_mermaid_is_a_mermaid_pre_and_other_code_is_marked_for_highlight_js():
 def test_a_hop_pointer_is_an_arrow_not_its_id():
     page = markdown_html('It starts here [`e/a.py:3`](u "q") ([p2h3](#p2h3)).')
     assert '<a class="hop" href="#p2h3"' in page and ">p2h3<" not in page
+
+
+def _linked(run_dir, text: str) -> str:
+    """*text* through the page's citation rendering: links, numbered superscripts, then grouping."""
+    from walkthrough_pipeline.render import (
+        CiteNumbers,
+        Linker,
+        group_cites,
+        markdown_html,
+    )
+    from walkthrough_pipeline.state import STATE_FILE, load_state
+
+    lk = Linker(load_state(run_dir / STATE_FILE), run_dir)
+    return group_cites(markdown_html(lk.expand(text), CiteNumbers()))
+
+
+def test_adjacent_citations_are_one_superscript_reading_1_2(done_run):
+    _, run_dir, _ = done_run
+    out = _linked(run_dir, "a [[c1]] [[c2]]")
+    assert out.count("<sup>") == 1
+    sup = re.search(r"<sup>(.*?)</sup>", out).group(1)
+    assert re.sub(r"<[^>]+>", "", sup) == "1, 2"
+
+
+def test_the_sparse_pass_keeps_one_citation_under_each_h3(done_run):
+    from walkthrough_pipeline.render import first_cites_only
+
+    _, run_dir, _ = done_run
+    body = (
+        "<h3>One</h3>"
+        + _linked(run_dir, "It reads. [[c1]]\n\nIt checks. [[c2]] [[c3]]")
+        + "<h3>Two</h3>"
+        + _linked(run_dir, "It writes. [[c3]]")
+    )
+    assert len(re.findall(r'class="cite"', body)) == 4
+    out = first_cites_only(body)
+    one, two = out.split("<h3>Two</h3>")
+    assert len(re.findall(r'class="cite"', one)) == 1
+    assert len(re.findall(r'class="cite"', two)) == 1
+    # Numbered again in the order shown.
+    assert re.findall(r'class="cite"[^>]*>(\d+)<', out) == ["1", "2"]
+    assert "It checks." in one and "It writes." in two
+
+
+def test_the_page_groups_adjacent_citations(done_run):
+    md_path, _, _ = done_run
+    page = md_path.with_suffix(".html").read_text()
+    assert not re.search(r'</a></sup>\s*<sup><a class="cite"', page)
