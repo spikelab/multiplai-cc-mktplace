@@ -36,6 +36,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 from . import budget
@@ -48,6 +49,8 @@ READ_EVERY_S = 30.0
 READ_TIMEOUT_S = 5.0
 HEADROOM = 0.9
 MIN_POINTS = 2.0
+# The endpoint's reset time moves by under a second between reads of one window.
+SAME_RESET_S = 60.0
 
 # Cost per call by ledger label, before this run's own calls of that label return: DolceTech/Dolcebot
 # PR #4's ledger (`budget.by_stage`, cost / calls), 2026-10. A dimension finder on a piece costs what a
@@ -167,6 +170,17 @@ def estimate(label: str) -> float:
     return DEFAULT_ESTIMATES["find:piece"]
 
 
+def same_reset(a: str, b: str) -> bool:
+    """Whether two reset times are one window's: within `SAME_RESET_S`, or, when either cannot be read, equal."""
+    try:
+        return (
+            abs((datetime.fromisoformat(a) - datetime.fromisoformat(b)).total_seconds())
+            <= SAME_RESET_S
+        )
+    except (TypeError, ValueError):
+        return a == b
+
+
 @dataclass
 class _Anchor:
     utilization: float
@@ -195,7 +209,11 @@ class Gate:
         """Move each window's anchor and rate forward on a new reading."""
         for r in readings:
             a = self.anchors.get(r.name)
-            if a is None or r.resets_at != a.resets_at or r.utilization < a.utilization:
+            if (
+                a is None
+                or not same_reset(r.resets_at, a.resets_at)
+                or r.utilization < a.utilization
+            ):
                 self.anchors[r.name] = _Anchor(r.utilization, self.spent, r.resets_at)
                 self.rates.pop(r.name, None)
                 continue

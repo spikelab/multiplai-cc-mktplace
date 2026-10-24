@@ -183,6 +183,34 @@ def test_a_new_reset_time_starts_the_measurement_again():
     assert "five_hour" not in g.rates
 
 
+def test_a_reset_time_that_moves_by_under_a_second_between_reads_is_the_same_window():
+    # Three reads of one window on 2026-10-24: the endpoint's reset time moved each time.
+    g = window.Gate()
+    g.learn(
+        [window.Reading("five_hour", 9.0, "2026-10-24T13:40:00.364858+00:00", None)]
+    )
+    g.spent = 26.0
+    g.learn(
+        [window.Reading("five_hour", 22.0, "2026-10-24T13:39:59.597598+00:00", None)]
+    )
+    assert g.rates["five_hour"] == pytest.approx(2.0)  # $26 over 13 points
+    g.spent = 30.0
+    g.learn(
+        [window.Reading("five_hour", 24.0, "2026-10-24T13:40:00.181188+00:00", None)]
+    )
+    assert g.rates["five_hour"] == pytest.approx(2.0)  # $30 over 15 points
+
+
+def test_a_reset_time_that_cannot_be_read_is_compared_as_text():
+    g = window.Gate()
+    g.learn([window.Reading("five_hour", 10.0, "soon", None)])
+    g.spent = 5.0
+    g.learn([window.Reading("five_hour", 12.0, "soon", None)])
+    assert "five_hour" in g.rates
+    g.learn([window.Reading("five_hour", 14.0, "later", None)])
+    assert "five_hour" not in g.rates
+
+
 # --- admitting calls ----------------------------------------------------------------------------------------
 
 
