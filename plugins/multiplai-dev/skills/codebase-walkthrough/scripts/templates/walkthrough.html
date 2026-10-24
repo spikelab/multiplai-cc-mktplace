@@ -93,7 +93,7 @@
   .fp-gate .fp-label { font-size: 13px; }
   @media (max-width: 640px) {
     ol.fp { flex-direction: column; gap: 26px; }
-    ol.fp > li { max-width: none; flex: none; }
+    ol.fp > li, ol.fp > li.fp-gate { max-width: none; flex: none; }
     ol.fp > li + li::before { content: "\2193"; left: 50%; top: -22px; transform: translateX(-50%); }
   }
   .cases { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 16px; margin: 12px 0; }
