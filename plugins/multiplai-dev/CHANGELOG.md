@@ -23,9 +23,9 @@ time, not derived from a tag.
   session happens to be set to. The level applies only while the skill
   runs; `CLAUDE_CODE_EFFORT_LEVEL` still overrides it.
   - `medium`: analyze-context-router, buildme, buildme-findings, codebase-walkthrough, design-system, learn-stack, plan, pr, propose-skill, review-viewer, spec-extract
-  - `high`: deepen, devops-gcp, e2e-test, skill-creator, think
-- `review` sets no effort: it keeps running at the session's effort, or
-  `REVIEW_EFFORT` in multiplai.conf, until medium and high are compared.
+  - `high`: deepen, devops-gcp, e2e-test, review, skill-creator, think
+- `review` runs at `high` until comparisons show whether `medium` finds as
+  many bugs.
 
 ## [0.105.3] - 2026-10-24
 

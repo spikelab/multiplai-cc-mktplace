@@ -2,6 +2,7 @@
 name: review
 description: Reviews a branch, PR or commit range, or a whole repository or directory, with a Python pipeline that finds, verifies, merges duplicate and labels repeated or low-value review findings, rejecting in code any finding whose cited lines are not at the reviewed commit. Writes a markdown review, severity rollups and a findings.json, then opens the findings in review-viewer.
 when_to_use: 'Triggers: review this branch, review PR, deep review, /multiplai-dev:review'
+effort: high
 ---
 
 # Review
