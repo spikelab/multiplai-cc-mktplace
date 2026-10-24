@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 from review_pipeline import checks
 from review_pipeline import target as target_mod
-from review_pipeline.models import CoverageRecord
+from review_pipeline.models import CoverageRecord, Piece
 from review_pipeline.prompts import find as find_prompt
 from review_pipeline.prompts.untrusted import fenced
 from review_pipeline.stages import find as find_stage
@@ -537,8 +537,13 @@ def test_the_prompt_states_the_rule_instruction_and_lists_the_included_docs(tmp_
             "docs/degradation-contract.md": "D.\n",
         },
     )
-    text = find_prompt.build(
-        target, "conventions", "diff", find_stage.conventions_chain(target)
+    text = find_prompt.build_report(
+        target,
+        "conventions",
+        Piece(id=1, group="", files=["CLAUDE.md"]),
+        "diff",
+        workspace="",
+        conventions=find_stage.conventions_chain(target),
     )
     assert INSTRUCTION in text
     after = text.split(INSTRUCTION, 1)[1]
@@ -608,7 +613,7 @@ def test_a_review_gives_the_conventions_finder_the_docs_and_records_the_skips(
         "reason": "missing",
     }.items() <= next(c for c in coverage if c["stage"] == "conventions").items()
     assert not any("gone.md" in e for e in state.errors)
-    check = next(c for c in state.checks if c.subject == "conventions")
+    check = next(c for c in state.checks if c.subject == "conventions@1")
     assert (
         "rules: docs/u.md" in check.given
         and "rules skipped: docs/gone.md" in check.given

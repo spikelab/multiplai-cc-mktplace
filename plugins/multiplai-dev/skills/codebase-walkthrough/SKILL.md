@@ -21,10 +21,17 @@ Run a walkthrough as a pipeline: code finds and checks, agents read and write.
 3. **explore** — one agent per slice of the module (at most `--unit-lines`
    lines) and one per group of boundary entries. Each returns claims with
    citations.
-4. **docs** — code fetches the vendor's `llms.txt` and the pages it lists that
+4. **core** (human mode, module or codebase) — one call with no tools names
+   the part of the code that does its main job, from the checked claims: a
+   plain title, the job, and the files that do it. `core_gate` checks in code
+   that the files are the target's and the title holds no citation, path or backticks; a
+   choice that fails twice is cut and the walkthrough has no core section.
+   Then one agent reads those files closely, with `Read`, `Grep` and `Glob` on
+   the snapshot, and its claims are checked like explore's.
+5. **docs** — code fetches the vendor's `llms.txt` and the pages it lists that
    name a resource the code calls, and maps each API path to a request in the
    API collection. One agent per resource links the docs to the code.
-5. **trace** — `code_facts.map_paths` finds the entry points of the module's
+6. **trace** — `code_facts.map_paths` finds the entry points of the module's
    repository (argparse, click and typer commands, `[project.scripts]`,
    `__main__` modules, `python -m` commands in a `SKILL.md`, hooks). The web
    entries the boundary stage found are added as caller seeds, each at its
@@ -44,36 +51,72 @@ Run a walkthrough as a pipeline: code finds and checks, agents read and write.
    written beside the walkthrough as `<name>-paths.json`, a `paths.v1`
    document (schema: `lib/code_facts/code_facts/schema/paths.v1.schema.json`)
    for other tools; `check` and buildme do not read it.
-6. **write** — one agent per section, with no tools, writes from the checked
+7. **write** — one agent per section, with no tools, writes from the checked
    claims only and refers to code by citation id. Each path gets one or two
    paragraphs written from its checked hops, citing them by hop id. Code turns the ids into
    `path:line` links and inserts the code snippets from the commit.
+8. **page** (human mode, module or codebase) — one call with no tools gets
+   every checked section and claim at once and writes the HTML page's open
+   sections as HTML fragments, with optional CSS. It lays them out with the
+   page's own components: numbered stage cards with an icon for each kind of
+   stage, a callout for a check, cards and trap cards. `page_gate` checks them in
+   code: only allowed tags and attributes, no link out of the page, CSS that
+   loads nothing and types no colour, only checked citation ids and none in a
+   heading. Code counts the visible words outside fold-outs against 3,600. A
+   failure gets one re-ask. A page that still fails, or a failed call, is
+   listed under "Warnings and errors" in Coverage, and code draws every
+   section of the page itself. The Markdown is never written from this call.
+9. **diagram** (human mode, module or codebase) — one call with no tools
+   draws the page's "How it works" picture as two SVGs, a wide one for screens
+   of 700 px and more and a tall one for phones, with their CSS. `diagram_gate`
+   checks them in code: only allowed SVG tags and attributes, no script, style
+   element or link out, every reference inside the SVG, every box of the flow
+   labelled, colours only from the design system's tokens. A failure gets one
+   re-ask. Code then renders the picture to PNG with `resvg-py` (light and
+   dark, wide and tall) in `<run>/diagram/`, and up to three looks, each with
+   `Read` limited to that folder, answer that it is right or return a
+   corrected picture, which must pass the same checks. This adds two to five
+   model calls to a run. When the draw fails, or `resvg-py` has no wheel for
+   the platform, the page shows the picture code draws and Coverage says why.
 
 In human mode the walkthrough is an explainer for someone new to the code. It
 has these sections, in this order:
 
 1. **What it is**: a sentence at the top on what the code is for, then two
-   short paragraphs in plain words.
-2. **Use cases**: at least two, each with who uses it and when, an example
-   command, call or file, what happens and what comes out. Each way to invoke
-   the code (a subcommand, a flag, a mode) gets its own example.
-3. **How it works**: one flow diagram of the main path, drawn by code from
-   boxes and arrows the writer names, then one short summary per step with
-   the specifics and code snippets behind a click.
+   short paragraphs in plain words, then the flow picture: one box per stage,
+   each marked as an input, code, an agent, a check, a decision or an output,
+   from the boxes and arrows the writer names. In the HTML page the diagram
+   stage draws it as SVG, or code draws the boxes when that stage fails; in
+   the Markdown it is a Mermaid diagram.
+2. **How it works**: one short block per stage of the picture, in the same
+   order, with the specifics and code snippets behind a click.
+3. **The part that does the main job**, titled by the core stage (for
+   example "How it finds bugs"): what it looks at, what it is given, what it
+   produces and what checks it. Left out when the core stage chose nothing.
 4. **What it creates**: each file, state record or output the code writes,
    with an example payload behind a click.
 5. **Configuration**: a table of the settings and flags that change behaviour.
-6. **Gotchas**.
-7. **Reference**, closed by default: Paths, Module tour, Who calls it and what
+6. **Use cases**: at least two, each with who uses it and when, an example
+   command, call or file, what happens and what comes out. Each way to invoke
+   the code (a subcommand, a flag, a mode) gets its own example.
+7. **Gotchas**.
+8. **Reference**, closed by default: Paths, Module tour, Who calls it and what
    it calls (names that appear only inside a quoted string are listed apart,
    under "Mentions in strings (not calls)"), Data stores, Vendor docs,
    Glossary, and the questions for the module's owner.
-8. **How this was made**, closed by default: Commits read (the module's
+9. **How this was made**, closed by default: Commits read (the module's
    repository and each one with a reference, plus how many were searched),
-   Coverage, and Cut by the checks.
+   Coverage, and Cut by the checks. When the page stage wrote the page, a line
+   gives its open body's word count.
+
+In the HTML page, sections 1 to 7 are open; with `--scope codebase` the three
+tables (Loops and caps, Exit codes and markers, State and resume) follow
+Gotchas, and they, Reference and How this was made are closed fold-outs at the
+bottom.
 
 Code checks each use case's flags and subcommands, each diagram box's
-citation and that the diagram is connected, and each key of a JSON or YAML
+citation and that the diagram is connected, that each stage of How it works
+names one box of the picture in the picture's order, and each key of a JSON or YAML
 example against the code. What fails is asked again once, then cut and
 listed under "Cut by the checks". In the HTML page a citation is a small
 numbered link to the cited lines, with `path:line` and the quote in its
@@ -90,8 +133,13 @@ gates never ask a model.
 
 - **Sends the module's repository, every repository that refers to it, and
   each `--lib` library's repository, to a model.** Agents read snapshots of those commits with `Read`, `Grep` and
-  `Glob` only; the writers get no tools. No agent gets a shell, file edits, or
-  web access. This is why it needs `--trust-repo`.
+  `Glob` only; the writers get no tools, nor do the core stage's choice and the
+  page writer (the core stage's deep read gets `Read`, `Grep` and `Glob` on the
+  snapshot). The page writer's HTML reaches a file only after `page_gate`
+  passes it. The diagram writer gets no tools; each look at the diagram gets
+  `Read` limited to `<run>/diagram`, the PNGs code drew, and its SVG reaches
+  a file only after `diagram_gate` passes it. No agent gets a shell, file
+  edits, or web access. This is why it needs `--trust-repo`.
 - **Reads git repositories** with `git rev-parse`, `git show`, `git archive`,
   `git ls-files`, `git ls-tree`, `git diff`, `git merge-base`, `git log` and
   `git grep` only. It never checks out, commits or writes to them, and fetches
@@ -109,8 +157,8 @@ gates never ask a model.
   with `--scope pr --pr N` the GitHub CLI `gh pr view`, which uses the network
   and the user's GitHub login. The PR's title and description go to the writer
   inside `<untrusted-content>` fences, as data.
-- **Writes files** to the run directory, the output directory and the log
-  files. The HTML page loads highlight.js and mermaid from
+- **Writes files** to the run directory (with the diagram's PNGs in
+  `<run>/diagram/`), the output directory and the log files. The HTML page loads highlight.js and mermaid from
   `cdnjs.cloudflare.com` when a browser opens it.
 - **Opens the review-viewer only when the user asks for it** (step 2), and
   puts the HTML page where its Summary tab links it. That
@@ -139,13 +187,13 @@ the repositories next to it, and re-run with `--trust-repo` only on a yes.
 | Arg | Meaning | Default |
 |-----|---------|---------|
 | target | Directory of the module, inside a git repository. With `--scope pr`: the repository | required for a module; for a change, `--repo` or the current directory |
-| `--scope` | `module`; `codebase`: a whole tool or plugin, with four more sections (which command to run, loops and caps, exit codes and markers, state and resume) and its own docs read as input; or `pr`: explain a change given by `--pr N` or `--range BASE..HEAD`, read at its head against the merge-base | `module` |
+| `--scope` | `module`; `codebase`: a whole tool or plugin, with three more sections (loops and caps, exit codes and markers, state and resume) and its own docs read as input; or `pr`: explain a change given by `--pr N` or `--range BASE..HEAD`, read at its head against the merge-base | `module` |
 | `--lib` | With `--scope codebase` (repeatable): a library directory the code calls, read alongside it and cited like it | none |
 | `--pr` / `--range` | With `--scope pr`, exactly one: a PR number (needs `gh`), or two commits | none |
 | `--repo` | With `--scope pr`: the repository | the current directory |
 | `--fetch` | With `--scope pr`: `git fetch --quiet origin` first | off |
 | `--expect-head` | With `--scope pr`: refuse to start unless the change's head is this sha | none |
-| `--commit` | Module only: read the directory at this commit instead of HEAD | HEAD |
+| `--commit` | Module or codebase: read the directory at this commit instead of HEAD | HEAD |
 | `--depth` | `overview` (skips test files), `standard`, `deep` | `overview` with `--scope codebase`, else `standard` |
 | `--mode` | `human` (Markdown and an HTML page) or `agent` (compact Markdown for coding agents; no references, docs or paths; `--scope module` only) | `human` |
 | `--name` | Base file name | the module directory, lower-cased; `pr-<N>` or `range-<base8>-<head8>` for a change |
@@ -202,13 +250,13 @@ uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/codebase-walkthrough/scripts \
   run /abs/path/to/tool --scope codebase --trust-repo [--lib /abs/path/to/library]
 ```
 
-After explore, three more agents each read the whole snapshot for one
-question: every loop and its cap, what the code keeps on disk and what a
-re-run does with it, and which command to run when. Each gets the tool's own
+After explore, two more agents each read the whole snapshot for one
+question: every loop and its cap, and what the code keeps on disk and what a
+re-run does with it. Each gets the tool's own
 `SKILL.md`, `README.md`, `CHANGELOG.md` and `CLAUDE.md` (those under the
 directory, and the nearest one of each name above it) and cites them like
-code. The walkthrough adds four tables to a module's sections: Which command
-to run, Loops and caps, Exit codes and markers, and State and resume. Each row
+code. The walkthrough adds three tables to a module's sections: Loops and
+caps, Exit codes and markers, and State and resume. Each row
 cites a line that passed the checks; a flag, number or name in no cited quote
 cuts the row (a cap alone is dropped and the row kept). A table with no row
 says so. It reads at `overview` depth (no test files) unless `--depth` says
@@ -350,9 +398,9 @@ uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/codebase-walkthrough/scripts \
   resume <run dir> --rewrite --trust-repo [--max-usd <n>]
 ```
 
-It runs the write and render stages again on a run past its trace stage, with
-the explore, docs and trace answers it already paid for, so only the writers
-are paid again. Use it to get a run's walkthrough in the current format. It
+It runs the write, page and render stages again on a run past its trace
+stage, with the explore, survey, core, docs and trace answers it already paid
+for, so only the writers and the page writer are paid again. Use it to get a run's walkthrough in the current format. It
 needs `--trust-repo`, as any run with model calls does. It cites the commits
 the run read, even when a repository has moved on since, and overwrites the
 outputs. It exits 1 with `resume --rewrite: <run dir> has not finished its
@@ -361,6 +409,35 @@ part-way through (exit 2) is continued with a plain `resume`. `--max-usd` is
 the ceiling for the run's whole spend, the earlier stages included: a run that
 spent $20 and is resumed with `--max-usd 25` stops after $5 more. Run it in
 the background and report as in steps 1 and 2.
+
+To write only the HTML page again, pass `--repage` in place of `--rewrite`:
+
+```bash
+uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/codebase-walkthrough/scripts \
+  python -m walkthrough_pipeline --session-id "{session_id}" \
+  resume <run dir> --repage --trust-repo [--max-usd <n>]
+```
+
+It runs the page and render stages again on a run past its write stage and
+keeps every other answer, so it pays for one page call, and one more when the
+page fails its checks. The Markdown does not change. It exits 1 with
+`resume --repage: <run dir> has not finished its write stage` for a run that
+has not got that far, and writes nothing.
+
+To draw only the page's "How it works" picture again, pass `--redraw`:
+
+```bash
+uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/codebase-walkthrough/scripts \
+  python -m walkthrough_pipeline --session-id "{session_id}" \
+  resume <run dir> --redraw --trust-repo [--max-usd <n>]
+```
+
+It runs the diagram and render stages again on a run past its page stage and
+keeps every other answer, so it pays for the draw and up to three looks (two
+to five calls). It exits 1 with `resume --redraw: <run dir> has not finished
+its page stage` for a run that has not got that far, and writes nothing.
+`--rewrite` also draws the picture again; `--repage` keeps it.
+`--rewrite`, `--repage` and `--redraw` cannot be given together.
 
 ## Configuration
 

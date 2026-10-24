@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import json
+import re
+from pathlib import Path
+
 from code_facts.prompts import UNTRUSTED_RULES, citation_rules, explore_unit  # noqa: F401  (explore_unit: re-export)
 from code_facts.prompts import schema_json as _schema
 
@@ -55,7 +59,7 @@ Schema:
 Answer with ONE JSON object and nothing after it."""
 
 
-# The survey's three questions (`--scope codebase`). Each agent reads across the whole snapshot.
+# The survey's two questions (`--scope codebase`). Each agent reads across the whole snapshot.
 SURVEY_QUESTIONS = {
     "loops": """Find every loop, retry, round and repeat in the code, and for each: what repeats, its cap
 (the constant or argument that limits it, with its value), what ends it well, and what ends it badly
@@ -70,11 +74,6 @@ records, reports. For each kind of stop (a crash or kill, a budget or round cap,
 say what is on disk afterwards, what a re-run or resume keeps, what it redoes, and what refuses to
 resume and with which message. Follow the calls into the libraries listed below when the code hands
 logging, state or cost tracking to them.""",
-    "commands": """Read the code's own docs listed below and its command-line entry points. Say which command,
-subcommand, mode or flag to use in which situation, and why; the decision rules and recipes the docs
-state (for example "use X for a trivial change, Y otherwise"); and the pitfalls they warn about. Where
-the docs and the code disagree (a flag the docs name that the code lacks, a different default), report
-that as a gotcha, citing both. In a `CHANGELOG.md` read only the first 200 lines.""",
 }
 
 
@@ -108,6 +107,101 @@ Libraries the code calls, which you may also read:
 
 Return each finding as a fact in `facts`, and each gate that cannot fire or doc that disagrees with the
 code as a fact in `gotchas`, every one with citations. Leave `files`, `interfaces` and `terms` empty.
+
+{CITATION_RULES}
+{UNTRUSTED_RULES}
+
+Schema:
+{_schema(schema)}
+
+Answer with ONE JSON object and nothing after it."""
+
+
+def core_choice(
+    name: str,
+    files: list[tuple[str, int]],
+    purposes: list[str],
+    doc_facts: list[str],
+    unit_facts: list[str],
+    schema,
+    failures: list[str] | None = None,
+    previous: str | None = None,
+) -> str:
+    """The core stage's first call: name the part of the code that does its main job. No tools."""
+    listing = "\n".join(f"- {path} ({n} lines)" for path, n in files)
+    redo = ""
+    if failures and previous:
+        redo = (
+            "\nYour previous answer failed these checks. Answer again, fixed:\n"
+            + "\n".join(f"- {f}" for f in failures[:30])
+            + "\n\nPrevious answer:\n"
+            + previous[:4000]
+            + "\n"
+        )
+    return f"""You are planning a walkthrough of `{name}` for someone who has never seen it.
+Work out what the code exists to do, and name the part of it that does that job: for example the finders
+of a review tool, the matching engine of a search service, the scheduler of a job runner. That part gets
+its own section and a deeper reading of its code.
+
+Files of `{name}`:
+{listing}
+
+What each file is for (checked against the code):
+{chr(10).join(purposes) or "- (none)"}
+
+What the code's own docs say (every item was checked against the code; ids in brackets are citation ids):
+{chr(10).join(doc_facts) or "- (none)"}
+
+Facts about the code (checked the same way):
+{chr(10).join(unit_facts) or "- (none)"}
+{redo}
+Return ONE JSON object:
+- `title`: the section's heading in plain words, at most 60 characters, no backticks, no file names, no
+  citation, e.g. "How it finds bugs";
+- `job`: one plain sentence: what the code exists to do;
+- `files`: the paths, exactly as listed above, of the files that do that job;
+- `why`: one plain sentence: why those files are the ones that do it;
+- `cites`: the citation ids (e.g. "c12") of the facts your answer rests on.
+A program checks every path and id.
+
+{EXPLAINER_RULES}
+
+Schema:
+{_schema(schema)}
+
+Answer with ONE JSON object and nothing after it."""
+
+
+def core_read(
+    name: str,
+    choice: dict,
+    files: list[tuple[str, int]],
+    libs: list[str],
+    schema,
+) -> str:
+    """The core stage's deep read: one agent with Read, Grep and Glob on the snapshot."""
+    listing = "\n".join(f"- {path} ({n} lines)" for path, n in files)
+    lib_list = "\n".join(f"- {d}/" for d in libs) or "- (none given)"
+    return f"""You are explaining the codebase `{name}` to an engineer who has just joined the team.
+Your working directory holds snapshots of one or more repositories at one commit each; every path
+below starts with the repository name.
+
+Core part: [core:read]
+The code exists to do this: {choice["job"]}
+These files do that job; read them closely, not in passing:
+{listing}
+
+Libraries the code calls, which you may also read:
+{lib_list}
+
+For each part of what these files do, find and cite:
+- what it looks at;
+- what it is given: its prompts, rules and inputs, quoted from the code;
+- what it produces;
+- how its output is checked, and by what;
+- why the part exists: what would go wrong without it.
+Return each finding as a fact in `facts`, and anything that would surprise a newcomer as a fact in
+`gotchas`, every one with citations. Leave `files`, `interfaces` and `terms` empty.
 
 {CITATION_RULES}
 {UNTRUSTED_RULES}
@@ -173,12 +267,35 @@ Writing rules (a program checks every paragraph; one that fails is cut from the 
   the word "think". Use only what the facts say."""
 
 
+# Rules 2 to 8 of the Clear Writing output style, copied here, not read at run time: the plugin runs on
+# machines that do not have that file.
 EXPLAINER_RULES = """\
 Writing rules (a program checks every sentence, example, box and key; what fails is cut):
 - Write for someone who has never seen this code: plain words, short sentences. Say what something
   does before how it does it. No code-speak in the text; name a function only when the reader needs it.
+- Never invent a name for a thing. Say what it does, using a verb. When something has no name yet, do
+  not compress the explanation into a noun phrase made up on the spot and then use it as if the reader
+  knew it. Write "it now checks only the text just written", not "diff-scoping is the fix". A term is
+  safe only if it appears in the material; otherwise describe the thing every time, even when that costs
+  more words. Being understood on the first read beats saving words inside a sentence. No metaphor in
+  place of an explanation: "the only setting worth changing" names a setting, "the only knob worth
+  considering" names nothing.
+- Prefer a verb to a noun built from a verb: "it blocks the edit", not "the blocking behaviour"; "it
+  fired 48 times", not "the firing rate was high". A noun built from a verb hides who does what to what.
+- Answer first: the first sentence says the thing the reader came for. Reasons come after.
+- One idea per sentence, at most 50 words. Two ideas welded into one short sentence is the failure to
+  avoid.
+- Concrete subject, active verb: "the script exits 2", not "the failure mode here is a non-zero exit".
+  Never put an abstract noun in the subject slot.
+- Say the thing; do not announce it. Never write "the key insight is", "crucially", "worth noting",
+  "importantly" or "the mechanism behind".
+- Numbers and names, not adjectives: "72% of tool-output bytes", not "the dominant cost".
+- Explain each internal term of the code (gate, verdict, piece, head, snapshot and the like) in plain
+  words before you use it, or avoid it.
+- Each section opens with a sentence that is enough on its own; the sentences after it add detail.
 - Cite with the citation id in double brackets at the END of the sentence it supports, e.g.
-  "It saves its progress after every phase. [[c12]]". Never put a citation in the middle of a phrase.
+  "It saves its progress after every phase. [[c12]]". Never put a citation in the middle of a phrase,
+  and never in a title or heading.
 - Never type a file path with a line number; the program turns each id into a link.
 - Backtick only identifiers that appear in the material (function, class, setting, flag names).
   Do not invent names.
@@ -239,17 +356,43 @@ code (each CLI subcommand, flag or mode that changes what happens gets its own c
 - `what_happens`: what the code then does, in two or three sentences;
 - `result`: what comes out (files, a PR, a report);
 - `cites`: the citation ids (e.g. "c12") of the material the case rests on, at least one.""",
-    "flow": """Return the main path through the code as a flow diagram plus a walk through it.
-- `nodes`: at most 14 boxes, each with an `id` (letters and digits, e.g. "n1"), a `label` in plain words
-  (no code names, no file names, at most 60 characters) and a `cite`: the citation id of the line that
-  box stands for;
+    "flow": """Return the code's flow as a picture of its stages plus a walk through them.
+Draw the stages a newcomer would name, usually 5 to 10, not the call path: a box stands for a stage, not
+for a line. Leave out setup, locking, logging, clearing old outputs and saving as boxes; mention them in a
+stage's text if at all.
+- `nodes`: at most 14 boxes, each with:
+  - `id` (letters and digits, e.g. "n1");
+  - `label`: the stage's name in plain words (no code names, no file names, at most 60 characters);
+  - `cite`: the citation id of the line that runs that stage;
+  - `kind`: "input" (what goes in), "code" (plain code), "agent" (a model agent runs here), "check"
+    (code with no model checks an answer), "decision" (the flow branches) or "output" (a file or result
+    that comes out). The first boxes are the inputs and the last the outputs. Mark every place a model
+    agent runs, and every place code with no model checks what it answered;
+  - `does`: one plain line on what the stage does, at most 80 characters;
+  - `reads` and `writes`: short plain names of what the stage takes in and produces;
+  - `fan_out`: where the stage runs work in parallel, plain words with the count, e.g. "5 aspect
+    finders, plus 1 per piece"; else leave it empty;
 - `edges`: arrows `{"from": <node id>, "to": <node id>, "label": <optional plain words>}`. Every box must
   be reached by an arrow: one connected diagram;
-- `steps`: one per box or group of boxes, in order, each with a `title`, a `summary` of one to three
-  sentences, `details_paragraphs` (the specifics, for a reader who opens the step) and `snippet_cites`
-  (one or two citation ids whose lines are worth showing as code).
-Follow the first path listed (the module's main entry point) unless the material shows another path is
-the main one.""",
+- `steps`: one per box that is not an input or an output, in box order, each with `node` (that box's
+  `id`), a `title` (the box's stage), a `summary` of one to three sentences, `details_paragraphs` (the
+  specifics, for a reader who opens the step) and `snippet_cites` (one or two citation ids whose lines
+  are worth showing as code).
+Start from the first path listed (the module's main entry point) unless the material shows another path
+is the main one.""",
+    "core": """This section explains the part of the code that does its main job, deeper than the stages
+around it: how it works, what each part looks at, what it is given, what it produces, and how its output is
+checked. Return:
+- `summary`: ONE plain sentence that is enough on its own: what this part does;
+- `paragraphs`: a few short paragraphs, each adding detail to the one before: how it works, and why it is
+  built that way;
+- `parts`: one per piece of it (for a review tool, each finder), each with `name` (plain words, no
+  citation), `looks_at` (what it reads), `given` (its prompt, rules and inputs, as the material quotes
+  them), `produces` (what it returns), `checked_by` (what checks its output, and how) and `cite`: the
+  citation id of the line that runs or defines it;
+- `flow`: only when this part has a flow of its own, its stages as boxes, arrows and steps, as for the
+  "How it works" section (`kind`, `does`, `fan_out`, one step per box that is not an input or an output,
+  with `node` set); else leave it out.""",
     "outputs": """Return `items`: each file, state record, log or other output the code writes, with its
 `name`, `what` (what it is for, in one or two sentences), `written_by_cite` (the citation id of the line
 that writes it) and, when the material shows its shape, an `example`: `format` "json", "yaml",
@@ -268,11 +411,6 @@ PR description and the commit subjects when they say why; never guess a reason t
   sentences saying what happens there and what the change altered, `details_paragraphs` (the specifics)
   and `snippet_cites` (one or two citation ids whose lines are worth showing as code).
 Follow the first path listed unless the material shows another goes through more of the change.""",
-    "commands": """Return `rows`: which command to run in which situation, one row per situation, the way a
-teammate would tell a newcomer. Each row has `situation` (when to use it, in plain words), `command` (the
-command line, using ONLY subcommands and flags that appear in the material; write a value the user chooses
-as a placeholder in angle brackets, e.g. `<plan file>`), `why` (one plain sentence) and `cite`: the citation
-id of the doc line or code line that says so. Start with the decision rules the docs state.""",
     "loops": """Return `rows`: every loop, retry or round in the code. Each row has `what` (what repeats, in
 plain words), `cap` (the limit exactly as the code writes it, with its value, e.g. "3 (`MAX_TRIES`)"),
 `ends_well` (what ends it well), `ends_badly` (what ends it badly: the error, exit code or marker) and
@@ -322,6 +460,294 @@ Material (every item was checked against the code; ids in brackets are citation 
 {material}
 {redo}
 {EXPLAINER_RULES}
+
+Schema:
+{_schema(schema)}
+
+Answer with ONE JSON object and nothing after it."""
+
+
+# What each open section of the page writer's answer holds, by key.
+PAGE_SECTION_ASKS = {
+    "summary": "two short paragraphs on what the code is and what it does, then the placeholder {{flow}} "
+    "alone in its own paragraph: code draws the flow picture there",
+    "flow": "the stages of the picture as stage cards, named as in the picture and in its order, each "
+    "opening with one sentence that is enough on its own; a code check on the stage before it goes inside "
+    "that stage's card as a checkline, not a card of its own",
+    "core": "the part that does the main job: what it looks at, what it is given, what it produces and what "
+    "checks it; you may place {{flow:core}} alone in a paragraph where its own picture helps",
+    "outputs": "what the code creates, and where",
+    "config": "what can be changed, and what each setting does",
+    "usecases": "when someone would use it, with an example each; do not repeat How it works",
+    "gotchas": "what will catch a newcomer out",
+}
+
+
+# The icons and kind classes the page's stylesheet draws (`render.ICON_SPRITE`, `templates/walkthrough.html`).
+PAGE_KINDS = ("input", "code", "agent", "check", "decision", "output")
+PAGE_ICONS = (*PAGE_KINDS, "warn")
+
+
+def _tagline(tagline: str) -> str:
+    """The line the page's header shows under its title, without its citations, for the writer not to repeat."""
+    line = re.sub(r"\s*\[\[[^\]]+\]\]", "", tagline).strip()
+    if not line:
+        return ""
+    return (
+        " The header already shows this line under the title, so do not repeat it: "
+        + json.dumps(line, ensure_ascii=False)
+    )
+
+
+def page_writer(
+    name: str,
+    sections: list[tuple[str, str]],
+    material: str,
+    tokens: list[str],
+    schema,
+    *,
+    words_max: int,
+    tagline: str = "",
+    failures: list[str] | None = None,
+    previous: str | None = None,
+) -> str:
+    """The page writer: one call with no tools that writes the open body of the HTML page as HTML
+    fragments, one per open section, from the gated sections and facts. `gates.page_gate` checks its
+    answer before any of it reaches a file."""
+    redo = ""
+    if failures and previous:
+        redo = (
+            "\nYour previous answer failed these checks. Return the whole answer again, fixed, using only "
+            "the material below:\n"
+            + "\n".join(f"- {f}" for f in failures[:60])
+            + "\n\nPrevious answer:\n"
+            + previous[:40000]
+            + "\n"
+        )
+    asks = "\n".join(
+        f'- "{key}" ("{title}"): {PAGE_SECTION_ASKS.get(key, "")}'
+        for key, title in sections
+    )
+    return f"""You are writing the open body of a web page that explains `{name}` to someone who does not \
+know the code and wants to understand how it works, quickly. It is not a guide to running it.
+
+The page reads like a pyramid. The first screen alone gives a sense of what happens. Each screen below it \
+adds detail to what the reader already has, so the reader can stop at any depth. Most code is a flow, so \
+the page shows the flow as a picture, at the top.
+
+Write these sections, in this order, with exactly these keys:
+{asks}
+
+How to write each section:
+- Open it with a sentence that is enough on its own, then get richer as the reader goes on.
+- The open text carries the explanation. It is as long as understanding needs, and no longer: give a \
+stage or a part two or three short paragraphs when the material has that much to say, and one sentence \
+when it has not.
+- Hide something behind a click (<details class="fold">) only when it is long and most readers can skip it.
+- Draw content that has a shape with the page's components below: steps in order as stage cards, things \
+that sit side by side as cards, the traps as trap cards. Plain paragraphs suit an argument.
+- The two overview paragraphs of "summary" stay open and above the picture.{_tagline(tagline)}
+- At most {words_max} visible words in all, outside <details>.
+
+The page's components. Its stylesheet draws them in both themes and at phone width, so use these classes \
+rather than writing CSS for the same thing:
+- An icon: <svg class="ic"><use href="#i-KIND"/></svg>, where KIND is one of {", ".join(PAGE_ICONS)}.
+- The kind classes {", ".join("k-" + k for k in PAGE_KINDS)} colour a stage card or a card like the \
+picture's boxes of that kind.
+- Stage cards, for steps in order: <ol class="stages"><li class="k-agent"><div><span class="badge">\
+<svg class="ic"><use href="#i-agent"/></svg><span class="num">2</span></span></div><div class="stage-body">\
+<p class="stage-kind">Model agent</p><h3>…</h3><p>…</p></div></li></ol>
+- A check on a step's result, inside that step's card: <div class="checkline"><svg class="ic"><use \
+href="#i-check"/></svg><p><strong>Code checks the result.</strong> …</p></div>
+- Cards side by side: <div class="cards"><div class="card k-output"><h3>…</h3><p>…</p></div></div>
+- Trap cards: <ul class="traps"><li><svg class="ic"><use href="#i-warn"/></svg><div><strong>…</strong> …\
+</div></li></ul>
+- A lead sentence under a section's title: <p class="lead">…</p>
+
+The page contract (a program checks every point; an answer that breaks one is sent back):
+- Each section's "html" is an HTML fragment. Do not write <h2>: code writes each section's title. Use \
+<h3> and <h4> below it.
+- Allowed tags: p ul ol li h3 h4 strong em code a details summary div span table thead tbody tr th td \
+figure figcaption br, and the SVG tags svg g path rect circle line polyline polygon text tspan title defs \
+symbol use. Allowed attributes: class id role aria-* open colspan rowspan, the SVG geometry and paint \
+attributes, and href only as "#..." on a and use. No style attribute, no on* attribute, no comment.
+- Cite with [[cN]] (or a path hop [[pNhK]]) at the end of the sentence it supports, using only the ids of \
+the material. Never cite inside <h3>, <h4> or <summary>.
+- Show code only as [[snippet:cN]] alone in its own <p>. Code puts the cited lines there.
+- Never type a file path with a line number in the text; the citation carries the location.
+- Every <code> text must be a name from the material that occurs in the code.
+- "css" is optional CSS for your fragments. Code nests it inside the page's own block, so write plain \
+rules for your classes. Colours only as var(--token) from this list: {", ".join(tokens) or "(none)"}. No \
+colour literal (#hex, rgb(, hsl(), no url(, no @import.
+
+Material (every item was checked against the code; ids are citation ids):
+{material}
+{redo}
+{EXPLAINER_RULES}
+
+Schema:
+{_schema(schema)}
+
+Answer with ONE JSON object and nothing after it."""
+
+
+# --- the diagram stage (stages/diagram.py) ---------------------------------------------------------------
+
+# The style example the diagram writer is shown: a neutral flow drawn as v3 of the review walkthrough drew
+# its picture. `tests/test_diagram.py` holds it to `gates.diagram_gate`.
+_TEMPLATES = Path(__file__).resolve().parents[1] / "templates"
+DIAGRAM_EXAMPLE = {
+    "wide": (_TEMPLATES / "diagram-example-wide.svg").read_text(encoding="utf-8"),
+    "tall": (_TEMPLATES / "diagram-example-tall.svg").read_text(encoding="utf-8"),
+    "css": (_TEMPLATES / "diagram-example.css").read_text(encoding="utf-8"),
+}
+
+
+def _diagram_rules(tokens: list[str]) -> str:
+    """The picture's look and its contract, shared by the writer and the looker."""
+    return f"""How the picture looks (the example below shows all of it):
+- One box per box of the flow in the material, in the order its arrows run, numbered from 1 (inputs and \
+outputs are not numbered). Each box shows a small tag in capitals naming its kind, its number, its label \
+exactly as the material gives it (you may break it over lines at a space), and one or two short lines of \
+what it does.
+- Each kind has its colour and its icon. Kinds: {", ".join(PAGE_KINDS)}. The icon of kind KIND is \
+<use href="#i-KIND" class="..." x=".." y=".." width="16" height="16"/>. An icon is one path in a 16 by 16 \
+box with no paint of its own, so give the <use> a class whose CSS sets fill: none and a stroke colour.
+- A box with a fan-out (many agents or items at once) is drawn as a stack of small cards or a row of small \
+tags, one per kind of worker the material names, with a dashed card for "one per ...".
+- A check is drawn small, as a narrow pill with the check icon, between the two boxes it sits between, with \
+its label under or beside it. What happens to what fails it goes in a small tag, joined by a dashed arrow.
+- One arrow per arrow of the flow, ending in an arrowhead (<marker>). An arrow back to an earlier box is a \
+dashed line drawn around the boxes, never across one, with a short label saying when it runs.
+- "wide" is for screens of 700 px and more: viewBox="0 0 1000 H", in two or three rows when the boxes do not \
+fit in one, joined by an arrow that turns down at the end of a row. "tall" is for phones: viewBox="0 0 420 \
+H", one column, top to bottom.
+- Every label is at least 14 units high in "wide" and 16 in "tall" (a phone shows the tall picture about \
+330 px wide, so 16 units there read as 12.5 px); only a kind's small tag may be 2 units smaller. Leave 15% spare room in every \
+box around its text: the reader's browser draws text in another font, wider or narrower than yours. No text \
+touches or crosses a box edge, an arrow or other text.
+
+The contract (a program checks every point; an answer that breaks one is sent back):
+- "wide" and "tall" are each exactly one <svg> element with a viewBox: width 1000 for wide, 420 for tall. At \
+most 40,000 characters each.
+- Allowed tags: svg g path rect circle ellipse line polyline polygon text tspan title desc defs marker use a. \
+No <style>, <script>, <foreignObject> or <image>, no comment, no <!DOCTYPE>. Well-formed XML: close every tag.
+- Allowed attributes: class, id, role, aria-*, the geometry and paint attributes (x y width height rx ry cx cy \
+r d points transform viewBox text-anchor font-size font-weight stroke-dasharray and the like), and on \
+<marker> markerWidth markerHeight refX refY orient markerUnits; marker-start and marker-end only as \
+url(#id). href only as "#id". No style attribute, no on* attribute.
+- fill and stroke attributes only as none or currentColor: every colour goes in "css".
+- Ids are lower-case letters, digits and -, each used once in its SVG; every #id and url(#id) points at an id \
+in the same SVG or at an icon i-KIND.
+- Every box label of the flow appears in the text of both SVGs.
+- No file path with a line number in the text. A word that looks like code (with _ . ( or /, or camelCase) \
+must be a name from the material that occurs in the code.
+- "css" styles your SVGs. Every selector starts with a class that starts with .wd- (for example \
+".wd-agent > rect"); no element selector on its own, no @media. Give the root <svg> the class wd-root and \
+set its fill to var(--fg) and its font-family to var(--font-body): the page is dark for some readers, and \
+text with no fill would be black. Colours only as var(--token) from this list: {", ".join(tokens) or "(none)"}. \
+No colour literal (#hex, rgb(, hsl(), no url(, no @import.
+- "alt" is one sentence that says what the picture shows, for a reader who cannot see it."""
+
+
+def diagram_writer(
+    name: str,
+    material: str,
+    tokens: list[str],
+    schema,
+    *,
+    failures: list[str] | None = None,
+    previous: str | None = None,
+) -> str:
+    """The diagram writer: one call with no tools that draws the "How it works" picture of the page as two
+    SVGs and their CSS. `gates.diagram_gate` checks its answer before any of it is used."""
+    redo = ""
+    if failures and previous:
+        redo = (
+            "\nYour previous answer failed these checks. Return the whole answer again, fixed:\n"
+            + "\n".join(f"- {f}" for f in failures[:60])
+            + "\n\nPrevious answer:\n"
+            + previous[:90000]
+            + "\n"
+        )
+    return f"""You are drawing the "How it works" picture of a web page that explains `{name}` to someone who \
+does not know the code. The picture sits at the top of the page, under two short paragraphs, and is the \
+first thing that shows how the code works: what goes in, each stage in order, what each stage is (code, a \
+model agent, a check, a decision), where many things run at once, where a check sends something back, and \
+what comes out.
+
+{_diagram_rules(tokens)}
+
+The example: a made-up flow, drawn in the style to follow. Copy its look, not its boxes.
+Example "wide":
+{DIAGRAM_EXAMPLE["wide"]}
+Example "tall":
+{DIAGRAM_EXAMPLE["tall"]}
+Example "css":
+{DIAGRAM_EXAMPLE["css"]}
+
+Material (every item was checked against the code):
+{material}
+{redo}
+Draw only what the material says. Use plain words, not code-speak; name a function only when the reader \
+needs it.
+
+Schema:
+{_schema(schema)}
+
+Answer with ONE JSON object and nothing after it."""
+
+
+def diagram_looker(
+    name: str,
+    material: str,
+    current: str,
+    pngs: list[str],
+    schema,
+    round_no: int,
+    *,
+    tokens: list[str],
+    failures: list[str] | None = None,
+) -> str:
+    """Look *round_no*: the model reads the PNGs code drew of the current picture and answers ok, or fix
+    with the whole corrected SVGs and CSS, which `gates.diagram_gate` checks before they are used."""
+    redo = ""
+    if failures:
+        redo = (
+            "\nThe corrected version of your last look failed these checks, so the picture below is still "
+            "the one before it. Fix these too if you answer fix:\n"
+            + "\n".join(f"- {f}" for f in failures[:60])
+            + "\n"
+        )
+    files = "\n".join(f"- {p}" for p in pngs)
+    return f"""You are checking the "How it works" picture of a web page that explains `{name}`. A program \
+drew the picture below as PNG files. This is look {round_no} of at most 3.
+
+Open each file with the Read tool, and look at it:
+{files}
+They are the wide layout in the light theme, the wide layout in the dark theme, and the tall layout (for \
+phones) in the light theme. The page shows the wide one 700 to 1000 px wide and the tall one about 360 px \
+wide, so text in the tall one is drawn smaller than in its PNG.
+
+Check each of these, in each file:
+- text overlapping other text, an arrow or a box edge, or touching a box edge
+- text cut off at a box edge or at the edge of the picture
+- an arrow crossing a box, or pointing at nothing, or no arrowhead
+- a box of the flow missing, or boxes in an order the arrows of the material do not follow
+- text or lines too faint to read, above all in the dark theme
+- labels too small to read on the tall layout
+- an icon drawn as a filled black shape (its <use> needs fill: none and a stroke colour)
+
+Answer "ok" when none of these is wrong. Otherwise answer "fix", list the problems you saw, and return the \
+whole corrected "wide", "tall" and "css" (all three, even one you did not change).
+{redo}
+{_diagram_rules(tokens)}
+
+The picture now (the JSON code drew the PNGs from):
+{current}
+
+Material (every item was checked against the code):
+{material}
 
 Schema:
 {_schema(schema)}

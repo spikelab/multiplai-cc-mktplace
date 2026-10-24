@@ -4,11 +4,6 @@ from __future__ import annotations
 
 from ..models import DEPS_DIR, TargetInfo
 
-# Diffs larger than this are cut in the prompt; the agent is told where the
-# whole diff is.
-DIFF_PROMPT_CHARS = 120_000
-
-
 # Externally authored text (a PR body, API output, a fetched page) goes into a
 # prompt inside this fence. The agents are told that what is inside is data.
 UNTRUSTED_OPEN = '<untrusted-content source="{source}">'
@@ -72,25 +67,11 @@ a finding or a confirmation whose only citations are web sources."""
 JSON_ONLY = "Answer with ONE JSON object and nothing before or after it: no heading, no prose, no table."
 
 
-def diff_block(target: TargetInfo, diff: str) -> str:
-    if len(diff) <= DIFF_PROMPT_CHARS:
-        body = diff
-    else:
-        body = diff[:DIFF_PROMPT_CHARS] + (
-            f"\n[... diff cut at {DIFF_PROMPT_CHARS} characters; the whole diff is at {target.diff_path} ...]"
-        )
-    return f"The change under review is {target.base_sha[:12]}..{target.head_sha[:12]}:\n\n```diff\n{body}\n```"
-
-
 def commits_block(target: TargetInfo) -> str:
     lines = "\n".join(
         f"- {sha[:10]} {subject}" for sha, subject in target.commits[:200]
     )
     return f"Commits in the change:\n{lines or '(none listed)'}"
-
-
-def files_block(target: TargetInfo) -> str:
-    return "Files changed:\n" + "\n".join(f"- {f}" for f in target.files)
 
 
 def description_block(target: TargetInfo) -> str:

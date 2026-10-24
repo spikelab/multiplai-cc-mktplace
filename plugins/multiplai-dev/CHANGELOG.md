@@ -15,7 +15,7 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
-## [0.106.0] - 2026-10-24
+## [0.108.0] - 2026-10-24
 
 ### Changed
 - Skills set `effort:` in their frontmatter again (still no `model:`), so
@@ -26,6 +26,108 @@ time, not derived from a tag.
   - `high`: deepen, devops-gcp, e2e-test, review, skill-creator, think
 - `review` runs at `high` until comparisons show whether `medium` finds as
   many bugs.
+
+## [0.107.0] - 2026-10-24
+
+### Changed
+- A change review now runs its dimension finders (`diff-bugs`, `callers`,
+  `history` and `conventions` by default) on every piece of the diff, each
+  given its piece's whole diff. Before, each dimension read the whole diff in
+  one call, cut at 120,000 characters, so on a large change it never saw the
+  rest. `diff-bugs` takes over the broad review the piece finders did, and
+  there is no separate piece finder any more. Each finder writes a report
+  (`report-<dimension>-<id>.md`) that a second call turns into findings, as
+  the piece finders' did. `--plan-only` prints the calls as
+  `<P> pieces x <D> dimensions + up to 21 paths`.
+- The `tests` and `trim` finders are off by default on a change review. Name
+  them in `dimensions`, or set `trim: true`, to run them. On PR #295 they
+  found no real bug the others missed and made the review about $25 dearer.
+- A review costs more: about $14 per dimension on a 227 KB diff, so about
+  $80 with the path finders before verification. The default
+  `--max-cost-usd` is now 150 USD (was 50), and the cost line says how many
+  dimensions each piece runs.
+- Sixteen calls run at once by default (was four).
+
+### Added
+- `dimensions` in `review.yaml` chooses which dimension finders run, for
+  example `dimensions: [diff-bugs, callers]`. An unknown name stops the
+  review with the valid names. `resume` keeps the list the run started with.
+- A finder that stops at the turn limit on a piece is asked again on two
+  halves of that piece, in the same run, instead of losing the piece.
+- `## Not reviewed`, near the top of the review and the summary, lists the
+  files a dimension did not review because its calls failed, and why. The
+  `DONE` line in `progress.log` ends `; <n> files not reviewed`.
+- Before each model call the review checks how much of the Claude usage
+  window is left (an internal endpoint, read with the login token in
+  `.credentials.json`; the token goes into that request only). It holds a
+  call back while the calls already running would use up the window, and
+  stops with exit `6`, the reset time and the `resume` command when even one
+  call does not fit. When the window cannot be read, it prints one `NOTICE:`
+  and runs as before.
+- A finder can mark a defect the change did not cause (`Pre-existing: yes`)
+  and say what it could not check, which the review lists as a need.
+
+### Fixed
+- A fresh round now removes the last round's `report-<dimension>-*.md` files
+  after keeping them, as it already did for the piece and path reports.
+
+## [0.106.0] - 2026-10-24
+
+### Added
+- codebase-walkthrough names the part of the code that does its main job and
+  gives it its own section after How it works, titled for that job (for
+  example "How it finds bugs"): what it looks at, what it is given, what it
+  produces and what checks it. One call with no tools chooses the part from
+  the checked claims, and one read-only agent reads its files closely; a code
+  check holds the choice to the target's files and a plain title. Module and
+  codebase scope, human mode.
+- The HTML page's open body is written by one call that sees every checked
+  section and claim at once, so the page no longer repeats itself. A code
+  check passes only allowed HTML tags and attributes, CSS that loads nothing
+  and types no colour, and citations the pipeline checked; it counts the
+  visible words against 3,600 and asks once more when the page fails. A page
+  that still fails is drawn by code, as before. `render` rebuilds the page
+  from the saved answer with no call.
+- The page writer lays out its sections with the page's components: numbered
+  stage cards with an icon for each kind of stage, a callout for the check on
+  a stage's result, cards side by side and trap cards. Their colours come from
+  the design system's tokens.
+- `resume --repage` writes only the HTML page again, for the cost of the page
+  call.
+- The "How it works" picture on the HTML page is drawn by a model as SVG, in
+  the style of a hand-drawn diagram: a colour and an icon for each kind of
+  stage, stacked cards where many agents run at once, checks drawn small, and
+  a dashed arrow back for a loop, with a wide layout for screens and a tall
+  one for phones, in the page's light and dark themes. Code renders it to PNG
+  and a model looks at it and corrects it, up to three times; code checks
+  every version for allowed SVG only, colours from the design system and every
+  stage labelled. When drawing fails, or `resvg-py` has no wheel for the
+  platform, the page shows the boxes code draws. This adds two to five model
+  calls to a run.
+- `resume --redraw` draws only the page's picture again, keeping every other
+  answer.
+- The flow picture at the top of the page draws each stage as a box marked as
+  an input, code, an agent, a check, a decision or an output, with stacked
+  cards where many agents run at once, and each check drawn small between the
+  boxes around it; How it works has one stage card per box, in the picture's
+  order.
+
+### Changed
+- The walkthrough reads What it is (with the flow picture), How it works, the
+  core part, What it creates, Configuration, Use cases, Gotchas. With
+  `--scope codebase` the three tables, Reference and How this was made are
+  closed fold-outs at the bottom of the page.
+- Adjacent citations on the page are one superscript ("1, 2"), and the page
+  shows the first citation under each heading only.
+- The writers follow plain-language rules (no invented names, verbs over
+  nouns, answer first, one idea per sentence), and a title or heading never
+  holds a citation.
+- `resume --rewrite` also asks the page writer again, and keeps the core
+  stage's answers.
+
+### Removed
+- The "Which command to run" table of `--scope codebase`, and the survey agent
+  that wrote it.
 
 ## [0.105.3] - 2026-10-24
 

@@ -186,10 +186,10 @@ def test_render_checks_an_edited_folder_and_writes_nothing_when_it_fails(
     assert {p.name: p.read_bytes() for p in md_path.parent.iterdir()} == before
 
 
-def test_a_folder_broken_during_a_run_keeps_the_write_stage(
+def test_a_folder_broken_during_a_run_keeps_the_write_and_page_stages(
     ws, tmp_path, monkeypatch, fake_fetch, acme, globex, capsys
 ):
-    """S7: the folder passes the check at start and fails at the render stage."""
+    """S7: the folder passes the check at start and fails at the render stage, after the page stage."""
     from walkthrough_pipeline import orchestrator
 
     real = orchestrator.write_outputs
@@ -203,7 +203,7 @@ def test_a_folder_broken_during_a_run_keeps_the_write_stage(
     assert main(run_args(ws, tmp_path, "--design-system-dir", str(acme))) == 1
     assert "is missing --radius" in capsys.readouterr().err
     run_dir = next((tmp_path / "runs").iterdir())
-    assert json.loads((run_dir / STATE_FILE).read_text())["stage"] == "write"
+    assert json.loads((run_dir / STATE_FILE).read_text())["stage"] == "diagram"
     assert not (tmp_path / "out" / "bookings-walkthrough.md").exists()
 
     monkeypatch.setattr(orchestrator, "write_outputs", real)

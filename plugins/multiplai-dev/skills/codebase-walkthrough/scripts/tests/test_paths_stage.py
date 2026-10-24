@@ -481,8 +481,8 @@ DEV = Path(__file__).resolve().parents[4]  # plugins/multiplai-dev
 SKILL_MD = DEV / "skills" / "codebase-walkthrough" / "SKILL.md"
 
 
-def test_skill_md_stage_5_describes_map_paths():
+def test_skill_md_trace_stage_describes_map_paths():
     text = SKILL_MD.read_text()
-    stage5 = text[text.index("5. **trace**") : text.index("6. **write**")]
-    assert "map_paths" in stage5
-    assert "webhooks first" not in stage5
+    stage = text[text.index("6. **trace**") : text.index("7. **write**")]
+    assert "map_paths" in stage
+    assert "webhooks first" not in stage

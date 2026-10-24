@@ -219,6 +219,8 @@ def failure_kind(error: str) -> str:
         return "timeout"
     if "no valid answer" in low:
         return "no valid answer after a re-ask"
+    if "maximum number of turns" in low:
+        return "turn limit"
     return "agent error"
 
 
@@ -226,7 +228,6 @@ def prompt_labels(
     target: TargetInfo,
     *,
     diff: str | None = None,
-    diff_limit: int = 0,
     rules: list[tuple[str, bool]] | None = None,
     extra: list[str] | None = None,
 ) -> list[str]:
@@ -237,12 +238,7 @@ def prompt_labels(
     """
     labels = list(extra or [])
     if diff is not None:
-        cut = (
-            f", cut at {diff_limit:,} characters"
-            if diff_limit and len(diff) > diff_limit
-            else ""
-        )
-        labels.append(f"diff ({len(target.files)} files{cut})")
+        labels.append(f"diff ({len(target.files)} files)")
         labels.append(f"commit subjects ({len(target.commits)})")
     if target.title or target.description:
         labels.append("PR description")

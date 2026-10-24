@@ -1,10 +1,11 @@
-"""target → repos → symbols → references → boundary → partition → explore → survey → docs → trace → write
-→ render.
+"""target → repos → symbols → references → boundary → partition → explore → survey → core → docs → trace
+→ write → page → diagram → render.
 
 `walkthrough-state.json` is written after every stage; `resume` reloads it and
 continues from the first stage not yet done. Stages up to `partition` are
 code only; the agent stages store each answer as it returns, so a budget
-stop keeps paid work. `survey` asks only for `--scope codebase`.
+stop keeps paid work. `survey` asks only for `--scope codebase`; `core`, `page` and `diagram` only for a
+module or a codebase in human mode.
 """
 
 from __future__ import annotations
@@ -34,8 +35,11 @@ from .partition import partition, ws_lines
 from .progress import ProgressWriter
 from .render import write_outputs
 from .stages import RunContext
+from .stages.core import run_core
+from .stages.diagram import run_diagram
 from .stages.docs import run_docs
 from .stages.explore import run_explore
+from .stages.page import run_page
 from .stages.survey import run_survey
 from .stages.trace import PATHS_CACHE, rewind_legacy_trace, run_trace
 from .stages.write import run_write
@@ -391,9 +395,12 @@ STAGES = (
     ("partition", None),
     ("explore", run_explore),
     ("survey", run_survey),
+    ("core", run_core),
     ("docs", run_docs),
     ("trace", run_trace),
     ("write", run_write),
+    ("page", run_page),
+    ("diagram", run_diagram),
 )
 
 
@@ -559,15 +566,50 @@ NO_CHANGE = object()
 
 def rewind_for_rewrite(state: WalkState, run_dir: Path) -> WalkState:
     """`resume --rewrite`: send a run past its trace stage back to the stage before `write`, dropping what
-    the write stage made (its sections, its answers, its entries in `dropped`). The explore, docs and
-    trace answers are kept, so only the write and render stages run again. Raises WalkError, and changes
+    the write stage made (its sections, its answers, its entries in `dropped`), the page stage's answers
+    and page, and the diagram stage's answers and picture (the flow it drew is written again). The explore,
+    survey, core, docs and trace answers are kept, so only the write, page, diagram and render stages run
+    again. Raises WalkError, and changes
     nothing, when the run has not finished its trace stage."""
     if not state.past("trace"):
         raise WalkError(f"resume --rewrite: {run_dir} has not finished its trace stage")
     state.stage = STAGES_ORDER[STAGES_ORDER.index("write") - 1]
     state.sections = {}
     state.write_answers = {}
+    state.page_answers = {}
+    state.page = {}
+    state.diagram_answers = {}
+    state.diagram = {}
     state.dropped = [d for d in state.dropped if not d.stage.startswith("write")]
+    return state
+
+
+def rewind_for_repage(state: WalkState, run_dir: Path) -> WalkState:
+    """`resume --repage`: send a finished run back to the stage before `page`, dropping the page stage's
+    answers and page. Every other answer is kept, the diagram stage's too (the flow it drew does not change),
+    so only the page, diagram and render stages run again: one page call, and one more when the page fails
+    its checks; the diagram stage reuses its stored answers and makes no call. Raises WalkError, and changes nothing, when the run
+    has not finished its write stage."""
+    if not state.past("write"):
+        raise WalkError(f"resume --repage: {run_dir} has not finished its write stage")
+    state.stage = STAGES_ORDER[STAGES_ORDER.index("page") - 1]
+    state.page_answers = {}
+    state.page = {}
+    # The diagram stage runs again from its stored answers and records its errors again.
+    state.errors = [e for e in state.errors if not e.startswith(("page:", "diagram:"))]
+    return state
+
+
+def rewind_for_redraw(state: WalkState, run_dir: Path) -> WalkState:
+    """`resume --redraw`: send a run past its page stage back to `page`, dropping the diagram stage's answers,
+    its picture and its errors, so only the diagram and render stages run again. Raises WalkError, and
+    changes nothing, when the run has not finished its page stage."""
+    if not state.past("page"):
+        raise WalkError(f"resume --redraw: {run_dir} has not finished its page stage")
+    state.stage = "page"
+    state.diagram_answers = {}
+    state.diagram = {}
+    state.errors = [e for e in state.errors if not e.startswith("diagram:")]
     return state
 
 
@@ -578,10 +620,14 @@ async def resume(
     session_id: str = "",
     docs: str | None | object = NO_CHANGE,
     rewrite: bool = False,
+    repage: bool = False,
+    redraw: bool = False,
     design_system_dir: str | None = None,
 ) -> list[Path]:
     """Continue a saved run. *docs* replaces the saved `--docs` URL (None drops the docs). *rewrite* runs the
-    write and render stages again on a run past its trace stage (`rewind_for_rewrite`). *design_system_dir*
+    write and render stages again on a run past its trace stage (`rewind_for_rewrite`); *repage* runs the page
+    and render stages again on a run past its write stage (`rewind_for_repage`); *redraw* runs the diagram and
+    render stages again on a run past its page stage (`rewind_for_redraw`). *design_system_dir*
     replaces the saved `--design-system-dir`; the folder in use is checked before anything else."""
     state = load_state(run_dir / STATE_FILE)
     if state is None:
@@ -602,5 +648,9 @@ async def resume(
     if rewrite:
         # Saved at once: a stop before the first write call leaves a run a plain `resume` finishes.
         save_state(rewind_for_rewrite(state, run_dir), run_dir)
+    elif repage:
+        save_state(rewind_for_repage(state, run_dir), run_dir)
+    elif redraw:
+        save_state(rewind_for_redraw(state, run_dir), run_dir)
     rewind_legacy_trace(state)
     return await run_state(state, run_dir, config, session_id=session_id)
