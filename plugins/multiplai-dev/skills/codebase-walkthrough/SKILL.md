@@ -65,6 +65,18 @@ Run a walkthrough as a pipeline: code finds and checks, agents read and write.
    failure gets one re-ask. A page that still fails, or a failed call, is
    listed under "Warnings and errors" in Coverage, and code draws every
    section of the page itself. The Markdown is never written from this call.
+9. **diagram** (human mode, module or codebase) — one call with no tools
+   draws the page's "How it works" picture as two SVGs, a wide one for screens
+   of 700 px and more and a tall one for phones, with their CSS. `diagram_gate`
+   checks them in code: only allowed SVG tags and attributes, no script, style
+   element or link out, every reference inside the SVG, every box of the flow
+   labelled, colours only from the design system's tokens. A failure gets one
+   re-ask. Code then renders the picture to PNG with `resvg-py` (light and
+   dark, wide and tall) in `<run>/diagram/`, and up to three looks, each with
+   `Read` limited to that folder, answer that it is right or return a
+   corrected picture, which must pass the same checks. This adds two to five
+   model calls to a run. When the draw fails, or `resvg-py` has no wheel for
+   the platform, the page shows the picture code draws and Coverage says why.
 
 In human mode the walkthrough is an explainer for someone new to the code. It
 has these sections, in this order:
@@ -72,8 +84,9 @@ has these sections, in this order:
 1. **What it is**: a sentence at the top on what the code is for, then two
    short paragraphs in plain words, then the flow picture: one box per stage,
    each marked as an input, code, an agent, a check, a decision or an output,
-   drawn by code from the boxes and arrows the writer names (in the Markdown,
-   a Mermaid diagram).
+   from the boxes and arrows the writer names. In the HTML page the diagram
+   stage draws it as SVG, or code draws the boxes when that stage fails; in
+   the Markdown it is a Mermaid diagram.
 2. **How it works**: one short block per stage of the picture, in the same
    order, with the specifics and code snippets behind a click.
 3. **The part that does the main job**, titled by the core stage (for
@@ -122,8 +135,10 @@ gates never ask a model.
   `Glob` only; the writers get no tools, nor do the core stage's choice and the
   page writer (the core stage's deep read gets `Read`, `Grep` and `Glob` on the
   snapshot). The page writer's HTML reaches a file only after `page_gate`
-  passes it. No agent gets a shell, file edits, or
-  web access. This is why it needs `--trust-repo`.
+  passes it. The diagram writer gets no tools; each look at the diagram gets
+  `Read` limited to `<run>/diagram`, the PNGs code drew, and its SVG reaches
+  a file only after `diagram_gate` passes it. No agent gets a shell, file
+  edits, or web access. This is why it needs `--trust-repo`.
 - **Reads git repositories** with `git rev-parse`, `git show`, `git archive`,
   `git ls-files`, `git ls-tree`, `git diff`, `git merge-base`, `git log` and
   `git grep` only. It never checks out, commits or writes to them, and fetches
@@ -141,8 +156,8 @@ gates never ask a model.
   with `--scope pr --pr N` the GitHub CLI `gh pr view`, which uses the network
   and the user's GitHub login. The PR's title and description go to the writer
   inside `<untrusted-content>` fences, as data.
-- **Writes files** to the run directory, the output directory and the log
-  files. The HTML page loads highlight.js and mermaid from
+- **Writes files** to the run directory (with the diagram's PNGs in
+  `<run>/diagram/`), the output directory and the log files. The HTML page loads highlight.js and mermaid from
   `cdnjs.cloudflare.com` when a browser opens it.
 - **Opens the review-viewer only when the user asks for it** (step 2), and
   puts the HTML page where its Summary tab links it. That
@@ -406,8 +421,22 @@ It runs the page and render stages again on a run past its write stage and
 keeps every other answer, so it pays for one page call, and one more when the
 page fails its checks. The Markdown does not change. It exits 1 with
 `resume --repage: <run dir> has not finished its write stage` for a run that
-has not got that far, and writes nothing. `--rewrite` and `--repage` cannot be
-given together.
+has not got that far, and writes nothing.
+
+To draw only the page's "How it works" picture again, pass `--redraw`:
+
+```bash
+uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/codebase-walkthrough/scripts \
+  python -m walkthrough_pipeline --session-id "{session_id}" \
+  resume <run dir> --redraw --trust-repo [--max-usd <n>]
+```
+
+It runs the diagram and render stages again on a run past its page stage and
+keeps every other answer, so it pays for the draw and up to three looks (two
+to five calls). It exits 1 with `resume --redraw: <run dir> has not finished
+its page stage` for a run that has not got that far, and writes nothing.
+`--rewrite` also draws the picture again; `--repage` keeps it.
+`--rewrite`, `--repage` and `--redraw` cannot be given together.
 
 ## Configuration
 

@@ -38,6 +38,18 @@ time, not derived from a tag.
   the design system's tokens.
 - `resume --repage` writes only the HTML page again, for the cost of the page
   call.
+- The "How it works" picture on the HTML page is drawn by a model as SVG, in
+  the style of a hand-drawn diagram: a colour and an icon for each kind of
+  stage, stacked cards where many agents run at once, checks drawn small, and
+  a dashed arrow back for a loop, with a wide layout for screens and a tall
+  one for phones, in the page's light and dark themes. Code renders it to PNG
+  and a model looks at it and corrects it, up to three times; code checks
+  every version for allowed SVG only, colours from the design system and every
+  stage labelled. When drawing fails, or `resvg-py` has no wheel for the
+  platform, the page shows the boxes code draws. This adds two to five model
+  calls to a run.
+- `resume --redraw` draws only the page's picture again, keeping every other
+  answer.
 - The flow picture at the top of the page draws each stage as a box marked as
   an input, code, an agent, a check, a decision or an output, with stacked
   cards where many agents run at once, and each check drawn small between the
