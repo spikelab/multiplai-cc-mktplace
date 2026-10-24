@@ -31,7 +31,7 @@ time, not derived from a tag.
   $108 with the path finders before verification. The default
   `--max-cost-usd` is now 150 USD (was 50), and the cost line says how many
   dimensions each piece runs.
-- Eight calls run at once by default (was four).
+- Sixteen calls run at once by default (was four).
 
 ### Added
 - `dimensions` in `review.yaml` chooses which dimension finders run, for

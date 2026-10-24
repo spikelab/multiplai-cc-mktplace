@@ -69,7 +69,7 @@ DIMENSIONS: tuple[str, ...] = (
 )
 # Not one of DIMENSIONS: `finder_dimensions` adds it when the review runs it.
 TRIM_DIMENSION = "trim"
-DEFAULT_CONCURRENCY = 8
+DEFAULT_CONCURRENCY = 16
 
 
 class ConfigError(ValueError):

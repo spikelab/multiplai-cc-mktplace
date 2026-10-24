@@ -18,9 +18,9 @@ def config(tmp_path, text: str) -> ReviewConfig:
     return load_config(tmp_path)
 
 
-def test_eight_calls_run_at_once_by_default(tmp_path):
-    assert DEFAULT_CONCURRENCY == 8
-    assert load_config(tmp_path).concurrency == 8
+def test_sixteen_calls_run_at_once_by_default(tmp_path):
+    assert DEFAULT_CONCURRENCY == 16
+    assert load_config(tmp_path).concurrency == 16
     assert config(tmp_path, "concurrency: 3\n").concurrency == 3
 
 

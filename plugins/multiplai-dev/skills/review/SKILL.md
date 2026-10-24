@@ -836,7 +836,7 @@ the only stop, and `--plan-only` exits the same either way.
 
 ## Usage window
 
-Eight calls run at once by default (`concurrency`). Before each model call
+Sixteen calls run at once by default (`concurrency`). Before each model call
 starts, the review reads the Claude usage windows (`five_hour` and
 `seven_day`: utilization from 0 to 100, reset time, and `remaining_dollars`
 when the account has one) from `GET https://api.anthropic.com/api/oauth/usage`,
@@ -893,7 +893,7 @@ jq -s '[.[].run.stages[]] | group_by(.stage) | map({stage: .[0].stage, cost_usd:
 
 `review.yaml` in the output directory (for the default one, the old
 default's `INBOX/reviews/review.yaml` until a `review.yaml` exists in the new
-place, with a warning) sets `concurrency` (default `8`), `finder_model`,
+place, with a warning) sets `concurrency` (default `16`), `finder_model`,
 `verifier_model`, `merger_model` (default: the verifier's), `effort`,
 `max_turns`, `explain`, `find_with_facts`, `trim` and `dimensions`. `multiplai.conf` keys
 `review_finder_model`, `review_verifier_model`, `review_effort` and
