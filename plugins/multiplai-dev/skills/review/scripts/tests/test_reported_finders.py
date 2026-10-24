@@ -175,7 +175,7 @@ class Model:
     path report call (1-based), or on the convert of that key; the ledger is then spent, so every later
     call stops too, until `resume`. `fail_report` (packages, for `diff-bugs`), `fail_keys` (report keys),
     `fail_path` (path ids) and `fail_convert` (keys): calls that raise *error*. `turn_limit` (report keys):
-    calls that stop at the turn limit (`sdk.MaxTurnsError`).
+    calls that stop at the turn limit (`sdk.MaxTurnsError`). `stop_key`: a budget stop on that report key.
 
     `text_calls` are the `diff-bugs` report calls, `report_calls` every dimension's.
     """
@@ -197,10 +197,12 @@ class Model:
         dimension_reports: dict[str, str] | None = None,
         fail_keys: tuple[str, ...] = (),
         turn_limit: tuple[str, ...] = (),
+        stop_key: str | None = None,
     ):
         self.reports, self.items = reports or {}, items or {}
         self.dimension_reports = dimension_reports or {}
         self.fail_keys, self.turn_limit = fail_keys, turn_limit
+        self.stop_key = stop_key
         self.path_reports, self.path_items = path_reports or {}, path_items or {}
         self.stop_report, self.stop_convert, self.stop_path = (
             stop_report,
@@ -255,6 +257,9 @@ class Model:
         }
         self.report_calls.append(call)
         self.dimension_prompts.append((budget_label, prompt))
+        if key == self.stop_key:
+            self.stop_key = None
+            raise self._stop(f"circuit breaker stopped the run at {key}")
         if key in self.turn_limit:
             raise sdk.MaxTurnsError(
                 "agent call failed (failed: Claude Code returned an error result: Reached maximum "

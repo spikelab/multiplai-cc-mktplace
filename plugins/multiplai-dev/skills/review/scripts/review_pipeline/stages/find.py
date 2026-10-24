@@ -959,6 +959,9 @@ async def _find_change(
     """A change review's finders: the path finders, then every dimension on every piece, each a report
     then a convert. Returns (key, record subject, result) of every finder."""
     renamed = adopt_legacy_reports(state)
+    if ctx.target_dir is not None:
+        for key in renamed:  # also under the name the review now gives that report
+            write_report_file(ctx.target_dir, key, state.finder_reports[key].text)
     finders = PieceFinders(state, ctx, change_dimensions(state))
     paths = path_jobs(state, ctx)
 
