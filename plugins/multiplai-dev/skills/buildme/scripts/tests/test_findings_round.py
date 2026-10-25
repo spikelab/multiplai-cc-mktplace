@@ -663,14 +663,14 @@ class SpecStepFault:
     def __init__(self, fail_with: BaseException | None = None, before=None):
         self.fail_with, self.before, self.calls = fail_with, before, 0
 
-    def __call__(self, change_dir, records):
+    def __call__(self, change_dir, records, **kw):
         self.calls += 1
         if self.fail_with is not None:
             exc, self.fail_with = self.fail_with, None
             if self.before is not None:
                 self.before()
             raise exc
-        return _REAL_APPEND_ISSUES(change_dir, records)
+        return _REAL_APPEND_ISSUES(change_dir, records, **kw)
 
     def install(self, monkeypatch) -> SpecStepFault:
         monkeypatch.setattr(spec, "append_issues", self)
@@ -2295,7 +2295,7 @@ class _Scenario:
             raise self.stop_triage_with
         return await self.triage(prompt, schema, **kw)
 
-    def spec_write(self, change_dir, records):
+    def spec_write(self, change_dir, records, **kw):
         """The spec step's write (`spec.append_issues`). While `stop_with` is
         set it edits calc.py (after committing a new file, with
         `commit_first`) and raises it."""
@@ -2314,7 +2314,7 @@ class _Scenario:
                 )
             (self.repo / "calc.py").write_text("# the spec step's own edit\n")
             raise self.stop_with
-        return _REAL_APPEND_ISSUES(change_dir, records)
+        return _REAL_APPEND_ISSUES(change_dir, records, **kw)
 
     async def run(self, stubs=None):
         run, lines = _run(

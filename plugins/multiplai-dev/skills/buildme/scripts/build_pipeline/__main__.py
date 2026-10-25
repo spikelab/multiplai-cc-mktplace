@@ -60,8 +60,9 @@ def _add_skip_explainers_flag(p: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Skip the unknowns/edge-case explainer pass for dependencies new "
         "to this project. unknowns.md is still written, recording the skip. "
-        "Default: explainers on (also settable as "
-        "`explainers: {enabled: false}` in specs/config.yaml).",
+        "Default: explainers off (`explainers: {enabled: false}` in "
+        "specs/config.yaml); the flag matters only when "
+        "`explainers: {enabled: true}` turns them on.",
     )
 
 

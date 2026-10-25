@@ -16,6 +16,7 @@ because of them:
 
 from __future__ import annotations
 
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -30,6 +31,9 @@ EXIT_NOT_READY = 2
 # Shared with `tdd_engine.EXIT_AGENT_TIMEOUT`: the marker on stdout tells the two apart.
 EXIT_SPEC_ISSUES = 4
 ISSUES_FILE = "spec-issues.md"
+# The header buildme-findings wrote before `write_issues` was the one writer.
+OLD_HEADER = "# Requirements issues\n"
+EARLIER_HEADING = "Issue recorded earlier"
 
 
 class SpecIssuesFound(Exception):
@@ -48,22 +52,44 @@ def write_issues(
 ) -> Path:
     """Append *issues* to the change's spec-issues.md, one `## <title>` section
     each (the form `pm-spec revise` reads: one issue per section), and set
-    `.change.yaml` `spec_issues` to it. A new file gets a header first. A
-    section already in the file, same title and body, is not written twice,
-    so a step that stopped after writing and runs again adds nothing."""
+    `.change.yaml` `spec_issues` to it. It is the one writer of the file: the
+    build's steps and buildme-findings (`findings.spec.append_issues`) both
+    call it.
+
+    A new file gets a header first. A section whose `## ` heading the file
+    already holds is not written again, so a step that stopped after writing
+    and runs again adds nothing; nothing already in the file is rewritten,
+    except two lines: the header `# Requirements issues` an older
+    buildme-findings wrote becomes this header, and a file with text but no
+    `## ` section (which pm-spec reads as one issue) gets `## Issue recorded earlier`
+    above that text before a section is appended, so it stays one issue."""
     path = Path(change_dir) / ISSUES_FILE
+    header = f"# Spec issues: {change}\n"
+    existed = path.is_file()
     text = (
         path.read_text()
-        if path.is_file()
+        if existed
         else (
-            f"# Spec issues: {change}\n\nRequirements problems buildme found. Fix them with "
+            f"{header}\nRequirements problems buildme found. Fix them with "
             f"`/multiplai-pm:pm-spec revise {pm_spec_change(change)}`, then run the build again.\n"
         )
     )
+    if text.startswith(OLD_HEADER):
+        text = header + text[len(OLD_HEADER) :]
     for title, body in issues:
-        section = f"## {' '.join(title.split())}\n\n{body.strip()}\n"
-        if section not in text:
-            text = text.rstrip("\n") + "\n\n" + section
+        title = " ".join(title.split())
+        if re.search(rf"^## {re.escape(title)}[ \t]*$", text, re.MULTILINE):
+            continue
+        if existed and not re.search(r"^## ", text, re.MULTILINE) and text.strip():
+            m = re.match(r"#[ \t]+.*\n", text)
+            cut = m.end() if m else 0
+            text = (
+                text[:cut]
+                + ("\n" if cut else "")
+                + f"## {EARLIER_HEADING}\n\n"
+                + text[cut:].lstrip("\n")
+            )
+        text = text.rstrip("\n") + "\n\n" + f"## {title}\n\n{body.strip()}\n"
     tmp = path.with_name(f".{path.name}.tmp")
     tmp.write_text(text)
     tmp.replace(path)

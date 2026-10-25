@@ -892,12 +892,15 @@ class TestSpecIssuesFile:
         change_dir = write_specs(tmp_path / "specs" / "changes" / CHANGE)
         path = readiness.write_issues(change_dir, [("Design: a", "one")], change=CHANGE)
         readiness.write_issues(
-            change_dir, [("Design: a", "one"), ("Design: b", "two")], change=CHANGE
+            change_dir,
+            [("Design: a", "one, worded again"), ("Design: b", "two")],
+            change=CHANGE,
         )
         text = path.read_text()
         assert text.startswith(f"# Spec issues: {CHANGE}\n")
         assert f"/multiplai-pm:pm-spec revise {CHANGE}" in text
         assert text.count("## Design: a") == 1 and text.count("## Design: b") == 1
+        assert "worded again" not in text
         assert read_change_meta(change_dir)["spec_issues"] == "spec-issues.md"
         assert readiness.open_issues(change_dir) == path
 

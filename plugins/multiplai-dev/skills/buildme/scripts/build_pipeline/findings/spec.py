@@ -39,16 +39,12 @@ from multiplai_core.untrusted import defang
 from .. import git_ops
 from ..change_manager import requirement_sources
 from ..config import BuildConfig
-from ..readiness import pm_spec_change
+from ..readiness import pm_spec_change, write_issues
 from .models import SpecIssue, TriageRecord, Verdict
 
 log = logging.getLogger(__name__)
 
 ISSUES_FILE = "spec-issues.md"
-EARLIER_HEADING = "Issue recorded earlier"
-
-_H2_RE = re.compile(r"^## ", re.MULTILINE)
-_TITLE_RE = re.compile(r"#[ \t]+.*\n")
 
 
 def issues_path(change_dir: Path) -> Path:
@@ -109,12 +105,13 @@ def requirements_file(change_dir: Path, requirement: str) -> str:
 
 
 def entry(record: TriageRecord, req_file: str) -> str:
-    """The record's `## ` section of `spec-issues.md`."""
+    """The body of the record's `## ` section of `spec-issues.md`, under
+    `heading(record)`."""
     t = record.triage
     c = record.comment
     assert t is not None
     link = _line(c.url, 300) or "(no link)"
-    lines = [f"## {heading(record)}", ""]
+    lines = []
     if req_file:
         lines.append(f"- Requirements file: `{req_file}`")
     lines.append(
@@ -142,44 +139,28 @@ def _has_section(text: str, head: str) -> bool:
     return re.search(rf"^## {re.escape(head)}[ \t]*$", text, re.MULTILINE) is not None
 
 
-def append_issues(change_dir: Path, records: list[TriageRecord]) -> list[str]:
-    """Append each record's section to `spec-issues.md`, skipping one whose
-    heading the file already holds; return the headings appended. Text
-    already in the file is kept as it is, except that a file with no `## `
-    section (which pm-spec reads as one issue) first gets one heading above
-    its text, so it stays one issue next to the new ones."""
+def append_issues(
+    change_dir: Path, records: list[TriageRecord], *, change: str | None = None
+) -> list[str]:
+    """Append each record's section to `spec-issues.md` through
+    `readiness.write_issues`, the file's one writer, skipping one whose
+    heading the file already holds; return the headings appended. *change*
+    names the change in a new file's header (the change dir's name when not
+    given)."""
     path = issues_path(change_dir)
     text = path.read_text() if path.exists() else ""
-    if text.strip() and not _H2_RE.search(text):
-        m = _TITLE_RE.match(text)
-        cut = m.end() if m else 0
-        text = (
-            text[:cut]
-            + ("\n" if cut else "")
-            + f"## {EARLIER_HEADING}\n\n"
-            + text[cut:].lstrip("\n")
-        )
-    if not text.strip():
-        text = (
-            "# Requirements issues\n\n"
-            "Raised by buildme findings. Each `## ` section is one issue for "
-            "`pm-spec revise`, which edits the requirements.\n"
-        )
     added: list[str] = []
+    issues: list[tuple[str, str]] = []
     for r in records:
         head = heading(r)
         if _has_section(text, head) or head in added:
             continue
         t = r.triage
         assert t is not None
-        text = (
-            text.rstrip("\n")
-            + "\n\n"
-            + entry(r, requirements_file(change_dir, t.requirement))
-        )
+        issues.append((head, entry(r, requirements_file(change_dir, t.requirement))))
         added.append(head)
-    if added:
-        path.write_text(text)
+    if issues:
+        write_issues(Path(change_dir), issues, change=change or Path(change_dir).name)
     return added
 
 
@@ -218,7 +199,7 @@ def run_spec_step(
     if not wanted:
         return [], None
     change_dir = Path(change_dir)
-    added = set(append_issues(change_dir, wanted))
+    added = set(append_issues(change_dir, wanted, change=config.change_name))
     if not added:
         log.info(
             "findings round %d: spec-issues.md already held every requirements issue",
