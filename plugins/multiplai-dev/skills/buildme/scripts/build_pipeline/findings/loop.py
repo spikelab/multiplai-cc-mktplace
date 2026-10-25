@@ -56,7 +56,7 @@ from pathlib import Path
 
 from build_pipeline.budget import BudgetExceededError
 
-from .. import budget, git_ops, stop_record
+from .. import budget, git_ops, readiness, stop_record
 from ..change_manager import normalize_change_name
 from ..config import BuildConfig
 from ..models import BlockStatus, BuildPhase
@@ -64,7 +64,7 @@ from ..progress import ProgressWriter
 from ..state import BuildState, FindingsRound, FindingsState
 from . import code, fetch, history, publish, spec, triage
 from .decisions import write_decisions
-from .models import TriageRecord
+from .models import PRComment, SpecIssue, TriageRecord
 
 log = logging.getLogger(__name__)
 
@@ -930,6 +930,38 @@ def _progress_note(progress: ProgressWriter, phase: str, details: str = "") -> N
         log.warning("Could not write %s to the progress file: %s", phase, e)
 
 
+def deferred_retries(
+    run: FindingsRun, fs: FindingsState
+) -> list[tuple[SpecIssue, str, PRComment]]:
+    """Each deferred code fix (`SpecIssue.defers_fix`) not yet retried whose
+    change dir's `.change.yaml` has no open `spec_issues` and a
+    `spec_revision` other than the one it was deferred at: the entry, that
+    revision, and the comment as the round that deferred it saved it."""
+    out = []
+    for r in fs.rounds:
+        for issue in r.spec_issues:
+            if (
+                not issue.defers_fix
+                or issue.deferred_comment_id is None
+                or issue.retried_at_revision is not None
+            ):
+                continue
+            change_dir = (Path(run.project_dir) / issue.issues_file).parent
+            rev = readiness.saved_revision(change_dir)
+            if (
+                readiness.open_issues(change_dir) is not None
+                or rev is None
+                or rev == issue.deferred_at_revision
+            ):
+                continue
+            saved = next(
+                (c for c in r.comments if c.id == issue.deferred_comment_id), None
+            )
+            if saved is not None:
+                out.append((issue, rev, saved))
+    return out
+
+
 async def _run_findings(run: FindingsRun) -> int:
     st = load_state(run)
     budget.reset()
@@ -994,7 +1026,24 @@ async def _run_findings(run: FindingsRun) -> int:
                 comments, run.config.findings, cache, repo=fs.repo, cwd=run.project_dir
             )
             seen = fs.seen_ids()
-            new = [c for c in comments if c.id not in seen]
+            # A fix deferred over a spec conflict is triaged again, once,
+            # after `pm-spec revise` resolved it (rows S9-S12). Its
+            # `retried_at_revision` is saved with this round's checkpoint.
+            retries = deferred_retries(run, fs)
+            again = {c.id for _, _, c in retries}
+            new = [c for c in comments if c.id not in seen - again]
+            for _, _, c in retries:  # a top-level comment older than `since`
+                if all(n.id != c.id for n in new):
+                    new.append(c)
+            for issue, rev, c in retries:
+                issue.retried_at_revision = rev
+                log.info(
+                    "findings: comment %d triaged again: its spec conflict was revised "
+                    "(spec_revision %s -> %s)",
+                    c.id,
+                    issue.deferred_at_revision,
+                    rev,
+                )
             if not any(triage.should_triage(c)[0] for c in new):
                 for c in new:
                     log.info(

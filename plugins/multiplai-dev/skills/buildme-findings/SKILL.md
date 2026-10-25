@@ -109,7 +109,9 @@ never removed. A PR whose branch lives in a fork is refused.
    (`other_locations`), the block lists them and asks for every listed
    location to be fixed and tested. A fix that contradicts the spec is not
    made: it waits on the requirements change, and its reply says so. The
-   other fixes are made in the same round.
+   other fixes are made in the same round. Once `pm-spec revise` has cleared
+   the spec issue and recorded a new spec revision, a later run triages that
+   comment again, once.
    On the last round `findings.max_rounds` allows, from round 2 on, every
    block starts with the escalation text of buildme's review fix: every
    finding lineage of the PR's reviews with what each review said about it,
