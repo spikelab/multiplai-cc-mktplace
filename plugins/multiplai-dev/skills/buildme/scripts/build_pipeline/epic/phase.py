@@ -365,14 +365,24 @@ async def run_epic_from_specs(config, args) -> int:
         live = [c for c in children if child_change(name, c.id, nested) not in merged]
         for c in live:
             child = child_change(name, c.id, nested)
-            ready, why = is_ready(
-                source / "components" / c.id if nested else changes / child
-            )
+            child_dir = source / "components" / c.id if nested else changes / child
+            ready, why = is_ready(child_dir)
             if not ready:
                 return readiness.refuse_not_ready(
                     child,
                     f"{'component' if nested else 'child'} {child} on origin/{branch}: {why}",
                 )
+            # The same refusal a single build gives an open spec_issues
+            # (`orchestrator._refuse_unless_ready_at_base`), before the lock.
+            for d in dict.fromkeys((child_dir, change_root(child_dir))):
+                issues = readiness.open_issues(d)
+                if issues is None:
+                    continue
+                try:
+                    shown = f"{rel}/{issues.relative_to(Path(tmp) / rel).as_posix()}"
+                except ValueError:
+                    shown = str(issues)
+                return readiness.refuse_issues_at(f"origin/{branch}:{shown}", child)
 
     try:
         epic_lock.hold(epic_dir, name)
@@ -404,7 +414,15 @@ async def run_epic_from_specs(config, args) -> int:
 
     try:
         return await coordinator.run_epic(
-            config, args, epic_dir, epic, branch, nested=nested
+            config,
+            args,
+            epic_dir,
+            epic,
+            branch,
+            nested=nested,
+            merged={
+                c.id for c in children if child_change(name, c.id, nested) in merged
+            },
         )
     except (
         Exception

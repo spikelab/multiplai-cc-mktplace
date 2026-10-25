@@ -545,3 +545,43 @@ def test_a_build_of_the_same_change_in_another_project_is_not_this_child(tmp_pat
         for p in (other, fixer):
             os.killpg(p.pid, signal.SIGKILL)
             p.wait()
+
+
+# --- spec issues and archived children (plan-pm-spec-gaps-2026-10-25.md) ------------
+
+
+def test_a_child_with_open_spec_issues_is_refused_before_launch(
+    tmp_path, monkeypatch, capsys
+):
+    """Item 6: an open `spec_issues` on the feature branch refuses the epic
+    with the single build's `SPEC:ISSUES:<ref>:<path>` and exit 4, before the
+    lock: nothing is written and no child is launched."""
+    e = Epic(tmp_path, monkeypatch)
+    child_dir = e.changes / "e-ui"
+    (child_dir / "spec-issues.md").write_text("# Spec issues: e-ui\n\n## A\n\nvague\n")
+    write_change_meta(child_dir, {"spec_issues": "spec-issues.md"})
+    _commit_all(e.project, "spec issues")
+    rc, out = e.refused(capsys)
+    assert rc == 4
+    lines = out.splitlines()
+    assert lines[0] == "SPEC:ISSUES:origin/ENG-40-e:specs/changes/e-ui/spec-issues.md"
+    assert lines[1] == "Run /multiplai-pm:pm-spec revise e-ui, then run the build again"
+    _assert_nothing_written(e)
+
+
+def test_an_archived_child_with_no_records_is_not_launched(tmp_path, monkeypatch):
+    """Item 8, row S8: a merged, archived on the branch, and its records and
+    saved status lost: it is merged, never launched again, and b launches."""
+    e = Epic(tmp_path, monkeypatch, answer=CHAIN)
+    assert e.run() == 3
+    e.fakes.set_pr(pr_url("e-a"), "MERGED")
+    _archive(e, "e-a")
+    for a in e.build_records("a"):
+        for p in a.path.parent.glob(a.path.name + ".*"):
+            p.unlink()
+    saved = json.loads((e.dir / "epic.json").read_text())
+    saved["child_status"]["a"]["status"] = "built"
+    (e.dir / "epic.json").write_text(json.dumps(saved))
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-b")]
+    assert e.build_records("a") == [] and len(e.build_records("b")) == 1
+    assert e.status()["a"]["status"] == "merged"

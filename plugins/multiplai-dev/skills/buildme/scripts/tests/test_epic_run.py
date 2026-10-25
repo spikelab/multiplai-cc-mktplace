@@ -1279,3 +1279,90 @@ def test_epic_acceptance_reaches_capped_fixer(tmp_path, monkeypatch, accept):
     assert asyncio.run(coord._run_fix(coord.children["a"], "head", 1, 1))
     assert ("--accept-unknown-spend" in calls[0]) is accept
     assert "--max-usd" in calls[0]
+
+
+# --- a child build that refuses its specs (plan-pm-spec-gaps-2026-10-25.md, item 7) ---
+
+ISSUES = "SPEC:ISSUES:origin/ENG-40-e:specs/changes/e-a/spec-issues.md"
+
+
+def _push_specs(project: Path, msg: str) -> None:
+    """Commit the checkout's specs onto the feature branch, as pm-spec does."""
+
+    def git(*a: str) -> None:
+        subprocess.run(["git", *a], cwd=project, check=True, capture_output=True)
+
+    git("add", "specs")
+    git("-c", "commit.gpgsign=false", "commit", "-qm", msg)
+    git("fetch", "-q", "origin")
+    git("-c", "commit.gpgsign=false", "merge", "-q", "--no-edit", "origin/ENG-40-e")
+    git("push", "-q", "origin", "HEAD:refs/heads/ENG-40-e")
+
+
+@pytest.mark.parametrize(
+    ("marker", "code"),
+    [(ISSUES, 4), ("SPEC:NOT_READY:child e-a on origin/ENG-40-e: changed", 2)],
+)
+def test_a_spec_refusal_is_parked_with_its_reason(tmp_path, monkeypatch, marker, code):
+    """The refusal's marker line is the reason, not `exit <code>`, and the
+    child is not relaunched in the run (rows S5, S6)."""
+    e = Epic(
+        tmp_path,
+        monkeypatch,
+        answer=INDEPENDENT,
+        steps={"a": [{"marker": marker, "exit": code}]},
+    )
+    e.run()
+    assert e.launches().count("a") == 1
+    assert e.status()["a"] == "parked" and e.reasons()["a"] == marker
+    row = next(c for c in e.summary(1)["children"] if c["id"] == "a")
+    assert row["status"] == "parked" and row["reason"] == marker
+
+
+def test_an_exit_4_with_no_refusal_marker_is_still_a_failure(tmp_path, monkeypatch):
+    """Exit 4 is also an agent timeout: without the marker it is `failed`."""
+    e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT, steps={"a": [{"exit": 4}]})
+    e.run()
+    assert e.status()["a"] == "failed" and e.reasons()["a"] == "exit 4"
+    assert e.launches().count("a") == 2
+
+
+def test_a_parked_child_runs_again_once_its_spec_is_ready(tmp_path, monkeypatch):
+    """Row S7: while the branch holds an open spec issue the epic refuses
+    before launching anything; once `pm-spec revise` clears it, the parked
+    child launches once more and builds."""
+    from multiplai_core.specs import write_change_meta
+
+    e = Epic(
+        tmp_path,
+        monkeypatch,
+        answer=INDEPENDENT,
+        steps={"a": [{"marker": ISSUES, "exit": 4}, {}]},
+    )
+    e.run()
+    assert e.status()["a"] == "parked" and e.launches().count("a") == 1
+    child_dir = e.config.specs_dir / "changes" / "e-a"
+    (child_dir / "spec-issues.md").write_text("# Spec issues: e-a\n\n## A\n\nvague\n")
+    write_change_meta(child_dir, {"spec_issues": "spec-issues.md"})
+    _push_specs(e.project, "spec issues")
+    assert e.run() == 4 and e.launches().count("a") == 1
+    write_change_meta(child_dir, {"spec_issues": None})
+    _push_specs(e.project, "pm-spec revise")
+    e.run()
+    assert e.launches().count("a") == 2
+    assert e.status()["a"] == "built" and pr_url("e-a") in merge_waiting()
+
+
+def test_other_children_build_while_one_is_parked_and_its_dependants_wait(
+    tmp_path, monkeypatch
+):
+    """Parking api stops nothing else: ui builds, and docs (which needs api
+    and ui) waits on api instead of being skipped."""
+    marker = "SPEC:ISSUES:origin/ENG-40-e:specs/changes/e-api/spec-issues.md"
+    e = Epic(tmp_path, monkeypatch, steps={"api": [{"marker": marker, "exit": 4}]})
+    e.run()
+    assert sorted(e.launches()) == ["api", "ui"]
+    assert e.status() == {"api": "parked", "ui": "built", "docs": "waiting"}
+    assert e.reasons()["docs"] == "waiting on api"
+    row = next(c for c in e.summary(1)["children"] if c["id"] == "docs")
+    assert row["status"] == "waiting" and row["reason"] == "waiting on api"
