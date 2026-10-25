@@ -590,8 +590,12 @@ epic's feature branch on origin holds it (`origin/<TICKET>-<parent>` after a
 `<parent>-<id>`, its change dir present, its `depends_on` naming only listed
 children with no cycle, and its specs ready. A child whose change dir is gone
 because it merged (its `--auto` build moved it to `specs/archive/`, or the
-saved `epic.json` says it merged) counts as merged and is not checked. Any
+saved `epic.json` says it merged) counts as merged, is not checked and is
+never launched again, even when its records are gone. Any
 failure prints `SPEC:NOT_READY:<reason>` and the pm-spec line, and exits `2`;
+a child with an open spec issue (`spec_issues` in its `.change.yaml`, or its
+change's) prints `SPEC:ISSUES:origin/<branch>:<path>` and the `pm-spec revise`
+line, and exits `4`, as a single build does;
 so does an epic with no feature branch on origin (a split pm-spec handed off
 before it pushed: `pm-spec resume <parent>` moves it there). A change that
 names the parent but is not in its `children` list is not built.
@@ -634,7 +638,13 @@ writes `agents/<NNN>-build-<id>.{started.json,result.json,log}` and ends with
 `runs/<NN>/summary.json` (each child's status, PR and reason), printing
 `EPIC:SUMMARY:<path>`. A child that exits `3` (for example `SPLIT:REQUIRED`)
 or exits `0` without a PR is parked, and the children that depend on it are
-skipped; a child that fails (`SPEC:ISSUES` included) is relaunched once per run. While a child waits on
+skipped. A child whose own build refuses its specs (`SPEC:NOT_READY` or
+`SPEC:ISSUES`, told by that line, not the exit code) is parked with that line
+as its reason and not relaunched in the run; every other child whose
+dependencies are met still builds, and the children that depend on it are
+`waiting on <id>`. The next run checks the specs again before anything
+launches, and once they are ready with no open issue the parked child builds
+again. A child that fails otherwise is relaunched once per run. While a child waits on
 an open PR, the build exits `3` with `EPIC:MERGE_WAITING:<urls>`. Re-running the
 same command continues from what is on disk: a child still running from an
 earlier run is waited for, never started twice, and a PR a stopped child
