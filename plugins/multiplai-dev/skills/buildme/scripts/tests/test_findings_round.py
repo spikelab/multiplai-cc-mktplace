@@ -302,7 +302,12 @@ class TestCodeStep:
 from build_pipeline.findings import loop
 from build_pipeline.findings.fetch import REPLY_MARKER
 from build_pipeline.state import BuildState
-from multiplai_core.specs import read_change_meta
+from multiplai_core.specs import (
+    clear_spec_issues,
+    read_change_meta,
+    set_spec_issues,
+    write_change_meta,
+)
 
 REPO = "acme/widgets"
 PR = 7
@@ -881,6 +886,115 @@ class TestSpecChangeRound:
             == 1
         )
         assert len(fake_pr.replies()) == 1
+
+
+CONFLICT = Triage(
+    verdict=Verdict.CODE_FIX,
+    reason="add accepts None, which the spec allows.",
+    locations=["calc.py:2"],
+    failing_test="add(2, 2) returns 4",
+    spec_conflict=True,
+    requirement="calc: Sum",
+)
+CONFLICT_FIXABLE = Triage(
+    verdict=Verdict.CODE_FIX,
+    reason="The revised spec refuses None.",
+    locations=["calc.py:2"],
+    failing_test="add(2, 2) returns 4",
+)
+
+
+def _ready_at(repo: Path, change: Path, revision: str, *, issues: bool) -> None:
+    """What `pm-spec revise` leaves: *revision* recorded as `spec_revision`,
+    with `spec_issues` still set or cleared, committed."""
+    write_change_meta(change, {"spec_revision": revision})
+    if not issues:
+        clear_spec_issues(change)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", f"spec: {revision}")
+
+
+class TestDeferredFixRetry:
+    """Items 11-13: a code fix deferred over a spec conflict is triaged again,
+    once, after `pm-spec revise` cleared the issue and moved `spec_revision`."""
+
+    async def _defer(self, repo, change, config, fake_pr):
+        _ready_at(repo, change, "rev-1", issues=False)
+        thread = fake_pr.add_thread("alice", "add should refuse None", fid="c0f1")
+        triage1 = FakeTriage({"add should refuse None": CONFLICT})
+        run, lines = _run(
+            config, change, triage_call=triage1, review=FakeReview(fake_pr)
+        )
+        with _Stubs(engine_stubs(repo)):
+            assert await loop.run_findings(run) == 0, lines
+        assert len(triage1.prompts) == 1
+        assert (
+            "A code fix waits on this change" in (change / "spec-issues.md").read_text()
+        )
+        return thread
+
+    async def _again(self, repo, change, config, fake_pr):
+        triage = FakeTriage({"add should refuse None": CONFLICT_FIXABLE})
+        run, lines = _run(
+            config, change, triage_call=triage, review=FakeReview(fake_pr)
+        )
+        with _Stubs(engine_stubs(repo)):
+            assert await loop.run_findings(run) == 0, lines
+        return triage, lines
+
+    @pytest.mark.asyncio
+    async def test_a_deferred_fix_is_triaged_again_after_revise(self, built, fake_pr):
+        repo, change, config = built
+        thread = await self._defer(repo, change, config, fake_pr)
+
+        _ready_at(repo, change, "rev-2", issues=False)
+        triage, lines = await self._again(repo, change, config, fake_pr)
+
+        assert len(triage.prompts) == 1
+        assert "add should refuse None" in triage.prompts[0]
+        assert "impl(block-1): Fix finding c0f1" in _subjects(repo)
+        assert (repo / "calc.py").read_text() == "def add(a, b):\n    return a + b\n"
+        replies = [r[2] for r in fake_pr.replies() if r[1] == thread]
+        assert "Not fixed this round" in replies[0]
+        assert "Fixed in" in replies[-1]
+        state = json.loads((change / ".findings-state.json").read_text())
+        (issue,) = state["findings"]["rounds"][0]["spec_issues"]
+        assert issue["deferred_at_revision"] == "rev-1"
+        assert issue["retried_at_revision"] == "rev-2"
+
+    @pytest.mark.asyncio
+    async def test_a_deferred_fix_is_not_retried_while_spec_issues_are_open(
+        self, built, fake_pr
+    ):
+        """Row S12: `spec_issues` still set, so the conflict is not resolved;
+        an unchanged `spec_revision` (no revise yet) is not retried either."""
+        repo, change, config = built
+        await self._defer(repo, change, config, fake_pr)
+
+        for revision, issues in (("rev-1", False), ("rev-2", True)):
+            meta = write_change_meta(change, {"spec_revision": revision})
+            if issues:
+                set_spec_issues(change, "spec-issues.md")
+            else:
+                clear_spec_issues(change)
+            assert meta is not None
+            _git(repo, "add", "-A")
+            _git(repo, "commit", "-qm", f"spec: {revision}", "--allow-empty")
+            triage, lines = await self._again(repo, change, config, fake_pr)
+            assert triage.prompts == [], (revision, lines)
+        assert not any("c0f1" in s and s.startswith("impl(") for s in _subjects(repo))
+
+    @pytest.mark.asyncio
+    async def test_a_retried_fix_is_not_retried_twice(self, built, fake_pr):
+        repo, change, config = built
+        await self._defer(repo, change, config, fake_pr)
+        _ready_at(repo, change, "rev-2", issues=False)
+        triage, _ = await self._again(repo, change, config, fake_pr)
+        assert len(triage.prompts) == 1
+
+        _ready_at(repo, change, "rev-3", issues=False)
+        triage, lines = await self._again(repo, change, config, fake_pr)
+        assert triage.prompts == [], lines
 
 
 class TestResume:

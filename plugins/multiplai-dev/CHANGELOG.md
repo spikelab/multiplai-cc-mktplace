@@ -15,6 +15,16 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.110.0] - 2026-10-25
+
+### Fixed
+- `/multiplai-dev:buildme-findings` comes back to a code fix it deferred
+  because the fix contradicted the spec. Once `/multiplai-pm:pm-spec revise`
+  has cleared the spec issue and recorded a new spec revision, the next
+  findings run triages that comment again and, if it is still a code fix,
+  fixes it and replies in its thread. It does this once per comment; a
+  later revision does not retry it again.
+
 ## [0.109.0] - 2026-10-25
 
 ### Fixed

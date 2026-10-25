@@ -39,7 +39,7 @@ from multiplai_core.untrusted import defang
 from .. import git_ops
 from ..change_manager import requirement_sources
 from ..config import BuildConfig
-from ..readiness import pm_spec_change, write_issues
+from ..readiness import pm_spec_change, saved_revision, write_issues
 from .models import SpecIssue, TriageRecord, Verdict
 
 log = logging.getLogger(__name__)
@@ -223,6 +223,10 @@ def run_spec_step(
                 requirements_file=requirements_file(change_dir, t.requirement),
                 defers_fix=defers_fix(r),
                 appended=head in added,
+                deferred_comment_id=r.comment.id if defers_fix(r) else None,
+                deferred_at_revision=saved_revision(change_dir)
+                if defers_fix(r)
+                else None,
             )
         )
         added.discard(head)  # a second record under the same heading added nothing

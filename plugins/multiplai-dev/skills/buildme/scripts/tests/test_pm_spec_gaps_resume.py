@@ -16,6 +16,7 @@ from build_pipeline.epic import coordinator
 from build_pipeline.epic import lock as epic_lock
 from multiplai_core.specs import mark_ready, read_change_meta, write_change_meta
 
+from . import test_findings_round as rounds
 from .epic_row_helpers import EpicSplitAnswer, child, pr_url, run_killed
 from .spec_fixtures import write_specs
 from .test_epic_run import Epic, _push_specs
@@ -295,3 +296,167 @@ def test_s13_a_resume_while_the_stopped_epic_still_runs_is_refused(
         proc.communicate("")
     assert _finish(e) == readiness.EXIT_SPEC_ISSUES
     assert _outcome(e) == plain
+
+
+# --- S9-S13: findings retries a deferred fix after revise -----------------------------
+
+FIXED = "def add(a, b):\n    return a + b\n"
+
+
+def _findings_repo(base: Path, monkeypatch):
+    """`built` from test_findings_round, with `spec_revision` rev-1 recorded,
+    a fresh fake PR, and the conflicting comment c0f1 on it."""
+    monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
+    repo, change, config = rounds._make_built(base)
+    rounds._ready_at(repo, change, "rev-1", issues=False)
+    pr = rounds._install_pr(monkeypatch)
+    pr.add_thread("alice", "add should refuse None", fid="c0f1")
+    return repo, change, config, pr
+
+
+async def _findings(change, config, pr, verdict, *, triage=None, review=None) -> int:
+    triage = triage or rounds.FakeTriage({"add should refuse None": verdict})
+    run, _ = rounds._run(
+        config,
+        change,
+        triage_call=triage,
+        review=review or rounds.FakeReview(pr),
+    )
+    with rounds._Stubs(rounds.engine_stubs(config.project_dir)):
+        return await rounds.loop.run_findings(run)
+
+
+def _findings_outcome(repo: Path, change: Path, pr) -> tuple:
+    """What a finished run leaves, without shas and times: spec-issues.md,
+    calc.py, the commit subjects, each saved entry's retry fields, the
+    triage rows for c0f1 in each round's file, and each reply's kind."""
+    st = rounds.BuildState.load(change / ".findings-state.json")
+    entries = [
+        (
+            i.heading,
+            i.deferred_comment_id,
+            i.deferred_at_revision,
+            i.retried_at_revision,
+        )
+        for r in st.findings.rounds
+        for i in r.spec_issues
+    ]
+    rows = [
+        sum(ln.startswith("| c0f1 ") for ln in p.read_text().splitlines())
+        for p in sorted(change.glob("findings-r[0-9].md"))
+    ]
+    replies = [
+        "fixed" if "Fixed in" in r[2] else "deferred" if "Not fixed" in r[2] else r[2]
+        for r in pr.replies()
+    ]
+    return (
+        (change / "spec-issues.md").read_text(),
+        (repo / "calc.py").read_text(),
+        rounds._subjects(repo),
+        entries,
+        rows,
+        replies,
+    )
+
+
+async def _plain_retry(base: Path, monkeypatch) -> tuple:
+    """Defer, revise to rev-2, retry: the run that never stopped."""
+    repo, change, config, pr = _findings_repo(base, monkeypatch)
+    assert await _findings(change, config, pr, rounds.CONFLICT) == 0
+    rounds._ready_at(repo, change, "rev-2", issues=False)
+    assert await _findings(change, config, pr, rounds.CONFLICT_FIXABLE) == 0
+    return _findings_outcome(repo, change, pr)
+
+
+class _StopFirst(rounds.FakeTriage):
+    """Triage that stops the process (Ctrl-C) on its first *stops* calls."""
+
+    def __init__(self, verdicts, stops=1):
+        super().__init__(verdicts)
+        self.stops = stops
+
+    async def __call__(self, prompt, schema, **kw):
+        if self.stops:
+            self.stops -= 1
+            raise KeyboardInterrupt
+        return await super().__call__(prompt, schema, **kw)
+
+
+@pytest.mark.asyncio
+async def test_s9_a_round_stopped_after_the_deferred_entry_is_saved_resumes_once(
+    tmp_path, monkeypatch
+):
+    """Stopped at the review, after the round's checkpoint saved the entry
+    with `deferred_at_revision`: the round resumes and the entry is one."""
+    repo, change, config, pr = _findings_repo(tmp_path / "plain", monkeypatch)
+    assert await _findings(change, config, pr, rounds.CONFLICT) == 0
+    plain = _findings_outcome(repo, change, pr)
+
+    repo, change, config, pr = _findings_repo(tmp_path / "stopped", monkeypatch)
+
+    class StopAtReview(rounds.FakeReview):
+        def review(self, run, rnd):
+            st = rounds.BuildState.load(change / ".findings-state.json")
+            (entry,) = st.findings.rounds[0].spec_issues
+            assert entry.deferred_at_revision == "rev-1"
+            raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        await _findings(change, config, pr, rounds.CONFLICT, review=StopAtReview(pr))
+    assert await _findings(change, config, pr, rounds.CONFLICT) == 0
+    assert _findings_outcome(repo, change, pr) == plain
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stops", [1, 2], ids=["s10_once", "s11_twice"])
+async def test_s10_s11_a_retry_stopped_before_it_is_saved_retries_once(
+    tmp_path, monkeypatch, stops
+):
+    """S10: stopped in the retry's triage, before the round's checkpoint
+    saves `retried_at_revision`. S11: the same step stopped twice in a row.
+    Either resume ends as one retry: one triage row in the finished round."""
+    plain = await _plain_retry(tmp_path / "plain", monkeypatch)
+
+    repo, change, config, pr = _findings_repo(tmp_path / "stopped", monkeypatch)
+    assert await _findings(change, config, pr, rounds.CONFLICT) == 0
+    rounds._ready_at(repo, change, "rev-2", issues=False)
+    stopping = _StopFirst({"add should refuse None": rounds.CONFLICT_FIXABLE}, stops)
+    for _ in range(stops):
+        with pytest.raises(KeyboardInterrupt):
+            await _findings(change, config, pr, None, triage=stopping)
+    assert await _findings(change, config, pr, rounds.CONFLICT_FIXABLE) == 0
+    outcome = _findings_outcome(repo, change, pr)
+    assert outcome == plain
+    assert outcome[4] == [1, 1]  # one triage of c0f1 in each finished round
+    assert (repo / "calc.py").read_text() == FIXED
+
+
+@pytest.mark.asyncio
+async def test_s12_a_base_moved_between_runs_does_not_change_the_retry(
+    tmp_path, monkeypatch
+):
+    """The retry reads only `.change.yaml`: a commit from the base branch
+    merged in between the runs changes nothing but that commit."""
+    plain = await _plain_retry(tmp_path / "plain", monkeypatch)
+
+    repo, change, config, pr = _findings_repo(tmp_path / "moved", monkeypatch)
+    assert await _findings(change, config, pr, rounds.CONFLICT) == 0
+    rounds._ready_at(repo, change, "rev-2", issues=False)
+    (repo / "NOTES.md").write_text("from the base branch\n")
+    rounds._git(repo, "add", "NOTES.md")
+    rounds._git(repo, "commit", "-qm", "Merge origin/main")
+    assert await _findings(change, config, pr, rounds.CONFLICT_FIXABLE) == 0
+    outcome = _findings_outcome(repo, change, pr)
+    subjects = [s for s in outcome[2] if s != "Merge origin/main"]
+    assert (*outcome[:2], subjects, *outcome[3:]) == plain
+    assert outcome[1] == FIXED
+
+
+def test_s13_findings_holds_no_run_lock():
+    """Findings has no run lock, so two findings runs on one PR can overlap.
+    Spike chose no lock (2026-10-25): resume adds none, and this pins it, so
+    adding one is a decision rather than a side effect."""
+    findings = Path(rounds.loop.__file__).parent
+    for py in sorted(findings.glob("*.py")):
+        text = py.read_text()
+        assert "flock" not in text and "epic.lock" not in text, py.name

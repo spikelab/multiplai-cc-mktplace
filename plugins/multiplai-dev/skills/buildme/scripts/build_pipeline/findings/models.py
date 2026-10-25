@@ -128,3 +128,10 @@ class SpecIssue(BaseModel):
     )
     defers_fix: bool = False  # a code_fix whose fix waits on this change
     appended: bool = True  # False: the file already held this finding's section
+    # A deferred code fix (`defers_fix`): its comment, and the `.change.yaml`
+    # `spec_revision` when it was deferred. Once `pm-spec revise` has cleared
+    # `spec_issues` and moved the revision, a later round triages the comment
+    # again, once, and saves the revision it read as `retried_at_revision`.
+    deferred_comment_id: int | None = None
+    deferred_at_revision: str | None = None
+    retried_at_revision: str | None = None
