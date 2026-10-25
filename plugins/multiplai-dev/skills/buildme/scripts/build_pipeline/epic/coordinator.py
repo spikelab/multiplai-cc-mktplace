@@ -89,7 +89,7 @@ import yaml
 
 from build_pipeline.budget import BudgetExceededError
 
-from .. import budget, feature_branch, git_ops, intake, stop_record
+from .. import budget, feature_branch, git_ops, intake, readiness, stop_record
 from ..config import git_toggles
 from ..models import AgentResult
 from . import CHILD_ENV, fix, merge, records, review, spend, store
@@ -119,6 +119,10 @@ PR_CLOSED = "PR closed without a merge"
 PR_UNREAD = "cannot read its PR's state: gh pr view failed"  # B1.S24: read again before the run ends
 MERGE_UNKNOWN = "cannot merge: "  # the merge step's fetch or push failed: `unknown` for the rest of the run
 NO_PR = "no PR opened"
+# A child build that refused its specs (`readiness`): parked with the marker
+# line, never relaunched in the run; the next run's entry checks the specs again.
+SPEC_REFUSALS = (f"{readiness.MARKER_NOT_READY}:", f"{readiness.MARKER_ISSUES}:")
+WAITING_ON = "waiting on "  # a dependant of a child parked on its specs
 REVIEW_KINDS = ("review", "resume")
 FIX_KINDS = ("post", "fix")
 PR_FIELDS = "number,state,headRefOid,mergeable,mergeStateStatus"
@@ -465,6 +469,9 @@ class Coordinator:
         None  # the files a merge of main into the branch conflicted in
     )
     nested: bool = False  # the children are components nested in the change
+    merged: set[str] = field(
+        default_factory=set
+    )  # ids specs/archive/ holds on the feature branch: merged, never launched
 
     def change(self, cid: str) -> str:
         """The `--change` the child *cid* builds as (`phase.child_change`)."""
@@ -496,6 +503,11 @@ class Coordinator:
                     cached.merge_stop,
                     cached.merge_park,
                 )
+            if c.id in self.merged or (
+                cached is not None and cached.status == "merged"
+            ):
+                self.children[c.id].status = "merged"
+                self.children[c.id].pr = cached.pr if cached is not None else None
 
     # -- argv -----------------------------------------------------------------
 
@@ -607,7 +619,12 @@ class Coordinator:
             return
         code = last.get("exit_code")
         c.pr = last.get("pr")
-        if code == 0 and c.pr:
+        # A refusal is told by its marker, never by the exit code: exit 4 is
+        # also an agent timeout (`readiness.EXIT_SPEC_ISSUES`).
+        refusal = records.wait_marker(last.get("markers", [])) or ""
+        if code != 0 and refusal.startswith(SPEC_REFUSALS):
+            c.status, c.reason = "parked", refusal
+        elif code == 0 and c.pr:
             c.status, c.reason = "built", ""
         elif code == 0:
             c.status, c.reason = "parked", NO_PR
@@ -657,6 +674,8 @@ class Coordinator:
                 by_child.setdefault(a.child, []).append(a)
         for cid, tries in by_child.items():
             c = self.children[cid]
+            if c.status == "merged":  # archived on the feature branch (B.S8)
+                continue
             for a in tries:
                 if a.result is not None:
                     continue
@@ -681,12 +700,22 @@ class Coordinator:
                 records.finish(a, None, interrupted=True)
             else:
                 self._classify(c, tries)
+                if c.status == "parked" and c.reason.startswith(SPEC_REFUSALS):
+                    # `run_epic_from_specs` found every child's specs ready
+                    # with no open issue before this run (B.S6, B.S7).
+                    log.info(
+                        "EPIC child %s: its specs are ready now; launching it again (was: %s)",
+                        cid,
+                        c.reason,
+                    )
+                    c.status, c.reason = "pending", ""
         for a in records.attempts(
             self.epic_dir
         ):  # a review's or fix's park stays (C.S6, C.S12, D2.S6)
             c = self.children.get(a.child)
             if (
                 c is not None
+                and c.status != "merged"
                 and a.kind in (*REVIEW_KINDS, *FIX_KINDS)
                 and (a.result or {}).get("parked")
             ):
@@ -694,7 +723,7 @@ class Coordinator:
         for c in (
             self.children.values()
         ):  # and a merge step's (PR E), until <W> is clean (E.S26)
-            if c.merge_park and not self._merge_retry(c):
+            if c.status != "merged" and c.merge_park and not self._merge_retry(c):
                 c.status, c.reason = "parked", c.merge_park
 
     # -- dependencies and merges -------------------------------------------------
@@ -747,10 +776,26 @@ class Coordinator:
             for c in self.children.values():
                 if c.status not in ("pending", "waiting", "failed"):
                     continue
+                # A dependency parked on its specs (or waiting on one) is a
+                # spec fix away from building: its dependants wait, not skip.
+                held = [
+                    d
+                    for d in c.depends_on
+                    if self._on_specs(self.children[d])
+                    or self.children[d].reason.startswith(WAITING_ON)
+                ]
+                if held and not c.reason.startswith(WAITING_ON):
+                    c.status, c.reason, changed = (
+                        "waiting",
+                        f"{WAITING_ON}{held[0]}",
+                        True,
+                    )
+                    continue
                 stuck = [
                     d
                     for d in c.depends_on
                     if self.children[d].status in ("parked", "skipped")
+                    and not self._on_specs(self.children[d])
                 ]
                 if stuck:
                     c.status, c.reason, changed = (
@@ -771,6 +816,11 @@ class Coordinator:
             elif c.status == "pending" and ("built" in deps or "reviewing" in deps):
                 c.status = "waiting"
         return ready
+
+    @staticmethod
+    def _on_specs(c: Child) -> bool:
+        """Parked because its build refused its specs (`SPEC_REFUSALS`)."""
+        return c.status == "parked" and c.reason.startswith(SPEC_REFUSALS)
 
     # -- launching and watching -------------------------------------------------
 
@@ -2698,6 +2748,7 @@ async def run_epic(
     branch: str,
     *,
     nested: bool = False,
+    merged: set[str] | None = None,
 ) -> int:
     """Build an epic's children (item 11) from its feature branch *branch*,
     which holds their ready specs. Returns 0 when nothing is
@@ -2707,12 +2758,20 @@ async def run_epic(
     or with `FEATURE_BRANCH:CONFLICT:<branch>:<files>` when merging origin's default
     branch into *branch* conflicts, 128 + the signal when stopped. *nested*: the
     children are the change's components, which build as `<change>/<id>`; once
-    every one merged, the change is archived on *branch* (`Coordinator._archive`)."""
+    every one merged, the change is archived on *branch* (`Coordinator._archive`).
+    *merged*: the ids of children `specs/archive/` holds on *branch*, which are
+    merged even when their records are gone."""
     from . import lock as epic_lock
 
     assert epic_lock.held(epic_dir), (
         "the coordinator runs under the epic lock its build holds"
     )
     return await Coordinator(
-        config, args, Path(epic_dir), epic, branch, nested=nested
+        config,
+        args,
+        Path(epic_dir),
+        epic,
+        branch,
+        nested=nested,
+        merged=merged or set(),
     ).run()

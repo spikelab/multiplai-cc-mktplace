@@ -454,7 +454,7 @@ if step.get("block"):
         time.sleep(0.02)
 if step.get("marker"):
     print(step["marker"], flush=True)
-    sys.exit(3)
+    sys.exit(step.get("exit", 3))    # a refusal of the specs exits 2 or 4
 if step.get("exit"):
     sys.exit(step["exit"])
 if step.get("no_pr"):

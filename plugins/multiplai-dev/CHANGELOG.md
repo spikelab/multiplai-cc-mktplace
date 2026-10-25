@@ -15,6 +15,25 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.109.0] - 2026-10-25
+
+### Fixed
+- An epic `/buildme` refuses a child with an open spec issue before it
+  launches anything, with the same `SPEC:ISSUES:<ref>:<path>` line and exit
+  `4` a single build gives, instead of launching the child and relaunching it.
+- A child whose own build refuses its specs (`SPEC:NOT_READY` or
+  `SPEC:ISSUES`) is parked with that line as its reason, not reported as
+  `failed: exit 2` and relaunched on every run. The rest of the epic keeps
+  building; children that depend on it wait on it. Once `pm-spec revise` has
+  made its specs ready again, the next run builds it.
+- A child that merged and was archived on the feature branch is never
+  launched again, even when the epic's records of it are gone.
+- `spec-issues.md` has one writer, so the build and `buildme-findings` no
+  longer give it two different headers or write the same issue twice. A file
+  an older `buildme-findings` started keeps its issues; only its header line
+  changes.
+- `--skip-explainers --help` now says the explainer pass is off by default.
+
 ## [0.108.0] - 2026-10-24
 
 ### Changed

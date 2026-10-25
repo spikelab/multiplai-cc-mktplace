@@ -9,7 +9,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from build_pipeline import git_ops
+from build_pipeline import git_ops, readiness
 from build_pipeline.config import BuildConfig, FindingsSettings
 from build_pipeline.findings import fetch, spec, triage
 from build_pipeline.findings.models import PRComment, Triage, TriageRecord, Verdict
@@ -752,7 +752,10 @@ class TestSpecIssuesFile:
         r1 = _record(1, Verdict.SPEC_CHANGE, finding_id="5e1", requirement="calc: Sum")
         spec.run_spec_step(_config(repo), change_dir, 1, [r1])
         once = (change_dir / "spec-issues.md").read_text()
-        assert once.startswith(earlier.rstrip("\n"))
+        # An older buildme-findings' header is the only line rewritten.
+        assert once.startswith(
+            earlier.replace("# Requirements issues", "# Spec issues: calc").rstrip("\n")
+        )
         assert _sections(once) == ["Build issue: Sum", "Finding 5e1"]
 
         # Round 2 raises the same finding again, next to a new one.
@@ -779,6 +782,25 @@ class TestSpecIssuesFile:
             "# Issues\n\n## Issue recorded earlier\n\nSum says nothing about None.\n"
         )
         assert _sections(text) == ["Issue recorded earlier", "Comment 1"]
+
+    def test_a_file_written_by_both_writers_has_one_header_and_no_repeated_heading(
+        self, tmp_path
+    ):
+        """The build's steps and buildme-findings write one file through
+        `readiness.write_issues`, each run again as a resume would."""
+        repo, change_dir = _repo_with_change(tmp_path)
+        build = [("Design: Sum", "Sum says nothing about None.")]
+        readiness.write_issues(change_dir, build, change="calc")
+        r1 = _record(1, Verdict.SPEC_CHANGE, finding_id="5e1", requirement="calc: Sum")
+        spec.run_spec_step(_config(repo), change_dir, 1, [r1])
+        readiness.write_issues(change_dir, build, change="calc")
+        spec.run_spec_step(_config(repo), change_dir, 2, [r1])
+        text = (change_dir / "spec-issues.md").read_text()
+        assert [line for line in text.splitlines() if line.startswith("# ")] == [
+            "# Spec issues: calc"
+        ]
+        assert _sections(text) == ["Design: Sum", "Finding 5e1"]
+        assert read_change_meta(change_dir)["spec_issues"] == "spec-issues.md"
 
     def test_model_text_cannot_add_a_section(self, tmp_path):
         repo, change_dir = _repo_with_change(tmp_path)
