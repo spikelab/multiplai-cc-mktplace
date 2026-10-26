@@ -37,6 +37,14 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
   files in one command. Every file is checked before the ticket is created; if
   an upload fails, the error names the new ref and gives the `attachments`
   command that attaches the rest.
+- `plane create` and `plane update` take `--parent <ref>` to make a ticket a
+  sub-issue of another in the same project (`--parent none` clears it), and
+  `get` shows the parent.
+- `plane relate SPK-12 blocked_by SPK-3` adds a relation between tickets, using
+  Plane's types (`blocked_by`, `blocking`, `relates_to`, `duplicate`, and the
+  start/finish before/after pairs). `plane relations` lists a ticket's
+  relations and `plane unrelate` removes one. Tickets in projects outside
+  `PLANE_ALLOWED_PROJECTS` are refused or withheld.
 
 ### Changed
 - `plane label-edit` now shows what it will change and how many issues carry

@@ -1,6 +1,6 @@
 ---
 name: plane
-description: Work with Plane tickets and projects — list, read, search, create, update, comment, and move issues through workflow states, create labels and workflow states (board columns), edit and delete workflow states, set work item types, restricted to an explicit project allowlist so shared team projects cannot be touched. Triggers on "my tickets", "what's on my board", "create a ticket", "move X to in progress", "comment on SPK-12", "what's in progress", "add this to Plane", or /multiplai-pm:plane.
+description: Work with Plane tickets and projects — list, read, search, create, update, comment, and move issues through workflow states, create labels and workflow states (board columns), edit and delete workflow states, set work item types, set parents and relations (blocked by, relates to) between tickets, restricted to an explicit project allowlist so shared team projects cannot be touched. Triggers on "my tickets", "what's on my board", "create a ticket", "move X to in progress", "comment on SPK-12", "what's in progress", "add this to Plane", or /multiplai-pm:plane.
 disable-model-invocation: false
 effort: low
 ---
@@ -62,6 +62,9 @@ and it says so on stderr.
 | `comment <ref> "text"` | Add a comment. |
 | `comment-edit <ref> <comment-id> "text"` | Replace an existing comment's body. |
 | `comments <ref>` | Read the comment thread; each entry prints its comment id. |
+| `relations <ref>` | The issue's relations by type, with each related issue's ref and name. |
+| `relate <ref> <type> <other>…` | Add a relation. `type` is Plane's: `blocked_by`, `blocking`, `relates_to`, `duplicate`, `start_before`, `start_after`, `finish_before`, `finish_after`. Read it from the first ref: `relate SPK-12 blocked_by SPK-3` means SPK-12 is blocked by SPK-3. |
+| `unrelate <ref> <other>…` | Remove the relation between `ref` and each other issue, whichever its type. |
 | `states [-p P]` / `labels [-p P]` / `members` / `cycles [-p P]` / `estimates [-p P]` | Reference data. |
 | `types [-p P]` | The project's work item types (name, default, id). Needs types turned on in Plane. |
 | `state-create [-p P] --name N --color C --group G [--description D] [--sequence S]` | New workflow state (a board column). `G` is `backlog`, `unstarted`, `started`, `completed` or `cancelled`; `S` orders the columns, lower first (`states --json` shows the current values). |
@@ -74,9 +77,11 @@ and it says so on stderr.
 | `search <query> [--limit N]` | Workspace search, filtered to allowlisted projects. |
 
 `create` and `update` also take `--assignee`, `--label` (`--create-labels` to add a
-missing one), `--estimate <value>`, `--type <name|uuid>` and `--cycle <name|uuid|active>`.
-The first three replace the whole field; `--type` sets the work item type (`types` lists
-them); `--cycle` is additive and does nothing if the issue is already there.
+missing one), `--estimate <value>`, `--type <name|uuid>`, `--parent <ref|none>` and
+`--cycle <name|uuid|active>`. The first three replace the whole field; `--type` sets the
+work item type (`types` lists them); `--parent` sets the parent issue, which Plane only
+accepts from the same project (`none` clears it); `--cycle` is additive and does nothing
+if the issue is already there.
 
 Global flags, given **before** the subcommand (`$PLANE --dry-run update ...`, not
 `$PLANE update ... --dry-run`): `--json` for machine-readable output, `--dry-run` to
@@ -229,6 +234,10 @@ $PLANE state-edit -p SPK Todo --name Accepted --yes # after the user's yes
 $PLANE state-delete -p SPK Shaping                  # previews the count, refuses
 $PLANE types -p SPK                                 # name, default, id
 $PLANE update SPK-12 --type Bug
+$PLANE update SPK-12 --parent SPK-3                 # SPK-12 becomes a sub-issue of SPK-3
+$PLANE relate SPK-12 blocked_by SPK-3 SPK-4         # SPK-12 waits on both
+$PLANE relations SPK-12
+$PLANE unrelate SPK-12 SPK-4
 $PLANE search "migrations"
 $PLANE --json issues -p SPK | jq '[.[] | select(.priority == "urgent")]'
 ```
@@ -257,4 +266,8 @@ $PLANE --json issues -p SPK | jq '[.[] | select(.priority == "urgent")]'
   `label-edit` set name, colour and description only, `labels` does not show which
   labels are children, and `label-delete` refuses a parent rather than destroy the
   group with it.
-- Sub-issues, relations and worklogs are not exposed.
+- Relations are limited to projects in the allowlist: `relate` refuses an issue outside
+  it, and `relations` withholds such issues and counts them on stderr. A Plane server
+  older than its relations API (added 2026-03) cannot use `relations`, `relate` or
+  `unrelate`, and says so.
+- Worklogs are not exposed.

@@ -628,6 +628,11 @@ def _project_id_of(issue: dict) -> str:
 _ISSUE_NOT_FOUND = ("The requested resource does not exist", "Work item not found")
 
 
+# `parent` expands to {id, sequence_id, project_id}, which is enough to print
+# the parent's ref without another request.
+_ISSUE_EXPAND = "state,assignees,labels,parent"
+
+
 def resolve_issue(cfg: dict, ref: str, project_ref: str | None = None) -> dict:
     """Resolve 'SPK-12', a bare sequence number, or a UUID to a full issue.
 
@@ -687,7 +692,7 @@ def resolve_issue(cfg: dict, ref: str, project_ref: str | None = None) -> dict:
             "GET",
             f"/work-items/{proj.get('identifier')}-{seq}/",
             cfg,
-            params={"expand": "state,assignees,labels"},
+            params={"expand": _ISSUE_EXPAND},
         )
     except PlaneError as exc:
         text = str(exc)
@@ -704,7 +709,7 @@ def resolve_issue(cfg: dict, ref: str, project_ref: str | None = None) -> dict:
             for found in _paginate(
                 f"/projects/{proj['id']}/issues/",
                 cfg,
-                params={"expand": "state,assignees,labels"},
+                params={"expand": _ISSUE_EXPAND},
             ):
                 if found.get("sequence_id") == seq:
                     return found
@@ -721,6 +726,28 @@ def resolve_issue(cfg: dict, ref: str, project_ref: str | None = None) -> dict:
             f"project {got}, not {proj['id']} — refusing to use it"
         )
     return issue
+
+
+def _resolve_other(cfg: dict, ref: str, project_id: str) -> dict:
+    """Resolve a second issue named next to one already resolved.
+
+    A bare number means "in the same project". A full ref names its own
+    project: passing `project_id` for it would make `DB-5` next to an SPK issue
+    resolve to SPK-5, because `resolve_issue` lets the project argument win.
+    """
+    ref = (ref or "").strip()
+    return resolve_issue(cfg, ref, project_id if ref.isdigit() else None)
+
+
+def _ref_of(cfg: dict, issue: dict) -> str:
+    """`SPK-12` for an issue, from its project's identifier."""
+    pid = _project_id_of(issue).lower()
+    ident = next(
+        (p.get("identifier") for p in list_projects(cfg) if p["id"].lower() == pid),
+        None,
+    )
+    seq = issue.get("sequence_id")
+    return f"{ident}-{seq}" if ident and seq else str(issue.get("id"))
 
 
 def resolve_state(cfg: dict, project_id: str, name: str) -> str:
@@ -1463,6 +1490,13 @@ def slim(issue: dict, identifier: str = "") -> dict:
     else:
         label_names = list(labels)
 
+    parent = issue.get("parent")
+    if isinstance(parent, dict):
+        # Plane only accepts a parent from the same project, so it shares the
+        # issue's identifier.
+        pseq = parent.get("sequence_id")
+        parent = f"{identifier}-{pseq}" if identifier and pseq else parent.get("id")
+
     seq = issue.get("sequence_id")
     return {
         "ref": f"{identifier}-{seq}" if identifier and seq else seq,
@@ -1473,6 +1507,7 @@ def slim(issue: dict, identifier: str = "") -> dict:
         "assignees": who,
         "labels": label_names,
         "type": _type_of(issue),
+        "parent": parent,
         "target_date": issue.get("target_date"),
         "updated_at": issue.get("updated_at"),
     }
@@ -1817,6 +1852,8 @@ def cmd_get(cfg, args):
     print(f"labels   : {_cell(s['labels']) or '-'}")
     if s["type"]:
         print(f"type     : {s['type']}")
+    if s["parent"]:
+        print(f"parent   : {s['parent']}")
     print(f"target   : {issue.get('target_date') or '-'}")
     print(f"uuid     : {issue.get('id')}")
     body = html_to_text(issue.get("description_html") or "")
@@ -1835,6 +1872,20 @@ def _apply_assignment_flags(cfg, args, project_id: str, payload: dict) -> None:
     """
     if getattr(args, "type", None):
         payload["type_id"] = resolve_type(cfg, project_id, args.type)
+    parent = getattr(args, "parent", None)
+    if parent is not None:
+        if parent.strip().lower() == "none":
+            payload["parent"] = None
+        else:
+            found = _resolve_other(cfg, parent, project_id)
+            # Plane's serializer refuses a parent from another project with a
+            # bare "Parent is not valid issue_id"; saying why here is clearer.
+            if _project_id_of(found).lower() != project_id.lower():
+                raise PlaneError(
+                    f"{parent} is in another project — Plane only accepts a parent "
+                    "from the same project. Use `relate` to link across projects."
+                )
+            payload["parent"] = found["id"]
     if args.assignee:
         payload["assignees"] = [
             resolve_member(cfg, project_id, who) for who in args.assignee
@@ -2001,10 +2052,12 @@ def cmd_update(cfg, args):
     if args.target_date:
         payload["target_date"] = args.target_date
     _apply_assignment_flags(cfg, args, pid, payload)
+    if payload.get("parent") and payload["parent"] == issue["id"]:
+        raise PlaneError("an issue cannot be its own parent")
     if not payload and not args.cycle:
         raise PlaneError(
             "nothing to update — pass --title/--body/--priority/--state/"
-            "--target-date/--assignee/--label/--estimate/--type/--cycle"
+            "--target-date/--assignee/--label/--estimate/--type/--parent/--cycle"
         )
 
     if payload:
@@ -2114,6 +2167,131 @@ def cmd_comments(cfg, args):
         print(f"--- {name}  {c.get('created_at', '')}  [{c.get('id')}]")
         print(html_to_text(c.get("comment_html") or "") or "(empty)")
         print()
+
+
+# Plane's names, read from its source (IssueRelationCreateSerializer) on
+# 2026-10-26. Read from the issue named first: `relate A blocked_by B` stores
+# "A is blocked by B", and `relate A blocking B` stores "B is blocked by A".
+_RELATION_TYPES = (
+    "blocked_by",
+    "blocking",
+    "relates_to",
+    "duplicate",
+    "start_before",
+    "start_after",
+    "finish_before",
+    "finish_after",
+)
+
+# The relations routes went into Plane's public API on 2026-03-30
+# (makeplane/plane#8763). An older server answers them with its catch-all 404.
+_NO_RELATIONS = (
+    "this Plane server has no work item relations API — it was added to Plane "
+    "in 2026-03; set the relation in the Plane UI instead"
+)
+
+
+def _relations_path(issue: dict) -> str:
+    return f"/projects/{_project_id_of(issue)}/work-items/{issue['id']}/relations/"
+
+
+def _relations_request(method: str, path: str, cfg: dict, **kw):
+    try:
+        return _request(method, path, cfg, **kw)
+    except PlaneError as exc:
+        if "-> 404" in str(exc) and "Page not found" in str(exc):
+            raise PlaneError(_NO_RELATIONS) from None
+        raise
+
+
+def cmd_relations(cfg, args):
+    """List an issue's relations, grouped by type, with refs and names.
+
+    Plane answers with ids only, so each related issue is read once more to
+    show its ref. Relations to issues in projects outside the allowlist are
+    withheld and counted on stderr, as `search` does: the guard refuses to read
+    those issues, and their ids alone are not something to act on.
+    """
+    issue = resolve_issue(cfg, args.ref, args.project)
+    data = _relations_request("GET", _relations_path(issue), cfg)
+    if not isinstance(data, dict):
+        raise PlaneError(f"the relations call returned {type(data).__name__}")
+
+    rows, withheld = [], 0
+    for rtype in _RELATION_TYPES:
+        for link in data.get(rtype) or []:
+            pid = str(link.get("project_id") or "").lower()
+            iid = str(link.get("issue_id") or "")
+            if pid not in cfg["allowed"]:
+                withheld += 1
+                continue
+            other = _request("GET", f"/projects/{pid}/issues/{iid}/", cfg)
+            other = other if isinstance(other, dict) else {"id": iid, "project": pid}
+            rows.append(
+                {
+                    "relation": rtype,
+                    "ref": _ref_of(cfg, other),
+                    "name": other.get("name"),
+                    "id": iid,
+                }
+            )
+    _emit(rows, args, ["relation", "ref", "name", "id"])
+    if withheld:
+        print(
+            f"\n({withheld} relation(s) to issues outside the allowlist withheld)",
+            file=sys.stderr,
+        )
+
+
+def cmd_relate(cfg, args):
+    """Add one relation from an issue to one or more others.
+
+    Every issue is resolved through `resolve_issue`, so an issue in a project
+    outside the allowlist is refused before anything is sent. Plane itself
+    allows relations across projects in the workspace, which is why that
+    refusal has to happen here.
+    """
+    issue = resolve_issue(cfg, args.ref, args.project)
+    pid = _project_id_of(issue)
+    others = [_resolve_other(cfg, ref, pid) for ref in args.other]
+    if any(o["id"] == issue["id"] for o in others):
+        raise PlaneError("an issue cannot be related to itself")
+
+    _relations_request(
+        "POST",
+        _relations_path(issue),
+        cfg,
+        body={"relation_type": args.relation, "issues": [o["id"] for o in others]},
+        dry_run=args.dry_run,
+    )
+    if not args.dry_run:
+        refs = ", ".join(_ref_of(cfg, o) for o in others)
+        print(f"{_ref_of(cfg, issue)} {args.relation} {refs}")
+
+
+def cmd_unrelate(cfg, args):
+    """Remove the relation between an issue and each of the others.
+
+    Plane's remove call names only the other issue, not a relation type: it
+    removes the relation between the two, whichever way it points. Adding it
+    back is `relate`, so this is not gated on --yes.
+    """
+    issue = resolve_issue(cfg, args.ref, args.project)
+    pid = _project_id_of(issue)
+    others = [_resolve_other(cfg, ref, pid) for ref in args.other]
+    for other in others:
+        _relations_request(
+            "POST",
+            f"{_relations_path(issue)}remove/",
+            cfg,
+            body={"related_issue": other["id"]},
+            dry_run=args.dry_run,
+        )
+        if not args.dry_run:
+            print(
+                f"removed the relation between {_ref_of(cfg, issue)} and "
+                f"{_ref_of(cfg, other)}"
+            )
 
 
 def cmd_states(cfg, args):
@@ -3031,6 +3209,10 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument(
             "--type", help="work item type by name, UUID or id prefix (see `types`)"
         )
+        sp.add_argument(
+            "--parent",
+            help="parent issue ref (SPK-3, or 3 in the same project); 'none' clears it",
+        )
         sp.add_argument("--cycle", help="cycle name, UUID, or 'active'")
 
     sp = add("create", cmd_create, "create an issue")
@@ -3077,6 +3259,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = add("comments", cmd_comments, "list comments on an issue, with their ids")
     sp.add_argument("ref")
+
+    sp = add("relations", cmd_relations, "list an issue's relations (blocked by, …)")
+    sp.add_argument("ref")
+
+    sp = add("relate", cmd_relate, "relate an issue to others, e.g. blocked_by")
+    sp.add_argument("ref")
+    sp.add_argument("relation", choices=_RELATION_TYPES)
+    sp.add_argument(
+        "other", nargs="+", help="issue ref(s); a bare number is in the same project"
+    )
+
+    sp = add("unrelate", cmd_unrelate, "remove the relation between issues")
+    sp.add_argument("ref")
+    sp.add_argument(
+        "other", nargs="+", help="issue ref(s); a bare number is in the same project"
+    )
 
     add("states", cmd_states, "list workflow states")
 

@@ -47,7 +47,7 @@ def test_a_ref_is_one_get_and_no_issue_pages(monkeypatch):
     requests, scans = stub(monkeypatch)
     assert plane.resolve_issue(dict(CFG), "DB-2291")["id"] == "i-2291"
     assert requests == [
-        ("GET", "/work-items/DB-2291/", {"expand": "state,assignees,labels"})
+        ("GET", "/work-items/DB-2291/", {"expand": "state,assignees,labels,parent"})
     ]
     assert scans == []
 
