@@ -254,10 +254,7 @@ def test_f4_one_get_hits_the_projects_endpoint_once(monkeypatch):
                 "results": [{"id": OK, "identifier": "SPK", "name": "Mine"}],
                 "next_page_results": False,
             }
-        return {
-            "results": [{"id": "x", "sequence_id": 12, "name": "Thing", "project": OK}],
-            "next_page_results": False,
-        }
+        return {"id": "x", "sequence_id": 12, "name": "Thing", "project": OK}
 
     monkeypatch.setattr(plane, "_request", fake_request)
     cfg = dict(CFG)

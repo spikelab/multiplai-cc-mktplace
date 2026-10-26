@@ -276,33 +276,25 @@ def test_sanitize_holds_on_plain_indented_and_unclosed_fences():
     assert plane._sanitize_prose("a — b") == "a - b"
 
 
-# --- D6: resolving a reference costs a full scan of the project ---------------
+# --- D6: resolving a reference used to cost a full scan of the project --------
 
 
-def test_resolve_issue_scans_every_page_before_saying_not_found(monkeypatch):
-    """A miss costs one request per page of the whole project, every time.
+def test_resolve_issue_misses_with_one_request_and_no_scan(monkeypatch):
+    """A miss costs one request, not one per page of the whole project.
 
-    Measured against a live Plane Cloud workspace: project DB lists 320 issues, so
-    `get DB-1974` (a miss) burns 4 sequential GETs at per_page=100. There is no
-    cache and no early stop, and the misses are exactly the calls an agent
-    retries. The message it ends on — "no issue with sequence N in DB" — is
-    stated as fact about the project when what was searched is the list
-    endpoint; two independent clients agree on 1974, but the sentence claims
-    more than the scan can prove.
+    Measured against a live Plane Cloud workspace: project DB lists 320 issues,
+    so `get DB-1974` (a miss) used to burn 4 sequential GETs at per_page=100.
+    The ref is now fetched from /work-items/<IDENT>-<N>/, and the view's own 404
+    is final — no fallback scan. The message still says what was checked
+    rather than claiming the number does not exist.
     """
-    pages = [
-        {
-            "results": [{"id": str(n), "sequence_id": n} for n in range(p, p + 100)],
-            "next_cursor": f"c{p}",
-            "next_page_results": p < 300,
-        }
-        for p in (0, 100, 200, 300)
-    ]
     calls = []
 
     def fake_request(method, path, cfg, *, params=None, **kw):
-        calls.append(params.get("cursor"))
-        return pages[len(calls) - 1]
+        calls.append(path)
+        raise plane.PlaneError(
+            f'GET {path} -> 404 {{"error": "The requested resource does not exist."}}'
+        )
 
     monkeypatch.setattr(plane, "_request", fake_request)
     monkeypatch.setattr(
@@ -312,4 +304,4 @@ def test_resolve_issue_scans_every_page_before_saying_not_found(monkeypatch):
     )
     with pytest.raises(plane.PlaneError, match="no issue with sequence 999999"):
         plane.resolve_issue({"allowed": dict(ALLOWED)}, "SPK-999999")
-    assert len(calls) == 4
+    assert calls == ["/work-items/SPK-999999/"]

@@ -405,7 +405,13 @@ def test_not_found_says_what_it_checked_rather_than_what_exists(monkeypatch):
     1975 present — and an independent client agrees. What the scan cannot see is
     everything the API does not list, so the message must not promote "not
     listed" into "does not exist"."""
-    monkeypatch.setattr(plane, "_paginate", lambda *a, **k: iter([]))
+
+    def missing(*a, **k):
+        raise plane.PlaneError(
+            'GET x -> 404 {"error": "The requested resource does not exist."}'
+        )
+
+    monkeypatch.setattr(plane, "_request", missing)
     monkeypatch.setattr(
         plane,
         "resolve_project",

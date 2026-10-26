@@ -230,12 +230,15 @@ def test_g8_digit_bearing_identifier_resolves(monkeypatch):
         captured["ref"] = ref
         return {"id": OK, "identifier": "WEB3", "name": "Web3"}
 
+    def fake_request(method, path, cfg, **kw):
+        captured["path"] = path
+        return {"sequence_id": 12, "name": "hit", "project": OK}
+
     monkeypatch.setattr(plane, "resolve_project", fake_resolve_project)
-    monkeypatch.setattr(
-        plane, "_paginate", lambda *a, **k: iter([{"sequence_id": 12, "name": "hit"}])
-    )
+    monkeypatch.setattr(plane, "_request", fake_request)
     issue = plane.resolve_issue(dict(CFG), "WEB3-12")
     assert captured["ref"] == "WEB3"
+    assert captured["path"] == "/work-items/WEB3-12/"
     assert issue["sequence_id"] == 12
 
 
@@ -243,8 +246,15 @@ def test_g8_separatorless_letters_only_ref_still_parses(monkeypatch):
     monkeypatch.setattr(
         plane, "resolve_project", lambda cfg, ref: {"id": OK, "identifier": "SPK"}
     )
-    monkeypatch.setattr(plane, "_paginate", lambda *a, **k: iter([{"sequence_id": 12}]))
+    seen = []
+
+    def fake_request(method, path, cfg, **kw):
+        seen.append(path)
+        return {"sequence_id": 12, "project": OK}
+
+    monkeypatch.setattr(plane, "_request", fake_request)
     assert plane.resolve_issue(dict(CFG), "SPK12")["sequence_id"] == 12
+    assert seen == ["/work-items/SPK-12/"]
 
 
 # --- G9: `check` must not print any part of the token ---------------------------

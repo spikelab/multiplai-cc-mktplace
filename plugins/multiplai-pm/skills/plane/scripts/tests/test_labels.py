@@ -362,6 +362,7 @@ def test_editing_a_label_patches_only_the_fields_given(monkeypatch):
             color="#123abc",
             description=None,
             dry_run=False,
+            yes=True,
         ),
     )
     method, path, body, dry = calls.calls[0]
@@ -382,6 +383,7 @@ def test_editing_a_label_can_rename_it(monkeypatch):
             color=None,
             description=None,
             dry_run=False,
+            yes=True,
         ),
     )
     assert calls.calls[0][2] == {"name": "defect"}
@@ -399,6 +401,7 @@ def test_renaming_onto_an_existing_name_is_refused(monkeypatch):
                 color=None,
                 description=None,
                 dry_run=False,
+                yes=True,
             ),
         )
     assert calls.calls == []
@@ -412,13 +415,14 @@ def test_renaming_a_label_to_its_own_name_is_not_a_collision(monkeypatch):
         Args(
             project=None,
             label="bug",
-            name="bug",
+            name="Bug",
             color=None,
             description=None,
             dry_run=False,
+            yes=True,
         ),
     )
-    assert calls.calls[0][2] == {"name": "bug"}
+    assert calls.calls[0][2] == {"name": "Bug"}
 
 
 def test_an_edit_with_no_fields_is_refused_rather_than_sent_empty(monkeypatch):
@@ -433,6 +437,7 @@ def test_an_edit_with_no_fields_is_refused_rather_than_sent_empty(monkeypatch):
                 color=None,
                 description=None,
                 dry_run=False,
+                yes=True,
             ),
         )
     assert calls.calls == []
@@ -450,6 +455,7 @@ def test_an_edit_can_clear_a_description_with_an_empty_string(monkeypatch):
             color=None,
             description="",
             dry_run=False,
+            yes=True,
         ),
     )
     assert calls.calls[0][2] == {"description": ""}
@@ -467,6 +473,7 @@ def test_edit_dry_run_sends_nothing(monkeypatch):
             color="#111111",
             description=None,
             dry_run=True,
+            yes=False,
         ),
     )
     assert calls.calls[0][3] is True
@@ -687,6 +694,7 @@ def test_json_output_carries_what_the_edit_changed(monkeypatch):
             color=None,
             description=None,
             dry_run=False,
+            yes=True,
             json=True,
         ),
     )
