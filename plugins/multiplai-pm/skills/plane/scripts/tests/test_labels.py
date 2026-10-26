@@ -1,6 +1,6 @@
 """Tests for managing labels: create, edit, delete.
 
-Delete is the only destructive command in this tool, and Plane has no undo for
+Delete is destructive, and Plane has no undo for
 it — removing a label detaches it from every issue silently. So most of what is
 pinned down here is refusals: an ambiguous reference, a missing --yes, a name
 that collides with a label that already exists, a colour that is not a colour.
