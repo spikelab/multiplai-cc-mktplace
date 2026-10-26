@@ -1,6 +1,6 @@
 ---
 name: plane
-description: Work with Plane tickets and projects — list, read, search, create, update, comment, and move issues through workflow states, restricted to an explicit project allowlist so shared team projects cannot be touched. Triggers on "my tickets", "what's on my board", "create a ticket", "move X to in progress", "comment on SPK-12", "what's in progress", "add this to Plane", or /multiplai-pm:plane.
+description: Work with Plane tickets and projects — list, read, search, create, update, comment, and move issues through workflow states, create labels and workflow states (board columns), restricted to an explicit project allowlist so shared team projects cannot be touched. Triggers on "my tickets", "what's on my board", "create a ticket", "move X to in progress", "comment on SPK-12", "what's in progress", "add this to Plane", or /multiplai-pm:plane.
 disable-model-invocation: false
 effort: low
 ---
@@ -63,6 +63,7 @@ scan is already per-project, so it does not make resolution faster.
 | `comment-edit <ref> <comment-id> "text"` | Replace an existing comment's body. |
 | `comments <ref>` | Read the comment thread; each entry prints its comment id. |
 | `states [-p P]` / `labels [-p P]` / `members` / `cycles [-p P]` / `estimates [-p P]` | Reference data. |
+| `state-create [-p P] --name N --color C --group G [--description D] [--sequence S]` | New workflow state (a board column). `G` is `backlog`, `unstarted`, `started`, `completed` or `cancelled`; `S` orders the columns, lower first (`states --json` shows the current values). |
 | `label-create [-p P] --name N [--color C] [--description D]` | New label in the project. |
 | `label-edit [-p P] <label> [--name] [--color] [--description]` | Rename, recolour or re-describe one. |
 | `label-delete [-p P] <label> --yes` | Delete a label. Destructive — see rule 11. |

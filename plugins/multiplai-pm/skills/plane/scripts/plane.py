@@ -1840,6 +1840,62 @@ def cmd_states(cfg, args):
     _emit(rows, args, ["name", "group", "default", "id"])
 
 
+# The groups a state can belong to. Plane also has `triage`, which it uses for
+# its intake queue; that one is left out because this tool does not manage
+# intake, and a board column created there would not show up on the board.
+_STATE_GROUPS = ("backlog", "unstarted", "started", "completed", "cancelled")
+
+
+def cmd_state_create(cfg, args):
+    """Add a workflow state (a board column). Additive: no issue changes."""
+    # Before any I/O, as in cmd_label_create: a bad colour is knowable locally.
+    color = normalize_color(args.color)
+    proj = resolve_project(cfg, args.project)
+    name = (args.name or "").strip()
+    if not name:
+        raise PlaneError("empty state name")
+
+    clash = [
+        s
+        for s in _paginate(f"/projects/{proj['id']}/states/", cfg)
+        if (s.get("name") or "").strip().lower() == name.lower()
+    ]
+    if clash:
+        raise PlaneError(
+            f"a state named {name!r} already exists here [{clash[0]['id']}]"
+        )
+
+    body: dict = {"name": name, "color": color, "group": args.group}
+    if args.description is not None:
+        body["description"] = args.description
+    if args.sequence is not None:
+        body["sequence"] = args.sequence
+    made = _request(
+        "POST",
+        f"/projects/{proj['id']}/states/",
+        cfg,
+        body=body,
+        dry_run=args.dry_run,
+    )
+    if args.dry_run:
+        return
+    if not isinstance(made, dict) or not made.get("id"):
+        raise PlaneError(f"creating state {name!r} returned no id: {made!r}")
+    if getattr(args, "json", False):
+        _emit(
+            {
+                **body,
+                "id": made["id"],
+                "project": {"id": proj["id"], "name": proj.get("name")},
+            },
+            args,
+        )
+    else:
+        print(
+            f"created state {name!r} ({args.group}) in {proj.get('name')} [{made['id']}]"
+        )
+
+
 def cmd_labels(cfg, args):
     proj = resolve_project(cfg, args.project)
     rows = [
@@ -2444,6 +2500,18 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("ref")
 
     add("states", cmd_states, "list workflow states")
+
+    sp = add("state-create", cmd_state_create, "create a workflow state (board column)")
+    sp.add_argument("--name", required=True)
+    sp.add_argument("--color", required=True, help="hex colour, e.g. #ff8800")
+    sp.add_argument("--group", required=True, choices=_STATE_GROUPS)
+    sp.add_argument("--description")
+    sp.add_argument(
+        "--sequence",
+        type=float,
+        help="position on the board; lower comes first (see `states --json`)",
+    )
+
     add("labels", cmd_labels, "list labels")
 
     sp = add("label-create", cmd_label_create, "create a label")

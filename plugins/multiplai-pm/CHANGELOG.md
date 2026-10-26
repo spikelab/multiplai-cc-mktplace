@@ -21,6 +21,15 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-26
+
+### Added
+- `plane state-create` adds a workflow state, which is a column on the
+  project's board: give it a name, a hex colour and a group (`backlog`,
+  `unstarted`, `started`, `completed` or `cancelled`), and optionally a
+  description and a position. It refuses a name the project already has, and
+  like every write it only reaches projects in `PLANE_ALLOWED_PROJECTS`.
+
 ## [0.10.0] - 2026-10-24
 
 ### Changed
