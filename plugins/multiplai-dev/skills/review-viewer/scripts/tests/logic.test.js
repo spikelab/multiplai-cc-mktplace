@@ -997,6 +997,21 @@ test("a GitHub link to lines takes https and ssh remotes, and nothing else", () 
   assert.equal(L.githubBlobUrl("https://github.com/o/r", "not-a-sha", "a.py", 1, 1), null);
 });
 
+test("a written title heads the finding and what happens comes before the claim", () => {
+  const f = { id: "a1b2c3d4e5", severity: "HIGH", status: "confirmed", claim: "The finder's own claim.",
+    title: "Bookings fail after a rename", what_happens: "No room can be booked. For example, renaming the channel hides them.",
+    file: "app.py", line_start: 7, line_end: 7, topic: "code", failure_scenario: "A rename.", citations: [] };
+  assert.equal(L.findingTitle(f), "Bookings fail after a rename");
+  assert.equal(L.findingTitle({ ...f, title: undefined }), "The finder's own claim.");
+  const md = L.findingMarkdown(f, {}, "");
+  assert.match(md, /^### \[HIGH\] Bookings fail after a rename\n/);
+  assert.ok(md.indexOf("**What happens:**") < md.indexOf("**Claim:** The finder's own claim."));
+  assert.doesNotMatch(L.findingMarkdown({ ...f, title: undefined, what_happens: undefined }, {}, ""), /What happens|\*\*Claim/);
+  // Every place app.js titles a finding goes through findingTitle, never the bare claim.
+  const app = require("node:fs").readFileSync(path.join(__dirname, "..", "review_viewer", "static", "app.js"), "utf8");
+  assert.doesNotMatch(app, /el\("h2", \{ text: f\.claim \}\)|class: "claim", text: f\.claim/);
+});
+
 test("a finding copies as markdown with where, scenario, explanation and cited code", () => {
   const f = { id: "a1b2c3d4e5", severity: "MEDIUM", status: "confirmed", claim: "The timeout is ignored.",
     file: "app.py", line_start: 7, line_end: 9, topic: "code", failure_scenario: "A slow call hangs.",

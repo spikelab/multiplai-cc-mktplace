@@ -235,6 +235,7 @@ STAGE_MODELS = {
     "merge": "merger_model",
     "repeats": "merger_model",
     "assess": "merger_model",
+    "write": "merger_model",
 }
 
 

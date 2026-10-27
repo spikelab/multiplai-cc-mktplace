@@ -343,9 +343,17 @@ def finding_section(
         else f"{fd['line_start']}-{fd['line_end']}"
     )
     out = [
-        f"### {fd['severity']} — {fd['file']}:{lines_} — {_one_line(fd['claim'])}",
+        f"### {fd['severity']} — {fd['file']}:{lines_} — {_one_line(fd.get('title') or fd['claim'])}",
         "",
     ]
+    if fd.get("what_happens"):
+        # The plain-language text first; the finder's own claim follows as a detail.
+        out += [
+            f"**What happens:** {_one_line(fd['what_happens'])}",
+            "",
+            f"**Claim:** {_one_line(fd['claim'])}",
+            "",
+        ]
     if class_line(fd):
         out += [class_line(fd), ""]
     if assessment_line(fd):
@@ -936,7 +944,7 @@ def render_summary(state: ReviewState, *, findings_file: dict | None = None) -> 
                 )
                 still = ", still open" if assess_label(fd) == "still-open" else ""
                 out.append(
-                    f"- {severity} `{fd['file']}:{lines_}` — {_short(fd['claim'])} ({fd['status']}{still})"
+                    f"- {severity} `{fd['file']}:{lines_}` — {_short(fd.get('title') or fd['claim'])} ({fd['status']}{still})"
                 )
         low = sum(1 for f in group if f["severity"] == "LOW")
         if low:

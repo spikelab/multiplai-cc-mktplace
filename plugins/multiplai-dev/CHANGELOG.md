@@ -15,6 +15,12 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.113.0] - 2026-10-27
+
+### Added
+- **review**: a new `write` stage after assess restates each shown finding in plain words: a title of at most 12 words and a short "what happens" text with a concrete example. The review and review-viewer head each finding with its title and show what happens first, with the finder's own claim under it. Each answer is checked in code (length, no file:line, no invented names, no filler phrases); one that fails twice is dropped and the claim is shown instead. The stage costs one call per 10 findings of a file, with no tools, on the assess stage's model.
+- **review-viewer**: `findings.json` gains the optional `title` and `what_happens` fields. The copied markdown of a finding uses them too.
+
 ## [0.112.0] - 2026-10-27
 
 ### Changed
