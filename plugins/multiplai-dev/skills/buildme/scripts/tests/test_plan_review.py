@@ -22,7 +22,9 @@ from build_pipeline.llm_steps.plan_review_steps import (
     PLAN_REVIEW_PROPOSE_ONLY_CATEGORIES,
     PLAN_REVIEW_TOOLS,
     _split_context,
-    plan_review_findings_text,
+    finding_dicts,
+    findings_lines,
+    plan_review_actionable,
     run_plan_review,
     run_plan_review_stage,
 )
@@ -36,6 +38,8 @@ from build_pipeline.models import (
 from build_pipeline.prompts.plan_review import NO_USE_CASES, PLAN_CHECK_PROMPT
 from build_pipeline.spec_generator import PlanRepairRejected
 from build_pipeline.state import PLAN_RULES_VERSION, BuildState, SpecGenState
+
+from tests.planning_fakes import edits_from
 
 # A recheck that calls the one listed finding fixed.
 _RESOLVED_PR_F1 = PriorAssessment(finding_id="PR-F1", status="resolved")
@@ -576,15 +580,23 @@ def _finding(category="rubric-conflict", severity="major", **kw):
     )
 
 
+def _rewrite_text(findings) -> str:
+    """The findings text the rewrite is shown for these findings."""
+    from build_pipeline.spec_generator import number_findings
+
+    return findings_lines(
+        number_findings("plan_review", finding_dicts(plan_review_actionable(findings)))
+    )
+
+
 class TestFindingsText:
     def test_empty_when_nothing_actionable(self):
-        assert plan_review_findings_text([]) == ""
-        assert plan_review_findings_text([_finding(severity="minor")]) == ""
+        assert _rewrite_text([]) == ""
+        assert _rewrite_text([_finding(severity="minor")]) == ""
 
-    def test_carries_the_severity_the_category_and_the_fix(self):
-        text = plan_review_findings_text(
-            [_finding(severity="critical", suggestion="Pass it in.")]
-        )
+    def test_carries_the_id_the_severity_the_category_and_the_fix(self):
+        text = _rewrite_text([_finding(severity="critical", suggestion="Pass it in.")])
+        assert text.startswith("- PR-F1 ")
         assert "[critical]" in text
         assert "(rubric-conflict)" in text
         assert "Fix: Pass it in." in text
@@ -594,14 +606,14 @@ class TestFindingsText:
             _finding(severity="blocker")
 
     def test_carries_the_location_the_claim_and_the_reason(self):
-        text = plan_review_findings_text([_finding()])
+        text = _rewrite_text([_finding()])
         assert "tasks.md" in text and "Block 2" in text
         assert "The block mandates a global." in text
         assert "The rubric scores globals down." in text
 
     @pytest.mark.parametrize("severity", PLAN_REVIEW_ACTIONABLE)
     def test_critical_and_major_reach_the_pass(self, severity):
-        assert plan_review_findings_text([_finding(severity=severity)])
+        assert _rewrite_text([_finding(severity=severity)])
 
     def test_oversized_plan_never_reaches_the_regeneration(self):
         """It is a proposal for a human — feeding it to a rewriter would have
@@ -619,7 +631,7 @@ class TestFindingsText:
                 )
             ],
         )
-        assert plan_review_findings_text([big]) == ""
+        assert _rewrite_text([big]) == ""
 
 
 # --- 5. The stage: one pass, checked before the model call ---------------
@@ -681,7 +693,7 @@ class TestPlanReviewStage:
         regen = AsyncMock(return_value="rewritten")
         with (
             patch.object(plan_review_steps, "run_plan_review", review),
-            patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen),
+            patch.object(plan_review_steps, "run_plan_edit", edits_from(regen)),
         ):
             findings = await run_plan_review_stage(
                 config.change_dir, config, state, state_path
@@ -709,7 +721,7 @@ class TestPlanReviewStage:
         regen = AsyncMock(return_value="## 1. Behavior\n- [ ] do it properly\n")
         with (
             patch.object(plan_review_steps, "run_plan_review", review),
-            patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen),
+            patch.object(plan_review_steps, "run_plan_edit", edits_from(regen)),
         ):
             findings = await run_plan_review_stage(
                 config.change_dir, config, state, state_path
@@ -743,7 +755,7 @@ class TestPlanReviewStage:
         rubric = AsyncMock(return_value="## Criteria\n- covers the new blocks\n")
         with (
             patch.object(plan_review_steps, "run_plan_review", review),
-            patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen),
+            patch.object(plan_review_steps, "run_plan_edit", edits_from(regen)),
             patch("build_pipeline.spec_generator.generate_rubric", rubric),
         ):
             await run_plan_review_stage(config.change_dir, config, state, state_path)
@@ -767,7 +779,7 @@ class TestPlanReviewStage:
         regen = AsyncMock(return_value="## 1. Behavior\n- [ ] do it properly\n")
         with (
             patch.object(plan_review_steps, "run_plan_review", review),
-            patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen),
+            patch.object(plan_review_steps, "run_plan_edit", edits_from(regen)),
             patch(
                 "build_pipeline.spec_generator.generate_rubric",
                 AsyncMock(side_effect=RuntimeError("rubric exploded")),
@@ -796,7 +808,7 @@ class TestPlanReviewStage:
         regen = AsyncMock(return_value="## 1. Behavior\n- [ ] do it properly\n")
         with (
             patch.object(plan_review_steps, "run_plan_review", review),
-            patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen),
+            patch.object(plan_review_steps, "run_plan_edit", edits_from(regen)),
         ):
             with pytest.raises(RuntimeError):
                 await run_plan_review_stage(
@@ -837,7 +849,7 @@ class TestPlanReviewStage:
         regen = AsyncMock(return_value="## 1. Behavior\n- [ ] do it properly\n")
         with (
             patch.object(plan_review_steps, "run_plan_review", review),
-            patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen),
+            patch.object(plan_review_steps, "run_plan_edit", edits_from(regen)),
         ):
             await run_plan_review_stage(config.change_dir, config, state, state_path)
 
@@ -899,7 +911,7 @@ class TestPlanReviewStage:
         regen = AsyncMock(side_effect=RuntimeError("generation exploded"))
         with (
             patch.object(plan_review_steps, "run_plan_review", review),
-            patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen),
+            patch.object(plan_review_steps, "run_plan_edit", edits_from(regen)),
         ):
             with pytest.raises(RuntimeError):
                 await run_plan_review_stage(
@@ -935,7 +947,7 @@ class TestPlanReviewStage:
         regen = AsyncMock()
         with (
             patch.object(plan_review_steps, "run_plan_review", review),
-            patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen),
+            patch.object(plan_review_steps, "run_plan_edit", edits_from(regen)),
         ):
             findings = await run_plan_review_stage(
                 config.change_dir, config, state, state_path
@@ -984,7 +996,7 @@ class TestNoBehaviourBlocks:
         regen = AsyncMock(return_value="## 1. Summarize\n\nAll of it.\n")
         with (
             patch.object(plan_review_steps, "run_plan_review", review),
-            patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen),
+            patch.object(plan_review_steps, "run_plan_edit", edits_from(regen)),
             patch(
                 "build_pipeline.spec_generator.generate_rubric",
                 AsyncMock(return_value="## Criteria\n- fresh\n"),
@@ -1016,7 +1028,7 @@ class TestNoBehaviourBlocks:
     def _patches(review, regen):
         return (
             patch.object(plan_review_steps, "run_plan_review", review),
-            patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen),
+            patch.object(plan_review_steps, "run_plan_edit", edits_from(regen)),
             patch(
                 "build_pipeline.spec_generator.generate_rubric",
                 AsyncMock(return_value="## Criteria\n- fresh\n"),
@@ -1035,7 +1047,7 @@ async def test_review_unavailable_blocks_and_resume_checks_again(tmp_path, tasks
     regen = AsyncMock()
     with (
         patch.object(plan_review_steps, "run_plan_review", review),
-        patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen),
+        patch.object(plan_review_steps, "run_plan_edit", edits_from(regen)),
     ):
         for attempt in range(2):
             with pytest.raises(RuntimeError, match="review unavailable"):
@@ -1184,7 +1196,7 @@ class TestPlanCheckRewrite:
         regen = AsyncMock(return_value=rewritten)
         with (
             patch.object(plan_review_steps, "run_plan_review", review),
-            patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen),
+            patch.object(plan_review_steps, "run_plan_edit", edits_from(regen)),
         ):
             await run_plan_review_stage(config.change_dir, config, state, state_path)
 
@@ -1214,7 +1226,7 @@ class TestPlanCheckRewrite:
         commit = Mock()
         with (
             patch.object(plan_review_steps, "run_plan_review", review),
-            patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen),
+            patch.object(plan_review_steps, "run_plan_edit", edits_from(regen)),
             patch("build_pipeline.git_ops.commit_stage", commit),
         ):
             await run_plan_review_stage(config.change_dir, config, state, state_path)
@@ -1233,9 +1245,10 @@ class TestPlanCheckRewrite:
                 "run_plan_review",
                 AsyncMock(return_value=PlanReviewResult(findings=[])),
             ),
-            patch(
-                "build_pipeline.llm_steps.spec_steps.generate_artifact",
-                AsyncMock(return_value=_NO_BEHAVIOUR_TASKS),
+            patch.object(
+                plan_review_steps,
+                "run_plan_edit",
+                edits_from(AsyncMock(return_value=_NO_BEHAVIOUR_TASKS)),
             ),
             patch("build_pipeline.git_ops.commit_stage", commit),
             pytest.raises(PlanRepairRejected),
@@ -1256,7 +1269,7 @@ class TestPlanCheckRewrite:
         regen = AsyncMock()
         with (
             patch.object(plan_review_steps, "run_plan_review", review),
-            patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen),
+            patch.object(plan_review_steps, "run_plan_edit", edits_from(regen)),
         ):
             await run_plan_review_stage(config.change_dir, config, state, state_path)
 
@@ -1291,7 +1304,7 @@ class TestPlanCheckRewrite:
         regen = AsyncMock(return_value=rewritten)
         with (
             patch.object(plan_review_steps, "run_plan_review", review),
-            patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen),
+            patch.object(plan_review_steps, "run_plan_edit", edits_from(regen)),
         ):
             await run_plan_review_stage(config.change_dir, config, state, state_path)
 
@@ -1312,7 +1325,7 @@ class TestPlanCheckRewrite:
         regen = AsyncMock(return_value=_NO_BEHAVIOUR_TASKS)
         with (
             patch.object(plan_review_steps, "run_plan_review", review),
-            patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen),
+            patch.object(plan_review_steps, "run_plan_edit", edits_from(regen)),
             pytest.raises(PlanRepairRejected, match="no behavior") as rejected,
         ):
             await run_plan_review_stage(config.change_dir, config, state, state_path)
@@ -1338,7 +1351,7 @@ class TestPlanCheckRewrite:
         regen = AsyncMock(return_value=rewritten)
         with (
             patch.object(plan_review_steps, "run_plan_review", review),
-            patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen),
+            patch.object(plan_review_steps, "run_plan_edit", edits_from(regen)),
         ):
             await run_plan_review_stage(config.change_dir, config, state, state_path)
 
@@ -1348,9 +1361,14 @@ class TestPlanCheckRewrite:
         assert state.spec_gen.step_passed("plan_review")
 
     @pytest.mark.asyncio
-    async def test_a_design_finding_rewrites_design_then_tasks(self, tmp_path):
+    async def test_a_design_edit_leaves_tasks_byte_identical(self, tmp_path):
+        """An edit to design.md publishes it with its unknowns written again,
+        and tasks.md, which no edit names, keeps every byte."""
+        from build_pipeline.models import PlanEdit, PlanEdits
+
         config, state, state_path = _stage_setup(tmp_path)
         config.skip_explainers = True
+        tasks_before = (config.change_dir / "tasks.md").read_bytes()
         review = AsyncMock(
             side_effect=[
                 PlanReviewResult(
@@ -1359,29 +1377,22 @@ class TestPlanCheckRewrite:
                 PlanReviewResult(prior_assessments=[_RESOLVED_PR_F1]),
             ]
         )
-        regen = AsyncMock(
-            side_effect=[
-                "# Design\n\n## Decisions\nTwo.\n",
-                "## 1. Behavior\n- [ ] do it properly\n",
-            ]
+        edit = AsyncMock(
+            return_value=PlanEdits(
+                edits=[PlanEdit(file="design.md", old_str="One.", new_str="Two.")]
+            )
         )
         with (
             patch.object(plan_review_steps, "run_plan_review", review),
-            patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen),
+            patch.object(plan_review_steps, "run_plan_edit", edit),
         ):
             await run_plan_review_stage(config.change_dir, config, state, state_path)
 
-        assert [c.args[0] for c in regen.await_args_list] == ["design", "tasks"]
-        assert "Two." in (config.change_dir / "design.md").read_text()
+        assert (config.change_dir / "design.md").read_text() == "## Decisions\nTwo.\n"
+        assert (config.change_dir / "tasks.md").read_bytes() == tasks_before
+        diff = (config.change_dir / "plan-edits-1.diff").read_text()
+        assert "-One." in diff and "+Two." in diff and "tasks.md" not in diff
         assert state.spec_gen.step_passed("plan_review")
-
-    def test_rewrites_design_unless_every_finding_is_in_tasks(self):
-        from build_pipeline.llm_steps.plan_review_steps import rewrites_design
-
-        assert not rewrites_design([{"file_path": "tasks.md"}])
-        assert rewrites_design([{"file_path": "design.md"}])
-        assert rewrites_design([{"file_path": "tasks.md"}, {"file_path": ""}])
-        assert rewrites_design([{}])
 
 
 @pytest.mark.asyncio
