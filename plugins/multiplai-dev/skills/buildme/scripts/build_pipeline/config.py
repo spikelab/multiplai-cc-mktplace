@@ -55,8 +55,8 @@ _DEFAULT_REFERENCE_DOCS: dict[str, list[str]] = {
 }
 
 # Per-document ceiling when reference docs are inlined into a spec-generation
-# prompt. The spec-gen system prompt forbids tools, so inlining is the only
-# channel — and an unbounded standards doc would crowd out the specs it is
+# prompt. The writer is not handed the docs' paths (and the unknowns pass has
+# no tools), so inlining is the only channel — and an unbounded standards doc would crowd out the specs it is
 # meant to inform.
 #
 # Sized against the real corpus rather than a round number: the docs run
@@ -75,9 +75,9 @@ REFERENCE_DOC_CHAR_LIMIT = 24000
 #
 # 12000 is a judgment, not a measurement: it admits a typical CLAUDE.md whole
 # and trims only the outliers. Trimming is safe here in a way it is not for the
-# spec generator — that one has no tools, while a reviewer holds `Read` and
-# `summarize_reference_doc` always emits the full section index, so a section
-# that did not fit is known to exist and can be fetched.
+# spec generator — that one is not handed the docs' paths, while a reviewer
+# holds `Read` and `summarize_reference_doc` always emits the full section
+# index, so a section that did not fit is known to exist and can be fetched.
 STANDARDS_DOC_CHAR_LIMIT = 12000
 
 
@@ -2123,8 +2123,8 @@ class BuildConfig:
     def reference_docs_text(self) -> str:
         """The reference docs inlined for a spec-generation prompt.
 
-        The spec-generation system prompt forbids tools, so inlining is the
-        only channel the generator has. Each doc over REFERENCE_DOC_CHAR_LIMIT
+        The writer is not handed the docs' paths (and the unknowns pass has no
+        tools), so inlining is the only channel the generator has. Each doc over REFERENCE_DOC_CHAR_LIMIT
         is reduced by `summarize_reference_doc` — whole sections plus a full
         section index, never a mid-sentence cut. An unreadable doc is skipped
         rather than failing the build. Returns "" when nothing resolves — the

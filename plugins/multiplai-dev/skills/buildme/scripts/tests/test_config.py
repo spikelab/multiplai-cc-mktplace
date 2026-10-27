@@ -636,7 +636,7 @@ class TestReferenceDocs:
     def test_long_sectioned_doc_keeps_whole_sections_and_a_full_index(self):
         """The reduction must never hand the generator half a rule, and must
         always say which sections it dropped — the doc is 60k chars and the
-        generator has no tools to go read the rest."""
+        generator is not handed the doc's path to go read the rest."""
         from build_pipeline.config import (
             REFERENCE_DOC_CHAR_LIMIT,
             summarize_reference_doc,
