@@ -45,7 +45,7 @@ log = logging.getLogger(__name__)
 # Two ranges whose lines are at most this far apart are grouped as if they
 # overlapped: finders often cite a statement and the line after it.
 MERGE_LINE_GAP = 2
-MERGED_STATUSES = ("confirmed", "unverifiable")
+MERGED_STATUSES = ("confirmed", "unverifiable", "unverified")
 
 
 def _near(a_start: int, a_end: int, b_start: int, b_end: int) -> bool:
@@ -160,7 +160,9 @@ def _citation_key(c) -> tuple[str, int, int, str]:
 def merge_set(members: list[Finding], state: ReviewState) -> Finding:
     """The finding *members* become; the first of them in `state.findings` order breaks ties."""
     rank = {s: i for i, s in enumerate(SEVERITIES)}
-    status_rank = {"confirmed": 0, "unverifiable": 1}
+    # A finding no verifier was asked about comes after a confirmed one and before one a
+    # verifier could not confirm.
+    status_rank = {"confirmed": 0, "unverified": 1, "unverifiable": 2}
     survivor = min(
         members,
         key=lambda f: (status_rank[state.verdicts[f.id].status], rank[f.severity]),

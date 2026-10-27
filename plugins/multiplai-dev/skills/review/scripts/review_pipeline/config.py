@@ -101,6 +101,9 @@ class ReviewConfig:
     extra_finders: bool = False  # the key is in review.yaml; its value is ignored
     deps: bool = True
     deps_max_mb: int = 50
+    # Verify LOW findings too (`review.yaml` `verify_low`, `--verify-low`). Off by default: a LOW
+    # finding reaches the review `unverified`, with no verifier call (`stages/verify.py`).
+    verify_low: bool = False
 
 
 _TRUE = ("1", "true", "yes", "on")
@@ -204,7 +207,7 @@ def load_config(
             setattr(cfg, key, value)
 
     cfg.extra_finders = "extra_finders" in data
-    for key in ("explain", "find_with_facts", "trim", "deps"):
+    for key in ("explain", "find_with_facts", "trim", "deps", "verify_low"):
         value = _flag(data.get(key), key, yaml_path)
         if value is not None:
             setattr(cfg, key, value)

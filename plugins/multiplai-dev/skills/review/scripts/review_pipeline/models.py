@@ -260,7 +260,9 @@ class Need(BaseModel):
 
 class Verdict(_Model):
     finding_id: str = ""
-    status: Literal["confirmed", "refuted", "unverifiable"]
+    # `unverified` is made in code for a LOW finding no verifier was asked about
+    # (`stages/verify.py`); a verifier never answers it (`VerifierAnswer`).
+    status: Literal["confirmed", "refuted", "unverifiable", "unverified"]
     reason: str
     citations: list[Citation] = Field(
         default_factory=list
@@ -301,6 +303,8 @@ class VerifierAnswer(Verdict):
 
     @model_validator(mode="after")
     def _impact_required(self) -> VerifierAnswer:
+        if self.status == "unverified":
+            raise ValueError("status must be confirmed, refuted or unverifiable")
         if self.status != "refuted" and not self.impact:
             raise ValueError(
                 f"impact is required unless status is refuted: one of {', '.join(IMPACTS)}"

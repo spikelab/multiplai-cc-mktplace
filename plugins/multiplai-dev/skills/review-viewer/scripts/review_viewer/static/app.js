@@ -36,6 +36,8 @@
     openRows: new Map(),
     shownRows: new Set(),
     showHidden: false,
+    // LOW findings in the Findings list: hidden until the reader turns them on (kept per viewer).
+    showLow: readShowLow(),
     // The Findings list's sections a reader opened; Code starts open.
     openSections: new Set(["code"]),
     fileFilter: "",
@@ -282,7 +284,8 @@
       renderSummary();
     }, SUMMARY_WAIT_MS + 50);
     await Promise.all([pollOnce(), pollSummary()]);
-    const first = L.findingOrder(L.groupFindings(state.shown, state.detail.decisions, state.showHidden))[0];
+    const first = L.findingOrder(L.groupFindings(state.shown, state.detail.decisions, state.showHidden,
+      { show: state.showLow }))[0];
     if (first) await selectFinding(first, { stay: true });
     else {
       renderDetail();
@@ -687,13 +690,26 @@
 
   // --- findings list (top of the Findings tab) -----------------------------------
 
+  /* Whether this viewer last chose to see LOW findings; storage can be missing or
+   * refused (a private window), and then LOW starts hidden. */
+  function readShowLow() {
+    try { return localStorage.getItem("review-viewer.show-low") === "1"; } catch (err) { return false; }
+  }
+  function writeShowLow(show) {
+    try { localStorage.setItem("review-viewer.show-low", show ? "1" : "0"); } catch (err) { /* not kept */ }
+  }
+
   function renderFindingList() {
     const box = $("findings");
     box.replaceChildren();
     const findings = state.shown;
-    const grouped = L.groupFindings(findings, state.detail.decisions, state.showHidden);
+    const grouped = L.groupFindings(findings, state.detail.decisions, state.showHidden,
+      { show: state.showLow, keep: state.selected });
     $("hidden-label").textContent = "Show decided and refuted (" + grouped.hidden + ")";
     $("show-hidden").parentElement.hidden = !grouped.hidden;
+    $("show-low").textContent = L.lowToggleLabel(grouped.low, state.showLow);
+    $("show-low").setAttribute("aria-pressed", String(state.showLow));
+    $("show-low").hidden = !grouped.low;
     if (!findings.length) {
       // The only read of the unfiltered list: to say why nothing is shown.
       const ff = state.detail.findings;
@@ -2626,6 +2642,11 @@
     $("nav-list").addEventListener("click", scrollPanelTop);
     $("nav-prev").addEventListener("click", () => stepFindingBy(-1));
     $("nav-next").addEventListener("click", () => stepFindingBy(1));
+    $("show-low").addEventListener("click", () => {
+      state.showLow = !state.showLow;
+      writeShowLow(state.showLow);
+      renderFindingList();
+    });
     $("show-hidden").addEventListener("change", (ev) => {
       state.showHidden = ev.target.checked;
       renderFindingList();

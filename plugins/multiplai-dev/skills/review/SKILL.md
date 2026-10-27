@@ -20,8 +20,11 @@ paths through the change from each entry point (see "The paths stage" below).
    defect (`other_locations`, `path:line`). Python drops each such place whose
    file is not at head or whose line is past the file's end, with a line
    under agent failures; the finding itself stays.
-2. **verify** — a fresh agent per finding re-reads the code and answers
-   `confirmed`, `refuted` or `unverifiable`, citing what it read. Unless it
+2. **verify** — a fresh agent per HIGH or MEDIUM finding re-reads the code
+   and answers `confirmed`, `refuted` or `unverifiable`, citing what it read.
+   A finding the finder rated LOW gets no verifier: it reaches the review
+   `unverified`, with the finder's text, in a last section **Not verified
+   (LOW)** (a trim finding is verified at any severity). Unless it
    refutes the finding, it also says in one sentence what correct behaviour
    would be (the finding's **expected behaviour**), without proposing a code
    change, and rates its **impact**: what goes wrong in production if the
@@ -111,6 +114,14 @@ changes the code and runs the tests.
 The gates re-read every cited line range with `git show <head>:<path>` and
 check the quote is there. A finding that fails is rejected; a confirmation
 that fails is recorded as `unverifiable`. The gates never ask a model.
+
+## LOW findings
+
+A LOW finding is not verified unless asked: `--verify-low` (on `review`,
+`batch` and `resume`) or `verify_low: true` in `review.yaml` sends every LOW
+finding to a verifier too. Without it, LOW findings cost no verifier call;
+on two Dolcebot reviews, verifying them was most of the verify spend. The
+viewer hides LOW findings until the reader presses **Show N low findings**.
 
 ## Full or critical
 
@@ -752,7 +763,7 @@ exits 2 when the target is not a PR or the decisions file is missing.
 What it posts:
 
 - **With `--decisions`:** every finding the user accepted that the review
-  shows (confirmed or unverifiable), at any severity and in any section.
+  shows (confirmed, unverifiable or unverified), at any severity and in any section.
 - **Without `--decisions`:** the findings the review lists (`render.listed`:
   no `repeat`, `low-value` or `important`, and in critical mode only
   `breaks-*`), at these severities per section:
@@ -868,8 +879,8 @@ state when it finishes:
   `repeats` and `assess`, each with its calls, tokens, cost, wall time, and the configured model and
   effort (`session default` when none is set). The model the SDK actually ran
   is not recorded.
-- `counts` (found, rejected by the gates, refuted, unverifiable, merged,
-  repeats, low-value) and
+- `counts` (found, rejected by the gates, refuted, unverifiable, unverified
+  (0.112+), merged, repeats, low-value) and
   `errors` (the number of lines in the review's error list).
 
 Cost and tokens are what the SDK returned, never estimated. A call that
@@ -897,7 +908,7 @@ jq -s '[.[].run.stages[]] | group_by(.stage) | map({stage: .[0].stage, cost_usd:
 default's `INBOX/reviews/review.yaml` until a `review.yaml` exists in the new
 place, with a warning) sets `concurrency` (default `16`), `finder_model`,
 `verifier_model`, `merger_model` (default: the verifier's), `effort`,
-`max_turns`, `explain`, `find_with_facts`, `trim` and `dimensions`. `multiplai.conf` keys
+`max_turns`, `explain`, `find_with_facts`, `trim`, `dimensions` and `verify_low`. `multiplai.conf` keys
 `review_finder_model`, `review_verifier_model`, `review_effort` and
 `review_explain` apply when the file does not set them. `--model` on the
 command line beats both for the three models. By default every stage runs on
@@ -936,6 +947,8 @@ the session's model.
 - `deps` (default `true`): clone the git dependencies `uv.lock` pins into the
   snapshot (see "Dependency source"); `false` is what `--no-deps` does.
 - `deps_max_mb` (default `50`): skip a dependency whose source is larger.
+- `verify_low` (default `false`): verify LOW findings too; `true` is what
+  `--verify-low` does (see "LOW findings").
 
 ## Other commands
 

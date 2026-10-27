@@ -78,6 +78,30 @@ test("findings group by severity and hide refuted, rejected and decided", () => 
   assert.equal(L.stepFinding(L.navOrder(fs, decisions, false, "e"), "e", 1), "a");
 });
 
+test("LOW findings are hidden behind a toggle, but the one open on the page stays listed", () => {
+  const fs = [
+    { id: "h", severity: "HIGH", status: "confirmed" },
+    { id: "m", severity: "MEDIUM", status: "unverifiable" },
+    { id: "l1", severity: "LOW", status: "unverified" },
+    { id: "l2", severity: "LOW", status: "unverified" },
+  ];
+  const hidden = L.groupFindings(fs, {}, false, { show: false });
+  assert.deepEqual(L.findingOrder(hidden), ["h", "m"], "LOW is hidden by default");
+  assert.equal(hidden.low, 2);
+  assert.equal(L.lowToggleLabel(hidden.low, false), "Show 2 low findings");
+  assert.equal(L.lowToggleLabel(1, true), "Hide 1 low finding");
+  assert.deepEqual(L.findingOrder(L.groupFindings(fs, {}, false, { show: true })), ["h", "m", "l1", "l2"]);
+  // A LOW finding opened by a link or by Prev/Next is listed while LOW is hidden.
+  assert.deepEqual(L.findingOrder(L.groupFindings(fs, {}, false, { show: false, keep: "l2" })), ["h", "m", "l2"]);
+  assert.deepEqual(L.navOrder(fs, {}, false, "m"), ["h", "m", "l1", "l2"], "Prev/Next still reaches LOW findings");
+  // Without the option every LOW finding is listed, as before.
+  assert.deepEqual(L.findingOrder(L.groupFindings(fs, {}, false)), ["h", "m", "l1", "l2"]);
+  // An unverified finding counts toward the open findings like a confirmed one.
+  const summary = { risk: { tier: 1, tier_why: "w", revertable: true, revert_why: "x" }, assessments: [] };
+  const open = L.riskInputs({}, summary, [{ id: "u", severity: "MEDIUM", status: "unverified" }], {}, []);
+  assert.equal(open.openMedium, 1);
+});
+
 test("a trim suggestion labelled important (its test must stay) is never shown or counted", () => {
   const fs = [
     { id: "t", severity: "LOW", status: "confirmed", topic: "tests", section: "trim",

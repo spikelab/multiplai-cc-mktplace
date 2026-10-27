@@ -32,7 +32,7 @@ DECISIONS_FILE = "buildme-decisions.json"
 # What `review_pipeline.render.listed` lists, copied: buildme does not import
 # review_pipeline. Statuses shown, assess labels hidden, and the impacts
 # `--mode critical` keeps.
-_SHOWN_STATUSES = ("confirmed", "unverifiable")
+_SHOWN_STATUSES = ("confirmed", "unverifiable", "unverified")
 _HIDDEN_LABELS = ("repeat", "low-value", "important")
 _CRITICAL_IMPACTS = ("breaks-users", "breaks-business")
 

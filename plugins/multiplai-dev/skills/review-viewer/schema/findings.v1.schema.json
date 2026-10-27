@@ -354,6 +354,7 @@
           "enum": [
             "confirmed",
             "unverifiable",
+            "unverified",
             "refuted",
             "rejected"
           ],
@@ -695,6 +696,19 @@
           "minimum": 0,
           "title": "Unverifiable",
           "type": "integer"
+        },
+        "unverified": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unverified"
         }
       },
       "required": [

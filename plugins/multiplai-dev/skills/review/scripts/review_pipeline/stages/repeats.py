@@ -39,7 +39,7 @@ from . import RunContext
 
 log = logging.getLogger(__name__)
 
-SHOWN_STATUSES = ("confirmed", "unverifiable")
+SHOWN_STATUSES = ("confirmed", "unverifiable", "unverified")
 
 
 def shown_findings(state: ReviewState) -> list[Finding]:

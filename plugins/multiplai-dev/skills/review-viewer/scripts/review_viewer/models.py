@@ -121,7 +121,8 @@ OTHER_LOCATIONS_SCHEMA = {
 class Finding(_Strict):
     id: str = Field(pattern=r"^[0-9a-f]{10}$")
     severity: Literal["HIGH", "MEDIUM", "LOW"]
-    status: Literal["confirmed", "unverifiable", "refuted", "rejected"]
+    # `unverified` (0.112+): a LOW finding no verifier was asked about.
+    status: Literal["confirmed", "unverifiable", "unverified", "refuted", "rejected"]
     claim: str
     file: str
     line_start: int = Field(ge=1)
@@ -229,6 +230,8 @@ class RunCounts(_Strict):
     rejected: int = Field(ge=0)  # by the gates
     refuted: int = Field(ge=0)
     unverifiable: int = Field(ge=0)
+    # LOW findings no verifier was asked about; absent in files written before multiplai-dev 0.112.
+    unverified: int | None = Field(default=None, ge=0)
     merged: int = Field(ge=0)
     # Labelled by the assess stage; absent in files written before multiplai-dev 0.28.
     repeats: int | None = Field(default=None, ge=0)

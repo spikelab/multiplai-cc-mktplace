@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-SHOWN_STATUSES = ("confirmed", "unverifiable")
+SHOWN_STATUSES = ("confirmed", "unverifiable", "unverified")
 # Assess labels whose findings are never listed or counted: low-value, and a
 # repeat of a finding the person rejected in an earlier round. They go to the
 # review's appendix with the refuted and gate-rejected ones; findings.json
@@ -51,6 +51,8 @@ def assess_label(fd: dict) -> str:
 
 
 SECTION_TITLES = {"code": "Code", "tests": "Tests", "docs": "Docs", "trim": "Trim"}
+# The last section of the review: the LOW findings no verifier was asked about.
+UNVERIFIED_TITLE = "Not verified (LOW)"
 # Said after a section's title in the review and the summary.
 SECTION_NOTES = {"trim": " (advisory: never blocks a merge)"}
 
@@ -716,9 +718,12 @@ def render_review(
             "",
         ]
     rank = {s: i for i, s in enumerate(SEVERITIES)}
+    # LOW findings no verifier was asked about go last, in their own section.
+    unverified = [f for f in shown if f["status"] == "unverified"]
     for name in SECTIONS:
         group = sorted(
-            (f for f in shown if section(f) == name), key=lambda f: rank[f["severity"]]
+            (f for f in shown if section(f) == name and f["status"] != "unverified"),
+            key=lambda f: rank[f["severity"]],
         )
         if not group:
             continue
@@ -790,6 +795,21 @@ def render_review(
         )
         out.append(f"  Merged into `{m.into}`: {_one_line(m.reason)}")
     out.append("")
+    if unverified:
+        out += [
+            f"## {UNVERIFIED_TITLE}",
+            "",
+            "LOW findings as the finder reported them; no verifier checked them. Counted above in "
+            "their sections. Run with `--verify-low` to verify them.",
+            "",
+        ]
+        for name in SECTIONS:
+            for fd in (f for f in unverified if section(f) == name):
+                out.append(
+                    finding_section(
+                        fd, web_base=web, head_sha=head, finders=finders.get(fd["id"])
+                    )
+                )
     return "\n".join(out)
 
 
