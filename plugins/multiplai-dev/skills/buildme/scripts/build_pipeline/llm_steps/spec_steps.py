@@ -27,6 +27,16 @@ from ..sdk import (
 
 log = logging.getLogger(__name__)
 
+# A read-only agent's tool set (the findings stage's self-check,
+# `findings.code`): the reviewer's, and nothing more. An agent that could
+# `Write` or `Edit` would fix what it was asked to judge.
+# `test_no_review_step_can_write` asserts the list.
+AUDITOR_TOOLS = ["Read", "Grep", "Glob"]
+
+# Enough turns to open a file's neighbours and grep the codebase for a name;
+# not enough to go wandering.
+AUDITOR_MAX_TURNS = 30
+
 # The most registry text one prompt carries; whole files are dropped from the
 # end, and named, to stay under it (judgment).
 REGISTRY_TEXT_LIMIT = 60_000

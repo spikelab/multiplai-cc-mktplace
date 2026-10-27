@@ -404,9 +404,11 @@ class TestReviewersAreReadOnlySubagents:
         """
         from build_pipeline.llm_steps.plan_review_steps import PLAN_REVIEW_TOOLS
         from build_pipeline.llm_steps.review_steps import REVIEWER_TOOLS
+        from build_pipeline.llm_steps.spec_steps import AUDITOR_TOOLS
 
         lists = [
             ("REVIEWER_TOOLS", REVIEWER_TOOLS),
+            ("AUDITOR_TOOLS", AUDITOR_TOOLS),
             ("PLAN_REVIEW_TOOLS", PLAN_REVIEW_TOOLS),
         ]
 
