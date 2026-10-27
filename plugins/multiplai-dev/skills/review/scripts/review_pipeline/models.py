@@ -586,6 +586,14 @@ class CoverageRecord(BaseModel):
     detail: str = ""
 
 
+class RunStart(BaseModel):
+    """One run of the pipeline on this round: a review or a resume (`orchestrator.run_state`)."""
+
+    producer: str  # "multiplai-dev:review 0.111.0"
+    session_id: str = ""
+    started_at: str = ""
+
+
 class ReviewState(BaseModel):
     target: TargetInfo
     stage: str = "target"  # last stage completed
@@ -671,6 +679,10 @@ class ReviewState(BaseModel):
     # before 0.26, which still load.
     checks: list[AgentCheck] = Field(default_factory=list)
     gate_checks: list[GateCheck] = Field(default_factory=list)
+    # One entry per run of this round, review or resume, appended when it starts and
+    # never rewritten; review-viewer's export finds the sessions' transcripts by it.
+    # Empty in checkpoints written before 0.111.
+    runs: list[RunStart] = Field(default_factory=list)
 
     @field_validator("stage", mode="before")
     @classmethod

@@ -36,7 +36,7 @@ from .export import (
 )
 from .facts import FACTS_FILE
 from .gates import gated_need, reason_kind
-from .models import MODES, SEVERITIES, ReviewState
+from .models import MODES, SEVERITIES, ReviewState, RunStart
 from .progress import ProgressWriter
 from .render import (
     count_line,
@@ -179,6 +179,9 @@ async def run_state(
     """
     t = state.target
     number = f"{rounds.round_number(target_dir):02d}"
+    state.runs.append(
+        RunStart(producer=producer(), session_id=session_id, started_at=timings.now())
+    )
     save_state(state, target_dir)
     review_ledger.started(
         slug=t.slug, target_dir=target_dir, head_sha=t.head_sha, session_id=session_id
@@ -264,6 +267,7 @@ async def _run_stages(
     window.progress_line = progress.line  # the usage window's readings and NOTICE
     if state.stage == "target":
         progress.started(
+            producer(),
             t.label or t.slug,
             t.base_sha,
             t.head_sha,

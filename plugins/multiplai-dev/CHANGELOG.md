@@ -15,6 +15,16 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.111.0] - 2026-10-27
+
+### Changed
+- `/multiplai-dev:review` names itself and its version in the first line of
+  `progress.log`, e.g. `STARTED multiplai-dev:review 0.111.0 <target> …`, so
+  a log shows which release made the review.
+- `review-state.json` keeps a `runs` list: the version, the Claude Code
+  session id and the start time of every run of the round, review or
+  resume. A resume adds an entry and never rewrites an earlier one.
+
 ## [0.110.0] - 2026-10-25
 
 ### Fixed
