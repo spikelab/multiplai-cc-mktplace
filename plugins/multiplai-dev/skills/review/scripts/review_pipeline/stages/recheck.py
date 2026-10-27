@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import logging
 
-from .. import checks, rounds, sdk
+from .. import checks, incremental, rounds, sdk
 from ..gates import earlier_status_gate, reason_kind
 from ..models import AgentCheck, EarlierStatus, GateCheck, RecheckOutput, ReviewState
 from ..prompts import recheck as prompt
@@ -44,7 +44,20 @@ def open_set(state: ReviewState, ctx: RunContext) -> list[rounds.OpenFinding]:
     if ctx.target_dir is None or t.is_tree:
         return []
     elsewhere = rounds.history_elsewhere(ctx.target_dir, t.slug, t.remote_url)
-    return rounds.open_findings(ctx.target_dir, t.head_sha, elsewhere)
+    found = rounds.open_findings(ctx.target_dir, t.head_sha, elsewhere)
+    # An incremental round carried these into its own findings (`incremental.py`): not earlier ones.
+    carried = set(state.scope.carried_ids) if state.scope else set()
+    return [o for o in found if o.id not in carried]
+
+
+def left_the_change(state: ReviewState, o: rounds.OpenFinding) -> bool:
+    """In an incremental round, an earlier finding whose file is no longer in the change."""
+    file = o.finding.get("file")
+    return (
+        incremental.is_incremental(state)
+        and bool(file)
+        and file not in state.target.files
+    )
 
 
 def changed_since(state: ReviewState, o: rounds.OpenFinding) -> str:
@@ -79,6 +92,14 @@ async def run_recheck(state: ReviewState, ctx: RunContext) -> ReviewState:
         o: rounds.OpenFinding,
     ) -> tuple[EarlierStatus, AgentCheck | None, GateCheck | None]:
         base = {"earlier_id": o.id, "lineage": o.lineage, "round": o.head_sha}
+        if left_the_change(state, o):
+            return (
+                EarlierStatus(
+                    **base, status="resolved", reason=incremental.LEFT_THE_CHANGE
+                ),
+                None,
+                None,
+            )
         if not o.finding.get("claim"):
             return (
                 EarlierStatus(

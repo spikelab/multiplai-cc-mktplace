@@ -187,6 +187,9 @@ class Finding(_Strict):
     other_locations: Annotated[
         list[str] | None, WithJsonSchema(OTHER_LOCATIONS_SCHEMA)
     ] = None
+    # The kept round an incremental round copied this finding from, unchanged (multiplai-dev
+    # 0.115+): `<NN>-<head12>`. Absent on a finding this round found.
+    carried_from: str | None = None
 
     @field_validator("paths")
     @classmethod
@@ -285,6 +288,19 @@ class EarlierStatus(_Strict):
     error: str = ""
 
 
+class Scope(_Strict):
+    """What an incremental round re-reviewed (multiplai-dev 0.115+): the files whose patch changed
+    since round `since_number`, of `total_files`, and the findings it carried from that round."""
+
+    kind: Literal["incremental"]
+    since_round: str
+    since_number: int
+    since_head: str
+    reviewed_files: list[str]
+    total_files: int
+    carried_ids: list[str]
+
+
 class FindingsFile(_Strict):
     """One review's findings, for review-viewer and the other readers of `findings.json`.
 
@@ -305,6 +321,8 @@ class FindingsFile(_Strict):
     # The status of each finding the last round left open (multiplai-dev 0.94+).
     # Absent when there are none, and in older files.
     earlier: list[EarlierStatus] = Field(default_factory=list)
+    # Only on an incremental round (multiplai-dev 0.115+); absent means every file was reviewed.
+    scope: Scope | None = None
 
 
 # --- checks.json v1 ------------------------------------------------------------------

@@ -137,6 +137,33 @@ finding to a verifier too. Without it, LOW findings cost no verifier call;
 on two Dolcebot reviews, verifying them was most of the verify spend. The
 viewer hides LOW findings until the reader presses **Show N low findings**.
 
+## Re-pushed PRs and branches
+
+A second review of a PR or branch whose last round finished reviews only the
+files whose patch changed. Each file's patch is compared with its patch in
+that round's `diff.patch`. The comparison ignores `index` lines and the line
+numbers in `@@` headers, so a rebase that keeps the patch counts as no change.
+A file is re-reviewed when its patch differs or it is new to the change, and
+the finders see its whole patch.
+
+- The findings the last round left open on the other files are copied into
+  this round unchanged: the same id, verdict, severity and plain-language
+  text, marked `carried_from` with the kept round's directory name. They make
+  no agent call, and a decision made on one still applies, since decisions
+  are keyed by id.
+- Earlier findings on re-reviewed files are rechecked as before. An earlier
+  finding whose file left the change is `resolved` ("file no longer in the
+  change"), with no call.
+- When no file changed, the run stops after recheck, writes `nothing changed
+  since round <N>` to `progress.log`, and exports the carried findings.
+- The review's header and summary say `Reviewed N of M files; K findings
+  carried from round <N>`, and so does the viewer's Summary tab.
+  `findings.json` gains a `scope` block.
+- Every file is reviewed for a tree, dir or range review; for a rerun of the
+  same head; for a first round; when the last round ran in another mode;
+  with `--full`; and with `incremental: false` in `review.yaml`.
+  `review-state.json` `scope.reason` says which applied.
+
 ## Full or critical
 
 `--mode full` (the default) lists every finding to act on. `--mode critical`
@@ -922,7 +949,7 @@ jq -s '[.[].run.stages[]] | group_by(.stage) | map({stage: .[0].stage, cost_usd:
 default's `INBOX/reviews/review.yaml` until a `review.yaml` exists in the new
 place, with a warning) sets `concurrency` (default `16`), `finder_model`,
 `verifier_model`, `merger_model` (default: the verifier's), `effort`,
-`max_turns`, `explain`, `find_with_facts`, `trim`, `dimensions` and `verify_low`. `multiplai.conf` keys
+`max_turns`, `explain`, `find_with_facts`, `trim`, `dimensions`, `verify_low` and `incremental`. `multiplai.conf` keys
 `review_finder_model`, `review_verifier_model`, `review_effort` and
 `review_explain` apply when the file does not set them. `--model` on the
 command line beats both for the three models. By default every stage runs on
@@ -963,6 +990,9 @@ the session's model.
 - `deps_max_mb` (default `50`): skip a dependency whose source is larger.
 - `verify_low` (default `false`): verify LOW findings too; `true` is what
   `--verify-low` does (see "LOW findings").
+- `incremental` (default `true`): a re-pushed PR or branch reviews only the
+  files whose patch changed; `false` reviews every file, as `--full` does for
+  one run (see "Re-pushed PRs and branches").
 
 ## Other commands
 

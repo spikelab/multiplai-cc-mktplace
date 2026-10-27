@@ -313,6 +313,15 @@
     return "https://github.com/" + m[1] + "/blob/" + sha + "/" + String(path).split("/").map(encodeURIComponent).join("/") + lines;
   }
 
+  /* The Summary tab's line for an incremental round; "" when every file was reviewed. The review's
+   * `render.scope_line` writes the same words. */
+  function scopeLine(findingsFile) {
+    const sc = (findingsFile || {}).scope;
+    if (!sc || sc.kind !== "incremental") return "";
+    return "Reviewed " + (sc.reviewed_files || []).length + " of " + sc.total_files + " files; " +
+      (sc.carried_ids || []).length + " findings carried from round " + sc.since_number;
+  }
+
   /* What the Export zip dialog says when the server refuses: a 409 lists where gitleaks found
    * something (file, line, rule; never the value), anything else gives the server's reason. */
   function exportRefusal(status, data) {
@@ -1606,7 +1615,7 @@
     SEVERITIES: SEVERITIES, joinParts: joinParts, groupReplies: groupReplies,
     isPending: isPending, pollDelay: pollDelay, applyPoll: applyPoll, citationRows: citationRows,
     isHidden: isHidden, groupFindings: groupFindings, findingOrder: findingOrder, navOrder: navOrder,
-    findingTitle: findingTitle, exportRefusal: exportRefusal,
+    findingTitle: findingTitle, exportRefusal: exportRefusal, scopeLine: scopeLine,
     lowToggleLabel: lowToggleLabel,
     githubBlobUrl: githubBlobUrl, findingFileName: findingFileName, shareOptions: shareOptions, shareText: shareText, findingTopic: findingTopic, findingMarkdown: findingMarkdown,
     assessLabel: assessLabel, shownFindings: shownFindings, shownFile: shownFile, findingSection: findingSection,

@@ -222,6 +222,18 @@ def earlier_counts(data: dict) -> dict[str, int]:
     }
 
 
+def scope_line(data: dict) -> str:
+    """`Reviewed N of M files; K findings carried from round <N>` for an incremental round
+    (`findings.json` `scope`), else "". review-viewer's `logic.scopeLine` writes the same words."""
+    sc = data.get("scope") or {}
+    if sc.get("kind") != "incremental":
+        return ""
+    return (
+        f"Reviewed {len(sc.get('reviewed_files') or [])} of {sc.get('total_files', 0)} files; "
+        f"{len(sc.get('carried_ids') or [])} findings carried from round {sc.get('since_number', '?')}"
+    )
+
+
 def earlier_line(data: dict) -> str:
     """`2 new, 1 still open, 3 earlier resolved, 0 earlier cannot verify`, or "" when the round
     has no earlier statuses and no `still-open` finding."""
@@ -696,6 +708,8 @@ def render_review(
     )
     if earlier_line(data):
         out.append(f"- **Against earlier rounds:** {earlier_line(data)}")
+    if scope_line(data):
+        out.append(f"- **Scope:** {scope_line(data)}")
     if data.get("run"):
         out.append(f"- **Model cost:** {cost_line(data['run'])}")
     if state.errors:
@@ -904,6 +918,8 @@ def render_summary(state: ReviewState, *, findings_file: dict | None = None) -> 
     )
     if earlier_line(data):
         out.append(f"Against earlier rounds: {earlier_line(data)}.")
+    if scope_line(data):
+        out.append(f"{scope_line(data)}.")
     out += not_reviewed_section(state)
     needs = [
         n

@@ -1071,7 +1071,11 @@ async def run_find(state: ReviewState, ctx: RunContext) -> ReviewState:
                 ctx.gate_reasons.append(gate.reason)
                 entry.update(fate="rejected", rule=reason_kind(gate.reason))
 
-    state.findings = kept
+    # Findings an incremental round carried from an earlier one (`incremental.py`) stay ahead of
+    # what the finders found; none of them is on a file the finders were given.
+    carried = [f for f in state.findings if f.carried_from]
+    carried_ids = {f.id for f in carried}
+    state.findings = carried + [f for f in kept if f.id not in carried_ids]
     # What the finders could not check blocks no one finding: it is a gap in the review.
     state.needs.extend(
         gated_need(

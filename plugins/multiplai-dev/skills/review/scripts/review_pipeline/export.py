@@ -128,6 +128,8 @@ def _finding(f: Finding, status: str, reason: str | None, expected: str | None) 
         **on_paths,
         **kind,
         **elsewhere,
+        # (0.115+) only on a finding an incremental round copied from an earlier one.
+        **({"carried_from": f.carried_from} if f.carried_from else {}),
     }
 
 
@@ -358,6 +360,18 @@ def to_findings_file(
         data["needs"] = [_need(n) for n in needs]
     if state.earlier_status:
         data["earlier"] = [_earlier(e) for e in state.earlier_status]
+    if state.scope is not None and state.scope.kind == "incremental":
+        # (0.115+) only on an incremental round: what it re-reviewed and what it carried.
+        sc = state.scope
+        data["scope"] = {
+            "kind": sc.kind,
+            "since_round": sc.since_round,
+            "since_number": sc.since_number,
+            "since_head": sc.since_head,
+            "reviewed_files": list(sc.reviewed_files),
+            "total_files": sc.total_files,
+            "carried_ids": list(sc.carried_ids),
+        }
     return data
 
 

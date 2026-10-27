@@ -255,6 +255,12 @@ def build_parser() -> argparse.ArgumentParser:
         "e.g. 'specs/changes/**')",
     )
     rv.add_argument(
+        "--full",
+        action="store_true",
+        help="Review every changed file, even when an earlier round of this PR or branch "
+        "finished (by default a re-push reviews only the files whose patch changed)",
+    )
+    rv.add_argument(
         "--restart",
         action="store_true",
         help="Start over even when the ledger shows an interrupted run of this target and head "
@@ -532,6 +538,7 @@ def main(argv: list[str] | None = None) -> int:
             dir=args.dir,
             mode=args.mode,
             restart=args.restart,
+            full=args.full,
             trim=args.trim,
             extra_finders=args.extra_finders is not None,
             paths=args.paths,

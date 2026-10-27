@@ -15,6 +15,11 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.115.0] - 2026-10-27
+
+### Changed
+- **review**: a second review of a PR or branch now reviews only the files whose patch changed since the last finished round. A rebase that keeps the patch counts as no change. Findings that round left open on the other files are carried over unchanged, with their ids, verdicts and decisions, and cost no agent call. An earlier finding whose file left the change is marked resolved. When nothing changed, the run makes no finder call and exports the carried findings. The review, its summary and review-viewer's Summary tab say "Reviewed N of M files; K findings carried from round N". Pass `--full`, or set `incremental: false` in `review.yaml`, to review every file. A rerun of the same head still reviews every file.
+
 ## [0.114.0] - 2026-10-27
 
 ### Added

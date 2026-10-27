@@ -208,6 +208,18 @@
           ],
           "default": null
         },
+        "carried_from": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Carried From"
+        },
         "citations": {
           "items": {
             "$ref": "#/$defs/Citation"
@@ -836,6 +848,58 @@
       "title": "RunTokens",
       "type": "object"
     },
+    "Scope": {
+      "additionalProperties": false,
+      "description": "What an incremental round re-reviewed (multiplai-dev 0.115+): the files whose patch changed\nsince round `since_number`, of `total_files`, and the findings it carried from that round.",
+      "properties": {
+        "carried_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Carried Ids",
+          "type": "array"
+        },
+        "kind": {
+          "const": "incremental",
+          "title": "Kind",
+          "type": "string"
+        },
+        "reviewed_files": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Reviewed Files",
+          "type": "array"
+        },
+        "since_head": {
+          "title": "Since Head",
+          "type": "string"
+        },
+        "since_number": {
+          "title": "Since Number",
+          "type": "integer"
+        },
+        "since_round": {
+          "title": "Since Round",
+          "type": "string"
+        },
+        "total_files": {
+          "title": "Total Files",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "since_round",
+        "since_number",
+        "since_head",
+        "reviewed_files",
+        "total_files",
+        "carried_ids"
+      ],
+      "title": "Scope",
+      "type": "object"
+    },
     "Target": {
       "additionalProperties": false,
       "properties": {
@@ -960,6 +1024,17 @@
       "const": 1,
       "title": "Schema Version",
       "type": "integer"
+    },
+    "scope": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Scope"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "target": {
       "$ref": "#/$defs/Target"
