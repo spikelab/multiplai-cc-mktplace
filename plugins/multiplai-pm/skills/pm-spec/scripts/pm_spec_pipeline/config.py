@@ -11,6 +11,7 @@ choice to the CLI).
 
 `interview:` (`self` | `user` | `ticket`) and `prototype: {enabled: auto |
 true | false}` are read from the same file; a command-line flag wins.
+`consistency: {max_rounds: N}` caps the blocked checks after the specs review.
 """
 
 from __future__ import annotations
@@ -41,6 +42,7 @@ INTERVIEW_MODES = ("self", "user", "ticket")
 PROTOTYPE_MODES = ("auto", "true", "false")
 
 RUN_DIR = ".pm-spec"
+DEFAULT_MAX_ROUNDS = 5
 
 
 def read_specs_config(specs_dir: Path) -> dict:
@@ -122,6 +124,15 @@ class SpecConfig:
         value = proto.get("enabled") if isinstance(proto, dict) else None
         text = str(value).strip().lower() if value is not None else "auto"
         return text if text in PROTOTYPE_MODES else "auto"
+
+    @property
+    def consistency_max_rounds(self) -> int:
+        """`consistency: {max_rounds: N}`: the checks after the specs review that
+        may block before `resume` stops checking (default 5)."""
+        value = self._table("consistency").get("max_rounds")
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
+        return DEFAULT_MAX_ROUNDS
 
     def _table(self, key: str) -> dict:
         value = self.data.get(key)

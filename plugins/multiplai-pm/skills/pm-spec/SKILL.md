@@ -134,6 +134,20 @@ after the third stop runs the consistency check and the handoff.
    edits the files on the branch and pushes; `resume` pulls them and checks
    them again, and hands off or blocks again. Running again with the files
    unchanged refuses with no model call and prints the findings.
+   A check after a block is shown the open blocking findings: each must come
+   back `resolved`, and a new finding blocks only when critical (a new major
+   one is advisory). `resume <name> --accept <id> --accept-reason "<why>"`
+   leaves a blocking finding as it is: it is saved in the run state and in
+   `accepted-findings.md` (committed at the handoff), and every later check is
+   told not to raise it again. When every blocking finding is accepted and no
+   file changed, the check passes with no model call. After 5 blocked checks
+   (`consistency: {max_rounds: N}` in `specs/config.yaml`) `resume` refuses to
+   check again (exit 4) until each open finding is accepted, or
+   `--check-again` asks for one more round.
+   **A pass that leaves a critical or major finding unfixed** (a new major
+   finding in a later round, or an accepted one) prints them under a banner of
+   `!` and `SPEC:WARN:<change_dir>` before `SPEC:READY`, in this flow and the
+   one below.
    **With no review stop** (`--auto`, an adopted change, a run from before
    the staged flow) critical and major findings get one rewrite of the
    `specs.md` files involved; a recheck must report each of them
@@ -248,7 +262,21 @@ longer need them.
   pushes, then you run `resume <name>`, which pulls and checks again. Do
   not edit the specs yourself unless the user asks you to; if they do, edit
   on the branch, push, then `resume`. Running `resume` before anyone edits
-  just prints the same findings.
+  just prints the same findings. The block line counts the findings still
+  open from earlier rounds apart from the new ones. When the user decides a
+  finding should stay as it is, run `resume <name> --accept <id>
+  --accept-reason "<their reason>"`; never accept one without the user
+  saying so. Do not loop on your own: after each block, show the findings and
+  let the user choose between editing and accepting.
+- **The round cap.** `resume` printed that the check blocked its cap of
+  rounds and is not run again on its own. Show the open findings and the
+  three choices it prints (accept, `--check-again`, or rethink the change);
+  never pick one for the user.
+- **`SPEC:WARN`.** The specs pass, but with critical or major findings not
+  fixed. Lead your message to the user with this, before the ready news:
+  say that buildme will build the specs with these problems, and list each
+  finding as printed (id, severity, text, places, and the reason for an
+  accepted one).
 - **`SPEC:READY`.** The specs are pushed and ready: tell the user that
   `/multiplai-dev:buildme <name>` builds them, and that the prototype and the
   specs are on the branch for anyone to read.
@@ -272,7 +300,8 @@ uv run --directory "${CLAUDE_PLUGIN_ROOT}/skills/pm-spec/scripts" python -m pm_s
   new <name> --project-dir /abs/path/to/repo [options]
 uv run --directory "${CLAUDE_PLUGIN_ROOT}/skills/pm-spec/scripts" python -m pm_spec_pipeline \
   resume <name> --project-dir /abs/path/to/repo [--interview-replies FILE] \
-    [--ticket COMPONENT=REF ...] [--tickets-later]
+    [--ticket COMPONENT=REF ...] [--tickets-later] \
+    [--accept ID ... --accept-reason TEXT] [--check-again]
 uv run --directory "${CLAUDE_PLUGIN_ROOT}/skills/pm-spec/scripts" python -m pm_spec_pipeline \
   revise <name> --project-dir /abs/path/to/repo [--from-respec]
 ```
@@ -298,6 +327,9 @@ from the skill's `scripts/` folder; other relative paths are read from
 | `--no-epic-split` | new | Keep the work as one component. |
 | `--ticket COMPONENT=REF` | resume | At the ticket wait: a component's ticket; once per component. |
 | `--tickets-later` | resume | At the ticket wait: go on with the components' tickets pending. |
+| `--accept ID` | resume | At a consistency block after the specs review: leave this finding (`CC-F<n>`) as it is; repeatable or comma-separated. Needs `--accept-reason`. |
+| `--accept-reason TEXT` | resume | Why the `--accept` findings are left as they are; saved with each. |
+| `--check-again` | resume | Run the consistency check once more after it reached its round cap. |
 | `--from-respec` | revise | Read `respec.md` instead of `spec-issues.md`. |
 | `--branch NAME` | all | The feature branch; it must start with `<TICKET>-` (default: the one the change's `.change.yaml` records, else `<TICKET>-<name>`). |
 | `--trust-repo` | all | Say the repository is trusted (same as `PM_SPEC_TRUST_REPO=1`). |
@@ -327,7 +359,8 @@ In `specs/changes/<name>/`: `.change.yaml`, `prd.md`, `ticket.md`,
 `interview.md` (and `interview-questions.md` in ticket mode), `proposal.md`,
 `use-cases.md`, `components.md` and `components/<id>/` (`plan.md`,
 `specs.md`, `.change.yaml`) for a change with several components, or
-`plan.md` and `specs.md` for one, `prototype/`, and `tickets.json`. The run's
+`plan.md` and `specs.md` for one, `prototype/`, `tickets.json`, and `accepted-findings.md` once a finding is
+accepted. The run's
 own state is in `.pm-spec/` (`state.json`, `progress.md`, `run.lock`), which
 has its own `.gitignore` and is never committed. Each review stop, the ticket
 wait and the handoff commit the change dir and push the feature branch;
@@ -357,9 +390,9 @@ calls cost.
 
 | Code | Means |
 |---|---|
-| 0 | Ready (`SPEC:READY:...`, then `SPEC:BRANCH:<branch>`). |
+| 0 | Ready (`SPEC:READY:...`, then `SPEC:BRANCH:<branch>`), after `SPEC:WARN:<change_dir>` when critical or major findings are left unfixed. |
 | 1 | Failed: a model call, an answer rejected twice, the prototype, `git fetch`, the commit or the push (the ready record is kept; `resume` retries only the commit or the push while the files are unchanged), or the spend cap. |
-| 2 | Refused: a change name with a `/` (a component's path: the change is named), an input file missing, an untrusted repository, no ticket ref (or one git cannot start a branch name with), a `--branch` not starting with `<TICKET>-`, no `origin` remote, pm-spec's worktree diverged from `origin/<branch>` (the `git pull --rebase` to run is printed), a run that exists (`new`) or does not (`resume`), no issues to revise, a resume at the ticket wait without every component's `--ticket` (or `--tickets-later`), or a `--ticket` naming no component. |
+| 2 | Refused: a change name with a `/` (a component's path: the change is named), an input file missing, an untrusted repository, no ticket ref (or one git cannot start a branch name with), a `--branch` not starting with `<TICKET>-`, no `origin` remote, pm-spec's worktree diverged from `origin/<branch>` (the `git pull --rebase` to run is printed), a run that exists (`new`) or does not (`resume`), no issues to revise, a resume at the ticket wait without every component's `--ticket` (or `--tickets-later`), a `--ticket` naming no component, or an `--accept` without `--accept-reason`, outside a consistency block after the specs review, or naming no open blocking finding. |
 | 3 | Waiting: for review (`SPEC:REVIEW:proposal`, `SPEC:REVIEW:components` or `SPEC:REVIEW:specs`), for the components' tickets (`SPEC:TICKETS:<path>`), or for the ticket replies (`INTERVIEW:WAITING:<path>`). Each but the last is pushed (`SPEC:BRANCH:<branch>`). |
-| 4 | Blocked on findings (`SPEC:BLOCKED:<change_dir>`). Edit the files, then run again. Also `resume` while requirements issues are open or a revise is blocked: run `revise`. |
+| 4 | Blocked on findings (`SPEC:BLOCKED:<change_dir>`). Edit the files, then run again, or `--accept` the findings; past the round cap, `--accept` or `--check-again`. Also `resume` while requirements issues are open or a revise is blocked: run `revise`. |
 | 5 | Another process holds the change's lock; the message names its pid, host and start time. |

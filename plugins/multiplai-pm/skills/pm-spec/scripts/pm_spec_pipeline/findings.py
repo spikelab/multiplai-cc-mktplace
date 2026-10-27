@@ -25,7 +25,7 @@ from typing import Literal
 
 from pydantic import BaseModel, field_validator
 
-from .run import EXIT_BLOCKED, MARKER_BLOCKED, Run, Stop
+from .run import EXIT_BLOCKED, MARKER_BLOCKED, MARKER_WARN, Run, Stop
 from .state import StepOutcome
 
 log = logging.getLogger(__name__)
@@ -79,6 +79,30 @@ def number_findings(step: str, findings: list[dict], *, start: int = 1) -> list[
     ]
 
 
+def _number(finding_id: str) -> int:
+    tail = finding_id.rpartition("-F")[2]
+    return int(tail) if tail.isdigit() else 0
+
+
+def number_new(step: str, findings: list[dict], taken: list[dict]) -> list[dict]:
+    """*findings* with an id on each that has none, numbered after every id in
+    *findings* and *taken*, so an id is never given twice."""
+    used = [_number(f.get("finding_id") or "") for f in [*findings, *taken]]
+    fresh = number_findings(
+        step,
+        [f for f in findings if not f.get("finding_id")],
+        start=max(used, default=0) + 1,
+    )
+    numbered = iter(fresh)
+    return [f if f.get("finding_id") else next(numbered) for f in findings]
+
+
+def carried_and_new(blocking: list[dict]) -> str:
+    """`<k> still open from earlier rounds, <n> new` for a recheck's block."""
+    new = sum(1 for f in blocking if f.get("status") == "new")
+    return f"{len(blocking) - new} still open from earlier rounds, {new} new"
+
+
 SAVED_KEYS = (
     "finding_id",
     "severity",
@@ -87,6 +111,8 @@ SAVED_KEYS = (
     "places",
     "status",
     "evidence",
+    "reason",
+    "accepted_at",
 )
 
 
@@ -200,6 +226,30 @@ def record_advisory(run: Run, name: str, advisory: list[dict]) -> None:
             f"{name}: advisory findings (not blocking)\n{findings_report(advisory)}",
             flush=True,
         )
+
+
+WARN_BAR = "!" * 72
+
+
+def warn_unfixed(run: Run, advisory: list[dict]) -> None:
+    """When a check passes with critical or major findings left unfixed (a new
+    one after the first round, or one a person accepted), print them under a
+    loud banner and `SPEC:WARN:<change_dir>`, and write them to the progress file."""
+    left = [f for f in advisory if f.get("severity") in ACTIONABLE]
+    left += run.state.accepted_findings
+    if not left:
+        return
+    report = findings_report(left)
+    text = (
+        f"{WARN_BAR}\n"
+        f"WARNING: {run.config.change_name} passes with {len(left)} critical or major "
+        "finding(s) not fixed. buildme builds the specs as they are, so each one "
+        f"below may be built wrong.\n{report}\n{WARN_BAR}"
+    )
+    log.warning("unfixed findings: %s", report.replace("\n", " | ")[:1000])
+    run.progress("CONSISTENCY_WARNING", text)
+    print(text, flush=True)
+    print(f"{MARKER_WARN}:{run.config.change_dir}", flush=True)
 
 
 def admit_repair(run: Run, name: str, revision: str, numbered: list[dict]) -> None:

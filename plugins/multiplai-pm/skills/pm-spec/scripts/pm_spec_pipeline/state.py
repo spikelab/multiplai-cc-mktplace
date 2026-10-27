@@ -78,7 +78,9 @@ class StepOutcome(BaseModel):
     fix, numbered, with a status each once a recheck ran. `rewrite_published`
     is set in the checkpoint that publishes the rewrite. `blocked_revision` is
     the revision a block on findings was recorded at: a resume at another
-    revision means the user edited the files, and the step gets its rewrite back."""
+    revision means the user edited the files, and the step gets its rewrite back.
+    `reviewed_blocks` counts the checks after the specs review that blocked,
+    for the round cap (`consistency.refuse_at_round_cap`)."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -92,6 +94,7 @@ class StepOutcome(BaseModel):
     advisory_findings: list[dict] = Field(default_factory=list)
     blocked_revision: str | None = None
     source: str = ""
+    reviewed_blocks: int = 0
 
 
 class EpicChild(BaseModel):
@@ -141,6 +144,10 @@ class RunState(BaseModel):
     # A change whose specs pm-spec did not write, taken as they stand: only
     # the consistency check and the handoff run on it.
     adopted: bool = False
+    # Consistency findings a person accepted with `resume --accept`: each saved
+    # finding with its `reason` and `accepted_at`. Kept across checks, so a
+    # later check is told not to raise them again.
+    accepted_findings: list[dict] = Field(default_factory=list)
 
     def step(self, name: str) -> StepOutcome:
         return self.steps.setdefault(name, StepOutcome())

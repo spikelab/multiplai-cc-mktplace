@@ -730,8 +730,13 @@ def reviewer_edit(repo: Path, at: Path, rule: str) -> str:
 def test_S17_resume_after_a_blocked_check_rechecks_the_edited_files(
     repo, model, tmp_path, monkeypatch, capsys
 ):
-    configure = two_with_check([CONTRADICTION], [])
-    configure(model)
+    two(model)
+    # The check after the block rechecks CC-F1, which the edit resolved.
+    resolved = {"finding_id": "CC-F1", "status": "resolved", "evidence": "the lines"}
+    model["consistency"] = [
+        {"findings": [CONTRADICTION]},
+        {"findings": [], "prior_assessments": [resolved]},
+    ]
     go(repo, [*FLOW[:4], (RESUME, 4)])
     cdir = change_dir(repo)
     capsys.readouterr()

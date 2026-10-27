@@ -21,6 +21,32 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-27
+
+### Changed
+
+- **pm-spec: the consistency check after the specs review no longer loops.**
+  It used to check every spec from scratch on each `resume` and block on any
+  major finding, so fixing one round's findings could turn up new ones with
+  no end. A check after a block now rechecks the findings it blocked on: each
+  must be resolved, and a new finding blocks only when critical. The block
+  line counts the findings still open from earlier rounds apart from new ones.
+
+### Added
+
+- **pm-spec: `resume --accept <id> --accept-reason "<why>"`** leaves a
+  blocking consistency finding as it is. It is recorded in
+  `accepted-findings.md`, committed with the specs, and later checks do not
+  raise it again. Accepting every blocking finding on unchanged files passes
+  with no model call.
+- **pm-spec: a round cap.** After 5 blocked checks (`consistency:
+  {max_rounds: N}` in `specs/config.yaml`), `resume` stops checking until the
+  open findings are accepted or `--check-again` asks for one more round.
+- **pm-spec: a loud warning on unfixed findings.** When the specs pass with
+  a critical or major finding not fixed (a new major one in a later round, or
+  an accepted one), pm-spec prints them under a banner and
+  `SPEC:WARN:<change_dir>` before `SPEC:READY`.
+
 ## [0.12.1] - 2026-10-27
 
 ### Fixed

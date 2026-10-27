@@ -44,7 +44,7 @@ use case). Severity:
 `critical` when a builder would have to implement one of two incompatible
 rules, `major` when a builder would have to guess, `minor` for wording that
 reads two ways but would be built the same.
-{prior_section}
+{prior_section}{accepted_section}
 Return ONLY JSON matching this schema (an empty `findings` list is a real
 answer when the documents agree):
 {{"findings": [{{"type": "contradiction|gap|duplicate", "severity": "critical|major|minor",
@@ -56,9 +56,9 @@ answer when the documents agree):
 """
 
 PRIOR_FINDINGS_SECTION = """
-## Findings the rewrite was asked to fix
+## Findings the {by} was asked to fix
 
-These documents were rewritten to fix the findings below.
+These documents were {done} to fix the findings below.
 
 {prior_findings}
 
@@ -72,12 +72,34 @@ or `cannot_verify`, and it goes in `prior_assessments` with the finding's
 """
 
 
-def prior_findings_section(prior: list[dict] | None) -> str:
-    """The recheck section for these listed findings; empty for none."""
+ACCEPTED_SECTION = """
+## Findings a person accepted
+
+A person read each finding below and accepted the documents as they are. Do
+not report any of them again, nor the same problem in other words.
+
+{accepted_findings}
+"""
+
+
+def _lines(findings: list[dict]) -> str:
+    return "\n".join(
+        f"- {f.get('finding_id', '?')} [{f.get('severity', '?')}] ({f.get('category', '?')}) {f.get('text', '')}"
+        for f in findings
+    )
+
+
+def prior_findings_section(prior: list[dict] | None, *, edited: bool = False) -> str:
+    """The recheck section for these listed findings; empty for none. *edited*:
+    a person changed the files (after the specs review), not the rewrite."""
     if not prior:
         return ""
-    lines = "\n".join(
-        f"- {f.get('finding_id', '?')} [{f.get('severity', '?')}] ({f.get('category', '?')}) {f.get('text', '')}"
-        for f in prior
-    )
-    return PRIOR_FINDINGS_SECTION.format(prior_findings=lines)
+    by, done = ("edit", "edited") if edited else ("rewrite", "rewritten")
+    return PRIOR_FINDINGS_SECTION.format(by=by, done=done, prior_findings=_lines(prior))
+
+
+def accepted_section(accepted: list[dict] | None) -> str:
+    """The findings a person accepted (`resume --accept`); empty for none."""
+    if not accepted:
+        return ""
+    return ACCEPTED_SECTION.format(accepted_findings=_lines(accepted))

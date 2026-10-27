@@ -46,6 +46,7 @@ OWNED_FILES = (
     "spec-issues.resolved-*.md",
     "respec.md",
     "respec.resolved-*.md",
+    "accepted-findings.md",
 )
 # Directories pm-spec owns whole: the prototype, and an old-layout change's
 # capability files.
