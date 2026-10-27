@@ -82,7 +82,6 @@ def accepted_build(tmp_path, monkeypatch):
         ),
     )
     reconcile_plan(config, state)
-    state.spec_gen.record_step("design_audit", "passed")
     state.spec_gen.record_step("plan_review", "passed")
     state.checkpoint(config.state_file_path())
     args = argparse.Namespace(
@@ -300,7 +299,7 @@ async def test_cancelled_standalone_tdd_persists_current_spend(
 
 
 @pytest.mark.asyncio
-async def test_plan_review_repair_revalidates_design_before_spec_only_success(
+async def test_a_plan_check_repair_is_rechecked_before_spec_only_success(
     accepted_build, monkeypatch
 ):
     from build_pipeline.models import (
@@ -318,16 +317,8 @@ async def test_plan_review_repair_revalidates_design_before_spec_only_success(
     state.spec_gen.steps.clear()
     state.spec_gen.record_step("prototype", "skipped")
     state.checkpoint(config.state_file_path())
-    design_audit = AsyncMock(return_value=[])
-    monkeypatch.setattr(
-        "build_pipeline.llm_steps.spec_steps.run_design_audit", design_audit
-    )
-    monkeypatch.setattr(
-        "build_pipeline.llm_steps.spec_steps.run_tasks_audit",
-        AsyncMock(return_value=[]),
-    )
     repair = PlanReviewFinding(
-        category="use-case-coverage",
+        category="coverage",
         severity="major",
         file_path="tasks.md",
         location="block 1",
@@ -358,9 +349,7 @@ async def test_plan_review_repair_revalidates_design_before_spec_only_success(
     )
     assert await orchestrator.run_orchestrator(config, args) == 0
     saved = BuildState.load(completed_state_path(config.state_file_path()))
-    assert saved.spec_gen.step_passed("design_audit")
     assert saved.spec_gen.step_passed("plan_review")
-    assert design_audit.await_count == 2
     assert review.await_count == 2
 
 

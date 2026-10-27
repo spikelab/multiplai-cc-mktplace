@@ -530,7 +530,6 @@ def _accepted_at_publish(tmp_path, monkeypatch, change: str):
         ),
     )
     reconcile_plan(config, state)
-    state.spec_gen.record_step("design_audit", "passed")
     state.spec_gen.record_step("plan_review", "passed")
     state.checkpoint(config.state_file_path())
     args = argparse.Namespace(

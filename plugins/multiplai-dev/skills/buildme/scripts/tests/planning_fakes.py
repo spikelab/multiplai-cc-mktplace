@@ -26,7 +26,6 @@ def _plan_fixture(config, state):
         if not path.exists():
             path.write_text(text)
     reconcile_plan(config, state, regenerated=set(ARTIFACT_DAG))
-    state.spec_gen.record_step("tasks_audit", "passed")
     state.spec_gen.record_step("explainers", "passed")
     state.checkpoint(config.state_file_path())
 
@@ -64,7 +63,7 @@ import pytest
 def accepted_planning(monkeypatch, request):
     """Supply complete plans to tests of intake, boards and extraction routing."""
     from build_pipeline import orchestrator, spec_generator
-    from build_pipeline.llm_steps import plan_review_steps, spec_steps
+    from build_pipeline.llm_steps import plan_review_steps
     from build_pipeline.models import GateResult, PlanReviewResult
 
     async def generated(cm, change_dir, config, state):
@@ -83,8 +82,6 @@ def accepted_planning(monkeypatch, request):
         return await real(config, args)
 
     monkeypatch.setattr(spec_generator, "_generate_all_artifacts", generated)
-    monkeypatch.setattr(spec_steps, "run_tasks_audit", AsyncMock(return_value=[]))
-    monkeypatch.setattr(spec_steps, "run_design_audit", AsyncMock(return_value=[]))
     monkeypatch.setattr(
         plan_review_steps,
         "run_plan_review",
