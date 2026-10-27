@@ -293,6 +293,42 @@ def test_resume_after_a_kill_following_verify(fixture_repo, tmp_path, agents, ca
     assert "RESUMED after recheck" in (target_dir / "progress.log").read_text()
 
 
+def test_the_started_line_names_the_skill_version_and_each_run_is_recorded(
+    fixture_repo, tmp_path, agents, capsys
+):
+    """Row S1: a run's first line names the skill and version; a resume adds a run, never rewrites one."""
+    import re
+
+    from review_pipeline.export import producer
+
+    repo, base, head = fixture_repo
+    out = tmp_path / "out"
+    agents(kill_at="merge")
+    with pytest.raises(RuntimeError, match="killed"):
+        main(_review_args(repo, base, head, out))
+    target_dir = out / "booking-engine" / f"range-{base}..{head}"
+    first = (target_dir / "progress.log").read_text().splitlines()[0]
+    assert re.match(r"^\[.*\] STARTED multiplai-dev:review \d+\.\d+\.\d+ ", first)
+    state = ReviewState.model_validate_json(
+        (target_dir / "review-state.json").read_text()
+    )
+    assert [(r.producer, r.session_id) for r in state.runs] == [
+        (producer(), "sess-test")
+    ]
+    assert state.runs[0].started_at
+    capsys.readouterr()
+
+    assert (
+        main(["--session-id", "sess-2", "resume", str(target_dir), "--trust-repo"]) == 0
+    )
+    state = ReviewState.model_validate_json(
+        (target_dir / "review-state.json").read_text()
+    )
+    assert [r.session_id for r in state.runs] == ["sess-test", "sess-2"]
+    log = (target_dir / "progress.log").read_text()
+    assert log.count("STARTED multiplai-dev:review ") == 1
+
+
 def test_batch_reviews_every_target_and_writes_rollups(
     fixture_repo, tmp_path, agents, capsys
 ):
