@@ -1322,7 +1322,10 @@ class TestPlanCheckRewrite:
         config, state, state_path = _stage_setup(tmp_path)
         (config.change_dir / "tasks.md").write_text(_NO_BEHAVIOUR_TASKS)
         review = AsyncMock(return_value=PlanReviewResult(findings=[]))
-        regen = AsyncMock(return_value=_NO_BEHAVIOUR_TASKS)
+        # The rewrite changes a heading and keeps the no-behaviour blocks.
+        regen = AsyncMock(
+            return_value=_NO_BEHAVIOUR_TASKS.replace("## 1. Core", "## 1. The core", 1)
+        )
         with (
             patch.object(plan_review_steps, "run_plan_review", review),
             patch.object(plan_review_steps, "run_plan_edit", edits_from(regen)),
