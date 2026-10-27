@@ -9,6 +9,20 @@ plan *quality* — over-engineering, granularity, testability, edge cases — an
 why the severity scale below is calibrated: severity decides what gets rewritten.
 """
 
+# The most findings one planning check returns. The prompts ask for it
+# (`FINDINGS_RULE`), and `spec_steps._audit_findings` and
+# `plan_review_steps.run_plan_review` keep the most severe this many.
+MAX_PLAN_FINDINGS = 10
+
+FINDINGS_RULE = f"""\
+## Which Findings to Report
+
+- Report the findings that would make the build wrong or leave a stated
+  behaviour unbuilt, most important first, at most {MAX_PLAN_FINDINGS}.
+- Report an edge case only for an input or failure that a spec scenario or the
+  plan names.
+- Leave out anything that is minor unless no critical or major finding exists."""
+
 DESIGN_AUDIT_PROMPT = """\
 You are an adversarial reviewer auditing the generated OpenSpec artifacts for internal consistency, completeness, and plan quality.
 
@@ -31,7 +45,7 @@ You are an adversarial reviewer auditing the generated OpenSpec artifacts for in
 
 ## Audit Checklist
 
-Cross-reference these artifacts and report ANY gaps:
+Cross-reference these artifacts against each other:
 
 ### Spec-Task Alignment
 - Every spec scenario has a task block that satisfies it
@@ -56,14 +70,13 @@ Cross-reference these artifacts and report ANY gaps:
 - Task block count is reasonable (2-8 blocks typical)
 
 ### Plan Quality — Right-Sizing (category "over-engineering")
-For every abstraction the design introduces — an interface, a base class, a
+Report an abstraction the build will produce — an interface, a base class, a
 plugin/registry/factory, a configuration knob, a new layer, a generalized
-parameter — name the requirement or spec scenario that needs it. Report each
-one where no requirement needs it, quoting the abstraction and stating what
-the simpler shape would be (a direct call, a literal, one concrete
-implementation). The same applies to scope the proposal did not ask for:
-report design decisions or task blocks that build capability nothing in the
-specs requires.
+parameter — that no requirement or spec scenario needs, quoting it and stating
+what the simpler shape would be (a direct call, a literal, one concrete
+implementation). The same applies to scope the proposal did not ask for: a
+design decision or task block that builds capability nothing in the specs
+requires.
 
 ### Plan Quality — Task Granularity (category "granularity")
 Report blocks that are mis-sized for review and verification:
@@ -74,19 +87,16 @@ Report blocks that are mis-sized for review and verification:
 - a block whose checkbox items do not add up to the behavior its title claims
 
 ### Plan Quality — Testability (category "testability")
-For every design decision and every task block, name the observable a test
-could assert on — a return value, a written file, a logged line, an emitted
-event, an exit code. Report each decision or block where no such observable
-exists, and say what to expose (a return value instead of an internal
-mutation, a seam instead of a hidden global) so it becomes assertable.
+Report a task block with no observable a test could assert on — a return
+value, a written file, a logged line, an emitted event, an exit code — and say
+what to expose (a return value instead of an internal mutation, a seam instead
+of a hidden global) so it becomes assertable.
 
 ### Plan Quality — Edge Cases (category "edge-case")
-Walk the inputs and the failure surface the design implies and report the ones
-no spec scenario and no task block covers. At minimum consider: empty or
-absent input, input at the size/format boundary, each external dependency
-failing or timing out, partial completion followed by a retry or resume,
-concurrent or repeated invocation, and the permission/credential being missing.
-Report each uncovered case with the scenario that should exist.
+Report an input or failure that a spec scenario or the plan names and that no
+task block covers, with the scenario that should exist.
+
+{findings_rule}
 
 ## Severity
 
@@ -133,6 +143,9 @@ Report what you can point at in these documents — quote the line, the block, o
 the scenario each finding comes from, and make the suggestion concrete enough
 to apply.
 """
+# Filled in here, not at `.format`: `FINDINGS_RULE` has no braces, so the
+# callers format the prompt as before.
+DESIGN_AUDIT_PROMPT = DESIGN_AUDIT_PROMPT.replace("{findings_rule}", FINDINGS_RULE)
 
 
 # The plan, in an audit or review prompt. A component's proposal and use cases
@@ -201,7 +214,8 @@ acceptance criteria an earlier block already delivers, so its tests would pass
 before the block is built: one that only confirms, verifies or pins earlier
 behaviour, adds tests and no code, or says an earlier block satisfies it. The
 build's TDD RED gate fails such a block, and the build with it. Suggest moving
-its criteria and tests into the block that builds the behaviour.
+its criteria and tests into the block that builds the behaviour. A block whose
+tests would pass before it is built is **critical**.
 
 ## Spec-Coverage Traceability
 
@@ -254,6 +268,8 @@ placeholder.
   IS a vertical slice
 - Setup or scaffolding checkbox items *inside* a behavior-scoped block
 
+{findings_rule}
+
 ## Output Format
 Return a JSON array of finding objects:
 
@@ -272,6 +288,7 @@ If the breakdown is properly sliced into vertical slices, return an empty array:
 
 Flag shape problems only — not naming style, granularity taste, or block count.
 """
+TASKS_AUDIT_PROMPT = TASKS_AUDIT_PROMPT.replace("{findings_rule}", FINDINGS_RULE)
 
 
 # Appended to the design audit, the tasks audit and the plan review when they

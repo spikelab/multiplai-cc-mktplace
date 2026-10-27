@@ -15,6 +15,14 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.117.0] - 2026-10-27
+
+### Changed
+- **buildme**: a minor finding from the design audit, the tasks audit or the plan review no longer stops a build or earns a rewrite, whatever its category. Only critical and major findings earn the rewrite. A block that adds no behaviour still stops the build when buildme's own scan finds it, or when the model rates it critical, which the tasks audit's prompt now tells it to do.
+- **buildme**: after the rewrite, a major finding stops the build only when the recheck says it is `still_present`. A major finding the recheck calls `partially_resolved` or `cannot_verify` is reported in the progress file (`<STEP>_ADVISORY`) and the build goes on. A critical finding still stops the build unless it is `resolved`.
+- **buildme**: each of the three planning checks reports at most 10 findings, most severe first, and reports an edge case only for an input or failure a spec scenario or the plan names. The log line `<check>: kept 10 of <n> findings` says when buildme dropped some.
+- **buildme**: a build that an earlier version stopped in planning gets one fresh check and one rewrite under these rules when you resume it, without editing the plan.
+
 ## [0.116.0] - 2026-10-27
 
 ### Added

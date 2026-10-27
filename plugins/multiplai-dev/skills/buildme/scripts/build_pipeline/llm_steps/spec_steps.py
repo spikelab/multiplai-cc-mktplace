@@ -25,6 +25,7 @@ from ..prompts.design_audit import (
     CAPABILITY_CHECK,
     COMPONENT_CAPABILITY_CHECK,
     DESIGN_AUDIT_PROMPT,
+    MAX_PLAN_FINDINGS,
     TASKS_AUDIT_PROMPT,
     plan_section,
     prior_findings_section,
@@ -43,9 +44,9 @@ log = logging.getLogger(__name__)
 
 # The audits are reviews, so they get the reviewer's tool set and nothing more:
 # read-only. An auditor that could `Write` or `Edit` would fix the design it was
-# asked to judge, and the one-regeneration-pass rule (see CLAUDE.md, "Audit
-# feedback is one pass, decided in one place") would no longer be the only way
-# an artifact changes. `test_no_review_step_can_write` asserts the list.
+# asked to judge, and `spec_generator.rewrite_plan` (see CLAUDE.md, "Planning
+# has one publisher") would no longer be the only way an artifact changes.
+# `test_no_review_step_can_write` asserts the list.
 AUDITOR_TOOLS = ["Read", "Grep", "Glob"]
 
 # Enough turns to open the artifacts' neighbours and grep the codebase for a
@@ -82,6 +83,18 @@ async def _audit_agent_text(prompt: str, config, *, budget_label: str) -> str:
             f"{budget_label} audit failed: {result.error or result.output}"
         )
     return result.output or ""
+
+
+_SEVERITY_RANK = {"critical": 0, "major": 1, "minor": 2}
+
+
+def keep_most_severe(findings: list, label: str, severity=lambda f: f["severity"]):
+    """The findings sorted critical, major, minor (stable within a severity),
+    cut to the first `MAX_PLAN_FINDINGS`. Logs how many it dropped."""
+    ranked = sorted(findings, key=lambda f: _SEVERITY_RANK.get(severity(f), 3))
+    if len(ranked) > MAX_PLAN_FINDINGS:
+        log.info("%s: kept %d of %d findings", label, MAX_PLAN_FINDINGS, len(ranked))
+    return ranked[:MAX_PLAN_FINDINGS]
 
 
 class AuditFindings(list):
@@ -136,7 +149,7 @@ def _audit_findings(raw: str, label: str, *, recheck: bool = False) -> AuditFind
             raise LLMCallError(f"{label} audit returned an invalid finding")
         finding["severity"] = finding["severity"].lower()
     log.info("%s audit found %d findings", label, len(findings))
-    return AuditFindings(findings, assessments)
+    return AuditFindings(keep_most_severe(findings, label), assessments)
 
 
 async def generate_artifact(

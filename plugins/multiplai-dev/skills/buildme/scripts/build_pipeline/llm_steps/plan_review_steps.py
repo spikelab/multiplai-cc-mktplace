@@ -18,6 +18,7 @@ from ..models import PlanReviewFinding, PlanReviewResult
 from ..prompts.design_audit import plan_section, prior_findings_section
 from ..prompts.plan_review import NO_USE_CASES, PLAN_REVIEW_PROMPT
 from ..sdk import agent_call_structured
+from .spec_steps import keep_most_severe
 
 log = logging.getLogger(__name__)
 
@@ -396,7 +397,7 @@ async def run_plan_review(
     effort = config.effort_for("plan_review")
 
     log.info("Running plan review on %s", change_dir.name)
-    return await agent_call_structured(
+    result = await agent_call_structured(
         prompt,
         PlanReviewResult,
         allowed_tools=PLAN_REVIEW_TOOLS,
@@ -406,6 +407,10 @@ async def run_plan_review(
         cwd=str(config.project_dir),
         budget_label="plan_review",
     )
+    result.findings = keep_most_severe(
+        list(result.findings), "Plan review", severity=lambda f: f.severity
+    )
+    return result
 
 
 def plan_review_actionable(
@@ -510,8 +515,8 @@ async def run_plan_review_stage(
 
     Blocking findings request one staged rewrite through the planning owner,
     then a required recheck of that revision, which is given the findings the
-    rewrite was asked to fix and blocks on any not `resolved`, and on new
-    critical findings (`recheck_verdict`). Unresolved findings and failed
+    rewrite was asked to fix and blocks on a critical one not `resolved`, a
+    major one `still_present`, and new critical findings (`recheck_verdict`). Unresolved findings and failed
     review calls record a blocked outcome and raise; they cannot authorize TDD.
     """
     from ..spec_generator import (

@@ -109,6 +109,12 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   prompt. The reviewer decides severity from the calibration scale; the diff
   and specs are its only ground truth. If a known non-issue keeps getting
   flagged, fix the spec/rubric wording — never blindfold the reviewer.
+  One exception, for the planning checks only: their prompts ask for at most
+  `MAX_PLAN_FINDINGS` (10) findings, most severe first, edge cases only for an
+  input or failure a scenario or the plan names, and minor findings only when
+  there is no critical or major one (`prompts.design_audit.FINDINGS_RULE`;
+  code keeps the 10 most severe, `spec_steps.keep_most_severe`). An unbounded
+  list fed every finding to the rewrite, so the rewrite grew with it.
 - **Positive recipes over prohibition lists.** Prompts state what to do and
   the observable condition for doing it (structural REQUIRED slots,
   gate-function checks). Enforcement lives in code gates, not in aggressive
@@ -147,12 +153,19 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   rewrite (`admit_repair`). The audit after the rewrite is given them (`prior=`,
   `prompts.design_audit.prior_findings_section`) and answers a status for each
   in `prior_assessments`; a first audit still answers a bare list.
-  `recheck_verdict` decides: a listed finding not `resolved` (no status is
-  `cannot_verify`) blocks, a new finding blocks only when critical or
-  `no-new-behaviour`, the deterministic scans' findings always block (their own
-  listed findings, `source: scan`, are resolved when the scans find nothing),
-  and the rest are advisory (`record_advisory`, `<STEP>_ADVISORY`). Only the
-  audit after a rewrite uses it; a first audit blocks on critical and major.
+  `recheck_verdict` decides: a listed critical finding not `resolved` (no
+  status is `cannot_verify`) blocks, a listed major finding blocks only when
+  `still_present`, a new finding blocks only when critical, the deterministic
+  scans' findings always block (they are code facts, not model judgments; their
+  own listed findings, `source: scan`, are resolved when the scans find
+  nothing), and the rest — a listed major `partially_resolved` or
+  `cannot_verify`, every minor — are advisory (`record_advisory`,
+  `<STEP>_ADVISORY`). Only the audit after a rewrite uses it; a first audit
+  blocks on critical and major model findings, whatever their category, and on
+  every deterministic finding. A minor finding never stops a run. A step
+  blocked under an older rule (`StepOutcome.rules_version` below
+  `state.PLAN_RULES_VERSION`) is reopened once by `reopen_if_edited`, which
+  also clears its `blocking_findings` so the fresh check is not refused.
   `rewrite_plan` raises `PlanRepairRejected` with the findings it acted on,
   never discards them. A block on findings (`block_on_findings`) saves
   `blocked_revision`; a resume at that revision refuses with no model call

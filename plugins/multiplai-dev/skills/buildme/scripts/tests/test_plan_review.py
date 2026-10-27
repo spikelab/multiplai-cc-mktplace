@@ -34,7 +34,7 @@ from build_pipeline.models import (
     PriorAssessment,
 )
 from build_pipeline.prompts.plan_review import NO_USE_CASES, PLAN_REVIEW_PROMPT
-from build_pipeline.state import BuildState, SpecGenState
+from build_pipeline.state import PLAN_RULES_VERSION, BuildState, SpecGenState
 
 # A recheck that calls the one listed finding fixed.
 _RESOLVED_PR_F1 = PriorAssessment(finding_id="PR-F1", status="resolved")
@@ -814,6 +814,58 @@ class TestPlanReviewStage:
         regen.assert_not_awaited()
         assert review.await_count == 1
         assert state.spec_gen.step_passed("plan_review") is False
+
+    @pytest.mark.asyncio
+    async def test_s9_a_step_blocked_under_the_old_rule_reopens_once(self, tmp_path):
+        """Row S9: a checkpoint blocked before `rules_version` existed gets one
+        fresh check and one rewrite under the new rule, then is recorded at
+        the current version, so a second block refuses as usual."""
+        from build_pipeline.spec_generator import PlanBlocked
+
+        config, state, state_path = _stage_setup(tmp_path)
+        current = state.spec_gen.step_revision("plan_review")
+        old = state.spec_gen.model_dump()
+        old["steps"]["plan_review"] = {
+            "revision": current,
+            "outcome": "blocked",
+            "reason": "Plan review still has blocking findings after bounded repair",
+            "repair_attempts": 1,
+            "blocking_findings": "- PR-F1 partially_resolved [major] (x) y",
+            "repair_findings": [{"finding_id": "PR-F1", "severity": "major"}],
+            "blocked_revision": current,
+        }
+        state.spec_gen = SpecGenState.model_validate(old)
+        assert state.spec_gen.steps["plan_review"].rules_version == 0
+        review = AsyncMock(
+            side_effect=[
+                PlanReviewResult(findings=[_finding(severity="critical")]),
+                PlanReviewResult(findings=[], prior_assessments=[_RESOLVED_PR_F1]),
+            ]
+        )
+        regen = AsyncMock(return_value="## 1. Behavior\n- [ ] do it properly\n")
+        with (
+            patch.object(plan_review_steps, "run_plan_review", review),
+            patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen),
+        ):
+            await run_plan_review_stage(config.change_dir, config, state, state_path)
+
+        assert review.await_count == 2
+        assert regen.await_count == 1
+        step = state.spec_gen.steps["plan_review"]
+        assert state.spec_gen.step_passed("plan_review")
+        assert step.rules_version == PLAN_RULES_VERSION
+
+        # Once only: a block recorded now refuses an unchanged resume.
+        step.outcome = "blocked"
+        step.blocked_revision = state.spec_gen.step_revision("plan_review")
+        step.blocking_findings = "- PR-F2 still_present [major] (x) y"
+        again = AsyncMock()
+        with patch.object(plan_review_steps, "run_plan_review", again):
+            with pytest.raises(PlanBlocked):
+                await run_plan_review_stage(
+                    config.change_dir, config, state, state_path
+                )
+        again.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_a_spent_stage_is_checked_before_the_model_call(self, tmp_path):

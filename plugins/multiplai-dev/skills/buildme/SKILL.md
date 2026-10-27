@@ -570,11 +570,16 @@ granularity, testability, uncovered edge cases) and folds every
 critical/major gap back into one regeneration pass of `design.md` and
 `tasks.md` before re-auditing once. The plan review
 reads `tasks.md` against the rubric, the constraints and the use cases and
-regenerates `tasks.md` at most once. Each re-audit is told which findings the
-rewrite was asked to fix and stops the run when one is not `resolved`, when
-it finds a new critical problem, or when the rewritten `tasks.md` still has a
-placeholder or a block that adds no behaviour by buildme's own scans; new
-major and minor findings are reported only, whatever their category. A stopped step prints those findings with their statuses. Resuming
+regenerates `tasks.md` at most once. Only critical and major findings earn a
+rewrite, and each check reports at most 10, most severe first. Each re-audit
+is told which findings the rewrite was asked to fix and stops the run when a
+critical one is not `resolved`, when a major one is `still_present`, when it
+finds a new critical problem, or when the rewritten `tasks.md` still has a
+placeholder or a block that adds no behaviour by buildme's own scans. A major
+finding the re-audit calls `partially_resolved` or `cannot_verify`, and every
+new major or minor finding, whatever its category, is reported only; a minor
+finding never stops a run. A build stopped by an earlier version's rule gets
+one fresh check and one rewrite under this one. A stopped step prints those findings with their statuses. Resuming
 without editing the plan stops again at no cost; editing the plan gives the
 step one more rewrite. TDD implementation (test-writer + implementer agents per block),
 integration gates, scored quality reviews, entry point verification, the
