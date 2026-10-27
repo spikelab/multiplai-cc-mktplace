@@ -233,6 +233,33 @@ def test_the_label_list_is_fetched_once_per_command_not_once_per_flag(monkeypatc
     assert len(calls.listings) == 1
 
 
+def label_args(*names):
+    return Args(
+        assignee=None,
+        label=list(names),
+        create_labels=False,
+        estimate=None,
+        dry_run=False,
+    )
+
+
+@pytest.mark.parametrize("given", ["none", "None", " NONE "])
+def test_label_none_clears_every_label(monkeypatch, given):
+    # Plane's serializer deletes every IssueLabel when `labels` is an empty
+    # list, and an empty list is the only way to leave an issue with none.
+    calls = stub(monkeypatch)
+    payload: dict = {}
+    plane._apply_assignment_flags(CFG, label_args(given), OK, payload)
+    assert payload["labels"] == []
+    assert calls.listings == []
+
+
+def test_label_none_beside_a_label_is_refused(monkeypatch):
+    stub(monkeypatch)
+    with pytest.raises(plane.PlaneError, match="--label none clears"):
+        plane._apply_assignment_flags(CFG, label_args("bug", "none"), OK, {})
+
+
 def test_repeating_a_new_label_name_creates_it_once(monkeypatch):
     calls = stub(monkeypatch, labels=[], routes={f"/projects/{OK}/labels/": {"id": L3}})
     payload: dict = {}

@@ -78,7 +78,8 @@ and it says so on stderr.
 
 `create` and `update` also take `--assignee`, `--label` (`--create-labels` to add a
 missing one), `--estimate <value>`, `--type <name|uuid>`, `--parent <ref|none>` and
-`--cycle <name|uuid|active>`. The first three replace the whole field; `--type` sets the
+`--cycle <name|uuid|active>`. The first three replace the whole field, so to remove one
+label pass every label the issue should keep, and `--label none` removes them all; `--type` sets the
 work item type (`types` lists them); `--parent` sets the parent issue, which Plane only
 accepts from the same project (`none` clears it); `--cycle` is additive and does nothing
 if the issue is already there.

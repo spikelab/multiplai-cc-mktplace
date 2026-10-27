@@ -1890,7 +1890,16 @@ def _apply_assignment_flags(cfg, args, project_id: str, payload: dict) -> None:
         payload["assignees"] = [
             resolve_member(cfg, project_id, who) for who in args.assignee
         ]
-    if args.label:
+    if args.label and any(x.strip().lower() == "none" for x in args.label):
+        # An empty list is the only way to leave an issue with no labels:
+        # Plane's serializer deletes them all and creates none.
+        if len(args.label) > 1:
+            raise PlaneError(
+                "--label none clears every label, so it cannot be combined "
+                "with other --label values"
+            )
+        payload["labels"] = []
+    elif args.label:
         # Listed once, not once per --label: resolving a name needs the whole
         # list, so N flags would otherwise pay for N complete listings.
         known = project_labels(cfg, project_id)
@@ -3227,7 +3236,9 @@ def build_parser() -> argparse.ArgumentParser:
             help="member by display name, email or UUID; repeat to set several",
         )
         sp.add_argument(
-            "--label", action="append", help="label by name or UUID; repeat for several"
+            "--label",
+            action="append",
+            help="label by name or UUID; repeat for several; 'none' clears them",
         )
         sp.add_argument(
             "--create-labels",
