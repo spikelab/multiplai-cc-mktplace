@@ -253,7 +253,8 @@ def reconcile_earlier(
     against: dict[str, list[Finding]] = {}
     for f in state.findings:
         a = state.assessments.get(f.id)
-        lineage[f.id] = f.id
+        # A carried finding keeps the lineage its earlier round gave it (`incremental.apply`).
+        lineage[f.id] = state.lineage.get(f.id, f.id) if f.carried_from else f.id
         if a is not None and a.label in ("still-open", "repeat") and a.earlier_id:
             e = by_earlier.get(a.earlier_id)
             lineage[f.id] = str((e.finding.get("lineage") if e else "") or a.earlier_id)

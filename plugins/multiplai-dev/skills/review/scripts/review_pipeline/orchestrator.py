@@ -21,7 +21,7 @@ from pathlib import Path
 import yaml
 from multiplai_core.log_utils import log_event
 
-from . import budget, deps, rounds, runlock, sdk, timings, window
+from . import budget, deps, incremental, rounds, runlock, sdk, timings, window
 from . import ledger as review_ledger
 from . import target as target_mod
 from .chunks import split_pieces
@@ -67,6 +67,12 @@ from .stages.write import run_write
 from .state import STATE_FILE, load_state, save_state
 
 log = logging.getLogger(__name__)
+
+# With no file to re-review, only recheck runs before export: the carried findings keep their
+# verdicts and plain-language text from the round they were carried from.
+NOTHING_CHANGED_SKIPS = frozenset(
+    {"explain", "paths", "find", "verify", "merge", "repeats", "assess", "write"}
+)
 
 STAGE_FUNCTIONS = (
     ("explain", run_explain),  # only with `explain: true`
@@ -130,6 +136,9 @@ class TargetSpec:
     dir: str | None = None  # a directory not under git, copied and reviewed as a tree
     mode: str = "full"  # `full` or `critical` (models.MODES)
     restart: bool = False  # start over even when the ledger shows an interrupted run
+    full: bool = (
+        False  # review every file even on a re-push (`--full`; `incremental.py`)
+    )
     trim: bool = False  # a tree review also runs the trim finder (`--trim`)
     extra_finders: bool = (
         False  # `--extra-finders` was given: accepted, ignored, noticed once
@@ -292,6 +301,9 @@ async def _run_stages(
     snapshot = target_mod.snapshot_head(t, target_dir / "tree")
     _with_deps(state, snapshot, config)
     diff = Path(t.diff_path).read_text(encoding="utf-8") if t.diff_path else ""
+    if incremental.is_incremental(state):
+        # The agents see only the re-reviewed files' patches; diff.patch keeps the whole change.
+        diff = incremental.limit_diff(diff, state.scope.reviewed_files)
     ctx = RunContext(
         config=config,
         snapshot=snapshot,
@@ -307,8 +319,12 @@ async def _run_stages(
     # again, and one written before 0.94 has no earlier statuses or lineage (row S3).
     reconcile_now = state.past("assess") and not state.past("export")
 
+    if incremental.nothing_changed(state) and not state.past("recheck"):
+        progress.line(f"nothing changed since round {state.scope.since_number}")
     for name, fn in STAGE_FUNCTIONS:
         if state.past(name) or (name == "explain" and not config.explain):
+            continue
+        if incremental.nothing_changed(state) and name in NOTHING_CHANGED_SKIPS:
             continue
         progress.stage(name, "started")
         ctx.counts, ctx.gate_reasons = {}, []
@@ -402,7 +418,10 @@ async def _run_stages(
                 reasons=sorted({reason_kind(r) for r in ctx.gate_reasons}),
             )
 
-    if reconcile_now:
+    # With nothing to re-review the assess stage is skipped, so its reconcile runs here.
+    if reconcile_now or (
+        incremental.nothing_changed(state) and not state.past("export")
+    ):
         reconcile_earlier(state, ctx)
     timings.close_interval(state, "run")
     note_missing_usage(state, ledger)
@@ -455,6 +474,7 @@ def prepare(
     *,
     check_interrupted: bool = False,
     lock: contextlib.ExitStack | None = None,
+    incremental_on: bool = True,
 ) -> tuple[ReviewState, Path]:
     """Resolve and gate the target, then write its directory. Raises ReviewError.
 
@@ -562,28 +582,44 @@ def prepare(
     if kept is not None:
         log.info("kept the earlier round of %s in %s", info.slug, kept)
     info = target_mod.write_target_files(info, diff or "", target_dir)
+    # What this round reviews, once, from the round just kept: `resume` reuses the stored scope.
+    scope, carried = None, None
+    if not info.is_tree:
+        scope, carried = incremental.decide(
+            target_dir,
+            info,
+            diff or "",
+            mode=spec.mode,
+            full=spec.full,
+            enabled=incremental_on,
+        )
     # A change review's pieces, once: `resume` reuses the stored ones, so piece ids stay stable.
     pieces = None
     if not info.is_tree:
+        reviewed = (
+            incremental.limit_diff(diff or "", scope.reviewed_files)
+            if scope is not None and scope.kind == "incremental"
+            else diff or ""
+        )
         try:
             pieces = split_pieces(
-                diff or "",
+                reviewed,
                 head_tree=target_mod.tree_paths(info.repo_path, info.head_sha),
                 base_tree=target_mod.tree_paths(info.repo_path, info.base_sha),
             )
         except target_mod.TargetError as e:
             raise ReviewError(str(e)) from e
-    return (
-        ReviewState(
-            target=info,
-            mode=spec.mode,
-            trim=spec.trim,
-            paths_enabled=spec.paths and info.is_tree,
-            pieces=pieces,
-            needs=[gated_need(n) for n in needs],
-        ),
-        target_dir,
+    state = ReviewState(
+        target=info,
+        mode=spec.mode,
+        trim=spec.trim,
+        paths_enabled=spec.paths and info.is_tree,
+        pieces=pieces,
+        needs=[gated_need(n) for n in needs],
     )
+    if scope is not None and carried is not None:
+        incremental.apply(state, scope, carried)
+    return state, target_dir
 
 
 def _same_remote(url: str | None, here: tuple[str, str] | None) -> bool:
@@ -863,7 +899,13 @@ async def review(
 ) -> Path:
     extra_finders_notice(config, spec)
     with contextlib.ExitStack() as lock:
-        state, target_dir = prepare(spec, out_dir, check_interrupted=True, lock=lock)
+        state, target_dir = prepare(
+            spec,
+            out_dir,
+            check_interrupted=True,
+            lock=lock,
+            incremental_on=config.incremental,
+        )
         change_review_dimensions(state, config)
         print_cost_lines(
             state, config, resuming=False

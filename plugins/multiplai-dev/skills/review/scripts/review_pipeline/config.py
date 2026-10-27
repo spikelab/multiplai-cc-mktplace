@@ -104,6 +104,9 @@ class ReviewConfig:
     # Verify LOW findings too (`review.yaml` `verify_low`, `--verify-low`). Off by default: a LOW
     # finding reaches the review `unverified`, with no verifier call (`stages/verify.py`).
     verify_low: bool = False
+    # A re-pushed PR or branch reviews only the files whose patch changed (`incremental.py`);
+    # `review.yaml` `incremental: false` or `--full` reviews every file.
+    incremental: bool = True
 
 
 _TRUE = ("1", "true", "yes", "on")
@@ -207,7 +210,14 @@ def load_config(
             setattr(cfg, key, value)
 
     cfg.extra_finders = "extra_finders" in data
-    for key in ("explain", "find_with_facts", "trim", "deps", "verify_low"):
+    for key in (
+        "explain",
+        "find_with_facts",
+        "trim",
+        "deps",
+        "verify_low",
+        "incremental",
+    ):
         value = _flag(data.get(key), key, yaml_path)
         if value is not None:
             setattr(cfg, key, value)

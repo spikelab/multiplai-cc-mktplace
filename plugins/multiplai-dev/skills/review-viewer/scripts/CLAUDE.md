@@ -100,6 +100,13 @@ write stage's plain-language text. Every heading and list row shows
 **What happens** first and the claim under **Details**, and the copied
 markdown does the same. A finding without them reads as before.
 
+From multiplai-dev 0.115 an incremental round (a re-pushed PR or branch that
+reviewed only the files whose patch changed) carries a top-level `scope`
+(`since_round`, `since_number`, `since_head`, `reviewed_files`, `total_files`,
+`carried_ids`), and each finding copied from the earlier round carries
+`carried_from`. The Summary tab shows `logic.scopeLine` above the badges:
+`Reviewed N of M files; K findings carried from round <N>`.
+
 ## Protocol 1a: `checks.json` v1 (optional)
 
 The review writes it beside `findings.json`: `agents` (each agent call's

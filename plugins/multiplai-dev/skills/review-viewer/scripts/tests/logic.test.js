@@ -997,6 +997,13 @@ test("a GitHub link to lines takes https and ssh remotes, and nothing else", () 
   assert.equal(L.githubBlobUrl("https://github.com/o/r", "not-a-sha", "a.py", 1, 1), null);
 });
 
+test("an incremental round says how many files it re-reviewed and how many findings it carried", () => {
+  const ff = { scope: { kind: "incremental", since_round: "01-aaaaaaaaaaaa", since_number: 1, since_head: "a",
+    reviewed_files: ["a.py"], total_files: 3, carried_ids: ["x", "y"] } };
+  assert.equal(L.scopeLine(ff), "Reviewed 1 of 3 files; 2 findings carried from round 1");
+  assert.equal(L.scopeLine({}), "");
+});
+
 test("an export refusal lists where gitleaks found something, and only the server's reason otherwise", () => {
   const r = L.exportRefusal(409, { leaks: [{ file: "transcripts/s.jsonl", line: 3, rule: "aws-access-token" }] });
   assert.deepEqual(r.lines, ["transcripts/s.jsonl:3 (aws-access-token)"]);

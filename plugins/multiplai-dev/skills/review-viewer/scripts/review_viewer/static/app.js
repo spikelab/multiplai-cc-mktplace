@@ -559,6 +559,8 @@
     }
     const box = $("badges");
     box.replaceChildren();
+    const scope = L.scopeLine(state.shownFile);
+    if (scope) box.appendChild(el("p", { class: "muted small scope-line", text: scope }));
     const groups = [["risk", "Risk of merging"],
       ["measured", "Measured from git" + (state.detail.pr ? " and GitHub" : "")],
       ["assessed", "Assessed by " + agent]]

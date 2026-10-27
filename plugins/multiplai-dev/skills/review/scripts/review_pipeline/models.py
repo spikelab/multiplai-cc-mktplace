@@ -135,6 +135,9 @@ class Finding(_Model):
     # location that is not at head; merge takes the union of a set's locations.
     defect_class: str = ""
     other_locations: list[str] = Field(default_factory=list)
+    # An incremental round copies a finding an earlier round left open on a file whose
+    # patch has not changed: the kept round's directory name (`rounds/<NN>-<head12>`).
+    carried_from: str | None = None
 
     @field_validator("defect_class", mode="before")
     @classmethod
@@ -615,6 +618,26 @@ class RunStart(BaseModel):
     started_at: str = ""
 
 
+class Scope(BaseModel):
+    """What this round reviews, decided once by `prepare` (`incremental.decide`) and kept by `resume`.
+
+    `incremental` re-reviews only `reviewed_files`: the change's files whose patch differs from the
+    one in round `since_round`'s `diff.patch`, or that are new to the change. The findings that round
+    left open on the other files are copied into this round (`carried_ids`). `full` reviews every
+    file; `reason` says which condition ruled out `incremental`.
+    """
+
+    kind: Literal["full", "incremental"] = "full"
+    since_round: str = ""  # the kept round's directory name
+    since_number: int = 0  # its position among the kept rounds, 1-based
+    since_head: str = ""
+    since_base: str = ""
+    reviewed_files: list[str] = Field(default_factory=list)
+    total_files: int = 0
+    carried_ids: list[str] = Field(default_factory=list)
+    reason: str = ""
+
+
 class ReviewState(BaseModel):
     target: TargetInfo
     stage: str = "target"  # last stage completed
@@ -709,6 +732,9 @@ class ReviewState(BaseModel):
     # never rewritten; review-viewer's export finds the sessions' transcripts by it.
     # Empty in checkpoints written before 0.111.
     runs: list[RunStart] = Field(default_factory=list)
+    # This round's scope (`Scope`): None in a tree, dir or range review's state, and in checkpoints
+    # written before 0.115, which reviewed every file.
+    scope: Scope | None = None
 
     @field_validator("stage", mode="before")
     @classmethod
