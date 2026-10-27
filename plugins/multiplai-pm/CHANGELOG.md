@@ -21,6 +21,16 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-10-27
+
+### Fixed
+
+- **`plane relations` no longer crashes** with `AttributeError: 'str' object
+  has no attribute 'get'` on a Plane server that lists each relation as a bare
+  issue id instead of `{project_id, issue_id}`. It now looks each id up in the
+  allowed projects, the ticket's own project first, and still withholds and
+  counts relations to issues it cannot find there.
+
 ## [0.12.0] - 2026-10-26
 
 ### Added

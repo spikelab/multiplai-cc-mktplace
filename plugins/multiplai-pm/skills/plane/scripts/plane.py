@@ -2204,6 +2204,36 @@ def _relations_request(method: str, path: str, cfg: dict, **kw):
         raise
 
 
+def _related_issue(cfg: dict, link, home_pid: str) -> dict | None:
+    """Read the issue one relations entry names, or None if it is not allowed.
+
+    Plane's source answers each entry as {project_id, issue_id}. A live server
+    answered with the bare issue id instead (2026-10-27), so an id is looked up
+    in each allowed project, the issue's own project first; an id that none of
+    them has is in a project outside the allowlist, or one the token cannot see.
+    """
+    if isinstance(link, dict):
+        pid = str(link.get("project_id") or "").lower()
+        iid = str(link.get("issue_id") or "")
+        if pid not in cfg["allowed"]:
+            return None
+        other = _request("GET", f"/projects/{pid}/issues/{iid}/", cfg)
+        return other if isinstance(other, dict) else {"id": iid, "project": pid}
+
+    iid = str(link)
+    for pid in sorted(cfg["allowed"], key=lambda p: p != home_pid):
+        try:
+            other = _request("GET", f"/projects/{pid}/issues/{iid}/", cfg)
+        except PlaneError as exc:
+            # As in resolve_issue: only a 404 means "not in this project".
+            if "-> 404" in str(exc):
+                continue
+            raise
+        if isinstance(other, dict):
+            return other
+    return None
+
+
 def cmd_relations(cfg, args):
     """List an issue's relations, grouped by type, with refs and names.
 
@@ -2217,16 +2247,15 @@ def cmd_relations(cfg, args):
     if not isinstance(data, dict):
         raise PlaneError(f"the relations call returned {type(data).__name__}")
 
+    home_pid = _project_id_of(issue).lower()
     rows, withheld = [], 0
     for rtype in _RELATION_TYPES:
         for link in data.get(rtype) or []:
-            pid = str(link.get("project_id") or "").lower()
-            iid = str(link.get("issue_id") or "")
-            if pid not in cfg["allowed"]:
+            other = _related_issue(cfg, link, home_pid)
+            if other is None:
                 withheld += 1
                 continue
-            other = _request("GET", f"/projects/{pid}/issues/{iid}/", cfg)
-            other = other if isinstance(other, dict) else {"id": iid, "project": pid}
+            iid = str(other.get("id"))
             rows.append(
                 {
                     "relation": rtype,
