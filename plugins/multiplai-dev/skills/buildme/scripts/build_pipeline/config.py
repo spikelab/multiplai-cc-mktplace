@@ -16,6 +16,7 @@ from typing import Literal
 import yaml
 from multiplai_core import resolve_model_spec
 from multiplai_core.env import CURRENT_MODEL, parse_model_spec, pick_model_spec
+from multiplai_core.plugin_options import option as plugin_option
 from multiplai_core.session import default_effort, default_model
 
 from .env import KNOWN_EFFORTS, load_multiplai_conf, pick_effort, resolve_model
@@ -358,6 +359,32 @@ def conf_int(task: str, key: str, default: int) -> int:
             default,
         )
         return default
+
+
+def conf_str(task: str, key: str) -> str:
+    """A string knob for *task* from multiplai.conf, or "" when it says nothing.
+
+    Surrounding whitespace and quotes are stripped, as `conf_int` strips them.
+    """
+    section = (load_multiplai_conf().get("_sections", {}) or {}).get(task) or {}
+    return (section.get(key) or "").strip().strip("\"'")
+
+
+def _split_list(raw: str) -> list[str]:
+    """A `:`-separated list, as in PATH. Blank entries are dropped."""
+    return [part.strip() for part in raw.split(":") if part.strip()]
+
+
+# Where the reviewer's standards and the spec writer's reference docs come
+# from, highest rank first. The highest place that sets an option wins and
+# replaces every lower one for it; lists are never merged, so the
+# `REFERENCES(<rank>):` and `STANDARDS(<rank>):` lines say exactly which docs a
+# run used. The order matches the review model's (BUILDME_REVIEW_MODEL, then
+# specs/config.yaml, then multiplai.conf): env is one run, config.yaml is this
+# repo's stated choice, the plugin option and the conf are machine-wide.
+# A CLAUDE_PLUGIN_OPTION_* variable is an environment variable, but it is how
+# Claude Code delivers the plugin config, so it ranks as "plugin", not "env".
+DOC_SOURCE_RANKS = ("env", "config", "plugin", "conf", "built-in")
 
 
 @dataclass
@@ -768,6 +795,10 @@ class BuildConfig:
     # `reference_docs:` key. Empty means "built-in defaults only"; a key
     # present here replaces _DEFAULT_REFERENCE_DOCS for that key alone.
     reference_docs: dict[str, list[str]] = field(default_factory=dict)
+    # Directories a reference or standards doc name is looked up in, in
+    # order, from specs/config.yaml's `reference_dirs:` key. Empty means "not
+    # set here" — see reference_dirs_source() for the lower ranks.
+    reference_dirs: list[str] = field(default_factory=list)
 
     # Gate toggles
     gates: GateToggles = field(default_factory=GateToggles)
@@ -854,6 +885,8 @@ class BuildConfig:
     # the resolved set once per process (it is called per artifact and per TDD
     # block, and one REFERENCES: line is information while twenty is noise).
     references_announced: bool = field(default=False, repr=False)
+    # The same, for the `STANDARDS(<rank>):` line standards_text() prints.
+    standards_announced: bool = field(default=False, repr=False)
 
     # Paths (resolved after config load)
     config_dir: Path = field(
@@ -1235,6 +1268,9 @@ class BuildConfig:
 
         # Reference docs (per stack/framework key, overriding the built-ins)
         self._load_reference_docs(data.get("reference_docs"))
+        self.reference_dirs = self._doc_list(
+            data.get("reference_dirs"), "reference_dirs"
+        )
 
         # TDD config
         tdd = data.get("tdd", {})
@@ -1257,7 +1293,9 @@ class BuildConfig:
                 setattr(self, key, _cfg_int(tdd[key], f"tdd.{key}", getattr(self, key)))
 
         # Reviewer context: coding standards + optional stronger review model
-        self.standards_files = data.get("standards_files") or []
+        self.standards_files = self._doc_list(
+            data.get("standards_files"), "standards_files"
+        )
         code_review_cfg = data.get("code_review", {}) or {}
         # The project's own config.yaml outranks multiplai.conf — the conf is a
         # machine-wide default, config.yaml is this repo's stated choice. So a
@@ -1760,11 +1798,16 @@ class BuildConfig:
                 f"### Conventions: {label}\n"
                 + summarize_reference_doc(label, text, STANDARDS_DOC_CHAR_LIMIT)
             )
-        for entry in self.standards_files:
-            path = self._resolve_standards_file(entry)
+        entries, rank = self.standards_source()
+        resolved: list[Path] = []
+        for entry in entries:
+            path = self._resolve_doc(entry)
             if path is None:
-                log.warning("Standards file not found, skipping: %s", entry)
+                log.warning(
+                    "Standards file not found, skipping: %s (from %s)", entry, rank
+                )
                 continue
+            resolved.append(path)
             try:
                 text = path.read_text()
             except (OSError, UnicodeDecodeError) as e:
@@ -1774,21 +1817,107 @@ class BuildConfig:
                 f"### Standard: {path.name}\n"
                 + summarize_reference_doc(path.name, text, STANDARDS_DOC_CHAR_LIMIT)
             )
+        self._announce_standards(resolved, rank)
         return "\n\n".join(parts)
 
-    def _resolve_standards_file(self, entry: str) -> Path | None:
+    def _announce_standards(self, resolved: list[Path], rank: str) -> None:
+        """Emit the `STANDARDS(<rank>):` progress line once per process."""
+        if self.standards_announced:
+            return
+        self.standards_announced = True
+        listed = ", ".join(p.name for p in resolved) or "(none)"
+        print(f"STANDARDS({rank}):{listed}", flush=True)
+        log.info("STANDARDS source=%s docs=%s", rank, listed)
+
+    def _ranked_list(
+        self, env_var: str, configured: list[str], option_key: str, conf_key: str
+    ) -> tuple[list[str], str]:
+        """The first of the four configurable ranks that sets this list.
+
+        Returns `([], "built-in")` when none does; the caller supplies the
+        built-in value. A blank value at any rank counts as unset.
+        """
+        raw = os.environ.get(env_var, "").strip()
+        if raw:
+            return _split_list(raw), "env"
+        if configured:
+            return list(configured), "config"
+        raw = plugin_option(option_key)
+        if raw:
+            return _split_list(raw), "plugin"
+        raw = conf_str("buildme", conf_key)
+        if raw:
+            return _split_list(raw), "conf"
+        return [], "built-in"
+
+    def standards_source(self) -> tuple[list[str], str]:
+        """The reviewer's `standards_files` entries and the rank that set them.
+
+        `BUILDME_STANDARDS_FILES`, then `standards_files:` in specs/config.yaml
+        (or the field set by whoever built this config), then the
+        `standards_files` plugin option, then `[buildme] STANDARDS_FILES=` in
+        multiplai.conf. The built-in list is empty.
+        """
+        return self._ranked_list(
+            "BUILDME_STANDARDS_FILES",
+            self.standards_files,
+            "standards_files",
+            "STANDARDS_FILES",
+        )
+
+    def reference_dirs_source(self) -> tuple[list[Path], str]:
+        """The directories doc names are looked up in, and the rank that set them.
+
+        `BUILDME_REFERENCE_DIRS`, then `reference_dirs:` in specs/config.yaml,
+        then the `reference_dirs` plugin option, then `[buildme]
+        REFERENCE_DIRS=` in multiplai.conf, then `$CLAUDE_CONFIG_DIR/
+        reference/dev/`. A relative directory is relative to the project.
+        """
+        entries, rank = self._ranked_list(
+            "BUILDME_REFERENCE_DIRS",
+            self.reference_dirs,
+            "reference_dirs",
+            "REFERENCE_DIRS",
+        )
+        if not entries:
+            return [self.config_dir / "reference" / "dev"], "built-in"
+        return [self._project_path(e) for e in entries], rank
+
+    def _project_path(self, entry: str) -> Path:
+        p = Path(entry).expanduser()
+        return p if p.is_absolute() else self.project_dir / p
+
+    def _resolve_doc(self, entry: str) -> Path | None:
+        """A standards or reference doc: absolute, else the first hit under the
+        project dir, each reference dir in order, then $CLAUDE_CONFIG_DIR."""
         p = Path(entry).expanduser()
         if p.is_absolute():
             return p if p.is_file() else None
         for base in (
             self.project_dir,
-            self.config_dir / "reference" / "dev",
+            *self.reference_dirs_source()[0],
             self.config_dir,
         ):
             candidate = base / p
             if candidate.is_file():
                 return candidate
         return None
+
+    @staticmethod
+    def _doc_list(raw, key: str) -> list[str]:
+        """A specs/config.yaml list of paths; a scalar is a one-item list.
+
+        Anything else is dropped with a warning, and the lower ranks then
+        stand for that option.
+        """
+        if not raw:
+            return []
+        if isinstance(raw, str):
+            return [raw]
+        if isinstance(raw, list) and all(isinstance(v, str) for v in raw):
+            return list(raw)
+        log.warning("%s must be a list of paths — ignoring", key)
+        return []
 
     def _load_reference_docs(self, raw) -> None:
         """Parse specs/config.yaml's `reference_docs:` key.
@@ -1904,43 +2033,92 @@ class BuildConfig:
                     names.append(name)
         return names
 
+    def reference_docs_source(self) -> tuple[list[str], str]:
+        """The reference doc names for this run and the rank that set them.
+
+        `BUILDME_REFERENCE_DOCS` is a flat list that replaces the whole
+        resolved list, because an environment variable cannot hold the
+        per-stack mapping. Without it, `reference_doc_names()` — the built-in
+        map overridden per key by `reference_docs:` in specs/config.yaml — and
+        the rank is "config" when config.yaml names any key this project uses.
+        """
+        raw = os.environ.get("BUILDME_REFERENCE_DOCS", "").strip()
+        if raw:
+            return _split_list(raw), "env"
+        keys = [self.stack, *self.detect_frameworks()]
+        rank = "config" if any(k in self.reference_docs for k in keys) else "built-in"
+        return self.reference_doc_names(), rank
+
+    def _configured_reference_names(self) -> set[str]:
+        """Names that specs/config.yaml's `reference_docs:` supplied."""
+        return {
+            name
+            for key in [self.stack, *self.detect_frameworks()]
+            for name in self.reference_docs.get(key, [])
+        }
+
     def stack_reference_docs(self) -> list[Path]:
         """Reference doc paths for the detected stack and frameworks.
 
-        A name with no file under $CLAUDE_CONFIG_DIR/reference/dev/ is skipped
-        (the mapping may name a doc that has not been written yet), but the
-        skip is logged rather than silent, and resolving *nothing* for a
-        project that does have a detected stack is a warning: it means every
-        spec below is being written with no conventions to build to.
+        A name may be a file name or a path, and resolves like a standards
+        file (`_resolve_doc`). A name nobody chose — one from the built-in
+        map, which may name a doc that has not been written yet — is skipped
+        with an INFO line. A name someone wrote (env or config.yaml) that does
+        not resolve is a warning, because it is most likely a typo. Resolving
+        *nothing* for a project that does have a detected stack is a warning
+        too: it means every spec below is being written with no conventions
+        to build to.
         """
-        ref_dir = self.config_dir / "reference" / "dev"
-        names = self.reference_doc_names()
+        names, rank = self.reference_docs_source()
+        chosen = set(names) if rank == "env" else self._configured_reference_names()
         resolved: list[Path] = []
         for name in names:
-            path = ref_dir / name
-            if path.is_file():
+            path = self._resolve_doc(name)
+            if path is not None:
                 resolved.append(path)
+            elif name in chosen:
+                log.warning(
+                    "Reference doc %s (from %s) not found, skipping — searched %s",
+                    name,
+                    rank,
+                    self._searched_dirs(),
+                )
             else:
-                log.info("Reference doc not found, skipping: %s", path)
-        self._announce_references(names, resolved)
+                log.info(
+                    "Reference doc not found, skipping: %s (searched %s)",
+                    name,
+                    self._searched_dirs(),
+                )
+        self._announce_references(names, resolved, rank)
         return resolved
 
-    def _announce_references(self, names: list[str], resolved: list[Path]) -> None:
-        """Emit the `REFERENCES:` progress line once per process."""
+    def _searched_dirs(self) -> str:
+        dirs = [self.project_dir, *self.reference_dirs_source()[0], self.config_dir]
+        return ", ".join(str(d) for d in dirs)
+
+    def _announce_references(
+        self, names: list[str], resolved: list[Path], rank: str
+    ) -> None:
+        """Emit the `REFERENCES(<rank>):` progress line once per process."""
         if names and not resolved:
             log.warning(
                 "Stack '%s' detected but NONE of its reference docs resolved under %s "
                 "(wanted: %s) — specs will be generated with no conventions to build to",
                 self.stack or "(unknown)",
-                self.config_dir / "reference" / "dev",
+                self._searched_dirs(),
                 ", ".join(names),
             )
         if self.references_announced:
             return
         self.references_announced = True
         listed = ", ".join(p.name for p in resolved) or "(none)"
-        print(f"REFERENCES:{listed}", flush=True)
-        log.info("REFERENCES stack=%s docs=%s", self.stack or "(unknown)", listed)
+        print(f"REFERENCES({rank}):{listed}", flush=True)
+        log.info(
+            "REFERENCES stack=%s source=%s docs=%s",
+            self.stack or "(unknown)",
+            rank,
+            listed,
+        )
 
     def reference_docs_text(self) -> str:
         """The reference docs inlined for a spec-generation prompt.

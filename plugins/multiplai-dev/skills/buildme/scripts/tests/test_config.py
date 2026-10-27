@@ -402,13 +402,13 @@ class TestReferenceDocs:
         config.stack_reference_docs()
         config.stack_reference_docs()
         out = capsys.readouterr().out
-        assert out.count("REFERENCES:") == 1
-        assert "REFERENCES:python-project-structure.md" in out
+        assert out.count("REFERENCES(") == 1
+        assert "REFERENCES(built-in):python-project-structure.md" in out
 
     def test_references_progress_line_says_none_when_empty(self, tmp_path, capsys):
         config = self._config_with_docs(tmp_path, stack="go")
         config.stack_reference_docs()
-        assert "REFERENCES:(none)" in capsys.readouterr().out
+        assert "REFERENCES(built-in):(none)" in capsys.readouterr().out
 
     # --- specs/config.yaml override ---
 

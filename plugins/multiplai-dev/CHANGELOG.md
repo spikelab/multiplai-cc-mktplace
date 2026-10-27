@@ -15,6 +15,20 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.116.0] - 2026-10-27
+
+### Added
+- **buildme**: you choose where the code reviewer's standards and the spec writer's reference docs come from, per run, per repo or per machine. Three options: `standards_files` (the reviewer's docs), `reference_docs` (the spec writer's docs) and the new `reference_dirs` (the directories a doc name is looked up in, instead of `$CLAUDE_CONFIG_DIR/reference/dev/`). Each is read from, highest first: the environment (`BUILDME_STANDARDS_FILES`, `BUILDME_REFERENCE_DOCS`, `BUILDME_REFERENCE_DIRS`, lists separated by `:`), `specs/config.yaml`, the multiplai-dev plugin options `standards_files` and `reference_dirs`, and `[buildme] STANDARDS_FILES=` / `REFERENCE_DIRS=` in `multiplai.conf`. The highest one that sets an option replaces the lower ones; lists are not merged.
+- **buildme**: a `reference_docs:` entry in `specs/config.yaml` can be a path in the repo (`docs/standards/testing.md`), so a repo's own standards reach the spec writer on every machine, not only on machines that have the doc under `reference/dev/`.
+- **buildme**: a `STANDARDS(<source>):<docs>` progress line names the reviewer's standards docs and where the list came from.
+
+### Changed
+- **buildme**: the `REFERENCES:` progress line is now `REFERENCES(<source>):<docs>`, where `<source>` is `env`, `config`, `plugin`, `conf` or `built-in`. Anything that matches the line on `REFERENCES:` must match `REFERENCES(` instead.
+- **buildme**: a reference doc that you named (in the environment or `specs/config.yaml`) and that does not exist is a warning. A doc from the built-in list that does not exist is still only an INFO line.
+
+### Fixed
+- **buildme**: SKILL.md said `standards_files` docs are not capped. Each one is capped at 12,000 characters and reduced on section boundaries, like the `CLAUDE.md` files the reviewer reads.
+
 ## [0.115.0] - 2026-10-27
 
 ### Changed

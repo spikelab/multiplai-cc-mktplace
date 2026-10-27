@@ -150,9 +150,9 @@ run, after the push or pull, fetches again and goes on.
 
 ### Reference docs — the standards the specs are written against
 
-Every build resolves engineering-standards docs from
-`$CLAUDE_CONFIG_DIR/reference/dev/` and **inlines them into the
-spec-generation prompts**. Inlining (rather than pointing at a path) is forced:
+Every build resolves engineering-standards docs (by default from
+`$CLAUDE_CONFIG_DIR/reference/dev/`; see "Choosing the docs" below) and
+**inlines them into the spec-generation prompts**. Inlining (rather than pointing at a path) is forced:
 the spec-gen system prompt allows no tools, so the generator cannot go read
 anything. This is why buildme has its own mechanism and does not rely on the
 `DEV REFERENCES` pointer block that multiplai-context injects into ordinary
@@ -183,10 +183,12 @@ Built-in map (`_DEFAULT_REFERENCE_DOCS` in `build_pipeline/config.py`):
 
 A name with no file on disk is skipped, and **renaming a doc without updating
 the map silently removes it from every build** — the Django and React entries
-were dead for a month that way. The run prints `REFERENCES:<names>` (or
-`REFERENCES:(none)`) so what actually reached the generator is visible, and a
-detected stack that resolves *nothing* logs a warning: it means the specs below
-were written with no conventions to build to.
+were dead for a month that way. The run prints `REFERENCES(<source>):<names>`
+(or `REFERENCES(<source>):(none)`) so what actually reached the generator, and
+which setting chose it, is visible. A detected stack that resolves *nothing*
+logs a warning: it means the specs below were written with no conventions to
+build to. A name you wrote yourself (environment or `specs/config.yaml`) that
+does not resolve is a warning too; a missing built-in name is only an INFO line.
 
 **Long docs are reduced, not cut.** A doc over `REFERENCE_DOC_CHAR_LIMIT`
 (24000) is passed through `summarize_reference_doc`, which keeps whole sections
@@ -201,10 +203,58 @@ automatic: buildme hands it the repo-root `CLAUDE.md` plus the `CLAUDE.md` (and
 changed — `config.convention_files()`. A sibling directory's file is never
 included; its rules do not govern this change, and feeding them in manufactures
 violations out of rules that never applied. Nothing has to be configured for
-this. The second is `standards_files` in `specs/config.yaml`, opt-in and for
-style guides that are not a `CLAUDE.md`; it resolves separately (absolute path,
-then project dir, then `reference/dev/`, then `$CLAUDE_CONFIG_DIR`) and is not
-capped. The reference docs above reach the spec generator, not the reviewer.
+this. The second is `standards_files`, opt-in and for style guides that are not
+a `CLAUDE.md`. Each of those docs is capped at `STANDARDS_DOC_CHAR_LIMIT`
+(12000) and reduced on section boundaries, the same way as the `CLAUDE.md`
+files. The run prints `STANDARDS(<source>):<names>` once. The reference docs
+above reach the spec generator, not the reviewer; to give both the same doc,
+name it in both lists.
+
+### Choosing the docs — environment, repo, machine
+
+Three options decide which docs a run uses:
+
+- `standards_files` — the reviewer's docs.
+- `reference_docs` — the spec writer's docs. In `specs/config.yaml` it is the
+  per-stack mapping above, and an entry may be a path in the repo
+  (`docs/standards/testing.md`), not only a file name.
+- `reference_dirs` — the directories a doc *name* is looked up in, in order,
+  instead of `$CLAUDE_CONFIG_DIR/reference/dev/`. A relative directory is
+  relative to the project.
+
+Each is read from five places. The highest one that sets an option wins and
+**replaces** the lower ones for it; lists are never merged, so the
+`REFERENCES(…)` and `STANDARDS(…)` lines say exactly which docs a run used.
+
+| Rank | Source (shown in the progress line) | Scope | Keys |
+|---|---|---|---|
+| 1 | `env`: `BUILDME_STANDARDS_FILES`, `BUILDME_REFERENCE_DOCS`, `BUILDME_REFERENCE_DIRS`, lists separated by `:` like `PATH` | one run | all three |
+| 2 | `config`: `standards_files:`, `reference_docs:`, `reference_dirs:` in `specs/config.yaml` | one repo | all three |
+| 3 | `plugin`: the multiplai-dev plugin options `standards_files` and `reference_dirs` (separated by `:`) | one machine | two |
+| 4 | `conf`: `STANDARDS_FILES=` and `REFERENCE_DIRS=` under `[buildme]` in `multiplai.conf` | one machine | two |
+| 5 | `built-in`: no standards files, `$CLAUDE_CONFIG_DIR/reference/dev/`, `_DEFAULT_REFERENCE_DOCS` | — | — |
+
+This is the order the review model already follows (`BUILDME_REVIEW_MODEL`,
+then `code_review.model`, then `[buildme.review] MODEL=`). Claude Code passes
+plugin options as `CLAUDE_PLUGIN_OPTION_*` variables; those count as rank 3,
+not rank 1.
+
+`BUILDME_REFERENCE_DOCS` is a flat list that replaces the whole resolved list,
+because an environment variable cannot hold the per-stack mapping. Every entry,
+in any list, resolves the same way: an absolute path as is; otherwise the first
+match under the project dir, then each reference dir in order, then
+`$CLAUDE_CONFIG_DIR`.
+
+A repo that keeps its own standards points both readers at them:
+
+```yaml
+standards_files: [docs/standards/README.md, docs/standards/testing.md]
+reference_docs:
+  django: [docs/standards/README.md, docs/standards/testing.md]
+```
+
+and one run can narrow the reviewer's list without touching the repo:
+`BUILDME_STANDARDS_FILES=docs/standards/README.md:docs/standards/frontend.md`.
 
 ## Git lifecycle
 
@@ -973,8 +1023,11 @@ Parse pipeline stdout for progress lines:
 - `PHASE:<name>:COMPLETE` — phase transitions (`BOOTSTRAP`, `RESEARCH`,
   `CODEBASE_ANALYSIS`, `SPEC_GENERATION`, `DESIGN_AUDIT`, `PLAN_REVIEW`,
   `REVIEW`, `TDD_BUILD`, `DOCS_UPDATE`, `RESPEC`, `ARCHIVE`, `PUBLISH`)
-- `REFERENCES:<doc names>` — the stack/framework reference docs the specs were
-  generated against, or `(none)`. Emitted once per run
+- `REFERENCES(<source>):<doc names>` — the stack/framework reference docs the
+  specs were generated against, or `(none)`; `<source>` is `env`, `config`,
+  `plugin`, `conf` or `built-in` (see "Choosing the docs"). Emitted once per run
+- `STANDARDS(<source>):<doc names>` — the reviewer's `standards_files` docs,
+  or `(none)`, and where the list came from. Emitted once per run
 - `BLOCK:<n>/<total>:<name>:COMPLETE` — block progress
 - `BOARD:<change>:<Column>` — kanban column transitions (see
   [`docs/dark-factory-board.md`](docs/dark-factory-board.md))
