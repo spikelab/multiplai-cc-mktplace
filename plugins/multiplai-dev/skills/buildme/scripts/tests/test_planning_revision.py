@@ -544,13 +544,18 @@ LISTED = [
 @pytest.mark.parametrize(
     "status,blocks",
     [
-        ("resolved", False),
-        ("partially_resolved", True),
+        ("resolved", None),
+        ("partially_resolved", False),
         ("still_present", True),
-        ("cannot_verify", True),
+        ("cannot_verify", False),
     ],
 )
-def test_recheck_verdict_blocks_on_every_listed_status_but_resolved(status, blocks):
+def test_recheck_verdict_blocks_on_a_listed_major_only_when_still_present(
+    status, blocks
+):
+    """A listed major blocks only when `still_present`; partly resolved or
+    unverifiable, it is advisory. `test_recheck_verdict_matrix` covers every
+    severity."""
     from build_pipeline.models import PriorAssessment
 
     given = [
@@ -558,22 +563,25 @@ def test_recheck_verdict_blocks_on_every_listed_status_but_resolved(status, bloc
         PriorAssessment(finding_id="DA-F2", status="resolved"),
     ]
     blocking, advisory = owner.recheck_verdict(LISTED, given, [], deterministic=[])
+    found = [("DA-F1", status)]
     assert [(f["finding_id"], f["status"]) for f in blocking] == (
-        [("DA-F1", status)] if blocks else []
+        found if blocks else []
     )
-    assert advisory == []
+    assert [(f["finding_id"], f["status"]) for f in advisory] == (
+        found if blocks is False else []
+    )
 
 
 def test_recheck_verdict_reads_a_listed_finding_with_no_status_as_cannot_verify():
     from build_pipeline.models import PriorAssessment
 
-    blocking, _ = owner.recheck_verdict(
+    _, advisory = owner.recheck_verdict(
         LISTED,
         [PriorAssessment(finding_id="DA-F1", status="resolved")],
         [],
         deterministic=[],
     )
-    assert [(f["finding_id"], f["status"], f["evidence"]) for f in blocking] == [
+    assert [(f["finding_id"], f["status"], f["evidence"]) for f in advisory] == [
         ("DA-F2", "cannot_verify", "")
     ]
 
@@ -1216,12 +1224,13 @@ def _legacy_checkpoint(config, state, stage, **step):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stage", ["design_audit", "plan_review", "tasks_audit"])
-async def test_S9_an_old_blocked_checkpoint_loads_and_refuses_as_before(
-    plan, monkeypatch, capsys, stage
+async def test_S9_an_old_blocked_checkpoint_reopens_once_under_the_new_rule(
+    plan, monkeypatch, stage
 ):
-    """S9: a checkpoint from before this change, blocked on findings. It loads
-    with the defaults, the reopen does nothing, and the refusal prints the
-    saved blocking findings."""
+    """A checkpoint from before `rules_version`, blocked on findings, loads
+    with the defaults; the reopen clears its rewrite count and saved findings
+    once (row S9 of plan-buildme-planning-checks-2026-10-27.md, which replaces
+    this test's earlier "refuses as before"), so the next run checks again."""
     config, cm, state = _ready(plan)
     saved = _legacy_checkpoint(
         config,
@@ -1234,14 +1243,19 @@ async def test_S9_an_old_blocked_checkpoint_loads_and_refuses_as_before(
         blocking_findings="- [critical] OLD-FINDING",
     )
     step = saved.spec_gen.steps[stage]
-    assert (step.repair_findings, step.blocked_revision) == ([], None)
+    assert (step.repair_findings, step.blocked_revision, step.rules_version) == (
+        [],
+        None,
+        0,
+    )
     owner.reopen_if_edited(saved, stage, config.state_file_path())
-    assert saved.spec_gen.steps[stage].repair_attempts == 1
-    run, review = _install(monkeypatch, stage, [AssertionError("no model call")])
-    with pytest.raises(owner.PlanBlocked, match="OLD-FINDING"):
-        await _run(run, config, cm, saved)
-    assert "OLD-FINDING" in capsys.readouterr().out
-    review.assert_not_awaited()
+    step = saved.spec_gen.steps[stage]
+    assert (step.repair_attempts, step.blocking_findings, step.rules_version) == (
+        0,
+        "",
+        owner.PLAN_RULES_VERSION,
+    )
+    owner.refuse_if_blocked(saved.spec_gen, stage)
 
 
 @pytest.mark.asyncio
@@ -1250,9 +1264,10 @@ async def test_S10_an_old_mid_rewrite_checkpoint_rechecks_as_a_first_audit(
     plan, monkeypatch, stage
 ):
     """S10: a checkpoint from before this change, stopped mid-rewrite after
-    the publication (S1 shape, no `repair_findings`). The re-audit runs with
-    no listed findings and blocks on major findings as before, with no second
-    rewrite."""
+    the publication (S1 shape, no `repair_findings`). Recorded before
+    `rules_version`, it is reopened once (row S9 of
+    plan-buildme-planning-checks-2026-10-27.md): the check runs with no listed
+    findings, and a major finding earns a fresh rewrite."""
     config, cm, state = _ready(plan)
     saved = _legacy_checkpoint(
         config,
@@ -1264,11 +1279,12 @@ async def test_S10_an_old_mid_rewrite_checkpoint_rechecks_as_a_first_audit(
         repair_attempts=1,
     )
     assert not owner.rewrite_published(saved.spec_gen, stage)
-    _no_rewrite(monkeypatch)
+    rewrite = AsyncMock(side_effect=Killed())
+    monkeypatch.setattr(owner, "rewrite_plan", rewrite)
     run, review = _install(monkeypatch, stage, [_first(stage, ("major", "MAJOR-GAP"))])
-    with pytest.raises(owner.PlanBlocked):
+    with pytest.raises(Killed):
         await _run(run, config, cm, saved)
-    assert review.await_args.kwargs.get("prior") is None
+    assert review.await_args_list[0].kwargs.get("prior") is None
+    rewrite.assert_awaited_once()
     step = BuildState.load(config.state_file_path()).spec_gen.steps[stage]
-    assert "MAJOR-GAP" in step.blocking_findings
-    assert step.blocked_revision == saved.spec_gen.step_revision(stage)
+    assert step.repair_attempts == 1

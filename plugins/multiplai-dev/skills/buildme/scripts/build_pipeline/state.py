@@ -26,6 +26,13 @@ from .stop_record import record as record_stop
 log = logging.getLogger(__name__)
 
 
+# The version of the planning steps' blocking rule a step outcome was recorded
+# under. 1: only critical, and major `still_present`, findings block after a
+# rewrite. A step blocked under an older rule gets one fresh check
+# (`spec_generator.reopen_if_edited`).
+PLAN_RULES_VERSION = 1
+
+
 class StepOutcome(BaseModel):
     revision: str
     outcome: Literal["passed", "blocked", "advisory", "skipped"]
@@ -38,6 +45,8 @@ class StepOutcome(BaseModel):
     # The step's revision when findings finally blocked it. A resume at another
     # revision means the plan was edited, and the step gets its rewrite back.
     blocked_revision: str | None = None
+    # `PLAN_RULES_VERSION` when recorded; 0 for a checkpoint written before it.
+    rules_version: int = 0
 
 
 class SpecGenState(BaseModel):
@@ -157,6 +166,7 @@ class SpecGenState(BaseModel):
             blocking_findings=blocking_findings,
             repair_findings=previous.repair_findings if previous else [],
             blocked_revision=blocked_revision,
+            rules_version=PLAN_RULES_VERSION,
         )
 
 

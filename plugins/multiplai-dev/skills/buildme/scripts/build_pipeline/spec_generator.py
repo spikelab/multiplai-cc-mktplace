@@ -41,7 +41,7 @@ from .io_utils import atomic_write
 from .models import ArtifactStatus, BuildPhase, PriorAssessment
 from .readiness import SpecIssuesFound
 from .rubric import generate_rubric
-from .state import BuildState, SpecGenState
+from .state import PLAN_RULES_VERSION, BuildState, SpecGenState
 
 log = logging.getLogger(__name__)
 
@@ -1065,17 +1065,24 @@ def recheck_verdict(
 ) -> tuple[list[dict], list[dict]]:
     """What a recheck after a rewrite blocks on, and what it only reports.
 
-    Blocking: a listed finding whose status is not `resolved` (no status is
-    `cannot_verify`); a new critical finding; and every finding of the
-    deterministic scans. Every other new finding — major or minor, in any
-    category, `no-new-behaviour` included — is advisory, as SKILL.md says.
-    A resolved listed finding is in neither list.
+    Blocking: a listed critical finding whose status is not `resolved` (no
+    status is `cannot_verify`); a listed major finding that is
+    `still_present`; a new critical finding; and every finding of the
+    deterministic scans. A listed major finding that is `partially_resolved`
+    or `cannot_verify`, a listed minor one, and every other new finding —
+    major or minor, in any category, `no-new-behaviour` included — are
+    advisory, as SKILL.md says. A resolved listed finding is in neither list.
     """
-    blocking = [
-        f for f in assess_listed(listed, assessments) if f["status"] != "resolved"
-    ]
-    blocking += [_new_finding(f) for f in deterministic]
+    blocking = []
     advisory = []
+    for f in assess_listed(listed, assessments):
+        if f["status"] == "resolved":
+            continue
+        blocks = f.get("severity") == "critical" or (
+            f.get("severity") == "major" and f["status"] == "still_present"
+        )
+        (blocking if blocks else advisory).append(f)
+    blocking += [_new_finding(f) for f in deterministic]
     for finding in new_findings:
         blocks = finding.get("severity") == "critical"
         (blocking if blocks else advisory).append(_new_finding(finding))
@@ -1145,11 +1152,11 @@ class PlanRepairRejected(ValueError):
 
 
 def _blocks_plan(finding: dict, default: str | None = "major") -> bool:
-    """A tasks-audit finding that a repair must resolve: critical or major, or
-    any `no-new-behaviour` finding, whose severity the audit prompt leaves to
-    the model although such a block always fails the RED gate."""
-    if finding.get("category") == "no-new-behaviour":
-        return True
+    """A tasks-audit finding that a repair must resolve: critical or major,
+    as in `design_audit_actionable` and `plan_review_actionable`. A
+    `no-new-behaviour` block the deterministic scan finds is critical, so it
+    always qualifies; one only the model finds qualifies at the severity the
+    model gave it."""
     return finding.get("severity", default) in {"critical", "major"}
 
 
@@ -1455,23 +1462,30 @@ def refuse_if_blocked(sg: SpecGenState, name: str) -> None:
 
 def reopen_if_edited(state: BuildState, name: str, state_path: Path) -> None:
     """A step findings blocked whose input files changed since: the plan was
-    edited, so it gets its one rewrite back."""
+    edited, so it gets its one rewrite back. A step blocked under an older
+    blocking rule (`rules_version` below `PLAN_RULES_VERSION`) is reopened the
+    same way, once: its saved blocking findings are cleared too, so the fresh
+    check is not refused."""
     sg = state.spec_gen
     assert sg is not None
     step = sg.steps.get(name)
-    if not (
-        step
-        and step.outcome == "blocked"
-        and step.blocked_revision
-        and step.blocked_revision != sg.step_revision(name)
+    if not step or step.outcome != "blocked":
+        return
+    if step.rules_version < PLAN_RULES_VERSION:
+        step.blocking_findings = ""
+        step.rules_version = PLAN_RULES_VERSION
+        log.warning("%s: blocked under an older blocking rule; checking it again", name)
+    elif not (
+        step.blocked_revision and step.blocked_revision != sg.step_revision(name)
     ):
         return
+    else:
+        log.warning(
+            "%s: plan changed since it was blocked; one rewrite allowed again", name
+        )
     step.repair_attempts = 0
     step.repair_findings = []
     step.blocked_revision = None
-    log.warning(
-        "%s: plan changed since it was blocked; one rewrite allowed again", name
-    )
     state.checkpoint(state_path)
 
 
@@ -1503,7 +1517,8 @@ async def run_design_audit_stage(
     """Audit the current revision, request one owner repair, and require recheck.
 
     The recheck is given the findings the rewrite was asked to fix and blocks
-    on any not `resolved`, and on new critical findings (`recheck_verdict`).
+    on a critical one not `resolved`, a major one `still_present`, and new
+    critical findings (`recheck_verdict`).
     Failed or unresolved blocking reviews checkpoint a blocked outcome. An
     unchanged passed revision costs no additional model call on resume.
     """

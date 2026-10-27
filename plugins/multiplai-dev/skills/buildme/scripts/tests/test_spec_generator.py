@@ -2443,13 +2443,56 @@ class TestTasksShapeAuditRejectsNoBehaviourBlocks:
         return cm, change_dir, config, state, first, finding
 
     @pytest.mark.asyncio
-    async def test_a_minor_no_new_behaviour_finding_still_drives_the_rewrite(
+    async def test_a_minor_no_new_behaviour_finding_does_not_drive_the_rewrite(
         self, tmp_path
     ):
-        """The audit prompt leaves this category's severity to the model, so a
-        block it rates minor is still a block whose tests cannot fail first."""
+        """Only critical and major model findings earn a rewrite: a block the
+        model rates minor, and the deterministic scan passes, is left alone."""
         cm, change_dir, config, state, first, finding = self._minor_model_case(tmp_path)
-        rewritten = "## 1. Summarize\n\nBuilds it, plurals included.\n"
+        with (
+            patch(
+                "build_pipeline.spec_generator.generate_rubric",
+                AsyncMock(return_value="# Rubric"),
+            ),
+            patch(
+                "build_pipeline.llm_steps.spec_steps.generate_artifact",
+                new_callable=AsyncMock,
+            ) as mock_gen,
+            patch(
+                "build_pipeline.llm_steps.spec_steps.run_tasks_audit",
+                new_callable=AsyncMock,
+            ) as mock_audit,
+        ):
+            mock_gen.side_effect = [first]
+            mock_audit.side_effect = [[finding]]
+
+            await _generate_single_artifact(cm, change_dir, "tasks", config, state)
+
+        assert mock_gen.call_count == 1
+        assert (change_dir / "tasks.md").read_text() == first
+        assert state.spec_gen.step_passed("tasks_audit")
+        assert not state.spec_gen.repair_attempts("tasks_audit")
+
+    @pytest.mark.asyncio
+    async def test_a_minor_no_new_behaviour_finding_on_the_rewrite_is_advisory(
+        self, tmp_path
+    ):
+        """A rewrite another finding drove publishes when its recheck raises a
+        new minor no-new-behaviour finding: the finding is reported only."""
+        from build_pipeline.llm_steps.spec_steps import AuditFindings
+        from build_pipeline.models import PriorAssessment
+
+        cm, change_dir, config, state, first, finding = self._minor_model_case(tmp_path)
+        major = {
+            "category": "horizontal-decomposition",
+            "severity": "major",
+            "description": "Block 1 is a layer",
+            "suggestion": "Slice it",
+        }
+        rewritten = (
+            "## 1. Summarize\n\nCreate `src/summary.py`, plurals included.\n\n"
+            "Interfaces:\n- Produces: `summarize(text: str) -> str`\n"
+        )
         with (
             patch(
                 "build_pipeline.spec_generator.generate_rubric",
@@ -2465,44 +2508,22 @@ class TestTasksShapeAuditRejectsNoBehaviourBlocks:
             ) as mock_audit,
         ):
             mock_gen.side_effect = [first, rewritten]
-            mock_audit.side_effect = [[finding], _resolved("TA-F1")]
+            mock_audit.side_effect = [
+                [major, finding],
+                AuditFindings(
+                    [finding], [PriorAssessment(finding_id="TA-F1", status="resolved")]
+                ),
+            ]
 
             await _generate_single_artifact(cm, change_dir, "tasks", config, state)
 
         assert mock_gen.call_count == 2
         assert (
-            "Block 2 only pins what Block 1 builds"
-            in mock_gen.call_args_list[1].kwargs["audit_findings"]
+            "Block 2 only pins"
+            not in (mock_gen.call_args_list[1].kwargs["audit_findings"])
         )
         assert (change_dir / "tasks.md").read_text() == rewritten
-
-    @pytest.mark.asyncio
-    async def test_a_minor_no_new_behaviour_finding_on_the_rewrite_blocks_it(
-        self, tmp_path
-    ):
-        cm, change_dir, config, state, first, finding = self._minor_model_case(tmp_path)
-        with (
-            patch(
-                "build_pipeline.spec_generator.generate_rubric",
-                AsyncMock(return_value="# Rubric"),
-            ),
-            patch(
-                "build_pipeline.llm_steps.spec_steps.generate_artifact",
-                new_callable=AsyncMock,
-            ) as mock_gen,
-            patch(
-                "build_pipeline.llm_steps.spec_steps.run_tasks_audit",
-                new_callable=AsyncMock,
-            ) as mock_audit,
-        ):
-            mock_gen.side_effect = [first, first]
-            mock_audit.side_effect = [[finding], [finding]]
-
-            with pytest.raises(ValueError, match="blocking shape findings"):
-                await _generate_single_artifact(cm, change_dir, "tasks", config, state)
-
-        assert (change_dir / "tasks.md").read_text() == first
-        assert not state.spec_gen.step_passed("tasks_audit")
+        assert state.spec_gen.step_passed("tasks_audit")
 
     @pytest.mark.asyncio
     async def test_a_block_left_after_the_rewrite_blocks_completion(
@@ -2560,3 +2581,128 @@ def test_plan_rewrite_invalidates_review_and_rubric(tmp_path):
     reconcile_plan(config, state)
     assert not state.spec_gen.step_passed("plan_review")
     assert "rubric" in state.spec_gen.stale_artifacts
+
+
+# --- What blocks after a rewrite (recheck_verdict) ---
+
+_RECHECK_MATRIX = [
+    (severity, status, expected)
+    for severity, row in {
+        "critical": ("neither", "blocking", "blocking", "blocking"),
+        "major": ("neither", "advisory", "blocking", "advisory"),
+        "minor": ("neither", "advisory", "advisory", "advisory"),
+    }.items()
+    for status, expected in zip(
+        ("resolved", "partially_resolved", "still_present", "cannot_verify"), row
+    )
+]
+
+
+@pytest.mark.parametrize("severity,status,expected", _RECHECK_MATRIX)
+def test_recheck_verdict_matrix(severity, status, expected):
+    """A listed finding blocks when it is critical and not resolved, or major
+    and still present; any other unresolved one is advisory."""
+    from build_pipeline.models import PriorAssessment
+    from build_pipeline.spec_generator import recheck_verdict
+
+    listed = [
+        {
+            "finding_id": "PR-F1",
+            "severity": severity,
+            "category": "coverage",
+            "text": "A scenario has no block",
+        }
+    ]
+    assessments = [PriorAssessment(finding_id="PR-F1", status=status)]
+
+    blocking, advisory = recheck_verdict(listed, assessments, [], deterministic=[])
+
+    ids = {
+        "blocking": [f["finding_id"] for f in blocking],
+        "advisory": [f["finding_id"] for f in advisory],
+    }
+    if expected == "neither":
+        assert ids == {"blocking": [], "advisory": []}
+    else:
+        assert ids[expected] == ["PR-F1"]
+        assert sum(map(len, ids.values())) == 1
+
+
+def test_a_deterministic_no_behaviour_finding_still_blocks_the_recheck():
+    """The scans' findings are code facts: a block the scan still flags
+    blocks whatever its listed counterpart's status."""
+    from build_pipeline.spec_generator import recheck_verdict
+
+    scanned = {
+        "category": "no-new-behaviour",
+        "severity": "critical",
+        "description": "Block 2 adds no behaviour",
+    }
+
+    blocking, advisory = recheck_verdict([], [], [], deterministic=[scanned])
+
+    assert [f["category"] for f in blocking] == ["no-new-behaviour"]
+    assert advisory == []
+
+
+def _finding_of(severity: str, n: int) -> dict:
+    return {
+        "category": "coverage",
+        "severity": severity,
+        "description": f"{severity} finding {n}",
+        "suggestion": "Fix it",
+    }
+
+
+def test_findings_capped_at_ten_most_severe_first(caplog):
+    """An audit's answer is sorted critical, major, minor and cut to ten."""
+    import json
+    import logging
+
+    from build_pipeline.llm_steps.spec_steps import _audit_findings
+
+    raw = json.dumps(
+        [_finding_of("minor", n) for n in range(4)]
+        + [_finding_of("major", n) for n in range(5)]
+        + [_finding_of("critical", n) for n in range(3)]
+    )
+
+    with caplog.at_level(logging.INFO):
+        findings = _audit_findings(raw, "Design")
+
+    assert [f["severity"] for f in findings] == ["critical"] * 3 + ["major"] * 5 + [
+        "minor"
+    ] * 2
+    assert [f["description"] for f in findings[-2:]] == [
+        "minor finding 0",
+        "minor finding 1",
+    ]
+    assert "Design: kept 10 of 12 findings" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_plan_review_findings_capped_at_ten_most_severe_first(tmp_path):
+    from build_pipeline.llm_steps import plan_review_steps
+    from build_pipeline.models import PlanReviewFinding, PlanReviewResult
+
+    findings = [
+        PlanReviewFinding(
+            category="coverage",
+            severity=severity,
+            file_path="tasks.md",
+            claim=f"{severity} {n}",
+        )
+        for severity, count in (("minor", 5), ("major", 4), ("critical", 3))
+        for n in range(count)
+    ]
+    config = MagicMock(project_dir=tmp_path)
+    with patch.object(
+        plan_review_steps,
+        "agent_call_structured",
+        AsyncMock(return_value=PlanReviewResult(findings=findings)),
+    ):
+        result = await plan_review_steps.run_plan_review(tmp_path, config)
+
+    assert [f.severity for f in result.findings] == ["critical"] * 3 + ["major"] * 4 + [
+        "minor"
+    ] * 3

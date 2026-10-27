@@ -18,6 +18,8 @@ path reachable from this prompt creates a ticket, moves a card, or splits
 tasks.md.
 """
 
+from .design_audit import FINDINGS_RULE
+
 PLAN_REVIEW_PROMPT = """\
 You are a second engineer reviewing an implementation plan before anyone builds it.
 
@@ -125,6 +127,8 @@ split as done, and do not suggest the plan be edited to reflect it.
 - **minor** — a clarification that improves the plan without changing what
   gets built.
 
+{findings_rule}
+
 ## Reviewing Method
 
 `Read`, `Grep` and `Glob` are available and they are all you have. Use them to
@@ -168,6 +172,8 @@ else. Its shape:
 
 If the plan is sound, return `{{"findings": []}}`.
 """
+# `FINDINGS_RULE` has no braces, so the prompt still formats as before.
+PLAN_REVIEW_PROMPT = PLAN_REVIEW_PROMPT.replace("{findings_rule}", FINDINGS_RULE)
 
 
 # What the `## Use Cases` section says when no use-case artifact exists. The
