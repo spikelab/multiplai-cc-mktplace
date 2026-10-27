@@ -209,3 +209,56 @@ def test_an_absolute_path_into_the_dependency_folder_becomes_relative(
         relative_path(path, target_info, snapshot)
         == f".review-deps/lib@{'a' * 12}/lib/runner.py"
     )
+
+
+# --- write_gate --------------------------------------------------------------------
+
+WRITE_MATERIAL = ["Rate plans are filtered on `KEYWORD`", "KEYWORD = 'dolcebot'"]
+PLAIN = (
+    "No room can be booked once the channel is renamed. "
+    "For example, renaming the channel to DolceBot makes every rate plan miss."
+)
+
+
+def test_write_gate_passes_a_plain_answer():
+    assert (
+        gates.write_gate("Rooms cannot be booked after a rename", PLAIN, WRITE_MATERIAL)
+        == []
+    )
+
+
+@pytest.mark.parametrize(
+    "title, text, reason",
+    [
+        (" ".join(["word"] * 13), PLAIN, "title has 13 words"),
+        ("Rooms cannot be booked", PLAIN + " See rateplan_service.py:4.", "path:line"),
+        (
+            "Rooms cannot be booked",
+            " ".join(["word"] * 51) + ".",
+            "a sentence over 50 words",
+        ),
+        (
+            "Rooms cannot be booked",
+            "Crucially, " + PLAIN,
+            "announces instead of saying: crucially",
+        ),
+        (
+            "Rooms cannot be booked",
+            PLAIN + " It reads `rate_plan_filter`.",
+            "rate_plan_filter",
+        ),
+    ],
+    ids=["title-words", "path-line", "sentence-words", "announce", "backticks"],
+)
+def test_write_gate_refuses_each_rule(title, text, reason):
+    reasons = gates.write_gate(title, text, WRITE_MATERIAL)
+    assert len(reasons) == 1 and reason in reasons[0], reasons
+
+
+def test_write_gate_accepts_a_backticked_name_from_the_material():
+    assert (
+        gates.write_gate(
+            "Rooms cannot be booked", "It reads `KEYWORD`.", WRITE_MATERIAL
+        )
+        == []
+    )

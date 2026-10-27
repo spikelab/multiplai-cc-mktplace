@@ -803,7 +803,7 @@
         class: "badge " + d.decision,
         text: d.decision + (d.implied ? " (earlier round)" : ""),
       }) : null,
-      el("span", { class: "claim", text: f.claim }),
+      el("span", { class: "claim", text: L.findingTitle(f) }),
       el("span", { class: "where", text: f.file + ":" + f.line_start }),
     ]));
     // Accept and Reject without opening the finding; shown on hover or focus.
@@ -1090,7 +1090,7 @@
     const fate = f.fate === "kept" ? findingRef(f.id)
       : el("span", {}, [f.fate + (f.rule ? " (" + f.rule + ")" : ""), f.into ? " into " : "", f.into ? findingRef(f.into) : null]);
     return el("div", { class: "check-event" + (f.fate === "rejected" ? " warn" : "") }, [
-      el("div", {}, [el("span", { class: "badge " + f.severity, text: f.severity }), " ", el("strong", { text: f.claim })]),
+      el("div", {}, [el("span", { class: "badge " + f.severity, text: f.severity }), " ", el("strong", { text: L.findingTitle(f) })]),
       el("div", { class: "muted small" }, ["Fate: ", fate]),
       el("p", { text: f.failure_scenario }),
     ].concat((f.citations || []).map(markedCitation)));
@@ -1189,7 +1189,7 @@
     if (m.findings.length) {
       kids.push(el("div", { class: "label", text: "Findings" }), el("ul", { class: "path-list" }, m.findings.map((f) =>
         el("li", {}, [el("button", { type: "button", class: "cite-link", onclick: () => selectFinding(f.id) },
-          [el("span", { class: "badge " + f.severity, text: f.severity }), " " + f.claim])]))));
+          [el("span", { class: "badge " + f.severity, text: f.severity }), " " + L.findingTitle(f)])]))));
     }
     kids.push(el("div", { class: "label", text: "E2E tests:" }), el("ul", { class: "path-list" },
       L.pathTestLines(m.tests).map((t) => el("li", { class: "mono small path-test-" + t.kind, text: t.text }))));
@@ -1357,14 +1357,22 @@
       shareBtn("github", "GitHub"),
       shareBtn("slack", "Slack"),
     ])));
-    box.appendChild(el("h2", { text: f.claim }));
-    // The failure scenario first, so the problem reads before anything about
-    // it; then the review's explanation; then the rest of the facts. With a
+    box.appendChild(el("h2", { text: L.findingTitle(f) }));
+    // What happens first, in plain words, when the review wrote it; then the
+    // finder's claim under Details. Then the failure scenario, so the problem
+    // reads before anything about it; then the review's explanation; then the
+    // rest of the facts. With a
     // verifier entry on the Checked tab, a link to it replaces the citation
     // lists (the entry shows what the verifier read and cited); without one,
     // findingParts keeps the lists.
     const shown = L.findingParts(f, state.detail.checks, "finding");
     const add = (nodes) => { for (const node of nodes) box.appendChild(node); };
+    if (f.what_happens) {
+      box.appendChild(el("div", { class: "label", text: "What happens" }));
+      box.appendChild(el("p", { text: f.what_happens }));
+      box.appendChild(el("div", { class: "label", text: "Details" }));
+      box.appendChild(el("p", { text: f.claim }));
+    }
     add(findingFacts(f, ["scenario"]));
     const explained = L.explanationText(f.assessment);
     if (explained) {
@@ -1879,7 +1887,7 @@
       const td = el("td", { class: "dots" });
       for (const f of (r && r.n != null && dots.get(r.n)) || []) {
         td.appendChild(el("span", {
-          class: "dot " + f.severity, title: f.severity + ": " + f.claim,
+          class: "dot " + f.severity, title: f.severity + ": " + L.findingTitle(f),
           onclick: () => selectFinding(f.id),
         }));
       }

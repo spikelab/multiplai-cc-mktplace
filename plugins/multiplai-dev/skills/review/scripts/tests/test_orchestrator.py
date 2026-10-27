@@ -245,6 +245,14 @@ def test_review_end_to_end(fixture_repo, tmp_path, agents, capsys):
         "**Expected behaviour:** Rate plans match whatever the channel is titled."
         in review
     )
+    # The write stage's plain-language text (conftest answers it): the title heads the finding,
+    # what happens comes first, and the claim is kept unchanged under it.
+    assert data["findings"][0]["title"] == "A plain title for this finding"
+    assert data["findings"][0]["claim"] == high_finding().claim
+    assert "— A plain title for this finding" in review
+    assert review.index("**What happens:**") < review.index(
+        "**Claim:** " + high_finding().claim
+    )
 
 
 def test_every_stage_runs_in_its_snapshot(fixture_repo, tmp_path, agents):

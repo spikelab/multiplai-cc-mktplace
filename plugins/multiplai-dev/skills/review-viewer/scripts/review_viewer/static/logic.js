@@ -313,14 +313,20 @@
     return "https://github.com/" + m[1] + "/blob/" + sha + "/" + String(path).split("/").map(encodeURIComponent).join("/") + lines;
   }
 
+  /* A finding's heading: the review's plain-language title (multiplai-dev 0.113+), else its claim. */
+  function findingTitle(f) {
+    return (f && f.title) || (f && f.claim) || "";
+  }
+
   /* One finding as markdown, to paste to whoever will fix it: what is wrong,
    * where, how it fails, what correct looks like, and the code it cites. */
   function findingMarkdown(f, target, explanation) {
     const t = target || {};
     const where = f.file + ":" + f.line_start + (f.line_end && f.line_end !== f.line_start ? "-" + f.line_end : "");
     const link = githubBlobUrl(t.remote_url, t.head_sha, f.file, f.line_start, f.line_end);
-    const out = ["### [" + f.severity + "] " + f.claim, "",
+    const out = ["### [" + f.severity + "] " + findingTitle(f), "",
       "`" + where + "` · " + findingTopic(f).topic + (link ? " · " + link : ""), ""];
+    if (f.what_happens) out.push("**What happens:** " + f.what_happens, "", "**Claim:** " + f.claim, "");
     out.push("**Failure scenario:** " + f.failure_scenario, "");
     if (explanation) out.push("**Explanation:** " + explanation, "");
     if (f.expected_behaviour) out.push("**Expected behaviour:** " + f.expected_behaviour, "");
@@ -1588,6 +1594,7 @@
     SEVERITIES: SEVERITIES, joinParts: joinParts, groupReplies: groupReplies,
     isPending: isPending, pollDelay: pollDelay, applyPoll: applyPoll, citationRows: citationRows,
     isHidden: isHidden, groupFindings: groupFindings, findingOrder: findingOrder, navOrder: navOrder,
+    findingTitle: findingTitle,
     lowToggleLabel: lowToggleLabel,
     githubBlobUrl: githubBlobUrl, findingFileName: findingFileName, shareOptions: shareOptions, shareText: shareText, findingTopic: findingTopic, findingMarkdown: findingMarkdown,
     assessLabel: assessLabel, shownFindings: shownFindings, shownFile: shownFile, findingSection: findingSection,

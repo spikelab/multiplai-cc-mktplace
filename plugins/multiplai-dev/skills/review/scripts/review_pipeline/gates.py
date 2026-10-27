@@ -504,3 +504,55 @@ def gated_need(need: Need) -> Need:
         log.info("need_gate blanked a command: %s", result.reason)
         return need.model_copy(update={"command": ""})
     return need
+
+
+# --- the write stage's plain-language text --------------------------------------
+
+WRITE_TITLE_MAX_WORDS = 12
+WRITE_SENTENCE_MAX_WORDS = 50
+# Phrases that announce a point instead of making it (Clear Writing rule 7).
+WRITE_BANNED = (
+    "the key insight",
+    "crucially",
+    "worth noting",
+    "importantly",
+    "the mechanism behind",
+)
+# `path:line`: a name with a slash or a file extension, then a colon and a number.
+_PATH_LINE_RE = re.compile(r"[\w./-]*(?:/|\.[A-Za-z][A-Za-z0-9]*)[\w./-]*:\d+")
+_SENTENCE_END_RE = re.compile(r"(?<=[.!?])\s+")
+_BACKTICKED_RE = re.compile(r"`([^`\n]+)`")
+
+
+def write_gate(title: str, what_happens: str, material: list[str]) -> list[str]:
+    """Why a write answer fails, one reason per broken rule; [] when it passes.
+
+    *material* is the text the writer was given about the finding (claim, failure scenario,
+    expected behaviour, the verifier's reason and every cited quote): a backticked identifier
+    must occur in it.
+    """
+    reasons = []
+    words = len(title.split())
+    if not title.strip() or not what_happens.strip():
+        reasons.append("empty title or what_happens")
+    if words > WRITE_TITLE_MAX_WORDS:
+        reasons.append(f"title has {words} words, over {WRITE_TITLE_MAX_WORDS}")
+    both = f"{title}\n{what_happens}"
+    if _PATH_LINE_RE.search(both):
+        reasons.append("path:line in the text")
+    long = [
+        s
+        for s in _SENTENCE_END_RE.split(what_happens.strip())
+        if len(s.split()) > WRITE_SENTENCE_MAX_WORDS
+    ]
+    if long:
+        reasons.append(f"a sentence over {WRITE_SENTENCE_MAX_WORDS} words")
+    lowered = both.lower()
+    banned = [p for p in WRITE_BANNED if p in lowered]
+    if banned:
+        reasons.append(f"announces instead of saying: {', '.join(banned)}")
+    corpus = "\n".join(material)
+    unknown = sorted({b for b in _BACKTICKED_RE.findall(both) if b not in corpus})
+    if unknown:
+        reasons.append(f"backticked names not in the material: {', '.join(unknown)}")
+    return reasons

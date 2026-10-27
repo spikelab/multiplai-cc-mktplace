@@ -20,7 +20,9 @@ from paths_stub import stub_result
 from review_pipeline import sdk, target
 from review_pipeline.chunks import piece_diff_text
 from review_pipeline.config import ReviewConfig
+from review_pipeline.export import to_findings_file
 from review_pipeline.models import (
+    Assessment,
     Citation,
     ConvertOutput,
     DuplicateSet,
@@ -31,6 +33,8 @@ from review_pipeline.models import (
     ReviewState,
     Verdict,
     VerifierAnswer,
+    WriteItem,
+    WriteOutput,
 )
 from review_pipeline.paths_io import PATHS_FILE
 from review_pipeline.stages import RunContext
@@ -44,6 +48,7 @@ from review_pipeline.stages.merge import (
     run_merge,
 )
 from review_pipeline.stages.verify import VerifyIncomplete, run_verify
+from review_pipeline.stages.write import run_write
 from review_pipeline.state import STATE_FILE, load_state
 
 
@@ -58,7 +63,9 @@ class Canned:
     async def __call__(self, prompt, schema, *, budget_label="", **kwargs):
         self.calls.append((budget_label, prompt))
         expected = (
-            ["Read", "Grep", "Glob"]
+            []
+            if budget_label == "write"
+            else ["Read", "Grep", "Glob"]
             if budget_label == "merge"
             else ["Read", "Grep", "Glob", "WebFetch", "WebSearch"]
         )
@@ -1279,3 +1286,139 @@ async def test_a_killed_merge_keeps_the_answer(target_info, ctx, monkeypatch, tm
     assert list(saved.merge_answers.values()) == [
         [DuplicateSet(finding_ids=[keep.id, copy.id])]
     ]
+
+
+# --- write -----------------------------------------------------------------------
+
+
+def write_state(target_info) -> tuple[ReviewState, list]:
+    findings = two_low_one_medium()
+    verdicts = {
+        f.id: medium_verdict().model_copy(update={"finding_id": f.id}) for f in findings
+    }
+    return (
+        ReviewState(
+            target=target_info, stage="assess", findings=findings, verdicts=verdicts
+        ),
+        findings,
+    )
+
+
+def written(*items) -> WriteOutput:
+    return WriteOutput(
+        findings=[
+            WriteItem(
+                id=fid,
+                title=title,
+                what_happens="No rate plan matches. For example, renaming the channel hides every room.",
+            )
+            for fid, title in items
+        ]
+    )
+
+
+@pytest.mark.write_calls
+async def test_write_stores_a_passing_answer_and_re_asks_a_failing_one_once(
+    target_info, ctx, monkeypatch
+):
+    state, findings = write_state(target_info)
+    a, b, c = (f.id for f in findings)
+    long_title = " ".join(["word"] * 13)
+    canned = use(
+        monkeypatch,
+        {
+            "write": [
+                written(
+                    (a, "Rooms vanish after a rename"),
+                    (b, long_title),
+                    (c, "Rooms vanish"),
+                ),
+                written((b, "Bookings fail after a rename")),
+            ]
+        },
+    )
+    state = await run_write(state, ctx)
+    assert len(canned.calls) == 2
+    assert "title has 13 words" in canned.calls[1][1], (
+        "the re-ask carries the gate's reason"
+    )
+    assert set(state.write_answers) == {a, b, c}
+    assert state.write_answers[b].title == "Bookings fail after a rename"
+    assert state.write_failed == [] and state.stage == "write"
+    assert ctx.counts == {"written": 3, "fallback": 0, "agent_failures": 0}
+
+
+@pytest.mark.write_calls
+async def test_write_falls_back_to_the_claim_after_two_failures(
+    target_info, ctx, monkeypatch
+):
+    state, findings = write_state(target_info)
+    a = findings[0].id
+    bad = " ".join(["word"] * 13)
+    others = [(f.id, "Rooms vanish") for f in findings[1:]]
+    use(monkeypatch, {"write": [written((a, bad), *others), written((a, bad))]})
+    state = await run_write(state, ctx)
+    assert a not in state.write_answers and state.write_failed == [a]
+    assert any(
+        e.startswith(f"write: no plain-language text for {a}") for e in state.errors
+    )
+    data = to_findings_file(state)
+    row = next(r for r in data["findings"] if r["id"] == a)
+    assert "title" not in row and "what_happens" not in row
+    assert all("title" in r for r in data["findings"] if r["id"] != a)
+
+
+@pytest.mark.write_calls
+async def test_write_skips_repeats_and_refuted_findings(target_info, ctx, monkeypatch):
+    state, findings = write_state(target_info)
+    a, b, c = (f.id for f in findings)
+    state.verdicts[b] = state.verdicts[b].model_copy(update={"status": "refuted"})
+    state.assessments[c] = Assessment(label="repeat", reason="r")
+    canned = use(monkeypatch, {"write": [written((a, "Rooms vanish"))]})
+    state = await run_write(state, ctx)
+    assert len(canned.calls) == 1 and set(state.write_answers) == {a}
+
+
+@pytest.mark.write_calls
+async def test_write_resumed_mid_stage_asks_only_for_the_rest(
+    target_info, ctx, monkeypatch, tmp_path
+):
+    """Rows S6, S7 and S11: answers and give-ups are kept; a resume asks only for ids with neither."""
+    from review_pipeline.prompts import write as write_prompt
+
+    monkeypatch.setattr(write_prompt, "BATCH", 1)
+    ctx.config.concurrency = 1
+    ctx.target_dir = tmp_path / "out"
+    ctx.target_dir.mkdir(exist_ok=True)
+    state, findings = write_state(target_info)
+    a, b, c = (f.id for f in findings)
+    bad = " ".join(["word"] * 13)
+    use(
+        monkeypatch,
+        {
+            "write": [
+                written((a, "Rooms vanish")),
+                written((b, bad)),
+                written((b, bad)),
+                sdk.UsageLimitError("limit"),
+            ]
+        },
+    )
+    with pytest.raises(sdk.UsageLimitError):
+        await run_write(state, ctx)
+    saved = load_state(ctx.target_dir / STATE_FILE)
+    assert set(saved.write_answers) == {a} and saved.write_failed == [b]
+    # Stopped the same way twice in a row: still nothing asked twice.
+    use(monkeypatch, {"write": [sdk.UsageLimitError("limit")]})
+    with pytest.raises(sdk.UsageLimitError):
+        await run_write(saved, ctx)
+    saved = load_state(ctx.target_dir / STATE_FILE)
+    canned = use(monkeypatch, {"write": [written((c, "Rooms vanish"))]})
+    state = await run_write(saved, ctx)
+    assert len(canned.calls) == 1
+    assert c in canned.calls[0][1] and a not in canned.calls[0][1]
+    # Every answer stored, stage not yet marked (S7): it is marked with no call.
+    state.stage = "assess"
+    canned = use(monkeypatch, {"write": []})
+    state = await run_write(state, ctx)
+    assert canned.calls == [] and state.stage == "write"

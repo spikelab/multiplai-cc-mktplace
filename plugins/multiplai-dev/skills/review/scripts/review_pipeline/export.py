@@ -37,6 +37,10 @@ written before it have none, and readers fall back to the topic rule.
 `checks.json` (the `checks.v1` contract beside it) is the record of every
 agent call: `AgentCheck` and `GateCheck` from the state, mapped the same way.
 
+`title` and `what_happens` (optional, 0.113+) are the write stage's plain-language
+title and text of a shown finding (`state.write_answers`); a finding the stage gave up on
+has neither, and readers show its `claim`.
+
 `lineage` (optional, 0.94+) is the id of the finding's first appearance in an
 earlier round, through a `still-open` or `repeat` label; it is written only
 when it differs from `id`. `earlier` (top level, optional, 0.94+) lists the
@@ -309,6 +313,10 @@ def to_findings_file(
             row["absorbed"] = merged_into[f.id]
         if state.lineage.get(f.id, f.id) != f.id:
             row["lineage"] = state.lineage[f.id]
+        written = state.write_answers.get(f.id)
+        if written is not None and status in SHOWN:
+            row["title"] = written.title
+            row["what_happens"] = written.what_happens
         assessment = state.assessments.get(f.id)
         if assessment is not None and status in SHOWN:
             row["assessment"] = _assessment(assessment)

@@ -299,3 +299,18 @@ def test_the_piece_prompt_builder_is_gone():
     )
     assert found.stdout == ""
     assert not (PACKAGE / "prompts" / "piece.py").exists()
+
+
+def test_the_write_prompt_carries_the_writing_rules_and_fences_the_findings():
+    from review_pipeline.prompts import write
+
+    text = write.build([high_finding()], {})
+    assert "Never invent a name for a thing" in text
+    assert '<untrusted-content source="findings">' in text
+    assert high_finding().claim in text
+    again = write.build(
+        [high_finding()],
+        {},
+        problems={high_finding().id: ["title has 13 words, over 12"]},
+    )
+    assert "title has 13 words" in again

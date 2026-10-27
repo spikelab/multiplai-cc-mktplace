@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -17,7 +18,7 @@ from fixture_repo import (
     SETTINGS_DEF_LINE,
 )
 from fixture_repo import build as build_repo
-from review_pipeline import budget, deps, ledger, target, window
+from review_pipeline import budget, deps, ledger, sdk, target, window
 from review_pipeline.models import Citation, Finding, Rejected, ReviewState, Verdict
 
 SCHEMA = TESTS.parents[2] / "review-viewer" / "schema" / "findings.v1.schema.json"
@@ -55,6 +56,42 @@ def no_usage_window(monkeypatch):
 def no_path_mapping(monkeypatch):
     """Every change review maps its paths before find; outside `test_paths_stage.py` that asks no model."""
     paths_stub.install(monkeypatch.setattr)
+
+
+class _WriteSdk:
+    """`sdk` as `stages/write.py` sees it, but with every write call answered in code.
+
+    Most tests here fake `sdk.agent_call_structured` for the stages they are about and know
+    nothing of the write stage. This answers that stage alone, so their fakes and call counts
+    stay as they were. A test marked `write_calls` talks to the real `sdk` (its own fake).
+    """
+
+    def __getattr__(self, name):
+        return getattr(sdk, name)
+
+    @staticmethod
+    async def agent_call_structured(prompt, output_type, **kwargs):
+        from review_pipeline.models import WriteItem, WriteOutput
+
+        ids = re.findall(r'"id": "([^"]+)"', prompt)
+        return WriteOutput(
+            findings=[
+                WriteItem(
+                    id=fid,
+                    title="A plain title for this finding",
+                    what_happens="Something goes wrong. For example, one input gives a wrong result.",
+                )
+                for fid in dict.fromkeys(ids)
+            ]
+        )
+
+
+@pytest.fixture(autouse=True)
+def canned_write(request, monkeypatch):
+    if request.node.get_closest_marker("write_calls") is None:
+        from review_pipeline.stages import write as write_stage
+
+        monkeypatch.setattr(write_stage, "sdk", _WriteSdk())
 
 
 CLAIM_HIGH = "Rate-plan eligibility depends on the hardcoded keyword 'dolcebot'"

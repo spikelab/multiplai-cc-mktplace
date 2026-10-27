@@ -92,6 +92,13 @@ defect in a few words) and `other_locations` (every other `path:line` or
 `locations_gate`). Both are absent when the finder named none, never null or
 empty. `models.py` and the schema accept them; the page does not show them yet.
 
+From multiplai-dev 0.113 a shown finding may carry `title` (at most 12
+words) and `what_happens` (2 to 4 sentences with an example), the review's
+write stage's plain-language text. Every heading and list row shows
+`logic.findingTitle(f)` (the title, else the claim); the finding page puts
+**What happens** first and the claim under **Details**, and the copied
+markdown does the same. A finding without them reads as before.
+
 ## Protocol 1a: `checks.json` v1 (optional)
 
 The review writes it beside `findings.json`: `agents` (each agent call's

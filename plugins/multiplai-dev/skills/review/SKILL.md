@@ -97,7 +97,21 @@ paths through the change from each entry point (see "The paths stage" below).
    Python checks every label; a bad one becomes `useful`. Skipped when fewer
    than two findings remain and there are no earlier rounds.
 
-   Neither step deletes a finding or changes a verdict or a severity.
+7. **write** — one agent with no tools restates each shown finding that is
+   not a repeat in plain words: a `title` of at most 12 words and
+   `what_happens`, 2 to 4 sentences with a concrete example (a trigger, then
+   the wrong result). Up to 10 findings of one file per call, on the assess
+   stage's model. Python checks every answer: the title's length, no
+   `path:line`, no sentence over 50 words, none of the phrases "the key
+   insight", "crucially", "worth noting", "importantly" or "the mechanism
+   behind", and every backticked name found in the finding's own text or
+   cited code. A failing answer is asked again once with the reasons; one
+   that fails twice is dropped with a line in the review's error list, and
+   the review and the viewer show that finding's `claim` instead. The
+   `claim` itself is never changed. The review and the viewer head each
+   finding with its title and show **What happens** first, the claim after it.
+
+   Neither repeats nor assess deletes a finding or changes a verdict or a severity.
    `repeat` and `low-value` findings are not listed or counted in the review,
    its summary, the rollups or review-viewer; they are in the appendix of
    `review-<slug>.md` and in `findings.json`.
@@ -876,7 +890,7 @@ state when it finishes:
 - `calls`, `tokens` (`input`, `output`, `cache_read`, `cache_write`,
   `total`), `cost_usd`, `max_usd` (the ceiling) and `stopped_by_budget`.
 - `stages`: one row per finder (`find:<dimension>`), `verify`, `recheck`, `merge`,
-  `repeats` and `assess`, each with its calls, tokens, cost, wall time, and the configured model and
+  `repeats`, `assess` and `write` (0.113+), each with its calls, tokens, cost, wall time, and the configured model and
   effort (`session default` when none is set). The model the SDK actually ran
   is not recorded.
 - `counts` (found, rejected by the gates, refuted, unverifiable, unverified

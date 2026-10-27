@@ -124,6 +124,10 @@ class Finding(_Strict):
     # `unverified` (0.112+): a LOW finding no verifier was asked about.
     status: Literal["confirmed", "unverifiable", "unverified", "refuted", "rejected"]
     claim: str
+    # The review's plain-language title (at most 12 words) and what happens, with an example
+    # (multiplai-dev 0.113+); absent when the write stage gave up on the finding.
+    title: str | None = None
+    what_happens: str | None = None
     file: str
     line_start: int = Field(ge=1)
     line_end: int = Field(ge=1)

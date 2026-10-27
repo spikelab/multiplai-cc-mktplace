@@ -36,6 +36,7 @@ STAGES: tuple[str, ...] = (
     "merge",
     "repeats",
     "assess",
+    "write",
     "export",
     "render",
     "done",
@@ -590,6 +591,22 @@ class CoverageRecord(BaseModel):
     detail: str = ""
 
 
+class WriteAnswer(_Model):
+    """A shown finding in plain words (`stages/write.py`): a title of at most 12 words, and what
+    happens, with one example. The finding's `claim` is never changed; this is shown above it."""
+
+    title: str
+    what_happens: str
+
+
+class WriteItem(WriteAnswer):
+    id: str
+
+
+class WriteOutput(_Model):
+    findings: list[WriteItem] = Field(default_factory=list)
+
+
 class RunStart(BaseModel):
     """One run of the pipeline on this round: a review or a resume (`orchestrator.run_state`)."""
 
@@ -683,6 +700,11 @@ class ReviewState(BaseModel):
     # before 0.26, which still load.
     checks: list[AgentCheck] = Field(default_factory=list)
     gate_checks: list[GateCheck] = Field(default_factory=list)
+    # The write stage's answer per shown finding, by id, stored as each call returns, so a resume
+    # asks only for the rest; `write_failed` lists the ids whose answer failed `write_gate` twice,
+    # which are never asked again and fall back to their claim.
+    write_answers: dict[str, WriteAnswer] = Field(default_factory=dict)
+    write_failed: list[str] = Field(default_factory=list)
     # One entry per run of this round, review or resume, appended when it starts and
     # never rewritten; review-viewer's export finds the sessions' transcripts by it.
     # Empty in checkpoints written before 0.111.

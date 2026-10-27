@@ -361,6 +361,18 @@
           "title": "Status",
           "type": "string"
         },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Title"
+        },
         "topic": {
           "anyOf": [
             {
@@ -410,6 +422,18 @@
           ],
           "default": null,
           "title": "Verifier Citations"
+        },
+        "what_happens": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "What Happens"
         }
       },
       "required": [
