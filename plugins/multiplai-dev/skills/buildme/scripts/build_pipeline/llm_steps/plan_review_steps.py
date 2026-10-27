@@ -1,7 +1,9 @@
-"""Read-only review of the final plan, after prototype and design repair.
+"""buildme's one planning check: a read-only review of design.md and tasks.md.
 
-The planning owner publishes at most one repair for this stage. A required
-recheck blocks unresolved major findings. Passed evidence belongs to the
+It replaced the design audit, the tasks audit and the plan review, which read
+the same documents three times. The planning owner publishes at most one
+repair for this stage. A required recheck blocks critical findings not
+`resolved` and major ones `still_present`. Passed evidence belongs to the
 reviewed input revision, so an unchanged resume needs no model call.
 """
 
@@ -14,16 +16,21 @@ from multiplai_core.specs import change_root
 
 from build_pipeline.budget import BudgetExceededError
 
+from ..change_manager import requirement_sources, spec_issue_ref
 from ..models import PlanReviewFinding, PlanReviewResult
-from ..prompts.design_audit import plan_section, prior_findings_section
-from ..prompts.plan_review import NO_USE_CASES, PLAN_REVIEW_PROMPT
+from ..prompts.plan_review import (
+    MAX_PLAN_FINDINGS,
+    NO_USE_CASES,
+    PLAN_CHECK_PROMPT,
+    plan_section,
+    prior_findings_section,
+)
 from ..sdk import agent_call_structured
-from .spec_steps import keep_most_severe
 
 log = logging.getLogger(__name__)
 
-# Read-only, exactly like the design/tasks auditors. `test_no_review_step_can_write`
-# in test_review_steps.py asserts the shape of lists like this one.
+# Read-only, like every reviewer. `test_no_review_step_can_write` in
+# test_review_steps.py asserts the shape of lists like this one.
 PLAN_REVIEW_TOOLS = ["Read", "Grep", "Glob"]
 
 # Enough turns to open the plan's neighbours and grep the codebase for a name
@@ -41,6 +48,20 @@ PLAN_REVIEW_ACTIONABLE = ("critical", "major")
 # rewriter silently perform the split inside one plan, which is the opposite of
 # what the finding asks for.
 PLAN_REVIEW_PROPOSE_ONLY_CATEGORIES = ("oversized-plan",)
+
+
+_SEVERITY_RANK = {"critical": 0, "major": 1, "minor": 2}
+
+
+def keep_most_severe(
+    findings: list[PlanReviewFinding], label: str
+) -> list[PlanReviewFinding]:
+    """The findings sorted critical, major, minor (stable within a severity),
+    cut to the first `MAX_PLAN_FINDINGS`. Logs how many it dropped."""
+    ranked = sorted(findings, key=lambda f: _SEVERITY_RANK.get(f.severity, 3))
+    if len(ranked) > MAX_PLAN_FINDINGS:
+        log.info("%s: kept %d of %d findings", label, MAX_PLAN_FINDINGS, len(ranked))
+    return ranked[:MAX_PLAN_FINDINGS]
 
 
 def _read(path: Path, missing: str) -> str:
@@ -366,7 +387,8 @@ async def run_plan_review(
     split_context: str = "",
     prior: list[dict] | None = None,
 ) -> PlanReviewResult:
-    """Review tasks.md against the rubric, the constraints and the use cases.
+    """Check design.md and tasks.md against the specs, the use cases, the
+    rubric, the constraints and the code (`PLAN_CHECK_PROMPT`).
 
     Runs as a read-only subagent on `config.model_for("plan_review")` and
     `config.effort_for("plan_review")`. Returns the findings; raises whatever `agent_call_structured`
@@ -377,18 +399,26 @@ async def run_plan_review(
     # reviewed against its plan.md, which says what it builds of them.
     root = change_root(change_dir)
     use_cases = _read(root / "use-cases.md", NO_USE_CASES)
+    specs = "\n\n".join(
+        f"### {label}\n{text}"
+        for label, text in requirement_sources(change_dir).items()
+    )
+    from ..rubric import detect_change_type
 
-    prompt = PLAN_REVIEW_PROMPT.format(
+    prompt = PLAN_CHECK_PROMPT.format(
         proposal_content=_read(root / "proposal.md", "(no proposal)"),
         plan_section=plan_section(
             _read(change_dir / "plan.md", "(no plan.md)"),
             component=root != Path(change_dir),
         ),
+        specs_content=specs or "(no specs)",
         design_content=_read(change_dir / "design.md", "(no design)"),
         use_cases_content=use_cases,
         tasks_content=_read(change_dir / "tasks.md", "(no tasks)"),
         rubric_content=_read(change_dir / "rubric.md", "(no rubric)"),
         split_context=split_context,
+        change_type=detect_change_type(change_dir),
+        spec_ref=spec_issue_ref(change_dir),
         block_trigger=getattr(config, "plan_split_block_trigger", 10),
         package_trigger=getattr(config, "plan_split_package_trigger", 5),
     ) + prior_findings_section(prior)
@@ -407,9 +437,7 @@ async def run_plan_review(
         cwd=str(config.project_dir),
         budget_label="plan_review",
     )
-    result.findings = keep_most_severe(
-        list(result.findings), "Plan review", severity=lambda f: f.severity
-    )
+    result.findings = keep_most_severe(list(result.findings), "Plan review")
     return result
 
 
@@ -433,15 +461,32 @@ def _finding_line(f: PlanReviewFinding) -> str:
         + (f" @ {f.location}" if f.location else "")
         + f": {f.claim}"
         + (f" Reason: {f.reason}" if f.reason else "")
+        + (f" Fix: {f.suggestion}" if f.suggestion else "")
     )
 
 
 def finding_dicts(findings: list[PlanReviewFinding]) -> list[dict]:
-    """Plan review findings in the shape the recheck and the checkpoint use."""
+    """Plan check findings in the shape the recheck, the checkpoint and
+    `audit_spec_issues` use: `claim` is the `description`."""
     return [
-        {"category": f.category, "severity": f.severity, "text": _finding_line(f)}
+        {
+            "category": f.category,
+            "severity": f.severity,
+            "text": _finding_line(f),
+            "description": f.claim,
+            "suggestion": f.suggestion,
+            "file_path": f.file_path,
+            "needs_requirements_change": f.needs_requirements_change,
+            "requirement": f.requirement,
+        }
         for f in findings
     ]
+
+
+def rewrites_design(findings: list[dict]) -> bool:
+    """Whether a rewrite for these findings changes design.md too: unless
+    every finding's `file_path` is tasks.md, both documents are rewritten."""
+    return any(f.get("file_path") != "tasks.md" for f in findings)
 
 
 def plan_review_findings_text(
@@ -511,24 +556,32 @@ async def run_plan_review_stage(
     state,
     state_path: Path,
 ) -> list[PlanReviewFinding]:
-    """Run the plan review and fold its findings back into tasks.md.
+    """Run the plan check and fold its findings back into design.md and tasks.md.
 
-    Blocking findings request one staged rewrite through the planning owner,
-    then a required recheck of that revision, which is given the findings the
-    rewrite was asked to fix and blocks on a critical one not `resolved`, a
-    major one `still_present`, and new critical findings (`recheck_verdict`). Unresolved findings and failed
-    review calls record a blocked outcome and raise; they cannot authorize TDD.
+    The check's model findings and the deterministic scans
+    (`scan_placeholders`, `scan_no_behaviour_blocks`) are read together.
+    Critical and major ones request one staged rewrite through the planning
+    owner, then a required recheck of that revision, which is given the
+    findings the rewrite was asked to fix and blocks on a critical one not
+    `resolved`, a major one `still_present`, and new critical findings
+    (`recheck_verdict`). A critical or major finding whose fix needs a
+    requirements change raises `SpecIssuesFound`, at the first check and at
+    the recheck. Unresolved findings and failed check calls record a blocked
+    outcome and raise; they cannot authorize TDD.
     """
+    from ..readiness import SpecIssuesFound
     from ..spec_generator import (
         PlanBlocked,
         PlanRepairRejected,
         assess_listed,
+        audit_spec_issues,
         block_on_findings,
         from_scans,
         log_findings,
         model_listed,
         number_findings,
         open_findings,
+        raise_spec_issues,
         recheck_verdict,
         reconcile_plan,
         record_advisory,
@@ -556,7 +609,8 @@ async def run_plan_review_stage(
             result = await run_plan_review(
                 change_dir, config, split_context=_split_context(config, change_dir)
             )
-            scanned = _no_behaviour_findings(change_dir)
+            raise_spec_issues(audit_spec_issues(finding_dicts(result.findings)), name)
+            scanned = _scan_findings(change_dir)
             findings = list(result.findings) + scanned
             log_plan_review_findings(findings)
             actionable = plan_review_actionable(findings)
@@ -590,6 +644,7 @@ async def run_plan_review_stage(
                 plan_review_findings_text(
                     actionable, ids=[f["finding_id"] for f in numbered]
                 ),
+                design=rewrites_design(numbered),
                 step=name,
             )
         listed = sg.steps[name].repair_findings
@@ -599,8 +654,10 @@ async def run_plan_review_stage(
             split_context=_split_context(config, change_dir),
             prior=model_listed(listed) or None,
         )
-        scanned = finding_dicts(_no_behaviour_findings(change_dir))
-        findings = list(result.findings) + _no_behaviour_findings(change_dir)
+        raise_spec_issues(audit_spec_issues(finding_dicts(result.findings)), name)
+        scanned_findings = _scan_findings(change_dir)
+        scanned = finding_dicts(scanned_findings)
+        findings = list(result.findings) + scanned_findings
         log_plan_review_findings(findings)
         new = [
             f
@@ -622,6 +679,13 @@ async def run_plan_review_stage(
         return findings
     except PlanBlocked:
         raise
+    except SpecIssuesFound as found:
+        # Blocked at this revision: after `pm-spec revise` changes the
+        # requirements, the step gets its one rewrite back (`reopen_if_edited`).
+        record_blocked_review(
+            config, state, state_path, name, str(found), "", final=True
+        )
+        raise
     except PlanRepairRejected as rejection:
         record_advisory(config, name, rejection.advisory)
         block_on_findings(
@@ -641,24 +705,36 @@ async def run_plan_review_stage(
         raise
 
 
-def _no_behaviour_findings(change_dir: Path) -> list[PlanReviewFinding]:
-    """The deterministic no-behaviour block scan, as plan review findings.
+def _scan_findings(change_dir: Path) -> list[PlanReviewFinding]:
+    """The deterministic scans of tasks.md, as plan check findings: the
+    placeholder scan and the no-behaviour block scan.
 
-    The design audit's rewrite of tasks.md comes after the shape audit, so the
-    scan runs here too: a block the reviewer model misses still reaches the
-    one regeneration. The prototype feedback pass, after this review, runs the
-    same scan on what it writes.
+    They always run, so a placeholder or a block the model misses still
+    reaches the one rewrite, and they block the recheck whatever the model
+    says: they are code facts, not model judgments.
     """
-    from ..spec_generator import scan_no_behaviour_blocks
+    from ..spec_generator import scan_no_behaviour_blocks, scan_placeholders
 
-    return [
+    tasks = change_dir / "tasks.md"
+    placeholders = [
+        PlanReviewFinding(
+            category=f["category"],
+            severity=f["severity"],
+            file_path="tasks.md",
+            location=f["description"].split(":", 1)[0],
+            claim=f["description"],
+            suggestion=f["suggestion"],
+        )
+        for f in scan_placeholders(tasks.read_text() if tasks.exists() else "")
+    ]
+    return placeholders + [
         PlanReviewFinding(
             category=f["category"],
             severity=f["severity"],
             file_path="tasks.md",
             location=f"Block {f['block']} — {f['name']}",
             claim=f["description"],
-            reason=f["suggestion"],
+            suggestion=f["suggestion"],
         )
-        for f in scan_no_behaviour_blocks(change_dir / "tasks.md")
+        for f in scan_no_behaviour_blocks(tasks)
     ]

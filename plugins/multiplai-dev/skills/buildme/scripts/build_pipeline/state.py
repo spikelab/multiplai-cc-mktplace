@@ -49,6 +49,43 @@ class StepOutcome(BaseModel):
     rules_version: int = 0
 
 
+# The plan files each step's outcome is tied to (`SpecGenState.step_revision`),
+# besides specs.md and requirements/*.md, which every step reads. A step not
+# listed is tied to the whole plan revision.
+STEP_INPUTS: dict[str, frozenset[str]] = {
+    "explainers": frozenset({"proposal.md", "design.md", "config.yaml", "references"}),
+    # The one plan check: what the tasks audit and the design audit it replaced
+    # read, plus the rubric.
+    "plan_review": frozenset(
+        {
+            "tasks.md",
+            "design.md",
+            "proposal.md",
+            "use-cases.md",
+            "unknowns.md",
+            "rubric.md",
+            "config.yaml",
+            "references",
+            "granularity",
+        }
+    ),
+}
+
+# Steps the one plan check replaced; a checkpoint's entries for them are
+# dropped on load (rows S10, S11 of plan-buildme-planning-checks-2026-10-27.md).
+RETIRED_STEPS = ("tasks_audit", "design_audit")
+
+
+def _inputs_revision(name: str, artifact_hashes: dict[str, str]) -> str:
+    keys = STEP_INPUTS[name]
+    inputs = {
+        k: v
+        for k, v in artifact_hashes.items()
+        if k in keys or k == "specs.md" or k.startswith("requirements/")
+    }
+    return hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
+
+
 class SpecGenState(BaseModel):
     """State for the spec generator sub-pipeline."""
 
@@ -90,6 +127,23 @@ class SpecGenState(BaseModel):
                         **step,
                         "repair_attempts": max(1, step.get("repair_attempts", 0)),
                     }
+            for name in RETIRED_STEPS:
+                steps.pop(name, None)
+            # plan_review was tied to the whole plan revision before it had
+            # inputs of its own. A revision recorded against the saved plan
+            # revision is re-tied to the same saved hashes, so a step that
+            # passed at the current plan stays passed.
+            review = steps.get("plan_review")
+            plan = value.get("revision")
+            if isinstance(review, dict) and plan:
+                review = dict(review)
+                current = _inputs_revision(
+                    "plan_review", dict(value.get("artifact_hashes") or {})
+                )
+                for field in ("revision", "blocked_revision"):
+                    if review.get(field) == plan:
+                        review[field] = current
+                steps["plan_review"] = review
             value["steps"] = steps
         return value
 
@@ -107,34 +161,9 @@ class SpecGenState(BaseModel):
         self.steps[name].repair_findings = [dict(f) for f in findings or []]
 
     def step_revision(self, name: str) -> str:
-        keys = {
-            "explainers": {"proposal.md", "design.md", "config.yaml", "references"},
-            "tasks_audit": {
-                "tasks.md",
-                "design.md",
-                "proposal.md",
-                "use-cases.md",
-                "unknowns.md",
-                "config.yaml",
-                "references",
-                "granularity",
-            },
-            "design_audit": {
-                "proposal.md",
-                "design.md",
-                "tasks.md",
-                "config.yaml",
-                "references",
-            },
-        }.get(name)
-        if keys is None:
+        if name not in STEP_INPUTS:
             return self.revision
-        inputs = {
-            k: v
-            for k, v in self.artifact_hashes.items()
-            if k in keys or k == "specs.md" or k.startswith("requirements/")
-        }
-        return hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
+        return _inputs_revision(name, self.artifact_hashes)
 
     def step_passed(self, name: str) -> bool:
         step = self.steps.get(name)

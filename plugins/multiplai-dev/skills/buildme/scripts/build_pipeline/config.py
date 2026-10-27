@@ -458,8 +458,6 @@ MODEL_STAGES: tuple[str, ...] = ("spec", "agent", "review")
 STEP_STAGES: dict[str, str] = {
     "spec_artifact": "spec",
     "rubric": "spec",
-    "design_audit": "spec",
-    "tasks_audit": "spec",
     "codebase_analysis": "spec",
     "explainer": "spec",
     "respec": "spec",
@@ -482,6 +480,10 @@ STEP_STAGES: dict[str, str] = {
     "findings_triage": "review",
     "findings_self_check": "review",
 }
+
+# Steps the one plan check (`plan_review`) replaced. A `models:` or `efforts:`
+# key naming one is dropped with a warning that says which key applies now.
+RETIRED_STEP_KEYS: frozenset[str] = frozenset({"design_audit", "tasks_audit"})
 
 # The keys `models:` and `efforts:` accept: a step, a stage, or `default`.
 MODEL_KEYS: frozenset[str] = (
@@ -1439,7 +1441,14 @@ class BuildConfig:
         specs: dict[str, str] = {}
         for key, spec in _cfg_mapping(data.get("models"), "models").items():
             key = str(key)
-            if key not in MODEL_KEYS:
+            if key in RETIRED_STEP_KEYS:
+                log.warning(
+                    "models.%s in config.yaml no longer has any effect: one "
+                    "plan check replaced the design and tasks audits, and "
+                    "models.plan_review is the key that applies to it",
+                    key,
+                )
+            elif key not in MODEL_KEYS:
                 log.warning(
                     "Dropping models.%s in config.yaml — not a buildme step, "
                     "a stage (%s) or 'default'",
@@ -1462,7 +1471,14 @@ class BuildConfig:
         for key, value in _cfg_mapping(data.get("efforts"), "efforts").items():
             key = str(key)
             name = str(value).strip().lower() if value is not None else ""
-            if key not in MODEL_KEYS:
+            if key in RETIRED_STEP_KEYS:
+                log.warning(
+                    "efforts.%s in config.yaml no longer has any effect: one "
+                    "plan check replaced the design and tasks audits, and "
+                    "efforts.plan_review is the key that applies to it",
+                    key,
+                )
+            elif key not in MODEL_KEYS:
                 log.warning(
                     "Dropping efforts.%s in config.yaml — not a buildme step, "
                     "a stage (%s) or 'default'",
