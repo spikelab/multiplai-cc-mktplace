@@ -1,8 +1,16 @@
-"""verify: one fresh agent per surviving finding, then `verdict_gate`.
+"""verify: one fresh agent per surviving HIGH or MEDIUM finding, then `verdict_gate`.
 
 - confirmed → stays in the review, and goes on to merge.
 - refuted → the appendix, with the verifier's reason.
 - unverifiable → stays in the review, severity lowered one step.
+- unverified → a finding the finder rated LOW: no verifier is asked unless
+  `verify_low` is on (`review.yaml`, `--verify-low`). The stage writes its
+  verdict in code, with an empty reason, no impact, and the topic `tests`
+  for a finding of the `tests` dimension (none otherwise). It stays in the
+  review and goes on to merge, like a confirmed one, and has no `AgentCheck`.
+  Verify only ever lowers a severity, so leaving LOW findings unverified
+  hides no HIGH or MEDIUM one. A trim finding is verified at any severity:
+  its `important` label below needs the verifier's impact.
 
 An `unverifiable` verdict can name what the verifier could not read, each
 with a command a person would run to get it. Those go to `state.needs`
@@ -22,8 +30,8 @@ A finding whose every try failed gets no verdict: the stage lets the other
 verifiers finish, keeps their verdicts, then raises `VerifyIncomplete`, and
 `resume` asks only for the findings left without one. A hit usage limit is
 never tried again: it stops the stage at once (`sdk.UsageLimitError`), with
-the verdicts already returned kept. No finding reaches the
-review unverified or with no impact or topic. A finding about `tests` never
+the verdicts already returned kept. No HIGH or MEDIUM finding reaches the
+review unverified or with no impact or topic; with `verify_low` on, no finding does. A finding about `tests` never
 breaks users or the business: a `breaks-*` impact on one is lowered to
 `correctness-only`, with a line in `state.errors`.
 
@@ -105,7 +113,7 @@ def important_assessments(state: ReviewState) -> dict[str, Assessment]:
         for f in state.findings
         if is_trim(f)
         and getattr(state.verdicts.get(f.id), "status", "")
-        in ("confirmed", "unverifiable")
+        in ("confirmed", "unverifiable", "unverified")
     ]
     members = {f.id: [f] for f in candidates}
     for m in state.merged:
@@ -160,10 +168,30 @@ def unverifiable_severity(severity: str, *, has_need: bool) -> str:
     return lowered
 
 
+def unverified_verdict(finding: Finding) -> Verdict:
+    """The verdict of a LOW finding no verifier is asked about, made in code."""
+    return Verdict(
+        finding_id=finding.id,
+        status="unverified",
+        reason="",
+        topic="tests" if finding.dimension == "tests" else "",
+    )
+
+
 async def run_verify(state: ReviewState, ctx: RunContext) -> ReviewState:
     if state.past("verify"):
         return state
     target, cfg = state.target, ctx.config
+    if not cfg.verify_low:
+        unasked = [
+            f
+            for f in state.findings
+            if f.severity == "LOW" and not is_trim(f) and f.id not in state.verdicts
+        ]
+        for f in unasked:
+            state.verdicts[f.id] = unverified_verdict(f)
+        if unasked:
+            save(state, ctx)
     todo = [f for f in state.findings if f.id not in state.verdicts]
 
     failed: dict[str, str] = {}
@@ -330,13 +358,14 @@ async def run_verify(state: ReviewState, ctx: RunContext) -> ReviewState:
         state.verdicts[f.id].status for f in state.findings if f.id in state.verdicts
     ]
     ctx.counts = {
-        s: statuses.count(s) for s in ("confirmed", "refuted", "unverifiable")
+        s: statuses.count(s)
+        for s in ("confirmed", "refuted", "unverifiable", "unverified")
     }
     missing = [
         f.id
         for f in state.findings
         if (v := state.verdicts.get(f.id))
-        and v.status != "refuted"
+        and v.status in ("confirmed", "unverifiable")
         and not v.expected_behaviour.strip()
     ]
     if missing:

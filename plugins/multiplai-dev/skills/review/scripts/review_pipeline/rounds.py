@@ -48,7 +48,7 @@ log = logging.getLogger(__name__)
 
 ROUNDS_DIR = "rounds"
 PATHS_CACHE = "paths-cache"  # the paths stage's answer cache (`stages/paths.py`)
-SHOWN_STATUSES = ("confirmed", "unverifiable")
+SHOWN_STATUSES = ("confirmed", "unverifiable", "unverified")
 
 
 def _read_json(path: Path) -> dict | None:

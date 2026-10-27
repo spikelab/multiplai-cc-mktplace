@@ -484,8 +484,109 @@ async def test_verify_downgrades_uncited_confirmation_and_keeps_refuted(
         "confirmed": 0,
         "refuted": 1,
         "unverifiable": 1,
+        "unverified": 0,
         "no_expected_behaviour": 1,
     }
+
+
+def two_low_one_medium() -> list:
+    low = [
+        high_finding().with_location(severity="LOW", claim=f"Low finding {n}")
+        for n in (1, 2)
+    ]
+    return [*low, medium_finding()]
+
+
+def medium_verdict() -> Verdict:
+    return Verdict(
+        status="confirmed",
+        impact="correctness-only",
+        topic="code",
+        reason="it does",
+        citations=[KEYWORD_USE_CITATION],
+        expected_behaviour="It matches.",
+    )
+
+
+async def test_verify_asks_no_verifier_about_a_low_finding(
+    target_info, ctx, monkeypatch
+):
+    findings = two_low_one_medium()
+    canned = use(monkeypatch, {"verify": [medium_verdict()]})
+    state = await run_verify(
+        ReviewState(target=target_info, stage="find", findings=findings), ctx
+    )
+    assert len(canned.calls) == 1
+    low, medium = findings[:2], findings[2]
+    for f in low:
+        v = state.verdicts[f.id]
+        assert (v.status, v.reason, v.impact, v.topic) == ("unverified", "", "", "")
+    assert state.verdicts[medium.id].status == "confirmed"
+    # Only the verifier's call is recorded; an unverified finding has no AgentCheck.
+    assert [c.subject for c in state.checks] == [medium.id]
+    assert [f.severity for f in state.findings] == ["LOW", "LOW", "MEDIUM"]
+    assert ctx.counts["unverified"] == 2
+    assert "no_expected_behaviour" not in ctx.counts
+
+
+async def test_verify_low_asks_a_verifier_about_every_finding(
+    target_info, ctx, monkeypatch
+):
+    ctx.config.verify_low = True
+    canned = use(monkeypatch, {"verify": [medium_verdict()] * 3})
+    state = await run_verify(
+        ReviewState(target=target_info, stage="find", findings=two_low_one_medium()),
+        ctx,
+    )
+    assert len(canned.calls) == 3
+    assert {v.status for v in state.verdicts.values()} == {"confirmed"}
+
+
+async def test_a_low_tests_finding_is_unverified_with_the_tests_topic_and_a_low_trim_finding_is_verified(
+    target_info, ctx, monkeypatch
+):
+    tests_low = high_finding().with_location(
+        severity="LOW", claim="A test is missing", dimension="tests", finder="tests"
+    )
+    trim_low = high_finding().with_location(
+        severity="LOW", claim="Merge two tests", dimension="trim", finder="trim"
+    )
+    canned = use(monkeypatch, {"verify": [medium_verdict()]})
+    state = await run_verify(
+        ReviewState(target=target_info, stage="find", findings=[tests_low, trim_low]),
+        ctx,
+    )
+    assert state.verdicts[tests_low.id].topic == "tests"
+    assert state.verdicts[tests_low.id].status == "unverified"
+    assert len(canned.calls) == 1 and state.verdicts[trim_low.id].status == "confirmed"
+
+
+async def test_verify_resumed_after_the_low_verdicts_asks_only_for_the_rest(
+    target_info, ctx, monkeypatch, tmp_path
+):
+    """Row S5: LOW findings already have their code-made verdict, so a resume makes no call for them."""
+    findings = two_low_one_medium()
+    ctx.target_dir = tmp_path / "out"
+    ctx.target_dir.mkdir(exist_ok=True)
+    use(monkeypatch, {"verify": [sdk.UsageLimitError("limit")]})
+    state = ReviewState(target=target_info, stage="find", findings=findings)
+    with pytest.raises(sdk.UsageLimitError):
+        await run_verify(state, ctx)
+    saved = load_state(ctx.target_dir / STATE_FILE)
+    assert {v.status for v in saved.verdicts.values()} == {"unverified"}
+    assert len(saved.verdicts) == 2
+    canned = use(monkeypatch, {"verify": [medium_verdict()]})
+    state = await run_verify(saved, ctx)
+    assert len(canned.calls) == 1 and len(state.verdicts) == 3
+    assert state.stage == "verify"
+
+
+def test_a_verifier_cannot_answer_unverified():
+    from pydantic import ValidationError
+    from review_pipeline.models import VerifierAnswer
+
+    with pytest.raises(ValidationError, match="confirmed, refuted or unverifiable"):
+        VerifierAnswer(status="unverified", reason="", impact="hygiene", topic="code")
 
 
 async def test_verify_keeps_a_grounded_confirmation_and_its_expected_behaviour(

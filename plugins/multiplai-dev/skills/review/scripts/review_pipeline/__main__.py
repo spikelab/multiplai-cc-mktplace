@@ -114,6 +114,15 @@ def _deps_flag(p: argparse.ArgumentParser) -> None:
     )
 
 
+def _verify_low_flag(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--verify-low",
+        action="store_true",
+        help="Verify LOW findings too; without it they reach the review unverified, "
+        "with no verifier call (review.yaml: verify_low)",
+    )
+
+
 def _model_flag(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--model",
@@ -256,6 +265,7 @@ def build_parser() -> argparse.ArgumentParser:
     _mode_flag(rv)
     _deps_flag(rv)
     _model_flag(rv)
+    _verify_low_flag(rv)
 
     bt = sub.add_parser(
         "batch",
@@ -271,6 +281,7 @@ def build_parser() -> argparse.ArgumentParser:
     _trust_flag(bt)
     _budget_flag(bt)
     _mode_flag(bt)
+    _verify_low_flag(bt)
 
     ru = sub.add_parser(
         "rollup",
@@ -293,6 +304,7 @@ def build_parser() -> argparse.ArgumentParser:
     _budget_flag(rs)
     _deps_flag(rs)
     _model_flag(rs)
+    _verify_low_flag(rs)
 
     po = sub.add_parser(
         "post",
@@ -410,6 +422,8 @@ def main(argv: list[str] | None = None) -> int:
             raise orchestrator.ReviewError(str(e)) from e
         if getattr(args, "no_deps", False):
             config.deps = False
+        if getattr(args, "verify_low", False):
+            config.verify_low = True
         if getattr(args, "model", None):
             config.finder_model = config.verifier_model = config.merger_model = (
                 args.model

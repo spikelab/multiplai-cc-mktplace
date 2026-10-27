@@ -15,6 +15,25 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.112.0] - 2026-10-27
+
+### Changed
+- `/multiplai-dev:review` no longer sends LOW findings to a verifier. A
+  finding the finder rated LOW reaches the review with the new status
+  `unverified` and the finder's own text, in a last section **Not verified
+  (LOW)** of `review-<slug>.md`. HIGH and MEDIUM findings are verified as
+  before, and so is a trim finding at any severity. On two Dolcebot reviews
+  most of the verify spend went to LOW findings no one acted on.
+- `--verify-low` (on `review`, `batch` and `resume`) or `verify_low: true`
+  in `review.yaml` verifies LOW findings as before.
+- `/multiplai-dev:review-viewer` hides LOW findings until you press **Show N
+  low findings** in the list. It remembers the choice in your browser. A LOW
+  finding opened by a link or by Prev/Next still shows. The open-findings
+  count on the Summary tab counts `unverified` findings like confirmed ones.
+- `findings.json` may carry status `unverified`, and `run.counts.unverified`.
+  Both are additive to schema v1. buildme's `--auto` posts accepted
+  `unverified` findings like the review lists them.
+
 ## [0.111.0] - 2026-10-27
 
 ### Changed

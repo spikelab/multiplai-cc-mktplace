@@ -229,6 +229,7 @@ def test_every_run_field_is_filled_from_the_state(canned_state):
         "rejected": 1,
         "refuted": 1,
         "unverifiable": 1,
+        "unverified": 0,
         "merged": 0,
         "repeats": 0,
         "low_value": 0,

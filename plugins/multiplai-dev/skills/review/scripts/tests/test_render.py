@@ -76,6 +76,32 @@ def test_header_and_sections(canned_state):
     assert "unverifiable (lowered from MEDIUM)" in text
 
 
+def test_unverified_low_findings_go_to_their_own_last_section(canned_state):
+    import jsonschema
+    from conftest import SCHEMA, high_finding
+    from review_pipeline.stages.verify import unverified_verdict
+
+    low = high_finding().with_location(severity="LOW", claim="A LOW one nobody checked")
+    state = canned_state.model_copy(
+        update={
+            "findings": [*canned_state.findings, low],
+            "verdicts": {**canned_state.verdicts, low.id: unverified_verdict(low)},
+        }
+    )
+    data = to_findings_file(state)
+    jsonschema.validate(data, json.loads(SCHEMA.read_text()))
+    row = next(f for f in data["findings"] if f["id"] == low.id)
+    assert row["status"] == "unverified" and "impact" not in row
+    assert data["run"] is None or data["run"]["counts"]["unverified"] == 1
+    text = render_review(state, findings_file=data)
+    heading = "## Not verified (LOW)"
+    assert heading in text
+    tail = text[text.index(heading) :]
+    assert "## Appendix" not in tail, "the section comes last"
+    assert f"### LOW — rateplan_service.py:1 — {low.claim}" in tail
+    assert text.count(low.claim) == 1, "listed once, not also under Code"
+
+
 def test_citations_are_full_sha_github_links(canned_state):
     head = canned_state.target.head_sha
     text = render_review(canned_state)

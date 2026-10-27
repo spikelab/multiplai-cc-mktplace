@@ -147,22 +147,35 @@
    * Refuted and decided findings are left out unless showHidden; `hidden`
    * counts them. Gate-rejected, low-value and repeat findings are never here
    * (shownFindings). Trim is listed only when a finding is in it: reviews
-   * before multiplai-dev 0.71 have none. */
-  function groupFindings(findings, decisions, showHidden) {
+   * before multiplai-dev 0.71 have none.
+   * With `low` given and `low.show` false, LOW findings are left out too, all
+   * but `low.keep` (the finding open on the page, reached by a link or by
+   * Prev/Next); `low` counts the LOW findings that would be listed with it on.
+   * Without `low`, every LOW finding is listed. */
+  function groupFindings(findings, decisions, showHidden, low) {
     const sections = SECTIONS.map((name) => ({ section: name, title: SECTION_TITLES[name],
       groups: { HIGH: [], MEDIUM: [], LOW: [] } }));
-    let hidden = 0;
+    let hidden = 0, lowCount = 0;
     for (const f of shownFindings(findings)) {
       if (isHidden(f, decisions)) {
         hidden += 1;
         if (!showHidden) continue;
+      }
+      if (f.severity === "LOW") {
+        lowCount += 1;
+        if (low && !low.show && f.id !== low.keep) continue;
       }
       const groups = sections[SECTIONS.indexOf(findingSection(f))].groups;
       (groups[f.severity] || (groups[f.severity] = [])).push(f);
     }
     const listed = sections.filter((s) => s.section !== "trim" ||
       Object.keys(s.groups).some((sev) => s.groups[sev].length));
-    return { sections: listed, hidden: hidden };
+    return { sections: listed, hidden: hidden, low: lowCount };
+  }
+
+  /* The label of the list's LOW toggle: "Show 3 low findings", "Hide 3 low findings". */
+  function lowToggleLabel(count, show) {
+    return (show ? "Hide " : "Show ") + count + " low finding" + (count === 1 ? "" : "s");
   }
 
   /* Ids in the order the list shows them: Code, Tests, Docs, Trim, and HIGH,
@@ -691,7 +704,9 @@
     const open = { HIGH: 0, MEDIUM: 0 };
     for (const f of shownFindings(findings)) {
       const d = effectiveDecision(f, decisions);
-      if (f.status === "confirmed" && !(d && d.decision === "reject") && f.severity in open) open[f.severity] += 1;
+      // A LOW finding no verifier was asked about counts like a confirmed one.
+      if ((f.status === "confirmed" || f.status === "unverified") && !(d && d.decision === "reject") &&
+        f.severity in open) open[f.severity] += 1;
     }
     const checks = badge("checks");
     const size = badge("size");
@@ -1573,6 +1588,7 @@
     SEVERITIES: SEVERITIES, joinParts: joinParts, groupReplies: groupReplies,
     isPending: isPending, pollDelay: pollDelay, applyPoll: applyPoll, citationRows: citationRows,
     isHidden: isHidden, groupFindings: groupFindings, findingOrder: findingOrder, navOrder: navOrder,
+    lowToggleLabel: lowToggleLabel,
     githubBlobUrl: githubBlobUrl, findingFileName: findingFileName, shareOptions: shareOptions, shareText: shareText, findingTopic: findingTopic, findingMarkdown: findingMarkdown,
     assessLabel: assessLabel, shownFindings: shownFindings, shownFile: shownFile, findingSection: findingSection,
     CRITICAL_IMPACTS: CRITICAL_IMPACTS, effectiveDecision: effectiveDecision,

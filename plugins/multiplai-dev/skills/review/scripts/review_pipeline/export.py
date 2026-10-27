@@ -8,6 +8,7 @@ and the pipeline's models carry more than it allows.
 |--------------------------------------|----------------|
 | confirmed                            | `confirmed`    |
 | unverifiable (lowered severity kept) | `unverifiable` |
+| LOW, no verifier asked (0.112+)      | `unverified`   |
 | refuted                              | `refuted`      |
 | gate-rejected                        | `rejected`     |
 
@@ -73,6 +74,9 @@ from .models import (
 )
 
 log = logging.getLogger(__name__)
+
+# The statuses a finding is shown with; only these carry `expected_behaviour`, `impact` and `assessment`.
+SHOWN = ("confirmed", "unverifiable", "unverified")
 
 PLUGIN_JSON = Path(__file__).resolve().parents[4] / ".claude-plugin" / "plugin.json"
 
@@ -233,6 +237,7 @@ def run_record(state: ReviewState) -> dict:
             "rejected": len(state.rejected),
             "refuted": statuses.count("refuted"),
             "unverifiable": statuses.count("unverifiable"),
+            "unverified": statuses.count("unverified"),
             "merged": len(state.merged),
             "repeats": labels.count("repeat"),
             "low_value": labels.count("low-value"),
@@ -291,17 +296,13 @@ def to_findings_file(
         verdict = state.verdicts.get(f.id)
         status = verdict.status if verdict else "unverifiable"
         reason = verdict.reason if verdict else "not verified"
-        expected = (
-            verdict.expected_behaviour
-            if verdict and status in ("confirmed", "unverifiable")
-            else None
-        )
+        expected = verdict.expected_behaviour if verdict and status in SHOWN else None
         row = _finding(f, status, reason, expected)
         if verdict:
             row["verifier_citations"] = [_citation(c) for c in verdict.citations]
             if verdict.topic:
                 row["topic"] = verdict.topic
-            if verdict.impact and status in ("confirmed", "unverifiable"):
+            if verdict.impact and status in SHOWN:
                 row["impact"] = verdict.impact
         row["section"] = section_of(verdict.topic if verdict else None, f.finders)
         if f.id in merged_into:
@@ -309,11 +310,11 @@ def to_findings_file(
         if state.lineage.get(f.id, f.id) != f.id:
             row["lineage"] = state.lineage[f.id]
         assessment = state.assessments.get(f.id)
-        if assessment is not None and status in ("confirmed", "unverifiable"):
+        if assessment is not None and status in SHOWN:
             row["assessment"] = _assessment(assessment)
         rows.append(row)
     rank = {s: i for i, s in enumerate(SEVERITIES)}
-    order = {"confirmed": 0, "unverifiable": 1, "refuted": 2}
+    order = {"confirmed": 0, "unverifiable": 1, "unverified": 2, "refuted": 3}
     rows.sort(key=lambda r: (order[r["status"]], rank[r["severity"]]))
     for r in state.rejected:
         rows.append(
