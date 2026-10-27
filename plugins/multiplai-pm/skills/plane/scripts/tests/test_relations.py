@@ -58,7 +58,10 @@ def stub(monkeypatch, *, relations=None, error=None):
         if method == "GET":
             iid = path.rstrip("/").rsplit("/", 1)[-1]
             ident, seq, _ = iid.split("-")
-            return issue(ident.upper(), int(seq))
+            found = issue(ident.upper(), int(seq))
+            if f"/projects/{found['project']}/" not in path:
+                raise plane.PlaneError(f"GET {path} -> 404: Work item not found")
+            return found
         return {"id": "x"}
 
     monkeypatch.setattr(plane, "resolve_issue", resolve)
@@ -270,3 +273,41 @@ def test_relations_lists_refs_and_withholds_issues_outside_the_allowlist(monkeyp
     assert "OPS" not in out and "ops-1-id" not in out
     assert "1 relation(s) to issues outside the allowlist withheld" in err
     assert not any(BAD in c[1] for c in calls)
+
+
+def test_relations_reads_bare_issue_ids(monkeypatch):
+    # Some Plane servers answer with a list of issue ids per type, with no
+    # project id, so each id is looked up in the allowed projects instead.
+    calls = stub(
+        monkeypatch,
+        relations={
+            "blocked_by": ["spk-3-id", "web-7-id"],
+            "relates_to": ["ops-1-id"],
+        },
+    )
+    out, err = run(
+        plane.cmd_relations, Args(project=None, ref="SPK-12"), ALLOWED_TWO_CFG
+    )
+    lines = out.splitlines()
+    assert any(line.startswith("blocked_by") and "SPK-3" in line for line in lines)
+    assert any(line.startswith("blocked_by") and "WEB-7" in line for line in lines)
+    assert "OPS" not in out and "ops-1-id" not in out
+    assert "1 relation(s) to issues outside the allowlist withheld" in err
+    assert not any(BAD in c[1] for c in calls)
+    # The issue's own project is tried first.
+    gets = [c[1] for c in calls if c[1].endswith("/spk-3-id/")]
+    assert gets == [f"/projects/{OK}/issues/spk-3-id/"]
+
+
+def test_relations_surfaces_errors_other_than_404_for_bare_ids(monkeypatch):
+    stub(monkeypatch, relations={"blocked_by": ["spk-3-id"]})
+    real = plane._request
+
+    def request(method, path, cfg, **kw):
+        if path.endswith("/spk-3-id/"):
+            raise plane.PlaneError(f"GET {path} -> 401: bad token")
+        return real(method, path, cfg, **kw)
+
+    monkeypatch.setattr(plane, "_request", request)
+    with pytest.raises(plane.PlaneError, match="401"):
+        run(plane.cmd_relations, Args(project=None, ref="SPK-12"), ALLOWED_TWO_CFG)
