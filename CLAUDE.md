@@ -266,12 +266,15 @@ stated where a renamer will actually see it: the kit's
 **The two maps agree on `reference/dev/` and deliberately diverge past it.** A
 name common to both must name the same file. But `STACK_DOCS` additionally
 names the review checklists in `reference/review/`, and
-`_DEFAULT_REFERENCE_DOCS` must not: `stack_reference_docs()` resolves only
-under `reference/dev/` (`build_pipeline/config.py:849`), so an entry naming a
-review doc there would be a dead map entry, and buildme inlines *contents*
-where the context hook injects a pointer. Adding a `reference/` subdirectory to
-the context side is a one-line change to `REFERENCE_SUBDIRS`; giving buildme
-the same reach is a resolver change, not a map change.
+`_DEFAULT_REFERENCE_DOCS` must not: by default `stack_reference_docs()` looks
+names up only under `reference/dev/` (`reference_dirs_source()` in
+`build_pipeline/config.py`), so an entry naming a review doc there would be a
+dead map entry, and buildme inlines *contents* where the context hook injects a
+pointer. Adding a `reference/` subdirectory to the context side is a one-line
+change to `REFERENCE_SUBDIRS`. On the buildme side a user widens the search
+with `reference_dirs` (environment, `specs/config.yaml`, plugin option or
+`multiplai.conf`; buildme's SKILL.md, "Choosing the docs"), not with a map
+change.
 
 ## Where the memory system lives — the common wrong-repo mistake
 

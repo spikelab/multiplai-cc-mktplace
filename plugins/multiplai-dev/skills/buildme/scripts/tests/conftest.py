@@ -77,6 +77,24 @@ def no_inherited_build_env(monkeypatch):
     monkeypatch.delenv("WORKSPACE", raising=False)
 
 
+# Where the reviewer's standards and the spec writer's reference docs come from
+# (config.standards_source / reference_dirs_source). Set in the developer's
+# shell or plugin options, any of these would swap a test's docs for theirs.
+_DOC_SOURCE_VARS = (
+    "BUILDME_STANDARDS_FILES",
+    "BUILDME_REFERENCE_DOCS",
+    "BUILDME_REFERENCE_DIRS",
+    "CLAUDE_PLUGIN_OPTION_STANDARDS_FILES",
+    "CLAUDE_PLUGIN_OPTION_REFERENCE_DIRS",
+)
+
+
+@pytest.fixture(autouse=True)
+def no_inherited_doc_sources(monkeypatch):
+    for key in _DOC_SOURCE_VARS:
+        monkeypatch.delenv(key, raising=False)
+
+
 @pytest.fixture(autouse=True)
 def git_identity(monkeypatch):
     """Code under test commits through `git_ops` with the process environment, and
