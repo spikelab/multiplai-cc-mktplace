@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import difflib
 import hashlib
 import json
 import logging
@@ -29,6 +30,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
+import yaml
 from multiplai_core.specs import change_root
 
 from build_pipeline.budget import BudgetExceededError
@@ -939,6 +941,32 @@ def number_findings(step: str, findings: list[dict], *, start: int = 1) -> list[
     ]
 
 
+def next_finding_number(listed: list[dict]) -> int:
+    """The number after the highest `-F<n>` id among *listed*, so a later
+    rewrite's new findings never reuse an earlier one's id."""
+    numbers = [
+        int(m.group(1))
+        for f in listed
+        if (m := re.search(r"-F(\d+)$", str(f.get("finding_id", ""))))
+    ]
+    return max(numbers, default=0) + 1
+
+
+# The budget labels of planning's model calls, which `planning.max_usd` caps:
+# the design, tasks and unknowns writers (`spec:<artifact>`), the rewrite's
+# edits, the plan check, the rubric and the explainers.
+PLANNING_LABELS = ("plan_rewrite", "plan_review", "rubric", "explainer")
+
+
+def planning_spend() -> float:
+    """What this build's planning calls have cost so far, in USD."""
+    return sum(
+        usd
+        for label, usd in budget.get_budget().usd_by_label.items()
+        if label.startswith("spec:") or label in PLANNING_LABELS
+    )
+
+
 def saved_findings(findings: list[dict]) -> list[dict]:
     """The fields of each finding a checkpoint keeps in `repair_findings`.
     `source` is `scan` for a finding of the deterministic scans."""
@@ -1241,7 +1269,9 @@ class PlanBlocked(RuntimeError):
     """A planning step stopped on findings, already recorded as blocked."""
 
 
-REOPEN_LINE = "Edit the plan to fix these and resume; the step then gets one rewrite."
+REOPEN_LINE = (
+    "Edit the plan to fix these and resume; the step then gets its rewrites again."
+)
 
 
 def block_on_findings(
@@ -1296,8 +1326,9 @@ def refuse_if_blocked(sg: SpecGenState, name: str) -> None:
 
 
 def reopen_if_edited(state: BuildState, name: str, state_path: Path) -> None:
-    """A step findings blocked whose input files changed since: the plan was
-    edited, so it gets its one rewrite back. A step blocked under an older
+    """A step findings blocked whose inputs changed since (the plan was
+    edited, or the `planning:` limits were raised) gets a fresh count of
+    rewrites. A step blocked under an older
     blocking rule (`rules_version` below `PLAN_RULES_VERSION`) is reopened the
     same way, once: its saved blocking findings are cleared too, so the fresh
     check is not refused."""
@@ -1316,10 +1347,12 @@ def reopen_if_edited(state: BuildState, name: str, state_path: Path) -> None:
         return
     else:
         log.warning(
-            "%s: plan changed since it was blocked; one rewrite allowed again", name
+            "%s: plan changed since it was blocked; its rewrites are counted again",
+            name,
         )
     step.repair_attempts = 0
     step.repair_findings = []
+    step.blocking_counts = []
     step.blocked_revision = None
     state.checkpoint(state_path)
 
@@ -1371,6 +1404,40 @@ def _load_or_create_state(config) -> BuildState:
     return state
 
 
+# The `_plan_hashes` key of config.yaml's `planning:` section. Only the plan
+# check's inputs (`state.STEP_INPUTS`) include it: raising `planning.max_usd`
+# or `planning.max_rewrites` reopens a blocked check, and marks nothing stale
+# and leaves the plan revision as it was (row S8).
+PLANNING_KEY = "planning"
+
+
+def _split_planning_section(text: str) -> tuple[str, str]:
+    """config.yaml's text without its top-level `planning:` section, and the
+    section. The section runs to the next line that starts at column 0; blank
+    lines after it go with it. A file with no section comes back unchanged, so
+    its hash is what it was before the section existed."""
+    lines = text.splitlines(keepends=True)
+    for start, line in enumerate(lines):
+        if re.match(r"planning\s*:", line):
+            end = start + 1
+            while end < len(lines) and (
+                not lines[end].strip() or lines[end][0] in " \t"
+            ):
+                end += 1
+            return "".join(lines[:start] + lines[end:]), "".join(lines[start:end])
+    return text, ""
+
+
+def _planning_hash(section: str) -> str:
+    try:
+        value = yaml.safe_load(section)
+    except yaml.YAMLError:
+        value = section
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, default=str).encode()
+    ).hexdigest()
+
+
 def _plan_hashes(config) -> dict[str, str]:
     # A component's proposal and use cases are its change's (`change_root`).
     root = change_root(config.change_dir)
@@ -1396,12 +1463,21 @@ def _plan_hashes(config) -> dict[str, str]:
     files.update(
         {"registry/" + p.name: p for p in (config.specs_dir / "registry").glob("*.md")}
     )
-    files["config.yaml"] = config.specs_dir / "config.yaml"
     hashes = {
         name: hashlib.sha256(p.read_bytes()).hexdigest()
         for name, p in files.items()
         if p.is_file()
     }
+    config_path = config.specs_dir / "config.yaml"
+    if config_path.is_file():
+        rest, section = _split_planning_section(
+            config_path.read_bytes().decode("utf-8", "surrogateescape")
+        )
+        hashes["config.yaml"] = hashlib.sha256(
+            rest.encode("utf-8", "surrogateescape")
+        ).hexdigest()
+        if section:
+            hashes[PLANNING_KEY] = _planning_hash(section)
     hashes["references"] = hashlib.sha256(
         config.reference_docs_text().encode()
     ).hexdigest()
@@ -1464,7 +1540,11 @@ def reconcile_plan(
         stale.update({"tasks", "rubric"})
     stale -= (regenerated or set()) | recovered
     sg.stale_artifacts = sorted(stale)
-    revision = hashlib.sha256(json.dumps(current, sort_keys=True).encode()).hexdigest()
+    revision = hashlib.sha256(
+        json.dumps(
+            {k: v for k, v in current.items() if k != PLANNING_KEY}, sort_keys=True
+        ).encode()
+    ).hexdigest()
     if revision != sg.revision:
         # Evidence for any earlier revision is stale. The explanation stage is
         # advisory and does not authorize implementation.
@@ -1487,12 +1567,10 @@ def _finish_plan_publication(config) -> set[str]:
         return set()
     files = json.loads(journal.read_text())
     for name, item in files.items():
-        if Path(name).name != name or name not in {
-            "design.md",
-            "tasks.md",
-            "rubric.md",
-            "unknowns.md",
-        }:
+        if Path(name).name != name or not (
+            name in {"design.md", "tasks.md", "rubric.md", "unknowns.md"}
+            or PLAN_EDITS_DIFF.fullmatch(name)
+        ):
             raise ValueError("Invalid planning publication journal")
         path = config.change_dir / name
         actual = path.read_text() if path.exists() else None
@@ -1505,12 +1583,60 @@ def _finish_plan_publication(config) -> set[str]:
     return {Path(name).stem for name in files}
 
 
+# The unified diff of one rewrite's edits, `plan-edits-<attempt>.diff` in the
+# change dir; that attempt's recheck is shown it (`plan_edits_diff`).
+PLAN_EDITS_DIFF = re.compile(r"plan-edits-(\d+)\.diff")
+
+
+def apply_plan_edits(staged_dir: Path, edits) -> dict[str, str]:
+    """Apply a rewrite's edits (`models.PlanEdit`), in order, to design.md and
+    tasks.md in *staged_dir*, and return the text of each file they changed.
+
+    Each `old_str` must occur exactly once in its file as the edits before it
+    leave it. A miss, or no edits at all, raises `PlanRepairRejected` and
+    writes nothing.
+    """
+    if not edits:
+        _reject_edits("The rewrite returned no edits")
+    texts: dict[str, str] = {}
+    for index, edit in enumerate(edits, 1):
+        if edit.file not in texts:
+            path = staged_dir / edit.file
+            texts[edit.file] = path.read_text() if path.exists() else ""
+        count = texts[edit.file].count(edit.old_str) if edit.old_str else 0
+        if count != 1:
+            found = "not found" if count == 0 else f"found {count} times"
+            _reject_edits(f"Plan edit {index} in {edit.file}: old_str {found}")
+        texts[edit.file] = texts[edit.file].replace(edit.old_str, edit.new_str, 1)
+    for name, text in texts.items():
+        atomic_write(staged_dir / name, text)
+    return texts
+
+
+def _reject_edits(message: str) -> None:
+    blocking, _ = recheck_verdict(
+        [],
+        [],
+        [],
+        deterministic=[
+            {"category": "plan-edit", "severity": "critical", "description": message}
+        ],
+    )
+    raise PlanRepairRejected(message, blocking=blocking)
+
+
+def plan_edits_diff(change_dir: Path, attempt: int) -> str:
+    """The published diff of rewrite *attempt*; empty when there is none."""
+    path = Path(change_dir) / f"plan-edits-{attempt}.diff"
+    return path.read_text() if path.exists() else ""
+
+
 async def rewrite_plan(
     config,
     state: BuildState,
-    findings_text: str,
+    findings: list[dict],
     *,
-    design: bool = False,
+    attempt: int = 1,
     step: str | None = None,
 ) -> int:
     """The sole feedback publisher: stage, validate, then publish one revision.
@@ -1518,16 +1644,19 @@ async def rewrite_plan(
     Failed generation leaves the original set intact. A crash during publication
     leaves a journal that must reconcile before any consumer accepts the files.
 
-    `design` rewrites design.md (and unknowns.md) before tasks.md; without it
-    only tasks.md is rewritten. `step` names the caller. The staged plan must
-    pass the deterministic scans and the requirements check, or it raises
-    `PlanRepairRejected`; the caller's own recheck judges the rest.
+    One call (`run_plan_edit`) returns exact replacements in design.md and
+    tasks.md for these numbered findings, and `apply_plan_edits` applies them;
+    lines no edit names are kept byte for byte. An edited design.md gets its
+    unknowns.md written again. The rubric is written again whole, and
+    `plan-edits-<attempt>.diff` is published with the files. `step` names the
+    caller. The staged plan must pass the deterministic scans and the
+    requirements check, or it raises `PlanRepairRejected`; the caller's own
+    recheck judges the rest.
     """
-    from .llm_steps.spec_steps import generate_artifact
+    from .llm_steps.plan_review_steps import run_plan_edit
     from .tdd_engine import parse_blocks
 
     reconcile_plan(config, state)
-    names = ["design", "tasks"] if design else ["tasks"]
     with tempfile.TemporaryDirectory(prefix="buildme-plan-") as directory:
         staged = copy.copy(config)
         staged.specs_dir = Path(directory) / "specs"
@@ -1549,26 +1678,23 @@ async def rewrite_plan(
         if source_config.exists():
             shutil.copy2(source_config, staged.specs_dir / "config.yaml")
         cm = ChangeManager(staged.specs_dir)
-        for name in list(names):
-            if name == "tasks" and design:
-                await _generate_unknowns(
-                    cm, staged.change_dir, staged, state.model_copy(deep=True)
-                )
-                names.append("unknowns")
-            context = cm.artifact_context(staged.change_dir, name)
-            context["unknowns_content"] = read_unknowns(staged.change_dir)
-            text = await generate_artifact(
-                name,
-                context,
-                staged,
-                audit_findings=findings_text,
-                research=read_research(state),
-                codebase_analysis=read_codebase_analysis(state),
-                reference_docs=config.reference_docs_text(),
+        result = await run_plan_edit(staged.change_dir, staged, findings)
+        if result.not_fixed:
+            log.warning(
+                "%s: the rewrite could not fix %s",
+                step or "plan_review",
+                ", ".join(result.not_fixed),
             )
-            if name == "design":
-                raise_spec_issues(design_spec_issues(text), step or "design")
-            atomic_write(staged.change_dir / f"{name}.md", text)
+        edited = apply_plan_edits(staged.change_dir, result.edits)
+        names = [
+            Path(name).stem for name in ("design.md", "tasks.md") if name in edited
+        ]
+        if "design.md" in edited:
+            raise_spec_issues(design_spec_issues(edited["design.md"]), step or "design")
+            await _generate_unknowns(
+                cm, staged.change_dir, staged, state.model_copy(deep=True)
+            )
+            names.append("unknowns")
         label = step or "plan_review"
 
         def reject(message: str, deterministic: list[dict]) -> None:
@@ -1616,6 +1742,25 @@ async def rewrite_plan(
                 "before": original.read_text() if original.exists() else None,
                 "after": (staged.change_dir / filename).read_text(),
             }
+        diff_name = f"plan-edits-{attempt}.diff"
+        diff_path = config.change_dir / diff_name
+        publication[diff_name] = {
+            "before": diff_path.read_text() if diff_path.exists() else None,
+            "after": "".join(
+                "".join(
+                    difflib.unified_diff(
+                        publication[name]["before"].splitlines(keepends=True)
+                        if publication[name]["before"] is not None
+                        else [],
+                        publication[name]["after"].splitlines(keepends=True),
+                        fromfile=f"a/{name}",
+                        tofile=f"b/{name}",
+                    )
+                )
+                for name in ("design.md", "tasks.md")
+                if name in edited
+            ),
+        }
         atomic_write(
             config.change_dir / ".plan-publication.json", json.dumps(publication)
         )
@@ -1628,7 +1773,7 @@ async def rewrite_plan(
         config.change_dir,
         "docs(specs): publish plan review repair",
     )
-    return 2 if design else 1
+    return 2 if "design.md" in edited else 1
 
 
 def assert_plan_current(config, state: BuildState, *, archived: bool = False) -> None:
@@ -1653,6 +1798,7 @@ def assert_plan_current(config, state: BuildState, *, archived: bool = False) ->
         key
         for key in keys
         if not (archived and key.startswith("registry/"))
+        and key != PLANNING_KEY
         and current.get(key) != expected.get(key)
     ]
     if changed or state.spec_gen.stale_artifacts:
