@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from build_pipeline.change_manager import ChangeManager
@@ -34,6 +34,7 @@ from build_pipeline.models import (
     PriorAssessment,
 )
 from build_pipeline.prompts.plan_review import NO_USE_CASES, PLAN_CHECK_PROMPT
+from build_pipeline.spec_generator import PlanRepairRejected
 from build_pipeline.state import PLAN_RULES_VERSION, BuildState, SpecGenState
 
 # A recheck that calls the one listed finding fixed.
@@ -204,6 +205,16 @@ class TestRunPlanReview:
         assert not (
             {"Write", "Edit", "Bash", "NotebookEdit"} & set(kwargs["allowed_tools"])
         )
+
+    @pytest.mark.asyncio
+    async def test_reviewer_runs_in_the_project_dir(self, tmp_path):
+        change_dir = _change_dir(tmp_path)
+        call = AsyncMock(return_value=PlanReviewResult(findings=[]))
+        config = _stub_config(tmp_path)
+        with patch.object(plan_review_steps, "agent_call_structured", call):
+            await run_plan_review(change_dir, config)
+
+        assert call.await_args.kwargs["cwd"] == str(config.project_dir)
 
     def test_the_tool_list_constant_can_never_write(self):
         assert PLAN_REVIEW_TOOLS == ["Read", "Grep", "Glob"]
@@ -569,6 +580,18 @@ class TestFindingsText:
     def test_empty_when_nothing_actionable(self):
         assert plan_review_findings_text([]) == ""
         assert plan_review_findings_text([_finding(severity="minor")]) == ""
+
+    def test_carries_the_severity_the_category_and_the_fix(self):
+        text = plan_review_findings_text(
+            [_finding(severity="critical", suggestion="Pass it in.")]
+        )
+        assert "[critical]" in text
+        assert "(rubric-conflict)" in text
+        assert "Fix: Pass it in." in text
+
+    def test_an_unknown_severity_is_rejected(self):
+        with pytest.raises(ValueError, match="severity"):
+            _finding(severity="blocker")
 
     def test_carries_the_location_the_claim_and_the_reason(self):
         text = plan_review_findings_text([_finding()])
@@ -1174,6 +1197,54 @@ class TestPlanCheckRewrite:
         assert state.spec_gen.step_passed("plan_review")
 
     @pytest.mark.asyncio
+    async def test_a_published_rewrite_is_committed_once(self, tmp_path):
+        """The published repair is committed with its own message; a rewrite
+        that is not published commits nothing."""
+        config, state, state_path = _stage_setup(tmp_path)
+        (config.change_dir / "tasks.md").write_text(_PINS_BLOCK_1)
+        review = AsyncMock(
+            side_effect=[
+                PlanReviewResult(findings=[_pins("critical")]),
+                PlanReviewResult(prior_assessments=[_RESOLVED_PR_F1]),
+            ]
+        )
+        regen = AsyncMock(
+            return_value="## 1. Summarize\n\n- [ ] Build it, plurals included.\n"
+        )
+        commit = Mock()
+        with (
+            patch.object(plan_review_steps, "run_plan_review", review),
+            patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen),
+            patch("build_pipeline.git_ops.commit_stage", commit),
+        ):
+            await run_plan_review_stage(config.change_dir, config, state, state_path)
+
+        assert commit.call_count == 1
+        assert commit.call_args.args[1] == "docs(specs): publish plan review repair"
+
+    @pytest.mark.asyncio
+    async def test_a_rewrite_that_is_not_published_commits_nothing(self, tmp_path):
+        config, state, state_path = _stage_setup(tmp_path)
+        (config.change_dir / "tasks.md").write_text(_NO_BEHAVIOUR_TASKS)
+        commit = Mock()
+        with (
+            patch.object(
+                plan_review_steps,
+                "run_plan_review",
+                AsyncMock(return_value=PlanReviewResult(findings=[])),
+            ),
+            patch(
+                "build_pipeline.llm_steps.spec_steps.generate_artifact",
+                AsyncMock(return_value=_NO_BEHAVIOUR_TASKS),
+            ),
+            patch("build_pipeline.git_ops.commit_stage", commit),
+            pytest.raises(PlanRepairRejected),
+        ):
+            await run_plan_review_stage(config.change_dir, config, state, state_path)
+
+        commit.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_a_minor_no_new_behaviour_finding_does_not_drive_the_rewrite(
         self, tmp_path
     ):
@@ -1242,13 +1313,18 @@ class TestPlanCheckRewrite:
         with (
             patch.object(plan_review_steps, "run_plan_review", review),
             patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen),
-            pytest.raises((RuntimeError, ValueError), match="no behavior"),
+            pytest.raises(PlanRepairRejected, match="no behavior") as rejected,
         ):
             await run_plan_review_stage(config.change_dir, config, state, state_path)
 
         assert regen.await_count == 1
         assert not state.spec_gen.step_passed("plan_review")
         assert state.spec_gen.repair_attempts("plan_review") == 1
+        assert rejected.value.blocking
+        saved = BuildState.load(state_path).spec_gen.steps["plan_review"]
+        assert saved.blocking_findings
+        assert rejected.value.blocking[0]["text"] in saved.blocking_findings
+        assert "PLAN_REVIEW_BLOCKED" in config.progress_file_path().read_text()
 
     @pytest.mark.asyncio
     async def test_a_placeholder_drives_the_rewrite_with_a_clean_check(self, tmp_path):

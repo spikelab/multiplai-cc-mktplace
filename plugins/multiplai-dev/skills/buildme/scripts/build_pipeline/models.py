@@ -507,8 +507,11 @@ class PlanReviewFinding(BaseModel):
     def _canonical_severity(cls, value):
         """`MAJOR` and ` major` are `major`: the blocking rule compares the
         exact lowercase names, so a model's capitalisation must not hide a
-        finding from it."""
-        return str(value or "").strip().lower() or "minor"
+        finding from it. Any other name is rejected, so the call is retried."""
+        severity = str(value or "").strip().lower() or "minor"
+        if severity not in ("critical", "major", "minor"):
+            raise ValueError(f"unknown severity {value!r}")
+        return severity
 
 
 class PlanReviewResult(BaseModel):
