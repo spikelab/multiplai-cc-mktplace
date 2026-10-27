@@ -132,6 +132,19 @@ def test_no_edits_is_a_rejection_with_a_blocking_finding(tmp_path):
     assert "no edits" in rejected.value.blocking[0]["text"]
 
 
+def test_edits_that_change_nothing_are_a_rejection(tmp_path):
+    staged = _staged(tmp_path)
+    with pytest.raises(PlanRepairRejected, match="change nothing"):
+        owner.apply_plan_edits(
+            staged,
+            [
+                PlanEdit(file="tasks.md", old_str="do it", new_str="do that"),
+                PlanEdit(file="tasks.md", old_str="do that", new_str="do it"),
+            ],
+        )
+    assert (staged / "tasks.md").read_text() == TASKS
+
+
 @pytest.mark.asyncio
 async def test_a_missed_edit_blocks_the_step_and_the_resume_refuses(tmp_path):
     """Row S4: the rejection is saved as the blocking findings at this

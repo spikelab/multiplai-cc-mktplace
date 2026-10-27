@@ -1593,21 +1593,26 @@ def apply_plan_edits(staged_dir: Path, edits) -> dict[str, str]:
     tasks.md in *staged_dir*, and return the text of each file they changed.
 
     Each `old_str` must occur exactly once in its file as the edits before it
-    leave it. A miss, or no edits at all, raises `PlanRepairRejected` and
-    writes nothing.
+    leave it. A miss, no edits at all, or edits that leave both files as
+    they were raise `PlanRepairRejected` and write nothing.
     """
     if not edits:
         _reject_edits("The rewrite returned no edits")
     texts: dict[str, str] = {}
+    originals: dict[str, str] = {}
     for index, edit in enumerate(edits, 1):
         if edit.file not in texts:
             path = staged_dir / edit.file
             texts[edit.file] = path.read_text() if path.exists() else ""
+            originals[edit.file] = texts[edit.file]
         count = texts[edit.file].count(edit.old_str) if edit.old_str else 0
         if count != 1:
             found = "not found" if count == 0 else f"found {count} times"
             _reject_edits(f"Plan edit {index} in {edit.file}: old_str {found}")
         texts[edit.file] = texts[edit.file].replace(edit.old_str, edit.new_str, 1)
+    texts = {name: text for name, text in texts.items() if text != originals[name]}
+    if not texts:
+        _reject_edits("The rewrite's edits change nothing")
     for name, text in texts.items():
         atomic_write(staged_dir / name, text)
     return texts
