@@ -40,7 +40,7 @@ def _phase_wiring_prerequisites(monkeypatch):
     from unittest.mock import AsyncMock
 
     from build_pipeline import orchestrator, spec_generator
-    from build_pipeline.llm_steps import plan_review_steps, spec_steps
+    from build_pipeline.llm_steps import plan_review_steps
     from build_pipeline.models import GateResult, PlanReviewResult
 
     real = orchestrator.run_orchestrator
@@ -60,7 +60,6 @@ def _phase_wiring_prerequisites(monkeypatch):
                 state.spec_gen and state.spec_gen.revision
             ):
                 _plan_fixture(config, state)
-                state.spec_gen.record_step("design_audit", "passed")
                 state.spec_gen.record_step("plan_review", "passed")
                 state.checkpoint(path)
                 git_ops.commit_tree(config.project_dir, "test: accepted plan")
@@ -76,12 +75,10 @@ def _phase_wiring_prerequisites(monkeypatch):
     monkeypatch.setattr(
         spec_generator, "generate_rubric", AsyncMock(return_value="# Current rubric")
     )
-    monkeypatch.setattr(spec_steps, "run_tasks_audit", AsyncMock(return_value=[]))
     monkeypatch.setattr(
         "build_pipeline.llm_steps.docs_steps.run_docs_update",
         AsyncMock(return_value=([], GateResult(passed=True, reason="unit docs"))),
     )
-    monkeypatch.setattr(spec_steps, "run_design_audit", AsyncMock(return_value=[]))
     monkeypatch.setattr(
         plan_review_steps,
         "run_plan_review",
@@ -297,10 +294,6 @@ class TestCodebaseAnalysisPhase:
                 "build_pipeline.spec_generator.run_spec_generator",
                 AsyncMock(return_value=0),
             ),
-            patch(
-                "build_pipeline.llm_steps.spec_steps.run_design_audit",
-                AsyncMock(return_value=[]),
-            ),
         )
 
     @pytest.mark.asyncio
@@ -309,8 +302,8 @@ class TestCodebaseAnalysisPhase:
 
         config = self._config(tmp_path, "analyze-me")
         mock_analysis = AsyncMock(return_value="## Architecture\nOne module: app.py")
-        p1, p2, p3 = self._patches(mock_analysis)
-        with p1, p2, p3:
+        p1, p2 = self._patches(mock_analysis)
+        with p1, p2:
             result = await run_orchestrator(config, self._args(tmp_path, "analyze-me"))
 
         assert result == 0
@@ -352,10 +345,6 @@ class TestCodebaseAnalysisPhase:
                 AsyncMock(return_value="## Architecture\nstuff"),
             ),
             patch("build_pipeline.spec_generator.run_spec_generator", _capture),
-            patch(
-                "build_pipeline.llm_steps.spec_steps.run_design_audit",
-                AsyncMock(return_value=[]),
-            ),
         ):
             result = await run_orchestrator(config, self._args(tmp_path, "record-path"))
 
@@ -373,8 +362,8 @@ class TestCodebaseAnalysisPhase:
 
         config = self._config(tmp_path, "greenfield", with_source=False)
         mock_analysis = AsyncMock()
-        p1, p2, p3 = self._patches(mock_analysis)
-        with caplog.at_level("INFO"), p1, p2, p3:
+        p1, p2 = self._patches(mock_analysis)
+        with caplog.at_level("INFO"), p1, p2:
             result = await run_orchestrator(config, self._args(tmp_path, "greenfield"))
 
         assert result == 0
@@ -399,8 +388,8 @@ class TestCodebaseAnalysisPhase:
         config = self._config(tmp_path, "specs-only", with_source=False)
         (config.change_dir / "notes.py").write_text("# not project source")
         mock_analysis = AsyncMock()
-        p1, p2, p3 = self._patches(mock_analysis)
-        with p1, p2, p3:
+        p1, p2 = self._patches(mock_analysis)
+        with p1, p2:
             assert (
                 await run_orchestrator(config, self._args(tmp_path, "specs-only")) == 0
             )
@@ -412,8 +401,8 @@ class TestCodebaseAnalysisPhase:
 
         config = self._config(tmp_path, "boom")
         mock_analysis = AsyncMock(side_effect=RuntimeError("all three agents died"))
-        p1, p2, p3 = self._patches(mock_analysis)
-        with caplog.at_level("WARNING"), p1, p2, p3:
+        p1, p2 = self._patches(mock_analysis)
+        with caplog.at_level("WARNING"), p1, p2:
             result = await run_orchestrator(config, self._args(tmp_path, "boom"))
 
         assert result == 0
@@ -426,8 +415,8 @@ class TestCodebaseAnalysisPhase:
 
         config = self._config(tmp_path, "resumed", phase=BuildPhase.SPEC_GENERATION)
         mock_analysis = AsyncMock()
-        p1, p2, p3 = self._patches(mock_analysis)
-        with p1, p2, p3:
+        p1, p2 = self._patches(mock_analysis)
+        with p1, p2:
             assert await run_orchestrator(config, self._args(tmp_path, "resumed")) == 0
         mock_analysis.assert_not_awaited()
 
@@ -510,7 +499,7 @@ class TestSpecGenerationReloadOnlyMovesForward:
         )
 
     @pytest.mark.asyncio
-    async def test_phase_is_not_rewound_and_the_audit_is_not_re_run(self, tmp_path):
+    async def test_phase_is_not_rewound_and_the_check_is_not_re_run(self, tmp_path):
         from unittest.mock import AsyncMock, patch
 
         from build_pipeline.orchestrator import run_orchestrator
@@ -520,10 +509,10 @@ class TestSpecGenerationReloadOnlyMovesForward:
 
         async def fake_spec_generator(cfg, args=None, **kwargs):
             """What the real one leaves behind: the pointer already at
-            DESIGN_AUDIT, and the audit stage recorded as spent."""
+            DESIGN_AUDIT, and the plan check recorded as passed."""
             s = BuildState.load(state_path)
             _plan_fixture(cfg, s)
-            s.spec_gen.record_step("design_audit", "passed")
+            s.spec_gen.record_step("plan_review", "passed")
             s.advance_to(BuildPhase.DESIGN_AUDIT, state_path)
             return 0
 
@@ -543,15 +532,15 @@ class TestSpecGenerationReloadOnlyMovesForward:
             ),
             patch("build_pipeline.state.BuildState.advance_to", recording_advance),
             patch(
-                "build_pipeline.llm_steps.spec_steps.run_design_audit",
+                "build_pipeline.llm_steps.plan_review_steps.run_plan_review",
                 new_callable=AsyncMock,
             ) as mock_audit,
         ):
             result = await run_orchestrator(config, self._args(tmp_path))
 
         assert result == 0
-        # The audit stage was already spent, so the orchestrator's DESIGN_AUDIT
-        # phase costs no LLM call at all — not even a report-only one.
+        # The plan check already passed, so the orchestrator's planning
+        # phases cost no LLM call at all.
         mock_audit.assert_not_awaited()
         # The pointer never went backwards: nothing re-advances to
         # SPEC_GENERATION after the spec generator left it at DESIGN_AUDIT.
@@ -597,11 +586,6 @@ class TestRespecPhaseWiring:
                 return_value=0,
             ),
             patch(
-                "build_pipeline.llm_steps.spec_steps.run_design_audit",
-                new_callable=AsyncMock,
-                return_value=[],
-            ),
-            patch(
                 "build_pipeline.llm_steps.respec_steps.run_respec_audit",
                 new_callable=AsyncMock,
                 return_value=config.change_dir / "respec.md",
@@ -635,11 +619,6 @@ class TestRespecPhaseWiring:
                 "build_pipeline.tdd_engine.run_tdd_engine",
                 new_callable=AsyncMock,
                 return_value=0,
-            ),
-            patch(
-                "build_pipeline.llm_steps.spec_steps.run_design_audit",
-                new_callable=AsyncMock,
-                return_value=[],
             ),
             patch(
                 "build_pipeline.llm_steps.respec_steps.run_respec_audit",
@@ -682,11 +661,6 @@ class TestTDDSubPhaseWiring:
                 new_callable=AsyncMock,
                 return_value=0,
             ) as engine,
-            patch(
-                "build_pipeline.llm_steps.spec_steps.run_design_audit",
-                new_callable=AsyncMock,
-                return_value=[],
-            ),
             patch(
                 "build_pipeline.llm_steps.docs_steps.run_docs_update",
                 new_callable=AsyncMock,
@@ -753,11 +727,6 @@ class TestDocsUpdatePhaseWiring:
                 return_value=0,
             ),
             patch(
-                "build_pipeline.llm_steps.spec_steps.run_design_audit",
-                new_callable=AsyncMock,
-                return_value=[],
-            ),
-            patch(
                 "build_pipeline.llm_steps.docs_steps.run_docs_update",
                 side_effect=fake_docs,
             ),
@@ -786,11 +755,6 @@ class TestDocsUpdatePhaseWiring:
                 "build_pipeline.tdd_engine.run_tdd_engine",
                 new_callable=AsyncMock,
                 return_value=0,
-            ),
-            patch(
-                "build_pipeline.llm_steps.spec_steps.run_design_audit",
-                new_callable=AsyncMock,
-                return_value=[],
             ),
             patch(
                 "build_pipeline.llm_steps.docs_steps.run_docs_update",
@@ -827,11 +791,6 @@ class TestDocsUpdatePhaseWiring:
                 "build_pipeline.tdd_engine.run_tdd_engine",
                 new_callable=AsyncMock,
                 return_value=0,
-            ),
-            patch(
-                "build_pipeline.llm_steps.spec_steps.run_design_audit",
-                new_callable=AsyncMock,
-                return_value=[],
             ),
             patch(
                 "build_pipeline.llm_steps.docs_steps.run_docs_update",
@@ -2101,10 +2060,6 @@ class TestPlanReviewPhase:
         mock_review = AsyncMock(return_value=PlanReviewResult(findings=[]))
         with (
             patch(
-                "build_pipeline.llm_steps.spec_steps.run_design_audit",
-                AsyncMock(return_value=[]),
-            ),
-            patch(
                 "build_pipeline.llm_steps.plan_review_steps.run_plan_review",
                 mock_review,
             ),
@@ -2135,10 +2090,6 @@ class TestPlanReviewPhase:
         mock_review = AsyncMock()
         with (
             patch(
-                "build_pipeline.llm_steps.spec_steps.run_design_audit",
-                AsyncMock(return_value=[]),
-            ),
-            patch(
                 "build_pipeline.llm_steps.plan_review_steps.run_plan_review",
                 mock_review,
             ),
@@ -2154,10 +2105,6 @@ class TestPlanReviewPhase:
 
         config = self._config(tmp_path, "broken-plan")
         with (
-            patch(
-                "build_pipeline.llm_steps.spec_steps.run_design_audit",
-                AsyncMock(return_value=[]),
-            ),
             patch(
                 "build_pipeline.llm_steps.plan_review_steps.run_plan_review",
                 AsyncMock(side_effect=RuntimeError("model exploded")),
@@ -2179,10 +2126,6 @@ class TestPlanReviewPhase:
         args = self._args(tmp_path, "retry-plan")
         with (
             patch(
-                "build_pipeline.llm_steps.spec_steps.run_design_audit",
-                AsyncMock(return_value=[]),
-            ),
-            patch(
                 "build_pipeline.llm_steps.plan_review_steps.run_plan_review",
                 AsyncMock(side_effect=RuntimeError("model exploded")),
             ),
@@ -2199,10 +2142,6 @@ class TestPlanReviewPhase:
 
         retry = AsyncMock(return_value=PlanReviewResult(findings=[]))
         with (
-            patch(
-                "build_pipeline.llm_steps.spec_steps.run_design_audit",
-                AsyncMock(return_value=[]),
-            ),
             patch("build_pipeline.llm_steps.plan_review_steps.run_plan_review", retry),
         ):
             assert await run_orchestrator(config, args) == 0
@@ -2222,10 +2161,6 @@ class TestPlanReviewPhase:
 
         mock_review = AsyncMock(return_value=PlanReviewResult(findings=[]))
         with (
-            patch(
-                "build_pipeline.llm_steps.spec_steps.run_design_audit",
-                AsyncMock(return_value=[]),
-            ),
             patch(
                 "build_pipeline.llm_steps.plan_review_steps.run_plan_review",
                 mock_review,

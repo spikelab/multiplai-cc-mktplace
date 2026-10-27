@@ -491,9 +491,27 @@ class PlanReviewFinding(BaseModel):
     location: str = ""
     claim: str = ""
     reason: str = ""
+    # How to fix it, as the design audit's findings carried before the one
+    # plan check replaced it.
+    suggestion: str = ""
+    # True when the fix needs a requirements change; `requirement` names it as
+    # `<spec ref>: <requirement name>` (`spec_generator.audit_spec_issues`).
+    needs_requirements_change: bool = False
+    requirement: str = ""
     # Populated only for category "oversized-plan" — which blocks go in which
     # ticket, and the signature boundary each cut crosses.
     proposed_cut: list[PlanReviewCut] = Field(default_factory=list)
+
+    @field_validator("severity", mode="before")
+    @classmethod
+    def _canonical_severity(cls, value):
+        """`MAJOR` and ` major` are `major`: the blocking rule compares the
+        exact lowercase names, so a model's capitalisation must not hide a
+        finding from it. Any other name is rejected, so the call is retried."""
+        severity = str(value or "").strip().lower() or "minor"
+        if severity not in ("critical", "major", "minor"):
+            raise ValueError(f"unknown severity {value!r}")
+        return severity
 
 
 class PlanReviewResult(BaseModel):
@@ -502,6 +520,24 @@ class PlanReviewResult(BaseModel):
     findings: list[PlanReviewFinding] = Field(default_factory=list)
     # Filled only by a recheck: a status for each finding the rewrite was asked to fix.
     prior_assessments: list[PriorAssessment] = Field(default_factory=list)
+
+
+class PlanEdit(BaseModel):
+    """One exact replacement in design.md or tasks.md, which
+    `spec_generator.apply_plan_edits` applies. `old_str` must occur exactly
+    once in the file as the edits before it leave it."""
+
+    file: Literal["design.md", "tasks.md"]
+    old_str: str
+    new_str: str
+
+
+class PlanEdits(BaseModel):
+    """Structured output of one plan rewrite (`PLAN_EDIT_PROMPT`)."""
+
+    edits: list[PlanEdit] = Field(default_factory=list)
+    # The finding ids it could not fix, with no edit for them.
+    not_fixed: list[str] = Field(default_factory=list)
 
 
 class GateResult(BaseModel):

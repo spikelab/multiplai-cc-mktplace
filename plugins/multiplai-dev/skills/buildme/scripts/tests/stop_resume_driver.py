@@ -92,9 +92,9 @@ def main() -> int:
         budget.record(_usage(SPEC_USD), label="spec_generation")
         return 0
 
-    async def fake_design_audit(*a, **k):
-        budget.record(_usage(AUDIT_USD), label="design_audit")
-        return []
+    async def fake_plan_check(*a, **k):
+        budget.record(_usage(AUDIT_USD), label="plan_review")
+        return PlanReviewResult(findings=[])
 
     async def fake_tdd(config, args, standalone=True):
         """The engine's progress, checkpoint and spend, without its agents."""
@@ -162,12 +162,8 @@ def main() -> int:
     with (
         patch("build_pipeline.spec_generator.run_spec_generator", fake_spec_generator),
         patch(
-            "build_pipeline.llm_steps.spec_steps.run_design_audit", fake_design_audit
-        ),
-        patch(
             "build_pipeline.llm_steps.plan_review_steps.run_plan_review",
-            new_callable=AsyncMock,
-            return_value=PlanReviewResult(findings=[]),
+            fake_plan_check,
         ),
         patch("build_pipeline.tdd_engine.run_tdd_engine", fake_tdd),
         patch(

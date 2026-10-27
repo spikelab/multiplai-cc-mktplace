@@ -415,10 +415,6 @@ class TestInTheBlock:
                 "build_pipeline.spec_generator.run_spec_generator",
                 AsyncMock(return_value=0),
             ),
-            patch(
-                "build_pipeline.llm_steps.spec_steps.run_design_audit",
-                AsyncMock(return_value=[]),
-            ),
         ):
             import asyncio
 
@@ -860,10 +856,6 @@ class TestTheAnalysisIsNotPaidTwice:
             patch(
                 "build_pipeline.spec_generator.run_spec_generator",
                 AsyncMock(return_value=0),
-            ),
-            patch(
-                "build_pipeline.llm_steps.spec_steps.run_design_audit",
-                AsyncMock(return_value=[]),
             ),
         ):
             for _ in range(runs):

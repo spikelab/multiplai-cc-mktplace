@@ -403,16 +403,15 @@ class TestReviewersAreReadOnlySubagents:
         the day it lands, and one that spells its own list is caught here.
         The design and tasks writer is checked on the list its call passes.
         """
+        from build_pipeline.llm_steps.plan_review_steps import PLAN_REVIEW_TOOLS
         from build_pipeline.llm_steps.review_steps import REVIEWER_TOOLS
         from build_pipeline.llm_steps.spec_steps import AUDITOR_TOOLS
 
-        lists = [("REVIEWER_TOOLS", REVIEWER_TOOLS), ("AUDITOR_TOOLS", AUDITOR_TOOLS)]
-        try:  # PLAN_REVIEW is a separate work item; cover it once it exists.
-            from build_pipeline.llm_steps.plan_review_steps import PLAN_REVIEW_TOOLS
-        except ImportError:
-            pass
-        else:
-            lists.append(("PLAN_REVIEW_TOOLS", PLAN_REVIEW_TOOLS))
+        lists = [
+            ("REVIEWER_TOOLS", REVIEWER_TOOLS),
+            ("AUDITOR_TOOLS", AUDITOR_TOOLS),
+            ("PLAN_REVIEW_TOOLS", PLAN_REVIEW_TOOLS),
+        ]
 
         for name, tools in lists:
             assert tools, f"{name} must not be empty"
@@ -464,39 +463,6 @@ class TestReviewersAreReadOnlySubagents:
         with _mock_llm() as mock_call:
             await run_code_review("diff", "rubric", config)
         assert mock_call.call_args.kwargs["max_turns"] == 30
-
-    @pytest.mark.asyncio
-    async def test_audits_run_as_read_only_subagents(self, tmp_path):
-        """The design and tasks audits get tools too, and keep their labels."""
-        from unittest.mock import MagicMock
-
-        from build_pipeline.llm_steps.spec_steps import (
-            run_design_audit,
-            run_tasks_audit,
-        )
-        from build_pipeline.models import AgentResult
-
-        change_dir = tmp_path / "changes" / "feat"
-        change_dir.mkdir(parents=True)
-        for name in ("proposal.md", "design.md", "tasks.md"):
-            (change_dir / name).write_text("body")
-        config = MagicMock(model="test-model", project_dir=tmp_path)
-
-        for step, label in (
-            (run_design_audit, "design_audit"),
-            (run_tasks_audit, "tasks_audit"),
-        ):
-            with patch(
-                "build_pipeline.llm_steps.spec_steps.agent_call",
-                new_callable=AsyncMock,
-                return_value=AgentResult(success=True, output="[]"),
-            ) as mock_agent:
-                await step(change_dir, config)
-            kwargs = mock_agent.call_args.kwargs
-            assert kwargs["allowed_tools"] == ["Read", "Grep", "Glob"]
-            assert not WRITE_CAPABLE_TOOLS.intersection(kwargs["allowed_tools"])
-            assert kwargs["cwd"] == str(tmp_path)
-            assert kwargs["budget_label"] == label
 
 
 # --- PR B: prior assessments and defect locations across a panel ------------

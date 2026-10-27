@@ -77,10 +77,6 @@ def _spec_stage_mocks():
             AsyncMock(return_value=0),
         ),
         patch(
-            "build_pipeline.llm_steps.spec_steps.run_design_audit",
-            AsyncMock(return_value=[]),
-        ),
-        patch(
             "build_pipeline.llm_steps.plan_review_steps.run_plan_review",
             AsyncMock(return_value=PlanReviewResult(findings=[])),
         ),
@@ -110,7 +106,6 @@ class TestResearch:
         with (
             mocks[0],
             mocks[1],
-            mocks[2],
             patch(
                 "build_pipeline.llm_steps.research_steps.llm_call_structured", decide
             ),
@@ -173,10 +168,6 @@ class TestResearch:
             patch(
                 "build_pipeline.spec_generator.run_spec_generator",
                 lambda config, args, **kwargs: fake_generate(config, None, args),
-            ),
-            patch(
-                "build_pipeline.llm_steps.spec_steps.run_design_audit",
-                AsyncMock(return_value=[]),
             ),
             patch(
                 "build_pipeline.llm_steps.plan_review_steps.run_plan_review",
@@ -245,7 +236,6 @@ class TestResearch:
         with (
             mocks[0],
             mocks[1],
-            mocks[2],
             patch(
                 "build_pipeline.llm_steps.research_steps.llm_call_structured", decide
             ),
@@ -493,7 +483,7 @@ class TestBootstrapConfigCommitted:
 
         config = _config(repo, "csv")
         mocks = _spec_stage_mocks()
-        with mocks[0], mocks[1], mocks[2]:
+        with mocks[0], mocks[1]:
             rc = await run_orchestrator(config, _args(repo, "csv"))
         err = capsys.readouterr().err
         assert "not committed" not in err
@@ -508,7 +498,7 @@ class TestBootstrapConfigCommitted:
         config = _config(repo, "csv")
         config.git.worktree = False
         mocks = _spec_stage_mocks()
-        with mocks[0], mocks[1], mocks[2]:
+        with mocks[0], mocks[1]:
             rc = await run_orchestrator(config, _args(repo, "csv"))
         assert rc == 0
 
@@ -580,7 +570,7 @@ class TestFailedBuildRetry:
         config = _config(repo, "csv")
         config.base_ref = base_ref
         mocks = _spec_stage_mocks()
-        with mocks[0], mocks[1], mocks[2]:
+        with mocks[0], mocks[1]:
             rc = await run_orchestrator(config, _args(repo, "csv"))
         return rc, config
 
@@ -860,7 +850,7 @@ class TestFailedBuildRetry:
             saved = BuildState.load(config.state_file_path())
             saved.spec_gen = SpecGenState(completed_artifacts=["proposal"])
             saved.spec_gen.record_step("explainers", "passed")
-            saved.spec_gen.record_step("tasks_audit", "passed")
+            saved.spec_gen.record_step("plan_review", "passed")
             saved.checkpoint(config.state_file_path())
             return 1
 
@@ -877,7 +867,7 @@ class TestFailedBuildRetry:
         assert state.spec_gen is not None
         assert state.spec_gen.completed_artifacts == ["proposal"]
         assert state.spec_gen.step_passed("explainers") and state.spec_gen.step_passed(
-            "tasks_audit"
+            "plan_review"
         )
 
     @pytest.mark.asyncio
@@ -958,7 +948,7 @@ class TestFailedBuildRetry:
             config = _config(project, "csv")
             config.git.worktree = False
             mocks = _spec_stage_mocks()
-            with mocks[0], mocks[1], mocks[2]:
+            with mocks[0], mocks[1]:
                 rc = await run_orchestrator(config, _args(project, "csv"))
         assert rc == 0, capsys.readouterr().err
         assert analysis.await_count == 2
@@ -1187,7 +1177,6 @@ class TestFailedBuildRetry:
             with (
                 mocks[0],
                 mocks[1],
-                mocks[2],
                 patch(
                     "build_pipeline.tdd_engine.run_tdd_engine",
                     AsyncMock(side_effect=engine),

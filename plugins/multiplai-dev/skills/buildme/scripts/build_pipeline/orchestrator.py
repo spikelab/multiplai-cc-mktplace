@@ -4,7 +4,7 @@ A build starts from a change whose proposal, use cases and requirements
 pm-spec marked ready (`multiplai_core.specs.is_ready`); anything else is
 refused with `SPEC:NOT_READY` (exit 2) before a file is written. Then:
 bootstrap → research → codebase analysis → design, unknowns, tasks, rubric →
-design audit → plan review → size gate → review → TDD → docs → respec →
+plan check → size gate → review → TDD → docs → respec →
 archive → publish. A parent change pm-spec split into children is an epic,
 handed to `epic.phase` before any of this.
 
@@ -317,8 +317,8 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             await _generate_all_artifacts(cm, config.change_dir, config, state)
             state.checkpoint(state_path)
 
-        # A plan-review repair can invalidate the earlier design audit. The
-        # owner returns only once both outcomes describe the final revision.
+        # One plan check. Both phases are still marked complete, so old
+        # checkpoints and the board keep their columns.
         if state.phase != BuildPhase.PUBLISH:
             from .spec_generator import validate_plan
 

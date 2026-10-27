@@ -214,7 +214,7 @@ def test_full_run_keeps_progress_spend_and_the_completed_checkpoint(full):
     budget = progress.rsplit("] BUDGET\n", 1)[1]
     for label, usd in (
         ("spec_generation", SPEC_USD),
-        ("design_audit", AUDIT_USD),
+        ("plan_review", AUDIT_USD),
         ("implementer", BLOCKS * BLOCK_USD),
     ):
         assert f"{label}=" in budget and f"/${usd:.2f}" in budget
