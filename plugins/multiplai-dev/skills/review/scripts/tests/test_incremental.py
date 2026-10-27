@@ -5,13 +5,9 @@ b.py. Each test then moves the branch and runs round two.
 
 Stop-and-resume rows of the plan's table covered here: S2 (`prepare` stopped after `keep_round`,
 before the scope was saved) and S3/S4 (stopped after the scope and the carried findings were
-saved; resume reuses both and carries nothing twice). S1 is
-`test_orchestrator.py::test_the_started_line_names_the_skill_version_and_each_run_is_recorded`,
-S5 `test_stages.py::test_verify_resumed_after_the_low_verdicts_asks_only_for_the_rest`, S6, S7 and
-S11 `test_stages.py::test_write_resumed_mid_stage_asks_only_for_the_rest`. S12 (the process still
-running) is `test_recheck.py::test_earlier_status_resume_s12_a_running_review_refuses_a_resume`,
-the run lock's refusal, unchanged. S9 and S10 keep today's behaviour (the state
-file is the source; a new head needs a new `review`), which the existing resume tests cover.
+saved; resume reuses both and carries nothing twice). `test_resume_rows.py` stops at every row
+from S1 to S7 and S11 and compares the result with a run that never stopped; its docstring names
+the tests for S8, S9, S10 and S12.
 """
 
 from __future__ import annotations
@@ -83,6 +79,11 @@ def _branch(repo: Path, base: str, files: dict[str, str], message: str) -> str:
 
 @pytest.fixture
 def repo(tmp_path) -> Path:
+    return build_repo(tmp_path)
+
+
+def build_repo(tmp_path: Path) -> Path:
+    """`main` with a.py, b.py and c.py, and the branch `feature` changing all three."""
     r = tmp_path / "shop"
     r.mkdir()
     _git(r, "init", "-q", "-b", "main")
