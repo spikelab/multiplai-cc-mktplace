@@ -357,3 +357,22 @@ REVIEW_FIX_SELF_CHECK = """\
 SEARCHED:
 - <finding>: <the functions, branches and files you checked>
 """
+
+
+# Appended to an implementer prompt (`run_implementer(carry_notes=True)`) only
+# under `carry_block_notes`, so with the flag off every prompt is unchanged.
+# Not a template: it is concatenated after `.format()`. The section goes before
+# the required slots so `_trim_evidence`, which keeps a report's end, keeps them.
+# `gates.parse_handoff_note` reads it; later blocks' implementer and review-fix
+# agents get it in their context (`tdd_engine.assemble_context`).
+NOTES_FOR_LATER_BLOCKS_REQUEST = """
+## Notes for later blocks
+
+Later blocks of this build are written by other agents, who will not see this
+session. Before the required slots, write a `NOTES_FOR_LATER_BLOCKS:` section
+with what one of them would otherwise have to find out again: conventions you
+chose, helpers you created or found, behaviour of the existing code or tools
+that the spec and design do not mention, and quirks of the test command. Write
+facts about the code, one per line, each naming the file or function it is
+about. Write `NOTES_FOR_LATER_BLOCKS: none` when there is nothing.
+"""
