@@ -15,6 +15,11 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.121.0] - 2026-10-27
+
+### Changed
+- **buildme**: the writer of `design.md` and `tasks.md` now reads the project's code with `Read`, `Grep` and `Glob` before describing it, and checks each name, endpoint or table it writes about. It still cannot change any file. Spec generation therefore needs `--trust-repo` (or `BUILDME_TRUST_REPO=1`), as the plan check already did.
+
 ## [0.120.0] - 2026-10-27
 
 ### Added

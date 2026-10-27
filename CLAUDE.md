@@ -254,7 +254,7 @@ them. But both mechanisms that load them live here, and they are independent:
 | Mechanism | Where | What it injects | Why that shape |
 |---|---|---|---|
 | Ordinary sessions | `multiplai-context`, `scripts/lib/reference_docs.py` → `context_manager.py` | Pointers: path + section index, once per session per project | 60k chars per doc; the main agent holds `Read` |
-| A buildme run | `multiplai-dev`, `build_pipeline/config.py` | Contents, inlined into the spec-gen prompts | That generator is given no tools, so a pointer is useless to it |
+| A buildme run | `multiplai-dev`, `build_pipeline/config.py` | Contents, inlined into the spec-gen prompts | The design and tasks writer reads only the project repo and is not handed the docs' paths; the unknowns pass has no tools; so a pointer is useless to them |
 
 Each keeps its own stack→filename map (`STACK_DOCS` and
 `_DEFAULT_REFERENCE_DOCS`). **Every name in either must exist in the kit** —

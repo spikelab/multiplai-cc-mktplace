@@ -1,8 +1,9 @@
 """LLM step functions for spec generation, the explainers and the codebase
 analysis.
 
-Spec generation calls llm_call() with the appropriate prompt template. The plan
-check that reviews what it writes is `plan_review_steps`.
+The design and tasks writer calls agent_call() with a read-only tool set;
+the unknowns regeneration pass calls llm_call() with no tools. The plan
+check that reviews what they write is `plan_review_steps`.
 """
 
 from __future__ import annotations
@@ -21,6 +22,8 @@ from ..change_manager import (
 from ..prompts.explainer import EXPLAINER_PROMPT, UNKNOWNS_REGEN_PROMPT
 from ..prompts.spec_generation import DESIGN_PROMPT, TASKS_PROMPT
 from ..sdk import (
+    LLMCallError,
+    agent_call,
     agent_call_structured,
     llm_call,
 )
@@ -36,6 +39,27 @@ AUDITOR_TOOLS = ["Read", "Grep", "Glob"]
 # Enough turns to open a file's neighbours and grep the codebase for a name;
 # not enough to go wandering.
 AUDITOR_MAX_TURNS = 30
+
+# The design and tasks writer reads what it describes, with the auditors' tool
+# set: read-only, so the document it returns is the only thing it changes. More
+# turns than an audit because it opens every file the plan and specs name
+# before writing about them (judgment).
+WRITER_MAX_TURNS = 40
+
+# `agent_call` takes no system prompt, so the writer's instructions open its
+# prompt.
+WRITER_INSTRUCTIONS = """\
+You are a technical specification writer. You hold Read, Grep and Glob in the
+project's repository, and nothing that can change it.
+
+- Before describing a file that plan.md or the specs below name, open it with
+  Read.
+- Check every claim you make about existing code (a name, an endpoint, a
+  table) with Grep or Read before you write it down.
+- Your final message is the document only, in markdown, starting at its first
+  `#` heading. Put nothing before that heading.
+
+"""
 
 # The most registry text one prompt carries; whole files are dropped from the
 # end, and named, to stay under it (judgment).
@@ -57,7 +81,11 @@ async def generate_artifact(
     reference_docs: str = "",
     audit_findings: str = "",
 ) -> str:
-    """Generate a single artifact's content via llm_call.
+    """Generate a single artifact's content.
+
+    `design` and `tasks` run as a read-only subagent (`agent_call` with
+    AUDITOR_TOOLS in the project dir), so the writer opens the code it
+    describes. The unknowns regeneration pass stays a no-tools `llm_call`.
 
     Args:
         artifact_id: Which artifact to generate (design, tasks, or the
@@ -68,13 +96,17 @@ async def generate_artifact(
         codebase_analysis: Existing code analysis for design generation
         reference_docs: Inlined stack/framework reference docs
             (config.reference_docs_text()) for `design` and `tasks`. Inlined
-            rather than read on demand because this call's system prompt
-            forbids tools — the prompt is the only channel.
+            rather than read on demand because the writer is not handed the
+            docs' paths — the prompt is the only channel.
         audit_findings: Findings injected on a single regeneration pass:
             the plan check's findings. Used by `design` and `tasks`.
 
     Returns:
         Generated markdown content.
+
+    Raises:
+        LLMCallError: the writer agent failed, or its output has no line
+            starting with `#`.
     """
     prompt = _build_prompt(
         artifact_id,
@@ -87,6 +119,23 @@ async def generate_artifact(
     )
 
     log.info("Generating artifact: %s", artifact_id)
+    if artifact_id in ("design", "tasks"):
+        agent = await agent_call(
+            WRITER_INSTRUCTIONS + prompt,
+            allowed_tools=AUDITOR_TOOLS,
+            model=config.model_for("spec_artifact"),
+            effort=config.effort_for("spec_artifact"),
+            max_turns=WRITER_MAX_TURNS,
+            cwd=str(config.project_dir),
+            budget_label=f"spec:{artifact_id}",
+        )
+        if not agent.success:
+            raise LLMCallError(
+                f"{artifact_id} writer failed: {agent.error or agent.output}"
+            )
+        result = _from_first_heading(agent.output or "", artifact_id)
+        log.info("Artifact %s generated (%d chars)", artifact_id, len(result))
+        return result
     result = await llm_call(
         prompt,
         model=config.model_for("spec_artifact"),
@@ -94,14 +143,27 @@ async def generate_artifact(
         system_prompt=(
             "You are a technical specification generator. Your ONLY job is to "
             "generate the requested document content based on the context provided "
-            "in the prompt. Output the document directly — do NOT attempt to use "
-            "tools, explore code, or request more information. All the context you "
+            "in the prompt. Output the document directly. You have no tools: do "
+            "not explore code or request more information. All the context you "
             "need is in the prompt. Output ONLY markdown content."
         ),
         budget_label=f"spec:{artifact_id}",
     )
     log.info("Artifact %s generated (%d chars)", artifact_id, len(result))
     return result
+
+
+def _from_first_heading(text: str, artifact_id: str) -> str:
+    """The writer's document: its text from the first line starting with `#`.
+
+    An agent's final message can open with a sentence about what it read;
+    that sentence is not part of the document. No such line means no
+    document."""
+    lines = text.splitlines(keepends=True)
+    for i, line in enumerate(lines):
+        if line.startswith("#"):
+            return "".join(lines[i:])
+    raise LLMCallError(f"{artifact_id} writer returned no line starting with '#'")
 
 
 def _build_prompt(
