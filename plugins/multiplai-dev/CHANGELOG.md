@@ -15,6 +15,18 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.119.0] - 2026-10-27
+
+### Changed
+- **buildme**: planning runs one check (`plan_review`) instead of three. The design audit, the tasks audit and the plan review read the same documents for overlapping problems; the one check reads `design.md` and `tasks.md` once against the specs, the use cases, the rubric, the constraints and the code, and covers what all three covered. A clean plan now costs one model call to check, not three.
+- **buildme**: a plan-check finding whose fix needs a requirements change stops the build with exit 4 and a `spec-issues.md` section titled `Plan review: <requirement>`, as the design audit's did.
+- **buildme**: a rewrite changes `design.md` only when a finding is about it; when every finding is in `tasks.md`, only `tasks.md` (and the rubric) is rewritten.
+- **buildme**: a build saved by an earlier version drops its design-audit and tasks-audit steps when you resume it. If its plan review had passed at the current plan, it is not run again; otherwise the one check runs fresh.
+
+### Removed
+- **buildme**: the `models:` and `efforts:` keys `design_audit` and `tasks_audit` in `specs/config.yaml` no longer have any effect. buildme logs a warning naming `plan_review`, the key that applies to the one check.
+- **buildme**: the `DESIGN_AUDIT_ADVISORY` and `TASKS_AUDIT_ADVISORY` / `TASKS_AUDIT_BLOCKED` progress lines; the one check writes `PLAN_REVIEW_ADVISORY` and `PLAN_REVIEW_BLOCKED`. The `DESIGN_AUDIT` phase is still marked complete, so the board keeps its column.
+
 ## [0.117.0] - 2026-10-27
 
 ### Changed

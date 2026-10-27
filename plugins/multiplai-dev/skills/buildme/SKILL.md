@@ -88,7 +88,7 @@ fixture runs establish harness behavior, not model quality.
 | Flag | Effect |
 |------|--------|
 | `--auto` | Skip review checkpoint (overnight/autonomous runs) |
-| `--spec-only` | Stop after the design, the tasks, the design audit and the plan review — everything up to the review checkpoint, no TDD build |
+| `--spec-only` | Stop after the design, the tasks and the plan check — everything up to the review checkpoint, no TDD build |
 | `--skip-research` | Skip the research phase |
 | `--lenient-review` | Accept-and-continue when a block exhausts its review iterations without passing, instead of failing the build. Unattended overnight runs only — the default is to fail, so low-scoring work is never silently marked done. |
 | `--skip-explainers` | Skip the unknowns/edge-case explainer pass for dependencies new to this project. `unknowns.md` is still written, recording the skip. The pass is **off by default**: its dependency scan flags spec words such as `assert` or `followed` as dependencies (#375), so the flag only matters when `explainers: {enabled: true}` turns it on. |
@@ -103,7 +103,7 @@ fixture runs establish harness behavior, not model quality.
 | `--epic-child` | Build as an epic's child: no spec-extract, and the PR targets `--branch` (the epic's feature branch), else the default branch. The epic's build passes it to every child, so the child's saved command keeps it when run again by hand. `BUILDME_EPIC_CHILD=1` in the environment does the same: a child's command saved before 0.84.2 lacks the flag, so pass one of them when running it by hand. |
 | `--base-ref <sha>` | Branch a new worktree from this commit instead of the source checkout's HEAD; the change's feature branch is then not looked up. An epic's children get `origin/<feature branch>` (see [Epic builds](#epic-builds-a-parent-and-its-children)), and a build that finds its change's feature branch sets it to that itself; a build that re-binds to its worktree ignores it. With `--base-ref`, the change dir as that commit holds it must be ready, or the build refuses before the worktree is cut. With `--branch` and `--epic-child`, the PR targets that branch (a single change given `--branch` builds on that branch itself, ignoring `--base-ref`, and its PR goes to the default branch); otherwise, when the commit is not on the default branch, the PR targets the branch that holds it (`--base`), except under `--epic-child` (or `BUILDME_EPIC_CHILD=1`), where it targets the default branch. Exits `1` when the `specs/config.yaml` committed at HEAD is not the version at that commit (push yours, or pull origin's, first). |
 | `--branch <name>` | The change's feature branch: where pm-spec pushed its specs, and what a single change builds on (an epic's child: what it starts from and what its PR targets). It must start with the change's `<TICKET>-`. Without it the build uses the branch the change dir's `.change.yaml` records, else the one branch on origin named `<TICKET>-<change>` (see [The feature branch](#the-feature-branch)). A branch it names that origin does not have, a name without the ticket prefix, and several matching branches on origin each refuse with `SPEC:NOT_READY`. |
-| `--trust-repo` | Required for every run that reaches a tool-using agent — which now includes the reviews. The per-block code review, the design audit, the tasks audit and the plan review all run as subagents that `Read`/`Grep`/`Glob` the repo, so a `spec-generate` or review-only run needs this flag too, not just a full `build`. `BUILDME_TRUST_REPO=1` is the environment equivalent. Without it the step stops and says so. An approved epic vouches for its own repo: it passes `--trust-repo` to each child build, review and fixer, and its merge step's one agent call (under `epic.merge: auto`) runs trusted for that call only. |
+| `--trust-repo` | Required for every run that reaches a tool-using agent — which now includes the reviews. The per-block code review and the plan check both run as subagents that `Read`/`Grep`/`Glob` the repo, so a `spec-generate` or review-only run needs this flag too, not just a full `build`. `BUILDME_TRUST_REPO=1` is the environment equivalent. Without it the step stops and says so. An approved epic vouches for its own repo: it passes `--trust-repo` to each child build, review and fixer, and its merge step's one agent call (under `epic.merge: auto`) runs trusted for that call only. |
 
 `specs/config.yaml` equivalents (CLI flags win): `explainers: {enabled: false}` (the default; #375),
 `respec: {halt_on_contradiction: false}` (on: a `SPEC_IMPACT: contradicts` stops the
@@ -564,22 +564,26 @@ command works after a scratch file under `/tmp` is gone.
 
 The pipeline handles: the readiness check, worktree/branch setup, bootstrap,
 research, codebase analysis, the plan (design, unknowns with the explainer
-pass, tasks, rubric, via change_manager) and the design audit — which
-critiques the plan for consistency *and* quality (over-engineering, task
-granularity, testability, uncovered edge cases) and folds every
-critical/major gap back into one regeneration pass of `design.md` and
-`tasks.md` before re-auditing once. The plan review
-reads `tasks.md` against the rubric, the constraints and the use cases and
-regenerates `tasks.md` at most once. Only critical and major findings earn a
-rewrite, and each check reports at most 10, most severe first. Each re-audit
-is told which findings the rewrite was asked to fix and stops the run when a
+pass, tasks, rubric, via change_manager) and one plan check (`plan_review`).
+The check reads `design.md` and `tasks.md` once, with `Read`/`Grep`/`Glob` on
+the repo, against the specs, the use cases, the rubric, the constraints and
+the code: coverage of every scenario, blocks that add no behaviour, contracts
+between blocks, vertical slicing, placeholders, claims about existing code,
+over-engineering, testability and edge cases the specs name. It reports at
+most 10 findings, most severe first. buildme's own scans for placeholders and
+for blocks that add no behaviour run beside it. Only critical and major
+findings, and the scans' findings, earn a rewrite: one pass that rewrites
+`tasks.md`, and `design.md` first unless every finding is in `tasks.md`. The
+recheck is told which findings the rewrite was asked to fix and stops the run when a
 critical one is not `resolved`, when a major one is `still_present`, when it
 finds a new critical problem, or when the rewritten `tasks.md` still has a
 placeholder or a block that adds no behaviour by buildme's own scans. A major
-finding the re-audit calls `partially_resolved` or `cannot_verify`, and every
+finding the recheck calls `partially_resolved` or `cannot_verify`, and every
 new major or minor finding, whatever its category, is reported only; a minor
 finding never stops a run. A build stopped by an earlier version's rule gets
-one fresh check and one rewrite under this one. A stopped step prints those findings with their statuses. Resuming
+one fresh check and one rewrite under this one; a build saved before the one
+check existed drops its design-audit and tasks-audit steps on resume and runs
+the check. A stopped step prints those findings with their statuses. Resuming
 without editing the plan stops again at no cost; editing the plan gives the
 step one more rewrite. TDD implementation (test-writer + implementer agents per block),
 integration gates, scored quality reviews, entry point verification, the
@@ -593,8 +597,8 @@ to `spec-issues.md` in the build's change dir and setting `spec_issues` in its
 
 - the design step answers a `SPEC_ISSUE: requirements/<capability>.md:
   <requirement>: <problem and fix>` line (the design is not written);
-- a design-audit finding whose fix needs a requirements change
-  (`needs_requirements_change`), at the first audit or the recheck;
+- a critical or major plan-check finding whose fix needs a requirements
+  change (`needs_requirements_change`), at the first check or the recheck;
 - a TDD agent reports `SPEC_IMPACT: contradicts` while
   `respec: {halt_on_contradiction: true}` is set.
 

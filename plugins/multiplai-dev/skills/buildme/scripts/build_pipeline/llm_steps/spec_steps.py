@@ -1,8 +1,8 @@
-"""LLM step functions for spec generation and design audit.
+"""LLM step functions for spec generation, the explainers and the codebase
+analysis.
 
-Spec generation calls llm_call() with the appropriate prompt template; the
-adversarial audits call agent_call() with a read-only tool set. Both return
-structured output.
+Spec generation calls llm_call() with the appropriate prompt template. The plan
+check that reviews what it writes is `plan_review_steps`.
 """
 
 from __future__ import annotations
@@ -13,44 +13,28 @@ import re
 from pathlib import Path
 
 from code_facts import CallFn
-from multiplai_core.specs import change_root
 
 from ..change_manager import (
-    requirement_sources,
     requirement_texts,
     spec_issue_ref,
-)
-from ..models import PriorAssessment
-from ..prompts.design_audit import (
-    CAPABILITY_CHECK,
-    COMPONENT_CAPABILITY_CHECK,
-    DESIGN_AUDIT_PROMPT,
-    MAX_PLAN_FINDINGS,
-    TASKS_AUDIT_PROMPT,
-    plan_section,
-    prior_findings_section,
 )
 from ..prompts.explainer import EXPLAINER_PROMPT, UNKNOWNS_REGEN_PROMPT
 from ..prompts.spec_generation import DESIGN_PROMPT, TASKS_PROMPT
 from ..sdk import (
-    LLMCallError,
-    agent_call,
     agent_call_structured,
-    extract_json,
     llm_call,
 )
 
 log = logging.getLogger(__name__)
 
-# The audits are reviews, so they get the reviewer's tool set and nothing more:
-# read-only. An auditor that could `Write` or `Edit` would fix the design it was
-# asked to judge, and `spec_generator.rewrite_plan` (see CLAUDE.md, "Planning
-# has one publisher") would no longer be the only way an artifact changes.
+# A read-only agent's tool set (the findings stage's self-check,
+# `findings.code`): the reviewer's, and nothing more. An agent that could
+# `Write` or `Edit` would fix what it was asked to judge.
 # `test_no_review_step_can_write` asserts the list.
 AUDITOR_TOOLS = ["Read", "Grep", "Glob"]
 
-# Enough turns to open the artifacts' neighbours and grep the codebase for a
-# name the design claims exists; not enough to go wandering.
+# Enough turns to open a file's neighbours and grep the codebase for a name;
+# not enough to go wandering.
 AUDITOR_MAX_TURNS = 30
 
 # The most registry text one prompt carries; whole files are dropped from the
@@ -61,95 +45,6 @@ REGISTRY_PLAN_RULE = (
     "These files are what the code does today, for the capabilities this change's requirements "
     "name. Keep that behaviour unless a requirement above changes it."
 )
-
-
-async def _audit_agent_text(prompt: str, config, *, budget_label: str) -> str:
-    """Run one audit as a read-only subagent, returning its raw text.
-
-    A failed agent cannot provide completed audit evidence, even if its
-    partial output happens to contain an empty findings list.
-    """
-    result = await agent_call(
-        prompt,
-        allowed_tools=AUDITOR_TOOLS,
-        model=config.model_for(budget_label),
-        effort=config.effort_for(budget_label),
-        max_turns=AUDITOR_MAX_TURNS,
-        cwd=str(config.project_dir),
-        budget_label=budget_label,
-    )
-    if not result.success:
-        raise LLMCallError(
-            f"{budget_label} audit failed: {result.error or result.output}"
-        )
-    return result.output or ""
-
-
-_SEVERITY_RANK = {"critical": 0, "major": 1, "minor": 2}
-
-
-def keep_most_severe(findings: list, label: str, severity=lambda f: f["severity"]):
-    """The findings sorted critical, major, minor (stable within a severity),
-    cut to the first `MAX_PLAN_FINDINGS`. Logs how many it dropped."""
-    ranked = sorted(findings, key=lambda f: _SEVERITY_RANK.get(severity(f), 3))
-    if len(ranked) > MAX_PLAN_FINDINGS:
-        log.info("%s: kept %d of %d findings", label, MAX_PLAN_FINDINGS, len(ranked))
-    return ranked[:MAX_PLAN_FINDINGS]
-
-
-class AuditFindings(list):
-    """An audit's findings, plus its status for each finding the rewrite was
-    asked to fix (`prior_assessments`, empty on a first audit)."""
-
-    prior_assessments: list[PriorAssessment]
-
-    def __init__(self, findings=(), prior_assessments=()):
-        super().__init__(findings)
-        self.prior_assessments = list(prior_assessments)
-
-
-def _audit_findings(raw: str, label: str, *, recheck: bool = False) -> AuditFindings:
-    """Require the complete findings schema before accepting audit evidence.
-
-    A first audit answers a bare list. A recheck answers
-    `{findings, prior_assessments}`, or a bare list, which then holds no
-    assessments. An unknown status is read as `cannot_verify`
-    (`PriorAssessment`)."""
-    try:
-        findings = extract_json(raw)
-    except ValueError as exc:
-        raise LLMCallError(f"{label} audit returned invalid JSON") from exc
-    assessments = []
-    if (
-        recheck
-        and isinstance(findings, dict)
-        and isinstance(findings.get("findings"), list)
-    ):
-        raw_assessments = findings.get("prior_assessments") or []
-        if not isinstance(raw_assessments, list):
-            raise LLMCallError(f"{label} audit returned invalid prior_assessments")
-        try:
-            assessments = [PriorAssessment.model_validate(a) for a in raw_assessments]
-        except ValueError as exc:
-            raise LLMCallError(
-                f"{label} audit returned an invalid prior assessment"
-            ) from exc
-        findings = findings["findings"]
-    if not isinstance(findings, list):
-        raise LLMCallError(f"{label} audit must return a findings list")
-    for finding in findings:
-        if (
-            not isinstance(finding, dict)
-            or any(
-                not isinstance(finding.get(key), str) or not finding[key].strip()
-                for key in ("category", "severity", "description", "suggestion")
-            )
-            or finding["severity"].lower() not in {"critical", "major", "minor"}
-        ):
-            raise LLMCallError(f"{label} audit returned an invalid finding")
-        finding["severity"] = finding["severity"].lower()
-    log.info("%s audit found %d findings", label, len(findings))
-    return AuditFindings(keep_most_severe(findings, label), assessments)
 
 
 async def generate_artifact(
@@ -175,9 +70,8 @@ async def generate_artifact(
             (config.reference_docs_text()) for `design` and `tasks`. Inlined
             rather than read on demand because this call's system prompt
             forbids tools — the prompt is the only channel.
-        audit_findings: Findings injected on a single regeneration pass —
-            tasks-shape, design-audit or plan-review findings. Used by
-            `design` and `tasks`.
+        audit_findings: Findings injected on a single regeneration pass:
+            the plan check's findings. Used by `design` and `tasks`.
 
     Returns:
         Generated markdown content.
@@ -413,88 +307,6 @@ async def run_explainer(dep, config, usage_context: str = "") -> str:
     )
 
 
-async def run_design_audit(
-    change_dir: Path, config, *, prior: list[dict] | None = None
-) -> AuditFindings:
-    """Run adversarial design audit on generated artifacts.
-
-    Runs as a read-only subagent, so the auditor can open the codebase the
-    design claims to change instead of judging four documents in isolation.
-
-    Returns list of gap dicts with category, severity, description, suggestion.
-    With `prior` (the findings a rewrite was asked to fix) it also asks for a
-    status for each, returned as `prior_assessments`.
-
-    A component is judged against its `plan.md`: the proposal it reads is its
-    change's, which also holds the other components' capabilities.
-    """
-    component = change_root(change_dir) != Path(change_dir)
-    proposal = _read_file(change_root(change_dir) / "proposal.md")
-    design = _read_file(change_dir / "design.md")
-    tasks = _read_file(change_dir / "tasks.md")
-
-    specs_parts = [
-        f"### {cap_name}\n{text}"
-        for cap_name, text in requirement_texts(change_dir).items()
-    ]
-    specs_content = "\n\n".join(specs_parts) if specs_parts else "(no specs)"
-
-    # Detect change type for type-specific audit questions
-    from ..rubric import detect_change_type
-
-    change_type = detect_change_type(change_dir)
-
-    prompt = DESIGN_AUDIT_PROMPT.format(
-        proposal_content=proposal,
-        plan_section=plan_section(_plan_at(change_dir), component=component),
-        specs_content=specs_content,
-        design_content=design,
-        tasks_content=tasks,
-        change_type=change_type,
-        capability_check=COMPONENT_CAPABILITY_CHECK if component else CAPABILITY_CHECK,
-        spec_ref=spec_issue_ref(change_dir),
-    ) + prior_findings_section(prior)
-
-    log.info("Running design audit on %s", change_dir.name)
-    raw = await _audit_agent_text(prompt, config, budget_label="design_audit")
-
-    return _audit_findings(raw, "Design", recheck=bool(prior))
-
-
-async def run_tasks_audit(
-    change_dir: Path, config, *, prior: list[dict] | None = None
-) -> AuditFindings:
-    """Audit tasks.md for horizontal (layer-by-layer) decomposition.
-
-    Checks that each block is a vertical slice — end-to-end exercisable when it
-    completes — rather than a layer (schema block, API block, UI block, final
-    wiring block). Runs as a read-only subagent. Returns a list of finding
-    dicts with category, severity, description, suggestion; empty list when the
-    shape is clean. `prior` works as in `run_design_audit`.
-    """
-    tasks = _read_file(change_dir / "tasks.md")
-    design = _read_file(change_dir / "design.md")
-
-    # Specs feed the traceability check: every WHEN/THEN must map to a block.
-    # `specs.md#<cap>` or `requirements/<cap>.md`, as the change holds them.
-    specs_parts = [
-        f"### {label}\n{text}"
-        for label, text in requirement_sources(change_dir).items()
-    ]
-    specs_content = "\n\n".join(specs_parts) or "(no requirements files)"
-
-    prompt = TASKS_AUDIT_PROMPT.format(
-        design_content=design,
-        specs_content=specs_content,
-        tasks_content=tasks,
-    ) + prior_findings_section(prior)
-
-    log.info("Running tasks shape audit on %s", change_dir.name)
-    raw = await _audit_agent_text(prompt, config, budget_label="tasks_audit")
-
-    return _audit_findings(raw, "Tasks shape", recheck=bool(prior))
-
-
 async def _codebase_analysis_call(
     prompt: str, schema, *, config, budget_label: str = "", **kwargs
 ):
@@ -560,10 +372,3 @@ async def run_codebase_analysis(
     )
     code_analysis.write_facts_file(analysis, md_path.parent)
     return code_analysis.render_markdown(analysis, project_dir, md_path.parent)
-
-
-def _read_file(path: Path) -> str:
-    """Read a file, returning placeholder if missing."""
-    if path.exists():
-        return path.read_text()
-    return "(not available)"

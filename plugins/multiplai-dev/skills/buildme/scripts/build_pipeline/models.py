@@ -491,9 +491,27 @@ class PlanReviewFinding(BaseModel):
     location: str = ""
     claim: str = ""
     reason: str = ""
+    # How to fix it, as the design audit's findings carried before the one
+    # plan check replaced it.
+    suggestion: str = ""
+    # True when the fix needs a requirements change; `requirement` names it as
+    # `<spec ref>: <requirement name>` (`spec_generator.audit_spec_issues`).
+    needs_requirements_change: bool = False
+    requirement: str = ""
     # Populated only for category "oversized-plan" — which blocks go in which
     # ticket, and the signature boundary each cut crosses.
     proposed_cut: list[PlanReviewCut] = Field(default_factory=list)
+
+    @field_validator("severity", mode="before")
+    @classmethod
+    def _canonical_severity(cls, value):
+        """`MAJOR` and ` major` are `major`: the blocking rule compares the
+        exact lowercase names, so a model's capitalisation must not hide a
+        finding from it. Any other name is rejected, so the call is retried."""
+        severity = str(value or "").strip().lower() or "minor"
+        if severity not in ("critical", "major", "minor"):
+            raise ValueError(f"unknown severity {value!r}")
+        return severity
 
 
 class PlanReviewResult(BaseModel):

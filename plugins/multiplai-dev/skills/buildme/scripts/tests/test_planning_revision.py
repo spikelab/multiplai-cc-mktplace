@@ -95,10 +95,6 @@ async def test_interrupted_publication_recovers_one_complete_revision(
         AsyncMock(side_effect=["# New design", "## 1. New values\nReturn two"]),
     )
     monkeypatch.setattr(
-        "build_pipeline.llm_steps.spec_steps.run_tasks_audit",
-        AsyncMock(return_value=[]),
-    )
-    monkeypatch.setattr(
         owner, "generate_rubric", AsyncMock(return_value="# New rubric")
     )
     original = owner.atomic_write
@@ -218,44 +214,32 @@ def test_new_plan_revision_invalidates_size_acceptance(plan):
 
 def test_repair_admission_and_outcome_share_one_ledger():
     sg = SpecGenState.model_validate(
-        {"tasks_audit_regen_done": True, "tasks_audit_done": True}
+        {"plan_review_regen_done": True, "plan_review_done": True}
     )
-    assert sg.repair_attempts("tasks_audit") == 1
-    assert not sg.step_passed("tasks_audit")
-    sg.record_step("tasks_audit")
+    assert sg.repair_attempts("plan_review") == 1
+    assert not sg.step_passed("plan_review")
+    sg.record_step("plan_review")
     saved = sg.model_dump()
-    assert saved["steps"]["tasks_audit"]["repair_attempts"] == 1
+    assert saved["steps"]["plan_review"]["repair_attempts"] == 1
     assert not any(key.endswith("_done") for key in saved)
 
 
 @pytest.mark.asyncio
-async def test_tasks_shape_repair_failure_keeps_published_plan_intact(
+async def test_a_rewrite_that_fails_publication_keeps_the_plan_intact(
     plan, monkeypatch
 ):
     config, cm, state = plan
     before = (config.change_dir / "tasks.md").read_bytes()
     monkeypatch.setattr(
-        "build_pipeline.llm_steps.spec_steps.run_tasks_audit",
-        AsyncMock(
-            return_value=[{"severity": "major", "description": "horizontal breakdown"}]
-        ),
-    )
-    monkeypatch.setattr(
         "build_pipeline.llm_steps.spec_steps.generate_artifact",
         AsyncMock(return_value="## 1. Replacement\nReturn two"),
     )
+    monkeypatch.setattr(owner, "generate_rubric", AsyncMock(return_value="# Rubric"))
     # The fixture deliberately lacks complete requirements, so publication must fail.
     with pytest.raises(ValueError, match="incomplete capability"):
-        await owner._audit_tasks_shape(
-            config.change_dir,
-            cm.artifact_context(config.change_dir, "tasks"),
-            config,
-            config.change_dir / "tasks.md",
-            state,
-        )
+        await owner.rewrite_plan(config, state, "horizontal breakdown")
     assert (config.change_dir / "tasks.md").read_bytes() == before
-    assert state.spec_gen.repair_attempts("tasks_audit") == 1
-    assert not state.spec_gen.step_passed("tasks_audit")
+    assert not (config.change_dir / ".plan-publication.json").exists()
 
 
 @pytest.mark.parametrize("repair", [False, True])
@@ -291,14 +275,14 @@ def test_requirements_change_invalidates_design(plan):
 def test_legacy_repair_flag_cannot_be_lost_when_step_evidence_already_exists():
     sg = SpecGenState.model_validate(
         {
-            "design_audit_regen_done": True,
-            "steps": {"design_audit": {"revision": "accepted", "outcome": "passed"}},
+            "plan_review_regen_done": True,
+            "steps": {"plan_review": {"revision": "accepted", "outcome": "passed"}},
         }
     )
-    assert sg.repair_attempts("design_audit") == 1
-    assert sg.steps["design_audit"].revision == "accepted"
+    assert sg.repair_attempts("plan_review") == 1
+    assert sg.steps["plan_review"].revision == "accepted"
     with pytest.raises(RuntimeError, match="already attempted"):
-        sg.admit_repair("design_audit")
+        sg.admit_repair("plan_review")
 
 
 @pytest.mark.asyncio
@@ -314,19 +298,15 @@ async def test_staged_repair_rejects_placeholders_even_when_model_audit_is_clean
         "build_pipeline.llm_steps.spec_steps.generate_artifact",
         AsyncMock(return_value="## 1. Values\nError handling: TBD\nReturn values"),
     )
-    monkeypatch.setattr(
-        "build_pipeline.llm_steps.spec_steps.run_tasks_audit",
-        AsyncMock(return_value=[]),
-    )
     monkeypatch.setattr(owner, "generate_rubric", AsyncMock(return_value="# Rubric"))
     with pytest.raises(ValueError, match="placeholder"):
         await owner.rewrite_plan(config, state, "Remove placeholders")
     assert (config.change_dir / "tasks.md").read_bytes() == before
-    assert not state.spec_gen.step_passed("tasks_audit")
+    assert not state.spec_gen.step_passed("plan_review")
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stage", ["design_audit", "plan_review"])
+@pytest.mark.parametrize("stage", ["plan_review"])
 async def test_blocked_findings_survive_resume_without_repaying_same_review(
     plan, monkeypatch, stage
 ):
@@ -337,33 +317,20 @@ async def test_blocked_findings_survive_resume_without_repaying_same_review(
     owner.reconcile_plan(config, state)
     state.spec_gen.admit_repair(stage)
     sentinel = "Missing rejection of the unique invalid account 891"
-    if stage == "design_audit":
-        review = AsyncMock(
-            return_value=[
-                {
-                    "severity": "critical",
-                    "category": "correctness",
-                    "description": sentinel,
-                }
+    review = AsyncMock(
+        return_value=PlanReviewResult(
+            findings=[
+                PlanReviewFinding(
+                    category="correctness",
+                    severity="critical",
+                    claim=sentinel,
+                    reason="Add a rejection scenario",
+                )
             ]
         )
-        monkeypatch.setattr(owner, "_run_audit", review)
-        run = owner.run_design_audit_stage
-    else:
-        review = AsyncMock(
-            return_value=PlanReviewResult(
-                findings=[
-                    PlanReviewFinding(
-                        category="correctness",
-                        severity="critical",
-                        claim=sentinel,
-                        reason="Add a rejection scenario",
-                    )
-                ]
-            )
-        )
-        monkeypatch.setattr(plan_review_steps, "run_plan_review", review)
-        run = plan_review_steps.run_plan_review_stage
+    )
+    monkeypatch.setattr(plan_review_steps, "run_plan_review", review)
+    run = plan_review_steps.run_plan_review_stage
     for _ in range(2):
         with pytest.raises(RuntimeError):
             await run(config.change_dir, config, state, config.state_file_path())
@@ -387,10 +354,6 @@ async def test_repaired_unknowns_keep_their_accepted_evidence_on_resume(
         AsyncMock(side_effect=["# New design", "## 1. Values\nReturn two"]),
     )
     monkeypatch.setattr(
-        "build_pipeline.llm_steps.spec_steps.run_tasks_audit",
-        AsyncMock(return_value=[]),
-    )
-    monkeypatch.setattr(
         owner, "generate_rubric", AsyncMock(return_value="# New rubric")
     )
     monkeypatch.setattr(owner, "_commit_change_dir", lambda *a: None)
@@ -410,13 +373,12 @@ async def test_repaired_unknowns_keep_their_accepted_evidence_on_resume(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stage", ["design_audit", "plan_review"])
+@pytest.mark.parametrize("stage", ["plan_review"])
 @pytest.mark.parametrize("failure", ["audit", "commit"])
 async def test_interrupted_post_repair_audit_resumes_on_the_new_revision(
     plan, monkeypatch, stage, failure
 ):
     from build_pipeline.llm_steps import plan_review_steps
-    from build_pipeline.llm_steps.spec_steps import AuditFindings
     from build_pipeline.models import (
         PlanReviewFinding,
         PlanReviewResult,
@@ -440,10 +402,6 @@ async def test_interrupted_post_repair_audit_resumes_on_the_new_revision(
     writer = AsyncMock(side_effect=generate)
     monkeypatch.setattr("build_pipeline.llm_steps.spec_steps.generate_artifact", writer)
     monkeypatch.setattr(
-        "build_pipeline.llm_steps.spec_steps.run_tasks_audit",
-        AsyncMock(return_value=[]),
-    )
-    monkeypatch.setattr(
         owner, "generate_rubric", AsyncMock(return_value="# New rubric")
     )
     monkeypatch.setattr(
@@ -453,47 +411,28 @@ async def test_interrupted_post_repair_audit_resumes_on_the_new_revision(
         if failure == "commit"
         else lambda *a: None,
     )
-    if stage == "design_audit":
-        review = AsyncMock(
-            side_effect=[
-                [
-                    {
-                        "severity": "critical",
-                        "category": "correctness",
-                        "description": "old gap",
-                    }
-                ],
-                *([RuntimeError("recheck interrupted")] if failure == "audit" else []),
-                AuditFindings(
-                    [], [PriorAssessment(finding_id="DA-F1", status="resolved")]
-                ),
-            ]
-        )
-        monkeypatch.setattr(owner, "_run_audit", review)
-        run = owner.run_design_audit_stage
-    else:
-        review = AsyncMock(
-            side_effect=[
-                PlanReviewResult(
-                    findings=[
-                        PlanReviewFinding(
-                            severity="critical",
-                            category="correctness",
-                            claim="old gap",
-                            reason="fix it",
-                        )
-                    ]
-                ),
-                *([RuntimeError("recheck interrupted")] if failure == "audit" else []),
-                PlanReviewResult(
-                    prior_assessments=[
-                        PriorAssessment(finding_id="PR-F1", status="resolved")
-                    ]
-                ),
-            ]
-        )
-        monkeypatch.setattr(plan_review_steps, "run_plan_review", review)
-        run = plan_review_steps.run_plan_review_stage
+    review = AsyncMock(
+        side_effect=[
+            PlanReviewResult(
+                findings=[
+                    PlanReviewFinding(
+                        severity="critical",
+                        category="correctness",
+                        claim="old gap",
+                        reason="fix it",
+                    )
+                ]
+            ),
+            *([RuntimeError("recheck interrupted")] if failure == "audit" else []),
+            PlanReviewResult(
+                prior_assessments=[
+                    PriorAssessment(finding_id="PR-F1", status="resolved")
+                ]
+            ),
+        ]
+    )
+    monkeypatch.setattr(plan_review_steps, "run_plan_review", review)
+    run = plan_review_steps.run_plan_review_stage
     with pytest.raises(RuntimeError, match="interrupted"):
         await run(config.change_dir, config, state, config.state_file_path())
     saved = BuildState.load(config.state_file_path())
@@ -509,7 +448,7 @@ async def test_interrupted_post_repair_audit_resumes_on_the_new_revision(
 # --- The recheck after a plan rewrite (plan-buildme-plan-recheck-2026-10-21.md) ---
 
 
-def test_number_findings_gives_each_step_its_own_ids_and_text():
+def test_number_findings_gives_each_finding_an_id_and_text():
     found = [
         {
             "severity": "major",
@@ -519,15 +458,11 @@ def test_number_findings_gives_each_step_its_own_ids_and_text():
         },
         {"description": "no severity"},
     ]
-    numbered = owner.number_findings("design_audit", found)
-    assert [f["finding_id"] for f in numbered] == ["DA-F1", "DA-F2"]
+    numbered = owner.number_findings("plan_review", found)
+    assert [f["finding_id"] for f in numbered] == ["PR-F1", "PR-F2"]
     assert numbered[0]["text"] == "gap Fix: add it"
     assert (numbered[1]["severity"], numbered[1]["category"]) == ("?", "")
     assert "finding_id" not in found[0]
-    assert [
-        owner.number_findings(step, found[:1])[0]["finding_id"]
-        for step in ("tasks_audit", "plan_review")
-    ] == ["TA-F1", "PR-F1"]
 
 
 LISTED = [
@@ -641,53 +576,6 @@ def test_recheck_verdict_always_blocks_on_the_deterministic_scans():
     assert advisory == []
 
 
-@pytest.mark.asyncio
-async def test_rejected_tasks_repair_keeps_blocking_findings_and_a_progress_line(
-    plan, monkeypatch
-):
-    """Done means 5: a tasks repair whose recheck still finds the listed
-    finding saves it as blocking and writes TASKS_AUDIT_BLOCKED."""
-    from build_pipeline.llm_steps.spec_steps import AuditFindings
-    from build_pipeline.models import PriorAssessment
-
-    config, cm, state = _ready(plan)
-    _writer(monkeypatch)
-    monkeypatch.setattr(
-        "build_pipeline.llm_steps.spec_steps.run_tasks_audit",
-        AsyncMock(
-            side_effect=[
-                [
-                    {
-                        "severity": "major",
-                        "category": "horizontal",
-                        "description": "HORIZONTAL-MARKER",
-                    }
-                ],
-                AuditFindings(
-                    [],
-                    [
-                        PriorAssessment(
-                            finding_id="TA-F1",
-                            status="still_present",
-                            evidence="block 1",
-                        )
-                    ],
-                ),
-            ]
-        ),
-    )
-    with pytest.raises(
-        owner.PlanRepairRejected,
-        match="Rewritten tasks still have blocking shape findings",
-    ):
-        await _tasks_stage(config, cm, state)
-    step = BuildState.load(config.state_file_path()).spec_gen.steps["tasks_audit"]
-    assert "TA-F1 still_present" in step.blocking_findings
-    assert "HORIZONTAL-MARKER" in step.blocking_findings
-    progress = config.progress_file_path().read_text()
-    assert "TASKS_AUDIT_BLOCKED" in progress and "HORIZONTAL-MARKER" in progress
-
-
 # Stop and resume rows S1-S11. A stop is a SIGKILL: the test puts back the
 # checkpoint and progress file the process had written when it died, so no
 # exception handler's record survives it.
@@ -697,7 +585,7 @@ class Killed(BaseException):
     """Stands in for the process dying at the point the test names."""
 
 
-IDS = {"design_audit": "DA-F1", "plan_review": "PR-F1", "tasks_audit": "TA-F1"}
+IDS = {"plan_review": "PR-F1"}
 PLAN_FILES = ("proposal.md", "design.md", "tasks.md", "unknowns.md", "rubric.md")
 
 
@@ -732,37 +620,22 @@ def _plan_files(config):
     return {name: (config.change_dir / name).read_bytes() for name in PLAN_FILES}
 
 
-async def _tasks_stage(config, cm, state, *_):
-    await owner._audit_tasks_shape(
-        config.change_dir,
-        cm.artifact_context(config.change_dir, "tasks"),
-        config,
-        config.change_dir / "tasks.md",
-        state,
+def _first(stage, *gaps):
+    """A first check's answer: (severity, text) per finding."""
+    from build_pipeline.models import PlanReviewFinding, PlanReviewResult
+
+    return PlanReviewResult(
+        findings=[
+            PlanReviewFinding(
+                category="correctness", severity=s, claim=t, reason="fix it"
+            )
+            for s, t in gaps
+        ]
     )
 
 
-def _first(stage, *gaps):
-    """A first audit's answer, in the stage's shape: (severity, text) per finding."""
-    from build_pipeline.models import PlanReviewFinding, PlanReviewResult
-
-    if stage == "plan_review":
-        return PlanReviewResult(
-            findings=[
-                PlanReviewFinding(
-                    category="correctness", severity=s, claim=t, reason="fix it"
-                )
-                for s, t in gaps
-            ]
-        )
-    return [
-        {"severity": s, "category": "correctness", "description": t} for s, t in gaps
-    ]
-
-
 def _recheck(stage, status, *gaps):
-    """A recheck's answer: `status` for the stage's first listed finding, plus new findings."""
-    from build_pipeline.llm_steps.spec_steps import AuditFindings
+    """A recheck's answer: `status` for the first listed finding, plus new findings."""
     from build_pipeline.models import PlanReviewResult, PriorAssessment
 
     given = [
@@ -770,18 +643,14 @@ def _recheck(stage, status, *gaps):
             finding_id=IDS[stage], status=status, evidence="tasks.md block 1"
         )
     ]
-    if stage == "plan_review":
-        return PlanReviewResult(
-            findings=_first(stage, *gaps).findings, prior_assessments=given
-        )
-    return AuditFindings(_first(stage, *gaps), given)
+    return PlanReviewResult(
+        findings=_first(stage, *gaps).findings, prior_assessments=given
+    )
 
 
 def _install(monkeypatch, stage, answers):
-    """Stub the stage's audit with these answers in order; the staged tasks
-    recheck inside `rewrite_plan` answers clean unless the stage is the tasks
-    audit, whose answers include it. An answer that is a function is called
-    (a `_Kill.die`). Returns (run, audit stub)."""
+    """Stub the plan check with these answers in order. An answer that is a
+    function is called (a `_Kill.die`). Returns (run, check stub)."""
     from build_pipeline.llm_steps import plan_review_steps
 
     queue = iter(answers)
@@ -793,25 +662,11 @@ def _install(monkeypatch, stage, answers):
         return item() if callable(item) else item
 
     review = AsyncMock(side_effect=answer)
-    if stage == "tasks_audit":
-        monkeypatch.setattr(
-            "build_pipeline.llm_steps.spec_steps.run_tasks_audit", review
-        )
-        return _tasks_stage, review
-    monkeypatch.setattr(
-        "build_pipeline.llm_steps.spec_steps.run_tasks_audit",
-        AsyncMock(return_value=[]),
-    )
-    if stage == "design_audit":
-        monkeypatch.setattr(owner, "_run_audit", review)
-        return owner.run_design_audit_stage, review
     monkeypatch.setattr(plan_review_steps, "run_plan_review", review)
     return plan_review_steps.run_plan_review_stage, review
 
 
 async def _run(run, config, cm, state):
-    if run is _tasks_stage:
-        return await run(config, cm, state)
     return await run(config.change_dir, config, state, config.state_file_path())
 
 
@@ -870,7 +725,7 @@ async def _block_after_recheck(monkeypatch, plan, stage):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stage", ["design_audit", "plan_review", "tasks_audit"])
+@pytest.mark.parametrize("stage", ["plan_review"])
 @pytest.mark.parametrize("resumed", ["clean", "findings"])
 async def test_S1_stop_after_admission_re_audits_without_a_second_rewrite(
     plan, monkeypatch, capsys, stage, resumed
@@ -903,8 +758,7 @@ async def test_S1_stop_after_admission_re_audits_without_a_second_rewrite(
     capsys.readouterr()
     if resumed == "clean":
         await _run(run, config, cm, saved)
-        if stage != "tasks_audit":  # the tasks audit's caller records its pass
-            assert saved.spec_gen.step_passed(stage)
+        assert saved.spec_gen.step_passed(stage)
     else:
         with pytest.raises(owner.PlanBlocked):
             await _run(run, config, cm, saved)
@@ -955,7 +809,7 @@ async def _reference_run(plan_dir, monkeypatch, stage):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stage", ["design_audit", "plan_review"])
+@pytest.mark.parametrize("stage", ["plan_review"])
 async def test_S2_stop_during_publication_finishes_it_then_rechecks(
     plan, monkeypatch, tmp_path_factory, stage
 ):
@@ -998,7 +852,7 @@ async def test_S2_stop_during_publication_finishes_it_then_rechecks(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stage", ["design_audit", "plan_review"])
+@pytest.mark.parametrize("stage", ["plan_review"])
 async def test_S3_stop_during_the_recheck_reruns_it_with_the_listed_findings(
     plan, monkeypatch, tmp_path_factory, stage
 ):
@@ -1038,7 +892,7 @@ async def test_S3_stop_during_the_recheck_reruns_it_with_the_listed_findings(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stage", ["design_audit", "plan_review", "tasks_audit"])
+@pytest.mark.parametrize("stage", ["plan_review"])
 async def test_S4_a_blocking_recheck_refuses_the_resume_with_its_findings(
     plan, monkeypatch, capsys, stage
 ):
@@ -1068,7 +922,7 @@ async def test_S4_a_blocking_recheck_refuses_the_resume_with_its_findings(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stage", ["design_audit", "plan_review", "tasks_audit"])
+@pytest.mark.parametrize("stage", ["plan_review"])
 async def test_S5_an_edited_plan_gets_its_one_rewrite_back(
     plan, monkeypatch, caplog, stage
 ):
@@ -1103,7 +957,7 @@ async def test_S5_an_edited_plan_gets_its_one_rewrite_back(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stage", ["design_audit", "plan_review", "tasks_audit"])
+@pytest.mark.parametrize("stage", ["plan_review"])
 async def test_S6_repeated_resumes_refuse_alike_and_a_new_block_replaces_the_old(
     plan, monkeypatch, stage
 ):
@@ -1141,28 +995,31 @@ async def test_S6_repeated_resumes_refuse_alike_and_a_new_block_replaces_the_old
 async def test_S7_this_change_adds_no_lock_against_a_second_run(plan, monkeypatch):
     """S7: buildme has no guard against two builds of one change outside an
     epic (the epic lock, epic/lock.py, covers only the epic directory). This
-    PR adds none: a second run started while the first waits on its audit
-    reaches its own audit call, and no lock file is left behind."""
+    PR adds none: a second run started while the first waits on its check
+    reaches its own check call, and no lock file is left behind."""
     import asyncio
+
+    from build_pipeline.llm_steps import plan_review_steps
+    from build_pipeline.models import PlanReviewResult
 
     config, cm, state = _ready(plan)
     release, started = asyncio.Event(), []
 
-    async def audit(*a, **kw):
+    async def check(*a, **kw):
         started.append(1)
         await release.wait()
-        return []
+        return PlanReviewResult()
 
-    monkeypatch.setattr(owner, "_run_audit", audit)
+    monkeypatch.setattr(plan_review_steps, "run_plan_review", check)
     first = asyncio.create_task(
-        owner.run_design_audit_stage(
+        plan_review_steps.run_plan_review_stage(
             config.change_dir, config, state, config.state_file_path()
         )
     )
     while not started:
         await asyncio.sleep(0)
     second = asyncio.create_task(
-        owner.run_design_audit_stage(
+        plan_review_steps.run_plan_review_stage(
             config.change_dir,
             config,
             BuildState.load(config.state_file_path()),
@@ -1177,7 +1034,7 @@ async def test_S7_this_change_adds_no_lock_against_a_second_run(plan, monkeypatc
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stage", ["design_audit", "plan_review", "tasks_audit"])
+@pytest.mark.parametrize("stage", ["plan_review"])
 async def test_S8_moved_git_refs_do_not_change_the_resume(plan, monkeypatch, stage):
     """S8: origin or the base branch moved between stop and resume. Step
     revisions hash plan files, not refs, so the resume still refuses as S4."""
@@ -1223,7 +1080,7 @@ def _legacy_checkpoint(config, state, stage, **step):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stage", ["design_audit", "plan_review", "tasks_audit"])
+@pytest.mark.parametrize("stage", ["plan_review"])
 async def test_S9_an_old_blocked_checkpoint_reopens_once_under_the_new_rule(
     plan, monkeypatch, stage
 ):
@@ -1259,7 +1116,7 @@ async def test_S9_an_old_blocked_checkpoint_reopens_once_under_the_new_rule(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stage", ["design_audit", "plan_review"])
+@pytest.mark.parametrize("stage", ["plan_review"])
 async def test_S10_an_old_mid_rewrite_checkpoint_rechecks_as_a_first_audit(
     plan, monkeypatch, stage
 ):
@@ -1288,3 +1145,113 @@ async def test_S10_an_old_mid_rewrite_checkpoint_rechecks_as_a_first_audit(
     rewrite.assert_awaited_once()
     step = BuildState.load(config.state_file_path()).spec_gen.steps[stage]
     assert step.repair_attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_a_blocking_recheck_keeps_its_findings_and_a_progress_line(
+    plan, monkeypatch
+):
+    """A rewrite whose recheck still finds the listed finding saves it as
+    blocking and writes PLAN_REVIEW_BLOCKED."""
+    config, cm, state, *_ = await _block_after_recheck(monkeypatch, plan, "plan_review")
+    step = state.spec_gen.steps["plan_review"]
+    assert "PR-F1 still_present" in step.blocking_findings
+    assert "LISTED-GAP" in step.blocking_findings
+    progress = config.progress_file_path().read_text()
+    assert "PLAN_REVIEW_BLOCKED" in progress and "LISTED-GAP" in progress
+
+
+def _old_audit_steps(config, state, **plan_review):
+    """A checkpoint saved before the one plan check: tasks_audit and
+    design_audit entries, and a plan_review tied to the whole plan revision."""
+    state.checkpoint(config.state_file_path())
+    raw = json.loads(config.state_file_path().read_text())
+    steps = raw["spec_gen"]["steps"]
+    for name in ("tasks_audit", "design_audit"):
+        steps[name] = {
+            "revision": raw["spec_gen"]["revision"],
+            "outcome": "passed",
+            "repair_attempts": 1,
+        }
+    if plan_review:
+        steps["plan_review"] = plan_review
+    config.state_file_path().write_text(json.dumps(raw))
+    return BuildState.load(config.state_file_path())
+
+
+@pytest.mark.asyncio
+async def test_S10_old_audit_steps_are_dropped_and_a_passed_check_needs_no_call(
+    plan, monkeypatch
+):
+    """Row S10 of plan-buildme-planning-checks-2026-10-27.md: the old steps
+    are dropped on load, and a plan_review that passed at the current plan
+    stays passed, so the resume makes no model call."""
+    from build_pipeline.llm_steps import plan_review_steps
+
+    config, cm, state = _ready(plan)
+    saved = _old_audit_steps(
+        config,
+        state,
+        revision=state.spec_gen.revision,
+        outcome="passed",
+        rules_version=owner.PLAN_RULES_VERSION,
+    )
+    assert set(saved.spec_gen.steps) & {"tasks_audit", "design_audit"} == set()
+    assert saved.spec_gen.step_passed("plan_review")
+    monkeypatch.setattr(
+        plan_review_steps,
+        "run_plan_review",
+        AsyncMock(side_effect=AssertionError("a passed check is not paid again")),
+    )
+    await plan_review_steps.run_plan_review_stage(
+        config.change_dir, config, saved, config.state_file_path()
+    )
+
+
+@pytest.mark.asyncio
+async def test_S10_old_audit_steps_with_no_plan_review_get_a_fresh_check(
+    plan, monkeypatch
+):
+    config, cm, state = _ready(plan)
+    saved = _old_audit_steps(config, state)
+    run, review = _install(monkeypatch, "plan_review", [_first("plan_review")])
+    await _run(run, config, cm, saved)
+    assert review.await_count == 1
+    assert review.await_args.kwargs.get("prior") is None
+    assert saved.spec_gen.step_passed("plan_review")
+
+
+@pytest.mark.asyncio
+async def test_S11_an_old_rewrite_stopped_mid_publication_finishes_then_checks(
+    plan, monkeypatch
+):
+    """Row S11: the old code's journal is finished as in S5, the old steps are
+    dropped (S10), and the one check runs fresh."""
+    config, cm, state = _ready(plan)
+    _writer(monkeypatch)
+    original = owner.atomic_write
+
+    def interrupted(path, content):
+        if path == config.change_dir / "tasks.md":
+            raise OSError("crash during publication")
+        original(path, content)
+
+    monkeypatch.setattr(owner, "atomic_write", interrupted)
+    with pytest.raises(OSError, match="crash"):
+        await owner.rewrite_plan(config, state, "old repair", step="plan_review")
+    monkeypatch.setattr(owner, "atomic_write", original)
+    journal = json.loads((config.change_dir / ".plan-publication.json").read_text())
+    assert set(journal) <= {"design.md", "tasks.md", "unknowns.md", "rubric.md"}
+    saved = _old_audit_steps(
+        config,
+        BuildState.load(config.state_file_path()),
+    )
+    run, review = _install(monkeypatch, "plan_review", [_first("plan_review")])
+    await _run(run, config, cm, saved)
+    assert not (config.change_dir / ".plan-publication.json").exists()
+    assert (config.change_dir / "tasks.md").read_text() == (
+        "## 1. Values\nReturn repaired values"
+    )
+    assert set(saved.spec_gen.steps) & {"tasks_audit", "design_audit"} == set()
+    assert review.await_count == 1
+    assert saved.spec_gen.step_passed("plan_review")

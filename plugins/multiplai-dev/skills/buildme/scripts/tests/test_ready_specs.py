@@ -20,10 +20,10 @@ import pytest
 import yaml
 from build_pipeline import readiness
 from build_pipeline.config import BuildConfig, GitToggles
-from build_pipeline.llm_steps.spec_steps import AuditFindings
 from build_pipeline.models import (
     BlockInfo,
     BuildPhase,
+    PlanReviewFinding,
     PlanReviewResult,
     PriorAssessment,
 )
@@ -156,13 +156,15 @@ class Models:
     """The planning steps' model calls, as fakes that count what they were asked."""
 
     def __init__(
-        self, design: list[str] | None = None, audit: list[list[dict]] | None = None
+        self,
+        design: list[str] | None = None,
+        checks: list[PlanReviewResult] | None = None,
     ):
         self.designs = list(design or ["# Design\n\n## Decisions\nReturn the value.\n"])
-        self.audits = list(audit or [[]])
+        self.checks = list(checks or [PlanReviewResult()])
         self.prompts: list[str] = []
         self.generate = AsyncMock(side_effect=self._generate)
-        self.design_audit = AsyncMock(side_effect=self._audit)
+        self.plan_check = AsyncMock(side_effect=self._check)
 
     async def _generate(self, artifact_id, context, config, **kwargs):
         from build_pipeline.llm_steps.spec_steps import _build_prompt
@@ -172,8 +174,8 @@ class Models:
             return self.designs.pop(0) if len(self.designs) > 1 else self.designs[0]
         return "## 1. Behavior\nReturn a value\n"
 
-    async def _audit(self, *args, **kwargs):
-        return self.audits.pop(0) if len(self.audits) > 1 else self.audits[0]
+    async def _check(self, *args, **kwargs):
+        return self.checks.pop(0) if len(self.checks) > 1 else self.checks[0]
 
     def patches(self):
         return (
@@ -181,16 +183,8 @@ class Models:
                 "build_pipeline.llm_steps.spec_steps.generate_artifact", self.generate
             ),
             patch(
-                "build_pipeline.llm_steps.spec_steps.run_tasks_audit",
-                AsyncMock(return_value=[]),
-            ),
-            patch(
-                "build_pipeline.llm_steps.spec_steps.run_design_audit",
-                self.design_audit,
-            ),
-            patch(
                 "build_pipeline.llm_steps.plan_review_steps.run_plan_review",
-                AsyncMock(return_value=PlanReviewResult(findings=[])),
+                self.plan_check,
             ),
             patch(
                 "build_pipeline.spec_generator.generate_rubric",
@@ -201,7 +195,7 @@ class Models:
 
 async def _build(repo: Path, models: Models, **config_over) -> int:
     p = models.patches()
-    with p[0], p[1], p[2], p[3], p[4]:
+    with p[0], p[1], p[2]:
         return await run_orchestrator(
             _config(repo, **config_over),
             _args(repo, spec_only=config_over.get("spec_only", True)),
@@ -325,7 +319,7 @@ class TestStartRefusal:
         assert not change_dir.exists()
         config = _config(repo)
         p = Models().patches()
-        with p[0], p[1], p[2], p[3], p[4]:
+        with p[0], p[1], p[2]:
             rc = await run_orchestrator(config, _args(repo))
 
         assert rc == 0, capsys.readouterr().out
@@ -506,22 +500,26 @@ class TestDesignSpecIssue:
         assert f"Merge origin/main into ENG-1-{CHANGE}" in log
 
 
-class TestDesignAuditSpecIssue:
-    GAP = {
-        "category": "spec-feasibility",
-        "severity": "major",
-        "description": "Behavior needs a store no requirement asks for",
-        "suggestion": "add a Store requirement",
-        "needs_requirements_change": True,
-        "requirement": "requirements/fixture.md: Behavior",
-    }
+class TestPlanCheckSpecIssue:
+    GAP = PlanReviewFinding(
+        category="coverage",
+        severity="major",
+        file_path="design.md",
+        location="Decisions",
+        claim="Behavior needs a store no requirement asks for",
+        suggestion="add a Store requirement",
+        needs_requirements_change=True,
+        requirement="requirements/fixture.md: Behavior",
+    )
 
     @pytest.mark.asyncio
-    async def test_S11_an_audit_gap_needing_a_requirements_change_stops_for_pm_spec(
+    async def test_spec_issue_from_plan_check_stops_with_exit_4(
         self, repo, tmp_path, capsys
     ):
         _handoff(repo)
-        models = Models(audit=[[self.GAP], []])
+        models = Models(
+            checks=[PlanReviewResult(findings=[self.GAP]), PlanReviewResult()]
+        )
 
         rc = await _build(repo, models)
 
@@ -531,10 +529,10 @@ class TestDesignAuditSpecIssue:
         assert rc == 4
         assert f"SPEC:ISSUES:{built / 'spec-issues.md'}" in out
         text = (built / "spec-issues.md").read_text()
-        assert "## Design audit: requirements/fixture.md: Behavior" in text
+        assert "## Plan review: requirements/fixture.md: Behavior" in text
         assert "Suggested change: add a Store requirement" in text
         state = BuildState.load(built / ".build-state.json")
-        step = state.spec_gen.steps["design_audit"]
+        step = state.spec_gen.steps["plan_review"]
         assert step.outcome == "blocked"
         assert models.generate.await_count == 2, (
             "no rewrite of design or tasks was paid for"
@@ -548,19 +546,21 @@ class TestDesignAuditSpecIssue:
         )
         assert BuildState.load(
             next(built.glob(".build-state*.json"))
-        ).spec_gen.step_passed("design_audit")
+        ).spec_gen.step_passed("plan_review")
 
     @pytest.mark.asyncio
-    async def test_an_audit_gap_the_design_can_fix_is_not_a_spec_issue(
+    async def test_a_plan_check_finding_the_design_can_fix_is_not_a_spec_issue(
         self, repo, tmp_path, capsys
     ):
         _handoff(repo)
-        gap = {**self.GAP, "needs_requirements_change": False}
+        gap = self.GAP.model_copy(update={"needs_requirements_change": False})
         models = Models(
-            audit=[
-                [gap],
-                AuditFindings(
-                    [], [PriorAssessment(finding_id="DA-F1", status="resolved")]
+            checks=[
+                PlanReviewResult(findings=[gap]),
+                PlanReviewResult(
+                    prior_assessments=[
+                        PriorAssessment(finding_id="PR-F1", status="resolved")
+                    ]
                 ),
             ]
         )
@@ -947,11 +947,12 @@ class TestSpecIssuesFile:
         assert design_spec_issues("# Design\nNo issues.\n") == []
 
     def test_only_actionable_gaps_flagged_for_the_requirements_are_spec_issues(self):
+        from build_pipeline.llm_steps.plan_review_steps import finding_dicts
         from build_pipeline.spec_generator import audit_spec_issues
 
-        gap = TestDesignAuditSpecIssue.GAP
+        [gap] = finding_dicts([TestPlanCheckSpecIssue.GAP])
         assert [t for t, _ in audit_spec_issues([gap])] == [
-            "Design audit: requirements/fixture.md: Behavior"
+            "Plan review: requirements/fixture.md: Behavior"
         ]
         assert audit_spec_issues([{**gap, "severity": "minor"}]) == []
         assert audit_spec_issues([{**gap, "needs_requirements_change": False}]) == []
@@ -968,10 +969,10 @@ class TestSpecIssuesFile:
         )
         assert "Flag any spec requirements that seem infeasible" not in DESIGN_PROMPT
 
-    def test_the_design_audit_prompt_asks_whether_a_fix_needs_the_requirements(self):
-        from build_pipeline.prompts.design_audit import DESIGN_AUDIT_PROMPT
+    def test_the_plan_check_prompt_asks_whether_a_fix_needs_the_requirements(self):
+        from build_pipeline.prompts.plan_review import PLAN_CHECK_PROMPT
 
-        assert '"needs_requirements_change": false' in DESIGN_AUDIT_PROMPT
+        assert '"needs_requirements_change": false' in PLAN_CHECK_PROMPT
 
 
 def test_buildme_never_imports_pm_spec_pipeline():

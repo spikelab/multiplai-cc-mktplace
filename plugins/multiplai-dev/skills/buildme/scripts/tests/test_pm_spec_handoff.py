@@ -109,8 +109,6 @@ async def _build_to_tdd(repo: Path, models: Models) -> tuple[int | None, dict]:
         p[0],
         p[1],
         p[2],
-        p[3],
-        p[4],
         patch("build_pipeline.tdd_engine.run_tdd_engine", tdd),
     ):
         try:

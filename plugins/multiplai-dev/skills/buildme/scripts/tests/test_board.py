@@ -451,11 +451,6 @@ class TestFullRunBoardTrail:
                 return_value=0,
             ),
             patch(
-                "build_pipeline.llm_steps.spec_steps.run_design_audit",
-                new_callable=AsyncMock,
-                return_value=[],
-            ),
-            patch(
                 "build_pipeline.tdd_engine.run_tdd_engine",
                 new_callable=AsyncMock,
                 return_value=0,
@@ -528,11 +523,6 @@ class TestFullRunBoardTrail:
                 "build_pipeline.spec_generator.run_spec_generator",
                 new_callable=AsyncMock,
                 return_value=0,
-            ),
-            patch(
-                "build_pipeline.llm_steps.spec_steps.run_design_audit",
-                new_callable=AsyncMock,
-                return_value=[],
             ),
             patch(
                 "build_pipeline.tdd_engine.run_tdd_engine",
@@ -636,11 +626,6 @@ class TestFullRunBoardTrail:
                 "build_pipeline.spec_generator.run_spec_generator",
                 new_callable=AsyncMock,
                 return_value=0,
-            ),
-            patch(
-                "build_pipeline.llm_steps.spec_steps.run_design_audit",
-                new_callable=AsyncMock,
-                return_value=[],
             ),
             patch(
                 "build_pipeline.tdd_engine.run_tdd_engine",
