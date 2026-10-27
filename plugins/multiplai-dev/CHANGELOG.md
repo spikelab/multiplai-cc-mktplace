@@ -15,6 +15,11 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.114.0] - 2026-10-27
+
+### Added
+- **review-viewer**: an **Export zip** button saves one zip of a saved review: its files, earlier rounds, decisions and questions, and the transcripts of the Claude Code sessions that ran it, with a `MANIFEST.txt`. The server runs `gitleaks` over everything first and refuses the export when it finds anything, listing each file, line and rule but never the value. There is no override. Export needs `gitleaks` installed (`brew install gitleaks`). The zip never holds the code snapshot or the viewer's token files.
+
 ## [0.113.0] - 2026-10-27
 
 ### Added

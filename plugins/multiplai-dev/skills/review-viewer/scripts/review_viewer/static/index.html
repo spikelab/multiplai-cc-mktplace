@@ -40,6 +40,8 @@
   <div class="top-tools">
     <label class="theme-pick muted"><span>Theme</span><select id="theme-select" class="ctl" aria-label="Colour theme"></select></label>
     <button id="mode-btn" class="ctl mode-btn" type="button" aria-label="Light or dark mode">◐ Auto</button>
+    <button id="export-btn" class="ctl" type="button" hidden
+            title="Download this review, its earlier rounds and the sessions' transcripts as one zip, after a gitleaks scan">Export zip</button>
     <button id="keys-btn" class="ctl help-btn" type="button" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">⌨</button>
     <button id="help-btn" class="ctl help-btn" type="button" title="Help: how the review works"
             aria-label="Help: how the review works" aria-haspopup="dialog" aria-controls="help">?</button>
@@ -189,6 +191,7 @@
   <div class="palette-foot muted small"><kbd>↑</kbd> <kbd>↓</kbd> move · <kbd>Enter</kbd> open · <kbd>Esc</kbd> close</div>
 </dialog>
 <dialog id="share" class="share-dlg" aria-labelledby="share-title"></dialog>
+<dialog id="export-dlg" class="share-dlg" aria-labelledby="export-title"></dialog>
 <dialog id="full-walk-dlg" class="share-dlg" aria-labelledby="full-walk-title"></dialog>
 <dialog id="help" class="help" aria-labelledby="help-title">
   <div class="help-head">

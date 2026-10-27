@@ -997,6 +997,16 @@ test("a GitHub link to lines takes https and ssh remotes, and nothing else", () 
   assert.equal(L.githubBlobUrl("https://github.com/o/r", "not-a-sha", "a.py", 1, 1), null);
 });
 
+test("an export refusal lists where gitleaks found something, and only the server's reason otherwise", () => {
+  const r = L.exportRefusal(409, { leaks: [{ file: "transcripts/s.jsonl", line: 3, rule: "aws-access-token" }] });
+  assert.deepEqual(r.lines, ["transcripts/s.jsonl:3 (aws-access-token)"]);
+  assert.equal(r.advice, "Remove these from the transcript or files, or share the folder another way.");
+  assert.deepEqual(L.exportRefusal(503, { error: "install gitleaks (brew install gitleaks)" }).lines,
+    ["install gitleaks (brew install gitleaks)"]);
+  const app = require("node:fs").readFileSync(path.join(__dirname, "..", "review_viewer", "static", "app.js"), "utf8");
+  assert.match(app, /L\.exportRefusal\(res\.status/);
+});
+
 test("a written title heads the finding and what happens comes before the claim", () => {
   const f = { id: "a1b2c3d4e5", severity: "HIGH", status: "confirmed", claim: "The finder's own claim.",
     title: "Bookings fail after a rename", what_happens: "No room can be booked. For example, renaming the channel hides them.",

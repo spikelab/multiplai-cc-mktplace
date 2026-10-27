@@ -25,6 +25,8 @@ import mimetypes
 import os
 import re
 import secrets
+import shutil
+import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
@@ -38,7 +40,7 @@ from code_facts.paths import PathsResult
 from multiplai_core.log_utils import log_event
 from pydantic import ValidationError
 
-from . import registry
+from . import export_zip, registry
 from .gitdata import (
     DEFINITION_NAME_RE,
     REPO_FILES_MAX,
@@ -602,6 +604,8 @@ def make_handler(viewer: Viewer):
                     if rest.endswith("/definitions"):
                         state = self._target(rest[: -len("/definitions")])
                         return self._definitions(state, q.get("name", ""))
+                    if rest.endswith("/export"):
+                        return self._export(self._target(rest[: -len("/export")]))
                     if rest.endswith("/pr"):
                         return self._json(
                             self._target(rest[: -len("/pr")]).refresh_pr()
@@ -648,6 +652,10 @@ def make_handler(viewer: Viewer):
                                 "slack": viewer.share_slack,
                             },
                             "pr": state.pr,
+                            # Export zip needs a saved review (its findings.json on disk).
+                            "export": (
+                                state.mailbox.dir.parent / "findings.json"
+                            ).is_file(),
                             "notice": state.notice,
                             "stats": state.stats,
                             "checks": state.checks.model_dump(mode="json")
@@ -682,6 +690,52 @@ def make_handler(viewer: Viewer):
                     threading.Thread(target=viewer.httpd.shutdown, daemon=True).start()
                     return
             raise _Reject(404, "not found")
+
+        def _export(self, state: TargetState) -> None:
+            """The review folder and its sessions' transcripts as a zip, only when gitleaks finds nothing."""
+            review_dir = state.mailbox.dir.parent
+            if not (review_dir / "findings.json").is_file():
+                raise _Reject(404, "no saved review to export")
+            work = Path(tempfile.mkdtemp(prefix="review-export-"))
+            try:
+                try:
+                    zipped = export_zip.build(
+                        review_dir,
+                        work,
+                        producer=state.findings.producer,
+                        ledger=export_zip.default_ledger(),
+                    )
+                except export_zip.GitleaksMissing as exc:
+                    raise _Reject(503, str(exc))
+                except export_zip.GitleaksFailed as exc:
+                    log.warning("export of %s: %s", state.slug, exc)
+                    raise _Reject(503, f"the secret scan failed: {exc}")
+                except export_zip.Leaks as exc:
+                    log.warning(
+                        "export of %s refused: gitleaks reported %d finding(s)",
+                        state.slug,
+                        len(exc.hits),
+                    )
+                    return self._json(
+                        {"error": "gitleaks found possible secrets", "leaks": exc.hits},
+                        409,
+                    )
+                name = export_zip.zip_name(state.slug, state.findings.target.head_sha)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/zip")
+                self.send_header("Content-Length", str(zipped.stat().st_size))
+                self.send_header(
+                    "Content-Disposition", f'attachment; filename="{name}"'
+                )
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Referrer-Policy", "no-referrer")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Content-Security-Policy", CSP)
+                self.end_headers()
+                with zipped.open("rb") as fh:
+                    shutil.copyfileobj(fh, self.wfile)
+            finally:
+                shutil.rmtree(work, ignore_errors=True)
 
         def _file(self, state: TargetState, path: str) -> None:
             try:

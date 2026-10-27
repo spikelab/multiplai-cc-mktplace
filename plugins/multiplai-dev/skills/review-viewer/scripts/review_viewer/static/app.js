@@ -152,6 +152,47 @@
     return data;
   }
 
+  // gitleaks over a long transcript can take minutes; the export waits longer than other requests.
+  const EXPORT_TIMEOUT_MS = 10 * 60 * 1000;
+
+  /* Export zip: the server builds and scans it; a refusal opens a dialog listing where gitleaks
+   * found something. The zip is saved through a blob URL, since the request carries the token. */
+  async function exportZip() {
+    const btn = $("export-btn");
+    btn.disabled = true;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), EXPORT_TIMEOUT_MS);
+    showToast("Building and scanning the zip…");
+    try {
+      const res = await fetch(targetUrl("/export"), { headers: { "X-Review-Token": state.token },
+        cache: "no-store", signal: ctrl.signal });
+      if (res.status === 401) { showFatal("auth"); return; }
+      if (!res.ok) {
+        const refusal = L.exportRefusal(res.status, await res.json().catch(() => ({})));
+        const dlg = $("export-dlg");
+        dlg.replaceChildren(
+          el("div", { class: "help-head" }, [
+            el("h2", { id: "export-title", text: refusal.title }),
+            el("button", { class: "ctl", type: "button", "aria-label": "Close", text: "Esc", onclick: () => dlg.close() }),
+          ]),
+          el("div", { class: "share-body" }, refusal.lines.map((x) => el("p", { class: "mono small", text: x }))
+            .concat(refusal.advice ? [el("p", { text: refusal.advice })] : [])));
+        dlg.showModal();
+        return;
+      }
+      const name = (/filename="([^"]+)"/.exec(res.headers.get("Content-Disposition") || "") || [])[1] || "review.zip";
+      const a = el("a", { href: URL.createObjectURL(await res.blob()), download: name });
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 0);
+    } catch (err) {
+      showToast("Could not export: " + err.message);
+    } finally {
+      clearTimeout(timer);
+      btn.disabled = false;
+    }
+  }
+
   function targetUrl(suffix) {
     return "/api/targets/" + encodeURIComponent(state.slug) + (suffix || "");
   }
@@ -269,6 +310,7 @@
     const target = state.detail.findings.target;
     $("title").textContent = target.label;
     document.title = target.label + " · review";
+    $("export-btn").hidden = !state.detail.export;
     renderHeader();
     renderFindingList();
     renderFiles();
@@ -2700,6 +2742,7 @@
     $("tab-needs").addEventListener("click", () => setTab("needs"));
     $("help-btn").addEventListener("click", () => openHelp("top"));
     $("keys-btn").addEventListener("click", () => openHelp("keys"));
+    $("export-btn").addEventListener("click", exportZip);
     $("palette-input").addEventListener("input", () => { state.palette.index = 0; renderPalette(); });
     $("palette-input").addEventListener("keydown", onPaletteKey);
     $("palette").addEventListener("click", (ev) => { if (ev.target === $("palette")) $("palette").close(); });
