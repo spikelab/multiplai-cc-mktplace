@@ -2518,8 +2518,9 @@ class TestTasksShapeAuditRejectsNoBehaviourBlocks:
             await _generate_single_artifact(cm, change_dir, "tasks", config, state)
 
         assert mock_gen.call_count == 2
-        assert "Block 2 only pins" not in (
-            mock_gen.call_args_list[1].kwargs["audit_findings"]
+        assert (
+            "Block 2 only pins"
+            not in (mock_gen.call_args_list[1].kwargs["audit_findings"])
         )
         assert (change_dir / "tasks.md").read_text() == rewritten
         assert state.spec_gen.step_passed("tasks_audit")
@@ -2702,6 +2703,6 @@ async def test_plan_review_findings_capped_at_ten_most_severe_first(tmp_path):
     ):
         result = await plan_review_steps.run_plan_review(tmp_path, config)
 
-    assert [f.severity for f in result.findings] == ["critical"] * 3 + [
-        "major"
-    ] * 4 + ["minor"] * 3
+    assert [f.severity for f in result.findings] == ["critical"] * 3 + ["major"] * 4 + [
+        "minor"
+    ] * 3
