@@ -52,6 +52,8 @@ class TestRunDocsUpdate:
     @pytest.mark.asyncio
     async def test_agent_gets_the_documented_tools_budget_label_and_cwd(self, tmp_path):
         config = make_config(tmp_path)
+        # Set the step's effort here so the user's multiplai.conf cannot decide it.
+        config.effort_specs = {"docs_update": "max"}
         agent = AsyncMock(
             return_value=AgentResult(success=True, output="DOCS_IMPACT: none\n")
         )
@@ -65,7 +67,7 @@ class TestRunDocsUpdate:
         assert kwargs["allowed_tools"] == DOCS_TOOLS
         assert kwargs["allowed_tools"] == ["Read", "Write", "Edit", "Glob", "Grep"]
         assert kwargs["budget_label"] == "docs_update"
-        assert kwargs["effort"] == config.spec_effort
+        assert kwargs["effort"] == "max"
         assert kwargs["cwd"] == str(config.project_dir)
         # Skill / SlashCommand are never granted to a pipeline agent.
         assert "Skill" not in kwargs["allowed_tools"]
