@@ -459,10 +459,14 @@ CALL_SITES = {
         None,
         ("tasks_audit",),
     ),  # budget_label="tasks_audit"
+    ("llm_steps/spec_steps.py", "generate_artifact", "agent_call"): (
+        "config.model_for('spec_artifact')",
+        ("spec_artifact",),
+    ),  # design and tasks
     ("llm_steps/spec_steps.py", "generate_artifact", "llm_call"): (
         "config.model_for('spec_artifact')",
         ("spec_artifact",),
-    ),
+    ),  # unknowns
     ("llm_steps/spec_steps.py", "run_explainer", "llm_call"): (
         "config.model_for('explainer')",
         ("explainer",),

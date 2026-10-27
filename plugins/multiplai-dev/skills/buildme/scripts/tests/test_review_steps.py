@@ -395,12 +395,13 @@ WRITE_CAPABLE_TOOLS = {"Write", "Edit", "Bash", "NotebookEdit", "MultiEdit"}
 
 
 class TestReviewersAreReadOnlySubagents:
-    def test_no_review_step_can_write(self):
+    def test_no_review_step_can_write(self, tmp_path):
         """Every review/audit step's tool list, checked against one deny set.
 
         Asserting on the constants rather than on a call keeps this true for
         steps added later: a new reviewer that reuses REVIEWER_TOOLS is covered
         the day it lands, and one that spells its own list is caught here.
+        The design and tasks writer is checked on the list its call passes.
         """
         from build_pipeline.llm_steps.review_steps import REVIEWER_TOOLS
         from build_pipeline.llm_steps.spec_steps import AUDITOR_TOOLS
@@ -418,6 +419,29 @@ class TestReviewersAreReadOnlySubagents:
             offenders = WRITE_CAPABLE_TOOLS.intersection(tools)
             assert not offenders, (
                 f"{name} grants write-capable tools: {sorted(offenders)}"
+            )
+
+        import asyncio
+
+        from build_pipeline.llm_steps.spec_steps import generate_artifact
+        from build_pipeline.models import AgentResult
+
+        config = BuildConfig(project_dir=tmp_path, change_name="feat")
+        config.specs_dir = tmp_path / "specs"
+        config.change_dir.mkdir(parents=True)
+        context = {"dependencies": {}}
+        for artifact in ("design", "tasks"):
+            with patch(
+                "build_pipeline.llm_steps.spec_steps.agent_call",
+                new_callable=AsyncMock,
+                return_value=AgentResult(success=True, output="# Doc\n"),
+            ) as mock_agent:
+                asyncio.run(generate_artifact(artifact, context, config))
+            tools = mock_agent.call_args.kwargs["allowed_tools"]
+            assert tools, f"{artifact} writer must not be empty"
+            offenders = WRITE_CAPABLE_TOOLS.intersection(tools)
+            assert not offenders, (
+                f"{artifact} writer grants write-capable tools: {sorted(offenders)}"
             )
 
     @pytest.mark.asyncio

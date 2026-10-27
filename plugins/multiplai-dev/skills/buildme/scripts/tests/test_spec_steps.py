@@ -97,9 +97,8 @@ class TestBuildPromptGrounding:
 
 
 class TestReferenceDocsInThePrompts:
-    """The spec-generation system prompt forbids tools, so the reference docs
-    have to travel inlined in the prompt or they do not reach the generator at
-    all."""
+    """The writer is not handed the reference docs' paths, so the docs have to
+    travel inlined in the prompt or they do not reach the generator at all."""
 
     _CONTEXT = TestBuildPromptGrounding._CONTEXT
 
@@ -148,9 +147,9 @@ class TestReferenceDocsInThePrompts:
         config = _make_config(tmp_path, {"auth": "SCENARIO: x"})
         (config.change_dir / "proposal.md").write_text("proposal body")
         with patch(
-            "build_pipeline.llm_steps.spec_steps.llm_call", new_callable=AsyncMock
-        ) as mock_llm:
-            mock_llm.return_value = "# design"
+            "build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock
+        ) as mock_agent:
+            mock_agent.return_value = _agent_text("# design")
             asyncio.run(
                 generate_artifact(
                     "design",
@@ -159,7 +158,118 @@ class TestReferenceDocsInThePrompts:
                     reference_docs="### Reference: house.md\nHOUSE-RULE-MARKER",
                 )
             )
-        assert "HOUSE-RULE-MARKER" in mock_llm.call_args[0][0]
+        assert "HOUSE-RULE-MARKER" in mock_agent.call_args[0][0]
+
+
+class TestWriterReadsTheCode:
+    """The design and tasks writer is a read-only subagent in the project dir;
+    the unknowns regeneration pass keeps no tools."""
+
+    _CONTEXT = TestBuildPromptGrounding._CONTEXT
+
+    def _config(self, tmp_path):
+        config = _make_config(tmp_path, {"auth": "SCENARIO: x"})
+        (config.change_dir / "proposal.md").write_text("proposal body")
+        (config.change_dir / "design.md").write_text("design body")
+        return config
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("artifact", ["design", "tasks"])
+    async def test_writer_gets_read_tools_in_the_project_dir(self, tmp_path, artifact):
+        from build_pipeline.llm_steps.spec_steps import (
+            WRITER_MAX_TURNS,
+            generate_artifact,
+        )
+
+        config = self._config(tmp_path)
+        with (
+            patch(
+                "build_pipeline.llm_steps.spec_steps.agent_call",
+                new_callable=AsyncMock,
+                return_value=_agent_text("# Doc\nbody\n"),
+            ) as mock_agent,
+            patch(
+                "build_pipeline.llm_steps.spec_steps.llm_call",
+                AsyncMock(side_effect=AssertionError("no toolless call")),
+            ),
+        ):
+            out = await generate_artifact(artifact, self._CONTEXT, config)
+        assert out == "# Doc\nbody\n"
+        kwargs = mock_agent.call_args.kwargs
+        assert kwargs["allowed_tools"] == ["Read", "Grep", "Glob"]
+        assert kwargs["cwd"] == str(config.project_dir)
+        assert kwargs["max_turns"] == WRITER_MAX_TURNS == 40
+        assert kwargs["budget_label"] == f"spec:{artifact}"
+        prompt = mock_agent.call_args[0][0]
+        assert prompt.index("Grep or Read") < prompt.index("PROJECT")
+        assert "starting at its first" in prompt
+
+    @pytest.mark.asyncio
+    async def test_writer_unknowns_gets_no_tools(self, tmp_path):
+        from build_pipeline.llm_steps.spec_steps import generate_artifact
+
+        config = self._config(tmp_path)
+        with (
+            patch(
+                "build_pipeline.llm_steps.spec_steps.llm_call",
+                new_callable=AsyncMock,
+                return_value="# Unknowns\n",
+            ) as mock_llm,
+            patch(
+                "build_pipeline.llm_steps.spec_steps.agent_call",
+                AsyncMock(side_effect=AssertionError("no tool-holding call")),
+            ),
+        ):
+            out = await generate_artifact("unknowns", self._CONTEXT, config)
+        assert out == "# Unknowns\n"
+        assert "allowed_tools" not in mock_llm.call_args.kwargs
+
+    @pytest.mark.asyncio
+    async def test_writer_preamble_before_the_first_heading_is_stripped(self, tmp_path):
+        from build_pipeline.llm_steps.spec_steps import generate_artifact
+
+        config = self._config(tmp_path)
+        text = "I read plan.md and api.py.\n\n# Design\n\n## Data\nRows.\n"
+        with patch(
+            "build_pipeline.llm_steps.spec_steps.agent_call",
+            new_callable=AsyncMock,
+            return_value=_agent_text(text),
+        ):
+            out = await generate_artifact("design", self._CONTEXT, config)
+        assert out == "# Design\n\n## Data\nRows.\n"
+
+    @pytest.mark.asyncio
+    async def test_writer_output_with_no_heading_raises(self, tmp_path):
+        from build_pipeline.llm_steps.spec_steps import generate_artifact
+        from build_pipeline.sdk import LLMCallError
+
+        config = self._config(tmp_path)
+        with (
+            patch(
+                "build_pipeline.llm_steps.spec_steps.agent_call",
+                new_callable=AsyncMock,
+                return_value=_agent_text("I could not find the files.\n"),
+            ),
+            pytest.raises(LLMCallError, match="no line starting with '#'"),
+        ):
+            await generate_artifact("tasks", self._CONTEXT, config)
+
+    @pytest.mark.asyncio
+    async def test_writer_failed_agent_raises(self, tmp_path):
+        from build_pipeline.llm_steps.spec_steps import generate_artifact
+        from build_pipeline.sdk import LLMCallError
+
+        config = self._config(tmp_path)
+        failed = AgentResult(success=False, output="# Design\npartial", error="boom")
+        with (
+            patch(
+                "build_pipeline.llm_steps.spec_steps.agent_call",
+                new_callable=AsyncMock,
+                return_value=failed,
+            ),
+            pytest.raises(LLMCallError, match="design writer failed: boom"),
+        ):
+            await generate_artifact("design", self._CONTEXT, config)
 
 
 class TestDesignAudit:

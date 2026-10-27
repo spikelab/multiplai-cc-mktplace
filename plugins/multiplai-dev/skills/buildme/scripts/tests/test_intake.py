@@ -20,7 +20,12 @@ from build_pipeline.intake import (
     config_commit_state,
 )
 from build_pipeline.llm_steps.research_steps import ResearchDecision
-from build_pipeline.models import BuildPhase, GateResult, PlanReviewResult
+from build_pipeline.models import (
+    AgentResult,
+    BuildPhase,
+    GateResult,
+    PlanReviewResult,
+)
 from build_pipeline.orchestrator import run_orchestrator
 from build_pipeline.state import BuildState
 
@@ -148,12 +153,12 @@ class TestResearch:
         async def fake_generate(config, state, args):
             prompts = []
 
-            async def fake_llm(prompt, **kwargs):
+            async def fake_agent(prompt, **kwargs):
                 prompts.append(prompt)
-                return "# Design\n"
+                return AgentResult(success=True, output="# Design\n")
 
             cm = ChangeManager(config.specs_dir)
-            with patch("build_pipeline.llm_steps.spec_steps.llm_call", fake_llm):
+            with patch("build_pipeline.llm_steps.spec_steps.agent_call", fake_agent):
                 await _generate_single_artifact(
                     cm,
                     config.change_dir,

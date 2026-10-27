@@ -1824,7 +1824,7 @@ async def rewrite_plan(
     on the step. Every other caller's recheck looks only for new problems. A rewrite that still
     has blocking findings (`recheck_verdict`) raises `PlanRepairRejected`.
     """
-    from .llm_steps.spec_steps import generate_artifact
+    from .llm_steps.spec_steps import REWRITE_CODEBASE_ANALYSIS, generate_artifact
     from .tdd_engine import parse_blocks
 
     reconcile_plan(config, state)
@@ -1864,7 +1864,10 @@ async def rewrite_plan(
                 staged,
                 audit_findings=findings_text,
                 research=read_research(state),
-                codebase_analysis=read_codebase_analysis(state),
+                # The writer reads the repo itself; the analysis is the
+                # biggest input, so the rewrite does not paste it again. Not
+                # empty: the prompt reads an empty analysis as a new project.
+                codebase_analysis=REWRITE_CODEBASE_ANALYSIS,
                 reference_docs=config.reference_docs_text(),
             )
             if name == "design":

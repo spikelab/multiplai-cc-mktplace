@@ -410,6 +410,37 @@ async def test_repaired_unknowns_keep_their_accepted_evidence_on_resume(
 
 
 @pytest.mark.asyncio
+async def test_a_rewrite_tells_the_writer_to_read_the_code_not_that_it_is_new(
+    plan, monkeypatch
+):
+    """Item 8: a rewrite does not paste the codebase analysis again, and the
+    text it passes in its place is not empty, which the prompt would turn
+    into "(new project)"."""
+    from build_pipeline.llm_steps.spec_steps import REWRITE_CODEBASE_ANALYSIS
+
+    config, cm, state = plan
+    (config.change_dir / "requirements").mkdir(exist_ok=True)
+    for cap in ("one", "two"):
+        (config.change_dir / f"requirements/{cap}.md").write_text(REQ)
+    owner.reconcile_plan(config, state)
+    writer = AsyncMock(side_effect=["# New design", "## 1. Values\nReturn two"])
+    monkeypatch.setattr("build_pipeline.llm_steps.spec_steps.generate_artifact", writer)
+    monkeypatch.setattr(
+        "build_pipeline.llm_steps.spec_steps.run_tasks_audit",
+        AsyncMock(return_value=[]),
+    )
+    monkeypatch.setattr(
+        owner, "generate_rubric", AsyncMock(return_value="# New rubric")
+    )
+    monkeypatch.setattr(owner, "_commit_change_dir", lambda *a: None)
+    await owner.rewrite_plan(config, state, "repair", design=True)
+    assert [c.args[0] for c in writer.await_args_list] == ["design", "tasks"]
+    assert REWRITE_CODEBASE_ANALYSIS.strip()
+    for call in writer.await_args_list:
+        assert call.kwargs["codebase_analysis"] == REWRITE_CODEBASE_ANALYSIS
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("stage", ["design_audit", "plan_review"])
 @pytest.mark.parametrize("failure", ["audit", "commit"])
 async def test_interrupted_post_repair_audit_resumes_on_the_new_revision(

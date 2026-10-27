@@ -240,8 +240,10 @@ class TestRequiredInputs:
             state_file=str(config.state_file_path()),
         )
         llm = AsyncMock(side_effect=AssertionError("no model call"))
+        agent = AsyncMock(side_effect=AssertionError("no model call"))
         with (
             patch("build_pipeline.llm_steps.spec_steps.llm_call", llm),
+            patch("build_pipeline.llm_steps.spec_steps.agent_call", agent),
             pytest.raises(
                 RuntimeError, match="Required inputs missing.*pm-spec c first"
             ),
@@ -256,6 +258,7 @@ class TestRequiredInputs:
             == before
         )
         llm.assert_not_awaited()
+        agent.assert_not_awaited()
 
     @pytest.mark.parametrize("artifact", ["proposal", "requirements", "use-cases"])
     def test_an_input_is_not_an_artifact_buildme_generates(self, artifact):
