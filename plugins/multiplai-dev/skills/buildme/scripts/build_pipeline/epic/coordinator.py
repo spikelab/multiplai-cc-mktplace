@@ -102,9 +102,6 @@ POLL = 1.0  # seconds between looks at a running child
 TICK = 30.0  # seconds between reads of the waited-on PRs
 STOP_WAIT = 30.0  # seconds the children get to exit on SIGINT or SIGTERM
 FETCH_TIMEOUT = 300  # seconds `git fetch origin` gets before a launch
-TESTS_TIMEOUT = (
-    300  # seconds the merge tests get, as `gates.run_test_suite` gives (40.4)
-)
 CHECKS_WAIT = 30.0  # seconds between reads of a PR's pending required checks (40.5)
 CHECKS_APPEAR = 120.0  # seconds a head the step just pushed gets for its checks to appear (40.5; judgment)
 CHECKS_LIMIT = 3600.0  # seconds 40.5 waits on pending checks before leaving the PR open (E.S8; judgment)
@@ -2102,7 +2099,7 @@ class Coordinator:
                     attempt,
                     directory,
                     env={**os.environ, "BUILDME_TRUST_REPO": "1"},
-                    timeout=TESTS_TIMEOUT,
+                    timeout=merge.suite_timeout(project),
                 )
             )
         except OSError as e:  # it could not start (a missing binary): a failed run

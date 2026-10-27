@@ -20,6 +20,7 @@ from build_pipeline import budget, git_ops, stop_record
 from build_pipeline.config import EpicSettings, discover_test_command
 from build_pipeline.epic import coordinator, merge, records
 from build_pipeline.epic import lock as epic_lock
+from build_pipeline.gates import DEFAULT_TEST_TIMEOUT
 from build_pipeline.models import AgentResult
 
 from .epic_row_helpers import (
@@ -546,12 +547,13 @@ def test_tests_that_cannot_run_park_and_push_nothing(tmp_path, monkeypatch):
 
 
 def test_tests_that_outlast_the_timeout_are_killed_and_park(tmp_path, monkeypatch):
-    """40.4: tests still running after TESTS_TIMEOUT (the fake clock's) are
+    """40.4: tests still running after `tdd.test_timeout` (the default, on the fake
+    clock) are
     killed with their process group; the child parks, nothing pushed."""
     r = MergeRoot(tmp_path, monkeypatch, tests=[{"block": True}])
     assert r.run() == 0
     assert r.status()["reason"] == (
-        f"merge tests could not run: timed out after {coordinator.TESTS_TIMEOUT}s; "
+        f"merge tests could not run: timed out after {DEFAULT_TEST_TIMEOUT}s; "
         f"{merge.abort_hint(r.w)}"
     )
     [tests] = r.tries("merge-tests")

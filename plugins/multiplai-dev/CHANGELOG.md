@@ -15,6 +15,11 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.122.0] - 2026-10-27
+
+### Added
+- **buildme**: `tdd.test_timeout` in `specs/config.yaml` sets how many seconds each full run of the test suite gets: the baseline before TDD, the integration gates after each block, the final verification and an epic's merge tests. It is 300 when unset, as before. A suite that takes longer than 300 seconds no longer counts as not run on every build.
+
 ## [0.121.0] - 2026-10-27
 
 ### Changed

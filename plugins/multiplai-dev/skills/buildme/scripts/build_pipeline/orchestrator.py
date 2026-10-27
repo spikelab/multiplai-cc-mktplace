@@ -557,6 +557,7 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
                 config.test_command,
                 config.project_dir,
                 parallel=config.parallel_tests,
+                timeout=config.test_timeout,
                 plan_revision=revision,
             )
             state.verification = gate.model_dump()

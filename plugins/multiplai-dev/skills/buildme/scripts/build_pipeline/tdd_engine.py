@@ -1342,7 +1342,9 @@ async def _enforce_red_gate(
         # empty set falls back to the whole command, so RED cannot pass on a
         # run that selected nothing.
         command = _block_test_command(config, block)
-        exit_code, output = run_test_suite(command, config.project_dir)
+        exit_code, output = run_test_suite(
+            command, config.project_dir, config.test_timeout
+        )
         from .narrow_tests import runner_of
 
         runner = runner_of(command, config.project_dir)
@@ -1960,7 +1962,10 @@ async def run_block_tdd(
                 _mark_block(state, block_idx, BlockStatus.FAILED, config)
                 return False
             if not integration_gate(
-                config.test_command, config.project_dir, parallel=config.parallel_tests
+                config.test_command,
+                config.project_dir,
+                parallel=config.parallel_tests,
+                timeout=config.test_timeout,
             ).passed:
                 _mark_block(state, block_idx, BlockStatus.FAILED, config)
                 return False
@@ -1975,6 +1980,7 @@ async def run_block_tdd(
                     config.test_command,
                     config.project_dir,
                     parallel=config.parallel_tests,
+                    timeout=config.test_timeout,
                 ).passed
             ):
                 _mark_block(state, block_idx, BlockStatus.FAILED, config)
@@ -2030,7 +2036,10 @@ def _verify_block_refactor(
     afterwards, which is the whole point of committing impl first.
     """
     gate = integration_gate(
-        config.test_command, config.project_dir, parallel=config.parallel_tests
+        config.test_command,
+        config.project_dir,
+        parallel=config.parallel_tests,
+        timeout=config.test_timeout,
     )
     detail = "" if gate.passed else f"tests failed after refactor: {gate.reason}"
 
@@ -2184,7 +2193,10 @@ async def _run_integration_and_review(
     # --- Integration gate ---
     log.info("START block=%d name=%s phase=INTEGRATION_GATE", block.number, block.name)
     gate = integration_gate(
-        config.test_command, config.project_dir, parallel=config.parallel_tests
+        config.test_command,
+        config.project_dir,
+        parallel=config.parallel_tests,
+        timeout=config.test_timeout,
     )
     if not gate.passed:
         log.warning(
@@ -2235,6 +2247,7 @@ async def _run_integration_and_review(
                     config.test_command,
                     config.project_dir,
                     parallel=config.parallel_tests,
+                    timeout=config.test_timeout,
                 )
                 if gate.passed:
                     break
@@ -2459,7 +2472,10 @@ async def _run_integration_and_review(
             _mark_block(state, block_idx, BlockStatus.FAILED, config)
             return False
         gate = integration_gate(
-            config.test_command, config.project_dir, parallel=config.parallel_tests
+            config.test_command,
+            config.project_dir,
+            parallel=config.parallel_tests,
+            timeout=config.test_timeout,
         )
         if not gate.passed:
             progress.log_diagnosis(block.name, gate.metadata.get("output", gate.reason))
@@ -2913,7 +2929,10 @@ async def _run_fix_on_pass(
         reason = "the fix agent " + ("timed out" if fix.timed_out else "failed")
     else:
         gate = integration_gate(
-            config.test_command, config.project_dir, parallel=config.parallel_tests
+            config.test_command,
+            config.project_dir,
+            parallel=config.parallel_tests,
+            timeout=config.test_timeout,
         )
         if not gate.passed:
             reason = f"tests failed after the fix: {gate.reason}"
@@ -3324,7 +3343,10 @@ async def _run_tdd_engine(config: BuildConfig, args, *, standalone: bool = True)
     if state.tdd and not state.tdd.baseline_tests_pass:
         progress.log_phase("BASELINE", "Running existing test suite")
         gate = baseline_test_gate(
-            config.test_command, config.project_dir, parallel=config.parallel_tests
+            config.test_command,
+            config.project_dir,
+            parallel=config.parallel_tests,
+            timeout=config.test_timeout,
         )
         if not gate.passed:
             log.error("Baseline test gate failed: %s", gate.reason)
@@ -3426,6 +3448,7 @@ async def _run_tdd_engine(config: BuildConfig, args, *, standalone: bool = True)
             config.test_command,
             config.project_dir,
             parallel=config.parallel_tests,
+            timeout=config.test_timeout,
             plan_revision=state.spec_gen.revision if state.spec_gen else "",
         )
         state.verification = gate.model_dump()
@@ -3574,7 +3597,10 @@ async def _run_refactor_all(
     # edits are dirty is unknowable from here, and unknown is never safe to
     # destroy — so: no reset, no checkpoint, no refactor pass.
     pre_gate = integration_gate(
-        config.test_command, config.project_dir, parallel=config.parallel_tests
+        config.test_command,
+        config.project_dir,
+        parallel=config.parallel_tests,
+        timeout=config.test_timeout,
     )
     if not pre_gate.passed:
         progress.log_phase(
@@ -3647,7 +3673,10 @@ async def _run_refactor_all(
         detail = f"refactor agent did not finish: {reason}"
     else:
         gate = integration_gate(
-            config.test_command, config.project_dir, parallel=config.parallel_tests
+            config.test_command,
+            config.project_dir,
+            parallel=config.parallel_tests,
+            timeout=config.test_timeout,
         )
         detail = "" if gate.passed else f"tests failed after refactor: {gate.reason}"
     if gate is not None and gate.passed:
@@ -3672,7 +3701,10 @@ async def _run_refactor_all(
             log.warning("DONE phase=REFACTOR_ALL result=discarded reason=%s", detail)
             progress.log_phase("REFACTOR_ALL", f"REVERTED — {detail}")
             if not integration_gate(
-                config.test_command, config.project_dir, parallel=config.parallel_tests
+                config.test_command,
+                config.project_dir,
+                parallel=config.parallel_tests,
+                timeout=config.test_timeout,
             ).passed:
                 return False
         else:
@@ -3884,7 +3916,12 @@ def _edits_the_suite_does_not_rewrite(
                 "Could not restore the round's non-test files: %s", proc.stderr.strip()
             )
             return None, None
-    gate = integration_gate(config.test_command, root, parallel=config.parallel_tests)
+    gate = integration_gate(
+        config.test_command,
+        root,
+        parallel=config.parallel_tests,
+        timeout=config.test_timeout,
+    )
     rerun = _snapshot_source_files(config)
     if rerun is None:
         return None, None
@@ -3936,7 +3973,12 @@ def _rewritten_by_the_suite(
             log.warning("Could not put back the agent's %s: %s", name, e)
     if not put_back:
         return set()
-    integration_gate(config.test_command, root, parallel=config.parallel_tests)
+    integration_gate(
+        config.test_command,
+        root,
+        parallel=config.parallel_tests,
+        timeout=config.test_timeout,
+    )
     rerun = _snapshot_source_files(config)
     if rerun is None:
         return None
@@ -4111,7 +4153,10 @@ async def _run_mutation_round(
 
     if gate is None:
         gate = integration_gate(
-            config.test_command, config.project_dir, parallel=config.parallel_tests
+            config.test_command,
+            config.project_dir,
+            parallel=config.parallel_tests,
+            timeout=config.test_timeout,
         )
     if not gate.passed:
         return _discard(

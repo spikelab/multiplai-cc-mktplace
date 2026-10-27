@@ -444,7 +444,7 @@ pr skill and follows the repo's PR template; these lines are unchanged by it.
 
 The normal path uses the configured suite, block TDD, independent review and a
 final verification after all writers. See the [test, mutation and model reference](scripts/README.md#test-and-model-reference)
-for `tdd.narrow_tests`, `tdd.parallel`, mutation settings, `models:`, `efforts:`
+for `tdd.narrow_tests`, `tdd.parallel`, `tdd.test_timeout`, mutation settings, `models:`, `efforts:`
 and multiplai.conf examples. These defaults have not changed in this repair.
 
 ## Scale Assessment (MANDATORY)

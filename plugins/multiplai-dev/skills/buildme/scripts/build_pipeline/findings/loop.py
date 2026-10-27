@@ -770,7 +770,10 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
         from ..gates import final_verification
 
         gate = final_verification(
-            run.config.test_command, run.project_dir, parallel=run.config.parallel_tests
+            run.config.test_command,
+            run.project_dir,
+            parallel=run.config.parallel_tests,
+            timeout=run.config.test_timeout,
         )
         st.verification = gate.model_dump()
         save()
