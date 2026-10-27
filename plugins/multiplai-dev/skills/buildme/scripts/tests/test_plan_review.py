@@ -33,7 +33,7 @@ from build_pipeline.models import (
     PlanReviewResult,
     PriorAssessment,
 )
-from build_pipeline.prompts.plan_review import NO_USE_CASES, PLAN_REVIEW_PROMPT
+from build_pipeline.prompts.plan_review import NO_USE_CASES, PLAN_CHECK_PROMPT
 from build_pipeline.state import PLAN_RULES_VERSION, BuildState, SpecGenState
 
 # A recheck that calls the one listed finding fixed.
@@ -44,7 +44,7 @@ CATEGORIES = (
     "block-contradiction",
     "constraint-violation",
     "over-prescription",
-    "use-case-coverage",
+    "coverage",
     "oversized-plan",
 )
 
@@ -55,7 +55,7 @@ CATEGORIES = (
 class TestPlanReviewPrompt:
     def test_every_shipped_category_is_in_the_prompt(self):
         for category in CATEGORIES:
-            assert f"`{category}`" in PLAN_REVIEW_PROMPT
+            assert f"`{category}`" in PLAN_CHECK_PROMPT
 
     def test_prompt_reads_the_five_documents_the_phase_needs(self):
         for placeholder in (
@@ -65,13 +65,13 @@ class TestPlanReviewPrompt:
             "{tasks_content}",
             "{rubric_content}",
         ):
-            assert placeholder in PLAN_REVIEW_PROMPT
+            assert placeholder in PLAN_CHECK_PROMPT
 
     def test_findings_carry_a_file_a_location_a_claim_and_a_reason(self):
         """The seat has to be swappable: the output shape is what a human
         reviewer leaves on the plan PR, not a machine-only format."""
         for field in ("file_path", "location", "claim", "reason"):
-            assert f'"{field}"' in PLAN_REVIEW_PROMPT
+            assert f'"{field}"' in PLAN_CHECK_PROMPT
         assert set(PlanReviewFinding.model_fields) >= {
             "file_path",
             "location",
@@ -80,25 +80,28 @@ class TestPlanReviewPrompt:
         }
 
     def test_oversized_plan_proposes_and_never_performs(self):
-        assert "proposed_cut" in PLAN_REVIEW_PROMPT
-        assert "signature boundary" in PLAN_REVIEW_PROMPT
+        assert "proposed_cut" in PLAN_CHECK_PROMPT
+        assert "signature boundary" in PLAN_CHECK_PROMPT
         assert "You are proposing a split. You are not performing one." in (
-            PLAN_REVIEW_PROMPT
+            PLAN_CHECK_PROMPT
         )
 
     def test_prompt_states_the_reviewer_cannot_write(self):
-        flat = " ".join(PLAN_REVIEW_PROMPT.split())
+        flat = " ".join(PLAN_CHECK_PROMPT.split())
         assert "You cannot write, edit or run anything, and you must not try." in flat
 
     def test_prompt_formats_with_the_triggers(self):
-        rendered = PLAN_REVIEW_PROMPT.format(
+        rendered = PLAN_CHECK_PROMPT.format(
             proposal_content="p",
             plan_section="",
+            specs_content="s",
             design_content="d",
             use_cases_content="u",
             tasks_content="t",
             rubric_content="r",
             split_context="",
+            change_type="feature",
+            spec_ref="specs.md#<capability>",
             block_trigger=8,
             package_trigger=3,
         )
@@ -106,7 +109,7 @@ class TestPlanReviewPrompt:
         assert "A block count above 8" in flat
         assert "more than 3 distinct top-level packages" in flat
         # The braces in the JSON examples survive .format() as literal braces.
-        assert '"category": "rubric-conflict"' in rendered
+        assert '"category": "coverage"' in rendered
 
 
 # --- 2. The read-only subagent -------------------------------------------
@@ -166,7 +169,7 @@ class TestPlanReviewComponentScope:
 
     @pytest.mark.asyncio
     async def test_a_component_gets_its_plan_and_the_scope_note(self, tmp_path):
-        from build_pipeline.prompts.design_audit import COMPONENT_SCOPE
+        from build_pipeline.prompts.plan_review import COMPONENT_SCOPE
 
         call = AsyncMock(return_value=PlanReviewResult(findings=[]))
         with patch.object(plan_review_steps, "agent_call_structured", call):
@@ -178,7 +181,7 @@ class TestPlanReviewComponentScope:
 
     @pytest.mark.asyncio
     async def test_a_change_gets_no_scope_note(self, tmp_path):
-        from build_pipeline.prompts.design_audit import COMPONENT_SCOPE
+        from build_pipeline.prompts.plan_review import COMPONENT_SCOPE
 
         call = AsyncMock(return_value=PlanReviewResult(findings=[]))
         with patch.object(plan_review_steps, "agent_call_structured", call):
@@ -361,7 +364,7 @@ class TestSplitContextSeam:
         )
 
         # Verbatim signatures, not a paraphrase: a cut a reviewer cannot name a
-        # boundary for is not a cut (PLAN_REVIEW_PROMPT).
+        # boundary for is not a cut (PLAN_CHECK_PROMPT).
         assert (
             "boundary: parse_log(path: Path) -> list[Row]; store_rows(rows: list[Row]) -> None"
             in context
@@ -640,10 +643,6 @@ def stage_followup_models():
             "build_pipeline.spec_generator.generate_rubric",
             AsyncMock(return_value="# Current rubric"),
         ),
-        patch(
-            "build_pipeline.llm_steps.spec_steps.run_tasks_audit",
-            AsyncMock(return_value=[]),
-        ),
     ):
         yield
 
@@ -703,33 +702,6 @@ class TestPlanReviewStage:
         assert state.spec_gen.step_passed("plan_review") is True
 
     @pytest.mark.asyncio
-    async def test_the_rewritten_plan_is_re_audited_for_shape(self, tmp_path):
-        """The shape audit is what catches a horizontally-decomposed plan, and
-        it only ever ran inside `_generate_single_artifact` — so the plan the
-        build is actually built against had never been through it."""
-        config, state, state_path = _stage_setup(tmp_path)
-        review = AsyncMock(
-            side_effect=[
-                PlanReviewResult(findings=[_finding(severity="critical")]),
-                PlanReviewResult(findings=[], prior_assessments=[_RESOLVED_PR_F1]),
-            ]
-        )
-        regen = AsyncMock(return_value="## 1. Behavior\n- [ ] do it properly\n")
-        shape_audit = AsyncMock(return_value=[])
-        with (
-            patch.object(plan_review_steps, "run_plan_review", review),
-            patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen),
-            patch("build_pipeline.llm_steps.spec_steps.run_tasks_audit", shape_audit),
-            patch(
-                "build_pipeline.spec_generator.generate_rubric",
-                AsyncMock(return_value="## Criteria\n- fresh\n"),
-            ),
-        ):
-            await run_plan_review_stage(config.change_dir, config, state, state_path)
-
-        shape_audit.assert_awaited_once()
-
-    @pytest.mark.asyncio
     async def test_the_rubric_is_regenerated_against_the_rewritten_plan(
         self,
         tmp_path,
@@ -749,10 +721,6 @@ class TestPlanReviewStage:
         with (
             patch.object(plan_review_steps, "run_plan_review", review),
             patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen),
-            patch(
-                "build_pipeline.llm_steps.spec_steps.run_tasks_audit",
-                AsyncMock(return_value=[]),
-            ),
             patch("build_pipeline.spec_generator.generate_rubric", rubric),
         ):
             await run_plan_review_stage(config.change_dir, config, state, state_path)
@@ -761,11 +729,11 @@ class TestPlanReviewStage:
         assert "covers the new blocks" in (config.change_dir / "rubric.md").read_text()
 
     @pytest.mark.asyncio
-    async def test_a_failed_re_audit_or_rubric_leaves_the_plan_standing(
+    async def test_a_failed_rubric_leaves_the_plan_standing(
         self,
         tmp_path,
     ):
-        """Both follow-ups are non-fatal, like every other step in this stage."""
+        """A rubric that fails to regenerate publishes nothing."""
         config, state, state_path = _stage_setup(tmp_path)
         review = AsyncMock(
             side_effect=[
@@ -777,10 +745,6 @@ class TestPlanReviewStage:
         with (
             patch.object(plan_review_steps, "run_plan_review", review),
             patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen),
-            patch(
-                "build_pipeline.llm_steps.spec_steps.run_tasks_audit",
-                AsyncMock(side_effect=RuntimeError("audit exploded")),
-            ),
             patch(
                 "build_pipeline.spec_generator.generate_rubric",
                 AsyncMock(side_effect=RuntimeError("rubric exploded")),
@@ -982,15 +946,15 @@ _NO_BEHAVIOUR_TASKS = (
 
 class TestNoBehaviourBlocks:
     def test_the_prompt_names_the_category(self):
-        assert "`no-new-behaviour`" in PLAN_REVIEW_PROMPT
+        assert "`no-new-behaviour`" in PLAN_CHECK_PROMPT
 
     @pytest.mark.asyncio
     async def test_the_stage_adds_the_scan_to_a_clean_review_and_regenerates(
         self,
         tmp_path,
     ):
-        """A block the design audit's rewrite brought back is caught here
-        even when the reviewer model misses it."""
+        """A block with no behaviour is caught by the deterministic scan
+        even when the check's model misses it."""
         config, state, state_path = _stage_setup(tmp_path)
         (config.change_dir / "tasks.md").write_text(_NO_BEHAVIOUR_TASKS)
         review = AsyncMock(return_value=PlanReviewResult(findings=[]))
@@ -998,10 +962,6 @@ class TestNoBehaviourBlocks:
         with (
             patch.object(plan_review_steps, "run_plan_review", review),
             patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen),
-            patch(
-                "build_pipeline.llm_steps.spec_steps.run_tasks_audit",
-                AsyncMock(return_value=[]),
-            ),
             patch(
                 "build_pipeline.spec_generator.generate_rubric",
                 AsyncMock(return_value="## Criteria\n- fresh\n"),
@@ -1018,16 +978,15 @@ class TestNoBehaviourBlocks:
         assert state.spec_gen.repair_attempts("plan_review") == 1
         assert state.spec_gen.step_passed("plan_review") is True
 
-    def test_the_severity_scale_rates_it_and_the_section_names_the_home(self):
-        """The reviewer rates the finding from the severity scale; the
-        category's own text does not decide its severity in advance."""
-        section = PLAN_REVIEW_PROMPT[
-            PLAN_REVIEW_PROMPT.index("### `no-new-behaviour`") :
-        ]
+    def test_the_section_and_the_severity_scale_both_rate_it_critical(self):
+        """A block whose tests pass before it is built fails the TDD RED gate
+        for certain, so the one check rates it critical in both places."""
+        section = PLAN_CHECK_PROMPT[PLAN_CHECK_PROMPT.index("### `no-new-behaviour`") :]
         section = section[: section.index("\n### ", 1)]
-        assert "critical" not in section
-        assert "Name the earlier block its criteria belong in" in section
-        severity = PLAN_REVIEW_PROMPT[PLAN_REVIEW_PROMPT.index("- **critical**") :]
+        flat = " ".join(section.split())
+        assert "This is always **critical**." in flat
+        assert "Name the earlier block its criteria belong in" in flat
+        severity = PLAN_CHECK_PROMPT[PLAN_CHECK_PROMPT.index("- **critical**") :]
         assert "adds no behaviour" in severity[: severity.index("- **major**")]
 
     @staticmethod
@@ -1035,10 +994,6 @@ class TestNoBehaviourBlocks:
         return (
             patch.object(plan_review_steps, "run_plan_review", review),
             patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen),
-            patch(
-                "build_pipeline.llm_steps.spec_steps.run_tasks_audit",
-                AsyncMock(return_value=[]),
-            ),
             patch(
                 "build_pipeline.spec_generator.generate_rubric",
                 AsyncMock(return_value="## Criteria\n- fresh\n"),
@@ -1070,3 +1025,300 @@ async def test_review_unavailable_blocks_and_resume_checks_again(tmp_path, tasks
     assert review.await_count == 2
     regen.assert_not_awaited()
     assert (config.change_dir / "tasks.md").read_text() == tasks
+
+
+# --- What the design audit and the tasks audit checked, now in the one check ---
+
+
+class TestPlanCheckPrompt:
+    @pytest.mark.asyncio
+    async def test_the_check_reads_the_specs_by_the_file_that_holds_them(
+        self, tmp_path
+    ):
+        change_dir = _change_dir(tmp_path)
+        (change_dir / "specs.md").write_text(
+            "# Capability: cap-a\n\n## ADDED Requirements\n\n"
+            "### Requirement: Keep the form\nThe form keeps the text.\n\n"
+            "#### Scenario: Wake from sleep\n- **WHEN** the laptop wakes\n"
+            "- **THEN** the form still holds the text\n"
+        )
+        call = AsyncMock(return_value=PlanReviewResult(findings=[]))
+        with patch.object(plan_review_steps, "agent_call_structured", call):
+            await run_plan_review(change_dir, _stub_config(tmp_path))
+        prompt = call.await_args.args[0]
+        assert "### specs.md#cap-a" in prompt
+        assert "Scenario: Wake from sleep" in prompt
+        assert "(no specs)" not in prompt
+        assert "## Decisions\nOne." in prompt  # the design
+        assert "## 1. Behavior" in prompt  # the tasks
+
+    @pytest.mark.asyncio
+    async def test_a_component_is_checked_against_its_own_specs_only(self, tmp_path):
+        """Real-model run, 2026-10-23: the design audit of one component
+        reported its sibling's capability as missing (critical)."""
+        root = _change_dir(tmp_path)
+        for comp in ("word-frequencies", "top-words"):
+            d = root / "components" / comp
+            d.mkdir(parents=True)
+            (d / "plan.md").write_text(f"# Plan: {comp}\n")
+            (d / "specs.md").write_text(
+                f"# Capability: {comp}\n\n## ADDED Requirements\n\n"
+                "### Requirement: R\nThe system SHALL r.\n"
+            )
+            for name in ("design.md", "tasks.md", "rubric.md"):
+                (d / name).write_text("x\n")
+        call = AsyncMock(return_value=PlanReviewResult(findings=[]))
+        with patch.object(plan_review_steps, "agent_call_structured", call):
+            await run_plan_review(
+                root / "components" / "word-frequencies", _stub_config(tmp_path)
+            )
+        prompt = call.await_args.args[0]
+        assert "### specs.md#word-frequencies" in prompt
+        assert "top-words" not in prompt
+
+    @pytest.mark.asyncio
+    async def test_a_recheck_lists_the_findings_the_rewrite_was_asked_to_fix(
+        self, tmp_path
+    ):
+        prior = [
+            {
+                "finding_id": "PR-F1",
+                "severity": "major",
+                "category": "coverage",
+                "text": "LISTED-MARKER gap",
+            }
+        ]
+        call = AsyncMock(return_value=PlanReviewResult(findings=[]))
+        with patch.object(plan_review_steps, "agent_call_structured", call):
+            await run_plan_review(
+                _change_dir(tmp_path), _stub_config(tmp_path), prior=prior
+            )
+            recheck = call.await_args.args[0]
+            await run_plan_review(_change_dir(tmp_path / "b"), _stub_config(tmp_path))
+            first = call.await_args.args[0]
+        assert "## Findings the rewrite was asked to fix" in recheck
+        assert "PR-F1 [major] (coverage) LISTED-MARKER gap" in recheck
+        assert "Findings the rewrite was asked to fix" not in first
+
+    def test_each_old_audits_checklist_item_is_in_the_one_prompt(self):
+        for category in (
+            "coverage",
+            "no-new-behaviour",
+            "interface-mismatch",
+            "horizontal-decomposition",
+            "placeholder",
+            "design-coherence",
+            "over-engineering",
+            "testability",
+            "edge-case",
+        ):
+            assert f"### `{category}`" in PLAN_CHECK_PROMPT, category
+        assert "at most 10" in " ".join(PLAN_CHECK_PROMPT.split())
+        assert "{findings_rule}" not in PLAN_CHECK_PROMPT
+
+    def test_a_capitalised_severity_is_read_as_the_canonical_name(self):
+        """The blocking rule compares exact lowercase names (`recheck_verdict`,
+        `plan_review_actionable`)."""
+        assert PlanReviewFinding(category="coverage", severity="MAJOR ").severity == (
+            "major"
+        )
+        assert PlanReviewFinding(category="coverage", severity="").severity == "minor"
+
+
+_PINS_BLOCK_1 = (
+    "## 1. Summarize\n\nCreate `src/summary.py`.\n\n"
+    "Interfaces:\n- Produces: `summarize(text: str) -> str`\n\n"
+    "## 2. Pin plurals\n\nPin the plural nouns.\n\n"
+    "Interfaces:\n- Produces: (none)\n"
+)
+
+
+def _pins(severity: str) -> PlanReviewFinding:
+    return _finding(
+        category="no-new-behaviour",
+        severity=severity,
+        location="Block 2 — Pin plurals",
+        claim="Block 2 only pins what Block 1 builds",
+    )
+
+
+class TestPlanCheckRewrite:
+    @pytest.mark.asyncio
+    async def test_the_models_no_new_behaviour_finding_reaches_the_rewrite(
+        self, tmp_path
+    ):
+        """A block the deterministic scan cannot see, reported by the model,
+        drives the one rewrite."""
+        config, state, state_path = _stage_setup(tmp_path)
+        (config.change_dir / "tasks.md").write_text(_PINS_BLOCK_1)
+        rewritten = "## 1. Summarize\n\n- [ ] Build it, plurals included.\n"
+        review = AsyncMock(
+            side_effect=[
+                PlanReviewResult(findings=[_pins("critical")]),
+                PlanReviewResult(prior_assessments=[_RESOLVED_PR_F1]),
+            ]
+        )
+        regen = AsyncMock(return_value=rewritten)
+        with (
+            patch.object(plan_review_steps, "run_plan_review", review),
+            patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen),
+        ):
+            await run_plan_review_stage(config.change_dir, config, state, state_path)
+
+        assert regen.await_count == 1
+        assert (
+            "Block 2 only pins what Block 1 builds"
+            in (regen.await_args.kwargs["audit_findings"])
+        )
+        assert (config.change_dir / "tasks.md").read_text() == rewritten
+        assert state.spec_gen.step_passed("plan_review")
+
+    @pytest.mark.asyncio
+    async def test_a_minor_no_new_behaviour_finding_does_not_drive_the_rewrite(
+        self, tmp_path
+    ):
+        """Only critical and major model findings earn a rewrite: a block the
+        model rates minor, and the deterministic scan passes, is left alone."""
+        config, state, state_path = _stage_setup(tmp_path)
+        (config.change_dir / "tasks.md").write_text(_PINS_BLOCK_1)
+        review = AsyncMock(return_value=PlanReviewResult(findings=[_pins("minor")]))
+        regen = AsyncMock()
+        with (
+            patch.object(plan_review_steps, "run_plan_review", review),
+            patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen),
+        ):
+            await run_plan_review_stage(config.change_dir, config, state, state_path)
+
+        regen.assert_not_awaited()
+        assert (config.change_dir / "tasks.md").read_text() == _PINS_BLOCK_1
+        assert state.spec_gen.step_passed("plan_review")
+        assert not state.spec_gen.repair_attempts("plan_review")
+
+    @pytest.mark.asyncio
+    async def test_a_minor_no_new_behaviour_finding_on_the_rewrite_is_advisory(
+        self, tmp_path
+    ):
+        """A rewrite another finding drove publishes when its recheck raises a
+        new minor no-new-behaviour finding: the finding is reported only."""
+        config, state, state_path = _stage_setup(tmp_path)
+        (config.change_dir / "tasks.md").write_text(_PINS_BLOCK_1)
+        layer = _finding(
+            category="horizontal-decomposition", claim="Block 1 is a layer"
+        )
+        rewritten = (
+            "## 1. Summarize\n\nCreate `src/summary.py`, plurals included.\n\n"
+            "Interfaces:\n- Produces: `summarize(text: str) -> str`\n"
+        )
+        review = AsyncMock(
+            side_effect=[
+                PlanReviewResult(findings=[layer, _pins("minor")]),
+                PlanReviewResult(
+                    findings=[_pins("minor")], prior_assessments=[_RESOLVED_PR_F1]
+                ),
+            ]
+        )
+        regen = AsyncMock(return_value=rewritten)
+        with (
+            patch.object(plan_review_steps, "run_plan_review", review),
+            patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen),
+        ):
+            await run_plan_review_stage(config.change_dir, config, state, state_path)
+
+        assert regen.await_count == 1
+        assert "Block 2 only pins" not in regen.await_args.kwargs["audit_findings"]
+        assert (config.change_dir / "tasks.md").read_text() == rewritten
+        assert state.spec_gen.step_passed("plan_review")
+
+    @pytest.mark.asyncio
+    async def test_a_block_the_scan_still_flags_after_the_rewrite_blocks(
+        self, tmp_path
+    ):
+        """The deterministic scans keep blocking: a rewrite that leaves a
+        no-behaviour block is not published, and the step is blocked."""
+        config, state, state_path = _stage_setup(tmp_path)
+        (config.change_dir / "tasks.md").write_text(_NO_BEHAVIOUR_TASKS)
+        review = AsyncMock(return_value=PlanReviewResult(findings=[]))
+        regen = AsyncMock(return_value=_NO_BEHAVIOUR_TASKS)
+        with (
+            patch.object(plan_review_steps, "run_plan_review", review),
+            patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen),
+            pytest.raises((RuntimeError, ValueError), match="no behavior"),
+        ):
+            await run_plan_review_stage(config.change_dir, config, state, state_path)
+
+        assert regen.await_count == 1
+        assert not state.spec_gen.step_passed("plan_review")
+        assert state.spec_gen.repair_attempts("plan_review") == 1
+
+    @pytest.mark.asyncio
+    async def test_a_placeholder_drives_the_rewrite_with_a_clean_check(self, tmp_path):
+        """A clean model check cannot overrule a placeholder the scan finds."""
+        config, state, state_path = _stage_setup(tmp_path)
+        (config.change_dir / "tasks.md").write_text(
+            "## 1. Behavior\nError handling: TBD\n- [ ] do it\n"
+        )
+        rewritten = "## 1. Behavior\n- [ ] do it properly\n"
+        review = AsyncMock(return_value=PlanReviewResult(findings=[]))
+        regen = AsyncMock(return_value=rewritten)
+        with (
+            patch.object(plan_review_steps, "run_plan_review", review),
+            patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen),
+        ):
+            await run_plan_review_stage(config.change_dir, config, state, state_path)
+
+        assert regen.await_count == 1
+        assert "Placeholder text on line 2" in regen.await_args.kwargs["audit_findings"]
+        assert (config.change_dir / "tasks.md").read_text() == rewritten
+        assert state.spec_gen.step_passed("plan_review")
+
+    @pytest.mark.asyncio
+    async def test_a_design_finding_rewrites_design_then_tasks(self, tmp_path):
+        config, state, state_path = _stage_setup(tmp_path)
+        config.skip_explainers = True
+        review = AsyncMock(
+            side_effect=[
+                PlanReviewResult(
+                    findings=[_finding(severity="critical", file_path="design.md")]
+                ),
+                PlanReviewResult(prior_assessments=[_RESOLVED_PR_F1]),
+            ]
+        )
+        regen = AsyncMock(
+            side_effect=[
+                "# Design\n\n## Decisions\nTwo.\n",
+                "## 1. Behavior\n- [ ] do it properly\n",
+            ]
+        )
+        with (
+            patch.object(plan_review_steps, "run_plan_review", review),
+            patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen),
+        ):
+            await run_plan_review_stage(config.change_dir, config, state, state_path)
+
+        assert [c.args[0] for c in regen.await_args_list] == ["design", "tasks"]
+        assert "Two." in (config.change_dir / "design.md").read_text()
+        assert state.spec_gen.step_passed("plan_review")
+
+    def test_rewrites_design_unless_every_finding_is_in_tasks(self):
+        from build_pipeline.llm_steps.plan_review_steps import rewrites_design
+
+        assert not rewrites_design([{"file_path": "tasks.md"}])
+        assert rewrites_design([{"file_path": "design.md"}])
+        assert rewrites_design([{"file_path": "tasks.md"}, {"file_path": ""}])
+        assert rewrites_design([{}])
+
+
+@pytest.mark.asyncio
+async def test_one_model_check_per_planning_pass(tmp_path):
+    """The design audit, the tasks audit and the plan review read the same
+    documents three times; a clean plan now costs one model check."""
+    from build_pipeline.spec_generator import validate_plan
+
+    config, state, state_path = _stage_setup(tmp_path)
+    call = AsyncMock(return_value=PlanReviewResult(findings=[]))
+    with patch.object(plan_review_steps, "agent_call_structured", call):
+        await validate_plan(config, state, state_path)
+
+    labels = [c.kwargs.get("budget_label") for c in call.await_args_list]
+    assert labels == ["plan_review"]
+    assert state.spec_gen.step_passed("plan_review")

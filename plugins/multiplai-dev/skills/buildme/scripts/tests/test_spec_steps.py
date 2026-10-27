@@ -6,30 +6,13 @@ change_dir/requirements/<capability>.md. Design/tasks/audit must read from
 there — not the empty legacy change_dir/specs/*/spec.md layout.
 """
 
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from build_pipeline.change_manager import ChangeManager
 from build_pipeline.config import BuildConfig
-from build_pipeline.llm_steps.spec_steps import (
-    _build_prompt,
-    _read_specs,
-    run_design_audit,
-    run_tasks_audit,
-)
-from build_pipeline.models import AgentResult
+from build_pipeline.llm_steps.spec_steps import _build_prompt, _read_specs
 from build_pipeline.prompts.spec_generation import DESIGN_PROMPT, TASKS_PROMPT
-
-
-def _agent_text(text: str) -> AgentResult:
-    """What a successful audit subagent hands back.
-
-    The audits run as read-only subagents (`agent_call`), so their seam returns
-    an AgentResult rather than a bare string. Their tool list is asserted in
-    test_review_steps.py — here the result only has to carry the text.
-    """
-    return AgentResult(success=True, output=text)
 
 
 def _make_config(tmp_path, req_files: dict[str, str]) -> BuildConfig:
@@ -162,107 +145,8 @@ class TestReferenceDocsInThePrompts:
         assert "HOUSE-RULE-MARKER" in mock_llm.call_args[0][0]
 
 
-class TestDesignAudit:
-    @pytest.mark.asyncio
-    async def test_audit_prompt_includes_requirements(self, tmp_path):
-        config = _make_config(tmp_path, {"auth": "SCENARIO: audit-req-marker"})
-        change_dir = config.change_dir
-        (change_dir / "proposal.md").write_text("proposal")
-        (change_dir / "design.md").write_text("design")
-        (change_dir / "tasks.md").write_text("## 1. Do the thing")
-
-        with patch(
-            "build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock
-        ) as mock_llm:
-            mock_llm.return_value = _agent_text("[]")
-            await run_design_audit(change_dir, config)
-
-        prompt = mock_llm.call_args[0][0]
-        assert "SCENARIO: audit-req-marker" in prompt
-        assert "(no specs)" not in prompt
-
-
-class TestDesignAuditComponentScope:
-    """A component is audited against its own plan.md, not the whole change.
-
-    Real-model run, 2026-10-23: the audit of component `word-frequencies` read
-    only the change's proposal (which promises `word_frequencies` and
-    `top_words`), reported its sibling `top-words`' capability as missing
-    (critical), and the epic stopped on spec-issues.md (exit 4)."""
-
-    def _change(self, tmp_path) -> Path:
-        root = tmp_path / "project" / "specs" / "changes" / "word-freq"
-        root.mkdir(parents=True)
-        (root / "proposal.md").write_text(
-            "## Impact\nAdds word_frequencies and top_words.\n"
-        )
-        for comp, cap in (
-            ("word-frequencies", "word-frequencies"),
-            ("top-words", "top-words"),
-        ):
-            d = root / "components" / comp
-            d.mkdir(parents=True)
-            (d / "plan.md").write_text(f"# Plan: {comp}\nPLAN-MARKER-{comp}\n")
-            (d / "specs.md").write_text(
-                f"# Capability: {cap}\n\n## ADDED Requirements\n\n"
-                "### Requirement: R\nThe system SHALL r.\n"
-            )
-            for name in ("design.md", "tasks.md"):
-                (d / name).write_text("x")
-        return root
-
-    async def _prompt(self, change_dir: Path, tmp_path) -> str:
-        config = BuildConfig(project_dir=tmp_path / "project", change_name="c")
-        with patch(
-            "build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock
-        ) as mock_llm:
-            mock_llm.return_value = _agent_text("[]")
-            await run_design_audit(change_dir, config)
-        return mock_llm.call_args[0][0]
-
-    @pytest.mark.asyncio
-    async def test_a_component_is_judged_against_its_plan(self, tmp_path):
-        from build_pipeline.prompts.design_audit import (
-            CAPABILITY_CHECK,
-            COMPONENT_CAPABILITY_CHECK,
-            COMPONENT_SCOPE,
-        )
-
-        root = self._change(tmp_path)
-        prompt = await self._prompt(root / "components" / "word-frequencies", tmp_path)
-        assert "PLAN-MARKER-word-frequencies" in prompt
-        assert "PLAN-MARKER-top-words" not in prompt
-        assert COMPONENT_SCOPE in prompt
-        assert COMPONENT_CAPABILITY_CHECK in prompt
-        assert CAPABILITY_CHECK not in prompt
-        # Its own specs only: the sibling's capability is not shown as its.
-        assert "### top-words" not in prompt
-
-    @pytest.mark.asyncio
-    async def test_a_change_with_its_plan_in_the_change_dir_keeps_the_proposal_check(
-        self, tmp_path
-    ):
-        from build_pipeline.prompts.design_audit import (
-            CAPABILITY_CHECK,
-            COMPONENT_SCOPE,
-        )
-
-        root = tmp_path / "project" / "specs" / "changes" / "one"
-        root.mkdir(parents=True)
-        (root / "proposal.md").write_text("proposal")
-        (root / "plan.md").write_text("PLAN-MARKER-one\n")
-        (root / "specs.md").write_text(
-            "# Capability: one\n\n## ADDED Requirements\n\n"
-            "### Requirement: R\nThe system SHALL r.\n"
-        )
-        prompt = await self._prompt(root, tmp_path)
-        assert "PLAN-MARKER-one" in prompt
-        assert CAPABILITY_CHECK in prompt
-        assert COMPONENT_SCOPE not in prompt
-
-
 class TestSpecIssueLabels:
-    """A requirement a design or its audit cannot follow is named as the
+    """A requirement a design or the plan check cannot follow is named as the
     change holds it: `specs.md#<capability>` with a `specs.md`, else
     `requirements/<capability>.md`."""
 
@@ -319,15 +203,19 @@ class TestSpecIssueLabels:
             ("_old", "requirements/<capability>.md", "specs.md#<capability>"),
         ],
     )
-    async def test_the_design_audit_prompt_names_them_as_the_change_holds_them(
+    async def test_the_plan_check_prompt_names_them_as_the_change_holds_them(
         self, tmp_path, layout, label, other
     ):
+        from build_pipeline.llm_steps.plan_review_steps import run_plan_review
+        from build_pipeline.models import PlanReviewResult
+
         config = getattr(self, layout)(tmp_path)
         with patch(
-            "build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock
+            "build_pipeline.llm_steps.plan_review_steps.agent_call_structured",
+            new_callable=AsyncMock,
+            return_value=PlanReviewResult(),
         ) as mock_llm:
-            mock_llm.return_value = _agent_text("[]")
-            await run_design_audit(config.change_dir, config)
+            await run_plan_review(config.change_dir, config)
         prompt = mock_llm.call_args[0][0]
         assert f"as `{label}: <requirement name>`" in prompt
         assert other not in prompt
@@ -391,117 +279,6 @@ class TestTasksPromptVerticalSlices:
         assert "(none — first pass)" not in prompt
 
 
-class TestTasksAudit:
-    """B4: adversarial shape audit over the generated tasks.md."""
-
-    def _change_dir(self, tmp_path, tasks_text: str) -> Path:
-        change_dir = tmp_path / "changes" / "feat"
-        change_dir.mkdir(parents=True)
-        (change_dir / "design.md").write_text("DESIGN-MARKER")
-        (change_dir / "tasks.md").write_text(tasks_text)
-        return change_dir
-
-    @pytest.mark.asyncio
-    async def test_prompt_includes_tasks_and_design(self, tmp_path):
-        change_dir = self._change_dir(tmp_path, "## 1. TASKS-MARKER block")
-        config = MagicMock(model="test-model")
-
-        with patch(
-            "build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock
-        ) as mock_llm:
-            mock_llm.return_value = _agent_text("[]")
-            findings = await run_tasks_audit(change_dir, config)
-
-        prompt = mock_llm.call_args[0][0]
-        assert "TASKS-MARKER" in prompt
-        assert "DESIGN-MARKER" in prompt
-        assert "vertical slice" in prompt
-        assert findings == []
-
-    @pytest.mark.asyncio
-    async def test_prompt_includes_specs_md_capabilities(self, tmp_path):
-        change_dir = self._change_dir(tmp_path, "## 1. TASKS-MARKER block")
-        (change_dir / "specs.md").write_text(
-            "# Capability: cap-a\n\n## ADDED Requirements\n\n"
-            "### Requirement: Keep the form\nThe form keeps the text.\n\n"
-            "#### Scenario: Wake from sleep\n- **WHEN** the laptop wakes\n"
-            "- **THEN** the form still holds the text\n"
-        )
-        config = MagicMock(model="test-model")
-
-        with patch(
-            "build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock
-        ) as mock_llm:
-            mock_llm.return_value = _agent_text("[]")
-            await run_tasks_audit(change_dir, config)
-
-        prompt = mock_llm.call_args[0][0]
-        assert "### specs.md#cap-a" in prompt
-        assert "Scenario: Wake from sleep" in prompt
-        assert "(no requirements files)" not in prompt
-
-    @pytest.mark.asyncio
-    async def test_returns_layering_findings(self, tmp_path):
-        change_dir = self._change_dir(
-            tmp_path, "## 1. Database schema\n## 2. API layer\n## 3. Wiring"
-        )
-        config = MagicMock(model="test-model")
-        raw = (
-            '[{"category": "horizontal-decomposition", "severity": "critical", '
-            '"description": "blocks are layers", "suggestion": "re-slice"}]'
-        )
-
-        with patch(
-            "build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock
-        ) as mock_llm:
-            mock_llm.return_value = _agent_text(raw)
-            findings = await run_tasks_audit(change_dir, config)
-
-        assert len(findings) == 1
-        assert findings[0]["category"] == "horizontal-decomposition"
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("audit", [run_design_audit, run_tasks_audit])
-    @pytest.mark.parametrize(
-        "raw",
-        [
-            "not json",
-            '{"findings": []}',
-            '["finding"]',
-            "[{}]",
-            '[{"severity": "unknown"}]',
-        ],
-    )
-    async def test_unavailable_audit_evidence_blocks(self, tmp_path, audit, raw):
-        from build_pipeline.sdk import LLMCallError
-
-        change_dir = self._change_dir(tmp_path, "## 1. Slice")
-        with patch(
-            "build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock
-        ) as call:
-            call.return_value = _agent_text(raw)
-            with pytest.raises(LLMCallError):
-                await audit(change_dir, MagicMock(model="test-model"))
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("audit", [run_design_audit, run_tasks_audit])
-    async def test_failed_auditor_cannot_supply_passing_partial_output(
-        self, tmp_path, audit
-    ):
-        from build_pipeline.models import AgentResult
-        from build_pipeline.sdk import LLMCallError
-
-        change_dir = self._change_dir(tmp_path, "## 1. Slice")
-        with patch(
-            "build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock
-        ) as call:
-            call.return_value = AgentResult(
-                success=False, output="[]", error="timed out"
-            )
-            with pytest.raises(LLMCallError, match="timed out"):
-                await audit(change_dir, MagicMock(model="test-model"))
-
-
 class TestEveryBlockAddsBehaviour:
     """Epic e2e attempt 1, Defect 1: a block whose tests pass before it is
     built fails the TDD RED gate and the whole build. The rule is stated where
@@ -519,40 +296,6 @@ class TestEveryBlockAddsBehaviour:
             "Put criteria that confirm, verify, pin or re-test what an earlier "
             "block delivers"
         ) in " ".join(TASKS_PROMPT.split())
-
-    @pytest.mark.asyncio
-    async def test_the_shape_audit_asks_for_and_returns_no_new_behaviour(
-        self,
-        tmp_path,
-    ):
-        """The audit's prompt carries the rule, its remedy and its severity
-        (critical, as the plan review's scale says), and a finding the model
-        reports under it comes back to the caller."""
-        change_dir = tmp_path / "changes" / "feat"
-        change_dir.mkdir(parents=True)
-        (change_dir / "design.md").write_text("# Design")
-        (change_dir / "tasks.md").write_text("## 1. Slice\n\n## 2. Pin it\n")
-        raw = (
-            '[{"category": "no-new-behaviour", "severity": "critical", '
-            '"description": "Block 2 pins Block 1", "suggestion": "fold it in"}]'
-        )
-
-        with patch(
-            "build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock
-        ) as mock_llm:
-            mock_llm.return_value = _agent_text(raw)
-            findings = await run_tasks_audit(change_dir, config=MagicMock(model="m"))
-
-        prompt = mock_llm.call_args[0][0]
-        section = prompt[prompt.index("## Blocks That Add No Behaviour") :]
-        section = section[: section.index("\n## ", 1)]
-        assert '(category "no-new-behaviour")' in section
-        assert "tests would pass before it is built is **critical**" in " ".join(
-            section.split()
-        )
-        assert "tests would pass" in section
-        assert "into the block that builds the behaviour" in section
-        assert [f["category"] for f in findings] == ["no-new-behaviour"]
 
 
 # --- PR 4 of the reverse-specs plan: spec generation reads specs/registry --------------
@@ -758,83 +501,3 @@ def test_the_cap_holds_when_the_names_alone_are_over_it(tmp_path):
     text = _read_registry(config, _registry_context(config), ["billing"])
     assert len(text) <= REGISTRY_TEXT_LIMIT
     assert text.endswith(f"(cut at {REGISTRY_TEXT_LIMIT:,} characters)")
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("audit", [run_design_audit, run_tasks_audit])
-async def test_audit_severity_is_canonical_for_blocking_consumers(tmp_path, audit):
-    raw = '[{"category":"coverage","severity":"MAJOR","description":"missing behavior","suggestion":"add behavior"}]'
-    with patch(
-        "build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock
-    ) as call:
-        call.return_value = _agent_text(raw)
-        findings = await audit(tmp_path, MagicMock(model="test-model"))
-    assert findings[0]["severity"] == "major"
-
-
-PRIOR = [
-    {
-        "finding_id": "DA-F1",
-        "severity": "major",
-        "category": "coverage",
-        "text": "LISTED-MARKER gap",
-    }
-]
-FINDING = '{"category":"coverage","severity":"critical","description":"new gap","suggestion":"fix it"}'
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("audit", [run_design_audit, run_tasks_audit])
-async def test_prior_assessments_are_read_from_the_recheck_object(tmp_path, audit):
-    raw = (
-        '{"findings": [' + FINDING + '], "prior_assessments": '
-        '[{"finding_id": "DA-F1", "status": "still_present", "evidence": "Block 2 still lacks it"}]}'
-    )
-    with patch(
-        "build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock
-    ) as call:
-        call.return_value = _agent_text(raw)
-        findings = await audit(tmp_path, MagicMock(model="test-model"), prior=PRIOR)
-    assert [f["description"] for f in findings] == ["new gap"]
-    assert [
-        (a.finding_id, a.status, a.evidence) for a in findings.prior_assessments
-    ] == [("DA-F1", "still_present", "Block 2 still lacks it")]
-    prompt = call.await_args.args[0]
-    assert "## Findings the rewrite was asked to fix" in prompt
-    assert "DA-F1 [major] (coverage) LISTED-MARKER gap" in prompt
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("audit", [run_design_audit, run_tasks_audit])
-async def test_prior_assessments_absent_from_a_bare_list_recheck(tmp_path, audit):
-    with patch(
-        "build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock
-    ) as call:
-        call.return_value = _agent_text("[" + FINDING + "]")
-        findings = await audit(tmp_path, MagicMock(model="test-model"), prior=PRIOR)
-    assert len(findings) == 1
-    assert findings.prior_assessments == []
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("audit", [run_design_audit, run_tasks_audit])
-async def test_prior_assessments_unknown_status_is_cannot_verify(tmp_path, audit):
-    raw = '{"findings": [], "prior_assessments": [{"finding_id": "DA-F1", "status": "fixed, I think"}]}'
-    with patch(
-        "build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock
-    ) as call:
-        call.return_value = _agent_text(raw)
-        findings = await audit(tmp_path, MagicMock(model="test-model"), prior=PRIOR)
-    assert findings.prior_assessments[0].status == "cannot_verify"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("audit", [run_design_audit, run_tasks_audit])
-async def test_prior_assessments_section_left_out_of_a_first_audit(tmp_path, audit):
-    with patch(
-        "build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock
-    ) as call:
-        call.return_value = _agent_text("[]")
-        findings = await audit(tmp_path, MagicMock(model="test-model"))
-    assert findings.prior_assessments == []
-    assert "Findings the rewrite was asked to fix" not in call.await_args.args[0]
