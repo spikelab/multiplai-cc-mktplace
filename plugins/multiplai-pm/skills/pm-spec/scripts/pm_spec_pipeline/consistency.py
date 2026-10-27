@@ -27,7 +27,18 @@ read and edited the files) the check rewrites nothing (`check_reviewed`): it
 reports its findings, and a critical or major one blocks with exit 4 and
 `SPEC:BLOCKED`, not ready. A person edits the files, pushes and runs `resume`,
 which pulls and checks the edited files again (row S17); unchanged files are
-refused with no model call. Minor findings are advisory. The one rewrite above
+refused with no model call. Minor findings are advisory. A check after a
+block follows the recheck rule: it is shown the blocking findings, each must
+come back `resolved`, and a new finding blocks only when critical. A person
+may accept a blocking finding instead (`resume --accept <id> --accept-reason
+<why>`, `accept_findings`): it is saved in the run state and in
+`accepted-findings.md`, every later check is told not to raise it again, and
+when every blocking finding is accepted and no file changed the step passes
+with no model call. After `consistency.max_rounds` blocked checks (default 5)
+`resume` refuses to check again (`refuse_at_round_cap`) until each open
+finding is accepted, or `--check-again` asks for one more round. A pass that
+leaves a critical or major finding unfixed prints it under a loud banner and
+`SPEC:WARN` (`findings.warn_unfixed`). The one rewrite above
 is for specs no review stop showed anyone: `--auto`, an adopted change, a run
 from before the staged flow.
 
@@ -40,6 +51,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
@@ -49,10 +61,14 @@ from pydantic import BaseModel, Field, field_validator
 from . import artifacts, layout, sdk
 from . import findings as F
 from .prompts import UNTRUSTED_NOTICE
-from .prompts.consistency import CONSISTENCY_PROMPT, prior_findings_section
+from .prompts.consistency import (
+    CONSISTENCY_PROMPT,
+    accepted_section,
+    prior_findings_section,
+)
 from .publish import publish
 from .rewrite import check_texts, cited_units, rewrite_units
-from .run import Run
+from .run import EXIT_BLOCKED, EXIT_REFUSED, MARKER_BLOCKED, Run, Stop
 
 log = logging.getLogger(__name__)
 
@@ -61,10 +77,22 @@ BLOCK_REASON = "The specs still disagree after their one rewrite"
 REVIEWED_BLOCK_REASON = (
     "The reviewed specs disagree; no file was rewritten after the specs review"
 )
-REVIEWED_NEXT = (
-    "Edit the files on the feature branch to fix these, push, and run `resume` "
-    "again: it pulls them and checks them again."
-)
+ACCEPTED_FILE = "accepted-findings.md"
+ACCEPTED_HEADER = """# Accepted consistency findings
+
+The consistency check raised each finding below, and a person accepted the
+specs as they are (`resume --accept`). pm-spec writes this file; every later
+check is told not to raise these again.
+"""
+
+
+def reviewed_next(run: Run) -> str:
+    name = run.config.change_name
+    return (
+        "Edit the files on the feature branch to fix these, push, and run `resume` "
+        "again: it pulls them and checks them again. To hand off with a finding left "
+        f'as it is, run `resume {name} --accept <id> --accept-reason "<why>"`.'
+    )
 
 
 class Place(BaseModel):
@@ -103,7 +131,9 @@ def as_dicts(answer: ConsistencyAnswer) -> list[dict]:
     ]
 
 
-def check_prompt(run: Run, prior: list[dict] | None = None) -> str:
+def check_prompt(
+    run: Run, prior: list[dict] | None = None, *, edited: bool = False
+) -> str:
     change_dir = run.config.change_dir
     return CONSISTENCY_PROMPT.format(
         notice=UNTRUSTED_NOTICE,
@@ -112,7 +142,8 @@ def check_prompt(run: Run, prior: list[dict] | None = None) -> str:
         use_cases_content=artifacts.use_cases_text(run) or "(missing)",
         plans_content=layout.plans_text(change_dir),
         specs_content=layout.all_specs_text(change_dir),
-        prior_section=prior_findings_section(prior),
+        prior_section=prior_findings_section(prior, edited=edited),
+        accepted_section=accepted_section(run.state.accepted_findings),
     )
 
 
@@ -188,10 +219,12 @@ def registry_findings(run: Run) -> list[dict]:
     return found
 
 
-async def check(run: Run, prior: list[dict] | None = None) -> ConsistencyAnswer:
+async def check(
+    run: Run, prior: list[dict] | None = None, *, edited: bool = False
+) -> ConsistencyAnswer:
     """One call of the read-only consistency agent."""
     return await sdk.agent_structured(
-        check_prompt(run, prior),
+        check_prompt(run, prior, edited=edited),
         ConsistencyAnswer,
         config=run.config,
         step="consistency",
@@ -228,6 +261,7 @@ async def recheck(run: Run, name: str, reason: str) -> str:
         "Recheck: every listed finding resolved.\n"
         + F.findings_report(step.repair_findings),
     )
+    F.warn_unfixed(run, advisory)
     return revision
 
 
@@ -252,25 +286,155 @@ def reviewed(run: Run) -> bool:
     return bool(step and step.outcome == "passed")
 
 
+def _open(step) -> list[dict]:
+    """The blocking findings nobody accepted."""
+    return [f for f in step.blocking_findings if f.get("status") != "accepted"]
+
+
+def accept_findings(run: Run) -> None:
+    """`resume --accept <id> --accept-reason <why>`: mark each named blocking
+    finding accepted, save it in the run state and `accepted-findings.md`.
+    Refuses (exit 2) with no reason, outside a block after the specs review,
+    or for an id that is not an open blocking finding."""
+    if not run.accept:
+        return
+    step = run.state.steps.get(NAME)
+    blocked = bool(step and step.outcome == "blocked" and reviewed(run))
+    open_ids = {f.get("finding_id"): f for f in _open(step)} if blocked else {}
+    unknown = [i for i in run.accept if i not in open_ids]
+    problem = ""
+    if not run.accept_reason.strip():
+        problem = (
+            "--accept needs --accept-reason: say why the finding is left as it is."
+        )
+    elif not blocked:
+        problem = (
+            "--accept takes a finding the consistency check blocked on after the "
+            "specs review, and the check is not blocked."
+        )
+    elif unknown:
+        problem = (
+            f"--accept: {', '.join(unknown)} is not an open blocking finding; "
+            f"the open ones are {', '.join(open_ids) or 'none'}."
+        )
+    if problem:
+        print(f"ERROR: {problem}", flush=True)
+        raise Stop(EXIT_REFUSED, problem)
+    stamp = datetime.now(UTC).strftime("%Y-%m-%d")
+    for finding_id in dict.fromkeys(run.accept):
+        finding = open_ids[finding_id]
+        finding["status"] = "accepted"
+        run.state.accepted_findings.append(
+            {
+                **F.saved_findings([finding])[0],
+                "reason": run.accept_reason.strip(),
+                "accepted_at": stamp,
+            }
+        )
+    _write_accepted(run)
+    run.save()
+    report = F.findings_report([open_ids[i] for i in dict.fromkeys(run.accept)])
+    run.progress("CONSISTENCY_ACCEPTED", f"{run.accept_reason.strip()}\n{report}")
+    print(f"Accepted:\n{report}", flush=True)
+
+
+def _write_accepted(run: Run) -> None:
+    parts = [ACCEPTED_HEADER]
+    for f in run.state.accepted_findings:
+        places = "; ".join(F._place(p) for p in f.get("places") or [])
+        parts.append(
+            f"## {f.get('finding_id', '?')} [{f.get('severity', '?')}] "
+            f"({f.get('category') or '?'})\n\n{f.get('text', '')}\n"
+            + (f"\nPlaces: {places}\n" if places else "")
+            + f"\nAccepted {f.get('accepted_at', '')}: {f.get('reason', '')}\n"
+        )
+    (run.config.change_dir / ACCEPTED_FILE).write_text("\n".join(parts))
+
+
+def passed_by_acceptance(run: Run, revision: str) -> bool:
+    """Every blocking finding accepted and the files unchanged since the block:
+    the check already read these files, so the step passes with no model call."""
+    step = run.state.steps.get(NAME)
+    if not (
+        step
+        and step.outcome == "blocked"
+        and step.blocked_revision == revision
+        and step.blocking_findings
+        and not _open(step)
+    ):
+        return False
+    F.record_passed(run, NAME, revision, "Every blocking finding accepted")
+    run.progress("CONSISTENCY_PASSED", "Every blocking finding accepted.")
+    F.warn_unfixed(run, step.advisory_findings)
+    return True
+
+
+def refuse_at_round_cap(run: Run) -> None:
+    """After `consistency.max_rounds` blocked checks, refuse (exit 4, no model
+    call) to check again unless `--check-again` asks for one more round."""
+    step = run.state.steps.get(NAME)
+    cap = run.config.consistency_max_rounds
+    if not step or step.outcome != "blocked" or step.reviewed_blocks < cap:
+        return
+    if run.check_again:
+        log.warning("consistency: past the round cap (%d); one more round", cap)
+        return
+    name = run.config.change_name
+    text = (
+        f"{F.WARN_BAR}\n"
+        f"The consistency check blocked {step.reviewed_blocks} rounds (the cap is "
+        f"{cap} rounds), and is not run again on its own. These findings are open:\n"
+        f"{F.findings_report(_open(step))}\n"
+        f'Accept each one left as it is: `resume {name} --accept <id> --accept-reason "<why>"`.\n'
+        f"Or, if the edits fix them, check once more: `resume {name} --check-again`.\n"
+        "If each round keeps finding new problems, the change may need rethinking "
+        f"rather than more edits.\n{F.WARN_BAR}"
+    )
+    print(text, flush=True)
+    print(f"{MARKER_BLOCKED}:{run.config.change_dir}", flush=True)
+    run.progress("CONSISTENCY_ROUND_CAP", text)
+    raise Stop(EXIT_BLOCKED, "round cap")
+
+
 async def check_reviewed(run: Run, revision: str) -> None:
     """The check after the specs review: reports, rewrites nothing, and blocks
-    (exit 4) on a critical or major finding (rows S13, S17)."""
+    (exit 4) on a critical or major finding (rows S13, S17). After a block it
+    rechecks the open blocking findings, and a new one blocks only when critical."""
     print("PHASE:CONSISTENCY", flush=True)
-    answer = await check(run)
-    found = format_findings(run) + registry_findings(run) + as_dicts(answer)
-    blocking, advisory = F.first_check_verdict(found)
+    step = run.state.step(NAME)
+    later = step.outcome == "blocked" and bool(step.blocking_findings)
+    listed = _open(step) if later else []
+    answer = await check(run, prior=listed, edited=True)
+    deterministic = format_findings(run) + registry_findings(run)
+    if later:
+        blocking, advisory = F.recheck_verdict(
+            listed,
+            answer.prior_assessments,
+            as_dicts(answer),
+            deterministic=deterministic,
+        )
+        blocking = F.number_new(
+            NAME, blocking, [*step.blocking_findings, *run.state.accepted_findings]
+        )
+        reason = f"{REVIEWED_BLOCK_REASON} ({F.carried_and_new(blocking)})"
+    else:
+        actionable, advisory = F.first_check_verdict(deterministic + as_dicts(answer))
+        blocking = F.number_new(NAME, actionable, run.state.accepted_findings)
+        reason = REVIEWED_BLOCK_REASON
     F.record_advisory(run, NAME, advisory)
     if blocking:
-        F.block_on_findings(
-            run,
-            NAME,
-            revision,
-            REVIEWED_BLOCK_REASON,
-            F.number_findings(NAME, blocking),
-            next_step=REVIEWED_NEXT,
-        )
+        step.reviewed_blocks += 1
+        next_step = reviewed_next(run)
+        if step.reviewed_blocks >= run.config.consistency_max_rounds:
+            next_step += (
+                f"\nThis is blocked round {step.reviewed_blocks}; the cap is "
+                f"{run.config.consistency_max_rounds}, so the next `resume` checks "
+                "again only with --check-again (--accept still works)."
+            )
+        F.block_on_findings(run, NAME, revision, reason, blocking, next_step=next_step)
     F.record_passed(run, NAME, revision, "No critical or major finding")
     run.progress("CONSISTENCY_PASSED", f"{len(advisory)} advisory finding(s).")
+    F.warn_unfixed(run, advisory)
 
 
 async def run_consistency(run: Run) -> None:
@@ -283,7 +447,10 @@ async def run_consistency(run: Run) -> None:
         log.info("SKIP consistency: passed at this revision")
         return
     if reviewed(run):
-        F.refuse_if_blocked(run, NAME, revision, next_step=REVIEWED_NEXT)
+        if passed_by_acceptance(run, revision):
+            return
+        F.refuse_if_blocked(run, NAME, revision, next_step=reviewed_next(run))
+        refuse_at_round_cap(run)
         await check_reviewed(run, revision)
         return
     F.reopen_if_edited(run, NAME, revision)

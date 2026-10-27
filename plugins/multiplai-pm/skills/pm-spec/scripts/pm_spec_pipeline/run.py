@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from . import state as state_mod
@@ -26,6 +26,7 @@ MARKER_BRANCH = "SPEC:BRANCH"
 MARKER_REVIEW = "SPEC:REVIEW"
 MARKER_TICKETS = "SPEC:TICKETS"
 MARKER_BLOCKED = "SPEC:BLOCKED"
+MARKER_WARN = "SPEC:WARN"
 MARKER_INTERVIEW_WAITING = "INTERVIEW:WAITING"
 
 
@@ -41,6 +42,10 @@ class Stop(Exception):
 class Run:
     config: SpecConfig
     state: RunState
+    # `resume --accept` (finding ids), `--accept-reason` and `--check-again`.
+    accept: list[str] = field(default_factory=list)
+    accept_reason: str = ""
+    check_again: bool = False
 
     def save(self) -> None:
         state_mod.save(self.state, self.config.run_dir)

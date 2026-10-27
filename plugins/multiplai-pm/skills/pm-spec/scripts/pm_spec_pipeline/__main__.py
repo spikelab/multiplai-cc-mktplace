@@ -182,6 +182,24 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="At the ticket wait: go on, the components' tickets left pending",
     )
+    resume.add_argument(
+        "--accept",
+        action="append",
+        default=[],
+        metavar="ID",
+        help="At a consistency block after the specs review: leave this finding "
+        "(CC-F<n>) as it is; repeatable, or comma-separated",
+    )
+    resume.add_argument(
+        "--accept-reason",
+        default="",
+        help="Why the --accept findings are left as they are (required with --accept)",
+    )
+    resume.add_argument(
+        "--check-again",
+        action="store_true",
+        help="Run the consistency check once more after it hit its round cap",
+    )
 
     revise = sub.add_parser(
         "revise",
@@ -303,6 +321,9 @@ async def _dispatch(args: argparse.Namespace) -> int:
             replies_file=replies,
             max_usd=args.max_usd,
             tickets_in=TicketInputs(refs=refs, later=args.tickets_later),
+            accept=[i.strip() for a in args.accept for i in a.split(",") if i.strip()],
+            accept_reason=args.accept_reason,
+            check_again=args.check_again,
         )
     return await cmd_revise(config, from_respec=args.from_respec, max_usd=args.max_usd)
 

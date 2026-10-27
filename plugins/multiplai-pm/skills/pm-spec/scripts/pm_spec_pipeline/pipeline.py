@@ -44,6 +44,7 @@ from multiplai_core.specs import write_change_meta
 from . import (
     artifacts,
     branch,
+    consistency,
     epic,
     handoff,
     intake,
@@ -326,6 +327,9 @@ async def cmd_resume(
     replies_file: str = "",
     max_usd: float | None = sdk.DEFAULT_MAX_USD,
     tickets_in: TicketInputs | None = None,
+    accept: list[str] | None = None,
+    accept_reason: str = "",
+    check_again: bool = False,
 ) -> int:
     if _load(config) is None and not _adoptable(config):
         _no_run(config)
@@ -336,6 +340,9 @@ async def cmd_resume(
             if _load(config) is not None
             else _adopt(config, max_usd)
         )
+        run.accept, run.accept_reason = list(accept or []), accept_reason
+        run.check_again = check_again
+        consistency.accept_findings(run)
         return await advance(run, replies_file=replies_file, tickets_in=tickets_in)
 
 
