@@ -229,7 +229,12 @@ def test_nested_list_items_degrade_to_a_paragraph():
 
 
 def test_not_found_says_what_it_actually_checked(monkeypatch):
-    monkeypatch.setattr(plane, "_request", lambda *a, **k: envelope([]))
+    def missing(*a, **k):
+        raise plane.PlaneError(
+            'GET x -> 404 {"error": "The requested resource does not exist."}'
+        )
+
+    monkeypatch.setattr(plane, "_request", missing)
     monkeypatch.setattr(
         plane,
         "resolve_project",

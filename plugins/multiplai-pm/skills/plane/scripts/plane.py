@@ -33,6 +33,7 @@ import json
 import mimetypes
 import os
 import re
+import shlex
 import sys
 import time
 import urllib.error
@@ -160,11 +161,12 @@ def _guard(method: str, path: str, allowed: dict) -> None:
        alone is exempt: free text, and results are re-filtered client-side.
     3. A path with no project UUID is workspace-scoped: reads only.
     4. The project object itself is read-only (no create, rename or delete).
-    5. DELETE reaches labels and nothing else. This tool deletes exactly one kind
-       of thing, so the verb is pinned to `/projects/<uuid>/labels/<uuid>/` here
-       rather than left to the fact that no call site currently writes another
-       one. Without this rule, "issues are never deleted" is a property of the
-       absence of code; with it, a call site that tries fails closed.
+    5. DELETE reaches labels and states and nothing else. This tool deletes
+       exactly two kinds of thing, so the verb is pinned to
+       `/projects/<uuid>/labels/<uuid>/` and `/projects/<uuid>/states/<uuid>/`
+       here rather than left to the fact that no call site currently writes
+       another one. Without this rule, "issues are never deleted" is a property
+       of the absence of code; with it, a call site that tries fails closed.
     """
     method = method.upper()
     bare, _, query = path.partition("?")
@@ -228,11 +230,12 @@ def _guard(method: str, path: str, allowed: dict) -> None:
         raise GuardError(f"refusing {method} on the project object itself ({bare})")
 
     if method == "DELETE" and not re.fullmatch(
-        rf"/projects/{_UUID}/labels/{_UUID}/?", bare
+        rf"/projects/{_UUID}/(?:labels|states)/{_UUID}/?", bare
     ):
         raise GuardError(
-            f"refusing DELETE on {bare} — the only deletion this client performs "
-            "is /projects/<project>/labels/<label>/"
+            f"refusing DELETE on {bare} — the only deletions this client performs "
+            "are /projects/<project>/labels/<label>/ and "
+            "/projects/<project>/states/<state>/"
         )
 
 
@@ -619,8 +622,24 @@ def _project_id_of(issue: dict) -> str:
     return proj["id"] if isinstance(proj, dict) else str(proj)
 
 
+# The bodies of the 404s that Plane's ref-lookup view answers itself (read from
+# its source on 2026-10-26): a missing or hidden work item, and a non-numeric
+# sequence. Any other 404 body is the server's catch-all for an unknown route.
+_ISSUE_NOT_FOUND = ("The requested resource does not exist", "Work item not found")
+
+
+# `parent` expands to {id, sequence_id, project_id}, which is enough to print
+# the parent's ref without another request.
+_ISSUE_EXPAND = "state,assignees,labels,parent"
+
+
 def resolve_issue(cfg: dict, ref: str, project_ref: str | None = None) -> dict:
-    """Resolve 'SPK-12', a bare sequence number, or a UUID to a full issue."""
+    """Resolve 'SPK-12', a bare sequence number, or a UUID to a full issue.
+
+    A ref is one GET to /work-items/<IDENT>-<N>/, however many issues the
+    project has. Only a Plane that predates that route falls back to paging
+    through the project's issues.
+    """
     ref = (ref or "").strip()
     if not ref:
         raise PlaneError("empty issue reference")
@@ -655,24 +674,80 @@ def resolve_issue(cfg: dict, ref: str, project_ref: str | None = None) -> dict:
             f"cannot parse issue reference {ref!r} — expected SPK-12, 12, or a UUID"
         )
 
+    # Resolved first, unchanged: this is what refuses a non-allowlisted
+    # identifier before any request about the issue is sent.
     proj = resolve_project(cfg, project_ref)
-    for issue in _paginate(
-        f"/projects/{proj['id']}/issues/",
-        cfg,
-        params={"expand": "state,assignees,labels"},
-    ):
-        if issue.get("sequence_id") == seq:
-            return issue
-    # Says what was actually checked. The scan covers the issue list endpoint,
-    # which is not the same set as "every issue that ever existed in the
-    # project": deleted and otherwise unlisted issues are invisible to it, so
-    # claiming the number does not exist would be a stronger statement than the
-    # evidence in hand.
-    raise PlaneError(
+    # Says what was actually checked. Neither the lookup nor the scan sees
+    # deleted or archived issues, so claiming the number does not exist would
+    # be a stronger statement than the evidence in hand.
+    missing = PlaneError(
         f"no issue with sequence {seq} listed by the API in "
         f"{proj.get('identifier')} ({proj.get('name')}) — deleted or otherwise "
         "unlisted issues would not appear here"
     )
+    # Built from the resolved project, not the user's spelling, so `db-2291`
+    # and `DB2291` reach the same URL.
+    try:
+        issue = _request(
+            "GET",
+            f"/work-items/{proj.get('identifier')}-{seq}/",
+            cfg,
+            params={"expand": _ISSUE_EXPAND},
+        )
+    except PlaneError as exc:
+        text = str(exc)
+        if "-> 404" not in text:
+            raise
+        if not any(marker in text for marker in _ISSUE_NOT_FOUND):
+            # Plane answers an unknown route with its catch-all 404, not the
+            # view's own: this server predates /work-items/<IDENT>-<N>/.
+            print(
+                "this Plane has no /work-items/<IDENT>-<N>/ lookup; "
+                f"scanning {proj.get('identifier')}'s issues instead",
+                file=sys.stderr,
+            )
+            for found in _paginate(
+                f"/projects/{proj['id']}/issues/",
+                cfg,
+                params={"expand": _ISSUE_EXPAND},
+            ):
+                if found.get("sequence_id") == seq:
+                    return found
+        raise missing from None
+    if not isinstance(issue, dict):
+        raise missing
+    # The endpoint is workspace-scoped: the path names an identifier, not a
+    # project UUID, so the guard could not judge it. This check is what keeps a
+    # mis-resolved identifier from handing back another project's ticket.
+    got = _project_id_of(issue).lower()
+    if got != proj["id"].lower():
+        raise GuardError(
+            f"the lookup for {proj.get('identifier')}-{seq} returned an issue in "
+            f"project {got}, not {proj['id']} — refusing to use it"
+        )
+    return issue
+
+
+def _resolve_other(cfg: dict, ref: str, project_id: str) -> dict:
+    """Resolve a second issue named next to one already resolved.
+
+    A bare number means "in the same project". A full ref names its own
+    project: passing `project_id` for it would make `DB-5` next to an SPK issue
+    resolve to SPK-5, because `resolve_issue` lets the project argument win.
+    """
+    ref = (ref or "").strip()
+    return resolve_issue(cfg, ref, project_id if ref.isdigit() else None)
+
+
+def _ref_of(cfg: dict, issue: dict) -> str:
+    """`SPK-12` for an issue, from its project's identifier."""
+    pid = _project_id_of(issue).lower()
+    ident = next(
+        (p.get("identifier") for p in list_projects(cfg) if p["id"].lower() == pid),
+        None,
+    )
+    seq = issue.get("sequence_id")
+    return f"{ident}-{seq}" if ident and seq else str(issue.get("id"))
 
 
 def resolve_state(cfg: dict, project_id: str, name: str) -> str:
@@ -683,6 +758,80 @@ def resolve_state(cfg: dict, project_id: str, name: str) -> str:
             return s["id"]
     avail = ", ".join(s.get("name", "?") for s in states)
     raise PlaneError(f"no state matching {name!r}. Available: {avail}")
+
+
+def resolve_state_object(
+    cfg: dict, project_id: str, ref: str, *, states: list[dict] | None = None
+) -> dict:
+    """State name, full UUID, or a unique id prefix -> the whole state object.
+
+    For the commands that rewrite or remove a state, which need its current
+    fields to preview the change. Same matching and refusals as
+    `resolve_label_object`: ambiguity is refused rather than settled by taking
+    the first match. `resolve_state` stays as it is for `--state` on issues.
+    """
+    needle = (ref or "").strip().lower()
+    if not needle:
+        raise PlaneError("empty state reference")
+    if states is None:
+        states = list(_paginate(f"/projects/{project_id}/states/", cfg))
+    if not states:
+        raise PlaneError("this project has no states")
+
+    for s in states:
+        if str(s.get("id", "")).lower() == needle:
+            return s
+
+    by_name = [s for s in states if (s.get("name") or "").strip().lower() == needle]
+    if len(by_name) == 1:
+        return by_name[0]
+    if len(by_name) > 1:
+        ids = ", ".join(s["id"] for s in by_name)
+        raise PlaneError(
+            f"{len(by_name)} states are named {ref!r} ({ids}) — give the id instead"
+        )
+
+    hits = [s for s in states if str(s.get("id", "")).lower().startswith(needle)]
+    if len(needle) >= 8:
+        if len(hits) == 1:
+            return hits[0]
+        if len(hits) > 1:
+            ids = ", ".join(s["id"] for s in hits)
+            raise PlaneError(
+                f"{len(hits)} states match {ref!r} ({ids}) — give more of the id"
+            )
+    elif hits:
+        raise PlaneError(
+            f"state id prefix {ref!r} is too short — give the full id or at least "
+            "its first 8 characters, as printed by `states`"
+        )
+
+    known = ", ".join(s.get("name") or s["id"] for s in states)
+    raise PlaneError(f"no state matching {ref!r} in this project. States here: {known}")
+
+
+_STATE_USAGE_SCOPE = "the issues /issues/ lists — archived issues are not scanned"
+
+
+def state_usage(cfg: dict, project_id: str, state_id: str) -> int:
+    """How many of the project's listed issues sit in this state.
+
+    Scanned client-side for the reason `label_usage` gives: `?state=<uuid>`
+    puts a non-project UUID in the query string, and guardrail rule 2 refuses
+    it. `fields` keeps the payload small; `state` is matched whether the server
+    answers with a bare id or an expanded object.
+    """
+    needle = state_id.lower()
+    count = 0
+    for issue in _paginate(
+        f"/projects/{project_id}/issues/", cfg, params={"fields": "id,state"}
+    ):
+        got = issue.get("state")
+        if isinstance(got, dict):
+            got = got.get("id")
+        if str(got or "").lower() == needle:
+            count += 1
+    return count
 
 
 def _parse_ts(value: str) -> datetime:
@@ -1078,6 +1227,93 @@ def label_usage(cfg: dict, project_id: str, label_id: str) -> int:
     return count
 
 
+# Read from Plane's source and docs on 2026-10-26: the community edition has no
+# /work-item-types/ route at all, so it answers with its catch-all 404
+# ({"error": "Page not found."}). Types are a Pro feature a project admin turns
+# on under Project settings -> Work item types. What a Pro server answers for a
+# project that has not turned them on is not documented, so any 404 is read
+# as "not available here" rather than as one specific cause.
+_NO_TYPES = (
+    "work item types are not available for this project — they are a Plane Pro "
+    "feature, turned on per project under Project settings -> Work item types, "
+    "and a Community Edition server does not have them"
+)
+
+
+def project_types(cfg: dict, project_id: str) -> list[dict]:
+    try:
+        return list(_paginate(f"/projects/{project_id}/work-item-types/", cfg))
+    except PlaneError as exc:
+        if "-> 404" in str(exc):
+            raise PlaneError(_NO_TYPES) from None
+        raise
+
+
+def resolve_type(
+    cfg: dict, project_id: str, ref: str, *, types: list[dict] | None = None
+) -> str:
+    """Work item type name, full UUID, or a unique id prefix -> type UUID.
+
+    Same matching and refusals as `resolve_label_object`: an ambiguous
+    reference is refused, never settled by taking the first match.
+    """
+    needle = (ref or "").strip().lower()
+    if not needle:
+        raise PlaneError("empty work item type reference")
+    if types is None:
+        types = project_types(cfg, project_id)
+    if not types:
+        raise PlaneError(f"this project lists no work item types. {_NO_TYPES}")
+
+    for t in types:
+        if str(t.get("id", "")).lower() == needle:
+            return t["id"]
+
+    by_name = [t for t in types if (t.get("name") or "").strip().lower() == needle]
+    if len(by_name) == 1:
+        return by_name[0]["id"]
+    if len(by_name) > 1:
+        ids = ", ".join(t["id"] for t in by_name)
+        raise PlaneError(
+            f"{len(by_name)} work item types are named {ref!r} ({ids}) — give the "
+            "id instead"
+        )
+
+    hits = [t for t in types if str(t.get("id", "")).lower().startswith(needle)]
+    if len(needle) >= 8:
+        if len(hits) == 1:
+            return hits[0]["id"]
+        if len(hits) > 1:
+            ids = ", ".join(t["id"] for t in hits)
+            raise PlaneError(
+                f"{len(hits)} work item types match {ref!r} ({ids}) — give more "
+                "of the id"
+            )
+    elif hits:
+        raise PlaneError(
+            f"work item type id prefix {ref!r} is too short — give the full id or "
+            "at least its first 8 characters, as printed by `types`"
+        )
+
+    known = ", ".join(t.get("name") or t["id"] for t in types)
+    raise PlaneError(
+        f"no work item type matching {ref!r} in this project. Types here: {known}"
+    )
+
+
+def _type_of(issue: dict) -> str | None:
+    """An issue's work item type: its name when expanded, its id otherwise.
+
+    Plane's issue serializer writes and returns the type as `type_id`, and the
+    model field `type` alongside it; neither is expandable, so this is usually
+    the id.
+    """
+    value = issue.get("type_id") or issue.get("type")
+    if isinstance(value, dict):
+        return value.get("name") or value.get("id")
+    return str(value) if value else None
+
+
 # Plane Cloud stores a pasted image as an inline node in description_html with
 # the asset UUID in src, and leaves issue-attachments/ empty. <img> is matched
 # too because self-hosted editors have used it.
@@ -1254,6 +1490,13 @@ def slim(issue: dict, identifier: str = "") -> dict:
     else:
         label_names = list(labels)
 
+    parent = issue.get("parent")
+    if isinstance(parent, dict):
+        # Plane only accepts a parent from the same project, so it shares the
+        # issue's identifier.
+        pseq = parent.get("sequence_id")
+        parent = f"{identifier}-{pseq}" if identifier and pseq else parent.get("id")
+
     seq = issue.get("sequence_id")
     return {
         "ref": f"{identifier}-{seq}" if identifier and seq else seq,
@@ -1263,6 +1506,8 @@ def slim(issue: dict, identifier: str = "") -> dict:
         "priority": issue.get("priority"),
         "assignees": who,
         "labels": label_names,
+        "type": _type_of(issue),
+        "parent": parent,
         "target_date": issue.get("target_date"),
         "updated_at": issue.get("updated_at"),
     }
@@ -1451,6 +1696,21 @@ def cmd_check(cfg, _args):
             "delete a comment in an allowed project",
         )
     )
+    negative.append(
+        (
+            "DELETE",
+            f"/projects/{off_id}/states/{off_id}/",
+            "delete a state in a project not in the allowlist",
+        )
+    )
+    negative.append(
+        ("DELETE", f"/projects/{ok_id}/states/", "delete a project's whole state set")
+    )
+    # A ref lookup reads /work-items/<IDENT>-<N>/, a workspace-scoped path with
+    # no project UUID in it. Reading it is fine; writing through it must not be.
+    negative.append(
+        ("PATCH", "/work-items/X-1/", "write via the workspace-scoped ref lookup")
+    )
 
     failures = 0
     for method, path, label in negative:
@@ -1472,6 +1732,11 @@ def cmd_check(cfg, _args):
             "DELETE",
             f"/projects/{ok_id}/labels/{'1' * 8}-1111-1111-1111-{'1' * 12}/",
             "delete a label in an allowed project",
+        ),
+        (
+            "DELETE",
+            f"/projects/{ok_id}/states/{'1' * 8}-1111-1111-1111-{'1' * 12}/",
+            "delete a state in an allowed project",
         ),
     ]
     for method, path, label in positive:
@@ -1585,6 +1850,10 @@ def cmd_get(cfg, args):
     print(f"priority : {issue.get('priority')}")
     print(f"assignees: {_cell(s['assignees']) or '-'}")
     print(f"labels   : {_cell(s['labels']) or '-'}")
+    if s["type"]:
+        print(f"type     : {s['type']}")
+    if s["parent"]:
+        print(f"parent   : {s['parent']}")
     print(f"target   : {issue.get('target_date') or '-'}")
     print(f"uuid     : {issue.get('id')}")
     body = html_to_text(issue.get("description_html") or "")
@@ -1594,11 +1863,29 @@ def cmd_get(cfg, args):
 
 
 def _apply_assignment_flags(cfg, args, project_id: str, payload: dict) -> None:
-    """Resolve --assignee / --label / --estimate into issue fields.
+    """Resolve --assignee / --label / --estimate / --type into issue fields.
 
-    All three are whole-list writes, like --body: what you pass is what the
-    issue ends up with. Repeat the flag for several values.
+    The first three are whole-list writes, like --body: what you pass is what
+    the issue ends up with. Repeat the flag for several values. --type takes
+    one value and writes `type_id`, the field Plane's issue serializer declares
+    writable for it.
     """
+    if getattr(args, "type", None):
+        payload["type_id"] = resolve_type(cfg, project_id, args.type)
+    parent = getattr(args, "parent", None)
+    if parent is not None:
+        if parent.strip().lower() == "none":
+            payload["parent"] = None
+        else:
+            found = _resolve_other(cfg, parent, project_id)
+            # Plane's serializer refuses a parent from another project with a
+            # bare "Parent is not valid issue_id"; saying why here is clearer.
+            if _project_id_of(found).lower() != project_id.lower():
+                raise PlaneError(
+                    f"{parent} is in another project — Plane only accepts a parent "
+                    "from the same project. Use `relate` to link across projects."
+                )
+            payload["parent"] = found["id"]
     if args.assignee:
         payload["assignees"] = [
             resolve_member(cfg, project_id, who) for who in args.assignee
@@ -1648,6 +1935,13 @@ def _place_in_cycle(
 
 
 def cmd_create(cfg, args):
+    uploads = getattr(args, "upload", None) or []
+    # Every file is checked before anything is sent, so a bad path never
+    # leaves a card behind.
+    for path in uploads:
+        _check_upload(path)
+    as_json = getattr(args, "json", False)
+
     proj = resolve_project(cfg, args.project)
     payload: dict = {"name": sanitize(args.title)}
     body = _body_text(args)
@@ -1673,8 +1967,10 @@ def cmd_create(cfg, args):
     if args.dry_run:
         if args.cycle:
             _place_in_cycle(cfg, proj["id"], None, args.cycle, dry_run=True)
+        for path in uploads:
+            upload_attachment(cfg, proj["id"], "<new-issue-id>", path, dry_run=True)
         return
-    if not isinstance(result, dict):
+    if not isinstance(result, dict) or not result.get("id"):
         print(
             "created, but the server answered with no body — "
             "run `issues` to find the new ref"
@@ -1684,14 +1980,59 @@ def cmd_create(cfg, args):
                 "not added to the cycle: the response carried no issue id",
                 file=sys.stderr,
             )
+        if uploads:
+            print(
+                f"not attached: {', '.join(uploads)} — the response carried no "
+                "issue id. Find the new ref with `issues`, then attach them with "
+                "`attachments <ref> --upload FILE`; do not re-run `create`.",
+                file=sys.stderr,
+            )
+            return 1
         return
-    print(
-        f"created {proj.get('identifier')}-{result.get('sequence_id')}  "
-        f"{result.get('name')}"
-    )
-    print(f"uuid: {result.get('id')}")
-    if args.cycle:
-        _place_in_cycle(cfg, proj["id"], result, args.cycle)
+    ref = f"{proj.get('identifier')}-{result.get('sequence_id')}"
+    attached: list[dict] = []
+    failed: tuple[str, str] | None = None
+    not_tried: list[str] = []
+    # Under --json stdout carries one document; the progress lines go to stderr.
+    with redirect_stdout(sys.stderr if as_json else sys.stdout):
+        print(f"created {ref}  {result.get('name')}")
+        print(f"uuid: {result.get('id')}")
+        if args.cycle:
+            _place_in_cycle(cfg, proj["id"], result, args.cycle)
+        for n, path in enumerate(uploads):
+            try:
+                aid = upload_attachment(cfg, proj["id"], result["id"], path)
+            except PlaneError as exc:
+                failed = (path, str(exc))
+                not_tried = uploads[n + 1 :]
+                break
+            attached.append({"file": path, "attachment_id": aid})
+
+    if as_json:
+        report: dict = {
+            "ref": ref,
+            "id": result.get("id"),
+            "name": result.get("name"),
+            "attachments": attached,
+        }
+        if failed:
+            report["failed"] = [{"file": failed[0], "error": failed[1]}]
+            report["not_tried"] = not_tried
+        _emit(report, args)
+    if failed:
+        rest = [failed[0], *not_tried]
+        lines = [
+            f"created {ref} [{result.get('id')}], but attaching files stopped.",
+            f"  uploaded : {', '.join(a['file'] for a in attached) or '(none)'}",
+            f"  failed   : {failed[0]} — {failed[1]}",
+            f"  not tried: {', '.join(not_tried) or '(none)'}",
+            "Do not re-run `create`: it would make a second issue. Attach the "
+            "rest with:",
+            "  plane.py attachments "
+            + shlex.quote(ref)
+            + "".join(f" --upload {shlex.quote(p)}" for p in rest),
+        ]
+        raise PlaneError("\n".join(lines))
 
 
 def cmd_update(cfg, args):
@@ -1711,10 +2052,12 @@ def cmd_update(cfg, args):
     if args.target_date:
         payload["target_date"] = args.target_date
     _apply_assignment_flags(cfg, args, pid, payload)
+    if payload.get("parent") and payload["parent"] == issue["id"]:
+        raise PlaneError("an issue cannot be its own parent")
     if not payload and not args.cycle:
         raise PlaneError(
             "nothing to update — pass --title/--body/--priority/--state/"
-            "--target-date/--assignee/--label/--estimate/--cycle"
+            "--target-date/--assignee/--label/--estimate/--type/--parent/--cycle"
         )
 
     if payload:
@@ -1783,8 +2126,8 @@ def _resolve_comment_id(comments: list[dict], ref: str) -> str:
 
 def cmd_comment_edit(cfg, args):
     """Replace the body of one existing comment. Not an append, like `update`."""
-    # Checked before the issue lookup: resolving a ref pages through a
-    # project's issues, which is too much work to spend on a missing argument.
+    # Checked before the issue lookup: resolving a ref costs requests, which
+    # is work not worth spending on a missing argument.
     text = _body_text(args) or args.text
     if not text:
         raise PlaneError("no comment text — pass TEXT, --body or --body-file")
@@ -1824,6 +2167,131 @@ def cmd_comments(cfg, args):
         print(f"--- {name}  {c.get('created_at', '')}  [{c.get('id')}]")
         print(html_to_text(c.get("comment_html") or "") or "(empty)")
         print()
+
+
+# Plane's names, read from its source (IssueRelationCreateSerializer) on
+# 2026-10-26. Read from the issue named first: `relate A blocked_by B` stores
+# "A is blocked by B", and `relate A blocking B` stores "B is blocked by A".
+_RELATION_TYPES = (
+    "blocked_by",
+    "blocking",
+    "relates_to",
+    "duplicate",
+    "start_before",
+    "start_after",
+    "finish_before",
+    "finish_after",
+)
+
+# The relations routes went into Plane's public API on 2026-03-30
+# (makeplane/plane#8763). An older server answers them with its catch-all 404.
+_NO_RELATIONS = (
+    "this Plane server has no work item relations API — it was added to Plane "
+    "in 2026-03; set the relation in the Plane UI instead"
+)
+
+
+def _relations_path(issue: dict) -> str:
+    return f"/projects/{_project_id_of(issue)}/work-items/{issue['id']}/relations/"
+
+
+def _relations_request(method: str, path: str, cfg: dict, **kw):
+    try:
+        return _request(method, path, cfg, **kw)
+    except PlaneError as exc:
+        if "-> 404" in str(exc) and "Page not found" in str(exc):
+            raise PlaneError(_NO_RELATIONS) from None
+        raise
+
+
+def cmd_relations(cfg, args):
+    """List an issue's relations, grouped by type, with refs and names.
+
+    Plane answers with ids only, so each related issue is read once more to
+    show its ref. Relations to issues in projects outside the allowlist are
+    withheld and counted on stderr, as `search` does: the guard refuses to read
+    those issues, and their ids alone are not something to act on.
+    """
+    issue = resolve_issue(cfg, args.ref, args.project)
+    data = _relations_request("GET", _relations_path(issue), cfg)
+    if not isinstance(data, dict):
+        raise PlaneError(f"the relations call returned {type(data).__name__}")
+
+    rows, withheld = [], 0
+    for rtype in _RELATION_TYPES:
+        for link in data.get(rtype) or []:
+            pid = str(link.get("project_id") or "").lower()
+            iid = str(link.get("issue_id") or "")
+            if pid not in cfg["allowed"]:
+                withheld += 1
+                continue
+            other = _request("GET", f"/projects/{pid}/issues/{iid}/", cfg)
+            other = other if isinstance(other, dict) else {"id": iid, "project": pid}
+            rows.append(
+                {
+                    "relation": rtype,
+                    "ref": _ref_of(cfg, other),
+                    "name": other.get("name"),
+                    "id": iid,
+                }
+            )
+    _emit(rows, args, ["relation", "ref", "name", "id"])
+    if withheld:
+        print(
+            f"\n({withheld} relation(s) to issues outside the allowlist withheld)",
+            file=sys.stderr,
+        )
+
+
+def cmd_relate(cfg, args):
+    """Add one relation from an issue to one or more others.
+
+    Every issue is resolved through `resolve_issue`, so an issue in a project
+    outside the allowlist is refused before anything is sent. Plane itself
+    allows relations across projects in the workspace, which is why that
+    refusal has to happen here.
+    """
+    issue = resolve_issue(cfg, args.ref, args.project)
+    pid = _project_id_of(issue)
+    others = [_resolve_other(cfg, ref, pid) for ref in args.other]
+    if any(o["id"] == issue["id"] for o in others):
+        raise PlaneError("an issue cannot be related to itself")
+
+    _relations_request(
+        "POST",
+        _relations_path(issue),
+        cfg,
+        body={"relation_type": args.relation, "issues": [o["id"] for o in others]},
+        dry_run=args.dry_run,
+    )
+    if not args.dry_run:
+        refs = ", ".join(_ref_of(cfg, o) for o in others)
+        print(f"{_ref_of(cfg, issue)} {args.relation} {refs}")
+
+
+def cmd_unrelate(cfg, args):
+    """Remove the relation between an issue and each of the others.
+
+    Plane's remove call names only the other issue, not a relation type: it
+    removes the relation between the two, whichever way it points. Adding it
+    back is `relate`, so this is not gated on --yes.
+    """
+    issue = resolve_issue(cfg, args.ref, args.project)
+    pid = _project_id_of(issue)
+    others = [_resolve_other(cfg, ref, pid) for ref in args.other]
+    for other in others:
+        _relations_request(
+            "POST",
+            f"{_relations_path(issue)}remove/",
+            cfg,
+            body={"related_issue": other["id"]},
+            dry_run=args.dry_run,
+        )
+        if not args.dry_run:
+            print(
+                f"removed the relation between {_ref_of(cfg, issue)} and "
+                f"{_ref_of(cfg, other)}"
+            )
 
 
 def cmd_states(cfg, args):
@@ -1896,6 +2364,208 @@ def cmd_state_create(cfg, args):
         )
 
 
+def _changes(current: dict, wanted: dict) -> dict:
+    """{field: {"from", "to"}} for every wanted field that differs from current.
+
+    A field already at the wanted value is left out, so re-running an edit
+    Plane already applied previews nothing for it rather than a no-op write.
+    """
+    out = {}
+    for field, value in wanted.items():
+        old = current.get(field)
+        same = (
+            str(old or "").lower() == str(value).lower()
+            if field == "color"
+            else old == value
+        )
+        if not same:
+            out[field] = {"from": old, "to": value}
+    return out
+
+
+def _print_changes(changes: dict) -> None:
+    for field, change in changes.items():
+        print(f"  {field}: {change['from']!r} -> {change['to']!r}")
+
+
+def cmd_state_edit(cfg, args):
+    """Change a workflow state in place. Gated on --yes, like `label-delete`.
+
+    Every issue in the state is affected — a rename changes the column they sit
+    in, a group change can move them into "done" — so the change and the issue
+    count are printed first, and nothing is sent until `--yes` is passed. The
+    `--yes` run recomputes the preview from the state as it is now, so an edit
+    made in Plane between the two runs shows up before anything is sent.
+    `--dry-run` prints the PATCH without needing `--yes`.
+    """
+    color = normalize_color(args.color) if args.color is not None else None
+    proj = resolve_project(cfg, args.project)
+    states = list(_paginate(f"/projects/{proj['id']}/states/", cfg))
+    state = resolve_state_object(cfg, proj["id"], args.state, states=states)
+    name = state.get("name") or state["id"]
+
+    wanted: dict = {}
+    if args.name is not None:
+        renamed = args.name.strip()
+        if not renamed:
+            raise PlaneError("empty state name")
+        collision = [
+            s
+            for s in states
+            if (s.get("name") or "").strip().lower() == renamed.lower()
+            and s["id"] != state["id"]
+        ]
+        if collision:
+            raise PlaneError(
+                f"another state is already named {renamed!r} [{collision[0]['id']}]"
+            )
+        wanted["name"] = renamed
+    if color is not None:
+        wanted["color"] = color
+    if args.group is not None:
+        wanted["group"] = args.group
+    if args.description is not None:
+        wanted["description"] = args.description
+    if args.sequence is not None:
+        wanted["sequence"] = args.sequence
+    if args.default:
+        wanted["default"] = True
+    changes = _changes(state, wanted)
+    if not changes:
+        raise PlaneError(
+            f"nothing to change on {name!r} — pass --name, --color, --group, "
+            "--description, --sequence or --default with a value it does not "
+            "already have"
+        )
+    payload = {field: change["to"] for field, change in changes.items()}
+
+    on_issues = state_usage(cfg, proj["id"], state["id"])
+    as_json = getattr(args, "json", False)
+    if not as_json:
+        print(f"state {name!r} [{state['id']}] in {proj.get('name')}:")
+        _print_changes(changes)
+        print(f"{on_issues} issue(s) in this state (counted over {_STATE_USAGE_SCOPE})")
+        if "group" in changes:
+            print(
+                f"those issues move from group {state.get('group')!r} to "
+                f"{args.group!r} with it"
+                + (
+                    f" — Plane treats {args.group!r} as closed"
+                    if args.group in ("completed", "cancelled")
+                    else ""
+                )
+            )
+        if "default" in changes:
+            was = [s for s in states if s.get("default") and s["id"] != state["id"]]
+            if was:
+                print(f"{was[0].get('name')!r} stops being the project's default state")
+
+    report = {
+        "state": {"id": state["id"], "name": state.get("name")},
+        "project": {"id": proj["id"], "name": proj.get("name")},
+        "changes": changes,
+        "on_issues": on_issues,
+        "counted_over": _STATE_USAGE_SCOPE,
+        "applied": False,
+    }
+    if not args.yes and not args.dry_run:
+        if as_json:
+            _emit(report, args)
+        raise PlaneError(
+            f"refusing to edit {name!r} without --yes. Show the user the change "
+            "above and re-run with --yes once they agree."
+        )
+
+    _request(
+        "PATCH",
+        f"/projects/{proj['id']}/states/{state['id']}/",
+        cfg,
+        body=payload,
+        dry_run=args.dry_run,
+    )
+    if args.dry_run:
+        return
+    if as_json:
+        _emit({**report, "applied": True}, args)
+    else:
+        changed = ", ".join(f"{k}={v!r}" for k, v in payload.items())
+        print(f"edited state {name!r} [{state['id']}] — {changed}")
+
+
+def cmd_state_delete(cfg, args):
+    """Delete a workflow state. Gated on --yes, like `label-delete`.
+
+    Plane refuses to delete the default state or one that still holds issues,
+    so both are checked here first and refused with what to do instead. The
+    issue count is a scan of what `/issues/` lists; Plane's own check also sees
+    archived issues, so a server refusal is passed through with that said.
+    `--dry-run` prints the DELETE without needing `--yes`.
+    """
+    proj = resolve_project(cfg, args.project)
+    state = resolve_state_object(cfg, proj["id"], args.state)
+    name = state.get("name") or state["id"]
+
+    if state.get("default"):
+        raise PlaneError(
+            f"{name!r} is the project's default state and Plane will not delete "
+            "it. Make another state the default first: "
+            "`state-edit <other> --default`."
+        )
+
+    on_issues = state_usage(cfg, proj["id"], state["id"])
+    scoped = f"{on_issues} issue(s) (counted over {_STATE_USAGE_SCOPE})"
+    report = {
+        "state": {"id": state["id"], "name": state.get("name")},
+        "project": {"id": proj["id"], "name": proj.get("name")},
+        "on_issues": on_issues,
+        "counted_over": _STATE_USAGE_SCOPE,
+        "deleted": False,
+    }
+    as_json = getattr(args, "json", False)
+    if not as_json:
+        print(
+            f"state {name!r} [{state['id']}] ({state.get('group')}) in "
+            f"{proj.get('name')} holds {scoped}"
+        )
+
+    if on_issues:
+        if as_json:
+            _emit(report, args)
+        raise PlaneError(
+            f"{name!r} still holds {on_issues} issue(s) and Plane deletes only "
+            "empty states. Move its issues to another state first "
+            "(`update <ref> --state <other>`), or rename it with `state-edit` "
+            "instead."
+        )
+
+    if not args.yes and not args.dry_run:
+        if as_json:
+            _emit(report, args)
+        raise PlaneError(
+            f"refusing to delete {name!r} without --yes. Deleting a state cannot "
+            "be undone."
+        )
+
+    try:
+        _request(
+            "DELETE",
+            f"/projects/{proj['id']}/states/{state['id']}/",
+            cfg,
+            dry_run=args.dry_run,
+        )
+    except PlaneError as exc:
+        raise PlaneError(
+            f"{exc}. This tool counted {scoped}; Plane's own check also counts "
+            "issues that scan does not list, such as archived ones."
+        ) from None
+    if args.dry_run:
+        return
+    if as_json:
+        _emit({**report, "deleted": True}, args)
+    else:
+        print(f"deleted state {name!r} [{state['id']}] from {proj.get('name')}")
+
+
 def cmd_labels(cfg, args):
     proj = resolve_project(cfg, args.project)
     rows = [
@@ -1921,6 +2591,31 @@ def cmd_labels(cfg, args):
             ["name", "color", "id", "description"],
         )
     )
+
+
+def cmd_types(cfg, args):
+    proj = resolve_project(cfg, args.project)
+    rows = [
+        {
+            "name": t.get("name"),
+            "default": t.get("is_default"),
+            "id": t["id"],
+            "description": t.get("description"),
+        }
+        for t in project_types(cfg, proj["id"])
+    ]
+    if getattr(args, "json", False):
+        _emit(rows, args)
+        return
+    # One line, last, for the reason `cmd_labels` gives.
+    print(
+        _table(
+            [{**r, "description": _one_line(r["description"])} for r in rows],
+            ["name", "default", "id", "description"],
+        )
+    )
+    if not rows:
+        print(f"\n({_NO_TYPES})", file=sys.stderr)
 
 
 def cmd_label_create(cfg, args):
@@ -1972,11 +2667,19 @@ def cmd_label_create(cfg, args):
 
 
 def cmd_label_edit(cfg, args):
-    """Change a label in place. Every issue carrying it sees the new name."""
+    """Change a label in place. Gated on --yes, like `label-delete`.
+
+    Every issue carrying the label sees the new name, and that set is not
+    visible from the label itself — so the change and the count of issues
+    carrying it are printed first, and nothing is sent until `--yes` is passed.
+    The `--yes` run recomputes the preview from the label as it is now.
+    `--dry-run` prints the PATCH without needing `--yes`.
+    """
     color = normalize_color(args.color) if args.color is not None else None
     proj = resolve_project(cfg, args.project)
     labels = project_labels(cfg, proj["id"])
     label = resolve_label_object(cfg, proj["id"], args.label, labels=labels)
+    name = label.get("name") or label["id"]
 
     payload: dict = {}
     if args.name is not None:
@@ -1998,8 +2701,40 @@ def cmd_label_edit(cfg, args):
         payload["color"] = color
     if args.description is not None:
         payload["description"] = args.description
-    if not payload:
-        raise PlaneError("nothing to change — pass --name, --color or --description")
+    changes = _changes(label, payload)
+    if not changes:
+        raise PlaneError(
+            "nothing to change — pass --name, --color or --description with a "
+            "value the label does not already have"
+        )
+    payload = {field: change["to"] for field, change in changes.items()}
+
+    on_issues = label_usage(cfg, proj["id"], label["id"])
+    as_json = getattr(args, "json", False)
+    if not as_json:
+        print(f"label {name!r} [{label['id']}] in {proj.get('name')}:")
+        _print_changes(changes)
+        print(
+            f"{on_issues} issue(s) carry this label (counted over {_LABEL_USAGE_SCOPE})"
+        )
+        if "name" in changes and on_issues:
+            print("the rename changes the label's name on every one of them")
+
+    report = {
+        "id": label["id"],
+        "was": label.get("name"),
+        "changed": payload,
+        "on_issues": on_issues,
+        "counted_over": _LABEL_USAGE_SCOPE,
+        "applied": False,
+    }
+    if not args.yes and not args.dry_run:
+        if as_json:
+            _emit(report, args)
+        raise PlaneError(
+            f"refusing to edit {name!r} without --yes. Show the user the change "
+            "above and re-run with --yes once they agree."
+        )
 
     _request(
         "PATCH",
@@ -2010,15 +2745,15 @@ def cmd_label_edit(cfg, args):
     )
     if args.dry_run:
         return
-    if getattr(args, "json", False):
-        _emit({"id": label["id"], "was": label.get("name"), "changed": payload}, args)
+    if as_json:
+        _emit({**report, "applied": True}, args)
     else:
         changed = ", ".join(f"{k}={v!r}" for k, v in payload.items())
         print(f"edited label {label.get('name')!r} [{label['id']}] — {changed}")
 
 
 def cmd_label_delete(cfg, args):
-    """Delete a label. The only destructive command in this tool.
+    """Delete a label. One of the two deletions this tool makes, with `state-delete`.
 
     Two gates, because Plane has no undo for this and the blast radius is not
     visible from the label itself: the issues carrying it are counted and shown
@@ -2163,11 +2898,12 @@ def _upload_credentials(data) -> tuple[str, dict, str]:
     return url, {str(k): str(v) for k, v in fields.items()}, aid
 
 
-def upload_attachment(cfg, project_id: str, issue_id: str, path: str, *, dry_run=False):
-    """Three calls: ask Plane for a presigned form, POST the file to S3, confirm.
+def _check_upload(path: str) -> tuple[str, bytes]:
+    """The file's upload name and contents, or a PlaneError saying why not.
 
-    Only the first and last go through `_request`; the middle one is
-    `push_asset`, which explains why it must not.
+    Shared by `upload_attachment` and `create --upload`, which runs it on every
+    file before creating the issue, so the two cannot disagree on what is
+    uploadable.
     """
     if not os.path.isfile(path):
         raise PlaneError(f"no file to upload at {path!r}")
@@ -2178,8 +2914,19 @@ def upload_attachment(cfg, project_id: str, issue_id: str, path: str, *, dry_run
         raise PlaneError(f"cannot read {path!r}: {exc}") from None
     if len(blob) > _ASSET_MAX_BYTES:
         raise PlaneError(f"{path} is larger than {_ASSET_MAX_BYTES} bytes — refused")
+    return _safe_filename(os.path.basename(path), "upload.bin"), blob
 
-    name = _safe_filename(os.path.basename(path), "upload.bin")
+
+def upload_attachment(
+    cfg, project_id: str, issue_id: str, path: str, *, dry_run=False
+) -> str | None:
+    """Three calls: ask Plane for a presigned form, POST the file to S3, confirm.
+
+    Only the first and last go through `_request`; the middle one is
+    `push_asset`, which explains why it must not. Returns the attachment id,
+    or None under --dry-run.
+    """
+    name, blob = _check_upload(path)
     mime = mimetypes.guess_type(name)[0] or "application/octet-stream"
     endpoint = f"/projects/{project_id}/issues/{issue_id}/issue-attachments/"
 
@@ -2195,7 +2942,7 @@ def upload_attachment(cfg, project_id: str, issue_id: str, path: str, *, dry_run
             "[dry-run] the file POST to storage and the completion PATCH are "
             "skipped — Plane only issues the presigned form for a real request"
         )
-        return
+        return None
 
     url, fields, attachment_id = _upload_credentials(created)
     try:
@@ -2217,6 +2964,7 @@ def upload_attachment(cfg, project_id: str, issue_id: str, path: str, *, dry_run
             "Plane until that PATCH succeeds."
         ) from None
     print(f"uploaded {name}  ({len(blob)} bytes)  attachment {attachment_id}")
+    return attachment_id
 
 
 def cmd_attachments(cfg, args):
@@ -2458,6 +3206,13 @@ def build_parser() -> argparse.ArgumentParser:
             help="create any --label that does not exist yet",
         )
         sp.add_argument("--estimate", help="estimate value, e.g. 3 (see `estimates`)")
+        sp.add_argument(
+            "--type", help="work item type by name, UUID or id prefix (see `types`)"
+        )
+        sp.add_argument(
+            "--parent",
+            help="parent issue ref (SPK-3, or 3 in the same project); 'none' clears it",
+        )
         sp.add_argument("--cycle", help="cycle name, UUID, or 'active'")
 
     sp = add("create", cmd_create, "create an issue")
@@ -2468,6 +3223,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--state", help="state name, e.g. Backlog")
     sp.add_argument("--target-date", help="YYYY-MM-DD")
     add_assignment_flags(sp)
+    sp.add_argument(
+        "--upload",
+        metavar="FILE",
+        action="append",
+        help="attach a local file to the new issue; repeat for several",
+    )
 
     sp = add("update", cmd_update, "update an issue")
     sp.add_argument("ref")
@@ -2499,6 +3260,22 @@ def build_parser() -> argparse.ArgumentParser:
     sp = add("comments", cmd_comments, "list comments on an issue, with their ids")
     sp.add_argument("ref")
 
+    sp = add("relations", cmd_relations, "list an issue's relations (blocked by, …)")
+    sp.add_argument("ref")
+
+    sp = add("relate", cmd_relate, "relate an issue to others, e.g. blocked_by")
+    sp.add_argument("ref")
+    sp.add_argument("relation", choices=_RELATION_TYPES)
+    sp.add_argument(
+        "other", nargs="+", help="issue ref(s); a bare number is in the same project"
+    )
+
+    sp = add("unrelate", cmd_unrelate, "remove the relation between issues")
+    sp.add_argument("ref")
+    sp.add_argument(
+        "other", nargs="+", help="issue ref(s); a bare number is in the same project"
+    )
+
     add("states", cmd_states, "list workflow states")
 
     sp = add("state-create", cmd_state_create, "create a workflow state (board column)")
@@ -2512,20 +3289,72 @@ def build_parser() -> argparse.ArgumentParser:
         help="position on the board; lower comes first (see `states --json`)",
     )
 
+    sp = add(
+        "state-edit",
+        cmd_state_edit,
+        "rename, recolour, regroup, reorder or make default a state (needs --yes)",
+    )
+    sp.add_argument(
+        "state", metavar="STATE", help="state name, UUID, or a unique id prefix"
+    )
+    sp.add_argument("--name", help="new name")
+    sp.add_argument("--color", help="hex colour, e.g. #ff8800")
+    sp.add_argument("--group", choices=_STATE_GROUPS)
+    sp.add_argument("--description")
+    sp.add_argument(
+        "--sequence",
+        type=float,
+        help="position on the board; lower comes first (see `states --json`)",
+    )
+    sp.add_argument(
+        "--default",
+        action="store_true",
+        help="make this the project's default state (there is no flag to unset: "
+        "Plane keeps exactly one default)",
+    )
+    sp.add_argument(
+        "--yes",
+        action="store_true",
+        help="confirm — the edit applies to every issue in the state. "
+        "--dry-run prints the request without this",
+    )
+
+    sp = add("state-delete", cmd_state_delete, "delete an empty state (needs --yes)")
+    sp.add_argument(
+        "state", metavar="STATE", help="state name, UUID, or a unique id prefix"
+    )
+    sp.add_argument(
+        "--yes",
+        action="store_true",
+        help="confirm — deletion cannot be undone. "
+        "--dry-run prints the request without this",
+    )
+
     add("labels", cmd_labels, "list labels")
+    add("types", cmd_types, "list the project's work item types")
 
     sp = add("label-create", cmd_label_create, "create a label")
     sp.add_argument("--name", required=True)
     sp.add_argument("--color", help="hex colour, e.g. #ff8800")
     sp.add_argument("--description")
 
-    sp = add("label-edit", cmd_label_edit, "rename or recolour an existing label")
+    sp = add(
+        "label-edit",
+        cmd_label_edit,
+        "rename or recolour an existing label (needs --yes)",
+    )
     sp.add_argument(
         "label", metavar="LABEL", help="label name, UUID, or a unique id prefix"
     )
     sp.add_argument("--name", help="new name")
     sp.add_argument("--color", help="hex colour, e.g. #ff8800")
     sp.add_argument("--description")
+    sp.add_argument(
+        "--yes",
+        action="store_true",
+        help="confirm — the edit shows on every issue carrying the label. "
+        "--dry-run prints the request without this",
+    )
 
     sp = add("label-delete", cmd_label_delete, "delete a label (needs --yes)")
     sp.add_argument(

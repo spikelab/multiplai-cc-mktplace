@@ -21,6 +21,38 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-26
+
+### Added
+- `plane state-edit` renames, recolours, regroups, re-describes, reorders a
+  workflow state or makes it the project's default, and `plane state-delete`
+  deletes an empty one. Both show what will change and how many issues sit in
+  the state, and change nothing until you run them again with `--yes`.
+  `state-delete` refuses the default state and a state that still holds
+  issues, and says what to do first.
+- `plane types` lists a project's work item types, and `--type` sets one on
+  `create` and `update`. `get` shows an issue's type. Types are a Plane Pro
+  feature turned on per project; without them `types` says so.
+- `plane create --upload FILE` (repeatable) creates the ticket and attaches the
+  files in one command. Every file is checked before the ticket is created; if
+  an upload fails, the error names the new ref and gives the `attachments`
+  command that attaches the rest.
+- `plane create` and `plane update` take `--parent <ref>` to make a ticket a
+  sub-issue of another in the same project (`--parent none` clears it), and
+  `get` shows the parent.
+- `plane relate SPK-12 blocked_by SPK-3` adds a relation between tickets, using
+  Plane's types (`blocked_by`, `blocking`, `relates_to`, `duplicate`, and the
+  start/finish before/after pairs). `plane relations` lists a ticket's
+  relations and `plane unrelate` removes one. Tickets in projects outside
+  `PLANE_ALLOWED_PROJECTS` are refused or withheld.
+
+### Changed
+- `plane label-edit` now shows what it will change and how many issues carry
+  the label, and applies only with `--yes`.
+- A ticket ref like `DB-2291` is now fetched with one request instead of a
+  scan of the whole project, so `get`, `update`, `comment` and the other
+  commands that take a ref no longer slow down on large projects.
+
 ## [0.11.0] - 2026-10-26
 
 ### Added

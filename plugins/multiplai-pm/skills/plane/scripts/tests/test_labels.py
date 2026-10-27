@@ -1,6 +1,6 @@
 """Tests for managing labels: create, edit, delete.
 
-Delete is the only destructive command in this tool, and Plane has no undo for
+Delete is destructive, and Plane has no undo for
 it — removing a label detaches it from every issue silently. So most of what is
 pinned down here is refusals: an ambiguous reference, a missing --yes, a name
 that collides with a label that already exists, a colour that is not a colour.
@@ -362,6 +362,7 @@ def test_editing_a_label_patches_only_the_fields_given(monkeypatch):
             color="#123abc",
             description=None,
             dry_run=False,
+            yes=True,
         ),
     )
     method, path, body, dry = calls.calls[0]
@@ -382,6 +383,7 @@ def test_editing_a_label_can_rename_it(monkeypatch):
             color=None,
             description=None,
             dry_run=False,
+            yes=True,
         ),
     )
     assert calls.calls[0][2] == {"name": "defect"}
@@ -399,6 +401,7 @@ def test_renaming_onto_an_existing_name_is_refused(monkeypatch):
                 color=None,
                 description=None,
                 dry_run=False,
+                yes=True,
             ),
         )
     assert calls.calls == []
@@ -412,13 +415,14 @@ def test_renaming_a_label_to_its_own_name_is_not_a_collision(monkeypatch):
         Args(
             project=None,
             label="bug",
-            name="bug",
+            name="Bug",
             color=None,
             description=None,
             dry_run=False,
+            yes=True,
         ),
     )
-    assert calls.calls[0][2] == {"name": "bug"}
+    assert calls.calls[0][2] == {"name": "Bug"}
 
 
 def test_an_edit_with_no_fields_is_refused_rather_than_sent_empty(monkeypatch):
@@ -433,6 +437,7 @@ def test_an_edit_with_no_fields_is_refused_rather_than_sent_empty(monkeypatch):
                 color=None,
                 description=None,
                 dry_run=False,
+                yes=True,
             ),
         )
     assert calls.calls == []
@@ -450,6 +455,7 @@ def test_an_edit_can_clear_a_description_with_an_empty_string(monkeypatch):
             color=None,
             description="",
             dry_run=False,
+            yes=True,
         ),
     )
     assert calls.calls[0][2] == {"description": ""}
@@ -467,6 +473,7 @@ def test_edit_dry_run_sends_nothing(monkeypatch):
             color="#111111",
             description=None,
             dry_run=True,
+            yes=False,
         ),
     )
     assert calls.calls[0][3] is True
@@ -687,6 +694,7 @@ def test_json_output_carries_what_the_edit_changed(monkeypatch):
             color=None,
             description=None,
             dry_run=False,
+            yes=True,
             json=True,
         ),
     )
@@ -791,3 +799,84 @@ def test_json_output_keeps_the_whole_description(monkeypatch):
     )
     out = run(plane.cmd_labels, CFG, Args(project=None, json=True))
     assert json.loads(out)[0]["description"] == long
+
+
+# --- label-edit is gated on --yes, like label-delete --------------------------
+
+
+def edit_args(**kw):
+    base = {
+        "project": None,
+        "label": "bug",
+        "name": "defect",
+        "color": None,
+        "description": None,
+        "dry_run": False,
+        "yes": False,
+    }
+    base.update(kw)
+    return Args(**base)
+
+
+def test_s9_label_edit_without_yes_sends_no_patch_and_refuses(monkeypatch):
+    """S9: refused without --yes, nothing is written."""
+    calls = stub(monkeypatch)
+    with pytest.raises(plane.PlaneError, match="without --yes"):
+        run(plane.cmd_label_edit, CFG, edit_args())
+    assert [c for c in calls.calls if c[0] == "PATCH"] == []
+
+
+def test_label_edit_preview_lists_each_change_and_the_count_with_scope(monkeypatch):
+    stub(monkeypatch, issues=issues_carrying(L1, L1, L2))
+    out = io.StringIO()
+    with redirect_stdout(out), pytest.raises(plane.PlaneError):
+        plane.cmd_label_edit(CFG, edit_args(color="#123abc"))
+    text = out.getvalue()
+    assert "name: 'bug' -> 'defect'" in text
+    assert "color: '#ff0000' -> '#123abc'" in text
+    assert (
+        f"2 issue(s) carry this label (counted over {plane._LABEL_USAGE_SCOPE})" in text
+    )
+    assert "on every one of them" in text
+
+
+def test_label_edit_dry_run_prints_the_patch_without_yes(monkeypatch):
+    calls = stub(monkeypatch)
+    out = run(plane.cmd_label_edit, CFG, edit_args(dry_run=True))
+    assert calls.calls == [
+        ("PATCH", f"/projects/{OK}/labels/{L1}/", {"name": "defect"}, True)
+    ]
+    assert "edited label" not in out
+
+
+def test_label_edit_json_refused_run_emits_the_count(monkeypatch):
+    stub(monkeypatch, issues=issues_carrying(L1))
+    out = io.StringIO()
+    with redirect_stdout(out), pytest.raises(plane.PlaneError):
+        plane.cmd_label_edit(CFG, edit_args(json=True))
+    got = json.loads(out.getvalue())
+    assert (got["id"], got["was"], got["changed"]) == (L1, "bug", {"name": "defect"})
+    assert (got["on_issues"], got["applied"]) == (1, False)
+
+
+def test_label_edit_json_applied_run_emits_one_document(monkeypatch):
+    stub(monkeypatch)
+    got = json.loads(run(plane.cmd_label_edit, CFG, edit_args(yes=True, json=True)))
+    assert got["applied"] is True
+    assert got["counted_over"] == plane._LABEL_USAGE_SCOPE
+
+
+def test_s9_rerun_after_an_applied_edit_previews_no_differences(monkeypatch):
+    """S9: Plane applied the rename but the output was lost; re-running the same
+    command finds nothing left to change and writes nothing."""
+    renamed = [dict(x) for x in LABELS]
+    renamed[0]["name"] = "defect"
+    calls = stub(monkeypatch, labels=renamed)
+    with pytest.raises(plane.PlaneError, match="nothing to change"):
+        plane.cmd_label_edit(CFG, edit_args(label="defect", yes=True))
+    assert calls.calls == []
+
+
+def test_label_edit_parser_takes_yes():
+    ok = plane.build_parser().parse_args(["label-edit", "bug", "--name", "x", "--yes"])
+    assert ok.yes is True

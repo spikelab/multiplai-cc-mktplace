@@ -1,6 +1,6 @@
 ---
 name: plane
-description: Work with Plane tickets and projects — list, read, search, create, update, comment, and move issues through workflow states, create labels and workflow states (board columns), restricted to an explicit project allowlist so shared team projects cannot be touched. Triggers on "my tickets", "what's on my board", "create a ticket", "move X to in progress", "comment on SPK-12", "what's in progress", "add this to Plane", or /multiplai-pm:plane.
+description: Work with Plane tickets and projects — list, read, search, create, update, comment, and move issues through workflow states, create labels and workflow states (board columns), edit and delete workflow states, set work item types, set parents and relations (blocked by, relates to) between tickets, restricted to an explicit project allowlist so shared team projects cannot be touched. Triggers on "my tickets", "what's on my board", "create a ticket", "move X to in progress", "comment on SPK-12", "what's in progress", "add this to Plane", or /multiplai-pm:plane.
 disable-model-invocation: false
 effort: low
 ---
@@ -44,10 +44,10 @@ one shows `MISSING`, fix that before doing anything else.
 Use the human ref you see in Plane: `SPK-12`. A bare number (`12`) works when the
 project is unambiguous or `-p` is given, and a UUID always works.
 
-Resolving `SPK-12` pages through the project's issues to match the sequence number,
-because Plane's search does not match identifiers. That is fine for normal projects and
-gets slow on very large ones. `-p`/`--project` is only needed for a bare number: the
-scan is already per-project, so it does not make resolution faster.
+A ref is fetched directly, with one request to `/work-items/<IDENT>-<N>/`, however many
+issues the project has. `-p`/`--project` is only needed for a bare number. A Plane server
+too old to have that route makes the tool page through the project's issues instead,
+and it says so on stderr.
 
 ## Commands
 
@@ -57,23 +57,31 @@ scan is already per-project, so it does not make resolution faster.
 | `projects [--all]` | Allowed projects; `--all` also lists blocked ones, marked. |
 | `issues [-p P] [--state S] [--limit N] [--full]` | List issues. Slim by default. |
 | `get <ref>` | One issue with its description rendered as text. |
-| `create --title T [--body M \| --body-file F] [--priority] [--state] [--target-date]` | New issue. |
+| `create --title T [--body M \| --body-file F] [--priority] [--state] [--target-date] [--upload FILE]…` | New issue; `--upload` attaches files to it (rule 10). |
 | `update <ref> [--title] [--body] [--priority] [--state] [--target-date]` | Partial update. |
 | `comment <ref> "text"` | Add a comment. |
 | `comment-edit <ref> <comment-id> "text"` | Replace an existing comment's body. |
 | `comments <ref>` | Read the comment thread; each entry prints its comment id. |
+| `relations <ref>` | The issue's relations by type, with each related issue's ref and name. |
+| `relate <ref> <type> <other>…` | Add a relation. `type` is Plane's: `blocked_by`, `blocking`, `relates_to`, `duplicate`, `start_before`, `start_after`, `finish_before`, `finish_after`. Read it from the first ref: `relate SPK-12 blocked_by SPK-3` means SPK-12 is blocked by SPK-3. |
+| `unrelate <ref> <other>…` | Remove the relation between `ref` and each other issue, whichever its type. |
 | `states [-p P]` / `labels [-p P]` / `members` / `cycles [-p P]` / `estimates [-p P]` | Reference data. |
+| `types [-p P]` | The project's work item types (name, default, id). Needs types turned on in Plane. |
 | `state-create [-p P] --name N --color C --group G [--description D] [--sequence S]` | New workflow state (a board column). `G` is `backlog`, `unstarted`, `started`, `completed` or `cancelled`; `S` orders the columns, lower first (`states --json` shows the current values). |
+| `state-edit [-p P] <state> [--name] [--color] [--group] [--description] [--sequence] [--default] --yes` | Rename, recolour, regroup, re-describe, reorder or make default a state. Previews first — see rule 12. |
+| `state-delete [-p P] <state> --yes` | Delete an empty, non-default state. Previews first — see rule 12. |
 | `label-create [-p P] --name N [--color C] [--description D]` | New label in the project. |
-| `label-edit [-p P] <label> [--name] [--color] [--description]` | Rename, recolour or re-describe one. |
-| `label-delete [-p P] <label> --yes` | Delete a label. Destructive — see rule 11. |
+| `label-edit [-p P] <label> [--name] [--color] [--description] --yes` | Rename, recolour or re-describe one. Previews first — see rule 12. |
+| `label-delete [-p P] <label> --yes` | Delete a label. Destructive — see rules 11 and 12. |
 | `attachments <ref> [--download DIR \| --upload FILE]` | List an issue's attachments; download or upload them. |
 | `search <query> [--limit N]` | Workspace search, filtered to allowlisted projects. |
 
 `create` and `update` also take `--assignee`, `--label` (`--create-labels` to add a
-missing one), `--estimate <value>` and `--cycle <name|uuid|active>`. The first three
-replace the whole field; `--cycle` is additive and does nothing if the issue is already
-there.
+missing one), `--estimate <value>`, `--type <name|uuid>`, `--parent <ref|none>` and
+`--cycle <name|uuid|active>`. The first three replace the whole field; `--type` sets the
+work item type (`types` lists them); `--parent` sets the parent issue, which Plane only
+accepts from the same project (`none` clears it); `--cycle` is additive and does nothing
+if the issue is already there.
 
 Global flags, given **before** the subcommand (`$PLANE --dry-run update ...`, not
 `$PLANE update ... --dry-run`): `--json` for machine-readable output, `--dry-run` to
@@ -138,24 +146,29 @@ Priorities: `urgent`, `high`, `medium`, `low`, `none`. States are given **by nam
     is accepted, and files above 32 MB are refused. Tell the user where a file went if it
     matters to them; it leaves the Plane API host.
 
+    `create --upload FILE` uses the same upload path. It checks every file before the
+    issue is created, then attaches them in order. If one fails, the error names the new
+    ref, what uploaded, what failed and what was not tried, and gives the
+    `attachments <ref> --upload …` command for the rest. Run that command; do not re-run
+    `create`, which would make a second issue.
+
     If the upload fails after Plane has already created the attachment record, the error
     says so and names the attachment id — the issue is then carrying a half-uploaded
     attachment that has to be removed in Plane before retrying. Pass that on verbatim
     rather than just retrying.
 
-11. **`label-delete` is the one destructive command here, and Plane has no undo.**
+11. **`label-delete` destroys labelling, and Plane has no undo.**
     Deleting a label strips it from every issue that carried it; those issues are
     otherwise untouched, but the labelling is gone and cannot be restored. So the
     command counts the issues carrying the label, prints that count, and then
     refuses unless `--yes` is passed. Run it once without `--yes` to see the
-    number, show the user, and only then confirm. `label-edit --name` is the
+    number, then follow rule 12 before confirming. `label-edit --name` is the
     non-destructive alternative when the real intent is a rename — every issue
-    keeps the label.
+    keeps the label — and it also needs `--yes`.
 
     The count comes from scanning the project's issues client-side, because
     `?labels=<uuid>` puts a non-project UUID in the query string and rule 2 of the
-    guardrail refuses those by design. On a very large project that scan is slow,
-    the same way resolving `SPK-12` is.
+    guardrail refuses those by design. On a very large project that scan is slow.
 
     **Pass on the scope with the number.** The scan sees what `issues` lists, so
     archived issues are not counted — the command prints that qualifier and you
@@ -170,6 +183,27 @@ Priorities: `urgent`, `high`, `medium`, `low`, `none`. States are given **by nam
     A label *group's* parent is refused outright rather than counted: Plane
     deletes a group's children with it, and the issue count does not show that.
     Delete the children individually, or re-parent them in Plane first.
+
+12. **Never pass `--yes` without the user's yes in this conversation.** This applies to
+    `state-edit`, `state-delete`, `label-edit` and `label-delete`. Each changes every
+    issue in the state or carrying the label, so:
+
+    1. Run the command without `--yes`. It changes nothing and prints the preview.
+    2. Show the user the printed preview verbatim: each field as old -> new, the issue
+       count with its scope, and any warning about a group change or the default state.
+    3. Ask a direct yes/no question.
+    4. Run the same command with `--yes` only on an explicit yes.
+
+    A yes covers that one command with those exact arguments. Changed arguments need a
+    new preview. A request phrased as an instruction ("rename Todo to Accepted") is not
+    the yes: the preview still goes to the user first. If the `--yes` run prints a
+    preview that differs from the one the user saw (someone changed the board in
+    between), show the new one and ask again. For a set of board changes, preview all of
+    them, ask once for the set, then run each.
+
+    `state-delete` refuses the default state and any state that still holds issues. Make
+    another state the default first (`state-edit <other> --default`), and move the
+    issues out (`update <ref> --state <other>`) or rename the state instead.
 
 ## Examples
 
@@ -186,12 +220,24 @@ $PLANE comment SPK-12 "Deployed in **v2026.07.28**."
 $PLANE comment-edit SPK-12 aaaa1111 "Deployed in **v2026.07.29**."
 $PLANE labels -p SPK                                # name, colour, id, description
 $PLANE label-create -p SPK --name triage --color '#ff8800' --description "Needs a look"
-$PLANE label-edit -p SPK triage --name "Needs triage"     # renames it everywhere
+$PLANE label-edit -p SPK triage --name "Needs triage"     # previews, refuses
+$PLANE label-edit -p SPK triage --name "Needs triage" --yes   # after the user's yes
 $PLANE --dry-run label-delete -p SPK triage         # print the DELETE, send nothing
 $PLANE label-delete -p SPK triage                   # prints the usage count, refuses
 $PLANE label-delete -p SPK triage --yes             # deletes it
+$PLANE create -p SPK --title "Broken header" --body-file /tmp/body.md \
+    --upload a.png --upload b.pdf                   # create and attach in one go
 $PLANE attachments SPK-12 --upload report.pdf --upload screenshot.png
 $PLANE --dry-run attachments SPK-12 --upload report.pdf   # print step 1, send nothing
+$PLANE state-edit -p SPK Todo --name Accepted       # previews the rename, refuses
+$PLANE state-edit -p SPK Todo --name Accepted --yes # after the user's yes
+$PLANE state-delete -p SPK Shaping                  # previews the count, refuses
+$PLANE types -p SPK                                 # name, default, id
+$PLANE update SPK-12 --type Bug
+$PLANE update SPK-12 --parent SPK-3                 # SPK-12 becomes a sub-issue of SPK-3
+$PLANE relate SPK-12 blocked_by SPK-3 SPK-4         # SPK-12 waits on both
+$PLANE relations SPK-12
+$PLANE unrelate SPK-12 SPK-4
 $PLANE search "migrations"
 $PLANE --json issues -p SPK | jq '[.[] | select(.priority == "urgent")]'
 ```
@@ -205,13 +251,23 @@ $PLANE --json issues -p SPK | jq '[.[] | select(.priority == "urgent")]'
   looks like a hang until it finishes.
 - No module assignment on write.
 - Issues are never deleted: the tool can create and modify them but not remove them.
-  Labels are the single exception (`label-delete`, gated on `--yes`). This is enforced
-  in the guardrail, not just left unimplemented — `DELETE` is refused on any path but
-  `/projects/<project>/labels/<label>/`, so a call site that tried would fail closed.
+  It deletes labels and workflow states only (`label-delete`, `state-delete`, both gated
+  on `--yes`). This is enforced in the guardrail, not just left unimplemented — `DELETE`
+  is refused on any path but `/projects/<project>/labels/<label>/` and
+  `/projects/<project>/states/<state>/`, so a call site that tried would fail closed.
+- The `triage` state group (Plane's intake queue) is not managed: `state-create` and
+  `state-edit --group` refuse it.
+- Work item types can be listed and set on an issue, but not created, edited or deleted.
+  They are a Plane Pro feature, turned on per project under *Project settings → Work
+  item types*; a Community Edition server has none, and `types` says so.
 - It refuses to touch project objects at all — so it cannot enable a project's cycles
   module or create its estimate set. Those are set up in Plane.
 - Label *groups* (a label with a parent) are not exposed: `label-create` and
   `label-edit` set name, colour and description only, `labels` does not show which
   labels are children, and `label-delete` refuses a parent rather than destroy the
   group with it.
-- Sub-issues, relations and worklogs are not exposed.
+- Relations are limited to projects in the allowlist: `relate` refuses an issue outside
+  it, and `relations` withholds such issues and counts them on stderr. A Plane server
+  older than its relations API (added 2026-03) cannot use `relations`, `relate` or
+  `unrelate`, and says so.
+- Worklogs are not exposed.
