@@ -22,7 +22,7 @@ from typing import NamedTuple
 import yaml
 
 from .. import git_ops, stop_record
-from ..config import discover_test_command, parse_parallel
+from ..config import discover_test_command, parse_parallel, parse_test_timeout
 from ..gates import parallel_command
 from ..models import AgentResult
 from ..prompts.epic_merge import MERGE_PROMPT
@@ -1046,6 +1046,12 @@ def test_command(p: Path) -> str | None:
         return command.strip()
     found = discover_test_command(p)
     return found[0] if found else None
+
+
+def suite_timeout(p: Path) -> int:
+    """Seconds 40.4 gets: `tdd.test_timeout` in `<P>/specs/config.yaml`, as
+    every full-suite run of a build gets."""
+    return parse_test_timeout(_tdd(p).get("test_timeout"))
 
 
 def suite_command(p: Path) -> str | None:

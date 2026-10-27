@@ -980,6 +980,31 @@ class TestParallelTestsConfig:
         assert "tdd.parallel" in caplog.text
 
 
+class TestTestTimeoutConfig:
+    """`tdd.test_timeout`: the seconds each full-suite run gets; 300 when unset."""
+
+    def test_300_by_default(self, tmp_path):
+        assert BuildConfig().test_timeout == 300
+        assert (
+            _config_from_yaml(tmp_path, "tdd:\n  test_command: pytest\n").test_timeout
+            == 300
+        )
+
+    def test_a_whole_number_of_seconds_is_used(self, tmp_path):
+        assert (
+            _config_from_yaml(tmp_path, "tdd:\n  test_timeout: 1800\n").test_timeout
+            == 1800
+        )
+
+    @pytest.mark.parametrize("value", ["0", "-5", "long", "true", "12.5"])
+    def test_an_unusable_value_warns_and_keeps_300(self, tmp_path, caplog, value):
+        assert (
+            _config_from_yaml(tmp_path, f"tdd:\n  test_timeout: {value}\n").test_timeout
+            == 300
+        )
+        assert "tdd.test_timeout" in caplog.text
+
+
 class TestBudgetConfig:
     def test_unlimited_by_default(self):
         config = BuildConfig()

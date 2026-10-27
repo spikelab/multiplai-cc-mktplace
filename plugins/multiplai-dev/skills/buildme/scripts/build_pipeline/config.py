@@ -731,6 +731,23 @@ def discover_test_command(project_dir: Path | str) -> tuple[str, str] | None:
     return None
 
 
+def parse_test_timeout(value: object) -> int:
+    """`tdd.test_timeout` from config.yaml as whole seconds above 0; unset is
+    `gates.DEFAULT_TEST_TIMEOUT`, and anything else warns and is that too."""
+    from .gates import DEFAULT_TEST_TIMEOUT
+
+    if value is None:
+        return DEFAULT_TEST_TIMEOUT
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    log.warning(
+        "Unrecognized tdd.test_timeout value %r in config.yaml — using %d",
+        value,
+        DEFAULT_TEST_TIMEOUT,
+    )
+    return DEFAULT_TEST_TIMEOUT
+
+
 def parse_parallel(value: object) -> str:
     """`tdd.parallel` from config.yaml as "auto" or "off". YAML reads a bare
     `off` / `no` as false and `on` as true; anything else warns and is "auto"."""
@@ -784,6 +801,10 @@ class BuildConfig:
     # command runs pytest and pytest-xdist imports in its environment
     # (`gates.parallel_command`); "off" never does.
     parallel_tests: str = "auto"
+    # tdd.test_timeout: seconds each full-suite run gets (the baseline, the
+    # integration gates, the final verification and the epic's merge tests)
+    # before it counts as not run.
+    test_timeout: int = 300
     # tdd.test_writer_max_turns / tdd.mutation_test_writer_max_turns: the turn
     # cap of the block test writer and of the mutation round's test writer.
     test_writer_max_turns: int = 30
@@ -1298,6 +1319,7 @@ class BuildConfig:
                 narrow,
             )
         self.parallel_tests = parse_parallel(tdd.get("parallel", "auto"))
+        self.test_timeout = parse_test_timeout(tdd.get("test_timeout"))
         for key in ("test_writer_max_turns", "mutation_test_writer_max_turns"):
             if key in tdd:
                 setattr(self, key, _cfg_int(tdd[key], f"tdd.{key}", getattr(self, key)))
