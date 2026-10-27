@@ -1226,10 +1226,10 @@ Required audits retain blocking findings in the checkpoint and `build-progress.m
 and print them. A step blocked at the current plan revision (`blocked_revision`)
 stops on resume without another paid review, prints the findings the rewrite
 was asked to fix with their statuses, and ends with `Edit the plan to fix these
-and resume; the step then gets one rewrite.` Edit the plan to address those
+and resume; the step then gets its rewrites again.` Edit the plan to address those
 findings before resuming: when a step's input files differ from
 `blocked_revision`, the resume clears `repair_findings` and `blocked_revision`,
-gives the step its one rewrite back, and audits it as a first audit. The tasks
+gives the step its rewrites back, and audits it as a first audit. The tasks
 audit follows the same rule.
 
 If a hard interruption loses staging-ownership evidence, the commit refusal names

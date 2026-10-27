@@ -1358,7 +1358,7 @@ def reopen_if_edited(state: BuildState, name: str, state_path: Path) -> None:
 
 
 def rewrite_published(sg: SpecGenState, name: str) -> bool:
-    """The step's one rewrite was admitted with findings and published, and
+    """The step's last rewrite was admitted with findings and published, and
     nothing has blocked since: the step's revision moved on from the one the
     admission recorded."""
     step = sg.steps.get(name)

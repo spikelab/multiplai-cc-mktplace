@@ -39,7 +39,7 @@ class StepOutcome(BaseModel):
     reason: str = ""
     repair_attempts: int = 0
     blocking_findings: str = ""
-    # The findings the step's one rewrite was asked to fix, numbered, saved as
+    # The findings the step's latest rewrite was asked to fix, numbered, saved as
     # the rewrite is admitted; the recheck adds each one's status and evidence.
     repair_findings: list[dict] = Field(default_factory=list)
     # The step's revision when findings finally blocked it. A resume at another

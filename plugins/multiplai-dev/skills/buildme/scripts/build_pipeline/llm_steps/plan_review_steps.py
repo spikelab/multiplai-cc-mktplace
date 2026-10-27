@@ -1,9 +1,12 @@
 """buildme's one planning check: a read-only review of design.md and tasks.md.
 
 It replaced the design audit, the tasks audit and the plan review, which read
-the same documents three times. The planning owner publishes at most one
-repair for this stage. A required recheck blocks critical findings not
-`resolved` and major ones `still_present`. Passed evidence belongs to the
+the same documents three times. Each rewrite edits the plan in place through
+the planning owner and is rechecked. The stage stops after
+`planning.max_rewrites` rewrites, when a rewrite leaves as many blocking
+findings as before, or once the planning spend reaches `planning.max_usd`.
+A recheck blocks critical findings not `resolved` and major ones
+`still_present`. Passed evidence belongs to the
 reviewed input revision, so an unchanged resume needs no model call.
 """
 
@@ -584,11 +587,14 @@ async def run_plan_review_stage(
 
     The check's model findings and the deterministic scans
     (`scan_placeholders`, `scan_no_behaviour_blocks`) are read together.
-    Critical and major ones request one staged rewrite through the planning
-    owner, then a required recheck of that revision, which is given the
-    findings the rewrite was asked to fix and blocks on a critical one not
-    `resolved`, a major one `still_present`, and new critical findings
-    (`recheck_verdict`). A critical or major finding whose fix needs a
+    Critical and major ones request a staged rewrite through the planning
+    owner, which edits the files in place, then a required recheck of that
+    revision, which is given the findings the rewrite was asked to fix and
+    the lines it changed, and blocks on a critical one not `resolved`, a
+    major one `still_present`, and new critical findings
+    (`recheck_verdict`). Blocking findings get another rewrite until
+    `planning.max_rewrites`, a rewrite that does not lower their count, or
+    `planning.max_usd` stops the loop. A critical or major finding whose fix needs a
     requirements change raises `SpecIssuesFound`, at the first check and at
     the recheck. Unresolved findings and failed check calls record a blocked
     outcome and raise; they cannot authorize TDD.
@@ -747,7 +753,7 @@ async def run_plan_review_stage(
         raise
     except SpecIssuesFound as found:
         # Blocked at this revision: after `pm-spec revise` changes the
-        # requirements, the step gets its one rewrite back (`reopen_if_edited`).
+        # requirements, the step gets its rewrites back (`reopen_if_edited`).
         record_blocked_review(
             config, state, state_path, name, str(found), "", final=True
         )
@@ -776,7 +782,7 @@ def _scan_findings(change_dir: Path) -> list[PlanReviewFinding]:
     placeholder scan and the no-behaviour block scan.
 
     They always run, so a placeholder or a block the model misses still
-    reaches the one rewrite, and they block the recheck whatever the model
+    reaches the rewrite, and they block the recheck whatever the model
     says: they are code facts, not model judgments.
     """
     from ..spec_generator import scan_no_behaviour_blocks, scan_placeholders
