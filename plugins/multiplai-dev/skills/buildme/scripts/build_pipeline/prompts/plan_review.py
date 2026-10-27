@@ -375,3 +375,24 @@ def prior_findings_section(prior: list[dict] | None) -> str:
         for f in prior
     )
     return PRIOR_FINDINGS_SECTION.format(prior_findings=lines)
+
+
+CHANGED_LINES_SECTION = """
+
+## What the rewrite changed
+
+The rewrite edited the documents in place. This is its diff:
+
+```diff
+{diff}
+```
+
+Give a status for every finding listed above. Report a new finding only when
+it is in these changed lines or caused by them. A new critical finding
+anywhere in the documents is still reported.
+"""
+
+
+def changed_lines_section(diff: str) -> str:
+    """The recheck section for a rewrite's diff; empty for none."""
+    return CHANGED_LINES_SECTION.format(diff=diff.rstrip()) if diff.strip() else ""

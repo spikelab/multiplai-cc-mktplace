@@ -98,8 +98,8 @@ class TestSessionDefaults:
     MULTIPLAI_MODEL moves every step's model; `models:` / `efforts:` move only
     the steps they name."""
 
-    def test_there_are_23_steps(self):
-        assert len(STEP_STAGES) == 23
+    def test_there_are_24_steps(self):
+        assert len(STEP_STAGES) == 24
 
     def test_every_step_follows_the_session(self, tmp_path, no_conf):
         with patch.dict(os.environ, SESSION):
@@ -447,6 +447,10 @@ CALL_SITES = {
     ("llm_steps/docs_steps.py", "run_docs_update", "agent_call"): (
         "config.model_for('docs_update')",
         ("docs_update",),
+    ),
+    ("llm_steps/plan_review_steps.py", "run_plan_edit", "agent_call_structured"): (
+        "config.model_for('plan_rewrite')",
+        ("plan_rewrite",),
     ),
     ("llm_steps/plan_review_steps.py", "run_plan_review", "agent_call_structured"): (
         "model",

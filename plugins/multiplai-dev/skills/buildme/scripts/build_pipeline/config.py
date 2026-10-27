@@ -447,9 +447,9 @@ MODEL_STAGES: tuple[str, ...] = ("spec", "agent", "review")
 
 # Every buildme step that calls a model, and its stage. A step name is the
 # call's `budget_label`, except: every `spec:<id>` artifact is
-# `spec_artifact`; the unlabeled explainer and respec calls are named for
-# what they do; `review_fix` is the fix agent the review
-# loop runs (it charges the budget as `implementer`); and
+# `spec_artifact`; the unlabeled respec call is named for what it does;
+# `review_fix` is the fix agent the review loop runs (it charges the budget
+# as `implementer`); and
 # `integration_fix_escalated` is the last integration-fix attempt, which has
 # always run on the review model, and `review_fix_escalated` is the review
 # loop's last fix, which questions the block's approach on the same model. A
@@ -457,6 +457,7 @@ MODEL_STAGES: tuple[str, ...] = ("spec", "agent", "review")
 # step in it.
 STEP_STAGES: dict[str, str] = {
     "spec_artifact": "spec",
+    "plan_rewrite": "spec",
     "rubric": "spec",
     "codebase_analysis": "spec",
     "explainer": "spec",
@@ -872,6 +873,13 @@ class BuildConfig:
     # baseline to diff against; its spend is capped by its own --max-usd.
     spec_extract: bool = True
     spec_extract_max_usd: float = 80.0
+    # `planning:` block. `max_rewrites`: rewrites the plan check may ask for
+    # before it blocks. `max_usd`: planning spend (the writer, the edits, the
+    # check, the rubric and the explainers) at which no further rewrite starts.
+    # Raising either and resuming reopens a blocked check without regenerating
+    # the plan (`spec_generator._plan_hashes`).
+    planning_max_rewrites: int = 2
+    planning_max_usd: float = 40.0
 
     # Runtime marker, not user-configurable: set to the branch name once the
     # pipeline has created its own worktree+branch (or re-bound to one on
@@ -1435,6 +1443,18 @@ class BuildConfig:
             ),
             allow_bots=[b.strip() for b in allow_bots],
         )
+
+        planning_cfg = _cfg_mapping(data.get("planning"), "planning")
+        self.planning_max_rewrites = _cfg_int(
+            planning_cfg.get("max_rewrites", 2), "planning.max_rewrites", 2
+        )
+        usd = planning_cfg.get("max_usd", 40.0)
+        if isinstance(usd, bool) or not isinstance(usd, (int, float)) or usd <= 0:
+            log.warning(
+                "Invalid planning.max_usd value %r in config.yaml — using 40", usd
+            )
+            usd = 40.0
+        self.planning_max_usd = float(usd)
 
         self._load_epic(_cfg_mapping(data.get("epic"), "epic"))
 

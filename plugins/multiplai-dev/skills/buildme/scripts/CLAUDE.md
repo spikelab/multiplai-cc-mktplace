@@ -47,7 +47,7 @@
 | `docs_steps.py` | Documentation writer; failures propagate. Freshness warnings remain advisory after a successful writer. |
 | `review_steps.py` | `run_code_review()`, `merge_panel_results()`, `run_review_fix()` | `run_code_review()` calls `agent_call_structured` with `REVIEWER_TOOLS = ["Read", "Grep", "Glob"]` and `REVIEWER_MAX_TURNS = 30`, so the reviewer opens the files a changed line calls into instead of judging a diff string — and the whole step now needs a trusted repo. It is **wired** as the active per-block review — `tdd_engine._run_quality_review` calls it with the block's actual diff, rubric, spec context, and coding standards. Runs every model in `config.review_panel` concurrently (empty panel → one reviewer on `review_model`-or-`model`, byte-identical to the pre-panel behavior), drops members that failed, and folds the survivors with `merge_panel_results()`. `run_review_fix()` remains **not wired**. Security review is out of scope for this pipeline — the dedicated security-review prompt, step function and `security_review` config toggle were deleted; use Claude Code's built-in `/security-review` instead. |
 | `research_steps.py` | `decide_research()`, `specs_summary()` | `decide_research()` is one toolless `llm_call_structured` (`budget_label="research"`) on `specs_summary` of the ready proposal and requirements; takes `call=` for tests. |
-| `plan_review_steps.py` | The one planning check (`run_plan_review`, `run_plan_review_stage`): a read-only review of `design.md` and `tasks.md` that replaced the design audit, the tasks audit and the plan review. It runs `spec_generator.scan_placeholders` and `scan_no_behaviour_blocks` beside the model (`_scan_findings`), keeps the 10 most severe findings (`keep_most_severe`), raises `SpecIssuesFound` for a critical or major finding with `needs_requirements_change`, at the first check and the recheck, and rewrites `design.md` too unless every finding is in `tasks.md` (`rewrites_design`). Bounded repairs use the planning owner; failed or blocking checks block implementation. It reads the dir's `plan.md`, and a component's check is scoped to its plan (`prompts.plan_review.plan_section`): the use cases and proposal are its change's. |
+| `plan_review_steps.py` | The one planning check (`run_plan_review`, `run_plan_review_stage`): a read-only review of `design.md` and `tasks.md` that replaced the design audit, the tasks audit and the plan review. It runs `spec_generator.scan_placeholders` and `scan_no_behaviour_blocks` beside the model (`_scan_findings`), keeps the 10 most severe findings (`keep_most_severe`), raises `SpecIssuesFound` for a critical or major finding with `needs_requirements_change`, at the first check and the recheck, and asks `run_plan_edit` (step `plan_rewrite`, read-only tools) for exact edits to `design.md` and `tasks.md` (`PlanEdits`). Bounded repairs use the planning owner; failed or blocking checks block implementation. It reads the dir's `plan.md`, and a component's check is scoped to its plan (`prompts.plan_review.plan_section`): the use cases and proposal are its change's. |
 
 ## Prompt Templates (prompts/)
 
@@ -89,7 +89,7 @@ All tests mock LLM calls — no API keys needed. Tests cover:
 - Models: review scoring, weighted averages, threshold enforcement
 - Gates: all gate functions with pass/fail scenarios
 - Change Manager: DAG resolution, archiving, delta spec merging
-- Spec Generator: dependency ordering, resume, change type detection, plan-check feedback (one bounded repair + required recheck, revision-guarded)
+- Spec Generator: dependency ordering, resume, change type detection, plan-check feedback (bounded in-place rewrites + required rechecks, revision-guarded)
 - TDD Engine: block parsing, context assembly, weak test patterns, agent selection
 - Dependencies: manifest/import subtraction, false-positive suppression
 - Respec steps: propose-only respec
@@ -146,8 +146,16 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   phase checks as proof. The phase still describes progress.
 - **Bounded repair can fail.** Required review errors or remaining blocking
   findings leave resumable blocked evidence. Never log failure and mark it passed.
-  The plan check (`plan_review`) gets one
-  rewrite. Its findings are numbered (`number_findings`, `PR-F<n>`)
+  The plan check (`plan_review`) rewrites in a loop that stops after
+  `planning.max_rewrites` rewrites (`BuildConfig.planning_max_rewrites`, 2),
+  when a rewrite leaves at least as many blocking findings as the last one
+  (`StepOutcome.blocking_counts`; listed scan findings, `source: scan`, are
+  counted once, through the scans' own findings), or before an admission
+  once `spec_generator.planning_spend()` (the `PLANNING_LABELS`) reaches
+  `planning.max_usd` (40). Each rewrite is edits (`apply_plan_edits`: an
+  `old_str` found other than once, or edits that change nothing, is a
+  blocking `plan-edit` finding) published with `plan-edits-<n>.diff`, which
+  the recheck gets as `changed_lines`. Its findings are numbered (`number_findings`, `PR-F<n>`)
   and saved in `StepOutcome.repair_findings` in the checkpoint that admits the
   rewrite (`admit_repair`). The audit after the rewrite is given them (`prior=`,
   `prompts.plan_review.prior_findings_section`) and answers a status for each
@@ -389,13 +397,17 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   lists, so adding a writable tool breaks a test rather than a build. The turn
   cap (30) is part of the same bound: enough to open a neighbour and grep for a
   name the plan claims exists, not enough to wander.
-- **PLAN_REVIEW requests at most one owner repair.** Model and deterministic
-  findings share that bound; the recheck after it applies `recheck_verdict` to
+- **PLAN_REVIEW requests at most `planning.max_rewrites` owner repairs.**
+  Model and deterministic findings share that bound; the recheck after it applies `recheck_verdict` to
   the listed findings (the model is asked only about its own; the
   deterministic ones are rechecked by the scans). `steps.plan_review.repair_attempts`
   records repair admission, `repair_findings` the listed findings and their
   statuses, `blocked_revision` a final block; its outcome is tied to the plan
-  files it reads (`state.STEP_INPUTS["plan_review"]`). A checkpoint's
+  files it reads and the `planning:` section of `specs/config.yaml`
+  (`state.STEP_INPUTS["plan_review"]`). That section is hashed apart from the
+  rest of `config.yaml` (`spec_generator.PLANNING_KEY`) and left out of the
+  plan revision, so a raised limit reopens the check and marks no document
+  stale. A checkpoint's
   `tasks_audit` and `design_audit` entries are dropped on load
   (`state.RETIRED_STEPS`), and `models:`/`efforts:` keys naming them log a
   warning and do nothing (`config.RETIRED_STEP_KEYS`). `oversized-plan` proposes a split for the size

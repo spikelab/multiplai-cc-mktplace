@@ -22,6 +22,8 @@ from build_pipeline.state import BuildState, TDDState
 from build_pipeline.tdd_engine import run_tdd_engine
 from multiplai_core.specs import mark_ready
 
+from tests.planning_fakes import edits_from
+
 
 def git(root, *args):
     return subprocess.run(
@@ -340,8 +342,10 @@ async def test_a_plan_check_repair_is_rechecked_before_spec_only_success(
         "build_pipeline.llm_steps.plan_review_steps.run_plan_review", review
     )
     monkeypatch.setattr(
-        "build_pipeline.llm_steps.spec_steps.generate_artifact",
-        AsyncMock(return_value="## 1. Value\nReturn one including the missing case"),
+        "build_pipeline.llm_steps.plan_review_steps.run_plan_edit",
+        edits_from(
+            AsyncMock(return_value="## 1. Value\nReturn one including the missing case")
+        ),
     )
     monkeypatch.setattr(
         "build_pipeline.spec_generator.generate_rubric",

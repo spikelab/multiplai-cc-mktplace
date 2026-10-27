@@ -31,6 +31,7 @@ from build_pipeline.orchestrator import run_orchestrator
 from build_pipeline.state import BuildState, TDDState
 from multiplai_core.specs import clear_spec_issues, mark_ready, read_change_meta
 
+from tests.planning_fakes import edits_from
 from tests.spec_fixtures import (
     REQUIREMENT,
     commit_specs,
@@ -165,6 +166,9 @@ class Models:
         self.prompts: list[str] = []
         self.generate = AsyncMock(side_effect=self._generate)
         self.plan_check = AsyncMock(side_effect=self._check)
+        self.edit = edits_from(
+            AsyncMock(return_value="## 1. Behavior\nReturn the value, gap covered\n")
+        )
 
     async def _generate(self, artifact_id, context, config, **kwargs):
         from build_pipeline.llm_steps.spec_steps import _build_prompt
@@ -190,12 +194,15 @@ class Models:
                 "build_pipeline.spec_generator.generate_rubric",
                 AsyncMock(return_value="# Rubric\nCorrect value\n"),
             ),
+            patch(
+                "build_pipeline.llm_steps.plan_review_steps.run_plan_edit", self.edit
+            ),
         )
 
 
 async def _build(repo: Path, models: Models, **config_over) -> int:
     p = models.patches()
-    with p[0], p[1], p[2]:
+    with p[0], p[1], p[2], p[3]:
         return await run_orchestrator(
             _config(repo, **config_over),
             _args(repo, spec_only=config_over.get("spec_only", True)),
@@ -319,7 +326,7 @@ class TestStartRefusal:
         assert not change_dir.exists()
         config = _config(repo)
         p = Models().patches()
-        with p[0], p[1], p[2]:
+        with p[0], p[1], p[2], p[3]:
             rc = await run_orchestrator(config, _args(repo))
 
         assert rc == 0, capsys.readouterr().out

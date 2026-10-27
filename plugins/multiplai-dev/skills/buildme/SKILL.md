@@ -124,6 +124,8 @@ buildme ignores them.
 | `architecture` | repo-relative path | `""` | stored only, for now |
 | `pr.template` | `auto` or a path | `auto` | stored only, for the PR stage |
 | `pr.max_change_lines` | int | `1000` | stored only, for the PR stage |
+| `planning.max_rewrites` | int | `2` | the plan check: rewrites of the plan before it stops the run. Raising it reopens a stopped check without regenerating the plan |
+| `planning.max_usd` | number | `40` | the plan check: it starts no rewrite or recheck once the planning calls (design, unknowns, tasks, rubric, explainers, the check and its rewrites) have spent this much. Raising it reopens a stopped check without regenerating the plan |
 | `findings.authors` | `collaborators` or a list of GitHub logins | `collaborators` | `/multiplai-dev:buildme-findings`: whose PR comments are acted on. `collaborators` means anyone whose `role_name` on the repo is `admin`, `maintain` or `write` |
 | `findings.max_rounds` | int | `3` | `/multiplai-dev:buildme-findings`: fix-and-re-review rounds before it stops (`findings --max-rounds` overrides it) |
 | `findings.allow_bots` | list of bot logins | `[]` | `/multiplai-dev:buildme-findings`: bots whose comments are acted on; any other bot's are listed and skipped |
@@ -572,20 +574,26 @@ between blocks, vertical slicing, placeholders, claims about existing code,
 over-engineering, testability and edge cases the specs name. It reports at
 most 10 findings, most severe first. buildme's own scans for placeholders and
 for blocks that add no behaviour run beside it. Only critical and major
-findings, and the scans' findings, earn a rewrite: one pass that rewrites
-`tasks.md`, and `design.md` first unless every finding is in `tasks.md`. The
-recheck is told which findings the rewrite was asked to fix and stops the run when a
-critical one is not `resolved`, when a major one is `still_present`, when it
-finds a new critical problem, or when the rewritten `tasks.md` still has a
-placeholder or a block that adds no behaviour by buildme's own scans. A major
+findings, and the scans' findings, earn a rewrite: one call that reads the
+code and edits `design.md` and `tasks.md` in place, leaving every line it does
+not name as it was. An edit whose text is not found once, or edits that change
+nothing, stop the run. The edits are saved as `plan-edits-<n>.diff` in the
+change dir. The recheck is told which findings the rewrite was asked to fix
+and which lines it changed. A critical finding not `resolved`, a major one
+`still_present`, a new critical problem, or a placeholder or block that adds
+no behaviour by buildme's own scans, gets another rewrite. The check stops the
+run after `planning.max_rewrites` rewrites (2), when a rewrite leaves as many
+blocking findings as before, or once the planning calls have spent
+`planning.max_usd` (40 USD). A major
 finding the recheck calls `partially_resolved` or `cannot_verify`, and every
 new major or minor finding, whatever its category, is reported only; a minor
 finding never stops a run. A build stopped by an earlier version's rule gets
-one fresh check and one rewrite under this one; a build saved before the one
+one fresh check and its rewrites under this one; a build saved before the one
 check existed drops its design-audit and tasks-audit steps on resume and runs
 the check. A stopped step prints those findings with their statuses. Resuming
-without editing the plan stops again at no cost; editing the plan gives the
-step one more rewrite. TDD implementation (test-writer + implementer agents per block),
+without editing the plan stops again at no cost; editing the plan, or raising
+`planning.max_rewrites` or `planning.max_usd`, gives the step its rewrites
+again, and a raised limit regenerates nothing. TDD implementation (test-writer + implementer agents per block),
 integration gates, scored quality reviews, entry point verification, the
 documentation update, the respec proposal, and publishing (push + draft PR).
 

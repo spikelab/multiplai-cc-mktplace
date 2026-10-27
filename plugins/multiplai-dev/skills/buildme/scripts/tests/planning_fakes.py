@@ -94,3 +94,23 @@ def accepted_planning(monkeypatch, request):
     monkeypatch.setattr(orchestrator, "run_orchestrator", run)
     if hasattr(request.module, "run_orchestrator"):
         monkeypatch.setattr(request.module, "run_orchestrator", run)
+
+
+def edits_from(writer):
+    """A fake of `plan_review_steps.run_plan_edit` built from a fake writer
+    that returns a whole rewritten tasks.md, as the plan rewrite's writer
+    once did: each call asks *writer* for tasks.md (with the findings as
+    `audit_findings`) and returns one edit replacing the staged file with it."""
+    from unittest.mock import AsyncMock
+
+    from build_pipeline.llm_steps.plan_review_steps import findings_lines
+    from build_pipeline.models import PlanEdit, PlanEdits
+
+    async def edit(change_dir, config, findings):
+        text = await writer(
+            "tasks", {}, config, audit_findings=findings_lines(findings)
+        )
+        old = (change_dir / "tasks.md").read_text()
+        return PlanEdits(edits=[PlanEdit(file="tasks.md", old_str=old, new_str=text)])
+
+    return AsyncMock(side_effect=edit)

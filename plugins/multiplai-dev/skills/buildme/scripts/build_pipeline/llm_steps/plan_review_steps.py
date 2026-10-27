@@ -1,9 +1,12 @@
 """buildme's one planning check: a read-only review of design.md and tasks.md.
 
 It replaced the design audit, the tasks audit and the plan review, which read
-the same documents three times. The planning owner publishes at most one
-repair for this stage. A required recheck blocks critical findings not
-`resolved` and major ones `still_present`. Passed evidence belongs to the
+the same documents three times. Each rewrite edits the plan in place through
+the planning owner and is rechecked. The stage stops after
+`planning.max_rewrites` rewrites, when a rewrite leaves as many blocking
+findings as before, or once the planning spend reaches `planning.max_usd`.
+A recheck blocks critical findings not `resolved` and major ones
+`still_present`. Passed evidence belongs to the
 reviewed input revision, so an unchanged resume needs no model call.
 """
 
@@ -17,14 +20,16 @@ from multiplai_core.specs import change_root
 from build_pipeline.budget import BudgetExceededError
 
 from ..change_manager import requirement_sources, spec_issue_ref
-from ..models import PlanReviewFinding, PlanReviewResult
+from ..models import PlanEdits, PlanReviewFinding, PlanReviewResult
 from ..prompts.plan_review import (
     MAX_PLAN_FINDINGS,
     NO_USE_CASES,
     PLAN_CHECK_PROMPT,
+    changed_lines_section,
     plan_section,
     prior_findings_section,
 )
+from ..prompts.spec_generation import PLAN_EDIT_PROMPT
 from ..sdk import agent_call_structured
 
 log = logging.getLogger(__name__)
@@ -386,6 +391,7 @@ async def run_plan_review(
     *,
     split_context: str = "",
     prior: list[dict] | None = None,
+    changed_lines: str = "",
 ) -> PlanReviewResult:
     """Check design.md and tasks.md against the specs, the use cases, the
     rubric, the constraints and the code (`PLAN_CHECK_PROMPT`).
@@ -393,7 +399,9 @@ async def run_plan_review(
     Runs as a read-only subagent on `config.model_for("plan_review")` and
     `config.effort_for("plan_review")`. Returns the findings; raises whatever `agent_call_structured`
     raises (the required stage records a blocked outcome). With `prior` (the
-    findings a rewrite was asked to fix) it also asks for a status for each.
+    findings a rewrite was asked to fix) it also asks for a status for each;
+    with `changed_lines` (the rewrite's diff) it reports new findings only in
+    or caused by those lines, and a new critical one anywhere.
     """
     # A component's proposal and use cases are its change's, so it is
     # reviewed against its plan.md, which says what it builds of them.
@@ -405,23 +413,27 @@ async def run_plan_review(
     )
     from ..rubric import detect_change_type
 
-    prompt = PLAN_CHECK_PROMPT.format(
-        proposal_content=_read(root / "proposal.md", "(no proposal)"),
-        plan_section=plan_section(
-            _read(change_dir / "plan.md", "(no plan.md)"),
-            component=root != Path(change_dir),
-        ),
-        specs_content=specs or "(no specs)",
-        design_content=_read(change_dir / "design.md", "(no design)"),
-        use_cases_content=use_cases,
-        tasks_content=_read(change_dir / "tasks.md", "(no tasks)"),
-        rubric_content=_read(change_dir / "rubric.md", "(no rubric)"),
-        split_context=split_context,
-        change_type=detect_change_type(change_dir),
-        spec_ref=spec_issue_ref(change_dir),
-        block_trigger=getattr(config, "plan_split_block_trigger", 10),
-        package_trigger=getattr(config, "plan_split_package_trigger", 5),
-    ) + prior_findings_section(prior)
+    prompt = (
+        PLAN_CHECK_PROMPT.format(
+            proposal_content=_read(root / "proposal.md", "(no proposal)"),
+            plan_section=plan_section(
+                _read(change_dir / "plan.md", "(no plan.md)"),
+                component=root != Path(change_dir),
+            ),
+            specs_content=specs or "(no specs)",
+            design_content=_read(change_dir / "design.md", "(no design)"),
+            use_cases_content=use_cases,
+            tasks_content=_read(change_dir / "tasks.md", "(no tasks)"),
+            rubric_content=_read(change_dir / "rubric.md", "(no rubric)"),
+            split_context=split_context,
+            change_type=detect_change_type(change_dir),
+            spec_ref=spec_issue_ref(change_dir),
+            block_trigger=getattr(config, "plan_split_block_trigger", 10),
+            package_trigger=getattr(config, "plan_split_package_trigger", 5),
+        )
+        + prior_findings_section(prior)
+        + changed_lines_section(changed_lines)
+    )
 
     model = config.model_for("plan_review")
     effort = config.effort_for("plan_review")
@@ -439,6 +451,50 @@ async def run_plan_review(
     )
     result.findings = keep_most_severe(list(result.findings), "Plan review")
     return result
+
+
+async def run_plan_edit(change_dir: Path, config, findings: list[dict]) -> PlanEdits:
+    """Ask for the exact replacements in design.md and tasks.md that fix these
+    numbered findings (`PLAN_EDIT_PROMPT`). *change_dir* is the staged copy
+    the edits will be applied to. Read-only tools, on the `spec` stage's model
+    under `plan_rewrite`; `spec_generator.apply_plan_edits` applies them."""
+    root = change_root(change_dir)
+    specs = "\n\n".join(
+        f"### {label}\n{text}"
+        for label, text in requirement_sources(change_dir).items()
+    )
+    prompt = PLAN_EDIT_PROMPT.format(
+        findings=findings_lines(findings),
+        design_content=_read(change_dir / "design.md", "(no design)"),
+        tasks_content=_read(change_dir / "tasks.md", "(no tasks)"),
+        proposal_content=_read(root / "proposal.md", "(no proposal)"),
+        plan_section=plan_section(
+            _read(change_dir / "plan.md", "(no plan.md)"),
+            component=root != Path(change_dir),
+        ),
+        use_cases_content=_read(root / "use-cases.md", NO_USE_CASES),
+        specs_content=specs or "(no specs)",
+    )
+    log.info("Running plan edit on %s", change_dir.name)
+    return await agent_call_structured(
+        prompt,
+        PlanEdits,
+        allowed_tools=PLAN_REVIEW_TOOLS,
+        model=config.model_for("plan_rewrite"),
+        effort=config.effort_for("plan_rewrite"),
+        max_turns=PLAN_REVIEW_MAX_TURNS,
+        cwd=str(config.project_dir),
+        budget_label="plan_rewrite",
+    )
+
+
+def findings_lines(findings: list[dict]) -> str:
+    """One line per numbered finding: its id, severity, category and text."""
+    return "\n".join(
+        f"- {f.get('finding_id', '?')} [{f.get('severity', '?')}] "
+        f"({f.get('category', '?')}) {f.get('text', '')}"
+        for f in findings
+    )
 
 
 def plan_review_actionable(
@@ -481,35 +537,6 @@ def finding_dicts(findings: list[PlanReviewFinding]) -> list[dict]:
         }
         for f in findings
     ]
-
-
-def rewrites_design(findings: list[dict]) -> bool:
-    """Whether a rewrite for these findings changes design.md too: unless
-    every finding's `file_path` is tasks.md, both documents are rewritten."""
-    return any(f.get("file_path") != "tasks.md" for f in findings)
-
-
-def plan_review_findings_text(
-    findings: list[PlanReviewFinding], *, ids: list[str] | None = None
-) -> str:
-    """The findings block injected into the single tasks.md regeneration.
-
-    Empty string when nothing actionable survives the filter — the caller reads
-    that as "report only, nothing to regenerate". `oversized-plan` never
-    survives it (`plan_review_actionable`). With `ids` (one per actionable
-    finding, in order) each line starts with its finding's id.
-    """
-    actionable = plan_review_actionable(findings)
-    if not actionable:
-        return ""
-    ids = list(ids or [])
-    return "\n".join(
-        "- "
-        + (f"{ids[n]} " if n < len(ids) else "")
-        + f"[{f.severity}] ({f.category}) "
-        + _finding_line(f)
-        for n, f in enumerate(actionable)
-    )
 
 
 def log_plan_review_findings(findings: list[PlanReviewFinding]) -> None:
@@ -560,11 +587,14 @@ async def run_plan_review_stage(
 
     The check's model findings and the deterministic scans
     (`scan_placeholders`, `scan_no_behaviour_blocks`) are read together.
-    Critical and major ones request one staged rewrite through the planning
-    owner, then a required recheck of that revision, which is given the
-    findings the rewrite was asked to fix and blocks on a critical one not
-    `resolved`, a major one `still_present`, and new critical findings
-    (`recheck_verdict`). A critical or major finding whose fix needs a
+    Critical and major ones request a staged rewrite through the planning
+    owner, which edits the files in place, then a required recheck of that
+    revision, which is given the findings the rewrite was asked to fix and
+    the lines it changed, and blocks on a critical one not `resolved`, a
+    major one `still_present`, and new critical findings
+    (`recheck_verdict`). Blocking findings get another rewrite until
+    `planning.max_rewrites`, a rewrite that does not lower their count, or
+    `planning.max_usd` stops the loop. A critical or major finding whose fix needs a
     requirements change raises `SpecIssuesFound`, at the first check and at
     the recheck. Unresolved findings and failed check calls record a blocked
     outcome and raise; they cannot authorize TDD.
@@ -579,8 +609,11 @@ async def run_plan_review_stage(
         from_scans,
         log_findings,
         model_listed,
+        next_finding_number,
         number_findings,
         open_findings,
+        plan_edits_diff,
+        planning_spend,
         raise_spec_issues,
         recheck_verdict,
         reconcile_plan,
@@ -595,7 +628,6 @@ async def run_plan_review_stage(
     )
 
     name = "plan_review"
-    reason = "Plan review still has blocking findings after bounded repair"
     reconcile_plan(config, state)
     sg = state.spec_gen
     assert sg is not None
@@ -604,6 +636,11 @@ async def run_plan_review_stage(
     reopen_if_edited(state, name, state_path)
     refuse_if_blocked(sg, name)
     admitted = sg.steps[name].revision if rewrite_published(sg, name) else None
+
+    def stop(why: str, blocking: list[dict]) -> None:
+        block_on_findings(config, state, state_path, name, why, blocking)
+        raise PlanBlocked(why)
+
     try:
         if admitted is None:
             result = await run_plan_review(
@@ -613,21 +650,10 @@ async def run_plan_review_stage(
             scanned = _scan_findings(change_dir)
             findings = list(result.findings) + scanned
             log_plan_review_findings(findings)
-            actionable = plan_review_actionable(findings)
-            if not actionable:
+            if not plan_review_actionable(findings):
                 sg.record_step(name)
                 state.checkpoint(state_path)
                 return findings
-            if sg.repair_attempts(name):
-                block_on_findings(
-                    config,
-                    state,
-                    state_path,
-                    name,
-                    reason,
-                    open_findings(finding_dicts(actionable)),
-                )
-                raise PlanBlocked(reason)
             numbered = number_findings(
                 name,
                 [
@@ -635,53 +661,99 @@ async def run_plan_review_stage(
                     *from_scans(finding_dicts(plan_review_actionable(scanned))),
                 ],
             )
-            sg.admit_repair(name, saved_findings(numbered))
-            state.checkpoint(state_path)
-            admitted = sg.steps[name].revision
-            await rewrite_plan(
+        while True:
+            if admitted is None:
+                attempts = sg.repair_attempts(name)
+                if attempts >= config.planning_max_rewrites:
+                    stop(
+                        f"{attempts} of planning.max_rewrites "
+                        f"{config.planning_max_rewrites} rewrites used; "
+                        f"{len(numbered)} blocking findings left",
+                        open_findings(numbered),
+                    )
+                spent = planning_spend()
+                if spent >= config.planning_max_usd:
+                    stop(
+                        f"planning spend ${spent:.2f} reached planning.max_usd "
+                        f"${config.planning_max_usd:.2f}",
+                        open_findings(numbered),
+                    )
+                sg.admit_repair(
+                    name,
+                    saved_findings(numbered),
+                    max_rewrites=config.planning_max_rewrites,
+                    start_count=len(numbered),
+                )
+                state.checkpoint(state_path)
+                admitted = sg.steps[name].revision
+                await rewrite_plan(
+                    config,
+                    state,
+                    numbered,
+                    attempt=sg.repair_attempts(name),
+                    step=name,
+                )
+            attempt = sg.repair_attempts(name)
+            listed = sg.steps[name].repair_findings
+            result = await run_plan_review(
+                change_dir,
                 config,
-                state,
-                plan_review_findings_text(
-                    actionable, ids=[f["finding_id"] for f in numbered]
-                ),
-                design=rewrites_design(numbered),
-                step=name,
+                split_context=_split_context(config, change_dir),
+                prior=model_listed(listed) or None,
+                changed_lines=plan_edits_diff(change_dir, attempt),
             )
-        listed = sg.steps[name].repair_findings
-        result = await run_plan_review(
-            change_dir,
-            config,
-            split_context=_split_context(config, change_dir),
-            prior=model_listed(listed) or None,
-        )
-        raise_spec_issues(audit_spec_issues(finding_dicts(result.findings)), name)
-        scanned_findings = _scan_findings(change_dir)
-        scanned = finding_dicts(scanned_findings)
-        findings = list(result.findings) + scanned_findings
-        log_plan_review_findings(findings)
-        new = [
-            f
-            for f in result.findings
-            if f.category not in PLAN_REVIEW_PROPOSE_ONLY_CATEGORIES
-        ]
-        given = list(result.prior_assessments) + scan_assessments(listed, scanned)
-        blocking, advisory = recheck_verdict(
-            listed, given, finding_dicts(new), deterministic=scanned
-        )
-        sg.steps[name].repair_findings = saved_findings(assess_listed(listed, given))
-        log_findings(name, "listed", sg.steps[name].repair_findings)
-        record_advisory(config, name, advisory)
-        if blocking:
-            block_on_findings(config, state, state_path, name, reason, blocking)
-            raise PlanBlocked(reason)
-        sg.record_step(name)
-        state.checkpoint(state_path)
-        return findings
+            raise_spec_issues(audit_spec_issues(finding_dicts(result.findings)), name)
+            scanned_findings = _scan_findings(change_dir)
+            scanned = finding_dicts(scanned_findings)
+            findings = list(result.findings) + scanned_findings
+            log_plan_review_findings(findings)
+            new = [
+                f
+                for f in finding_dicts(result.findings)
+                if f["category"] not in PLAN_REVIEW_PROPOSE_ONLY_CATEGORIES
+            ]
+            given = list(result.prior_assessments) + scan_assessments(listed, scanned)
+            blocking, advisory = recheck_verdict(
+                listed, given, new, deterministic=scanned
+            )
+            sg.steps[name].repair_findings = saved_findings(
+                assess_listed(listed, given)
+            )
+            log_findings(name, "listed", sg.steps[name].repair_findings)
+            record_advisory(config, name, advisory)
+            if not blocking:
+                sg.record_step(name)
+                state.checkpoint(state_path)
+                return findings
+            # A listed finding of the scans is counted by the scans' own
+            # findings, which every recheck runs again.
+            left = [f for f in blocking if f.get("source") != "scan"]
+            started = sg.steps[name].blocking_counts[-1:] or [len(listed)]
+            if len(left) >= started[0]:
+                stop(
+                    f"rewrite {attempt} left {len(left)} blocking findings "
+                    f"(was {started[0]})",
+                    blocking,
+                )
+            carried = [
+                {k: v for k, v in f.items() if k not in ("status", "evidence")}
+                for f in left
+                if f.get("finding_id")
+            ]
+            numbered = carried + number_findings(
+                name,
+                [
+                    *[f for f in new if f.get("severity") == "critical"],
+                    *from_scans(scanned),
+                ],
+                start=next_finding_number(listed),
+            )
+            admitted = None
     except PlanBlocked:
         raise
     except SpecIssuesFound as found:
         # Blocked at this revision: after `pm-spec revise` changes the
-        # requirements, the step gets its one rewrite back (`reopen_if_edited`).
+        # requirements, the step gets its rewrites back (`reopen_if_edited`).
         record_blocked_review(
             config, state, state_path, name, str(found), "", final=True
         )
@@ -710,7 +782,7 @@ def _scan_findings(change_dir: Path) -> list[PlanReviewFinding]:
     placeholder scan and the no-behaviour block scan.
 
     They always run, so a placeholder or a block the model misses still
-    reaches the one rewrite, and they block the recheck whatever the model
+    reaches the rewrite, and they block the recheck whatever the model
     says: they are code facts, not model judgments.
     """
     from ..spec_generator import scan_no_behaviour_blocks, scan_placeholders

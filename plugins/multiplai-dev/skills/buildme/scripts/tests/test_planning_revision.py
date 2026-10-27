@@ -12,6 +12,35 @@ from build_pipeline.config import BuildConfig
 from build_pipeline.state import BuildState, SpecGenState
 
 REQ = "### Requirement: Value\n#### Scenario: Read\nWHEN read\nTHEN returns one\n"
+# The findings a direct `rewrite_plan` call is asked to fix.
+FIX = [
+    {
+        "finding_id": "PR-F1",
+        "severity": "critical",
+        "category": "correctness",
+        "text": "change values",
+    }
+]
+
+
+def _rewrite_to(monkeypatch, *, design=None, tasks=None):
+    """Fake the rewrite's edit call: it replaces the whole of design.md and
+    tasks.md, as the staged copy holds them, with these texts (a file given
+    no text is not edited). Returns the stub."""
+    from build_pipeline.llm_steps import plan_review_steps
+    from build_pipeline.models import PlanEdit, PlanEdits
+
+    async def edit(change_dir, config, findings):
+        edits = []
+        for name, text in (("design.md", design), ("tasks.md", tasks)):
+            if text is not None:
+                old = (change_dir / name).read_text()
+                edits.append(PlanEdit(file=name, old_str=old, new_str=text))
+        return PlanEdits(edits=edits)
+
+    stub = AsyncMock(side_effect=edit)
+    monkeypatch.setattr(plan_review_steps, "run_plan_edit", stub)
+    return stub
 
 
 @pytest.fixture
@@ -90,9 +119,8 @@ async def test_interrupted_publication_recovers_one_complete_revision(
     owner.reconcile_plan(config, state)
     state.spec_gen.record_step("plan_review", "passed")
     old_revision = state.spec_gen.revision
-    monkeypatch.setattr(
-        "build_pipeline.llm_steps.spec_steps.generate_artifact",
-        AsyncMock(side_effect=["# New design", "## 1. New values\nReturn two"]),
+    _rewrite_to(
+        monkeypatch, design="# New design", tasks="## 1. New values\nReturn two"
     )
     monkeypatch.setattr(
         owner, "generate_rubric", AsyncMock(return_value="# New rubric")
@@ -106,7 +134,7 @@ async def test_interrupted_publication_recovers_one_complete_revision(
 
     monkeypatch.setattr(owner, "atomic_write", interrupted)
     with pytest.raises(OSError, match="crash"):
-        await owner.rewrite_plan(config, state, "change values", design=True)
+        await owner.rewrite_plan(config, state, FIX)
     assert (config.change_dir / ".plan-publication.json").exists()
     monkeypatch.setattr(owner, "atomic_write", original)
     owner.reconcile_plan(config, state)
@@ -230,14 +258,11 @@ async def test_a_rewrite_that_fails_publication_keeps_the_plan_intact(
 ):
     config, cm, state = plan
     before = (config.change_dir / "tasks.md").read_bytes()
-    monkeypatch.setattr(
-        "build_pipeline.llm_steps.spec_steps.generate_artifact",
-        AsyncMock(return_value="## 1. Replacement\nReturn two"),
-    )
+    _rewrite_to(monkeypatch, tasks="## 1. Replacement\nReturn two")
     monkeypatch.setattr(owner, "generate_rubric", AsyncMock(return_value="# Rubric"))
     # The fixture deliberately lacks complete requirements, so publication must fail.
     with pytest.raises(ValueError, match="incomplete capability"):
-        await owner.rewrite_plan(config, state, "horizontal breakdown")
+        await owner.rewrite_plan(config, state, FIX)
     assert (config.change_dir / "tasks.md").read_bytes() == before
     assert not (config.change_dir / ".plan-publication.json").exists()
 
@@ -294,13 +319,10 @@ async def test_staged_repair_rejects_placeholders_even_when_model_audit_is_clean
     for cap in ("one", "two"):
         (config.change_dir / f"requirements/{cap}.md").write_text(REQ)
     before = (config.change_dir / "tasks.md").read_bytes()
-    monkeypatch.setattr(
-        "build_pipeline.llm_steps.spec_steps.generate_artifact",
-        AsyncMock(return_value="## 1. Values\nError handling: TBD\nReturn values"),
-    )
+    _rewrite_to(monkeypatch, tasks="## 1. Values\nError handling: TBD\nReturn values")
     monkeypatch.setattr(owner, "generate_rubric", AsyncMock(return_value="# Rubric"))
     with pytest.raises(ValueError, match="placeholder"):
-        await owner.rewrite_plan(config, state, "Remove placeholders")
+        await owner.rewrite_plan(config, state, FIX)
     assert (config.change_dir / "tasks.md").read_bytes() == before
     assert not state.spec_gen.step_passed("plan_review")
 
@@ -314,6 +336,7 @@ async def test_blocked_findings_survive_resume_without_repaying_same_review(
     from build_pipeline.models import PlanReviewFinding, PlanReviewResult
 
     config, _, state = plan
+    config.planning_max_rewrites = 1
     owner.reconcile_plan(config, state)
     state.spec_gen.admit_repair(stage)
     sentinel = "Missing rejection of the unique invalid account 891"
@@ -349,15 +372,12 @@ async def test_repaired_unknowns_keep_their_accepted_evidence_on_resume(
     for cap in ("one", "two"):
         (config.change_dir / f"requirements/{cap}.md").write_text(REQ)
     owner.reconcile_plan(config, state)
-    monkeypatch.setattr(
-        "build_pipeline.llm_steps.spec_steps.generate_artifact",
-        AsyncMock(side_effect=["# New design", "## 1. Values\nReturn two"]),
-    )
+    _rewrite_to(monkeypatch, design="# New design", tasks="## 1. Values\nReturn two")
     monkeypatch.setattr(
         owner, "generate_rubric", AsyncMock(return_value="# New rubric")
     )
     monkeypatch.setattr(owner, "_commit_change_dir", lambda *a: None)
-    await owner.rewrite_plan(config, state, "repair", design=True)
+    await owner.rewrite_plan(config, state, FIX)
     saved = BuildState.load(config.state_file_path())
     assert saved.spec_gen.step_passed("explainers")
     unknowns = (config.change_dir / "unknowns.md").read_bytes()
@@ -392,15 +412,11 @@ async def test_interrupted_post_repair_audit_resumes_on_the_new_revision(
     owner.reconcile_plan(config, state)
     before = state.spec_gen.revision
 
-    async def generate(name, *a, **kw):
-        return (
-            "# Repaired design"
-            if name == "design"
-            else "## 1. Values\nReturn repaired values"
-        )
-
-    writer = AsyncMock(side_effect=generate)
-    monkeypatch.setattr("build_pipeline.llm_steps.spec_steps.generate_artifact", writer)
+    writer = _rewrite_to(
+        monkeypatch,
+        design="# Repaired design",
+        tasks="## 1. Values\nReturn repaired values",
+    )
     monkeypatch.setattr(
         owner, "generate_rubric", AsyncMock(return_value="# New rubric")
     )
@@ -600,15 +616,11 @@ def _ready(plan):
 
 
 def _writer(monkeypatch):
-    async def generate(name, *a, **kw):
-        return (
-            "# Repaired design"
-            if name == "design"
-            else "## 1. Values\nReturn repaired values"
-        )
-
-    writer = AsyncMock(side_effect=generate)
-    monkeypatch.setattr("build_pipeline.llm_steps.spec_steps.generate_artifact", writer)
+    writer = _rewrite_to(
+        monkeypatch,
+        design="# Repaired design",
+        tasks="## 1. Values\nReturn repaired values",
+    )
     monkeypatch.setattr(
         owner, "generate_rubric", AsyncMock(return_value="# New rubric")
     )
@@ -732,8 +744,10 @@ async def test_S1_stop_after_admission_re_audits_without_a_second_rewrite(
 ):
     """S1: stopped after the admission checkpoint, before the journal. The
     resume re-audits the unchanged plan, passes when it is clean, and
-    otherwise blocks on what it found with no second rewrite."""
+    otherwise blocks on what it found with no second rewrite when one is the
+    limit (row S3 of plan-buildme-planning-checks-2026-10-27.md)."""
     config, cm, state = _ready(plan)
+    config.planning_max_rewrites = 1
     before = _plan_files(config)
     kill = _Kill(config)
     monkeypatch.setattr(owner, "rewrite_plan", kill.die)
@@ -923,12 +937,12 @@ async def test_S4_a_blocking_recheck_refuses_the_resume_with_its_findings(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stage", ["plan_review"])
-async def test_S5_an_edited_plan_gets_its_one_rewrite_back(
+async def test_S5_an_edited_plan_gets_its_rewrites_back(
     plan, monkeypatch, caplog, stage
 ):
     """S5: the plan was edited after the block. The resume reopens the step
     (count reset, both new fields cleared, one log line), then runs it as a
-    first audit, which may rewrite once more."""
+    first audit, whose rewrites are counted from zero."""
     config, cm, state, run, review = await _block_after_recheck(
         monkeypatch, plan, stage
     )
@@ -943,7 +957,7 @@ async def test_S5_an_edited_plan_gets_its_one_rewrite_back(
     with caplog.at_level("WARNING"):
         await _run(run, config, cm, state)
     assert (
-        f"{stage}: plan changed since it was blocked; one rewrite allowed again"
+        f"{stage}: plan changed since it was blocked; its rewrites are counted again"
         in caplog.text
     )
     assert writer.await_count >= 1
@@ -1238,9 +1252,13 @@ async def test_S11_an_old_rewrite_stopped_mid_publication_finishes_then_checks(
 
     monkeypatch.setattr(owner, "atomic_write", interrupted)
     with pytest.raises(OSError, match="crash"):
-        await owner.rewrite_plan(config, state, "old repair", step="plan_review")
+        await owner.rewrite_plan(config, state, FIX, step="plan_review")
     monkeypatch.setattr(owner, "atomic_write", original)
-    journal = json.loads((config.change_dir / ".plan-publication.json").read_text())
+    # The old code's journal named only the four plan files.
+    path = config.change_dir / ".plan-publication.json"
+    journal = json.loads(path.read_text())
+    journal.pop("plan-edits-1.diff")
+    path.write_text(json.dumps(journal))
     assert set(journal) <= {"design.md", "tasks.md", "unknowns.md", "rubric.md"}
     saved = _old_audit_steps(
         config,

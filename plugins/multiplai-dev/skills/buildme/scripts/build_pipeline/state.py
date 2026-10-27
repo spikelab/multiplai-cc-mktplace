@@ -39,7 +39,7 @@ class StepOutcome(BaseModel):
     reason: str = ""
     repair_attempts: int = 0
     blocking_findings: str = ""
-    # The findings the step's one rewrite was asked to fix, numbered, saved as
+    # The findings the step's latest rewrite was asked to fix, numbered, saved as
     # the rewrite is admitted; the recheck adds each one's status and evidence.
     repair_findings: list[dict] = Field(default_factory=list)
     # The step's revision when findings finally blocked it. A resume at another
@@ -47,6 +47,9 @@ class StepOutcome(BaseModel):
     blocked_revision: str | None = None
     # `PLAN_RULES_VERSION` when recorded; 0 for a checkpoint written before it.
     rules_version: int = 0
+    # The blocking count each admitted rewrite started from, one per
+    # admission. A recheck that does not lower the last one blocks the step.
+    blocking_counts: list[int] = Field(default_factory=list)
 
 
 # The plan files each step's outcome is tied to (`SpecGenState.step_revision`),
@@ -67,6 +70,8 @@ STEP_INPUTS: dict[str, frozenset[str]] = {
             "config.yaml",
             "references",
             "granularity",
+            # config.yaml's `planning:` section (`spec_generator.PLANNING_KEY`).
+            "planning",
         }
     ),
 }
@@ -151,14 +156,27 @@ class SpecGenState(BaseModel):
         step = self.steps.get(name)
         return step.repair_attempts if step else 0
 
-    def admit_repair(self, name: str, findings: list[dict] | None = None) -> None:
-        if self.repair_attempts(name):
+    def admit_repair(
+        self,
+        name: str,
+        findings: list[dict] | None = None,
+        *,
+        max_rewrites: int = 1,
+        start_count: int = 0,
+    ) -> None:
+        """Admit one more rewrite, which starts from *start_count* blocking
+        findings. Raises when *max_rewrites* are already admitted."""
+        attempts = self.repair_attempts(name)
+        if attempts >= max_rewrites:
             raise RuntimeError(
-                f"{name} repair already attempted; resolve blocking findings before resuming"
+                f"{name}: {attempts} of {max_rewrites} rewrites already attempted; "
+                "resolve blocking findings before resuming"
             )
+        counts = list(self.steps[name].blocking_counts) if name in self.steps else []
         self.record_step(name, "blocked", "Repair admitted; validation pending")
-        self.steps[name].repair_attempts = 1
+        self.steps[name].repair_attempts = attempts + 1
         self.steps[name].repair_findings = [dict(f) for f in findings or []]
+        self.steps[name].blocking_counts = [*counts, start_count]
 
     def step_revision(self, name: str) -> str:
         if name not in STEP_INPUTS:
@@ -196,6 +214,7 @@ class SpecGenState(BaseModel):
             repair_findings=previous.repair_findings if previous else [],
             blocked_revision=blocked_revision,
             rules_version=PLAN_RULES_VERSION,
+            blocking_counts=previous.blocking_counts if previous else [],
         )
 
 

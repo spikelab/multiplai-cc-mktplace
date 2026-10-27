@@ -15,6 +15,17 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.120.0] - 2026-10-27
+
+### Added
+- **buildme**: `planning.max_rewrites` (default `2`) and `planning.max_usd` (default `40`) in `specs/config.yaml`. The plan check stops the build after that many rewrites, or once the planning calls have spent that much. Raising either one and resuming gives a stopped check its rewrites again and regenerates nothing.
+- **buildme**: each plan rewrite's changes are saved as `plan-edits-<n>.diff` in the change dir.
+
+### Changed
+- **buildme**: a plan rewrite now edits `design.md` and `tasks.md` in place instead of writing them again. Lines no finding names stay as they were. An edit whose text is not found exactly once, or edits that change nothing, stop the build with a blocking finding.
+- **buildme**: the recheck after a rewrite is shown the lines the rewrite changed. Findings that still block get another rewrite, up to `planning.max_rewrites`; the check stops early when a rewrite leaves as many blocking findings as the one before.
+- **buildme**: the explainer calls are now counted under their own `explainer` label in the budget summary.
+
 ## [0.119.0] - 2026-10-27
 
 ### Changed

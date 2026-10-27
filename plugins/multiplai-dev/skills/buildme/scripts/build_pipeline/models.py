@@ -522,6 +522,24 @@ class PlanReviewResult(BaseModel):
     prior_assessments: list[PriorAssessment] = Field(default_factory=list)
 
 
+class PlanEdit(BaseModel):
+    """One exact replacement in design.md or tasks.md, which
+    `spec_generator.apply_plan_edits` applies. `old_str` must occur exactly
+    once in the file as the edits before it leave it."""
+
+    file: Literal["design.md", "tasks.md"]
+    old_str: str
+    new_str: str
+
+
+class PlanEdits(BaseModel):
+    """Structured output of one plan rewrite (`PLAN_EDIT_PROMPT`)."""
+
+    edits: list[PlanEdit] = Field(default_factory=list)
+    # The finding ids it could not fix, with no edit for them.
+    not_fixed: list[str] = Field(default_factory=list)
+
+
 class GateResult(BaseModel):
     passed: bool
     reason: str
