@@ -21,6 +21,15 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-10-27
+
+### Fixed
+
+- **plane: `update --label none` removes every label from an issue.** Before,
+  there was no way to leave an issue with no labels: `--label` replaces the
+  whole list, and an empty list could not be sent. `none` cannot be combined
+  with other `--label` values.
+
 ## [0.13.0] - 2026-10-27
 
 ### Changed
