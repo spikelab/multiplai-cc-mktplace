@@ -61,6 +61,23 @@ about a finding the page does not show, read it from `findings.json`.
   page's Full walkthrough dialog, you run codebase-walkthrough (step 6),
   which sends the repository to a model and spends up to $50; for a PR it
   also runs `gh pr view`.
+- **Reads Claude Code transcripts and runs gitleaks for Export zip.** The
+  page's **Export zip** button (shown for a saved review) asks the server for
+  one zip of the review folder, its earlier rounds, the decisions and
+  questions, and the transcripts of the sessions that ran the review: each
+  `session_id` in `review-state.json` `runs` and in the review skill's
+  `<data_dir>/reviews/ledger.jsonl` lines for this folder, read from
+  `$CLAUDE_CONFIG_DIR/projects/*/<session_id>.jsonl` (else `~/.claude`) with
+  that session's `subagents/` and `tool-results/`. It copies them into a
+  temporary directory, runs `gitleaks dir` over all of it, and sends the zip
+  only when gitleaks finds nothing. A hit refuses the export (409) with each
+  hit's file, line and rule, never the value; there is no redaction and no
+  override. Without `gitleaks` on `PATH` the export is refused (503). The
+  temporary directory is deleted after each request. The zip never holds
+  `tree/`, `paths-cache/`, `viewer/server.token`, `viewer/open.html`,
+  `viewer/server.json` or `viewer/target.json`. `MANIFEST.txt` in the zip
+  lists every file with its size, the review's version, the gitleaks
+  version, and any session whose transcript was not found.
 - **Never calls a model.** You, the session, write the summary; the
   server only checks and serves it. The page loads highlight.js, marked and
   DOMPurify from cdnjs.cloudflare.com (pinned versions, with integrity
@@ -71,6 +88,8 @@ about a finding the page does not show, read it from `findings.json`.
 - **`uv`** (https://docs.astral.sh/uv/). The server runs via `uv run`.
 - **`git`**, and a local clone of the repository.
 - **`gh`** (https://cli.github.com), logged in, for PR targets only.
+- **`gitleaks`** (https://github.com/gitleaks/gitleaks, `brew install
+  gitleaks`), for Export zip only.
 - Optionally a `findings.json` that validates against
   `schema/findings.v1.schema.json`.
 

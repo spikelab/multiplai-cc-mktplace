@@ -313,6 +313,18 @@
     return "https://github.com/" + m[1] + "/blob/" + sha + "/" + String(path).split("/").map(encodeURIComponent).join("/") + lines;
   }
 
+  /* What the Export zip dialog says when the server refuses: a 409 lists where gitleaks found
+   * something (file, line, rule; never the value), anything else gives the server's reason. */
+  function exportRefusal(status, data) {
+    const d = data || {};
+    if (status === 409) {
+      const rows = (d.leaks || []).map((h) => h.file + (h.line ? ":" + h.line : "") + " (" + (h.rule || "unknown rule") + ")");
+      return { title: "Not exported: gitleaks found possible secrets", lines: rows,
+        advice: "Remove these from the transcript or files, or share the folder another way." };
+    }
+    return { title: "Not exported", lines: [d.error || "HTTP " + status], advice: "" };
+  }
+
   /* A finding's heading: the review's plain-language title (multiplai-dev 0.113+), else its claim. */
   function findingTitle(f) {
     return (f && f.title) || (f && f.claim) || "";
@@ -1594,7 +1606,7 @@
     SEVERITIES: SEVERITIES, joinParts: joinParts, groupReplies: groupReplies,
     isPending: isPending, pollDelay: pollDelay, applyPoll: applyPoll, citationRows: citationRows,
     isHidden: isHidden, groupFindings: groupFindings, findingOrder: findingOrder, navOrder: navOrder,
-    findingTitle: findingTitle,
+    findingTitle: findingTitle, exportRefusal: exportRefusal,
     lowToggleLabel: lowToggleLabel,
     githubBlobUrl: githubBlobUrl, findingFileName: findingFileName, shareOptions: shareOptions, shareText: shareText, findingTopic: findingTopic, findingMarkdown: findingMarkdown,
     assessLabel: assessLabel, shownFindings: shownFindings, shownFile: shownFile, findingSection: findingSection,
