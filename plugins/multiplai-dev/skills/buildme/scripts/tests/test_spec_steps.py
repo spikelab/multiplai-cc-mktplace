@@ -525,9 +525,9 @@ class TestEveryBlockAddsBehaviour:
         self,
         tmp_path,
     ):
-        """The audit's prompt carries the rule and its remedy, leaving the
-        severity to the model, and a finding the model reports under it comes
-        back to the caller, which turns every finding into the one rewrite."""
+        """The audit's prompt carries the rule, its remedy and its severity
+        (critical, as the plan review's scale says), and a finding the model
+        reports under it comes back to the caller."""
         change_dir = tmp_path / "changes" / "feat"
         change_dir.mkdir(parents=True)
         (change_dir / "design.md").write_text("# Design")
@@ -547,7 +547,9 @@ class TestEveryBlockAddsBehaviour:
         section = prompt[prompt.index("## Blocks That Add No Behaviour") :]
         section = section[: section.index("\n## ", 1)]
         assert '(category "no-new-behaviour")' in section
-        assert "critical" not in section
+        assert "tests would pass before it is built is **critical**" in " ".join(
+            section.split()
+        )
         assert "tests would pass" in section
         assert "into the block that builds the behaviour" in section
         assert [f["category"] for f in findings] == ["no-new-behaviour"]

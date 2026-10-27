@@ -795,13 +795,18 @@ class TestPlanReviewStage:
         assert state.spec_gen.step_passed("plan_review") is False
 
     @pytest.mark.asyncio
-    async def test_a_recorded_regeneration_is_report_only_on_resume(self, tmp_path):
+    async def test_a_legacy_recorded_regeneration_gets_one_fresh_rewrite(
+        self, tmp_path
+    ):
+        """A legacy `plan_review_regen_done` flag was recorded before
+        `rules_version`, so the step is reopened once (row S9): one rewrite,
+        one recheck, and the unresolved critical finding then blocks."""
         config, state, state_path = _stage_setup(tmp_path)
         state.spec_gen = SpecGenState(plan_review_regen_done=True)
         review = AsyncMock(
             return_value=PlanReviewResult(findings=[_finding(severity="critical")])
         )
-        regen = AsyncMock()
+        regen = AsyncMock(return_value="## 1. Behavior\n- [ ] do it properly\n")
         with (
             patch.object(plan_review_steps, "run_plan_review", review),
             patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen),
@@ -811,8 +816,8 @@ class TestPlanReviewStage:
                     config.change_dir, config, state, state_path
                 )
 
-        regen.assert_not_awaited()
-        assert review.await_count == 1
+        assert regen.await_count == 1
+        assert review.await_count == 2
         assert state.spec_gen.step_passed("plan_review") is False
 
     @pytest.mark.asyncio
