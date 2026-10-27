@@ -374,7 +374,12 @@ def refuse_at_round_cap(run: Run) -> None:
     call) to check again unless `--check-again` asks for one more round."""
     step = run.state.steps.get(NAME)
     cap = run.config.consistency_max_rounds
-    if not step or step.outcome != "blocked" or step.reviewed_blocks < cap:
+    if (
+        not step
+        or step.outcome != "blocked"
+        or step.reviewed_blocks < cap
+        or not _open(step)
+    ):
         return
     if run.check_again:
         log.warning("consistency: past the round cap (%d); one more round", cap)

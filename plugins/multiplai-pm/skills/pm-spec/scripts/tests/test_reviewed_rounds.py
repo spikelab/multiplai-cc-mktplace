@@ -186,3 +186,15 @@ def test_the_round_cap_stops_checking_until_accept_or_check_again(repo, model, c
     assert len(model.calls) == calls + 1
     cdir = change_dir(repo)
     assert layout.ready(cdir) == (True, "")
+
+
+def test_past_the_round_cap_accepting_every_open_finding_checks_the_edit(repo, model):
+    write(repo / "specs" / "config.yaml", "consistency:\n  max_rounds: 1\n")
+    git(repo, "add", "specs/config.yaml")
+    git(repo, "commit", "-qm", "config")
+    blocked_once(repo, model, answer())
+    reviewer_edit(repo, repo.parent / "reviewer", "60 a minute everywhere")
+    calls = len(model.calls)
+    code = run(repo, *RESUME, "--accept", "CC-F1", "--accept-reason", "fine as is")
+    assert code == 0
+    assert len(model.calls) == calls + 1
