@@ -15,6 +15,11 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.128.0] - 2026-10-28
+
+### Changed
+- **buildme**: the check after each block's refactor runs only the block's own tests, not the whole `tdd.test_command`. The integration gate runs the whole suite on the same tree right after, so the second whole run caught nothing the gate does not; it cost one whole-suite run per block. When the integration gate is red, buildme now discards the block's refactor commit and runs the gate again before starting a fix agent. A refactor that breaks a test outside the block is still discarded, not fixed.
+
 ## [0.127.0] - 2026-10-28
 
 ### Added

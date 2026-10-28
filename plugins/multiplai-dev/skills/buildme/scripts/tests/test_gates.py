@@ -1451,7 +1451,10 @@ class TestParallelFullSuite:
         probe.assert_not_called()
 
     def test_every_full_suite_gate_in_the_engine_passes_the_setting(self):
-        """`tdd.parallel` reaches every integration and baseline gate call.
+        """`tdd.parallel` reaches every integration and baseline gate call
+        that runs the whole suite. A call given the block's own tests
+        (`_block_test_command(...)`) is not one: the setting is for the whole
+        suite.
 
         The calls are found by AST, not by text, so a call the formatter has
         wrapped across lines is still seen.
@@ -1467,6 +1470,11 @@ class TestParallelFullSuite:
             for node in ast.walk(ast.parse(inspect.getsource(tdd_engine)))
             if isinstance(node, ast.Call)
             and getattr(node.func, "id", getattr(node.func, "attr", None)) in gates
+            and not (
+                node.args
+                and isinstance(node.args[0], ast.Call)
+                and getattr(node.args[0].func, "id", None) == "_block_test_command"
+            )
         ]
         assert calls  # every call must pass the setting; adding a gate is allowed
         missing = [
