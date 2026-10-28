@@ -165,7 +165,7 @@
         if (stop.n === 5) return "Approved";
         return (stop.approved_by || []).length
           ? "Approved by " + namesText(stop.approved_by, me)
-          : "Passed (no approval was needed or recorded on the page)";
+          : "Passed without an approval on this page";
       case "decided_by_agent":
         return agent + " decided, because nobody replied in time";
       case "rework_requested":
@@ -175,7 +175,8 @@
     }
     if (stop.n === 5) {
       return stop.waiting_on && stop.waiting_on.length
-        ? "The pull request is open; " + namesText(stop.waiting_on, me) + " reviews it on GitHub"
+        ? "The pull request is open; " + namesText(stop.waiting_on, me) +
+          (stop.waiting_on.length === 1 && stop.waiting_on[0] !== me ? " reviews" : " review") + " it on GitHub"
         : "The pull request is open";
     }
     const waited = since(stop.waiting_since, now);

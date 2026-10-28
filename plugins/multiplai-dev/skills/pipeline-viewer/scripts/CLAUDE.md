@@ -24,7 +24,7 @@ cd plugins/multiplai-dev/skills/pipeline-viewer/scripts && \
 | `slack.py` | One post per stop revision (`notified.json`), thread replies; `SLACK_TOKEN` only handed to `slack_sdk`. |
 | `buildme.py` | Imports `write_issues` and `epic_dir_for` from `../../buildme/scripts` (not a declared dependency: uv refuses a workspace member as a path source). |
 | `server.py` | `ThreadingHTTPServer`, the routes of `API.md`, people.json auth (re-read on change), the deadline thread. |
-| `static/` | The page (chunk C). Until then a placeholder `index.html`. |
+| `static/` | The page, vanilla JS with no build step. `boot.js` takes the token out of `?t=` and keeps it for the origin, and applies the theme; `logic.js` holds the pure functions (tested by `tests/logic.test.js` under node); `app.js` the views (changes list, one change's stops and build, review mode); `tokens.css` is a copy of the neutral design system's tokens (`test_static.py` checks it matches), because the CSP allows no inline style. |
 
 ## Decision commits
 

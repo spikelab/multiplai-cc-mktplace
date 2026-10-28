@@ -177,7 +177,10 @@ test("a waiting stop says who, how long, and when Claude decides", () => {
 test("finished stops say how they ended", () => {
   assert.equal(L.stopLine({ n: 2, state: "approved", approved_by: ["Pat"] }, {}), "Approved by Pat");
   assert.equal(L.stopLine({ n: 2, state: "approved", approved_by: [] }, {}),
-    "Passed (no approval was needed or recorded on the page)");
+    "Passed without an approval on this page");
+  const pr = { n: 5, state: "waiting", waiting_on: ["Eli"] };
+  assert.equal(L.stopLine(pr, { me: "Eli" }), "The pull request is open; you review it on GitHub");
+  assert.equal(L.stopLine(pr, { me: "Pat" }), "The pull request is open; Eli reviews it on GitHub");
   assert.equal(L.stopLine({ n: 3, state: "decided_by_agent" }, { agent: "Claude" }),
     "Claude decided, because nobody replied in time");
   assert.equal(L.stopLine({ n: 1, state: "rework_requested", rework_by: ["Pat"] }, { me: "Pat" }),
