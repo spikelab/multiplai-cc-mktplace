@@ -1127,7 +1127,9 @@ class TestDiffPathHelpers:
         assert docs_freshness_gate(diff, [], tmp_path).action == "docs_may_be_stale"
 
     def test_specs_are_the_builds_paperwork_not_source(self):
-        diff = _diff_for("specs/changes/c/design.md", "src/app.py", "README.md")
+        diff = _diff_for(
+            "specs/changes/c/implementation-plan.md", "src/app.py", "README.md"
+        )
         assert source_paths_in_diff(diff) == ["src/app.py"]
 
 

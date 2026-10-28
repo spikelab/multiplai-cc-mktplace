@@ -333,7 +333,7 @@ class TestStartRefusal:
         assert config.feature_branch == f"ENG-1-{CHANGE}"
         wt = _worktree(tmp_path)
         assert _git(wt, "merge-base", "--is-ancestor", pushed, "HEAD") == ""
-        assert (wt / "specs" / "changes" / CHANGE / "design.md").is_file()
+        assert (wt / "specs" / "changes" / CHANGE / "implementation-plan.md").is_file()
         assert not change_dir.exists(), "the checkout is never written"
 
     @pytest.mark.asyncio
@@ -377,7 +377,7 @@ class TestStartRefusal:
             repo, Models(), git=GitToggles(worktree=False, push=False, pr="none")
         )
         assert rc == 0, capsys.readouterr().err
-        assert (change_dir / "design.md").is_file()
+        assert (change_dir / "implementation-plan.md").is_file()
 
     @pytest.mark.asyncio
     async def test_ready_committed_specs_build_and_buildme_never_writes_them(
@@ -406,7 +406,9 @@ class TestStartRefusal:
         )
         for name, data in what.items():
             assert (built / name).read_bytes() == data, name
-        assert (built / "design.md").is_file() and (built / "tasks.md").is_file()
+        assert (built / "implementation-plan.md").is_file() and (
+            built / "tasks.md"
+        ).is_file()
         generated = [c.args[0] for c in models.generate.await_args_list]
         assert not set(generated) & {"proposal", "use-cases", "requirements"}
 
@@ -443,7 +445,7 @@ class TestDesignSpecIssue:
         assert "## Design: requirements/fixture.md: Behavior" in text
         assert "add a requirement for the store" in text
         assert read_change_meta(built)["spec_issues"] == "spec-issues.md"
-        assert not (built / "design.md").exists(), (
+        assert not (built / "implementation-plan.md").exists(), (
             "a design with spec issues is not published"
         )
         state = BuildState.load(built / ".build-state.json")
@@ -454,7 +456,10 @@ class TestDesignSpecIssue:
         asked = len(models.prompts)
         rc = await _build(repo, models)
         assert rc == 0, capsys.readouterr().err
-        assert "Keep the value in a store" in (built / "design.md").read_text()
+        assert (
+            "Keep the value in a store"
+            in (built / "implementation-plan.md").read_text()
+        )
         assert "### Requirement: Store" in models.prompts[asked], (
             "the design reads the revised requirements"
         )
@@ -511,7 +516,7 @@ class TestPlanCheckSpecIssue:
     GAP = PlanReviewFinding(
         category="coverage",
         severity="major",
-        file_path="design.md",
+        file_path="implementation-plan.md",
         location="Decisions",
         claim="Behavior needs a store no requirement asks for",
         suggestion="add a Store requirement",
@@ -777,7 +782,9 @@ class TestOldCheckpoints:
             out = capsys.readouterr().out
             assert rc == 0, out
             assert "SPEC:NOT_READY" not in out
-            assert (built / "design.md").is_file() and (built / "tasks.md").is_file()
+            assert (built / "implementation-plan.md").is_file() and (
+                built / "tasks.md"
+            ).is_file()
 
 
 # --- the copy the build reads: --base-ref and a resumed worktree (S7, S10) ----
@@ -815,7 +822,11 @@ class TestTheCopyTheBuildReads:
         rc = await _build(repo, Models(), base_ref=_git(repo, "rev-parse", "HEAD"))
         assert rc == 0, capsys.readouterr().out
         assert (
-            _worktree(tmp_path) / "specs" / "changes" / CHANGE / "design.md"
+            _worktree(tmp_path)
+            / "specs"
+            / "changes"
+            / CHANGE
+            / "implementation-plan.md"
         ).is_file()
 
     @staticmethod

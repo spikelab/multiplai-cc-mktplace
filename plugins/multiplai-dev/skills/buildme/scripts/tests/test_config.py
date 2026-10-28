@@ -746,7 +746,7 @@ class TestPathOverrides:
         assert config.change_dir == archived
         assert config.tasks_path == archived / "findings-r1-tasks.md"
         assert config.state_file_path() == archived / ".findings-r1-state.json"
-        assert config.design_path == archived / "design.md"
+        assert config.design_path == archived / "implementation-plan.md"
 
     def test_a_relative_override_is_read_under_specs(self, tmp_path):
         config = self._config(tmp_path)

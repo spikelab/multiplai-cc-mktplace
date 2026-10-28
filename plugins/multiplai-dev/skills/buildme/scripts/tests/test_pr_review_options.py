@@ -27,7 +27,7 @@ PR_12 = [
     "specs/changes/word-freq/components/word-frequencies/.build-state.json",
     "specs/changes/word-freq/components/word-frequencies/.change.yaml",
     "specs/changes/word-freq/components/word-frequencies/codebase-analysis.md",
-    "specs/changes/word-freq/components/word-frequencies/design.md",
+    "specs/changes/word-freq/components/word-frequencies/implementation-plan.md",
     "specs/changes/word-freq/components/word-frequencies/facts.json",
     "specs/changes/word-freq/components/word-frequencies/implementation-notes.md",
     "specs/changes/word-freq/components/word-frequencies/mutation.md",
@@ -52,7 +52,7 @@ KEPT = [
 ]
 LEFT_OUT = [
     "build-progress.md",
-    "specs/archive/2026-10-23-word-freq/design.md",
+    "specs/archive/2026-10-23-word-freq/implementation-plan.md",
     "specs/changes/word-freq/components/word-frequencies/pr-sections/worktree.md",
     "specs/changes/word-freq/components/word-frequencies/.findings-r1-state.json",
 ]

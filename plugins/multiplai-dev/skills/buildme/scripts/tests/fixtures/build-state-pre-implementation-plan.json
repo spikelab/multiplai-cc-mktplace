@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "verification": null,
+  "publication": "pending",
+  "completion_kind": "pending",
+  "publish_sections": [],
+  "change_name": "legacy-plan",
+  "tier": "advanced",
+  "phase": "spec_generation",
+  "bootstrap_done": false,
+  "research_path": null,
+  "split_required": false,
+  "size_accepted": false,
+  "worktree_path": null,
+  "branch": null,
+  "source_repo": null,
+  "pr_url": null,
+  "base_sha": null,
+  "failed_stop": null,
+  "docs_impact": [],
+  "spec_gen": {
+    "revision": "c2821f780b8fd7ae0087803cdaf453656c72578a8abfb78e7768e63fb996652a",
+    "artifact_hashes": {
+      "proposal.md": "f09263d8998e896ea7ca3f1d05d2c17ed21538af4884408a5d48b362065a564a",
+      "use-cases.md": "7e213402d4944509fba7d50357e397a4829968db1cf1e0e069b80173840d4987",
+      "design.md": "6c806b255b873581a3d30dcd7d737442676f2743e6e568f0caeee20f48f95f1c",
+      "unknowns.md": "cd14dd3b12a1077b844b52fbf3dd25ba7b4f781ac7d66ba87359f1a408cb48a7",
+      "tasks.md": "2240189e91e2fc0705d2548215eb163bce1baf6a4d0142bfc99c94ed7682ea9f",
+      "rubric.md": "62382e68c0d5812f6b05346c2e155163e679ffa34dfbff9d503db105058d2d41",
+      "requirements/export.md": "861e252784a4dd2d9addcb78df8228b6449f5430530c091d7067b87a70c11918",
+      "references": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "granularity": "77f38a275aeaaed5d35803c7a4a3200e9006c3c3473b33108dfc5f457de936f7"
+    },
+    "stale_artifacts": [],
+    "steps": {
+      "explainers": {
+        "revision": "0e04e9446df5da12462232b86af5c73bd0948362a748bceb55d59d0be6e8b55e",
+        "outcome": "skipped",
+        "reason": "",
+        "repair_attempts": 0,
+        "blocking_findings": "",
+        "repair_findings": [],
+        "blocked_revision": null,
+        "rules_version": 1,
+        "blocking_counts": []
+      },
+      "plan_review": {
+        "revision": "c2821f780b8fd7ae0087803cdaf453656c72578a8abfb78e7768e63fb996652a",
+        "outcome": "passed",
+        "reason": "",
+        "repair_attempts": 0,
+        "blocking_findings": "",
+        "repair_findings": [],
+        "blocked_revision": null,
+        "rules_version": 1,
+        "blocking_counts": []
+      }
+    },
+    "expected_capabilities": [],
+    "requirements_source": "",
+    "requirements_members": {},
+    "completed_artifacts": [
+      "design",
+      "unknowns",
+      "tasks",
+      "rubric"
+    ],
+    "research_path": null,
+    "codebase_analysis_path": null,
+    "spec_extract_sha": null
+  },
+  "tdd": null,
+  "findings": null,
+  "budget": {},
+  "state_file": "",
+  "started_at": "2026-10-27T09:00:00+00:00",
+  "updated_at": "2026-10-27T09:00:00+00:00"
+}

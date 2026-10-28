@@ -494,7 +494,7 @@ def _accepted_at_publish(tmp_path, monkeypatch, change: str):
     (config.specs_dir / "registry" / "cap-a.md").write_text(
         REQUIREMENT.format(title="before")
     )
-    for name in ("design", "unknowns", "tasks", "rubric"):
+    for name in ("implementation-plan", "unknowns", "tasks", "rubric"):
         (config.change_dir / f"{name}.md").write_text(f"# {name}\n")
     (project / "app.py").write_text("value = 1\n")
     _git(project, "add", ".")

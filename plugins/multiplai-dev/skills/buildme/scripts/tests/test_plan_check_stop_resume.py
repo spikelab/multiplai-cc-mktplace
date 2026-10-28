@@ -35,7 +35,7 @@ REWRITES = [
     "## 1. Behavior\n- [ ] do it properly\n",
     "## 1. Behavior\n- [ ] do it right\n",
 ]
-PLAN_FILES = ("design.md", "tasks.md", "unknowns.md", "rubric.md")
+PLAN_FILES = ("implementation-plan.md", "tasks.md", "unknowns.md", "rubric.md")
 
 
 class Killed(BaseException):
@@ -252,7 +252,7 @@ async def test_S4_a_missed_edit_refuses_until_the_plan_is_edited(tmp_path):
     calls = (plan.check_calls, plan.edit_calls)
     assert isinstance(await plan.run(), PlanBlocked)
     assert (plan.check_calls, plan.edit_calls) == calls
-    design = plan.config.change_dir / "design.md"
+    design = plan.config.change_dir / "implementation-plan.md"
     design.write_text(design.read_text() + "Edited by the user.\n")
     assert await plan.run() is None
     step = plan.state().spec_gen.steps[STEP]
@@ -446,7 +446,7 @@ async def test_S12_an_edit_after_a_block_gets_a_fresh_count(tmp_path):
     )
     assert isinstance(await plan.run(), PlanBlocked)
     plan.writes = ["## 1. Behavior\n- [ ] do it again\n", REWRITES[1]]
-    design = plan.config.change_dir / "design.md"
+    design = plan.config.change_dir / "implementation-plan.md"
     design.write_text(design.read_text() + "Edited by the user.\n")
     assert await plan.run() is None
     step = plan.state().spec_gen.steps[STEP]

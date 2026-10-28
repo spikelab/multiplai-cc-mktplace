@@ -188,7 +188,9 @@ async def test_pm_spec_ready_specs_build_to_tdd_and_an_edit_refuses(
     assert _git(wt, "branch", "--show-current") == branch
     for name in ("proposal.md", "use-cases.md", "plan.md", "specs.md"):
         assert (built / name).read_bytes() == (change_dir / name).read_bytes(), name
-    assert (built / "design.md").is_file() and (built / "tasks.md").is_file()
+    assert (built / "implementation-plan.md").is_file() and (
+        built / "tasks.md"
+    ).is_file()
     generated = {c.args[0] for c in models.generate.await_args_list}
     assert generated == {"design", "tasks"}, generated
 
@@ -252,4 +254,4 @@ async def test_an_old_handoff_is_refused_until_pm_spec_resume_moves_it(
 
     rc, reached = await _build_to_tdd(repo, Models())
     assert rc is None, capsys.readouterr().out
-    assert (reached["change_dir"] / "design.md").is_file()
+    assert (reached["change_dir"] / "implementation-plan.md").is_file()

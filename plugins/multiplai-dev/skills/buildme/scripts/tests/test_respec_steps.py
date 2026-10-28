@@ -60,7 +60,7 @@ def _make_config(tmp_path: Path, change_name: str = "test-change") -> BuildConfi
 
 
 def _seed_specs(config: BuildConfig) -> dict[Path, str]:
-    """Write requirements/*.md + design.md; return path → sha256 of each."""
+    """Write requirements/*.md + implementation-plan.md; return path → sha256 of each."""
     req_dir = config.change_dir / "requirements"
     req_dir.mkdir(parents=True, exist_ok=True)
     files = {
@@ -70,7 +70,8 @@ def _seed_specs(config: BuildConfig) -> dict[Path, str]:
         req_dir / "auth.md": (
             "### Requirement: Authenticate\nThe system SHALL authenticate.\n"
         ),
-        config.change_dir / "design.md": "# Design\nUploads are synchronous.\n",
+        config.change_dir
+        / "implementation-plan.md": "# Design\nUploads are synchronous.\n",
     }
     for path, text in files.items():
         path.write_text(text)

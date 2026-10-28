@@ -156,7 +156,7 @@ class TestArtifactStatus:
     def test_all_done(self, cm, specs_dir):
         change = cm.create_change("test")
         _inputs(change)
-        for name in ("design", "unknowns", "tasks", "rubric"):
+        for name in ("implementation-plan", "unknowns", "tasks", "rubric"):
             (change / f"{name}.md").write_text("x")
         status = cm.artifact_status(change)
         assert all(s == ArtifactStatus.DONE for s in status.values())
@@ -166,7 +166,7 @@ class TestArtifactStatus:
         before the edge cases of anything new are on disk."""
         change = cm.create_change("test")
         _inputs(change)
-        (change / "design.md").write_text("x")
+        (change / "implementation-plan.md").write_text("x")
         status = cm.artifact_status(change)
         assert status["unknowns"] == ArtifactStatus.READY
         assert status["tasks"] == ArtifactStatus.BLOCKED
@@ -178,7 +178,7 @@ class TestArtifactStatus:
     ):
         change = cm.create_change("test")
         _inputs(change)
-        (change / "design.md").write_text("x")
+        (change / "implementation-plan.md").write_text("x")
         (change / "unknowns.md").write_text("x")
         status = cm.artifact_status(change)
         assert status["tasks"] == ArtifactStatus.READY
@@ -188,7 +188,7 @@ class TestArtifactStatus:
         breakdown is not written until the use cases are on disk."""
         change = cm.create_change("test")
         _inputs(change, use_cases=False)
-        (change / "design.md").write_text("x")
+        (change / "implementation-plan.md").write_text("x")
         (change / "unknowns.md").write_text("x")
         status = cm.artifact_status(change)
         assert status["tasks"] == ArtifactStatus.BLOCKED
@@ -232,7 +232,7 @@ class TestArtifactContext:
         ctx = cm.artifact_context(change, "design")
         assert "## Decisions" in ctx["template"]
         assert ctx["instruction"]
-        assert ctx["output_path"] == "design.md"
+        assert ctx["output_path"] == "implementation-plan.md"
 
     def test_includes_dependency_paths(self, cm):
         change = cm.create_change("test")
@@ -366,7 +366,7 @@ class TestInitSpecs:
 
 
 class TestExtractGlobalConstraints:
-    """design.md's `## Global Constraints` body is threaded into agent prompts."""
+    """implementation-plan.md's `## Global Constraints` body is threaded into agent prompts."""
 
     def test_extracts_section_body_verbatim(self):
         design = (
@@ -440,7 +440,7 @@ def test_requirements_need_every_proposed_capability(tmp_path):
     (change / "requirements" / "one.md").write_text(
         "## ADDED Requirements\n### Requirement: One\nRequired.\n#### Scenario: Works\n- **WHEN** called\n- **THEN** succeeds\n"
     )
-    (change / "design.md").write_text("x")
+    (change / "implementation-plan.md").write_text("x")
     (change / "unknowns.md").write_text("x")
     (change / "tasks.md").write_text("## 1. Both\nImplement both capabilities")
     assert cm.missing_inputs(change) == ["requirements/*.md"]

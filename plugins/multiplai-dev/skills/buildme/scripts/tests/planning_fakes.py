@@ -22,7 +22,7 @@ def _plan_fixture(config, state):
         "tasks": "## 1. Behavior\nReturn a value",
         "rubric": "# Rubric",
     }.items():
-        path = root / f"{name}.md"
+        path = root / ARTIFACT_DAG[name]["generates"]
         if not path.exists():
             path.write_text(text)
     reconcile_plan(config, state, regenerated=set(ARTIFACT_DAG))

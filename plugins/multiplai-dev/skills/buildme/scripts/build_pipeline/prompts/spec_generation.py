@@ -170,13 +170,13 @@ Output ONLY the markdown content. No commentary.
 
 
 PLAN_EDIT_PROMPT = """\
-You are fixing findings in a change's plan: its design.md and tasks.md. Fix
+You are fixing findings in a change's plan: its implementation-plan.md and tasks.md. Fix
 them by editing the documents in place. Do not rewrite them.
 
 ## Findings to fix
 {findings}
 
-## design.md
+## implementation-plan.md
 {design_content}
 
 ## tasks.md
@@ -197,7 +197,7 @@ them by editing the documents in place. Do not rewrite them.
 ## Instructions
 - Return the smallest set of exact replacements that fixes the findings.
   Change nothing a finding does not need changed.
-- Each edit names its file (`design.md` or `tasks.md`), an `old_str` copied
+- Each edit names its file (`implementation-plan.md` or `tasks.md`), an `old_str` copied
   exactly from that file, and the `new_str` that replaces it. Copy enough of
   the surrounding text that `old_str` occurs exactly once in the file.
 - Edits apply in order. A later edit's `old_str` is matched against the file

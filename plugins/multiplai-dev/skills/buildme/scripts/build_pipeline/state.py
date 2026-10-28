@@ -18,6 +18,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, model_validator
 
 from . import budget
+from .change_manager import PLAN_HASH_KEY
 from .findings.models import PRComment, SpecIssue, Triage
 from .models import BlockInfo, BlockStatus, BuildPhase
 from .stop_record import StepStop  # moved; `from .state import StepStop` keeps working
@@ -56,13 +57,15 @@ class StepOutcome(BaseModel):
 # besides specs.md and requirements/*.md, which every step reads. A step not
 # listed is tied to the whole plan revision.
 STEP_INPUTS: dict[str, frozenset[str]] = {
-    "explainers": frozenset({"proposal.md", "design.md", "config.yaml", "references"}),
+    "explainers": frozenset(
+        {"proposal.md", PLAN_HASH_KEY, "config.yaml", "references"}
+    ),
     # The one plan check: what the tasks audit and the design audit it replaced
     # read, plus the rubric.
     "plan_review": frozenset(
         {
             "tasks.md",
-            "design.md",
+            PLAN_HASH_KEY,
             "proposal.md",
             "use-cases.md",
             "unknowns.md",

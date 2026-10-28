@@ -9,7 +9,7 @@ concurrent / offline input?).
 The signal comes from two spec sections the generator already produces:
 
     proposal.md  → ``## Impact``    ("Affected code, APIs, dependencies, systems")
-    design.md    → ``## Decisions`` (the chosen libraries and services)
+    implementation-plan.md → ``## Decisions`` (the chosen libraries and services)
 
 Only **backtick-quoted tokens** inside those sections count as candidates.
 Prose names are deliberately ignored: an explainer per capitalized word would
@@ -56,6 +56,8 @@ from pathlib import Path
 
 from multiplai_core.specs import change_root
 from pydantic import BaseModel, Field
+
+from .change_manager import plan_path
 
 log = logging.getLogger(__name__)
 
@@ -800,7 +802,7 @@ def existing_import_names(project_dir: Path) -> set[str]:
 def detect_new_dependencies(change_dir: Path, project_dir: Path) -> list[NewDependency]:
     """Tools/libraries/services named in the specs but absent from the manifests.
 
-    Reads ``proposal.md``'s ``## Impact`` and ``design.md``'s ``## Decisions``,
+    Reads ``proposal.md``'s ``## Impact`` and the plan's ``## Decisions``,
     collects backtick-quoted tokens, and subtracts the stdlib, generic
     language/format words, the project's own modules, and every manifest-declared
     dependency. Returns one entry per surviving name, sorted, each carrying its
@@ -809,11 +811,11 @@ def detect_new_dependencies(change_dir: Path, project_dir: Path) -> list[NewDepe
     proposal = _read(
         change_root(change_dir) / "proposal.md"
     )  # a component's: its change's
-    design = _read(change_dir / "design.md")
+    design = _read(plan_path(change_dir))
 
     sources = [
         ("proposal.md § Impact", _section(proposal, _IMPACT_RE)),
-        ("design.md § Decisions", _section(design, _DECISIONS_RE)),
+        (f"{plan_path(change_dir).name} § Decisions", _section(design, _DECISIONS_RE)),
     ]
 
     declared, manifests = declared_dependencies(project_dir)
@@ -885,7 +887,7 @@ def design_decisions_text(change_dir: Path) -> str:
     Feeds the explainer's usage_context slot — how this project intends to use
     the dependency, so the explainer researches the relevant edge cases.
     """
-    return _section(_read(change_dir / "design.md"), _DECISIONS_RE).strip()
+    return _section(_read(plan_path(change_dir)), _DECISIONS_RE).strip()
 
 
 def _read(path: Path) -> str:

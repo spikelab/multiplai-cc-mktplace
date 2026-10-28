@@ -254,7 +254,7 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
 
         # Phase: Codebase Analysis — read the repo that already exists so the
         # design extends it instead of inventing a parallel structure. Runs
-        # before spec generation because design.md is its only consumer.
+        # before spec generation because implementation-plan.md is its only consumer.
         # Best-effort: an analysis failure costs grounding, never the build. The
         # spec-extract step after it ends the build only when spec-extract may
         # still write into specs/registry/ (`_run_spec_extract_step`).
@@ -1776,7 +1776,7 @@ def _print_review_context_paths(config: BuildConfig) -> None:
     edge cases are stated before anything is built on top of them. The
     codebase analysis follows, because it is what the design was written
     against: "why does it extend that module" is answered there, not in
-    design.md.
+    implementation-plan.md.
     """
     if config.unknowns_path.exists():
         print(f"REVIEW:READ_FIRST:{config.unknowns_path}", flush=True)

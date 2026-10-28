@@ -23,7 +23,7 @@ def _write_change(change_dir, *, impact: str = "", decisions: str = ""):
     (change_dir / "proposal.md").write_text(
         "## Why\nBecause.\n\n## What Changes\nStuff.\n\n## Impact\n" + impact + "\n"
     )
-    (change_dir / "design.md").write_text(
+    (change_dir / "implementation-plan.md").write_text(
         "## Context\nc\n\n## Decisions\n" + decisions + "\n\n## Risks / Trade-offs\nr\n"
     )
     return change_dir
@@ -137,7 +137,7 @@ class TestPrecision:
         (change / "proposal.md").write_text(
             "## Why\nWe like `polars`.\n\n## Impact\nNothing new.\n"
         )
-        (change / "design.md").write_text(
+        (change / "implementation-plan.md").write_text(
             "## Context\nToday we use `duckdb`.\n\n## Decisions\nNo new libraries.\n"
         )
         assert detect_new_dependencies(change, project) == []
@@ -247,7 +247,7 @@ class TestMisc:
         assert len(deps) == 1
         assert deps[0].mentioned_in == [
             "proposal.md § Impact",
-            "design.md § Decisions",
+            "implementation-plan.md § Decisions",
         ]
 
     def test_missing_spec_files_return_nothing(self, tmp_path, project):
@@ -646,7 +646,7 @@ class TestTemplateHeadingsFeedTheScan:
                 "## Impact\n\nAudio goes through `mlx-whisper`.\n",
             )
         )
-        (change / "design.md").write_text(
+        (change / "implementation-plan.md").write_text(
             TEMPLATES["design"].replace(
                 "## Decisions\n",
                 "## Decisions\n\nChart with `altair`.\n",
@@ -656,7 +656,7 @@ class TestTemplateHeadingsFeedTheScan:
             d.name: d.mentioned_in for d in detect_new_dependencies(change, project)
         }
         assert found["mlx-whisper"] == ["proposal.md § Impact"]
-        assert found["altair"] == ["design.md § Decisions"]
+        assert found["altair"] == ["implementation-plan.md § Decisions"]
 
     def test_use_cases_document_is_not_scanned_for_dependencies(
         self,

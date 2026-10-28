@@ -39,7 +39,7 @@ def _config(tmp_path, **kw) -> BuildConfig:
     project.mkdir(exist_ok=True)
     change = project / "specs" / "changes" / "test"
     change.mkdir(parents=True, exist_ok=True)
-    (change / "design.md").write_text("# Design")
+    (change / "implementation-plan.md").write_text("# Design")
     config = BuildConfig(
         project_dir=project,
         change_name="test",
