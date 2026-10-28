@@ -284,6 +284,18 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   and `review_metrics.py` read `reviewed_sha` only, so such a record, or one
   written before 0.96.6 with no `reviewed_sha` key, gives no scope diff and
   an `unknown` line origin.
+- **Notes for later blocks never reach the test writer, and cost nothing
+  when off.** Under `carry_block_notes` the implementer and review-fix agents
+  get `NOTES_FOR_LATER_BLOCKS_REQUEST` (`run_implementer(carry_notes=True)`),
+  `_record_handoff_note` keeps one `HandoffNote` per (role, round) on the block
+  (a re-run replaces it, so a resume never doubles it), and `assemble_context`
+  adds `HANDOFF_HEADING` with earlier blocks' notes for the `implementer` role
+  only. The test writer stays black-box, which is why it is a separate agent.
+  With the flag off, prompts and contexts are byte-identical to a build
+  without the feature (`tests/test_handoff_notes.py`); the benchmark's
+  `current` arm depends on that. Resume rows are S1-S8 in
+  plan-buildme-carry-block-notes-2026-10-27.md
+  (`tests/test_handoff_notes_stop_resume.py`).
 - **`SEARCHED:` is recorded, not gated.** Every review-fix brief ends with
   `prompts.implementation.REVIEW_FIX_SELF_CHECK`. `parse_searched` puts the
   section in the round record; a missing one is `searched: null` and a

@@ -649,6 +649,20 @@ class ImplementationNote(BaseModel):
         return self.spec_impact == "contradicts"
 
 
+class HandoffNote(BaseModel):
+    """What one agent of a block wrote for later blocks (`carry_block_notes`).
+
+    Parsed from the agent's `NOTES_FOR_LATER_BLOCKS:` slot
+    (gates.parse_handoff_note). Kept on the block, one per (role, round): a
+    re-run of the same agent replaces its note. Later blocks' implementer and
+    review-fix agents get every earlier block's notes in their context.
+    """
+
+    role: str  # implementer | review-fix
+    round: int  # 0 for the implementer; the review-fix iteration, from 1
+    text: str
+
+
 # --- Block state ---
 
 
@@ -744,6 +758,8 @@ class BlockInfo(BaseModel):
     # Persisted here so a resumed build keeps the learning it already
     # collected; also appended to implementation-notes.md as they arrive.
     notes: list[ImplementationNote] = Field(default_factory=list)
+    # Notes for later blocks (`carry_block_notes`), one per (role, round).
+    handoff_notes: list[HandoffNote] = Field(default_factory=list)
     # Set while the fix-on-pass runs (see FixOnPassState); None otherwise.
     fix_pass: FixOnPassState | None = None
     # The fix on pass was kept, so `implementer_report` ends with its part.

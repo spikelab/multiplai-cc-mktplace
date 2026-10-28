@@ -786,7 +786,7 @@ TEST_CHANGE_MARKER = "TEST CHANGE REQUIRED:"
 # Every REQUIRED slot label an agent report can carry — used as the stop
 # boundary when reading the free-text SURPRISES and SEARCHED slots, together
 # with `_TEST_CHANGE_LINE` below.
-_REPORT_SLOT_LABELS = "STATUS|TESTS_RUN|GREEN|FILES|TEST_COUNT|RED_EXPECTED|SURPRISES|SPEC_IMPACT|SEARCHED|RECURRING"
+_REPORT_SLOT_LABELS = "STATUS|TESTS_RUN|GREEN|FILES|TEST_COUNT|RED_EXPECTED|SURPRISES|SPEC_IMPACT|SEARCHED|RECURRING|NOTES_FOR_LATER_BLOCKS"
 
 # The colon after a slot label is MANDATORY — every legitimate slot form
 # carries one (`SURPRISES: x`, `- **SURPRISES:** x`, `**SURPRISES**: x`).
@@ -896,6 +896,34 @@ def parse_implementation_note(
         surprises=surprises,
         spec_impact=spec_impact,
     )
+
+
+# --- Notes for later blocks (NOTES_FOR_LATER_BLOCKS: slot) ---
+
+# Asked for only under `carry_block_notes`. Same label grammar as SURPRISES:
+# the colon is mandatory, and the section runs to the next slot label or the end.
+_HANDOFF_RE = re.compile(
+    r"^\s*(?:[-*]\s*)?(?:\*\*)?NOTES_FOR_LATER_BLOCKS" + _SLOT_COLON + r"[ \t]*"
+    r"(.*?)"
+    r"(?=^\s*(?:[-*]\s*)?(?:\*\*)?(?:"
+    + _REPORT_SLOT_LABELS
+    + r")"
+    + _SLOT_COLON
+    + r"|"
+    + _TEST_CHANGE_LINE
+    + r"|\Z)",
+    re.MULTILINE | re.IGNORECASE | re.DOTALL,
+)
+
+
+def parse_handoff_note(output: str) -> str | None:
+    """The agent's `NOTES_FOR_LATER_BLOCKS:` section, or None when it has none
+    or says nothing ("none", an echoed placeholder). The last section wins, as
+    in `parse_implementation_note`."""
+    matches = _HANDOFF_RE.findall(output or "")
+    if not matches:
+        return None
+    return _clean_surprises(matches[-1]) or None
 
 
 # --- Review fix: where the agent looked (SEARCHED: slot) ---

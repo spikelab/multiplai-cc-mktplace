@@ -15,6 +15,12 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.123.0] - 2026-10-28
+
+### Added
+- **buildme**: `carry_block_notes: true` in `specs/config.yaml` makes each block's implementer and review-fix agents write notes for later blocks (conventions chosen, helpers found, behaviour of the existing code the spec does not mention). Every later block's implementer and review-fix agents get those notes; the test writer and refactorer do not. Off by default: with it off, every prompt is unchanged. Turn it on only after the notes-forward benchmark shows it helps.
+- **buildme**: `evals/notes_forward_compare.py` runs buildme's TDD step on five multi-block fixtures with the option off and on, and reports acceptance, cost, implementer turns and context size per block. `--self-check` checks the fixtures offline.
+
 ## [0.122.0] - 2026-10-27
 
 ### Added

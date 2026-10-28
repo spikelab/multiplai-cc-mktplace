@@ -4645,6 +4645,25 @@ class TestImplementationNotesLoop:
         assert "raises on timeout" in progress_text
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("carry", [False, True])
+    async def test_notes_for_later_blocks_are_asked_for_only_under_the_flag(
+        self, setup, carry
+    ):
+        """`carry_block_notes`: the implementer is asked for notes for later
+        blocks and its section is saved on the block only when the flag is on."""
+        config, state, progress, block = setup
+        config.carry_block_notes = carry
+        report = "NOTES_FOR_LATER_BLOCKS: ids are strings\nSTATUS: DONE\n"
+        tw, impl = self._agents("STATUS: DONE\nTEST_COUNT: 6\n", report)
+
+        with tw, impl as run:
+            assert await run_block_tdd(block, config, state, progress) is True
+
+        assert run.await_args.kwargs["carry_notes"] is carry
+        expected = [("implementer", 0, "ids are strings")] if carry else []
+        assert [(n.role, n.round, n.text) for n in block.handoff_notes] == expected
+
+    @pytest.mark.asyncio
     async def test_halt_on_contradiction_stops_the_build_with_a_diagnosis(self, setup):
         """Criterion 8 (respec.halt_on_contradiction: true)."""
         config, state, progress, block = setup
