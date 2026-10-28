@@ -189,8 +189,9 @@ class TestSelectTestPaths:
         self, changed, files, runner
     ):
         # The block's own tests must always run, so a changed file the engine
-        # counts as a test but the narrow run cannot name means the whole command.
-        assert select_test_paths(changed, files, runner) == []
+        # counts as a test but the narrow run cannot name means the whole command
+        # (None, not the empty list of nothing selected).
+        assert select_test_paths(changed, files, runner) is None
 
     def test_conftest_and_init_do_not_stop_narrowing(self):
         # pytest never collects tests from these.

@@ -1410,22 +1410,46 @@ def _load_or_create_state(config) -> BuildState:
 # and leaves the plan revision as it was (row S8).
 PLANNING_KEY = "planning"
 
+# Top-level config.yaml sections no planning step reads: how the TDD loop runs
+# its tests, how an epic runs its children, and the git switches. They are cut
+# out of the plan's hash and stored nowhere, so editing one mid-build changes
+# no plan revision and marks nothing stale (rows S3, S4 of
+# plan-buildme-subdir-narrow-tests-2026-10-28.md).
+UNPLANNED_SECTIONS = ("tdd", "epic", "git")
 
-def _split_planning_section(text: str) -> tuple[str, str]:
-    """config.yaml's text without its top-level `planning:` section, and the
-    section. The section runs to the next line that starts at column 0; blank
-    lines after it go with it. A file with no section comes back unchanged, so
-    its hash is what it was before the section existed."""
+
+def _split_sections(text: str, keys: tuple[str, ...]) -> tuple[str, dict[str, str]]:
+    """config.yaml's text without its top-level *keys* sections, and each
+    section found. A section runs to the next line that starts at column 0;
+    blank lines after it go with it. A file with none of them comes back
+    unchanged, so its hash is what it was before the sections existed."""
     lines = text.splitlines(keepends=True)
-    for start, line in enumerate(lines):
-        if re.match(r"planning\s*:", line):
-            end = start + 1
+    kept: list[str] = []
+    sections: dict[str, str] = {}
+    i = 0
+    while i < len(lines):
+        match = re.match(r"([A-Za-z_][\w-]*)\s*:", lines[i])
+        if match and match.group(1) in keys:
+            end = i + 1
             while end < len(lines) and (
                 not lines[end].strip() or lines[end][0] in " \t"
             ):
                 end += 1
-            return "".join(lines[:start] + lines[end:]), "".join(lines[start:end])
-    return text, ""
+            sections[match.group(1)] = sections.get(match.group(1), "") + "".join(
+                lines[i:end]
+            )
+            i = end
+            continue
+        kept.append(lines[i])
+        i += 1
+    return "".join(kept), sections
+
+
+def _split_planning_section(text: str) -> tuple[str, str]:
+    """config.yaml's text without its top-level `planning:` section, and the
+    section (`_split_sections`)."""
+    rest, sections = _split_sections(text, (PLANNING_KEY,))
+    return rest, sections.get(PLANNING_KEY, "")
 
 
 def _planning_hash(section: str) -> str:
@@ -1470,14 +1494,15 @@ def _plan_hashes(config) -> dict[str, str]:
     }
     config_path = config.specs_dir / "config.yaml"
     if config_path.is_file():
-        rest, section = _split_planning_section(
-            config_path.read_bytes().decode("utf-8", "surrogateescape")
+        rest, sections = _split_sections(
+            config_path.read_bytes().decode("utf-8", "surrogateescape"),
+            (PLANNING_KEY, *UNPLANNED_SECTIONS),
         )
         hashes["config.yaml"] = hashlib.sha256(
             rest.encode("utf-8", "surrogateescape")
         ).hexdigest()
-        if section:
-            hashes[PLANNING_KEY] = _planning_hash(section)
+        if sections.get(PLANNING_KEY):
+            hashes[PLANNING_KEY] = _planning_hash(sections[PLANNING_KEY])
     hashes["references"] = hashlib.sha256(
         config.reference_docs_text().encode()
     ).hexdigest()

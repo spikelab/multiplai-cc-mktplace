@@ -16,6 +16,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from collections.abc import Sequence
 from pathlib import Path
 from typing import NamedTuple
@@ -78,7 +79,14 @@ from .mutation import (
     run_mutation,
     score_text,
 )
-from .narrow_tests import agent_test_command, narrow_test_command
+from .narrow_tests import (
+    agent_test_command,
+    agent_test_command_multi,
+    narrow_parts,
+    narrow_test_command,
+    narrow_test_command_multi,
+    runner_of,
+)
 from .progress import ProgressWriter
 from .prompts.implementation import (
     REVIEW_FIX_ESCALATION,
@@ -98,6 +106,44 @@ from .state import BuildState, TDDState
 log = logging.getLogger(__name__)
 
 
+# When each block started in this process, for `_tdd_event`'s elapsed time.
+_BLOCK_STARTED: dict[tuple[str, int], float] = {}
+# The `TDD:` line's phase for the status a block fails from.
+_FAIL_PHASES = {
+    BlockStatus.TESTING: "TEST_WRITE",
+    BlockStatus.IMPLEMENTING: "IMPLEMENT",
+    BlockStatus.REVIEWING: "REVIEW",
+}
+
+
+def _tdd_event(
+    config: BuildConfig,
+    state: BuildState,
+    block: BlockInfo,
+    phase: str,
+    status: str,
+    detail: str = "",
+) -> None:
+    """Print one `TDD: <change> block=N/M phase=<PHASE> <START|DONE|FAIL>
+    elapsed=<s>` line on stdout and append it to the progress file, so a
+    build's progress shows outside the daily log. Elapsed counts from the
+    block's start in this process (from its first event on a resume)."""
+    total = len(state.tdd.blocks) if state.tdd else 0
+    started = _BLOCK_STARTED.setdefault(
+        (config.change_name, block.number), time.monotonic()
+    )
+    line = (
+        f"TDD: {config.change_name} block={block.number}/{total} phase={phase} "
+        f"{status} elapsed={time.monotonic() - started:.0f}"
+        + (f" {detail}" if detail else "")
+    )
+    print(line, flush=True)
+    try:
+        ProgressWriter(config.progress_file_path()).log_line(line)
+    except OSError as e:
+        log.warning("Could not append to the progress file: %s", e)
+
+
 def _mark_block(
     state: BuildState,
     block_idx: int,
@@ -112,6 +158,9 @@ def _mark_block(
     `.board.json` stays current when the TDD engine runs standalone; it emits a
     `BOARD:` line only when the card actually moves columns.
     """
+    if status == BlockStatus.FAILED and state.tdd and block_idx < len(state.tdd.blocks):
+        block = state.tdd.blocks[block_idx]
+        _tdd_event(config, state, block, _FAIL_PHASES.get(block.status, "BLOCK"), "FAIL")
     state.mark_block_status(block_idx, status, config.state_file_path())
     board.record(
         config,
@@ -142,7 +191,16 @@ def _block_test_command(config: BuildConfig, block: BlockInfo) -> str:
     test files and the tests named after the source files it changed
     (`narrow_tests`), or the whole `test_command` when it cannot narrow it.
     The gates that decide whether work is done (`integration_gate`,
-    `baseline_test_gate`) keep the whole `test_command`."""
+    `baseline_test_gate`) keep the whole `test_command`. With
+    `tdd.narrow_commands` each directory's command is narrowed in it."""
+    if config.narrow_commands:
+        return narrow_test_command_multi(
+            config.narrow_commands,
+            config.project_dir,
+            block.baseline_commit,
+            config.narrow_tests,
+            config.test_command,
+        )
     return narrow_test_command(
         config.test_command,
         config.project_dir,
@@ -156,6 +214,14 @@ def _block_agent_test_command(config: BuildConfig, block: BlockInfo) -> str:
     their test command: `_block_test_command`, plus how to add the test files
     they write and the tests named after the modules they change, which the
     command, fixed before they start, cannot list."""
+    if config.narrow_commands:
+        return agent_test_command_multi(
+            config.narrow_commands,
+            config.project_dir,
+            block.baseline_commit,
+            config.narrow_tests,
+            config.test_command,
+        )
     return agent_test_command(
         config.test_command,
         config.project_dir,
@@ -1365,6 +1431,81 @@ async def _enforce_test_quality(
     return False
 
 
+def _red_run(
+    config: BuildConfig, block: BlockInfo, expected: list[str] | None
+) -> tuple[GateResult, int | None, str, str, str | None]:
+    """Run the block's RED check and judge it with `red_gate`: the gate's
+    result, and the exit code, output, command and runner the RED evidence
+    is read from.
+
+    With `tdd.narrow_commands`, each directory's part runs on its own and
+    `red_gate` judges each part that fails or holds one of the block's test
+    files (a part that passes holding none, such as the tests named after a
+    changed module, has nothing to prove). The first rejection decides; with
+    none, the first judged part is the evidence, and it is "unverified" when
+    any judged part is. When no part is judged, the first part's passing run
+    is judged and rejected."""
+    parts = (
+        narrow_parts(
+            config.narrow_commands,
+            config.project_dir,
+            block.baseline_commit,
+            enabled=config.narrow_tests,
+        )
+        if config.narrow_commands
+        else None
+    )
+    if not parts:
+        command = _block_test_command(config, block)
+        exit_code, output = run_test_suite(
+            command, config.project_dir, config.test_timeout
+        )
+        runner = runner_of(command, config.project_dir)
+        gate = red_gate(
+            output,
+            exit_code,
+            runner=runner,
+            expected_tests=expected,
+            test_command=command,
+            project_dir=config.project_dir,
+        )
+        return gate, exit_code, output, command, runner
+    runs = []
+    for part in parts:
+        exit_code, output = run_test_suite(
+            part.shell, config.project_dir, config.test_timeout
+        )
+        prefix = "" if part.dir in ("", ".") else part.dir.rstrip("/") + "/"
+        holds = any(t.startswith(prefix) for t in expected or [])
+        gate = red_gate(
+            output,
+            exit_code,
+            runner=part.runner,
+            expected_tests=expected,
+            test_command=part.shell,
+            project_dir=config.project_dir,
+        )
+        log.info(
+            "RED part dir=%s exit=%s judged=%s: %s",
+            part.dir,
+            exit_code,
+            exit_code != 0 or holds,
+            gate.reason,
+        )
+        runs.append((part, exit_code, output, gate, exit_code != 0 or holds))
+    judged = [r for r in runs if r[4]] or runs[:1]
+    rejected = next((r for r in judged if not r[3].passed), None)
+    part, exit_code, _, gate, _ = rejected or judged[0]
+    if rejected is None and any(
+        r[3].metadata.get("classification") == "unverified" for r in judged
+    ):
+        gate = next(
+            r[3] for r in judged if r[3].metadata.get("classification") == "unverified"
+        )
+    output = "\n".join(f"$ {r[0].shell}\n{r[2]}" for r in runs)
+    return gate, exit_code, output, part.shell, part.runner
+
+
 async def _enforce_red_gate(
     block: BlockInfo,
     config: BuildConfig,
@@ -1400,22 +1541,8 @@ async def _enforce_red_gate(
         # The block's own test files are always in the narrow set, and an
         # empty set falls back to the whole command, so RED cannot pass on a
         # run that selected nothing.
-        command = _block_test_command(config, block)
-        exit_code, output = run_test_suite(
-            command, config.project_dir, config.test_timeout
-        )
-        from .narrow_tests import runner_of
-
-        runner = runner_of(command, config.project_dir)
         expected = _list_block_test_files(config, block)
-        gate = red_gate(
-            output,
-            exit_code,
-            runner=runner,
-            expected_tests=expected,
-            test_command=command,
-            project_dir=config.project_dir,
-        )
+        gate, exit_code, output, command, runner = _red_run(config, block, expected)
         if gate.passed:
             block.red_expected = red_expected_note(
                 test_report,
@@ -1455,6 +1582,7 @@ async def _enforce_red_gate(
                 gate.reason,
             )
             progress.log_agent("RedGate", block.name, "RED CONFIRMED")
+            _tdd_event(config, state, block, "RED", "DONE")
             progress.log_evidence("RED", block.name, block.red_evidence)
             return True
 
@@ -1856,6 +1984,8 @@ async def run_block_tdd(
     log.info(
         "START block=%d/%d name=%s phase=TEST_WRITE", block.number, total, block.name
     )
+    _BLOCK_STARTED[(config.change_name, block.number)] = time.monotonic()
+    _tdd_event(config, state, block, "TEST_WRITE", "START")
 
     specs = ""
     for cap, text in requirement_texts(config.change_dir).items():
@@ -1927,6 +2057,7 @@ async def run_block_tdd(
 
     # --- Phase B: Implement ---
     log.info("START block=%d name=%s phase=IMPLEMENT", block.number, block.name)
+    _tdd_event(config, state, block, "IMPLEMENT", "START")
     _mark_block(state, block_idx, BlockStatus.IMPLEMENTING, config)
     progress.log_block(block.number, total, block.name, "IMPLEMENTING")
 
@@ -1987,6 +2118,7 @@ async def run_block_tdd(
         impl_result.elapsed_seconds,
     )
     progress.log_agent("Implementer", block.name, "COMPLETE")
+    _tdd_event(config, state, block, "IMPLEMENT", "DONE")
 
     # Kept in state so the reviewer sees the implementer's own account as a
     # claim to verify, and so the test-integrity gate can find a declared
@@ -2014,6 +2146,7 @@ async def run_block_tdd(
     # --- Phase C: Refactor (every tier) ---
     if config.refactor_phase:
         log.info("START block=%d name=%s phase=REFACTOR", block.number, block.name)
+        _tdd_event(config, state, block, "REFACTOR", "START")
         # The point to rewind to if the refactor turns out not to be
         # behavior-preserving. The impl commit above is the normal answer; the
         # HEAD fallback only applies when there was genuinely nothing to commit
@@ -2059,6 +2192,14 @@ async def run_block_tdd(
                 block.name,
                 "TIMEOUT" if refactor_result.timed_out else "FAILED",
             )
+            _tdd_event(
+                config,
+                state,
+                block,
+                "REFACTOR",
+                "FAIL",
+                "reason=timeout" if refactor_result.timed_out else "reason=error",
+            )
             if not rewind_to or not git_ops.discard_to(
                 config.project_dir, rewind_to, "failed block refactor"
             ):
@@ -2091,6 +2232,7 @@ async def run_block_tdd(
         else:
             log.info("DONE block=%d name=%s phase=REFACTOR", block.number, block.name)
             progress.log_agent("Refactorer", block.name, "COMPLETE")
+            _tdd_event(config, state, block, "REFACTOR", "DONE")
             if not _record_implementation_note(
                 block,
                 config,
@@ -2295,11 +2437,20 @@ async def _run_integration_and_review(
 
     # --- Integration gate ---
     log.info("START block=%d name=%s phase=INTEGRATION_GATE", block.number, block.name)
+    _tdd_event(config, state, block, "INTEGRATION_GATE", "START")
     gate = integration_gate(
         config.test_command,
         config.project_dir,
         parallel=config.parallel_tests,
         timeout=config.test_timeout,
+    )
+    _tdd_event(
+        config,
+        state,
+        block,
+        "INTEGRATION_GATE",
+        "DONE" if gate.passed else "FAIL",
+        "" if gate.passed else "fixing",
     )
     if not gate.passed:
         log.warning(
@@ -2500,6 +2651,14 @@ async def _run_integration_and_review(
             block.name, iteration + 1, review.weighted_average, score_gate.passed
         )
         round_path = _record_review_round(config, block, review, score_gate, plan=plan)
+        _tdd_event(
+            config,
+            state,
+            block,
+            "REVIEW",
+            "DONE" if score_gate.passed else "FAIL",
+            f"round={iteration + 1} findings={len(review.findings)}",
+        )
 
         if score_gate.passed:
             review_passed = True
@@ -2677,6 +2836,7 @@ def _finish_block(
     _mark_block(state, block_idx, BlockStatus.DONE, config)
     log.info("DONE block=%d/%d name=%s", block.number, total, block.name)
     progress.log_block(block.number, total, block.name, "COMPLETE")
+    _tdd_event(config, state, block, "BLOCK", "DONE")
     print(f"BLOCK:{block.number}/{total}:{block.name}:COMPLETE")
     return True
 

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 import math
 import os
 import sys
@@ -323,6 +324,32 @@ def build_parser() -> argparse.ArgumentParser:
 SPEND_COMMANDS = ("build", "findings", "tdd")
 
 
+class _ChangeTag(logging.Filter):
+    """Puts `[change:<name>] ` in front of each record's message, so the
+    daily log tells apart two builds started from one session."""
+
+    def __init__(self, change: str):
+        super().__init__()
+        self.tag = f"[change:{change}] "
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        # One record passes every handler; tag it once.
+        if not getattr(record, "buildme_change", False):
+            record.msg = self.tag + str(record.msg)
+            record.buildme_change = True
+        return True
+
+
+def tag_log_records(change: str) -> None:
+    """Tag every record the build's log handlers write with *change*."""
+    if not change:
+        return
+    for name in ("build_pipeline", "code_facts"):
+        for handler in logging.getLogger(name).handlers:
+            if not any(isinstance(f, _ChangeTag) for f in handler.filters):
+                handler.addFilter(_ChangeTag(change))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -402,18 +429,21 @@ def _main(args: argparse.Namespace) -> int:
         from .orchestrator import run_orchestrator
 
         config = BuildConfig.from_cli_args(args)
+        tag_log_records(config.change_name)
         return asyncio.run(run_orchestrator(config, args))
 
     elif args.command == "spec-generate":
         from .spec_generator import run_spec_generator
 
         config = BuildConfig.from_cli_args(args)
+        tag_log_records(config.change_name)
         return asyncio.run(run_spec_generator(config, args))
 
     elif args.command == "tdd":
         from .tdd_engine import run_tdd_engine
 
         config = BuildConfig.from_cli_args(args)
+        tag_log_records(config.change_name)
         return asyncio.run(run_tdd_engine(config, args))
 
     elif args.command == "findings":

@@ -21,6 +21,7 @@ from multiplai_core.session import default_effort, default_model
 
 from .env import KNOWN_EFFORTS, load_multiplai_conf, pick_effort, resolve_model
 from .models import ReviewGatePolicy
+from .narrow_tests import NARROW_RUNNERS, NarrowCommand
 
 log = logging.getLogger(__name__)
 
@@ -760,6 +761,66 @@ def parse_parallel(value: object) -> str:
     return "auto"
 
 
+def parse_narrow_commands(value: object, project_dir: Path) -> list[NarrowCommand]:
+    """`tdd.narrow_commands` from config.yaml: one entry per directory with a
+    `dir` inside the project, a `command` with no `;`, `&` or `|`, and an
+    optional `runner` (`NARROW_RUNNERS`). An invalid entry warns and is
+    skipped; anything but a list warns and gives none."""
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        log.warning(
+            "tdd.narrow_commands in config.yaml is not a list (%r) — ignoring it", value
+        )
+        return []
+    entries = []
+    root = Path(project_dir).resolve()
+    for i, item in enumerate(value):
+        where = f"tdd.narrow_commands[{i}]"
+        if not isinstance(item, dict):
+            log.warning("%s in config.yaml is not a mapping — skipping it", where)
+            continue
+        directory, command, runner = (
+            item.get("dir"),
+            item.get("command"),
+            item.get("runner"),
+        )
+        if not isinstance(directory, str) or not directory.strip():
+            log.warning("%s in config.yaml has no dir — skipping it", where)
+            continue
+        if Path(directory).is_absolute() or not (
+            (root / directory).resolve() == root
+            or root in (root / directory).resolve().parents
+        ):
+            log.warning(
+                "%s dir %r in config.yaml is outside the repo — skipping it",
+                where,
+                directory,
+            )
+            continue
+        if not isinstance(command, str) or not command.strip():
+            log.warning("%s in config.yaml has no command — skipping it", where)
+            continue
+        if re.search(r"[;&|]", command):
+            log.warning(
+                "%s command %r in config.yaml chains commands (;, & or |) — "
+                "skipping it",
+                where,
+                command,
+            )
+            continue
+        if runner is not None and runner not in NARROW_RUNNERS:
+            log.warning(
+                "%s runner %r in config.yaml is not one of %s — skipping it",
+                where,
+                runner,
+                ", ".join(NARROW_RUNNERS),
+            )
+            continue
+        entries.append(NarrowCommand(directory.strip().rstrip("/"), command, runner))
+    return entries
+
+
 @dataclass
 class BuildConfig:
     """Complete configuration for a build pipeline run."""
@@ -796,6 +857,11 @@ class BuildConfig:
     # files and the tests named after its changed modules (narrow_tests.py);
     # the gates that decide whether work is done keep `test_command`.
     narrow_tests: bool = True
+    # tdd.narrow_commands: for a repo whose tests sit in several directories
+    # with different runners, one runner command per directory; a block's
+    # loop narrows each one in its own directory (`narrow_tests.narrow_parts`).
+    # Empty: `test_command` is narrowed as one command.
+    narrow_commands: list[NarrowCommand] = field(default_factory=list)
     # tdd.parallel: "auto" lets the full-suite runs (`gates.baseline_test_gate`,
     # `gates.integration_gate`, the epic's merge tests) add `-n auto` when the
     # command runs pytest and pytest-xdist imports in its environment
@@ -1324,6 +1390,9 @@ class BuildConfig:
                 "Unrecognized tdd.narrow_tests value %r in config.yaml — using true",
                 narrow,
             )
+        self.narrow_commands = parse_narrow_commands(
+            tdd.get("narrow_commands"), self.project_dir
+        )
         self.parallel_tests = parse_parallel(tdd.get("parallel", "auto"))
         self.test_timeout = parse_test_timeout(tdd.get("test_timeout"))
         for key in ("test_writer_max_turns", "mutation_test_writer_max_turns"):
