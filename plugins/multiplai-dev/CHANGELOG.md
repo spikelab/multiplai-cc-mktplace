@@ -15,6 +15,15 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.127.0] - 2026-10-28
+
+### Added
+- **buildme**: with `review.plan_approval: true` in `specs/config.yaml`, a build stops after its plan check and before any code is written, until an engineer approves the implementation plan. It writes `plan-approval.md` (the plan to approve, `tasks.md` to read, the plan check's outcome and revision), prints `PLAN:WAITING:<path>` and exits 3. The approval is a commit on the build's branch with `Stop: 4`, `Revision: <plan revision>` and `Approved-by:` (or `Decided-by:`) trailers; `--approve-plan` makes it. An edited plan needs a new approval. In an epic, a component waiting for approval is recorded as `waiting` and relaunched on the next epic run. Off by default; turning it on does not change the plan revision.
+
+### Changed
+- **buildme**: the implementation plan is now written as `implementation-plan.md` instead of `design.md`. A change planned before this version keeps its `design.md`: buildme reads it, keeps the same plan revision, and does not regenerate it. With both files, `implementation-plan.md` is used. buildme never renames or removes `design.md`.
+- **pr**: quotes `implementation-plan.md` as evidence, and `design.md` only when the new file is absent.
+
 ## [0.125.0] - 2026-10-28
 
 ### Added
