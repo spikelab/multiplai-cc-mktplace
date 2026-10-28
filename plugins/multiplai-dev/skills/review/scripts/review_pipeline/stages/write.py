@@ -67,8 +67,16 @@ def _material(f: Finding, state: ReviewState) -> list[str]:
 async def run_write(state: ReviewState, ctx: RunContext) -> ReviewState:
     if state.past("write"):
         return state
+    ctx.counts = await write_findings(state, ctx, write_candidates(state))
+    state.stage = "write"
+    return state
+
+
+async def write_findings(
+    state: ReviewState, ctx: RunContext, todo: list[Finding]
+) -> dict[str, int]:
+    """Ask for the plain-language text of *todo*, in `batches`; return the stage's counts."""
     target, cfg = state.target, ctx.config
-    todo = write_candidates(state)
     failed_calls = 0
 
     async def ask(
@@ -141,10 +149,8 @@ async def run_write(state: ReviewState, ctx: RunContext) -> ReviewState:
 
     await bounded(batches(todo), one, cfg.concurrency)
 
-    ctx.counts = {
+    return {
         "written": sum(1 for f in todo if f.id in state.write_answers),
         "fallback": sum(1 for f in todo if f.id in state.write_failed),
         "agent_failures": failed_calls,
     }
-    state.stage = "write"
-    return state

@@ -745,11 +745,69 @@ test("the Needs you tab groups items by what they block, the review's own gaps f
   assert.equal(groups[1].items[0].where, "The vendor's docs, Health checks page");
 });
 
-test("asking the session about a need names it and what it blocks", () => {
-  const q = L.needQuestion({ what: "The column type.", blocks: "app.py:7 — The timeout is ignored." });
-  assert.match(q, /The column type\./);
-  assert.match(q, /It blocks: app\.py:7 — The timeout is ignored\./);
-  assert.match(L.needQuestion({ what: "w", blocks: "the review" }), /It blocks: the review as a whole/);
+const COMMANDS_FILE = {
+  findings: [
+    { id: "a1b2c3d4e5", file: "app.py", line_start: 7, claim: "The timeout is ignored.", status: "confirmed",
+      severity: "HIGH", unchecked: ["Whether the vendor still caps retries."] },
+    { id: "b2c3d4e5f6", file: "cache.py", line_start: 3, claim: "The version comment is wrong.", title: "Version comment is wrong",
+      status: "confirmed", severity: "MEDIUM" },
+  ],
+  needs: [
+    { what: "The cache version.", blocks: "review", cause: "no-access", command: "aws elasticache describe-cache-clusters --cache-cluster-id cache", source: "finder" },
+    { what: "Whether the vendor still caps retries.", blocks: "a1b2c3d4e5", cause: "unreachable", command: "", source: "verifier" },
+  ],
+  need_commands: [
+    { id: "N1", command: "aws elasticache describe-cache-clusters --cache-cluster-id cache", why: "The cache version.", blocks: ["b2c3d4e5f6"], where: "",
+      whats: ["The cache version.", "The cluster's engine version."] },
+    { id: "N2", command: "gh api repos/o/r/contents/.github/workflows", why: "The upload tool.", blocks: ["review"],
+      where: "", whats: ["The upload tool."] },
+  ],
+};
+
+test("with need_commands the Needs you tab has one row per command, and none for a need without one", () => {
+  const rows = L.needCommandRows(COMMANDS_FILE);
+  assert.deepEqual(rows.map((r) => [r.id, r.command, r.why, r.file]), [
+    ["N1", "aws elasticache describe-cache-clusters --cache-cluster-id cache", "The cache version.", "answers/N1.txt"],
+    ["N2", "gh api repos/o/r/contents/.github/workflows", "The upload tool.", "answers/N2.txt"],
+  ]);
+  assert.deepEqual(rows[0].findings, [{ id: "b2c3d4e5f6", label: "cache.py:3 — Version comment is wrong" }]);
+  assert.deepEqual(rows[1].findings, []);  // "review" links to no finding
+  assert.equal(L.needsCount(COMMANDS_FILE), 2);  // the need with no command is no row
+  assert.ok(!rows.some((r) => r.why.includes("caps retries")));
+});
+
+test("without need_commands the tab falls back to one row per need", () => {
+  const old = { findings: COMMANDS_FILE.findings, needs: COMMANDS_FILE.needs };
+  assert.equal(L.needCommandRows(old), null);
+  assert.equal(L.needsCount(old), 2);
+  assert.equal(L.needsGroups(old).length, 2);
+});
+
+test("a finding's unchecked needs read Not checked, and its page names the commands that bear on it", () => {
+  const [a, b] = COMMANDS_FILE.findings;
+  assert.deepEqual(L.uncheckedLines(a), ["Not checked: Whether the vendor still caps retries."]);
+  assert.deepEqual(L.uncheckedLines(b), []);
+  assert.deepEqual(L.findingCommandIds(b, COMMANDS_FILE), ["N1"]);
+  assert.deepEqual(L.findingCommandIds(a, COMMANDS_FILE), []);
+  const parts = L.findingParts(Object.assign({ verdict_reason: "r", failure_scenario: "s", citations: [] }, a,
+    { needs: [COMMANDS_FILE.needs[1]] }), null, "finding").parts;
+  assert.ok(parts.includes("unchecked") && !parts.includes("needs"));
+  assert.equal(parts.indexOf("unchecked"), parts.indexOf("verdict") + 1);
+});
+
+test("the shown file keeps a command when it bears on a shown finding or the review, less hidden ids", () => {
+  const ff = Object.assign({}, COMMANDS_FILE, {
+    findings: COMMANDS_FILE.findings.concat([{ id: "c3d4e5f6a7", file: "x.py", line_start: 1, claim: "c",
+      status: "rejected", severity: "LOW" }]),
+    need_commands: COMMANDS_FILE.need_commands.concat([
+      { id: "N3", command: "gh api x", why: "w", blocks: ["c3d4e5f6a7"], where: "", whats: ["w"] },
+      { id: "N4", command: "gh api y", why: "w", blocks: ["b2c3d4e5f6", "c3d4e5f6a7"], where: "", whats: ["w"] },
+    ]),
+  });
+  const shown = L.shownFile(ff);
+  assert.deepEqual(shown.need_commands.map((c) => [c.id, c.blocks]),
+    [["N1", ["b2c3d4e5f6"]], ["N2", ["review"]], ["N4", ["b2c3d4e5f6"]]]);
+  assert.ok(!("need_commands" in L.shownFile({ findings: [] })));
 });
 
 const RUN = {
@@ -1206,7 +1264,7 @@ test("the share request carries the destination the dialog picked", () => {
 const appJs = fs.readFileSync(path.join(STATIC, "app.js"), "utf8");
 
 test("app.js reads the unfiltered findings only to filter them or to say why the list is empty", () => {
-  const reads = [...appJs.matchAll(/state\.detail\.findings(?!\.(?:target|mode|run)\b)[^\n]*/g)].map((m) => m[0]);
+  const reads = [...appJs.matchAll(/state\.detail\.findings(?!\.(?:target|mode|run)\b|_mtime)[^\n]*/g)].map((m) => m[0]);
   assert.deepEqual(reads, ["state.detail.findings);", "state.detail.findings;"],
     "every other list, count, marker, Go to entry and risk input must read state.shown");
   assert.match(appJs, /state\.shownFile = L\.shownFile\(state\.detail\.findings\);/);

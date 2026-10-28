@@ -15,6 +15,18 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.124.0] - 2026-10-28
+
+### Added
+- **review**: `python -m review_pipeline answers <review dir>` applies the outputs you saved for the review's commands. Save each command's output as `answers/N1.txt`, `answers/N2.txt`, … in the review's directory; `answers` works out which findings each output bears on, runs the verifier again on only those findings with the output as evidence, rewrites the text of those whose verdict changed, and writes `findings.json` and the review again. Find does not run again, finding ids stay the same, and your decisions in the viewer still apply. It prints what changed (`N2 → <id> unverifiable→confirmed`) and what it cost. Running it again after a stop continues where it stopped.
+- **review-viewer**: a page already open picks up a changed `findings.json`, such as the one `answers` writes, without a restart.
+
+### Changed
+- **review**: **Needs you** lists one row per command instead of one per need, with an id (`N1`, `N2`, …), the command, one line of why, and the findings it bears on. The same command asked for by several agents shows once. The review's terminal output ends with this list and the `answers` command line.
+- **review**: what the review could not check and names no command for is no longer in Needs you. It shows on the finding it weakens as **Not checked:**, or under **Not checked** in the review when it concerns the review as a whole.
+- **review**: the finders and the verifier now give a command whenever a read-only `gh`, `gcloud`, `git`, `curl` or other command-line tool can get the fact (`curl -sL <url>` for a web page, `gh api repos/<owner>/<repo>/contents/<path>` for a file in another GitHub repository).
+- **review-viewer**: the Needs you tab shows one row per command with the file to save its output in. The **Ask the session** button is gone.
+
 ## [0.123.0] - 2026-10-28
 
 ### Added

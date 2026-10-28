@@ -481,16 +481,17 @@
 
     <section id="help-needs" class="help-sec" tabindex="-1" aria-labelledby="help-h-needs">
       <h3 id="help-h-needs">Needs you</h3>
-      <p>A tab of its own, shown when the review could not get something it needed. Items are grouped by
-        what they block: the review as a whole first, then each finding, which links to it. Each item says
-        what is missing; why (the review has no access, a lookup failed, or it is not reachable on the web);
-        a command a person with access could run to get it, where to look when no one command gets it
-        (a console page, a dashboard, a team), or both.</p>
-      <p>When the review named neither, <b>Ask the session</b> puts a question about the item in the chat,
-        for you to read and send.</p>
-      <p>A verifier lists what kept it from settling its finding. A finder's gaps, and a failed GitHub
-        lookup of the PR or its branch rules, block the review as a whole. A finding's own needs also show
-        under it on the Findings tab.</p>
+      <p>A tab of its own, shown when the review named a command it needs a person to run. There is one
+        row per command, however many agents asked for it: an id (<code>N1</code>, <code>N2</code>, …), the
+        command, one line of why, and the findings it bears on, which link to them. Run each one and save
+        its output in the review's directory as <code>answers/N1.txt</code> and so on, then run review's
+        <code>answers</code> command: it re-checks only the findings those outputs bear on, and this page
+        shows the result without a restart.</p>
+      <p>What the review could not check and named no command for is not a task for you. It shows on the
+        finding it weakens as <b>Not checked:</b>, a warning about how far to trust that finding, and a gap
+        in the review as a whole is listed in the review's coverage notes.</p>
+      <p>A review written before multiplai-dev 0.124 has no commands list; its items are grouped by what they
+        block, each with what is missing, why, and a command, a place to look, or both.</p>
       <p>The page runs nothing: read a command before you run it. Code keeps a command only when it is one
         short line, has no pipes, redirects or chained commands, and is a known read-only form; otherwise the item
         shows where to look instead, when the review named a place.</p>
