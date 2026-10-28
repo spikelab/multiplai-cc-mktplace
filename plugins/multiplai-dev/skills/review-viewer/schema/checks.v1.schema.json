@@ -282,6 +282,7 @@
           "enum": [
             "paths",
             "find",
+            "verify",
             "conventions"
           ],
           "title": "Stage",

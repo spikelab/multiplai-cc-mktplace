@@ -73,6 +73,23 @@ class Need(_Strict):
     source: Literal["verifier", "finder", "pipeline"]
 
 
+class NeedCommand(_Strict):
+    """One command the review asks a person to run, and the needs it answers (multiplai-dev 0.124+).
+
+    `id` is `N1`, `N2`, …; the person saves the command's output as
+    `answers/<id>.txt` in the review's directory. `why` is the shortest `what`
+    of its needs, `whats` all of them. `blocks` is the finding ids it bears on,
+    or `["review"]` when it bears on none. Nothing runs `command`.
+    """
+
+    id: str = Field(pattern=r"^N[1-9][0-9]*$")
+    command: str = Field(min_length=1)
+    why: str
+    blocks: list[str] = Field(min_length=1)
+    where: str = ""
+    whats: list[str] = Field(min_length=1)
+
+
 class Assessment(_Strict):
     """The review's own judgement of a finding against the rest of the review
     and earlier rounds (multiplai-dev 0.27+). Older files have none.
@@ -140,6 +157,9 @@ class Finding(_Strict):
     fix: Fix | None = None  # older files only; see Premise
     # What the review could not read to settle this finding. Absent in older files.
     needs: list[Need] = Field(default_factory=list)
+    # What the review could not check this finding on and named no command for (multiplai-dev
+    # 0.124+): each need's `what`. Absent when there are none, and in older files.
+    unchecked: list[str] = Field(default_factory=list)
     # The lines the verifier itself read to reach its verdict. Absent in
     # files written before multiplai-dev 0.26.
     verifier_citations: list[Citation] | None = None
@@ -315,6 +335,8 @@ class FindingsFile(_Strict):
     findings: list[Finding]
     # Every need of the review, the findings' and its own. Absent in older files.
     needs: list[Need] = Field(default_factory=list)
+    # The needs grouped by command, one entry per command (multiplai-dev 0.124+). Absent in older files.
+    need_commands: list[NeedCommand] = Field(default_factory=list)
     run: Run | None = None  # absent in files written before multiplai-dev 0.28
     # The mode the review ran in (multiplai-dev 0.32+); absent means `full`.
     mode: Literal["full", "critical"] | None = None
@@ -405,7 +427,7 @@ class GateEntry(_Strict):
 class CoverageEntry(_Strict):
     """What a review stage could not cover, and why (review's `checks.add_coverage`)."""
 
-    stage: Literal["paths", "find", "conventions"]
+    stage: Literal["paths", "find", "verify", "conventions"]
     subject: str
     level: Literal["info", "error"]
     reason: str

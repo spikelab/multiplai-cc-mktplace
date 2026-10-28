@@ -28,6 +28,7 @@ from .chunks import split_pieces
 from .config import ReviewConfig, run_config
 from .costs import cost_lines, estimate, kept_line
 from .export import (
+    need_coverage,
     producer,
     run_record,
     to_findings_file,
@@ -39,6 +40,7 @@ from .gates import gated_need, reason_kind
 from .models import MODES, SEVERITIES, ReviewState, RunStart
 from .progress import ProgressWriter
 from .render import (
+    answers_lines,
     count_line,
     listed,
     not_reviewed_count,
@@ -428,6 +430,7 @@ async def _run_stages(
     state.budget = ledger.to_state()
     findings_path = target_dir / "findings.json"
     if not state.past("export"):
+        need_coverage(state)
         findings_path = write_findings_file(state, target_dir)
         write_checks_file(state, target_dir)
         state.stage = "export"
@@ -440,7 +443,8 @@ async def _run_stages(
     save_state(state, target_dir)
     shutil.rmtree(snapshot, ignore_errors=True)
 
-    rows = to_findings_file(state)["findings"]
+    data = to_findings_file(state)
+    rows = data["findings"]
     shown = listed(rows, state.mode)
     counts = {s: sum(1 for f in shown if f["severity"] == s) for s in SEVERITIES}
     message = f"review finished: {count_line(rows, state.mode)}"
@@ -455,6 +459,8 @@ async def _run_stages(
     )
     print(f"{t.slug}: {message}; output in {target_dir}", flush=True)
     print(f"summary: {summary_path(state, target_dir)}", flush=True)
+    for line in answers_lines(data, target_dir):
+        print(line, flush=True)
     log_event(
         "review",
         "done",

@@ -151,10 +151,10 @@ reopens only the plan check. `tdd:`, `epic:` and `git:` are read by no planning
 step, so editing them (`tdd.narrow_commands`, `epic.max_parallel`) between a
 stop and a resume changes nothing about the plan.
 
-**Re-binding a running build after an upgrade.** Versions up to 0.123.0
+**Re-binding a running build after an upgrade.** Versions up to 0.124.0
 hashed `tdd:`, `epic:` and `git:` into the plan revision, so a build they
 planned stops once with `Planning inputs changed after implementation` when
-0.124.0 resumes it in TDD. To keep it, print the values 0.124.0 computes from
+0.125.0 resumes it in TDD. To keep it, print the values 0.125.0 computes from
 the build's saved hashes, with only `config.yaml`'s replaced (the command reads
 and writes nothing else):
 

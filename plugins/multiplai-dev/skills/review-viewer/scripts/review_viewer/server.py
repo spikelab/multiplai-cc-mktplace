@@ -64,6 +64,7 @@ from .models import (
     Summary,
     findings_digest,
     load_checks,
+    load_findings,
 )
 from .stats import PR_BADGE_IDS, pr_badges
 from .summary import Served, full_walkthrough, served_path, summary_path
@@ -170,6 +171,12 @@ class TargetState:
     # Every file git lists at head (gitdata.repo_files), for the page's
     # "Show all files in the repo"; [] when git could not list them.
     repo_files: list[str] = field(default_factory=list)
+    # The findings.json in the review's directory, and its mtime in ns when last read. `/api/poll`
+    # re-reads it when the mtime changes (`reload_findings`), so a page already open sees what
+    # review's `answers` wrote. None: the findings were built in memory, or no file is there.
+    findings_path: Path | None = None
+    findings_mtime: int = 0
+    _reload_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     # `serve` fetched the PR just before the server started.
     _pr_checked: float = field(default_factory=time.monotonic, repr=False)
     _pr_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
@@ -203,6 +210,49 @@ class TargetState:
                             if b.get("id") not in PR_BADGE_IDS
                         ] + [b.to_dict() for b in pr_badges(self.pr)]
             return {"pr": self.pr, "stats": self.stats}
+
+    def reload_findings(self) -> int:
+        """Re-read `findings_path` when its mtime changed; return the mtime of the findings served.
+
+        A file that no longer validates, or names another target or head, is
+        logged and not served; the mtime is still recorded, so it is not read
+        again until it changes. The repository path serve chose is kept.
+        """
+        if self.findings_path is None:
+            return self.findings_mtime
+        with self._reload_lock:
+            try:
+                mtime = self.findings_path.stat().st_mtime_ns
+            except OSError:
+                return self.findings_mtime
+            if mtime == self.findings_mtime:
+                return mtime
+            self.findings_mtime = mtime
+            try:
+                ff = load_findings(self.findings_path)
+            except (OSError, ValueError) as exc:
+                log.warning("findings for %s no longer read: %s", self.slug, exc)
+                return mtime
+            old = self.findings.target
+            if (ff.target.slug, ff.target.head_sha) != (old.slug, old.head_sha):
+                log.warning(
+                    "%s now names %s at %s; not served",
+                    self.findings_path,
+                    ff.target.slug,
+                    ff.target.head_sha[:12],
+                )
+                return mtime
+            ff.target.repo_path = old.repo_path
+            extra = _path_files(self.paths) if self.paths is not None else ()
+            self.allowed = allowed_paths(ff.target, ff, self.repo_files, extra=extra)
+            self.checks = checks_beside(ff, self.findings_path.parent)
+            self.findings = ff
+            write_private(
+                served_path(self.mailbox.dir),
+                Served(ff, self.pr, self.notice, self.stats).to_json(),
+            )
+            log.info("re-read %s", self.findings_path)
+            return mtime
 
     def summary(self) -> Summary | None:
         """The summary `summary put` last wrote, or None. It was checked when
@@ -595,7 +645,11 @@ def make_handler(viewer: Viewer):
                     except ValueError:
                         since = 0
                     rows, n = state.mailbox.read_outbox(since)
-                    return self._json({"answers": rows, "n": n})
+                    # The page loads the target again when this differs from what it last saw.
+                    mtime = str(state.reload_findings())
+                    return self._json(
+                        {"answers": rows, "n": n, "findings_mtime": mtime}
+                    )
                 if route.startswith("/api/targets/"):
                     rest = route[len("/api/targets/") :]
                     if rest.endswith("/file"):
@@ -633,9 +687,11 @@ def make_handler(viewer: Viewer):
                             }
                         )
                     state = self._target(rest)
+                    mtime = str(state.reload_findings())
                     return self._json(
                         {
                             "findings": state.findings.model_dump(mode="json"),
+                            "findings_mtime": mtime,
                             "files": state.findings.target.files_changed,
                             "repo_files": state.repo_files[:REPO_FILES_MAX],
                             "repo_files_total": len(state.repo_files),
@@ -1006,6 +1062,11 @@ def build_viewer(
             repo_files=listed,
             pr_number=pr_number_of(extra, Path(box).parent),
         )
+        on_disk = Path(box).parent / "findings.json"
+        if on_disk.is_file():
+            state = targets[ff.target.slug]
+            state.findings_path = on_disk
+            state.findings_mtime = on_disk.stat().st_mtime_ns
     return Viewer(
         targets=targets,
         token=secrets.token_urlsafe(32),

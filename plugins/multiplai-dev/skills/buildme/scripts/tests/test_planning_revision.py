@@ -1340,7 +1340,7 @@ def test_S4_editing_a_key_outside_those_sections_still_stops_the_build(plan):
 
 
 def test_S1_a_revision_saved_by_an_older_version_stops_the_build_once(plan):
-    """A build planned on 0.123.0 or earlier hashed the tdd/epic/git text into
+    """A build planned on 0.124.0 or earlier hashed the tdd/epic/git text into
     its revision; resuming it in TDD raises the existing error."""
     import hashlib
 

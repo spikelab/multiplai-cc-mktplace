@@ -347,8 +347,10 @@ def finding_section(
     head_sha: str,
     original_severity: str | None = None,
     finders: list[str] | None = None,
+    commands: list[str] | None = None,
 ) -> str:
-    """One finding. *finders* are the finders that reported it, from the pipeline state."""
+    """One finding. *finders* are the finders that reported it, from the pipeline state; *commands*
+    the ids of the Needs you commands that bear on it."""
     lines_ = (
         f"{fd['line_start']}"
         if fd["line_start"] == fd["line_end"]
@@ -380,6 +382,11 @@ def finding_section(
         f"**Verdict:** {status}. {_one_line(fd.get('verdict_reason') or '')}".rstrip(),
         "",
     ]
+    out += [f"**Not checked:** {_one_line(w)}" for w in fd.get("unchecked", [])]
+    if fd.get("unchecked"):
+        out.append("")
+    if commands:
+        out += [f"**Needs you:** {', '.join(commands)} (under Needs you above)", ""]
     if finders and len(finders) > 1:
         out += [f"**Reported by:** {', '.join(finders)}", ""]
 
@@ -398,53 +405,66 @@ def finding_section(
     out += [f"**Failure scenario:** {_one_line(fd['failure_scenario'])}", ""]
     if fd.get("expected_behaviour"):
         out += [f"**Expected behaviour:** {_one_line(fd['expected_behaviour'])}", ""]
-    if fd.get("needs"):
-        out += [
-            "**Needs you** (each with a command the review suggests, a place to look, or neither: read a "
-            "command before running it):",
-            "",
-        ]
-        out += need_lines(fd["needs"], blocks=False) + [""]
     return "\n".join(out)
 
 
-CAUSE_WORDS = {
-    "no-access": "the review has no access",
-    "lookup-failed": "a lookup failed",
-    "unreachable": "not reachable on the web",
-}
+def need_lines(commands: list[dict], findings: list[dict] | None = None) -> list[str]:
+    """One markdown bullet per command the review asks a person to run (`need_commands`): its id, the
+    command, why, the findings it bears on, and where to look when the review named a place.
 
-
-def need_lines(
-    needs: list[dict], findings: list[dict] | None = None, *, blocks: bool = True
-) -> list[str]:
-    """One markdown bullet per need: what is missing, what it blocks, why, the command and where to look.
-
-    With *findings*, a need that blocks a finding names its file and line.
-    *blocks* False leaves out what it blocks (under the finding itself).
+    With *findings*, a finding is named by its file and line.
     """
     where = {f["id"]: f"`{f['file']}:{f['line_start']}`" for f in findings or []}
     out = []
-    for n in needs:
-        what = _one_line(n["what"]).rstrip(".") + "."
-        cause = CAUSE_WORDS.get(n["cause"], n["cause"])
-        if blocks:
-            on = (
-                "the review"
-                if n["blocks"] == "review"
-                else where.get(n["blocks"], f"finding `{n['blocks']}`")
-            )
-            line = f"- {what} Blocks {on}; {cause}."
-        else:
-            line = f"- {what} Why: {cause}."
-        if n.get("command"):
-            line += f" Run: `{n['command']}`"
-        if n.get("where"):
-            line += f" Where to look: {_one_line(n['where']).rstrip('.')}."
-        if not n.get("command") and not n.get("where"):
-            line += " The review named no command and no place to look."
+    for c in commands:
+        on = [where.get(b, f"finding `{b}`") for b in c["blocks"] if b != "review"]
+        line = (
+            f"- **{c['id']}** `{c['command']}` — {_one_line(c['why']).rstrip('.')}. "
+            f"Bears on {', '.join(on) if on else 'the review'}."
+        )
+        if c.get("where"):
+            line += f" Where to look: {_one_line(c['where']).rstrip('.')}."
         out.append(line)
     return out
+
+
+def command_ids(data: dict, finding_id: str) -> list[str]:
+    """The ids of the commands in *data*'s `need_commands` that bear on *finding_id*."""
+    return [c["id"] for c in data.get("need_commands", []) if finding_id in c["blocks"]]
+
+
+NEEDS_INTRO = (
+    "Run each command, read it first, and save its output as `answers/<id>.txt` in the review's "
+    "directory; then `python -m review_pipeline answers <dir> --trust-repo` re-checks the findings "
+    "each output bears on."
+)
+
+
+def answers_lines(data: dict, target_dir: Path) -> list[str]:
+    """The terminal's Needs you list at the end of a run, and the `answers` command that applies the outputs."""
+    commands = data.get("need_commands", [])
+    if not commands:
+        return []
+    out = [
+        f"needs you: {len(commands)} command{'' if len(commands) == 1 else 's'}; "
+        f"save each output as {target_dir / 'answers'}/<id>.txt"
+    ]
+    for c in commands:
+        on = [b for b in c["blocks"] if b != "review"]
+        out.append(f"  {c['id']}  {c['command']}")
+        out.append(
+            f"      {_one_line(c['why'])}"
+            + (f" (bears on {', '.join(on)})" if on else "")
+        )
+    out.append(f"then: python -m review_pipeline answers {target_dir} --trust-repo")
+    return out
+
+
+def not_checked_lines(state: ReviewState) -> list[str]:
+    """What the review could not check and named no command for (`export.need_coverage`), one bullet each."""
+    return [
+        f"- {_one_line(c.detail)}" for c in state.coverage if c.reason == "no-command"
+    ]
 
 
 def duration(seconds: float) -> str:
@@ -717,17 +737,18 @@ def render_review(
             "- **Agent failures:** " + "; ".join(_one_line(e) for e in state.errors)
         )
     out += not_reviewed_section(state)
-    review_needs = [n for n in data.get("needs", []) if n["blocks"] == "review"]
-    if review_needs:
+    if data.get("need_commands"):
+        out += ["", "## Needs you", "", NEEDS_INTRO, ""]
+        out += need_lines(data["need_commands"], findings)
+    if not_checked_lines(state):
         out += [
             "",
-            "## Needs you",
+            "## Not checked",
             "",
-            "What the review could not check, each with a command the review suggests, a place to look, "
-            "or neither. Read a command before running it.",
+            "What the review could not check and knows no command for. No finding rests on it.",
             "",
         ]
-        out += need_lines(review_needs)
+        out += not_checked_lines(state)
     out += ["", "## Findings", ""]
 
     finders = {f.id: f.finders for f in state.findings}
@@ -758,6 +779,7 @@ def render_review(
                     head_sha=head,
                     original_severity=state.original_severity.get(fd["id"]),
                     finders=finders.get(fd["id"]),
+                    commands=command_ids(data, fd["id"]),
                 )
             )
 
@@ -805,11 +827,9 @@ def render_review(
             )
         else:
             out.append(f"  {assessment_line(fd).removeprefix('**Assessment:** ')}")
-        # Its needs are printed nowhere else: the summary leaves them out with the finding.
-        out += [
-            f"  - Needs you: {line[2:]}"
-            for line in need_lines(fd.get("needs", []), blocks=False)
-        ]
+        out += [f"  - Not checked: {_one_line(w)}" for w in fd.get("unchecked", [])]
+        if command_ids(data, fd["id"]):
+            out.append(f"  - Needs you: {', '.join(command_ids(data, fd['id']))}")
     for m in state.merged:
         f = m.finding
         out.append(
@@ -829,7 +849,11 @@ def render_review(
             for fd in (f for f in unverified if section(f) == name):
                 out.append(
                     finding_section(
-                        fd, web_base=web, head_sha=head, finders=finders.get(fd["id"])
+                        fd,
+                        web_base=web,
+                        head_sha=head,
+                        finders=finders.get(fd["id"]),
+                        commands=command_ids(data, fd["id"]),
                     )
                 )
     return "\n".join(out)
@@ -921,27 +945,26 @@ def render_summary(state: ReviewState, *, findings_file: dict | None = None) -> 
     if scope_line(data):
         out.append(f"{scope_line(data)}.")
     out += not_reviewed_section(state)
-    needs = [
-        n
-        for n in data.get("needs", [])
-        if n["blocks"] == "review" or n["blocks"] in shown_ids
+    commands = [
+        c
+        for c in data.get("need_commands", [])
+        if c["blocks"] == ["review"] or any(b in shown_ids for b in c["blocks"])
     ]
-    left_out = len(data.get("needs", [])) - len(needs)
-    if needs:
-        out += [
-            "",
-            "## Needs you",
-            "",
-            "The review could not get these, each with a command the review suggests, a place to look, "
-            "or neither. Read a command before running it.",
-            "",
-        ]
-        out += need_lines(needs, findings)
+    left_out = len(data.get("need_commands", [])) - len(commands)
+    if commands:
+        out += ["", "## Needs you", "", NEEDS_INTRO, ""]
+        out += need_lines(commands, findings)
         out.append("")
     if left_out:
         out.append(
-            f"{left_out} more need{'' if left_out == 1 else 's'} block{'s' if left_out == 1 else ''} "
-            "findings not listed; the full review's appendix has them under each finding."
+            f"{left_out} more command{'' if left_out == 1 else 's'} bear{'s' if left_out == 1 else ''} "
+            "only on findings not listed; the full review's Needs you has them."
+        )
+    unchecked = len(not_checked_lines(state))
+    if unchecked:
+        out.append(
+            f"{unchecked} thing{'' if unchecked == 1 else 's'} the review could not check and knows no "
+            "command for; the full review lists them under Not checked."
         )
     if state.errors:
         out.append("Agent failures: " + "; ".join(_short(e) for e in state.errors))

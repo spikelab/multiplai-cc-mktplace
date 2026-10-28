@@ -408,6 +408,13 @@
           "default": null,
           "title": "Topic"
         },
+        "unchecked": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Unchecked",
+          "type": "array"
+        },
         "verdict_reason": {
           "anyOf": [
             {
@@ -550,6 +557,56 @@
         "source"
       ],
       "title": "Need",
+      "type": "object"
+    },
+    "NeedCommand": {
+      "additionalProperties": false,
+      "description": "One command the review asks a person to run, and the needs it answers (multiplai-dev 0.124+).\n\n`id` is `N1`, `N2`, \u2026; the person saves the command's output as\n`answers/<id>.txt` in the review's directory. `why` is the shortest `what`\nof its needs, `whats` all of them. `blocks` is the finding ids it bears on,\nor `[\"review\"]` when it bears on none. Nothing runs `command`.",
+      "properties": {
+        "blocks": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Blocks",
+          "type": "array"
+        },
+        "command": {
+          "minLength": 1,
+          "title": "Command",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^N[1-9][0-9]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "whats": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Whats",
+          "type": "array"
+        },
+        "where": {
+          "default": "",
+          "title": "Where",
+          "type": "string"
+        },
+        "why": {
+          "title": "Why",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "command",
+        "why",
+        "blocks",
+        "whats"
+      ],
+      "title": "NeedCommand",
       "type": "object"
     },
     "Premise": {
@@ -997,6 +1054,13 @@
       ],
       "default": null,
       "title": "Mode"
+    },
+    "need_commands": {
+      "items": {
+        "$ref": "#/$defs/NeedCommand"
+      },
+      "title": "Need Commands",
+      "type": "array"
     },
     "needs": {
       "items": {

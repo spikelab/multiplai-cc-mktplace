@@ -18,7 +18,12 @@ from conftest import (
 )
 from review_pipeline import orchestrator, sdk, target
 from review_pipeline.config import ReviewConfig
-from review_pipeline.export import to_findings_file
+from review_pipeline.export import (
+    need_commands,
+    need_coverage,
+    to_checks_file,
+    to_findings_file,
+)
 from review_pipeline.gates import gated_need, need_gate
 from review_pipeline.models import (
     FinderOutput,
@@ -33,6 +38,8 @@ from review_pipeline.render import render_review, render_summary
 from review_pipeline.stages import RunContext
 from review_pipeline.stages.find import run_find
 from review_pipeline.stages.verify import run_verify, unverifiable_severity
+
+CHECKS_SCHEMA = SCHEMA.with_name("checks.v1.schema.json")
 
 TAVILY_NEED = NeedAsk(
     what="The tavily-python 0.8.4 changelog, to see whether search() still takes depth.",
@@ -409,7 +416,7 @@ async def test_finder_needs_are_stored_as_blocking_the_review(
     assert state.finder_reports["diff-bugs@1"].needs == [TAVILY_NEED]
 
 
-async def test_a_need_without_a_command_carries_where_to_look_into_the_file_and_the_summary(
+async def test_a_need_without_a_command_keeps_where_in_the_file_and_is_not_checked_on_its_finding(
     target_info, ctx, monkeypatch
 ):
     medium = medium_finding()
@@ -435,7 +442,7 @@ async def test_a_need_without_a_command_carries_where_to_look_into_the_file_and_
     state = await run_verify(
         ReviewState(target=target_info, stage="find", findings=[medium]), ctx
     )
-    assert "never leave both empty" in prompts[0]
+    assert "cannot be trusted on" in prompts[0]
     assert (
         state.needs[0].where
         == "Console > Dataform > DolceDataform > Workflow execution logs"
@@ -446,12 +453,13 @@ async def test_a_need_without_a_command_carries_where_to_look_into_the_file_and_
         data["needs"][0]["where"]
         == "Console > Dataform > DolceDataform > Workflow execution logs"
     )
+    # With no command it is no task for a person: the finding says what it was not checked on.
+    assert data["findings"][0]["unchecked"] == [
+        "The Dataform workflow invocation history."
+    ]
     text = render_review(state)
-    assert (
-        "Where to look: Console > Dataform > DolceDataform > Workflow execution logs."
-        in text
-    )
-    assert "named no command" not in text
+    assert "**Not checked:** The Dataform workflow invocation history." in text
+    assert "## Needs you" not in text and "named no command" not in text
 
 
 def test_finder_answer_with_needs_parses_and_an_unknown_cause_becomes_no_access():
@@ -637,53 +645,210 @@ def test_summary_has_a_needs_you_section_after_the_counts(canned_state):
     lines = text.splitlines()
     counts = next(i for i, line in enumerate(lines) if line.startswith("Findings:"))
     assert lines[counts + 2] == "## Needs you"
-    assert "Run: `gh api repos/example/booking-engine/rules/branches/main`" in text
-    assert "Blocks the review; a lookup failed." in text
-    assert "Blocks `rateplan_service.py:" in text
-    assert "The review named no command and no place to look." in text
+    assert (
+        "- **N1** `gh api repos/example/booking-engine/rules/branches/main` — "
+        "GitHub's rules on main. Bears on the review."
+    ) in text
+    assert "`answers/<id>.txt`" in text
+    assert "python -m review_pipeline answers <dir> --trust-repo" in text
+    # A need with no command is no row: its finding is listed with "Not checked" in the review.
+    assert "The production channel title." not in text
     assert "## Needs you" not in render_summary(canned_state)
 
 
-def test_needs_headings_promise_no_command(canned_state):
-    # A need can carry a command, a place to look, or neither.
+def test_needs_you_names_no_need_without_a_command(canned_state):
     for text in (
         render_review(_with_needs(canned_state)),
         render_summary(_with_needs(canned_state)),
     ):
         assert (
-            "Each command was suggested" not in text
-            and "commands suggested" not in text
+            "named no command" not in text and "a place to look, or neither" not in text
         )
-        assert "a command the review suggests, a place to look, or neither" in text
 
 
-def test_a_need_that_blocks_a_finding_not_listed_is_in_the_reviews_appendix(
+def test_a_command_bearing_only_on_a_finding_not_listed_is_left_out_of_the_summary(
     canned_state,
 ):
-    # Critical mode leaves out the unrated finding the need blocks; the need must not vanish with it.
-    state = _with_needs(canned_state).model_copy(update={"mode": "critical"})
+    # Critical mode leaves out the unrated finding the command bears on; the review's appendix keeps it.
+    state = _with_needs(canned_state)
+    hidden = next(f.id for f in state.findings if f.severity == "LOW")
+    state.needs.append(
+        Need(
+            what="Its title.",
+            blocks=hidden,
+            command="gh api repos/o/r",
+            source="verifier",
+        )
+    )
+    state = state.model_copy(update={"mode": "critical"})
     review, summary = render_review(state), render_summary(state)
     appendix = review[review.index("## Appendix") :]
+    assert "  - Not checked: The production channel title." in appendix
+    assert "  - Needs you: N2" in appendix
+    assert "`gh api repos/o/r`" not in summary
     assert (
-        "  - Needs you: The production channel title. Why: the review has no access. "
-        "The review named no command and no place to look."
-    ) in appendix
-    assert "The production channel title." not in summary
-    assert (
-        "1 more need blocks findings not listed; the full review's appendix has them"
+        "1 more command bears only on findings not listed; the full review's Needs you has them."
         in summary
     )
-    assert "more need" not in render_summary(
-        _with_needs(canned_state)
+    assert "more command" not in render_summary(
+        state.model_copy(update={"mode": "full"})
     )  # full mode lists that finding
 
 
-def test_review_lists_each_findings_needs_under_it_and_the_reviews_own(canned_state):
-    text = render_review(_with_needs(canned_state))
-    assert "## Needs you" in text and text.index("## Needs you") < text.index(
-        "## Findings"
+def test_review_lists_commands_before_the_findings_and_names_them_under_each(
+    canned_state,
+):
+    state = _with_needs(canned_state)
+    medium = next(f.id for f in state.findings if f.severity == "LOW")
+    state.needs.append(
+        Need(
+            what="Its title.",
+            blocks=medium,
+            command="gh api repos/o/r",
+            source="verifier",
+        )
     )
-    assert (
-        "The production channel title. Why: the review has no access. "
-        "The review named no command and no place to look."
-    ) in text
+    text = render_review(state)
+    assert text.index("## Needs you") < text.index("## Findings")
+    assert "- **N2** `gh api repos/o/r` — Its title. Bears on `" in text
+    assert "**Not checked:** The production channel title." in text
+    assert "**Needs you:** N2 (under Needs you above)" in text
+
+
+def test_a_need_of_the_review_with_no_command_is_under_not_checked(canned_state):
+    state = canned_state.model_copy(
+        update={"needs": [Need(what="The wiki page.", source="finder")], "coverage": []}
+    )
+    need_coverage(state)
+    review, summary = render_review(state), render_summary(state)
+    assert "## Not checked\n\nWhat the review could not check" in review
+    assert "- The wiki page." in review and "## Needs you" not in review
+    assert "1 thing the review could not check and knows no command for" in summary
+
+
+# --- needs grouped by command ---------------------------------------------------
+
+CACHE = "aws elasticache describe-cache-clusters --cache-cluster-id example-cache"
+DOCS = "gh api repos/example/app/contents/docs/api.md"
+FLAGS = "kubectl get configmap flags --namespace example -o yaml"
+
+
+def _eleven_needs(finding_id: str) -> list[Need]:
+    """The shape of a real review's 11 needs: 3 commands, each worded differently by each agent, and 4 with none."""
+
+    def n(what, command="", blocks="review", source="finder", where=""):
+        return Need(
+            what=what, blocks=blocks, command=command, source=source, where=where
+        )
+
+    return [
+        n("Whether example-cache really runs Redis 7, as the comment says.", CACHE),
+        n("Which page size the API docs give.", DOCS),
+        n("Whether the API docs still allow 500 items a page.", DOCS),
+        n("Whether the version comment is true.", CACHE),
+        n("How the billing team reads the nightly export."),
+        n("Whether the two repository ids are the app's.", where="GitHub settings"),
+        n("Whether the vendor still retries on a 429."),
+        n(
+            "The engine version of example-cache, which config.py:12 claims is 7.",
+            CACHE,
+        ),
+        n("Whether the checkout flag is on.", FLAGS),
+        n("Whether the wiki page the README links still exists."),
+        n(
+            "The page size the API docs give.",
+            DOCS,
+            blocks=finding_id,
+            source="verifier",
+        ),
+    ]
+
+
+def test_need_commands_group_needs_by_command_in_first_seen_order():
+    needs = _eleven_needs("abcdef0123")
+    groups = need_commands(needs)
+    assert [(g.id, g.command) for g in groups] == [
+        ("N1", CACHE),
+        ("N2", DOCS),
+        ("N3", FLAGS),
+    ]
+    cache = groups[0]
+    assert cache.why == "Whether the version comment is true."  # the shortest `what`
+    assert len(cache.whats) == 3 and cache.blocks == ["review"]
+    # "review" is dropped once a group names a finding.
+    assert groups[1].blocks == ["abcdef0123"] and len(groups[1].whats) == 3
+
+
+def test_a_real_reviews_eleven_needs_give_three_commands():
+    # The 4 needs with no command form no group: they are not tasks for a person.
+    assert len(need_commands(_eleven_needs("abcdef0123"))) == 3
+
+
+def test_need_commands_normalise_whitespace_and_keep_the_first_where():
+    needs = [
+        Need(what="a longer what", command="  gh api  repos/o/r\t--jq .id "),
+        Need(what="short", command="gh api repos/o/r --jq .id", where="Settings"),
+        Need(what="other", command="gh api repos/o/r", where="ignored", blocks="f2"),
+        Need(what="b", command="gh api repos/o/r", blocks="f1"),
+    ]
+    first, second = need_commands(needs)
+    assert first.command == "gh api repos/o/r --jq .id"
+    assert first.whats == ["a longer what", "short"] and first.where == "Settings"
+    assert second.blocks == ["f1", "f2"] and second.where == "ignored"
+
+
+def test_a_no_command_need_on_a_finding_is_exported_as_unchecked(canned_state):
+    high = canned_state.findings[0]
+    state = canned_state.model_copy(
+        update={
+            "needs": [
+                Need(what="The production title.", blocks=high.id, source="verifier"),
+                Need(what="Rules.", blocks=high.id, command="gh api repos/o/r/rules"),
+            ]
+        }
+    )
+    data = to_findings_file(state)
+    jsonschema.validate(data, json.loads(SCHEMA.read_text()))
+    row = next(f for f in data["findings"] if f["id"] == high.id)
+    assert row["unchecked"] == ["The production title."]
+    assert data["need_commands"] == [
+        {
+            "id": "N1",
+            "command": "gh api repos/o/r/rules",
+            "why": "Rules.",
+            "blocks": [high.id],
+            "where": "",
+            "whats": ["Rules."],
+        }
+    ]
+    assert all("unchecked" not in f for f in data["findings"] if f["id"] != high.id)
+
+
+def test_a_no_command_need_of_the_review_is_a_coverage_record_once(canned_state):
+    state = canned_state.model_copy(
+        update={
+            "needs": [
+                Need(what="The wiki page.", source="finder"),
+                Need(what="The bucket policy.", source="verifier"),
+                Need(
+                    what="Rules.", command="gh api repos/o/r/rules", source="pipeline"
+                ),
+            ],
+            "coverage": [],
+            "errors": [],
+        }
+    )
+    need_coverage(state)
+    need_coverage(state)  # again, as a resumed export does: nothing is added twice
+    assert [(c.stage, c.reason, c.level, c.detail) for c in state.coverage] == [
+        ("find", "no-command", "info", "The wiki page."),
+        ("verify", "no-command", "info", "The bucket policy."),
+    ]
+    assert state.errors == []
+    checks = to_checks_file(state)
+    jsonschema.validate(checks, json.loads(CHECKS_SCHEMA.read_text()))
+    assert [c["detail"] for c in checks["coverage"]] == [
+        "The wiki page.",
+        "The bucket policy.",
+    ]
+    assert "need_commands" in to_findings_file(state)

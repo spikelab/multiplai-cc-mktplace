@@ -614,8 +614,7 @@ pre.sketch {
 .needs pre .copy-btn { opacity: 1; }
 .needs-panel > h3 { margin: 0 0 var(--s1); font-size: var(--fs-md); }
 .need-blocks { margin: 0 0 var(--s2); font-size: var(--fs-sm); }
-.need-where, .need-ask { margin: var(--s1) 0 0; }
-.need-ask .ctl { margin-left: var(--s1); }
+.need-where { margin: var(--s1) 0 0; }
 .badge.topic { border-style: dashed; }
 .badge.topic.guessed { font-style: italic; opacity: .8; }
 .badge.impact { border-style: dotted; }

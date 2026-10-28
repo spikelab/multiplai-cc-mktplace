@@ -262,6 +262,38 @@ class Need(BaseModel):
     source: Literal["verifier", "finder", "pipeline"] = "pipeline"
 
 
+class NeedCommand(BaseModel):
+    """One command the review asks a person to run, and every need it answers (`export.need_commands`).
+
+    `id` is `N1`, `N2`, … in the order the command first appears in the needs.
+    `why` is the shortest `what` of the needs grouped under it. `blocks` is the
+    sorted finding ids it bears on, or `["review"]` when it bears on none.
+    """
+
+    id: str
+    command: str
+    why: str
+    blocks: list[str]
+    where: str = ""
+    whats: list[str]
+
+
+class AnswerMatch(BaseModel):
+    """What one saved output, `answers/<id>.txt`, bears on (`answers.py`), saved once matched.
+
+    `sha256` is the output's hash when matched, `head_sha` the review's head then. `before` is
+    each finding's verdict status before the output was applied ("" when it had none), so the
+    command can say what changed and rewrite only those findings. `note` is what the match call
+    said the output shows that no finding covers.
+    """
+
+    sha256: str
+    head_sha: str
+    finding_ids: list[str] = Field(default_factory=list)
+    before: dict[str, str] = Field(default_factory=dict)
+    note: str = ""
+
+
 class Verdict(_Model):
     finding_id: str = ""
     # `unverified` is made in code for a LOW finding no verifier was asked about
@@ -587,7 +619,7 @@ class CoverageRecord(BaseModel):
     doc left out for the budget) only to `checks.json` and the report's gap line.
     """
 
-    stage: Literal["paths", "find", "conventions"]
+    stage: Literal["paths", "find", "verify", "conventions"]
     subject: str  # "p3", "review_cmd at a.py:2", "piece@2", "docs/gone.md"
     level: Literal["info", "error"]
     reason: str  # a closed vocabulary per stage: see checks.ERROR_LINES
@@ -735,6 +767,12 @@ class ReviewState(BaseModel):
     # This round's scope (`Scope`): None in a tree, dir or range review's state, and in checkpoints
     # written before 0.115, which reviewed every file.
     scope: Scope | None = None
+    # The `answers` command (0.124+): each saved output's match by its id (`N1`, …), the hashes of
+    # the outputs already applied, and the findings whose text it rewrote since their verdict was
+    # last dropped. Empty in a review it never ran on.
+    answer_matches: dict[str, AnswerMatch] = Field(default_factory=dict)
+    answers_applied: list[str] = Field(default_factory=list)
+    answers_rewritten: list[str] = Field(default_factory=list)
 
     @field_validator("stage", mode="before")
     @classmethod
@@ -788,6 +826,18 @@ class ConvertOutput(_Model):
 
     items: list[ConvertItem] = Field(default_factory=list)
     needs: list[NeedAsk] = Field(default_factory=list)
+
+
+class AnswerMatchItem(_Model):
+    id: str
+    finding_ids: list[str] = Field(default_factory=list)
+    note: str = ""
+
+
+class AnswerMatchOutput(_Model):
+    """The `answers` match call's answer: per saved output, the findings it bears on."""
+
+    outputs: list[AnswerMatchItem] = Field(default_factory=list)
 
 
 class MergeOutput(_Model):

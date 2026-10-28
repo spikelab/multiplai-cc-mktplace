@@ -64,6 +64,14 @@ A web source may be cited too, as {"path": "<the URL>", "line_start": 1, "line_e
 citation is always a file at this commit. The program does not check web citations, and it discards
 a finding or a confirmation whose only citations are web sources."""
 
+# How a need names its command (finders, the report prompt and the verifier): a command whenever one
+# exists, so the person gets a task and not a question.
+NEED_COMMAND_RULE = """\
+Give a command whenever a read-only `gh`, `gcloud`, `git`, `curl` or other command-line tool can get
+the fact: for a web page that is `curl -sL <url>`, and for a file in another GitHub repository it is
+`gh api repos/<owner>/<repo>/contents/<path>`. Leave the command empty only when no such command
+exists, and then say in `what` what the finding cannot be trusted on."""
+
 JSON_ONLY = "Answer with ONE JSON object and nothing before or after it: no heading, no prose, no table."
 
 

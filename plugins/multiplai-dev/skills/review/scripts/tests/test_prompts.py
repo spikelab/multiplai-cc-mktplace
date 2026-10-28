@@ -314,3 +314,22 @@ def test_the_write_prompt_carries_the_writing_rules_and_fences_the_findings():
         problems={high_finding().id: ["title has 13 words, over 12"]},
     )
     assert "title has 13 words" in again
+
+
+def test_finders_and_verifier_ask_for_a_command_whenever_one_exists(target_info):
+    prompts = {
+        "report": report(target_info, "diff-bugs"),
+        "tree": find.build(
+            target_info.model_copy(update={"kind": "tree"}), "diff-bugs"
+        ),
+        "verify": verify.build(target_info, high_finding()),
+    }
+    for name, prompt in prompts.items():
+        flat = " ".join(prompt.split())
+        assert "`curl -sL <url>`" in flat, name
+        assert "`gh api repos/<owner>/<repo>/contents/<path>`" in flat, name
+        assert "cannot be trusted on" in flat, name
+        assert "never leave both empty" not in flat, name
+    for name in ("tree", "verify"):
+        flat = " ".join(prompts[name].split())
+        assert "Leave the command empty only when no such command exists" in flat, name

@@ -29,6 +29,7 @@
     findingsById: new Map(),
     shown: [],
     shownFile: null,
+    findingsMtime: null,  // findings.json's mtime as the server last served it
     selected: null,
     filePath: null,
     view: null,
@@ -278,15 +279,20 @@
     schedulePoll();
   }
 
+  /* Gate-rejected, low-value, repeat and important findings are never shown or counted
+   * (L.shownFindings); everything after this reads state.shown. */
+  function showFindings() {
+    state.shownFile = L.shownFile(state.detail.findings);
+    state.shown = state.shownFile.findings;
+    state.findingsById = new Map(state.shown.map((f) => [f.id, f]));
+  }
+
   async function loadTarget(slug) {
     state.pollGen += 1;
     state.slug = slug;
     state.detail = await api(targetUrl());
-    // Gate-rejected, low-value, repeat and important findings are never shown or counted
-    // (L.shownFindings); everything below reads state.shown.
-    state.shownFile = L.shownFile(state.detail.findings);
-    state.shown = state.shownFile.findings;
-    state.findingsById = new Map(state.shown.map((f) => [f.id, f]));
+    state.findingsMtime = state.detail.findings_mtime;
+    showFindings();
     state.changed = new Set(state.detail.files);
     state.dirToggled = new Map();
     renderAllFilesToggle();
@@ -399,7 +405,7 @@
     $("tab-checked").hidden = !checks;
     $("tab-paths").hidden = !paths;
     $("paths-count").textContent = paths ? String(paths.paths.length) : "";
-    const needs = state.detail ? L.needsItems(state.shownFile).length : 0;
+    const needs = state.detail ? L.needsCount(state.shownFile) : 0;
     if (state.tab === "needs" && !needs) state.tab = "summary";
     $("tab-needs").hidden = !needs;
     $("needs-count").textContent = needs ? String(needs) : "";
@@ -497,10 +503,9 @@
   // --- summary ---------------------------------------------------------------------
 
   /* How a person gets what a need asks for: the suggested command, in a code
-   * block with a Copy button; where to look; or, when the review named
-   * neither, a button that puts a question about it in the chat. The command
-   * was written by a model or the pipeline, so it is labelled to be read
-   * before running, and nothing here runs it. */
+   * block with a Copy button, and where to look. The command was written by
+   * a model or the pipeline, so it is labelled to be read before running,
+   * and nothing here runs it. */
   function needAction(n) {
     const out = [];
     if (n.command) {
@@ -513,22 +518,40 @@
     }
     if (n.where) out.push(el("div", { class: "need-where" }, [el("span", { class: "muted small", text: "Where to look: " }), n.where]));
     if (!n.command && !n.where) {
-      out.push(el("div", { class: "need-ask" }, [
-        el("span", { class: "muted small", text: "The review named no command and no place to look. " }),
-        el("button", { class: "ctl ctl-sm", type: "button", text: "Ask the session",
-          title: "Put a question about this in the chat, for you to send",
-          onclick: () => { $("question").value = L.needQuestion(n); setChatOpen(true); renderAskAbout(); renderFab(); } }),
-      ]));
+      out.push(el("div", { class: "muted small", text: "The review named no command and no place to look." }));
     }
     return out;
   }
 
+  /* One row per command (`need_commands`): its id, the command, why, the
+   * findings it bears on, and the file to save its output in for review's
+   * `answers` command. */
+  function renderNeedCommands(box, rows) {
+    box.appendChild(el("p", { class: "muted small", text: "Run each command and save its output in the " +
+      "review's directory under the file named below; then run review's answers command to re-check " +
+      "the findings it bears on." }));
+    for (const r of rows) {
+      const links = r.findings.map((x) => el("button", { class: "cite-link", text: x.label,
+        onclick: () => { setTab("finding"); selectFinding(x.id); } }));
+      box.appendChild(el("section", { class: "needs", id: "need-" + r.id }, [
+        el("h3", {}, [el("span", { class: "mono", text: r.id }), " " + r.why]),
+      ].concat(needAction({ command: r.command, where: r.where }), [
+        el("div", { class: "need-blocks" }, links.length
+          ? [el("b", { text: "Bears on " })].concat(links)
+          : [el("b", { text: "Bears on " }), "the review as a whole"]),
+        el("div", { class: "muted small" }, ["Save its output as ", el("code", { text: r.file })]),
+      ])));
+    }
+  }
+
   function renderNeeds() {
     const box = $("needs");
-    const groups = L.needsGroups(state.shownFile);
+    const rows = L.needCommandRows(state.shownFile);
+    const groups = rows ? [] : L.needsGroups(state.shownFile);
     box.replaceChildren();
-    if (!groups.length) return;
+    if (rows ? !rows.length : !groups.length) return;
     box.appendChild(el("h3", { class: "label-help" }, [el("span", { text: "Needs you" }), helpButton("needs", "Needs you")]));
+    if (rows) return renderNeedCommands(box, rows);
     box.appendChild(el("p", { class: "muted small", text: "The review could not get these. Get each one yourself " +
       "to settle what it blocks." }));
     for (const g of groups) {
@@ -1337,6 +1360,8 @@
         out.push(el("div", { class: "label", text: "Expected behaviour" }), el("p", { text: f.expected_behaviour }));
       } else if (part === "verdict") {
         out.push(el("div", { class: "label", text: "Verdict" }), el("p", { text: f.verdict_reason }));
+      } else if (part === "unchecked") {
+        for (const line of L.uncheckedLines(f)) out.push(el("p", { class: "small unchecked", text: line }));
       } else if (part === "absorbed") {
         out.push(el("div", { class: "label", text: "Merged into this finding" }));
         for (const a of f.absorbed) {
@@ -1345,6 +1370,13 @@
       } else if (part === "cited") {
         out.push(el("div", { class: "label", text: "Cited code" }));
         for (const c of f.citations) out.push(citationLink(c));
+      } else if (part === "needs" && L.needCommandRows(state.shownFile)) {
+        const ids = L.findingCommandIds(f, state.shownFile);
+        if (!ids.length) continue;
+        out.push(el("div", { class: "label", text: "Needs you" }), el("p", { class: "small" }, [
+          el("button", { class: "cite-link mono", text: ids.join(", "), onclick: () => setTab("needs") }),
+          " — see the Needs you tab",
+        ]));
       } else if (part === "needs") {
         out.push(el("div", { class: "label", text: "Needs you" }));
         for (const n of L.needsItems({ needs: f.needs, findings: [] })) {
@@ -1781,6 +1813,22 @@
       renderThread();
       if (state.view && L.explainByBlock(state.questions, state.view.path).size) redrawCode();
     }
+    if (res.findings_mtime && res.findings_mtime !== state.findingsMtime) await reloadFindings(gen);
+  }
+
+  /* findings.json changed on disk (review's `answers` re-checked some findings): show the new
+   * findings and Needs you tab. Ids are unchanged, so the decisions and the selection stand. */
+  async function reloadFindings(gen) {
+    const detail = await api(targetUrl());
+    if (gen !== state.pollGen) return;
+    state.findingsMtime = detail.findings_mtime;
+    state.detail = Object.assign({}, state.detail, { findings: detail.findings, checks: detail.checks });
+    showFindings();
+    renderFindingList();
+    renderTabs();
+    renderSummary();
+    renderChecked();
+    renderDetail();
   }
 
   function schedulePoll(delay) {

@@ -12,8 +12,11 @@ from conftest import (
 from review_pipeline import post as post_mod
 from review_pipeline.__main__ import main
 from review_pipeline.export import to_findings_file, write_findings_file
-from review_pipeline.models import Merged, ReviewState
+from review_pipeline.models import Merged, Need, ReviewState
 from review_pipeline.render import (
+    answers_lines,
+    finding_section,
+    need_lines,
     render_review,
     render_summary,
     write_review,
@@ -711,3 +714,65 @@ def test_the_done_line_counts_the_files_not_reviewed(tmp_path, model, capsys):  
         if " DONE " in f" {line} "
     ]
     assert "not reviewed" not in done
+
+
+# --- Needs you: one line per command --------------------------------------------------
+
+COMMANDS = [
+    {
+        "id": "N1",
+        "command": "gh api repos/o/r/contents/README.md",
+        "why": "Whether the README links the wiki.",
+        "blocks": ["review"],
+        "where": "",
+        "whats": ["Whether the README links the wiki."],
+    },
+    {
+        "id": "N2",
+        "command": "aws elasticache describe-cache-clusters --cache-cluster-id cache",
+        "why": "The engine version of cache.",
+        "blocks": ["f1", "f2"],
+        "where": "Console > SQL",
+        "whats": ["The engine version of cache.", "Whether cache runs Redis 7."],
+    },
+]
+
+
+def test_need_lines_give_one_bullet_per_command_with_its_findings():
+    findings = [{"id": "f1", "file": "a.tf", "line_start": 3}]
+    assert need_lines(COMMANDS, findings) == [
+        (
+            "- **N1** `gh api repos/o/r/contents/README.md` — Whether the README links the wiki. "
+            "Bears on the review."
+        ),
+        (
+            "- **N2** `aws elasticache describe-cache-clusters --cache-cluster-id cache` — The engine version of cache. "
+            "Bears on `a.tf:3`, finding `f2`. Where to look: Console > SQL."
+        ),
+    ]
+
+
+def test_answers_lines_list_each_command_and_end_with_the_answers_command(tmp_path):
+    lines = answers_lines({"need_commands": COMMANDS}, tmp_path)
+    assert lines == [
+        f"needs you: 2 commands; save each output as {tmp_path / 'answers'}/<id>.txt",
+        "  N1  gh api repos/o/r/contents/README.md",
+        "      Whether the README links the wiki.",
+        "  N2  aws elasticache describe-cache-clusters --cache-cluster-id cache",
+        "      The engine version of cache. (bears on f1, f2)",
+        f"then: python -m review_pipeline answers {tmp_path} --trust-repo",
+    ]
+    assert answers_lines({}, tmp_path) == []
+
+
+def test_finding_section_prints_unchecked_and_the_commands_under_the_verdict(
+    canned_state,
+):
+    canned_state.needs = [
+        Need(what="The production title.", blocks=canned_state.findings[0].id)
+    ]
+    fd = to_findings_file(canned_state)["findings"][0]
+    text = finding_section(fd, web_base=None, head_sha="0" * 40, commands=["N2"])
+    verdict = text.index("**Verdict:**")
+    assert text.index("**Not checked:** The production title.") > verdict
+    assert "**Needs you:** N2 (under Needs you above)" in text

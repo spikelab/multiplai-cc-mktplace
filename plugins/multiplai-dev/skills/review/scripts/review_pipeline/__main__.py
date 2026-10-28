@@ -8,6 +8,8 @@
   batch   — a YAML list of targets, then rollups
   rollup  — regenerate HIGH/MEDIUM/LOW-only.md and runs.jsonl from existing findings.json files
   resume  — continue a review from its review-state.json
+  answers — apply the outputs saved in <target_dir>/answers/N<k>.txt for the review's
+            Needs you commands: re-verify only the findings they bear on, then export again
   post    — post the accepted findings as one PR review, one inline comment each
   assess-only — run the repeats and assess stages on saved reviews and compare
             their labels with the decisions already recorded (writes a report;
@@ -20,9 +22,13 @@
             calls no model)
 
 stdout contract: progress summary lines, a `summary: <path>` line per finished
-target, then for review/batch/resume a `findings: <path>[ <path>...]` line
+target (followed, when the review names commands for a person, by a `needs you:`
+line, two lines per command and a `then: python -m review_pipeline answers …`
+line), then for review/batch/resume a `findings: <path>[ <path>...]` line
 listing every findings.json written, and a final `checks: <path>[ <path>...]`
-line listing the checks.json beside each. `review --plan-only` prints one line
+line listing the checks.json beside each. `answers` prints one line per output applied
+(`N2 → <id> unverifiable→confirmed`), a `cost: $<n>` line, then the same
+`findings:` and `checks:` lines. `review --plan-only` prints one line
 per file group, a `groups: <n>  finder calls: <n>  files skipped: <n>` line and
 a final `plan: <path>` line, and calls no model.
 
@@ -60,6 +66,7 @@ SUBCOMMANDS = (
     "batch",
     "rollup",
     "resume",
+    "answers",
     "post",
     "assess-only",
     "migrate",
@@ -311,6 +318,17 @@ def build_parser() -> argparse.ArgumentParser:
     _deps_flag(rs)
     _model_flag(rs)
     _verify_low_flag(rs)
+
+    an = sub.add_parser(
+        "answers",
+        parents=[common],
+        help="Apply the outputs saved in <target_dir>/answers/N<k>.txt to a finished review: "
+        "re-verify only the findings they bear on and export again",
+    )
+    an.add_argument("target_dir", help="The review's directory, <out>/<repo>/<object>")
+    _trust_flag(an)
+    _budget_flag(an)
+    _model_flag(an)
 
     po = sub.add_parser(
         "post",
@@ -591,6 +609,43 @@ def main(argv: list[str] | None = None) -> int:
             render.write_runs(root)
             print(f"findings: {path}")
             print(f"checks: {path.parent / 'checks.json'}")
+            return 0
+
+        if args.command == "answers":
+            from .answers import apply_answers
+
+            target_dir = Path(args.target_dir).expanduser().resolve()
+            root = rounds.out_root(target_dir)
+            config = load_config(root, **max_cost)
+            try:
+                result = asyncio.run(apply_answers(target_dir, config))
+            except orchestrator.budget.BudgetExceededError as e:
+                print(
+                    f"STOPPED: {e}\nWhat came back is kept. Run answers again with a higher "
+                    f"--max-cost-usd (now {config.max_cost_usd or 'none'}) to continue.",
+                    file=sys.stderr,
+                )
+                return 4
+            except VerifyIncomplete as e:
+                print(
+                    f"STOPPED: {e}\nThe other verdicts are kept. Run answers again to retry only these.",
+                    file=sys.stderr,
+                )
+                return 5
+            except sdk.UsageLimitError as e:
+                print(
+                    f"STOPPED: {e}\nWhat came back is kept. After the limit resets, continue with:\n"
+                    f"  python -m review_pipeline answers {target_dir} --trust-repo",
+                    file=sys.stderr,
+                )
+                return 6
+            for line in result.lines:
+                print(line, flush=True)
+            print(f"cost: ${result.cost_usd:.2f}", flush=True)
+            if result.findings_path is not None:
+                render.write_rollups(root)
+                print(f"findings: {result.findings_path}")
+                print(f"checks: {result.findings_path.parent / 'checks.json'}")
             return 0
 
         if args.command == "assess-only":
