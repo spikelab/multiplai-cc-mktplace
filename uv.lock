@@ -2099,6 +2099,7 @@ dependencies = [
     { name = "code-facts" },
     { name = "multiplai-core" },
     { name = "pydantic" },
+    { name = "viewer-kit" },
 ]
 
 [package.optional-dependencies]
@@ -2116,6 +2117,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2" },
     { name = "pytest", marker = "extra == 'dev'" },
     { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.8" },
+    { name = "viewer-kit", editable = "plugins/multiplai-dev/lib/viewer_kit" },
 ]
 provides-extras = ["dev"]
 
@@ -2564,6 +2566,28 @@ requires-dist = [
     { name = "playwright", specifier = "==1.63.0" },
     { name = "scenedetect", specifier = ">=0.7" },
     { name = "tqdm", specifier = ">=4.66" },
+]
+
+[[package]]
+name = "viewer-kit"
+version = "0.1.0"
+source = { editable = "plugins/multiplai-dev/lib/viewer_kit" }
+dependencies = [
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "pydantic", specifier = ">=2" },
+    { name = "pytest", marker = "extra == 'dev'" },
+    { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.8" },
+]
+provides-extras = ["dev"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-xdist", specifier = ">=3.8" },
 ]
 
 [[package]]

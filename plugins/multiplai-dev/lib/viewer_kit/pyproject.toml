@@ -1,0 +1,25 @@
+[project]
+name = "viewer-kit"
+version = "0.1.0"
+description = "The parts of a local viewer server that do not depend on what it shows: the page-to-session mailbox, bind address and URLs, request checks, and per-person tokens. Shared by review-viewer and pipeline-viewer."
+requires-python = ">=3.12"
+dependencies = [
+    # The mailbox writes rows the viewers model in pydantic; `people` validates
+    # people.json with it.
+    "pydantic>=2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-xdist>=3.8"]
+
+# The same as the `dev` extra, as a dependency group, so the bare
+# `uv run --directory <this dir> python -m pytest tests/` works too.
+[dependency-groups]
+dev = ["pytest", "pytest-xdist>=3.8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["viewer_kit"]
