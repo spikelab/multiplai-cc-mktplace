@@ -5,7 +5,8 @@
     serve     serve the page for one repo (--repo <abs>) until stopped
     invite    give a person a personal link (written to a 0600 file, never printed)
     reply     send the session's answer to a row from the page
-    pending   print the inbox rows that have no final answer yet
+    pending   print the inbox rows that have no final answer yet, fenced
+    watch     print new inbox rows as they come, fenced (the session's Monitor)
     notify    post a stop's Slack message (once per docs revision)
     record    record decided: the agent's decision at a stop after the timeout
 
@@ -44,7 +45,7 @@ from viewer_kit.mailbox import (
 from viewer_kit.people import PEOPLE_FILE, Person, add_person
 from viewer_kit.request_checks import public_origin
 
-from . import buildme, record, server, status
+from . import buildme, fenced, record, server, status
 from . import config as config_mod
 from . import questions as questions_mod
 from .models import OutboxRow
@@ -136,7 +137,11 @@ def _repo_of(args, box: Mailbox) -> Path | None:
 
 
 def _monitor_command(box: Mailbox) -> str:
-    command = json.dumps(f"tail -n 0 -q -F {shlex.quote(str(box.inbox))}")
+    # `watch`, not a raw `tail -F`: rows carry text other people typed, and
+    # the session must only ever see it fenced (fenced.py).
+    command = json.dumps(
+        f"{shlex.quote(sys.executable)} -m pipeline_viewer watch --box {shlex.quote(str(box.dir))}"
+    )
     description = json.dumps("pipeline-viewer rows from the page")
     return f"Monitor(command={command}, description={description}, timeout_ms={MONITOR_TIMEOUT_MS})"
 
@@ -361,7 +366,21 @@ def cmd_pending(args) -> int:
         print(f"no box at {box.dir}", file=sys.stderr)
         return EXIT_USAGE
     for row in box.pending():
-        print(json.dumps(row, ensure_ascii=False))
+        print(fenced.format_row(row))
+    return 0
+
+
+def cmd_watch(args) -> int:
+    """Print each row appended to the inbox from now on, fenced, one JSON
+    line per row, until stopped. The session's Monitor runs this."""
+    box = _box(args)
+    if box is None:
+        return EXIT_USAGE
+    try:
+        for row in fenced.follow(box.inbox):
+            print(fenced.format_row(row), flush=True)
+    except KeyboardInterrupt:
+        return 0
     return 0
 
 
@@ -517,6 +536,13 @@ def build_parser() -> argparse.ArgumentParser:
         "pending", parents=[common, where], help="rows with no final answer"
     )
     p.set_defaults(func=cmd_pending)
+
+    w = sub.add_parser(
+        "watch",
+        parents=[common, where],
+        help="print new rows from the page as they come, fenced (for Monitor)",
+    )
+    w.set_defaults(func=cmd_watch)
 
     n = sub.add_parser(
         "notify", parents=[common, where], help="post a stop's Slack message"

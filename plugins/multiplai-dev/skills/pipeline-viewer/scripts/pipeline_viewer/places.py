@@ -81,7 +81,12 @@ def _names(checkout: Path) -> set[str]:
         return {
             p.name
             for p in root.iterdir()
-            if p.is_dir() and not p.name.startswith(".") and p.name not in SKIP
+            # A symlinked change dir could point anywhere on the machine:
+            # it is not a change, and nothing reads or writes through it.
+            if not p.is_symlink()
+            and p.is_dir()
+            and not p.name.startswith(".")
+            and p.name not in SKIP
         }
     except OSError:
         return set()

@@ -79,6 +79,10 @@ test("the server's comments file parses back to doc, section, person and text", 
     { doc: "proposal.md", section: "What changes", by: "Bo Example", at: "2026-01-02T11:00:00Z", text: "Line one.\nLine two." },
   ]);
   assert.deepEqual(L.parseReviewFile(""), []);
+  const quoted = "## a.md — S\n\nAda, 2026-01-02T10:00:00Z:\n\n> First.\n>\n> ## not a block\n";
+  assert.deepEqual(L.parseReviewFile(quoted), [
+    { doc: "a.md", section: "S", by: "Ada", at: "2026-01-02T10:00:00Z", text: "First.\n\n## not a block" },
+  ]);
 });
 
 // --- sorting ------------------------------------------------------------------

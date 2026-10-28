@@ -45,6 +45,14 @@ message is meant to be shown to the person as it is.
 The 409 messages, exactly:
 
 - `pm-spec is running on <name>; try again when it stops` (its `run.lock` is held)
+- `buildme is building <name>; try again when it stops, or comment on the pull request`
+  (the change's checkout is a build's worktree and the build is neither
+  complete, nor stopped on a failure, nor waiting at stop 4; inferred from
+  buildme's files, row S18)
+- `specs/changes/<name> is a symlink; nothing is written through it`, or
+  `<path> goes through a symlink; nothing is written through it`
+- `<git's error>; nothing was recorded, try again` (the commit failed; the
+  file the write had changed is put back as it was)
 - `<files> have uncommitted edits; commit or discard them first` (approve only;
   `<files>` is a comma-separated list relative to the repo)
 - `branch <b> has diverged from origin; resolve it, then retry`
@@ -267,7 +275,9 @@ One `ChangeStatus`. 404 for an unknown name.
 `path` is relative to the change dir (`components/api/plan.md`,
 `reviews/block-01-round-1.json`, `review/stop-1.md`). It is read from the
 checkout that holds the branch (the build's worktree first), else the repo.
-Anything that resolves outside the change dir, symlinks included, is 403.
+Anything that resolves outside the change dir, symlinks included, is 403;
+so is every path of a change whose dir (or `specs/` or `changes/` above it)
+is a symlink. A symlinked change dir is not listed as a change at all.
 Missing: 404. Over 1 MiB: 413. Text is UTF-8 with invalid bytes replaced.
 
 ### `GET /api/diff?name=<name>&commit=<sha>`
@@ -327,7 +337,8 @@ git. Answer: `{"id": "q-…"}`. The answer arrives through `/api/poll` with
 
 Body: `{"name": str, "stop": 1-5, "doc": str, "section": str, "text": str}`.
 `text` 1-8000 characters, `section` at most 200. Appends the comment to
-`review/stop-<n>.md` in the change dir and commits only that file. Refused
+`review/stop-<n>.md` in the change dir, quoted with `> ` on every line, and
+commits only that file. Refused
 409 only for `run.lock`, divergence, no checkout or a stop not reached
 (uncommitted edits to the stop's docs do not block a comment).
 Answer: WriteResult.

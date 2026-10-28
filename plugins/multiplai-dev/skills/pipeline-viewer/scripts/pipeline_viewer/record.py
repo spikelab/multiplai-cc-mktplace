@@ -21,6 +21,9 @@ whoever runs the server, and nothing is signed. Hooks run.
 Order of a write (the plan's Stop and resume rows):
 
 1. No write checkout → refuse. pm-spec's `run.lock` held → refuse (S4).
+   The write checkout is a build's worktree and buildme is at work there
+   (inferred from its files: not complete, not failed, not waiting at stop
+   4) → refuse (S18).
 2. With an upstream: fetch, then fast-forward; a branch that has diverged
    from it → refuse (S6).
 3. The caller re-reads the status (the pull may have changed the revision).
@@ -45,7 +48,7 @@ from viewer_kit.people import Person
 from . import buildme, gitio
 from .models import APPROVABLE_STOPS, ChangeStatus, StopStatus
 from .places import CHANGES, Place
-from .status import pm_spec_running
+from .status import build_running, pm_spec_running
 
 log = logging.getLogger(__name__)
 
@@ -108,6 +111,14 @@ def prepare(place: Place) -> None:
     cwd = _checkout(place)
     if pm_spec_running(place):
         raise Refused(f"pm-spec is running on {place.name}; try again when it stops")
+    if place.write is not None and place.write.kind == "build" and build_running(place):
+        # Inferred from buildme's files, not a lock (status.build_running):
+        # a commit here while buildme works could be discarded by it, or a
+        # half-written review file swept into its own commit (row S18).
+        raise Refused(
+            f"buildme is building {place.name}; try again when it stops, "
+            "or comment on the pull request"
+        )
     up = gitio.upstream(cwd, place.branch)
     if not up:
         return
@@ -204,8 +215,34 @@ def _author(person: Person | None) -> list[str]:
     return ["--author", f"{person.name} <{person.email}>"] if person else []
 
 
+def _restore(cwd: Path, paths: list[str]) -> None:
+    """Put *paths* back as HEAD has them (a file HEAD lacks is removed), so
+    text a failed commit left behind is not swept into the next person's
+    commit under their name."""
+    for rel in paths:
+        # From HEAD's blob, not `git checkout`: the failure may be a held
+        # index.lock, which would stop a checkout too.
+        res = gitio.run(cwd, "show", f"HEAD:{rel}", check=False)
+        if res.returncode == 0:
+            (cwd / rel).write_text(res.stdout, encoding="utf-8")
+        else:
+            (cwd / rel).unlink(missing_ok=True)
+        # Unstage what `git add` may have staged (fails harmlessly while the
+        # index is locked, and then nothing was staged).
+        gitio.ok(cwd, "reset", "--quiet", "--", rel)
+
+
 def _commit(place: Place, message: str, person: Person | None, paths: list[str]) -> str:
     cwd = _checkout(place)
+    try:
+        return _commit_in(cwd, message, person, paths)
+    except (Refused, gitio.GitError) as exc:
+        _restore(cwd, paths)
+        detail = exc.message if isinstance(exc, Refused) else str(exc)
+        raise Refused(f"{detail}; nothing was recorded, try again") from None
+
+
+def _commit_in(cwd: Path, message: str, person: Person | None, paths: list[str]) -> str:
     if paths:
         gitio.run(cwd, "add", "--", *paths)
         args = [
@@ -363,12 +400,16 @@ def rework(
         _not_closed(s)
 
     def files(s: StopStatus) -> list[str]:
-        body = f"{text.strip()}\n\nRequested by {person.name} on the stop {n} review (revision {s.revision})."
+        # Quoted: the person's text cannot start a `## ` line, which would
+        # add an issue (or a review block) in someone else's name.
+        body = f"{_quote(text)}\n\nRequested by {person.name} on the stop {n} review (revision {s.revision})."
         if n == 4:
             _append_review(
                 change_dir, n, place.name, f"Rework requested: {title}", person, body
             )
             return [_rel(place, "review", f"stop-{n}.md")]
+        _safe_path(change_dir, "spec-issues.md")
+        _safe_path(change_dir, ".change.yaml")
         buildme.write_issues(change_dir, [(title, body)], change=place.name)
         paths = [_rel(place, "spec-issues.md")]
         if (change_dir / ".change.yaml").is_file():
@@ -388,17 +429,41 @@ def rework(
     )
 
 
+def _safe_path(change_dir: Path, *parts: str) -> Path:
+    """`change_dir/parts…`, refused when any step of it is a symlink.
+
+    A committed symlink (`specs/changes/x -> /elsewhere`, or `review ->`
+    somewhere) would turn a review write into a write anywhere on the
+    machine. The change dir must be the checkout's own
+    `specs/changes/<name>`, and no directory or file below it on the way
+    may be a symlink."""
+    checkout = change_dir.parents[2]
+    if change_dir.resolve() != checkout.resolve() / CHANGES / change_dir.name:
+        raise Refused(
+            f"{CHANGES / change_dir.name} is a symlink; nothing is written through it"
+        )
+    path = change_dir
+    for part in parts:
+        path = path / part
+        if path.is_symlink():
+            raise Refused(
+                f"{(CHANGES / change_dir.name).joinpath(*parts).as_posix()} goes through "
+                "a symlink; nothing is written through it"
+            )
+    return path
+
+
 def _append_review(
     change_dir: Path, n: int, name: str, heading: str, person: Person, text: str
 ) -> Path:
-    path = change_dir / "review" / f"stop-{n}.md"
+    path = _safe_path(change_dir, "review", f"stop-{n}.md")
     path.parent.mkdir(parents=True, exist_ok=True)
     existing = (
         path.read_text(encoding="utf-8")
         if path.is_file()
         else f"# Review of stop {n}: {name}\n"
     )
-    block = f"\n## {' '.join(heading.split())}\n\n{person.name}, {utc_now()}:\n\n{text.strip()}\n"
+    block = f"\n## {' '.join(heading.split())}\n\n{person.name}, {utc_now()}:\n\n{_quote(text)}\n"
     tmp = path.with_name(f".{path.name}.tmp")
     tmp.write_text(existing.rstrip("\n") + "\n" + block, encoding="utf-8")
     tmp.replace(path)
@@ -471,7 +536,9 @@ def answer(place: Place, status_fn, q: dict, agent: str) -> WriteResult:
         _must_be_reached(status, s)
         section = " ".join(str(q.get("section") or "the whole stop").split())
         heading = f"Question: {q.get('doc') or 'all documents'} — {section}"
-        path = _checkout(place) / CHANGES / place.name / "review" / f"stop-{n}.md"
+        path = _safe_path(
+            _checkout(place) / CHANGES / place.name, "review", f"stop-{n}.md"
+        )
         path.parent.mkdir(parents=True, exist_ok=True)
         existing = (
             path.read_text(encoding="utf-8")

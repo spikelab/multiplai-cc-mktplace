@@ -12,8 +12,8 @@ manual check (`python tests/fixture_repo.py <dir>`). All content is invented.
 | export-csv | pm-spec worktree | 1 waiting |
 | search-box | pm-spec worktree | 2 waiting |
 | dark-mode | pm-spec worktree | 3 waiting |
-| rate-limit | build worktree, `plan-approval.md` | 4 waiting |
-| audit-log | build worktree, TDD block 2 of 3 | 4 passed, building |
+| rate-limit | build worktree, `plan-approval.md`, buildme's waiting note | 4 waiting |
+| audit-log | build worktree, TDD block 2 of 3 (buildme at work: writes refused) | 4 passed, building |
 | help-page | build worktree, `.build-state.complete.json` with a PR | 5 waiting |
 """
 
@@ -191,6 +191,13 @@ def build(root: Path) -> dict:
         {"phase": "plan_review", "spec_gen": {"revision": "planrev4"}},
         plan_files,
     )  # fmt: skip
+    # buildme's last note while it waits at stop 4 (so writes may go here).
+    write(
+        out["rate-limit"] / "build-progress.md",
+        "# Build progress\n\n## [2026-01-05 11:00] PLAN_APPROVAL\n"
+        "Waiting for an engineer to approve implementation-plan.md at revision planrev4; "
+        "request in plan-approval.md.\n",
+    )
 
     wt = _build_change(
         repo, wt_root, "audit-log",

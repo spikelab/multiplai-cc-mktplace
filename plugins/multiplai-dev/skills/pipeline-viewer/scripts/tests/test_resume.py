@@ -1,4 +1,4 @@
-"""The plan's Stop and resume rows S1-S7, S11, S13 and S17. Each case stops the
+"""The plan's Stop and resume rows S1-S7, S11, S13, S17 and S18. Each case stops the
 work at the row's point, resumes it, and compares the result with a run that
 never stopped."""
 
@@ -382,3 +382,35 @@ def test_s17_refused_answer_is_recorded_by_the_next_write(fx, tmp_path):
     assert (fx["export-csv"] / review).read_text() == (
         never["export-csv"] / review
     ).read_text()
+
+
+# --- S18: buildme at work in the build's worktree ------------------------------------
+
+
+def _stop_build(fx) -> None:
+    """The build stopped on a failure: writes may go to its worktree."""
+    state = fx["audit-log"] / "specs/changes/audit-log/.build-state.json"
+    data = json.loads(state.read_text())
+    data["failed_stop"] = True
+    state.write_text(json.dumps(data))
+
+
+def test_s18_refused_while_buildme_builds_then_written(fx, tmp_path):
+    from fixture_repo import build
+    from helpers import ENG
+
+    never = build(tmp_path / "never")
+    _stop_build(never)
+    p, fresh = status_fn(never, "audit-log")
+    record.comment(p, fresh, ENG, 4, "design.md", "Approach", "Why a table?")
+
+    p, fresh = status_fn(fx, "audit-log")
+    head = git(fx["audit-log"], "rev-parse", "HEAD")
+    with pytest.raises(record.Refused, match="buildme is building audit-log"):
+        record.comment(p, fresh, ENG, 4, "design.md", "Approach", "Why a table?")
+    assert git(fx["audit-log"], "rev-parse", "HEAD") == head
+    _stop_build(fx)
+    record.comment(p, fresh, ENG, 4, "design.md", "Approach", "Why a table?")
+    assert [(s, a) for s, a, _ in _review_log(fx["audit-log"])] == [
+        (s, a) for s, a, _ in _review_log(never["audit-log"])
+    ]

@@ -311,6 +311,15 @@
     return out.concat(rest).map((p) => ({ heading: p.heading, body: p.body, code: null }));
   }
 
+  /* The server quotes a person's text with "> " so it cannot start a block
+   * of its own; show it as written. Text not quoted on every line (written
+   * before quoting) is left as it is. */
+  function unquote(text) {
+    const lines = String(text).split("\n");
+    if (!lines.every((l) => l === ">" || l.startsWith("> "))) return text;
+    return lines.map((l) => (l === ">" ? "" : l.slice(2))).join("\n");
+  }
+
   /* The comments file the server writes (`review/stop-<n>.md`): one `## `
    * block per comment, headed `<doc> — <section>`, then `<name>, <time>:`. */
   function parseReviewFile(text) {
@@ -329,7 +338,7 @@
         section,
         by: by ? by[1] : null,
         at: by ? by[2] : null,
-        text: (by ? rest.slice(by[0].length) : rest).trim(),
+        text: unquote((by ? rest.slice(by[0].length) : rest).trim()),
       });
     }
     return out;

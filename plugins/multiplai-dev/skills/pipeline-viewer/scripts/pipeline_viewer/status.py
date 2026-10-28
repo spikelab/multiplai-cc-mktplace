@@ -169,6 +169,39 @@ def pm_spec_running(place: Place) -> bool:
     )
 
 
+# buildme's last progress note while it waits at stop 4 (`_plan_approval_gate`).
+PLAN_WAITING_NOTE = "Waiting for an engineer to approve "
+
+
+def build_running(place: Place) -> bool:
+    """Whether buildme may be at work in the build's worktree, inferred from
+    its files (buildme takes no lock for a single build). Stopped means one
+    of: the build completed (`.build-state.complete.json`), it stopped on a
+    failure (`failed_stop`), or it waits at stop 4: `plan-approval.md` is
+    there, no approval is saved for the current plan revision, and the last
+    note in `build-progress.md` is the waiting one. Anything else counts as
+    running."""
+    b = place.build()
+    if b is None:
+        return False
+    state, done = build_state(place)
+    if done:
+        return False
+    if not isinstance(state, dict):
+        return True
+    if state.get("failed_stop"):
+        return False
+    revision = (state.get("spec_gen") or {}).get("revision")
+    approval = state.get("plan_approval") or {}
+    waiting_for_approval = (
+        b.change_dir(place.name) / PLAN_REQUEST
+    ).is_file() and approval.get("revision") != revision
+    tail = _tail(b.checkout / "build-progress.md", 1)
+    return not (
+        waiting_for_approval and bool(tail) and tail[-1].startswith(PLAN_WAITING_NOTE)
+    )
+
+
 # --- documents -------------------------------------------------------------------
 
 

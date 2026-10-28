@@ -41,7 +41,7 @@ from . import config as config_mod
 from . import deadlines, gitio, record, status
 from . import questions as questions_mod
 from .models import ChangeStatus, InboxRow
-from .places import Place, list_changes
+from .places import CHANGES, Place, list_changes
 from .slack import Slack
 
 log = logging.getLogger(__name__)
@@ -55,6 +55,7 @@ MAX_TITLE = 120
 MAX_DOC_BYTES = 1024 * 1024
 MAX_DIFF_BYTES = 1024 * 1024
 DEADLINE_INTERVAL_S = 60.0
+REQUEST_TIMEOUT_S = 30
 SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
 SERVER_FILE = "server.json"
 CSP = (
@@ -157,8 +158,18 @@ def _text(body: dict, name: str, limit: int, required: bool = True) -> str | Non
     return value
 
 
+def _no_query(line: str) -> str:
+    """A request log line without any `?query` (tokens travel in `?t=`)."""
+    return re.sub(r"\?\S*", "", line)
+
+
 def _inside(base: Path, rel: str) -> Path:
-    """*base*/*rel*, resolved; 403 when it leaves *base* (symlinks included)."""
+    """*base*/*rel*, resolved; 403 when it leaves *base* (symlinks included).
+
+    *base* is a change dir, `<checkout>/specs/changes/<name>`. It must be
+    that very directory: when `specs`, `changes` or `<name>` is a symlink,
+    resolving *base* itself would follow it out of the checkout, so the
+    target is checked against the checkout's resolved path instead."""
     if (
         not rel
         or "\x00" in rel
@@ -166,7 +177,10 @@ def _inside(base: Path, rel: str) -> Path:
         or re.match(r"^[A-Za-z]:", rel)
     ):
         raise Reject(403, "outside the change")
-    root = base.resolve()
+    checkout = base.parents[2]
+    root = checkout.resolve() / CHANGES / base.name
+    if base.resolve() != root:
+        raise Reject(403, "outside the change")
     target = (root / rel).resolve()
     if target != root and root not in target.parents:
         raise Reject(403, "outside the change")
@@ -177,9 +191,14 @@ def make_handler(viewer: Viewer):
     class Handler(BaseHTTPRequestHandler):
         server_version = "pipeline-viewer"
         sys_version = ""
+        # A client that sends its request slowly (or never finishes the
+        # headers) is dropped after this many seconds instead of holding a
+        # thread before the token is even checked.
+        timeout = REQUEST_TIMEOUT_S
 
         def log_message(self, fmt, *args):
-            log.debug("%s %s", self.client_address[0], fmt % args)
+            # Query strings are dropped: the personal link carries `?t=<token>`.
+            log.debug("%s %s", self.client_address[0], _no_query(fmt % args))
 
         def _send(self, status_code: int, body: bytes, ctype: str) -> None:
             self.send_response(status_code)
