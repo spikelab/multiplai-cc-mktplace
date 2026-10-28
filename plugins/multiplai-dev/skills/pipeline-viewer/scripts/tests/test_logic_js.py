@@ -12,6 +12,7 @@ def test_page_logic_under_node():
     assert node, "node is required for the page-logic tests"
     proc = subprocess.run(
         [node, str(TESTS / "logic.test.js")],
+        check=False,
         capture_output=True,
         text=True,
         cwd=TESTS.parent,
