@@ -99,6 +99,7 @@ fixture runs establish harness behavior, not model quality.
 | `--pr-ready` | Open the PR ready-for-review instead of the default draft. |
 | `--research-path <file>` | Research to build on. Its content is saved as `research.md` in the change dir and fed to the design (fenced as untrusted). Without it, the pipeline decides whether research is needed — see [Step 2](#step-2-research). |
 | `--accept-size` | Build a plan the size gate says should be split, as one PR. The build remembers it, so a later retry or resume does not stop on size again. |
+| `--approve-plan` | Under `review.plan_approval: true`: commit the user's approval of the implementation plan at its current revision (an empty commit on the build's branch with `Stop: 4`, `Revision: <plan revision>` and `Approved-by: <git user.name>` trailers) and go on. Pass it only after the user approved the plan; without the setting it does nothing. |
 | `--force` | Start a new build even if this change already published. The new build gets the next free branch (`<feature branch>-2`, …, cut where the published build started) and leaves the published one alone. Pass it only after the user said yes to the `BUILD:COMPLETE` question (below). A stopped build with a `.build-state.json` resumes with or without it. |
 | `--epic-child` | Build as an epic's child: no spec-extract, and the PR targets `--branch` (the epic's feature branch), else the default branch. The epic's build passes it to every child, so the child's saved command keeps it when run again by hand. `BUILDME_EPIC_CHILD=1` in the environment does the same: a child's command saved before 0.84.2 lacks the flag, so pass one of them when running it by hand. |
 | `--base-ref <sha>` | Branch a new worktree from this commit instead of the source checkout's HEAD; the change's feature branch is then not looked up. An epic's children get `origin/<feature branch>` (see [Epic builds](#epic-builds-a-parent-and-its-children)), and a build that finds its change's feature branch sets it to that itself; a build that re-binds to its worktree ignores it. With `--base-ref`, the change dir as that commit holds it must be ready, or the build refuses before the worktree is cut. With `--branch` and `--epic-child`, the PR targets that branch (a single change given `--branch` builds on that branch itself, ignoring `--base-ref`, and its PR goes to the default branch); otherwise, when the commit is not on the default branch, the PR targets the branch that holds it (`--base`), except under `--epic-child` (or `BUILDME_EPIC_CHILD=1`), where it targets the default branch. Exits `1` when the `specs/config.yaml` committed at HEAD is not the version at that commit (push yours, or pull origin's, first). |
@@ -127,6 +128,7 @@ buildme ignores them.
 | `planning.max_rewrites` | int | `2` | the plan check: rewrites of the plan before it stops the run. Raising it reopens a stopped check without regenerating the plan |
 | `planning.max_usd` | number | `40` | the plan check: it starts no rewrite or recheck once the planning calls (design, unknowns, tasks, rubric, explainers, the check and its rewrites) have spent this much. Raising it reopens a stopped check without regenerating the plan |
 | `tdd.narrow_commands` | list of `dir`, `command`, optional `runner` (`pytest` / `jest`) | none | the TDD loop, for a repo whose tests sit in several directories with different runners: each entry is narrowed to the block's own tests in its own directory (`cd backend && pytest -q tests/test_x.py`); a directory with no changed file is left out, and when every one is, the whole `tdd.test_command` runs. Example and rules: [Repos with tests in several directories](scripts/README.md#repos-with-tests-in-several-directories) |
+| `review.plan_approval` | bool | `false` | stop 4: after the plan check and the size gate, the build waits (`PLAN:WAITING`, exit `3`) until its branch holds an engineer's approval commit for the current plan revision (see [The plan approval](#the-plan-approval-stop-4)). Turning it on for a planned build changes no plan revision |
 | `findings.authors` | `collaborators` or a list of GitHub logins | `collaborators` | `/multiplai-dev:buildme-findings`: whose PR comments are acted on. `collaborators` means anyone whose `role_name` on the repo is `admin`, `maintain` or `write` |
 | `findings.max_rounds` | int | `3` | `/multiplai-dev:buildme-findings`: fix-and-re-review rounds before it stops (`findings --max-rounds` overrides it) |
 | `findings.allow_bots` | list of bot logins | `[]` | `/multiplai-dev:buildme-findings`: bots whose comments are acted on; any other bot's are listed and skipped |
@@ -743,7 +745,9 @@ writes `agents/<NNN>-build-<id>.{started.json,result.json,log}` and ends with
 `runs/<NN>/summary.json` (each child's status, PR and reason), printing
 `EPIC:SUMMARY:<path>`. A child that exits `3` (for example `SPLIT:REQUIRED`)
 or exits `0` without a PR is parked, and the children that depend on it are
-skipped. A child whose own build refuses its specs (`SPEC:NOT_READY` or
+skipped. A child that exits `3` with `PLAN:WAITING` is `waiting`, with that
+line as its reason, and is not relaunched in the run; the next run launches it
+again, and it builds once the approval commit is on its branch. A child whose own build refuses its specs (`SPEC:NOT_READY` or
 `SPEC:ISSUES`, told by that line, not the exit code) is parked with that line
 as its reason and not relaunched in the run; every other child whose
 dependencies are met still builds, and the children that depend on it are
@@ -1009,6 +1013,22 @@ the build: the pipeline writes `split-proposal.md` (the proposed PRs, the cuts,
 the reason) and exits `3` with `SPLIT:REQUIRED:<path>`. Re-running stops the
 same way until `--accept-size` is passed.
 
+### The plan approval (stop 4)
+
+With `review.plan_approval: true` in `specs/config.yaml`, an engineer approves
+how the change will be implemented before any code is written. After the plan
+check and the size gate, the pipeline looks on the build's branch for a commit
+whose trailers are `Stop: 4`, `Revision: <plan revision>` and `Approved-by:`
+(or `Decided-by:`). With none, it writes `plan-approval.md` in the change dir
+(the file to approve, `design.md`; `tasks.md` with its block count, to read;
+the plan check's outcome; the plan revision; and the commands that record the
+approval) and exits `3` with `PLAN:WAITING:<path>`. Re-running stops the same
+way, and keeps `plan-approval.md` as it is, until the approval commit is
+there; `--approve-plan` makes that commit in git `user.name`'s name. Any edit
+to the plan makes a new plan revision: an approval of the old one no longer
+counts, and the build asks again. An epic's child that stops here is `waiting`
+in the run's summary, and the next run of the epic launches it again.
+
 ### The documentation phase (always on)
 
 After the build and before the respec proposal, `DOCS_UPDATE` brings the
@@ -1171,6 +1191,7 @@ get past it), `4` with `SPEC:ISSUES` the requirements go back to pm-spec
 | Marker | What happened | What you do |
 |---|---|---|
 | `RESEARCH:NEEDED:<path>` | the research decision asked for research; topics in `<path>` | Run `/deep-research` on them and re-run with `--research-path <output>` — or, without `multiplai-research`, say so and re-run with `--skip-research`. |
+| `PLAN:WAITING:<path>` | stop 4 (`review.plan_approval: true`): the plan waits for an engineer's approval; `<path>` is `plan-approval.md` | When the `multiplai-dev:pipeline-viewer` skill is installed, run `pipeline-viewer notify --change <name> --stop 4`; otherwise show `<path>` to the user. Stop. Re-run the same build command once the approval commit is on the build's branch, or with `--approve-plan` when the user tells you here that they approve the plan. Never add `--approve-plan` without the user's approval. |
 | `SPLIT:REQUIRED:<path>` | the size gate wants the plan split; proposal in `<path>` | Show `<path>` to the user, or post it on the change's ticket (`ticket_refs` in its `.change.yaml`, which pm-spec wrote; plane `comment` / `gh issue comment --body-file`), and stop. Re-run with `--accept-size` only when the user chooses to build it as one PR. |
 | `BUILD:COMPLETE:<path>` | this change already published; `<path>` is its kept checkpoint, and stderr names its branch and PR. Nothing was written | Ask the user with AskUserQuestion whether to start a new build of it on a new branch. On yes, re-run the same command with `--force`; on no, stop. Never add `--force` without the user's yes. |
 | `EPIC:MERGE_WAITING:<urls>` | a child waits for a PR another child opened to merge, or a PR passed review and waits for a person to merge it under `epic.merge: manual`, or, under `epic.merge: auto`, buildme left a PR open itself: its checks were still pending after an hour, or a merge queue only queued it (comma-separated `<urls>`) | Tell the user which PRs wait for a merge, and any child the `EPIC: child` lines on stderr name, and stop. Under `manual`, re-run the same command once they are merged. Under `auto`, do not ask the user to merge by hand. Checks still pending: re-run the same command, which reads them again and merges. A queued PR: re-run once the queue has merged it, since a re-run while it is still queued runs the merge step again, which merges the feature branch in and pushes when that branch has moved (see [Merging the children's PRs](#epic-builds-a-parent-and-its-children)). A PR closed without a merge parks the children that wait on it. |
