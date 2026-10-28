@@ -65,7 +65,12 @@ level. `needs` (top level, and on each finding) is optional: what the review
 could not get, each with a suggested command and/or `where` to look. The page
 shows the top-level list on the **Needs you** tab, grouped by what each item
 blocks (`logic.needsGroups`), and a finding's own under it; nothing runs a
-command. Line numbers are 1-based, at
+command. From multiplai-dev 0.124 a top-level `need_commands` (one entry per
+command: `id`, `command`, `why`, `blocks`, `where`, `whats`) replaces that tab
+with one row per command (`logic.needCommandRows`), and a finding's `unchecked`
+list shows as **Not checked:** (`logic.uncheckedLines`). The server re-reads
+`findings.json` when its mtime changes (`TargetState.reload_findings`, on
+`/api/poll`), and the page reloads the target when `findings_mtime` changes. Line numbers are 1-based, at
 `head_sha`. `finding_id` is the first 10 hex of
 `sha1(f"{file}\0{line_start}\0{claim}")`.
 

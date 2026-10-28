@@ -178,10 +178,142 @@ def unverified_verdict(finding: Finding) -> Verdict:
     )
 
 
+async def verify_one(
+    state: ReviewState, ctx: RunContext, finding: Finding, *, evidence: str = ""
+) -> tuple[Verdict | None, AgentCheck, GateCheck | None]:
+    """One verifier call for *finding*, tried up to `VERIFY_TRIES` times, then `verdict_gate`.
+
+    *evidence* is extra text the verifier is given as data (review's `answers`: the outputs of the
+    Needs you commands, each fenced). Returns no verdict when every try failed.
+    """
+    target, cfg = state.target, ctx.config
+    started = checks.now()
+    given = checks.prompt_labels(target, extra=[f"finding {finding.id}"])
+    answer, error = None, ""
+    with sdk.recording() as rec:
+        for attempt in range(1, VERIFY_TRIES + 1):
+            try:
+                answer = await sdk.agent_call_structured(
+                    prompt.build(target, finding, evidence=evidence),
+                    VerifierAnswer,
+                    allowed_tools=sdk.VERIFIER_TOOLS,
+                    model=cfg.verifier_model,
+                    effort=cfg.effort,
+                    max_turns=cfg.max_turns,
+                    cwd=str(ctx.snapshot),
+                    budget_label="verify",
+                )
+                break
+            except (sdk.RepoTrustError, sdk.UsageLimitError):
+                raise
+            except sdk.AgentCallError as e:
+                error = f"the verifier failed: {str(e).splitlines()[0][:200]}"
+                log.warning(
+                    "verifier failed for finding %s (try %d/%d): %s",
+                    finding.id,
+                    attempt,
+                    VERIFY_TRIES,
+                    error,
+                )
+    check = AgentCheck(
+        stage="verify",
+        subject=finding.id,
+        given=given,
+        calls=[checks.summarise_call(c, target, ctx.snapshot) for c in rec.tool_calls],
+        turns=rec.turns,
+        cost_usd=round(rec.cost_usd, 6),
+        started_at=started,
+        ended_at=checks.now(),
+    )
+    if answer is None:
+        log.error("verifier failed %d times for finding %s", VERIFY_TRIES, finding.id)
+        check.error = f"{error} ({VERIFY_TRIES} tries)"
+        check.outcome = f"failed: {checks.failure_kind(error)}"
+        return None, check, None
+    verdict = Verdict.model_validate(answer.model_dump()).model_copy(
+        update={
+            "finding_id": finding.id,
+            "citations": [
+                fix_citation(c, target, ctx.snapshot) for c in answer.citations
+            ],
+        }
+    )
+    if (
+        verdict.topic == "tests"
+        and verdict.impact in CRITICAL_IMPACTS
+        and not is_trim(finding)
+    ):
+        state.errors.append(
+            f"verify: {finding.id} is about tests; impact {verdict.impact} lowered to "
+            "correctness-only"
+        )
+        verdict = verdict.model_copy(update={"impact": "correctness-only"})
+    answered = verdict.status
+    result = verdict_gate(target, verdict)
+    gate_check = GateCheck(
+        finding_id=finding.id,
+        gate="verdict_gate",
+        passed=result.passed,
+        rule="" if result.passed else reason_kind(result.reason),
+    )
+    if not result.passed:
+        ctx.gate_reasons.append(result.reason)
+        verdict = verdict.model_copy(
+            update={
+                "status": "unverifiable",
+                "reason": f"{result.reason}. The verifier said: {verdict.reason}",
+            }
+        )
+    # The verifier saw no diff: its prompt holds the finding and its cited lines.
+    shown = checks.cited_ranges(finding.citations)
+    check.outcome = (
+        verdict.status if result.passed else f"{verdict.status} (answered {answered})"
+    )
+    check.verdict = {
+        "status": verdict.status,
+        "reason": verdict.reason,
+        "citations": [
+            checks.marked_citation(c, rec.tool_calls, {}, target, ctx.snapshot, shown)
+            for c in verdict.citations
+        ],
+        "lowered": not result.passed,
+    }
+    return verdict, check, gate_check
+
+
+def keep_verdict(
+    state: ReviewState,
+    finding: Finding,
+    verdict: Verdict,
+    check: AgentCheck,
+    gate_check: GateCheck | None,
+) -> None:
+    """Store *verdict* and its records; an unverifiable one's needs go to `state.needs` through `need_gate`."""
+    state.checks.append(check)
+    state.verdicts[verdict.finding_id] = verdict
+    if gate_check:
+        state.gate_checks.append(gate_check)
+    if verdict.status == "unverifiable":
+        state.needs.extend(
+            gated_need(
+                Need(
+                    what=n.what,
+                    blocks=finding.id,
+                    cause=n.cause,
+                    command=n.command,
+                    where=n.where,
+                    source="verifier",
+                )
+            )
+            for n in verdict.needs
+            if n.what.strip()
+        )
+
+
 async def run_verify(state: ReviewState, ctx: RunContext) -> ReviewState:
     if state.past("verify"):
         return state
-    target, cfg = state.target, ctx.config
+    cfg = ctx.config
     if not cfg.verify_low:
         unasked = [
             f
@@ -196,137 +328,16 @@ async def run_verify(state: ReviewState, ctx: RunContext) -> ReviewState:
 
     failed: dict[str, str] = {}
 
-    async def _one(
-        finding: Finding,
-    ) -> tuple[Verdict | None, AgentCheck, GateCheck | None]:
-        started = checks.now()
-        given = checks.prompt_labels(target, extra=[f"finding {finding.id}"])
-        answer, error = None, ""
-        with sdk.recording() as rec:
-            for attempt in range(1, VERIFY_TRIES + 1):
-                try:
-                    answer = await sdk.agent_call_structured(
-                        prompt.build(target, finding),
-                        VerifierAnswer,
-                        allowed_tools=sdk.VERIFIER_TOOLS,
-                        model=cfg.verifier_model,
-                        effort=cfg.effort,
-                        max_turns=cfg.max_turns,
-                        cwd=str(ctx.snapshot),
-                        budget_label="verify",
-                    )
-                    break
-                except (sdk.RepoTrustError, sdk.UsageLimitError):
-                    raise
-                except sdk.AgentCallError as e:
-                    error = f"the verifier failed: {str(e).splitlines()[0][:200]}"
-                    log.warning(
-                        "verifier failed for finding %s (try %d/%d): %s",
-                        finding.id,
-                        attempt,
-                        VERIFY_TRIES,
-                        error,
-                    )
-        check = AgentCheck(
-            stage="verify",
-            subject=finding.id,
-            given=given,
-            calls=[
-                checks.summarise_call(c, target, ctx.snapshot) for c in rec.tool_calls
-            ],
-            turns=rec.turns,
-            cost_usd=round(rec.cost_usd, 6),
-            started_at=started,
-            ended_at=checks.now(),
-        )
-        if answer is None:
-            log.error(
-                "verifier failed %d times for finding %s", VERIFY_TRIES, finding.id
-            )
-            check.error = f"{error} ({VERIFY_TRIES} tries)"
-            check.outcome = f"failed: {checks.failure_kind(error)}"
-            return None, check, None
-        verdict = Verdict.model_validate(answer.model_dump()).model_copy(
-            update={
-                "finding_id": finding.id,
-                "citations": [
-                    fix_citation(c, target, ctx.snapshot) for c in answer.citations
-                ],
-            }
-        )
-        if (
-            verdict.topic == "tests"
-            and verdict.impact in CRITICAL_IMPACTS
-            and not is_trim(finding)
-        ):
-            state.errors.append(
-                f"verify: {finding.id} is about tests; impact {verdict.impact} lowered to "
-                "correctness-only"
-            )
-            verdict = verdict.model_copy(update={"impact": "correctness-only"})
-        answered = verdict.status
-        result = verdict_gate(target, verdict)
-        gate_check = GateCheck(
-            finding_id=finding.id,
-            gate="verdict_gate",
-            passed=result.passed,
-            rule="" if result.passed else reason_kind(result.reason),
-        )
-        if not result.passed:
-            ctx.gate_reasons.append(result.reason)
-            verdict = verdict.model_copy(
-                update={
-                    "status": "unverifiable",
-                    "reason": f"{result.reason}. The verifier said: {verdict.reason}",
-                }
-            )
-        # The verifier saw no diff: its prompt holds the finding and its cited lines.
-        shown = checks.cited_ranges(finding.citations)
-        check.outcome = (
-            verdict.status
-            if result.passed
-            else f"{verdict.status} (answered {answered})"
-        )
-        check.verdict = {
-            "status": verdict.status,
-            "reason": verdict.reason,
-            "citations": [
-                checks.marked_citation(
-                    c, rec.tool_calls, {}, target, ctx.snapshot, shown
-                )
-                for c in verdict.citations
-            ],
-            "lowered": not result.passed,
-        }
-        return verdict, check, gate_check
-
     async def one(finding: Finding) -> Verdict | None:
         # Stored and saved as each answer arrives, so a stop mid-stage, a
         # budget stop or a kill, keeps what was already paid for.
-        verdict, check, gate_check = await _one(finding)
-        state.checks.append(check)
+        verdict, check, gate_check = await verify_one(state, ctx, finding)
         if verdict is None:
+            state.checks.append(check)
             failed[finding.id] = check.error
             save(state, ctx)
             return None
-        state.verdicts[verdict.finding_id] = verdict
-        if gate_check:
-            state.gate_checks.append(gate_check)
-        if verdict.status == "unverifiable":
-            state.needs.extend(
-                gated_need(
-                    Need(
-                        what=n.what,
-                        blocks=finding.id,
-                        cause=n.cause,
-                        command=n.command,
-                        where=n.where,
-                        source="verifier",
-                    )
-                )
-                for n in verdict.needs
-                if n.what.strip()
-            )
+        keep_verdict(state, finding, verdict, check, gate_check)
         save(state, ctx)
         return verdict
 

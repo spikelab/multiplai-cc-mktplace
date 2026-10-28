@@ -322,7 +322,8 @@ def test_a_rejected_paths_json_leaves_the_payload_as_without_one(
 
     a, b = payload(without), payload(with_rejected)
     assert a["checks"] is not None and a["paths"] is None
-    assert b == a
+    # Two files written apart have two mtimes; nothing else may differ.
+    assert {**b, "findings_mtime": ""} == {**a, "findings_mtime": ""}
     route = f"/api/targets/{without.slug}/summary"
     assert (
         with_rejected.request("GET", route)

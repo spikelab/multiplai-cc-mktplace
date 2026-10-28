@@ -24,6 +24,7 @@ from ..models import Piece, TargetInfo
 from . import (
     CITATION_RULES,
     JSON_ONLY,
+    NEED_COMMAND_RULE,
     deps_block,
     fence,
     workspace_block,
@@ -192,10 +193,11 @@ SCHEMA = """\
                "other_locations": ["path/to/other.py:17"] }],
  "needs": [{"what": "one sentence naming what you could not check, and why it matters here",
             "cause": "no-access" | "unreachable",
-            "command": "one read-only shell command that fetches it, or empty",
+            "command": "one read-only shell command that fetches it; empty only when none exists",
             "where": "where a person finds it when no single command does, or empty"}]}"""
 
-NEEDS_RULES = """\
+NEEDS_RULES = (
+    """\
 When you could not check something your task asks for, because you could not read it (a provider's
 behaviour you could not fetch, settings or data outside this repository), add one item to `needs`
 instead of guessing. Never write a finding to say you could not check something. `cause` is
@@ -203,11 +205,13 @@ instead of guessing. Never write a finding to say you could not check something.
 reach it. `command` is ONE read-only shell command, on one line with no pipes, redirects or `;`,
 that a person with normal access to this project would run to get it, such as
 `gh api repos/<owner>/<repo>/rules/branches/main` with the real names filled in; leave it empty when
-you know of none. `where` tells a person where to find it when no such command gets it: the console
+none exists. `where` tells a person where to find it when no such command gets it: the console
 page and its path (Console > Dataform > <repository> > Workflow execution logs), the API method,
 the dashboard, the file outside this repository, or the team that owns it, with the real names you
-read filled in. Fill `where` whenever `command` is empty; never leave both empty. Leave `needs`
-empty when you checked everything."""
+read filled in. Leave `needs` empty when you checked everything.
+"""
+    + NEED_COMMAND_RULE
+)
 
 
 FILE_RULE_TREE = (
@@ -317,7 +321,10 @@ PRE_EXISTING_AND_NEEDS = (
     "could not read it (a provider's behaviour, settings or data outside this repository), write one "
     "paragraph starting `Could not check:` instead of guessing: what you could not check and why it matters "
     "here, then one read-only shell command on one line that a person with normal access would run to get "
-    "it, or where a person finds it."
+    "it. A web page is `curl -sL <url>`, and a file in another GitHub repository is "
+    "`gh api repos/<owner>/<repo>/contents/<path>`. Write where a person finds it only when no read-only "
+    "`gh`, `gcloud`, `git`, `curl` or other command-line tool can get it, and then say what the finding "
+    "cannot be trusted on."
 )
 
 CLASS_AND_PLACES = (

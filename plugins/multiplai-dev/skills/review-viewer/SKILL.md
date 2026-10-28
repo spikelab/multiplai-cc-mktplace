@@ -322,19 +322,23 @@ within seconds; the server is not restarted.
 
 ### 5. What the page shows
 
-- When the review could not get something it needed, a **Needs you** tab
-  appears (from `needs` in `findings.json`), with a count. It groups the items
-  by what they block: the review as a whole first, then each finding (a link
-  to it). Each item says what is missing and why, then the suggested command
-  in a code block with a Copy button, labelled "suggested by the review: read
-  it before running", and where to look (`where`) when the review named a
-  place. An item with neither has an **Ask the session** button that puts a
-  question about it in the chat for the user to send: answer it by working
-  out, from the repository, where a person would get the information. The
-  Findings tab shows a finding's own needs under it. The page runs nothing;
-  the tab is hidden for a review with no needs. If the user asks about one,
-  give the command as `! <command>` for them to run, never run it yourself
-  (the review skill's step 2 says why).
+- When the review named a command it needs a person to run, a **Needs you**
+  tab appears, with a count. With `need_commands` in `findings.json` it shows
+  one row per command: its id (`N1`, `N2`, …), the command in a code block
+  with a Copy button, labelled "suggested by the review: read it before
+  running", one line of why, links to the findings it bears on, and the file
+  to save its output in (`answers/N<k>.txt` in the review's directory). A need
+  with no command has no row: the finding it weakens shows it as
+  **Not checked:** beside the verdict, and the finding also names the ids of
+  the commands that bear on it. A file without `need_commands` (written before
+  multiplai-dev 0.124) shows its `needs` grouped by what they block, as
+  before. The page runs nothing; the tab is hidden when there is nothing to
+  run. If the user asks about one, give the command as
+  `! <command> > <review dir>/answers/N<k>.txt` for them to run, never run it
+  yourself (the review skill's step 2 says why), and once the outputs are
+  saved run review's `answers` command. The page re-reads `findings.json` when
+  it changes on disk (checked on each poll), so what `answers` writes appears
+  without a restart, with decisions unchanged.
 - A finding on the Findings tab reads: its claim, the **Failure scenario**,
   the **Explanation** (the review's assessment and its reason), expected
   behaviour, verdict, cited code, needs, then **Checked by** and the decision. A badge says what it is about (the

@@ -52,6 +52,13 @@ written only when there are some: at the top level every need, and on each
 finding the needs that block it. A need that blocked a finding merged away
 moves to the finding it was merged into. A file without needs has neither
 key, as before.
+
+`need_commands` (top level, optional, 0.124+) is the needs grouped by command
+(`need_commands()`): one entry per distinct command, with an id (`N1`, …), the
+shortest `what` as its `why`, and the finding ids it bears on. A need with no
+command is in no group. On the finding it blocks it is exported as `unchecked`
+(optional, 0.124+), a list of its `what`s; one that blocks the review becomes
+a coverage record (`need_coverage()`), so it reaches `checks.json`.
 """
 
 from __future__ import annotations
@@ -63,6 +70,7 @@ from pathlib import Path
 
 from . import timings
 from .budget import TOKEN_FIELDS, empty_stage
+from .checks import add_coverage
 from .config import DIMENSIONS
 from .models import (
     SEVERITIES,
@@ -70,9 +78,11 @@ from .models import (
     AgentCheck,
     Assessment,
     Citation,
+    CoverageRecord,
     EarlierStatus,
     Finding,
     Need,
+    NeedCommand,
     ReviewState,
     section_of,
 )
@@ -170,6 +180,79 @@ def exported_needs(state: ReviewState) -> list[Need]:
             seen.add(key)
             out.append(n)
     return out
+
+
+def normalised_command(command: str) -> str:
+    """*command* with each run of whitespace made one space, and stripped."""
+    return " ".join(command.split())
+
+
+def need_commands(needs: list[Need]) -> list[NeedCommand]:
+    """*needs* grouped by their normalised command, one `NeedCommand` per command, in first-seen order.
+
+    A need with an empty command is in no group.
+    """
+    groups: dict[str, list[Need]] = {}
+    for n in needs:
+        command = normalised_command(n.command)
+        if command:
+            groups.setdefault(command, []).append(n)
+    out = []
+    for i, (command, group) in enumerate(groups.items(), start=1):
+        ids = sorted({n.blocks for n in group} - {"review"})
+        out.append(
+            NeedCommand(
+                id=f"N{i}",
+                command=command,
+                why=min((n.what for n in group), key=len),
+                blocks=ids or ["review"],
+                where=next((n.where for n in group if n.where), ""),
+                whats=[n.what for n in group],
+            )
+        )
+    return out
+
+
+NO_COMMAND = (
+    "no-command"  # the coverage reason of a need of the review that has no command
+)
+
+
+def need_coverage(state: ReviewState) -> None:
+    """Record each need of the review with no command as a coverage record, once.
+
+    Such a need is no task for a person; it says what the review could not
+    check. A verifier's need is recorded under `verify`, any other under `find`.
+    """
+    have = {(c.stage, c.detail) for c in state.coverage if c.reason == NO_COMMAND}
+    for n in exported_needs(state):
+        if n.blocks != "review" or normalised_command(n.command):
+            continue
+        stage = "verify" if n.source == "verifier" else "find"
+        if (stage, n.what) in have:
+            continue
+        have.add((stage, n.what))
+        add_coverage(
+            state,
+            CoverageRecord(
+                stage=stage,
+                subject="need",
+                level="info",
+                reason=NO_COMMAND,
+                detail=n.what,
+            ),
+        )
+
+
+def _need_command(c: NeedCommand) -> dict:
+    return {
+        "id": c.id,
+        "command": c.command,
+        "why": c.why,
+        "blocks": list(c.blocks),
+        "where": c.where,
+        "whats": list(c.whats),
+    }
 
 
 def _tokens(rec: dict) -> dict:
@@ -346,6 +429,10 @@ def to_findings_file(
         mine = [_need(n) for n in needs if n.blocks == row["id"]]
         if mine:
             row["needs"] = mine
+        # (0.124+) what this finding could not be checked on, with no command to get it.
+        unchecked = [m["what"] for m in mine if not normalised_command(m["command"])]
+        if unchecked:
+            row["unchecked"] = unchecked
 
     data = {
         "schema_version": 1,
@@ -358,6 +445,9 @@ def to_findings_file(
     }
     if needs:
         data["needs"] = [_need(n) for n in needs]
+    commands = need_commands(needs)
+    if commands:
+        data["need_commands"] = [_need_command(c) for c in commands]
     if state.earlier_status:
         data["earlier"] = [_earlier(e) for e in state.earlier_status]
     if state.scope is not None and state.scope.kind == "incremental":

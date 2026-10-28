@@ -501,6 +501,40 @@ def test_changed_findings_restart_the_viewer(start_live):
             proc.kill()
 
 
+def test_poll_reports_a_changed_findings_file_and_serves_it(start_live):
+    # review's `answers` rewrites findings.json under an open page; the poll says so.
+    live = start_live()
+    status, first = live.request("GET", f"/api/poll?target={live.slug}&since=0")
+    assert status == 200
+    status, again = live.request("GET", f"/api/poll?target={live.slug}&since=0")
+    assert again["findings_mtime"] == first["findings_mtime"]
+    data = json.loads(live.findings.read_text())
+    data["findings"][0]["verdict_reason"] = "settled by N1"
+    live.findings.write_text(json.dumps(data))
+    stamp = live.findings.stat().st_mtime_ns + 1_000_000_000
+    os.utime(live.findings, ns=(stamp, stamp))
+    status, poll = live.request("GET", f"/api/poll?target={live.slug}&since=0")
+    assert status == 200 and poll["findings_mtime"] == str(stamp)
+    status, served = live.request("GET", f"/api/targets/{live.slug}")
+    assert served["findings_mtime"] == str(stamp)
+    assert served["findings"]["findings"][0]["verdict_reason"] == "settled by N1"
+
+
+def test_poll_keeps_serving_findings_that_name_another_head(start_live):
+    live = start_live()
+    data = json.loads(live.findings.read_text())
+    before = data["findings"][0]["verdict_reason"]
+    data["target"]["head_sha"] = "0" * 40
+    data["findings"][0]["verdict_reason"] = "another round"
+    live.findings.write_text(json.dumps(data))
+    stamp = live.findings.stat().st_mtime_ns + 1_000_000_000
+    os.utime(live.findings, ns=(stamp, stamp))
+    status, _ = live.request("GET", f"/api/poll?target={live.slug}&since=0")
+    assert status == 200
+    status, served = live.request("GET", f"/api/targets/{live.slug}")
+    assert served["findings"]["findings"][0]["verdict_reason"] == before
+
+
 def test_monitor_command_survives_spaces_and_quotes(tmp_path):
     import shlex
 

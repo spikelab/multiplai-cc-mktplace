@@ -120,13 +120,21 @@
 
   /* A findings file with only the shown findings (in a critical review, only
    * the `breaks-*` ones), and only the needs that block the review or a shown
-   * finding. */
+   * finding. A command (`need_commands`) is kept when it blocks a shown
+   * finding or nothing the file holds, less the hidden findings it blocks. */
   function shownFile(ff) {
     const findings = shownFindings(ff && ff.findings, ff && ff.mode);
     const ids = new Set(findings.map((f) => f.id));
     const all = new Set(((ff && ff.findings) || []).map((f) => f.id));
-    const needs = ((ff && ff.needs) || []).filter((n) => ids.has(n.blocks) || !all.has(n.blocks));
-    return Object.assign({}, ff, { findings: findings, needs: needs });
+    const kept = (id) => ids.has(id) || !all.has(id);
+    const needs = ((ff && ff.needs) || []).filter((n) => kept(n.blocks));
+    const out = Object.assign({}, ff, { findings: findings, needs: needs });
+    if (ff && Array.isArray(ff.need_commands)) {
+      out.need_commands = ff.need_commands
+        .filter((c) => (c.blocks || []).some(kept))
+        .map((c) => Object.assign({}, c, { blocks: (c.blocks || []).filter(kept) }));
+    }
+    return out;
   }
 
   /* Refuted findings, and any finding you decided (accept, reject or defer),
@@ -635,12 +643,42 @@
     return all.filter((g) => g.blocks === "the review").concat(all.filter((g) => g.blocks !== "the review"));
   }
 
-  /* The message the page puts in the chat when a need gives no command and no
-   * place to look: it asks the session how a person would get the information. */
-  function needQuestion(n) {
-    const blocks = n.blocks === "the review" ? "the review as a whole" : n.blocks;
-    return "The review could not get this, and named no command or place to look: " + n.what +
-      "\nIt blocks: " + blocks + "\nWhere would I find it, and what exactly should I run or open?";
+  /* The "Needs you" rows of a file with `need_commands` (multiplai-dev 0.124+),
+   * one per command: its id, the command, why, where to look, the file its
+   * output goes in, and the findings it bears on that the file holds, each
+   * with a label. null for an older file, which the page shows by need. */
+  function needCommandRows(findingsFile) {
+    const commands = findingsFile && findingsFile.need_commands;
+    if (!Array.isArray(commands)) return null;
+    const byId = new Map(((findingsFile && findingsFile.findings) || []).map((f) => [f.id, f]));
+    return commands.filter((c) => c && c.command).map((c) => ({
+      id: String(c.id),
+      command: String(c.command),
+      why: String(c.why || ""),
+      where: String(c.where || ""),
+      file: "answers/" + c.id + ".txt",
+      findings: (c.blocks || []).filter((id) => byId.has(id)).map((id) => {
+        const f = byId.get(id);
+        return { id: id, label: f.file + ":" + f.line_start + " — " + (f.title || f.claim) };
+      }),
+    }));
+  }
+
+  /* How many rows the "Needs you" tab has: one per command, or one per need in an older file. */
+  function needsCount(findingsFile) {
+    const rows = needCommandRows(findingsFile);
+    return rows ? rows.length : needsItems(findingsFile).length;
+  }
+
+  /* The ids of the commands that bear on *finding*, in the file's order. */
+  function findingCommandIds(finding, findingsFile) {
+    const rows = needCommandRows(findingsFile) || [];
+    return rows.filter((r) => r.findings.some((x) => x.id === finding.id)).map((r) => r.id);
+  }
+
+  /* What the review could not check this finding on, with no command to get it. */
+  function uncheckedLines(finding) {
+    return ((finding && finding.unchecked) || []).map((what) => "Not checked: " + what);
   }
 
   /* Badges for the Summary tab: measured ones from the server, then the
@@ -1389,9 +1427,12 @@
     const parts = ["scenario"];
     if (f.expected_behaviour) parts.push("expected");
     if (f.verdict_reason) parts.push("verdict");
+    if (f.unchecked && f.unchecked.length) parts.push("unchecked");
     if (f.absorbed && f.absorbed.length) parts.push("absorbed");
     if (lists) parts.push("cited");
-    if (f.needs && f.needs.length) parts.push("needs");
+    // A need with no command is shown as `unchecked` when the file has that list.
+    const unchecked = f.unchecked && f.unchecked.length;
+    if ((f.needs || []).some((n) => n.command || !unchecked)) parts.push("needs");
     if (lists && f.verifier_citations && f.verifier_citations.length) parts.push("verifier-cited");
     return { checkedBy: checkedBy, parts: parts };
   }
@@ -1631,7 +1672,8 @@
     neighbourFile: neighbourFile,
     summaryBadges: summaryBadges, fullWalkthroughView: fullWalkthroughView,
     fullWalkthroughNotes: fullWalkthroughNotes, needsItems: needsItems, needsGroups: needsGroups,
-    needQuestion: needQuestion,
+    needCommandRows: needCommandRows, needsCount: needsCount, findingCommandIds: findingCommandIds,
+    uncheckedLines: uncheckedLines,
     diffBlock: diffBlock, formatRef: formatRef, parseRefs: parseRefs, refAnchor: refAnchor,
     completion: completion, matchFiles: matchFiles,
     blockStarts: blockStarts, blockKey: blockKey, explainByBlock: explainByBlock,
