@@ -2790,3 +2790,94 @@ def test_a_scope_diff_from_a_reviewed_commit_to_an_uncommitted_tree_is_none(proj
     head = _git(p.dir, "rev-parse", "HEAD")
     (p.dir / "app.py").write_text(FIXED)
     assert _scope_diff(p.config, {"head_sha": head, "reviewed_sha": head}) is None
+
+
+# --- The integration gate throws a refactor away before fixing --------------
+
+
+class TestRefactorDiscardedOnRedGate:
+    """The refactor check runs only the block's tests, so the integration gate
+    is the first whole run after a refactor. When it is red, the refactor
+    commit is thrown away and the gate runs again before a fix agent runs."""
+
+    @staticmethod
+    def _commit(p, files: dict[str, str], subject: str) -> str:
+        for rel, text in files.items():
+            (p.dir / rel).write_text(text)
+        _git(p.dir, "add", "-A")
+        _git(p.dir, "commit", "-qm", subject)
+        return _git(p.dir, "rev-parse", "HEAD")
+
+    @staticmethod
+    def _integration_fixer(p, removes_flag: bool):
+        def run(**kwargs):
+            if removes_flag:
+                (p.dir / "broken.flag").unlink(missing_ok=True)
+            return AgentResult(success=True, output="fixed")
+
+        return patch(
+            "build_pipeline.tdd_engine.run_integration_fix",
+            new_callable=AsyncMock,
+            side_effect=run,
+        )
+
+    @pytest.mark.asyncio
+    async def test_red_gate_after_a_refactor_discards_it_without_a_fix_agent(
+        self, project
+    ):
+        p = project
+        p.block.impl_commit = self._commit(p, {"app.py": FIXED}, "impl")
+        p.block.refactor_commit = self._commit(p, {"broken.flag": ""}, "refactor")
+
+        stack, _, _ = _engine([_passing()], _fixer(p.dir))
+        with stack, self._integration_fixer(p, removes_flag=True) as fixer:
+            assert await _run_integration_and_review(
+                p.block, p.config, p.state, p.progress
+            )
+
+        fixer.assert_not_called()
+        assert not (p.dir / "broken.flag").exists()
+        assert p.block.refactor_commit is None
+        assert p.block.impl_commit in _git(p.dir, "log", "--format=%H").splitlines()
+        assert "refactor" not in _git(p.dir, "log", "--format=%s").splitlines()
+        saved = json.loads(p.config.state_file_path().read_text())
+        assert saved["tdd"]["blocks"][0]["refactor_commit"] is None
+
+    @pytest.mark.asyncio
+    async def test_red_without_the_refactor_still_goes_to_the_fix_agent(self, project):
+        p = project
+        p.block.impl_commit = self._commit(
+            p, {"app.py": FIXED, "broken.flag": ""}, "impl"
+        )
+        p.block.refactor_commit = self._commit(
+            p,
+            {"app.py": "def add(a: int, b: int) -> int:\n    return a + b\n"},
+            "refactor",
+        )
+
+        stack, _, _ = _engine([_passing()], _fixer(p.dir))
+        with stack, self._integration_fixer(p, removes_flag=True) as fixer:
+            assert await _run_integration_and_review(
+                p.block, p.config, p.state, p.progress
+            )
+
+        fixer.assert_called_once()
+        assert p.block.refactor_commit is None
+        assert (p.dir / "app.py").read_text() == FIXED
+
+    @pytest.mark.asyncio
+    async def test_without_a_refactor_commit_nothing_is_discarded(self, project):
+        p = project
+        p.block.impl_commit = self._commit(
+            p, {"app.py": FIXED, "broken.flag": ""}, "impl"
+        )
+
+        stack, _, _ = _engine([_passing()], _fixer(p.dir))
+        with stack, self._integration_fixer(p, removes_flag=True) as fixer:
+            assert await _run_integration_and_review(
+                p.block, p.config, p.state, p.progress
+            )
+
+        fixer.assert_called_once()
+        assert _git(p.dir, "rev-parse", "HEAD") != p.baseline
+        assert "impl" in _git(p.dir, "log", "--format=%s").splitlines()

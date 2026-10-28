@@ -1558,6 +1558,28 @@ class TestBlockRefactorVerification:
         assert "refactorer" in roles
 
     @pytest.mark.asyncio
+    async def test_refactor_check_runs_the_block_tests_not_the_whole_suite(self, setup):
+        """The integration gate runs the whole suite on the same tree right
+        after, so the refactor check runs only the block's own tests: here the
+        whole suite is red and the block's tests are green, and the refactor
+        is kept."""
+        config, state, progress, block = setup
+        config.test_command = "false"
+        refactorer = self._agent_writing(
+            config.project_dir,
+            "module.py",
+            "def add(a: int, b: int) -> int:\n    return a + b\n",
+        )
+
+        with patch(
+            "build_pipeline.tdd_engine._block_test_command", return_value="true"
+        ):
+            assert await self._run(config, state, progress, block, refactorer) is True
+
+        assert block.refactor_commit is not None
+        assert _git_log_subjects(config.project_dir)[0] == "refactor(block-1): Block1"
+
+    @pytest.mark.asyncio
     async def test_red_suite_after_refactor_reverts_and_continues(self, setup):
         """A refactor that breaks the suite is discarded — the block keeps the
         green implementation and the build carries on."""

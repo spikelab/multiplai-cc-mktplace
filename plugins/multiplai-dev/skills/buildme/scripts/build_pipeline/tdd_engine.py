@@ -2207,12 +2207,7 @@ async def run_block_tdd(
             ):
                 _mark_block(state, block_idx, BlockStatus.FAILED, config)
                 return False
-            if not integration_gate(
-                config.test_command,
-                config.project_dir,
-                parallel=config.parallel_tests,
-                timeout=config.test_timeout,
-            ).passed:
+            if not _block_tests_gate(config, block).passed:
                 _mark_block(state, block_idx, BlockStatus.FAILED, config)
                 return False
         elif not _verify_block_refactor(
@@ -2222,12 +2217,7 @@ async def run_block_tdd(
                 not rewind_to
                 or git_ops.rev_parse_head(config.project_dir) != rewind_to
                 or not git_ops.tree_is_clean(config.project_dir)
-                or not integration_gate(
-                    config.test_command,
-                    config.project_dir,
-                    parallel=config.parallel_tests,
-                    timeout=config.test_timeout,
-                ).passed
+                or not _block_tests_gate(config, block).passed
             ):
                 _mark_block(state, block_idx, BlockStatus.FAILED, config)
                 return False
@@ -2253,6 +2243,17 @@ async def run_block_tdd(
     return True
 
 
+def _block_tests_gate(config: BuildConfig, block: BlockInfo) -> GateResult:
+    """`integration_gate` on the block's own tests (`_block_test_command`),
+    which is the whole `test_command` when it cannot be narrowed. Without
+    `tdd.parallel`: that rewrite is for the whole suite."""
+    return integration_gate(
+        _block_test_command(config, block),
+        config.project_dir,
+        timeout=config.test_timeout,
+    )
+
+
 def _verify_block_refactor(
     block: BlockInfo,
     config: BuildConfig,
@@ -2266,9 +2267,11 @@ def _verify_block_refactor(
     Two checks, both of which the refactorer could otherwise satisfy by moving
     the bar instead of clearing it:
 
-    1. The suite is re-run through `integration_gate` — the same call that
-       produces this block's GREEN evidence a moment later — so "still green"
-       means green by the same measurement.
+    1. The block's own tests are re-run (`_block_tests_gate`). The whole
+       suite is not: `integration_gate` runs it on this same tree a moment
+       later, and throws the refactor away first when it is red
+       (`_discard_refactor_for_gate`), so a second whole run here would
+       catch nothing that one does not.
     2. `unchanged_tests_gate` is re-applied against *before* — the snapshot
        taken when the refactor window opened (after the impl commit), so a
        test the implementer legitimately changed is not blamed on the
@@ -2282,12 +2285,7 @@ def _verify_block_refactor(
     block: the implementation that was green before the refactor is still there
     afterwards, which is the whole point of committing impl first.
     """
-    gate = integration_gate(
-        config.test_command,
-        config.project_dir,
-        parallel=config.parallel_tests,
-        timeout=config.test_timeout,
-    )
+    gate = _block_tests_gate(config, block)
     detail = "" if gate.passed else f"tests failed after refactor: {gate.reason}"
 
     if gate.passed:
@@ -2420,6 +2418,40 @@ def _enforce_test_integrity(
     return False
 
 
+def _discard_refactor_for_gate(
+    block: BlockInfo,
+    config: BuildConfig,
+    state: BuildState,
+    progress: ProgressWriter,
+) -> bool:
+    """Throw the block's refactor commit away after a red integration gate.
+    True when it was discarded and the gate should run again: the block has
+    a refactor commit on top of its impl commit, HEAD is still the refactor
+    commit and the tree is clean, so nothing but the refactor is dropped."""
+    if (
+        not block.refactor_commit
+        or not block.impl_commit
+        or git_ops.rev_parse_head(config.project_dir) != block.refactor_commit
+        or not git_ops.tree_is_clean(config.project_dir)
+    ):
+        return False
+    if not git_ops.discard_to(
+        config.project_dir, block.impl_commit, f"refactor of block {block.number}"
+    ):
+        return False
+    log.warning(
+        "Refactor of block %d (%s) discarded: integration gate red after it",
+        block.number,
+        block.name,
+    )
+    progress.log_agent(
+        "Refactorer", block.name, "REVERTED — whole suite red after refactor"
+    )
+    block.refactor_commit = None
+    state.checkpoint(config.state_file_path())
+    return True
+
+
 async def _run_integration_and_review(
     block: BlockInfo,
     config: BuildConfig,
@@ -2446,6 +2478,16 @@ async def _run_integration_and_review(
         parallel=config.parallel_tests,
         timeout=config.test_timeout,
     )
+    # The refactor check ran only the block's tests, so this is the first
+    # whole run since the refactor: a red suite throws the refactor away and
+    # runs again before any fix agent is spent on it.
+    if not gate.passed and _discard_refactor_for_gate(block, config, state, progress):
+        gate = integration_gate(
+            config.test_command,
+            config.project_dir,
+            parallel=config.parallel_tests,
+            timeout=config.test_timeout,
+        )
     _tdd_event(
         config,
         state,

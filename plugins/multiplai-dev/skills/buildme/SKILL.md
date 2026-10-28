@@ -433,10 +433,14 @@ After the last block, one conservative whole-change pass lands as
 
 Every block runs test → implement → **refactor**, on both tiers. The refactor
 step is verified rather than trusted: after the agent finishes, the pipeline
-re-runs the suite and re-hashes every test file. If the suite is not green, or
-any test file changed, the entire refactor diff is discarded (the block is reset
-to its `impl(block-N)` commit) and the build continues with the implementation
-that was already green. A refactor can improve a block or do nothing; it can
+re-runs the block's own tests (the narrowed command, or the whole
+`tdd.test_command` when it cannot be narrowed) and re-hashes every test file.
+If those tests are not green, or any test file changed, the entire refactor
+diff is discarded (the block is reset to its `impl(block-N)` commit) and the
+build continues with the implementation that was already green. The whole
+suite runs once, at the block's integration gate right after; when that run is
+red, the refactor commit is discarded first and the gate runs again, so a fix
+agent is started only when the implementation itself is red. A refactor can improve a block or do nothing; it can
 never break one. There is no "the test needed changing" escape hatch inside a
 refactor window — that hatch belongs to the implementer.
 
