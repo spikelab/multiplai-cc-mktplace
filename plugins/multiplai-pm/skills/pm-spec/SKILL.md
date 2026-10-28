@@ -366,7 +366,7 @@ has its own `.gitignore` and is never committed. Each review stop, the ticket
 wait and the handoff commit the change dir and push the feature branch;
 nothing else is pushed, and no pull request is opened. A commit holds only
 these files, the issues files `revise` reads and moves aside, and the old
-layout's `requirements/`: never buildme's (`design.md`, `tasks.md`,
+layout's `requirements/`: never buildme's (`implementation-plan.md`, `tasks.md`,
 `.build-state.json`, `.board.json` and the rest), which share the change dir
 in a build's worktree.
 

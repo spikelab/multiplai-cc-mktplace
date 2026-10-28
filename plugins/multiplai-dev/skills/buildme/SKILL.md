@@ -28,7 +28,7 @@ pm-spec in `spec-issues.md` (`SPEC:ISSUES`, exit `4`), for
 
 Before any spec is written, the pipeline reads the repo it is about to change
 (architecture, patterns, integration points) and resolves the reference docs
-for the detected stack and framework, so `design.md` extends the code that
+for the detected stack and framework, so `implementation-plan.md` extends the code that
 exists and follows the conventions the project already builds to.
 
 Builds use an isolated worktree and branch by default. `--no-worktree` and
@@ -599,7 +599,13 @@ command works after a scratch file under `/tmp` is gone.
 The pipeline handles: the readiness check, worktree/branch setup, bootstrap,
 research, codebase analysis, the plan (design, unknowns with the explainer
 pass, tasks, rubric, via change_manager) and one plan check (`plan_review`).
-The check reads `design.md` and `tasks.md` once, with `Read`/`Grep`/`Glob` on
+The design is written to `implementation-plan.md`. A change planned before
+that name has `design.md` instead. buildme
+reads it when there is no `implementation-plan.md`, with the same plan revision,
+so the plan is not written again. A new or rewritten plan is written as
+`implementation-plan.md`; buildme never renames or removes `design.md`, and
+logs it once as unused when both files are there.
+The check reads `implementation-plan.md` and `tasks.md` once, with `Read`/`Grep`/`Glob` on
 the repo, against the specs, the use cases, the rubric, the constraints and
 the code: coverage of every scenario, blocks that add no behaviour, contracts
 between blocks, vertical slicing, placeholders, claims about existing code,
@@ -607,7 +613,7 @@ over-engineering, testability and edge cases the specs name. It reports at
 most 10 findings, most severe first. buildme's own scans for placeholders and
 for blocks that add no behaviour run beside it. Only critical and major
 findings, and the scans' findings, earn a rewrite: one call that reads the
-code and edits `design.md` and `tasks.md` in place, leaving every line it does
+code and edits `implementation-plan.md` and `tasks.md` in place, leaving every line it does
 not name as it was. An edit whose text is not found once, or edits that change
 nothing, stop the run. The edits are saved as `plan-edits-<n>.diff` in the
 change dir. The recheck is told which findings the rewrite was asked to fix
@@ -1046,7 +1052,7 @@ Work through them **in this order**, and do not skip the first one:
    its modules (the first slice reads the first two when none does), for
    that alone; tests are not otherwise analysed. Files left out by the
    limit, and slices whose agent failed, are listed under "Not analysed". The same
-   facts are in `facts.json` beside it. Read it before `design.md`, because
+   facts are in `facts.json` beside it. Read it before `implementation-plan.md`, because
    "why does it extend that module rather than add a new one" is answered
    here, not there. Absent for a greenfield project (nothing to analyze) —
    that absence is itself worth noting to the user.
@@ -1055,7 +1061,7 @@ Work through them **in this order**, and do not skip the first one:
    `tasks.md`: the plan review checks that every use case here is delivered by
    some block, and a use case with no block is the cheapest thing to catch at
    this checkpoint.
-4. Then `design.md`, `tasks.md`, `rubric.md`. `proposal.md` and
+4. Then `implementation-plan.md`, `tasks.md`, `rubric.md`. `proposal.md` and
    `specs.md` (or `requirements/`) are pm-spec's: a problem in them goes to
    `/multiplai-pm:pm-spec revise <name>`, never into an edit here (an edit
    makes the next build refuse with `SPEC:NOT_READY`).
