@@ -151,6 +151,21 @@ def test_size_is_not_measured_when_the_named_head_is_not_in_the_checkout(tmp_pat
     assert github.changed_files(repo, "main", "never-fetched") == []
 
 
+def test_the_plan_is_evidence_and_an_old_name_plan_only_when_alone(tmp_path):
+    """buildme's plan is implementation-plan.md; a change planned before the
+    rename has design.md, which is quoted only when no new-name plan is there."""
+    repo = make_repo(tmp_path / "proj")
+    change = make_change(repo)
+    rel = "specs/changes/feat"
+    (change / "design.md").write_text("# Design\n\nOld plan.\n")
+    src = fill.read_sources(repo, change, base=None, head="HEAD")
+    assert src.files[f"{rel}/design.md"] == "# Design\n\nOld plan.\n"
+    (change / "implementation-plan.md").write_text("# Plan\n\nNew plan.\n")
+    src = fill.read_sources(repo, change, base=None, head="HEAD")
+    assert src.files[f"{rel}/implementation-plan.md"] == "# Plan\n\nNew plan.\n"
+    assert f"{rel}/design.md" not in src.files
+
+
 def test_ticket_url_from_the_flag_or_from_ticket_md(tmp_path):
     repo = make_repo(tmp_path / "proj")
     change = make_change(

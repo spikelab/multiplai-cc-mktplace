@@ -66,7 +66,10 @@ ARTIFACTS = (
     "respec.md",
 )
 # Files a checkbox's evidence may quote, when present in the change dir.
-EVIDENCE_FILES = ("proposal.md", "design.md", "tasks.md", *ARTIFACTS)
+EVIDENCE_FILES = ("proposal.md", "implementation-plan.md", "tasks.md", *ARTIFACTS)
+# buildme's plan in a change planned before it was renamed, quoted only when
+# the change has no implementation-plan.md.
+OLD_PLAN_FILE = "design.md"
 SOURCE_FILE_CHARS = 20_000
 STATE_FILE = ".build-state.json"
 _DATE_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-")
@@ -214,8 +217,12 @@ def read_sources(
     m = _TICKET_URL_LINE_RE.search(header)
     src.ticket_url = ticket_url or (m.group(1) or m.group(2) if m else None)
 
+    old_plan = (
+        () if (change_dir / "implementation-plan.md").is_file() else (OLD_PLAN_FILE,)
+    )
     for name in (
-        EVIDENCE_FILES
+        *EVIDENCE_FILES,
+        *old_plan,
     ):  # never ticket.md: external text cannot be a checkbox's evidence
         p = change_dir / name
         if p.is_file():

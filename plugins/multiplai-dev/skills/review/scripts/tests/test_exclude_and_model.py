@@ -37,7 +37,7 @@ def change(tmp_path) -> tuple[Path, str, str]:
         "src/words.py": "def count(text):\n    return len(text.split())\n",
         "tests/test_words.py": "from words import count\n\ndef test_count():\n    assert count('a b') == 2\n",
         "README.md": "# proj\n\nCounts words.\n",
-        f"{SPEC}/design.md": "# Design\n",
+        f"{SPEC}/implementation-plan.md": "# Design\n",
         f"{SPEC}/facts.json": "{}\n",
         f"{SPEC}/.board.json": "{}\n",
         "specs/archive/2026-10-23-old/tasks.md": "- [ ] x\n",
@@ -74,7 +74,7 @@ def test_diff_and_files_leave_out_the_excluded_paths(change):
         [
             "build-progress.md",
             f"{SPEC}/.board.json",
-            f"{SPEC}/design.md",
+            f"{SPEC}/implementation-plan.md",
             f"{SPEC}/facts.json",
             "specs/archive/2026-10-23-old/tasks.md",
         ]
@@ -197,10 +197,10 @@ def test_the_review_names_what_exclude_left_out(canned_state):
     from review_pipeline.render import render_review
 
     canned_state.target.excluded = ["specs/changes/**"]
-    canned_state.target.excluded_files = [f"{SPEC}/design.md"]
+    canned_state.target.excluded_files = [f"{SPEC}/implementation-plan.md"]
     text = render_review(canned_state)
     assert "- **Left out by --exclude (`specs/changes/**`):** 1 files" in text
-    assert f"  - `{SPEC}/design.md`" in text
+    assert f"  - `{SPEC}/implementation-plan.md`" in text
 
 
 def test_a_review_without_exclude_says_nothing_about_it(canned_state):
