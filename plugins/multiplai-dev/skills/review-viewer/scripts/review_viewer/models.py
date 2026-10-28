@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, WithJsonSchema, field_validator
+from viewer_kit.people import Person
 
 SCHEMA_DIR = Path(__file__).resolve().parents[2] / "schema"
 SCHEMA_PATH = SCHEMA_DIR / "findings.v1.schema.json"
@@ -589,6 +590,10 @@ class InboxRow(_Strict):
     # kind "question" only: the Full walkthrough dialog's Confirm. The server
     # fixes `text`; the session runs the command `summary status` prints.
     full_walkthrough: bool = False
+    # Who asked, for a viewer whose server checks people.json tokens
+    # (viewer_kit.people). review-viewer never sets it, and the mailbox writes
+    # a row without one without the key, so older rows still load.
+    author: Person | None = None
 
 
 class OutboxRow(_Strict):
@@ -597,9 +602,3 @@ class OutboxRow(_Strict):
     ts: str
     text: str
     done: bool
-
-
-class Decision(_Strict):
-    decision: Literal["accept", "reject", "defer"]
-    note: str = ""
-    ts: str

@@ -1,0 +1,47 @@
+[project]
+name = "pipeline-viewer"
+version = "0.1.0"
+description = "Shared web page for following and answering pm-spec and buildme: status, step-by-step review, approvals as commits, Slack"
+requires-python = ">=3.12"
+dependencies = [
+    # No [sdk] extra: nothing here calls a model. The server reads files and
+    # git, writes review commits, and moves rows between the page and the
+    # JSONL files the session watches.
+    "multiplai-core",
+    "pydantic>=2",
+    "pyyaml>=6.0",
+    # The mailbox, bind address and URLs, request checks and people.json,
+    # shared with review-viewer.
+    "viewer-kit",
+    # Not declared here: build-pipeline (buildme's scripts), whose
+    # `readiness.write_issues` is the one writer of spec-issues.md. uv rejects
+    # a workspace member that is also a `path` source, and `workspace = true`
+    # cannot resolve in an installed plugin, which has no workspace root.
+    # `pipeline_viewer.buildme` imports the two modules it needs from the
+    # sibling skill directory instead; they need only multiplai-core,
+    # pydantic and the stdlib, all declared here.
+    # Posts stop notices to the configured channel (`slack.py`).
+    "slack_sdk>=3.27,<4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-xdist>=3.8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+# multiplai-core is a git direct reference (not on PyPI)
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["pipeline_viewer"]
+
+# Member-local sources so this directory also resolves standalone — an
+# installed plugin is a copy of the plugin subtree only (no workspace root
+# above it). In-repo, uv still resolves through the workspace root and the
+# single uv.lock.
+[tool.uv.sources]
+multiplai-core = { git = "https://github.com/spikelab/multiplai-core", branch = "main" }
+viewer-kit = { path = "../../../lib/viewer_kit", editable = true }

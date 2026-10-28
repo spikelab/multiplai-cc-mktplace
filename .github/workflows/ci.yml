@@ -415,6 +415,41 @@ jobs:
           uv run --project ../../../../.. --package review-viewer \
             --extra dev python -m pytest tests/ -q -n auto
 
+  viewer-kit-tests:
+    name: viewer_kit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      # viewer_kit is not a workspace member (its consumers reach it through
+      # an editable path source), so its tests run in review-viewer's
+      # environment, which installs it. Offline; one test serves on loopback.
+      - name: Run tests
+        working-directory: plugins/multiplai-dev/lib/viewer_kit
+        run: |
+          uv run --project ../../../.. --package review-viewer \
+            --extra dev python -m pytest tests/ -q -n auto
+
+  pipeline-viewer-tests:
+    name: pipeline-viewer tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      # Offline: the fixture repo's origin is a local bare repo, Slack is a
+      # stub, and the servers listen on loopback.
+      - name: Run tests
+        working-directory: plugins/multiplai-dev/skills/pipeline-viewer/scripts
+        run: |
+          uv run --project ../../../../.. --package pipeline-viewer \
+            --extra dev python -m pytest tests/ -q -n auto
+
   apple-tests:
     name: multiplai-apple tests
     runs-on: ubuntu-latest

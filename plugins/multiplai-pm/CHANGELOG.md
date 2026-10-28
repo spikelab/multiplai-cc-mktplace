@@ -21,6 +21,11 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
 
 ## [Unreleased]
 
+## [0.13.2] - 2026-10-28
+
+### Changed
+- **pm-spec**: at each review stop (proposal, components, specs), when `multiplai-dev:pipeline-viewer` is installed, the session tells the reviewers through it: one Slack post per stop with a link to the page where they review, ask Claude and approve.
+
 ## [0.13.1] - 2026-10-27
 
 ### Fixed

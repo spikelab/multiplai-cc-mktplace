@@ -15,6 +15,19 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.126.0] - 2026-10-28
+
+### Added
+- **pipeline-viewer** (new skill): a web page, served from the machine running pm-spec and buildme and shareable through a tunnel such as ngrok, where the people on a change follow it and answer it. It lists every change under `specs/changes/` with the stop it is at (proposal, use cases and components, specs, implementation plan, pull request), who it waits on and for how long. A reviewer goes through each stop's documents one `##` section at a time, in full; comments, asks Claude about a section, and approves or asks for rework at the end. Everyone on the page sees every question and Claude's answer. Each comment, acknowledgement, approval, rework request and answer is a commit on the change's branch, named after the person (`--author`) with `Stop:`/`Approved-by:`/`Revision:` trailers. The build view shows the phase, each block's status, review rounds, timeouts, RED/GREEN output and diffs, spend against budget, and an estimate of the time left.
+- **pipeline-viewer**: the Claude session reads what people type on the page only through `watch` (its Monitor) and `pending`, which print each row with the person's text inside an `<untrusted-content>` fence, never raw.
+- **pipeline-viewer**: while buildme is at work in a build's worktree, the page refuses comments and decisions on that change (`buildme is building <name>; try again when it stops, or comment on the pull request`). Writes go through once the build completes, stops on a failure, or waits at stop 4. This is read from buildme's files, not a lock.
+- **pipeline-viewer**: a change dir, `review/` dir or file that is a symlink is never read or written through, and text a person typed is quoted (`> `) in `review/stop-<n>.md` and `spec-issues.md`, so it cannot add a section in someone else's name. A commit that fails leaves nothing behind for the next person's commit to pick up.
+- **pipeline-viewer**: each person gets a personal link (`invite`, written to a file, never printed); the page knows who is acting from it.
+- **pipeline-viewer**: `notify` posts once per stop in a Slack channel (`pipeline_viewer.slack.channel` in `specs/config.yaml`; needs `SLACK_TOKEN`), @-mentions the stop's reviewers and replies in that thread with acknowledgements, approvals and reminders. Without someone acknowledging a stop within `ack_timeout_minutes`, and approving within `decide_timeout_minutes`, the session is told to decide and go on; a later answer that disagrees becomes rework.
+
+### Changed
+- **review-viewer**: its mailbox, network and request checks moved to a shared library (`lib/viewer_kit`) that pipeline-viewer also uses. Nothing changes for a review-viewer user.
+
 ## [0.125.0] - 2026-10-28
 
 ### Added

@@ -20,7 +20,7 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from . import netinfo
+from viewer_kit import netinfo
 
 log = logging.getLogger(__name__)
 

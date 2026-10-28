@@ -31,8 +31,10 @@ from pathlib import Path
 
 from multiplai_core.log_utils import log_event, setup_logging
 from pydantic import ValidationError
+from viewer_kit import netinfo
+from viewer_kit.mailbox import MAX_ROW_BYTES, Mailbox, MailboxError, utc_now
 
-from . import gitdata, netinfo, registry, server, stats, summary
+from . import gitdata, registry, server, stats, summary
 from .gitdata import (
     EMPTY_TREE,
     GitError,
@@ -44,7 +46,6 @@ from .gitdata import (
     parse_target,
     resolve_target,
 )
-from .mailbox import MAX_ROW_BYTES, Mailbox, MailboxError, utc_now
 from .models import (
     CHECKS_SCHEMA_PATH,
     SCHEMA_PATH,
@@ -695,12 +696,8 @@ def cmd_pending(args) -> int:
         if not box.dir.is_dir():
             print(f"no mailbox at {box.dir}", file=sys.stderr)
             return EXIT_USAGE
-        last_done: dict[str, bool] = {}
-        for row in box.read_outbox(0)[0]:
-            last_done[row.get("reply_to")] = row.get("done") is True
-        for row in box.read_inbox():
-            if not last_done.get(row.get("id")):
-                print(json.dumps(row, ensure_ascii=False))
+        for row in box.pending():
+            print(json.dumps(row, ensure_ascii=False))
     return 0
 
 

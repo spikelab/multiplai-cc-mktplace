@@ -35,6 +35,7 @@ members = [
     "plugins/multiplai-dev/skills/codebase-walkthrough/scripts",
     "plugins/multiplai-dev/skills/deepen/scripts",
     "plugins/multiplai-dev/skills/design-system/scripts",
+    "plugins/multiplai-dev/skills/pipeline-viewer/scripts",
     "plugins/multiplai-dev/skills/pr/scripts",
     "plugins/multiplai-dev/skills/review-viewer/scripts",
     "plugins/multiplai-dev/skills/review/scripts",
@@ -178,6 +179,7 @@ per-file-target-version = { "plugins/multiplai-pm/skills/plane/scripts/**" = "py
 "plugins/multiplai-dev/lib/code_facts/tests/test_explore.py" = ["C408"]
 "plugins/multiplai-dev/lib/code_facts/tests/test_paths_schema.py" = ["SIM102"]
 "plugins/multiplai-dev/lib/code_facts/tests/test_prompts.py" = ["RUF059"]
+"plugins/multiplai-dev/lib/viewer_kit/viewer_kit/netinfo.py" = ["PLW1510"]
 "plugins/multiplai-dev/skills/buildme/scripts/build_pipeline/board.py" = ["BLE001"]
 "plugins/multiplai-dev/skills/buildme/scripts/build_pipeline/budget.py" = ["BLE001"]
 "plugins/multiplai-dev/skills/buildme/scripts/build_pipeline/code_analysis.py" = ["C408", "ISC004"]
@@ -274,7 +276,6 @@ per-file-target-version = { "plugins/multiplai-pm/skills/plane/scripts/**" = "py
 "plugins/multiplai-dev/skills/pr/scripts/tests/test_commands.py" = ["PLW1510"]
 "plugins/multiplai-dev/skills/pr/scripts/tests/test_spend.py" = ["RUF012"]
 "plugins/multiplai-dev/skills/review-viewer/scripts/review_viewer/gitdata.py" = ["ISC004", "PLW1510"]
-"plugins/multiplai-dev/skills/review-viewer/scripts/review_viewer/netinfo.py" = ["PLW1510"]
 "plugins/multiplai-dev/skills/review-viewer/scripts/review_viewer/server.py" = ["G201"]
 "plugins/multiplai-dev/skills/review-viewer/scripts/tests/test_gitdata.py" = ["F821", "PLW1510"]
 "plugins/multiplai-dev/skills/review-viewer/scripts/tests/test_logging.py" = ["PLW1510"]

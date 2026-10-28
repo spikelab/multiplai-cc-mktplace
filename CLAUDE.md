@@ -105,6 +105,8 @@ directory:
 | design_system | `cd plugins/multiplai-dev/lib/design_system && uv run --project ../../../.. --package design-system-scripts --extra dev python -m pytest tests/ -q -n auto` (not a workspace member: it runs in the design-system skill's environment, which installs it) |
 | review | `cd plugins/multiplai-dev/skills/review/scripts && uv run --project ../../../../.. --package review-pipeline --extra dev python -m pytest tests/ -q -n auto` |
 | review-viewer | `cd plugins/multiplai-dev/skills/review-viewer/scripts && uv run --project ../../../../.. --package review-viewer --extra dev python -m pytest tests/ -q -n auto` |
+| viewer_kit | `cd plugins/multiplai-dev/lib/viewer_kit && uv run --project ../../../.. --package review-viewer --extra dev python -m pytest tests/ -q -n auto` (not a workspace member: it runs in review-viewer's environment, which installs it) |
+| pipeline-viewer | `cd plugins/multiplai-dev/skills/pipeline-viewer/scripts && uv run --project ../../../../.. --package pipeline-viewer --extra dev python -m pytest tests/ -q -n auto` |
 | pr | `cd plugins/multiplai-dev/skills/pr/scripts && uv run --project ../../../../.. --package pr-pipeline --extra dev python -m pytest tests/ -q -n auto` |
 | spec-extract | `cd plugins/multiplai-dev/skills/spec-extract/scripts && uv run --project ../../../../.. --package spec-extract-pipeline --extra dev python -m pytest tests/ -q -n auto` |
 | pm-spec | `cd plugins/multiplai-pm/skills/pm-spec/scripts && uv run --project ../../../../.. --package pm-spec-pipeline --extra dev python -m pytest tests/ -q -n auto` |
