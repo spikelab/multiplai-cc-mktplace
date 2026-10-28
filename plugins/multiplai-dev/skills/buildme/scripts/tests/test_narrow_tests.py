@@ -12,9 +12,13 @@ from pathlib import Path
 
 import pytest
 from build_pipeline.narrow_tests import (
+    NarrowCommand,
     agent_test_command,
+    agent_test_command_multi,
     narrow_command,
+    narrow_parts,
     narrow_test_command,
+    narrow_test_command_multi,
     runner_of,
     select_test_paths,
 )
@@ -1011,3 +1015,152 @@ class TestAgentTestCommand:
         base = _repo(project)
         (project / "tests" / "test_new.py").write_text("def test_n(): pass\n")
         assert agent_test_command("pytest", project, base) == "pytest"
+
+
+# --- one runner command per directory (tdd.narrow_commands) -----------------
+
+
+class TestNarrowCommands:
+    """A repo with a pytest backend and a jest frontend lists one command per
+    directory; each is narrowed in its own directory, and a directory with no
+    changed file is left out."""
+
+    WHOLE = "bash -c 'make test-all'"
+
+    @pytest.fixture
+    def repo(self, tmp_path):
+        r = tmp_path / "repo"
+        (r / "backend" / "pkg").mkdir(parents=True)
+        (r / "backend" / "tests").mkdir()
+        (r / "backend" / "pkg" / "widget.py").write_text("x = 1\n")
+        (r / "backend" / "tests" / "test_widget.py").write_text("def test_w(): pass\n")
+        (r / "frontend" / "src").mkdir(parents=True)
+        (r / "frontend" / "src" / "cart.ts").write_text("export const a = 1\n")
+        (r / "frontend" / "src" / "cart.test.ts").write_text("test('a', () => {})\n")
+        return r
+
+    @staticmethod
+    def entries(backend="pytest -q", runner=None):
+        return [
+            NarrowCommand("backend", backend, runner),
+            NarrowCommand("frontend", "npx jest", "jest"),
+        ]
+
+    def narrow(self, repo, base, entries=None):
+        return narrow_test_command_multi(
+            entries or self.entries(), repo, base, True, self.WHOLE
+        )
+
+    def test_backend_only_change_runs_only_the_backend_part(self, repo):
+        base = _repo(repo)
+        (repo / "backend" / "pkg" / "widget.py").write_text("x = 2\n")
+        assert self.narrow(repo, base) == "cd backend && pytest -q tests/test_widget.py"
+
+    def test_frontend_only_change_runs_only_the_frontend_part(self, repo):
+        base = _repo(repo)
+        (repo / "frontend" / "src" / "cart.ts").write_text("export const a = 2\n")
+        assert self.narrow(repo, base) == "cd frontend && npx jest src/cart.test.ts"
+
+    def test_both_changed_runs_both_parts_each_in_its_directory(self, repo):
+        base = _repo(repo)
+        (repo / "backend" / "pkg" / "widget.py").write_text("x = 2\n")
+        (repo / "frontend" / "src" / "cart.ts").write_text("export const a = 2\n")
+        assert self.narrow(repo, base) == (
+            "(cd backend && pytest -q tests/test_widget.py) && "
+            "(cd frontend && npx jest src/cart.test.ts)"
+        )
+
+    def test_a_backend_test_it_cannot_name_runs_the_backend_whole(self, repo):
+        base = _repo(repo)
+        # Django's tests.py counts as a test but cannot be named here.
+        (repo / "backend" / "pkg" / "tests.py").write_text("def test_t(): pass\n")
+        (repo / "frontend" / "src" / "cart.ts").write_text("export const a = 2\n")
+        assert self.narrow(repo, base) == (
+            "(cd backend && pytest -q) && (cd frontend && npx jest src/cart.test.ts)"
+        )
+
+    def test_nothing_selected_runs_the_whole_test_command(self, repo):
+        base = _repo(repo)
+        (repo / "README.md").write_text("docs\n")
+        (repo / "backend" / "NOTES.md").write_text("notes\n")
+        assert self.narrow(repo, base) == self.WHOLE
+
+    def test_an_explicit_runner_narrows_a_wrapper_script(self, repo):
+        base = _repo(repo)
+        (repo / "backend" / "pkg" / "widget.py").write_text("x = 2\n")
+        wrapper = self.entries("bash tools/run-tests.sh", "pytest")
+        assert (
+            self.narrow(repo, base, wrapper)
+            == "cd backend && bash tools/run-tests.sh tests/test_widget.py"
+        )
+        # Without it the wrapper's runner is unknown, so the part runs whole.
+        assert (
+            self.narrow(repo, base, self.entries("bash tools/run-tests.sh"))
+            == "cd backend && bash tools/run-tests.sh"
+        )
+
+    def test_narrowing_off_or_no_block_start_runs_the_whole_command(self, repo):
+        base = _repo(repo)
+        (repo / "backend" / "pkg" / "widget.py").write_text("x = 2\n")
+        assert (
+            narrow_test_command_multi(self.entries(), repo, base, False, self.WHOLE)
+            == self.WHOLE
+        )
+        assert (
+            narrow_test_command_multi(self.entries(), repo, None, True, self.WHOLE)
+            == self.WHOLE
+        )
+
+    def test_parts_carry_their_runner_and_kind(self, repo):
+        base = _repo(repo)
+        (repo / "backend" / "pkg" / "tests.py").write_text("def test_t(): pass\n")
+        (repo / "frontend" / "src" / "cart.ts").write_text("export const a = 2\n")
+        parts = narrow_parts(self.entries(), repo, base)
+        assert [(p.dir, p.runner, p.kind) for p in parts] == [
+            ("backend", "pytest", "whole"),
+            ("frontend", "node", "selected"),
+        ]
+
+    def test_agent_text_names_each_directory_and_how_to_add_a_path(self, repo):
+        base = _repo(repo)
+        (repo / "backend" / "pkg" / "widget.py").write_text("x = 2\n")
+        text = agent_test_command_multi(self.entries(), repo, base, True, self.WHOLE)
+        assert text.splitlines()[0] == "cd backend && pytest -q tests/test_widget.py"
+        assert "`frontend`: `cd frontend && npx jest` runs there" in text
+        assert "relative to `backend`" in text
+        assert "test_<module>.py" in text and "<name>.test.<ext>" in text
+        assert "buildme runs the whole suite itself" in text
+
+    def test_agent_text_before_any_change_gives_the_whole_command(self, repo):
+        base = _repo(repo)
+        text = agent_test_command_multi(self.entries(), repo, base, True, self.WHOLE)
+        assert text.splitlines()[0] == self.WHOLE
+        assert "runs the whole suite" in text
+        assert "`backend`: `cd backend && pytest -q` runs there" in text
+
+
+class TestPytestDefaultPatterns:
+    """A project that sets `python_files` to pytest's own patterns, or
+    `testpaths = .`, is still narrowed."""
+
+    @pytest.fixture
+    def project(self, tmp_path):
+        p = tmp_path / "proj"
+        (p / "app" / "tests").mkdir(parents=True)
+        (p / "app" / "models.py").write_text("x = 1\n")
+        (p / "app" / "tests" / "test_models.py").write_text("def test_m(): pass\n")
+        (p / "app" / "tests" / "models_test.py").write_text("def test_m(): pass\n")
+        return p
+
+    def test_testpaths_dot_and_test_star_python_files_narrow(self, project):
+        (project / "pytest.ini").write_text(
+            "[pytest]\npython_files = test_*.py\ntestpaths = .\n"
+        )
+        base = _repo(project)
+        (project / "app" / "models.py").write_text("x = 2\n")
+        # models_test.py does not match python_files, so the whole run
+        # never collects it.
+        assert (
+            narrow_test_command("pytest", project, base)
+            == "pytest app/tests/test_models.py"
+        )

@@ -9,6 +9,7 @@ Subcommands for dev/debug use (only /buildme is user-facing):
   archive       — Archive a completed change (merge delta specs → main registry)
   setup         — Write or merge specs/config.yaml (the wrapper asks the questions)
   config-get    — Print one resolved specs/config.yaml value (e.g. git.pr)
+  plan-revision — Print the planning values to re-bind a build after an upgrade
 
 Exit codes: 0 done (an epic runs its children and prints EPIC:SUMMARY), 1 failure
 (for an epic: a child failed), 2 usage, or a refusal that wrote nothing
@@ -303,6 +304,15 @@ def build_parser() -> argparse.ArgumentParser:
     cget.add_argument("key", help="Dotted key, e.g. git.pr or architecture")
     cget.add_argument("--project-dir", default=".", help="Project directory")
 
+    # --- plan-revision ---
+    prev = sub.add_parser(
+        "plan-revision",
+        help="Print the planning values a build's checkpoint needs after an "
+        "upgrade changed how config.yaml is hashed; writes nothing",
+    )
+    prev.add_argument("--change", required=True, help="Change name")
+    prev.add_argument("--project-dir", default=".", help="The build's worktree")
+
     for command in (build, spec, tdd, findings):
         command.add_argument(
             "--accept-unknown-spend",
@@ -424,6 +434,19 @@ def _main(args: argparse.Namespace) -> int:
         from .setup import config_get
 
         return config_get(args)
+
+    elif args.command == "plan-revision":
+        import json
+        from pathlib import Path
+
+        from .spec_generator import rebound_values
+
+        config = BuildConfig(
+            project_dir=Path(args.project_dir).resolve(), change_name=args.change
+        )
+        config.specs_dir = config.project_dir / "specs"
+        print(json.dumps(rebound_values(config), indent=2))
+        return 0
 
     elif args.command == "build":
         from .orchestrator import run_orchestrator

@@ -656,7 +656,9 @@ def _pytest_collects(
 
     def collects(path: str) -> bool:
         parts = PurePosixPath(path).parts
-        if python_files and not any(fnmatch.fnmatch(parts[-1], p) for p in python_files):
+        if python_files and not any(
+            fnmatch.fnmatch(parts[-1], p) for p in python_files
+        ):
             return False
         if any(_under(parts, i) is not None for i in ignored if i):
             return False

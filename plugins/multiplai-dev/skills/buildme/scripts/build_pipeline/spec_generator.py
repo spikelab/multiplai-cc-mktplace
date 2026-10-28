@@ -1462,6 +1462,26 @@ def _planning_hash(section: str) -> str:
     ).hexdigest()
 
 
+def _config_hashes(config) -> dict[str, str]:
+    """config.yaml's hash without the `planning:` and `UNPLANNED_SECTIONS`
+    sections, and the `planning:` section's own (`PLANNING_KEY`)."""
+    config_path = config.specs_dir / "config.yaml"
+    if not config_path.is_file():
+        return {}
+    rest, sections = _split_sections(
+        config_path.read_bytes().decode("utf-8", "surrogateescape"),
+        (PLANNING_KEY, *UNPLANNED_SECTIONS),
+    )
+    hashes = {
+        "config.yaml": hashlib.sha256(
+            rest.encode("utf-8", "surrogateescape")
+        ).hexdigest()
+    }
+    if sections.get(PLANNING_KEY):
+        hashes[PLANNING_KEY] = _planning_hash(sections[PLANNING_KEY])
+    return hashes
+
+
 def _plan_hashes(config) -> dict[str, str]:
     # A component's proposal and use cases are its change's (`change_root`).
     root = change_root(config.change_dir)
@@ -1492,22 +1512,41 @@ def _plan_hashes(config) -> dict[str, str]:
         for name, p in files.items()
         if p.is_file()
     }
-    config_path = config.specs_dir / "config.yaml"
-    if config_path.is_file():
-        rest, sections = _split_sections(
-            config_path.read_bytes().decode("utf-8", "surrogateescape"),
-            (PLANNING_KEY, *UNPLANNED_SECTIONS),
-        )
-        hashes["config.yaml"] = hashlib.sha256(
-            rest.encode("utf-8", "surrogateescape")
-        ).hexdigest()
-        if sections.get(PLANNING_KEY):
-            hashes[PLANNING_KEY] = _planning_hash(sections[PLANNING_KEY])
+    hashes.update(_config_hashes(config))
     hashes["references"] = hashlib.sha256(
         config.reference_docs_text().encode()
     ).hexdigest()
     hashes["granularity"] = hashlib.sha256(config.task_granularity.encode()).hexdigest()
     return hashes
+
+
+def _revision(hashes: dict[str, str]) -> str:
+    """The plan revision of *hashes* (`SpecGenState.revision`)."""
+    return hashlib.sha256(
+        json.dumps(
+            {k: v for k, v in hashes.items() if k != PLANNING_KEY}, sort_keys=True
+        ).encode()
+    ).hexdigest()
+
+
+def rebound_values(config) -> dict:
+    """What the build's checkpoint would hold if only config.yaml's hash were
+    computed by this version: its saved hashes with that one replaced, the
+    plan revision, and each saved step's revision. For re-binding a build
+    planned by an older version by hand; reads, writes nothing."""
+    state = BuildState.load(config.state_file_path())
+    sg = state.spec_gen or SpecGenState()
+    hashes = dict(sg.artifact_hashes)
+    hashes["config.yaml"] = _config_hashes(config)["config.yaml"]
+    rebound = sg.model_copy(update={"artifact_hashes": hashes})
+    return {
+        "artifact_hashes.config.yaml": hashes["config.yaml"],
+        "revision": _revision(hashes),
+        **{
+            f"steps.{name}.revision": rebound.step_revision(name)
+            for name in sorted(sg.steps)
+        },
+    }
 
 
 def reconcile_plan(
@@ -1565,11 +1604,7 @@ def reconcile_plan(
         stale.update({"tasks", "rubric"})
     stale -= (regenerated or set()) | recovered
     sg.stale_artifacts = sorted(stale)
-    revision = hashlib.sha256(
-        json.dumps(
-            {k: v for k, v in current.items() if k != PLANNING_KEY}, sort_keys=True
-        ).encode()
-    ).hexdigest()
+    revision = _revision(current)
     if revision != sg.revision:
         # Evidence for any earlier revision is stale. The explanation stage is
         # advisory and does not authorize implementation.

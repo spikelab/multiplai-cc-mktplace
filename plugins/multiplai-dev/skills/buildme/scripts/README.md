@@ -274,7 +274,9 @@ The whole command runs instead when:
   `vitest run unit`, `--testPathPattern`, `--findRelatedTests`), or a pytest
   option that points at another config or root (`-c`, `--rootdir`,
   `--config-file`, `--pyargs`), because appended paths would only add to it;
-- the project sets pytest's `python_files`, or its pytest config cannot be read;
+- the project sets pytest's `python_files` to anything but pytest's own
+  `test_*.py` and `*_test.py` (with only those, a file is selected only when
+  its name matches one), or its pytest config cannot be read;
 - a selected pytest file sits below another pytest config file or `setup.py`
   than the one the whole run uses, because pytest finds its config from the
   paths it is given; or under a `conftest.py` pytest loads (none above the
@@ -290,6 +292,44 @@ So RED never passes on a run that left out the block's own tests. The agents'
 command is fixed before they change anything, so each agent is also told to
 add the test files it writes and the test file named after each module it
 changes.
+
+### Repos with tests in several directories
+
+When `tdd.test_command` runs more than one runner (a pytest backend and a
+jest frontend, say, behind one `bash -c '…'`), it is never narrowed. List one
+runner command per directory in `tdd.narrow_commands` instead:
+
+```yaml
+tdd:
+  test_command: bash -c 'cd backend && pytest -q && cd ../frontend && pnpm test:ci'
+  narrow_commands:
+    - dir: backend
+      command: bash tools/bm-backend-tests.sh   # a wrapper that ends in pytest "$@"
+      runner: pytest
+    - dir: frontend
+      command: TZ=Europe/Rome corepack pnpm exec jest
+      runner: jest
+```
+
+Each entry is narrowed by the rules above, run from its `dir` with paths
+relative to it (`cd backend && bash tools/bm-backend-tests.sh tests/test_x.py`):
+
+- a directory with no file changed since the block started is left out;
+- one whose rules above say "run the whole command" runs its command with no
+  paths;
+- the parts that run are joined with `&&`, each in a subshell when there are
+  several;
+- when every directory is left out, the whole `tdd.test_command` runs.
+
+`runner` (`pytest` or `jest`) says which runner takes the paths when the
+command does not name it, as with a wrapper script. Without it the runner is
+read from the command, as for `tdd.test_command`. The RED check runs each part
+on its own. It judges each part that fails or holds one of the block's test
+files, and the first part it rejects decides. An entry with no `dir`, a `dir`
+outside the repo, no `command`, a command with `;`, `&` or `|`, or another
+`runner` is skipped with a warning. The agents are told which command runs in
+each directory and how to add a path to it. The gates listed below keep the
+whole `tdd.test_command`.
 
 The checks that decide whether work is done still run the **whole** command:
 the baseline gate, the integration gate after each block (which also checks a
@@ -313,6 +353,7 @@ so Node commands are unchanged.
 | Key | Values | Default |
 |---|---|---|
 | `tdd.narrow_tests` | `true` / `false` | `true`; `false` runs the whole command in the loop too |
+| `tdd.narrow_commands` | list of `dir`, `command`, optional `runner` (`pytest` / `jest`) | none; one runner command per test directory, each narrowed in its own directory ([Repos with tests in several directories](#repos-with-tests-in-several-directories)) |
 | `tdd.parallel` | `auto` / `off` | `auto`; `off` runs the full suite serially |
 | `tdd.test_timeout` | whole seconds | `300`; each full-suite run (the baseline, the integration gates, the final verification, an epic's merge tests) that takes longer counts as not run |
 | `tdd.test_writer_max_turns` | positive integer | `30`; the block test writer's turn cap, stated in its prompt |

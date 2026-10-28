@@ -160,7 +160,9 @@ def _mark_block(
     """
     if status == BlockStatus.FAILED and state.tdd and block_idx < len(state.tdd.blocks):
         block = state.tdd.blocks[block_idx]
-        _tdd_event(config, state, block, _FAIL_PHASES.get(block.status, "BLOCK"), "FAIL")
+        _tdd_event(
+            config, state, block, _FAIL_PHASES.get(block.status, "BLOCK"), "FAIL"
+        )
     state.mark_block_status(block_idx, status, config.state_file_path())
     board.record(
         config,
