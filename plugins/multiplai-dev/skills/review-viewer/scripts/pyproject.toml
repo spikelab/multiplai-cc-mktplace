@@ -12,6 +12,9 @@ dependencies = [
     # exactly the paths.v1 contract the review writes. Only that model is
     # imported; nothing here reaches code_facts' model calls.
     "code-facts",
+    # The mailbox, bind address and URLs, and request checks, shared with
+    # pipeline-viewer.
+    "viewer-kit",
 ]
 
 [project.optional-dependencies]
@@ -36,3 +39,4 @@ packages = ["review_viewer"]
 [tool.uv.sources]
 multiplai-core = { git = "https://github.com/spikelab/multiplai-core", branch = "main" }
 code-facts = { path = "../../../lib/code_facts", editable = true }
+viewer-kit = { path = "../../../lib/viewer_kit", editable = true }

@@ -232,6 +232,13 @@ longer need them.
 
 ## At each stop
 
+At each `SPEC:REVIEW:*` stop, when `multiplai-dev:pipeline-viewer` is in your
+skills list, also tell the reviewers through it: run its `notify` for this
+change and the stop's number (proposal 1, components 2, specs 3), as its
+SKILL.md says. It posts once per stop in the configured Slack channel with a
+link to the page where they review, ask Claude and approve. Without that
+skill, tell the user as below.
+
 - **`SPEC:REVIEW:proposal`.** Tell the user the proposal is pushed on
   `<branch>` (`SPEC:BRANCH`) and is ready to share: `proposal.md` (and
   `interview.md`) in `specs/changes/<name>/`. Reviewers comment and edit on

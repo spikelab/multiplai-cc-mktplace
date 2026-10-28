@@ -23,8 +23,9 @@ import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
+from viewer_kit.mailbox import Mailbox, atomic_write
+
 from .gitdata import is_tree_review, tree_pathspec
-from .mailbox import Mailbox, atomic_write
 from .models import ASSESSMENT_TITLE_MAX, FindingsFile, Summary
 
 # Assessments a summary must carry when it says it is complete.

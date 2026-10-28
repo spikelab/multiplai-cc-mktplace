@@ -39,6 +39,15 @@ from urllib.parse import parse_qs, urlparse
 from code_facts.paths import PathsResult
 from multiplai_core.log_utils import log_event
 from pydantic import ValidationError
+from viewer_kit.mailbox import (
+    Mailbox,
+    MailboxError,
+    new_question_id,
+    utc_now,
+    write_private,
+)
+from viewer_kit.request_checks import Reject as _Reject
+from viewer_kit.request_checks import check_origin, check_token, read_json_body
 
 from . import export_zip, registry
 from .gitdata import (
@@ -53,7 +62,6 @@ from .gitdata import (
     pr_status,
     repo_files,
 )
-from .mailbox import Mailbox, MailboxError, new_question_id, utc_now, write_private
 from .models import (
     SHARE_RECIPIENT_RE,
     SHARE_TEXT_MAX,
@@ -473,12 +481,6 @@ def summarise(state: TargetState) -> dict:
     return {"slug": t.slug, "label": t.label, "counts": counts, "run": run}
 
 
-class _Reject(Exception):
-    def __init__(self, status: int, error: str, log_reason: str | None = None):
-        super().__init__(error)
-        self.status, self.error, self.log_reason = status, error, log_reason
-
-
 def make_handler(viewer: Viewer):
     class Handler(BaseHTTPRequestHandler):
         server_version = "review-viewer"
@@ -507,44 +509,7 @@ def make_handler(viewer: Viewer):
                 "application/json; charset=utf-8",
             )
 
-        # --- checks -----------------------------------------------------------
-
-        def _check_origin(self) -> None:
-            origin = self.headers.get("Origin")
-            if origin is None:
-                return
-            host = self.headers.get("Host", "")
-            if urlparse(origin).netloc.lower() != host.lower():
-                raise _Reject(403, "forbidden", "foreign origin")
-
-        def _check_token(self) -> None:
-            given = self.headers.get("X-Review-Token", "")
-            if not hmac.compare_digest(
-                given.encode("utf-8"), viewer.token.encode("utf-8")
-            ):
-                raise _Reject(401, "unauthorized", "bad token")
-
-        def _body(self) -> dict:
-            ctype = self.headers.get("Content-Type", "").split(";")[0].strip().lower()
-            if ctype != "application/json":
-                raise _Reject(
-                    415, "content type must be application/json", "wrong content type"
-                )
-            try:
-                length = int(self.headers.get("Content-Length") or 0)
-            except ValueError:
-                raise _Reject(400, "bad content length")
-            if length < 0:
-                raise _Reject(400, "bad content length")
-            if length > MAX_BODY_BYTES:
-                raise _Reject(413, "body too large")
-            try:
-                data = json.loads(self.rfile.read(length) or b"{}")
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                raise _Reject(400, "invalid json")
-            if not isinstance(data, dict):
-                raise _Reject(400, "expected a json object")
-            return data
+        # --- checks (viewer_kit.request_checks) -------------------------------
 
         def _target(self, slug: str | None) -> TargetState:
             state = viewer.targets.get(slug or "")
@@ -564,15 +529,19 @@ def make_handler(viewer: Viewer):
             url = urlparse(self.path)
             route = url.path
             try:
-                self._check_origin()
+                check_origin(self.headers)
                 if route.startswith("/api/"):
-                    self._check_token()
+                    check_token(self.headers, viewer.token)
                     # whoami is how `list`, `serve` and `stop` probe the server;
                     # counting it as activity would keep a server with no open
                     # page alive for as long as the session keeps checking.
                     if route != "/api/whoami":
                         viewer.last_seen = time.monotonic()
-                    body = self._body() if method == "POST" else {}
+                    body = (
+                        read_json_body(self.headers, self.rfile, MAX_BODY_BYTES)
+                        if method == "POST"
+                        else {}
+                    )
                     return self._api(method, route, parse_qs(url.query), body)
                 if method == "GET" and route.startswith(FULL_WALKTHROUGH_PREFIX):
                     return self._full_walkthrough_page(route)
