@@ -21,6 +21,11 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
 
 ## [Unreleased]
 
+## [0.13.3] - 2026-10-28
+
+### Changed
+- **pm-spec**: names buildme's implementation plan as `implementation-plan.md` (written as `design.md` before multiplai-dev 0.127.0).
+
 ## [0.13.1] - 2026-10-27
 
 ### Fixed
