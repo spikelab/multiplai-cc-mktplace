@@ -322,7 +322,9 @@ Body: `{"name": str, "stop": 1-4, "text": str, "title": str|null}`. `text`
 by <name>`. Stops 1-3: the request is added to the change's `spec-issues.md`
 (read by `pm-spec revise`). Stop 4: it is added to `review/stop-4.md`
 (the session edits the implementation plan). Then a commit with trailers
-`Stop`, `Rework-requested-by` and `Revision`. Answer: WriteResult.
+`Stop`, `Rework-requested-by` and `Revision`. One rework request per person
+per stop revision: a second one answers `already: true` and records nothing
+(more detail goes in as comments). Answer: WriteResult.
 
 ### `POST /api/push`
 
