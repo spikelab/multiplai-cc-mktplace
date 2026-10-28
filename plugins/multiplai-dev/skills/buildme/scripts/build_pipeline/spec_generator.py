@@ -1424,7 +1424,7 @@ PLANNING_KEY = "planning"
 # nothing stale (rows S3, S4 of plan-buildme-subdir-narrow-tests-2026-10-28.md):
 # turning stop 4 on for a planned build asks for an approval of that plan
 # instead of writing a new one.
-UNPLANNED_SECTIONS = ("tdd", "epic", "git", "review")
+UNPLANNED_SECTIONS = ("tdd", "epic", "git", "review", "pipeline_viewer")
 
 
 def _split_sections(text: str, keys: tuple[str, ...]) -> tuple[str, dict[str, str]]:

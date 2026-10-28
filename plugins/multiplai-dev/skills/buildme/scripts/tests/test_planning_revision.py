@@ -1347,6 +1347,16 @@ def test_S3_editing_tdd_epic_or_git_keeps_the_revision_and_marks_nothing_stale(p
     assert state.spec_gen.stale_artifacts == stale
 
 
+def test_S3_adding_pipeline_viewer_settings_keeps_the_revision(plan):
+    config, state = _in_tdd(plan)
+    revision = state.spec_gen.revision
+    (config.specs_dir / "config.yaml").write_text(
+        CONFIG + "pipeline_viewer:\n  slack:\n    channel: dev-updates\n"
+    )
+    owner.reconcile_plan(config, state)
+    assert state.spec_gen.revision == revision
+
+
 def test_S3_adding_narrow_commands_keeps_the_revision(plan):
     config, state = _in_tdd(plan)
     revision = state.spec_gen.revision

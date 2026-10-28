@@ -419,7 +419,7 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   (`state.STEP_INPUTS["plan_review"]`). That section is hashed apart from the
   rest of `config.yaml` (`spec_generator.PLANNING_KEY`) and left out of the
   plan revision, so a raised limit reopens the check and marks no document
-  stale. `tdd:`, `epic:` and `git:` (`spec_generator.UNPLANNED_SECTIONS`) are cut
+  stale. `tdd:`, `epic:`, `git:`, `review:` and `pipeline_viewer:` (`spec_generator.UNPLANNED_SECTIONS`) are cut
   out of the hash too and stored nowhere: no planning step reads them. A checkpoint's
   `tasks_audit` and `design_audit` entries are dropped on load
   (`state.RETIRED_STEPS`), and `models:`/`efforts:` keys naming them log a
