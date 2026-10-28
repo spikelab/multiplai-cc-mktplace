@@ -88,6 +88,11 @@ class ProgressWriter:
         with self.path.open("a") as f:
             f.write(f"- [{self._now()}] Block {block_num}/{total}: {name} — {status}\n")
 
+    def log_line(self, line: str) -> None:
+        """Append one line as it is, with the time in front."""
+        with self.path.open("a") as f:
+            f.write(f"- [{self._now()}] {line}\n")
+
     def log_agent(self, agent_type: str, block_name: str, status: str) -> None:
         with self.path.open("a") as f:
             f.write(f"  - [{self._now()}] {agent_type} ({block_name}): {status}\n")

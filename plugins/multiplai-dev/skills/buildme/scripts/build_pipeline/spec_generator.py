@@ -1410,22 +1410,46 @@ def _load_or_create_state(config) -> BuildState:
 # and leaves the plan revision as it was (row S8).
 PLANNING_KEY = "planning"
 
+# Top-level config.yaml sections no planning step reads: how the TDD loop runs
+# its tests, how an epic runs its children, and the git switches. They are cut
+# out of the plan's hash and stored nowhere, so editing one mid-build changes
+# no plan revision and marks nothing stale (rows S3, S4 of
+# plan-buildme-subdir-narrow-tests-2026-10-28.md).
+UNPLANNED_SECTIONS = ("tdd", "epic", "git")
 
-def _split_planning_section(text: str) -> tuple[str, str]:
-    """config.yaml's text without its top-level `planning:` section, and the
-    section. The section runs to the next line that starts at column 0; blank
-    lines after it go with it. A file with no section comes back unchanged, so
-    its hash is what it was before the section existed."""
+
+def _split_sections(text: str, keys: tuple[str, ...]) -> tuple[str, dict[str, str]]:
+    """config.yaml's text without its top-level *keys* sections, and each
+    section found. A section runs to the next line that starts at column 0;
+    blank lines after it go with it. A file with none of them comes back
+    unchanged, so its hash is what it was before the sections existed."""
     lines = text.splitlines(keepends=True)
-    for start, line in enumerate(lines):
-        if re.match(r"planning\s*:", line):
-            end = start + 1
+    kept: list[str] = []
+    sections: dict[str, str] = {}
+    i = 0
+    while i < len(lines):
+        match = re.match(r"([A-Za-z_][\w-]*)\s*:", lines[i])
+        if match and match.group(1) in keys:
+            end = i + 1
             while end < len(lines) and (
                 not lines[end].strip() or lines[end][0] in " \t"
             ):
                 end += 1
-            return "".join(lines[:start] + lines[end:]), "".join(lines[start:end])
-    return text, ""
+            sections[match.group(1)] = sections.get(match.group(1), "") + "".join(
+                lines[i:end]
+            )
+            i = end
+            continue
+        kept.append(lines[i])
+        i += 1
+    return "".join(kept), sections
+
+
+def _split_planning_section(text: str) -> tuple[str, str]:
+    """config.yaml's text without its top-level `planning:` section, and the
+    section (`_split_sections`)."""
+    rest, sections = _split_sections(text, (PLANNING_KEY,))
+    return rest, sections.get(PLANNING_KEY, "")
 
 
 def _planning_hash(section: str) -> str:
@@ -1436,6 +1460,26 @@ def _planning_hash(section: str) -> str:
     return hashlib.sha256(
         json.dumps(value, sort_keys=True, default=str).encode()
     ).hexdigest()
+
+
+def _config_hashes(config) -> dict[str, str]:
+    """config.yaml's hash without the `planning:` and `UNPLANNED_SECTIONS`
+    sections, and the `planning:` section's own (`PLANNING_KEY`)."""
+    config_path = config.specs_dir / "config.yaml"
+    if not config_path.is_file():
+        return {}
+    rest, sections = _split_sections(
+        config_path.read_bytes().decode("utf-8", "surrogateescape"),
+        (PLANNING_KEY, *UNPLANNED_SECTIONS),
+    )
+    hashes = {
+        "config.yaml": hashlib.sha256(
+            rest.encode("utf-8", "surrogateescape")
+        ).hexdigest()
+    }
+    if sections.get(PLANNING_KEY):
+        hashes[PLANNING_KEY] = _planning_hash(sections[PLANNING_KEY])
+    return hashes
 
 
 def _plan_hashes(config) -> dict[str, str]:
@@ -1468,21 +1512,41 @@ def _plan_hashes(config) -> dict[str, str]:
         for name, p in files.items()
         if p.is_file()
     }
-    config_path = config.specs_dir / "config.yaml"
-    if config_path.is_file():
-        rest, section = _split_planning_section(
-            config_path.read_bytes().decode("utf-8", "surrogateescape")
-        )
-        hashes["config.yaml"] = hashlib.sha256(
-            rest.encode("utf-8", "surrogateescape")
-        ).hexdigest()
-        if section:
-            hashes[PLANNING_KEY] = _planning_hash(section)
+    hashes.update(_config_hashes(config))
     hashes["references"] = hashlib.sha256(
         config.reference_docs_text().encode()
     ).hexdigest()
     hashes["granularity"] = hashlib.sha256(config.task_granularity.encode()).hexdigest()
     return hashes
+
+
+def _revision(hashes: dict[str, str]) -> str:
+    """The plan revision of *hashes* (`SpecGenState.revision`)."""
+    return hashlib.sha256(
+        json.dumps(
+            {k: v for k, v in hashes.items() if k != PLANNING_KEY}, sort_keys=True
+        ).encode()
+    ).hexdigest()
+
+
+def rebound_values(config) -> dict:
+    """What the build's checkpoint would hold if only config.yaml's hash were
+    computed by this version: its saved hashes with that one replaced, the
+    plan revision, and each saved step's revision. For re-binding a build
+    planned by an older version by hand; reads, writes nothing."""
+    state = BuildState.load(config.state_file_path())
+    sg = state.spec_gen or SpecGenState()
+    hashes = dict(sg.artifact_hashes)
+    hashes["config.yaml"] = _config_hashes(config)["config.yaml"]
+    rebound = sg.model_copy(update={"artifact_hashes": hashes})
+    return {
+        "artifact_hashes.config.yaml": hashes["config.yaml"],
+        "revision": _revision(hashes),
+        **{
+            f"steps.{name}.revision": rebound.step_revision(name)
+            for name in sorted(sg.steps)
+        },
+    }
 
 
 def reconcile_plan(
@@ -1540,11 +1604,7 @@ def reconcile_plan(
         stale.update({"tasks", "rubric"})
     stale -= (regenerated or set()) | recovered
     sg.stale_artifacts = sorted(stale)
-    revision = hashlib.sha256(
-        json.dumps(
-            {k: v for k, v in current.items() if k != PLANNING_KEY}, sort_keys=True
-        ).encode()
-    ).hexdigest()
+    revision = _revision(current)
     if revision != sg.revision:
         # Evidence for any earlier revision is stale. The explanation stage is
         # advisory and does not authorize implementation.

@@ -19,7 +19,8 @@ known to accept them: pytest, or jest / vitest run directly or through
 `npm test --`. The whole command is given back for: any other command (a task
 runner such as tox, even behind `uv run`, or a chained command); a command
 that already names what to run (paths, a jest / vitest filter, pytest
-`addopts` paths, another pytest config or rootdir, `python_files`); a pytest
+`addopts` paths, another pytest config or rootdir, a `python_files` other than
+pytest's own patterns); a pytest
 config it cannot read; a selected pytest file below another pytest config or
 `setup.py` than the whole run's (pytest finds its config from the paths it is
 given), or under a `conftest.py` pytest loads whose `collect_ignore` or
@@ -37,6 +38,13 @@ whole command.
 An agent's command is fixed before it changes anything, so `agent_test_command`
 adds how to run the test files it writes and the test file named after each
 module it changes.
+
+A repo whose tests sit in several directories, each with its own runner,
+lists one `NarrowCommand` per directory (`tdd.narrow_commands`). Each one is
+narrowed as above, run from its directory with paths relative to it
+(`narrow_parts`): a directory with no changed file is left out, one that must
+run whole runs its command with no paths, and when every directory is left
+out the whole `tdd.test_command` runs.
 """
 
 from __future__ import annotations
@@ -52,6 +60,7 @@ import shlex
 import subprocess
 import tomllib
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 log = logging.getLogger(__name__)
@@ -102,6 +111,9 @@ _PYTEST_DEFAULT_NORECURSE = (
     "venv",
     "{arch}",
 )
+# pytest's default `python_files`. A project that sets only these collects
+# no file `_PY_TEST_RE` does not name.
+_PYTEST_DEFAULT_FILES = ("test_*.py", "*_test.py")
 # Options whose value is a path that is not a test to run.
 _PYTEST_PATH_VALUE_OPTS = ("--ignore", "--ignore-glob", "--deselect")
 # Options that point pytest at another config or root than the one read here,
@@ -252,14 +264,14 @@ def select_test_paths(
     files: list[str],
     runner: str | None,
     collected: Callable[[str], bool] | None = None,
-) -> list[str]:
+) -> list[str] | None:
     """Sorted test paths for *runner*: the changed test files, plus the test
     file named after each changed source file found among *files*. Only paths
     the whole command collects count: never one under a tool or environment
-    directory, and none that *collected* rejects. Empty, so the whole command
-    runs, when a collected changed file in the runner's language is one the
-    engine counts as a test but this module cannot name: the block's own
-    tests would otherwise be left out."""
+    directory, and none that *collected* rejects. Empty when nothing is
+    selected. None, so the whole command runs, when a collected changed file
+    in the runner's language is one the engine counts as a test but this
+    module cannot name: the block's own tests would otherwise be left out."""
     if runner not in (PYTEST, NODE):
         return []
     from .tdd_engine import _TEST_PATH_RE, _is_tool_cache
@@ -277,7 +289,7 @@ def select_test_paths(
                 selected.add(path)
         elif _may_hold_tests(path, runner) and _TEST_PATH_RE.search(path):
             if runs(path):
-                return []
+                return None
         else:
             selected.update(_named_test_files(path, pool, runner))
     return sorted(selected)
@@ -570,10 +582,15 @@ def _pytest_collects(
 ) -> Callable[[str], bool] | None:
     """Which project-relative paths the whole pytest command collects, or None
     when it cannot tell: the command (or `addopts`) already names paths, or
-    points pytest at another config or root, the project sets its own
-    `python_files`, or its config cannot be read."""
+    points pytest at another config or root, the project sets a
+    `python_files` pattern other than pytest's own two (`_PYTEST_DEFAULT_FILES`),
+    or its config cannot be read."""
     tokens = shlex.split(test_command)
-    at = next(i for i, t in enumerate(tokens) if Path(t).name in ("pytest", "py.test"))
+    # A wrapper given an explicit runner names none: it takes no arguments here.
+    at = next(
+        (i for i, t in enumerate(tokens) if Path(t).name in ("pytest", "py.test")),
+        len(tokens) - 1,
+    )
     try:
         found = _pytest_config(project_dir)
         config_dir, options = found if found else (None, {})
@@ -589,7 +606,8 @@ def _pytest_collects(
             e,
         )
         return None
-    if options.get("python_files"):
+    python_files = _words(options.get("python_files"))
+    if not set(python_files) <= set(_PYTEST_DEFAULT_FILES):
         return None
     if any(t.startswith(_PYTEST_OTHER_ROOT_OPTS) for t in args):
         return None
@@ -610,11 +628,19 @@ def _pytest_collects(
     roots = [""]
     if config_dir is not None and config_dir.resolve() == project_dir.resolve():
         try:
+            # `.` (the config's own directory) is no glob pattern: Path.glob
+            # raises on it.
             matched = sorted(
                 {
-                    p.relative_to(project_dir).as_posix()
+                    ""
+                    if not PurePosixPath(pattern).parts
+                    else p.relative_to(project_dir).as_posix()
                     for pattern in _words(options.get("testpaths"))
-                    for p in project_dir.glob(pattern)
+                    for p in (
+                        [project_dir]
+                        if not PurePosixPath(pattern).parts
+                        else project_dir.glob(pattern)
+                    )
                 }
             )
         except (ValueError, NotImplementedError):
@@ -630,6 +656,10 @@ def _pytest_collects(
 
     def collects(path: str) -> bool:
         parts = PurePosixPath(path).parts
+        if python_files and not any(
+            fnmatch.fnmatch(parts[-1], p) for p in python_files
+        ):
+            return False
         if any(_under(parts, i) is not None for i in ignored if i):
             return False
         if any(fnmatch.fnmatch(path, g) for g in ignore_globs):
@@ -650,7 +680,10 @@ def _node_names_tests(test_command: str, project_dir: Path) -> bool:
     if any(tuple(tokens[: len(npm)]) == npm for npm in _NPM_TEST):
         extra = tokens[tokens.index("--") + 1 :] if "--" in tokens else []
         tokens = shlex.split(_package_test_script(project_dir)) + extra
-    at = next(i for i, t in enumerate(tokens) if Path(t).name in ("jest", "vitest"))
+    at = next(
+        (i for i, t in enumerate(tokens) if Path(t).name in ("jest", "vitest")),
+        len(tokens) - 1,
+    )
     args = tokens[at + 1 :]
     if (
         Path(tokens[at]).name == "vitest"
@@ -674,12 +707,15 @@ def _narrowable_runner(
     project_dir: Path,
     base: str | None,
     enabled: bool,
+    runner: str | None = None,
 ) -> tuple[str, Callable[[str], bool] | None] | None:
     """The runner, and which paths its whole command collects (None when
-    any path it runs counts), or None when the command is not narrowed."""
+    any path it runs counts), or None when the command is not narrowed.
+    *runner*, when given, is used instead of the one the command names."""
     if not test_command or not enabled or not base:
         return None
-    runner = runner_of(test_command, project_dir)
+    if runner is None or _CHAINED_RE.search(test_command):
+        runner = runner_of(test_command, project_dir)
     if runner is None:
         return None
     if _coverage_configured(test_command, runner, project_dir):
@@ -715,13 +751,23 @@ def _git_lines(project_dir: Path, *args: str) -> list[str]:
     return [line for line in proc.stdout.splitlines() if line.strip()]
 
 
-def _narrow(
-    test_command: str, project_dir: Path, base: str | None, enabled: bool
-) -> tuple[str, str | None]:
-    """The command, and the runner when narrowing applies (None otherwise)."""
-    narrowable = _narrowable_runner(test_command, project_dir, base, enabled)
+# What narrowing one command gives: its paths ("selected"), no test file
+# selected ("none"), or a reason it must run whole ("whole").
+SELECTED, NONE, WHOLE = "selected", "none", "whole"
+
+
+def _narrow_one(
+    test_command: str,
+    project_dir: Path,
+    base: str | None,
+    enabled: bool,
+    runner: str | None = None,
+) -> tuple[str, str, str | None]:
+    """The kind of result, the command, and the runner when narrowing
+    applies (None otherwise)."""
+    narrowable = _narrowable_runner(test_command, project_dir, base, enabled, runner)
     if narrowable is None:
-        return test_command, None
+        return WHOLE, test_command, None
     runner, collected = narrowable
     try:
         # Paths relative to the project, which may be a repo subdirectory;
@@ -739,20 +785,38 @@ def _narrow(
             "running the whole test command",
             e,
         )
-        return test_command, None
+        return WHOLE, test_command, None
     paths = select_test_paths(
         sorted(set(changed) | set(untracked)), tracked + untracked, runner, collected
     )
+    if paths is None:
+        log.info(
+            "Narrow tests: a changed test file cannot be named — running the whole "
+            "test command"
+        )
+        return WHOLE, test_command, runner
     # `ls-files` still lists a tracked file deleted but not staged.
     paths = [p for p in paths if (project_dir / p).is_file()]
-    if paths and runner == PYTEST:
+    if not paths:
+        log.info("Narrow tests: no test file selected — running the whole test command")
+        return NONE, test_command, runner
+    if runner == PYTEST:
         reason = _pytest_runs_alike(paths, project_dir)
         if reason is not None:
             log.info("Narrow tests: %s — running the whole test command", reason)
-            return test_command, None
+            return WHOLE, test_command, None
     command = narrow_command(test_command, paths, runner)
     if command == test_command:
-        log.info("Narrow tests: no test file selected — running the whole test command")
+        log.info("Narrow tests: the selection cannot be appended — running it whole")
+        return WHOLE, test_command, runner
+    return SELECTED, command, runner
+
+
+def _narrow(
+    test_command: str, project_dir: Path, base: str | None, enabled: bool
+) -> tuple[str, str | None]:
+    """The command, and the runner when narrowing applies (None otherwise)."""
+    _, command, runner = _narrow_one(test_command, project_dir, base, enabled)
     return command, runner
 
 
@@ -804,3 +868,148 @@ def agent_test_command(
             f"command{where}."
         )
     return f"{command}\n\n{scope} buildme runs the whole suite itself after you finish."
+
+
+# `tdd.narrow_commands` runner names, and the runner each one is here.
+NARROW_RUNNERS = {"pytest": PYTEST, "jest": NODE}
+
+
+@dataclass(frozen=True)
+class NarrowCommand:
+    """One `tdd.narrow_commands` entry: the runner *command* run from *dir*
+    (relative to the project), and its runner (`NARROW_RUNNERS`) when the
+    command does not name it."""
+
+    dir: str
+    command: str
+    runner: str | None = None
+
+
+@dataclass(frozen=True)
+class NarrowPart:
+    """One directory's part of a block's run: *command* run from *dir*, with
+    the block's paths appended (`kind` SELECTED) or none (WHOLE)."""
+
+    dir: str
+    command: str
+    runner: str | None
+    kind: str
+
+    @property
+    def shell(self) -> str:
+        """The part as one command run from the project: `cd <dir> && ...`."""
+        if self.dir in ("", "."):
+            return self.command
+        return f"cd {shlex.quote(self.dir)} && {self.command}"
+
+
+def _join(parts: list[NarrowPart]) -> str:
+    if len(parts) == 1:
+        return parts[0].shell
+    # Each part in a subshell, so a `cd` does not carry into the next part.
+    return " && ".join(f"({p.shell})" for p in parts)
+
+
+def narrow_parts(
+    entries: list[NarrowCommand],
+    project_dir: Path | str,
+    base: str | None,
+    *,
+    enabled: bool = True,
+) -> list[NarrowPart] | None:
+    """The parts of a block's run, one per entry with a changed file under its
+    directory, or None when the whole `tdd.test_command` runs: narrowing is
+    off, there is no block start, or no entry has a changed file."""
+    if not entries or not enabled or not base:
+        return None
+    project_dir = Path(project_dir)
+    parts = []
+    for entry in entries:
+        sub = project_dir / entry.dir
+        try:
+            changed = _git_lines(
+                sub, "diff", "--name-only", "--relative", "--diff-filter=d", base
+            ) + _git_lines(sub, "ls-files", "--others", "--exclude-standard")
+        except (OSError, RuntimeError, subprocess.SubprocessError) as e:
+            log.warning(
+                "Narrow tests: could not list the block's changes under %s (%s) — "
+                "running its command whole",
+                entry.dir,
+                e,
+            )
+            parts.append(NarrowPart(entry.dir, entry.command, None, WHOLE))
+            continue
+        if not changed:
+            continue
+        kind, command, runner = _narrow_one(
+            entry.command, sub, base, True, NARROW_RUNNERS.get(entry.runner or "")
+        )
+        if kind != NONE:
+            parts.append(NarrowPart(entry.dir, command, runner, kind))
+    return parts or None
+
+
+def narrow_test_command_multi(
+    entries: list[NarrowCommand],
+    project_dir: Path | str,
+    base: str | None,
+    enabled: bool,
+    test_command: str,
+) -> str:
+    """The command a block's loop runs when `tdd.narrow_commands` is set: its
+    parts (`narrow_parts`) joined with `&&`, or *test_command* when there are
+    none, so RED never passes on a run that selected nothing."""
+    parts = narrow_parts(entries, project_dir, base, enabled=enabled)
+    return _join(parts) if parts else test_command
+
+
+def _naming(runner: str | None) -> str:
+    return (
+        "`test_<module>.py` or `<module>_test.py`"
+        if runner == PYTEST
+        else "`<name>.test.<ext>` or `<name>.spec.<ext>`"
+    )
+
+
+def agent_test_command_multi(
+    entries: list[NarrowCommand],
+    project_dir: Path | str,
+    base: str | None,
+    enabled: bool,
+    test_command: str,
+) -> str:
+    """`agent_test_command` for `tdd.narrow_commands`: the command, then, for
+    each directory, the command that runs there and how to add a test file's
+    path to it."""
+    if not enabled or not base:
+        return test_command
+    parts = narrow_parts(entries, project_dir, base, enabled=enabled)
+    lines = []
+    for entry in entries:
+        runner = NARROW_RUNNERS.get(entry.runner or "") or runner_of(
+            entry.command, Path(project_dir) / entry.dir
+        )
+        where = " after a `--`" if _needs_separator(entry.command) else ""
+        lines.append(
+            f"- `{entry.dir}`: `{NarrowPart(entry.dir, entry.command, runner, WHOLE).shell}`"
+            f" runs there; add a test file's path, relative to `{entry.dir}`, to the "
+            f"end of it{where} (the test file for a module is named {_naming(runner)})."
+        )
+    per_dir = "\n".join(lines)
+    if not parts:
+        return (
+            f"{test_command}\n\nIt runs the whole suite. To check one test file "
+            "quickly while you work, run that file's directory's command with the "
+            f"file's path:\n{per_dir}\nRun the command as given before you finish. "
+            "buildme runs the whole suite itself after you finish."
+        )
+    return (
+        f"{_join(parts)}\n\nIt runs only this block's own test files and the tests "
+        "named after the modules the block has changed so far, each part from its "
+        "own directory, not the whole suite. When you write another test file, or "
+        "change a module that has a test file named after it, add that file's path "
+        "to the end of the part for its directory when that part names test paths, "
+        "or add a part for the directory when the command has none; a part with no "
+        "paths runs its directory's whole suite and stays as it is:"
+        f"\n{per_dir}\nbuildme runs the whole suite itself after you finish."
+    )

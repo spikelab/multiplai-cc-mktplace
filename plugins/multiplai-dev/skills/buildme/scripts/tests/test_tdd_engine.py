@@ -1125,6 +1125,43 @@ class TestRunBlockTDD:
         assert block.status == BlockStatus.IMPLEMENTING
 
     @pytest.mark.asyncio
+    async def test_a_block_prints_tdd_lines_labelled_with_change_and_component(
+        self, setup, capsys
+    ):
+        config, state, progress, block = setup
+        config.change_name = "acct/model"
+        ok_result = AgentResult(
+            success=True, output="Tests written", files_changed=["test_x.py"]
+        )
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                return_value=ok_result,
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                return_value=ok_result,
+            ),
+        ):
+            await run_block_tdd(block, config, state, progress)
+        out = capsys.readouterr().out
+        assert re.search(
+            r"^TDD: acct/model block=1/1 phase=TEST_WRITE START elapsed=\d+$",
+            out,
+            re.MULTILINE,
+        )
+        assert re.search(
+            r"^TDD: acct/model block=1/1 phase=RED DONE", out, re.MULTILINE
+        )
+        assert re.search(
+            r"^TDD: acct/model block=1/1 phase=IMPLEMENT DONE", out, re.MULTILINE
+        )
+        text = config.progress_file_path().read_text()
+        assert "TDD: acct/model block=1/1 phase=TEST_WRITE START" in text
+
+    @pytest.mark.asyncio
     async def test_the_test_writer_gets_the_configured_turn_cap(self, setup):
         config, state, progress, block = setup
         config.test_writer_max_turns = 17
@@ -5402,3 +5439,193 @@ class TestRedExpected:
         assert block.red_expected == unstopped.red_expected
         assert block.red_evidence == unstopped.red_evidence
         self._same_apart_from_red_expected(block, config, unstopped, u_config)
+
+
+# --- tdd.narrow_commands: the RED gate over several directories -----------
+
+
+def _sh(cwd: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=cwd, capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+
+class TestRedGateOverParts:
+    """With `tdd.narrow_commands`, the RED check runs each directory's part
+    on its own and judges each one that fails or holds a block test."""
+
+    @pytest.fixture
+    def setup(self, tmp_path):
+        from build_pipeline.narrow_tests import NarrowCommand
+
+        repo = tmp_path / "repo"
+        (repo / "backend" / "pkg").mkdir(parents=True)
+        (repo / "backend" / "tests").mkdir()
+        (repo / "backend" / "pkg" / "widget.py").write_text("x = 1\n")
+        (repo / "backend" / "tests" / "test_widget.py").write_text(
+            "def test_w(): pass\n"
+        )
+        (repo / "frontend" / "src").mkdir(parents=True)
+        (repo / "frontend" / "src" / "cart.ts").write_text("export const a = 1\n")
+        specs = repo / "specs" / "changes" / "two"
+        specs.mkdir(parents=True)
+        _sh(repo, "init", "-q")
+        _sh(repo, "config", "user.email", "t@example.com")
+        _sh(repo, "config", "user.name", "T")
+        _sh(repo, "add", "-A")
+        _sh(repo, "commit", "-qm", "init")
+        config = BuildConfig(
+            project_dir=repo,
+            change_name="two/web",
+            tier="advanced",
+            test_command="bash -c 'make test-all'",
+            config_dir=tmp_path / "config",
+        )
+        config.specs_dir = repo / "specs"
+        config.narrow_commands = [
+            NarrowCommand("backend", "pytest -q", "pytest"),
+            NarrowCommand("frontend", "npx jest", "jest"),
+        ]
+        block = BlockInfo(
+            number=1,
+            name="Block1",
+            description="d",
+            baseline_commit=_sh(repo, "rev-parse", "HEAD"),
+        )
+        state = BuildState(
+            change_name="two/web",
+            tier="advanced",
+            state_file=str(tmp_path / "state.json"),
+            tdd=TDDState(blocks=[block]),
+        )
+        progress = ProgressWriter(tmp_path / "progress.md")
+        progress.initialize("two/web", "advanced", 1)
+        return config, state, progress, block
+
+    async def _red(self, setup, results):
+        from build_pipeline.tdd_engine import _enforce_red_gate
+
+        config, state, progress, block = setup
+        calls = []
+
+        def suite(command, *_a, **_k):
+            calls.append(command)
+            return results[command]
+
+        with (
+            patch("build_pipeline.tdd_engine.run_test_suite", side_effect=suite),
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                return_value=AgentResult(success=False, error="stop"),
+            ),
+        ):
+            ok = await _enforce_red_gate(block, config, state, progress, "", "", 0)
+        return ok, calls
+
+    @pytest.mark.asyncio
+    async def test_a_failing_backend_block_test_is_red(self, setup):
+        repo = setup[0].project_dir
+        (repo / "backend" / "tests" / "test_new.py").write_text("def test_n(): 1/0\n")
+        command = "cd backend && pytest -q tests/test_new.py"
+        ok, calls = await self._red(
+            setup,
+            {
+                command: (
+                    1,
+                    "FAILED tests/test_new.py::test_n - AssertionError: missing\n",
+                )
+            },
+        )
+        assert ok is True
+        assert calls == [command]
+
+    @pytest.mark.asyncio
+    async def test_a_failing_frontend_block_test_is_red(self, setup):
+        repo = setup[0].project_dir
+        (repo / "frontend" / "src" / "cart.test.ts").write_text("test('a', fail)\n")
+        # The backend part runs the test named after a changed module, which
+        # passes: it holds no block test, so it has nothing to prove.
+        (repo / "backend" / "pkg" / "widget.py").write_text("x = 2\n")
+        backend = "cd backend && pytest -q tests/test_widget.py"
+        frontend = "cd frontend && npx jest src/cart.test.ts"
+        ok, calls = await self._red(
+            setup,
+            {
+                backend: (0, "1 passed"),
+                frontend: (
+                    1,
+                    "FAIL src/cart.test.ts\nTests:       1 failed, 1 total\n",
+                ),
+            },
+        )
+        assert ok is True
+        assert calls == [backend, frontend]
+
+    @pytest.mark.asyncio
+    async def test_a_passing_block_test_in_one_part_is_not_red(self, setup):
+        repo = setup[0].project_dir
+        (repo / "backend" / "tests" / "test_new.py").write_text("def test_n(): pass\n")
+        (repo / "frontend" / "src" / "cart.test.ts").write_text("test('a', fail)\n")
+        backend = "cd backend && pytest -q tests/test_new.py"
+        frontend = "cd frontend && npx jest src/cart.test.ts"
+        ok, _ = await self._red(
+            setup,
+            {
+                backend: (0, "1 passed"),
+                frontend: (
+                    1,
+                    "FAIL src/cart.test.ts\nTests:       1 failed, 1 total\n",
+                ),
+            },
+        )
+        assert ok is False
+
+    @pytest.mark.asyncio
+    async def test_red_prints_a_tdd_line_labelled_with_the_change(self, setup, capsys):
+        repo = setup[0].project_dir
+        (repo / "backend" / "tests" / "test_new.py").write_text("def test_n(): 1/0\n")
+        await self._red(
+            setup,
+            {
+                "cd backend && pytest -q tests/test_new.py": (
+                    1,
+                    "FAILED tests/test_new.py::test_n - AssertionError: missing\n",
+                )
+            },
+        )
+        out = capsys.readouterr().out
+        assert re.search(
+            r"^TDD: two/web block=1/1 phase=RED DONE elapsed=\d+$", out, re.MULTILINE
+        )
+
+
+def test_log_records_carry_the_change(tmp_path):
+    """Two builds from one session write the same daily log; each record is
+    tagged with its change."""
+    import logging
+
+    from build_pipeline.__main__ import tag_log_records
+
+    logger = logging.getLogger("build_pipeline")
+    path = tmp_path / "build.log"
+    handler = logging.FileHandler(path)
+    handler.setFormatter(logging.Formatter("[session:x] %(levelname)s: %(message)s"))
+    second = logging.FileHandler(tmp_path / "err.log")
+    logger.addHandler(handler)
+    logger.addHandler(second)
+    old = logger.level
+    logger.setLevel(logging.INFO)
+    try:
+        tag_log_records("account-management/account-model")
+        tag_log_records("account-management/account-model")
+        logging.getLogger("build_pipeline.tdd_engine").info("START block=%d", 1)
+    finally:
+        logger.removeHandler(handler)
+        logger.removeHandler(second)
+        logger.setLevel(old)
+        handler.close()
+        second.close()
+    assert path.read_text() == (
+        "[session:x] INFO: [change:account-management/account-model] START block=1\n"
+    )

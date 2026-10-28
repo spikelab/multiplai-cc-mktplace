@@ -126,6 +126,7 @@ buildme ignores them.
 | `pr.max_change_lines` | int | `1000` | stored only, for the PR stage |
 | `planning.max_rewrites` | int | `2` | the plan check: rewrites of the plan before it stops the run. Raising it reopens a stopped check without regenerating the plan |
 | `planning.max_usd` | number | `40` | the plan check: it starts no rewrite or recheck once the planning calls (design, unknowns, tasks, rubric, explainers, the check and its rewrites) have spent this much. Raising it reopens a stopped check without regenerating the plan |
+| `tdd.narrow_commands` | list of `dir`, `command`, optional `runner` (`pytest` / `jest`) | none | the TDD loop, for a repo whose tests sit in several directories with different runners: each entry is narrowed to the block's own tests in its own directory (`cd backend && pytest -q tests/test_x.py`); a directory with no changed file is left out, and when every one is, the whole `tdd.test_command` runs. Example and rules: [Repos with tests in several directories](scripts/README.md#repos-with-tests-in-several-directories) |
 | `findings.authors` | `collaborators` or a list of GitHub logins | `collaborators` | `/multiplai-dev:buildme-findings`: whose PR comments are acted on. `collaborators` means anyone whose `role_name` on the repo is `admin`, `maintain` or `write` |
 | `findings.max_rounds` | int | `3` | `/multiplai-dev:buildme-findings`: fix-and-re-review rounds before it stops (`findings --max-rounds` overrides it) |
 | `findings.allow_bots` | list of bot logins | `[]` | `/multiplai-dev:buildme-findings`: bots whose comments are acted on; any other bot's are listed and skipped |
@@ -139,6 +140,36 @@ buildme ignores them.
 | `walkthrough_max_usd` | number | `10` | the spend limit of each walkthrough `regenerate_walkthroughs` re-runs; a run that reaches it leaves the old file in place |
 | `spec_extract` | bool | `true` | the codebase analysis phase: when `specs/registry/` is empty, run `/multiplai-dev:spec-extract` on the project's Python code at the build's starting commit with `--apply`, and commit the registry files it writes (`SPEC_EXTRACT:` lines in [Step 4](#step-4-report-results)). Only with `--trust-repo`; never for an epic: the parent builds nothing itself and its children skip it, so they build without a baseline |
 | `spec_extract_max_usd` | number | `80` | spec-extract's `--max-usd`: its spend limit for the run folder, across every resume. Capped by spec-extract, not by buildme's budget; what it spends is in buildme's `SPEND:` line |
+
+**Which sections count toward the plan revision.** The plan revision
+(`spec_gen.revision` in `.build-state.json`) hashes `specs/config.yaml`
+without its `planning:`, `tdd:`, `epic:` and `git:` sections, so a build
+already in TDD stops with `Planning inputs changed after implementation` only
+when another key changes (`project`, `context`, `memory_files`,
+`reference_docs`, `models`, and the rest). `planning:` is hashed on its own and
+reopens only the plan check. `tdd:`, `epic:` and `git:` are read by no planning
+step, so editing them (`tdd.narrow_commands`, `epic.max_parallel`) between a
+stop and a resume changes nothing about the plan.
+
+**Re-binding a running build after an upgrade.** Versions up to 0.124.0
+hashed `tdd:`, `epic:` and `git:` into the plan revision, so a build they
+planned stops once with `Planning inputs changed after implementation` when
+0.125.0 resumes it in TDD. To keep it, print the values 0.125.0 computes from
+the build's saved hashes, with only `config.yaml`'s replaced (the command reads
+and writes nothing else):
+
+```bash
+uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/buildme/scripts \
+  python -m build_pipeline plan-revision --change <change>[/<component>] \
+  --project-dir <build worktree>
+```
+
+Write each printed value into the build's `.build-state.json`, then resume:
+`artifact_hashes.config.yaml` → `spec_gen.artifact_hashes["config.yaml"]`,
+`revision` → `spec_gen.revision`, and each `steps.<name>.revision` →
+`spec_gen.steps.<name>.revision` (`explainers` and `plan_review` hash
+`config.yaml` too; left alone, they run again). Do it only when nothing but
+`config.yaml` changed since the stop: any other edit still stops the build.
 
 **Commit `specs/config.yaml`.** The build's worktree branches from `HEAD`, so an
 uncommitted config never reaches it. With `git.worktree` on, the pipeline stops
@@ -445,7 +476,7 @@ pr skill and follows the repo's PR template; these lines are unchanged by it.
 
 The normal path uses the configured suite, block TDD, independent review and a
 final verification after all writers. See the [test, mutation and model reference](scripts/README.md#test-and-model-reference)
-for `tdd.narrow_tests`, `tdd.parallel`, `tdd.test_timeout`, mutation settings, `models:`, `efforts:`
+for `tdd.narrow_tests`, `tdd.narrow_commands`, `tdd.parallel`, `tdd.test_timeout`, mutation settings, `models:`, `efforts:`
 and multiplai.conf examples. These defaults have not changed in this repair.
 
 ## Scale Assessment (MANDATORY)
@@ -1047,6 +1078,13 @@ Parse pipeline stdout for progress lines:
 - `STANDARDS(<source>):<doc names>` — the reviewer's `standards_files` docs,
   or `(none)`, and where the list came from. Emitted once per run
 - `BLOCK:<n>/<total>:<name>:COMPLETE` — block progress
+- `TDD: <change>[/<component>] block=<n>/<total> phase=<PHASE> <START|DONE|FAIL> elapsed=<s>`
+  — one line per block phase: the block's start (`TEST_WRITE START`), `RED
+  DONE`, `IMPLEMENT START`/`DONE`, `REFACTOR START`/`DONE`/`FAIL reason=timeout`,
+  `INTEGRATION_GATE`, each `REVIEW` round with `round=<k> findings=<n>`,
+  `BLOCK DONE`, and `FAIL` from the phase a block fails in. `elapsed` counts
+  from the block's start in this process. The same lines go to
+  `build-progress.md`, and the daily log's records carry `[change:<change>]`
 - `BOARD:<change>:<Column>` — kanban column transitions (see
   [`docs/dark-factory-board.md`](docs/dark-factory-board.md))
 - `WORKTREE:<path>` / `BRANCH:<name>` / `PUSHED:<branch>` / `PR:<url>` — git lifecycle.

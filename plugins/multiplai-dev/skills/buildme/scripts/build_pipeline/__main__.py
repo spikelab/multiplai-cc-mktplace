@@ -9,6 +9,7 @@ Subcommands for dev/debug use (only /buildme is user-facing):
   archive       — Archive a completed change (merge delta specs → main registry)
   setup         — Write or merge specs/config.yaml (the wrapper asks the questions)
   config-get    — Print one resolved specs/config.yaml value (e.g. git.pr)
+  plan-revision — Print the planning values to re-bind a build after an upgrade
 
 Exit codes: 0 done (an epic runs its children and prints EPIC:SUMMARY), 1 failure
 (for an epic: a child failed), 2 usage, or a refusal that wrote nothing
@@ -27,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 import math
 import os
 import sys
@@ -302,6 +304,15 @@ def build_parser() -> argparse.ArgumentParser:
     cget.add_argument("key", help="Dotted key, e.g. git.pr or architecture")
     cget.add_argument("--project-dir", default=".", help="Project directory")
 
+    # --- plan-revision ---
+    prev = sub.add_parser(
+        "plan-revision",
+        help="Print the planning values a build's checkpoint needs after an "
+        "upgrade changed how config.yaml is hashed; writes nothing",
+    )
+    prev.add_argument("--change", required=True, help="Change name")
+    prev.add_argument("--project-dir", default=".", help="The build's worktree")
+
     for command in (build, spec, tdd, findings):
         command.add_argument(
             "--accept-unknown-spend",
@@ -321,6 +332,32 @@ def build_parser() -> argparse.ArgumentParser:
 # SIGTERM to its children when it is stopped. Only a kill (SIGKILL) prints
 # nothing; the epic then counts the attempt as unknown.
 SPEND_COMMANDS = ("build", "findings", "tdd")
+
+
+class _ChangeTag(logging.Filter):
+    """Puts `[change:<name>] ` in front of each record's message, so the
+    daily log tells apart two builds started from one session."""
+
+    def __init__(self, change: str):
+        super().__init__()
+        self.tag = f"[change:{change}] "
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        # One record passes every handler; tag it once.
+        if not getattr(record, "buildme_change", False):
+            record.msg = self.tag + str(record.msg)
+            record.buildme_change = True
+        return True
+
+
+def tag_log_records(change: str) -> None:
+    """Tag every record the build's log handlers write with *change*."""
+    if not change:
+        return
+    for name in ("build_pipeline", "code_facts"):
+        for handler in logging.getLogger(name).handlers:
+            if not any(isinstance(f, _ChangeTag) for f in handler.filters):
+                handler.addFilter(_ChangeTag(change))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -398,22 +435,38 @@ def _main(args: argparse.Namespace) -> int:
 
         return config_get(args)
 
+    elif args.command == "plan-revision":
+        import json
+        from pathlib import Path
+
+        from .spec_generator import rebound_values
+
+        config = BuildConfig(
+            project_dir=Path(args.project_dir).resolve(), change_name=args.change
+        )
+        config.specs_dir = config.project_dir / "specs"
+        print(json.dumps(rebound_values(config), indent=2))
+        return 0
+
     elif args.command == "build":
         from .orchestrator import run_orchestrator
 
         config = BuildConfig.from_cli_args(args)
+        tag_log_records(config.change_name)
         return asyncio.run(run_orchestrator(config, args))
 
     elif args.command == "spec-generate":
         from .spec_generator import run_spec_generator
 
         config = BuildConfig.from_cli_args(args)
+        tag_log_records(config.change_name)
         return asyncio.run(run_spec_generator(config, args))
 
     elif args.command == "tdd":
         from .tdd_engine import run_tdd_engine
 
         config = BuildConfig.from_cli_args(args)
+        tag_log_records(config.change_name)
         return asyncio.run(run_tdd_engine(config, args))
 
     elif args.command == "findings":

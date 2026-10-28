@@ -35,6 +35,24 @@ from .state import BuildState, SpecGenState, completed_state_path
 log = logging.getLogger(__name__)
 
 
+def reconcile_kept_implementation(config: BuildConfig, state: BuildState) -> None:
+    """`reconcile_plan`, refusing a build already in TDD whose plan revision
+    it changes (rows S1, S4 of plan-buildme-subdir-narrow-tests-2026-10-28.md)."""
+    from .spec_generator import reconcile_plan
+
+    old_revision = state.spec_gen.revision if state.spec_gen else ""
+    reconcile_plan(config, state)
+    assert state.spec_gen is not None
+    if state.tdd and not old_revision:
+        raise RuntimeError(
+            "Legacy implementation has no planning revision; preserve it and start a reviewed build in a clean checkout"
+        )
+    if state.tdd and old_revision and old_revision != state.spec_gen.revision:
+        raise RuntimeError(
+            "Planning inputs changed after implementation; start a new build to preserve completed work"
+        )
+
+
 async def run_orchestrator(config: BuildConfig, args) -> int:
     """Main entry point for the build orchestrator."""
     budget_mod.reset()
@@ -300,20 +318,10 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
 
         # Reconcile edited plans before required validation. Completed
         # implementation is kept only while its recorded planning inputs agree.
-        from .spec_generator import _generate_all_artifacts, reconcile_plan
+        from .spec_generator import _generate_all_artifacts
 
         if state.phase != BuildPhase.PUBLISH:
-            old_revision = state.spec_gen.revision if state.spec_gen else ""
-            reconcile_plan(config, state)
-            assert state.spec_gen is not None
-            if state.tdd and not old_revision:
-                raise RuntimeError(
-                    "Legacy implementation has no planning revision; preserve it and start a reviewed build in a clean checkout"
-                )
-            if state.tdd and old_revision and old_revision != state.spec_gen.revision:
-                raise RuntimeError(
-                    "Planning inputs changed after implementation; start a new build to preserve completed work"
-                )
+            reconcile_kept_implementation(config, state)
             await _generate_all_artifacts(cm, config.change_dir, config, state)
             state.checkpoint(state_path)
 

@@ -1,6 +1,7 @@
 """Tests for config — tier detection, test command discovery, config loading."""
 
 import argparse
+import logging
 import os
 from pathlib import Path
 from unittest.mock import patch
@@ -904,6 +905,66 @@ class TestNarrowTestsConfig:
             _config_from_yaml(tmp_path, 'tdd:\n  narrow_tests: "true"\n').narrow_tests
             is True
         )
+
+
+class TestNarrowCommandsConfig:
+    """`tdd.narrow_commands`: one runner command per test directory."""
+
+    def test_absent_is_empty(self, tmp_path):
+        assert BuildConfig().narrow_commands == []
+        config = _config_from_yaml(tmp_path, "tdd:\n  test_command: pytest\n")
+        assert config.narrow_commands == []
+
+    def test_entries_are_read_with_their_runner(self, tmp_path):
+        from build_pipeline.narrow_tests import NarrowCommand
+
+        config = _config_from_yaml(
+            tmp_path,
+            "tdd:\n"
+            "  narrow_commands:\n"
+            "    - dir: backend/\n"
+            "      command: bash tools/bm-backend-tests.sh\n"
+            "      runner: pytest\n"
+            "    - dir: frontend\n"
+            "      command: TZ=Europe/Rome corepack pnpm exec jest\n",
+        )
+        assert config.narrow_commands == [
+            NarrowCommand("backend", "bash tools/bm-backend-tests.sh", "pytest"),
+            NarrowCommand("frontend", "TZ=Europe/Rome corepack pnpm exec jest", None),
+        ]
+
+    @pytest.mark.parametrize(
+        "entry,warning",
+        [
+            ("command: pytest", "has no dir"),
+            ("dir: ../elsewhere\n      command: pytest", "outside the repo"),
+            ("dir: /abs\n      command: pytest", "outside the repo"),
+            ("dir: backend", "has no command"),
+            ("dir: backend\n      command: pytest && ruff check .", "chains commands"),
+            ("dir: backend\n      command: pytest | tee x", "chains commands"),
+            ("dir: backend\n      command: pytest\n      runner: mocha", "mocha"),
+        ],
+    )
+    def test_an_invalid_entry_is_warned_about_and_skipped(
+        self, tmp_path, caplog, entry, warning
+    ):
+        from build_pipeline.narrow_tests import NarrowCommand
+
+        caplog.set_level(logging.WARNING, logger="build_pipeline.config")
+        config = _config_from_yaml(
+            tmp_path,
+            "tdd:\n  narrow_commands:\n"
+            f"    - {entry}\n"
+            "    - dir: frontend\n      command: npx jest\n",
+        )
+        assert config.narrow_commands == [NarrowCommand("frontend", "npx jest")]
+        assert warning in caplog.text
+
+    def test_a_value_that_is_not_a_list_is_ignored(self, tmp_path, caplog):
+        caplog.set_level(logging.WARNING, logger="build_pipeline.config")
+        config = _config_from_yaml(tmp_path, "tdd:\n  narrow_commands: pytest\n")
+        assert config.narrow_commands == []
+        assert "is not a list" in caplog.text
 
 
 class TestTestWriterTurnsConfig:

@@ -1273,3 +1273,137 @@ async def test_S11_an_old_rewrite_stopped_mid_publication_finishes_then_checks(
     assert set(saved.spec_gen.steps) & {"tasks_audit", "design_audit"} == set()
     assert review.await_count == 1
     assert saved.spec_gen.step_passed("plan_review")
+
+
+# --- config.yaml sections no planning step reads (rows S1, S3, S4 of
+# plan-buildme-subdir-narrow-tests-2026-10-28.md) -----------------------------
+
+CONFIG = (
+    "project:\n  name: x\n"
+    "tdd:\n  test_command: pytest\n"
+    "epic:\n  max_parallel: 2\n"
+    "git:\n  push: true\n"
+)
+
+
+def _in_tdd(plan):
+    """A plan reconciled once, with a build in TDD."""
+    from build_pipeline.state import TDDState
+
+    config, _, state = plan
+    (config.specs_dir / "config.yaml").write_text(CONFIG)
+    owner.reconcile_plan(config, state)
+    state.tdd = TDDState()
+    return config, state
+
+
+def test_S3_editing_tdd_epic_or_git_keeps_the_revision_and_marks_nothing_stale(plan):
+    from build_pipeline.orchestrator import reconcile_kept_implementation
+
+    config, state = _in_tdd(plan)
+    revision, stale = state.spec_gen.revision, list(state.spec_gen.stale_artifacts)
+    (config.specs_dir / "config.yaml").write_text(
+        CONFIG.replace("test_command: pytest", "test_command: pytest -x")
+        .replace("max_parallel: 2", "max_parallel: 3")
+        .replace("push: true", "push: false")
+    )
+    reconcile_kept_implementation(config, state)
+    assert state.spec_gen.revision == revision
+    assert state.spec_gen.stale_artifacts == stale
+
+
+def test_S3_adding_narrow_commands_keeps_the_revision(plan):
+    config, state = _in_tdd(plan)
+    revision = state.spec_gen.revision
+    (config.specs_dir / "config.yaml").write_text(
+        CONFIG.replace(
+            "tdd:\n",
+            "tdd:\n  narrow_commands:\n    - dir: backend\n      command: pytest\n",
+        )
+    )
+    owner.reconcile_plan(config, state)
+    assert state.spec_gen.revision == revision
+
+
+def test_S4_editing_a_key_outside_those_sections_still_stops_the_build(plan):
+    from build_pipeline.orchestrator import reconcile_kept_implementation
+
+    config, state = _in_tdd(plan)
+    revision = state.spec_gen.revision
+    (config.specs_dir / "config.yaml").write_text(CONFIG.replace("name: x", "name: y"))
+    with pytest.raises(
+        RuntimeError, match="Planning inputs changed after implementation"
+    ):
+        reconcile_kept_implementation(config, state)
+    assert state.spec_gen.revision != revision
+    assert "design" in state.spec_gen.stale_artifacts
+
+
+def test_S1_a_revision_saved_by_an_older_version_stops_the_build_once(plan):
+    """A build planned on 0.124.0 or earlier hashed the tdd/epic/git text into
+    its revision; resuming it in TDD raises the existing error."""
+    import hashlib
+
+    from build_pipeline.orchestrator import reconcile_kept_implementation
+
+    config, state = _in_tdd(plan)
+    sg = state.spec_gen
+    old = dict(sg.artifact_hashes)
+    old["config.yaml"] = hashlib.sha256(CONFIG.encode()).hexdigest()
+    sg.artifact_hashes = old
+    sg.revision = hashlib.sha256(
+        json.dumps(
+            {k: v for k, v in old.items() if k != owner.PLANNING_KEY}, sort_keys=True
+        ).encode()
+    ).hexdigest()
+    with pytest.raises(
+        RuntimeError,
+        match="Planning inputs changed after implementation; start a new build "
+        "to preserve completed work",
+    ):
+        reconcile_kept_implementation(config, state)
+
+
+def test_split_sections_cuts_each_named_top_level_section():
+    text = "a: 1\ntdd:\n  x: 1\n\nb: 2\ngit:\n  push: false\nplanning:\n  max_usd: 9\n"
+    rest, sections = owner._split_sections(text, ("planning", "tdd", "git"))
+    assert rest == "a: 1\nb: 2\n"
+    assert sections == {
+        "tdd": "tdd:\n  x: 1\n\n",
+        "git": "git:\n  push: false\n",
+        "planning": "planning:\n  max_usd: 9\n",
+    }
+
+
+def test_S1_the_printed_values_rebind_an_older_build(plan):
+    """`plan-revision` prints what an older build's checkpoint needs; written
+    in, the build resumes in TDD with its plan check still passed."""
+    import hashlib
+
+    from build_pipeline.orchestrator import reconcile_kept_implementation
+    from build_pipeline.state import _inputs_revision
+
+    config, state = _in_tdd(plan)
+    sg = state.spec_gen
+    old = dict(sg.artifact_hashes)
+    old["config.yaml"] = hashlib.sha256(CONFIG.encode()).hexdigest()
+    sg.artifact_hashes = old
+    sg.revision = owner._revision(old)
+    sg.record_step(
+        "plan_review", "passed", revision=_inputs_revision("plan_review", old)
+    )
+    state.checkpoint(config.state_file_path())
+    before = config.state_file_path().read_bytes()
+
+    values = owner.rebound_values(config)
+    assert config.state_file_path().read_bytes() == before  # writes nothing
+    assert set(values) == {
+        "artifact_hashes.config.yaml",
+        "revision",
+        "steps.plan_review.revision",
+    }
+    sg.artifact_hashes["config.yaml"] = values["artifact_hashes.config.yaml"]
+    sg.revision = values["revision"]
+    sg.steps["plan_review"].revision = values["steps.plan_review.revision"]
+    reconcile_kept_implementation(config, state)
+    assert sg.step_passed("plan_review")

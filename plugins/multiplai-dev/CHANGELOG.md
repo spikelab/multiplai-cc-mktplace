@@ -15,6 +15,17 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.125.0] - 2026-10-28
+
+### Added
+- **buildme**: `tdd.narrow_commands` in `specs/config.yaml` lists one runner command per test directory, for a repo with a pytest backend and a jest frontend behind one `tdd.test_command`. Inside a block, buildme and its agents now run only the block's own tests and the tests named after its changed modules, each in its own directory (`cd backend && pytest -q tests/test_x.py`). A directory with no changed file is left out. The baseline, integration, final-verification and epic merge runs still use the whole `tdd.test_command`. An optional `runner: pytest` or `runner: jest` lets a wrapper script take the test paths.
+- **buildme**: each block phase prints a `TDD: <change>/<component> block=N/M phase=<PHASE> START|DONE|FAIL elapsed=<s>` line on stdout and in `build-progress.md`. The daily log's records now carry `[change:<name>]`, so two builds started from one session can be told apart.
+- **buildme**: `python -m build_pipeline plan-revision --change … --project-dir …` prints the planning values a build planned by an older version needs in its `.build-state.json` to resume after this upgrade. It writes nothing.
+
+### Changed
+- **buildme**: editing `tdd:`, `epic:` or `git:` in `specs/config.yaml` no longer changes the plan revision, so it no longer stops a build that is already in TDD. A build planned by 0.124.0 or earlier stops once on resume with `Planning inputs changed after implementation`; SKILL.md ("Re-binding a running build after an upgrade") says which values to write.
+- **buildme**: a pytest config whose `python_files` lists only `test_*.py` and/or `*_test.py`, or whose `testpaths` is `.`, no longer stops the block's tests from being narrowed. Before, the first made buildme run the whole suite, and the second made narrowing crash.
+
 ## [0.124.0] - 2026-10-28
 
 ### Added
