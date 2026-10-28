@@ -1020,7 +1020,7 @@ how the change will be implemented before any code is written. After the plan
 check and the size gate, the pipeline looks on the build's branch for a commit
 whose trailers are `Stop: 4`, `Revision: <plan revision>` and `Approved-by:`
 (or `Decided-by:`). With none, it writes `plan-approval.md` in the change dir
-(the file to approve, `design.md`; `tasks.md` with its block count, to read;
+(the file to approve, `implementation-plan.md`, or `design.md` for a change planned before the rename; `tasks.md` with its block count, to read;
 the plan check's outcome; the plan revision; and the commands that record the
 approval) and exits `3` with `PLAN:WAITING:<path>`. Re-running stops the same
 way, and keeps `plan-approval.md` as it is, until the approval commit is

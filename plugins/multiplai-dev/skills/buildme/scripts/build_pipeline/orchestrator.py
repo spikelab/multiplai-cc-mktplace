@@ -25,7 +25,7 @@ from build_pipeline.budget import BudgetExceededError
 
 from . import board, git_ops, readiness, review_rounds, walkthroughs
 from . import budget as budget_mod
-from .change_manager import ChangeManager, registry_names
+from .change_manager import PLAN_FILE, ChangeManager, plan_path, registry_names
 from .config import BuildConfig
 from .models import BoardColumn, BuildPhase
 from .progress import ProgressWriter
@@ -1951,8 +1951,8 @@ def _run_size_gate(
 
 
 #: The file stop 4 asks the engineer to approve, relative to the change dir.
-#: The one place that names it.
-PLAN_APPROVAL_DOC = "design.md"
+#: A change planned before the rename has `design.md` instead (`plan_path`).
+PLAN_APPROVAL_DOC = PLAN_FILE
 #: Read with the plan, never approved on its own.
 PLAN_READING_DOCS = ("tasks.md",)
 PLAN_APPROVAL_FILE = "plan-approval.md"
@@ -2032,7 +2032,7 @@ def _plan_approval_request(
             "",
             "## To approve",
             "",
-            f"- `{PLAN_APPROVAL_DOC}`: how the change will be implemented. Approve this file.",
+            f"- `{plan_path(config.change_dir).name}`: how the change will be implemented. Approve this file.",
             "",
             "## To read (no approval)",
             "",
@@ -2137,7 +2137,7 @@ def _plan_approval_gate(
     _progress_note(
         progress,
         "PLAN_APPROVAL",
-        f"Waiting for an engineer to approve {PLAN_APPROVAL_DOC} at revision "
+        f"Waiting for an engineer to approve {plan_path(config.change_dir).name} at revision "
         f"{revision[:12]}; request in {path}. Re-run with --approve-plan, or after "
         "the approval commit lands on the build's branch.",
     )
