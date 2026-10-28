@@ -182,10 +182,24 @@ def dirty(cwd: Path, paths: list[str]) -> list[str]:
     staged or not. Untracked files count."""
     if not paths:
         return []
-    out = ok(cwd, "status", "--porcelain=v1", "--untracked-files=all", "--", *paths)
-    if not out:
+    try:
+        res = run(
+            cwd,
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+            "--",
+            *paths,
+            check=False,
+        )
+    except GitError:
         return []
-    return sorted({line[3:].strip() for line in out.splitlines() if len(line) > 3})
+    if res.returncode != 0:
+        return []
+    # Not stripped: each line's first column is a status letter or a space.
+    return sorted(
+        {line[3:].strip() for line in res.stdout.splitlines() if len(line) > 3}
+    )
 
 
 def toplevel(cwd: Path) -> Path | None:
