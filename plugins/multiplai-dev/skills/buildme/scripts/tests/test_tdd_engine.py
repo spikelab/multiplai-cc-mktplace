@@ -2084,8 +2084,9 @@ class TestNarrowTestCommandInTheBlockLoop:
             ref.call_args.kwargs["test_command"].splitlines()[0]
             == f"{self.WHOLE} tests/test_new.py tests/test_widget.py"
         )
-        # The refactor's verification is a gate: whole command.
-        assert gate_calls == [self.WHOLE]
+        # The refactor's verification runs the block's tests; the integration
+        # gate right after runs the whole command.
+        assert gate_calls == [f"{self.WHOLE} tests/test_new.py tests/test_widget.py"]
 
     @pytest.mark.asyncio
     async def test_red_retry_gets_the_narrow_command_and_reruns_with_its_new_tests(
