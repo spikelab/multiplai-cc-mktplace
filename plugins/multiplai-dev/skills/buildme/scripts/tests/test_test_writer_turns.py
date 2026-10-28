@@ -64,7 +64,9 @@ def setup(tmp_path, monkeypatch):
     monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
     project = tmp_path / "project"
     (project / "specs" / "changes" / "test").mkdir(parents=True)
-    (project / "specs" / "changes" / "test" / "design.md").write_text("# Design")
+    (project / "specs" / "changes" / "test" / "implementation-plan.md").write_text(
+        "# Design"
+    )
     (project / "module.py").write_text(
         "def add(a, b):\n    raise NotImplementedError\n"
     )

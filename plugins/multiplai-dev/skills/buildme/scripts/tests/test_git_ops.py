@@ -353,7 +353,7 @@ class TestCommitPaths:
         (change_dir / ".board.json").write_text("{}\n")
         archived = config.specs_dir / "archive" / "2026-01-01-c"
         archived.mkdir(parents=True)
-        (archived / "design.md").write_text("d\n")
+        (archived / "implementation-plan.md").write_text("d\n")
         (archived / ".build-state.json").write_text("{}\n")
         (archived / ".board.json").write_text("{}\n")
 
@@ -367,7 +367,7 @@ class TestCommitPaths:
             text=True,
         ).stdout.split()
         assert "specs/changes/c/proposal.md" in committed
-        assert "specs/archive/2026-01-01-c/design.md" in committed
+        assert "specs/archive/2026-01-01-c/implementation-plan.md" in committed
         assert not any(".build-state.json" in f for f in committed)
         assert not any(".board.json" in f for f in committed)
         # Never tracked, so a later cleanup unlink leaves no uncommitted deletion.

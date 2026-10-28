@@ -36,7 +36,14 @@ from multiplai_core.specs import change_root
 from build_pipeline.budget import BudgetExceededError
 
 from . import budget
-from .change_manager import ARTIFACT_DAG, ChangeManager
+from .change_manager import (
+    ARTIFACT_DAG,
+    OLD_PLAN_FILE,
+    PLAN_FILE,
+    PLAN_HASH_KEY,
+    ChangeManager,
+    plan_path,
+)
 from .dependencies import NewDependency, design_decisions_text, detect_new_dependencies
 from .gates import unknowns_gate
 from .io_utils import atomic_write
@@ -1411,11 +1418,13 @@ def _load_or_create_state(config) -> BuildState:
 PLANNING_KEY = "planning"
 
 # Top-level config.yaml sections no planning step reads: how the TDD loop runs
-# its tests, how an epic runs its children, and the git switches. They are cut
-# out of the plan's hash and stored nowhere, so editing one mid-build changes
-# no plan revision and marks nothing stale (rows S3, S4 of
-# plan-buildme-subdir-narrow-tests-2026-10-28.md).
-UNPLANNED_SECTIONS = ("tdd", "epic", "git")
+# its tests, how an epic runs its children, the git switches, and `review:`
+# (`review.plan_approval`, stop 4). They are cut out of the plan's hash and
+# stored nowhere, so editing one mid-build changes no plan revision and marks
+# nothing stale (rows S3, S4 of plan-buildme-subdir-narrow-tests-2026-10-28.md):
+# turning stop 4 on for a planned build asks for an approval of that plan
+# instead of writing a new one.
+UNPLANNED_SECTIONS = ("tdd", "epic", "git", "review", "pipeline_viewer")
 
 
 def _split_sections(text: str, keys: tuple[str, ...]) -> tuple[str, dict[str, str]]:
@@ -1489,7 +1498,6 @@ def _plan_hashes(config) -> dict[str, str]:
         name: config.change_dir / name
         for name in (
             "specs.md",
-            "design.md",
             "unknowns.md",
             "tasks.md",
             "rubric.md",
@@ -1498,6 +1506,9 @@ def _plan_hashes(config) -> dict[str, str]:
             "codebase-analysis.md",
         )
     }
+    # The plan is hashed under one key whatever its file is called, so a
+    # change planned under the old name keeps its revision (`PLAN_HASH_KEY`).
+    files[PLAN_HASH_KEY] = plan_path(config.change_dir)
     files.update(
         {
             "requirements/" + p.name: p
@@ -1583,7 +1594,7 @@ def reconcile_plan(
             stale.update({"design", "unknowns", "tasks", "rubric"})
         if "use-cases.md" in changed:
             stale.update({"tasks", "rubric"})
-        if "design.md" in changed:
+        if PLAN_HASH_KEY in changed:
             stale.update({"unknowns", "tasks", "rubric"})
         if "unknowns.md" in changed:
             stale.update({"tasks", "rubric"})
@@ -1612,6 +1623,7 @@ def reconcile_plan(
         state.verification = None
         state.split_required = False
         state.size_accepted = False
+        state.plan_approval = None
     sg.artifact_hashes = current
     if "unknowns" in recovered:
         _record_explainer_outcome(config, state)
@@ -1628,7 +1640,8 @@ def _finish_plan_publication(config) -> set[str]:
     files = json.loads(journal.read_text())
     for name, item in files.items():
         if Path(name).name != name or not (
-            name in {"design.md", "tasks.md", "rubric.md", "unknowns.md"}
+            # A journal written before the rename names `OLD_PLAN_FILE`.
+            name in {PLAN_FILE, OLD_PLAN_FILE, "tasks.md", "rubric.md", "unknowns.md"}
             or PLAN_EDITS_DIFF.fullmatch(name)
         ):
             raise ValueError("Invalid planning publication journal")
@@ -1640,7 +1653,12 @@ def _finish_plan_publication(config) -> set[str]:
             )
     for name, item in files.items():
         atomic_write(config.change_dir / name, item["after"])
-    return {Path(name).stem for name in files}
+    return {_artifact_id(name) for name in files}
+
+
+def _artifact_id(name: str) -> str:
+    """The artifact (`ARTIFACT_DAG` key) a published file name belongs to."""
+    return "design" if name in (PLAN_FILE, OLD_PLAN_FILE) else Path(name).stem
 
 
 # The unified diff of one rewrite's edits, `plan-edits-<attempt>.diff` in the
@@ -1649,8 +1667,11 @@ PLAN_EDITS_DIFF = re.compile(r"plan-edits-(\d+)\.diff")
 
 
 def apply_plan_edits(staged_dir: Path, edits) -> dict[str, str]:
-    """Apply a rewrite's edits (`models.PlanEdit`), in order, to design.md and
-    tasks.md in *staged_dir*, and return the text of each file they changed.
+    """Apply a rewrite's edits (`models.PlanEdit`), in order, to the plan
+    (`plan_path`) and tasks.md in *staged_dir*, and return the text of each
+    file they changed. The edited plan is written as `PLAN_FILE`, and the
+    staged copy of an old-name plan is removed, so the staged plan has one
+    name.
 
     Each `old_str` must occur exactly once in its file as the edits before it
     leave it. A miss, no edits at all, or edits that leave both files as
@@ -1662,7 +1683,11 @@ def apply_plan_edits(staged_dir: Path, edits) -> dict[str, str]:
     originals: dict[str, str] = {}
     for index, edit in enumerate(edits, 1):
         if edit.file not in texts:
-            path = staged_dir / edit.file
+            path = (
+                plan_path(staged_dir)
+                if edit.file == PLAN_FILE
+                else staged_dir / edit.file
+            )
             texts[edit.file] = path.read_text() if path.exists() else ""
             originals[edit.file] = texts[edit.file]
         count = texts[edit.file].count(edit.old_str) if edit.old_str else 0
@@ -1675,6 +1700,8 @@ def apply_plan_edits(staged_dir: Path, edits) -> dict[str, str]:
         _reject_edits("The rewrite's edits change nothing")
     for name, text in texts.items():
         atomic_write(staged_dir / name, text)
+    if PLAN_FILE in texts:
+        (staged_dir / OLD_PLAN_FILE).unlink(missing_ok=True)
     return texts
 
 
@@ -1709,9 +1736,10 @@ async def rewrite_plan(
     Failed generation leaves the original set intact. A crash during publication
     leaves a journal that must reconcile before any consumer accepts the files.
 
-    One call (`run_plan_edit`) returns exact replacements in design.md and
+    One call (`run_plan_edit`) returns exact replacements in the plan and
     tasks.md for these numbered findings, and `apply_plan_edits` applies them;
-    lines no edit names are kept byte for byte. An edited design.md gets its
+    lines no edit names are kept byte for byte. An edited plan is published as
+    `PLAN_FILE` (an `OLD_PLAN_FILE` stays where it is) and gets its
     unknowns.md written again. The rubric is written again whole, and
     `plan-edits-<attempt>.diff` is published with the files. `step` names the
     caller. The staged plan must pass the deterministic scans and the
@@ -1752,10 +1780,10 @@ async def rewrite_plan(
             )
         edited = apply_plan_edits(staged.change_dir, result.edits)
         names = [
-            Path(name).stem for name in ("design.md", "tasks.md") if name in edited
+            _artifact_id(name) for name in (PLAN_FILE, "tasks.md") if name in edited
         ]
-        if "design.md" in edited:
-            raise_spec_issues(design_spec_issues(edited["design.md"]), step or "design")
+        if PLAN_FILE in edited:
+            raise_spec_issues(design_spec_issues(edited[PLAN_FILE]), step or "design")
             await _generate_unknowns(
                 cm, staged.change_dir, staged, state.model_copy(deep=True)
             )
@@ -1801,12 +1829,17 @@ async def rewrite_plan(
         names.append("rubric")
         publication = {}
         for name in names:
-            filename = f"{name}.md"
+            filename = ARTIFACT_DAG[name]["generates"]
             original = config.change_dir / filename
             publication[filename] = {
                 "before": original.read_text() if original.exists() else None,
                 "after": (staged.change_dir / filename).read_text(),
             }
+        # The diff is against the plan as it was read, an old-name plan too.
+        shown = {
+            PLAN_FILE: plan_path(config.change_dir),
+            "tasks.md": config.change_dir / "tasks.md",
+        }
         diff_name = f"plan-edits-{attempt}.diff"
         diff_path = config.change_dir / diff_name
         publication[diff_name] = {
@@ -1814,15 +1847,15 @@ async def rewrite_plan(
             "after": "".join(
                 "".join(
                     difflib.unified_diff(
-                        publication[name]["before"].splitlines(keepends=True)
-                        if publication[name]["before"] is not None
+                        shown[name].read_text().splitlines(keepends=True)
+                        if shown[name].exists()
                         else [],
                         publication[name]["after"].splitlines(keepends=True),
                         fromfile=f"a/{name}",
                         tofile=f"b/{name}",
                     )
                 )
-                for name in ("design.md", "tasks.md")
+                for name in (PLAN_FILE, "tasks.md")
                 if name in edited
             ),
         }
@@ -1838,7 +1871,7 @@ async def rewrite_plan(
         config.change_dir,
         "docs(specs): publish plan review repair",
     )
-    return 2 if "design.md" in edited else 1
+    return 2 if PLAN_FILE in edited else 1
 
 
 def assert_plan_current(config, state: BuildState, *, archived: bool = False) -> None:

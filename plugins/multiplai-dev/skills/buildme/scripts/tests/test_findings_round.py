@@ -105,7 +105,7 @@ def _make_built(base: Path, subdir: str = "") -> tuple[Path, Path, BuildConfig]:
     # registry file starts as a copy of them.
     (repo / "specs" / "registry").mkdir(parents=True)
     (repo / "specs" / "registry" / "calc.md").write_text(REQUIREMENTS)
-    (change / "design.md").write_text("# Design\n")
+    (change / "implementation-plan.md").write_text("# Design\n")
     (change / "tasks.md").write_text("## 1. Add\n\nAdd two numbers.\n")
     (change / ".build-state.json").write_text(json.dumps(BUILD_STATE, indent=2))
     (repo / "calc.py").write_text("def add(a, b):\n    return a - b\n")

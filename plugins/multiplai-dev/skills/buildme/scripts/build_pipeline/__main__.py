@@ -175,6 +175,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Build a plan the size gate says should be split, as one PR",
     )
     build.add_argument(
+        "--approve-plan",
+        action="store_true",
+        help="Under review.plan_approval: commit your approval of the "
+        "implementation plan at its current revision (Approved-by: git "
+        "user.name) and go on",
+    )
+    build.add_argument(
         "--epic-child",
         action="store_true",
         help="This build is an epic's child (the coordinator passes it): "

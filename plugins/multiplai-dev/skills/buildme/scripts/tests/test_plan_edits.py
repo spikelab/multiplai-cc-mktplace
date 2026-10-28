@@ -83,7 +83,11 @@ async def _run(config, state, state_path, answers, rewrites=REWRITES):
 
 
 def _staged(tmp_path, **texts):
-    for name, text in {"design.md": "# D\none\n", "tasks.md": TASKS, **texts}.items():
+    for name, text in {
+        "implementation-plan.md": "# D\none\n",
+        "tasks.md": TASKS,
+        **texts,
+    }.items():
         (tmp_path / name).write_text(text)
     return tmp_path
 
@@ -95,12 +99,12 @@ def test_edits_apply_in_order_each_to_the_text_the_last_left(tmp_path):
         [
             PlanEdit(file="tasks.md", old_str="do it", new_str="do it now"),
             PlanEdit(file="tasks.md", old_str="it now", new_str="it today"),
-            PlanEdit(file="design.md", old_str="one", new_str="two"),
+            PlanEdit(file="implementation-plan.md", old_str="one", new_str="two"),
         ],
     )
     assert (staged / "tasks.md").read_text() == "## 1. Behavior\n- [ ] do it today\n"
-    assert (staged / "design.md").read_text() == "# D\ntwo\n"
-    assert set(edited) == {"tasks.md", "design.md"}
+    assert (staged / "implementation-plan.md").read_text() == "# D\ntwo\n"
+    assert set(edited) == {"tasks.md", "implementation-plan.md"}
 
 
 @pytest.mark.parametrize(
@@ -110,19 +114,19 @@ def test_edits_apply_in_order_each_to_the_text_the_last_left(tmp_path):
 def test_an_edit_that_does_not_match_once_rejects_and_writes_nothing(
     tmp_path, old, message
 ):
-    staged = _staged(tmp_path, **{"design.md": "# D\nfoo\n"})
+    staged = _staged(tmp_path, **{"implementation-plan.md": "# D\nfoo\n"})
     with pytest.raises(
-        PlanRepairRejected, match=f"Plan edit 2 in design.md.*{message}"
+        PlanRepairRejected, match=f"Plan edit 2 in implementation-plan.md.*{message}"
     ):
         owner.apply_plan_edits(
             staged,
             [
                 PlanEdit(file="tasks.md", old_str="do it", new_str="do it now"),
-                PlanEdit(file="design.md", old_str=old, new_str="x"),
+                PlanEdit(file="implementation-plan.md", old_str=old, new_str="x"),
             ],
         )
     assert (staged / "tasks.md").read_text() == TASKS
-    assert (staged / "design.md").read_text() == "# D\nfoo\n"
+    assert (staged / "implementation-plan.md").read_text() == "# D\nfoo\n"
 
 
 def test_no_edits_is_a_rejection_with_a_blocking_finding(tmp_path):

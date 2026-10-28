@@ -22,7 +22,7 @@ from ..sdk import agent_call
 
 log = logging.getLogger(__name__)
 
-# Tool allowlists per agent type (from design.md)
+# Tool allowlists per agent type
 TEST_WRITER_TOOLS = ["Read", "Write", "Bash", "Glob", "Grep"]
 IMPLEMENTER_TOOLS = ["Read", "Write", "Edit", "Bash", "Glob", "Grep"]
 REFACTORER_TOOLS = ["Read", "Write", "Edit", "Bash", "Glob", "Grep"]

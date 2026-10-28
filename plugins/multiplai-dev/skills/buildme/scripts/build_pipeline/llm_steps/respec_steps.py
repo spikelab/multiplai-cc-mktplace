@@ -12,7 +12,7 @@ Two halves, both belonging to the same loop:
 
 **Propose only.** `run_respec_audit` writes exactly one file — `respec.md` —
 and reaches the model through `llm_call`, which grants no tools. There is no
-code path here that can edit `specs.md`, `requirements/*.md` or `design.md`; applying a
+code path here that can edit `specs.md`, `requirements/*.md` or the plan; applying a
 proposed delta stays a deliberate human (or next-change) decision. Both files
 travel with the change into `archive/<date>-<name>/` and are never merged into
 `registry/`.
@@ -28,7 +28,7 @@ from pathlib import Path
 
 from build_pipeline.budget import BudgetExceededError
 
-from ..change_manager import requirement_texts
+from ..change_manager import plan_path, requirement_texts
 from ..models import ImplementationNote
 from ..prompts.respec import RESPEC_PROMPT
 from ..sdk import llm_call
@@ -191,7 +191,7 @@ async def run_respec_audit(config, state=None) -> Path | None:
         change_name=change_name,
         notes=notes,
         requirements=_read_requirements(change_dir) or "(no requirements files)",
-        design=_read(change_dir / "design.md") or "(no design.md)",
+        design=_read(plan_path(change_dir)) or "(no implementation-plan.md)",
     )
 
     try:

@@ -3917,7 +3917,7 @@ async def _run_refactor_all(
         diff=diff,
         design=config.design_path.read_text()
         if config.design_path.exists()
-        else "(no design.md)",
+        else "(no implementation-plan.md)",
         rubric=config.rubric_path.read_text()
         if config.rubric_path.exists()
         else "(no rubric.md)",

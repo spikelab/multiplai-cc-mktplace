@@ -222,6 +222,52 @@ def test_a_parked_child_skips_its_dependants(tmp_path, monkeypatch, capsys):
     assert sorted(e.launches()) == ["api", "ui"]
 
 
+PLAN_WAITING = "PLAN:WAITING:/x/specs/changes/e-a/plan-approval.md"
+
+
+def test_a_child_waiting_for_its_plan_approval_runs_again_next_run(
+    tmp_path, monkeypatch
+):
+    """Item E4 and row S12 of plan-multiplai-dev-pipeline-viewer-2026-10-28.md:
+    a child stopped at stop 4 is `waiting` with the marker (not failed, not
+    parked), not relaunched in the run, and the next run launches it again;
+    once its build passes, the epic ends as one that never stopped."""
+    e = Epic(
+        tmp_path / "stopped",
+        monkeypatch,
+        answer=INDEPENDENT,
+        steps={"a": [{"marker": PLAN_WAITING}, {}]},
+    )
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-b"), pr_url("e-c")]
+    assert e.status() == {"a": "waiting", "b": "built", "c": "built"}
+    got = {c["id"]: (c["status"], c["reason"]) for c in e.summary(1)["children"]}
+    assert got["a"] == ("waiting", PLAN_WAITING)
+    assert e.summary(1)["totals"] == {"waiting": 1, "built": 2}
+    assert sorted(e.launches()) == ["a", "b", "c"]
+
+    assert e.run() == 3
+    stopped = (e.status(), merge_waiting())
+    assert sorted(e.launches()) == ["a", "a", "b", "c"]
+
+    never = Epic(tmp_path / "never", monkeypatch, answer=INDEPENDENT)
+    assert never.run() == 3
+    assert stopped == (never.status(), merge_waiting())
+
+
+def test_the_dependants_of_a_child_waiting_for_its_plan_are_not_skipped(
+    tmp_path, monkeypatch
+):
+    """A dependant of a child waiting at stop 4 is neither skipped nor
+    launched: it waits for its dependency, which the next run builds."""
+    marker = PLAN_WAITING.replace("e-a", "e-api")
+    e = Epic(tmp_path, monkeypatch, steps={"api": [{"marker": marker}, {}]})
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-ui")]
+    assert e.status() == {"api": "waiting", "ui": "built", "docs": "waiting"}
+    assert sorted(e.launches()) == ["api", "ui"]
+    assert e.run() == 3 and merge_waiting() == [pr_url("e-api"), pr_url("e-ui")]
+    assert e.status()["api"] == "built" and e.status()["docs"] != "skipped"
+
+
 def test_exit_0_without_a_pr_parks(tmp_path, monkeypatch):
     e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT, steps={"a": [{"no_pr": True}]})
     assert e.run() == 3 and merge_waiting() == [pr_url("e-b"), pr_url("e-c")]

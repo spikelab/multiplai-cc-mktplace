@@ -48,7 +48,7 @@ def accepted_build(tmp_path, monkeypatch):
     for name, content in {
         "proposal.md": "## Capabilities\n- `value`\n",
         "requirements/value.md": "### Requirement: Value\n#### Scenario: Read\nWHEN read\nTHEN returns one\n",
-        "design.md": "# Design\nA constant",
+        "implementation-plan.md": "# Design\nA constant",
         "use-cases.md": "# Use cases\nRead one",
         "unknowns.md": "# Unknowns\nNone",
         "tasks.md": "## 1. Value\nReturn one",

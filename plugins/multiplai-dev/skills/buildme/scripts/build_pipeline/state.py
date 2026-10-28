@@ -18,6 +18,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, model_validator
 
 from . import budget
+from .change_manager import PLAN_HASH_KEY
 from .findings.models import PRComment, SpecIssue, Triage
 from .models import BlockInfo, BlockStatus, BuildPhase
 from .stop_record import StepStop  # moved; `from .state import StepStop` keeps working
@@ -52,17 +53,29 @@ class StepOutcome(BaseModel):
     blocking_counts: list[int] = Field(default_factory=list)
 
 
+class PlanApproval(BaseModel):
+    """An engineer's approval of the implementation plan at one plan revision
+    (stop 4): the commit on the build's branch with `Stop: 4`,
+    `Revision: <revision>` and `Approved-by:` or `Decided-by:` trailers."""
+
+    revision: str
+    by: str
+    commit: str
+
+
 # The plan files each step's outcome is tied to (`SpecGenState.step_revision`),
 # besides specs.md and requirements/*.md, which every step reads. A step not
 # listed is tied to the whole plan revision.
 STEP_INPUTS: dict[str, frozenset[str]] = {
-    "explainers": frozenset({"proposal.md", "design.md", "config.yaml", "references"}),
+    "explainers": frozenset(
+        {"proposal.md", PLAN_HASH_KEY, "config.yaml", "references"}
+    ),
     # The one plan check: what the tasks audit and the design audit it replaced
     # read, plus the rubric.
     "plan_review": frozenset(
         {
             "tasks.md",
-            "design.md",
+            PLAN_HASH_KEY,
             "proposal.md",
             "use-cases.md",
             "unknowns.md",
@@ -390,6 +403,11 @@ class BuildState(BaseModel):
     # (a resume, or a FAILED build re-running every phase) keeps the
     # acceptance instead of stopping again. Default False.
     size_accepted: bool = False
+    # The approval commit stop 4 found for the plan revision it names
+    # (`orchestrator._plan_approval_gate`, under `review.plan_approval`). A new
+    # plan revision clears it (`spec_generator.reconcile_plan`). None in older
+    # checkpoints and while the build waits for an approval.
+    plan_approval: PlanApproval | None = None
 
     # Git lifecycle — set when the pipeline creates its own worktree/branch.
     # Persisted so a resume RE-BINDS to the existing worktree instead of

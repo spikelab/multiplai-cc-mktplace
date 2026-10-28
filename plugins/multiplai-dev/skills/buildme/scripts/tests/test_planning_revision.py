@@ -24,7 +24,7 @@ FIX = [
 
 
 def _rewrite_to(monkeypatch, *, design=None, tasks=None):
-    """Fake the rewrite's edit call: it replaces the whole of design.md and
+    """Fake the rewrite's edit call: it replaces the whole of implementation-plan.md and
     tasks.md, as the staged copy holds them, with these texts (a file given
     no text is not edited). Returns the stub."""
     from build_pipeline.llm_steps import plan_review_steps
@@ -32,7 +32,7 @@ def _rewrite_to(monkeypatch, *, design=None, tasks=None):
 
     async def edit(change_dir, config, findings):
         edits = []
-        for name, text in (("design.md", design), ("tasks.md", tasks)):
+        for name, text in (("implementation-plan.md", design), ("tasks.md", tasks)):
             if text is not None:
                 old = (change_dir / name).read_text()
                 edits.append(PlanEdit(file=name, old_str=old, new_str=text))
@@ -55,7 +55,7 @@ def plan(tmp_path):
     for name, value in {
         "proposal.md": "## Capabilities\n- `one`\n- `two`\n",
         "use-cases.md": "# Use cases\nRead values",
-        "design.md": "# Design\nReturn values",
+        "implementation-plan.md": "# Design\nReturn values",
         "tasks.md": "## 1. Values\nReturn values",
         "unknowns.md": "# Unknowns\nNone",
         "rubric.md": "# Rubric\nCheck values",
@@ -238,6 +238,24 @@ def test_new_plan_revision_invalidates_size_acceptance(plan):
     (config.change_dir / "tasks.md").write_text("## 1. Larger plan\nMore work")
     owner.reconcile_plan(config, state)
     assert not state.size_accepted
+
+
+def test_new_plan_revision_invalidates_plan_approval(plan):
+    """Item E3: an approval names one plan revision; an edit to tasks.md
+    (or the plan file) clears it, as it clears `size_accepted`."""
+    from build_pipeline.state import PlanApproval
+
+    config, _, state = plan
+    owner.reconcile_plan(config, state)
+    approval = PlanApproval(
+        revision=state.spec_gen.revision, by="Ada Lovelace", commit="a" * 40
+    )
+    state.plan_approval = approval
+    owner.reconcile_plan(config, state)
+    assert state.plan_approval == approval
+    (config.change_dir / "tasks.md").write_text("## 1. Larger plan\nMore work")
+    owner.reconcile_plan(config, state)
+    assert state.plan_approval is None
 
 
 def test_repair_admission_and_outcome_share_one_ledger():
@@ -510,7 +528,9 @@ def test_recheck_verdict_blocks_on_a_listed_major_only_when_still_present(
     from build_pipeline.models import PriorAssessment
 
     given = [
-        PriorAssessment(finding_id="DA-F1", status=status, evidence="design.md:3"),
+        PriorAssessment(
+            finding_id="DA-F1", status=status, evidence="implementation-plan.md:3"
+        ),
         PriorAssessment(finding_id="DA-F2", status="resolved"),
     ]
     blocking, advisory = owner.recheck_verdict(LISTED, given, [], deterministic=[])
@@ -602,7 +622,13 @@ class Killed(BaseException):
 
 
 IDS = {"plan_review": "PR-F1"}
-PLAN_FILES = ("proposal.md", "design.md", "tasks.md", "unknowns.md", "rubric.md")
+PLAN_FILES = (
+    "proposal.md",
+    "implementation-plan.md",
+    "tasks.md",
+    "unknowns.md",
+    "rubric.md",
+)
 
 
 def _ready(plan):
@@ -798,7 +824,7 @@ async def _reference_run(plan_dir, monkeypatch, stage):
     for name, value in {
         "proposal.md": "## Capabilities\n- `one`\n- `two`\n",
         "use-cases.md": "# Use cases\nRead values",
-        "design.md": "# Design\nReturn values",
+        "implementation-plan.md": "# Design\nReturn values",
         "tasks.md": "## 1. Values\nReturn values",
         "unknowns.md": "# Unknowns\nNone",
         "rubric.md": "# Rubric\nCheck values",
@@ -946,7 +972,9 @@ async def test_S5_an_edited_plan_gets_its_rewrites_back(
     config, cm, state, run, review = await _block_after_recheck(
         monkeypatch, plan, stage
     )
-    (config.change_dir / "design.md").write_text("# Design\nEdited by the user")
+    (config.change_dir / "implementation-plan.md").write_text(
+        "# Design\nEdited by the user"
+    )
     owner.reconcile_plan(config, state)
     writer = _writer(monkeypatch)
     run, review = _install(
@@ -989,7 +1017,9 @@ async def test_S6_repeated_resumes_refuse_alike_and_a_new_block_replaces_the_old
     assert messages[0] == messages[1]
     assert config.state_file_path().read_bytes() == checkpoint
     assert review.await_count == calls
-    (config.change_dir / "design.md").write_text("# Design\nEdited by the user")
+    (config.change_dir / "implementation-plan.md").write_text(
+        "# Design\nEdited by the user"
+    )
     _writer(monkeypatch)
     run, review = _install(
         monkeypatch,
@@ -1259,7 +1289,12 @@ async def test_S11_an_old_rewrite_stopped_mid_publication_finishes_then_checks(
     journal = json.loads(path.read_text())
     journal.pop("plan-edits-1.diff")
     path.write_text(json.dumps(journal))
-    assert set(journal) <= {"design.md", "tasks.md", "unknowns.md", "rubric.md"}
+    assert set(journal) <= {
+        "implementation-plan.md",
+        "tasks.md",
+        "unknowns.md",
+        "rubric.md",
+    }
     saved = _old_audit_steps(
         config,
         BuildState.load(config.state_file_path()),
@@ -1310,6 +1345,16 @@ def test_S3_editing_tdd_epic_or_git_keeps_the_revision_and_marks_nothing_stale(p
     reconcile_kept_implementation(config, state)
     assert state.spec_gen.revision == revision
     assert state.spec_gen.stale_artifacts == stale
+
+
+def test_S3_adding_pipeline_viewer_settings_keeps_the_revision(plan):
+    config, state = _in_tdd(plan)
+    revision = state.spec_gen.revision
+    (config.specs_dir / "config.yaml").write_text(
+        CONFIG + "pipeline_viewer:\n  slack:\n    channel: dev-updates\n"
+    )
+    owner.reconcile_plan(config, state)
+    assert state.spec_gen.revision == revision
 
 
 def test_S3_adding_narrow_commands_keeps_the_revision(plan):

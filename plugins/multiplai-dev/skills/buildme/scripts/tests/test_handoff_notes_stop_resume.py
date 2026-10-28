@@ -75,7 +75,7 @@ def _setup(tmp_path, carry=True):
     project = tmp_path / "project"
     change = project / "specs" / "changes" / "test"
     change.mkdir(parents=True)
-    (change / "design.md").write_text("# Design")
+    (change / "implementation-plan.md").write_text("# Design")
     config = BuildConfig(
         project_dir=project,
         change_name="test",

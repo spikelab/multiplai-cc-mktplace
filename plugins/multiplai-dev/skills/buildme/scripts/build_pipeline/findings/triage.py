@@ -15,7 +15,7 @@ from pathlib import Path
 from multiplai_core.untrusted import defang, markdown_notice
 
 from .. import sdk
-from ..change_manager import requirement_texts
+from ..change_manager import plan_path, requirement_texts
 from ..config import BuildConfig
 from ..prompts.findings import TRIAGE_PROMPT
 from .history import earlier_text
@@ -51,7 +51,7 @@ def _requirements_text(change_dir: Path) -> str:
 
 
 def _design_text(change_dir: Path) -> str:
-    path = Path(change_dir) / "design.md"
+    path = plan_path(Path(change_dir))
     return path.read_text()[:_DOC_CHARS] if path.is_file() else "(none)"
 
 

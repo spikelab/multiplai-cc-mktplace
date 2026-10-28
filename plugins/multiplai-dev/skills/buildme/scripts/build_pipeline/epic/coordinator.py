@@ -120,6 +120,10 @@ NO_PR = "no PR opened"
 # line, never relaunched in the run; the next run's entry checks the specs again.
 SPEC_REFUSALS = (f"{readiness.MARKER_NOT_READY}:", f"{readiness.MARKER_ISSUES}:")
 WAITING_ON = "waiting on "  # a dependant of a child parked on its specs
+# A child build stopped at stop 4 for an engineer's approval of its plan
+# (`orchestrator._plan_approval_gate`): `waiting` with the marker line, never
+# relaunched in the run; the next run launches it again.
+PLAN_WAITING = f"{intake.MARKER_PLAN_WAITING}:"
 REVIEW_KINDS = ("review", "resume")
 FIX_KINDS = ("post", "fix")
 PR_FIELDS = "number,state,headRefOid,mergeable,mergeStateStatus"
@@ -621,6 +625,8 @@ class Coordinator:
         refusal = records.wait_marker(last.get("markers", [])) or ""
         if code != 0 and refusal.startswith(SPEC_REFUSALS):
             c.status, c.reason = "parked", refusal
+        elif code == 3 and refusal.startswith(PLAN_WAITING):
+            c.status, c.reason = "waiting", refusal
         elif code == 0 and c.pr:
             c.status, c.reason = "built", ""
         elif code == 0:
@@ -706,6 +712,15 @@ class Coordinator:
                         c.reason,
                     )
                     c.status, c.reason = "pending", ""
+                elif self._on_plan(c):
+                    # The approval commit may be on its branch now; its build
+                    # looks again (row S12).
+                    log.info(
+                        "EPIC child %s: launching it again to look for its plan approval (was: %s)",
+                        cid,
+                        c.reason,
+                    )
+                    c.status, c.reason = "pending", ""
         for a in records.attempts(
             self.epic_dir
         ):  # a review's or fix's park stays (C.S6, C.S12, D2.S6)
@@ -771,7 +786,7 @@ class Coordinator:
         while changed:
             changed = False
             for c in self.children.values():
-                if c.status not in ("pending", "waiting", "failed"):
+                if c.status not in ("pending", "waiting", "failed") or self._on_plan(c):
                     continue
                 # A dependency parked on its specs (or waiting on one) is a
                 # spec fix away from building: its dependants wait, not skip.
@@ -802,7 +817,7 @@ class Coordinator:
                     )
         ready = []
         for c in self.children.values():
-            if c.status not in ("pending", "waiting", "failed"):
+            if c.status not in ("pending", "waiting", "failed") or self._on_plan(c):
                 continue
             deps = [self.children[d].status for d in c.depends_on]
             if all(s == "merged" for s in deps):
@@ -813,6 +828,11 @@ class Coordinator:
             elif c.status == "pending" and ("built" in deps or "reviewing" in deps):
                 c.status = "waiting"
         return ready
+
+    @staticmethod
+    def _on_plan(c: Child) -> bool:
+        """Waiting at stop 4 for its plan's approval (`PLAN_WAITING`)."""
+        return c.status == "waiting" and c.reason.startswith(PLAN_WAITING)
 
     @staticmethod
     def _on_specs(c: Child) -> bool:

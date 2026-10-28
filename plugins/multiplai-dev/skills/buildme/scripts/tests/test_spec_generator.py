@@ -272,7 +272,7 @@ class TestResumeSkipsExisting:
         from tests.spec_fixtures import write_specs
 
         write_specs(change_dir, capabilities=("cap-a",))
-        (change_dir / "design.md").write_text("# Design\n")
+        (change_dir / "implementation-plan.md").write_text("# Design\n")
 
         config = MagicMock()
         config.reference_docs_text.return_value = ""
@@ -483,7 +483,7 @@ class TestGenerateUnknowns:
             '[project]\nname = "demo"\ndependencies = ["httpx"]\n'
         )
         (change_dir / "proposal.md").write_text("## Impact\n" + impact + "\n")
-        (change_dir / "design.md").write_text("## Decisions\nNone.\n")
+        (change_dir / "implementation-plan.md").write_text("## Decisions\nNone.\n")
 
         config = MagicMock()
         config.reference_docs_text.return_value = ""
@@ -569,7 +569,7 @@ class TestGenerateUnknowns:
         from build_pipeline.spec_generator import _generate_unknowns
 
         cm, change_dir, config, state = self._setup(tmp_path, impact="Adds `polars`.")
-        (change_dir / "design.md").write_text(
+        (change_dir / "implementation-plan.md").write_text(
             "## Decisions\nStream frames lazily; never collect() whole files.\n"
         )
         with (
@@ -671,7 +671,7 @@ class TestUnknownsGateResumeDurability:
             "## Capabilities\n- `cap-a`\n## Impact\nAdds `polars`.\n"
         )
         (change_dir / "use-cases.md").write_text("## Personas\n\n## Use cases\n")
-        (change_dir / "design.md").write_text("## Decisions\nNone.\n")
+        (change_dir / "implementation-plan.md").write_text("## Decisions\nNone.\n")
         (change_dir / "unknowns.md").write_text("# Unknowns\n\n## polars\n")
         (change_dir / "tasks.md").write_text("## 1. Slice")
         (change_dir / "rubric.md").write_text("# Rubric")
@@ -819,7 +819,7 @@ class TestUnknownsThreadedIntoTasks:
         cm.init_specs()
         change_dir = cm.create_change("test-feature")
         (change_dir / "proposal.md").write_text("## Impact\nNone.\n")
-        (change_dir / "design.md").write_text("## Decisions\nNone.\n")
+        (change_dir / "implementation-plan.md").write_text("## Decisions\nNone.\n")
         (change_dir / "unknowns.md").write_text(
             "# Unknowns\n\n## polars\n\n### Edge cases & failure modes\n"
             "- empty frame raises SchemaError\n"
@@ -1342,7 +1342,7 @@ def test_plan_rewrite_invalidates_review_and_rubric(tmp_path):
     (config.change_dir / "tasks.md").write_text(
         "## 1. Original\nImplement original behavior\n"
     )
-    (config.change_dir / "design.md").write_text("Original design")
+    (config.change_dir / "implementation-plan.md").write_text("Original design")
     (config.change_dir / "rubric.md").write_text("Old rubric")
     state = BuildState(change_name="revision", tier="standard", spec_gen=SpecGenState())
     reconcile_plan(config, state)

@@ -149,7 +149,7 @@ def _change_dir(tmp_path, *, use_cases: bool = True) -> Path:
     change_dir = tmp_path / "specs" / "changes" / "c"
     change_dir.mkdir(parents=True)
     (change_dir / "proposal.md").write_text("## Why\nBecause.\n")
-    (change_dir / "design.md").write_text("## Decisions\nOne.\n")
+    (change_dir / "implementation-plan.md").write_text("## Decisions\nOne.\n")
     (change_dir / "tasks.md").write_text("## 1. Behavior\n- [ ] do it\n")
     (change_dir / "rubric.md").write_text("## Criteria\n- correctness\n")
     if use_cases:
@@ -168,7 +168,7 @@ class TestPlanReviewComponentScope:
         comp = root / "components" / "word-frequencies"
         comp.mkdir(parents=True)
         (comp / "plan.md").write_text("# Plan\nPLAN-MARKER\n")
-        for name in ("design.md", "tasks.md", "rubric.md"):
+        for name in ("implementation-plan.md", "tasks.md", "rubric.md"):
             (comp / name).write_text("x\n")
         return comp
 
@@ -650,7 +650,7 @@ def _stage_setup(tmp_path, change="plan-c"):
     cm.init_specs()
     cm.create_change(change)
     (config.change_dir / "proposal.md").write_text("## Why\nBecause.\n")
-    (config.change_dir / "design.md").write_text("## Decisions\nOne.\n")
+    (config.change_dir / "implementation-plan.md").write_text("## Decisions\nOne.\n")
     (config.change_dir / "tasks.md").write_text("## 1. Behavior\n- [ ] do it\n")
     (config.change_dir / "rubric.md").write_text("## Criteria\n- correctness\n")
     state_path = tmp_path / "state.json"
@@ -1100,7 +1100,7 @@ class TestPlanCheckPrompt:
                 f"# Capability: {comp}\n\n## ADDED Requirements\n\n"
                 "### Requirement: R\nThe system SHALL r.\n"
             )
-            for name in ("design.md", "tasks.md", "rubric.md"):
+            for name in ("implementation-plan.md", "tasks.md", "rubric.md"):
                 (d / name).write_text("x\n")
         call = AsyncMock(return_value=PlanReviewResult(findings=[]))
         with patch.object(plan_review_steps, "agent_call_structured", call):
@@ -1365,7 +1365,7 @@ class TestPlanCheckRewrite:
 
     @pytest.mark.asyncio
     async def test_a_design_edit_leaves_tasks_byte_identical(self, tmp_path):
-        """An edit to design.md publishes it with its unknowns written again,
+        """An edit to implementation-plan.md publishes it with its unknowns written again,
         and tasks.md, which no edit names, keeps every byte."""
         from build_pipeline.models import PlanEdit, PlanEdits
 
@@ -1375,14 +1375,22 @@ class TestPlanCheckRewrite:
         review = AsyncMock(
             side_effect=[
                 PlanReviewResult(
-                    findings=[_finding(severity="critical", file_path="design.md")]
+                    findings=[
+                        _finding(
+                            severity="critical", file_path="implementation-plan.md"
+                        )
+                    ]
                 ),
                 PlanReviewResult(prior_assessments=[_RESOLVED_PR_F1]),
             ]
         )
         edit = AsyncMock(
             return_value=PlanEdits(
-                edits=[PlanEdit(file="design.md", old_str="One.", new_str="Two.")]
+                edits=[
+                    PlanEdit(
+                        file="implementation-plan.md", old_str="One.", new_str="Two."
+                    )
+                ]
             )
         )
         with (
@@ -1391,7 +1399,9 @@ class TestPlanCheckRewrite:
         ):
             await run_plan_review_stage(config.change_dir, config, state, state_path)
 
-        assert (config.change_dir / "design.md").read_text() == "## Decisions\nTwo.\n"
+        assert (
+            config.change_dir / "implementation-plan.md"
+        ).read_text() == "## Decisions\nTwo.\n"
         assert (config.change_dir / "tasks.md").read_bytes() == tasks_before
         diff = (config.change_dir / "plan-edits-1.diff").read_text()
         assert "-One." in diff and "+Two." in diff and "tasks.md" not in diff

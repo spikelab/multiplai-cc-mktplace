@@ -73,7 +73,7 @@ Before any spec is written, three explore agents analyze the existing repo in
 parallel — module structure and entry points; naming, error-handling and test
 patterns; dependencies, config loading and integration points. Their findings
 are merged into `specs/changes/<name>/codebase-analysis.md`, which is threaded
-into the `design.md` prompt so the design extends the modules the project
+into the `implementation-plan.md` prompt so the design extends the modules the project
 already has instead of proposing a parallel structure beside them. At the
 review checkpoint the pipeline prints `REVIEW:CODEBASE_ANALYSIS:<path>`.
 
@@ -105,7 +105,7 @@ documents, which are required inputs it checks and never writes:
 
 ```
 proposal.md, use-cases.md, requirements/*.md   (pm-spec's inputs)
-└── design.md  (requires: proposal + requirements)
+└── implementation-plan.md  (requires: proposal + requirements)
     └── unknowns.md  (requires: design)
         └── tasks.md  (requires: proposal + requirements + design + unknowns + use-cases)
             └── rubric.md  (requires: tasks)
@@ -163,7 +163,7 @@ real new dependency. Turn it on only after
 ### Phase 4: Plan Check
 
 One read-only check (`plan_review`: `Read`/`Grep`/`Glob`, 30 turns) reads
-`design.md` and `tasks.md` against the proposal, the plan, the specs, the use
+`implementation-plan.md` and `tasks.md` against the proposal, the plan, the specs, the use
 cases, the rubric and the code, and reports at most 10 findings, most severe
 first. It replaced the design audit, the tasks audit and the plan review, which
 read the same documents three times. Its categories:
@@ -188,7 +188,7 @@ read the same documents three times. Its categories:
 buildme's own scans for placeholders and for blocks that add no behaviour run
 beside the check. Critical and major findings, and the scans' findings, are
 numbered `PR-F1`, `PR-F2`, … and request one staged rewrite: `tasks.md`, and
-`design.md` before it unless every finding is in `tasks.md`. The rewritten set
+`implementation-plan.md` before it unless every finding is in `tasks.md`. The rewritten set
 must pass the scans before it is published. Minor findings are reported only.
 
 The recheck is told which findings the rewrite was asked to fix and gives each
@@ -313,7 +313,7 @@ documentation judgment call would be worse than the staleness it catches.
 ### Phase 10: Respec
 
 Reads `implementation-notes.md` plus the current `requirements/*.md` and
-`design.md`, and writes `specs/changes/<name>/respec.md`: a proposed delta in the
+`implementation-plan.md`, and writes `specs/changes/<name>/respec.md`: a proposed delta in the
 same ADDED/MODIFIED/REMOVED Requirements format the archive merge already
 applies, each entry carrying the note that motivated it.
 
@@ -464,7 +464,7 @@ specs/
 │       ├── .board.json            # Kanban card (column, branch, pr_url, history)
 │       ├── proposal.md            # Why this change exists (pm-spec's)
 │       ├── use-cases.md           # Who it is for, and what they can observe (pm-spec's)
-│       ├── design.md              # How to implement (architecture decisions)
+│       ├── implementation-plan.md # How to implement (architecture decisions)
 │       ├── unknowns.md            # Explainer per dependency new to this project
 │       ├── tasks.md               # Block-by-block work breakdown
 │       ├── rubric.md              # Evaluation criteria
@@ -523,7 +523,7 @@ token column.
 Capability entries are **kebab-case names only** — no descriptions. The intent
 lives in `use-cases.md`, and `expected_capabilities` harvests every backticked
 list item in this file, so a trailing description is noise it has to strip.
-Goals and Non-Goals live here, under What Changes; `design.md` no longer
+Goals and Non-Goals live here, under What Changes; `implementation-plan.md` no longer
 carries them.
 
 ### use-cases.md
@@ -584,9 +584,15 @@ The system SHALL allow password change with a valid token.
 - **THEN** HTTP 410 returned with message "Token expired"
 ```
 
-### design.md
+### implementation-plan.md
 
 Architecture decisions with rationale and alternatives considered.
+
+A change planned before this file was renamed has `design.md` instead. buildme
+reads it when there is no `implementation-plan.md`, with the same plan revision,
+so the plan is not written again. A new or rewritten plan is written as
+`implementation-plan.md`; buildme never renames or removes `design.md`, and
+logs it once as unused when both files are there.
 
 ```markdown
 ## Context

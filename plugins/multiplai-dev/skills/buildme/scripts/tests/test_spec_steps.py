@@ -67,7 +67,7 @@ class TestBuildPromptGrounding:
         "template": "TEMPLATE",
         "instruction": "INSTRUCTION",
         "context": "PROJECT",
-        "dependencies": {"proposal": "proposal.md", "design": "design.md"},
+        "dependencies": {"proposal": "proposal.md", "design": "implementation-plan.md"},
     }
 
     def test_design_prompt_includes_requirements(self, tmp_path):
@@ -80,7 +80,7 @@ class TestBuildPromptGrounding:
     def test_tasks_prompt_includes_requirements(self, tmp_path):
         config = _make_config(tmp_path, {"auth": "SCENARIO: login-flow-marker"})
         (config.change_dir / "proposal.md").write_text("proposal body")
-        (config.change_dir / "design.md").write_text("design body")
+        (config.change_dir / "implementation-plan.md").write_text("design body")
         prompt = _build_prompt("tasks", self._CONTEXT, config)
         assert "SCENARIO: login-flow-marker" in prompt
         assert "(no specs yet)" not in prompt
@@ -113,7 +113,7 @@ class TestReferenceDocsInThePrompts:
     def test_tasks_prompt_inlines_the_docs(self, tmp_path):
         config = _make_config(tmp_path, {"auth": "SCENARIO: x"})
         (config.change_dir / "proposal.md").write_text("proposal body")
-        (config.change_dir / "design.md").write_text("design body")
+        (config.change_dir / "implementation-plan.md").write_text("design body")
         prompt = _build_prompt(
             "tasks",
             self._CONTEXT,
@@ -160,7 +160,7 @@ class TestWriterReadsTheCode:
     def _config(self, tmp_path):
         config = _make_config(tmp_path, {"auth": "SCENARIO: x"})
         (config.change_dir / "proposal.md").write_text("proposal body")
-        (config.change_dir / "design.md").write_text("design body")
+        (config.change_dir / "implementation-plan.md").write_text("design body")
         return config
 
     @pytest.mark.asyncio
@@ -278,7 +278,7 @@ class TestSpecIssueLabels:
             "# Capability: billing\n\n## ADDED Requirements\n\n"
             "### Requirement: Invoices\nThe system SHALL list invoices.\n"
         )
-        for name in ("design.md", "tasks.md"):
+        for name in ("implementation-plan.md", "tasks.md"):
             (component / name).write_text("x")
         config = BuildConfig(project_dir=project, change_name="feat/billing")
         config.specs_dir = project / "specs"
@@ -286,7 +286,7 @@ class TestSpecIssueLabels:
 
     def _old(self, tmp_path) -> BuildConfig:
         config = _make_config(tmp_path, {"auth": "### Requirement: Log in\n"})
-        for name in ("proposal.md", "design.md", "tasks.md"):
+        for name in ("proposal.md", "implementation-plan.md", "tasks.md"):
             (config.change_dir / name).write_text("x")
         return config
 
@@ -366,12 +366,15 @@ class TestTasksPromptVerticalSlices:
     def test_first_pass_has_no_findings_placeholder(self, tmp_path):
         config = _make_config(tmp_path, {"auth": "req"})
         (config.change_dir / "proposal.md").write_text("proposal body")
-        (config.change_dir / "design.md").write_text("design body")
+        (config.change_dir / "implementation-plan.md").write_text("design body")
         context = {
             "template": "TEMPLATE",
             "instruction": "INSTRUCTION",
             "context": "PROJECT",
-            "dependencies": {"proposal": "proposal.md", "design": "design.md"},
+            "dependencies": {
+                "proposal": "proposal.md",
+                "design": "implementation-plan.md",
+            },
         }
         prompt = _build_prompt("tasks", context, config)
         assert "(none — first pass)" in prompt
@@ -379,12 +382,15 @@ class TestTasksPromptVerticalSlices:
     def test_regeneration_pass_injects_findings(self, tmp_path):
         config = _make_config(tmp_path, {"auth": "req"})
         (config.change_dir / "proposal.md").write_text("proposal body")
-        (config.change_dir / "design.md").write_text("design body")
+        (config.change_dir / "implementation-plan.md").write_text("design body")
         context = {
             "template": "TEMPLATE",
             "instruction": "INSTRUCTION",
             "context": "PROJECT",
-            "dependencies": {"proposal": "proposal.md", "design": "design.md"},
+            "dependencies": {
+                "proposal": "proposal.md",
+                "design": "implementation-plan.md",
+            },
         }
         prompt = _build_prompt(
             "tasks",
@@ -426,7 +432,7 @@ def _registry_config(
     for name, text in registry.items():
         (config.specs_dir / "registry" / f"{name}.md").write_text(text)
     (config.change_dir / "proposal.md").write_text("proposal body")
-    (config.change_dir / "design.md").write_text("design body")
+    (config.change_dir / "implementation-plan.md").write_text("design body")
     return config
 
 
@@ -498,7 +504,7 @@ class TestRegistryInThePrompts:
             "# Capability: billing\n\n## ADDED Requirements\n\n"
             "### Requirement: Invoices\nSPEC-MARKER\n"
         )
-        (component / "design.md").write_text("design body")
+        (component / "implementation-plan.md").write_text("design body")
         config = BuildConfig(project_dir=project, change_name="feat/billing")
         config.specs_dir = project / "specs"
         assert config.change_dir == component

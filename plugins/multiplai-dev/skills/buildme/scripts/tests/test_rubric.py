@@ -13,7 +13,7 @@ class TestDetectChangeType:
         if proposal_text:
             (change_dir / "proposal.md").write_text(proposal_text)
         if design_text:
-            (change_dir / "design.md").write_text(design_text)
+            (change_dir / "implementation-plan.md").write_text(design_text)
         return change_dir
 
     def test_backend_from_api_keywords(self, tmp_path):

@@ -333,7 +333,9 @@ class TestAssembleContext:
         change_dir.mkdir(parents=True)
 
         # Design doc
-        (change_dir / "design.md").write_text("# Design\nSome design content.")
+        (change_dir / "implementation-plan.md").write_text(
+            "# Design\nSome design content."
+        )
 
         # Requirements (BDD scenarios) — flat one file per capability
         req_dir = change_dir / "requirements"
@@ -464,7 +466,7 @@ class TestContextConstraintsAndInterfaces:
         specs_root = project_dir / "specs"
         change_dir = specs_root / "changes" / "c"
         change_dir.mkdir(parents=True)
-        (change_dir / "design.md").write_text(design_text)
+        (change_dir / "implementation-plan.md").write_text(design_text)
 
         config = BuildConfig(
             project_dir=project_dir,
@@ -1073,7 +1075,7 @@ class TestRunBlockTDD:
         specs_root = project_dir / "specs"
         change_dir = specs_root / "changes" / "test"
         change_dir.mkdir(parents=True)
-        (change_dir / "design.md").write_text("# Design")
+        (change_dir / "implementation-plan.md").write_text("# Design")
 
         config = BuildConfig(
             project_dir=project_dir,
@@ -1465,7 +1467,7 @@ class TestBlockRefactorVerification:
         project_dir.mkdir()
         change_dir = project_dir / "specs" / "changes" / "test"
         change_dir.mkdir(parents=True)
-        (change_dir / "design.md").write_text("# Design")
+        (change_dir / "implementation-plan.md").write_text("# Design")
         (project_dir / "module.py").write_text("x = 1\n")
         _git_init_project(project_dir)
 
@@ -3931,7 +3933,7 @@ class TestWholeChangeRefactor:
         project_dir.mkdir()
         change_dir = project_dir / "specs" / "changes" / "feat"
         change_dir.mkdir(parents=True)
-        (change_dir / "design.md").write_text("# Design")
+        (change_dir / "implementation-plan.md").write_text("# Design")
         (change_dir / "rubric.md").write_text("# Rubric")
         (project_dir / "module.py").write_text("x = 1\n")
         baseline = _git_init_project(project_dir)
@@ -4614,7 +4616,7 @@ class TestImplementationNotesLoop:
         specs_root = project_dir / "specs"
         change_dir = specs_root / "changes" / "test"
         change_dir.mkdir(parents=True)
-        (change_dir / "design.md").write_text("# Design")
+        (change_dir / "implementation-plan.md").write_text("# Design")
 
         config = BuildConfig(
             project_dir=project_dir,
@@ -5071,7 +5073,9 @@ class TestRedExpected:
         monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
         project = root / "project"
         (project / "specs" / "changes" / "test").mkdir(parents=True)
-        (project / "specs" / "changes" / "test" / "design.md").write_text("# Design")
+        (project / "specs" / "changes" / "test" / "implementation-plan.md").write_text(
+            "# Design"
+        )
         (project / "module.py").write_text(
             "def add(a, b):\n    raise NotImplementedError\n"
         )

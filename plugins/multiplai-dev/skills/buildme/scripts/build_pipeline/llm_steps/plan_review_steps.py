@@ -1,4 +1,4 @@
-"""buildme's one planning check: a read-only review of design.md and tasks.md.
+"""buildme's one planning check: a read-only review of implementation-plan.md and tasks.md.
 
 It replaced the design audit, the tasks audit and the plan review, which read
 the same documents three times. Each rewrite edits the plan in place through
@@ -19,7 +19,7 @@ from multiplai_core.specs import change_root
 
 from build_pipeline.budget import BudgetExceededError
 
-from ..change_manager import requirement_sources, spec_issue_ref
+from ..change_manager import plan_path, requirement_sources, spec_issue_ref
 from ..models import PlanEdits, PlanReviewFinding, PlanReviewResult
 from ..prompts.plan_review import (
     MAX_PLAN_FINDINGS,
@@ -393,7 +393,7 @@ async def run_plan_review(
     prior: list[dict] | None = None,
     changed_lines: str = "",
 ) -> PlanReviewResult:
-    """Check design.md and tasks.md against the specs, the use cases, the
+    """Check implementation-plan.md and tasks.md against the specs, the use cases, the
     rubric, the constraints and the code (`PLAN_CHECK_PROMPT`).
 
     Runs as a read-only subagent on `config.model_for("plan_review")` and
@@ -421,7 +421,7 @@ async def run_plan_review(
                 component=root != Path(change_dir),
             ),
             specs_content=specs or "(no specs)",
-            design_content=_read(change_dir / "design.md", "(no design)"),
+            design_content=_read(plan_path(change_dir), "(no implementation plan)"),
             use_cases_content=use_cases,
             tasks_content=_read(change_dir / "tasks.md", "(no tasks)"),
             rubric_content=_read(change_dir / "rubric.md", "(no rubric)"),
@@ -454,7 +454,7 @@ async def run_plan_review(
 
 
 async def run_plan_edit(change_dir: Path, config, findings: list[dict]) -> PlanEdits:
-    """Ask for the exact replacements in design.md and tasks.md that fix these
+    """Ask for the exact replacements in implementation-plan.md and tasks.md that fix these
     numbered findings (`PLAN_EDIT_PROMPT`). *change_dir* is the staged copy
     the edits will be applied to. Read-only tools, on the `spec` stage's model
     under `plan_rewrite`; `spec_generator.apply_plan_edits` applies them."""
@@ -465,7 +465,7 @@ async def run_plan_edit(change_dir: Path, config, findings: list[dict]) -> PlanE
     )
     prompt = PLAN_EDIT_PROMPT.format(
         findings=findings_lines(findings),
-        design_content=_read(change_dir / "design.md", "(no design)"),
+        design_content=_read(plan_path(change_dir), "(no implementation plan)"),
         tasks_content=_read(change_dir / "tasks.md", "(no tasks)"),
         proposal_content=_read(root / "proposal.md", "(no proposal)"),
         plan_section=plan_section(
@@ -583,7 +583,7 @@ async def run_plan_review_stage(
     state,
     state_path: Path,
 ) -> list[PlanReviewFinding]:
-    """Run the plan check and fold its findings back into design.md and tasks.md.
+    """Run the plan check and fold its findings back into implementation-plan.md and tasks.md.
 
     The check's model findings and the deterministic scans
     (`scan_placeholders`, `scan_no_behaviour_blocks`) are read together.

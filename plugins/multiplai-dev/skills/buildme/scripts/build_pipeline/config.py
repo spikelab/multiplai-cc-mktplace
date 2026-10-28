@@ -1121,6 +1121,13 @@ class BuildConfig:
     # its review loop at once, as before.
     fix_on_pass: bool = True
 
+    # Stop 4: an engineer approves the implementation plan before TDD starts
+    # (`review.plan_approval`). The build stops after the plan check and the
+    # size gate until the build's branch holds an approval commit for the
+    # current plan revision (`orchestrator._plan_approval_gate`). Off by
+    # default, so a build without the key runs as before.
+    plan_approval: bool = False
+
     # Per-build ceilings from `budget:` in specs/config.yaml. None = unlimited
     # (the pre-budget behavior).
     budget_max_tokens: int | None = None
@@ -1556,6 +1563,16 @@ class BuildConfig:
 
         self._load_epic(_cfg_mapping(data.get("epic"), "epic"))
 
+        review_cfg = _cfg_mapping(data.get("review"), "review")
+        approval = review_cfg.get("plan_approval", False)
+        if not isinstance(approval, bool):
+            log.warning(
+                "Invalid review.plan_approval value %r in config.yaml — want true | false; using false",
+                approval,
+            )
+            approval = False
+        self.plan_approval = approval
+
         specs: dict[str, str] = {}
         for key, spec in _cfg_mapping(data.get("models"), "models").items():
             key = str(key)
@@ -1811,7 +1828,9 @@ class BuildConfig:
 
     @property
     def design_path(self) -> Path:
-        return self.change_dir / "design.md"
+        from .change_manager import plan_path
+
+        return plan_path(self.change_dir)
 
     @property
     def tasks_path(self) -> Path:

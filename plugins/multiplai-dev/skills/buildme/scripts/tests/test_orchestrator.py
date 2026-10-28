@@ -473,7 +473,7 @@ class TestSpecGenerationReloadOnlyMovesForward:
         cm.init_specs()
         cm.create_change("reload")
         (config.change_dir / "proposal.md").write_text("## Why\nBecause.")
-        (config.change_dir / "design.md").write_text("## Decisions\nNone.")
+        (config.change_dir / "implementation-plan.md").write_text("## Decisions\nNone.")
         (config.change_dir / "tasks.md").write_text("## 1. Block")
         state = BuildState(
             change_name="reload",
@@ -2038,7 +2038,7 @@ class TestPlanReviewPhase:
         cm.init_specs()
         cm.create_change(change)
         (config.change_dir / "proposal.md").write_text("## Why\nShip it.\n")
-        (config.change_dir / "design.md").write_text("## Decisions\nNone.")
+        (config.change_dir / "implementation-plan.md").write_text("## Decisions\nNone.")
         (config.change_dir / "tasks.md").write_text("## Block 1\n- [ ] do it\n")
         (config.change_dir / "rubric.md").write_text("## Criteria\n- correctness\n")
         state = BuildState(

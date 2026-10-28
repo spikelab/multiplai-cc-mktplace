@@ -15,7 +15,7 @@ Driven, end to end, by a real build:
   * **Shaping** — bootstrap → research → codebase analysis → spec
     generation (design, tasks, from pm-spec's proposal and requirements).
   * **Planning** — design audit → plan review → the review
-    checkpoint (design.md / tasks.md / rubric.md, audited and reviewed).
+    checkpoint (implementation-plan.md / tasks.md / rubric.md, audited and reviewed).
   * **In Development** — the TDD build, the documentation update, and the
     respec pass.
   * **In Review** — entered *only* when the PUBLISH phase has pushed the

@@ -523,11 +523,11 @@ class PlanReviewResult(BaseModel):
 
 
 class PlanEdit(BaseModel):
-    """One exact replacement in design.md or tasks.md, which
+    """One exact replacement in implementation-plan.md or tasks.md, which
     `spec_generator.apply_plan_edits` applies. `old_str` must occur exactly
     once in the file as the edits before it leave it."""
 
-    file: Literal["design.md", "tasks.md"]
+    file: Literal["implementation-plan.md", "tasks.md"]
     old_str: str
     new_str: str
 

@@ -39,7 +39,7 @@ FINDINGS_RULE = f"""\
 PLAN_CHECK_PROMPT = """\
 You are a second engineer reviewing an implementation plan before anyone builds it.
 
-The plan is `design.md` and `tasks.md`. Your job is to review it the way you
+The plan is `implementation-plan.md` and `tasks.md`. Your job is to review it the way you
 would review a colleague's plan on a pull request: read it against the
 documents it has to agree with and against the code it changes, and leave
 findings someone can act on. You are NOT rewriting the plan and you are NOT
@@ -222,7 +222,7 @@ split as done, and do not suggest the plan be edited to reflect it.
 ## Fixes That Need a Requirements Change
 
 The proposal and the specs are fixed inputs here: the rewrite this check drives
-changes only design.md and tasks.md. When a finding can only be fixed by
+changes only implementation-plan.md and tasks.md. When a finding can only be fixed by
 changing a requirement (it is infeasible, or contradicts another requirement or
 the codebase, or a needed behaviour is missing from the specs), set
 `needs_requirements_change` to true and name the requirement in `requirement`
@@ -279,7 +279,7 @@ Return ONLY a JSON object:
 }}
 ```
 
-`file_path` is `design.md` or `tasks.md`: the document the fix belongs in.
+`file_path` is `implementation-plan.md` or `tasks.md`: the document the fix belongs in.
 `proposed_cut` is used ONLY by `oversized-plan` findings and is `[]` everywhere
 else. Its shape:
 

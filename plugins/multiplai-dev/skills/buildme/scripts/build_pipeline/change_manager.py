@@ -16,7 +16,8 @@ Directory layout:
           .change.yaml       plan.md, specs.md and ready record, and is built
           plan.md            as `<name>/<id>`; buildme's files for it go here
           specs.md
-        design.md          — buildme's, from here down
+        implementation-plan.md — buildme's, from here down (the old name in a
+                             change planned before the rename: `plan_path`)
         unknowns.md
         tasks.md
         rubric.md
@@ -148,7 +149,7 @@ _GLOBAL_CONSTRAINTS_RE = re.compile(
 
 
 def extract_global_constraints(design_text: str) -> str:
-    """Verbatim body of design.md's `## Global Constraints` section ("" when
+    """Verbatim body of the plan's `## Global Constraints` section ("" when
     absent). These are the project-wide rules (version floors, naming, exact
     literals) every block's agents must honor — threaded into agent and
     review prompts by the TDD engine."""
@@ -164,13 +165,40 @@ INPUTS: dict[str, str] = {
     "requirements": "requirements/*.md",
 }
 
+# The implementation plan buildme writes (artifact `design`). A change planned
+# before the rename holds `OLD_PLAN_FILE` instead, which `plan_path` reads.
+PLAN_FILE = "implementation-plan.md"
+OLD_PLAN_FILE = "design.md"
+# The plan's key in `SpecGenState.artifact_hashes` and `STEP_INPUTS`. It keeps
+# the old file name: the revisions saved by a build planned before the rename
+# hash this key, so renaming it would mark every plan in flight stale.
+PLAN_HASH_KEY = OLD_PLAN_FILE
+
+# Old plan files already reported as unused, so each is named once.
+_UNUSED_REPORTED: set[Path] = set()
+
+
+def plan_path(change_dir: Path) -> Path:
+    """The change's implementation plan: `PLAN_FILE`, or `OLD_PLAN_FILE` when
+    only that is there. With both, `PLAN_FILE` is used and the old file is
+    logged once as unused. buildme never renames or removes the old file."""
+    new = Path(change_dir) / PLAN_FILE
+    old = Path(change_dir) / OLD_PLAN_FILE
+    if new.is_file():
+        if old.is_file() and old not in _UNUSED_REPORTED:
+            _UNUSED_REPORTED.add(old)
+            log.warning("%s is unused: the plan is %s", old, new)
+        return new
+    return old if old.is_file() else new
+
+
 # buildme's planning artifacts. Insertion order is load-bearing:
 # `artifact_status` resolves each node against the statuses it has already
 # computed, so every node must appear AFTER the nodes it requires or it reads
 # its dependency as absent and reports BLOCKED. A requirement may also name an
 # input (`INPUTS`), done when its file is there.
 ARTIFACT_DAG: dict[str, dict] = {
-    "design": {"generates": "design.md", "requires": ["proposal", "requirements"]},
+    "design": {"generates": PLAN_FILE, "requires": ["proposal", "requirements"]},
     # Explainer gate (B1): before the build depends on anything new to this
     # project, write down its contract and edge cases. Sits between design and
     # tasks so the edge cases are on disk while the task breakdown is written —
@@ -428,6 +456,8 @@ class ChangeManager:
                 dep_paths[dep_id] = ", ".join(
                     str(m.relative_to(change_dir)) for m in matches
                 )
+            elif dep_id == "design":
+                dep_paths[dep_id] = plan_path(change_dir).name
             else:
                 dep_paths[dep_id] = dep_generates
 
@@ -473,7 +503,7 @@ class ChangeManager:
         sections (`valid_specs_text`), or, in a change with no `specs.md`,
         every capability the proposal names has a valid `requirements/<cap>.md`.
         The proposal and use cases of a component are its change's
-        (`change_root`)."""
+        (`change_root`). The plan is `plan_path`'s, the old name included."""
         if generates == "requirements/*.md":
             specs = change_dir / "specs.md"
             if specs.is_file():
@@ -488,7 +518,9 @@ class ChangeManager:
             )
         if generates in (INPUTS["proposal"], INPUTS["use-cases"]):
             change_dir = change_root(change_dir)
-        path = change_dir / generates
+        path = (
+            plan_path(change_dir) if generates == PLAN_FILE else change_dir / generates
+        )
         return path.is_file() and bool(path.read_text().strip())
 
     def _merge_delta_requirements(self, change_dir: Path) -> None:

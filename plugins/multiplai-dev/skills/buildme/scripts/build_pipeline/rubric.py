@@ -12,7 +12,7 @@ from pathlib import Path
 
 from multiplai_core.specs import change_root
 
-from .change_manager import requirement_texts
+from .change_manager import plan_path, requirement_texts
 from .prompts.rubric_prompts import RUBRIC_PROMPT
 from .sdk import llm_call
 
@@ -115,11 +115,12 @@ async def generate_rubric(change_dir: Path, config) -> str:
 def _gather_text(change_dir: Path) -> str:
     """Gather text from all artifacts for keyword analysis."""
     parts = []
-    for filename in ["proposal.md", "design.md", "tasks.md"]:
-        # A component's proposal is its change's.
-        path = (
-            change_root(change_dir) if filename == "proposal.md" else change_dir
-        ) / filename
+    # A component's proposal is its change's.
+    for path in [
+        change_root(change_dir) / "proposal.md",
+        plan_path(change_dir),
+        change_dir / "tasks.md",
+    ]:
         if path.exists():
             parts.append(path.read_text())
 
