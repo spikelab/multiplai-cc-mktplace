@@ -761,6 +761,18 @@ def parse_parallel(value: object) -> str:
     return "auto"
 
 
+def parse_whole_suite(value: object) -> str:
+    """`tdd.whole_suite` from config.yaml as "per_block" or "end"; anything
+    else warns and is "per_block"."""
+    text = str(value).strip().lower()
+    if text in ("per_block", "end"):
+        return text
+    log.warning(
+        "Unrecognized tdd.whole_suite value %r in config.yaml — using per_block", value
+    )
+    return "per_block"
+
+
 def parse_narrow_commands(value: object, project_dir: Path) -> list[NarrowCommand]:
     """`tdd.narrow_commands` from config.yaml: one entry per directory with a
     `dir` inside the project, a `command` with no `;`, `&` or `|`, and an
@@ -857,6 +869,10 @@ class BuildConfig:
     # files and the tests named after its changed modules (narrow_tests.py);
     # the gates that decide whether work is done keep `test_command`.
     narrow_tests: bool = True
+    # tdd.whole_suite: "per_block" runs `test_command` in every block's gates;
+    # "end" narrows those gates to the block's tests and runs `test_command`
+    # once after the last block (`tdd_engine._run_end_suite`).
+    whole_suite: str = "per_block"
     # tdd.narrow_commands: for a repo whose tests sit in several directories
     # with different runners, one runner command per directory; a block's
     # loop narrows each one in its own directory (`narrow_tests.narrow_parts`).
@@ -1400,6 +1416,12 @@ class BuildConfig:
         self.narrow_commands = parse_narrow_commands(
             tdd.get("narrow_commands"), self.project_dir
         )
+        self.whole_suite = parse_whole_suite(tdd.get("whole_suite", "per_block"))
+        if self.whole_suite == "end" and not self.narrow_tests:
+            log.warning(
+                "tdd.whole_suite is end but tdd.narrow_tests is false — every "
+                "block's test run falls back to the whole test command"
+            )
         self.parallel_tests = parse_parallel(tdd.get("parallel", "auto"))
         self.test_timeout = parse_test_timeout(tdd.get("test_timeout"))
         for key in ("test_writer_max_turns", "mutation_test_writer_max_turns"):
