@@ -260,3 +260,54 @@ def test_push_route(rw):
         "unpushed": False,
         "push_error": None,
     }
+
+
+def test_questions_are_shown_to_everyone_with_the_asker(rw):
+    from pipeline_viewer.models import OutboxRow
+
+    client, fx = rw
+    _, asked = client.post(
+        "/api/ask",
+        {"name": "export-csv", "stop": 1, "doc": "proposal.md", "section": "Why", "text": "Why now?"},
+    )  # fmt: skip
+    # Eli, who did not ask, sees Pat's question, then the answer.
+    status, body = client.get("/api/questions?name=export-csv&stop=1", token=ENG_TOKEN)
+    assert status == 200
+    [q] = body["questions"]
+    assert q["id"] == asked["id"] and q["author"]["name"] == "Pat Planner"
+    assert q["text"] == "Why now?" and q["answer"] is None and q["done"] is False
+    Mailbox(fx["box"]).append_outbox(
+        OutboxRow(
+            reply_to=asked["id"], ts="2026-01-02T11:00:00Z", text="Because.", done=True
+        )
+    )
+    [q] = client.get("/api/questions?name=export-csv", token=ENG_TOKEN)[1]["questions"]
+    assert q["answer"] == "Because." and q["answered_at"] == "2026-01-02T11:00:00Z"
+    assert client.get("/api/questions?name=export-csv&stop=2")[1]["questions"] == []
+    assert client.get("/api/questions?name=nope")[0] == 404
+    assert client.get("/api/questions?name=export-csv&stop=9")[0] == 400
+    assert client.get("/api/questions?name=export-csv", token=None)[0] == 401
+
+
+def test_a_write_records_answers_still_missing_from_git(rw):
+    from pipeline_viewer.models import OutboxRow
+
+    client, fx = rw
+    _, asked = client.post(
+        "/api/ask",
+        {"name": "export-csv", "stop": 1, "doc": "proposal.md", "section": "Why", "text": "Why now?"},
+    )  # fmt: skip
+    Mailbox(fx["box"]).append_outbox(
+        OutboxRow(reply_to=asked["id"], ts="t", text="Because.", done=True)
+    )
+    status, _ = client.post("/api/ack", {"name": "export-csv", "stop": 1})
+    assert status == 200
+    log = git(fx["export-csv"], "log", "--format=%s%n%(trailers)")
+    assert f"Question: {asked['id']}" in log
+    # Once only: a second write adds no second answer commit.
+    client.post(
+        "/api/comment",
+        {"name": "export-csv", "stop": 1, "doc": "proposal.md", "section": "Why", "text": "Ok."},
+    )  # fmt: skip
+    log = git(fx["export-csv"], "log", "--format=%(trailers)")
+    assert log.count(f"Question: {asked['id']}") == 1

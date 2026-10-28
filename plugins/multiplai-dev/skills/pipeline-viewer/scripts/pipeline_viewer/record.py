@@ -11,6 +11,7 @@ the repo when it has the branch checked out; else it refuses).
 | approve | empty commit, `Approved-by` |
 | rework | `write_issues` (stops 1-3) or `review/stop-4.md` (stop 4), then a commit of those files, `Rework-requested-by` |
 | decided | empty commit, `Decided-by: agent`, `Reason` |
+| answer | appends a question and the session's answer to `review/stop-<n>.md` and commits only that file, `Answered-for: <asker>`, `Question: <id>`; committer only, no `--author` |
 
 Each commit's subject starts `review(<name>):` and its trailers carry
 `Stop: <n>` and `Revision: <the stop's revision>`. A person's commit names
@@ -423,3 +424,95 @@ def comment(
         )
         sha = _commit(place, message, person, [rel])
         return _finish(place, sha, False, rel)
+
+
+# --- answers to questions asked on the page ------------------------------------------
+
+
+def _quote(text: str) -> str:
+    """Markdown quote, so a `## ` line in the text cannot start a new block."""
+    return "\n".join("> " + line if line else ">" for line in text.strip().splitlines())
+
+
+def recorded_questions(place: Place) -> set[str]:
+    """Ids of the questions whose answer is already committed on the branch."""
+    if place.write is None:
+        return set()
+    return {
+        c.trailers["question"]
+        for c in gitio.review_commits(place.write.checkout, place.name)
+        if c.trailers.get("question")
+    }
+
+
+def answer(place: Place, status_fn, q: dict, agent: str) -> WriteResult:
+    """Append question *q* (from `questions.questions`) and its final answer
+    to the stop's review file, and commit that file. The commit names no
+    author: the committer runs the session; `Answered-for` names the asker.
+    Once per question id: a second call finds the `Question:` trailer and
+    only pushes. Refusals as for a comment (S4, S6, no checkout, a stop not
+    reached); the answer is in the outbox either way (row S17)."""
+    n = q["stop"]
+    asker = (q.get("author") or {}).get("name") or "someone"
+    with _WRITE_LOCK:
+        prepare(place)
+        found = next(
+            (
+                c.sha
+                for c in reversed(gitio.review_commits(_checkout(place), place.name))
+                if c.trailers.get("question") == q["id"]
+            ),
+            None,
+        )
+        if found:
+            return _finish(place, found, True)
+        status = status_fn()
+        s = _stop(status, n)
+        _must_be_reached(status, s)
+        section = " ".join(str(q.get("section") or "the whole stop").split())
+        heading = f"Question: {q.get('doc') or 'all documents'} — {section}"
+        path = _checkout(place) / CHANGES / place.name / "review" / f"stop-{n}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        existing = (
+            path.read_text(encoding="utf-8")
+            if path.is_file()
+            else f"# Review of stop {n}: {place.name}\n"
+        )
+        block = (
+            f"\n## {heading}\n\n{asker}, {q.get('asked_at')}, asked:\n\n{_quote(q['text'])}\n"
+            f"\n{agent}, {q.get('answered_at')}, answered:\n\n{_quote(q.get('answer') or '')}\n"
+        )
+        tmp = path.with_name(f".{path.name}.tmp")
+        tmp.write_text(existing.rstrip("\n") + "\n" + block, encoding="utf-8")
+        tmp.replace(path)
+        rel = _rel(place, "review", f"stop-{n}.md")
+        short = section[:80].replace('"', "'")
+        message = _message(
+            f'review({place.name}): {agent} answered {asker} on stop {n} section "{short}"',
+            [
+                ("Stop", str(n)),
+                ("Answered-for", asker),
+                ("Question", q["id"]),
+                *_revision(s),
+            ],
+        )
+        sha = _commit(place, message, None, [rel])
+        return _finish(place, sha, False, rel)
+
+
+def record_answers(
+    place: Place, status_fn, qs: list[dict], agent: str
+) -> list[tuple[str, WriteResult | None, str | None]]:
+    """Record every answered question of *qs* not yet in git (row S17):
+    (id, result, refusal message). Stops at the first refusal, which the
+    next write retries."""
+    from .questions import unrecorded
+
+    out: list[tuple[str, WriteResult | None, str | None]] = []
+    for q in unrecorded(qs, recorded_questions(place)):
+        try:
+            out.append((q["id"], answer(place, status_fn, q, agent), None))
+        except Refused as ref:
+            out.append((q["id"], None, ref.message))
+            break
+    return out

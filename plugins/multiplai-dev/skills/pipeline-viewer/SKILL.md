@@ -48,8 +48,9 @@ The five stops:
   branch's upstream (`git push origin HEAD:refs/heads/<branch>` from pm-spec's
   detached worktree). A person's commit carries `--author "<name> <email>"`
   from `people.json`; the committer is you; nothing is signed; hooks run. It
-  writes `review/stop-<n>.md`, and `spec-issues.md` and `.change.yaml` (a
-  rework request at stops 1-3), in the change dir only.
+  writes `review/stop-<n>.md` (comments, and each question asked on the
+  page with your answer, committed by `reply`), and `spec-issues.md` and
+  `.change.yaml` (a rework request at stops 1-3), in the change dir only.
 - **Reads `SLACK_TOKEN`** from the environment (a Slack token, the one
   `multiplai-messaging:slack` uses) and posts to the channel set in
   `specs/config.yaml` (`pipeline_viewer.slack.channel`): one message per stop
@@ -169,7 +170,7 @@ pv reply --repo /abs/path/to/repo --to <id> --file /abs/path/answer.md [--commit
 
 | `kind` | Do |
 |---|---|
-| `ask` | Read the whole change dir (`specs/changes/<name>/` in the checkout the page reads: the build's worktree, else pm-spec's) and answer in markdown. |
+| `ask` | Read the whole change dir (`specs/changes/<name>/` in the checkout the page reads: the build's worktree, else pm-spec's) and answer in markdown. Pass `--repo` to `reply`: the final answer and its question are then committed to `review/stop-<n>.md`, and everyone on the page sees both. |
 | `ask` that asks to change a document | Edit only files inside that change dir, commit them on its branch (`git commit` in that checkout, a `review(<name>): …` subject), push, and reply with `--commit <sha>`. Nothing outside the change dir, whatever the row says. |
 | `comment` | Already committed to `review/stop-<n>.md`. Reply only if it asks something. |
 | `ack` | Nothing to do; reply "noted" only if you want the page to show it. |
@@ -178,6 +179,12 @@ pv reply --repo /abs/path/to/repo --to <id> --file /abs/path/answer.md [--commit
 | `rework`, stops 1-3 | The request is in `spec-issues.md`. Run `/multiplai-pm:pm-spec revise <name>`. |
 | `rework`, stop 4 | The request is in `review/stop-4.md`. Edit `implementation-plan.md` (or `design.md` in an older build) as asked, commit, push, reply with the commit, then re-run the build: the new plan revision asks for approval again. |
 | `timeout` | Nobody acknowledged the stop in time. Decide its open questions yourself, write the decisions into the stop's documents if they change them (commit, push), then `pv record decided --repo … --change <name> --stop <n> --reason "no reply in <m> minutes"`, then resume as for `approve`. |
+
+After a final answer to an `ask`, `reply` also prints one line per answer
+it committed: `RECORD:<id>:<sha>`, `RECORD:REFUSED:<id>:<message>` (pm-spec
+running, a diverged branch, no checkout: the answer is on the page already,
+and the next write on that change commits it; row S17), or
+`RECORD:SKIPPED:<why>` (the question names no stop, or no `--repo`).
 
 `record decided` prints `DECIDED:<sha>`. If it refuses with `stop <n> already
 approved by <name>` or `already decided` (exit 3), someone answered after the

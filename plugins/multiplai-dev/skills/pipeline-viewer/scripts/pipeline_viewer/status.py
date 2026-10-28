@@ -66,6 +66,7 @@ TRAILER_KINDS = {
     "rework-requested-by": "rework",
     "acknowledged-by": "ack",
     "commented-by": "comment",
+    "answered-for": "answer",
 }
 
 

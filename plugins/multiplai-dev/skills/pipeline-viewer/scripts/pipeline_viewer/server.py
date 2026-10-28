@@ -39,6 +39,7 @@ from viewer_kit.request_checks import Reject, check_origin, check_person, read_j
 
 from . import config as config_mod
 from . import deadlines, gitio, record, status
+from . import questions as questions_mod
 from .models import ChangeStatus, InboxRow
 from .places import Place, list_changes
 from .slack import Slack
@@ -270,6 +271,7 @@ def make_handler(viewer: Viewer):
                 "/api/doc": lambda: self._doc(q),
                 "/api/diff": lambda: self._diff(q),
                 "/api/poll": lambda: self._poll(q),
+                "/api/questions": lambda: self._questions(q),
             }
             posts = {
                 "/api/ask": lambda: self._ask(body, person),
@@ -396,6 +398,38 @@ def make_handler(viewer: Viewer):
             rows, n = viewer.box.read_outbox(since)
             self._json({"answers": rows, "n": n})
 
+        def _questions(self, q: dict) -> None:
+            place = self._place(q.get("name"))
+            stop = q.get("stop")
+            if stop not in (None, ""):
+                stop = _int(int(stop) if stop.isdigit() else -1, "stop", 1, 5)
+            else:
+                stop = None
+            qs = questions_mod.questions(
+                viewer.box.read_inbox(),
+                viewer.box.read_outbox(0)[0],
+                place.name,
+                stop,
+            )
+            self._json({"questions": qs})
+
+        def _record_answers(self, place: Place, cfg) -> None:
+            """Row S17: answers the session gave while their commit was
+            refused go into git on the next write. Never fails the write."""
+            qs = questions_mod.questions(
+                viewer.box.read_inbox(), viewer.box.read_outbox(0)[0], place.name
+            )
+            try:
+                done = record.record_answers(
+                    place, lambda: viewer.status_of(place, cfg), qs, viewer.agent
+                )
+            except Exception:
+                log.exception("recording answers on %s failed", place.name)
+                return
+            for qid, _res, refused in done:
+                if refused:
+                    log.warning("answer %s not recorded yet: %s", qid, refused)
+
         def _row(
             self,
             kind,
@@ -481,6 +515,7 @@ def make_handler(viewer: Viewer):
                 title = _text(body, "title", MAX_TITLE, required=False)
                 title = title or f"Rework requested at stop {n} by {person.name}"
                 res = record.rework(place, fresh, person, n, roles, title, text)
+            self._record_answers(place, cfg)
             revision = fresh().stops[n - 1].revision
             row = self._row(
                 kind,

@@ -20,7 +20,9 @@ and `pending:` lines, then nothing per request. No command prints a token.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
+import io
 import json
 import os
 import re
@@ -44,6 +46,7 @@ from viewer_kit.request_checks import public_origin
 
 from . import buildme, record, server, status
 from . import config as config_mod
+from . import questions as questions_mod
 from .models import OutboxRow
 from .places import list_changes
 from .slack import Slack, stop_text
@@ -311,7 +314,43 @@ def cmd_reply(args) -> int:
         print(f"could not write the answer: {exc}", file=sys.stderr)
         return EXIT_USAGE
     print(f"{'partial' if args.more else 'final'} answer for {args.to} -> {box.outbox}")
+    if not args.more:
+        _record_answer(args, box)
     return 0
+
+
+def _record_answer(args, box: Mailbox) -> None:
+    """Put the question and its answer in the stop's review file, in git,
+    with any earlier answer on the same change whose commit was refused
+    (row S17). The answer is already in the outbox, so a refusal is only
+    reported: `RECORD:<id>:<sha>`, `RECORD:SKIPPED:<why>`,
+    `RECORD:REFUSED:<id>:<message>` (retried on the next write)."""
+    row = next((r for r in box.read_inbox() if r.get("id") == args.to), {})
+    if row.get("kind") != "ask":
+        return
+    if row.get("stop") is None:
+        print("RECORD:SKIPPED:the question names no stop")
+        return
+    args.change = row.get("change")
+    if _repo_of(args, box) is None:
+        print("RECORD:SKIPPED:give --repo to record the answer in git")
+        return
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        found = _status_for(args, box)
+    if found is None:
+        print(f"RECORD:SKIPPED:{err.getvalue().strip()}")
+        return
+    place, _cfg, _people, fresh = found
+    qs = questions_mod.questions(box.read_inbox(), box.read_outbox(0)[0], place.name)
+    agent = getattr(args, "agent", None) or "Claude"
+    for qid, res, refused in record.record_answers(place, fresh, qs, agent):
+        if refused:
+            print(f"RECORD:REFUSED:{qid}:{refused}")
+        else:
+            print(f"RECORD:{qid}:{res.commit}")
+            if res.unpushed:
+                print(f"UNPUSHED:{res.push_error or 'push failed'}")
 
 
 def cmd_pending(args) -> int:

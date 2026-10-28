@@ -151,8 +151,10 @@ The 409 messages, exactly:
  "revision": "3f2a…", "reason": null}
 ```
 
-`kind`: `comment | ack | approve | rework | decided`. `reason` is set on
-`decided` (`no reply in <m> minutes`).
+`kind`: `comment | ack | approve | rework | decided | answer`. `reason` is set on
+`decided` (`no reply in <m> minutes`). `answer` is the session's answer to a
+question asked on the page, written into `review/stop-<n>.md`; its `by` is
+the person who asked. An answer decides nothing: it never changes `state`.
 
 ### PmSpecStatus
 
@@ -285,6 +287,34 @@ Missing: 404. Over 1 MiB: 413. Text is UTF-8 with invalid bytes replaced.
 `{"answers": [OutboxRow, …], "n": <total rows>}`: the session's answers after
 the first `since` rows. The page keeps `n` and sends it next time; after a
 server restart it starts again from `since=0`.
+
+### `GET /api/questions?name=<name>[&stop=<n>]`
+
+Every question asked on the page about the change (at stop `n`, when
+given), oldest first, with the session's answer so far. Everyone invited
+sees every question.
+
+```json
+{"questions": [{"id": "q-…", "change": "add-export", "stop": 1,
+  "doc": "proposal.md", "section": "Why",
+  "author": {"name": "Ada Example", "role": "pm"},
+  "asked_at": "…", "text": "Why now?",
+  "answer": "markdown" | null, "answered_at": "…" | null,
+  "done": true, "commit": "sha|null"}]}
+```
+
+`answer` joins the outbox rows that reply to the question; `done` is the
+last row's flag. `stop` other than 1-5: 400. Unknown change: 404.
+
+When the session gives a final answer (`reply` without `--more`) to a
+question that names a stop, the question and the answer are appended to
+`review/stop-<n>.md` (heading `## Question: <doc> — <section>`, then
+`<asker>, <time>, asked:` and `<agent>, <time>, answered:`, each text quoted
+with `> `) and committed with trailers `Stop`, `Answered-for: <asker>`,
+`Question: <id>` and `Revision`. The commit names no author: the committer
+is whoever runs the session. It is refused as a comment is (pm-spec running,
+a diverged branch, no checkout); the answer is still in the outbox and on
+the page, and the next write on that change commits it (row S17).
 
 ### `POST /api/ask`
 

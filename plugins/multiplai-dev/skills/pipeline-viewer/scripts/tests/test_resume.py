@@ -1,4 +1,4 @@
-"""The plan's Stop and resume rows S1-S7, S11 and S13. Each case stops the
+"""The plan's Stop and resume rows S1-S7, S11, S13 and S17. Each case stops the
 work at the row's point, resumes it, and compares the result with a run that
 never stopped."""
 
@@ -334,3 +334,51 @@ def test_s13_record_decided_after_approval_refuses(fx, capsys, tmp_path):
     assert [(s, a) for s, a, _ in _review_log(fx["export-csv"])] == [
         (s, a) for s, a, _ in _review_log(never["export-csv"])
     ]
+
+
+# --- S17: an answer whose commit was refused ------------------------------------------
+
+
+def test_s17_refused_answer_is_recorded_by_the_next_write(fx, tmp_path):
+    from fixture_repo import build
+    from pipeline_viewer.questions import questions
+
+    ask = {"id": "q-17", "ts": "2026-01-02T10:00:00Z", "kind": "ask", "change": "export-csv",
+           "stop": 1, "doc": "proposal.md", "section": "Why", "text": "Why now?",
+           "author": {"name": PM.name, "role": "pm"}}  # fmt: skip
+    ans = {
+        "reply_to": "q-17",
+        "ts": "2026-01-02T11:00:00Z",
+        "text": "Because.",
+        "done": True,
+    }
+    qs = questions([ask], [ans], "export-csv")
+
+    never = build(tmp_path / "never")
+    p, fresh = status_fn(never, "export-csv")
+    record.record_answers(p, fresh, qs, "Claude")
+    record.acknowledge(p, fresh, PM, 1, roles(never, 1))
+
+    p, fresh = status_fn(fx, "export-csv")
+    lock = fx["export-csv"] / "specs/changes/export-csv/.pm-spec/run.lock"
+    fd = os.open(lock, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        os.write(
+            fd, json.dumps({"pid": os.getpid(), "host": socket.gethostname()}).encode()
+        )
+        [(qid, res, refused)] = record.record_answers(p, fresh, qs, "Claude")
+        assert qid == "q-17" and res is None and "pm-spec is running" in refused
+    finally:
+        os.close(fd)
+    # The next write: the missing answer goes in first, once.
+    record.record_answers(p, fresh, qs, "Claude")
+    record.acknowledge(p, fresh, PM, 1, roles(fx, 1))
+    assert record.record_answers(p, fresh, qs, "Claude") == []
+    assert [(s, a) for s, a, _ in _review_log(fx["export-csv"])] == [
+        (s, a) for s, a, _ in _review_log(never["export-csv"])
+    ]
+    review = "specs/changes/export-csv/review/stop-1.md"
+    assert (fx["export-csv"] / review).read_text() == (
+        never["export-csv"] / review
+    ).read_text()

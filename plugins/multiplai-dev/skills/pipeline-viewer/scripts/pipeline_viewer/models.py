@@ -21,7 +21,7 @@ StopState = Literal[
     "rework_requested",
 ]
 RowKind = Literal["ask", "comment", "ack", "approve", "rework", "timeout"]
-RecordKind = Literal["comment", "ack", "approve", "rework", "decided"]
+RecordKind = Literal["comment", "ack", "approve", "rework", "decided", "answer"]
 
 STOP_LABELS = {
     1: "proposal",
