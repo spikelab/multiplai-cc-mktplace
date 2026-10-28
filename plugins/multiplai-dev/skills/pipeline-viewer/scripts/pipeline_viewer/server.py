@@ -116,16 +116,6 @@ class Viewer:
     def slack(self, cfg: config_mod.ViewerConfig) -> Slack:
         return Slack(self.box.dir, cfg.slack_channel)
 
-    def base_url(self) -> str | None:
-        if self.public_url:
-            return self.public_url
-        if self.httpd is None:
-            return None
-        from viewer_kit import netinfo
-
-        urls = netinfo.display_urls(self.port)
-        return urls[0][0] if urls else None
-
     def places(self) -> dict[str, Place]:
         return list_changes(self.repo, self.worktrees_root)
 
