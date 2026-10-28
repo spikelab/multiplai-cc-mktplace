@@ -22,7 +22,7 @@ dependencies = [
     # equal to PLAYWRIGHT_VERSION in the multiplai-container Dockerfile: each
     # Playwright release expects one Chromium build, and the image ships the
     # build that version expects under PLAYWRIGHT_BROWSERS_PATH.
-    "playwright==1.63.0",
+    "playwright==1.64.1",
     # `capture` prints text read from a web page inside an untrusted-content
     # fence; the fence and its notice come from multiplai_core.untrusted, the
     # one implementation every producer shares (docs/untrusted-content.md).
