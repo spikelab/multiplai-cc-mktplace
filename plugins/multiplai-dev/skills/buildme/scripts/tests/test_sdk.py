@@ -360,6 +360,22 @@ class TestAgentCallStructured:
         assert run.await_count == 2
 
     @pytest.mark.asyncio
+    async def test_a_failed_run_with_valid_output_never_passes(self):
+        """A failed agent run's partial output parses, but it is not an
+        answer: every attempt fails, so the call raises."""
+        from build_pipeline.models import AgentResult
+
+        failed = AgentResult(success=False, output='{"value": 3}', error="died")
+        with patch(
+            "build_pipeline.sdk.agent_call", AsyncMock(return_value=failed)
+        ) as call:
+            with pytest.raises(LLMCallError):
+                await agent_call_structured(
+                    "review it", self.Answer, allowed_tools=["Read"]
+                )
+        assert call.await_count == 2
+
+    @pytest.mark.asyncio
     async def test_exhausted_retries_raises_llm_call_error(self):
         """run_code_review gathers with return_exceptions=True, so exhaustion
         must arrive as an exception, not as a half-built model."""

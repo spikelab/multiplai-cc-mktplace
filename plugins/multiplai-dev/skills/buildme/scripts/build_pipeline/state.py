@@ -26,18 +26,69 @@ from .stop_record import record as record_stop
 log = logging.getLogger(__name__)
 
 
+# The version of the planning steps' blocking rule a step outcome was recorded
+# under. 1: only critical, and major `still_present`, findings block after a
+# rewrite. A step blocked under an older rule gets one fresh check
+# (`spec_generator.reopen_if_edited`).
+PLAN_RULES_VERSION = 1
+
+
 class StepOutcome(BaseModel):
     revision: str
     outcome: Literal["passed", "blocked", "advisory", "skipped"]
     reason: str = ""
     repair_attempts: int = 0
     blocking_findings: str = ""
-    # The findings the step's one rewrite was asked to fix, numbered, saved as
+    # The findings the step's latest rewrite was asked to fix, numbered, saved as
     # the rewrite is admitted; the recheck adds each one's status and evidence.
     repair_findings: list[dict] = Field(default_factory=list)
     # The step's revision when findings finally blocked it. A resume at another
     # revision means the plan was edited, and the step gets its rewrite back.
     blocked_revision: str | None = None
+    # `PLAN_RULES_VERSION` when recorded; 0 for a checkpoint written before it.
+    rules_version: int = 0
+    # The blocking count each admitted rewrite started from, one per
+    # admission. A recheck that does not lower the last one blocks the step.
+    blocking_counts: list[int] = Field(default_factory=list)
+
+
+# The plan files each step's outcome is tied to (`SpecGenState.step_revision`),
+# besides specs.md and requirements/*.md, which every step reads. A step not
+# listed is tied to the whole plan revision.
+STEP_INPUTS: dict[str, frozenset[str]] = {
+    "explainers": frozenset({"proposal.md", "design.md", "config.yaml", "references"}),
+    # The one plan check: what the tasks audit and the design audit it replaced
+    # read, plus the rubric.
+    "plan_review": frozenset(
+        {
+            "tasks.md",
+            "design.md",
+            "proposal.md",
+            "use-cases.md",
+            "unknowns.md",
+            "rubric.md",
+            "config.yaml",
+            "references",
+            "granularity",
+            # config.yaml's `planning:` section (`spec_generator.PLANNING_KEY`).
+            "planning",
+        }
+    ),
+}
+
+# Steps the one plan check replaced; a checkpoint's entries for them are
+# dropped on load (rows S10, S11 of plan-buildme-planning-checks-2026-10-27.md).
+RETIRED_STEPS = ("tasks_audit", "design_audit")
+
+
+def _inputs_revision(name: str, artifact_hashes: dict[str, str]) -> str:
+    keys = STEP_INPUTS[name]
+    inputs = {
+        k: v
+        for k, v in artifact_hashes.items()
+        if k in keys or k == "specs.md" or k.startswith("requirements/")
+    }
+    return hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
 
 
 class SpecGenState(BaseModel):
@@ -81,6 +132,23 @@ class SpecGenState(BaseModel):
                         **step,
                         "repair_attempts": max(1, step.get("repair_attempts", 0)),
                     }
+            for name in RETIRED_STEPS:
+                steps.pop(name, None)
+            # plan_review was tied to the whole plan revision before it had
+            # inputs of its own. A revision recorded against the saved plan
+            # revision is re-tied to the same saved hashes, so a step that
+            # passed at the current plan stays passed.
+            review = steps.get("plan_review")
+            plan = value.get("revision")
+            if isinstance(review, dict) and plan:
+                review = dict(review)
+                current = _inputs_revision(
+                    "plan_review", dict(value.get("artifact_hashes") or {})
+                )
+                for field in ("revision", "blocked_revision"):
+                    if review.get(field) == plan:
+                        review[field] = current
+                steps["plan_review"] = review
             value["steps"] = steps
         return value
 
@@ -88,44 +156,32 @@ class SpecGenState(BaseModel):
         step = self.steps.get(name)
         return step.repair_attempts if step else 0
 
-    def admit_repair(self, name: str, findings: list[dict] | None = None) -> None:
-        if self.repair_attempts(name):
+    def admit_repair(
+        self,
+        name: str,
+        findings: list[dict] | None = None,
+        *,
+        max_rewrites: int = 1,
+        start_count: int = 0,
+    ) -> None:
+        """Admit one more rewrite, which starts from *start_count* blocking
+        findings. Raises when *max_rewrites* are already admitted."""
+        attempts = self.repair_attempts(name)
+        if attempts >= max_rewrites:
             raise RuntimeError(
-                f"{name} repair already attempted; resolve blocking findings before resuming"
+                f"{name}: {attempts} of {max_rewrites} rewrites already attempted; "
+                "resolve blocking findings before resuming"
             )
+        counts = list(self.steps[name].blocking_counts) if name in self.steps else []
         self.record_step(name, "blocked", "Repair admitted; validation pending")
-        self.steps[name].repair_attempts = 1
+        self.steps[name].repair_attempts = attempts + 1
         self.steps[name].repair_findings = [dict(f) for f in findings or []]
+        self.steps[name].blocking_counts = [*counts, start_count]
 
     def step_revision(self, name: str) -> str:
-        keys = {
-            "explainers": {"proposal.md", "design.md", "config.yaml", "references"},
-            "tasks_audit": {
-                "tasks.md",
-                "design.md",
-                "proposal.md",
-                "use-cases.md",
-                "unknowns.md",
-                "config.yaml",
-                "references",
-                "granularity",
-            },
-            "design_audit": {
-                "proposal.md",
-                "design.md",
-                "tasks.md",
-                "config.yaml",
-                "references",
-            },
-        }.get(name)
-        if keys is None:
+        if name not in STEP_INPUTS:
             return self.revision
-        inputs = {
-            k: v
-            for k, v in self.artifact_hashes.items()
-            if k in keys or k == "specs.md" or k.startswith("requirements/")
-        }
-        return hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
+        return _inputs_revision(name, self.artifact_hashes)
 
     def step_passed(self, name: str) -> bool:
         step = self.steps.get(name)
@@ -157,6 +213,8 @@ class SpecGenState(BaseModel):
             blocking_findings=blocking_findings,
             repair_findings=previous.repair_findings if previous else [],
             blocked_revision=blocked_revision,
+            rules_version=PLAN_RULES_VERSION,
+            blocking_counts=previous.blocking_counts if previous else [],
         )
 
 

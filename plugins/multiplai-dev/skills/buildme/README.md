@@ -31,8 +31,8 @@ The full pipeline runs as a subprocess to keep the parent context lean:
 ```
 (pm-spec: interview → proposal, use cases, requirements → ready)
   → Readiness check → Research → Codebase Analysis
-  → Spec Generation (design, unknowns/explainers, tasks, rubric) → Design Audit
-  → Plan Review → Review → TDD Build → Docs → Respec → Archive
+  → Spec Generation (design, unknowns/explainers, tasks, rubric) → Plan Check
+  → Review → TDD Build → Docs → Respec → Archive
   → Publish (push + draft PR)
 ```
 
@@ -119,7 +119,7 @@ everything after it stale, and they are written again.
 
 **Requirements problems go back to pm-spec.** The design prompt asks for one
 `SPEC_ISSUE: requirements/<capability>.md: <requirement>: <problem and fix>`
-line per requirement that cannot be built as written; the design audit marks a
+line per requirement that cannot be built as written; the plan check marks a
 finding whose fix needs a requirements change `needs_requirements_change`; and
 a TDD agent's `SPEC_IMPACT: contradicts` under
 `respec: {halt_on_contradiction: true}` is a third. Each appends a `## `
@@ -160,65 +160,53 @@ dependency scan is broken. It flags every backtick-quoted word in the specs
 real new dependency. Turn it on only after
 [#375](https://github.com/spikelab/multiplai-cc-mktplace/issues/375) is fixed.
 
-### Phase 4: Design Audit
+### Phase 4: Plan Check
 
-An adversarial audit call reviews the plan against its inputs (proposal,
-requirements, design, tasks) and returns a list of gaps. It checks two things: internal
-consistency (spec↔task alignment, design coherence, placeholders) and **plan
-quality** — abstractions no requirement asks for, blocks that are mis-sized for
-review, decisions with nothing a test can assert on, and edge cases no scenario
-covers.
-
-The gaps are not just logged. Every gap at **critical** or **major** severity is
-numbered (`DA-F1`, `DA-F2`, …) and fed back into **one** staged repair of
-design, tasks and rubric. The repaired set must pass deterministic checks and a
-re-audit before implementation. Minor findings on the first audit are reported
-only.
-
-The re-audit is told which findings the rewrite was asked to fix, and gives
-each one a status: `resolved`, `partially_resolved`, `still_present` or
-`cannot_verify` (a finding it gives no status is `cannot_verify`). It blocks
-when a listed finding is anything but `resolved`, and when it finds a new
-**critical** problem. New major and minor findings are logged and written to
-`build-progress.md` under `DESIGN_AUDIT_ADVISORY`; they do not block.
-
-Repair admission and outcomes live together in `spec_gen.steps.design_audit`:
-`repair_findings` holds the numbered findings with their statuses, and
-`blocked_revision` the plan revision a block happened at. An unchanged accepted
-revision skips the model call on resume. If a later plan review repairs tasks,
-the design audit revalidates those new inputs; each stage retains its
-one-repair allowance, so validation cannot become an unbounded loop.
-
-> Note: the multi-agent codebase-analysis step (`run_codebase_analysis`) **is**
-> wired — see [Phase 2.5](#phase-25-codebase-analysis).
-
-### Phase 4.5: Plan Review
-
-The second pair of eyes the board's Planning column has always claimed. A
-read-only reviewer (`Read`/`Grep`/`Glob`, 30 turns) reads `tasks.md` against
-`rubric.md`, the design's global constraints and `use-cases.md`, and reports
-findings under seven categories:
+One read-only check (`plan_review`: `Read`/`Grep`/`Glob`, 30 turns) reads
+`design.md` and `tasks.md` against the proposal, the plan, the specs, the use
+cases, the rubric and the code, and reports at most 10 findings, most severe
+first. It replaced the design audit, the tasks audit and the plan review, which
+read the same documents three times. Its categories:
 
 | Category | What it means |
 |----------|---------------|
+| `coverage` | A spec scenario or use case no block delivers |
+| `no-new-behaviour` | A block adds nothing an earlier block has not built, so its tests pass before it is built and the TDD RED gate fails it (always critical) |
+| `interface-mismatch` | A `Consumes:` with no matching earlier `Produces:`, or a design contract no block matches |
+| `horizontal-decomposition` | Blocks sliced by layer instead of by behaviour |
+| `placeholder` | A name, signature or format another block must match, left unstated |
+| `design-coherence` | A claim about existing code the repository contradicts |
+| `over-engineering` | An abstraction the build will produce that no requirement needs |
+| `testability` | A block with nothing a test could assert on |
+| `edge-case` | An input or failure a spec scenario or the plan names that no block covers |
 | `rubric-conflict` | A block asks for something the rubric scores down |
 | `block-contradiction` | Two blocks contradict each other |
-| `constraint-violation` | A block breaks a constraint the design stated |
+| `constraint-violation` | A block breaks a constraint the proposal or design stated |
 | `over-prescription` | The plan dictates a block-internal choice that belongs to the implementer |
-| `use-case-coverage` | A use case no block delivers |
-| `no-new-behaviour` | A block adds nothing an earlier block has not built, so its tests pass before it is built and the TDD RED gate fails it |
 | `oversized-plan` | The change should be several changes |
 
-Critical and major findings, numbered `PR-F1`, `PR-F2`, …, request one staged
-owner repair, shared with the model-free checks. The recheck after it follows
-the design audit's rule: every listed finding must come back `resolved`, a new
-critical finding blocks, and new major and minor findings go to the log and to
-`PLAN_REVIEW_ADVISORY`. The model-free checks recheck their own findings, and
-anything they still find blocks. Failed calls and unresolved findings record a
-blocked outcome and stop planning. The step's `repair_attempts`,
-`repair_findings`, `blocked_revision` and revision-bound outcome live in
-`spec_gen.steps.plan_review`. A passing outcome skips repeat calls only while
-its inputs remain current.
+buildme's own scans for placeholders and for blocks that add no behaviour run
+beside the check. Critical and major findings, and the scans' findings, are
+numbered `PR-F1`, `PR-F2`, … and request one staged rewrite: `tasks.md`, and
+`design.md` before it unless every finding is in `tasks.md`. The rewritten set
+must pass the scans before it is published. Minor findings are reported only.
+
+The recheck is told which findings the rewrite was asked to fix and gives each
+a status: `resolved`, `partially_resolved`, `still_present` or `cannot_verify`
+(a finding it gives no status is `cannot_verify`). It blocks when a listed
+critical finding is anything but `resolved`, when a listed major one is
+`still_present`, when it finds a new **critical** problem, and when the scans
+still find something. Everything else goes to the log and to
+`build-progress.md` under `PLAN_REVIEW_ADVISORY`. A critical or major finding
+whose fix needs a requirements change stops the build with exit 4, at the
+first check or the recheck.
+
+Failed calls and blocking findings record a blocked outcome and stop planning.
+The step's `repair_attempts`, `repair_findings`, `blocked_revision` and
+outcome live in `spec_gen.steps.plan_review`, tied to the plan files the check
+reads; a passing outcome skips the model call on resume while they are
+unchanged. A checkpoint from before the one check drops its `design_audit` and
+`tasks_audit` steps on load.
 
 `oversized-plan` is deliberately excluded from that regeneration. It names a
 proposed cut and the signature boundary the cut crosses, and stops there:
@@ -736,7 +724,7 @@ uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/buildme/scripts \
 |------|--------|
 | `--change <name>` | Required: the change dir under `specs/changes/`, its specs marked ready by pm-spec |
 | `--auto` | Skip review checkpoint |
-| `--spec-only` | Stop after the design, tasks, design audit and plan review |
+| `--spec-only` | Stop after the design, the tasks and the plan check |
 | `--skip-research` | Skip the research phase |
 | `--skip-explainers` | Skip the unknowns/explainer pass (`unknowns.md` still records the skip) — `build`, `spec-generate` |
 | `--no-worktree` | Build in place on the current branch; implies no push and no PR |
@@ -810,7 +798,7 @@ Blocks: 2
 ## [2026-10-16T06:41:19Z] BUDGET
 Budget: 5,500 tokens / $5.50 over 4 SDK calls.
   breakdown: in=5,500 out=0 cache_read=0 cache_write=0
-  by phase: implementer=4,000 tokens/$4.00, spec_generation=1,000 tokens/$1.00, design_audit=500 tokens/$0.50
+  by phase: implementer=4,000 tokens/$4.00, spec_generation=1,000 tokens/$1.00, plan_review=500 tokens/$0.50
 
 ## [2026-10-16T06:41:19Z] RESUMED
 Mode: scratch | Tier: standard
@@ -834,7 +822,7 @@ Published: https://github.com/acme/proj/pull/7. Checkpoint kept at …/specs/arc
 ## [2026-10-16T06:41:20Z] BUDGET
 Budget: 7,500 tokens / $7.50 over 5 SDK calls.
   breakdown: in=7,500 out=0 cache_read=0 cache_write=0
-  by phase: implementer=6,000 tokens/$6.00, spec_generation=1,000 tokens/$1.00, design_audit=500 tokens/$0.50
+  by phase: implementer=6,000 tokens/$6.00, spec_generation=1,000 tokens/$1.00, plan_review=500 tokens/$0.50
 ```
 
 This sample comes from `tests/stop_resume_driver.py` (S3), whose phases record
@@ -1115,12 +1103,11 @@ State is checkpointed to `.build-state.json` after every phase transition:
     "revision": "<plan-content-hash>",
     "steps": {
       "explainers": {"revision": "<explainer-input-hash>", "outcome": "skipped", "repair_attempts": 0},
-      "design_audit": {"revision": "<audit-input-hash>", "outcome": "passed", "repair_attempts": 1,
-                       "repair_findings": [{"finding_id": "DA-F1", "severity": "major", "category": "edge-cases",
-                                            "text": "No scenario covers an empty schedule.",
-                                            "status": "resolved", "evidence": "requirements/next-run.md, scenario 4"}],
-                       "blocked_revision": null},
-      "plan_review": {"revision": "<plan-content-hash>", "outcome": "passed", "repair_attempts": 0}
+      "plan_review": {"revision": "<check-input-hash>", "outcome": "passed", "repair_attempts": 1,
+                      "repair_findings": [{"finding_id": "PR-F1", "severity": "major", "category": "edge-case",
+                                           "text": "No scenario covers an empty schedule.",
+                                           "status": "resolved", "evidence": "tasks.md, Block 4"}],
+                      "blocked_revision": null}
     }
   },
   "tdd": {
@@ -1171,7 +1158,7 @@ Cancelled.
 | `rubric.py` | Rubric generation, change type detection | Via sdk |
 | `progress.py` | Tail-able progress file writer | No |
 | `env.py` | .env loading, model resolution | No |
-| `llm_steps/spec_steps.py` | Artifact generation, design audit, per-dependency explainer | Yes |
+| `llm_steps/spec_steps.py` | Artifact generation, per-dependency explainer | Yes |
 | `llm_steps/research_steps.py` | The research decision, from the ready specs | Yes |
 | `readiness.py` | `SPEC:NOT_READY` / `SPEC:ISSUES` refusals and `spec-issues.md` | No |
 | `llm_steps/tdd_steps.py` | Test writer, implementer, refactorer | Yes |
@@ -1239,10 +1226,10 @@ Required audits retain blocking findings in the checkpoint and `build-progress.m
 and print them. A step blocked at the current plan revision (`blocked_revision`)
 stops on resume without another paid review, prints the findings the rewrite
 was asked to fix with their statuses, and ends with `Edit the plan to fix these
-and resume; the step then gets one rewrite.` Edit the plan to address those
+and resume; the step then gets its rewrites again.` Edit the plan to address those
 findings before resuming: when a step's input files differ from
 `blocked_revision`, the resume clears `repair_findings` and `blocked_revision`,
-gives the step its one rewrite back, and audits it as a first audit. The tasks
+gives the step its rewrites back, and audits it as a first audit. The tasks
 audit follows the same rule.
 
 If a hard interruption loses staging-ownership evidence, the commit refusal names

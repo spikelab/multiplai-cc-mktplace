@@ -109,8 +109,12 @@ def _test_directory(test_command: str, project_dir: Path) -> Path:
     return directory
 
 
+# Seconds a full test run gets when `tdd.test_timeout` sets nothing.
+DEFAULT_TEST_TIMEOUT = 300
+
+
 def run_test_suite(
-    test_command: str, project_dir: Path, timeout: int = 300
+    test_command: str, project_dir: Path, timeout: int = DEFAULT_TEST_TIMEOUT
 ) -> tuple[int | None, str]:
     """Run the repo's test suite under the trust guard (shared mechanics for
     the integration and RED gates).
@@ -271,16 +275,20 @@ def _full_suite(test_command: str, project_dir: Path, parallel: str) -> str:
 
 
 def baseline_test_gate(
-    test_command: str, project_dir: Path, *, parallel: str = "off"
+    test_command: str,
+    project_dir: Path,
+    *,
+    parallel: str = "off",
+    timeout: int = DEFAULT_TEST_TIMEOUT,
 ) -> GateResult:
     """Run the test suite and check it passes before TDD starts. *parallel*
-    is `tdd.parallel` (`parallel_command`)."""
+    is `tdd.parallel` (`parallel_command`), *timeout* `tdd.test_timeout`."""
     if not test_command:
         return GateResult(
             passed=True, reason="No test command configured — skipping baseline"
         )
     exit_code, output = run_test_suite(
-        _full_suite(test_command, project_dir, parallel), project_dir
+        _full_suite(test_command, project_dir, parallel), project_dir, timeout
     )
     if exit_code is None:
         # Could not verify — untrusted repo, missing binary or timeout. The
@@ -301,16 +309,20 @@ def baseline_test_gate(
 
 
 def integration_gate(
-    test_command: str, project_dir: Path, *, parallel: str = "off"
+    test_command: str,
+    project_dir: Path,
+    *,
+    parallel: str = "off",
+    timeout: int = DEFAULT_TEST_TIMEOUT,
 ) -> GateResult:
     """Run the full test suite after a block completes. *parallel* is
-    `tdd.parallel` (`parallel_command`)."""
+    `tdd.parallel` (`parallel_command`), *timeout* `tdd.test_timeout`."""
     if not test_command:
         return GateResult(
             passed=True, reason="No test command — skipping integration gate"
         )
     exit_code, output = run_test_suite(
-        _full_suite(test_command, project_dir, parallel), project_dir
+        _full_suite(test_command, project_dir, parallel), project_dir, timeout
     )
     if exit_code is None:
         # No action: an unverifiable suite is not something a fix agent can
@@ -1732,6 +1744,7 @@ def final_verification(
     project_dir: Path,
     *,
     parallel: str = "off",
+    timeout: int = DEFAULT_TEST_TIMEOUT,
     plan_revision: str = "",
 ) -> GateResult:
     """The shared completion gate, after the last writer and before publication."""
@@ -1747,7 +1760,9 @@ def final_verification(
             plan_revision=plan_revision,
             include_files=True,
         )
-        gate = integration_gate(test_command, project_dir, parallel=parallel)
+        gate = integration_gate(
+            test_command, project_dir, parallel=parallel, timeout=timeout
+        )
         after = verification_inputs(
             test_command,
             project_dir,

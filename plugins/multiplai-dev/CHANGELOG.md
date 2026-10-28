@@ -15,11 +15,52 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
-## [0.117.0] - 2026-10-27
+## [0.123.0] - 2026-10-28
 
 ### Added
 - **buildme**: `carry_block_notes: true` in `specs/config.yaml` makes each block's implementer and review-fix agents write notes for later blocks (conventions chosen, helpers found, behaviour of the existing code the spec does not mention). Every later block's implementer and review-fix agents get those notes; the test writer and refactorer do not. Off by default: with it off, every prompt is unchanged. Turn it on only after the notes-forward benchmark shows it helps.
 - **buildme**: `evals/notes_forward_compare.py` runs buildme's TDD step on five multi-block fixtures with the option off and on, and reports acceptance, cost, implementer turns and context size per block. `--self-check` checks the fixtures offline.
+
+## [0.122.0] - 2026-10-27
+
+### Added
+- **buildme**: `tdd.test_timeout` in `specs/config.yaml` sets how many seconds each full run of the test suite gets: the baseline before TDD, the integration gates after each block, the final verification and an epic's merge tests. It is 300 when unset, as before. A suite that takes longer than 300 seconds no longer counts as not run on every build.
+
+## [0.121.0] - 2026-10-27
+
+### Changed
+- **buildme**: the writer of `design.md` and `tasks.md` now reads the project's code with `Read`, `Grep` and `Glob` before describing it, and checks each name, endpoint or table it writes about. It still cannot change any file. Spec generation therefore needs `--trust-repo` (or `BUILDME_TRUST_REPO=1`), as the plan check already did.
+
+## [0.120.0] - 2026-10-27
+
+### Added
+- **buildme**: `planning.max_rewrites` (default `2`) and `planning.max_usd` (default `40`) in `specs/config.yaml`. The plan check stops the build after that many rewrites, or once the planning calls have spent that much. Raising either one and resuming gives a stopped check its rewrites again and regenerates nothing.
+- **buildme**: each plan rewrite's changes are saved as `plan-edits-<n>.diff` in the change dir.
+
+### Changed
+- **buildme**: a plan rewrite now edits `design.md` and `tasks.md` in place instead of writing them again. Lines no finding names stay as they were. An edit whose text is not found exactly once, or edits that change nothing, stop the build with a blocking finding.
+- **buildme**: the recheck after a rewrite is shown the lines the rewrite changed. Findings that still block get another rewrite, up to `planning.max_rewrites`; the check stops early when a rewrite leaves as many blocking findings as the one before.
+- **buildme**: the explainer calls are now counted under their own `explainer` label in the budget summary.
+
+## [0.119.0] - 2026-10-27
+
+### Changed
+- **buildme**: planning runs one check (`plan_review`) instead of three. The design audit, the tasks audit and the plan review read the same documents for overlapping problems; the one check reads `design.md` and `tasks.md` once against the specs, the use cases, the rubric, the constraints and the code, and covers what all three covered. A clean plan now costs one model call to check, not three.
+- **buildme**: a plan-check finding whose fix needs a requirements change stops the build with exit 4 and a `spec-issues.md` section titled `Plan review: <requirement>`, as the design audit's did.
+- **buildme**: a rewrite changes `design.md` only when a finding is about it; when every finding is in `tasks.md`, only `tasks.md` (and the rubric) is rewritten.
+- **buildme**: a build saved by an earlier version drops its design-audit and tasks-audit steps when you resume it. If its plan review had passed at the current plan, it is not run again; otherwise the one check runs fresh.
+
+### Removed
+- **buildme**: the `models:` and `efforts:` keys `design_audit` and `tasks_audit` in `specs/config.yaml` no longer have any effect. buildme logs a warning naming `plan_review`, the key that applies to the one check.
+- **buildme**: the `DESIGN_AUDIT_ADVISORY` and `TASKS_AUDIT_ADVISORY` / `TASKS_AUDIT_BLOCKED` progress lines; the one check writes `PLAN_REVIEW_ADVISORY` and `PLAN_REVIEW_BLOCKED`. The `DESIGN_AUDIT` phase is still marked complete, so the board keeps its column.
+
+## [0.117.0] - 2026-10-27
+
+### Changed
+- **buildme**: a minor finding from the design audit, the tasks audit or the plan review no longer stops a build or earns a rewrite, whatever its category. Only critical and major findings earn the rewrite. A block that adds no behaviour still stops the build when buildme's own scan finds it, or when the model rates it critical, which the tasks audit's prompt now tells it to do.
+- **buildme**: after the rewrite, a major finding stops the build only when the recheck says it is `still_present`. A major finding the recheck calls `partially_resolved` or `cannot_verify` is reported in the progress file (`<STEP>_ADVISORY`) and the build goes on. A critical finding still stops the build unless it is `resolved`.
+- **buildme**: each of the three planning checks reports at most 10 findings, most severe first, and reports an edge case only for an input or failure a spec scenario or the plan names. The log line `<check>: kept 10 of <n> findings` says when buildme dropped some.
+- **buildme**: a build that an earlier version stopped in planning gets one fresh check and one rewrite under these rules when you resume it, without editing the plan.
 
 ## [0.116.0] - 2026-10-27
 

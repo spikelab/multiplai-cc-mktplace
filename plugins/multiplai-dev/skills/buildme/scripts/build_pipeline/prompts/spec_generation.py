@@ -167,3 +167,56 @@ Rules:
 
 Output ONLY the markdown content. No commentary.
 """
+
+
+PLAN_EDIT_PROMPT = """\
+You are fixing findings in a change's plan: its design.md and tasks.md. Fix
+them by editing the documents in place. Do not rewrite them.
+
+## Findings to fix
+{findings}
+
+## design.md
+{design_content}
+
+## tasks.md
+{tasks_content}
+
+## Proposal
+{proposal_content}
+
+## Plan — what this builds, what is out of scope, and what done means
+{plan_section}
+
+## Use cases
+{use_cases_content}
+
+## Specs
+{specs_content}
+
+## Instructions
+- Return the smallest set of exact replacements that fixes the findings.
+  Change nothing a finding does not need changed.
+- Each edit names its file (`design.md` or `tasks.md`), an `old_str` copied
+  exactly from that file, and the `new_str` that replaces it. Copy enough of
+  the surrounding text that `old_str` occurs exactly once in the file.
+- Edits apply in order. A later edit's `old_str` is matched against the file
+  as the earlier edits leave it.
+- Before you write about existing code (a name, an endpoint, a table), check
+  it with Read, Grep or Glob. You cannot change any file yourself.
+- Keep tasks.md's block format: each block keeps its `Interfaces:` and
+  `Satisfies:` lines, and every block adds behaviour its tests can show.
+- When you cannot fix a finding by editing these documents, make no edit for
+  it and put its finding id in `not_fixed`.
+
+Return one JSON object:
+
+```json
+{{
+  "edits": [
+    {{"file": "tasks.md", "old_str": "exact text", "new_str": "replacement"}}
+  ],
+  "not_fixed": []
+}}
+```
+"""

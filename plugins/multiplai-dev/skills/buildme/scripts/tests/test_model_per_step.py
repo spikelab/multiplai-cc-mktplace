@@ -98,8 +98,8 @@ class TestSessionDefaults:
     MULTIPLAI_MODEL moves every step's model; `models:` / `efforts:` move only
     the steps they name."""
 
-    def test_there_are_25_steps(self):
-        assert len(STEP_STAGES) == 25
+    def test_there_are_24_steps(self):
+        assert len(STEP_STAGES) == 24
 
     def test_every_step_follows_the_session(self, tmp_path, no_conf):
         with patch.dict(os.environ, SESSION):
@@ -297,6 +297,27 @@ class TestPrecedence:
         assert config.model_specs == {}
         assert any("models.test_writr" in r.getMessage() for r in caplog.records)
 
+    @pytest.mark.parametrize("table", ["models", "efforts"])
+    @pytest.mark.parametrize("step", ["design_audit", "tasks_audit"])
+    def test_a_retired_audit_key_has_no_effect_and_names_plan_review(
+        self, tmp_path, no_conf, caplog, table, step
+    ):
+        """One plan check replaced the design and tasks audits, so their
+        `models:` and `efforts:` keys do nothing; the warning says which key
+        applies now."""
+        value = "opus" if table == "models" else "high"
+        with caplog.at_level(logging.WARNING):
+            config = _config(tmp_path, f"{table}:\n  {step}: {value}\n")
+        assert config.model_specs == {}
+        assert config.effort_specs == {}
+        [message] = [
+            r.getMessage()
+            for r in caplog.records
+            if f"{table}.{step}" in r.getMessage()
+        ]
+        assert "no longer has any effect" in message
+        assert f"{table}.plan_review" in message
+
     def test_every_documented_spec_form_is_kept(self, tmp_path, no_conf):
         forms = [
             "haiku",
@@ -427,6 +448,10 @@ CALL_SITES = {
         "config.model_for('docs_update')",
         ("docs_update",),
     ),
+    ("llm_steps/plan_review_steps.py", "run_plan_edit", "agent_call_structured"): (
+        "config.model_for('plan_rewrite')",
+        ("plan_rewrite",),
+    ),
     ("llm_steps/plan_review_steps.py", "run_plan_review", "agent_call_structured"): (
         "model",
         ("plan_review",),
@@ -447,22 +472,14 @@ CALL_SITES = {
         "config.model_for('review_fix')",
         ("review_fix",),
     ),
-    ("llm_steps/spec_steps.py", "_audit_agent_text", "agent_call"): (
-        "config.model_for(budget_label)",
-        ("design_audit", "tasks_audit"),
-    ),
-    ("llm_steps/spec_steps.py", "run_design_audit", "_audit_agent_text"): (
-        None,
-        ("design_audit",),
-    ),  # budget_label="design_audit"
-    ("llm_steps/spec_steps.py", "run_tasks_audit", "_audit_agent_text"): (
-        None,
-        ("tasks_audit",),
-    ),  # budget_label="tasks_audit"
+    ("llm_steps/spec_steps.py", "generate_artifact", "agent_call"): (
+        "config.model_for('spec_artifact')",
+        ("spec_artifact",),
+    ),  # design and tasks
     ("llm_steps/spec_steps.py", "generate_artifact", "llm_call"): (
         "config.model_for('spec_artifact')",
         ("spec_artifact",),
-    ),
+    ),  # unknowns
     ("llm_steps/spec_steps.py", "run_explainer", "llm_call"): (
         "config.model_for('explainer')",
         ("explainer",),

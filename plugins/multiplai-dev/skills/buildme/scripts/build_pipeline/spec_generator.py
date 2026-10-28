@@ -7,11 +7,11 @@ The proposal, use cases and requirements are pm-spec's, marked ready in
 and never writes them. Flow:
 1. Check the inputs
 2. Generate design -> unknowns -> tasks -> rubric
-3. Run design audit (standalone)
+3. Run the plan check (standalone)
 4. Return exit code
 
 A design that flags a requirement as infeasible or contradictory
-(`SPEC_ISSUE:` lines, `design_spec_issues`), and a design-audit finding whose
+(`SPEC_ISSUE:` lines, `design_spec_issues`), and a plan-check finding whose
 fix needs a requirements change, raise `readiness.SpecIssuesFound`; the
 orchestrator writes them to spec-issues.md for `pm-spec revise` and stops
 (exit 4).
@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import difflib
 import hashlib
 import json
 import logging
@@ -29,6 +30,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
+import yaml
 from multiplai_core.specs import change_root
 
 from build_pipeline.budget import BudgetExceededError
@@ -41,7 +43,7 @@ from .io_utils import atomic_write
 from .models import ArtifactStatus, BuildPhase, PriorAssessment
 from .readiness import SpecIssuesFound
 from .rubric import generate_rubric
-from .state import BuildState, SpecGenState
+from .state import PLAN_RULES_VERSION, BuildState, SpecGenState
 
 log = logging.getLogger(__name__)
 
@@ -94,9 +96,11 @@ async def run_spec_generator(config, args=None, *, standalone: bool = True) -> i
         log.info("DONE phase=ARTIFACT_GENERATION")
 
         if standalone:
-            log.info("START phase=DESIGN_AUDIT")
-            print("PHASE: design_audit")
-            await run_design_audit_stage(
+            from .llm_steps.plan_review_steps import run_plan_review_stage
+
+            log.info("START phase=PLAN_REVIEW")
+            print("PHASE: plan_review")
+            await run_plan_review_stage(
                 change_dir, config, state, config.state_file_path()
             )
             state.advance_to(BuildPhase.DESIGN_AUDIT, config.state_file_path())
@@ -177,8 +181,7 @@ async def _generate_all_artifacts(
             )
             log.info("DONE artifact=%s", artifact_id)
 
-    # Unknowns-gate resume durability: same problem as the tasks audit below —
-    # the gate runs after unknowns.md is written, so a crash mid-gate leaves
+    # Unknowns-gate resume durability: the gate runs after unknowns.md is written, so a crash mid-gate leaves
     # the artifact DONE and the DAG loop never re-enters it. The checkpoint,
     # not file existence, is the record that the gate ran.
     if state.spec_gen and not state.spec_gen.step_passed("explainers"):
@@ -214,25 +217,6 @@ async def _generate_all_artifacts(
             state.checkpoint(config.state_file_path())
     elif state.spec_gen:
         log.info("SKIP phase=UNKNOWNS_GATE reason=recorded-complete-in-state")
-
-    # Tasks-audit resume durability: the audit runs after tasks.md is
-    # written, so a crash mid-audit leaves the artifact DONE (file exists)
-    # and the DAG loop above never re-enters it. The checkpoint state — not
-    # file existence — is the record of audit completion; re-run it here
-    # when the artifact exists but the audit isn't recorded complete.
-    if state.spec_gen and not state.spec_gen.step_passed("tasks_audit"):
-        context = cm.artifact_context(change_dir, "tasks")
-        tasks_path = change_dir / context["output_path"]
-        if tasks_path.exists():
-            log.info(
-                "Tasks-shape audit not recorded complete — running it now "
-                "(resume durability)"
-            )
-            await _audit_tasks_shape(change_dir, context, config, tasks_path, state)
-            state.spec_gen.record_step("tasks_audit", "passed")
-            state.checkpoint(config.state_file_path())
-    elif state.spec_gen:
-        log.info("SKIP phase=TASKS_SHAPE_AUDIT reason=recorded-complete-in-state")
 
     reconcile_plan(config, state)
     if state.spec_gen and "rubric" in state.spec_gen.stale_artifacts:
@@ -291,21 +275,7 @@ async def _generate_single_artifact(
         atomic_write(output_path, content)
         log.info("Wrote artifact: %s", output_path)
 
-        # Tasks-shape audit: catch horizontal decomposition before the rubric
-        # and implementation build on a layered breakdown. Prompt instructions
-        # alone drift — this audit is the enforcement. Completion is recorded
-        # in checkpoint state (not file existence): tasks.md already exists at
-        # this point, so a crash mid-audit would otherwise mark the artifact
-        # DONE and silently skip the audit on resume (see
-        # _generate_all_artifacts' durability pass).
-        if artifact_id == "tasks":
-            await _audit_tasks_shape(change_dir, context, config, output_path, state)
-            if state.spec_gen:
-                state.spec_gen.record_step("tasks_audit", "passed")
-
     reconcile_plan(config, state, regenerated={artifact_id})
-    if state.spec_gen and artifact_id == "tasks":
-        state.spec_gen.record_step("tasks_audit", "passed")
     if state.spec_gen and artifact_id == "unknowns":
         _record_explainer_outcome(config, state)
 
@@ -496,8 +466,7 @@ async def _audit_unknowns(
 ) -> None:
     """Gate unknowns.md; regenerate ONCE when a required list came back empty.
 
-    Same single-pass shape as ``_audit_tasks_shape``: the gate's findings are
-    injected into exactly one regeneration call. A regenerated document that
+    The gate's findings are injected into exactly one regeneration call. A regenerated document that
     still fails is logged and stands — there is no re-audit loop, so a
     stubbornly incomplete explainer costs one extra call, not an unbounded
     number.
@@ -939,20 +908,8 @@ def scan_no_behaviour_blocks(tasks_path: Path) -> list[dict]:
     return findings
 
 
-def tasks_findings_text(findings: list[dict]) -> str:
-    """Audit findings as the ``audit_findings`` text of a tasks rewrite, each
-    line starting with its id when ``number_findings`` gave it one."""
-    return "\n".join(
-        "- "
-        + (f"{f['finding_id']} " if f.get("finding_id") else "")
-        + f"[{f.get('severity', '?')}] {f.get('description', '')}"
-        + (f" Fix: {f['suggestion']}" if f.get("suggestion") else "")
-        for f in findings
-    )
-
-
 # The prefix of each step's finding ids: `<prefix>-F<n>`.
-FINDING_ID_PREFIXES = {"tasks_audit": "TA", "design_audit": "DA", "plan_review": "PR"}
+FINDING_ID_PREFIXES = {"plan_review": "PR"}
 
 # The evidence a listed finding from the deterministic scans gets when the
 # rewritten tasks pass every scan.
@@ -982,6 +939,32 @@ def number_findings(step: str, findings: list[dict], *, start: int = 1) -> list[
         }
         for n, f in enumerate(findings, start)
     ]
+
+
+def next_finding_number(listed: list[dict]) -> int:
+    """The number after the highest `-F<n>` id among *listed*, so a later
+    rewrite's new findings never reuse an earlier one's id."""
+    numbers = [
+        int(m.group(1))
+        for f in listed
+        if (m := re.search(r"-F(\d+)$", str(f.get("finding_id", ""))))
+    ]
+    return max(numbers, default=0) + 1
+
+
+# The budget labels of planning's model calls, which `planning.max_usd` caps:
+# the design, tasks and unknowns writers (`spec:<artifact>`), the rewrite's
+# edits, the plan check, the rubric and the explainers.
+PLANNING_LABELS = ("plan_rewrite", "plan_review", "rubric", "explainer")
+
+
+def planning_spend() -> float:
+    """What this build's planning calls have cost so far, in USD."""
+    return sum(
+        usd
+        for label, usd in budget.get_budget().usd_by_label.items()
+        if label.startswith("spec:") or label in PLANNING_LABELS
+    )
 
 
 def saved_findings(findings: list[dict]) -> list[dict]:
@@ -1065,17 +1048,24 @@ def recheck_verdict(
 ) -> tuple[list[dict], list[dict]]:
     """What a recheck after a rewrite blocks on, and what it only reports.
 
-    Blocking: a listed finding whose status is not `resolved` (no status is
-    `cannot_verify`); a new critical finding; and every finding of the
-    deterministic scans. Every other new finding — major or minor, in any
-    category, `no-new-behaviour` included — is advisory, as SKILL.md says.
-    A resolved listed finding is in neither list.
+    Blocking: a listed critical finding whose status is not `resolved` (no
+    status is `cannot_verify`); a listed major finding that is
+    `still_present`; a new critical finding; and every finding of the
+    deterministic scans. A listed major finding that is `partially_resolved`
+    or `cannot_verify`, a listed minor one, and every other new finding —
+    major or minor, in any category, `no-new-behaviour` included — are
+    advisory, as SKILL.md says. A resolved listed finding is in neither list.
     """
-    blocking = [
-        f for f in assess_listed(listed, assessments) if f["status"] != "resolved"
-    ]
-    blocking += [_new_finding(f) for f in deterministic]
+    blocking = []
     advisory = []
+    for f in assess_listed(listed, assessments):
+        if f["status"] == "resolved":
+            continue
+        blocks = f.get("severity") == "critical" or (
+            f.get("severity") == "major" and f["status"] == "still_present"
+        )
+        (blocking if blocks else advisory).append(f)
+    blocking += [_new_finding(f) for f in deterministic]
     for finding in new_findings:
         blocks = finding.get("severity") == "critical"
         (blocking if blocks else advisory).append(_new_finding(finding))
@@ -1144,15 +1134,6 @@ class PlanRepairRejected(ValueError):
         self.assessments = assessments or []
 
 
-def _blocks_plan(finding: dict, default: str | None = "major") -> bool:
-    """A tasks-audit finding that a repair must resolve: critical or major, or
-    any `no-new-behaviour` finding, whose severity the audit prompt leaves to
-    the model although such a block always fails the RED gate."""
-    if finding.get("category") == "no-new-behaviour":
-        return True
-    return finding.get("severity", default) in {"critical", "major"}
-
-
 def design_spec_issues(text: str) -> list[tuple[str, str]]:
     """The design step's `SPEC_ISSUE:` lines, as `(title, body)` issues for
     spec-issues.md: the title names the requirements file and requirement the
@@ -1180,90 +1161,6 @@ def raise_spec_issues(issues: list[tuple[str, str]], step: str) -> None:
     if issues:
         log.error("SPEC_ISSUES step=%s count=%d", step, len(issues))
         raise SpecIssuesFound(issues, step=step)
-
-
-async def _audit_tasks_shape(
-    change_dir: Path,
-    context: dict,
-    config,
-    output_path: Path,
-    state: BuildState | None = None,
-) -> None:
-    """Audit tasks.md for horizontal decomposition; regenerate ONCE on findings.
-
-    Findings come from three sources: the deterministic placeholder scan and
-    no-behaviour block scan (both always run) and the LLM shape/traceability
-    audit. Any findings trigger exactly
-    one regeneration pass with the findings injected into the tasks prompt
-    followed by a required recheck. Missing audit evidence and unresolved
-    blocking findings stop planning. Repair admission survives interruption.
-    """
-    from .llm_steps.spec_steps import run_tasks_audit
-
-    name = "tasks_audit"
-    sg = state.spec_gen if state is not None else None
-    if sg is not None:
-        reconcile_plan(config, state)
-        reopen_if_edited(state, name, config.state_file_path())
-        refuse_if_blocked(sg, name)
-    log.info("START phase=TASKS_SHAPE_AUDIT")
-    print("PHASE: tasks_shape_audit")
-    scanned = scan_placeholders(output_path.read_text())
-    scanned += scan_no_behaviour_blocks(output_path)
-    if scanned:
-        log.warning("Deterministic scans found %d findings", len(scanned))
-    model = await run_tasks_audit(change_dir, config)
-    scanned = [f for f in scanned if _blocks_plan(f)]
-    model = [f for f in model if _blocks_plan(f)]
-    findings = scanned + model
-
-    if not findings:
-        log.info("DONE phase=TASKS_SHAPE_AUDIT findings=0")
-        return
-
-    log.warning(
-        "DONE phase=TASKS_SHAPE_AUDIT findings=%d — one regeneration pass",
-        len(findings),
-    )
-    for finding in findings:
-        log.warning(
-            "  finding severity=%s desc=%s",
-            finding.get("severity", "?"),
-            finding.get("description", "?"),
-        )
-
-    assert state is not None and sg is not None
-    state_path = config.state_file_path()
-    if sg.repair_attempts(name):
-        block_on_findings(
-            config,
-            state,
-            state_path,
-            name,
-            "Tasks audit still has blocking findings after bounded repair",
-            open_findings(findings),
-        )
-        raise PlanBlocked(
-            "Tasks audit still has blocking findings after bounded repair"
-        )
-    numbered = number_findings(name, from_scans(scanned) + model)
-    sg.admit_repair(name, saved_findings(numbered))
-    state.checkpoint(state_path)
-    try:
-        await rewrite_plan(
-            config, state, tasks_findings_text(numbered), step=name, listed=numbered
-        )
-    except PlanRepairRejected as rejection:
-        sg.steps[name].repair_findings = saved_findings(rejection.assessments)
-        record_advisory(config, name, rejection.advisory)
-        block_on_findings(
-            config, state, state_path, name, str(rejection), rejection.blocking
-        )
-        raise
-    except BaseException:
-        sg.record_step(name, "blocked", "Task repair did not complete")
-        state.checkpoint(state_path)
-        raise
 
 
 def _commit_change_dir(config, change_dir: Path, message: str) -> None:
@@ -1295,22 +1192,13 @@ async def _generate_rubric(
     log.info("Wrote rubric: %s", rubric_path)
 
 
-async def _run_audit(
-    change_dir: Path, config, *, prior: list[dict] | None = None
-) -> list[dict]:
-    """Run design audit on generated artifacts."""
-    from .llm_steps.spec_steps import run_design_audit
-
-    return await run_design_audit(change_dir, config, prior=prior)
-
-
 # Severities that earn a regeneration pass. A minor gap is a clarification,
 # not a reason to spend two more spec-generation calls.
 DESIGN_AUDIT_ACTIONABLE = ("critical", "major")
 
 
 def design_audit_actionable(gaps: list[dict]) -> list[dict]:
-    """The gaps at critical or major severity: what earns the rewrite."""
+    """The findings at critical or major severity: what earns the rewrite."""
     return [
         g
         for g in gaps or []
@@ -1319,7 +1207,8 @@ def design_audit_actionable(gaps: list[dict]) -> list[dict]:
 
 
 def audit_spec_issues(gaps: list[dict]) -> list[tuple[str, str]]:
-    """The critical and major design-audit gaps whose fix needs a
+    """The critical and major plan-check findings (as
+    `plan_review_steps.finding_dicts` gives them) whose fix needs a
     requirements change (`needs_requirements_change: true`), as `(title,
     body)` issues for spec-issues.md."""
     issues = []
@@ -1327,34 +1216,15 @@ def audit_spec_issues(gaps: list[dict]) -> list[tuple[str, str]]:
         if g.get("needs_requirements_change") is not True:
             continue
         target = str(g.get("requirement") or "").strip() or g.get(
-            "category", "design-audit"
+            "category", "plan-review"
         )
         body = f"[{g.get('severity', '?')}] {g.get('description', '').strip()}"
         if g.get("suggestion"):
             body += f"\n\nSuggested change: {str(g['suggestion']).strip()}"
         issues.append(
-            (f"Design audit: {target}", body + "\n\nRaised by buildme's design audit.")
+            (f"Plan review: {target}", body + "\n\nRaised by buildme's plan review.")
         )
     return issues
-
-
-def design_audit_findings_text(gaps: list[dict]) -> str:
-    """The findings block injected into the single design/tasks regeneration.
-
-    Empty string when the audit surfaced nothing at critical or major severity
-    — the caller reads that as "report only, nothing to regenerate".
-    """
-    actionable = design_audit_actionable(gaps)
-    if not actionable:
-        return ""
-    return "\n".join(
-        "- "
-        + (f"{g['finding_id']} " if g.get("finding_id") else "")
-        + f"[{g.get('severity', '?')}] ({g.get('category', 'design-audit')}) "
-        f"{g.get('description', '')}"
-        + (f" Fix: {g['suggestion']}" if g.get("suggestion") else "")
-        for g in actionable
-    )
 
 
 def record_blocked_review(
@@ -1399,7 +1269,9 @@ class PlanBlocked(RuntimeError):
     """A planning step stopped on findings, already recorded as blocked."""
 
 
-REOPEN_LINE = "Edit the plan to fix these and resume; the step then gets one rewrite."
+REOPEN_LINE = (
+    "Edit the plan to fix these and resume; the step then gets its rewrites again."
+)
 
 
 def block_on_findings(
@@ -1454,29 +1326,39 @@ def refuse_if_blocked(sg: SpecGenState, name: str) -> None:
 
 
 def reopen_if_edited(state: BuildState, name: str, state_path: Path) -> None:
-    """A step findings blocked whose input files changed since: the plan was
-    edited, so it gets its one rewrite back."""
+    """A step findings blocked whose inputs changed since (the plan was
+    edited, or the `planning:` limits were raised) gets a fresh count of
+    rewrites. A step blocked under an older
+    blocking rule (`rules_version` below `PLAN_RULES_VERSION`) is reopened the
+    same way, once: its saved blocking findings are cleared too, so the fresh
+    check is not refused."""
     sg = state.spec_gen
     assert sg is not None
     step = sg.steps.get(name)
-    if not (
-        step
-        and step.outcome == "blocked"
-        and step.blocked_revision
-        and step.blocked_revision != sg.step_revision(name)
+    if not step or step.outcome != "blocked":
+        return
+    if step.rules_version < PLAN_RULES_VERSION:
+        step.blocking_findings = ""
+        step.rules_version = PLAN_RULES_VERSION
+        log.warning("%s: blocked under an older blocking rule; checking it again", name)
+    elif not (
+        step.blocked_revision and step.blocked_revision != sg.step_revision(name)
     ):
         return
+    else:
+        log.warning(
+            "%s: plan changed since it was blocked; its rewrites are counted again",
+            name,
+        )
     step.repair_attempts = 0
     step.repair_findings = []
+    step.blocking_counts = []
     step.blocked_revision = None
-    log.warning(
-        "%s: plan changed since it was blocked; one rewrite allowed again", name
-    )
     state.checkpoint(state_path)
 
 
 def rewrite_published(sg: SpecGenState, name: str) -> bool:
-    """The step's one rewrite was admitted with findings and published, and
+    """The step's last rewrite was admitted with findings and published, and
     nothing has blocked since: the step's revision moved on from the one the
     admission recorded."""
     step = sg.steps.get(name)
@@ -1494,160 +1376,13 @@ def open_findings(findings: list[dict]) -> list[dict]:
     return [{**f, "finding_id": "", "text": _finding_text(f)} for f in findings]
 
 
-async def run_design_audit_stage(
-    change_dir: Path,
-    config,
-    state: BuildState,
-    state_path: Path,
-) -> list[dict]:
-    """Audit the current revision, request one owner repair, and require recheck.
-
-    The recheck is given the findings the rewrite was asked to fix and blocks
-    on any not `resolved`, and on new critical findings (`recheck_verdict`).
-    Failed or unresolved blocking reviews checkpoint a blocked outcome. An
-    unchanged passed revision costs no additional model call on resume.
-    """
-    name = "design_audit"
-    reconcile_plan(config, state)
-    sg = state.spec_gen
-    assert sg is not None
-    if sg.step_passed(name):
-        return []
-    reopen_if_edited(state, name, state_path)
-    refuse_if_blocked(sg, name)
-    admitted = sg.steps[name].revision if rewrite_published(sg, name) else None
-    try:
-        if admitted is None:
-            gaps = await _run_audit(change_dir, config)
-            actionable = design_audit_actionable(gaps)
-            _log_design_audit_gaps(gaps)
-            raise_spec_issues(audit_spec_issues(gaps), name)
-            if not actionable:
-                sg.record_step(name)
-                state.checkpoint(state_path)
-                return gaps
-            if sg.repair_attempts(name):
-                block_on_findings(
-                    config,
-                    state,
-                    state_path,
-                    name,
-                    "Design audit still has blocking findings after bounded repair",
-                    open_findings(actionable),
-                )
-                raise PlanBlocked(
-                    "Design audit still has blocking findings after bounded repair"
-                )
-            numbered = number_findings(name, actionable)
-            sg.admit_repair(name, saved_findings(numbered))
-            state.checkpoint(state_path)
-            admitted = sg.steps[name].revision
-            await rewrite_plan(
-                config,
-                state,
-                design_audit_findings_text(numbered),
-                design=True,
-                step=name,
-            )
-        listed = sg.steps[name].repair_findings
-        gaps = await _run_audit(change_dir, config, prior=listed)
-        _log_design_audit_gaps(gaps)
-        raise_spec_issues(audit_spec_issues(gaps), name)
-        assessments = getattr(gaps, "prior_assessments", [])
-        blocking, advisory = recheck_verdict(
-            listed, assessments, list(gaps), deterministic=[]
-        )
-        sg.steps[name].repair_findings = saved_findings(
-            assess_listed(listed, assessments)
-        )
-        log_findings(name, "listed", sg.steps[name].repair_findings)
-        record_advisory(config, name, advisory)
-        if blocking:
-            block_on_findings(
-                config,
-                state,
-                state_path,
-                name,
-                "Design audit still has blocking findings after bounded repair",
-                blocking,
-            )
-            raise PlanBlocked(
-                "Design audit still has blocking findings after bounded repair"
-            )
-        sg.record_step(name)
-        state.checkpoint(state_path)
-        return gaps
-    except PlanBlocked:
-        raise
-    except SpecIssuesFound as found:
-        # Blocked at this revision: after `pm-spec revise` changes the
-        # requirements, the step gets its one rewrite back (`reopen_if_edited`).
-        record_blocked_review(
-            config, state, state_path, name, str(found), "", final=True
-        )
-        raise
-    except PlanRepairRejected as rejection:
-        record_advisory(config, name, rejection.advisory)
-        block_on_findings(
-            config, state, state_path, name, str(rejection), rejection.blocking
-        )
-        raise
-    except BaseException as error:
-        record_blocked_review(
-            config,
-            state,
-            state_path,
-            name,
-            str(error) or type(error).__name__,
-            "",
-            revision=admitted,
-        )
-        raise
-
-
 async def validate_plan(config, state: BuildState, state_path: Path) -> None:
-    """Review until both required audits describe the same final revision.
-
-    Either audit can request its one bounded repair. That repair invalidates
-    earlier evidence, so validate again before returning. Two possible repair
-    publications need at most three validation passes; unresolved findings stop
-    inside the audit stages and cannot advance to implementation.
-    """
+    """Run the one plan check (`run_plan_review_stage`). It passes, or it
+    records a blocked outcome and raises: unresolved findings cannot advance
+    to implementation."""
     from .llm_steps.plan_review_steps import run_plan_review_stage
 
-    for _ in range(3):
-        await run_design_audit_stage(config.change_dir, config, state, state_path)
-        await run_plan_review_stage(config.change_dir, config, state, state_path)
-        assert state.spec_gen is not None
-        if all(
-            state.spec_gen.step_passed(step) for step in ("design_audit", "plan_review")
-        ):
-            return
-    raise RuntimeError("Planning reviews did not converge within the bounded repairs")
-
-
-def _log_design_audit_gaps(gaps: list[dict]) -> None:
-    """Record what the audit found, at the severity it found it."""
-    dict_gaps = [g for g in gaps or [] if isinstance(g, dict)]
-    if not dict_gaps:
-        log.info("DONE phase=DESIGN_AUDIT gaps=0")
-        return
-    critical_gaps = [g for g in dict_gaps if g.get("severity") == "critical"]
-    if critical_gaps:
-        log.warning(
-            "DONE phase=DESIGN_AUDIT gaps=%d critical=%d",
-            len(dict_gaps),
-            len(critical_gaps),
-        )
-        for gap in critical_gaps:
-            log.warning(
-                "  gap category=%s desc=%s",
-                gap.get("category", "?"),
-                gap.get("description", "?"),
-            )
-        print(f"PHASE: design_audit_warnings — {len(critical_gaps)} critical gaps")
-    else:
-        log.info("DONE phase=DESIGN_AUDIT gaps=%d critical=0", len(dict_gaps))
+    await run_plan_review_stage(config.change_dir, config, state, state_path)
 
 
 def _load_or_create_state(config) -> BuildState:
@@ -1667,6 +1402,40 @@ def _load_or_create_state(config) -> BuildState:
     )
     state.checkpoint(state_path)
     return state
+
+
+# The `_plan_hashes` key of config.yaml's `planning:` section. Only the plan
+# check's inputs (`state.STEP_INPUTS`) include it: raising `planning.max_usd`
+# or `planning.max_rewrites` reopens a blocked check, and marks nothing stale
+# and leaves the plan revision as it was (row S8).
+PLANNING_KEY = "planning"
+
+
+def _split_planning_section(text: str) -> tuple[str, str]:
+    """config.yaml's text without its top-level `planning:` section, and the
+    section. The section runs to the next line that starts at column 0; blank
+    lines after it go with it. A file with no section comes back unchanged, so
+    its hash is what it was before the section existed."""
+    lines = text.splitlines(keepends=True)
+    for start, line in enumerate(lines):
+        if re.match(r"planning\s*:", line):
+            end = start + 1
+            while end < len(lines) and (
+                not lines[end].strip() or lines[end][0] in " \t"
+            ):
+                end += 1
+            return "".join(lines[:start] + lines[end:]), "".join(lines[start:end])
+    return text, ""
+
+
+def _planning_hash(section: str) -> str:
+    try:
+        value = yaml.safe_load(section)
+    except yaml.YAMLError:
+        value = section
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, default=str).encode()
+    ).hexdigest()
 
 
 def _plan_hashes(config) -> dict[str, str]:
@@ -1694,12 +1463,21 @@ def _plan_hashes(config) -> dict[str, str]:
     files.update(
         {"registry/" + p.name: p for p in (config.specs_dir / "registry").glob("*.md")}
     )
-    files["config.yaml"] = config.specs_dir / "config.yaml"
     hashes = {
         name: hashlib.sha256(p.read_bytes()).hexdigest()
         for name, p in files.items()
         if p.is_file()
     }
+    config_path = config.specs_dir / "config.yaml"
+    if config_path.is_file():
+        rest, section = _split_planning_section(
+            config_path.read_bytes().decode("utf-8", "surrogateescape")
+        )
+        hashes["config.yaml"] = hashlib.sha256(
+            rest.encode("utf-8", "surrogateescape")
+        ).hexdigest()
+        if section:
+            hashes[PLANNING_KEY] = _planning_hash(section)
     hashes["references"] = hashlib.sha256(
         config.reference_docs_text().encode()
     ).hexdigest()
@@ -1762,7 +1540,11 @@ def reconcile_plan(
         stale.update({"tasks", "rubric"})
     stale -= (regenerated or set()) | recovered
     sg.stale_artifacts = sorted(stale)
-    revision = hashlib.sha256(json.dumps(current, sort_keys=True).encode()).hexdigest()
+    revision = hashlib.sha256(
+        json.dumps(
+            {k: v for k, v in current.items() if k != PLANNING_KEY}, sort_keys=True
+        ).encode()
+    ).hexdigest()
     if revision != sg.revision:
         # Evidence for any earlier revision is stale. The explanation stage is
         # advisory and does not authorize implementation.
@@ -1785,12 +1567,10 @@ def _finish_plan_publication(config) -> set[str]:
         return set()
     files = json.loads(journal.read_text())
     for name, item in files.items():
-        if Path(name).name != name or name not in {
-            "design.md",
-            "tasks.md",
-            "rubric.md",
-            "unknowns.md",
-        }:
+        if Path(name).name != name or not (
+            name in {"design.md", "tasks.md", "rubric.md", "unknowns.md"}
+            or PLAN_EDITS_DIFF.fullmatch(name)
+        ):
             raise ValueError("Invalid planning publication journal")
         path = config.change_dir / name
         actual = path.read_text() if path.exists() else None
@@ -1803,32 +1583,85 @@ def _finish_plan_publication(config) -> set[str]:
     return {Path(name).stem for name in files}
 
 
+# The unified diff of one rewrite's edits, `plan-edits-<attempt>.diff` in the
+# change dir; that attempt's recheck is shown it (`plan_edits_diff`).
+PLAN_EDITS_DIFF = re.compile(r"plan-edits-(\d+)\.diff")
+
+
+def apply_plan_edits(staged_dir: Path, edits) -> dict[str, str]:
+    """Apply a rewrite's edits (`models.PlanEdit`), in order, to design.md and
+    tasks.md in *staged_dir*, and return the text of each file they changed.
+
+    Each `old_str` must occur exactly once in its file as the edits before it
+    leave it. A miss, no edits at all, or edits that leave both files as
+    they were raise `PlanRepairRejected` and write nothing.
+    """
+    if not edits:
+        _reject_edits("The rewrite returned no edits")
+    texts: dict[str, str] = {}
+    originals: dict[str, str] = {}
+    for index, edit in enumerate(edits, 1):
+        if edit.file not in texts:
+            path = staged_dir / edit.file
+            texts[edit.file] = path.read_text() if path.exists() else ""
+            originals[edit.file] = texts[edit.file]
+        count = texts[edit.file].count(edit.old_str) if edit.old_str else 0
+        if count != 1:
+            found = "not found" if count == 0 else f"found {count} times"
+            _reject_edits(f"Plan edit {index} in {edit.file}: old_str {found}")
+        texts[edit.file] = texts[edit.file].replace(edit.old_str, edit.new_str, 1)
+    texts = {name: text for name, text in texts.items() if text != originals[name]}
+    if not texts:
+        _reject_edits("The rewrite's edits change nothing")
+    for name, text in texts.items():
+        atomic_write(staged_dir / name, text)
+    return texts
+
+
+def _reject_edits(message: str) -> None:
+    blocking, _ = recheck_verdict(
+        [],
+        [],
+        [],
+        deterministic=[
+            {"category": "plan-edit", "severity": "critical", "description": message}
+        ],
+    )
+    raise PlanRepairRejected(message, blocking=blocking)
+
+
+def plan_edits_diff(change_dir: Path, attempt: int) -> str:
+    """The published diff of rewrite *attempt*; empty when there is none."""
+    path = Path(change_dir) / f"plan-edits-{attempt}.diff"
+    return path.read_text() if path.exists() else ""
+
+
 async def rewrite_plan(
     config,
     state: BuildState,
-    findings_text: str,
+    findings: list[dict],
     *,
-    design: bool = False,
+    attempt: int = 1,
     step: str | None = None,
-    listed: list[dict] | None = None,
 ) -> int:
     """The sole feedback publisher: stage, validate, then publish one revision.
 
     Failed generation leaves the original set intact. A crash during publication
     leaves a journal that must reconcile before any consumer accepts the files.
 
-    `step` names the caller. When it is the tasks audit, the staged tasks
-    recheck checks `listed` (the numbered findings the rewrite was asked to
-    fix: the model is asked about its own, and those from the deterministic
-    scans are resolved when every scan passes), and their statuses are saved
-    on the step. Every other caller's recheck looks only for new problems. A rewrite that still
-    has blocking findings (`recheck_verdict`) raises `PlanRepairRejected`.
+    One call (`run_plan_edit`) returns exact replacements in design.md and
+    tasks.md for these numbered findings, and `apply_plan_edits` applies them;
+    lines no edit names are kept byte for byte. An edited design.md gets its
+    unknowns.md written again. The rubric is written again whole, and
+    `plan-edits-<attempt>.diff` is published with the files. `step` names the
+    caller. The staged plan must pass the deterministic scans and the
+    requirements check, or it raises `PlanRepairRejected`; the caller's own
+    recheck judges the rest.
     """
-    from .llm_steps.spec_steps import generate_artifact
+    from .llm_steps.plan_review_steps import run_plan_edit
     from .tdd_engine import parse_blocks
 
     reconcile_plan(config, state)
-    names = ["design", "tasks"] if design else ["tasks"]
     with tempfile.TemporaryDirectory(prefix="buildme-plan-") as directory:
         staged = copy.copy(config)
         staged.specs_dir = Path(directory) / "specs"
@@ -1850,43 +1683,31 @@ async def rewrite_plan(
         if source_config.exists():
             shutil.copy2(source_config, staged.specs_dir / "config.yaml")
         cm = ChangeManager(staged.specs_dir)
-        for name in list(names):
-            if name == "tasks" and design:
-                await _generate_unknowns(
-                    cm, staged.change_dir, staged, state.model_copy(deep=True)
-                )
-                names.append("unknowns")
-            context = cm.artifact_context(staged.change_dir, name)
-            context["unknowns_content"] = read_unknowns(staged.change_dir)
-            text = await generate_artifact(
-                name,
-                context,
-                staged,
-                audit_findings=findings_text,
-                research=read_research(state),
-                codebase_analysis=read_codebase_analysis(state),
-                reference_docs=config.reference_docs_text(),
+        result = await run_plan_edit(staged.change_dir, staged, findings)
+        if result.not_fixed:
+            log.warning(
+                "%s: the rewrite could not fix %s",
+                step or "plan_review",
+                ", ".join(result.not_fixed),
             )
-            if name == "design":
-                raise_spec_issues(design_spec_issues(text), step or "design")
-            atomic_write(staged.change_dir / f"{name}.md", text)
-        label = step or "tasks_audit"
-        listed = list(listed or []) if step == "tasks_audit" else []
+        edited = apply_plan_edits(staged.change_dir, result.edits)
+        names = [
+            Path(name).stem for name in ("design.md", "tasks.md") if name in edited
+        ]
+        if "design.md" in edited:
+            raise_spec_issues(design_spec_issues(edited["design.md"]), step or "design")
+            await _generate_unknowns(
+                cm, staged.change_dir, staged, state.model_copy(deep=True)
+            )
+            names.append("unknowns")
+        label = step or "plan_review"
 
-        def reject(
-            message: str, deterministic: list[dict], assessments=(), new=()
-        ) -> None:
+        def reject(message: str, deterministic: list[dict]) -> None:
             blocking, advisory = recheck_verdict(
-                listed, assessments, list(new), deterministic=deterministic
+                [], [], [], deterministic=deterministic
             )
             log_findings(label, "blocking", blocking)
-            log_findings(label, "advisory", advisory)
-            raise PlanRepairRejected(
-                message,
-                blocking=blocking,
-                advisory=advisory,
-                assessments=assess_listed(listed, assessments),
-            )
+            raise PlanRepairRejected(message, blocking=blocking, advisory=advisory)
 
         tasks_path = staged.change_dir / "tasks.md"
         if not parse_blocks(tasks_path):
@@ -1915,27 +1736,6 @@ async def rewrite_plan(
                     }
                 ],
             )
-        from .llm_steps.spec_steps import run_tasks_audit
-
-        findings = await run_tasks_audit(
-            staged.change_dir, staged, prior=model_listed(listed) or None
-        )
-        given = list(getattr(findings, "prior_assessments", [])) + scan_assessments(
-            listed, []
-        )
-        blocking, advisory = recheck_verdict(
-            listed, given, list(findings), deterministic=[]
-        )
-        if blocking:
-            reject(
-                "Rewritten tasks still have blocking shape findings",
-                [],
-                given,
-                findings,
-            )
-        assessed = assess_listed(listed, given)
-        log_findings(label, "listed", assessed)
-        record_advisory(config, label, advisory)
         # The rubric describes this exact task/design set.
         await _generate_rubric(staged.change_dir, staged, state)
         names.append("rubric")
@@ -1947,6 +1747,25 @@ async def rewrite_plan(
                 "before": original.read_text() if original.exists() else None,
                 "after": (staged.change_dir / filename).read_text(),
             }
+        diff_name = f"plan-edits-{attempt}.diff"
+        diff_path = config.change_dir / diff_name
+        publication[diff_name] = {
+            "before": diff_path.read_text() if diff_path.exists() else None,
+            "after": "".join(
+                "".join(
+                    difflib.unified_diff(
+                        publication[name]["before"].splitlines(keepends=True)
+                        if publication[name]["before"] is not None
+                        else [],
+                        publication[name]["after"].splitlines(keepends=True),
+                        fromfile=f"a/{name}",
+                        tofile=f"b/{name}",
+                    )
+                )
+                for name in ("design.md", "tasks.md")
+                if name in edited
+            ),
+        }
         atomic_write(
             config.change_dir / ".plan-publication.json", json.dumps(publication)
         )
@@ -1954,19 +1773,12 @@ async def rewrite_plan(
     reconcile_plan(config, state, regenerated=set(names))
     # Reconciliation records the published unknowns evidence on the live state.
     state.checkpoint(config.state_file_path())
-    assert state.spec_gen is not None
-    state.spec_gen.record_step("tasks_audit", "passed")
-    if step == "tasks_audit":
-        state.spec_gen.steps["tasks_audit"].repair_findings = saved_findings(assessed)
-    state.checkpoint(config.state_file_path())
     _commit_change_dir(
         config,
         config.change_dir,
-        "docs(specs): publish "
-        + ("design audit" if design else "plan review")
-        + " repair",
+        "docs(specs): publish plan review repair",
     )
-    return 2 if design else 1
+    return 2 if "design.md" in edited else 1
 
 
 def assert_plan_current(config, state: BuildState, *, archived: bool = False) -> None:
@@ -1982,9 +1794,7 @@ def assert_plan_current(config, state: BuildState, *, archived: bool = False) ->
         )
     if (config.change_dir / ".plan-publication.json").exists():
         raise RuntimeError("Planning publication is incomplete")
-    if not state.spec_gen.step_passed("design_audit") or not state.spec_gen.step_passed(
-        "plan_review"
-    ):
+    if not state.spec_gen.step_passed("plan_review"):
         raise RuntimeError("Required planning review evidence is missing or stale")
     current = _plan_hashes(config)
     expected = state.spec_gen.artifact_hashes
@@ -1993,6 +1803,7 @@ def assert_plan_current(config, state: BuildState, *, archived: bool = False) ->
         key
         for key in keys
         if not (archived and key.startswith("registry/"))
+        and key != PLANNING_KEY
         and current.get(key) != expected.get(key)
     ]
     if changed or state.spec_gen.stale_artifacts:

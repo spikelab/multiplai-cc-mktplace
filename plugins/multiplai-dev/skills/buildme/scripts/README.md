@@ -314,6 +314,7 @@ so Node commands are unchanged.
 |---|---|---|
 | `tdd.narrow_tests` | `true` / `false` | `true`; `false` runs the whole command in the loop too |
 | `tdd.parallel` | `auto` / `off` | `auto`; `off` runs the full suite serially |
+| `tdd.test_timeout` | whole seconds | `300`; each full-suite run (the baseline, the integration gates, the final verification, an epic's merge tests) that takes longer counts as not run |
 | `tdd.test_writer_max_turns` | positive integer | `30`; the block test writer's turn cap, stated in its prompt |
 | `tdd.mutation_test_writer_max_turns` | positive integer | `30`; the mutation round's test writer's turn cap |
 
@@ -473,7 +474,7 @@ An unknown key or effort name is dropped with a warning.
 
 | Stage | Steps |
 |---|---|
-| `spec` | `spec_artifact` (design, unknowns and tasks), `rubric`, `design_audit`, `tasks_audit`, `codebase_analysis`, `explainer`, `respec`, `research` |
+| `spec` | `spec_artifact` (design, unknowns and tasks), `rubric`, `codebase_analysis`, `explainer`, `respec`, `research` |
 | `agent` | `test_writer`, `implementer`, `refactor`, `refactor_all`, `mutation_test_writer`, `integration_fix`, `review_fix`, `docs_update`, `merge` |
 | `review` | `review`, `adjudication`, `test_quality_audit`, `plan_review`, `integration_fix_escalated` (the last integration-fix attempt), `review_fix_escalated` (the review loop's last fix, which questions the block's approach), `findings_triage` (the findings stage's one read-only agent per PR comment), `findings_self_check` (the findings stage's one read-only check of a round's fix commits) |
 

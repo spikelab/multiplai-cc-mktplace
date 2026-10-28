@@ -55,8 +55,8 @@ _DEFAULT_REFERENCE_DOCS: dict[str, list[str]] = {
 }
 
 # Per-document ceiling when reference docs are inlined into a spec-generation
-# prompt. The spec-gen system prompt forbids tools, so inlining is the only
-# channel — and an unbounded standards doc would crowd out the specs it is
+# prompt. The writer is not handed the docs' paths (and the unknowns pass has
+# no tools), so inlining is the only channel — and an unbounded standards doc would crowd out the specs it is
 # meant to inform.
 #
 # Sized against the real corpus rather than a round number: the docs run
@@ -75,9 +75,9 @@ REFERENCE_DOC_CHAR_LIMIT = 24000
 #
 # 12000 is a judgment, not a measurement: it admits a typical CLAUDE.md whole
 # and trims only the outliers. Trimming is safe here in a way it is not for the
-# spec generator — that one has no tools, while a reviewer holds `Read` and
-# `summarize_reference_doc` always emits the full section index, so a section
-# that did not fit is known to exist and can be fetched.
+# spec generator — that one is not handed the docs' paths, while a reviewer
+# holds `Read` and `summarize_reference_doc` always emits the full section
+# index, so a section that did not fit is known to exist and can be fetched.
 STANDARDS_DOC_CHAR_LIMIT = 12000
 
 
@@ -447,9 +447,9 @@ MODEL_STAGES: tuple[str, ...] = ("spec", "agent", "review")
 
 # Every buildme step that calls a model, and its stage. A step name is the
 # call's `budget_label`, except: every `spec:<id>` artifact is
-# `spec_artifact`; the unlabeled explainer and respec calls are named for
-# what they do; `review_fix` is the fix agent the review
-# loop runs (it charges the budget as `implementer`); and
+# `spec_artifact`; the unlabeled respec call is named for what it does;
+# `review_fix` is the fix agent the review loop runs (it charges the budget
+# as `implementer`); and
 # `integration_fix_escalated` is the last integration-fix attempt, which has
 # always run on the review model, and `review_fix_escalated` is the review
 # loop's last fix, which questions the block's approach on the same model. A
@@ -457,9 +457,8 @@ MODEL_STAGES: tuple[str, ...] = ("spec", "agent", "review")
 # step in it.
 STEP_STAGES: dict[str, str] = {
     "spec_artifact": "spec",
+    "plan_rewrite": "spec",
     "rubric": "spec",
-    "design_audit": "spec",
-    "tasks_audit": "spec",
     "codebase_analysis": "spec",
     "explainer": "spec",
     "respec": "spec",
@@ -482,6 +481,10 @@ STEP_STAGES: dict[str, str] = {
     "findings_triage": "review",
     "findings_self_check": "review",
 }
+
+# Steps the one plan check (`plan_review`) replaced. A `models:` or `efforts:`
+# key naming one is dropped with a warning that says which key applies now.
+RETIRED_STEP_KEYS: frozenset[str] = frozenset({"design_audit", "tasks_audit"})
 
 # The keys `models:` and `efforts:` accept: a step, a stage, or `default`.
 MODEL_KEYS: frozenset[str] = (
@@ -728,6 +731,23 @@ def discover_test_command(project_dir: Path | str) -> tuple[str, str] | None:
     return None
 
 
+def parse_test_timeout(value: object) -> int:
+    """`tdd.test_timeout` from config.yaml as whole seconds above 0; unset is
+    `gates.DEFAULT_TEST_TIMEOUT`, and anything else warns and is that too."""
+    from .gates import DEFAULT_TEST_TIMEOUT
+
+    if value is None:
+        return DEFAULT_TEST_TIMEOUT
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    log.warning(
+        "Unrecognized tdd.test_timeout value %r in config.yaml — using %d",
+        value,
+        DEFAULT_TEST_TIMEOUT,
+    )
+    return DEFAULT_TEST_TIMEOUT
+
+
 def parse_parallel(value: object) -> str:
     """`tdd.parallel` from config.yaml as "auto" or "off". YAML reads a bare
     `off` / `no` as false and `on` as true; anything else warns and is "auto"."""
@@ -781,6 +801,10 @@ class BuildConfig:
     # command runs pytest and pytest-xdist imports in its environment
     # (`gates.parallel_command`); "off" never does.
     parallel_tests: str = "auto"
+    # tdd.test_timeout: seconds each full-suite run gets (the baseline, the
+    # integration gates, the final verification and the epic's merge tests)
+    # before it counts as not run.
+    test_timeout: int = 300
     # tdd.test_writer_max_turns / tdd.mutation_test_writer_max_turns: the turn
     # cap of the block test writer and of the mutation round's test writer.
     test_writer_max_turns: int = 30
@@ -876,6 +900,13 @@ class BuildConfig:
     # baseline to diff against; its spend is capped by its own --max-usd.
     spec_extract: bool = True
     spec_extract_max_usd: float = 80.0
+    # `planning:` block. `max_rewrites`: rewrites the plan check may ask for
+    # before it blocks. `max_usd`: planning spend (the writer, the edits, the
+    # check, the rubric and the explainers) at which no further rewrite starts.
+    # Raising either and resuming reopens a blocked check without regenerating
+    # the plan (`spec_generator._plan_hashes`).
+    planning_max_rewrites: int = 2
+    planning_max_usd: float = 40.0
 
     # Runtime marker, not user-configurable: set to the branch name once the
     # pipeline has created its own worktree+branch (or re-bound to one on
@@ -1294,6 +1325,7 @@ class BuildConfig:
                 narrow,
             )
         self.parallel_tests = parse_parallel(tdd.get("parallel", "auto"))
+        self.test_timeout = parse_test_timeout(tdd.get("test_timeout"))
         for key in ("test_writer_max_turns", "mutation_test_writer_max_turns"):
             if key in tdd:
                 setattr(self, key, _cfg_int(tdd[key], f"tdd.{key}", getattr(self, key)))
@@ -1441,12 +1473,31 @@ class BuildConfig:
             allow_bots=[b.strip() for b in allow_bots],
         )
 
+        planning_cfg = _cfg_mapping(data.get("planning"), "planning")
+        self.planning_max_rewrites = _cfg_int(
+            planning_cfg.get("max_rewrites", 2), "planning.max_rewrites", 2
+        )
+        usd = planning_cfg.get("max_usd", 40.0)
+        if isinstance(usd, bool) or not isinstance(usd, (int, float)) or usd <= 0:
+            log.warning(
+                "Invalid planning.max_usd value %r in config.yaml — using 40", usd
+            )
+            usd = 40.0
+        self.planning_max_usd = float(usd)
+
         self._load_epic(_cfg_mapping(data.get("epic"), "epic"))
 
         specs: dict[str, str] = {}
         for key, spec in _cfg_mapping(data.get("models"), "models").items():
             key = str(key)
-            if key not in MODEL_KEYS:
+            if key in RETIRED_STEP_KEYS:
+                log.warning(
+                    "models.%s in config.yaml no longer has any effect: one "
+                    "plan check replaced the design and tasks audits, and "
+                    "models.plan_review is the key that applies to it",
+                    key,
+                )
+            elif key not in MODEL_KEYS:
                 log.warning(
                     "Dropping models.%s in config.yaml — not a buildme step, "
                     "a stage (%s) or 'default'",
@@ -1469,7 +1520,14 @@ class BuildConfig:
         for key, value in _cfg_mapping(data.get("efforts"), "efforts").items():
             key = str(key)
             name = str(value).strip().lower() if value is not None else ""
-            if key not in MODEL_KEYS:
+            if key in RETIRED_STEP_KEYS:
+                log.warning(
+                    "efforts.%s in config.yaml no longer has any effect: one "
+                    "plan check replaced the design and tasks audits, and "
+                    "efforts.plan_review is the key that applies to it",
+                    key,
+                )
+            elif key not in MODEL_KEYS:
                 log.warning(
                     "Dropping efforts.%s in config.yaml — not a buildme step, "
                     "a stage (%s) or 'default'",
@@ -2130,8 +2188,8 @@ class BuildConfig:
     def reference_docs_text(self) -> str:
         """The reference docs inlined for a spec-generation prompt.
 
-        The spec-generation system prompt forbids tools, so inlining is the
-        only channel the generator has. Each doc over REFERENCE_DOC_CHAR_LIMIT
+        The writer is not handed the docs' paths (and the unknowns pass has no
+        tools), so inlining is the only channel the generator has. Each doc over REFERENCE_DOC_CHAR_LIMIT
         is reduced by `summarize_reference_doc` — whole sections plus a full
         section index, never a mid-sentence cut. An unreadable doc is skipped
         rather than failing the build. Returns "" when nothing resolves — the
