@@ -1149,6 +1149,57 @@ def is_ancestor_of_head(repo: Path | str, sha: str) -> bool:
     return res.returncode == 0
 
 
+def commit_trailers(repo: Path | str) -> list[tuple[str, dict[str, str]]] | None:
+    """Every commit reachable from *repo*'s HEAD, newest first, with its
+    trailers (keys lower-cased; a key given twice keeps its last value).
+    None when git could not be asked; [] for a repo with no commit."""
+    res = _run(
+        ["git", "log", "HEAD", "--format=%H%x1f%(trailers:only,unfold)%x1e"],
+        cwd=repo,
+        errors="replace",
+    )
+    if not res.ok:
+        if not has_commits(repo) and is_git_repo(repo):
+            return []
+        log.warning("git log of trailers failed: %s", res.stderr.strip())
+        return None
+    out: list[tuple[str, dict[str, str]]] = []
+    for record in res.stdout.split("\x1e"):
+        sha, sep, body = record.strip("\n").partition("\x1f")
+        if not sep or not sha.strip():
+            continue
+        trailers: dict[str, str] = {}
+        for line in body.splitlines():
+            key, colon, value = line.partition(":")
+            if colon and key.strip():
+                trailers[key.strip().lower()] = value.strip()
+        out.append((sha.strip(), trailers))
+    return out
+
+
+def user_name(repo: Path | str) -> str:
+    """git's `user.name` in *repo*, or "" when unset."""
+    res = _run(["git", "config", "user.name"], cwd=repo)
+    return res.stdout.strip() if res.ok else ""
+
+
+def commit_empty(repo: Path | str, message: str) -> str:
+    """Commit nothing but *message* on *repo*'s HEAD and return the new SHA.
+
+    `--only --allow-empty` with no path: whatever the index holds stays staged
+    and out of the commit. The repo's hooks run. Raises GitLifecycleError when
+    git refuses."""
+    res = _run(["git", "commit", "--only", "--allow-empty", "-m", message], cwd=repo)
+    if not res.ok:
+        raise GitLifecycleError(
+            f"git commit failed: {(res.stderr or res.stdout).strip()[-400:]}"
+        )
+    sha = rev_parse_head(repo)
+    if sha is None:
+        raise GitLifecycleError("git commit succeeded but HEAD cannot be read")
+    return sha
+
+
 def tree_is_clean(
     repo: Path | str, ignore: Path | str | None = None, every_submodule: bool = False
 ) -> bool:

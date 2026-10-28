@@ -350,6 +350,20 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             if rc is not None:
                 return rc
 
+        # Stop 4 (`review.plan_approval`): an engineer approves the plan before
+        # any code is written. Exit 3 with plan-approval.md until the build's
+        # branch holds an approval commit for this plan revision.
+        if state.phase != BuildPhase.PUBLISH:
+            rc = _plan_approval_gate(
+                config,
+                state,
+                state_path,
+                progress,
+                approve=bool(getattr(args, "approve_plan", False)),
+            )
+            if rc is not None:
+                return rc
+
         if state.phase != BuildPhase.PUBLISH:
             from .spec_generator import assert_plan_current
 
@@ -1934,6 +1948,213 @@ def _run_size_gate(
     )
     print(f"{MARKER_SPLIT_REQUIRED}:{path}", flush=True)
     return WAITING_EXIT
+
+
+#: The file stop 4 asks the engineer to approve, relative to the change dir.
+#: The one place that names it.
+PLAN_APPROVAL_DOC = "design.md"
+#: Read with the plan, never approved on its own.
+PLAN_READING_DOCS = ("tasks.md",)
+PLAN_APPROVAL_FILE = "plan-approval.md"
+PLAN_APPROVAL_STOP = "4"
+
+
+def _approval_for(config: BuildConfig, revision: str) -> tuple[str, str] | None:
+    """The newest commit on the build's branch (HEAD of the project) whose
+    trailers are `Stop: 4`, `Revision: <revision>` and `Approved-by:` or
+    `Decided-by:`, as (sha, who). None when there is none.
+
+    Raises GitLifecycleError when git cannot be asked: "no answer" must not
+    read as "not approved" and post the request again, nor as approved."""
+    commits = git_ops.commit_trailers(config.project_dir)
+    if commits is None:
+        raise git_ops.GitLifecycleError(
+            f"cannot read the commits of {config.project_dir} to look for the plan approval"
+        )
+    for sha, trailers in commits:
+        if (
+            trailers.get("stop") == PLAN_APPROVAL_STOP
+            and trailers.get("revision") == revision
+        ):
+            who = trailers.get("approved-by") or trailers.get("decided-by")
+            if who:
+                return sha, who
+    return None
+
+
+def _approval_message(change: str, revision: str, who: str) -> str:
+    return (
+        f"review({change}): {who} approved the implementation plan\n\n"
+        f"Stop: {PLAN_APPROVAL_STOP}\n"
+        f"Revision: {revision}\n"
+        f"Approved-by: {who}\n"
+    )
+
+
+def _plan_approval_request(
+    config: BuildConfig, state: BuildState, revision: str
+) -> str:
+    """plan-approval.md: what to approve, what to read, the plan check's
+    outcome, and the two ways to record the approval."""
+    from .tdd_engine import parse_blocks
+
+    sg = state.spec_gen or SpecGenState()
+    check = sg.steps.get("plan_review")
+    if check is None:
+        check_lines = ["- No plan check is recorded for this revision."]
+    else:
+        check_lines = [f"- Outcome: {check.outcome}"]
+        if check.reason:
+            check_lines.append(f"- Reason: {check.reason}")
+        check_lines.append(f"- Rewrites admitted: {check.repair_attempts}")
+        if check.blocking_findings:
+            check_lines.append(f"- Blocking findings: {check.blocking_findings}")
+        check_lines.append(
+            f"- Advisory findings, if any, are in `{config.progress_file_path().name}` "
+            "under `PLAN_REVIEW_ADVISORY`."
+        )
+    reading = []
+    for name in PLAN_READING_DOCS:
+        path = config.change_dir / name
+        if name == "tasks.md":
+            reading.append(
+                f"- `{name}`: {len(parse_blocks(path))} block(s), the order TDD builds them in"
+            )
+        else:
+            reading.append(f"- `{name}`")
+    return "\n".join(
+        [
+            f"# Approve the implementation plan: {config.change_name}",
+            "",
+            f"Plan revision: `{revision}`",
+            "",
+            "buildme writes no code until an engineer approves this plan.",
+            "",
+            "## To approve",
+            "",
+            f"- `{PLAN_APPROVAL_DOC}`: how the change will be implemented. Approve this file.",
+            "",
+            "## To read (no approval)",
+            "",
+            *reading,
+            "",
+            "## Plan check",
+            "",
+            *check_lines,
+            "",
+            "## How to approve",
+            "",
+            "Re-run the same build command with `--approve-plan`: it commits the",
+            "approval in your name (git `user.name`). Or commit it yourself on the",
+            f"build's branch{f' `{state.branch}`' if state.branch else ''}, with these trailers:",
+            "",
+            "```",
+            f"git commit --only --allow-empty -m \"review({config.change_name}): approve the implementation plan\" \\",
+            f"  --trailer \"Stop: {PLAN_APPROVAL_STOP}\" --trailer \"Revision: {revision}\" \\",
+            "  --trailer \"Approved-by: <your name>\"",
+            "```",
+            "",
+            "Then re-run the same build command. An edit to the plan makes a new",
+            "revision, and the build asks again.",
+            "",
+        ]
+    )
+
+
+def _plan_approval_gate(
+    config: BuildConfig,
+    state: BuildState,
+    state_path: Path,
+    progress: ProgressWriter,
+    *,
+    approve: bool,
+) -> int | None:
+    """Stop 4: wait for an engineer's approval of the implementation plan,
+    after the size gate, under `review.plan_approval`.
+
+    The approval is a commit on the build's branch with `Stop: 4`,
+    `Revision: <state.spec_gen.revision>` and `Approved-by:` or `Decided-by:`
+    trailers. Found: saves `state.plan_approval` and goes on. Not found:
+    writes `plan-approval.md` (kept as it is while the revision is the same),
+    prints `PLAN:WAITING:<path>` and returns 3. `--approve-plan` (*approve*)
+    makes the commit, `Approved-by: <git user.name>`, when none is there.
+    A saved approval for another revision is cleared (row S9).
+    """
+    from .intake import MARKER_PLAN_WAITING, WAITING_EXIT
+
+    if not config.plan_approval:
+        if approve:
+            log.info("SKIP --approve-plan reason=review.plan_approval is off")
+        return None
+    log.info("START phase=PLAN_APPROVAL")
+    revision = state.spec_gen.revision if state.spec_gen else ""
+    saved = state.plan_approval
+    if saved is not None and saved.revision == revision:
+        log.info("DONE phase=PLAN_APPROVAL approved_by=%s saved=true", saved.by)
+        return None
+    if saved is not None:
+        state.plan_approval = None
+        state.checkpoint(state_path)
+    try:
+        found = _approval_for(config, revision)
+        if found is None and approve:
+            who = git_ops.user_name(config.project_dir)
+            if not who:
+                print(
+                    "ERROR:--approve-plan needs git user.name; set it "
+                    "(git config user.name \"<your name>\") and re-run",
+                    flush=True,
+                )
+                return 1
+            sha = git_ops.commit_empty(
+                config.project_dir,
+                _approval_message(config.change_name, revision, who),
+            )
+            found = (sha, who)
+    except git_ops.GitLifecycleError as e:
+        log.error("FAIL phase=PLAN_APPROVAL error=%s", e)
+        print(f"ERROR:{e}", flush=True)
+        return 1
+    if found is not None:
+        sha, who = found
+        from .state import PlanApproval
+
+        state.plan_approval = PlanApproval(revision=revision, by=who, commit=sha)
+        state.checkpoint(state_path)
+        log.info("DONE phase=PLAN_APPROVAL approved_by=%s commit=%s", who, sha)
+        _progress_note(
+            progress,
+            "PLAN_APPROVAL",
+            f"Plan revision {revision[:12]} approved by {who} in {sha[:12]}",
+        )
+        return None
+
+    path = config.change_dir / PLAN_APPROVAL_FILE
+    if _requested_revision(path) != revision:
+        path.write_text(_plan_approval_request(config, state, revision))
+    state.checkpoint(state_path)
+    log.info("DONE phase=PLAN_APPROVAL waiting=true request=%s", path)
+    _progress_note(
+        progress,
+        "PLAN_APPROVAL",
+        f"Waiting for an engineer to approve {PLAN_APPROVAL_DOC} at revision "
+        f"{revision[:12]}; request in {path}. Re-run with --approve-plan, or after "
+        "the approval commit lands on the build's branch.",
+    )
+    print(f"{MARKER_PLAN_WAITING}:{path}", flush=True)
+    return WAITING_EXIT
+
+
+def _requested_revision(path: Path) -> str | None:
+    """The plan revision an existing plan-approval.md asks about, or None."""
+    try:
+        text = path.read_text()
+    except (OSError, UnicodeError):
+        return None
+    for line in text.splitlines():
+        if line.startswith("Plan revision: `") and line.endswith("`"):
+            return line[len("Plan revision: `") : -1]
+    return None
 
 
 def _inside_own_worktree(config: BuildConfig, state: BuildState) -> bool:

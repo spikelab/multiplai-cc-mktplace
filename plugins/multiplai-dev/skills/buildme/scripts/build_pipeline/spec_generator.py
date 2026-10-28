@@ -1418,11 +1418,13 @@ def _load_or_create_state(config) -> BuildState:
 PLANNING_KEY = "planning"
 
 # Top-level config.yaml sections no planning step reads: how the TDD loop runs
-# its tests, how an epic runs its children, and the git switches. They are cut
-# out of the plan's hash and stored nowhere, so editing one mid-build changes
-# no plan revision and marks nothing stale (rows S3, S4 of
-# plan-buildme-subdir-narrow-tests-2026-10-28.md).
-UNPLANNED_SECTIONS = ("tdd", "epic", "git")
+# its tests, how an epic runs its children, the git switches, and `review:`
+# (`review.plan_approval`, stop 4). They are cut out of the plan's hash and
+# stored nowhere, so editing one mid-build changes no plan revision and marks
+# nothing stale (rows S3, S4 of plan-buildme-subdir-narrow-tests-2026-10-28.md):
+# turning stop 4 on for a planned build asks for an approval of that plan
+# instead of writing a new one.
+UNPLANNED_SECTIONS = ("tdd", "epic", "git", "review")
 
 
 def _split_sections(text: str, keys: tuple[str, ...]) -> tuple[str, dict[str, str]]:
@@ -1621,6 +1623,7 @@ def reconcile_plan(
         state.verification = None
         state.split_required = False
         state.size_accepted = False
+        state.plan_approval = None
     sg.artifact_hashes = current
     if "unknowns" in recovered:
         _record_explainer_outcome(config, state)

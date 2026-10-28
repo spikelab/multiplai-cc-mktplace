@@ -53,6 +53,16 @@ class StepOutcome(BaseModel):
     blocking_counts: list[int] = Field(default_factory=list)
 
 
+class PlanApproval(BaseModel):
+    """An engineer's approval of the implementation plan at one plan revision
+    (stop 4): the commit on the build's branch with `Stop: 4`,
+    `Revision: <revision>` and `Approved-by:` or `Decided-by:` trailers."""
+
+    revision: str
+    by: str
+    commit: str
+
+
 # The plan files each step's outcome is tied to (`SpecGenState.step_revision`),
 # besides specs.md and requirements/*.md, which every step reads. A step not
 # listed is tied to the whole plan revision.
@@ -393,6 +403,11 @@ class BuildState(BaseModel):
     # (a resume, or a FAILED build re-running every phase) keeps the
     # acceptance instead of stopping again. Default False.
     size_accepted: bool = False
+    # The approval commit stop 4 found for the plan revision it names
+    # (`orchestrator._plan_approval_gate`, under `review.plan_approval`). A new
+    # plan revision clears it (`spec_generator.reconcile_plan`). None in older
+    # checkpoints and while the build waits for an approval.
+    plan_approval: PlanApproval | None = None
 
     # Git lifecycle — set when the pipeline creates its own worktree/branch.
     # Persisted so a resume RE-BINDS to the existing worktree instead of

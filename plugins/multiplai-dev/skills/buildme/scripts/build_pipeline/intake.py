@@ -10,6 +10,7 @@ existing spec-stage commit (none of these names is in
 - ``research.md``           — research content, or why none was needed
 - ``research-request.md``   — the topics the wrapper should research
 - ``split-proposal.md``     — written by the size gate (orchestrator)
+- ``plan-approval.md``      — written by stop 4, the plan approval (orchestrator)
 
 Exit code 3 (WAITING_EXIT) means "waiting on a human or the wrapper"; each
 case prints one stdout marker the wrapper acts on before re-running the same
@@ -34,6 +35,9 @@ WAITING_EXIT = 3
 
 MARKER_RESEARCH_NEEDED = "RESEARCH:NEEDED"
 MARKER_SPLIT_REQUIRED = "SPLIT:REQUIRED"
+# Stop 4: the build waits for an engineer's approval of the implementation plan
+# (`orchestrator._plan_approval_gate`).
+MARKER_PLAN_WAITING = "PLAN:WAITING"
 
 CONFIG_NOT_COMMITTED = (
     "specs/config.yaml is not committed; the build's worktree would not see it. "
