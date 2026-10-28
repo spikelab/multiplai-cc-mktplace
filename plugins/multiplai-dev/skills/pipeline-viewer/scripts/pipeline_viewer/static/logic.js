@@ -371,6 +371,21 @@
     return out;
   }
 
+  /* --- questions asked on the page ----------------------------------------- */
+
+  /* The questions about one section, oldest first. The page sends at most
+   * 200 characters of a heading, so a long one is matched on those. */
+  function questionsFor(questions, doc, heading) {
+    const key = String(heading || "").slice(0, 200);
+    return (questions || []).filter((q) => q && q.doc === doc && q.section === key);
+  }
+
+  /* "You asked", "Pat Planner asked", "Someone asked". */
+  function askerLabel(name, me) {
+    if (me && name === me) return "You asked";
+    return (name || "Someone") + " asked";
+  }
+
   /* --- diffs ---------------------------------------------------------------- */
 
   function diffLineKind(line) {
@@ -411,6 +426,6 @@
     parseTime, formatDuration, formatClock, stopLine,
     changeGroup, sortChanges, estimateRemaining, budgetShare, formatUsd,
     isMarkdown, codeLanguage, splitSections, parseReviewFile, reviewSteps,
-    groupReplies, diffLineKind, parseHash, makeHash,
+    groupReplies, questionsFor, askerLabel, diffLineKind, parseHash, makeHash,
   };
 });

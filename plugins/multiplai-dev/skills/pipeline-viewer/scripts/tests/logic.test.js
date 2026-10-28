@@ -227,6 +227,22 @@ test("answers group by the question they reply to", () => {
   assert.equal(m.get("q1").commit, "abc1234");
 });
 
+test("questions attach to their section, with who asked", () => {
+  const long = "x".repeat(250);
+  const qs = [
+    { id: "q1", doc: "proposal.md", section: "Why", author: { name: "Pat" } },
+    { id: "q2", doc: "proposal.md", section: "What", author: { name: "Eli" } },
+    { id: "q3", doc: "tasks.md", section: "Why", author: { name: "Eli" } },
+    { id: "q4", doc: "proposal.md", section: long.slice(0, 200), author: { name: "Eli" } },
+  ];
+  assert.deepEqual(L.questionsFor(qs, "proposal.md", "Why").map((q) => q.id), ["q1"]);
+  assert.deepEqual(L.questionsFor(qs, "proposal.md", long).map((q) => q.id), ["q4"]);
+  assert.deepEqual(L.questionsFor(null, "a", "b"), []);
+  assert.equal(L.askerLabel("Pat", "Eli"), "Pat asked");
+  assert.equal(L.askerLabel("Pat", "Pat"), "You asked");
+  assert.equal(L.askerLabel(null, "Pat"), "Someone asked");
+});
+
 test("diff lines are classified", () => {
   assert.equal(L.diffLineKind("@@ -1 +1 @@"), "hunk");
   assert.equal(L.diffLineKind("+++ b/x"), "meta");

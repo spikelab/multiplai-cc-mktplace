@@ -12,7 +12,6 @@
   const MAX_BACKOFF_MS = 120000;
   const REQUEST_TIMEOUT_MS = 20000;
   const TICK_MS = 30000;
-  const KEEP_ASKED = 300;
 
   const state = {
     token: typeof PV_TOKEN === "string" ? PV_TOKEN : "",
@@ -27,7 +26,7 @@
     pollN: 0,
     pollRows: [],
     answers: new Map(),
-    asked: [],
+    mine: new Set(),
     acked: new Set(),
     review: null,
     changesTimer: null,
@@ -235,6 +234,7 @@
       state.changesBackoff = CHANGES_EVERY_MS;
       banner("");
       if (changed && state.started) render(false);
+      if (state.review && state.review.steps) refreshQuestions(state.review);
     } catch (err) {
       if (err.status === 401) return;
       state.changesBackoff = Math.min(state.changesBackoff * 2, MAX_BACKOFF_MS);
@@ -243,10 +243,12 @@
     if (!document.hidden) state.changesTimer = setTimeout(refreshChanges, state.changesBackoff);
   }
 
+  /* A question this browser asked since it opened the page has no final
+   * answer yet: poll often. */
   function pendingAsk() {
-    return state.asked.some((a) => {
-      const ans = state.answers.get(a.id);
-      return (!ans || !ans.done) && now() - Date.parse(a.ts) < 6 * 3600 * 1000;
+    return [...state.mine].some((id) => {
+      const ans = state.answers.get(id);
+      return !ans || !ans.done;
     });
   }
 
@@ -266,6 +268,7 @@
       state.pollN = data.n;
       state.answers = L.groupReplies(state.pollRows);
       state.pollBackoff = pendingAsk() ? POLL_FAST_MS : POLL_SLOW_MS;
+      if ((data.answers || []).length && state.review) refreshQuestions(state.review);
       for (const [id, ans] of state.answers) {
         if (ans.done && before.get(id) !== true) answerArrived(id);
       }
@@ -276,12 +279,11 @@
     if (!document.hidden) state.pollTimer = setTimeout(pollAnswers, state.pollBackoff);
   }
 
+  /* Tell the asker their answer arrived when it is not on screen. */
   function answerArrived(id) {
-    const ask = state.asked.find((a) => a.id === id);
-    document.querySelectorAll('[data-answer="' + CSS.escape(id) + '"]').forEach((el) => fillAnswer(el, ask));
-    if (ask && !document.querySelector('[data-answer="' + CSS.escape(id) + '"]') && state.loaded) {
-      toast(state.agent + " answered your question about “" + (ask.section || ask.change) + "”. Open that section to read it.", "ok");
-    }
+    if (!state.mine.has(id) || !state.loaded) return;
+    if (document.querySelector('[data-answer="' + CSS.escape(id) + '"]')) return;
+    toast(state.agent + " answered your question. Open its section to read it.", "ok");
   }
 
   /* --- routing ---------------------------------------------------------------- */
@@ -496,6 +498,9 @@
     const items = recs.map((r) => {
       const who = r.kind === "decided" ? state.agent : (r.by === state.me ? "You" : r.by || "Someone");
       let text = who + " " + (RECORD_VERBS[r.kind] || r.kind);
+      if (r.kind === "answer") {
+        text = state.agent + " answered " + (r.by === state.me ? "your" : (r.by || "someone") + "’s") + " question";
+      }
       if (r.kind === "decided" && r.reason) text += " (" + r.reason + ")";
       return h("li", {},
         h("span", { class: "rec-time muted" }, L.formatClock(r.at, now())),
@@ -696,7 +701,7 @@
     }
     const rv = {
       change: c.name, stop: s.n, revision: s.revision, steps: null, comments: [],
-      idx: 0, atEnd: false, read: null, open: null,
+      idx: 0, atEnd: false, read: null, open: null, questions: [], qa: null,
     };
     state.review = rv;
     window.scrollTo(0, 0);
@@ -714,7 +719,7 @@
     if (state.review !== rv) return;
     rv.steps = L.reviewSteps(docs);
     rv.failed = docs.filter((d) => d.error);
-    await loadComments(rv);
+    await Promise.all([loadComments(rv), loadQuestions(rv)]);
     if (state.review !== rv) return;
     rv.read = new Set(store.get(readKey(rv), []));
     const saved = store.get("pos." + rv.change + "." + rv.stop, 0);
@@ -722,6 +727,22 @@
     rv.atEnd = rv.idx >= rv.steps.length;
     renderReview();
     maybeAck(c, s);
+  }
+
+  /* Every question about this stop, from everyone, with its answer. */
+  async function loadQuestions(rv) {
+    try {
+      const res = await api("/api/questions?name=" + encodeURIComponent(rv.change) + "&stop=" + rv.stop);
+      rv.questions = res.questions || [];
+    } catch (err) {
+      rv.questions = rv.questions || [];
+    }
+  }
+
+  async function refreshQuestions(rv) {
+    const before = JSON.stringify(rv.questions || []);
+    await loadQuestions(rv);
+    if (state.review === rv && JSON.stringify(rv.questions) !== before) renderQA(rv);
   }
 
   async function loadComments(rv, force) {
@@ -761,6 +782,7 @@
     rv.idx = Math.max(0, Math.min(idx, rv.steps.length));
     rv.atEnd = rv.idx >= rv.steps.length;
     rv.open = null;
+    rv.qa = null;
     store.set("pos." + rv.change + "." + rv.stop, rv.idx);
     history.replaceState(null, "", L.makeHash({ change: rv.change, stop: rv.stop, review: true, s: rv.idx }));
     renderReview();
@@ -841,7 +863,6 @@
   /* Comments and questions about one section. */
   function talk(rv, c, s, st) {
     const comments = rv.comments.filter((m) => m.doc === st.doc && m.section === st.heading);
-    const asks = state.asked.filter((a) => a.change === c.name && a.stop === s.n && a.doc === st.doc && a.section === st.heading);
     const box = h("section", { class: "talk" });
     const commentForm = composer({
       label: "Comment on this section",
@@ -861,16 +882,15 @@
     });
     const askForm = composer({
       label: "Ask " + state.agent + " about this section",
-      hint: state.agent + " reads the whole change before answering. The answer appears here; you can keep reading meanwhile. To change the text, ask for the change here.",
+      hint: state.agent + " reads the whole change before answering. Everyone on this page sees your question and the answer, and both are saved in the change's review file. You can keep reading meanwhile. To change the text, ask for the change here.",
       button: "Ask " + state.agent,
       open: rv.open === "ask",
       onopen: () => { rv.open = "ask"; },
       send: async (text) => {
         const res = await api("/api/ask", { name: c.name, stop: s.n, doc: st.doc, section: st.heading.slice(0, 200), text });
-        state.asked.push({ id: res.id, change: c.name, stop: s.n, doc: st.doc, section: st.heading, text, ts: new Date().toISOString() });
-        state.asked = state.asked.slice(-KEEP_ASKED);
-        store.set("asked", state.asked);
-        toast("Sent to " + state.agent + ".", "ok");
+        state.mine.add(res.id);
+        toast("Sent to " + state.agent + ". Everyone on this page sees the question and the answer.", "ok");
+        await loadQuestions(rv);
         rv.open = null;
         if (state.review === rv) renderReview();
         state.pollBackoff = POLL_FAST_MS;
@@ -887,35 +907,43 @@
         h("p", { class: "muted small" }, (m.by === state.me ? "You" : m.by || "Someone") + (m.at ? " · " + L.formatClock(m.at, now()) : "")),
         markdown(m.text)))));
     }
-    if (asks.length) {
-      box.appendChild(h("h3", {}, "Your questions (" + asks.length + ")"));
-      box.appendChild(h("ul", { class: "comments" }, asks.map((a) => {
-        const ansEl = h("div", { class: "answer", dataset: { answer: a.id } });
-        fillAnswer(ansEl, a);
-        return h("li", {},
-          h("p", { class: "muted small" }, "You asked · " + L.formatClock(a.ts, now())),
-          h("p", { class: "question" }, a.text),
-          ansEl);
-      })));
-    }
+    rv.qa = { el: h("div", { class: "qa" }), change: c.name, doc: st.doc, heading: st.heading };
+    box.appendChild(rv.qa.el);
+    renderQA(rv);
     return box;
   }
 
-  function fillAnswer(el, ask) {
-    const ans = state.answers.get(el.dataset.answer);
+  /* The questions about the section on screen, everyone's, with answers. */
+  function renderQA(rv) {
+    if (!rv.qa) return;
+    const qs = L.questionsFor(rv.questions, rv.qa.doc, rv.qa.heading);
+    const el = rv.qa.el;
     el.replaceChildren();
-    if (!ans) {
+    if (!qs.length) return;
+    el.appendChild(h("h3", {}, "Questions (" + qs.length + ")"));
+    el.appendChild(h("ul", { class: "comments" }, qs.map((q) => h("li", {},
+      h("p", { class: "muted small" }, L.askerLabel(q.author && q.author.name, state.me) +
+        (q.asked_at ? " · " + L.formatClock(q.asked_at, now()) : "")),
+      h("p", { class: "question" }, q.text),
+      answerEl(q, rv.qa.change)))));
+  }
+
+  function answerEl(q, changeName) {
+    const el = h("div", { class: "answer", dataset: { answer: q.id } });
+    if (q.answer == null) {
       el.appendChild(h("p", { class: "muted" }, "Waiting for " + state.agent + " to answer…"));
-      return;
+      return el;
     }
-    el.appendChild(h("p", { class: "muted small" }, state.agent + " answered" + (ans.done ? "" : " (still writing…)")));
-    el.appendChild(markdown(ans.text));
-    if (ans.commit) {
-      const c = ask && state.byName.get(ask.change);
+    el.appendChild(h("p", { class: "muted small" }, state.agent + " answered" +
+      (q.answered_at ? " · " + L.formatClock(q.answered_at, now()) : "") + (q.done ? "" : " (still writing…)")));
+    el.appendChild(markdown(q.answer));
+    if (q.commit) {
+      const c = state.byName.get(changeName);
       el.appendChild(c && c.build
-        ? h("button", { class: "btn small", type: "button", onclick: () => showDiff(c, ans.commit, "The edit") }, "See the edit")
-        : h("p", { class: "muted small" }, "Edited the documents in commit ", h("code", {}, shortSha(ans.commit)), "."));
+        ? h("button", { class: "btn small", type: "button", onclick: () => showDiff(c, q.commit, "The edit") }, "See the edit")
+        : h("p", { class: "muted small" }, "Edited the documents in commit ", h("code", {}, shortSha(q.commit)), "."));
     }
+    return el;
   }
 
   /* A button that opens a text box with a send button. */
@@ -1088,7 +1116,6 @@
       showUnauthorized();
       return;
     }
-    state.asked = store.get("asked", []).filter((a) => a && typeof a.id === "string");
     try {
       await loadWhoami();
     } catch (err) {
