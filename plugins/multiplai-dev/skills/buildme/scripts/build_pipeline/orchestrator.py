@@ -2049,9 +2049,9 @@ def _plan_approval_request(
             f"build's branch{f' `{state.branch}`' if state.branch else ''}, with these trailers:",
             "",
             "```",
-            f"git commit --only --allow-empty -m \"review({config.change_name}): approve the implementation plan\" \\",
-            f"  --trailer \"Stop: {PLAN_APPROVAL_STOP}\" --trailer \"Revision: {revision}\" \\",
-            "  --trailer \"Approved-by: <your name>\"",
+            f'git commit --only --allow-empty -m "review({config.change_name}): approve the implementation plan" \\',
+            f'  --trailer "Stop: {PLAN_APPROVAL_STOP}" --trailer "Revision: {revision}" \\',
+            '  --trailer "Approved-by: <your name>"',
             "```",
             "",
             "Then re-run the same build command. An edit to the plan makes a new",
@@ -2102,7 +2102,7 @@ def _plan_approval_gate(
             if not who:
                 print(
                     "ERROR:--approve-plan needs git user.name; set it "
-                    "(git config user.name \"<your name>\") and re-run",
+                    '(git config user.name "<your name>") and re-run',
                     flush=True,
                 )
                 return 1

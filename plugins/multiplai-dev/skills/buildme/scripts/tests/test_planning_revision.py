@@ -240,6 +240,24 @@ def test_new_plan_revision_invalidates_size_acceptance(plan):
     assert not state.size_accepted
 
 
+def test_new_plan_revision_invalidates_plan_approval(plan):
+    """Item E3: an approval names one plan revision; an edit to tasks.md
+    (or the plan file) clears it, as it clears `size_accepted`."""
+    from build_pipeline.state import PlanApproval
+
+    config, _, state = plan
+    owner.reconcile_plan(config, state)
+    approval = PlanApproval(
+        revision=state.spec_gen.revision, by="Ada Lovelace", commit="a" * 40
+    )
+    state.plan_approval = approval
+    owner.reconcile_plan(config, state)
+    assert state.plan_approval == approval
+    (config.change_dir / "tasks.md").write_text("## 1. Larger plan\nMore work")
+    owner.reconcile_plan(config, state)
+    assert state.plan_approval is None
+
+
 def test_repair_admission_and_outcome_share_one_ledger():
     sg = SpecGenState.model_validate(
         {"plan_review_regen_done": True, "plan_review_done": True}
