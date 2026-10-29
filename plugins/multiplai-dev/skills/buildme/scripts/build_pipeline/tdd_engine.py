@@ -31,9 +31,12 @@ from .change_manager import (
 )
 from .config import BuildConfig
 from .gates import (
+    TEST_RUNS_DIR,
     _repo_trusted,
     agent_status_gate,
     baseline_test_gate,
+    failing_tests,
+    failure_log_path,
     final_verification,
     integration_gate,
     parse_diff_paths,
@@ -47,6 +50,7 @@ from .gates import (
     review_score_gate,
     run_test_suite,
     unchanged_tests_gate,
+    verification_inputs,
     wiring_task_gate,
 )
 from .llm_steps.respec_steps import append_implementation_note
@@ -63,6 +67,7 @@ from .models import (
     BlockInfo,
     BlockStatus,
     BuildPhase,
+    EndSuiteState,
     FindingAdjudication,
     FixOnPassState,
     GateResult,
@@ -188,48 +193,71 @@ def _git_commit_block_phase(
     )
 
 
-def _block_test_command(config: BuildConfig, block: BlockInfo) -> str:
-    """The test command for the block's RED check. It runs the block's own
-    test files and the tests named after the source files it changed
-    (`narrow_tests`), or the whole `test_command` when it cannot narrow it.
-    The gates that decide whether work is done (`integration_gate`,
-    `baseline_test_gate`) keep the whole `test_command`. With
+def _test_command_since(config: BuildConfig, base: str | None) -> str:
+    """`test_command` narrowed to the test files changed since *base* and the
+    tests named after the source files changed since it (`narrow_tests`), or
+    the whole `test_command` when it cannot narrow it. With
     `tdd.narrow_commands` each directory's command is narrowed in it."""
     if config.narrow_commands:
         return narrow_test_command_multi(
             config.narrow_commands,
             config.project_dir,
-            block.baseline_commit,
+            base,
             config.narrow_tests,
             config.test_command,
         )
     return narrow_test_command(
-        config.test_command,
-        config.project_dir,
-        block.baseline_commit,
-        enabled=config.narrow_tests,
+        config.test_command, config.project_dir, base, enabled=config.narrow_tests
     )
 
 
-def _block_agent_test_command(config: BuildConfig, block: BlockInfo) -> str:
-    """What the block's test writer, implementer and refactorer are given as
-    their test command: `_block_test_command`, plus how to add the test files
-    they write and the tests named after the modules they change, which the
-    command, fixed before they start, cannot list."""
+def _agent_test_command_since(config: BuildConfig, base: str | None) -> str:
+    """`_test_command_since`, plus how to add the test files an agent writes
+    and the tests named after the modules it changes, which the command,
+    fixed before it starts, cannot list."""
     if config.narrow_commands:
         return agent_test_command_multi(
             config.narrow_commands,
             config.project_dir,
-            block.baseline_commit,
+            base,
             config.narrow_tests,
             config.test_command,
         )
     return agent_test_command(
-        config.test_command,
-        config.project_dir,
-        block.baseline_commit,
-        enabled=config.narrow_tests,
+        config.test_command, config.project_dir, base, enabled=config.narrow_tests
     )
+
+
+def _block_test_command(config: BuildConfig, block: BlockInfo) -> str:
+    """The test command for the block's RED check: `_test_command_since` the
+    block's start. The gates that decide whether work is done keep the whole
+    `test_command` under `tdd.whole_suite: per_block` (`_block_gate`)."""
+    return _test_command_since(config, block.baseline_commit)
+
+
+def _block_agent_test_command(config: BuildConfig, block: BlockInfo) -> str:
+    """What the block's agents (test writer, implementer, refactorer,
+    integration and review fixers) are given as their test command."""
+    return _agent_test_command_since(config, block.baseline_commit)
+
+
+def _change_base(state: BuildState) -> str | None:
+    """The commit the build started from: the first block's start."""
+    if state.tdd and state.tdd.blocks:
+        return state.tdd.blocks[0].baseline_commit
+    return None
+
+
+def _change_test_command(config: BuildConfig, state: BuildState) -> str:
+    """`_test_command_since` the start of the build: every test file the
+    change touched and the tests named after every module it changed."""
+    return _test_command_since(config, _change_base(state))
+
+
+def _change_agent_test_command(config: BuildConfig, state: BuildState) -> str:
+    """What an agent working on the whole change is given as its test command
+    (the whole-change refactorer, the mutation test writer, the end fixer)."""
+    return _agent_test_command_since(config, _change_base(state))
 
 
 # git's well-known empty-tree object. Used as the diff baseline when the
@@ -2243,7 +2271,9 @@ async def run_block_tdd(
     return True
 
 
-def _block_tests_gate(config: BuildConfig, block: BlockInfo) -> GateResult:
+def _block_tests_gate(
+    config: BuildConfig, block: BlockInfo, failure_log: Path | None = None
+) -> GateResult:
     """`integration_gate` on the block's own tests (`_block_test_command`),
     which is the whole `test_command` when it cannot be narrowed. Without
     `tdd.parallel`: that rewrite is for the whole suite."""
@@ -2251,7 +2281,62 @@ def _block_tests_gate(config: BuildConfig, block: BlockInfo) -> GateResult:
         _block_test_command(config, block),
         config.project_dir,
         timeout=config.test_timeout,
+        failure_log=failure_log,
     )
+
+
+# Blocks whose narrowed gate fell back to the whole command under
+# `tdd.whole_suite: end`, warned about once each in this process.
+_WHOLE_FALLBACK_WARNED: set[tuple[str, int]] = set()
+
+
+def _defers_whole_suite(config: BuildConfig) -> bool:
+    return config.whole_suite == "end"
+
+
+def _block_gate_detail(config: BuildConfig, block: BlockInfo) -> str:
+    """The `TDD:` detail for a block gate's start: nothing under `per_block`,
+    `block-tests` under `end`, and `whole-suite (could not narrow)` when the
+    block's command falls back to the whole one."""
+    if not _defers_whole_suite(config):
+        return ""
+    if _block_test_command(config, block) == config.test_command:
+        return "whole-suite (could not narrow)"
+    return "block-tests"
+
+
+def _block_gate(config: BuildConfig, block: BlockInfo, label: str) -> GateResult:
+    """The test run that decides a block step's work is green. Under
+    `tdd.whole_suite: per_block` it is the whole `test_command`; under `end`
+    it is the block's own tests (`_block_tests_gate`), and the whole command
+    runs once after the last block (`_run_end_suite`). A failed run writes
+    its output to `.buildme-test-runs/<stamp>-block-N-<label>.log`."""
+    failure_log = failure_log_path(config.change_dir, f"block-{block.number}-{label}")
+    if _defers_whole_suite(config):
+        if _block_test_command(config, block) != config.test_command:
+            return _block_tests_gate(config, block, failure_log)
+        key = (config.change_name, block.number)
+        if key not in _WHOLE_FALLBACK_WARNED:
+            _WHOLE_FALLBACK_WARNED.add(key)
+            log.warning(
+                "tdd.whole_suite is end but block %d (%s) could not be narrowed — "
+                "its gates run the whole test command",
+                block.number,
+                block.name,
+            )
+    return integration_gate(
+        config.test_command,
+        config.project_dir,
+        parallel=config.parallel_tests,
+        timeout=config.test_timeout,
+        failure_log=failure_log,
+    )
+
+
+def _output_note(gate: GateResult) -> str:
+    """` (output: <path>)` when the gate saved a failed run's output."""
+    path = gate.metadata.get("output_file")
+    return f" (output: {path})" if path else ""
 
 
 def _verify_block_refactor(
@@ -2444,8 +2529,9 @@ def _discard_refactor_for_gate(
         block.number,
         block.name,
     )
+    suite = "block tests" if _defers_whole_suite(config) else "whole suite"
     progress.log_agent(
-        "Refactorer", block.name, "REVERTED — whole suite red after refactor"
+        "Refactorer", block.name, f"REVERTED — {suite} red after refactor"
     )
     block.refactor_commit = None
     state.checkpoint(config.state_file_path())
@@ -2471,23 +2557,21 @@ async def _run_integration_and_review(
 
     # --- Integration gate ---
     log.info("START block=%d name=%s phase=INTEGRATION_GATE", block.number, block.name)
-    _tdd_event(config, state, block, "INTEGRATION_GATE", "START")
-    gate = integration_gate(
-        config.test_command,
-        config.project_dir,
-        parallel=config.parallel_tests,
-        timeout=config.test_timeout,
+    _tdd_event(
+        config,
+        state,
+        block,
+        "INTEGRATION_GATE",
+        "START",
+        _block_gate_detail(config, block),
     )
-    # The refactor check ran only the block's tests, so this is the first
-    # whole run since the refactor: a red suite throws the refactor away and
-    # runs again before any fix agent is spent on it.
+    gate = _block_gate(config, block, "integration")
+    # Under per_block the refactor check ran only the block's tests, so this
+    # is the first whole run since the refactor; under `tdd.whole_suite: end`
+    # it runs the block tests again. Either way a red gate throws the refactor
+    # away and runs again before any fix agent is spent on it.
     if not gate.passed and _discard_refactor_for_gate(block, config, state, progress):
-        gate = integration_gate(
-            config.test_command,
-            config.project_dir,
-            parallel=config.parallel_tests,
-            timeout=config.test_timeout,
-        )
+        gate = _block_gate(config, block, "integration")
     _tdd_event(
         config,
         state,
@@ -2498,7 +2582,10 @@ async def _run_integration_and_review(
     )
     if not gate.passed:
         log.warning(
-            "Integration gate failed after block %s: %s", block.name, gate.reason
+            "Integration gate failed after block %s: %s%s",
+            block.name,
+            gate.reason,
+            _output_note(gate),
         )
         # Circuit breaker: scoped fixes first, then one architecture-questioning
         # escalation, then FAILED with a diagnosis — never an endless fix loop.
@@ -2528,7 +2615,8 @@ async def _run_integration_and_review(
             )
             fix_result = await run_integration_fix(
                 failure_output=gate.metadata.get("output", gate.reason),
-                test_command=config.test_command,
+                failing_tests=failing_tests(gate.metadata.get("output", "")),
+                test_command=_block_agent_test_command(config, block),
                 context_bundle=context,
                 escalate=escalated,
                 model=fix_model,
@@ -2541,12 +2629,7 @@ async def _run_integration_and_review(
             if fix_result.success:
                 fix_completed = True
                 last_fix_output = fix_result.output
-                gate = integration_gate(
-                    config.test_command,
-                    config.project_dir,
-                    parallel=config.parallel_tests,
-                    timeout=config.test_timeout,
-                )
+                gate = _block_gate(config, block, f"integration-fix-{attempt + 1}")
                 if gate.passed:
                     break
 
@@ -2559,7 +2642,7 @@ async def _run_integration_and_review(
             diagnosis = (
                 f"Integration gate exhausted after {MAX_INTEGRATION_FIX_ATTEMPTS} fix "
                 f"attempts (final attempt escalated).\n"
-                f"Gate: {gate.reason}\n"
+                f"Gate: {gate.reason}{_output_note(gate)}\n"
                 f"Last fix agent report:\n{last_fix_output or '(no fix agent completed)'}"
             )
             progress.log_diagnosis(block.name, diagnosis)
@@ -2760,7 +2843,7 @@ async def _run_integration_and_review(
             block_description=description,
             failing_tests=fix_brief,
             context_bundle=context,
-            test_command=config.test_command,
+            test_command=_block_agent_test_command(config, block),
             prompt_style=config.implementer_prompt_style,
             model=fix_model,
             effort=config.effort_for(fix_step),
@@ -2778,14 +2861,12 @@ async def _run_integration_and_review(
             block.resumable = True
             _mark_block(state, block_idx, BlockStatus.FAILED, config)
             return False
-        gate = integration_gate(
-            config.test_command,
-            config.project_dir,
-            parallel=config.parallel_tests,
-            timeout=config.test_timeout,
-        )
+        gate = _block_gate(config, block, f"review-fix-{iteration + 1}")
         if not gate.passed:
-            progress.log_diagnosis(block.name, gate.metadata.get("output", gate.reason))
+            progress.log_diagnosis(
+                block.name,
+                gate.metadata.get("output", gate.reason) + _output_note(gate),
+            )
             _mark_block(state, block_idx, BlockStatus.FAILED, config)
             return False
         if fix.output:
@@ -2877,6 +2958,10 @@ def _finish_block(
     # and its first commit does not carry them.
     _git_commit_block_phase(config, "fix", block)
     block.fix_pass = None
+    if _defers_whole_suite(config) and state.tdd is not None:
+        # Saved by `_mark_block`'s checkpoint: a block gated on its own tests
+        # leaves the whole run owed, whatever the setting is on resume.
+        state.tdd.whole_suite_deferred = True
     _mark_block(state, block_idx, BlockStatus.DONE, config)
     log.info("DONE block=%d/%d name=%s", block.number, total, block.name)
     progress.log_block(block.number, total, block.name, "COMPLETE")
@@ -3220,7 +3305,7 @@ async def _run_fix_on_pass(
         block_description=_review_fix_description(brief),
         failing_tests=brief,
         context_bundle=context,
-        test_command=config.test_command,
+        test_command=_block_agent_test_command(config, block),
         prompt_style=config.implementer_prompt_style,
         model=config.model_for("review_fix"),
         effort=config.effort_for("review_fix"),
@@ -3239,14 +3324,9 @@ async def _run_fix_on_pass(
     if not fix.success:
         reason = "the fix agent " + ("timed out" if fix.timed_out else "failed")
     else:
-        gate = integration_gate(
-            config.test_command,
-            config.project_dir,
-            parallel=config.parallel_tests,
-            timeout=config.test_timeout,
-        )
+        gate = _block_gate(config, block, "fix-on-pass")
         if not gate.passed:
-            reason = f"tests failed after the fix: {gate.reason}"
+            reason = f"tests failed after the fix: {gate.reason}{_output_note(gate)}"
         elif not _enforce_test_integrity(
             block, config, state, progress, block_idx, "fix on pass", fix.output or ""
         ):
@@ -3658,10 +3738,13 @@ async def _run_tdd_engine(config: BuildConfig, args, *, standalone: bool = True)
             config.project_dir,
             parallel=config.parallel_tests,
             timeout=config.test_timeout,
+            failure_log=failure_log_path(config.change_dir, "baseline"),
         )
         if not gate.passed:
-            log.error("Baseline test gate failed: %s", gate.reason)
-            progress.log_phase("BASELINE", f"FAILED: {gate.reason}")
+            log.error(
+                "Baseline test gate failed: %s%s", gate.reason, _output_note(gate)
+            )
+            progress.log_phase("BASELINE", f"FAILED: {gate.reason}{_output_note(gate)}")
             return EXIT_BUILD_FAILURE
         state.tdd.baseline_tests_pass = True
         state.checkpoint(state_path)
@@ -3732,6 +3815,12 @@ async def _run_tdd_engine(config: BuildConfig, args, *, standalone: bool = True)
     if not await _run_refactor_all(config, state, progress):
         return EXIT_BUILD_FAILURE
 
+    # --- End-of-build whole run (`tdd.whole_suite: end`) ---
+    # Before mutation testing: cosmic-ray's restore point must be a green,
+    # committed tree.
+    if not await _run_end_suite(config, state, progress, standalone):
+        return EXIT_BUILD_FAILURE
+
     # --- Mutation testing (Python only; cosmic-ray over the changed lines) ---
     # After the whole-change refactor so it measures the code that ships. A
     # step that must see the finished, mutation-tested build goes after this.
@@ -3754,18 +3843,19 @@ async def _run_tdd_engine(config: BuildConfig, args, *, standalone: bool = True)
             log.info("DONE phase=E2E_CHECK result=passed")
             progress.log_phase("E2E_CHECK", "PASSED")
 
-    if standalone:
+    if standalone and not _verified_now(config, state):
         gate = final_verification(
             config.test_command,
             config.project_dir,
             parallel=config.parallel_tests,
             timeout=config.test_timeout,
             plan_revision=state.spec_gen.revision if state.spec_gen else "",
+            failure_log=failure_log_path(config.change_dir, "final-verification"),
         )
         state.verification = gate.model_dump()
         state.checkpoint(state_path)
         if not gate.passed:
-            progress.log_phase("VERIFY", gate.reason)
+            progress.log_phase("VERIFY", gate.reason + _output_note(gate))
             return EXIT_BUILD_FAILURE
 
     # Success. Persist the finished TDD sub-state; the phase pointer stays at
@@ -3787,6 +3877,25 @@ async def _run_tdd_engine(config: BuildConfig, args, *, standalone: bool = True)
     if standalone:
         state.complete(state_path)
     return EXIT_SUCCESS
+
+
+def _verified_now(config: BuildConfig, state: BuildState) -> bool:
+    """True when `state.verification` passed on the inputs the tree has now
+    (the orchestrator's test before publish), so the final check would run
+    the same suite on the same tree again."""
+    saved = state.verification or {}
+    if not saved.get("passed"):
+        return False
+    try:
+        current = verification_inputs(
+            config.test_command,
+            config.project_dir,
+            parallel=config.parallel_tests,
+            plan_revision=state.spec_gen.revision if state.spec_gen else "",
+        )
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return saved.get("metadata", {}).get("inputs") == current
 
 
 def _completion_line(blocks: list[BlockInfo]) -> str:
@@ -3907,15 +4016,12 @@ async def _run_refactor_all(
     # downstream re-runs the suite. Whose
     # edits are dirty is unknowable from here, and unknown is never safe to
     # destroy — so: no reset, no checkpoint, no refactor pass.
-    pre_gate = integration_gate(
-        config.test_command,
-        config.project_dir,
-        parallel=config.parallel_tests,
-        timeout=config.test_timeout,
-    )
+    pre_gate = _refactor_all_gate(config, state, "refactor-all-before")
     if not pre_gate.passed:
         progress.log_phase(
-            "REFACTOR_ALL", f"FAILED — suite red before refactor: {pre_gate.reason}"
+            "REFACTOR_ALL",
+            f"FAILED — suite red before refactor: {pre_gate.reason}"
+            + _output_note(pre_gate),
         )
         state.checkpoint(config.state_file_path())
         return False
@@ -3963,7 +4069,7 @@ async def _run_refactor_all(
         rubric=config.rubric_path.read_text()
         if config.rubric_path.exists()
         else "(no rubric.md)",
-        test_command=config.test_command,
+        test_command=_change_agent_test_command(config, state),
         model=config.model_for("refactor_all"),
         effort=config.effort_for("refactor_all"),
         cwd=str(config.project_dir),
@@ -3983,13 +4089,12 @@ async def _run_refactor_all(
         gate = None
         detail = f"refactor agent did not finish: {reason}"
     else:
-        gate = integration_gate(
-            config.test_command,
-            config.project_dir,
-            parallel=config.parallel_tests,
-            timeout=config.test_timeout,
+        gate = _refactor_all_gate(config, state, "refactor-all-after")
+        detail = (
+            ""
+            if gate.passed
+            else f"tests failed after refactor: {gate.reason}{_output_note(gate)}"
         )
-        detail = "" if gate.passed else f"tests failed after refactor: {gate.reason}"
     if gate is not None and gate.passed:
         after = _snapshot_all_test_files(config, state)
         if before is None or after is None:
@@ -4011,12 +4116,7 @@ async def _run_refactor_all(
         ):
             log.warning("DONE phase=REFACTOR_ALL result=discarded reason=%s", detail)
             progress.log_phase("REFACTOR_ALL", f"REVERTED — {detail}")
-            if not integration_gate(
-                config.test_command,
-                config.project_dir,
-                parallel=config.parallel_tests,
-                timeout=config.test_timeout,
-            ).passed:
+            if not _refactor_all_gate(config, state, "refactor-all-discarded").passed:
                 return False
         else:
             # The refactor's edits failed verification AND could not be
@@ -4038,6 +4138,11 @@ async def _run_refactor_all(
             "refactor: simplify across blocks",
             "whole-change refactor",
         )
+        if sha:
+            # So the end-of-build run can throw this commit away first when
+            # the whole suite is red right after it (`_run_end_suite`).
+            state.tdd.refactor_all_commit = sha
+            state.checkpoint(config.state_file_path())
         log.info(
             "DONE phase=REFACTOR_ALL result=committed sha=%s",
             sha[:8] if sha else "(no changes)",
@@ -4048,6 +4153,361 @@ async def _run_refactor_all(
 
     state.tdd.refactor_all_done = True
     state.checkpoint(config.state_file_path())
+    return True
+
+
+def _refactor_all_gate(
+    config: BuildConfig, state: BuildState, label: str
+) -> GateResult:
+    """The whole-change refactor's test run: the whole `test_command`, or,
+    when the end-of-build run is owed (`_end_suite_needed`), the tests of
+    everything the change touched (`_change_test_command`)."""
+    failure_log = failure_log_path(config.change_dir, label)
+    if (
+        _end_suite_needed(config, state)
+        and _change_test_command(config, state) != config.test_command
+    ):
+        return integration_gate(
+            _change_test_command(config, state),
+            config.project_dir,
+            timeout=config.test_timeout,
+            failure_log=failure_log,
+        )
+    return integration_gate(
+        config.test_command,
+        config.project_dir,
+        parallel=config.parallel_tests,
+        timeout=config.test_timeout,
+        failure_log=failure_log,
+    )
+
+
+def _end_suite_needed(config: BuildConfig, state: BuildState) -> bool:
+    """True when the whole test command runs once after the last block:
+    `tdd.whole_suite: end`, or a block already finished under it."""
+    return _defers_whole_suite(config) or bool(
+        state.tdd and state.tdd.whole_suite_deferred
+    )
+
+
+def _end_event(
+    config: BuildConfig, progress: ProgressWriter, status: str, detail: str = ""
+) -> None:
+    """`_tdd_event` for the end-of-build run: `block=end phase=END_SUITE`."""
+    started = _BLOCK_STARTED.setdefault((config.change_name, 0), time.monotonic())
+    line = (
+        f"TDD: {config.change_name} block=end phase=END_SUITE {status} "
+        f"elapsed={time.monotonic() - started:.0f}" + (f" {detail}" if detail else "")
+    )
+    print(line, flush=True)
+    try:
+        progress.log_line(line)
+    except OSError as e:
+        log.warning("Could not append to the progress file: %s", e)
+
+
+def _content_now(config: BuildConfig) -> str | None:
+    """The tree's `verification_inputs` content hash, or None when Git could
+    not be read."""
+    try:
+        return verification_inputs(
+            config.test_command, config.project_dir, parallel=config.parallel_tests
+        )["content"]
+    except (OSError, RuntimeError, ValueError) as e:
+        log.warning("Could not fingerprint the tree for the end-of-build run: %s", e)
+        return None
+
+
+def _refuse_end_suite(
+    config: BuildConfig, progress: ProgressWriter, since: str | None
+) -> bool:
+    """Refuse to start or resume the end run over uncommitted changes it
+    cannot tell from the user's. Changes nothing; returns False."""
+    dirty = git_ops.dirty_files(config.project_dir)
+    paths = ", ".join(sorted(dirty)) if dirty else "the project"
+    message = (
+        f"END_SUITE: did not resume — uncommitted changes in {paths} since "
+        f"{(since or '')[:8]}; buildme cannot tell its stopped fixer's edits from "
+        "yours. Commit them to keep them or discard them, then run the build again."
+    )
+    log.error(message)
+    print(message, flush=True)
+    progress.log_phase("END_SUITE", message)
+    return False
+
+
+def _start_end_suite(config: BuildConfig, state: BuildState) -> EndSuiteState:
+    """Save a fresh checkpoint for the end run at HEAD, keeping *attempts*
+    from the run in flight (if any), and checkpoint the state."""
+    tdd = state.tdd
+    previous = tdd.end_suite
+    snapshot = _snapshot_all_test_files(config, state)
+    tdd.end_suite = EndSuiteState(
+        checkpoint=git_ops.rev_parse_head(config.project_dir) or "",
+        attempts=previous.attempts if previous else 0,
+        test_file_hashes=snapshot,
+    )
+    state.checkpoint(config.state_file_path())
+    return tdd.end_suite
+
+
+def _end_suite_gate(
+    config: BuildConfig, state: BuildState, label: str, standalone: bool
+) -> GateResult:
+    """One whole run of `test_command`. In a standalone run it is
+    `final_verification`, saved to `state.verification`, so the final check
+    after the engine reuses it when nothing changed since."""
+    failure_log = failure_log_path(config.change_dir, label)
+    if standalone:
+        gate = final_verification(
+            config.test_command,
+            config.project_dir,
+            parallel=config.parallel_tests,
+            timeout=config.test_timeout,
+            plan_revision=state.spec_gen.revision if state.spec_gen else "",
+            failure_log=failure_log,
+        )
+        state.verification = gate.model_dump()
+        return gate
+    return integration_gate(
+        config.test_command,
+        config.project_dir,
+        parallel=config.parallel_tests,
+        timeout=config.test_timeout,
+        failure_log=failure_log,
+    )
+
+
+def _write_fix_attempts_diff(config: BuildConfig, checkpoint: str) -> str | None:
+    """`git diff <checkpoint>` of the tree the end fixers left, new files
+    included, to `.buildme-test-runs/<stamp>-end-fix-attempts.diff`. Returns
+    the path, or None when it could not be written."""
+    root = config.project_dir
+    pathspec = ["--", ".", *git_ops.BOOKKEEPING_EXCLUDES]
+    tracked = git_ops._run(["git", "diff", "--binary", checkpoint, *pathspec], cwd=root)
+    untracked = git_ops._run(
+        ["git", "ls-files", "--others", "--exclude-standard", "-z", *pathspec], cwd=root
+    )
+    if not tracked.ok or not untracked.ok:
+        log.warning(
+            "Could not read the end fixers' diff: %s",
+            (tracked.stderr or untracked.stderr).strip(),
+        )
+        return None
+    parts = [tracked.stdout]
+    for name in filter(None, untracked.stdout.split("\0")):
+        # Exit 1 means "differs", which a new file always does.
+        new = git_ops._run(
+            ["git", "diff", "--binary", "--no-index", "--", "/dev/null", name], cwd=root
+        )
+        parts.append(new.stdout)
+    path = failure_log_path(config.change_dir, "end-fix-attempts").with_suffix(".diff")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("".join(parts), encoding="utf-8")
+    except OSError as e:
+        log.warning("Could not write the end fixers' diff to %s: %s", path, e)
+        return None
+    return str(path)
+
+
+def _end_suite_exhausted(
+    config: BuildConfig,
+    state: BuildState,
+    progress: ProgressWriter,
+    gate: GateResult,
+    reason: str,
+) -> bool:
+    """Save the fixers' diff, put the tree back to the end run's checkpoint,
+    record the failure and return False."""
+    es = state.tdd.end_suite
+    diff_file = _write_fix_attempts_diff(config, es.checkpoint)
+    discarded = git_ops.discard_to(
+        config.project_dir, es.checkpoint, "end-of-build fix attempts"
+    )
+    es.exhausted = True
+    es.after_fix_content = None
+    es.failure_file = gate.metadata.get("output_file")
+    state.checkpoint(config.state_file_path())
+    diagnosis = (
+        f"End-of-build test run failed: {reason}\n"
+        f"Gate: {gate.reason}\n"
+        f"Last run's output: {es.failure_file or '(not saved)'}\n"
+        f"Fix attempts' diff: {diff_file or '(not saved)'}\n"
+        + (
+            f"The tree is back at {es.checkpoint[:8]}."
+            if discarded
+            else f"The fix attempts could NOT be discarded back to "
+            f"{es.checkpoint[:8]}: inspect the tree."
+        )
+    )
+    log.error("FAIL phase=END_SUITE reason=%s", reason)
+    progress.log_diagnosis("end of build", diagnosis)
+    _end_event(config, progress, "FAIL", f"attempts={es.attempts}" + _output_note(gate))
+    return False
+
+
+async def _run_end_suite(
+    config: BuildConfig,
+    state: BuildState,
+    progress: ProgressWriter,
+    standalone: bool,
+) -> bool:
+    """Run the whole `test_command` once after the last block, when
+    `tdd.whole_suite: end` left it owed (`_end_suite_needed`).
+
+    Green: done. Red: when HEAD is the whole-change refactor commit, throw it
+    away and run again; then up to MAX_INTEGRATION_FIX_ATTEMPTS fix attempts
+    (the last one escalated), each followed by a whole run. A fix that turns
+    the suite green is checked by `unchanged_tests_gate` and committed. If the
+    attempts run out, the fixers' diff and the last run's output are saved,
+    the tree goes back to where the run started, and this returns False.
+
+    Resume (rows S6-S12 of plan-buildme-full-suite-once-2026-10-28.md) never
+    commits, discards or tests uncommitted edits it cannot prove are the
+    stopped fixer's (`EndSuiteState.after_fix_content`).
+    """
+    tdd = state.tdd
+    if tdd is None or tdd.end_suite_done or not _end_suite_needed(config, state):
+        return True
+    state_path = config.state_file_path()
+    es = tdd.end_suite
+    head = git_ops.rev_parse_head(config.project_dir)
+    clean = git_ops.tree_is_clean(config.project_dir)
+    fixed = (
+        es is not None
+        and not es.exhausted
+        and es.after_fix_content is not None
+        and _content_now(config) == es.after_fix_content
+    )
+    if fixed:
+        pass  # S8/S9: the stopped fixer's tree; test it, as the loop would.
+    elif not clean:
+        return _refuse_end_suite(config, progress, es.checkpoint if es else head)
+    else:
+        if es is not None and es.exhausted:
+            message = (
+                f"END_SUITE: previous run exhausted {es.attempts} fix attempts "
+                f"(output: {es.failure_file}); starting again from {(head or '')[:8]}"
+            )
+            log.warning(message)
+            print(message, flush=True)
+            progress.log_phase("END_SUITE", message)
+            tdd.end_suite = None
+        if tdd.end_suite is None or tdd.end_suite.checkpoint != head:
+            _start_end_suite(config, state)
+    es = tdd.end_suite
+
+    _end_event(config, progress, "START", f"attempts={es.attempts}")
+    progress.log_phase("END_SUITE", "Running the whole test command")
+    gate = _end_suite_gate(config, state, f"end-suite-{es.attempts}", standalone)
+    if (
+        not gate.passed
+        and not fixed
+        and tdd.refactor_all_commit
+        and head == tdd.refactor_all_commit
+    ):
+        parent = git_ops._run(
+            ["git", "rev-parse", f"{tdd.refactor_all_commit}^"], cwd=config.project_dir
+        )
+        if parent.ok and git_ops.discard_to(
+            config.project_dir, parent.stdout.strip(), "whole-change refactor"
+        ):
+            log.warning(
+                "Whole-change refactor discarded: the whole suite is red after it"
+            )
+            progress.log_phase(
+                "REFACTOR_ALL", "REVERTED — whole suite red after it (end of build)"
+            )
+            tdd.refactor_all_commit = None
+            es = _start_end_suite(config, state)
+            gate = _end_suite_gate(
+                config, state, f"end-suite-{es.attempts}", standalone
+            )
+
+    while not gate.passed:
+        log.warning(
+            "End-of-build test run failed: %s%s", gate.reason, _output_note(gate)
+        )
+        if es.attempts >= MAX_INTEGRATION_FIX_ATTEMPTS:
+            return _end_suite_exhausted(
+                config,
+                state,
+                progress,
+                gate,
+                f"still red after {es.attempts} fix attempts",
+            )
+        try:
+            budget_mod.check(phase="end-of-build fix")
+        except BudgetExceededError as e:
+            log.error("FAIL phase=END_SUITE reason=budget_exhausted")
+            progress.log_phase("BUDGET", f"STOPPED: {e}\n{e.diagnosis}")
+            state.checkpoint(state_path)
+            return False
+        es.attempts += 1
+        es.after_fix_content = None
+        state.checkpoint(state_path)
+        escalated = es.attempts == MAX_INTEGRATION_FIX_ATTEMPTS
+        fix_step = "integration_fix_escalated" if escalated else "integration_fix"
+        progress.log_agent(
+            "IntegrationFixer",
+            "end of build",
+            f"attempt {es.attempts}/{MAX_INTEGRATION_FIX_ATTEMPTS}"
+            + (" — ESCALATED" if escalated else ""),
+        )
+        diff = capture_build_diff(config, state)
+        fix_result = await run_integration_fix(
+            failure_output=gate.metadata.get("output", gate.reason),
+            failing_tests=failing_tests(gate.metadata.get("output", "")),
+            test_command=_change_agent_test_command(config, state),
+            context_bundle=(
+                "## The change's diff (every block, from the start of the build)\n"
+                + (diff or "(diff unavailable)")
+            ),
+            escalate=escalated,
+            model=config.model_for(fix_step),
+            effort=config.effort_for(fix_step),
+            cwd=str(config.project_dir),
+        )
+        if fix_result.output:
+            es.fix_reports.append(fix_result.output)
+        es.after_fix_content = _content_now(config)
+        state.checkpoint(state_path)
+        if fix_result.success:
+            gate = _end_suite_gate(
+                config, state, f"end-suite-{es.attempts}", standalone
+            )
+        fixed = True
+
+    if fixed:
+        after = _snapshot_all_test_files(config, state)
+        if es.test_file_hashes is None or after is None:
+            return _end_suite_exhausted(
+                config, state, progress, gate, "test integrity evidence unavailable"
+            )
+        tests_gate = unchanged_tests_gate(es.test_file_hashes, after, es.fix_reports)
+        if not tests_gate.passed:
+            return _end_suite_exhausted(
+                config, state, progress, gate, tests_gate.reason
+            )
+        claims = tests_gate.metadata.get("claims") or []
+        if claims:
+            es.test_change_claims = list(claims)
+            progress.log_phase(
+                "END_SUITE",
+                f"{tests_gate.reason}\n" + "\n".join(f"- {c}" for c in claims),
+            )
+        git_ops.commit_tree(
+            config.project_dir, "fix: end-of-build test suite", "end-of-build fix"
+        )
+        if standalone:
+            # The commit moved HEAD: the final check runs again on it.
+            state.verification = None
+    tdd.end_suite_done = True
+    tdd.end_suite = None
+    state.checkpoint(state_path)
+    progress.log_phase("END_SUITE", "PASSED")
+    _end_event(config, progress, "DONE")
     return True
 
 
@@ -4081,7 +4541,11 @@ def _snapshot_source_files(config: BuildConfig) -> dict[str, str] | None:
         for name in proc.stdout.split("\0"):
             if not name or _is_tool_cache(name):
                 continue
-            if _TEST_PATH_RE.search(name) or Path(name).name in _BOOKKEEPING_NAMES:
+            if (
+                _TEST_PATH_RE.search(name)
+                or Path(name).name in _BOOKKEEPING_NAMES
+                or TEST_RUNS_DIR in Path(name).parts
+            ):
                 continue
             names.add(name)
     snapshot: dict[str, str] = {}
@@ -4368,6 +4832,7 @@ async def _run_mutation_round(
     config: BuildConfig,
     first: MutationResult,
     rewind_to: str,
+    agent_test_command: str,
 ) -> _RoundOutcome:
     """The one survivor round.
 
@@ -4395,7 +4860,7 @@ async def _run_mutation_round(
     branch = git_ops.current_branch(config.project_dir)
     result = await run_mutation_test_writer(
         survivors=_format_survivors(config, first),
-        test_command=config.test_command,
+        test_command=agent_test_command,
         model=config.model_for("mutation_test_writer"),
         effort=config.effort_for("mutation_test_writer"),
         max_turns=config.mutation_test_writer_max_turns,
@@ -4598,7 +5063,9 @@ async def _run_mutation(
             "survivors",
             f"{len(first.survivors)} surviving mutant(s)",
         )
-        outcome = await _run_mutation_round(config, first, rewind_to)
+        outcome = await _run_mutation_round(
+            config, first, rewind_to, _change_agent_test_command(config, state)
+        )
         round_note = outcome.note
         if outcome.discard_failed:
             # No report: writing it means a whole-tree commit, which would put

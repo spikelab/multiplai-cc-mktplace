@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 from build_pipeline.narrow_tests import (
+    DO_NOT_RUN_WHOLE,
     NarrowCommand,
     agent_test_command,
     agent_test_command_multi,
@@ -329,6 +330,11 @@ def _git(cwd: Path, *args: str) -> str:
     return subprocess.run(
         ["git", *args], cwd=cwd, capture_output=True, text=True, check=True
     ).stdout.strip()
+
+
+def _unnarrowed(command: str) -> str:
+    """What an agent is given when its command cannot be narrowed at all."""
+    return f"{command}\n\n{DO_NOT_RUN_WHOLE}"
 
 
 def _repo(root: Path) -> str:
@@ -698,7 +704,7 @@ class TestNarrowStaysInsideTheWholeRun:
         base = _repo(project)
         self._block(project)
         assert narrow_test_command(command, project, base) == command
-        assert agent_test_command(command, project, base) == command
+        assert agent_test_command(command, project, base) == _unnarrowed(command)
 
     def test_pytest_addopts_naming_paths_falls_back(self, project, monkeypatch):
         monkeypatch.setenv("PYTEST_ADDOPTS", "tests/unit")
@@ -754,7 +760,9 @@ class TestNarrowStaysInsideTheWholeRun:
         base = _repo(project)
         self._block(project)
         assert narrow_test_command("pytest -q", project, base) == "pytest -q"
-        assert agent_test_command("pytest -q", project, base) == "pytest -q"
+        assert agent_test_command("pytest -q", project, base) == _unnarrowed(
+            "pytest -q"
+        )
 
     def test_a_conftest_that_ignores_files_elsewhere_still_narrows(self, project):
         (project / "docs").mkdir()
@@ -844,7 +852,7 @@ class TestNarrowLoadsTheWholeRunsConfig:
         base = _repo(repo)
         self._block(repo)
         assert narrow_test_command("pytest -q", repo, base) == "pytest -q"
-        assert agent_test_command("pytest -q", repo, base) == "pytest -q"
+        assert agent_test_command("pytest -q", repo, base) == _unnarrowed("pytest -q")
 
     def test_a_nested_config_with_no_root_config_falls_back(self, repo):
         (repo / "packages" / "a" / "pytest.ini").write_text("[pytest]\n")
@@ -990,7 +998,8 @@ class TestAgentTestCommand:
         assert text.splitlines()[0] == "pytest -xvs"
         assert "runs the whole suite" in text
         assert "test_<module>.py" in text
-        assert "run the command as given before you finish" in text
+        assert "do not run it as given" in text
+        assert "before you finish" not in text
 
     def test_npm_whole_command_says_paths_go_after_the_separator(self, tmp_path):
         p = tmp_path / "web"
@@ -1005,16 +1014,20 @@ class TestAgentTestCommand:
     @pytest.mark.parametrize(
         "command,enabled", [("make test", True), ("pytest", False)]
     )
-    def test_a_command_it_cannot_narrow_is_given_bare(self, project, command, enabled):
+    def test_a_command_it_cannot_narrow_says_not_to_run_it(
+        self, project, command, enabled
+    ):
         base = _repo(project)
         (project / "tests" / "test_new.py").write_text("def test_n(): pass\n")
-        assert agent_test_command(command, project, base, enabled=enabled) == command
+        assert agent_test_command(
+            command, project, base, enabled=enabled
+        ) == _unnarrowed(command)
 
-    def test_coverage_configured_is_given_bare(self, project):
+    def test_coverage_configured_says_not_to_run_it(self, project):
         (project / "pytest.ini").write_text("[pytest]\naddopts = --cov=pkg\n")
         base = _repo(project)
         (project / "tests" / "test_new.py").write_text("def test_n(): pass\n")
-        assert agent_test_command("pytest", project, base) == "pytest"
+        assert agent_test_command("pytest", project, base) == _unnarrowed("pytest")
 
 
 # --- one runner command per directory (tdd.narrow_commands) -----------------
@@ -1137,6 +1150,16 @@ class TestNarrowCommands:
         assert text.splitlines()[0] == self.WHOLE
         assert "runs the whole suite" in text
         assert "`backend`: `cd backend && pytest -q` runs there" in text
+        assert "before you finish" not in text
+        assert "do not run it as given" in text
+
+    @pytest.mark.parametrize("enabled,base", [(False, "HEAD"), (True, None)])
+    def test_agent_text_that_cannot_narrow_says_not_to_run_it(
+        self, repo, enabled, base
+    ):
+        _repo(repo)
+        text = agent_test_command_multi(self.entries(), repo, base, enabled, self.WHOLE)
+        assert text == _unnarrowed(self.WHOLE)
 
 
 class TestPytestDefaultPatterns:

@@ -832,6 +832,15 @@ def narrow_test_command(
     return _narrow(test_command, Path(project_dir), base, enabled)[0]
 
 
+# What an agent is told when its command could not be narrowed at all (no
+# runner buildme knows, narrowing off, or no base commit).
+DO_NOT_RUN_WHOLE = (
+    "Do not run this command: it runs the whole suite and is slow. Run only the "
+    "test files you wrote or changed, with the project's test runner. buildme "
+    "runs the whole suite itself after you finish."
+)
+
+
 def agent_test_command(
     test_command: str,
     project_dir: Path | str,
@@ -845,7 +854,7 @@ def agent_test_command(
     before it changes anything, so it cannot list those itself."""
     command, runner = _narrow(test_command, Path(project_dir), base, enabled)
     if runner is None:
-        return command
+        return f"{command}\n\n{DO_NOT_RUN_WHOLE}"
     named = (
         "`test_<module>.py` or `<module>_test.py`"
         if runner == PYTEST
@@ -854,10 +863,10 @@ def agent_test_command(
     where = " after a `--`" if _needs_separator(command) else ""
     if command == test_command:
         scope = (
-            "It runs the whole suite. To check one test file quickly while you "
-            f"work, add its path to the end of the command{where} (the test file "
-            f"for a module is named {named}); run the command as given before "
-            "you finish."
+            "It runs the whole suite and is slow: do not run it as given. Run "
+            "only the test files you write or change, by adding a file's path to "
+            f"the end of the command{where} (the test file for a module is named "
+            f"{named})."
         )
     else:
         scope = (
@@ -982,7 +991,7 @@ def agent_test_command_multi(
     each directory, the command that runs there and how to add a test file's
     path to it."""
     if not enabled or not base:
-        return test_command
+        return f"{test_command}\n\n{DO_NOT_RUN_WHOLE}"
     parts = narrow_parts(entries, project_dir, base, enabled=enabled)
     lines = []
     for entry in entries:
@@ -998,9 +1007,9 @@ def agent_test_command_multi(
     per_dir = "\n".join(lines)
     if not parts:
         return (
-            f"{test_command}\n\nIt runs the whole suite. To check one test file "
-            "quickly while you work, run that file's directory's command with the "
-            f"file's path:\n{per_dir}\nRun the command as given before you finish. "
+            f"{test_command}\n\nIt runs the whole suite and is slow: do not run it "
+            "as given. Run only the test files you write or change, each with its "
+            f"directory's command and the file's path:\n{per_dir}\n"
             "buildme runs the whole suite itself after you finish."
         )
     return (

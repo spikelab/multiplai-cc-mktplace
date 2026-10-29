@@ -256,6 +256,7 @@ async def run_integration_fix(
     test_command: str,
     context_bundle: str,
     *,
+    failing_tests: list[str] | None = None,
     escalate: bool = False,
     model: str | None = None,
     effort: str | None = None,
@@ -263,11 +264,18 @@ async def run_integration_fix(
 ) -> AgentResult:
     """Spawn an agent to fix broken integration tests.
 
-    Gets the failure output and must make the full test suite pass again.
+    Gets the failure output and the failing test ids (*failing_tests*, from
+    `gates.failing_tests`), and must make them pass; it runs their files with
+    *test_command*, and buildme runs the whole suite after it finishes.
     ``escalate=True`` (final circuit-breaker attempt) switches to the
     question-the-architecture prompt: prior scoped fixes failed, so the agent
     is asked to challenge the block's approach, not just the last edit.
     """
+    failing = (
+        "\n".join(f"- {test_id}" for test_id in failing_tests)
+        if failing_tests
+        else "(none named in the output — read the failure output above)"
+    )
     if escalate:
         prompt = f"""\
 You are a senior fix agent. The integration test suite is still failing after
@@ -277,6 +285,9 @@ approach, not just the last edit.
 
 ## Failure Output
 {failure_output}
+
+## Failing tests
+{failing}
 
 ## Context
 {context_bundle}
@@ -293,11 +304,12 @@ approach, not just the last edit.
   you have license to rewrite it, provided the tests and specs stay satisfied.
 - Modify a test only when you can point to the exact spec line it contradicts,
   and declare it in your report as the Output section below says.
-- Run the full test suite after fixing to verify.
+- Run the failing tests' files with the test command above. Buildme runs
+  the whole suite after you finish.
 
 ## Output
 Report a `DIAGNOSIS:` section — the root cause, why the previous scoped fixes
-could not work, and what you changed — then confirm the suite result.
+could not work, and what you changed — then the failing tests' result.
 
 {TEST_CHANGE_DECLARATION}"""
     else:
@@ -307,6 +319,9 @@ implemented. Your job is to fix the failures without breaking other tests.
 
 ## Failure Output
 {failure_output}
+
+## Failing tests
+{failing}
 
 ## Context
 {context_bundle}
@@ -320,10 +335,11 @@ implemented. Your job is to fix the failures without breaking other tests.
 1. Fix the minimum code needed to make tests pass.
 2. Modify a test only when it has a genuine bug (contradicts the specs), and
    declare it in your report as the Output section below says.
-3. Run the full test suite after fixing to verify.
+3. Run the failing tests' files with the test command above. Buildme runs
+   the whole suite after you finish.
 
 ## Output
-Report the root cause, what you fixed, and confirm all tests pass.
+Report the root cause, what you fixed, and the failing tests' result.
 
 {TEST_CHANGE_DECLARATION}"""
     log.info("Spawning integration fix agent%s", " (escalated)" if escalate else "")

@@ -546,7 +546,7 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
         assert_plan_current(config, state, archived=config.auto)
 
         # All content-writing preparation precedes the shared final gate.
-        from .gates import final_verification, verification_inputs
+        from .gates import failure_log_path, final_verification, verification_inputs
 
         revision = state.spec_gen.revision if state.spec_gen else ""
         try:
@@ -581,6 +581,7 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
                 parallel=config.parallel_tests,
                 timeout=config.test_timeout,
                 plan_revision=revision,
+                failure_log=failure_log_path(config.change_dir, "final-verification"),
             )
             state.verification = gate.model_dump()
             state.checkpoint(state_path)

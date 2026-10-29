@@ -293,11 +293,12 @@ Work through these in order, and stop when you run out of clear wins:
 
 The pipeline re-runs the full suite after you finish and re-hashes every test
 file. A red suite or any test-file change discards this entire pass and keeps
-the build exactly as it was. Run the suite yourself before you finish.
+the build exactly as it was. Run the test files of the modules you change with
+the test command above; do not run the whole suite yourself.
 
 ## Output
 Report what you changed and why, grouped by the five categories above, and
-confirm the full suite is green. If you changed nothing, say so plainly — "the
+the result of the tests you ran. If you changed nothing, say so plainly — "the
 blocks were already consistent" is a valid and useful result.
 """
 

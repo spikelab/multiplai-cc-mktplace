@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field, model_validator
 from . import budget
 from .change_manager import PLAN_HASH_KEY
 from .findings.models import PRComment, SpecIssue, Triage
-from .models import BlockInfo, BlockStatus, BuildPhase
+from .models import BlockInfo, BlockStatus, BuildPhase, EndSuiteState
 from .stop_record import StepStop  # moved; `from .state import StepStop` keeps working
 from .stop_record import record as record_stop
 
@@ -250,6 +250,17 @@ class TDDState(BaseModel):
     # so a resume runs it again. Old checkpoints default to False.
     mutation_done: bool = False
     e2e_done: bool = False
+    # `tdd.whole_suite: end`: set when a block finishes gated only on its own
+    # tests, so the whole run after the last block (`_run_end_suite`) stays
+    # owed even if the setting goes back to per_block before a resume.
+    whole_suite_deferred: bool = False
+    # The end-of-build whole run passed (and its fix, if any, is committed).
+    end_suite_done: bool = False
+    # The end-of-build whole run in flight; None when none is.
+    end_suite: EndSuiteState | None = None
+    # The whole-change refactor's commit, so the end run can throw it away
+    # when the suite is red right after it.
+    refactor_all_commit: str | None = None
 
 
 FINDINGS_STEPS = ("fetch", "triage", "spec", "code", "publish", "review")
