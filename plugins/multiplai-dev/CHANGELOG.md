@@ -15,6 +15,16 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.140.0] - 2026-10-29
+
+### Added
+- **review**: `review --dimensions diff-bugs,callers` chooses the dimension finders for one run, over `review.yaml`'s `dimensions`, and `review --finder-model <model>` chooses the finders' model, over `--model`, `review.yaml` and `multiplai.conf`. An unknown dimension name exits `2`.
+- **buildme**: `epic.review_dimensions` and `epic.review_finder_model` in `specs/config.yaml` set the dimension finders and their model for each review of an epic child's PR. Unset, the review skill's own settings decide, as before.
+
+### Changed
+- **review**: `resume` now keeps the finder model the stopped run started with, as it already kept its dimensions, even when `review.yaml`, `multiplai.conf` or the resume's own `--model` say otherwise. It prints a `NOTICE:` when they differ. `--model` on `resume` still sets the verifier and merger models. A review of a new head uses the current settings.
+- **review**: before any finder runs, a piece whose diff changes more than 12 definitions that existed before the change is cut in two for the `callers` finder alone, instead of waiting for that finder to hit the 60-turn limit. The other finders still read the whole piece, and `resume` uses the pieces the run saved. The threshold comes from the callers finders of two reviews that ran while finders could not search, so it will be checked again once they can.
+
 ## [0.129.0] - 2026-10-29
 
 ### Added
