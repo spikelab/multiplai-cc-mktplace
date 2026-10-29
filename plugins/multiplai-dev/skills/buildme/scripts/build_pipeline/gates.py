@@ -12,8 +12,11 @@ import re
 import shlex
 import shutil
 import subprocess
+import tempfile
+import time
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
+from itertools import pairwise
 from pathlib import Path
 from typing import NamedTuple
 
@@ -113,9 +116,188 @@ def _test_directory(test_command: str, project_dir: Path) -> Path:
 # Seconds a full test run gets when `tdd.test_timeout` sets nothing.
 DEFAULT_TEST_TIMEOUT = 300
 
+# Runs of the test command that may end with no test results (the runner
+# crashed, the test database is down, the project failed to start) before the
+# block stops: the first run and two retries.
+RUNNER_ATTEMPTS = 3
+# Seconds waited before the second and the third of those runs.
+RUNNER_RETRY_WAITS = (10, 30)
+# The wait between runner failures; a seam for tests.
+_sleep = time.sleep
+
+# Lines a runner prints only when tests ran: pytest's summary (`=== 1 failed,
+# 2 passed in 0.12s ===`, or `-q`'s bare `1 failed, 2 passed in 0.12s`, or
+# `no tests ran`), Jest's `Tests:` line, unittest's and Django's `Ran N tests`,
+# and pytest's `FAILED <id>` / `ERROR <id>` lines.
+_TEST_RESULTS_RE = re.compile(
+    r"^=+ .*\b(?:passed|failed|errors?|skipped|xfailed|xpassed|deselected|"
+    r"no tests ran)\b.* in [\d.]+s\b|"
+    r"^\d+ (?:passed|failed|errors?|skipped|xfailed|xpassed|deselected)\b.*"
+    r" in [\d.]+s\b|"
+    r"^no tests ran\b|"
+    r"^Tests:\s+\d|"
+    r"^Ran \d+ tests? in |"
+    r"^(?:FAILED|ERROR)\s+\S+::",
+    re.MULTILINE,
+)
+
+
+class RunnerFailed(Exception):
+    """The test command ended `RUNNER_ATTEMPTS` times in a row with no test
+    results from a known runner (`runner_failure`). *outputs* are the saved
+    output files of those runs (none when the caller gave no output path)."""
+
+    def __init__(self, command: str, outputs: list[str], tail: str):
+        self.command = command
+        self.outputs = outputs
+        self.tail = tail
+        where = (
+            "; outputs: " + ", ".join(outputs) if outputs else f"; last output:\n{tail}"
+        )
+        super().__init__(
+            f"the test runner failed {RUNNER_ATTEMPTS} times with no test "
+            f"results ({command}){where}"
+        )
+
+
+def _runner_kind(argv: list[str], test_command: str, project_dir: Path) -> str | None:
+    """`"pytest"`, `"other"` (jest or vitest, Django's `manage.py test`,
+    `python -m unittest`: runners whose output says when tests ran), or None
+    for a command that is none of these."""
+    while (
+        len(argv) == 3
+        and Path(argv[0]).name in {"sh", "bash", "zsh"}
+        and argv[1] == "-c"
+    ):
+        try:
+            argv, _ = _test_invocation(argv[2], project_dir)
+        except ValueError:
+            return None
+    if (
+        _runner_of_tokens(argv) == PYTEST
+        or runner_of(test_command, project_dir) == PYTEST
+    ):
+        return PYTEST
+    if _runner_of_tokens(argv) is not None or runner_of(test_command, project_dir):
+        return "other"
+    names = [Path(t).name for t in argv]
+    if "manage.py" in names and "test" in names:
+        return "other"
+    if any(a == "-m" and b == "unittest" for a, b in pairwise(argv)):
+        return "other"
+    return None
+
+
+# pytest's exit codes that say tests were collected: 1 tests failed, 2
+# interrupted (a collection error), 5 none collected. 3 (internal error) and
+# 4 (usage error, a conftest that fails to import) say they were not.
+_PYTEST_RAN = (1, 2, 5)
+# pytest's own usage error: the command is wrong, and running it again
+# changes nothing; the gates judge it as before.
+_PYTEST_USAGE_RE = re.compile(
+    r"^ERROR: usage: |: error: unrecognized arguments", re.MULTILINE
+)
+
+
+def runner_failure(
+    exit_code: int | None,
+    output: str,
+    argv: list[str],
+    test_command: str,
+    project_dir: Path,
+) -> bool:
+    """True when a run that ended on its own failed with no test results from
+    a known runner: a runner crash, a test database that is down, a project
+    that fails to start. An assertion failure prints results, so it is never
+    one; neither is a run of an unknown command, which says nothing either
+    way, nor a pytest exit code that says tests ran, nor pytest's usage error."""
+    if exit_code in (0, None):
+        return False
+    text = _ANSI_RE.sub("", output)
+    if _TEST_RESULTS_RE.search(text):
+        return False
+    kind = _runner_kind(argv, test_command, project_dir)
+    if kind == PYTEST:
+        return exit_code not in _PYTEST_RAN and not _PYTEST_USAGE_RE.search(text)
+    return kind is not None
+
+
+def _relative_dir(directory: Path, project_dir: Path) -> str:
+    try:
+        return directory.resolve().relative_to(project_dir.resolve()).as_posix()
+    except ValueError:
+        return str(directory)
+
+
+def _run_once(
+    argv: list[str],
+    directory: Path,
+    project_dir: Path,
+    timeout: int,
+    out_path: Path,
+) -> tuple[int | None, str, bool]:
+    """Run *argv* once in a process group of its own, its stdout and stderr
+    streamed to *out_path*. Returns (exit code, output, timed out). On a
+    timeout, and on anything that ends the wait (Ctrl-C, SIGTERM or SIGHUP
+    through `git_ops._exit_on_termination`), the whole group is killed and
+    awaited; after a normal exit, any process the run left in its group is
+    killed. Logs `TEST_RUN start` and `TEST_RUN end ... seconds=<s>`.
+    Raises FileNotFoundError when the program does not exist."""
+    from . import git_ops
+
+    where = _relative_dir(directory, project_dir)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    timed_out = False
+    with git_ops._exit_on_termination(), out_path.open("wb") as sink:
+        started = time.monotonic()
+        proc = subprocess.Popen(
+            argv,
+            cwd=directory,
+            stdin=subprocess.DEVNULL,
+            stdout=sink,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        log.info("TEST_RUN start dir=%s output=%s", where, out_path)
+        try:
+            exit_code: int | None = proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            timed_out, exit_code = True, None
+        except BaseException:
+            git_ops._kill_group(proc)
+            log.info(
+                "TEST_RUN end dir=%s exit=stopped seconds=%.3f",
+                where,
+                time.monotonic() - started,
+            )
+            raise
+        git_ops._kill_group(proc)
+        log.info(
+            "TEST_RUN end dir=%s exit=%s seconds=%.3f",
+            where,
+            "timeout" if timed_out else exit_code,
+            time.monotonic() - started,
+        )
+    output = out_path.read_text(encoding="utf-8", errors="replace")
+    return exit_code, output, timed_out
+
+
+def _free_path(output: Path, attempt: int) -> Path:
+    """`<output stem>-run<attempt>.out`, or with `-<n>` added when a file of
+    that name exists: a run never overwrites an earlier run's output."""
+    path = output.with_name(f"{output.stem}-run{attempt}.out")
+    n = 1
+    while path.exists():
+        n += 1
+        path = output.with_name(f"{output.stem}-run{attempt}-{n}.out")
+    return path
+
 
 def run_test_suite(
-    test_command: str, project_dir: Path, timeout: int = DEFAULT_TEST_TIMEOUT
+    test_command: str,
+    project_dir: Path,
+    timeout: int = DEFAULT_TEST_TIMEOUT,
+    output: Path | None = None,
 ) -> tuple[int | None, str]:
     """Run the repo's test suite under the trust guard (shared mechanics for
     the integration and RED gates).
@@ -123,6 +305,15 @@ def run_test_suite(
     Returns (exit_code, combined output). exit_code is None when the command
     could not run at all (missing binary, timeout, untrusted repo) — callers
     must treat None as "could not verify", never as pass or fail evidence.
+
+    Each run streams its output to a file (`_run_once`): with *output* set,
+    `<output stem>-run<k>.out` beside it, else a temporary file. The file is
+    removed once the run printed test results, and kept when it timed out,
+    failed with no results, or was stopped part way, so a later run never
+    overwrites it. A run that fails with no test results from a known runner
+    (`runner_failure`) runs again after `RUNNER_RETRY_WAITS`; the third such
+    run raises `RunnerFailed` with the kept files. An assertion failure is
+    never run again.
     """
     if not _repo_trusted():
         return None, (
@@ -131,16 +322,55 @@ def run_test_suite(
         )
     try:
         argv, directory = _test_invocation(test_command, project_dir)
-        result = subprocess.run(
-            argv,
-            capture_output=True,
-            text=True,
-            cwd=directory,
-            timeout=timeout,
-        )
-    except (subprocess.TimeoutExpired, FileNotFoundError, ValueError) as e:
+    except ValueError as e:
         return None, f"Test command failed to run: {e}"
-    return result.returncode, result.stdout + "\n" + result.stderr
+    kept: list[str] = []
+    for attempt in range(1, RUNNER_ATTEMPTS + 1):
+        if output is not None:
+            out_path = _free_path(output, attempt)
+            temporary = False
+        else:
+            fd, name = tempfile.mkstemp(prefix="buildme-test-run-", suffix=".out")
+            os.close(fd)
+            out_path, temporary = Path(name), True
+        try:
+            exit_code, text, timed_out = _run_once(
+                argv, directory, project_dir, timeout, out_path
+            )
+        except FileNotFoundError as e:
+            out_path.unlink(missing_ok=True)
+            return None, f"Test command failed to run: {e}"
+        except BaseException:
+            if temporary:
+                out_path.unlink(missing_ok=True)
+            raise
+        if timed_out:
+            if temporary:
+                out_path.unlink(missing_ok=True)
+                saved = ""
+            else:
+                saved = f" (partial output: {out_path})"
+            return None, (
+                f"Test command failed to run: timed out after {timeout} seconds"
+                f"{saved}\n" + "\n".join(text.splitlines()[-40:])
+            )
+        if not runner_failure(exit_code, text, argv, test_command, project_dir):
+            out_path.unlink(missing_ok=True)
+            return exit_code, text
+        if temporary:
+            out_path.unlink(missing_ok=True)
+        else:
+            kept.append(str(out_path))
+        log.warning(
+            "TEST_RUN runner failure %d/%d (exit %s, no test results)%s",
+            attempt,
+            RUNNER_ATTEMPTS,
+            exit_code,
+            f": {out_path}" if not temporary else "",
+        )
+        if attempt < RUNNER_ATTEMPTS:
+            _sleep(RUNNER_RETRY_WAITS[attempt - 1])
+    raise RunnerFailed(test_command, kept, "\n".join(text.splitlines()[-40:]))
 
 
 # Wrappers that run their command in the project's own environment, where
@@ -352,11 +582,16 @@ def _attach_failure_log(
 
 
 def _suite_run(
-    test_command: str, project_dir: Path, parallel: str, timeout: int
+    test_command: str,
+    project_dir: Path,
+    parallel: str,
+    timeout: int,
+    failure_log: Path | None = None,
 ) -> tuple[str, int | None, str]:
-    """(the command run, its exit code, its output) for one whole-suite run."""
+    """(the command run, its exit code, its output) for one whole-suite run.
+    With *failure_log*, the run's output streams beside it (`run_test_suite`)."""
     command = _full_suite(test_command, project_dir, parallel)
-    exit_code, output = run_test_suite(command, project_dir, timeout)
+    exit_code, output = run_test_suite(command, project_dir, timeout, failure_log)
     return command, exit_code, output
 
 
@@ -377,7 +612,7 @@ def baseline_test_gate(
             passed=True, reason="No test command configured — skipping baseline"
         )
     command, exit_code, output = _suite_run(
-        test_command, project_dir, parallel, timeout
+        test_command, project_dir, parallel, timeout, failure_log
     )
     return _attach_failure_log(
         _baseline_verdict(exit_code, output), failure_log, command, exit_code, output
@@ -420,7 +655,7 @@ def integration_gate(
             passed=True, reason="No test command — skipping integration gate"
         )
     command, exit_code, output = _suite_run(
-        test_command, project_dir, parallel, timeout
+        test_command, project_dir, parallel, timeout, failure_log
     )
     return _attach_failure_log(
         _integration_verdict(exit_code, output), failure_log, command, exit_code, output

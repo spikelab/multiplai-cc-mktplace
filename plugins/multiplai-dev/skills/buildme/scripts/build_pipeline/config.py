@@ -887,6 +887,10 @@ class BuildConfig:
     # integration gates, the final verification and the epic's merge tests)
     # before it counts as not run.
     test_timeout: int = 300
+    # tdd.db_check: a command run from the project before the first paid
+    # call (`preflight.py`); exit 0 means the test database answers. Empty:
+    # not checked.
+    db_check: str = ""
     # tdd.test_writer_max_turns / tdd.mutation_test_writer_max_turns: the turn
     # cap of the block test writer and of the mutation round's test writer.
     test_writer_max_turns: int = 30
@@ -1424,6 +1428,14 @@ class BuildConfig:
             )
         self.parallel_tests = parse_parallel(tdd.get("parallel", "auto"))
         self.test_timeout = parse_test_timeout(tdd.get("test_timeout"))
+        db_check = tdd.get("db_check")
+        if isinstance(db_check, str):
+            self.db_check = db_check.strip()
+        elif db_check is not None:
+            log.warning(
+                "tdd.db_check in config.yaml is not a command (%r) — ignoring it",
+                db_check,
+            )
         for key in ("test_writer_max_turns", "mutation_test_writer_max_turns"):
             if key in tdd:
                 setattr(self, key, _cfg_int(tdd[key], f"tdd.{key}", getattr(self, key)))

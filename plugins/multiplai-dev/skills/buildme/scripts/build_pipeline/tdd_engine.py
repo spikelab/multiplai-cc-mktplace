@@ -32,6 +32,7 @@ from .change_manager import (
 from .config import BuildConfig
 from .gates import (
     TEST_RUNS_DIR,
+    RunnerFailed,
     _repo_trusted,
     agent_status_gate,
     baseline_test_gate,
@@ -1547,7 +1548,10 @@ def _red_run(
     if not parts:
         command = _block_test_command(config, block)
         exit_code, output = run_test_suite(
-            command, config.project_dir, config.test_timeout
+            command,
+            config.project_dir,
+            config.test_timeout,
+            failure_log_path(config.change_dir, f"block-{block.number}-red"),
         )
         runner = runner_of(command, config.project_dir)
         gate = red_gate(
@@ -1562,7 +1566,10 @@ def _red_run(
     runs = []
     for part in parts:
         exit_code, output = run_test_suite(
-            part.shell, config.project_dir, config.test_timeout
+            part.shell,
+            config.project_dir,
+            config.test_timeout,
+            failure_log_path(config.change_dir, f"block-{block.number}-red"),
         )
         prefix = "" if part.dir in ("", ".") else part.dir.rstrip("/") + "/"
         holds = any(t.startswith(prefix) for t in expected or [])
@@ -3687,6 +3694,29 @@ async def _run_quality_review(
     )
 
 
+def _stop_on_runner_failure(
+    block: BlockInfo,
+    config: BuildConfig,
+    state: BuildState,
+    progress: ProgressWriter,
+    failed: RunnerFailed,
+) -> None:
+    """Stop *block* after the test runner failed `RUNNER_ATTEMPTS` times with
+    no test results (row S30): FAILED and `resumable`, so a re-run resumes the
+    block and runs the test command again, and no fix agent is spent on a
+    failure no test reported. The diagnosis names the saved outputs."""
+    log.error(
+        "STOP block=%d name=%s reason=test-runner-failed: %s",
+        block.number,
+        block.name,
+        failed,
+    )
+    progress.log_diagnosis(block.name, f"Stopped: {failed}")
+    block.resumable = True
+    idx = state.tdd.current_block if state.tdd else 0
+    _mark_block(state, idx, BlockStatus.FAILED, config)
+
+
 async def run_tdd_engine(config: BuildConfig, args, *, standalone: bool = True) -> int:
     """Run TDD and retain current spend if a provider or process interrupts it."""
     try:
@@ -3789,16 +3819,31 @@ async def _run_tdd_engine(config: BuildConfig, args, *, standalone: bool = True)
         note=f"{total_blocks} block(s)",
     )
 
+    # The standalone `tdd` command checks what a paid call needs first (item
+    # 33); under `build` the orchestrator already did.
+    if standalone:
+        from . import preflight
+
+        failed = preflight.run(config, publishes=False, target=None)
+        if failed:
+            preflight.report(failed)
+            return EXIT_BUILD_FAILURE
+
     # --- Baseline test gate ---
     if state.tdd and not state.tdd.baseline_tests_pass:
         progress.log_phase("BASELINE", "Running existing test suite")
-        gate = baseline_test_gate(
-            config.test_command,
-            config.project_dir,
-            parallel=config.parallel_tests,
-            timeout=config.test_timeout,
-            failure_log=failure_log_path(config.change_dir, "baseline"),
-        )
+        try:
+            gate = baseline_test_gate(
+                config.test_command,
+                config.project_dir,
+                parallel=config.parallel_tests,
+                timeout=config.test_timeout,
+                failure_log=failure_log_path(config.change_dir, "baseline"),
+            )
+        except RunnerFailed as failed:
+            log.error("STOP phase=BASELINE reason=test-runner-failed: %s", failed)
+            progress.log_phase("BASELINE", f"STOPPED: {failed}")
+            return EXIT_BUILD_FAILURE
         if not gate.passed:
             log.error(
                 "Baseline test gate failed: %s%s", gate.reason, _output_note(gate)
@@ -3850,18 +3895,24 @@ async def _run_tdd_engine(config: BuildConfig, args, *, standalone: bool = True)
             state.advance_block(state_path)
             continue
 
-        # Run TDD phases
-        tdd_ok = await run_block_tdd(block, config, state, progress)
-        if not tdd_ok:
-            # Only report a timeout when the block actually timed out; every
-            # failure path sets status=FAILED, so the status alone can't tell
-            # a timeout from an ordinary build failure.
-            if block.timed_out:
-                return EXIT_AGENT_TIMEOUT
-            return EXIT_BUILD_FAILURE
+        try:
+            # Run TDD phases
+            tdd_ok = await run_block_tdd(block, config, state, progress)
+            if not tdd_ok:
+                # Only report a timeout when the block actually timed out; every
+                # failure path sets status=FAILED, so the status alone can't tell
+                # a timeout from an ordinary build failure.
+                if block.timed_out:
+                    return EXIT_AGENT_TIMEOUT
+                return EXIT_BUILD_FAILURE
 
-        # Run integration + review
-        review_ok = await _run_integration_and_review(block, config, state, progress)
+            # Run integration + review
+            review_ok = await _run_integration_and_review(
+                block, config, state, progress
+            )
+        except RunnerFailed as failed:
+            _stop_on_runner_failure(block, config, state, progress, failed)
+            return EXIT_BUILD_FAILURE
         if not review_ok:
             return EXIT_BUILD_FAILURE
 
