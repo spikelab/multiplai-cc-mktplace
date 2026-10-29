@@ -23,8 +23,9 @@ paths through the change from each entry point (see "The paths stage" below).
 2. **verify** — a fresh agent per HIGH or MEDIUM finding re-reads the code
    and answers `confirmed`, `refuted` or `unverifiable`, citing what it read.
    A finding the finder rated LOW gets no verifier: it reaches the review
-   `unverified`, with the finder's text, in a last section **Not verified
-   (LOW)** (a trim finding is verified at any severity). Unless it
+   `unverified`, with the finder's text, in `review-<slug>-low.md`, which the
+   review's last section **Not verified (LOW)** links to (a trim finding is
+   verified at any severity). Unless it
    refutes the finding, it also says in one sentence what correct behaviour
    would be (the finding's **expected behaviour**), without proposing a code
    change, and rates its **impact**: what goes wrong in production if the
@@ -115,6 +116,17 @@ paths through the change from each entry point (see "The paths stage" below).
    `repeat` and `low-value` findings are not listed or counted in the review,
    its summary, the rollups or review-viewer; they are in the appendix of
    `review-<slug>.md` and in `findings.json`.
+
+`review-<slug>.md` opens, after its header lines, with `## Findings`: one
+line per listed finding, the ones rated `breaks-users` or `breaks-business`
+first, then by the other impacts and by severity. Each line gives the
+severity, the impact, whether the change introduced the defect or it was
+there before (`pre-existing`; not on a tree review), the section when it is
+not Code, any earlier decision, and a link to the finding in full. The
+commit and file lists are in `## Commits and files` near the end, and a
+citation whose lines sit inside another citation of the same file is not
+printed again (`findings.json` keeps every citation). A finding the finder
+marked `Pre-existing: yes` has `pre_existing: true` in `findings.json`.
 
 Findings are listed in three sections, **Code**, **Tests** and **Docs**, by
 the verifier's topic, with severity read within each section: a HIGH under

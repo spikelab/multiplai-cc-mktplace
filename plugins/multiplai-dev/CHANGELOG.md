@@ -15,6 +15,17 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.138.0] - 2026-10-29
+
+### Changed
+- **review**: `review-<slug>.md` now opens with one list of every listed finding, the ones rated `breaks-users` or `breaks-business` first, then by the other impacts and by severity. Each line gives the severity, the impact, whether the change introduced the defect or it was already there, the section when it is not Code, any earlier decision, and a link to the finding in full. The commit and file lists moved from the header to `## Commits and files` near the end; the header keeps their counts.
+- **review**: the LOW findings no verifier checked are now in their own file, `review-<slug>-low.md`, and the review's last section, **Not verified (LOW)**, links to it. They are still counted in their sections and named in the opening list. An unverifiable MEDIUM stays in the main review.
+- **review**: a citation whose lines sit inside another citation of the same file in the same finding is no longer printed twice in the markdown. `findings.json` keeps every citation.
+
+### Added
+- **review**: a finding the finder marked `Pre-existing: yes` has `pre_existing: true` in `findings.json` and a **Pre-existing** line in the review, and keeps the finder's kind as its dimension. A review saved by an earlier version, which marked such a finding with the dimension `pre-existing`, loads with `pre_existing: true`. A pre-existing `tests` finding that no verifier checked is now listed under Tests rather than Code.
+- **review-viewer**: `findings.json` v1 accepts the optional `pre_existing` field.
+
 ## [0.129.0] - 2026-10-29
 
 ### Added
