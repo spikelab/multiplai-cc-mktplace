@@ -572,13 +572,18 @@ class EpicSettings:
     feature branch, else `manual` (`Coordinator.__post_init__`). `max_usd`: one ceiling for
     the whole epic, None for none. `round_worth`: which Code MEDIUM earns
     another review round (`epic.review.decide`): `breaks`, one the verifier
-    did not rate `correctness-only` or `hygiene`; `any`, every one."""
+    did not rate `correctness-only` or `hygiene`; `any`, every one.
+    `accept_size`: every child launch adds `--accept-size`, and a child
+    parked on `SPLIT:REQUIRED` is launched again. `max_child_attempts`:
+    launches of a failed child in one run."""
 
     max_parallel: int = 2
     max_review_rounds: int = 3
     merge: Literal["auto", "manual"] | None = None
     max_usd: float | None = None
     round_worth: Literal["breaks", "any"] = "breaks"
+    accept_size: bool = False
+    max_child_attempts: int = 2
 
 
 def _cfg_int(value, key: str, default: int) -> int:
@@ -1765,6 +1770,13 @@ class BuildConfig:
                 worth,
             )
             worth = "breaks"
+        accept_size = epic_cfg.get("accept_size", False)
+        if not isinstance(accept_size, bool):
+            log.warning(
+                "Invalid epic.accept_size value %r in config.yaml — want true | false; using false",
+                accept_size,
+            )
+            accept_size = False
         self.epic = EpicSettings(
             max_parallel=_cfg_int(
                 epic_cfg.get("max_parallel", 2), "epic.max_parallel", 2
@@ -1775,6 +1787,10 @@ class BuildConfig:
             merge=merge,
             max_usd=max_usd,
             round_worth=worth,
+            accept_size=accept_size,
+            max_child_attempts=_cfg_int(
+                epic_cfg.get("max_child_attempts", 2), "epic.max_child_attempts", 2
+            ),
         )
 
     def _discover_test_command(self) -> None:
