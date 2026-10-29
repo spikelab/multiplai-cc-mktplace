@@ -145,7 +145,9 @@ def test_verifier_prompt_asks_for_a_severity_with_the_severity_guide(target_info
 
 def test_verdict_severity_is_optional_and_normalised():
     assert Verdict(status="confirmed", reason="").severity is None
-    assert Verdict(status="confirmed", reason="", severity="medium").severity == "MEDIUM"
+    assert (
+        Verdict(status="confirmed", reason="", severity="medium").severity == "MEDIUM"
+    )
     assert Verdict(status="confirmed", reason="", severity="urgent").severity is None
     # An answer without one still parses: the finding keeps the finder's severity.
     answer = VerifierAnswer.model_validate(
@@ -154,7 +156,9 @@ def test_verdict_severity_is_optional_and_normalised():
     assert answer.severity is None
 
 
-async def test_the_verifier_severity_replaces_the_finders(target_info, ctx, monkeypatch):
+async def test_the_verifier_severity_replaces_the_finders(
+    target_info, ctx, monkeypatch
+):
     high, medium = high_finding(), medium_finding()
     use(
         monkeypatch,
@@ -195,7 +199,9 @@ def test_a_raised_severity_says_raised_in_the_review():
         "citations": [],
         "failure_scenario": "s",
     }
-    text = finding_section(row, web_base=None, head_sha="0" * 40, original_severity="LOW")
+    text = finding_section(
+        row, web_base=None, head_sha="0" * 40, original_severity="LOW"
+    )
     assert "confirmed (raised from LOW)" in text
 
 
