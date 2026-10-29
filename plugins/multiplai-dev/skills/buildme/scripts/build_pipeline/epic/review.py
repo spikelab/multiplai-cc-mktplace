@@ -70,13 +70,19 @@ def _skill(*args: str) -> list[str]:
     ]
 
 
+# What the epic's reviews pass as `--verify-low`: only the risky LOW findings are verified.
+EPIC_VERIFY_LOW = "risky"
+
+
 def review_argv(worktree: Path, number: int, config) -> list[str]:
     """`--fetch`: the review needs the PR's head and base commits in the clone.
     A sibling's merge moves the base, and a push from elsewhere moves the
     head, without any launch here fetching them (C.S8). Then
     `findings.loop.review_options` of the epic's *config*: the spec change
-    directories and buildme's runtime files left out, and the configured
-    review model."""
+    directories and buildme's runtime files left out, the configured
+    review model, and `--verify-low risky` (`EPIC_VERIFY_LOW`), so the LOW
+    findings whose scenario is a crash, an access or data problem, or lost
+    data are verified and can rise."""
     from ..findings.loop import review_options
 
     return _skill(
@@ -87,7 +93,7 @@ def review_argv(worktree: Path, number: int, config) -> list[str]:
         str(number),
         "--trust-repo",
         "--fetch",
-        *review_options(config),
+        *review_options(config, verify_low=EPIC_VERIFY_LOW),
     )
 
 
@@ -95,7 +101,10 @@ def resume_argv(target_dir: str, config) -> list[str]:
     from ..findings.loop import review_options
 
     return _skill(
-        "resume", target_dir, "--trust-repo", *review_options(config, exclude=False)
+        "resume",
+        target_dir,
+        "--trust-repo",
+        *review_options(config, exclude=False, verify_low=EPIC_VERIFY_LOW),
     )
 
 

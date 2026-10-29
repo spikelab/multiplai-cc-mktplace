@@ -737,6 +737,9 @@ class ReviewState(BaseModel):
     original_severity: dict[str, str] = Field(
         default_factory=dict
     )  # lowered findings only
+    # `verify_low: risky`: the LOW findings the selection call chose for the verifier, saved before
+    # any verifier runs, so a resume does not ask again. None until that call has answered.
+    low_selected: list[str] | None = None
     errors: list[str] = Field(
         default_factory=list
     )  # agent failures, shown in the review header
@@ -842,6 +845,12 @@ class AnswerMatchOutput(_Model):
 
 class MergeOutput(_Model):
     duplicate_sets: list[DuplicateSet] = Field(default_factory=list)
+
+
+class LowSelectOutput(_Model):
+    """The LOW selection call's answer (`verify_low: risky`): the ids of the LOW findings to verify."""
+
+    finding_ids: list[str] = Field(default_factory=list)
 
 
 class RepeatMatch(_Model):

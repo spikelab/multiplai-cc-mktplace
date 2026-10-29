@@ -454,13 +454,16 @@ def review_excludes(config: BuildConfig) -> list[str]:
     return globs
 
 
-def review_options(config: BuildConfig, *, exclude: bool = True) -> list[str]:
+def review_options(
+    config: BuildConfig, *, exclude: bool = True, verify_low: str = ""
+) -> list[str]:
     """What every review buildme launches of its PR adds to the review
     skill's command line: `--exclude` for each of `review_excludes` (on
     `review`; a `resume` keeps the files its run chose), and `--model` when
     the config names the review's model (`configured_model_for("review")`:
     `models.review` in specs/config.yaml and the like). Without one, the
-    review skill's own review.yaml or multiplai.conf decides."""
+    review skill's own review.yaml or multiplai.conf decides. *verify_low*
+    adds `--verify-low <it>` (the epic passes `risky`)."""
     argv = []
     if exclude:
         for glob in review_excludes(config):
@@ -468,6 +471,8 @@ def review_options(config: BuildConfig, *, exclude: bool = True) -> list[str]:
     model = config.configured_model_for("review")
     if model:
         argv += ["--model", model]
+    if verify_low:
+        argv += ["--verify-low", verify_low]
     return argv
 
 

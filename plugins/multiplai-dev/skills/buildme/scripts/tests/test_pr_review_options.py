@@ -170,6 +170,22 @@ def test_models_review_is_passed_to_the_review_and_its_resume(tmp_path, no_conf)
     assert _values(epic_review.resume_argv("/out/r/pr-12", config), "--model") == want
 
 
+def test_the_epic_review_and_its_resume_verify_risky_lows_and_the_fixer_review_does_not(
+    tmp_path, no_conf
+):
+    repo, _ = _repo(tmp_path / "proj", ["a.py"])
+    config = _config(repo, "")
+    run = _run(config)
+    assert _values(epic_review.review_argv(repo, 12, config), "--verify-low") == [
+        "risky"
+    ]
+    assert _values(epic_review.resume_argv("/out/r/pr-12", config), "--verify-low") == [
+        "risky"
+    ]
+    assert _values(loop.review_argv(run), "--verify-low") == []
+    assert _values(loop.resume_argv(run, "/out/r/pr-12"), "--verify-low") == []
+
+
 def test_the_review_model_field_is_passed(tmp_path, no_conf):
     repo, _ = _repo(tmp_path / "proj", ["a.py"])
     config = _config(repo, review_model="claude-haiku-4-5")

@@ -102,8 +102,9 @@ class ReviewConfig:
     deps: bool = True
     deps_max_mb: int = 50
     # Verify LOW findings too (`review.yaml` `verify_low`, `--verify-low`). Off by default: a LOW
-    # finding reaches the review `unverified`, with no verifier call (`stages/verify.py`).
-    verify_low: bool = False
+    # finding reaches the review `unverified`, with no verifier call (`stages/verify.py`). `risky`
+    # (`--verify-low risky`) verifies only the LOW findings one no-tools call chooses as risky.
+    verify_low: bool | Literal["risky"] = False
     # A re-pushed PR or branch reviews only the files whose patch changed (`incremental.py`);
     # `review.yaml` `incremental: false` or `--full` reviews every file.
     incremental: bool = True
@@ -218,6 +219,9 @@ def load_config(
         "verify_low",
         "incremental",
     ):
+        if key == "verify_low" and str(data.get(key)).strip().lower() == "risky":
+            cfg.verify_low = "risky"
+            continue
         value = _flag(data.get(key), key, yaml_path)
         if value is not None:
             setattr(cfg, key, value)

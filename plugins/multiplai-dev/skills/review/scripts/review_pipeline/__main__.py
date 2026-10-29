@@ -121,12 +121,27 @@ def _deps_flag(p: argparse.ArgumentParser) -> None:
     )
 
 
+def _low_mode(value: str) -> str:
+    if value != "risky":
+        raise argparse.ArgumentTypeError(
+            f"invalid value {value!r}: the only value is 'risky'; "
+            "put a positional argument before --verify-low"
+        )
+    return value
+
+
 def _verify_low_flag(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--verify-low",
-        action="store_true",
+        nargs="?",
+        const=True,
+        default=False,
+        type=_low_mode,
+        metavar="risky",
         help="Verify LOW findings too; without it they reach the review unverified, "
-        "with no verifier call (review.yaml: verify_low)",
+        "with no verifier call. `--verify-low risky` verifies only the LOW findings whose "
+        "scenario is a crash or error, an access or data-exposure problem, or lost or wrong "
+        "data, chosen by one no-tools call (review.yaml: verify_low)",
     )
 
 
@@ -447,7 +462,7 @@ def main(argv: list[str] | None = None) -> int:
         if getattr(args, "no_deps", False):
             config.deps = False
         if getattr(args, "verify_low", False):
-            config.verify_low = True
+            config.verify_low = args.verify_low
         if getattr(args, "model", None):
             config.finder_model = config.verifier_model = config.merger_model = (
                 args.model
