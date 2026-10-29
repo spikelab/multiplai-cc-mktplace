@@ -175,7 +175,8 @@ Return a JSON object:
         {{"file": "...", "test_name": "...", "pattern": "...", "suggestion": "..."}}
     ],
     "total_tests": <int>,
-    "weak_count": <int>
+    "weak_count": <int>,
+    "reason": "<one or two sentences on why the tests pass or fail>"
 }}
 ```
 A test suite passes if weak_count / total_tests < 0.2 (less than 20% weak tests).

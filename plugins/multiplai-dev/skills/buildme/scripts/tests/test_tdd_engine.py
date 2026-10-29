@@ -2165,11 +2165,16 @@ class TestNarrowTestCommandInTheBlockLoop:
 
         assert ok is True
         assert suite_calls == [self.WHOLE]
-        assert impl.call_args.kwargs["test_command"] == self.WHOLE
-        assert ref.call_args.kwargs["test_command"] == self.WHOLE
+        # Given the whole command, each agent is told not to run it (G31).
+        for agent in (impl, ref):
+            text = agent.call_args.kwargs["test_command"]
+            assert text.splitlines()[0] == self.WHOLE
+            assert "Do not run this command" in text
 
     @pytest.mark.asyncio
-    async def test_integration_gate_and_its_fixer_use_the_whole_command(self, setup):
+    async def test_integration_gate_uses_the_whole_command_and_its_fixer_the_narrow_one(
+        self, setup
+    ):
         config, state, progress, block = setup
         block.baseline_commit = git_ops.rev_parse_head(config.project_dir)
         (config.project_dir / "tests" / "test_new.py").write_text(
@@ -2195,7 +2200,9 @@ class TestNarrowTestCommandInTheBlockLoop:
 
         assert ok is False
         assert gate_calls and set(gate_calls) == {self.WHOLE}
-        assert {c.kwargs["test_command"] for c in fixer.call_args_list} == {self.WHOLE}
+        assert {
+            c.kwargs["test_command"].splitlines()[0] for c in fixer.call_args_list
+        } == {f"{self.WHOLE} tests/test_new.py"}
 
 
 class TestEvidenceBasedReview:

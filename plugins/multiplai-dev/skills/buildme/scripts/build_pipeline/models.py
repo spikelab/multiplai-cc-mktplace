@@ -443,6 +443,8 @@ class TestQualityAudit(BaseModel):
     weak_tests: list[WeakTestFinding] = Field(default_factory=list)
     total_tests: int = 0
     weak_count: int = 0
+    # One or two sentences on why the tests pass or fail the audit.
+    reason: str = ""
 
     def findings_text(self) -> str:
         return "\n".join(

@@ -548,6 +548,10 @@ CALL_SITES = {
         "fix_model",
         ("integration_fix", "integration_fix_escalated"),
     ),
+    ("tdd_engine.py", "_run_end_suite", "run_integration_fix"): (
+        "fix_model",
+        ("integration_fix", "integration_fix_escalated"),
+    ),
     ("tdd_engine.py", "_run_integration_and_review", "run_implementer"): (
         "fix_model",
         ("review_fix", "review_fix_escalated"),

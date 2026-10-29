@@ -273,10 +273,25 @@ EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 MAX_REVIEW_DIFF_CHARS = 150_000
 
 
-# Python-only, on purpose: this regex feeds the weak-test *scan*, which looks
-# for `def test_*`. Widening it to Swift/TS would hand non-Python source to a
-# Python-shaped scan and fail every block on "no test functions found".
+# The test files the weak-test scan reads: Python (`_TEST_FILE_RE`) and
+# JS/TS (`_JS_TEST_FILE_RE`, the shapes `narrow_tests._NODE_TEST_RE` names,
+# plus anything under `__tests__/`). The scan counts each file's tests by its
+# language (`_count_tests`); its weak patterns and mock heuristics are
+# Python-only and run on the Python files alone. Swift and Go are not read:
+# a scan with no counter for them would fail every block on "no test
+# functions found".
 _TEST_FILE_RE = re.compile(r"(^|/)(test_[^/]+\.py|[^/]+_test\.py|conftest\.py)$")
+_JS_TEST_FILE_RE = re.compile(
+    r"(^|/)[^/]+\.(test|spec)\.[cm]?[jt]sx?$|(^|/)__tests__/.+\.[cm]?[jt]sx?$"
+)
+# The header `_read_block_test_files` writes before each file's source.
+_TEST_FILE_HEADER_RE = re.compile(r"^# --- (.+) ---$", re.MULTILINE)
+_PY_TEST_DEF_RE = re.compile(r"def\s+test_\w+")
+# `it(` / `test(`, `.each(...)(` and `.concurrent(`; not `it.skip`, `xit` or
+# `test.todo`.
+_JS_TEST_CALL_RE = re.compile(
+    r"^\s*(it|test)(\.each\(.*?\)|\.concurrent)?\s*\(", re.MULTILINE
+)
 
 # Language-agnostic, used only for integrity hashing. The integrity gate does
 # not parse test source — it only needs to know which paths are tests — so it
@@ -309,7 +324,9 @@ def _read_block_test_files(config: BuildConfig, block: BlockInfo) -> str:
 
     parts: list[str] = []
     for name in names:
-        if not _TEST_FILE_RE.search(name.strip()):
+        if not (
+            _TEST_FILE_RE.search(name.strip()) or _JS_TEST_FILE_RE.search(name.strip())
+        ):
             continue
         path = config.project_dir / name
         try:
@@ -1070,6 +1087,28 @@ def assemble_context(
     return "\n\n".join(parts)
 
 
+def _count_tests(content: str) -> tuple[str, int]:
+    """(the Python source in *content*, its test count). *content* is
+    `_read_block_test_files`' output: each file's source after a
+    `# --- <name> ---` header, counted by its language — `def test_` in
+    Python, `it(`/`test(` calls in JS/TS (`_JS_TEST_CALL_RE`). Without
+    headers (the test writer's report) it is all read as Python."""
+    headers = list(_TEST_FILE_HEADER_RE.finditer(content))
+    if not headers:
+        return content, len(_PY_TEST_DEF_RE.findall(content))
+    python: list[str] = [content[: headers[0].start()]]
+    total = 0
+    for i, header in enumerate(headers):
+        end = headers[i + 1].start() if i + 1 < len(headers) else len(content)
+        body = content[header.end() : end]
+        if _JS_TEST_FILE_RE.search(header.group(1)):
+            total += len(_JS_TEST_CALL_RE.findall(body))
+        else:
+            python.append(content[header.start() : end])
+            total += len(_PY_TEST_DEF_RE.findall(body))
+    return "".join(python), total
+
+
 def run_test_quality_check(
     test_files_content: str, contracts: str, config: BuildConfig
 ) -> GateResult:
@@ -1081,18 +1120,16 @@ def run_test_quality_check(
     if not config.gates.test_quality_enabled:
         return GateResult(passed=True, reason="Test quality check disabled")
 
+    python, total_tests = _count_tests(test_files_content)
     weak_findings: list[str] = []
     for pattern in WEAK_TEST_PATTERNS:
-        matches = pattern.findall(test_files_content)
+        matches = pattern.findall(python)
         for m in matches:
             weak_findings.append(f"Weak pattern found: {m.strip()[:80]}")
 
     # Per-function mock heuristics (mock-assertion-only, mock-setup-dominant)
-    for func_name, body in _iter_test_functions(test_files_content):
+    for func_name, body in _iter_test_functions(python):
         weak_findings.extend(_scan_test_function(func_name, body))
-
-    # Count total test functions
-    total_tests = len(re.findall(r"def\s+test_\w+", test_files_content))
 
     if total_tests == 0:
         return GateResult(
@@ -1331,6 +1368,24 @@ async def _adjudicate_review_findings(
     )
 
 
+def _record_audit(
+    block: BlockInfo, progress: ProgressWriter, audit: TestQualityAudit, verdict: str
+) -> None:
+    """Write the test-quality auditor's verdict, reason and findings to the
+    progress file, and its reason to the log."""
+    log.info(
+        "Test-quality audit for block %s (%s): %s",
+        block.name,
+        verdict,
+        audit.reason or "(no reason given)",
+    )
+    progress.log_diagnosis(
+        block.name,
+        f"Test-quality audit ({verdict}): {audit.reason or '(no reason given)'}\n"
+        f"{audit.findings_text()}",
+    )
+
+
 async def _enforce_test_quality(
     block: BlockInfo,
     config: BuildConfig,
@@ -1374,6 +1429,7 @@ async def _enforce_test_quality(
         _mark_block(state, block_idx, BlockStatus.FAILED, config)
         return False
 
+    _record_audit(block, progress, audit, "OVERTURNED" if audit.passed else "CONFIRMED")
     if audit.passed:
         log.info(
             "Test-quality auditor overturned the static scan for block %s", block.name
@@ -1446,6 +1502,9 @@ async def _enforce_test_quality(
         progress.log_agent("TestQualityAuditor", block.name, f"ERROR: {e}")
         _mark_block(state, block_idx, BlockStatus.FAILED, config)
         return False
+    _record_audit(
+        block, progress, re_audit, "OVERTURNED" if re_audit.passed else "STILL WEAK"
+    )
     if re_audit.passed:
         return True
 
@@ -4223,8 +4282,24 @@ def _refuse_end_suite(
 ) -> bool:
     """Refuse to start or resume the end run over uncommitted changes it
     cannot tell from the user's. Changes nothing; returns False."""
-    dirty = git_ops.dirty_files(config.project_dir)
-    paths = ", ".join(sorted(dirty)) if dirty else "the project"
+    status = git_ops._run(
+        [
+            "git",
+            "status",
+            "--porcelain",
+            "-z",
+            "--",
+            ".",
+            *git_ops.BOOKKEEPING_EXCLUDES,
+        ],
+        cwd=config.project_dir,
+    )
+    names = sorted(
+        {entry[3:] for entry in status.stdout.split("\0") if len(entry) > 3}
+        if status.ok
+        else set()
+    )
+    paths = ", ".join(names) or "the project"
     message = (
         f"END_SUITE: did not resume — uncommitted changes in {paths} since "
         f"{(since or '')[:8]}; buildme cannot tell its stopped fixer's edits from "
@@ -4449,6 +4524,7 @@ async def _run_end_suite(
         state.checkpoint(state_path)
         escalated = es.attempts == MAX_INTEGRATION_FIX_ATTEMPTS
         fix_step = "integration_fix_escalated" if escalated else "integration_fix"
+        fix_model = config.model_for(fix_step)
         progress.log_agent(
             "IntegrationFixer",
             "end of build",
@@ -4465,7 +4541,7 @@ async def _run_end_suite(
                 + (diff or "(diff unavailable)")
             ),
             escalate=escalated,
-            model=config.model_for(fix_step),
+            model=fix_model,
             effort=config.effort_for(fix_step),
             cwd=str(config.project_dir),
         )
