@@ -5646,6 +5646,11 @@ def test_log_records_carry_the_change(tmp_path):
     handler = logging.FileHandler(path)
     handler.setFormatter(logging.Formatter("[session:x] %(levelname)s: %(message)s"))
     second = logging.FileHandler(tmp_path / "err.log")
+    # An earlier test's cli.main(["build", "--change", "x", ...]) leaves its
+    # handlers here, tagged "x"; they would tag the record first.
+    earlier = list(logger.handlers)
+    for h in earlier:
+        logger.removeHandler(h)
     logger.addHandler(handler)
     logger.addHandler(second)
     old = logger.level
@@ -5657,6 +5662,8 @@ def test_log_records_carry_the_change(tmp_path):
     finally:
         logger.removeHandler(handler)
         logger.removeHandler(second)
+        for h in earlier:
+            logger.addHandler(h)
         logger.setLevel(old)
         handler.close()
         second.close()
