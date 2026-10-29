@@ -489,6 +489,32 @@ class Repeat(BaseModel):
     )
 
 
+class EarlierDecision(BaseModel):
+    """One entry of an `--earlier-decisions` file: a finding an earlier reviewer of the same
+    change (buildme's block review) rejected, or accepted and left unfixed, with its reason."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1)
+    file: str = ""
+    line_start: int | None = None
+    line_end: int | None = None
+    claim: str = Field(min_length=1)
+    decision: Literal["rejected", "accepted-unfixed"]
+    reason: str = ""
+
+
+class EarlierDecisionMatch(BaseModel):
+    """A shown finding that describes the same defect as an `EarlierDecision`: its id,
+    decision and reason, why the two are the same (`match_reason`), and how it was matched."""
+
+    id: str
+    decision: Literal["rejected", "accepted-unfixed"]
+    reason: str = ""
+    match_reason: str = ""
+    by: Literal["id", "agent"] = "agent"
+
+
 # `important` is not the assess agent's: the verify stage gives it to a
 # confirmed trim finding about a test that must stay (`stages/verify.important_assessments`).
 AssessLabel = Literal["useful", "still-open", "low-value", "repeat", "important"]
@@ -722,6 +748,12 @@ class ReviewState(BaseModel):
     # already sent to the repeats agent, so a resume does not ask again.
     repeats: dict[str, Repeat] = Field(default_factory=dict)
     repeats_checked: list[str] = Field(default_factory=list)
+    # Shown findings that describe the same defect as an entry of the `--earlier-decisions` file
+    # (a decision buildme's block review made), by finding id, stored by the repeats stage;
+    # `earlier_checked` lists the ids already sent to its match call, so a resume does not ask again.
+    # A match is not a repeat: the finding stays listed.
+    earlier_decisions: dict[str, EarlierDecisionMatch] = Field(default_factory=dict)
+    earlier_checked: list[str] = Field(default_factory=list)
     # The assess stage's label per shown finding, by id. `assess_answer` is the
     # agent's answer, stored as it arrives (empty when the call failed), so a
     # resume does not ask twice.
@@ -852,6 +884,16 @@ class RepeatMatch(_Model):
 
 class RepeatsOutput(_Model):
     matches: list[RepeatMatch] = Field(default_factory=list)
+
+
+class EarlierMatch(_Model):
+    id: str
+    decision_id: str
+    reason: str = ""
+
+
+class EarlierMatchesOutput(_Model):
+    matches: list[EarlierMatch] = Field(default_factory=list)
 
 
 def worst_status(*statuses: str) -> str:

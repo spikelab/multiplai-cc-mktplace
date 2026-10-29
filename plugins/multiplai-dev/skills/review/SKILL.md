@@ -164,6 +164,31 @@ the finders see its whole patch.
   with `--full`; and with `incremental: false` in `review.yaml`.
   `review-state.json` `scope.reason` says which applied.
 
+## Decisions an earlier reviewer made: `--earlier-decisions`
+
+`--earlier-decisions <file>` (on `review` and `resume`) hands the review the
+findings an earlier reviewer of the same change already decided on. buildme
+passes it with the findings of its per-block reviews. The file is a JSON list:
+
+```json
+[{"id": "B03-R1-F1", "file": "backend/auth.py", "line_start": 709,
+  "line_end": 709, "claim": "a login can be tied to another company by name",
+  "decision": "accepted-unfixed", "reason": "accepted by the block 3 review"}]
+```
+
+`decision` is `rejected` or `accepted-unfixed`; `id` and `claim` must not be
+empty, ids are unique, `file`, the lines and `reason` may be left out, and no
+other key is allowed. A file that does not match this shape stops the run
+with exit 2 before anything else.
+
+After merge, the repeats stage matches this round's findings against the
+list: an equal id with no call, then one agent call for the rest. A finding
+that describes a decided defect stays listed and blocking and gets no
+`repeat` label. `findings.json` gives it `earlier_decision: {id, decision,
+reason}` and the review shows an **Earlier decision:** line under it. The
+finders never see the list. A `resume` keeps the matches it already saved,
+even when the file changed since; the next round reads the file again.
+
 ## Full or critical
 
 `--mode full` (the default) lists every finding to act on. `--mode critical`

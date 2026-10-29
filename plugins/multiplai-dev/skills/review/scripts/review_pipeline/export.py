@@ -405,6 +405,14 @@ def to_findings_file(
         assessment = state.assessments.get(f.id)
         if assessment is not None and status in SHOWN:
             row["assessment"] = _assessment(assessment)
+        earlier = state.earlier_decisions.get(f.id)
+        if earlier is not None and status in SHOWN:
+            # (0.137+) the `--earlier-decisions` entry this finding describes.
+            row["earlier_decision"] = {
+                "id": earlier.id,
+                "decision": earlier.decision,
+                "reason": earlier.reason,
+            }
         rows.append(row)
     rank = {s: i for i, s in enumerate(SEVERITIES)}
     order = {"confirmed": 0, "unverifiable": 1, "unverified": 2, "refuted": 3}

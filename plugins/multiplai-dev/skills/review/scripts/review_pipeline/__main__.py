@@ -139,6 +139,18 @@ def _model_flag(p: argparse.ArgumentParser) -> None:
     )
 
 
+def _earlier_decisions_flag(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--earlier-decisions",
+        metavar="FILE",
+        default=None,
+        help="JSON list of {id, file, line_start, line_end, claim, decision, reason}, decision "
+        "rejected or accepted-unfixed: findings an earlier reviewer of the change decided on. "
+        "A finding of this round that describes one is marked with it in findings.json and the "
+        "review, and stays listed",
+    )
+
+
 def _mode_flag(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--mode",
@@ -279,6 +291,7 @@ def build_parser() -> argparse.ArgumentParser:
     _deps_flag(rv)
     _model_flag(rv)
     _verify_low_flag(rv)
+    _earlier_decisions_flag(rv)
 
     bt = sub.add_parser(
         "batch",
@@ -318,6 +331,7 @@ def build_parser() -> argparse.ArgumentParser:
     _deps_flag(rs)
     _model_flag(rs)
     _verify_low_flag(rs)
+    _earlier_decisions_flag(rs)
 
     an = sub.add_parser(
         "answers",
@@ -452,6 +466,15 @@ def main(argv: list[str] | None = None) -> int:
             config.finder_model = config.verifier_model = config.merger_model = (
                 args.model
             )
+        if getattr(args, "earlier_decisions", None):
+            from .stages.repeats import load_earlier_decisions
+
+            try:
+                config.earlier_decisions = load_earlier_decisions(
+                    Path(args.earlier_decisions).expanduser()
+                )
+            except ValueError as e:
+                raise orchestrator.ReviewError(str(e)) from e
         return config
 
     from .post import PostError, post
@@ -760,10 +783,18 @@ def main(argv: list[str] | None = None) -> int:
             getattr(e, "target_dir", None) or "<out>/<repo>/<object>"
         ]
         flags = (
-            f" --max-cost-usd {args.max_cost_usd:g}"
-            if getattr(args, "max_cost_usd", None) is not None
-            else ""
-        ) + (" --no-deps" if getattr(args, "no_deps", False) else "")
+            (
+                f" --max-cost-usd {args.max_cost_usd:g}"
+                if getattr(args, "max_cost_usd", None) is not None
+                else ""
+            )
+            + (" --no-deps" if getattr(args, "no_deps", False) else "")
+            + (
+                f" --earlier-decisions {args.earlier_decisions}"
+                if getattr(args, "earlier_decisions", None)
+                else ""
+            )
+        )
         commands = "\n".join(
             f"  python -m review_pipeline resume {d} --trust-repo{flags}" for d in dirs
         )
