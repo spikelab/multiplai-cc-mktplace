@@ -11,7 +11,9 @@ in `state.finder_reports` and written as `report-<dimension>-<id>.md` or
 `report-path-<id>.md` before a second call converts it into findings
 (`run_reported`). A dimension finder that stops at the turn limit has its piece
 split in two (`chunks.split_piece`), and that dimension alone is asked on both
-halves, in the same job; a half is not split again. Only `RepoTrustError`, a
+halves, in the same job; a half is not split again. Before any finder runs, a
+piece whose diff changes more than `CALLERS_MAX_SYMBOLS` existing definitions
+is split for `callers` alone (`split_for_callers`). Only `RepoTrustError`, a
 hit usage limit and a budget stop end the stage; a failed report or convert
 call is recorded in coverage and the others go on, and `resume` asks only for
 the missing report or convert.
@@ -37,7 +39,7 @@ from pydantic import ValidationError
 
 from .. import budget, checks, sdk, timings
 from ..checks import add_coverage, drop_coverage
-from ..chunks import piece_diff_text, split_piece
+from ..chunks import changed_symbols, piece_diff_text, split_piece
 from ..config import CHANGE_DEFAULT_OFF, DIMENSIONS, TRIM_DIMENSION, ReviewConfig
 from ..gates import file_at_head, finding_gate, gated_locations, gated_need, reason_kind
 from ..linked_docs import LinkSource, linked_docs, not_included_line
@@ -635,6 +637,41 @@ def covering(state: ReviewState, piece: Piece, dimension: str) -> list[Piece]:
         if i in by_id and dimension in by_id[i].split_for
     ]
     return halves or [piece]
+
+
+CALLERS_DIMENSION = "callers"
+# A piece whose diff changes more existing definitions than this (`chunks.changed_symbols`) is split in
+# two for the callers finder before it runs. Set from the callers finders of DFACCMGMT-1's reviews of
+# PRs #37 and #38 (2026-10-29), which ran with search broken. Of the whole pieces, four hit the 60-turn
+# limit: three changed 13, 16 and 22, and one (a single hunk, no definition) changed 0, which no count
+# catches. Of the twelve whose finder answered, two changed more than 12 (33 and 15). Two halves also
+# hit the limit, with 3 and 9. Re-check it once finders can search, since searching changes the turns.
+CALLERS_MAX_SYMBOLS = 12
+
+
+def split_for_callers(state: ReviewState, diff: str) -> list[Piece]:
+    """Before the finders run: cut each stored piece whose *diff* part changes more than
+    `CALLERS_MAX_SYMBOLS` existing definitions in two, for the callers finder only (the halves'
+    `split_for`). Returns the pieces cut. A piece already cut, a half, a piece `split_piece` cannot cut
+    and a review that does not run `callers` are left as they are. Called once, when a review plans its
+    pieces; `resume` uses the stored pieces and never calls it."""
+    if CALLERS_DIMENSION not in change_dimensions(state):
+        return []
+    cut: list[Piece] = []
+    for piece in top_pieces(state):
+        if piece.split_into:
+            continue
+        if len(changed_symbols(piece_diff_text(diff, piece))) <= CALLERS_MAX_SYMBOLS:
+            continue
+        halves = split_piece(piece, diff, max(p.id for p in state.pieces or []) + 1)
+        if halves is None:
+            continue
+        for half in halves:
+            half.split_for.append(CALLERS_DIMENSION)
+        piece.split_into = [h.id for h in halves]
+        state.pieces = [*(state.pieces or []), *halves]
+        cut.append(piece)
+    return cut
 
 
 def is_converted(state: ReviewState, key: str) -> bool:

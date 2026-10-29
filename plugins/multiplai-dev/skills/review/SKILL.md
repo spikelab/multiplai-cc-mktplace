@@ -505,6 +505,14 @@ that dimension is asked on them; another dimension that stops on the same
 piece uses the same halves. A half is never cut again, and a file with one
 hunk is not cut.
 
+Before any finder runs, a piece whose diff changes more than 12 definitions
+that existed before the change (a removed line that defines a function or
+class, or the definition git names in a hunk header; files the change adds
+do not count) is cut the same way for the `callers` finder alone, which
+traces each one's callers. The other dimensions read the whole piece.
+`--plan-only` shows the halves. `resume` uses the pieces the run saved and
+cuts nothing.
+
 A failed report or convert call is listed in the review's errors and its
 coverage, and the other finders go on. A file that a dimension did not
 review, because every call of that dimension covering it failed, is listed
@@ -654,7 +662,14 @@ matching a git glob, read from the top of the repository, out of the diff,
 the file list and every stage; the review's header lists the paths it left
 out. buildme passes its spec change directories and runtime files this way.
 `--model <model>` (on `review` and `resume`) runs every stage on one model for
-that run, over `review.yaml` and `multiplai.conf`.
+that run, over `review.yaml` and `multiplai.conf`. On `review`,
+`--finder-model <model>` runs the finders on that model, over `--model` too,
+and `--dimensions <names>` (comma-separated, for example
+`diff-bugs,callers`) chooses the dimension finders, over `review.yaml`'s
+`dimensions`; buildme's epic passes both from `epic.review_dimensions` and
+`epic.review_finder_model`. `resume` keeps the finder model and the
+dimensions the stopped run started with, whatever `--model` or `review.yaml`
+say then, and prints a `NOTICE:` when they differ.
 
 **For `--tree` and `--dir`, plan first.** Run the same command with
 `--plan-only` in the foreground and paste its total line to the user. When
