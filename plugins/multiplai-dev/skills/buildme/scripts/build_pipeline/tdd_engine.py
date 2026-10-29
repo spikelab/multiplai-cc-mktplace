@@ -1897,6 +1897,18 @@ def _record_handoff_note(
     state.checkpoint(config.state_file_path())
 
 
+def _impl_done(config: BuildConfig, block: BlockInfo) -> bool:
+    """An earlier run of *block* committed its tests and its implementation,
+    both on HEAD. The refactor runs when HEAD is the implementation commit;
+    a later commit means the block went past it (`run_block_tdd`)."""
+    return bool(
+        block.test_commit
+        and block.impl_commit
+        and git_ops.is_ancestor_of_head(config.project_dir, block.test_commit)
+        and git_ops.is_ancestor_of_head(config.project_dir, block.impl_commit)
+    )
+
+
 def _tests_done(config: BuildConfig, block: BlockInfo) -> str | None:
     """How much of Phase A an earlier run of *block* finished: "red" when its
     test commit is on HEAD, the RED gate passed and the test files are as the
@@ -2063,6 +2075,30 @@ async def run_block_tdd(
             "misses the block's committed work",
             block.number,
             block.status.value,
+        )
+
+    # A block resumed after its implementation was committed (G33) starts at
+    # the first step with no commit: the test writer, the quality and RED
+    # gates and the implementer are not run again.
+    if _impl_done(config, block):
+        head = git_ops.rev_parse_head(config.project_dir)
+        refactor = config.refactor_phase and head == block.impl_commit
+        log.info(
+            "SKIP block=%d phase=TEST_WRITE,IMPLEMENT reason=impl-committed next=%s",
+            block.number,
+            "REFACTOR" if refactor else "REVIEW",
+        )
+        progress.log_agent(
+            "Implementer",
+            block.name,
+            f"SKIPPED — tests and implementation committed at "
+            f"{block.test_commit[:8]} and {block.impl_commit[:8]}",
+        )
+        if not refactor:
+            return True
+        _mark_block(state, block_idx, BlockStatus.IMPLEMENTING, config)
+        return await _refactor_block(
+            block, config, state, progress, block_idx, block.impl_commit
         )
 
     # --- Phase A: Write tests ---
@@ -2234,98 +2270,115 @@ async def run_block_tdd(
 
     # --- Phase C: Refactor (every tier) ---
     if config.refactor_phase:
-        log.info("START block=%d name=%s phase=REFACTOR", block.number, block.name)
-        _tdd_event(config, state, block, "REFACTOR", "START")
-        # The point to rewind to if the refactor turns out not to be
-        # behavior-preserving. The impl commit above is the normal answer; the
-        # HEAD fallback only applies when there was genuinely nothing to commit
-        # and the tree is clean, so a reset cannot eat uncommitted work.
-        rewind_to = impl_sha
-        if rewind_to is None and git_ops.tree_is_clean(config.project_dir):
-            rewind_to = git_ops.rev_parse_head(config.project_dir)
-
-        # The integrity baseline for this window is the tree as the implementer
-        # left it — NOT `block.test_file_hashes`, which was frozen at the RED
-        # gate and is only re-baselined by `_enforce_test_integrity` AFTER this
-        # phase. An implementer that legitimately changed a test (the
-        # `TEST CHANGE REQUIRED:` path, committed just above) would otherwise
-        # be blamed on the refactorer, discarding a good refactor every time.
-        # The whole-change pass snapshots its own window the same way.
-        pre_refactor_hashes = _snapshot_test_files(config, block)
-
-        refactor_context = assemble_context(
-            block, config, "refactorer", blocks=state.tdd.blocks if state.tdd else None
+        return await _refactor_block(
+            block, config, state, progress, block_idx, impl_sha
         )
-        progress.log_agent("Refactorer", block.name, "STARTED")
-        refactor_result = await run_refactorer(
-            block_name=block.name,
-            block_description=block.description,
-            context_bundle=refactor_context,
-            test_command=_block_agent_test_command(config, block),
-            model=config.model_for("refactor"),
-            effort=config.effort_for("refactor"),
-            cwd=cwd,
+    return True
+
+
+async def _refactor_block(
+    block: BlockInfo,
+    config: BuildConfig,
+    state: BuildState,
+    progress: ProgressWriter,
+    block_idx: int,
+    impl_sha: str | None,
+) -> bool:
+    """Phase C of `run_block_tdd`: the refactor, verified, its diff discarded
+    on failure. False when the block fails."""
+    cwd = str(config.project_dir)
+    log.info("START block=%d name=%s phase=REFACTOR", block.number, block.name)
+    _tdd_event(config, state, block, "REFACTOR", "START")
+    # The point to rewind to if the refactor turns out not to be
+    # behavior-preserving. The impl commit above is the normal answer; the
+    # HEAD fallback only applies when there was genuinely nothing to commit
+    # and the tree is clean, so a reset cannot eat uncommitted work.
+    rewind_to = impl_sha
+    if rewind_to is None and git_ops.tree_is_clean(config.project_dir):
+        rewind_to = git_ops.rev_parse_head(config.project_dir)
+
+    # The integrity baseline for this window is the tree as the implementer
+    # left it — NOT `block.test_file_hashes`, which was frozen at the RED
+    # gate and is only re-baselined by `_enforce_test_integrity` AFTER this
+    # phase. An implementer that legitimately changed a test (the
+    # `TEST CHANGE REQUIRED:` path, committed just above) would otherwise
+    # be blamed on the refactorer, discarding a good refactor every time.
+    # The whole-change pass snapshots its own window the same way.
+    pre_refactor_hashes = _snapshot_test_files(config, block)
+
+    refactor_context = assemble_context(
+        block, config, "refactorer", blocks=state.tdd.blocks if state.tdd else None
+    )
+    progress.log_agent("Refactorer", block.name, "STARTED")
+    refactor_result = await run_refactorer(
+        block_name=block.name,
+        block_description=block.description,
+        context_bundle=refactor_context,
+        test_command=_block_agent_test_command(config, block),
+        model=config.model_for("refactor"),
+        effort=config.effort_for("refactor"),
+        cwd=cwd,
+    )
+    # Refactor is non-fatal: a failed or timed-out refactor leaves the
+    # passing implementation intact, so log and move on.
+    if not refactor_result.success:
+        reason = "timeout" if refactor_result.timed_out else refactor_result.error
+        log.warning(
+            "FAIL block=%d name=%s phase=REFACTOR reason=%s (non-fatal)",
+            block.number,
+            block.name,
+            reason,
         )
-        # Refactor is non-fatal: a failed or timed-out refactor leaves the
-        # passing implementation intact, so log and move on.
-        if not refactor_result.success:
-            reason = "timeout" if refactor_result.timed_out else refactor_result.error
-            log.warning(
-                "FAIL block=%d name=%s phase=REFACTOR reason=%s (non-fatal)",
-                block.number,
-                block.name,
-                reason,
-            )
-            progress.log_agent(
-                "Refactorer",
-                block.name,
-                "TIMEOUT" if refactor_result.timed_out else "FAILED",
-            )
-            _tdd_event(
-                config,
-                state,
-                block,
-                "REFACTOR",
-                "FAIL",
-                "reason=timeout" if refactor_result.timed_out else "reason=error",
-            )
-            if not rewind_to or not git_ops.discard_to(
-                config.project_dir, rewind_to, "failed block refactor"
-            ):
-                _mark_block(state, block_idx, BlockStatus.FAILED, config)
-                return False
-            if not _block_tests_gate(config, block).passed:
-                _mark_block(state, block_idx, BlockStatus.FAILED, config)
-                return False
-        elif not _verify_block_refactor(
-            block, config, state, progress, rewind_to, pre_refactor_hashes
+        progress.log_agent(
+            "Refactorer",
+            block.name,
+            "TIMEOUT" if refactor_result.timed_out else "FAILED",
+        )
+        _tdd_event(
+            config,
+            state,
+            block,
+            "REFACTOR",
+            "FAIL",
+            "reason=timeout" if refactor_result.timed_out else "reason=error",
+        )
+        if not rewind_to or not git_ops.discard_to(
+            config.project_dir, rewind_to, "failed block refactor"
         ):
-            if (
-                not rewind_to
-                or git_ops.rev_parse_head(config.project_dir) != rewind_to
-                or not git_ops.tree_is_clean(config.project_dir)
-                or not _block_tests_gate(config, block).passed
-            ):
-                _mark_block(state, block_idx, BlockStatus.FAILED, config)
-                return False
-        else:
-            log.info("DONE block=%d name=%s phase=REFACTOR", block.number, block.name)
-            progress.log_agent("Refactorer", block.name, "COMPLETE")
-            _tdd_event(config, state, block, "REFACTOR", "DONE")
-            if not _record_implementation_note(
-                block,
-                config,
-                state,
-                progress,
-                "refactorer",
-                refactor_result.output,
-            ):
-                _mark_block(state, block_idx, BlockStatus.FAILED, config)
-                return False
-            refactor_sha = _git_commit_block_phase(config, "refactor", block)
-            if refactor_sha:
-                block.refactor_commit = refactor_sha
-                state.checkpoint(config.state_file_path())
+            _mark_block(state, block_idx, BlockStatus.FAILED, config)
+            return False
+        if not _block_tests_gate(config, block).passed:
+            _mark_block(state, block_idx, BlockStatus.FAILED, config)
+            return False
+    elif not _verify_block_refactor(
+        block, config, state, progress, rewind_to, pre_refactor_hashes
+    ):
+        if (
+            not rewind_to
+            or git_ops.rev_parse_head(config.project_dir) != rewind_to
+            or not git_ops.tree_is_clean(config.project_dir)
+            or not _block_tests_gate(config, block).passed
+        ):
+            _mark_block(state, block_idx, BlockStatus.FAILED, config)
+            return False
+    else:
+        log.info("DONE block=%d name=%s phase=REFACTOR", block.number, block.name)
+        progress.log_agent("Refactorer", block.name, "COMPLETE")
+        _tdd_event(config, state, block, "REFACTOR", "DONE")
+        if not _record_implementation_note(
+            block,
+            config,
+            state,
+            progress,
+            "refactorer",
+            refactor_result.output,
+        ):
+            _mark_block(state, block_idx, BlockStatus.FAILED, config)
+            return False
+        refactor_sha = _git_commit_block_phase(config, "refactor", block)
+        if refactor_sha:
+            block.refactor_commit = refactor_sha
+            state.checkpoint(config.state_file_path())
 
     return True
 
