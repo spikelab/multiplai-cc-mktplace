@@ -15,6 +15,17 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.133.0] - 2026-10-29
+
+### Fixed
+- **buildme** epic: the fixer now acts on the epic review's own findings. The review posts them as a GitHub App, which `findings.authors` does not allow, so on 2026-10-29 the fixer acted on none of them four times. The epic now passes `findings --from-review <review folder>`: the fixer reads the blockers from the review's `findings.json`, acts on the comment posting each one whoever wrote it, and still replies under each comment. Comments from people are still allowed by `findings.authors` alone.
+- **buildme** epic: an open confirmed finding no longer merges on its own. Under `epic.merge: auto`, a PR at `epic.max_review_rounds` with an open Code HIGH, or a confirmed Code MEDIUM not rated `hygiene`, parks with the finding ids instead of getting the final fix and merging. A MEDIUM rated `correctness-only` is no longer treated as harmless: under `epic.round_worth: breaks` it now earns another review round. PR #39 merged with two such findings.
+
+### Added
+- **buildme-findings**: `--from-review <review folder>` records one decision for each blocker in `.findings-state.json`: fixed (with its commit), not a defect (with the reason), spec change (with the `spec-issues.md` heading) or still open (with why). A blocker left with no decision ends the run with `FINDINGS:INGESTION_ERROR:<ids>` and exit 1; the epic marks that child `failed` and launches its fixer once more on the next run. A newer review that replaced the folder while a round was open prints `FINDINGS:REVIEW_CHANGED:<old head>→<new head>`.
+- **buildme** epic: `epic.accepted_findings` in `specs/config.yaml` (`{<child id>: {'<finding id>': <reason>}}`) lists findings a person accepted. A listed finding does not block that child; a child parked on findings goes to the merge step once every one is listed, and stays parked otherwise until its PR's head changes.
+- **buildme**: the review impact `depends-on-data` (added to the review skill separately) counts as critical in `--mode critical`, as the review skill counts it.
+
 ## [0.129.0] - 2026-10-29
 
 ### Added
