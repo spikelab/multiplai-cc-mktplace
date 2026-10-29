@@ -32,18 +32,18 @@ from build_pipeline.models import BlockStatus
 
 from tests.test_whole_suite_end import _make, _runs
 
-# A fake `pytest`: while `db.down` exists it fails the way a runner does when
-# it cannot start (no test results, exit 4); otherwise it reports one passed
-# test. Every run appends a line to `runs.txt`.
+# A fake `pytest`: while `db.down` exists it fails the way pytest does when
+# it never gets going (an internal error, no test results, no collection
+# error, exit 3); otherwise it reports one passed test. Every run appends a
+# line to `runs.txt`.
 FAKE_PYTEST = f"""#!{sys.executable}
 import pathlib, sys
 here = pathlib.Path.cwd()
 with (here / "runs.txt").open("a") as f:
     f.write("run\\n")
 if (here / "db.down").exists():
-    print("ImportError while loading conftest '/x/conftest.py'.")
-    print("django.db.utils.OperationalError: could not connect to server")
-    sys.exit(4)
+    print("INTERNALERROR> django.db.utils.OperationalError: could not connect")
+    sys.exit(3)
 print("1 passed in 0.01s")
 """
 

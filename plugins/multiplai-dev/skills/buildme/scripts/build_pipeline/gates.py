@@ -188,14 +188,22 @@ def _runner_kind(argv: list[str], test_command: str, project_dir: Path) -> str |
     return None
 
 
-# pytest's exit codes that say tests were collected: 1 tests failed, 2
-# interrupted (a collection error), 5 none collected. 3 (internal error) and
-# 4 (usage error, a conftest that fails to import) say they were not.
-_PYTEST_RAN = (1, 2, 5)
-# pytest's own usage error: the command is wrong, and running it again
-# changes nothing; the gates judge it as before.
-_PYTEST_USAGE_RE = re.compile(
-    r"^ERROR: usage: |: error: unrecognized arguments", re.MULTILINE
+# pytest's exit codes that say it got going: 1 tests failed, 2 interrupted
+# (a collection error), 4 usage error (a conftest or test module that fails
+# to import or collect), 5 none collected. 3 (internal error) and anything
+# else, such as a signal, say it did not.
+_PYTEST_GOT_GOING = (1, 2, 4, 5)
+# A collection or import error in the output: the code or the tests are
+# broken, usually by the implementer, which is a fix agent's job, never a
+# retry's.
+_COLLECTION_ERROR_RE = re.compile(
+    r"ERROR collecting|errors? during collection|"
+    r"ImportError while (?:loading conftest|importing test module)|"
+    r"^E\s+(?:ModuleNotFoundError|ImportError|SyntaxError|IndentationError)\b|"
+    r"^(?:ModuleNotFoundError|ImportError|SyntaxError|IndentationError):|"
+    r"Test suite failed to run|Cannot find module|"
+    r"^ERROR: usage: |: error: unrecognized arguments",
+    re.MULTILINE,
 )
 
 
@@ -206,19 +214,21 @@ def runner_failure(
     test_command: str,
     project_dir: Path,
 ) -> bool:
-    """True when a run that ended on its own failed with no test results from
-    a known runner: a runner crash, a test database that is down, a project
-    that fails to start. An assertion failure prints results, so it is never
-    one; neither is a run of an unknown command, which says nothing either
-    way, nor a pytest exit code that says tests ran, nor pytest's usage error."""
+    """True when a known runner never got going: the run failed with no test
+    results it printed and no collection or import error in its output (it
+    was killed, crashed, or printed nothing useful; a test database that is
+    down). An assertion failure, a collection error, pytest's usage error and
+    a pytest exit code that says it got going are test failures for the
+    gates and the fix agent; a command buildme does not know says nothing
+    either way, so it is never one."""
     if exit_code in (0, None):
         return False
     text = _ANSI_RE.sub("", output)
-    if _TEST_RESULTS_RE.search(text):
+    if _TEST_RESULTS_RE.search(text) or _COLLECTION_ERROR_RE.search(text):
         return False
     kind = _runner_kind(argv, test_command, project_dir)
     if kind == PYTEST:
-        return exit_code not in _PYTEST_RAN and not _PYTEST_USAGE_RE.search(text)
+        return exit_code not in _PYTEST_GOT_GOING
     return kind is not None
 
 

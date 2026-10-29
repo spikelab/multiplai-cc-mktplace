@@ -468,13 +468,16 @@ output streamed to a file in that folder (`<stamp>-<label>-run<k>.out`). The
 build-pipeline log gets `TEST_RUN start` and `TEST_RUN end dir=<dir>
 exit=<code> seconds=<s>` for each run. On a timeout, or when buildme is
 stopped, the whole group is killed and the partial output is kept; a later
-run never overwrites it. A run that fails with no test results from pytest,
-Jest, Vitest, `manage.py test` or `python -m unittest` (the runner crashed,
-the test database is down, the project failed to start) runs again after 10
-and then 30 seconds. A third such run stops the block (FAILED, resumable)
-with the three outputs named in `build-progress.md`, and no fix agent runs on
-it; re-running the build runs the test command again. A test that fails is
-never run again.
+run never overwrites it. A run where pytest, Jest, Vitest, `manage.py test`
+or `python -m unittest` never got going (it was killed or crashed, the test
+database is down, or it printed nothing) runs again after 10 and then 30
+seconds: that is a failed run with no test results and no collection or
+import error in its output. A third such run stops the block (FAILED,
+resumable) with the three outputs named in `build-progress.md`, and no fix
+agent runs on it; re-running the build runs the test command again. A test
+that fails is never run again, and neither is a conftest or test file that
+fails to import or collect (pytest exit 4, or exit 1, 2 or 5): that goes to
+the fix agent as a failing test.
 
 ### The check before the first paid call
 

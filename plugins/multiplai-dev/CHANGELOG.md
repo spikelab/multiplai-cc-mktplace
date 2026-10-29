@@ -22,7 +22,7 @@ time, not derived from a tag.
 
 ### Changed
 - **buildme**: every test-command run runs in a process group of its own and streams its output to `<change dir>/.buildme-test-runs/`. A timeout or a stopped build kills the whole group, so no test process outlives the run, and keeps the partial output. The build log gets a `TEST_RUN end ... seconds=<s>` line for each run, which gives the time spent in tests.
-- **buildme**: a test run that fails with no test results (the runner crashed, the test database is down, the project failed to start) is run again after 10 and 30 seconds instead of being treated as failing tests. If the third run fails the same way, the block stops with the three saved outputs and no fix agent is spent on it; re-running the build runs the tests again. A test that fails is never run again.
+- **buildme**: a test run where the runner never got going (it was killed or crashed, the test database is down, it printed nothing) is run again after 10 and 30 seconds instead of being treated as failing tests. A conftest or test file that fails to import or collect (pytest exit 4, or a collection or import error in the output) is not run again: it goes to the fix agent as a failing test, as before. If the third run fails the same way, the block stops with the three saved outputs and no fix agent is spent on it; re-running the build runs the tests again. A test that fails is never run again.
 
 ## [0.129.0] - 2026-10-29
 

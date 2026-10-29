@@ -121,10 +121,12 @@ def test_an_unknown_command_with_no_output_is_not_run_again(tmp_path, trusted, w
 @pytest.mark.parametrize(
     ("argv", "code", "output", "expected"),
     [
-        # pytest: exit 3 (internal error) and 4 (a conftest that fails to
-        # import) with no results; 1, 2 and 5 say tests ran even with the
+        # pytest: exit 3 (internal error) or a signal with no results and no
+        # collection error; 1, 2, 4 and 5 say it got going, even with the
         # terminal reporter off.
-        (["pytest"], 4, "ImportError while loading conftest", True),
+        (["pytest"], 4, "ImportError while loading conftest", False),
+        (["pytest"], 3, "ImportError while loading conftest", False),
+        (["pytest"], 4, "", False),
         (["pytest"], 3, "INTERNALERROR> OperationalError", True),
         (["pytest"], -9, "", True),
         (["pytest", "-p", "no:terminal"], 1, "", False),
@@ -134,9 +136,11 @@ def test_an_unknown_command_with_no_output_is_not_run_again(tmp_path, trusted, w
         (["pytest"], 2, "1 error in 0.30s", False),
         (["python", "manage.py", "test"], 1, "OperationalError: no database", True),
         (["python", "manage.py", "test"], 1, "Ran 4 tests in 0.1s\n\nFAILED", False),
-        (["python", "-m", "unittest"], 1, "ImportError: no module", True),
+        (["python", "-m", "unittest"], 1, "ImportError: no module", False),
+        (["python", "-m", "unittest"], 1, "Segmentation fault", True),
         (["npx", "jest"], 1, "Tests:       1 failed, 1 total", False),
-        (["npx", "jest"], 1, "Cannot find module 'x'", True),
+        (["npx", "jest"], 1, "Cannot find module 'x'", False),
+        (["npx", "jest"], 137, "", True),
         (["make", "test"], 1, "", False),
     ],
 )
@@ -149,3 +153,74 @@ def test_runner_failure_needs_a_known_runner_and_no_results(
 def test_a_run_that_passed_or_could_not_run_is_never_a_runner_failure(tmp_path):
     assert not runner_failure(0, "", ["pytest"], "pytest", tmp_path)
     assert not runner_failure(None, "", ["pytest"], "pytest", tmp_path)
+
+
+# A fake `pytest`: while `broken.import` exists it fails the way pytest does
+# when a conftest cannot import the implementer's code (exit 4, a collection
+# error); otherwise one test passes. Every run appends a line to `runs.txt`.
+BROKEN_IMPORT_PYTEST = f"""#!{sys.executable}
+import pathlib, sys
+here = pathlib.Path.cwd()
+with (here / "runs.txt").open("a") as f:
+    f.write("run\\n")
+if (here / "broken.import").exists():
+    print("ImportError while loading conftest '/x/tests/conftest.py'.")
+    print("tests/conftest.py:1: in <module>")
+    print("    from app import thing")
+    print("E   ImportError: cannot import name 'thing' from 'app' (/x/app.py)")
+    sys.exit(4)
+print("1 passed in 0.01s")
+"""
+
+
+@pytest.mark.asyncio
+async def test_a_broken_import_goes_to_the_fix_agent_on_the_first_run(
+    tmp_path, monkeypatch, waits
+):
+    """pytest exit 4 with a collection error is the implementer's code, not
+    the runner: the integration gate sends it to the fix agent at once, with
+    no retry and no stop."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, patch
+
+    from build_pipeline import tdd_engine
+    from build_pipeline.models import AgentResult
+
+    from tests.test_whole_suite_end import _make
+
+    monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
+    p = _make(tmp_path / "run", whole_suite="per_block")
+    script = p.dir / "pytest"
+    script.write_text(BROKEN_IMPORT_PYTEST)
+    script.chmod(0o755)
+    p.config.test_command = "./pytest"
+    (p.dir / "broken.import").touch()
+
+    async def block_tdd(block, config, state, progress):
+        return True
+
+    def fix(**kwargs):
+        (p.dir / "broken.import").unlink()
+        return AgentResult(success=True, output="fixed the import")
+
+    fixer = AsyncMock(side_effect=fix)
+    reached = AsyncMock(side_effect=RuntimeError("review reached"))
+    with (
+        patch("build_pipeline.tdd_engine.run_block_tdd", side_effect=block_tdd),
+        patch("build_pipeline.tdd_engine.run_integration_fix", fixer),
+        patch("build_pipeline.tdd_engine._run_quality_review", reached),
+    ):
+        await tdd_engine.run_tdd_engine(
+            p.config, SimpleNamespace(block=None), standalone=False
+        )
+
+    fixer.assert_called_once()
+    assert "ImportError" in fixer.call_args.kwargs["failure_output"]
+    assert waits == []
+    assert (p.dir / "runs.txt").read_text().splitlines() == ["run", "run"]
+    # It went on to the review (whose stand-in raises, which is what ends
+    # this run), not to the runner-failure stop.
+    reached.assert_called()
+    assert "test runner failed" not in p.config.progress_file_path().read_text()
+    runs = p.config.change_dir / ".buildme-test-runs"
+    assert not list(runs.glob("*.out"))
