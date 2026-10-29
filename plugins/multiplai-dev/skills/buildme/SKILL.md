@@ -793,6 +793,9 @@ the next run waits for them. An ignored SIGHUP or SIGTERM (SIGHUP under
 `specs/config.yaml` takes an `epic:` block: `epic.max_parallel` (default `2`),
 `epic.max_review_rounds` (default `3`), `epic.round_worth` (`breaks` or
 `any`, default `breaks`; which Code MEDIUM earns another review round, below),
+`epic.accepted_findings` (`{<child id>: {'<finding id>': <reason>}}`, default
+none: the review findings a person accepted for that child, which then do not
+block it; quote the finding ids; an entry with no reason still blocks),
 `epic.merge` (`auto` or `manual`; unset, it is `auto` when the feature
 branch is not origin's default branch, which is always the case for a
 pm-spec epic, else `manual`; under `manual` a human merges each child's PR,
@@ -897,11 +900,13 @@ call:
 
 - `round` (another fix and review): a Code HIGH is open, or, below
   `epic.max_review_rounds`, a Code MEDIUM earns a round. Under
-  `epic.round_worth: breaks` that is a MEDIUM the review's verifier rated
-  `breaks-users` or `breaks-business`, or did not rate; under `any`, every
-  MEDIUM, as before 0.74.
-- `final_fix`: only Code MEDIUMs are left and none earns a round, or the PR
-  is at `epic.max_review_rounds` with only Code MEDIUMs. One fixer runs one
+  `epic.round_worth: breaks` that is a MEDIUM the review's verifier did not
+  rate `hygiene` (`correctness-only` and `depends-on-data` earn one too); under
+  `any`, every MEDIUM, as before 0.74.
+- `final_fix`: only Code MEDIUMs rated `hygiene` are left below the cap, or
+  the PR is at `epic.max_review_rounds` and the only Code MEDIUMs left are
+  unconfirmed or rated `hygiene` (under `epic.merge: manual`, any Code
+  MEDIUMs: a person reads them before merging). One fixer runs one
   fresh round with `--no-review` (`--max-rounds` one more than every round in
   the change's `.findings-state.json`, finished or not, as `findings` first
   finishes a round an earlier fixer left open): it fixes, pushes and replies,
@@ -914,7 +919,14 @@ call:
   round and ends `FINDINGS:DONE`; the PR still goes to the merge step, and the
   issue says no fix ran on what it lists. A run that finds an issue with that
   title, open or closed, files none.
-- `park`: a Code HIGH is open at `epic.max_review_rounds`.
+- `park`: at `epic.max_review_rounds`, a Code HIGH is open, or under
+  `epic.merge: auto` a confirmed Code MEDIUM not rated `hygiene` is: an open
+  confirmed finding never merges on its own. The record keeps their ids
+  (`open_ids`). The child stays parked until its PR's head changes (the next
+  run reviews the new head) or until `epic.accepted_findings` lists every one
+  of them for the child; then the next run records the review again without
+  them and sends the PR to the merge step, which still merges only the
+  reviewed head. A finding listed there never blocks the child at all.
 
 The reviews are its own and each fixer's (below). Every fixer launch runs one
 round, whose review is the PR's next, so a decision follows every review.
@@ -934,13 +946,18 @@ review_pipeline post <review dir> --decisions <that file>`, run in the child's
 project directory (`agents/<NNN>-post-<id>.*`). Then the fixer runs there:
 `python -m build_pipeline findings --pr <n> --change <epic>-<id> --project-dir
 <child project dir> --auto --trust-repo --max-rounds <M> --severities
-HIGH,MEDIUM --code-only --no-escalation [--max-usd <left>]` (`agents/<NNN>-fix-<id>.*`;
+HIGH,MEDIUM --code-only --no-escalation --from-review <review dir> [--max-usd <left>]` (`agents/<NNN>-fix-<id>.*`;
 `<left>` is its share of `epic.max_usd`, above, only when `epic.max_usd` is
 set; its re-reviews post only HIGH and MEDIUM Code findings, so it runs no
 round for a finding the epic would merge with), where `<M>` is every round in
 the change's `.findings-state.json`, finished or not, plus one, so the fixer
 runs one round (finishing first a round an earlier fixer left open) and
-stops. When it ends, the coordinator reads the PR again and
+stops. `--from-review` makes it act on the review's blockers though the review
+posts them under a GitHub App that `findings.authors` does not allow, and
+record a decision for each; a blocker left with none ends the fixer with
+`FINDINGS:INGESTION_ERROR:<ids>`, which leaves the child `failed`; the next
+run launches the fixer once more, with a fresh round, and a second such end
+leaves it `failed`. When it ends, the coordinator reads the PR again and
 reuses the fixer's last review (no new review launch): blockers on it get
 the same decision, above. A head with a fix
 after its review is not fixed again: when that fixer exited 0 with
