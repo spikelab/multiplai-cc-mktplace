@@ -42,6 +42,10 @@ leaves a critical or major finding unfixed prints it under a loud banner and
 is for specs no review stop showed anyone: `--auto`, an adopted change, a run
 from before the staged flow.
 
+Before each check, `counts.py` appends one advisory line of regex counts
+(refusals with no status, "as before" THENs with no baseline, "as today"
+statements with no named function, commit pins) to the progress file.
+
 The step's revision is `layout.revision` of the change (the change dir's and
 every component's `spec_revision`), taken before each agent call (the first check and the recheck): it is the
 revision the check read, and the handoff marks ready only that revision.
@@ -58,7 +62,7 @@ from typing import Literal
 from multiplai_core.specs import split_capabilities
 from pydantic import BaseModel, Field, field_validator
 
-from . import artifacts, layout, sdk
+from . import artifacts, counts, layout, sdk
 from . import findings as F
 from .prompts import UNTRUSTED_NOTICE
 from .prompts.consistency import (
@@ -451,6 +455,9 @@ async def run_consistency(run: Run) -> None:
     if step and step.outcome == "passed" and step.revision == revision:
         log.info("SKIP consistency: passed at this revision")
         return
+    run.progress(
+        "SPEC_COUNTS", "Advisory: " + counts.counts_line(counts.count_specs(change_dir))
+    )
     if reviewed(run):
         if passed_by_acceptance(run, revision):
             return

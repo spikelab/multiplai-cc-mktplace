@@ -26,8 +26,11 @@ builds from them. You report problems; you do not fix them.
 
 ## What to report
 Read every document above together. You may read the repository (Read, Glob,
-Grep) to understand names it uses, but judge only these documents. Report
-each problem of these three types:
+Grep) to understand names it uses, but judge only these documents, with one
+exception: for each statement about what the code does today that names a
+file and a function, read that function, and report a `contradiction` when
+the code does something else, citing the statement and the function as its
+two places. Report each problem of these three types:
 
 - `contradiction`: two places require behaviour that cannot both hold — two
   requirements, or a requirement and the proposal, a plan or a use case, give

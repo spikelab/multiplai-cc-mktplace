@@ -26,6 +26,11 @@ Give each component:
 - `title`: one line.
 - `depends_on`: the ids of the components that must be delivered before this
   one can start. Leave it empty when it can start at once. No cycles.
+- One owner for each shared rule: when two components change or rely on the
+  same behaviour of existing code, such as one function or one endpoint's
+  access rule, one component owns it and states it. Every other component
+  that changes or relies on it lists the owner in `depends_on` and cites it
+  in its plan, rather than stating the rule again.
 - `ticket_ref`: the ref of the ticket child item this component delivers,
   exactly as listed, or empty for a component of your own.
 - `plan`: the component's plan in Markdown, with these sections (short is

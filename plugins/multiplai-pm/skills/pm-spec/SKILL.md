@@ -75,7 +75,10 @@ after the third stop runs the consistency check and the handoff.
    `components/<id>/.change.yaml` (`depends_on`, `branch`); the change's
    `.change.yaml` records `children`, the ids in dependency order. One
    component: no `components/` folder, its `plan.md` in the change dir.
-   `--no-epic-split` keeps one component.
+   `--no-epic-split` keeps one component. When two components change or rely
+   on the same behaviour of existing code (one function, one endpoint's
+   access rule), the call is told to make one of them its owner, and the
+   others depend on it and cite it.
 7. **Stop:** commit, push, `SPEC:REVIEW:components`, `SPEC:BRANCH:<branch>`,
    exit 3.
 
@@ -110,7 +113,13 @@ after the third stop runs the consistency check and the handoff.
    `## ADDED/MODIFIED/REMOVED Requirements`; a name for existing behaviour
    must be an existing `specs/registry/` file's, and only such a capability
    may have `MODIFIED` or `REMOVED` requirements (with no registry file,
-   every requirement is `ADDED`). The call answers with the file between
+   every requirement is `ADDED`). The call is told to state outcomes: a
+   refusal's HTTP status (or the error the caller sees) and message, how and
+   by whom an "as before" baseline is captured, who supplies any production
+   data, and the file and function behind each statement about today's
+   behaviour (no line numbers or commits); production row counts and ids go
+   in the plan's Context, and conventions the proposal states are not
+   restated. The call answers with the file between
    the two delimiter lines a rewrite uses; only the text between them is
    written, and an answer without them, or with anything but blank lines
    above the first `# Capability:` line, writes nothing and fails the run
@@ -125,7 +134,13 @@ after the third stop runs the consistency check and the handoff.
    that breaks the format (a capability name that is not kebab-case or is
    used twice, a requirement with no scenario) is a critical finding, and so
    is a `MODIFIED` or `REMOVED` section in a capability with no
-   `specs/registry/<capability>.md`.
+   `specs/registry/<capability>.md`. The agent judges only these documents,
+   except that it reads the function a statement about today's behaviour
+   names, and reports a `contradiction` when the code does something else.
+   Each check first appends one advisory line to `.pm-spec/progress.md`
+   (`SPEC_COUNTS`) counting refusals with no status, "as before" THENs with
+   no baseline, "as today" statements with no named function, and commit
+   pins; nothing blocks on these counts.
    **After the specs review stop** (step 11) the check rewrites no file: the
    specs are what reviewers read and edited. A critical or major finding
    stops the run with `SPEC:BLOCKED:<change_dir>`, exit 4, the findings
