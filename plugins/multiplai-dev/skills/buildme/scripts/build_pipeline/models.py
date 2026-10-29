@@ -443,6 +443,8 @@ class TestQualityAudit(BaseModel):
     weak_tests: list[WeakTestFinding] = Field(default_factory=list)
     total_tests: int = 0
     weak_count: int = 0
+    # One or two sentences on why the tests pass or fail the audit.
+    reason: str = ""
 
     def findings_text(self) -> str:
         return "\n".join(
@@ -664,6 +666,33 @@ class HandoffNote(BaseModel):
 
 
 # --- Block state ---
+
+
+class EndSuiteState(BaseModel):
+    """The end-of-build whole test run under `tdd.whole_suite: end`, in
+    flight (`tdd_engine._run_end_suite`). Saved before each step, cleared
+    when the run is green and its fix (if any) is committed.
+    """
+
+    # HEAD when the run started: a fix that cannot make the suite green is
+    # thrown away back to here.
+    checkpoint: str
+    # Fix attempts made from `checkpoint`; only goes up, so the cap of
+    # MAX_INTEGRATION_FIX_ATTEMPTS holds across resumes.
+    attempts: int = 0
+    # Set when the attempts ran out; a resume on a clean tree starts again.
+    exhausted: bool = False
+    # `verification_inputs(...)["content"]` of the tree the last fixer left,
+    # so a resume can tell its edits from anyone else's. None while a fixer
+    # runs (a resume then refuses: its edits cannot be told from a user's).
+    after_fix_content: str | None = None
+    # The test files' hashes at `checkpoint`; None when they could not be
+    # read, which blocks keeping any fix ("not checked" never authorizes).
+    test_file_hashes: dict[str, str] | None = None
+    test_change_claims: list[str] = Field(default_factory=list)
+    fix_reports: list[str] = Field(default_factory=list)
+    # The last failed run's output file when the attempts ran out.
+    failure_file: str | None = None
 
 
 class FixOnPassState(BaseModel):

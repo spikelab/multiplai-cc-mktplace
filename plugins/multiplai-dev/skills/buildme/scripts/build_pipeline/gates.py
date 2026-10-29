@@ -13,6 +13,7 @@ import shlex
 import shutil
 import subprocess
 from collections.abc import Callable, Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import NamedTuple
 
@@ -274,22 +275,116 @@ def _full_suite(test_command: str, project_dir: Path, parallel: str) -> str:
     )
 
 
+# Lines of a failed run's output its failure file keeps (`write_failure_log`).
+FAILURE_LOG_LINES = 400
+# The change dir's folder of failure files: bookkeeping, never committed,
+# cleaned or verified (`git_ops.BOOKKEEPING_EXCLUDES`).
+TEST_RUNS_DIR = ".buildme-test-runs"
+
+
+def failure_log_path(change_dir: Path, label: str) -> Path:
+    """`<change_dir>/.buildme-test-runs/<UTC stamp>-<label>.log`."""
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    return Path(change_dir) / TEST_RUNS_DIR / f"{stamp}-{label}.log"
+
+
+_FAILED_TEST_RE = re.compile(
+    r"^(?:FAILED|ERROR)\s+(.+?)(?:\s+-\s.*)?\s*$|^\s*FAIL\s+(\S+)", re.MULTILINE
+)
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def failing_tests(output: str) -> list[str]:
+    """The failing test ids a run's output names, in order and once each:
+    pytest's `FAILED <nodeid>` / `ERROR <nodeid>` summary lines and Jest's
+    `FAIL <path>` lines."""
+    found: dict[str, None] = {}
+    for match in _FAILED_TEST_RE.finditer(_ANSI_RE.sub("", output)):
+        found[match.group(1) or match.group(2)] = None
+    return list(found)
+
+
+def write_failure_log(
+    path: Path, command: str, exit_code: int | None, output: str
+) -> str | None:
+    """Write a failed run's command, its exit code (or, when it did not run,
+    `run_test_suite`'s reason), the failing test ids and the output's last
+    `FAILURE_LOG_LINES` lines to *path*. Returns the path, or None when the
+    file could not be written (logged; the gate's verdict does not change)."""
+    status = (
+        f"exit code: {exit_code}"
+        if exit_code is not None
+        else f"did not run: {output.strip()}"
+    )
+    ids = failing_tests(output)
+    lines = output.splitlines()[-FAILURE_LOG_LINES:]
+    text = (
+        f"command: {command}\n{status}\n\n"
+        f"failing tests ({len(ids)}):\n"
+        + "".join(f"  {test_id}\n" for test_id in ids)
+        + f"\nlast {len(lines)} lines of output:\n"
+        + "\n".join(lines)
+        + "\n"
+    )
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    except OSError as error:
+        log.warning(
+            "Could not write the failed test run's output to %s: %s", path, error
+        )
+        return None
+    return str(path)
+
+
+def _attach_failure_log(
+    gate: GateResult,
+    failure_log: Path | None,
+    command: str,
+    exit_code: int | None,
+    output: str,
+) -> GateResult:
+    if failure_log is not None and not gate.passed:
+        written = write_failure_log(failure_log, command, exit_code, output)
+        if written:
+            gate.metadata["output_file"] = written
+    return gate
+
+
+def _suite_run(
+    test_command: str, project_dir: Path, parallel: str, timeout: int
+) -> tuple[str, int | None, str]:
+    """(the command run, its exit code, its output) for one whole-suite run."""
+    command = _full_suite(test_command, project_dir, parallel)
+    exit_code, output = run_test_suite(command, project_dir, timeout)
+    return command, exit_code, output
+
+
 def baseline_test_gate(
     test_command: str,
     project_dir: Path,
     *,
     parallel: str = "off",
     timeout: int = DEFAULT_TEST_TIMEOUT,
+    failure_log: Path | None = None,
 ) -> GateResult:
     """Run the test suite and check it passes before TDD starts. *parallel*
-    is `tdd.parallel` (`parallel_command`), *timeout* `tdd.test_timeout`."""
+    is `tdd.parallel` (`parallel_command`), *timeout* `tdd.test_timeout`.
+    A failed run with *failure_log* set writes its output there
+    (`write_failure_log`) and names the file in `metadata["output_file"]`."""
     if not test_command:
         return GateResult(
             passed=True, reason="No test command configured — skipping baseline"
         )
-    exit_code, output = run_test_suite(
-        _full_suite(test_command, project_dir, parallel), project_dir, timeout
+    command, exit_code, output = _suite_run(
+        test_command, project_dir, parallel, timeout
     )
+    return _attach_failure_log(
+        _baseline_verdict(exit_code, output), failure_log, command, exit_code, output
+    )
+
+
+def _baseline_verdict(exit_code: int | None, output: str) -> GateResult:
     if exit_code is None:
         # Could not verify — untrusted repo, missing binary or timeout. The
         # message run_test_suite returns already names which.
@@ -314,16 +409,25 @@ def integration_gate(
     *,
     parallel: str = "off",
     timeout: int = DEFAULT_TEST_TIMEOUT,
+    failure_log: Path | None = None,
 ) -> GateResult:
     """Run the full test suite after a block completes. *parallel* is
-    `tdd.parallel` (`parallel_command`), *timeout* `tdd.test_timeout`."""
+    `tdd.parallel` (`parallel_command`), *timeout* `tdd.test_timeout`.
+    A failed run with *failure_log* set writes its output there
+    (`write_failure_log`) and names the file in `metadata["output_file"]`."""
     if not test_command:
         return GateResult(
             passed=True, reason="No test command — skipping integration gate"
         )
-    exit_code, output = run_test_suite(
-        _full_suite(test_command, project_dir, parallel), project_dir, timeout
+    command, exit_code, output = _suite_run(
+        test_command, project_dir, parallel, timeout
     )
+    return _attach_failure_log(
+        _integration_verdict(exit_code, output), failure_log, command, exit_code, output
+    )
+
+
+def _integration_verdict(exit_code: int | None, output: str) -> GateResult:
     if exit_code is None:
         # No action: an unverifiable suite is not something a fix agent can
         # repair (the pre-collapse gate returned no action here either).
@@ -1746,8 +1850,11 @@ def final_verification(
     parallel: str = "off",
     timeout: int = DEFAULT_TEST_TIMEOUT,
     plan_revision: str = "",
+    failure_log: Path | None = None,
 ) -> GateResult:
-    """The shared completion gate, after the last writer and before publication."""
+    """The shared completion gate, after the last writer and before publication.
+    A failed run with *failure_log* set writes its output there after the
+    second input read, so the file is never one of the inputs it compares."""
     if not test_command.strip():
         return GateResult(
             passed=False, reason="Final verification requires a configured test command"
@@ -1760,9 +1867,10 @@ def final_verification(
             plan_revision=plan_revision,
             include_files=True,
         )
-        gate = integration_gate(
-            test_command, project_dir, parallel=parallel, timeout=timeout
+        command, exit_code, output = _suite_run(
+            test_command, project_dir, parallel, timeout
         )
+        gate = _integration_verdict(exit_code, output)
         after = verification_inputs(
             test_command,
             project_dir,
@@ -1774,6 +1882,7 @@ def final_verification(
         return GateResult(
             passed=False, reason=f"Final verification unavailable: {error}"
         )
+    _attach_failure_log(gate, failure_log, command, exit_code, output)
     gate.metadata["inputs"] = {
         k: v for k, v in after.items() if k not in {"files", "index"}
     }

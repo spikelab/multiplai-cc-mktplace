@@ -924,6 +924,8 @@ BOOKKEEPING_EXCLUDES = [
     ":(exclude,glob)**/build-progress.md",
     # Section files publish hands the pr skill (orchestrator._pre_publish_sections).
     ":(exclude,glob)**/pr-sections/**",
+    # A failed whole test run's output (gates.write_failure_log).
+    ":(exclude,glob)**/.buildme-test-runs/**",
 ]
 
 

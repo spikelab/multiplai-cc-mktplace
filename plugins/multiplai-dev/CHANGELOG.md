@@ -15,6 +15,16 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.129.0] - 2026-10-29
+
+### Added
+- **buildme**: `tdd.whole_suite: end` in `specs/config.yaml` runs the whole `tdd.test_command` once after the last block instead of several times in every block. The block gates (the integration gate and the runs after each integration fix, review fix and fix on pass) and the whole-change refactor's checks run only the tests of what changed. When the end run is red, buildme first discards the whole-change refactor commit if it is the last commit, then makes up to three fix attempts. If the suite is still red, buildme puts the tree back, saves the fixers' diff and the last run's output, and fails the build with both paths in `build-progress.md`. A stopped end run resumes, but never over uncommitted edits it cannot tell from yours. The default, `per_block`, runs buildme's whole-suite checks as before. Trade-off: a block that breaks another block's tests is caught only at the end.
+
+### Changed
+- **buildme** (G23): every failed whole test run (the baseline, a block gate, the whole-change refactor, the end run, the final verification) writes its command, exit code, failing test ids and last 400 lines of output to `<change dir>/.buildme-test-runs/<UTC stamp>-<label>.log`, and the log line and `build-progress.md` name that file. buildme never commits or cleans that folder.
+- **buildme** (G31): no agent is told to run the whole test suite. The integration and review fixers, the fix on pass, the whole-change refactorer and the mutation test writer get a narrowed test command instead of the whole one; the integration fixer also gets the failing tests by name. When a command cannot be narrowed, the agent is told not to run it and to run only the test files it wrote or changed.
+- **buildme** (G32): the weak-test scan reads a block's Jest test files and counts their `it(`/`test(` calls, so a Jest-only block no longer fails with "No test functions found". The test-quality auditor's verdict and its reason go to `build-progress.md`.
+
 ## [0.128.0] - 2026-10-28
 
 ### Changed

@@ -1041,6 +1041,39 @@ class TestParallelTestsConfig:
         assert "tdd.parallel" in caplog.text
 
 
+class TestWholeSuiteConfig:
+    """`tdd.whole_suite`: `per_block` (default) runs the whole test command in
+    every block's gates; `end` runs it once after the last block."""
+
+    def test_per_block_by_default(self, tmp_path):
+        assert BuildConfig().whole_suite == "per_block"
+        assert (
+            _config_from_yaml(tmp_path, "tdd:\n  test_command: pytest\n").whole_suite
+            == "per_block"
+        )
+
+    @pytest.mark.parametrize("value", ["per_block", "end", '"end"'])
+    def test_both_values_are_read(self, tmp_path, value):
+        config = _config_from_yaml(tmp_path, f"tdd:\n  whole_suite: {value}\n")
+        assert config.whole_suite == value.strip('"')
+
+    def test_an_unknown_value_warns_and_keeps_per_block(self, tmp_path, caplog):
+        config = _config_from_yaml(tmp_path, "tdd:\n  whole_suite: never\n")
+        assert config.whole_suite == "per_block"
+        assert "Unrecognized tdd.whole_suite value 'never'" in caplog.text
+
+    def test_end_without_narrowing_warns(self, tmp_path, caplog):
+        config = _config_from_yaml(
+            tmp_path, "tdd:\n  whole_suite: end\n  narrow_tests: false\n"
+        )
+        assert config.whole_suite == "end"
+        assert "falls back to the whole test command" in caplog.text
+
+    def test_end_with_narrowing_does_not_warn(self, tmp_path, caplog):
+        _config_from_yaml(tmp_path, "tdd:\n  whole_suite: end\n")
+        assert "falls back" not in caplog.text
+
+
 class TestTestTimeoutConfig:
     """`tdd.test_timeout`: the seconds each full-suite run gets; 300 when unset."""
 

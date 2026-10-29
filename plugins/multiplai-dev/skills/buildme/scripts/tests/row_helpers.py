@@ -57,6 +57,7 @@ BOOKKEEPING = (
     ".board.json",
     "build-progress.md",
     "pr-sections/*",
+    ".buildme-test-runs/*",
 )
 
 

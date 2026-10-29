@@ -370,10 +370,20 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   deleted".** `_snapshot_test_files` returns `None` (distinct from `{}`) when
   Git or a file cannot be read. Both integrity windows block on `None`:
   unavailable evidence cannot authorize a required check.
-- **Two test-path regexes, on purpose.** `_TEST_FILE_RE` is Python-only because
-  it feeds the `def test_*` weak-test scan; `_TEST_PATH_RE` is
+- **Separate test-path regexes, on purpose.** `_TEST_FILE_RE` (Python) and
+  `_JS_TEST_FILE_RE` (JS/TS) feed the weak-test scan, which counts each
+  file's tests by its language (`_count_tests`) and runs its weak patterns on
+  the Python files only; a language with no counter must not be read, or every
+  block fails on "no test functions found". `_TEST_PATH_RE` is
   language-agnostic because integrity hashing never parses source and must
   cover Swift/Go/TS repos or the gate silently no-ops there.
+- **Under `tdd.whole_suite: end` the whole run is owed until it passes.**
+  `_finish_block` sets `TDDState.whole_suite_deferred`, so `_run_end_suite`
+  runs even if the setting goes back to `per_block` before a resume. Its
+  resume never commits, discards or tests uncommitted edits it cannot prove
+  are its stopped fixer's (`EndSuiteState.after_fix_content`); anything else
+  refuses. Rows S1-S18 of plan-buildme-full-suite-once-2026-10-28.md are
+  `tests/test_whole_suite_end.py`.
 - **Confidence shrinks a score toward neutral; it never scales it.**
   Multiplying would make an unsure reviewer look *harsher* (score 2 at 40% →
   0.8, a hard critical fail), which inverts the meaning of low confidence.
