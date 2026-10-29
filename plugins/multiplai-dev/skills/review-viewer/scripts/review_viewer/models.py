@@ -211,6 +211,9 @@ class Finding(_Strict):
     # The kept round an incremental round copied this finding from, unchanged (multiplai-dev
     # 0.115+): `<NN>-<head12>`. Absent on a finding this round found.
     carried_from: str | None = None
+    # The defect was in the code before the reviewed change (multiplai-dev 0.138+). Written only
+    # as true; absent otherwise, and in older files.
+    pre_existing: bool | None = None
 
     @field_validator("paths")
     @classmethod

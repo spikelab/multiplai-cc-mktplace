@@ -295,7 +295,7 @@ def _normalise(
         other_locations=[
             relative_path(loc, target, ctx.snapshot) for loc in finding.other_locations
         ],
-        dimension="pre-existing" if finding.dimension == "pre-existing" else dimension,
+        dimension=dimension,
         finder=dimension,
         finders=[dimension],
     )
@@ -353,8 +353,8 @@ def map_converted(
     """Every converted item as a `ConvertedItem`, and a `Finding` for each one that has a location.
 
     A missing severity is LOW. A finding's finder is the key's kind (the
-    dimension, or `path`), and so is its dimension, except "pre-existing" for
-    an item the report marks so. An item with no file, line or citation, or one
+    dimension, or `path`), and so is its dimension; an item the report marks
+    pre-existing has `pre_existing` set. An item with no file, line or citation, or one
     whose location does not validate, stays an item with `finding_id` None.
     """
     kind = key.partition("@")[0]
@@ -368,7 +368,8 @@ def map_converted(
                 finding = Finding(
                     claim=it.claim,
                     severity=severity,
-                    dimension="pre-existing" if it.pre_existing else kind,
+                    dimension=kind,
+                    pre_existing=it.pre_existing,
                     file=it.file,
                     line_start=it.line_start,
                     line_end=it.line_end or it.line_start,
