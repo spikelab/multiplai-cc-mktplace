@@ -97,8 +97,9 @@ class ReviewError(Exception):
 
 
 class InterruptedRun(ReviewError):
-    """The ledger shows a run of this target and head that started and never ended, and its saved
-    state is still in the target directory, so `resume` can continue it. Exit code 4."""
+    """The ledger shows a run of this target and head that started and never ended, or that the
+    usage limit or the verifier stopped, and its saved state is still in the target directory, so
+    `resume` can continue it. Exit code 4."""
 
     def __init__(self, target_dir: Path):
         self.target_dir = target_dir
@@ -495,7 +496,8 @@ def prepare(
     and committed there (`import_dir`), then reviewed as a tree at that commit.
     With *check_interrupted* (a review, not `--plan-only`) and no
     `spec.restart`, a run of this directory and head that the ledger shows
-    started and never ended raises InterruptedRun before anything is
+    started and never ended, or stopped by the usage limit or the verifier,
+    raises InterruptedRun before anything is
     written, when `resume` can continue it (`_resumable`); otherwise this run
     starts over. While the chosen directory has no saved state yet, the
     directory multiplai-dev 0.46 used for this target (`<out>/<its slug>/`) is
@@ -717,8 +719,9 @@ def _choose_folder(
 
 
 def _resumable(target_dir: Path, head_sha: str) -> bool:
-    """True when the ledger shows a run of *target_dir* and *head_sha* that never ended and
-    the directory still holds a readable `review-state.json` on that head.
+    """True when the ledger shows a run of *target_dir* and *head_sha* that never ended, or
+    that ended stopped by the usage limit or the verifier (`ledger.resumable`), and the
+    directory still holds a readable `review-state.json` on that head.
 
     `run_state` saves the state before it writes the `started` line, so a run
     that left the line left its state too, unless the directory or the file
@@ -727,7 +730,7 @@ def _resumable(target_dir: Path, head_sha: str) -> bool:
     would ever close the line: this run starts over instead, and its own end
     line closes it.
     """
-    if not review_ledger.interrupted(target_dir, head_sha):
+    if not review_ledger.resumable(target_dir, head_sha):
         return False
     path = target_dir / STATE_FILE
     saved = load_state(path) if path.is_file() else None
