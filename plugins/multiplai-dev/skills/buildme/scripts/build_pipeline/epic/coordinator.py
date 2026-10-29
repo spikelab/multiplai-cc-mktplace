@@ -1206,7 +1206,12 @@ class Coordinator:
                 code, out = await self._run_review(
                     c,
                     "review",
-                    review.review_argv(self._worktree(c), number, self.config),
+                    review.review_argv(
+                        self._worktree(c),
+                        number,
+                        self.config,
+                        self._child_change_dir(c),
+                    ),
                     head,
                 )
                 if code == 2 and review.RUNNING_NOW in out:  # C.S2: never two at once
@@ -1224,7 +1229,11 @@ class Coordinator:
                     code, out = await self._run_review(
                         c,
                         "resume",
-                        review.resume_argv(hint.group(1).strip(), self.config),
+                        review.resume_argv(
+                            hint.group(1).strip(),
+                            self.config,
+                            self._child_change_dir(c),
+                        ),
                         head,
                     )
                     if code == 2 and review.RUNNING_NOW in out:
@@ -1302,6 +1311,11 @@ class Coordinator:
             self._save()
 
     # -- fixing a reviewed PR (PR D2) ---------------------------------------------
+
+    def _child_change_dir(self, c: Child) -> Path | None:
+        """The child's change directory in `<P>`, whose block reviews give the review's
+        `--earlier-decisions` (`review.child_change_dir`)."""
+        return review.child_change_dir(self._child_project(c), self.change(c.id))
 
     def _child_project(self, c: Child) -> Path:
         """`<P>`: the child's worktree joined with the project's offset in its repo, absolute."""
