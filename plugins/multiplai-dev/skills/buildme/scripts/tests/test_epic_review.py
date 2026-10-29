@@ -592,6 +592,8 @@ def test_an_interrupted_review_is_resumed(tmp_path, monkeypatch):
         "resume",
         str(e.target()),
         "--trust-repo",
+        "--verify-low",
+        "risky",
     ]
     assert (resume.result["pr_round"], resume.result["review_dir"]) == (
         1,
