@@ -336,6 +336,17 @@ the baseline gate, the integration gate after each block (which also checks a
 block's refactor), the whole-change refactor, mutation testing and epic mode's
 merge step.
 
+`tdd.whole_suite: end` changes that for the block gates and the whole-change
+refactor. The integration gate and the runs after each integration fix,
+review fix and fix on pass run the block's narrowed command. The
+whole-change refactor's checks run the narrowed command for every file the
+change touched. The whole command then runs once after the whole-change
+refactor (`_run_end_suite`), with up to three fix attempts when it is red.
+The baseline, mutation testing, the final verification and epic mode's merge
+step keep the whole command. A block whose command cannot be narrowed logs a
+warning and runs the whole command. Every failed whole run, under either
+setting, writes its output to `<change dir>/.buildme-test-runs/`.
+
 The baseline gate, the integration gate and epic mode's merge tests run a
 pytest command with `-n auto` (pytest-xdist, one worker per CPU) when
 `python -c "import xdist"` succeeds in the environment pytest runs in: the
@@ -354,6 +365,7 @@ so Node commands are unchanged.
 |---|---|---|
 | `tdd.narrow_tests` | `true` / `false` | `true`; `false` runs the whole command in the loop too |
 | `tdd.narrow_commands` | list of `dir`, `command`, optional `runner` (`pytest` / `jest`) | none; one runner command per test directory, each narrowed in its own directory ([Repos with tests in several directories](#repos-with-tests-in-several-directories)) |
+| `tdd.whole_suite` | `per_block` / `end` | `per_block`; `end` narrows every block gate and runs the whole command once after the last block |
 | `tdd.parallel` | `auto` / `off` | `auto`; `off` runs the full suite serially |
 | `tdd.test_timeout` | whole seconds | `300`; each full-suite run (the baseline, the integration gates, the final verification, an epic's merge tests) that takes longer counts as not run |
 | `tdd.test_writer_max_turns` | positive integer | `30`; the block test writer's turn cap, stated in its prompt |

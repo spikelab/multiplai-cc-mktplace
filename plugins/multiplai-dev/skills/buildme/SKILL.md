@@ -128,6 +128,7 @@ buildme ignores them.
 | `planning.max_rewrites` | int | `2` | the plan check: rewrites of the plan before it stops the run. Raising it reopens a stopped check without regenerating the plan |
 | `planning.max_usd` | number | `40` | the plan check: it starts no rewrite or recheck once the planning calls (design, unknowns, tasks, rubric, explainers, the check and its rewrites) have spent this much. Raising it reopens a stopped check without regenerating the plan |
 | `tdd.narrow_commands` | list of `dir`, `command`, optional `runner` (`pytest` / `jest`) | none | the TDD loop, for a repo whose tests sit in several directories with different runners: each entry is narrowed to the block's own tests in its own directory (`cd backend && pytest -q tests/test_x.py`); a directory with no changed file is left out, and when every one is, the whole `tdd.test_command` runs. Example and rules: [Repos with tests in several directories](scripts/README.md#repos-with-tests-in-several-directories) |
+| `tdd.whole_suite` | `per_block` / `end` | `per_block` | the TDD loop: `per_block` runs the whole `tdd.test_command` in every block's gates. `end` runs only each block's own tests there, and the whole command once after the last block (see [The refactor phase](#the-refactor-phase)) |
 | `review.plan_approval` | bool | `false` | stop 4: after the plan check and the size gate, the build waits (`PLAN:WAITING`, exit `3`) until its branch holds an engineer's approval commit for the current plan revision (see [The plan approval](#the-plan-approval-stop-4)). Turning it on for a planned build changes no plan revision |
 | `findings.authors` | `collaborators` or a list of GitHub logins | `collaborators` | `/multiplai-dev:buildme-findings`: whose PR comments are acted on. `collaborators` means anyone whose `role_name` on the repo is `admin`, `maintain` or `write` |
 | `findings.max_rounds` | int | `3` | `/multiplai-dev:buildme-findings`: fix-and-re-review rounds before it stops (`findings --max-rounds` overrides it) |
@@ -443,6 +444,23 @@ red, the refactor commit is discarded first and the gate runs again, so a fix
 agent is started only when the implementation itself is red. A refactor can improve a block or do nothing; it can
 never break one. There is no "the test needed changing" escape hatch inside a
 refactor window — that hatch belongs to the implementer.
+
+With `tdd.whole_suite: end` the integration gate, the runs after each fix and
+the whole-change refactor's checks run only the tests of what the block (or
+the change) touched. The whole `tdd.test_command` runs once after the
+whole-change refactor, before mutation testing. When that run is red it first
+throws away the `refactor: simplify across blocks` commit if HEAD is that
+commit, then makes up to three fix attempts (the last one escalated), each
+followed by a whole run. A green fix lands as `fix: end-of-build test suite`.
+If it is still red, the tree goes back to where the run started and the build
+fails, naming two files in `build-progress.md`: the last run's output and the
+fixers' combined diff. The trade-off: a block that breaks another block's
+tests is caught only at the end, by a fixer that sees the whole change's diff
+and the failing tests but not the block's review history. Whatever the
+setting, every failed whole run writes its command, exit code, failing test
+ids and last 400 lines of output to
+`<change dir>/.buildme-test-runs/<UTC stamp>-<label>.log`, and the log line
+names that file. buildme never commits or cleans that folder.
 
 After the last block, one **whole-change** pass runs over the cumulative diff,
 before the entry-point check. Its charter is deliberately narrow: remove cross-block
