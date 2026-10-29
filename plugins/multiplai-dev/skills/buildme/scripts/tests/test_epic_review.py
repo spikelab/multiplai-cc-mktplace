@@ -718,9 +718,14 @@ def test_at_the_cap_with_blockers_the_child_parks_and_stays_parked(
         st["status"] == "parked" and "f1" in st["reason"] and "1 of 1" in st["reason"]
     )
     assert e.child_status("b")["status"] == "skipped"
-    e.fakes.set_head("e-a", "c" * 40)  # a later commit does not un-park it
-    assert e.run() == 0
+    assert e.run() == 0  # the same head: parked again, not reviewed again
     assert e.launched() == ["review"] and e.child_status("a")["status"] == "parked"
+    # S10 of plan-factory-merged-2026-10-29.md: a later commit is reviewed,
+    # and parks again while the HIGH is open.
+    e.fakes.set_head("e-a", "c" * 40)
+    assert e.run() == 0
+    assert e.launched() == ["review", "review"]
+    assert e.child_status("a")["status"] == "parked"
 
 
 @pytest.mark.parametrize(
