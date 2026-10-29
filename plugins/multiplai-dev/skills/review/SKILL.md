@@ -1104,5 +1104,8 @@ the session's model.
   totals line gives the mean rounds per review with two or more, and both
   shares with their counts. `--repo` names a checkout to use for a round
   whose recorded repository (a deleted worktree) is gone, when its `origin`
-  is the same repository. It writes nothing, calls no model and needs no
+  is the same repository. `--counts` adds, per round, the confirmed
+  findings by severity, impact and topic, the number of finder reports
+  (`report-*.md`) and how many say a search returned nothing, and a totals
+  line. It writes nothing, calls no model and needs no
   `--trust-repo`. Reviews migrated into `legacy/` are not read.
