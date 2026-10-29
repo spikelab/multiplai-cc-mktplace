@@ -440,37 +440,18 @@ def _write_state(r: Root, cid: str, *, blocked: bool = False) -> None:
 def test_s24_a_child_failing_twice_in_a_run_is_not_launched_a_third_time(
     tmp_path, monkeypatch
 ):
-    fails = {"a": [{"exit": 1}] * 4 + [{}], "b": [{}]}
+    """Two failures in one run: no third launch in that run. Nothing shows the
+    next build would fail the same way, so the next run launches it again with
+    nothing changed."""
+    fails = {"a": [{"exit": 1}] * 2 + [{}], "b": [{}]}
     r = Root(tmp_path / "r", monkeypatch, fails)
     assert r.run() == 1
     assert len(r.launches("a")) == 2  # relaunched within the run, once
     assert [b.result["exit_code"] for b in r.builds("a")] == [1, 1]
-    # Nothing changed since: the next run does not launch it.
-    _write_state(r, "a")
-    assert r.run() == 1
-    assert len(r.launches("a")) == 2
-    assert (
-        "launched again once its plan or its specs change"
-        in (r.child_status()["a"]["reason"])
-    )
-    # Its specs change on the feature branch: the next run launches it.
-    other = tmp_path / "r" / "edit"
-    _git(
-        tmp_path / "r",
-        "clone",
-        "-q",
-        "-b",
-        BRANCH,
-        str(tmp_path / "r" / "o" / "r.git"),
-        str(other),
-    )
-    spec = other / "specs" / "changes" / "e-a" / "requirements" / "cap-a.md"
-    spec.write_text(spec.read_text() + "\nAnother scenario.\n")
-    mark_ready(spec.parents[1])  # pm-spec revise marks them ready again
-    _git(other, "commit", "-qam", "pm-spec revise e-a")
-    _git(other, "push", "-q", "origin", BRANCH)
-    assert r.run() == 1
-    assert len(r.launches("a")) == 4
+    _write_state(r, "a")  # same plan revision, same specs
+    r.run()
+    assert len(r.launches("a")) == 3
+    assert r.status()["a"] == "built"
 
 
 def test_s24_a_child_whose_plan_check_is_blocked_is_not_relaunched(

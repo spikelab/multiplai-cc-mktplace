@@ -790,10 +790,9 @@ child parked on `SPLIT:REQUIRED` by an earlier run is launched again. A child
 that fails otherwise is launched again in the same run, up to
 `epic.max_child_attempts` launches in a run (default `2`), except one whose
 planning check is blocked at its plan's current revision (its relaunch would
-refuse at once): that one is launched again once its plan changes. A child
-whose last `epic.max_child_attempts` builds all failed is launched again by a
-later run only once its plan revision, or its change dir on the feature
-branch, changed. Before a child is parked or failed, the run looks for an
+refuse at once): that one is launched again once its plan changes. Every
+other failed child is launched again by the next run, since nothing shows its
+next build would fail the same way. Before a child is parked or failed, the run looks for an
 open PR from the child's branch into the feature branch that a build outside
 the epic opened (`gh pr list --head <branch> --base <feature branch>`): with
 one, the child is built with that PR, and its records are left as they are; a

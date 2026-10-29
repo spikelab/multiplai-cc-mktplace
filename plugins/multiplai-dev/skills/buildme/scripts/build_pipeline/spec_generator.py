@@ -1354,19 +1354,6 @@ def refuses_blocked(config, name: str = "plan_review") -> bool:
     return step.revision == current and bool(step.blocking_findings)
 
 
-def plan_unchanged(config) -> bool:
-    """Whether the plan revision of *config*'s change on disk now is the one
-    its checkpoint saved (`reconcile_plan` would keep it). Reads and writes
-    nothing; False with no readable checkpoint or no saved revision."""
-    try:
-        state = BuildState.load(config.state_file_path())
-        now = _plan_hashes(config)
-    except (OSError, ValueError):
-        return False
-    sg = state.spec_gen
-    return bool(sg is not None and sg.revision and sg.revision == _revision(now))
-
-
 def reopen_if_edited(state: BuildState, name: str, state_path: Path) -> None:
     """A step findings blocked whose inputs changed since (the plan was
     edited, or the `planning:` limits were raised) gets a fresh count of

@@ -706,51 +706,6 @@ class Coordinator:
             log.warning("EPIC child %s: cannot read its plan check: %s", c.id, e)
             return False
 
-    def _failed_in_a_row(self, c: Child, tries: list[records.Attempt]) -> None:
-        """At the start of a run (row S24): a child whose last
-        `epic.max_child_attempts` builds all failed is launched again only
-        when its plan revision (`spec_generator.plan_unchanged`) or its specs
-        on the feature branch changed since the last of them."""
-        n = self.settings.max_child_attempts
-        last = tries[-n:]
-        if len(last) < n or not all(_failed(a) for a in last):
-            return
-        from ..spec_generator import plan_unchanged
-
-        try:
-            same_plan = plan_unchanged(self._child_config(c))
-        except Exception as e:  # unreadable: launched, as before the rule
-            log.warning("EPIC child %s: cannot read its plan revision: %s", c.id, e)
-            same_plan = False
-        if same_plan and self._specs_unchanged(c, last[-1]):
-            c.relaunched, c.argv = True, None
-            c.reason = (
-                f"{c.reason}: its last {n} builds failed; launched again once its "
-                "plan or its specs change"
-            )
-
-    def _specs_unchanged(self, c: Child, a: records.Attempt) -> bool:
-        """Whether the child's change dir on `origin/<feature branch>` is as
-        it was when attempt *a* started (`head_sha`). False when git cannot tell."""
-        from ..change_manager import change_path
-
-        sha = a.started.get("head_sha")
-        rel = feature_branch.rel_to(
-            self.repo, change_path(Path(self.config.specs_dir), self.change(c.id))
-        )
-        if not sha or rel is None:
-            return False
-        res = _git(
-            self.repo,
-            "diff",
-            "--quiet",
-            sha,
-            feature_branch.ref(self.branch),
-            "--",
-            rel,
-        )
-        return res.returncode == 0
-
     def _classify_records(self, c: Child, tries: list[records.Attempt]) -> None:
         """`_classify` from the records alone."""
         last = tries[-1].result or {}
@@ -854,8 +809,6 @@ class Coordinator:
                 records.finish(a, None, interrupted=True)
             else:
                 self._classify(c, tries)
-                if c.status == "failed" and not c.relaunched:
-                    self._failed_in_a_row(c, tries)
                 if c.status == "parked" and c.reason.startswith(SPEC_REFUSALS):
                     # `run_epic_from_specs` found every child's specs ready
                     # with no open issue before this run (B.S6, B.S7).
@@ -2942,18 +2895,6 @@ class Coordinator:
         )
         print(f"{MARKER_SUMMARY}:{path}", flush=True)
         return path
-
-
-def _failed(a: records.Attempt) -> bool:
-    """A build attempt `_classify` takes as `failed`: it ended by itself with
-    an exit code other than 0 and 3 and no refusal of its specs."""
-    r = a.result or {}
-    refusal = records.wait_marker(r.get("markers", [])) or ""
-    return (
-        not r.get("interrupted")
-        and r.get("exit_code") not in (0, 3, None)
-        and not refusal.startswith(SPEC_REFUSALS)
-    )
 
 
 def _new_run_dir(epic_dir: Path) -> Path:

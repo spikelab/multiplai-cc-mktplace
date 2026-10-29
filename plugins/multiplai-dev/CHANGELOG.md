@@ -19,7 +19,7 @@ time, not derived from a tag.
 
 ### Added
 - **buildme** (G20): `epic.accept_size: true` in `specs/config.yaml` makes the epic pass `--accept-size` to every child it launches, and launches again a child that an earlier run left parked on `SPLIT:REQUIRED`. Off by default.
-- **buildme** (G22): `epic.max_child_attempts` (default `2`): a child whose build fails is launched again in the same run, up to that many launches, instead of once per run. A child whose planning check is blocked at its plan's current revision is not launched again until its plan changes, and a child whose last builds all failed is launched by a later run only once its plan or its specs on the feature branch changed.
+- **buildme** (G22): `epic.max_child_attempts` (default `2`): a child whose build fails is launched again in the same run, up to that many launches, instead of once per run. A child whose planning check is blocked at its plan's current revision is not launched again until its plan changes, because its next build would refuse the same way. Any other failed child is launched again by the next run.
 
 ### Changed
 - **buildme** (G35): before the epic parks or fails a child, it looks for an open PR from the child's branch into the feature branch, such as one a build run by hand opened. With one, the child counts as built with that PR and its dependants can start; its records are left as they were. A child parked by its review stays parked. When the lookup fails, the child waits, unlaunched, until a lookup works.
