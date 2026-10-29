@@ -76,9 +76,17 @@ def review_argv(worktree: Path, number: int, config) -> list[str]:
     head, without any launch here fetching them (C.S8). Then
     `findings.loop.review_options` of the epic's *config*: the spec change
     directories and buildme's runtime files left out, and the configured
-    review model."""
+    review model. Then `epic.review_dimensions` and `epic.review_finder_model`
+    as `--dimensions` and `--finder-model`, when set (item 46). `resume_argv`
+    passes neither: a resumed review keeps the ones it saved (row S38)."""
     from ..findings.loop import review_options
 
+    epic = config.epic
+    settings = []
+    if epic.review_dimensions:
+        settings += ["--dimensions", ",".join(epic.review_dimensions)]
+    if epic.review_finder_model:
+        settings += ["--finder-model", epic.review_finder_model]
     return _skill(
         "review",
         "--repo",
@@ -88,6 +96,7 @@ def review_argv(worktree: Path, number: int, config) -> list[str]:
         "--trust-repo",
         "--fetch",
         *review_options(config),
+        *settings,
     )
 
 

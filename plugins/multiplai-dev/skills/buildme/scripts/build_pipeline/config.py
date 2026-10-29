@@ -572,13 +572,19 @@ class EpicSettings:
     feature branch, else `manual` (`Coordinator.__post_init__`). `max_usd`: one ceiling for
     the whole epic, None for none. `round_worth`: which Code MEDIUM earns
     another review round (`epic.review.decide`): `breaks`, one the verifier
-    did not rate `correctness-only` or `hygiene`; `any`, every one."""
+    did not rate `correctness-only` or `hygiene`; `any`, every one.
+    `review_dimensions` and `review_finder_model`: the dimension finders and
+    their model for each review of a child's PR, passed as the review's
+    `--dimensions` and `--finder-model` (`epic.review.review_argv`); None
+    leaves the review skill's own settings."""
 
     max_parallel: int = 2
     max_review_rounds: int = 3
     merge: Literal["auto", "manual"] | None = None
     max_usd: float | None = None
     round_worth: Literal["breaks", "any"] = "breaks"
+    review_dimensions: list[str] | None = None
+    review_finder_model: str | None = None
 
 
 def _cfg_int(value, key: str, default: int) -> int:
@@ -589,6 +595,30 @@ def _cfg_int(value, key: str, default: int) -> int:
         )
         return default
     return value
+
+
+def _cfg_names(value, key: str) -> list[str] | None:
+    """A non-empty list of non-empty strings from config.yaml, or None (with a warning for anything else)."""
+    if value is None:
+        return None
+    if (
+        not isinstance(value, list)
+        or not value
+        or not all(isinstance(v, str) and v.strip() for v in value)
+    ):
+        log.warning("Invalid %s value %r in config.yaml — ignoring it", key, value)
+        return None
+    return [v.strip() for v in value]
+
+
+def _cfg_text(value, key: str) -> str | None:
+    """A non-empty string from config.yaml, or None (with a warning for anything else)."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        log.warning("Invalid %s value %r in config.yaml — ignoring it", key, value)
+        return None
+    return value.strip()
 
 
 def _cfg_mapping(value, key: str) -> dict:
@@ -1775,6 +1805,12 @@ class BuildConfig:
             merge=merge,
             max_usd=max_usd,
             round_worth=worth,
+            review_dimensions=_cfg_names(
+                epic_cfg.get("review_dimensions"), "epic.review_dimensions"
+            ),
+            review_finder_model=_cfg_text(
+                epic_cfg.get("review_finder_model"), "epic.review_finder_model"
+            ),
         )
 
     def _discover_test_command(self) -> None:
