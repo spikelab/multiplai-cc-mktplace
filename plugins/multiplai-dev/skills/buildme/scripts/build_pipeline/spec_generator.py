@@ -1332,6 +1332,41 @@ def refuse_if_blocked(sg: SpecGenState, name: str) -> None:
         raise PlanBlocked(text)
 
 
+def refuses_blocked(config, name: str = "plan_review") -> bool:
+    """Whether a build of *config*'s change would now refuse the step *name*
+    with no model call (`refuse_if_blocked`, after `reconcile_plan` and
+    `reopen_if_edited`): its checkpoint records the step blocked under the
+    current blocking rule, at the revision its inputs on disk have now. An
+    edit to the plan, the specs or the `planning:` limits makes it False. Reads
+    and writes nothing; False with no readable checkpoint."""
+    try:
+        state = BuildState.load(config.state_file_path())
+        now = _plan_hashes(config)
+    except (OSError, ValueError):
+        return False
+    sg = state.spec_gen
+    step = sg.steps.get(name) if sg is not None else None
+    if not step or step.outcome != "blocked" or step.rules_version < PLAN_RULES_VERSION:
+        return False
+    current = sg.model_copy(update={"artifact_hashes": now}).step_revision(name)
+    if step.blocked_revision:
+        return step.blocked_revision == current
+    return step.revision == current and bool(step.blocking_findings)
+
+
+def plan_unchanged(config) -> bool:
+    """Whether the plan revision of *config*'s change on disk now is the one
+    its checkpoint saved (`reconcile_plan` would keep it). Reads and writes
+    nothing; False with no readable checkpoint or no saved revision."""
+    try:
+        state = BuildState.load(config.state_file_path())
+        now = _plan_hashes(config)
+    except (OSError, ValueError):
+        return False
+    sg = state.spec_gen
+    return bool(sg is not None and sg.revision and sg.revision == _revision(now))
+
+
 def reopen_if_edited(state: BuildState, name: str, state_path: Path) -> None:
     """A step findings blocked whose inputs changed since (the plan was
     edited, or the `planning:` limits were raised) gets a fresh count of
@@ -1418,13 +1453,28 @@ def _load_or_create_state(config) -> BuildState:
 PLANNING_KEY = "planning"
 
 # Top-level config.yaml sections no planning step reads: how the TDD loop runs
-# its tests, how an epic runs its children, the git switches, and `review:`
-# (`review.plan_approval`, stop 4). They are cut out of the plan's hash and
+# its tests, how an epic runs its children, the git switches, `review:`
+# (`review.plan_approval`, stop 4), and the settings of the steps after
+# planning: the fixer of PR comments (`findings:`), the per-block code review
+# (`code_review:`; its `model` is also the planning check's fallback model,
+# which picks who checks the plan, not what the plan says) and the test
+# quality gate (`test_quality:`). `memory_files:` is not one of them: its
+# `stacks` sets the stack that picks the reference docs the design and tasks
+# prompts inline (`BuildConfig.reference_docs_text`). They are cut out of the plan's hash and
 # stored nowhere, so editing one mid-build changes no plan revision and marks
 # nothing stale (rows S3, S4 of plan-buildme-subdir-narrow-tests-2026-10-28.md):
 # turning stop 4 on for a planned build asks for an approval of that plan
 # instead of writing a new one.
-UNPLANNED_SECTIONS = ("tdd", "epic", "git", "review", "pipeline_viewer")
+UNPLANNED_SECTIONS = (
+    "tdd",
+    "epic",
+    "git",
+    "review",
+    "pipeline_viewer",
+    "findings",
+    "code_review",
+    "test_quality",
+)
 
 
 def _split_sections(text: str, keys: tuple[str, ...]) -> tuple[str, dict[str, str]]:
