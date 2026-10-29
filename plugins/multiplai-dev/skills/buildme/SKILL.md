@@ -152,7 +152,14 @@ when another key changes (`project`, `context`, `memory_files`,
 `reference_docs`, `models`, and the rest). `planning:` is hashed on its own and
 reopens only the plan check. `tdd:`, `epic:` and `git:` are read by no planning
 step, so editing them (`tdd.narrow_commands`, `epic.max_parallel`) between a
-stop and a resume changes nothing about the plan.
+stop and a resume changes nothing about the plan. Since 0.135.0 neither do
+`findings:`, `code_review:` and `test_quality:`, read only after planning
+(`code_review.model` is also the planning check's fallback model; changing it
+does not check a passed plan again). `memory_files:` still counts: its
+`stacks` picks the reference docs the design and tasks prompts inline. A
+build planned before 0.135.0 with one of those three sections in its
+`config.yaml` sees its plan revision change once; `plan-revision`, below,
+re-binds it.
 
 **Re-binding a running build after an upgrade.** Versions up to 0.124.0
 hashed `tdd:`, `epic:` and `git:` into the plan revision, so a build they
@@ -640,7 +647,10 @@ findings, and the scans' findings, earn a rewrite: one call that reads the
 code and edits `implementation-plan.md` and `tasks.md` in place, leaving every line it does
 not name as it was. An edit whose text is not found once, or edits that change
 nothing, stop the run. The edits are saved as `plan-edits-<n>.diff` in the
-change dir. The recheck is told which findings the rewrite was asked to fix
+change dir. Like `facts.json` and `codebase-analysis.md`, it is never
+committed (since 0.135.0): planning's working files stay on disk in the change
+dir and off the PR's branch, and one a branch committed before stays as it
+was. The recheck is told which findings the rewrite was asked to fix
 and which lines it changed. A critical finding not `resolved`, a major one
 `still_present`, a new critical problem, or a placeholder or block that adds
 no behaviour by buildme's own scans, gets another rewrite. The check stops the
@@ -775,7 +785,24 @@ as its reason and not relaunched in the run; every other child whose
 dependencies are met still builds, and the children that depend on it are
 `waiting on <id>`. The next run checks the specs again before anything
 launches, and once they are ready with no open issue the parked child builds
-again. A child that fails otherwise is relaunched once per run. While a child waits on
+again. With `epic.accept_size: true` every launch adds `--accept-size`, and a
+child parked on `SPLIT:REQUIRED` by an earlier run is launched again. A child
+that fails otherwise is launched again in the same run, up to
+`epic.max_child_attempts` launches in a run (default `2`), except one whose
+planning check is blocked at its plan's current revision (its relaunch would
+refuse at once): that one is launched again once its plan changes. A child
+whose last `epic.max_child_attempts` builds all failed is launched again by a
+later run only once its plan revision, or its change dir on the feature
+branch, changed. Before a child is parked or failed, the run looks for an
+open PR from the child's branch into the feature branch that a build outside
+the epic opened (`gh pr list --head <branch> --base <feature branch>`): with
+one, the child is built with that PR, and its records are left as they are; a
+review's or fixer's park stays. When that lookup fails, the child is
+`unknown` and is not launched until a lookup answers. A component built by
+hand, `build --change <epic>/<id>`, builds as the epic's child
+(`--epic-child --branch <feature branch>`, the branch the epic's
+`.change.yaml` records), so its PR targets the feature branch; another
+`--branch` is refused with exit `2`. While a child waits on
 an open PR, the build exits `3` with `EPIC:MERGE_WAITING:<urls>`. Re-running the
 same command continues from what is on disk: a child still running from an
 earlier run is waited for, never started twice, and a PR a stopped child
@@ -801,7 +828,8 @@ waits for the PR's required checks, and merges it with `gh pr merge --merge`;
 a version, CHANGELOG or lockfile conflict there costs one agent call, with
 Read, Edit and Bash in the child's worktree, counted against `epic.max_usd`) and
 `epic.max_usd` (one ceiling for the whole epic, default none; each child keeps
-its own `budget.max_usd` too). `build` and `findings` print
+its own `budget.max_usd` too), `epic.accept_size` (default `false`) and
+`epic.max_child_attempts` (default `2`), both above. `build` and `findings` print
 `SPEND:<usd>:<tokens>` as their last line on every exit but a kill (SIGTERM
 and SIGHUP included): what that process spent, the PR body's model calls and a
 walkthrough regeneration included (the pr skill and the walkthrough print
@@ -811,12 +839,16 @@ those skills printed none (killed or timed out), the line ends `:incomplete`.
 The epic's spend is each child attempt's `SPEND:`, plus what each merge
 agent call spent, plus the reviews of the
 children's PRs in the review ledger (`<data_dir>/reviews/ledger.jsonl`: each
-review run once, its resumes in it, a fresh review of the same head added);
+review run once, its resumes in it, a fresh review of the same head added),
+plus what each child's `.build-state.json` and `.build-state.complete.json`
+in its worktree hold beyond its build records, such as a build run by hand
+(each checkpoint once, never below `0`);
 `epic.json` and each summary hold it as `spent_usd`, with
 `spend_complete: false` when an attempt was killed before it printed `SPEND:`,
 its `SPEND:` ends `:incomplete`, a merge agent call was interrupted, a review
-has not finished, or a review was killed and then run again fresh instead of
-resumed. Before each launch, once
+has not finished, a review was killed and then run again fresh instead of
+resumed, or a checkpoint cannot be read or has calls of unknown spend not
+accepted. Before each launch, once
 `epic.max_usd` is reached, nothing more is launched: the run waits for the
 children already running and exits `3` with `EPIC:BUDGET:<spent>`. A fixer
 runs several rounds in one launch, so it is given what is left of
