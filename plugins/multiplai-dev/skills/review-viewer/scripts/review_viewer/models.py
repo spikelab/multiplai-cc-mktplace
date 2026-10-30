@@ -111,6 +111,16 @@ class Assessment(_Strict):
     earlier_note: str | None = None
 
 
+class EarlierDecision(_Strict):
+    """The decision an earlier reviewer of the change made on the same defect (multiplai-dev
+    0.137+): an entry of the review's `--earlier-decisions` file, which buildme writes from its
+    block reviews. The finding stays listed; this only records the decision beside it."""
+
+    id: str = Field(min_length=1)
+    decision: Literal["rejected", "accepted-unfixed"]
+    reason: str = ""
+
+
 class Absorbed(_Strict):
     """A finding the review merged into this one, at its merge or assess stage: its id and claim."""
 
@@ -183,9 +193,17 @@ class Finding(_Strict):
     ) = None
     # What breaks in production if the change is merged as is, as the verifier
     # rated it (multiplai-dev 0.32+). Absent on refuted and rejected findings
-    # and in older files. A `critical` review lists only the two `breaks-*`.
+    # and in older files. A `critical` review lists only `breaks-users`,
+    # `breaks-business` and `depends-on-data` (multiplai-dev 0.132+).
     impact: (
-        Literal["breaks-users", "breaks-business", "correctness-only", "hygiene"] | None
+        Literal[
+            "breaks-users",
+            "breaks-business",
+            "depends-on-data",
+            "correctness-only",
+            "hygiene",
+        ]
+        | None
     ) = None
     # The section the review lists the finding in (multiplai-dev 0.71+): `trim`
     # for what only the trim finder reported, else from the topic. Absent in
@@ -211,6 +229,12 @@ class Finding(_Strict):
     # The kept round an incremental round copied this finding from, unchanged (multiplai-dev
     # 0.115+): `<NN>-<head12>`. Absent on a finding this round found.
     carried_from: str | None = None
+    # The `--earlier-decisions` entry this finding describes (multiplai-dev 0.137+). Absent when
+    # it matches none, and in older files.
+    earlier_decision: EarlierDecision | None = None
+    # The defect was in the code before the reviewed change (multiplai-dev 0.138+). Written only
+    # as true; absent otherwise, and in older files.
+    pre_existing: bool | None = None
 
     @field_validator("paths")
     @classmethod

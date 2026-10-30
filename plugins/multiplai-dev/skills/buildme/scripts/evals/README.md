@@ -101,3 +101,25 @@ uv run --project . python evals/notes_forward_compare.py \
 The fixtures are small, so an agent can often find a planted fact by reading
 the code; expect the benefit to show more in implementer turns than in
 acceptance. No live run has been made.
+
+# Epic metrics
+
+`epic_metrics.py` reads what an epic run left on disk and prints one JSON
+object and one markdown row per child that started: spend split into planning,
+TDD per block, PR review, and fix and merge steps; findings the fixer acted on
+against blockers posted; confirmed MEDIUM and HIGH findings per review round;
+finder reports that say a search came back empty; block-review rounds after the
+block had passed; test minutes per block; the implementer's and design
+writer's first-prompt sizes; 1-hour and 5-minute cache-write shares; lines
+added under `specs/` in the PR; hand interventions from a CSV; and the gaps
+when nothing ran. It makes no model call and no network call.
+
+```sh
+python evals/epic_metrics.py --self-check
+python evals/epic_metrics.py --epic-dir <data_dir>/buildme/epics/<owner>-<repo>--<change> \
+  --transcripts-root <claude config dir>/projects \
+  --interventions factory-interventions.csv --output metrics.json --markdown metrics.md
+```
+
+Test minutes come from `TEST_RUN end ... seconds=<s>` log lines. A child with
+none reports its test time as missing; the script never estimates it.

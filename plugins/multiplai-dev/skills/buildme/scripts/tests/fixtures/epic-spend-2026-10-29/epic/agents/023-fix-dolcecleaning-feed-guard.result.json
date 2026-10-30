@@ -1,0 +1,14 @@
+{
+  "exit_code": 0,
+  "markers": [
+    "FINDINGS:CHANGE:{WORKTREES}/buildme-account-management-dolcecleaning-feed-guard/specs/changes/account-management/components/dolcecleaning-feed-guard",
+    "FINDINGS:WORKTREE:{WORKTREES}/buildme-account-management-dolcecleaning-feed-guard",
+    "FINDINGS:DONE:0",
+    "SPEND:0.000000:0"
+  ],
+  "pr": null,
+  "interrupted": false,
+  "spend": 0.0,
+  "final_head": "f375976093659fbdfea3680934227e4ad902c245",
+  "at": "2026-10-29T04:27:19.433726+00:00"
+}

@@ -4,13 +4,35 @@
 - refuted → the appendix, with the verifier's reason.
 - unverifiable → stays in the review, severity lowered one step.
 - unverified → a finding the finder rated LOW: no verifier is asked unless
-  `verify_low` is on (`review.yaml`, `--verify-low`). The stage writes its
+  `verify_low` is on (`review.yaml`, `--verify-low`), or `risky` and the
+  LOW selection call below chose it. The stage writes its
   verdict in code, with an empty reason, no impact, and the topic `tests`
   for a finding of the `tests` dimension (none otherwise). It stays in the
   review and goes on to merge, like a confirmed one, and has no `AgentCheck`.
-  Verify only ever lowers a severity, so leaving LOW findings unverified
-  hides no HIGH or MEDIUM one. A trim finding is verified at any severity:
-  its `important` label below needs the verifier's impact.
+  A trim finding is verified at any severity: its `important` label below
+  needs the verifier's impact.
+
+Every answer but `refuted` also gives a `severity`, rated from the consequence
+the verifier checked. After all verdicts, one pass sets each confirmed or
+unverifiable finding's severity with `verified_severity`: the verifier's
+severity (the finder's when the verdict has none, as in a checkpoint saved
+before verifiers gave one), then `hygiene` is LOW, an impact in
+`CRITICAL_IMPACTS` is at least MEDIUM, and an unverifiable verdict is lowered
+by `unverifiable_severity` as before. No other cap; no status changes. The
+finder's severity goes to `state.original_severity` first, for every
+unverifiable finding and for a confirmed one whose severity changes, and the
+pass skips a finding already there, so a resume never applies it twice.
+
+With `verify_low: risky` (`--verify-low risky`), one call with no tools, on
+the verifier's model, reads every LOW finding's claim and failure scenario
+and returns the ids whose scenario ends in a crash or an error response, an
+access or data-exposure problem, or lost or wrong data
+(`prompts/low_select.py`). Those LOW findings go to the verifier like any
+other; the rest get the unverified verdict. The answer is saved in
+`state.low_selected`, with the unverified verdicts, before any verifier
+runs, so a resume does not ask again. An id that is not one of the LOW
+findings is dropped with a line in `state.errors`. A failed call selects
+none, with a line in `state.errors`, and is not asked again.
 
 An `unverifiable` verdict can name what the verifier could not read, each
 with a command a person would run to get it. Those go to `state.needs`
@@ -32,12 +54,13 @@ verifiers finish, keeps their verdicts, then raises `VerifyIncomplete`, and
 never tried again: it stops the stage at once (`sdk.UsageLimitError`), with
 the verdicts already returned kept. No HIGH or MEDIUM finding reaches the
 review unverified or with no impact or topic; with `verify_low` on, no finding does. A finding about `tests` never
-breaks users or the business: a `breaks-*` impact on one is lowered to
-`correctness-only`, with a line in `state.errors`.
+breaks users or the business: an impact in `CRITICAL_IMPACTS` on one is
+lowered to `correctness-only`, with a line in `state.errors`.
 
 A trim finding (`models.is_trim`) is a suggestion to remove, merge or shorten
 a test or comment: its impact rates what removing the test risks, so it is
-never lowered, and its severity is set to LOW once the stage ends.
+never lowered, the verifier's severity and the impact rules above are not
+applied to it, and its severity is set to LOW once the stage ends.
 `important_assessments` then labels `important` each shown (confirmed or
 unverifiable) trim finding whose test must stay (impact `breaks-*`, or a citation under a `## Critical
 paths` glob), which takes it out of the list. Both are recomputed from the
@@ -59,6 +82,7 @@ from ..models import (
     Assessment,
     Finding,
     GateCheck,
+    LowSelectOutput,
     Need,
     ReviewState,
     Verdict,
@@ -66,6 +90,7 @@ from ..models import (
     is_trim,
     lower_severity,
 )
+from ..prompts import low_select
 from ..prompts import verify as prompt
 from . import RunContext, bounded, fix_citation, save
 from .find import critical_paths
@@ -168,6 +193,51 @@ def unverifiable_severity(severity: str, *, has_need: bool) -> str:
     return lowered
 
 
+def verified_severity(finder: str, verdict: Verdict, *, has_need: bool) -> str:
+    """The severity of a confirmed or unverifiable finding, from its verdict.
+
+    The verifier's severity, or *finder* when the verdict has none. Then `hygiene` is LOW, and an
+    impact in `CRITICAL_IMPACTS` is at least MEDIUM. An unverifiable verdict is then lowered by
+    `unverifiable_severity`.
+    """
+    severity = verdict.severity or finder
+    floor = SEVERITIES.index("MEDIUM")
+    if verdict.impact == "hygiene":
+        severity = "LOW"
+    elif verdict.impact in CRITICAL_IMPACTS and SEVERITIES.index(severity) > floor:
+        severity = "MEDIUM"
+    if verdict.status == "unverifiable":
+        severity = unverifiable_severity(severity, has_need=has_need)
+    return severity
+
+
+def settle_severity(
+    state: ReviewState, index: int, finder: str, waiting: set[str]
+) -> None:
+    """Set `state.findings[index]`'s severity from its verdict, starting from the finder's *finder*.
+
+    Only a confirmed or unverifiable verdict changes anything. *finder* is recorded in
+    `state.original_severity` for an unverifiable finding and for one whose severity changes, and
+    removed otherwise. A trim finding keeps today's rule: only an unverifiable verdict lowers it.
+    """
+    finding = state.findings[index]
+    verdict = state.verdicts[finding.id]
+    if verdict.status not in ("confirmed", "unverifiable"):
+        return
+    has_need = finding.id in waiting
+    if not is_trim(finding):
+        severity = verified_severity(finder, verdict, has_need=has_need)
+    elif verdict.status == "unverifiable":
+        severity = unverifiable_severity(finder, has_need=has_need)
+    else:
+        severity = finder
+    if severity != finder or verdict.status == "unverifiable":
+        state.original_severity[finding.id] = finder
+    else:
+        state.original_severity.pop(finding.id, None)
+    state.findings[index] = finding.model_copy(update={"severity": severity})
+
+
 def unverified_verdict(finding: Finding) -> Verdict:
     """The verdict of a LOW finding no verifier is asked about, made in code."""
     return Verdict(
@@ -176,6 +246,59 @@ def unverified_verdict(finding: Finding) -> Verdict:
         reason="",
         topic="tests" if finding.dimension == "tests" else "",
     )
+
+
+async def select_risky_lows(
+    state: ReviewState, ctx: RunContext, lows: list[Finding]
+) -> list[str]:
+    """The ids of *lows* the LOW selection call chose, in *lows* order; an id it returns that is not
+    one of them gets a line in `state.errors`. A failed call chooses none, also with a line there."""
+    target, cfg = state.target, ctx.config
+    started = checks.now()
+    error, answer = "", None
+    with sdk.recording() as rec:
+        try:
+            answer = await sdk.agent_call_structured(
+                low_select.build(lows),
+                LowSelectOutput,
+                allowed_tools=[],
+                model=cfg.verifier_model,
+                effort=cfg.effort,
+                max_turns=cfg.max_turns,
+                cwd=str(ctx.snapshot),
+                budget_label="verify:low-select",
+            )
+        except (sdk.RepoTrustError, sdk.UsageLimitError):
+            raise
+        except sdk.AgentCallError as e:
+            log.exception("LOW selection failed for %s", target.slug)
+            error = f"verify: LOW selection failed, no LOW finding verified: {str(e).splitlines()[0][:200]}"
+    check = AgentCheck(
+        stage="verify",
+        subject="low-selection",
+        given=[f"LOW findings ({len(lows)})"],
+        calls=[checks.summarise_call(c, target, ctx.snapshot) for c in rec.tool_calls],
+        turns=rec.turns,
+        cost_usd=round(rec.cost_usd, 6),
+        started_at=started,
+        ended_at=checks.now(),
+    )
+    state.checks.append(check)
+    if answer is None:
+        state.errors.append(error)
+        check.error, check.outcome = error, f"failed: {checks.failure_kind(error)}"
+        return []
+    asked = {f.id for f in lows}
+    returned = list(dict.fromkeys(i.strip() for i in answer.finding_ids))
+    unknown = [i for i in returned if i not in asked]
+    if unknown:
+        state.errors.append(
+            "verify: LOW selection returned ids that are not LOW findings, dropped: "
+            + ", ".join(unknown)
+        )
+    chosen = [f.id for f in lows if f.id in returned]
+    check.outcome = f"{len(chosen)} of {len(lows)} LOW findings chosen for the verifier"
+    return chosen
 
 
 async def verify_one(
@@ -314,15 +437,21 @@ async def run_verify(state: ReviewState, ctx: RunContext) -> ReviewState:
     if state.past("verify"):
         return state
     cfg = ctx.config
-    if not cfg.verify_low:
-        unasked = [
+    if cfg.verify_low is not True:
+        lows = [
             f
             for f in state.findings
             if f.severity == "LOW" and not is_trim(f) and f.id not in state.verdicts
         ]
+        selected = False
+        if cfg.verify_low == "risky" and lows and state.low_selected is None:
+            state.low_selected = await select_risky_lows(state, ctx, lows)
+            selected = True
+        chosen = set(state.low_selected or []) if cfg.verify_low == "risky" else set()
+        unasked = [f for f in lows if f.id not in chosen]
         for f in unasked:
             state.verdicts[f.id] = unverified_verdict(f)
-        if unasked:
+        if unasked or selected:
             save(state, ctx)
     todo = [f for f in state.findings if f.id not in state.verdicts]
 
@@ -345,21 +474,10 @@ async def run_verify(state: ReviewState, ctx: RunContext) -> ReviewState:
     if failed:
         raise VerifyIncomplete(sorted(failed), next(iter(failed.values())))
 
-    lowered = []
     waiting = {n.blocks for n in state.needs}
     for i, finding in enumerate(state.findings):
-        verdict = state.verdicts.get(finding.id)
-        if (
-            verdict
-            and verdict.status == "unverifiable"
-            and finding.id not in state.original_severity
-        ):
-            state.original_severity[finding.id] = finding.severity
-            lowered.append(finding.id)
-            severity = unverifiable_severity(
-                finding.severity, has_need=finding.id in waiting
-            )
-            state.findings[i] = finding.model_copy(update={"severity": severity})
+        if finding.id in state.verdicts and finding.id not in state.original_severity:
+            settle_severity(state, i, finding.severity, waiting)
     for i, finding in enumerate(state.findings):
         if is_trim(finding) and finding.severity != "LOW":
             state.findings[i] = finding.model_copy(update={"severity": "LOW"})

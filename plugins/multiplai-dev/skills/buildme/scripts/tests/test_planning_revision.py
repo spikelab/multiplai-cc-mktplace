@@ -1357,6 +1357,37 @@ def test_S3_adding_pipeline_viewer_settings_keeps_the_revision(plan):
     assert state.spec_gen.revision == revision
 
 
+@pytest.mark.parametrize(
+    "section",
+    [
+        "findings:\n  authors: [someone]\n",
+        "code_review:\n  fix_on_pass: false\n  per_block: false\n",
+        "test_quality:\n  enabled: false\n",
+    ],
+)
+def test_adding_settings_of_the_steps_after_planning_keeps_the_revision(plan, section):
+    """G25 (plan-factory-merged-2026-10-29.md, item 31): `findings:`,
+    `code_review:` and `test_quality:` are read after planning."""
+    config, state = _in_tdd(plan)
+    revision, stale = state.spec_gen.revision, list(state.spec_gen.stale_artifacts)
+    (config.specs_dir / "config.yaml").write_text(CONFIG + section)
+    owner.reconcile_plan(config, state)
+    assert state.spec_gen.revision == revision
+    assert state.spec_gen.stale_artifacts == stale
+
+
+def test_editing_memory_files_still_changes_the_revision(plan):
+    """`memory_files.stacks` picks the reference docs planning inlines, so it
+    stays in the plan's hash (item 31)."""
+    config, state = _in_tdd(plan)
+    revision = state.spec_gen.revision
+    (config.specs_dir / "config.yaml").write_text(
+        CONFIG + "memory_files:\n  stacks:\n    django: [django.md]\n"
+    )
+    owner.reconcile_plan(config, state)
+    assert state.spec_gen.revision != revision
+
+
 def test_S3_adding_narrow_commands_keeps_the_revision(plan):
     config, state = _in_tdd(plan)
     revision = state.spec_gen.revision

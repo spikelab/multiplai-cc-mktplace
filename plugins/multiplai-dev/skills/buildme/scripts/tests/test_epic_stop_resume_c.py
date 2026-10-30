@@ -203,6 +203,8 @@ def _assert_same(
             "resume",
             f"<root>/ws/.multiplai/data/reviews/o-r/pr-{N}",
             "--trust-repo",
+            "--verify-low",
+            "risky",
         ],
     }
     want = [build if w == "<build>" else (w[0], argv[w[0]], *w[2:]) for w in want_a]

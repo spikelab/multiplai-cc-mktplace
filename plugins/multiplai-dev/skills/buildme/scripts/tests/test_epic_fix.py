@@ -186,6 +186,8 @@ def test_blockers_lead_to_a_post_then_a_fix_and_round_counts_add_up(
         "HIGH,MEDIUM",
         "--code-only",
         "--no-escalation",
+        "--from-review",
+        str(e.target),
     ]
     assert (_rounds(first), _rounds(second)) == (0 + 1, 2 + 1)
     assert [x["cwd"] for x in e.fakes.fix_launches()] == [

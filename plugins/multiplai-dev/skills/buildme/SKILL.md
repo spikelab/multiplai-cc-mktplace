@@ -128,6 +128,7 @@ buildme ignores them.
 | `planning.max_rewrites` | int | `2` | the plan check: rewrites of the plan before it stops the run. Raising it reopens a stopped check without regenerating the plan |
 | `planning.max_usd` | number | `40` | the plan check: it starts no rewrite or recheck once the planning calls (design, unknowns, tasks, rubric, explainers, the check and its rewrites) have spent this much. Raising it reopens a stopped check without regenerating the plan |
 | `tdd.narrow_commands` | list of `dir`, `command`, optional `runner` (`pytest` / `jest`) | none | the TDD loop, for a repo whose tests sit in several directories with different runners: each entry is narrowed to the block's own tests in its own directory (`cd backend && pytest -q tests/test_x.py`); a directory with no changed file is left out, and when every one is, the whole `tdd.test_command` runs. Example and rules: [Repos with tests in several directories](scripts/README.md#repos-with-tests-in-several-directories) |
+| `tdd.db_check` | a command | none | the check before the first paid call: run from the project (only with `--trust-repo`); a non-zero exit stops the build with `PREFLIGHT:FAILED:test-db:<reason>` before any model call (see [The check before the first paid call](#the-check-before-the-first-paid-call)) |
 | `tdd.whole_suite` | `per_block` / `end` | `per_block` | the TDD loop: `per_block` runs the whole `tdd.test_command` in every block's gates. `end` runs only each block's own tests there, and the whole command once after the last block (see [The refactor phase](#the-refactor-phase)) |
 | `review.plan_approval` | bool | `false` | stop 4: after the plan check and the size gate, the build waits (`PLAN:WAITING`, exit `3`) until its branch holds an engineer's approval commit for the current plan revision (see [The plan approval](#the-plan-approval-stop-4)). Turning it on for a planned build changes no plan revision |
 | `findings.authors` | `collaborators` or a list of GitHub logins | `collaborators` | `/multiplai-dev:buildme-findings`: whose PR comments are acted on. `collaborators` means anyone whose `role_name` on the repo is `admin`, `maintain` or `write` |
@@ -152,7 +153,14 @@ when another key changes (`project`, `context`, `memory_files`,
 `reference_docs`, `models`, and the rest). `planning:` is hashed on its own and
 reopens only the plan check. `tdd:`, `epic:` and `git:` are read by no planning
 step, so editing them (`tdd.narrow_commands`, `epic.max_parallel`) between a
-stop and a resume changes nothing about the plan.
+stop and a resume changes nothing about the plan. Since 0.135.0 neither do
+`findings:`, `code_review:` and `test_quality:`, read only after planning
+(`code_review.model` is also the planning check's fallback model; changing it
+does not check a passed plan again). `memory_files:` still counts: its
+`stacks` picks the reference docs the design and tasks prompts inline. A
+build planned before 0.135.0 with one of those three sections in its
+`config.yaml` sees its plan revision change once; `plan-revision`, below,
+re-binds it.
 
 **Re-binding a running build after an upgrade.** Versions up to 0.124.0
 hashed `tdd:`, `epic:` and `git:` into the plan revision, so a build they
@@ -462,6 +470,35 @@ ids and last 400 lines of output to
 `<change dir>/.buildme-test-runs/<UTC stamp>-<label>.log`, and the log line
 names that file. buildme never commits or cleans that folder.
 
+Every run of the test command runs in a process group of its own, with its
+output streamed to a file in that folder (`<stamp>-<label>-run<k>.out`). The
+build-pipeline log gets `TEST_RUN start` and `TEST_RUN end dir=<dir>
+exit=<code> seconds=<s>` for each run. On a timeout, or when buildme is
+stopped, the whole group is killed and the partial output is kept; a later
+run never overwrites it. A run where pytest, Jest, Vitest, `manage.py test`
+or `python -m unittest` never got going (it was killed or crashed, the test
+database is down, or it printed nothing) runs again after 10 and then 30
+seconds: that is a failed run with no test results and no collection or
+import error in its output. A third such run stops the block (FAILED,
+resumable) with the three outputs named in `build-progress.md`, and no fix
+agent runs on it; re-running the build runs the test command again. A test
+that fails is never run again, and neither is a conftest or test file that
+fails to import or collect (pytest exit 4, or exit 1, 2 or 5): that goes to
+the fix agent as a failing test.
+
+### The check before the first paid call
+
+On every run until TDD is done, after the worktree is set up and before
+research, planning or TDD calls a model, buildme checks with no model that
+`specs/config.yaml` parses; the program of `tdd.test_command` and of each
+`tdd.narrow_commands` entry exists where it runs; when the run pushes and
+opens a PR (not `--spec-only`, not `git.pr: none`), the branch the PR targets exists on origin and `gh repo view`
+reports `WRITE`, `MAINTAIN` or `ADMIN`; `tdd.db_check`, when set, exits 0; and
+no other process holds the epic lock of a component (`<epic>/<id>`) built by
+hand. Each failed check prints one `PREFLIGHT:FAILED:<check>:<reason>` line
+and the build exits `1`, its checkpoint unchanged. The standalone `tdd`
+command runs the same checks, without the PR ones.
+
 After the last block, one **whole-change** pass runs over the cumulative diff,
 before the entry-point check. Its charter is deliberately narrow: remove cross-block
 duplication, dead code and needless indirection, and make naming consistent —
@@ -640,7 +677,10 @@ findings, and the scans' findings, earn a rewrite: one call that reads the
 code and edits `implementation-plan.md` and `tasks.md` in place, leaving every line it does
 not name as it was. An edit whose text is not found once, or edits that change
 nothing, stop the run. The edits are saved as `plan-edits-<n>.diff` in the
-change dir. The recheck is told which findings the rewrite was asked to fix
+change dir. Like `facts.json` and `codebase-analysis.md`, it is never
+committed (since 0.135.0): planning's working files stay on disk in the change
+dir and off the PR's branch, and one a branch committed before stays as it
+was. The recheck is told which findings the rewrite was asked to fix
 and which lines it changed. A critical finding not `resolved`, a major one
 `still_present`, a new critical problem, or a placeholder or block that adds
 no behaviour by buildme's own scans, gets another rewrite. The check stops the
@@ -783,7 +823,23 @@ as its reason and not relaunched in the run; every other child whose
 dependencies are met still builds, and the children that depend on it are
 `waiting on <id>`. The next run checks the specs again before anything
 launches, and once they are ready with no open issue the parked child builds
-again. A child that fails otherwise is relaunched once per run. While a child waits on
+again. With `epic.accept_size: true` every launch adds `--accept-size`, and a
+child parked on `SPLIT:REQUIRED` by an earlier run is launched again. A child
+that fails otherwise is launched again in the same run, up to
+`epic.max_child_attempts` launches in a run (default `2`), except one whose
+planning check is blocked at its plan's current revision (its relaunch would
+refuse at once): that one is launched again once its plan changes. Every
+other failed child is launched again by the next run, since nothing shows its
+next build would fail the same way. Before a child is parked or failed, the run looks for an
+open PR from the child's branch into the feature branch that a build outside
+the epic opened (`gh pr list --head <branch> --base <feature branch>`): with
+one, the child is built with that PR, and its records are left as they are; a
+review's or fixer's park stays. When that lookup fails, the child is
+`unknown` and is not launched until a lookup answers. A component built by
+hand, `build --change <epic>/<id>`, builds as the epic's child
+(`--epic-child --branch <feature branch>`, the branch the epic's
+`.change.yaml` records), so its PR targets the feature branch; another
+`--branch` is refused with exit `2`. While a child waits on
 an open PR, the build exits `3` with `EPIC:MERGE_WAITING:<urls>`. Re-running the
 same command continues from what is on disk: a child still running from an
 earlier run is waited for, never started twice, and a PR a stopped child
@@ -801,6 +857,9 @@ the next run waits for them. An ignored SIGHUP or SIGTERM (SIGHUP under
 `specs/config.yaml` takes an `epic:` block: `epic.max_parallel` (default `2`),
 `epic.max_review_rounds` (default `3`), `epic.round_worth` (`breaks` or
 `any`, default `breaks`; which Code MEDIUM earns another review round, below),
+`epic.accepted_findings` (`{<child id>: {'<finding id>': <reason>}}`, default
+none: the review findings a person accepted for that child, which then do not
+block it; quote the finding ids; an entry with no reason still blocks),
 `epic.merge` (`auto` or `manual`; unset, it is `auto` when the feature
 branch is not origin's default branch, which is always the case for a
 pm-spec epic, else `manual`; under `manual` a human merges each child's PR,
@@ -809,7 +868,14 @@ waits for the PR's required checks, and merges it with `gh pr merge --merge`;
 a version, CHANGELOG or lockfile conflict there costs one agent call, with
 Read, Edit and Bash in the child's worktree, counted against `epic.max_usd`) and
 `epic.max_usd` (one ceiling for the whole epic, default none; each child keeps
-its own `budget.max_usd` too). `build` and `findings` print
+its own `budget.max_usd` too), `epic.accept_size` (default `false`) and
+`epic.max_child_attempts` (default `2`), both above. `epic.review_dimensions`
+(a list, for example `[diff-bugs, callers]`) and `epic.review_finder_model` (a
+model name) choose the dimension finders and their model for each review of a
+child's PR, passed as the review's `--dimensions` and `--finder-model`; unset,
+the review skill's own `review.yaml` decides, as before. A review resumed after
+a stop keeps the ones it started with; the next head's review uses the current
+ones. `build` and `findings` print
 `SPEND:<usd>:<tokens>` as their last line on every exit but a kill (SIGTERM
 and SIGHUP included): what that process spent, the PR body's model calls and a
 walkthrough regeneration included (the pr skill and the walkthrough print
@@ -819,12 +885,16 @@ those skills printed none (killed or timed out), the line ends `:incomplete`.
 The epic's spend is each child attempt's `SPEND:`, plus what each merge
 agent call spent, plus the reviews of the
 children's PRs in the review ledger (`<data_dir>/reviews/ledger.jsonl`: each
-review run once, its resumes in it, a fresh review of the same head added);
+review run once, its resumes in it, a fresh review of the same head added),
+plus what each child's `.build-state.json` and `.build-state.complete.json`
+in its worktree hold beyond its build records, such as a build run by hand
+(each checkpoint once, never below `0`);
 `epic.json` and each summary hold it as `spent_usd`, with
 `spend_complete: false` when an attempt was killed before it printed `SPEND:`,
 its `SPEND:` ends `:incomplete`, a merge agent call was interrupted, a review
-has not finished, or a review was killed and then run again fresh instead of
-resumed. Before each launch, once
+has not finished, a review was killed and then run again fresh instead of
+resumed, or a checkpoint cannot be read or has calls of unknown spend not
+accepted. Before each launch, once
 `epic.max_usd` is reached, nothing more is launched: the run waits for the
 children already running and exits `3` with `EPIC:BUDGET:<spent>`. A fixer
 runs several rounds in one launch, so it is given what is left of
@@ -905,11 +975,13 @@ call:
 
 - `round` (another fix and review): a Code HIGH is open, or, below
   `epic.max_review_rounds`, a Code MEDIUM earns a round. Under
-  `epic.round_worth: breaks` that is a MEDIUM the review's verifier rated
-  `breaks-users` or `breaks-business`, or did not rate; under `any`, every
-  MEDIUM, as before 0.74.
-- `final_fix`: only Code MEDIUMs are left and none earns a round, or the PR
-  is at `epic.max_review_rounds` with only Code MEDIUMs. One fixer runs one
+  `epic.round_worth: breaks` that is a MEDIUM the review's verifier did not
+  rate `hygiene` (`correctness-only` and `depends-on-data` earn one too); under
+  `any`, every MEDIUM, as before 0.74.
+- `final_fix`: only Code MEDIUMs rated `hygiene` are left below the cap, or
+  the PR is at `epic.max_review_rounds` and the only Code MEDIUMs left are
+  unconfirmed or rated `hygiene` (under `epic.merge: manual`, any Code
+  MEDIUMs: a person reads them before merging). One fixer runs one
   fresh round with `--no-review` (`--max-rounds` one more than every round in
   the change's `.findings-state.json`, finished or not, as `findings` first
   finishes a round an earlier fixer left open): it fixes, pushes and replies,
@@ -922,7 +994,14 @@ call:
   round and ends `FINDINGS:DONE`; the PR still goes to the merge step, and the
   issue says no fix ran on what it lists. A run that finds an issue with that
   title, open or closed, files none.
-- `park`: a Code HIGH is open at `epic.max_review_rounds`.
+- `park`: at `epic.max_review_rounds`, a Code HIGH is open, or under
+  `epic.merge: auto` a confirmed Code MEDIUM not rated `hygiene` is: an open
+  confirmed finding never merges on its own. The record keeps their ids
+  (`open_ids`). The child stays parked until its PR's head changes (the next
+  run reviews the new head) or until `epic.accepted_findings` lists every one
+  of them for the child; then the next run records the review again without
+  them and sends the PR to the merge step, which still merges only the
+  reviewed head. A finding listed there never blocks the child at all.
 
 The reviews are its own and each fixer's (below). Every fixer launch runs one
 round, whose review is the PR's next, so a decision follows every review.
@@ -942,13 +1021,18 @@ review_pipeline post <review dir> --decisions <that file>`, run in the child's
 project directory (`agents/<NNN>-post-<id>.*`). Then the fixer runs there:
 `python -m build_pipeline findings --pr <n> --change <epic>-<id> --project-dir
 <child project dir> --auto --trust-repo --max-rounds <M> --severities
-HIGH,MEDIUM --code-only --no-escalation [--max-usd <left>]` (`agents/<NNN>-fix-<id>.*`;
+HIGH,MEDIUM --code-only --no-escalation --from-review <review dir> [--max-usd <left>]` (`agents/<NNN>-fix-<id>.*`;
 `<left>` is its share of `epic.max_usd`, above, only when `epic.max_usd` is
 set; its re-reviews post only HIGH and MEDIUM Code findings, so it runs no
 round for a finding the epic would merge with), where `<M>` is every round in
 the change's `.findings-state.json`, finished or not, plus one, so the fixer
 runs one round (finishing first a round an earlier fixer left open) and
-stops. When it ends, the coordinator reads the PR again and
+stops. `--from-review` makes it act on the review's blockers though the review
+posts them under a GitHub App that `findings.authors` does not allow, and
+record a decision for each; a blocker left with none ends the fixer with
+`FINDINGS:INGESTION_ERROR:<ids>`, which leaves the child `failed`; the next
+run launches the fixer once more, with a fresh round, and a second such end
+leaves it `failed`. When it ends, the coordinator reads the PR again and
 reuses the fixer's last review (no new review launch): blockers on it get
 the same decision, above. A head with a fix
 after its review is not fixed again: when that fixer exited 0 with

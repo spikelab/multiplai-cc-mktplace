@@ -11,12 +11,16 @@ run: a review, a resume, each target of a batch, a run stopped by the budget
 or by the verifier. A run killed before it could write its end line, or
 stopped with Ctrl-C or a cancelled task (which writes none), leaves a
 `started` line with nothing after it for the same `target_dir` and
-`head_sha`: `interrupted()` finds it, and a plain `review` of that target
-refuses to start over when the directory still holds that run's saved state
-on that head (orchestrator `_resumable`; without it there is nothing to
-resume, and the review starts over). A run still going leaves the same line, so
-`interrupted()` alone cannot tell the two apart: the orchestrator takes the
-target directory's run lock (runlock.py) before it asks. `migrate` adds `event: "migrated"` lines. The file is
+`head_sha`. A run stopped by the usage limit or by the verifier ends with a
+`finished` line whose `stopped` is in `RESUMABLE_STOPS`. `resumable()` finds
+either, and a plain `review` of that target refuses to start over when the
+directory still holds that run's saved state on that head (orchestrator
+`_resumable`; without it there is nothing to resume, and the review starts
+over). A budget stop is not in `RESUMABLE_STOPS`: a plain `review` after it
+starts over, and `resume` with a higher ceiling continues it. A run still
+going leaves the same `started` line, so `resumable()` alone cannot tell the
+two apart: the orchestrator takes the target directory's run lock
+(runlock.py) before it asks. `migrate` adds `event: "migrated"` lines. The file is
 only ever opened for appending; nothing rewrites or truncates it.
 """
 
@@ -33,6 +37,8 @@ log = logging.getLogger(__name__)
 REVIEWS_DIR = "reviews"
 LEDGER_FILE = "ledger.jsonl"
 LEGACY_DIR = "legacy"
+# A run that ended with one of these `stopped` values is continued by `resume`, not started over.
+RESUMABLE_STOPS = ("usage-limit", "verify-incomplete")
 
 
 def data_dir() -> Path:
@@ -113,8 +119,8 @@ def read() -> list[dict]:
     return entries
 
 
-def interrupted(target_dir: Path, head_sha: str) -> bool:
-    """True when the last ledger line for this directory and head is a `started` line."""
+def _last(target_dir: Path, head_sha: str) -> dict | None:
+    """The last `started` or `finished` line for this directory and head."""
     last = None
     for entry in read():
         if (
@@ -122,8 +128,23 @@ def interrupted(target_dir: Path, head_sha: str) -> bool:
             and entry.get("head_sha") == head_sha
             and entry.get("event") in ("started", "finished")
         ):
-            last = entry["event"]
-    return last == "started"
+            last = entry
+    return last
+
+
+def interrupted(target_dir: Path, head_sha: str) -> bool:
+    """True when the last ledger line for this directory and head is a `started` line."""
+    last = _last(target_dir, head_sha)
+    return last is not None and last["event"] == "started"
+
+
+def resumable(target_dir: Path, head_sha: str) -> bool:
+    """True when the last ledger line for this directory and head is a `started` line, or a
+    `finished` line whose `stopped` is in `RESUMABLE_STOPS`."""
+    last = _last(target_dir, head_sha)
+    if last is None:
+        return False
+    return last["event"] == "started" or last.get("stopped") in RESUMABLE_STOPS
 
 
 def started(*, slug: str, target_dir: Path, head_sha: str, session_id: str) -> None:
