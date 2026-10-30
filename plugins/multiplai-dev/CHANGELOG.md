@@ -15,6 +15,22 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.143.0] - 2026-10-29
+
+### Added
+
+- **buildme can test security and permission scenarios from the spec alone**
+  (`tdd.spec_tests`, off by default). With it on, before a block's test
+  writer, a second test writer gets only the block's scenarios marked
+  security or permission and the public interfaces they touch, not the
+  design, so its tests check what the spec says rather than what the design
+  chose. A scenario is marked when the word "security" or "permission" is in
+  its `#### Scenario:` heading or in its `### Requirement:` heading (for
+  example `[security]`). The block's test writer is told those test files
+  and writes the rest; one test commit holds both, and they go through the
+  same quality and RED gates. Its spend is recorded as `spec_test_writer`.
+  With the setting off, every prompt and step is the same as before.
+
 ## [0.129.0] - 2026-10-29
 
 ### Added
