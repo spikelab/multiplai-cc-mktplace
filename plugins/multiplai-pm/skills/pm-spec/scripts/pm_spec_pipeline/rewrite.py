@@ -40,6 +40,7 @@ END = "=== FILE END ==="
 
 
 _CAPABILITY_RE = re.compile(r"^# Capability:", re.MULTILINE)
+NAMES_ONLY = "(capability names and requirement titles only; no finding here cites it)"
 
 
 def preamble(text: str) -> str:
@@ -148,15 +149,26 @@ async def rewrite_units(
 ) -> Rewritten:
     """The new text of each of *units* the answers change (`Rewritten`), each
     call shown the findings that cite that file and the findings that cite
-    none."""
+    none, in full the other spec files those findings cite, and every other
+    spec file by its capability names and requirement titles."""
     change_dir = run.config.change_dir
-    everything = layout.all_specs_text(change_dir)
     out: dict[str, str] = {}
     problems: list[dict] = []
     for unit in units:
         mine = [f for f in findings if unit in (cited_units(change_dir, f) or [unit])]
         specs = Path(unit).name == layout.SPECS_FILE
         current = (change_dir / unit).read_text()
+        cited = {u for f in mine for u in cited_units(change_dir, f)} - {unit}
+        others = [u for u in layout.units(change_dir) if u != unit]
+        everything = (
+            "\n\n".join(
+                f"### {u}\n{(change_dir / u).read_text()}"
+                if u in cited
+                else f"### {u} {NAMES_ONLY}\n{layout.outline((change_dir / u).read_text())}"
+                for u in others
+            )
+            or "(none)"
+        )
         prompt = P.REWRITE_SPECS_PROMPT.format(
             notice=UNTRUSTED_NOTICE,
             project_context=run.config.project_context,
