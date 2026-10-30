@@ -134,7 +134,14 @@ after the third stop runs the consistency check and the handoff.
    that breaks the format (a capability name that is not kebab-case or is
    used twice, a requirement with no scenario) is a critical finding, and so
    is a `MODIFIED` or `REMOVED` section in a capability with no
-   `specs/registry/<capability>.md`. The agent judges only these documents,
+   `specs/registry/<capability>.md`. Code also raises a major `gap` for each
+   mention, in a component's `specs.md`, of another component's id where
+   neither component depends on the other, even through others: either take
+   the reliance out of the spec, or add the dependency to the citing
+   component's `.change.yaml` `depends_on` and to `components.md`. A block
+   saves those dependencies too, so an edit to `depends_on` or
+   `components.md` alone counts as an edit and the check runs again. The
+   agent judges only these documents,
    except that it reads the function a statement about today's behaviour
    names, and reports a `contradiction` when the code does something else.
    Each check first appends one advisory line to `.pm-spec/progress.md`

@@ -7,8 +7,12 @@ not kebab-case or is used twice, a requirement with no scenario) is a
 critical `format` finding found in code, before the agent reads anything, and
 so is a `## MODIFIED` or `## REMOVED Requirements` section in a capability that
 has no `specs/registry/<capability>.md` (a critical `registry` finding): there
-is no recorded behaviour for it to change. The step follows the recheck rule in
-`findings.py`:
+is no recorded behaviour for it to change. A mention in a component's
+`specs.md` of another component's id, where neither is in the other's
+transitive `depends_on`, is a major `gap` finding found in code
+(`citation_findings`); on a later check code, not the agent, says whether a
+listed one is resolved (`settle_citations`). The step follows the recheck rule
+in `findings.py`:
 
 1. A first check whose findings are all minor passes; minor findings are
    saved, logged and printed as advisory.
@@ -59,7 +63,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
-from multiplai_core.specs import split_capabilities
+from multiplai_core.specs import component_dirs, read_change_meta, split_capabilities
 from pydantic import BaseModel, Field, field_validator
 
 from . import artifacts, counts, layout, sdk
@@ -169,6 +173,106 @@ def format_findings(run: Run) -> list[dict]:
     ]
 
 
+_NO_PATH = re.compile(r"no path to `([^`]+)`")
+
+
+def _closure(deps: dict[str, list[str]], cid: str) -> set[str]:
+    """Every component *cid* depends on, directly or through others."""
+    seen: set[str] = set()
+    todo = list(deps.get(cid, []))
+    while todo:
+        dep = todo.pop()
+        if dep not in seen:
+            seen.add(dep)
+            todo += deps.get(dep, [])
+    return seen
+
+
+def citation_findings(run: Run) -> list[dict]:
+    """A major `gap` finding for each mention, in a component's `specs.md`, of
+    another component's id as a whole word, where neither component is in the
+    other's transitive `depends_on`: the citing one may be built before the
+    cited one, or without it. One finding per mention."""
+    change_dir = run.config.change_dir
+    comps = component_dirs(change_dir)
+    deps = {
+        d.name: [str(x) for x in read_change_meta(d).get("depends_on") or []]
+        for d in comps
+    }
+    reach = {cid: _closure(deps, cid) for cid in deps}
+    words = {
+        cid: re.compile(r"(?<![\w-])" + re.escape(cid) + r"(?![\w-])") for cid in deps
+    }
+    found = []
+    for d in comps:
+        a, path = d.name, d / layout.SPECS_FILE
+        if not path.is_file():
+            continue
+        unit = layout.rel(change_dir, path)
+        for n, line in enumerate(path.read_text().splitlines(), 1):
+            for b in deps:
+                if b == a or b in reach[a] or a in reach[b]:
+                    continue
+                hits = len(words[b].findall(line))
+                for k in range(hits):
+                    which = (
+                        f" (mention {k + 1} of {hits} on this line)" if hits > 1 else ""
+                    )
+                    found.append(
+                        {
+                            "category": "gap",
+                            "severity": "major",
+                            "description": f"{unit}:{n} cites `{b}`{which}, but neither "
+                            f"`{a}` nor `{b}` depends on the other, so `{a}` can be built "
+                            f'before `{b}` or without it: "{line.strip()[:200]}"',
+                            "suggestion": f"take the reliance on `{b}` out of this spec, "
+                            f"or add `{b}` to `depends_on` in components/{a}/.change.yaml "
+                            f"and to `{a}`'s row in components.md",
+                            "places": [
+                                {"file": unit, "where": f"line {n}"},
+                                {
+                                    "file": f"components/{a}/.change.yaml",
+                                    "where": f"depends_on: no path to `{b}`",
+                                },
+                            ],
+                        }
+                    )
+    return found
+
+
+def citation_pair(finding: dict) -> tuple[str, str] | None:
+    """(citing, cited) for a finding `citation_findings` raised; None for any other."""
+    places = finding.get("places") or []
+    if len(places) < 2 or not str(places[1].get("file", "")).endswith(".change.yaml"):
+        return None
+    m = _NO_PATH.search(str(places[1].get("where", "")))
+    return (Path(places[1]["file"]).parent.name, m.group(1)) if m else None
+
+
+def settle_citations(
+    listed: list[dict], assessments, accepted: list[dict], current: list[dict]
+) -> tuple[list, list[dict]]:
+    """The agent cannot see `depends_on`, so code gives each listed citation
+    finding its status: `resolved` when no current mention has its pair, else
+    `still_present`. Returns the assessments with those in place of the agent's,
+    and the current citation findings whose pair no listed or accepted finding
+    carries (the new ones)."""
+    now = {citation_pair(f) for f in current}
+    ours = {}
+    for f in listed:
+        if (pair := citation_pair(f)) is not None:
+            ours[f["finding_id"]] = F.PriorAssessment(
+                finding_id=f["finding_id"],
+                status="still_present" if pair in now else "resolved",
+                evidence="checked in code against depends_on and the specs files",
+            )
+    out = [a for a in assessments or [] if a.finding_id not in ours]
+    carried = {citation_pair(f) for f in [*listed, *accepted]} - {None}
+    return out + list(ours.values()), [
+        f for f in current if citation_pair(f) not in carried
+    ]
+
+
 _DELTA_HEADING = re.compile(r"^##\s+(MODIFIED|REMOVED)\s+Requirements\b", re.IGNORECASE)
 
 
@@ -246,15 +350,19 @@ async def recheck(run: Run, name: str, reason: str) -> str:
     listed = step.repair_findings
     revision = layout.revision(run.config.change_dir)
     answer = await check(run, prior=listed)
-    blocking, advisory = F.recheck_verdict(
+    assessments, citations = settle_citations(
         listed,
         answer.prior_assessments,
+        run.state.accepted_findings,
+        citation_findings(run),
+    )
+    blocking, advisory = F.recheck_verdict(
+        listed,
+        assessments,
         as_dicts(answer),
-        deterministic=format_findings(run) + registry_findings(run),
+        deterministic=format_findings(run) + registry_findings(run) + citations,
     )
-    step.repair_findings = F.saved_findings(
-        F.assess_listed(listed, answer.prior_assessments)
-    )
+    step.repair_findings = F.saved_findings(F.assess_listed(listed, assessments))
     F.log_findings(name, "listed", step.repair_findings)
     F.record_advisory(run, name, advisory)
     if blocking:
@@ -363,6 +471,7 @@ def passed_by_acceptance(run: Run, revision: str) -> bool:
         step
         and step.outcome == "blocked"
         and step.blocked_revision == revision
+        and not F.dependencies_changed(run, step)
         and step.blocking_findings
         and not _open(step)
     ):
@@ -414,11 +523,17 @@ async def check_reviewed(run: Run, revision: str) -> None:
     later = step.outcome == "blocked" and bool(step.blocking_findings)
     listed = _open(step) if later else []
     answer = await check(run, prior=listed, edited=True)
-    deterministic = format_findings(run) + registry_findings(run)
+    assessments, citations = settle_citations(
+        listed,
+        answer.prior_assessments,
+        run.state.accepted_findings,
+        citation_findings(run),
+    )
+    deterministic = format_findings(run) + registry_findings(run) + citations
     if later:
         blocking, advisory = F.recheck_verdict(
             listed,
-            answer.prior_assessments,
+            assessments,
             as_dicts(answer),
             deterministic=deterministic,
         )
@@ -473,7 +588,12 @@ async def run_consistency(run: Run) -> None:
         return
     print("PHASE:CONSISTENCY", flush=True)
     answer = await check(run)
-    found = format_findings(run) + registry_findings(run) + as_dicts(answer)
+    found = (
+        format_findings(run)
+        + registry_findings(run)
+        + citation_findings(run)
+        + as_dicts(answer)
+    )
     actionable, advisory = F.first_check_verdict(found)
     F.record_advisory(run, NAME, advisory)
     if not actionable:

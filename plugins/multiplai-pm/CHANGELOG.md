@@ -29,6 +29,8 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
 - **pm-spec**: the consistency check now reads the function that a statement about today's behaviour names, and reports a contradiction when the code does something else.
 
 ### Added
+- **pm-spec**: the consistency check now flags, before the agent's findings, each place where a component's `specs.md` names another component that it is not ordered with (neither depends on the other, even through others). Each is a major finding that names the two fixes: take the reliance out of the spec, or add the dependency to the component's `.change.yaml` and to `components.md`.
+- **pm-spec**: after a blocked check, an edit to a component's `depends_on` or to `components.md` alone now counts as an edit, so `resume` checks again instead of refusing. A run blocked by an earlier version keeps the old behaviour until its next block.
 - **pm-spec**: each consistency check appends one advisory line to `.pm-spec/progress.md` counting refusals with no status, "as before" THENs with no baseline, "as today" statements with no named function, and commit pins. Nothing blocks on these counts.
 
 ## [0.13.3] - 2026-10-28

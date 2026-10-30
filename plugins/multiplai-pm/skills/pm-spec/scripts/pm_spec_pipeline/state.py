@@ -79,8 +79,11 @@ class StepOutcome(BaseModel):
     is set in the checkpoint that publishes the rewrite. `blocked_revision` is
     the revision a block on findings was recorded at: a resume at another
     revision means the user edited the files, and the step gets its rewrite back.
-    `reviewed_blocks` counts the checks after the specs review that blocked,
-    for the round cap (`consistency.refuse_at_round_cap`)."""
+    `blocked_dependencies` is `layout.dependency_digest` at that block: an edit
+    to a component's `depends_on` or to `components.md` alone also counts as
+    an edit (row S58); a state saved before 0.14.0 has none, and only the
+    revision is compared. `reviewed_blocks` counts the checks after the specs
+    review that blocked, for the round cap (`consistency.refuse_at_round_cap`)."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -93,6 +96,7 @@ class StepOutcome(BaseModel):
     blocking_findings: list[dict] = Field(default_factory=list)
     advisory_findings: list[dict] = Field(default_factory=list)
     blocked_revision: str | None = None
+    blocked_dependencies: str | None = None
     source: str = ""
     reviewed_blocks: int = 0
 
