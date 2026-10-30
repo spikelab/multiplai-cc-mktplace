@@ -301,7 +301,7 @@ async def _run_stages(
     else:
         progress.line(f"RESUMED after {state.stage}")
 
-    snapshot = target_mod.snapshot_head(t, target_dir / "tree")
+    snapshot = target_mod.snapshot_head(t, target_dir / "tree", note=progress.line)
     _with_deps(state, snapshot, config)
     diff = Path(t.diff_path).read_text(encoding="utf-8") if t.diff_path else ""
     if incremental.is_incremental(state):

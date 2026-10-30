@@ -730,8 +730,25 @@ class Coordinator:
                 and c.status != "merged"
                 and a.kind in (*REVIEW_KINDS, *FIX_KINDS)
                 and (a.result or {}).get("parked")
+                # S10: a park on open findings at the round cap is decided
+                # again by the review step: a new head is reviewed, and an
+                # unchanged one parks again unless every id was accepted.
+                and not a.result.get("open_ids")
             ):
                 c.status, c.reason = "parked", a.result["parked"]
+        for c in self.children.values():  # S9: its fixer was launched again once
+            fixes = [
+                a
+                for a in records.attempts(self.epic_dir)
+                if a.child == c.id and a.kind == "fix"
+            ]
+            if (
+                c.status != "merged"
+                and len(fixes) >= 2
+                and all((a.result or {}).get("ingestion_error") for a in fixes[-2:])
+            ):
+                c.status, c.reason = "failed", fixes[-1].result["failed"]
+                c.relaunched = True
         for c in (
             self.children.values()
         ):  # and a merge step's (PR E), until <W> is clean (E.S26)
@@ -1053,10 +1070,16 @@ class Coordinator:
     ) -> dict:
         """Item 22's fields of a review result, from its ledger line; with
         blockers, `next` and `next_reason`, what follows it (`review.decide`);
-        with `parked` when that is `park` (an open HIGH at the round cap) or
-        its findings cannot be read."""
+        with `parked` when that is `park` (an open finding at the round cap,
+        whose ids are `open_ids`) or its findings cannot be read. A finding
+        `epic.accepted_findings` lists for *c* is not a blocker (`accepted`)."""
         c.pr_round = review.pr_round(review.ledger_lines(), self.slug, number)
-        blocking = review.blockers(review_dir)
+        listed = self.settings.accepted_findings.get(c.id, {})
+        found = review.blocking_findings(review_dir)
+        accepted = [f["id"] for f in found or [] if f.get("id") in listed]
+        if found is not None:
+            found = [f for f in found if f.get("id") not in listed]
+        blocking = None if found is None else review.lines(found, review_dir)
         fields = {
             "head_sha": line.get("head_sha"),
             "base_sha": line.get("base_sha"),
@@ -1066,6 +1089,7 @@ class Coordinator:
             "reused": reused,
             "conflicts": c.conflicts,
             "blocking": blocking or [],
+            **({"accepted": accepted} if accepted else {}),
             "reused_pipeline_run": (
                 {"target_dir": line.get("target_dir"), "round": line.get("round")}
                 if reused
@@ -1077,12 +1101,16 @@ class Coordinator:
             fields["parked"] = f"cannot read the review's findings in {review_dir}"
         elif blocking:
             fields["next"], fields["next_reason"] = review.decide(
-                review.blocking_findings(review_dir) or [],
+                found or [],
                 c.pr_round,
                 cap,
                 self.settings.round_worth,
+                self.settings.merge or "auto",
             )
             if fields["next"] == "park":
+                fields["open_ids"] = review.open_at_cap(
+                    found or [], self.settings.merge or "auto"
+                )
                 fields["parked"] = (
                     f"review round {c.pr_round} of {cap} left {len(blocking)} blocker(s): "
                     + "; ".join(blocking)
@@ -1107,8 +1135,9 @@ class Coordinator:
         """Item 24, found: no review. A started record for this head with no
         result gets its result now (C.S2, C.S4); when no record of this head
         holds a review's fields (none at all, or only the exit-2 `is running
-        now` asks), one pair is written; a head whose review is recorded
-        writes nothing."""
+        now` asks), or the last one's blockers differ from the review's now
+        (a finding accepted since, S11), one pair is written; a head whose
+        review is recorded writes nothing."""
         tries = [
             a
             for a in records.attempts(self.epic_dir)
@@ -1122,7 +1151,9 @@ class Coordinator:
             records.finish(a, None, interrupted=True)
         if open_:
             records.finish(open_[-1], None, interrupted=True, extra=fields)
-        elif not any("blocking" in a.result for a in tries):
+        elif [a.result["blocking"] for a in tries if "blocking" in a.result][-1:] != [
+            fields["blocking"]
+        ]:
             argv = review.review_argv(self._worktree(c), number, self.config)
             a = records.start(
                 self.epic_dir, "review", c.id, argv, head_sha=head, pr_round=c.pr_round
@@ -1374,7 +1405,14 @@ class Coordinator:
         return fix.rounds_started(project, self.change(c.id)) + 1
 
     async def _run_fix(
-        self, c: Child, head: str, number: int, rounds: int, *, final: bool = False
+        self,
+        c: Child,
+        head: str,
+        number: int,
+        rounds: int,
+        *,
+        final: bool = False,
+        from_review: str | None = None,
     ) -> bool:
         """32.2: run `findings` on *c*'s PR. True when it exited 0, so the review
         step reads the PR again; else the child is parked (`FINDINGS:FAILED`, or
@@ -1389,7 +1427,10 @@ class Coordinator:
         more is launched. Under it, the fixer used up only its share while
         others held the rest: True, so the review step runs it again with
         its share recomputed (D2.S19). *final*: the final fix (`--no-review`),
-        whose result keeps `final_head`, the HEAD it left in `<P>`."""
+        whose result keeps `final_head`, the HEAD it left in `<P>`.
+        *from_review*: the review folder whose blockers it acts on; a fixer
+        that ends `FINDINGS:INGESTION_ERROR` leaves the child `failed` with
+        the ids (S9), not launched again in this run."""
         project = self._child_project(c)
         change = self.change(c.id)
         if not await self._fixer_gone(c, number):
@@ -1412,6 +1453,7 @@ class Coordinator:
             left,
             final=final,
             accept_unknown_spend=getattr(self.config, "accept_unknown_spend", False),
+            from_review=from_review,
         )
         attempt = records.start(
             self.epic_dir, "fix", c.id, argv, head_sha=head, pr_round=c.pr_round
@@ -1473,6 +1515,18 @@ class Coordinator:
                 c.id,
                 code,
             )
+            return False
+        ids = fix.ingestion_error(out) if code != 0 else None
+        if ids is not None:
+            why = f"the fixer left review findings with no decision: {', '.join(ids)}"
+            records.finish(
+                attempt,
+                code,
+                interrupted=False,
+                extra={"ingestion_error": ids, "failed": why},
+            )
+            c.status, c.reason, c.relaunched = "failed", why, True
+            log.warning("EPIC child %s: %s", c.id, why)
             return False
         why = fix.failed_reason(out) or f"the fixer exited {code}: {review.tail(out)}"
         records.finish(attempt, code, interrupted=False, extra={"parked": why})
@@ -1578,7 +1632,12 @@ class Coordinator:
                 return False
         rounds = self._rounds_for_fixer(c, self._child_project(c))
         return await self._run_fix(
-            c, head, number, rounds, final=rec.result.get("next") == "final_fix"
+            c,
+            head,
+            number,
+            rounds,
+            final=rec.result.get("next") == "final_fix",
+            from_review=rec.result.get("review_dir"),
         )
 
     async def _fix_pending(self, c: Child, number: int, head: str) -> bool | None:
@@ -1606,6 +1665,25 @@ class Coordinator:
                     return False
                 records.finish(a, None, interrupted=True)
         fixes = [a for a in tries if a.kind == "fix"]
+        if (
+            fixes
+            and (fixes[-1].result or {}).get("ingestion_error")
+            and not (
+                len(fixes) >= 2 and (fixes[-2].result or {}).get("ingestion_error")
+            )
+        ):  # S9: once more, with a fresh round
+            argv = fixes[-1].started.get("argv") or []
+            if self._over_budget():
+                c.status = "built"
+                return False
+            return await self._run_fix(
+                c,
+                head,
+                number,
+                self._rounds_for_fixer(c, self._child_project(c)),
+                final=fix.is_final(argv),
+                from_review=fix.saved_from_review(argv),
+            )
         if not fixes or (
             fixes[-1].result is not None and not fixes[-1].result.get("interrupted")
         ):
@@ -1633,7 +1711,14 @@ class Coordinator:
             c.status = "built"
             return False
         # R2: once more, as launched; recounted, a finished round would run again.
-        return await self._run_fix(c, head, number, fix.saved_rounds(argv), final=final)
+        return await self._run_fix(
+            c,
+            head,
+            number,
+            fix.saved_rounds(argv),
+            final=final,
+            from_review=fix.saved_from_review(argv),
+        )
 
     # -- merging a reviewed PR (PR E) ---------------------------------------------
 
