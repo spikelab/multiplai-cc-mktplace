@@ -15,6 +15,15 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.136.0] - 2026-10-29
+
+### Added
+- **buildme**: before research, planning or TDD calls a model, a build now checks with no model that `specs/config.yaml` parses, the test command's program (and each `tdd.narrow_commands` entry's) exists, the PR's target branch is on origin and `gh` can open a PR there (only when the run publishes), the test database answers (new `tdd.db_check`, a command; unset means not checked), and no other process is running the component's epic. Each failed check prints one `PREFLIGHT:FAILED:<check>:<reason>` line and the build exits 1 before spending anything.
+
+### Changed
+- **buildme**: every test-command run runs in a process group of its own and streams its output to `<change dir>/.buildme-test-runs/`. A timeout or a stopped build kills the whole group, so no test process outlives the run, and keeps the partial output. The build log gets a `TEST_RUN end ... seconds=<s>` line for each run, which gives the time spent in tests.
+- **buildme**: a test run where the runner never got going (it was killed or crashed, the test database is down, it printed nothing) is run again after 10 and 30 seconds instead of being treated as failing tests. A conftest or test file that fails to import or collect (pytest exit 4, or a collection or import error in the output) is not run again: it goes to the fix agent as a failing test, as before. If the third run fails the same way, the block stops with the three saved outputs and no fix agent is spent on it; re-running the build runs the tests again. A test that fails is never run again.
+
 ## [0.135.0] - 2026-10-29
 
 ### Added

@@ -128,6 +128,7 @@ buildme ignores them.
 | `planning.max_rewrites` | int | `2` | the plan check: rewrites of the plan before it stops the run. Raising it reopens a stopped check without regenerating the plan |
 | `planning.max_usd` | number | `40` | the plan check: it starts no rewrite or recheck once the planning calls (design, unknowns, tasks, rubric, explainers, the check and its rewrites) have spent this much. Raising it reopens a stopped check without regenerating the plan |
 | `tdd.narrow_commands` | list of `dir`, `command`, optional `runner` (`pytest` / `jest`) | none | the TDD loop, for a repo whose tests sit in several directories with different runners: each entry is narrowed to the block's own tests in its own directory (`cd backend && pytest -q tests/test_x.py`); a directory with no changed file is left out, and when every one is, the whole `tdd.test_command` runs. Example and rules: [Repos with tests in several directories](scripts/README.md#repos-with-tests-in-several-directories) |
+| `tdd.db_check` | a command | none | the check before the first paid call: run from the project (only with `--trust-repo`); a non-zero exit stops the build with `PREFLIGHT:FAILED:test-db:<reason>` before any model call (see [The check before the first paid call](#the-check-before-the-first-paid-call)) |
 | `tdd.whole_suite` | `per_block` / `end` | `per_block` | the TDD loop: `per_block` runs the whole `tdd.test_command` in every block's gates. `end` runs only each block's own tests there, and the whole command once after the last block (see [The refactor phase](#the-refactor-phase)) |
 | `review.plan_approval` | bool | `false` | stop 4: after the plan check and the size gate, the build waits (`PLAN:WAITING`, exit `3`) until its branch holds an engineer's approval commit for the current plan revision (see [The plan approval](#the-plan-approval-stop-4)). Turning it on for a planned build changes no plan revision |
 | `findings.authors` | `collaborators` or a list of GitHub logins | `collaborators` | `/multiplai-dev:buildme-findings`: whose PR comments are acted on. `collaborators` means anyone whose `role_name` on the repo is `admin`, `maintain` or `write` |
@@ -468,6 +469,35 @@ setting, every failed whole run writes its command, exit code, failing test
 ids and last 400 lines of output to
 `<change dir>/.buildme-test-runs/<UTC stamp>-<label>.log`, and the log line
 names that file. buildme never commits or cleans that folder.
+
+Every run of the test command runs in a process group of its own, with its
+output streamed to a file in that folder (`<stamp>-<label>-run<k>.out`). The
+build-pipeline log gets `TEST_RUN start` and `TEST_RUN end dir=<dir>
+exit=<code> seconds=<s>` for each run. On a timeout, or when buildme is
+stopped, the whole group is killed and the partial output is kept; a later
+run never overwrites it. A run where pytest, Jest, Vitest, `manage.py test`
+or `python -m unittest` never got going (it was killed or crashed, the test
+database is down, or it printed nothing) runs again after 10 and then 30
+seconds: that is a failed run with no test results and no collection or
+import error in its output. A third such run stops the block (FAILED,
+resumable) with the three outputs named in `build-progress.md`, and no fix
+agent runs on it; re-running the build runs the test command again. A test
+that fails is never run again, and neither is a conftest or test file that
+fails to import or collect (pytest exit 4, or exit 1, 2 or 5): that goes to
+the fix agent as a failing test.
+
+### The check before the first paid call
+
+On every run until TDD is done, after the worktree is set up and before
+research, planning or TDD calls a model, buildme checks with no model that
+`specs/config.yaml` parses; the program of `tdd.test_command` and of each
+`tdd.narrow_commands` entry exists where it runs; when the run pushes and
+opens a PR (not `--spec-only`, not `git.pr: none`), the branch the PR targets exists on origin and `gh repo view`
+reports `WRITE`, `MAINTAIN` or `ADMIN`; `tdd.db_check`, when set, exits 0; and
+no other process holds the epic lock of a component (`<epic>/<id>`) built by
+hand. Each failed check prints one `PREFLIGHT:FAILED:<check>:<reason>` line
+and the build exits `1`, its checkpoint unchanged. The standalone `tdd`
+command runs the same checks, without the PR ones.
 
 After the last block, one **whole-change** pass runs over the cumulative diff,
 before the entry-point check. Its charter is deliberately narrow: remove cross-block
