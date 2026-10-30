@@ -1452,3 +1452,98 @@ def test_S1_the_printed_values_rebind_an_older_build(plan):
     sg.steps["plan_review"].revision = values["steps.plan_review.revision"]
     reconcile_kept_implementation(config, state)
     assert sg.step_passed("plan_review")
+
+
+# --- the dependencies' specs.md are in the plan revision (plan item 49) ------
+
+
+def _components_plan(tmp_path, billing_deps: str):
+    """A change `feat` with components `billing` (depends_on *billing_deps*),
+    `users` (depends_on accounts) and `accounts`, each with a specs.md, and
+    billing planned. Returns (config, state) for `feat/billing`."""
+    specs = tmp_path / "specs"
+    root = specs / "changes" / "feat"
+    root.mkdir(parents=True)
+    (root / "proposal.md").write_text("## Capabilities\n- `billing`\n")
+    for cid, deps in (
+        ("billing", billing_deps),
+        ("users", "[accounts]"),
+        ("accounts", "[]"),
+    ):
+        comp = root / "components" / cid
+        comp.mkdir(parents=True)
+        (comp / "plan.md").write_text(f"# Plan: {cid}\n")
+        (comp / ".change.yaml").write_text(f"depends_on: {deps}\n")
+        (comp / "specs.md").write_text(
+            f"# Capability: {cid}\n\n## ADDED Requirements\n\n" + REQ
+        )
+    billing = root / "components" / "billing"
+    for name, value in {
+        "implementation-plan.md": "# Design\nReturn values",
+        "tasks.md": "## 1. Values\nReturn values",
+        "unknowns.md": "# Unknowns\nNone",
+        "rubric.md": "# Rubric\nCheck values",
+    }.items():
+        (billing / name).write_text(value)
+    config = BuildConfig(
+        project_dir=tmp_path, change_name="feat/billing", skip_explainers=True
+    )
+    config.specs_dir = specs
+    assert config.change_dir == billing
+    state = BuildState(
+        change_name="feat-billing",
+        tier="advanced",
+        spec_gen=SpecGenState(),
+        state_file=str(config.state_file_path()),
+    )
+    return config, state
+
+
+@pytest.mark.parametrize("dep", ["users", "accounts"])
+def test_a_dependencys_specs_edit_marks_the_plan_stale(tmp_path, dep):
+    """An edit to the specs.md of a component in the transitive depends_on
+    marks design, unknowns, tasks and rubric stale and gives a new revision,
+    as a registry edit does."""
+    config, state = _components_plan(tmp_path, "[users]")
+    owner.reconcile_plan(config, state)
+    assert state.spec_gen.stale_artifacts == []
+    before = state.spec_gen.revision
+    spec = config.change_dir.parent / dep / "specs.md"
+    spec.write_text(spec.read_text() + "\nThe system SHALL also log it.\n")
+    owner.reconcile_plan(config, state)
+    assert set(state.spec_gen.stale_artifacts) == {
+        "design",
+        "unknowns",
+        "tasks",
+        "rubric",
+    }
+    assert state.spec_gen.revision != before
+
+
+def test_a_component_with_no_dependency_keeps_its_revision(tmp_path):
+    """No dependency: the hashed files are today's, so the revision is
+    unchanged byte for byte, and a sibling's specs edit changes nothing."""
+    from build_pipeline.llm_steps import spec_steps
+
+    config, state = _components_plan(tmp_path, "[]")
+    hashes = owner._plan_hashes(config)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(spec_steps, "_dependency_dirs", lambda change_dir: [])
+        assert owner._plan_hashes(config) == hashes
+    owner.reconcile_plan(config, state)
+    before = state.spec_gen.revision
+    users = config.change_dir.parent / "users" / "specs.md"
+    users.write_text(users.read_text() + "\nchanged\n")
+    owner.reconcile_plan(config, state)
+    assert state.spec_gen.revision == before
+    assert state.spec_gen.stale_artifacts == []
+
+
+def test_the_revision_hashes_the_files_the_prompt_section_reads(tmp_path):
+    from build_pipeline.llm_steps.spec_steps import dependency_spec_files
+
+    config, _ = _components_plan(tmp_path, "[users]")
+    files = dependency_spec_files(config.change_dir)
+    assert [f.parent.name for f in files] == ["users", "accounts"]
+    keys = {k for k in owner._plan_hashes(config) if k.startswith("depends_on/")}
+    assert keys == {"depends_on/users/specs.md", "depends_on/accounts/specs.md"}

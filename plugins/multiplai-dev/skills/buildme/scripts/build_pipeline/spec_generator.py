@@ -1518,6 +1518,16 @@ def _plan_hashes(config) -> dict[str, str]:
     files.update(
         {"registry/" + p.name: p for p in (config.specs_dir / "registry").glob("*.md")}
     )
+    # The specs.md the prompts' dependency section reads; none for a component
+    # with no dependency, so its revision is unchanged.
+    from .llm_steps.spec_steps import dependency_spec_files
+
+    files.update(
+        {
+            f"depends_on/{p.parent.name}/specs.md": p
+            for p in dependency_spec_files(config.change_dir)
+        }
+    )
     hashes = {
         name: hashlib.sha256(p.read_bytes()).hexdigest()
         for name, p in files.items()
@@ -1607,7 +1617,7 @@ def reconcile_plan(
             "references",
             "granularity",
             "codebase-analysis.md",
-        } or any(key.startswith("registry/") for key in changed):
+        } or any(key.startswith(("registry/", "depends_on/")) for key in changed):
             stale.update({"design", "unknowns", "tasks", "rubric"})
     if not ChangeManager(config.specs_dir)._artifact_exists(
         config.change_dir, "requirements/*.md"

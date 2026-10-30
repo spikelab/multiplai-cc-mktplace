@@ -25,8 +25,13 @@ time, not derived from a tag.
   turn, is added to those prompts under `## Requirements of the components this
   one depends on`, up to 60,000 characters; a file left out is named with its
   requirement names. A component with no dependency gets the same prompts as
-  before. An edit to a dependency's `specs.md` does not mark the component's
-  plan stale.
+  before.
+- buildme: an edit to the `specs.md` of a component another one depends on
+  (directly or in turn) now marks the dependent component's plan stale, as an
+  edit to `specs/registry/` already does: its design, unknowns, tasks and
+  rubric are planned again. After the upgrade, the plan of each component that
+  has a dependency gets a new revision once, so it is planned again on its next
+  run; components with no dependency keep their plan revision.
 
 ## [0.129.0] - 2026-10-29
 

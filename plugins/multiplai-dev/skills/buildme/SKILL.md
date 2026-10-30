@@ -706,8 +706,11 @@ means). Its design and tasks agents and its plan check also get the
 `specs.md` of every component in its `depends_on`, and theirs in turn, under
 `## Requirements of the components this one depends on`, capped at 60,000
 characters (a file left out is named with its requirement names); a
-component with no dependency gets no such section. An edit to a dependency's
-`specs.md` does not mark the component's plan stale. A merged component's dir
+component with no dependency gets no such section. Those files are part of
+the plan revision: an edit to a dependency's `specs.md` marks the component's
+design, unknowns, tasks and rubric stale, as a `specs/registry/` edit does.
+After upgrading to 0.141.0, the plan of each component with a dependency gets
+a new revision once. A merged component's dir
 stays on the branch (the saved `epic.json` says it merged), and no component
 archives itself: once every component has merged, the run archives the whole
 change on the feature branch, once (every component's capabilities merge

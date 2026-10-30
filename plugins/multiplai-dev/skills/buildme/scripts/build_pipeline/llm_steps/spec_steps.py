@@ -391,6 +391,14 @@ def _dependency_dirs(change_dir: Path) -> list[Path]:
     return found
 
 
+def dependency_spec_files(change_dir: Path) -> list[Path]:
+    """The `specs.md` of each dir `_dependency_dirs` finds that has one, nearest
+    first: what `dependency_specs_section` reads and `spec_generator._plan_hashes`
+    hashes, so the prompt and the plan revision never disagree."""
+    files = [d / "specs.md" for d in _dependency_dirs(change_dir)]
+    return [f for f in files if f.is_file()]
+
+
 def dependency_specs_section(change_dir: Path, specs_dir: Path) -> str:
     """The `## Requirements of the components this one depends on` section
     appended to the design, tasks and plan-check prompts: the `specs.md` of each
@@ -399,8 +407,7 @@ def dependency_specs_section(change_dir: Path, specs_dir: Path) -> str:
     dropped from the end and named instead, with their requirement names; names
     still over it are cut (`_cap`). "" when no dependency has a `specs.md`, so a
     component with no dependency gets today's prompt byte for byte."""
-    files = [d / "specs.md" for d in _dependency_dirs(change_dir)]
-    files = [f for f in files if f.is_file()]
+    files = dependency_spec_files(change_dir)
     if not files:
         return ""
     base = Path(specs_dir).parent
