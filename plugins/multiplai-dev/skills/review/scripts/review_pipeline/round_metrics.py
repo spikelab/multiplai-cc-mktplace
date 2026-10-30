@@ -19,6 +19,11 @@ A round whose recorded `repo_path` no longer exists (a deleted worktree) may
 be read in another checkout given with `--repo`, when that checkout's
 `origin` names the same repository as the round's `remote_url`.
 
+With `--counts` it also prints, per round, the confirmed findings by
+severity, impact and topic, the number of finder reports (`report-*.md` in
+the round's directory) and how many of them state that a search returned
+nothing (`EMPTY_SEARCH_RE`).
+
 It prints Markdown and writes nothing. It uses no network and calls no model;
 the only commands it runs are `git blame`, `git merge-base --is-ancestor` and
 `git remote get-url`, all read-only.
@@ -44,6 +49,26 @@ ORIGINS = (PRESENT, WRITTEN, UNKNOWN, NO_LINE)
 
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
+# A finder report that states a search returned nothing or did not work: a search word
+# (grep, search, rg) and, later in the same sentence, "returned nothing", "came back empty",
+# "found no matches", "isn't working", "is blocked" and the like. Chosen by reading the
+# 102 finder reports of three PR reviews run on 2026-10-29, whose directory searches all
+# came back empty; a report that says a search found nothing for a term that is truly
+# absent counts too.
+EMPTY_SEARCH_RE = re.compile(
+    r"\b(?:grep|greps|search|searches|searching|ripgrep|rg)\b[^.\n]{0,120}?"
+    r"(?:\b(?:return(?:s|ed|ing)?|came back|comes back|coming back|finds?|found|gives?|gave"
+    r"|lists?|listed)\b[^.\n]{0,30}?"
+    r"(?:\bnothing\b|\bno (?:match(?:es)?|results?|hits?|files?)\b|\bempty\b|\banything\b)"
+    r"|\b(?:is ?n[o']t (?:working|returning|searching|finding)|unable to search"
+    r"|could ?n[o']t run|misses files|is skipping files|did ?n[o']t find|does ?n[o']t work"
+    r"|did not work|didn't work|is broken|broken here|is failing|failed\b|blocked"
+    r"|keeps? (?:returning|coming back)))",
+    re.IGNORECASE,
+)
+REPORT_GLOB = "report-*.md"
+SEVERITIES = ("HIGH", "MEDIUM", "LOW")
+
 
 @dataclass
 class RoundMetrics:
@@ -58,6 +83,11 @@ class RoundMetrics:
         bool  # True when *repo* is a `--repo` checkout, the recorded one being gone
     )
     origins: Counter = field(default_factory=Counter)
+    reports: int = 0  # finder reports in the round's directory
+    empty_search: int = 0  # of those, reports that state a search returned nothing
+    severity: Counter = field(default_factory=Counter)  # confirmed findings
+    impact: Counter = field(default_factory=Counter)
+    topic: Counter = field(default_factory=Counter)
 
 
 @dataclass
@@ -67,21 +97,34 @@ class TargetMetrics:
     stopped: int  # kept runs that stopped before export: no findings.json, left out
 
 
-def target_rounds(target_dir: Path) -> tuple[list[dict], int]:
-    """The rounds of *target_dir* that have a `findings.json`, sorted by `generated_at`, and the
-    number of kept rounds left out because they have none."""
+def target_rounds(target_dir: Path) -> tuple[list[tuple[Path, dict]], int]:
+    """The rounds of *target_dir* that have a `findings.json`, each with its directory, sorted by
+    `generated_at`, and the number of kept rounds left out because they have none."""
     found, stopped = [], 0
     for d in rounds._round_dirs(target_dir):
         data = rounds._read_json(d / "findings.json")
         if data is None:
             stopped += 1
             continue
-        found.append(data)
+        found.append((d, data))
     top = rounds._read_json(target_dir / "findings.json")
     if top is not None and rounds._kept_already(target_dir, top) is None:
-        found.append(top)
-    found.sort(key=lambda data: str(data.get("generated_at") or ""))
+        found.append((target_dir, top))
+    found.sort(key=lambda pair: str(pair[1].get("generated_at") or ""))
     return found, stopped
+
+
+def search_counts(round_dir: Path) -> tuple[int, int]:
+    """The finder reports in *round_dir*, and how many state that a search returned nothing."""
+    reports = sorted(round_dir.glob(REPORT_GLOB))
+    empty = 0
+    for path in reports:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        empty += EMPTY_SEARCH_RE.search(text) is not None
+    return len(reports), empty
 
 
 def first_repo_citation(finding: dict) -> tuple[str, int] | None:
@@ -178,10 +221,10 @@ def measure_target(
 ) -> TargetMetrics:
     found, stopped = target_rounds(target_dir)
     first_head = str(
-        ((found[0] if found else {}).get("target") or {}).get("head_sha") or ""
+        ((found[0][1] if found else {}).get("target") or {}).get("head_sha") or ""
     )
     result = []
-    for n, data in enumerate(found, start=1):
+    for n, (round_dir, data) in enumerate(found, start=1):
         findings = _listable(data)
         listed = listed_findings(findings, data.get("mode"))
         labels = Counter(assess_label(f) for f in findings)
@@ -198,6 +241,12 @@ def measure_target(
             repo=repo,
             repo_stand_in=stand_in,
         )
+        metrics.reports, metrics.empty_search = search_counts(round_dir)
+        for f in findings:
+            if f.get("status") == "confirmed":
+                metrics.severity[str(f.get("severity") or "none")] += 1
+                metrics.impact[str(f.get("impact") or "none")] += 1
+                metrics.topic[str(f.get("topic") or "none")] += 1
         if n >= 2:
             for f in listed:
                 where = first_repo_citation(f)
@@ -229,7 +278,49 @@ def _plural(n: int, word: str) -> str:
     return f"{n} {word}{'' if n == 1 else 's'}"
 
 
-def render(metrics: list[TargetMetrics], out: Path) -> str:
+def _tally(c: Counter) -> str:
+    """`name n, name n` by count, most first; `–` when empty."""
+    items = sorted(c.items(), key=lambda kv: (-kv[1], kv[0]))
+    return ", ".join(f"{k} {v}" for k, v in items) or "–"
+
+
+def _counts_table(t: TargetMetrics) -> list[str]:
+    lines = [
+        "Counts per round (confirmed findings; finder reports):",
+        "",
+        "| Round | Head | Confirmed | " + " | ".join(SEVERITIES) + " | Impact | Topic "
+        "| Reports | Search returned nothing |",
+        "|---|---|---|" + "---|" * len(SEVERITIES) + "---|---|---|---|",
+    ]
+    for n, r in enumerate(t.rounds, start=1):
+        severities = " | ".join(str(r.severity[s]) for s in SEVERITIES)
+        lines.append(
+            f"| {n} | `{r.head_sha[:12]}` | {sum(r.severity.values())} | {severities} "
+            f"| {_tally(r.impact)} | {_tally(r.topic)} | {r.reports} "
+            f"| {_share(r.empty_search, r.reports)} |"
+        )
+    lines.append("")
+    return lines
+
+
+def _counts_totals(metrics: list[TargetMetrics]) -> str:
+    every = [r for t in metrics for r in t.rounds]
+    severity: Counter = Counter()
+    for r in every:
+        severity.update(r.severity)
+    by_severity = ", ".join(f"{s} {severity[s]}" for s in SEVERITIES)
+    other = sum(v for k, v in severity.items() if k not in SEVERITIES)
+    return (
+        f"**Counts** ({_plural(len(every), 'round')}): finder reports that state a search returned "
+        f"nothing: {_share(sum(r.empty_search for r in every), sum(r.reports for r in every))}; "
+        f"confirmed findings summed over the rounds (a finding confirmed in two rounds counts "
+        f"twice): {sum(severity.values())} ({by_severity}"
+        + (f", other {other}" if other else "")
+        + ")."
+    )
+
+
+def render(metrics: list[TargetMetrics], out: Path, counts: bool = False) -> str:
     lines = ["# Review round metrics", "", f"Scanned: `{out}`", ""]
     if not metrics:
         lines.append("No review rounds found.")
@@ -263,6 +354,8 @@ def render(metrics: list[TargetMetrics], out: Path) -> str:
                 f"| {r.repeat} | {r.low_value} | {origins} | {repo} |"
             )
         lines.append("")
+        if counts:
+            lines += _counts_table(t)
     multi = [t for t in metrics if len(t.rounds) >= 2]
     mean = f"{sum(len(t.rounds) for t in multi) / len(multi):.2f}" if multi else "n/a"
     origins: Counter = Counter()
@@ -282,4 +375,6 @@ def render(metrics: list[TargetMetrics], out: Path) -> str:
         f"{origins[NO_LINE]} with no repo citation); "
         f"still-open: {_share(later_still, later_listed)} round-2+ listed findings."
     )
+    if counts:
+        lines += ["", _counts_totals(metrics)]
     return "\n".join(lines) + "\n"

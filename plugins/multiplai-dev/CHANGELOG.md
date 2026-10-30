@@ -15,6 +15,30 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.131.0] - 2026-10-29
+
+### Fixed
+
+- The review skill's agents can search the code again. Each review copies the
+  reviewed commit into a folder under the data directory, and that directory is
+  git-ignored, so ripgrep, which the agents' Grep runs on, skipped every file in
+  it: in three PR reviews on 2026-10-29, 76 of 102 finder reports say a search
+  returned nothing. The copy, and the copy of base files the explain stage
+  reads, is now made a git repository of its own (`git init`), which stops
+  ripgrep from applying the ignore files above it; the reviewed repository's own
+  `.gitignore` still applies. A copy left by an older version gets the `git init`
+  on its next run, without being extracted again.
+- A review now fails at the start, naming the folder and the ignore file that
+  hides it, when ripgrep lists no file in the copy while the change has files.
+  Without ripgrep installed it writes one line to `progress.log` and goes on.
+
+### Added
+
+- `round-metrics --counts` also prints, per round, the confirmed findings by
+  severity, impact and topic, the number of finder reports, and how many of them
+  say a search returned nothing, with a totals line. It still writes nothing and
+  calls no model.
+
 ## [0.130.0] - 2026-10-29
 
 ### Added
