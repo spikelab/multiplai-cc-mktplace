@@ -46,6 +46,23 @@ leaves a critical or major finding unfixed prints it under a loud banner and
 is for specs no review stop showed anyone: `--auto`, an adopted change, a run
 from before the staged flow.
 
+A table in a specs file whose header row is a table's header row in
+`ticket.md` must match that table cell for cell, whitespace aside; a mismatch
+is a critical `format` finding found in code (`table_findings`).
+
+The first check reads every document in full. Each finished check saves the
+sha256 of what it read in `RunState.checked_digests` (`document_digests`),
+and the next check reads in full only the specs files changed since, those a
+changed one names (by component id or capability name), those whose plan
+changed and those a listed finding cites; every other specs file goes in by
+its capability names and requirement titles (`what_to_read`). A change to the
+proposal or the use cases, or no saved digests, makes a full check. On such a
+check a new major finding the agent raises that cites only unchanged files,
+and that no earlier finding of the step had, is advisory (`quiet_unchanged`);
+a new critical one still blocks. The digests are cleared before each check
+and saved with its outcome, so a check stopped before then leaves none, and
+the next check is a full one (row S40).
+
 Before each check, `counts.py` appends one advisory line of regex counts
 (refusals with no status, "as before" THENs with no baseline, "as today"
 statements with no named function, commit pins) to the progress file.
@@ -57,11 +74,12 @@ revision the check read, and the handoff marks ready only that revision.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from datetime import UTC, datetime
-from pathlib import Path
-from typing import Literal
+from pathlib import Path, PurePosixPath
+from typing import Literal, NamedTuple
 
 from multiplai_core.specs import component_dirs, read_change_meta, split_capabilities
 from pydantic import BaseModel, Field, field_validator
@@ -139,8 +157,180 @@ def as_dicts(answer: ConsistencyAnswer) -> list[dict]:
     ]
 
 
+CHANGE_WIDE = ("proposal.md", "use-cases.md")
+UNCHANGED_MARK = (
+    "(unchanged since the last check: capability names and requirement titles only)"
+)
+UNCHANGED_NOTE = (
+    " [Advisory: it cites only files unchanged since the last check, and no "
+    "earlier check raised it.]"
+)
+
+
+class Reading(NamedTuple):
+    """What one check reads. *digests*: the sha256 of each document now
+    (`document_digests`). *changed*: the documents whose digest differs from
+    the last finished check's, or that it did not read; None when no digests
+    are saved, which makes a full check. *full*: the spec files read in full."""
+
+    digests: dict[str, str]
+    changed: set[str] | None
+    full: set[str]
+
+
+def _sha(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def document_digests(run: Run) -> dict[str, str]:
+    """The sha256 of each document the check reads, by its path in the change
+    dir: `proposal.md`, `use-cases.md`, each `plan.md` and each spec file."""
+    change_dir = run.config.change_dir
+    out = {
+        "proposal.md": _sha(artifacts.proposal_text(run)),
+        "use-cases.md": _sha(artifacts.use_cases_text(run)),
+    }
+    for d in layout.spec_dirs(change_dir):
+        if (d / layout.PLAN_FILE).is_file():
+            out[layout.rel(change_dir, d / layout.PLAN_FILE)] = _sha(
+                (d / layout.PLAN_FILE).read_text()
+            )
+    for unit in layout.units(change_dir):
+        out[unit] = _sha((change_dir / unit).read_text())
+    return out
+
+
+def _plan_of(unit: str) -> str:
+    """The `plan.md` beside a spec file (beside its `requirements/` dir, in the old layout)."""
+    parent = PurePosixPath(unit).parent
+    if parent.name == layout.OLD_DIR:
+        parent = parent.parent
+    return str(parent / layout.PLAN_FILE)
+
+
+def _word(name: str) -> re.Pattern:
+    return re.compile(r"(?<![\w-])" + re.escape(name) + r"(?![\w-])")
+
+
+def _cited_by(change_dir: Path, text: str, units: list[str]) -> set[str]:
+    """The spec files *text* names: by their component's id, or by one of
+    their capability names, each as a whole word."""
+    out = set()
+    for unit in units:
+        parent = PurePosixPath(_plan_of(unit)).parent
+        names = layout.unit_capabilities(unit, (change_dir / unit).read_text())
+        if parent.parent.name == "components":
+            names = [parent.name, *names]
+        if any(_word(n).search(text) for n in names):
+            out.add(unit)
+    return out
+
+
+def what_to_read(run: Run, prior: list[dict] | None = None) -> Reading:
+    """The documents a check reads in full. With no saved digests, every spec
+    file. Otherwise, when the proposal or the use cases changed, every spec
+    file too, as each spec may rest on them; else each spec file that changed,
+    each one whose component's plan changed, each one a changed spec file names
+    (its component id or a capability name), and each one a finding in *prior*
+    cites. Every other spec file goes in by its capability names and
+    requirement titles."""
+    change_dir = run.config.change_dir
+    digests = document_digests(run)
+    units = layout.units(change_dir)
+    saved = run.state.checked_digests
+    if not saved:
+        return Reading(digests, None, set(units))
+    changed = {k for k, v in digests.items() if saved.get(k) != v}
+    if changed & set(CHANGE_WIDE):
+        return Reading(digests, changed, set(units))
+    edited = [u for u in units if u in changed]
+    full = set(edited) | {u for u in units if _plan_of(u) in changed}
+    for unit in edited:
+        full |= _cited_by(change_dir, (change_dir / unit).read_text(), units)
+    for finding in prior or []:
+        full |= set(cited_units(change_dir, finding))
+    return Reading(digests, changed, full)
+
+
+def specs_section(run: Run, reading: Reading | None) -> str:
+    """The `## Specs` text of a check: every spec file in full, or, when
+    *reading* leaves some out, a note and their outlines."""
+    change_dir = run.config.change_dir
+    if reading is None or set(layout.units(change_dir)) <= reading.full:
+        return layout.all_specs_text(change_dir)
+    try:
+        where = change_dir.relative_to(run.config.project_dir).as_posix()
+    except ValueError:
+        where = str(change_dir)
+    note = (
+        f"The last check read every file below in full. A file marked "
+        f"{UNCHANGED_MARK} has not changed since then; its whole text is at "
+        f"`{where}/<path>` in the repository, if a problem needs it.\n\n"
+    )
+    return note + layout.specs_text(
+        change_dir, reading.full, placeholder=UNCHANGED_MARK
+    )
+
+
+def _names_changed(change_dir: Path, finding: dict, changed: set[str]) -> bool:
+    """A place of *finding* is a document in *changed*, by path or capability name."""
+    for place in finding.get("places") or []:
+        raw = str(place.get("file", "") if isinstance(place, dict) else place)
+        raw = raw.strip().strip("`")
+        if any(raw == k or raw.endswith("/" + k) for k in changed):
+            return True
+    return bool(set(cited_units(change_dir, finding)) & changed)
+
+
+def _place_files(finding: dict) -> frozenset[str]:
+    return frozenset(
+        str(p.get("file", "") if isinstance(p, dict) else p).strip().strip("`")
+        for p in finding.get("places") or []
+    )
+
+
+def quiet_unchanged(
+    run: Run, found: list[dict], reading: Reading, earlier: list[dict]
+) -> tuple[list[dict], list[dict]]:
+    """(kept, advisory) of the agent's findings on a check that read only what
+    changed: a major finding whose places are all documents unchanged since
+    the last check, and that no earlier finding of the step had (the same
+    category and the same files), is advisory. A critical one still blocks."""
+    if reading.changed is None:
+        return found, []
+    before = {(f.get("category", ""), _place_files(f)) for f in earlier}
+    change_dir = run.config.change_dir
+    kept, quiet = [], []
+    for f in found:
+        if (
+            f.get("severity") == "major"
+            and not _names_changed(change_dir, f, reading.changed)
+            and (f.get("category", ""), _place_files(f)) not in before
+        ):
+            quiet.append(
+                F.new_finding({**f, "description": f["description"] + UNCHANGED_NOTE})
+            )
+        else:
+            kept.append(f)
+    return kept, quiet
+
+
+def _earlier(run: Run, name: str) -> list[dict]:
+    step = run.state.step(name)
+    return [
+        *step.blocking_findings,
+        *step.advisory_findings,
+        *step.repair_findings,
+        *run.state.accepted_findings,
+    ]
+
+
 def check_prompt(
-    run: Run, prior: list[dict] | None = None, *, edited: bool = False
+    run: Run,
+    prior: list[dict] | None = None,
+    *,
+    edited: bool = False,
+    reading: Reading | None = None,
 ) -> str:
     change_dir = run.config.change_dir
     return CONSISTENCY_PROMPT.format(
@@ -149,7 +339,7 @@ def check_prompt(
         proposal_content=artifacts.proposal_text(run) or "(missing)",
         use_cases_content=artifacts.use_cases_text(run) or "(missing)",
         plans_content=layout.plans_text(change_dir),
-        specs_content=layout.all_specs_text(change_dir),
+        specs_content=specs_section(run, reading),
         prior_section=prior_findings_section(prior, edited=edited),
         accepted_section=accepted_section(run.state.accepted_findings),
     )
@@ -273,6 +463,73 @@ def settle_citations(
     ]
 
 
+TICKET_FILE = "ticket.md"
+_SEPARATOR_CELL = re.compile(r"^:?-+:?$")
+
+
+def _cells(line: str) -> tuple[str, ...]:
+    """The cells of a markdown table row, each with its whitespace collapsed."""
+    inner = line.strip().removeprefix("|").removesuffix("|")
+    return tuple(" ".join(c.split()) for c in inner.split("|"))
+
+
+def markdown_tables(text: str) -> list[tuple[int, list[tuple[str, ...]]]]:
+    """Each markdown table in *text*, outside fenced code: (the line number of
+    its header row, its rows as cells, the separator row left out)."""
+    tables, rows, start, fenced = [], [], 0, False
+    lines = text.splitlines()
+    for n, line in enumerate([*lines, ""], 1):
+        if line.lstrip().startswith(("```", "~~~")):
+            fenced = not fenced
+        is_row = not fenced and line.strip().startswith("|")
+        if is_row:
+            if not rows:
+                start = n
+            rows.append(_cells(line))
+            continue
+        if len(rows) >= 2 and all(_SEPARATOR_CELL.match(c) for c in rows[1] if c):
+            tables.append((start, [rows[0], *rows[2:]]))
+        rows = []
+    return tables
+
+
+def _row_text(row: tuple[str, ...]) -> str:
+    return "| " + " | ".join(row) + " |"
+
+
+def table_findings(run: Run) -> list[dict]:
+    """A critical `format` finding for each table in a spec file whose header
+    row is a table's header row in `ticket.md` and whose cells differ from that
+    table's, whitespace aside: a table copied from the ticket must be copied
+    exactly (G14). Found in code, with no model call."""
+    change_dir = run.config.change_dir
+    ticket = change_dir / TICKET_FILE
+    if not ticket.is_file():
+        return []
+    copied = {rows[0]: (n, rows) for n, rows in markdown_tables(ticket.read_text())}
+    found = []
+    for unit in layout.units(change_dir):
+        for n, rows in markdown_tables((change_dir / unit).read_text()):
+            if rows[0] not in copied or rows == copied[rows[0]][1]:
+                continue
+            tn, expected = copied[rows[0]]
+            found.append(
+                {
+                    "category": "format",
+                    "severity": "critical",
+                    "description": f"{unit}:{n} copies the table at {TICKET_FILE}:{tn} "
+                    "(the same header row) but its cells differ. The ticket's table "
+                    "is:\n" + "\n".join(_row_text(r) for r in expected)[:4000],
+                    "suggestion": f"copy the table from {TICKET_FILE} cell for cell",
+                    "places": [
+                        {"file": unit, "where": f"the table at line {n}"},
+                        {"file": TICKET_FILE, "where": f"the table at line {tn}"},
+                    ],
+                }
+            )
+    return found
+
+
 _DELTA_HEADING = re.compile(r"^##\s+(MODIFIED|REMOVED)\s+Requirements\b", re.IGNORECASE)
 
 
@@ -328,17 +585,30 @@ def registry_findings(run: Run) -> list[dict]:
 
 
 async def check(
-    run: Run, prior: list[dict] | None = None, *, edited: bool = False
+    run: Run,
+    prior: list[dict] | None = None,
+    *,
+    edited: bool = False,
+    reading: Reading | None = None,
 ) -> ConsistencyAnswer:
-    """One call of the read-only consistency agent."""
-    return await sdk.agent_structured(
-        check_prompt(run, prior, edited=edited),
+    """One call of the read-only consistency agent, reading what *reading*
+    (default `what_to_read`) says. The saved digests are cleared before the
+    call, and the digests of what it read are put in the state after it, for
+    the caller's next save with the check's outcome (row S40)."""
+    reading = reading or what_to_read(run, prior)
+    if run.state.checked_digests is not None:
+        run.state.checked_digests = None
+        run.save()
+    answer = await sdk.agent_structured(
+        check_prompt(run, prior, edited=edited, reading=reading),
         ConsistencyAnswer,
         config=run.config,
         step="consistency",
         label="consistency",
         cwd=str(run.config.project_dir),
     )
+    run.state.checked_digests = reading.digests
+    return answer
 
 
 async def recheck(run: Run, name: str, reason: str) -> str:
@@ -360,7 +630,10 @@ async def recheck(run: Run, name: str, reason: str) -> str:
         listed,
         assessments,
         as_dicts(answer),
-        deterministic=format_findings(run) + registry_findings(run) + citations,
+        deterministic=format_findings(run)
+        + table_findings(run)
+        + registry_findings(run)
+        + citations,
     )
     step.repair_findings = F.saved_findings(F.assess_listed(listed, assessments))
     F.log_findings(name, "listed", step.repair_findings)
@@ -522,14 +795,17 @@ async def check_reviewed(run: Run, revision: str) -> None:
     step = run.state.step(NAME)
     later = step.outcome == "blocked" and bool(step.blocking_findings)
     listed = _open(step) if later else []
-    answer = await check(run, prior=listed, edited=True)
+    in_code = format_findings(run) + table_findings(run) + registry_findings(run)
+    earlier = _earlier(run, NAME)
+    reading = what_to_read(run, listed)
+    answer = await check(run, prior=listed, edited=True, reading=reading)
     assessments, citations = settle_citations(
         listed,
         answer.prior_assessments,
         run.state.accepted_findings,
         citation_findings(run),
     )
-    deterministic = format_findings(run) + registry_findings(run) + citations
+    deterministic = in_code + citations
     if later:
         blocking, advisory = F.recheck_verdict(
             listed,
@@ -542,7 +818,9 @@ async def check_reviewed(run: Run, revision: str) -> None:
         )
         reason = f"{REVIEWED_BLOCK_REASON} ({F.carried_and_new(blocking)})"
     else:
-        actionable, advisory = F.first_check_verdict(deterministic + as_dicts(answer))
+        kept, quiet = quiet_unchanged(run, as_dicts(answer), reading, earlier)
+        actionable, advisory = F.first_check_verdict(deterministic + kept)
+        advisory += quiet
         blocking = F.number_new(NAME, actionable, run.state.accepted_findings)
         reason = REVIEWED_BLOCK_REASON
     F.record_advisory(run, NAME, advisory)
@@ -587,14 +865,15 @@ async def run_consistency(run: Run) -> None:
         await recheck(run, NAME, BLOCK_REASON)
         return
     print("PHASE:CONSISTENCY", flush=True)
-    answer = await check(run)
-    found = (
-        format_findings(run)
-        + registry_findings(run)
-        + citation_findings(run)
-        + as_dicts(answer)
+    in_code = format_findings(run) + table_findings(run) + registry_findings(run)
+    earlier = _earlier(run, NAME)
+    reading = what_to_read(run)
+    answer = await check(run, reading=reading)
+    kept, quiet = quiet_unchanged(run, as_dicts(answer), reading, earlier)
+    actionable, advisory = F.first_check_verdict(
+        in_code + citation_findings(run) + kept
     )
-    actionable, advisory = F.first_check_verdict(found)
+    advisory += quiet
     F.record_advisory(run, NAME, advisory)
     if not actionable:
         F.record_passed(run, NAME, revision, "No critical or major finding")

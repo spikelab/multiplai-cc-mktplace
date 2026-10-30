@@ -79,6 +79,15 @@ after the third stop runs the consistency check and the handoff.
    on the same behaviour of existing code (one function, one endpoint's
    access rule), the call is told to make one of them its owner, and the
    others depend on it and cite it.
+   **Sizing (guidance, not a gate).** Each component pays a fixed cost
+   whatever its size: on wave 1 of the DFACCMGMT-1 epic (2026-10-29,
+   `factory-efficiency-results.md`) planning cost $51.69 per component and
+   the PR review $81.43 per PR, against $8.46 of TDD per block. So a small
+   component costs about as much to plan and review as a large one. For an
+   epic built with `epic.merge: auto`, size components by buildme's 10-block
+   split trigger, not by its 5-package one: a component that touches both the
+   backend and the frontend crosses the package trigger early, and splitting
+   it there pays the fixed cost twice.
 7. **Stop:** commit, push, `SPEC:REVIEW:components`, `SPEC:BRANCH:<branch>`,
    exit 3.
 
@@ -148,6 +157,19 @@ after the third stop runs the consistency check and the handoff.
    (`SPEC_COUNTS`) counting refusals with no status, "as before" THENs with
    no baseline, "as today" statements with no named function, and commit
    pins; nothing blocks on these counts.
+   A table in a `specs.md` whose header row is a table's header row in
+   `ticket.md` must match that table cell for cell, whitespace aside; a
+   mismatch is a critical `format` finding raised in code.
+   **Later checks read what changed.** The first check reads everything.
+   Each check saves a digest of every file it read in the run state, and the
+   next check reads in full only the `specs.md` files changed since, the
+   ones a changed file names (by component id or capability name), the ones
+   whose `plan.md` changed and the ones an open finding cites; every other
+   `specs.md` goes in by its capability names and requirement titles. An edit
+   to `proposal.md` or `use-cases.md` makes a full check, and so does a check
+   that stopped before its result was saved. On such a check a new major
+   finding that cites only unchanged files, and that no earlier check raised,
+   is advisory; a new critical finding still blocks.
    **After the specs review stop** (step 11) the check rewrites no file: the
    specs are what reviewers read and edited. A critical or major finding
    stops the run with `SPEC:BLOCKED:<change_dir>`, exit 4, the findings
@@ -206,7 +228,12 @@ and hands off again. The issues file may be in the change dir or in a
 component's (`components/<id>/spec-issues.md`, where buildme writes a
 component's issues): name the change, `revise <name>`, never
 `<name>/<component>`, which is refused. An issues file written after that is a
-new round, with its own rewrite. Each rewrite, here and in the check, answers `UNCHANGED` or the whole
+new round, with its own rewrite. Each rewrite, here and in the check, reads
+in full the file it rewrites and the other `specs.md` files its findings
+cite, and every other one by its capability names and requirement titles. It
+makes the smallest change that closes a gap: a scenario added to the
+requirement that covers the behaviour, else that requirement extended, and a
+new requirement only when none covers it. It answers `UNCHANGED` or the whole
 file between two delimiter lines; only the text between them is written, a
 file answered `UNCHANGED` stays byte for byte as it was, and an answer of any
 other shape blocks the revise (exit 4) with nothing written. While `spec_issues` is set or a revise is blocked, `resume`

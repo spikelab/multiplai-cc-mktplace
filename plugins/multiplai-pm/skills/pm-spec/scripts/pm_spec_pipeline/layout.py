@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 
 from multiplai_core.specs import (
@@ -87,6 +88,30 @@ def all_specs_text(change_dir: Path) -> str:
     parts = [
         f"### {u}\n{(Path(change_dir) / u).read_text()}" for u in units(change_dir)
     ]
+    return "\n\n".join(parts) or "(none)"
+
+
+_OUTLINE_LINE = re.compile(r"^(# Capability:|##\s|### Requirement:)")
+
+
+def outline(text: str) -> str:
+    """The `# Capability:`, `## ... Requirements` and `### Requirement:` lines
+    of a spec file: its capability names and requirement titles."""
+    lines = [line.rstrip() for line in text.splitlines() if _OUTLINE_LINE.match(line)]
+    return "\n".join(lines) or "(no capability or requirement headings)"
+
+
+def specs_text(change_dir: Path, full: set[str], *, placeholder: str) -> str:
+    """Every spec file of the change under a `### <path>` heading: in full when
+    it is in *full*, else its `outline` under the heading followed by
+    *placeholder*."""
+    parts = []
+    for u in units(change_dir):
+        text = (Path(change_dir) / u).read_text()
+        if u in full:
+            parts.append(f"### {u}\n{text}")
+        else:
+            parts.append(f"### {u} {placeholder}\n{outline(text)}")
     return "\n\n".join(parts) or "(none)"
 
 

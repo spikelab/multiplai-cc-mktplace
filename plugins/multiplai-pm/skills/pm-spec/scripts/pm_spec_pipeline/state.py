@@ -22,6 +22,8 @@ What each field is for, by the plan's stop-and-resume rows:
   pushed, `skipped` under `--auto`; `tickets` is `pending` at the ticket wait.
   A run started before the stages existed gets each of them `skipped`, reason
   "before the staged flow" (row S14).
+- `checked_digests`: row S40, what the last consistency check read, so the
+  next one reads in full only what changed.
 - `handoff`: row S8, the revision the ready record was written at, whether its
   commit landed and whether the branch was pushed.
 """
@@ -152,6 +154,14 @@ class RunState(BaseModel):
     # finding with its `reason` and `accepted_at`. Kept across checks, so a
     # later check is told not to raise them again.
     accepted_findings: list[dict] = Field(default_factory=list)
+    # The sha256 of each document the last finished consistency check read
+    # (`consistency.document_digests`: the proposal, the use cases, each plan
+    # and each spec file, by path). The next check reads in full only the spec
+    # files changed since, and the files they cite. Cleared before each check
+    # and saved with its outcome, so a check stopped before its outcome was
+    # saved leaves none, and the next check reads everything (row S40). None
+    # (no check yet, or a state saved before 0.15.0): a full check.
+    checked_digests: dict[str, str] | None = None
 
     def step(self, name: str) -> StepOutcome:
         return self.steps.setdefault(name, StepOutcome())

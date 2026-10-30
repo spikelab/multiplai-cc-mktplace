@@ -276,7 +276,10 @@ as it is, word for word.
 ## Use cases
 {use_cases_content}
 
-## Every specs file of the change
+## The other specs files of the change
+Each specs file a finding below cites is in full; every other one is shown by
+its capability names and requirement titles.
+
 {specs_content}
 
 ## The file to revise: {unit}
@@ -290,7 +293,9 @@ Fix each finding in this file where the fix belongs here. A behaviour two
 places both require belongs to the component whose plan names it: keep it
 there and take it out of the other. Two requirements that contradict
 each other are resolved by stating the one rule the proposal and the use cases
-support. A gap is closed with a requirement and a WHEN/THEN scenario.
+support. A gap is closed with the smallest change that covers it: add a
+WHEN/THEN scenario to the requirement that covers the behaviour; extend that
+requirement when no scenario fits; add a requirement only when none covers it.
 
 ## Output Format
 When none of the findings needs a change in this file, answer with exactly
