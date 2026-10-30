@@ -39,6 +39,18 @@ time, not derived from a tag.
   say a search returned nothing, with a totals line. It still writes nothing and
   calls no model.
 
+## [0.130.0] - 2026-10-29
+
+### Added
+
+- buildme ships `evals/epic_metrics.py`, which reads an epic's records, build
+  states, review folders, cost ledger, agent transcripts and git history and
+  prints each child's spend (planning, TDD per block, PR review, fix and
+  merge), the findings its fixer acted on, confirmed review findings, empty
+  finder searches, block-review rounds after a pass, prompt sizes, cache-write
+  shares, planning lines on the PR and hand interventions. It calls no model.
+  `--self-check` checks its counting on a built-in fixture.
+
 ## [0.129.0] - 2026-10-29
 
 ### Added
