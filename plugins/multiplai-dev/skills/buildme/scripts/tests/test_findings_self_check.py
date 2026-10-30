@@ -1133,13 +1133,11 @@ class TestDecisions:
                         pass
             return out
 
-        render, models = (
-            constants(review / "render.py"),
-            constants(review / "models.py"),
-        )
+        render = constants(review / "render.py")
         assert decisions._SHOWN_STATUSES == render["SHOWN_STATUSES"]
         assert decisions._HIDDEN_LABELS == render["HIDDEN_LABELS"]
-        assert decisions._CRITICAL_IMPACTS == models["CRITICAL_IMPACTS"]
+        # `_CRITICAL_IMPACTS` is pinned in test_epic_review_fix_merge_resume.py,
+        # which also reads a tuple that names a constant (`DEPENDS_ON_DATA`).
 
     @pytest.mark.parametrize("mode", [None, "full", "critical"])
     def test_what_the_review_hides_is_never_accepted(self, tmp_path, mode):

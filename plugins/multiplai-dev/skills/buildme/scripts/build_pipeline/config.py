@@ -572,7 +572,9 @@ class EpicSettings:
     feature branch, else `manual` (`Coordinator.__post_init__`). `max_usd`: one ceiling for
     the whole epic, None for none. `round_worth`: which Code MEDIUM earns
     another review round (`epic.review.decide`): `breaks`, one the verifier
-    did not rate `correctness-only` or `hygiene`; `any`, every one.
+    did not rate `hygiene`; `any`, every one. `accepted_findings`: per
+    child id, the review finding ids a person accepted, each with its reason;
+    a listed id does not block that child (`Coordinator._fields`).
     `accept_size`: every child launch adds `--accept-size`, and a child
     parked on `SPLIT:REQUIRED` is launched again. `max_child_attempts`:
     launches of a failed child in one run."""
@@ -584,6 +586,7 @@ class EpicSettings:
     round_worth: Literal["breaks", "any"] = "breaks"
     accept_size: bool = False
     max_child_attempts: int = 2
+    accepted_findings: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
 def _cfg_int(value, key: str, default: int) -> int:
@@ -594,6 +597,32 @@ def _cfg_int(value, key: str, default: int) -> int:
         )
         return default
     return value
+
+
+def _accepted_findings(value) -> dict[str, dict[str, str]]:
+    """`epic.accepted_findings`: `{<child id>: {<finding id>: <reason>}}`. A
+    child or finding entry of another shape, or a finding with no reason, is
+    left out with a warning, so it still blocks."""
+    out: dict[str, dict[str, str]] = {}
+    for child, ids in _cfg_mapping(value, "epic.accepted_findings").items():
+        if not isinstance(ids, dict):
+            log.warning(
+                "Invalid epic.accepted_findings.%s value %r in config.yaml — ignoring it",
+                child,
+                ids,
+            )
+            continue
+        for fid, reason in ids.items():
+            if not isinstance(reason, str) or not reason.strip():
+                log.warning(
+                    "epic.accepted_findings.%s.%s has no reason in config.yaml — "
+                    "it still blocks",
+                    child,
+                    fid,
+                )
+                continue
+            out.setdefault(str(child), {})[str(fid)] = reason.strip()
+    return out
 
 
 def _cfg_mapping(value, key: str) -> dict:
@@ -1791,6 +1820,7 @@ class BuildConfig:
             max_child_attempts=_cfg_int(
                 epic_cfg.get("max_child_attempts", 2), "epic.max_child_attempts", 2
             ),
+            accepted_findings=_accepted_findings(epic_cfg.get("accepted_findings")),
         )
 
     def _discover_test_command(self) -> None:

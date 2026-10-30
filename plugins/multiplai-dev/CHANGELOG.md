@@ -29,6 +29,67 @@ time, not derived from a tag.
 - **buildme**: `facts.json`, `codebase-analysis.md` and `plan-edits-*.diff` in a change dir are no longer committed, so they stay off the PR's branch. They stay on disk for the build. A branch that already committed them keeps them as they are, with no delete commit.
 - **buildme** (G25): editing the `findings:`, `code_review:` or `test_quality:` sections of `specs/config.yaml` no longer changes the plan revision, so it does not make a planned build plan again. `memory_files:` still does, because its `stacks` picks the reference docs that planning reads. A build planned by an earlier version whose `config.yaml` has one of those three sections sees its plan revision change once; `plan-revision` re-binds it.
 
+## [0.134.0] - 2026-10-29
+
+### Changed
+- **review**: a review stopped by the Claude usage limit or by a verifier that gave no usable answer is no longer started over by a plain `review` of the same target and head. That `review` now makes no model call, prints `interrupted run found; continue with: python -m review_pipeline resume <dir>` and exits 4, as it already did for a killed run, so the answers paid for before the stop are not paid for again. buildme's epic already runs that `resume` when it sees the line. `--restart` still starts over, a budget stop still lets a plain `review` start over, and a review of a head the stopped run was not on starts over as before.
+
+## [0.133.0] - 2026-10-29
+
+### Fixed
+- **buildme** epic: the fixer now acts on the epic review's own findings. The review posts them as a GitHub App, which `findings.authors` does not allow, so on 2026-10-29 the fixer acted on none of them four times. The epic now passes `findings --from-review <review folder>`: the fixer reads the blockers from the review's `findings.json`, acts on the comment posting each one whoever wrote it, and still replies under each comment. Comments from people are still allowed by `findings.authors` alone.
+- **buildme** epic: an open confirmed finding no longer merges on its own. Under `epic.merge: auto`, a PR at `epic.max_review_rounds` with an open Code HIGH, or a confirmed Code MEDIUM not rated `hygiene`, parks with the finding ids instead of getting the final fix and merging. A MEDIUM rated `correctness-only` is no longer treated as harmless: under `epic.round_worth: breaks` it now earns another review round. PR #39 merged with two such findings.
+
+### Added
+- **buildme-findings**: `--from-review <review folder>` records one decision for each blocker in `.findings-state.json`: fixed (with its commit), not a defect (with the reason), spec change (with the `spec-issues.md` heading) or still open (with why). A blocker left with no decision ends the run with `FINDINGS:INGESTION_ERROR:<ids>` and exit 1; the epic marks that child `failed` and launches its fixer once more on the next run. A newer review that replaced the folder while a round was open prints `FINDINGS:REVIEW_CHANGED:<old head>→<new head>`.
+- **buildme** epic: `epic.accepted_findings` in `specs/config.yaml` (`{<child id>: {'<finding id>': <reason>}}`) lists findings a person accepted. A listed finding does not block that child; a child parked on findings goes to the merge step once every one is listed, and stays parked otherwise until its PR's head changes.
+- **buildme**: the review impact `depends-on-data` (added to the review skill separately) counts as critical in `--mode critical`, as the review skill counts it.
+
+## [0.132.0] - 2026-10-29
+
+### Changed
+- **review**: the verifier now gives each finding a severity (HIGH, MEDIUM or LOW) for the consequence it checked, using the same severity guide the finders use. Once every finding has a verdict, the review sets each confirmed or unverifiable finding's severity from it, so a severity can now go up as well as down. Two rules hold it to the verifier's impact: a `hygiene` finding is LOW, and a `breaks-users`, `breaks-business` or `depends-on-data` finding is at least MEDIUM. An unverifiable finding is then lowered one step as before. No verdict changes, and no prompt is told to leave anything out. The review shows the finder's severity beside a changed one, as "raised from" or "lowered from". A review stopped and resumed sets each severity once. A verdict saved by an older version has no severity, so its finding keeps the finder's severity, with the two rules applied. `answers` sets the severity the same way after a new verdict.
+
+### Added
+- **review**: a new impact, `depends-on-data`. The verifier uses it when default settings reach the code and the harm happens only if production holds data it cannot read, such as duplicate names or a login with two roles, and it names that data in its reason. `--mode critical` lists these findings, and a finding about tests rated this way is lowered to `correctness-only`, as `breaks-*` ones are.
+- **review-viewer**: shows the `depends-on-data` impact as a badge, describes it in the help, and lists it under **Critical only**. `findings.json` v1 accepts it.
+
+## [0.131.0] - 2026-10-29
+
+### Fixed
+
+- The review skill's agents can search the code again. Each review copies the
+  reviewed commit into a folder under the data directory, and that directory is
+  git-ignored, so ripgrep, which the agents' Grep runs on, skipped every file in
+  it: in three PR reviews on 2026-10-29, 76 of 102 finder reports say a search
+  returned nothing. The copy, and the copy of base files the explain stage
+  reads, is now made a git repository of its own (`git init`), which stops
+  ripgrep from applying the ignore files above it; the reviewed repository's own
+  `.gitignore` still applies. A copy left by an older version gets the `git init`
+  on its next run, without being extracted again.
+- A review now fails at the start, naming the folder and the ignore file that
+  hides it, when ripgrep lists no file in the copy while the change has files.
+  Without ripgrep installed it writes one line to `progress.log` and goes on.
+
+### Added
+
+- `round-metrics --counts` also prints, per round, the confirmed findings by
+  severity, impact and topic, the number of finder reports, and how many of them
+  say a search returned nothing, with a totals line. It still writes nothing and
+  calls no model.
+
+## [0.130.0] - 2026-10-29
+
+### Added
+
+- buildme ships `evals/epic_metrics.py`, which reads an epic's records, build
+  states, review folders, cost ledger, agent transcripts and git history and
+  prints each child's spend (planning, TDD per block, PR review, fix and
+  merge), the findings its fixer acted on, confirmed review findings, empty
+  finder searches, block-review rounds after a pass, prompt sizes, cache-write
+  shares, planning lines on the PR and hand interventions. It calls no model.
+  `--self-check` checks its counting on a built-in fixture.
+
 ## [0.129.0] - 2026-10-29
 
 ### Added
