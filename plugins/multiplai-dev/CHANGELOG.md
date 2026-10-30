@@ -15,6 +15,31 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.148.0] - 2026-10-29
+
+### Added
+
+- **buildme: `epic watch` runs the epic until it is done or needs a
+  person.** `python -m build_pipeline epic watch --change <parent>
+  --project-dir <project> --trust-repo` runs the epic, then runs it again
+  after a network failure, an agent timeout or a hit Claude usage limit. For
+  the usage limit it waits until the reset time the error names; otherwise it
+  waits 5 minutes, then twice as long each time in a row, up to 60. It stops
+  when every child is merged, when a person is needed (a manual merge, the
+  spend cap, a feature-branch conflict, a spec refusal, a split, a parked
+  child or a plan waiting for approval), or on a failure it cannot name, and
+  then posts one Slack message through the pipeline-viewer (`SLACK_TOKEN` and
+  `pipeline_viewer.slack.channel`; without them the message goes to the
+  viewer's `slack-outbox.md`). It never starts a second epic: before each run
+  it waits for a running epic and for any child build or fixer an earlier run
+  left alive. Every decision is logged in `<epic dir>/watch.log`, and a loop
+  stopped while waiting for a usage reset waits until that time when started
+  again.
+- **pipeline-viewer: `post`.** `python -m pipeline_viewer post --repo <repo>
+  --change <name> --key <key>` posts the message on stdin to the viewer's
+  Slack channel once per change and key, or writes it to `slack-outbox.md`
+  without a token or channel. `epic watch` posts through it.
+
 ## [0.147.0] - 2026-10-29
 
 ### Added
