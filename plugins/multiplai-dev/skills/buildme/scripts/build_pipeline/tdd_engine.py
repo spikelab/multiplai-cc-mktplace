@@ -9,6 +9,7 @@ Exit codes: 0=success, 1=build failure, 4=agent timeout.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import logging
@@ -36,6 +37,7 @@ from .gates import (
     _repo_trusted,
     agent_status_gate,
     baseline_test_gate,
+    block_severity_gate,
     failing_tests,
     failure_log_path,
     final_verification,
@@ -68,6 +70,7 @@ from .models import (
     BlockInfo,
     BlockStatus,
     BuildPhase,
+    ComponentReviewState,
     EndSuiteState,
     FindingAdjudication,
     FixOnPassState,
@@ -103,6 +106,9 @@ from .prompts.review import (
     ADJUDICATION_ROUND_MEMORY,
     ADJUDICATION_SCOPE_FIELD,
     ADJUDICATION_SCOPE_SECTION,
+    COMPONENT_ACCESS_CHECKLIST,
+    COMPONENT_FIX_BRIEF,
+    COMPONENT_REVIEW_PROMPT,
     FINDING_ADJUDICATION_PROMPT,
 )
 from .prompts.test_writing import DRAFTS_SECTION, TEST_QUALITY_PROMPT
@@ -689,6 +695,9 @@ EXIT_AGENT_TIMEOUT = 4
 # set. Exhaustion fails the block with a diagnosis in build-progress.md.
 MAX_INTEGRATION_FIX_ATTEMPTS = 3
 MAX_REVIEW_ITERATIONS = 3
+# Review rounds per block under `code_review.component_review`: the
+# per-block review is a lighter gate there, and the component review follows.
+COMPONENT_BLOCK_ROUNDS = 2
 
 # Cap for RED/GREEN evidence blobs stored in block state and fed to the
 # reviewer — the interesting part of a pytest run is the tail.
@@ -2800,8 +2809,9 @@ async def _run_integration_and_review(
     fixes_run = fixes_completed = 0
     round_path: Path | None = None
     recurring: str | None = None
-    for iteration in range(MAX_REVIEW_ITERATIONS):
-        iter_gate = review_iteration_gate(iteration, MAX_REVIEW_ITERATIONS)
+    rounds = _block_review_rounds(config)
+    for iteration in range(rounds):
+        iter_gate = review_iteration_gate(iteration, rounds)
         if not iter_gate.passed:
             log.warning("Review loop exhausted for block %s", block.name)
             break
@@ -2892,7 +2902,7 @@ async def _run_integration_and_review(
         )
         block.review_iterations = iteration + 1
 
-        score_gate = review_score_gate(review, config.review_gate)
+        score_gate = _block_review_gate(review, block.review_scores.findings, config)
         progress.log_review(
             block.name, iteration + 1, review.weighted_average, score_gate.passed
         )
@@ -2916,16 +2926,20 @@ async def _run_integration_and_review(
             block.name,
             score_gate.reason,
         )
-        if iteration + 1 >= MAX_REVIEW_ITERATIONS:
+        if iteration + 1 >= rounds:
             break  # no fix agent after the last review — its work would go unreviewed
         # Spawn fix agent for the failing dimensions PLUS the findings that
         # survived adjudication. Rejected findings are absent by construction.
         fix_brief = score_gate.reason
         if plan is None:
-            new_findings = review.findings
+            new_findings = _gating(config, review.findings)
         else:
-            new_findings = [review.findings[i] for i in plan.new_open]
-            open_text = review_rounds.open_findings_text(plan)
+            new_findings = _gating(config, [review.findings[i] for i in plan.new_open])
+            open_text = review_rounds.open_findings_text(
+                plan
+                if not _component_review_on(config)
+                else dataclasses.replace(plan, carried=_gating(config, plan.carried))
+            )
             if open_text:
                 fix_brief += f"\n\n## Findings still open from earlier rounds (fix these)\n{open_text}"
         accepted_text = ReviewResult(scores=[], findings=new_findings).findings_text()
@@ -2938,7 +2952,7 @@ async def _run_integration_and_review(
         # The last fix (its review is the loop's last) questions the approach,
         # on the review model, with every finding of every round in front of
         # it — as the integration gate's last fix does. Counted per process.
-        escalated = iteration == MAX_REVIEW_ITERATIONS - 2
+        escalated = iteration == rounds - 2
         fix_step = "review_fix_escalated" if escalated else "review_fix"
         fix_model = config.model_for(fix_step)
         description = _review_fix_description(fix_brief)
@@ -3027,7 +3041,7 @@ async def _run_integration_and_review(
                 "Review exhausted for block %s after %d iterations — accepting "
                 "(--lenient-review)",
                 block.name,
-                MAX_REVIEW_ITERATIONS,
+                rounds,
             )
             progress.log_block(
                 block.number,
@@ -3041,26 +3055,63 @@ async def _run_integration_and_review(
                 "after %d iterations",
                 block.number,
                 block.name,
-                MAX_REVIEW_ITERATIONS,
+                rounds,
             )
             progress.log_block(
                 block.number, total, block.name, "FAILED — review exhausted"
             )
             progress.log_diagnosis(
-                block.name, _review_exhausted_diagnosis(config, block, recurring)
+                block.name,
+                _review_exhausted_diagnosis(config, block, recurring, rounds),
             )
             print(f"BLOCK:{block.number}/{total}:{block.name}:REVIEW_EXHAUSTED")
             # Every review fix errored: the findings were never worked on.
             block.resumable = fixes_run > 0 and fixes_completed == 0
             _mark_block(state, block_idx, BlockStatus.FAILED, config)
             return False
-    elif config.fix_on_pass:
+    elif config.fix_on_pass and not _component_review_on(config):
+        # Under the component review, a passing block holds no accepted
+        # finding at the gating severities, and the rest go to that review.
         if not await _fix_on_pass(
             block, config, state, progress, block_idx, round_path
         ):
             return False
 
     return _finish_block(block, config, state, progress, block_idx, total)
+
+
+def _component_review_on(config: BuildConfig) -> bool:
+    """`code_review.component_review`. Only a real True counts, so a config
+    double without the attribute runs as before."""
+    return getattr(config, "component_review", False) is True
+
+
+def _block_review_rounds(config: BuildConfig) -> int:
+    return (
+        COMPONENT_BLOCK_ROUNDS
+        if _component_review_on(config)
+        else MAX_REVIEW_ITERATIONS
+    )
+
+
+def _block_review_gate(
+    review: ReviewResult, findings: list[ReviewFinding], config: BuildConfig
+) -> GateResult:
+    """The per-block review's verdict: `review_score_gate`, or, under the
+    component review, `block_severity_gate` on the block's open findings."""
+    if not _component_review_on(config):
+        return review_score_gate(review, config.review_gate)
+    return block_severity_gate(review, findings, config.block_gate_severities)
+
+
+def _gating(config: BuildConfig, findings: list[ReviewFinding]) -> list[ReviewFinding]:
+    """*findings*, or under the component review only those rated one of
+    `block_gate_severities`: the per-block fix agent works on those, and the
+    rest go to the component review."""
+    if not _component_review_on(config):
+        return findings
+    wanted = set(config.block_gate_severities)
+    return [f for f in findings if f.severity.strip().lower() in wanted]
 
 
 def _finish_block(
@@ -3213,14 +3264,17 @@ def _scope_diff(config: BuildConfig, last: dict) -> str | None:
 
 
 def _review_exhausted_diagnosis(
-    config: BuildConfig, block: BlockInfo, recurring: str | None
+    config: BuildConfig,
+    block: BlockInfo,
+    recurring: str | None,
+    rounds: int = MAX_REVIEW_ITERATIONS,
 ) -> str:
     """Why the review loop ran out: the findings still present or partly
     resolved in two or more round records, and the last fix's RECURRING:
     answer when it gave one."""
     ids = review_rounds.recurring_ids(config.change_dir, block.number)
     lines = [
-        f"Review exhausted after {MAX_REVIEW_ITERATIONS} iterations.",
+        f"Review exhausted after {rounds} iterations.",
         "Findings still present or partly resolved in two or more rounds: "
         + (", ".join(ids) if ids else "none"),
     ]
@@ -3984,6 +4038,12 @@ async def _run_tdd_engine(config: BuildConfig, args, *, standalone: bool = True)
     if not await _run_end_suite(config, state, progress, standalone):
         return EXIT_BUILD_FAILURE
 
+    # --- Component review (`code_review.component_review`, off by default) ---
+    # After the whole-suite run, so it reads the component as it will ship,
+    # and before mutation testing, which then measures any kept fix.
+    if not await _run_component_review(config, state, progress):
+        return EXIT_BUILD_FAILURE
+
     # --- Mutation testing (Python only; cosmic-ray over the changed lines) ---
     # After the whole-change refactor so it measures the code that ships. A
     # step that must see the finished, mutation-tested build goes after this.
@@ -4689,6 +4749,523 @@ async def _run_end_suite(
     progress.log_phase("END_SUITE", "PASSED")
     _end_event(config, progress, "DONE")
     return True
+
+
+# --- Component review (`code_review.component_review`) ---------------------
+#
+# Item 61 of plan-factory-merged-2026-10-29.md. Off by default; with it off
+# `_run_component_review` returns at once and nothing below runs.
+
+COMPONENT_SOURCE = "Component review"
+COMPONENT_FIX_SEVERITIES = frozenset({"critical", "major"})
+
+# Words in a changed path or in the specs that make the component one that
+# touches auth, roles or tenant data, so its review gets
+# `COMPONENT_ACCESS_CHECKLIST`. A false match costs a few lines of prompt.
+_ACCESS_RE = re.compile(
+    r"\b(auth\w*|permissions?|roles?|rbac|acl|tenants?|tenancy|multi-tenant)\b",
+    re.IGNORECASE,
+)
+
+
+def _component_block(state: BuildState) -> BlockInfo:
+    """The block the component review's adjudicator and fix agent are given:
+    every block's capabilities and produced interfaces, numbered after the
+    last block so every block counts as earlier."""
+    blocks = state.tdd.blocks if state.tdd else []
+    satisfies: list[str] = []
+    produces: list[str] = []
+    for b in blocks:
+        satisfies += [c for c in b.satisfies if c not in satisfies]
+        produces += [p for p in b.produces if p not in produces]
+    return BlockInfo(
+        number=max((b.number for b in blocks), default=0) + 1,
+        name=COMPONENT_SOURCE,
+        description=(
+            "Every block of this component, reviewed at once after the last block."
+        ),
+        satisfies=satisfies,
+        produces=produces,
+    )
+
+
+def _touches_access(diff: str, texts: dict[str, str]) -> bool:
+    """True when a changed path or the specs name auth, roles or tenants."""
+    haystack = "\n".join([*parse_diff_paths(diff), *texts.values()])
+    return bool(_ACCESS_RE.search(haystack))
+
+
+def _left_by_block_reviews(config: BuildConfig, state: BuildState) -> str:
+    """The open findings each block's last review round left below
+    `block_gate_severities`, one line each: the per-block review sent them
+    here."""
+    wanted = set(config.block_gate_severities)
+    lines = []
+    for b in state.tdd.blocks if state.tdd else []:
+        open_, _, _ = review_rounds.open_state(config.change_dir, b.number)
+        for f in open_:
+            if f.severity.strip().lower() in wanted:
+                continue
+            where = f" ({f.file_path}:{f.line})" if f.file_path else ""
+            lines.append(f"- {f.finding_id} [{f.severity}] {f.claim}{where}")
+    return "\n".join(lines)
+
+
+async def _review_component(
+    config: BuildConfig, state: BuildState, diff: str
+) -> ReviewResult:
+    """One review of the component's diff from its base, with every
+    requirement, the design, the rubric and the coding standards, and the
+    access checklist when the component touches auth, roles or tenant data.
+    Propagates the reviewer's failure, as `_run_quality_review` does."""
+    rubric = config.rubric_path.read_text() if config.rubric_path.exists() else ""
+    texts = requirement_texts(config.change_dir)
+    parts = [
+        f"Component: {config.change_name} — every block, diffed from the "
+        "component's base"
+    ]
+    parts += [f"### Requirement: {cap}\n{text}" for cap, text in texts.items()]
+    if config.design_path.exists():
+        parts.append(
+            f"### Design ({config.design_path.name})\n{config.design_path.read_text()}"
+        )
+    constraints = _global_constraints_text(config)
+    if constraints:
+        parts.append(f"### Global Constraints (project-wide)\n{constraints}")
+    if _touches_access(diff, texts):
+        parts.append(COMPONENT_ACCESS_CHECKLIST)
+    left = _left_by_block_reviews(config, state)
+    report = (
+        "### Findings the block reviews left open for this review\n"
+        "The per-block reviews made the fix agent work only on findings rated "
+        + ", ".join(s.capitalize() for s in config.block_gate_severities)
+        + ". These were rated lower and are still open; check each against "
+        "the code.\n" + left
+        if left
+        else ""
+    )
+    return await run_code_review(
+        diff,
+        rubric,
+        config,
+        spec_context="\n\n".join(parts),
+        standards=config.standards_text(parse_diff_paths(diff)),
+        implementer_report=report,
+        prompt_template=COMPONENT_REVIEW_PROMPT,
+        budget_label="component_review",
+    )
+
+
+def _split_component_findings(
+    findings: list[ReviewFinding],
+) -> tuple[list[ReviewFinding], list[ReviewFinding]]:
+    """(the Critical and Major findings the fix round works on, the Minor
+    ones it leaves). Note findings are in neither, as in the fix on pass."""
+    fix = [
+        f for f in findings if f.severity.strip().lower() in COMPONENT_FIX_SEVERITIES
+    ]
+    rest = [f for f in review_rounds.fixable_on_pass(findings) if f not in fix]
+    return fix, rest
+
+
+def _component_fix_brief(findings: list[ReviewFinding]) -> str:
+    brief = COMPONENT_FIX_BRIEF.format(
+        findings=ReviewResult(scores=[], findings=findings).findings_text()
+    )
+    if any(f.other_locations for f in findings):
+        brief += "\n\n" + REVIEW_FIX_LOCATIONS
+    return brief
+
+
+def _change_dir_in_project(config: BuildConfig) -> str | None:
+    try:
+        return (
+            Path(config.change_dir)
+            .resolve()
+            .relative_to(Path(config.project_dir).resolve())
+            .as_posix()
+            or "."
+        )
+    except ValueError:
+        return None
+
+
+def _component_review_done(
+    config: BuildConfig, state: BuildState, progress: ProgressWriter, commit: bool
+) -> bool:
+    """Commit the review's record, `unfixed-findings.md` and any spec issue
+    (only the change dir, and only when *commit*), and mark the review done."""
+    rel = _change_dir_in_project(config)
+    if commit and rel is not None:
+        git_ops.commit_paths(
+            config.project_dir,
+            "docs(component): component review",
+            [rel, *git_ops.BOOKKEEPING_EXCLUDES],
+        )
+    if state.tdd is not None:
+        state.tdd.component_review_done = True
+        state.tdd.component_review = None
+    state.checkpoint(config.state_file_path())
+    progress.log_phase("COMPONENT_REVIEW", "DONE")
+    log.info("DONE phase=COMPONENT_REVIEW")
+    return True
+
+
+def _component_spec_issue(
+    config: BuildConfig, findings: list[ReviewFinding], surprises: str
+) -> None:
+    """Record, in spec-issues.md, that the fix agent could fix *findings*
+    only by changing the requirements (its SPEC_IMPACT: contradicts)."""
+    from .readiness import write_issues
+
+    lines = "\n".join(f"- {f.finding_id} [{f.severity}] {f.claim}" for f in findings)
+    try:
+        write_issues(
+            config.change_dir,
+            [
+                (
+                    "Component review: findings that need a requirements change",
+                    f"{lines}\n\n{surprises.strip()}\n\nRaised by buildme's component "
+                    "review fix round (code_review.component_review).",
+                )
+            ],
+            change=config.change_name,
+        )
+    except OSError as e:
+        log.warning("Could not write the component review's spec issue: %s", e)
+
+
+async def _run_component_review(
+    config: BuildConfig, state: BuildState, progress: ProgressWriter
+) -> bool:
+    """One review of the whole component after the last block and the whole
+    suite (`code_review.component_review`; off by default, and then nothing
+    runs).
+
+    The review is adjudicated and written to `reviews/component-review.json`,
+    which is committed with the tree as the checkpoint. Its Critical and Major
+    findings get one fix round (`_component_fix_round`); the fix is committed,
+    then kept only if the whole suite is green and the test files are
+    unchanged, else thrown away back to the checkpoint. What stays open goes
+    to `unfixed-findings.md` (a PR-body section), and to spec-issues.md when
+    the fix agent says only a requirements change fixes it. Returns False
+    when the budget stops it, the review fails, or a resume is refused."""
+    if not _component_review_on(config) or not state.tdd:
+        return True
+    if state.tdd.component_review_done:
+        return True
+    if state.tdd.component_review is not None:
+        return await _resume_component_review(config, state, progress)
+    state_path = config.state_file_path()
+    try:
+        budget_mod.check(phase="component review")
+    except BudgetExceededError as e:
+        log.error("FAIL phase=COMPONENT_REVIEW reason=budget_exhausted")
+        progress.log_phase("BUDGET", f"STOPPED: {e}\n{e.diagnosis}")
+        state.checkpoint(state_path)
+        return False
+
+    diff = capture_build_diff(config, state)
+    if not diff:
+        log.info("SKIP phase=COMPONENT_REVIEW reason=no-diff-captured")
+        return _component_review_done(config, state, progress, commit=False)
+    log.info("START phase=COMPONENT_REVIEW diff_chars=%d", len(diff))
+    progress.log_phase("COMPONENT_REVIEW", "Reviewing the whole component")
+    component = _component_block(state)
+    try:
+        review = await _review_component(config, state, diff)
+    except BudgetExceededError:
+        raise
+    except Exception as e:
+        log.error("FAIL phase=COMPONENT_REVIEW error=%s", e)
+        progress.log_phase(
+            "COMPONENT_REVIEW", f"FAILED: {e}. Run the build again to retry."
+        )
+        state.checkpoint(state_path)
+        return False
+    review = await _adjudicate_review_findings(
+        review,
+        component,
+        config,
+        diff,
+        build_context=_global_constraints_text(config),
+    )
+    clean = git_ops.tree_is_clean(config.project_dir)
+    path = review_rounds.record_component(
+        config.change_dir,
+        head_sha=git_ops.rev_parse_head(config.project_dir),
+        review=review,
+        weighted_average=review.weighted_average_with(config.review_gate),
+    )
+    findings = review_rounds.with_component_ids(review.findings)
+    fix, rest = _split_component_findings(findings)
+    progress.log_phase(
+        "COMPONENT_REVIEW",
+        f"{len(findings)} accepted finding(s), {len(fix)} rated Critical or Major",
+    )
+    if not fix:
+        review_rounds.append_unfixed(
+            config.change_dir,
+            component,
+            rest,
+            "not attempted (the component review fixes Critical and Major only)",
+            source=COMPONENT_SOURCE,
+        )
+        return _component_review_done(config, state, progress, commit=clean)
+    if path is None or not clean:
+        review_rounds.append_unfixed(
+            config.change_dir,
+            component,
+            fix + rest,
+            "not attempted (no record of the review, or no clean commit to roll back to)",
+            source=COMPONENT_SOURCE,
+        )
+        return _component_review_done(config, state, progress, commit=clean)
+
+    # The record is the review a resume fixes from (row S44): committed, the
+    # checkpoint holds it and a discard back to the checkpoint keeps it.
+    git_ops.commit_tree(
+        config.project_dir, "docs(component): component review", "component review"
+    )
+    checkpoint = git_ops.rev_parse_head(config.project_dir)
+    if checkpoint is None or not git_ops.tree_is_clean(config.project_dir):
+        review_rounds.append_unfixed(
+            config.change_dir,
+            component,
+            fix + rest,
+            "not attempted (no clean commit to roll back to)",
+            source=COMPONENT_SOURCE,
+        )
+        return _component_review_done(config, state, progress, commit=False)
+    state.tdd.component_review = ComponentReviewState(
+        review_path=str(path),
+        checkpoint=checkpoint,
+        test_file_hashes=_snapshot_all_test_files(config, state),
+    )
+    state.checkpoint(state_path)
+    return await _component_fix_round(config, state, progress, fix, rest)
+
+
+async def _resume_component_review(
+    config: BuildConfig, state: BuildState, progress: ProgressWriter
+) -> bool:
+    """A build stopped inside the component review's fix round. Stopped
+    before the fix agent finished (S44), the fix round runs again on the
+    saved review, with no new review. Stopped after the fix commit (S45), the
+    suite runs: red throws the fix away, green keeps it. Any commit or
+    uncommitted change the stopped round did not leave is refused, and
+    nothing is changed."""
+    cr = state.tdd.component_review
+    head = cr.fix_commit if cr.step == "suite" and cr.fix_commit else cr.checkpoint
+    refusal = stop_record.others_work(config.project_dir, None, head=head)
+    if refusal:
+        message = (
+            f"COMPONENT_REVIEW: did not resume, and changed nothing: {refusal}. "
+            "Then run the build again."
+        )
+        log.error(message)
+        progress.log_phase("COMPONENT_REVIEW", message)
+        return False
+    findings = review_rounds.component_findings(cr.review_path)
+    if findings is None:
+        message = (
+            f"COMPONENT_REVIEW: did not resume: {cr.review_path} cannot be read. "
+            "Restore it from the checkpoint commit, then run the build again."
+        )
+        log.error(message)
+        progress.log_phase("COMPONENT_REVIEW", message)
+        return False
+    fix, rest = _split_component_findings(findings)
+    if cr.step == "suite":
+        log.warning("Component review resumed after its fix commit: running the suite")
+        progress.log_phase("COMPONENT_REVIEW", "RESUMED — running the suite on the fix")
+        return _component_verdict(config, state, progress, fix, rest)
+    log.warning(
+        "Component review resumed before its fix round: fixing the saved review"
+    )
+    progress.log_phase("COMPONENT_REVIEW", "RESUMED — fixing the saved review")
+    return await _component_fix_round(config, state, progress, fix, rest)
+
+
+async def _component_fix_round(
+    config: BuildConfig,
+    state: BuildState,
+    progress: ProgressWriter,
+    fix: list[ReviewFinding],
+    rest: list[ReviewFinding],
+) -> bool:
+    """The fix agent on the review's Critical and Major findings, then the
+    fix commit (row S45's stop point), then `_component_verdict`."""
+    cr = state.tdd.component_review
+    component = _component_block(state)
+    brief = _component_fix_brief(fix)
+    progress.log_agent(
+        "ComponentReviewFix", component.name, f"FIX — {len(fix)} finding(s)"
+    )
+    context = assemble_context(
+        component, config, "implementer", blocks=state.tdd.blocks
+    )
+    result = await run_implementer(
+        block_name=component.name,
+        block_description=_review_fix_description(brief),
+        failing_tests=brief,
+        context_bundle=context,
+        test_command=_change_agent_test_command(config, state),
+        prompt_style=config.implementer_prompt_style,
+        model=config.model_for("review_fix"),
+        effort=config.effort_for("review_fix"),
+        cwd=str(config.project_dir),
+    )
+    cr.fix_report = result.output or ""
+    if not result.success:
+        reason = "the fix agent " + ("timed out" if result.timed_out else "failed")
+        return _component_not_kept(config, state, progress, fix, rest, reason)
+    sha = git_ops.commit_tree(
+        config.project_dir,
+        "fix(component): component review findings",
+        "component review fix",
+    )
+    if sha is None:
+        return _component_not_kept(
+            config, state, progress, fix, rest, "the fix agent changed nothing"
+        )
+    cr.fix_commit = sha
+    cr.step = "suite"
+    state.checkpoint(config.state_file_path())
+    return _component_verdict(config, state, progress, fix, rest)
+
+
+def _component_suite_gate(config: BuildConfig) -> GateResult:
+    """The whole `test_command`, once, on the fix commit."""
+    return integration_gate(
+        config.test_command,
+        config.project_dir,
+        parallel=config.parallel_tests,
+        timeout=config.test_timeout,
+        failure_log=failure_log_path(config.change_dir, "component-review-fix"),
+    )
+
+
+def _component_verdict(
+    config: BuildConfig,
+    state: BuildState,
+    progress: ProgressWriter,
+    fix: list[ReviewFinding],
+    rest: list[ReviewFinding],
+) -> bool:
+    """Run the suite on the fix commit and check the test files: green and
+    unchanged keeps the fix, anything else throws it away."""
+    cr = state.tdd.component_review
+    gate = _component_suite_gate(config)
+    reason = ""
+    if not gate.passed:
+        reason = f"tests failed after the fix: {gate.reason}{_output_note(gate)}"
+    else:
+        after = _snapshot_all_test_files(config, state)
+        if cr.test_file_hashes is None or after is None:
+            reason = "test integrity evidence unavailable"
+        else:
+            tests_gate = unchanged_tests_gate(cr.test_file_hashes, after, cr.fix_report)
+            if not tests_gate.passed:
+                reason = f"test files changed during the fix: {tests_gate.reason}"
+    if reason:
+        return _component_not_kept(config, state, progress, fix, rest, reason)
+
+    component = _component_block(state)
+    review_rounds.update_round(
+        cr.review_path,
+        fix_brief=_review_fix_description(_component_fix_brief(fix)),
+        fix={"report": cr.fix_report, "commit": cr.fix_commit, "kept": True},
+    )
+    note = parse_implementation_note(
+        cr.fix_report,
+        block_number=component.number,
+        block_name=component.name,
+        role="implementer",
+    )
+    if note is not None and note.contradicts:
+        _component_spec_issue(config, fix, note.surprises)
+        review_rounds.append_unfixed(
+            config.change_dir,
+            component,
+            fix,
+            "fix kept, but the fix agent reported that only a requirements change "
+            "fixes some of these (spec-issues.md)",
+            source=COMPONENT_SOURCE,
+        )
+    review_rounds.append_unfixed(
+        config.change_dir,
+        component,
+        rest,
+        "not attempted (the component review fixes Critical and Major only)",
+        source=COMPONENT_SOURCE,
+    )
+    log.info("Component review fix kept (%s)", (cr.fix_commit or "")[:8])
+    progress.log_agent("ComponentReviewFix", component.name, "FIX KEPT")
+    return _component_review_done(config, state, progress, commit=True)
+
+
+def _component_not_kept(
+    config: BuildConfig,
+    state: BuildState,
+    progress: ProgressWriter,
+    fix: list[ReviewFinding],
+    rest: list[ReviewFinding],
+    reason: str,
+) -> bool:
+    """Throw the fix away back to the checkpoint and list its findings as
+    unfixed. Returns False only when the rollback is refused, which leaves an
+    unverified fix in the tree."""
+    cr = state.tdd.component_review
+    component = _component_block(state)
+    if not git_ops.discard_to(
+        config.project_dir, cr.checkpoint, "component review fix"
+    ):
+        message = (
+            f"COMPONENT_REVIEW: the fix was not kept ({reason}) and could not be "
+            f"rolled back to {cr.checkpoint[:8]}: the tree holds an unverified fix."
+        )
+        log.error(message)
+        progress.log_phase("COMPONENT_REVIEW", message)
+        state.checkpoint(config.state_file_path())
+        return False
+    review_rounds.update_round(
+        cr.review_path,
+        fix_brief=_review_fix_description(_component_fix_brief(fix)),
+        fix={
+            "report": cr.fix_report,
+            "commit": cr.fix_commit,
+            "kept": False,
+            "not_kept_reason": reason,
+        },
+    )
+    note = parse_implementation_note(
+        cr.fix_report,
+        block_number=component.number,
+        block_name=component.name,
+        role="implementer",
+    )
+    if note is not None and note.contradicts:
+        _component_spec_issue(config, fix, note.surprises)
+    review_rounds.append_unfixed(
+        config.change_dir,
+        component,
+        fix,
+        f"fix not kept: {reason}",
+        source=COMPONENT_SOURCE,
+    )
+    review_rounds.append_unfixed(
+        config.change_dir,
+        component,
+        rest,
+        "not attempted (the component review fixes Critical and Major only)",
+        source=COMPONENT_SOURCE,
+    )
+    log.warning("Component review fix rolled back: %s", reason)
+    progress.log_agent(
+        "ComponentReviewFix", component.name, f"FIX ROLLED BACK — {reason}"
+    )
+    return _component_review_done(config, state, progress, commit=True)
 
 
 def _snapshot_source_files(config: BuildConfig) -> dict[str, str] | None:

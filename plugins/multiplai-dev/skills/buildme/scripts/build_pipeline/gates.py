@@ -1678,6 +1678,38 @@ def review_score_gate(
     )
 
 
+def block_severity_gate(
+    review: ReviewResult,
+    findings: list,
+    severities: tuple[str, ...] | list[str],
+) -> GateResult:
+    """The per-block gate under `code_review.component_review`: the block
+    fails only on an accepted finding rated one of *severities*
+    (`code_review.block_gate_severities`, lower-case), or on the
+    spec-compliance verdict, which stays a hard floor. The scores do not
+    gate; findings rated lower go to the component review.
+
+    *findings* are the block's open accepted findings (the earlier rounds'
+    carried ones and this round's new ones)."""
+    if not review.spec_compliant:
+        return review_score_gate(review)
+    wanted = {s.lower() for s in severities}
+    blocking = [f for f in findings if f.severity.strip().lower() in wanted]
+    named = ", ".join(s.capitalize() for s in severities) or "(none)"
+    if blocking:
+        return GateResult(
+            passed=False,
+            reason=f"{len(blocking)} accepted finding(s) rated {named}",
+            action="fix_blocking_findings",
+            metadata={"blocking": len(blocking)},
+        )
+    return GateResult(
+        passed=True,
+        reason=f"Review passed: no accepted finding rated {named}",
+        metadata={"blocking": 0},
+    )
+
+
 # A declaration counts only on a line that starts with the marker
 # (`_TEST_CHANGE_LINE`), as the prompts ask. Every implementer and
 # integration-fix prompt shows the marker, so prose that mentions it ("no

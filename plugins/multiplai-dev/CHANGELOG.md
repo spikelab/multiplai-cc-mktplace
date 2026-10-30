@@ -15,6 +15,14 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.142.0] - 2026-10-29
+
+### Added
+- **buildme**: `code_review.component_review: true` in `specs/config.yaml` reviews the whole component once, after the last block and the whole-suite run and before the PR. The reviewer reads the component's diff from its base with every requirement, the implementation plan, the rubric and the findings the block reviews left open; a component whose changed paths or specs name auth, roles or tenants also gets a fixed checklist (who can read each new field, how entities are matched, what each migration does on the historical schema). The accepted Critical and Major findings get one fix round, kept only if the whole test command stays green and the test files are unchanged. Findings still open go to the PR body, and to `spec-issues.md` when the fix agent says only a requirements change fixes them. The review is saved to `reviews/component-review.json`; a stopped build resumes the fix round from it without a new review, and a build stopped after the fix commit runs the suite to decide whether to keep the fix.
+- **buildme**: with the component review on, the per-block review fails a block only on findings rated `code_review.block_gate_severities` (default `[Critical, Major]`) or a spec-compliance miss, in at most 2 reviews, and a passing block gets no fix on pass: its lower-rated findings go to the component review.
+
+Both settings are off by default: with `component_review` unset or false, the per-block review, its prompts and its records are exactly as before this release, and `block_gate_severities` is ignored. Findings rounds (`/multiplai-dev:buildme-findings`) never run the component review.
+
 ## [0.141.0] - 2026-10-29
 
 ### Added
