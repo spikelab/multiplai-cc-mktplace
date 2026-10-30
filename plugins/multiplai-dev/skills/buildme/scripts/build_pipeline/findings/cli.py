@@ -192,6 +192,11 @@ def resolve(args: argparse.Namespace) -> FindingsRun:
         code_only=bool(getattr(args, "code_only", False)),
         review=not getattr(args, "no_review", False),
         escalate=not getattr(args, "no_escalation", False),
+        from_review=(
+            Path(args.from_review).expanduser().resolve()
+            if getattr(args, "from_review", None)
+            else None
+        ),
     )
 
 

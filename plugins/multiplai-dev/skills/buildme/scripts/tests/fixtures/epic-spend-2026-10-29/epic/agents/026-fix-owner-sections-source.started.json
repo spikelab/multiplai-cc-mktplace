@@ -1,0 +1,15 @@
+{
+  "kind": "fix",
+  "child": "owner-sections-source",
+  "argv": [
+    "python",
+    "-m",
+    "build_pipeline",
+    "findings",
+    "--change",
+    "account-management/owner-sections-source"
+  ],
+  "pr_round": 1,
+  "head_sha": "ccadf8c41ac3a234fb83b4c4f60e77fc37c1b24d",
+  "at": "2026-10-29T04:36:14.611764+00:00"
+}
