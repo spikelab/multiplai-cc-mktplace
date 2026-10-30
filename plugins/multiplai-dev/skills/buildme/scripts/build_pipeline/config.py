@@ -878,6 +878,10 @@ class BuildConfig:
     # loop narrows each one in its own directory (`narrow_tests.narrow_parts`).
     # Empty: `test_command` is narrowed as one command.
     narrow_commands: list[NarrowCommand] = field(default_factory=list)
+    # tdd.spec_tests: before each block's test writer, a second test writer
+    # gets the block's scenarios marked security or permission and its public
+    # interfaces, not the design (`spec_tests.py`). Off: no such step.
+    spec_tests: bool = False
     # tdd.parallel: "auto" lets the full-suite runs (`gates.baseline_test_gate`,
     # `gates.integration_gate`, the epic's merge tests) add `-n auto` when the
     # command runs pytest and pytest-xdist imports in its environment
@@ -1422,6 +1426,16 @@ class BuildConfig:
                 "tdd.whole_suite is end but tdd.narrow_tests is false — every "
                 "block's test run falls back to the whole test command"
             )
+        spec_tests = tdd.get("spec_tests", False)
+        if isinstance(spec_tests, bool):
+            self.spec_tests = spec_tests
+        else:
+            log.warning(
+                "Invalid tdd.spec_tests value %r in config.yaml — want true | false; "
+                "using false",
+                spec_tests,
+            )
+            self.spec_tests = False
         self.parallel_tests = parse_parallel(tdd.get("parallel", "auto"))
         self.test_timeout = parse_test_timeout(tdd.get("test_timeout"))
         for key in ("test_writer_max_turns", "mutation_test_writer_max_turns"):

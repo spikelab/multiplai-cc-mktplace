@@ -1914,6 +1914,99 @@ def _tests_done(config: BuildConfig, block: BlockInfo) -> str | None:
     return "committed"
 
 
+async def _write_spec_tests(
+    block: BlockInfo,
+    config: BuildConfig,
+    state: BuildState,
+    progress: ProgressWriter,
+    block_idx: int,
+    cwd: str,
+    drafts: list[str],
+) -> tuple[bool, list[str]]:
+    """`tdd.spec_tests`: run a test writer on the block's scenarios marked
+    security or permission (`spec_tests.block_marked_scenarios`) and the
+    public interfaces they touch, without the design. Its files stay
+    uncommitted: the block's test commit takes them with the other tests, so
+    the gates and a resume treat them as the block's tests. Returns whether
+    the block goes on, and the test files it wrote (not in *drafts*)."""
+    from .spec_tests import SPEC_TESTS_RULE, block_marked_scenarios, spec_tests_context
+
+    scenarios = block_marked_scenarios(block, config.change_dir)
+    if not scenarios:
+        log.info(
+            "SKIP block=%d phase=SPEC_TEST_WRITE reason=no-marked-scenarios",
+            block.number,
+        )
+        return True, []
+    description = SPEC_TESTS_RULE
+    if drafts:
+        description += "\n\n" + _drafts_section(config, drafts)
+
+    log.info("START block=%d phase=SPEC_TEST_WRITE", block.number)
+    progress.log_agent("SpecTestWriter", block.name, "STARTED")
+    result = await run_test_writer(
+        block_name=block.name,
+        block_description=description,
+        specs=scenarios,
+        context_bundle=spec_tests_context(
+            block, config.project_dir, state.tdd.blocks if state.tdd else None
+        ),
+        test_command=_block_agent_test_command(config, block),
+        model=config.model_for("test_writer"),
+        effort=config.effort_for("test_writer"),
+        max_turns=config.test_writer_max_turns,
+        cwd=cwd,
+        budget_label="spec_test_writer",
+    )
+    files = [f for f in _uncommitted_test_files(config) or [] if f not in drafts]
+    capped = _hit_turn_limit(result) and bool(files)
+    if not result.success and not capped:
+        block.timed_out = result.timed_out
+        block.resumable = True
+        log.error(
+            "FAIL block=%d name=%s phase=SPEC_TEST_WRITE reason=%s error=%s",
+            block.number,
+            block.name,
+            "timeout" if result.timed_out else "error",
+            result.error,
+        )
+        progress.log_agent(
+            "SpecTestWriter", block.name, "TIMEOUT" if result.timed_out else "FAILED"
+        )
+        _mark_block(state, block_idx, BlockStatus.FAILED, config)
+        return False, []
+    if capped:
+        progress.log_agent(
+            "SpecTestWriter",
+            block.name,
+            f"ran out of turns — its {len(files)} test file(s) go to the gates",
+        )
+        return True, files
+
+    status = agent_status_gate(result.output, "SpecTestWriter")
+    if not status.passed:
+        log.error(
+            "FAIL block=%d name=%s phase=SPEC_TEST_WRITE reason=agent_status status=%s",
+            block.number,
+            block.name,
+            status.metadata.get("status"),
+        )
+        progress.log_agent(
+            "SpecTestWriter", block.name, str(status.metadata.get("status"))
+        )
+        progress.log_diagnosis(block.name, status.reason)
+        _mark_block(state, block_idx, BlockStatus.FAILED, config)
+        return False, []
+    if not _record_implementation_note(
+        block, config, state, progress, "spec_test_writer", result.output
+    ):
+        _mark_block(state, block_idx, BlockStatus.FAILED, config)
+        return False, []
+    log.info("DONE block=%d phase=SPEC_TEST_WRITE files=%d", block.number, len(files))
+    progress.log_agent("SpecTestWriter", block.name, "COMPLETE")
+    return True, files
+
+
 async def _write_block_tests(
     block: BlockInfo,
     config: BuildConfig,
@@ -1934,6 +2027,19 @@ async def _write_block_tests(
     if drafts:
         log.info("block=%d phase=TEST_WRITE drafts=%d", block.number, len(drafts))
         description += "\n\n" + _drafts_section(config, drafts)
+
+    # `tdd.spec_tests`: the block's security and permission scenarios get
+    # tests from the spec alone first; this test writer is told their files.
+    if config.spec_tests:
+        from .spec_tests import spec_tests_done_section
+
+        ok, spec_files = await _write_spec_tests(
+            block, config, state, progress, block_idx, cwd, drafts or []
+        )
+        if not ok:
+            return False, None
+        if spec_files:
+            description += "\n\n" + spec_tests_done_section(spec_files)
 
     progress.log_agent("TestWriter", block.name, "STARTED")
     test_result = await run_test_writer(
