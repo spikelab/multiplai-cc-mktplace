@@ -283,6 +283,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Never run the last round's fix as the escalated fix (an epic's "
         "fixer, whose --max-rounds allows one round at a time)",
     )
+    findings.add_argument(
+        "--from-review",
+        default=None,
+        metavar="REVIEW_DIR",
+        help="Act on the blockers in REVIEW_DIR/findings.json (as --auto posts "
+        "them, with --severities and --code-only) whoever posted them, and "
+        "record a decision for each; one left undecided ends "
+        "FINDINGS:INGESTION_ERROR:<ids>, exit 1 (an epic's fixer)",
+    )
     _add_trust_repo_flag(findings)
 
     # --- archive ---
