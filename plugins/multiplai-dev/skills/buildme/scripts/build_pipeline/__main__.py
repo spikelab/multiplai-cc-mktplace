@@ -10,6 +10,7 @@ Subcommands for dev/debug use (only /buildme is user-facing):
   setup         — Write or merge specs/config.yaml (the wrapper asks the questions)
   config-get    — Print one resolved specs/config.yaml value (e.g. git.pr)
   plan-revision — Print the planning values to re-bind a build after an upgrade
+  epic status   — Print one JSON line per child of an epic; launches nothing
 
 Exit codes: 0 done (an epic runs its children and prints EPIC:SUMMARY), 1 failure
 (for an epic: a child failed), 2 usage, or a refusal that wrote nothing
@@ -320,6 +321,17 @@ def build_parser() -> argparse.ArgumentParser:
     prev.add_argument("--change", required=True, help="Change name")
     prev.add_argument("--project-dir", default=".", help="The build's worktree")
 
+    # --- epic ---
+    epic = sub.add_parser("epic", help="Read an epic's state")
+    epic_sub = epic.add_subparsers(dest="epic_command", required=True)
+    status = epic_sub.add_parser(
+        "status",
+        help="Print one JSON line per child: state, head, target, blocker, next "
+        "action and spend; launches and writes nothing",
+    )
+    status.add_argument("--change", required=True, help="The epic's change name")
+    status.add_argument("--project-dir", default=".", help="Project directory")
+
     for command in (build, spec, tdd, findings):
         command.add_argument(
             "--accept-unknown-spend",
@@ -431,6 +443,11 @@ def _main(args: argparse.Namespace) -> int:
         os.environ.get("MULTIPLAI_SESSION_MODEL") or "not found",
         os.environ.get("MULTIPLAI_SESSION_EFFORT") or "not found",
     )
+
+    if args.command == "epic":
+        from .epic.status import run_cli as run_epic_status
+
+        return run_epic_status(args)
 
     if args.command == "setup":
         from .setup import run_setup
