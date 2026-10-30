@@ -325,3 +325,39 @@ fix changed:
 ADJUDICATION_SCOPE_FIELD = """
 - `in_fix_scope`: true when the finding is in code the scope diff added or
   changed, or in code that calls what it changed; false otherwise."""
+
+# The component review (`code_review.component_review`): the same reviewer
+# and the same instructions, reading every block's change at once from the
+# component's base, after the last block and the whole-suite run.
+COMPONENT_REVIEW_PROMPT = CODE_REVIEW_PROMPT.replace(
+    """You are reviewing a block implementation against its spec and a quality
+rubric.""",
+    """You are reviewing a whole component (every block of it, diffed from the
+component's base) against its specs, its design and a quality rubric.""",
+).replace(
+    "## Spec Context — the scenarios this block must satisfy",
+    "## Spec Context — the component's specs and design",
+)
+
+# Added to the component review's spec context when the component touches
+# auth, roles or tenant data (`tdd_engine._touches_access`).
+COMPONENT_ACCESS_CHECKLIST = """\
+### Checklist: this component touches auth, roles or tenant data
+Answer each of these from the code, and raise a finding wherever the answer is
+wrong or missing:
+- For each new or changed field: who can read it, who can write it, and where
+  the code checks that.
+- For each new query or lookup: how entities are matched (by id, by tenant, by
+  user), and whether a match can reach another tenant's or user's rows.
+- For each migration: what it does to rows written under the historical
+  schema."""
+
+# The component review's one fix round (`tdd_engine._component_fix_round`).
+COMPONENT_FIX_BRIEF = """\
+The component review read every block of this component at once. The judge
+accepted these Critical and Major findings: fix them, and change nothing else.
+A finding you can only fix by changing what the requirements say: leave it,
+and name it under SPEC_IMPACT: contradicts.
+
+## Adjudicated findings (accepted — fix these)
+{findings}"""

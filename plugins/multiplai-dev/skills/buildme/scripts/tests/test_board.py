@@ -431,6 +431,8 @@ class TestFullRunBoardTrail:
         monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
         repo = make_repo(tmp_path / "proj")
         make_bare_origin(repo, tmp_path / "origin.git")
+        # The PR's target is on origin, as the check before paid calls asks.
+        git_ops._run(["git", "push", "-q", "origin", "HEAD:main"], cwd=repo)
 
         config = BuildConfig(project_dir=repo, change_name="boarded", auto=True)
         config.specs_dir = repo / "specs"
@@ -607,6 +609,8 @@ class TestFullRunBoardTrail:
         monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
         repo = make_repo(tmp_path / "proj")
         make_bare_origin(repo, tmp_path / "origin.git")
+        # The PR's target is on origin, as the check before paid calls asks.
+        git_ops._run(["git", "push", "-q", "origin", "HEAD:main"], cwd=repo)
 
         config = BuildConfig(project_dir=repo, change_name="latecrash", auto=True)
         config.specs_dir = repo / "specs"

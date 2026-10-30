@@ -65,6 +65,18 @@ waits for them and nothing new is launched, by `_loop` or inside a step
 and a re-run after `epic.max_usd` is raised runs it again; under it, it runs
 again with its share recomputed once the others end.
 `epic.json` and each summary hold `spent_usd` and `spend_complete`.
+
+Shared analysis (item 63 of plan-factory-merged-2026-10-29.md, behind
+`epic.shared_analysis`, off by default): before the first launch of a run,
+the codebase analysis runs once at `origin/<feature branch>`, in a detached
+worktree of its own, into `<epic_dir>/codebase-analysis/`
+(`_shared_analysis`, `code_analysis.run_shared`); its spend is an `analysis`
+record. Each child is then launched with `--shared-analysis <dir>`. A
+directory with no completion marker is a killed run and is analysed again
+from the start, before any child launches; a finished one whose settings
+are the current ones is kept even when the branch moved since, and the
+children re-check the facts whose cited files changed. Off, no child gets the
+flag and each runs its own analysis.
 """
 
 from __future__ import annotations
@@ -72,6 +84,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
+import functools
 import io
 import json
 import logging
@@ -124,6 +137,12 @@ WAITING_ON = "waiting on "  # a dependant of a child parked on its specs
 # (`orchestrator._plan_approval_gate`): `waiting` with the marker line, never
 # relaunched in the run; the next run launches it again.
 PLAN_WAITING = f"{intake.MARKER_PLAN_WAITING}:"
+# A child build stopped by the size gate (`orchestrator._run_size_gate`):
+# parked, and launched again with `--accept-size` under `epic.accept_size`.
+SPLIT_REQUIRED = f"{intake.MARKER_SPLIT_REQUIRED}:"
+PLAN_BLOCKED = (
+    "its planning check is blocked at this plan revision"  # G22: not relaunched
+)
 REVIEW_KINDS = ("review", "resume")
 FIX_KINDS = ("post", "fix")
 PR_FIELDS = "number,state,headRefOid,mergeable,mergeStateStatus"
@@ -435,7 +454,8 @@ class Child:
     argv: list[str] | None = None  # the command to relaunch with, when set
     proc: subprocess.Popen | None = None
     attempt: records.Attempt | None = None
-    relaunched: bool = False  # a failure was relaunched in this invocation
+    relaunched: bool = False  # no more launches of a failure in this invocation
+    launches: int = 0  # its builds this invocation started (`epic.max_child_attempts`)
     pr_round: int | None = None  # item 23, cached in epic.json
     conflicts: bool | None = None
     reviewed: bool = False  # its review step ran in this invocation
@@ -473,6 +493,8 @@ class Coordinator:
     merged: set[str] = field(
         default_factory=set
     )  # ids specs/archive/ holds on the feature branch: merged, never launched
+    shared: Path | None = None  # the finished shared analysis (`epic.shared_analysis`)
+    shared_tried: bool = False  # `_shared_analysis` ran in this invocation
 
     def change(self, cid: str) -> str:
         """The `--change` the child *cid* builds as (`phase.child_change`)."""
@@ -543,6 +565,8 @@ class Coordinator:
             argv.append("--skip-research")
         if getattr(self.config, "accept_unknown_spend", False):
             argv.append("--accept-unknown-spend")
+        if self.settings.accept_size:
+            argv.append("--accept-size")
         return argv
 
     # -- reading the records ----------------------------------------------------
@@ -556,9 +580,31 @@ class Coordinator:
         prs = records.marker(found, "PR")
         if prs:
             return prs[-1]
+        for branch in self._branches(found):
+            listed = _gh(
+                self.repo,
+                "pr",
+                "list",
+                "--head",
+                branch,
+                "--state",
+                "all",
+                "--json",
+                "url",
+            )
+            if not isinstance(listed, list):
+                raise ReadFailed(f"gh pr list --head {branch} failed")
+            if listed and isinstance(listed[0], dict) and listed[0].get("url"):
+                return listed[0]["url"]
+        return None
+
+    def _branches(self, found: list[str]) -> list[str]:
+        """The branches of the child's builds: each `BRANCH:` line, then the
+        branch `git worktree list` gives for each `WORKTREE:` path. None at
+        all without a `WORKTREE:` line. Raises ReadFailed when git fails."""
         worktrees = records.marker(found, "WORKTREE")
         if not worktrees:
-            return None
+            return []
         branches = list(dict.fromkeys(records.marker(found, "BRANCH")))
         porcelain = _git(self.repo, "worktree", "list", "--porcelain")
         if not porcelain.ok:
@@ -582,26 +628,101 @@ class Coordinator:
             )
             if path and Path(path).resolve() in wanted and ref and ref not in branches:
                 branches.append(ref)
-        for branch in branches:
+        return branches
+
+    def _open_pr(self, tries: list[records.Attempt]) -> str | None:
+        """An open PR from one of the child's branches (`_branches`) into the
+        feature branch, which a build outside the epic opened (G35): None
+        when an attempt printed a `PR:` line, whose PR the rules of
+        `_classify` already follow. Raises ReadFailed when `git` or `gh` fails."""
+        found = [m for a in tries for m in records.markers(a.log)]
+        if records.marker(found, "PR"):
+            return None
+        for branch in self._branches(found):
             listed = _gh(
                 self.repo,
                 "pr",
                 "list",
                 "--head",
                 branch,
+                "--base",
+                self.branch,
                 "--state",
-                "all",
+                "open",
                 "--json",
                 "url",
             )
             if not isinstance(listed, list):
-                raise ReadFailed(f"gh pr list --head {branch} failed")
+                raise ReadFailed(
+                    f"gh pr list --head {branch} --base {self.branch} failed"
+                )
             if listed and isinstance(listed[0], dict) and listed[0].get("url"):
                 return listed[0]["url"]
         return None
 
+    def _adopt(self, c: Child, tries: list[records.Attempt]) -> None:
+        """A child about to be parked or failed whose branch has an open PR
+        into the feature branch (`_open_pr`) is `built` with it (row S22);
+        its records stay as they are. A lookup that fails makes it `unknown`,
+        launched no more until a lookup answers (S23)."""
+        try:
+            url = self._open_pr(tries)
+        except ReadFailed as e:
+            c.status, c.reason, c.argv = (
+                "unknown",
+                f"cannot tell whether a PR is open from its branch: {e}",
+                None,
+            )
+            return
+        if url:
+            log.info(
+                "EPIC child %s: %s is open from its branch into %s; taking it as built (was %s: %s)",
+                c.id,
+                url,
+                self.branch,
+                c.status,
+                c.reason,
+            )
+            c.status, c.reason, c.pr, c.argv = "built", "", url, None
+
     def _classify(self, c: Child, tries: list[records.Attempt]) -> None:
-        """A child's status from its finished attempts (item 15)."""
+        """A child's status from its finished attempts (item 15). One that
+        would be parked or failed is `built` when a PR from its branch into
+        the feature branch is open (`_adopt`). A failed one whose planning
+        check a relaunch would refuse at this plan revision
+        (`spec_generator.refuses_blocked`) is launched no more in this run."""
+        self._classify_records(c, tries)
+        if c.status in ("parked", "failed"):
+            self._adopt(c, tries)
+        if c.status == "failed" and self._plan_blocked(c):
+            c.relaunched, c.argv = True, None
+            c.reason = f"{c.reason}: {PLAN_BLOCKED}"
+
+    def _child_config(self, c: Child):
+        """The child's build config, read in its worktree as its build reads it."""
+        import argparse
+
+        from ..config import BuildConfig
+
+        return BuildConfig.from_cli_args(
+            argparse.Namespace(
+                project_dir=str(self._child_project(c)), change=self.change(c.id)
+            )
+        )
+
+    def _plan_blocked(self, c: Child) -> bool:
+        """Its planning check is blocked at the plan revision its files have
+        now, so a launch would refuse it with no model call (G22)."""
+        from ..spec_generator import refuses_blocked
+
+        try:
+            return refuses_blocked(self._child_config(c))
+        except Exception as e:  # never decides a launch on a config it cannot read
+            log.warning("EPIC child %s: cannot read its plan check: %s", c.id, e)
+            return False
+
+    def _classify_records(self, c: Child, tries: list[records.Attempt]) -> None:
+        """`_classify` from the records alone."""
         last = tries[-1].result or {}
         c.argv = None
         if last.get("interrupted"):
@@ -712,6 +833,19 @@ class Coordinator:
                         c.reason,
                     )
                     c.status, c.reason = "pending", ""
+                elif (
+                    self.settings.accept_size
+                    and c.status == "parked"
+                    and c.reason.startswith(SPLIT_REQUIRED)
+                ):
+                    # Parked by the size gate in a run without the key (S21):
+                    # launched again with `--accept-size`.
+                    log.info(
+                        "EPIC child %s: epic.accept_size is on; launching it again (was: %s)",
+                        cid,
+                        c.reason,
+                    )
+                    c.status, c.reason = "pending", ""
                 elif self._on_plan(c):
                     # The approval commit may be on its branch now; its build
                     # looks again (row S12).
@@ -730,8 +864,25 @@ class Coordinator:
                 and c.status != "merged"
                 and a.kind in (*REVIEW_KINDS, *FIX_KINDS)
                 and (a.result or {}).get("parked")
+                # S10: a park on open findings at the round cap is decided
+                # again by the review step: a new head is reviewed, and an
+                # unchanged one parks again unless every id was accepted.
+                and not a.result.get("open_ids")
             ):
                 c.status, c.reason = "parked", a.result["parked"]
+        for c in self.children.values():  # S9: its fixer was launched again once
+            fixes = [
+                a
+                for a in records.attempts(self.epic_dir)
+                if a.child == c.id and a.kind == "fix"
+            ]
+            if (
+                c.status != "merged"
+                and len(fixes) >= 2
+                and all((a.result or {}).get("ingestion_error") for a in fixes[-2:])
+            ):
+                c.status, c.reason = "failed", fixes[-1].result["failed"]
+                c.relaunched = True
         for c in (
             self.children.values()
         ):  # and a merge step's (PR E), until <W> is clean (E.S26)
@@ -823,7 +974,9 @@ class Coordinator:
             if all(s == "merged" for s in deps):
                 if c.status == "waiting":
                     c.status = "pending"
-                if c.status == "pending" or not c.relaunched:
+                if c.status == "pending" or (
+                    not c.relaunched and c.launches < self.settings.max_child_attempts
+                ):
                     ready.append(c)
             elif c.status == "pending" and ("built" in deps or "reviewing" in deps):
                 c.status = "waiting"
@@ -881,8 +1034,6 @@ class Coordinator:
         branch's (B1.S22). The next run then fetches again."""
         if self.conflict is not None:
             return False
-        if c.status == "failed":
-            c.relaunched = True
         argv = c.argv
         if argv is not None and not _parses(argv):
             # Saved by buildme's own epic split (`--mode brief --plan-file ...`),
@@ -939,10 +1090,25 @@ class Coordinator:
             argv = self.new_argv(c.id)
         # A saved command must use this invocation's explicit acceptance, not
         # a stale flag from a previous epic run.
-        argv = [arg for arg in argv if arg != "--accept-unknown-spend"]
+        argv = [
+            arg
+            for arg in argv
+            if arg not in ("--accept-unknown-spend", "--accept-size")
+        ]
         if getattr(self.config, "accept_unknown_spend", False):
             argv.append("--accept-unknown-spend")
+        if self.settings.accept_size:
+            argv.append("--accept-size")
+        # Likewise the shared analysis: only this invocation's setting adds it.
+        if "--shared-analysis" in argv:
+            i = argv.index("--shared-analysis")
+            argv = argv[:i] + argv[i + 2 :]
+        if self.settings.shared_analysis:
+            shared = await self._shared_analysis(sha)
+            if shared is not None:
+                argv += ["--shared-analysis", str(shared)]
         c.attempt = records.start(self.epic_dir, "build", c.id, argv, head_sha=sha)
+        c.launches += 1
         c.status, c.argv, c.reason = "running", argv, ""
         self._save()
         c.proc = _spawn(argv, c.attempt.log)
@@ -960,6 +1126,88 @@ class Coordinator:
         ):
             await CLOCK.sleep(POLL)
         return True
+
+    async def _shared_analysis(self, sha: str) -> Path | None:
+        """The epic's finished shared analysis directory (item 63), run here
+        at most once per invocation, before the launch that asked for it, so
+        no child starts while it runs. A finished one whose settings are
+        the current ones is kept, at whatever commit it was made (S42).
+        Otherwise it runs at *sha*, `origin/<feature branch>`, in the detached
+        worktree `<worktrees root>/buildme-analysis-<branch>`, replacing a
+        directory a killed run left with no marker (S41). None when it
+        failed: the children then analyse for themselves."""
+        from .. import code_analysis
+        from ..llm_steps.spec_steps import _codebase_analysis_call
+
+        if self.shared_tried:
+            return self.shared
+        self.shared_tried = True
+        directory = self.epic_dir / code_analysis.SHARED_DIR
+        settings = code_analysis.shared_settings(self.config)
+        marker = code_analysis.shared_marker(directory)
+        if marker is not None and marker.get("settings") == settings:
+            log.info(
+                "EPIC shared analysis: reusing %s, made at %s",
+                directory,
+                marker["sha"][:12],
+            )
+            self.shared = directory
+            return directory
+        w = git_ops.worktrees_root(self.repo) / (
+            "buildme-analysis-" + self.branch.replace("/", "-")
+        )
+        why = await asyncio.to_thread(feature_branch._checkout, self.repo, w, sha)
+        if why is not None:
+            log.warning("EPIC shared analysis not run: %s", why)
+            return None
+        prefix = git_ops.path_prefix(self.project_dir) or ""
+        project = w / prefix if prefix else w
+        try:  # the change's documents as the feature branch holds them
+            change = project / self.config.change_dir.relative_to(self.project_dir)
+        except ValueError:
+            change = self.config.change_dir
+        attempt = records.start(
+            self.epic_dir,
+            "analysis",
+            "shared",
+            ["codebase-analysis", str(project)],
+            head_sha=sha,
+        )
+        before = budget.process_spend().cost_usd
+        try:
+            marker = await code_analysis.run_shared(
+                directory,
+                project,
+                call=functools.partial(_codebase_analysis_call, config=self.config),
+                settings=settings,
+                name=self.config.project_name or self.project_dir.name,
+                named_text=code_analysis.epic_spec_text(change),
+            )
+        except BudgetExceededError:
+            records.finish(
+                attempt,
+                1,
+                interrupted=False,
+                extra={"spend": round(budget.process_spend().cost_usd - before, 6)},
+            )
+            raise
+        except Exception as exc:  # the children analyse for themselves
+            log.warning("EPIC shared analysis failed: %s: %s", type(exc).__name__, exc)
+            marker = None
+        except BaseException:  # a cancelled call records no usage: its spend is unknown
+            records.finish(attempt, None, interrupted=True)
+            raise
+        records.finish(
+            attempt,
+            0 if marker is not None else 1,
+            interrupted=False,
+            extra={"spend": round(budget.process_spend().cost_usd - before, 6)},
+        )
+        if marker is None:
+            return None
+        log.info("EPIC shared analysis: written to %s at %s", directory, sha[:12])
+        self.shared = directory
+        return directory
 
     def _done(self, c: Child, exit_code: int | None, *, interrupted: bool) -> None:
         records.finish(c.attempt, exit_code, interrupted=interrupted)
@@ -1053,10 +1301,16 @@ class Coordinator:
     ) -> dict:
         """Item 22's fields of a review result, from its ledger line; with
         blockers, `next` and `next_reason`, what follows it (`review.decide`);
-        with `parked` when that is `park` (an open HIGH at the round cap) or
-        its findings cannot be read."""
+        with `parked` when that is `park` (an open finding at the round cap,
+        whose ids are `open_ids`) or its findings cannot be read. A finding
+        `epic.accepted_findings` lists for *c* is not a blocker (`accepted`)."""
         c.pr_round = review.pr_round(review.ledger_lines(), self.slug, number)
-        blocking = review.blockers(review_dir)
+        listed = self.settings.accepted_findings.get(c.id, {})
+        found = review.blocking_findings(review_dir)
+        accepted = [f["id"] for f in found or [] if f.get("id") in listed]
+        if found is not None:
+            found = [f for f in found if f.get("id") not in listed]
+        blocking = None if found is None else review.lines(found, review_dir)
         fields = {
             "head_sha": line.get("head_sha"),
             "base_sha": line.get("base_sha"),
@@ -1066,6 +1320,7 @@ class Coordinator:
             "reused": reused,
             "conflicts": c.conflicts,
             "blocking": blocking or [],
+            **({"accepted": accepted} if accepted else {}),
             "reused_pipeline_run": (
                 {"target_dir": line.get("target_dir"), "round": line.get("round")}
                 if reused
@@ -1077,12 +1332,16 @@ class Coordinator:
             fields["parked"] = f"cannot read the review's findings in {review_dir}"
         elif blocking:
             fields["next"], fields["next_reason"] = review.decide(
-                review.blocking_findings(review_dir) or [],
+                found or [],
                 c.pr_round,
                 cap,
                 self.settings.round_worth,
+                self.settings.merge or "auto",
             )
             if fields["next"] == "park":
+                fields["open_ids"] = review.open_at_cap(
+                    found or [], self.settings.merge or "auto"
+                )
                 fields["parked"] = (
                     f"review round {c.pr_round} of {cap} left {len(blocking)} blocker(s): "
                     + "; ".join(blocking)
@@ -1107,8 +1366,9 @@ class Coordinator:
         """Item 24, found: no review. A started record for this head with no
         result gets its result now (C.S2, C.S4); when no record of this head
         holds a review's fields (none at all, or only the exit-2 `is running
-        now` asks), one pair is written; a head whose review is recorded
-        writes nothing."""
+        now` asks), or the last one's blockers differ from the review's now
+        (a finding accepted since, S11), one pair is written; a head whose
+        review is recorded writes nothing."""
         tries = [
             a
             for a in records.attempts(self.epic_dir)
@@ -1122,7 +1382,9 @@ class Coordinator:
             records.finish(a, None, interrupted=True)
         if open_:
             records.finish(open_[-1], None, interrupted=True, extra=fields)
-        elif not any("blocking" in a.result for a in tries):
+        elif [a.result["blocking"] for a in tries if "blocking" in a.result][-1:] != [
+            fields["blocking"]
+        ]:
             argv = review.review_argv(self._worktree(c), number, self.config)
             a = records.start(
                 self.epic_dir, "review", c.id, argv, head_sha=head, pr_round=c.pr_round
@@ -1206,7 +1468,12 @@ class Coordinator:
                 code, out = await self._run_review(
                     c,
                     "review",
-                    review.review_argv(self._worktree(c), number, self.config),
+                    review.review_argv(
+                        self._worktree(c),
+                        number,
+                        self.config,
+                        self._child_change_dir(c),
+                    ),
                     head,
                 )
                 if code == 2 and review.RUNNING_NOW in out:  # C.S2: never two at once
@@ -1224,7 +1491,11 @@ class Coordinator:
                     code, out = await self._run_review(
                         c,
                         "resume",
-                        review.resume_argv(hint.group(1).strip(), self.config),
+                        review.resume_argv(
+                            hint.group(1).strip(),
+                            self.config,
+                            self._child_change_dir(c),
+                        ),
                         head,
                     )
                     if code == 2 and review.RUNNING_NOW in out:
@@ -1303,6 +1574,11 @@ class Coordinator:
 
     # -- fixing a reviewed PR (PR D2) ---------------------------------------------
 
+    def _child_change_dir(self, c: Child) -> Path | None:
+        """The child's change directory in `<P>`, whose block reviews give the review's
+        `--earlier-decisions` (`review.child_change_dir`)."""
+        return review.child_change_dir(self._child_project(c), self.change(c.id))
+
     def _child_project(self, c: Child) -> Path:
         """`<P>`: the child's worktree joined with the project's offset in its repo, absolute."""
         try:
@@ -1374,7 +1650,14 @@ class Coordinator:
         return fix.rounds_started(project, self.change(c.id)) + 1
 
     async def _run_fix(
-        self, c: Child, head: str, number: int, rounds: int, *, final: bool = False
+        self,
+        c: Child,
+        head: str,
+        number: int,
+        rounds: int,
+        *,
+        final: bool = False,
+        from_review: str | None = None,
     ) -> bool:
         """32.2: run `findings` on *c*'s PR. True when it exited 0, so the review
         step reads the PR again; else the child is parked (`FINDINGS:FAILED`, or
@@ -1389,7 +1672,10 @@ class Coordinator:
         more is launched. Under it, the fixer used up only its share while
         others held the rest: True, so the review step runs it again with
         its share recomputed (D2.S19). *final*: the final fix (`--no-review`),
-        whose result keeps `final_head`, the HEAD it left in `<P>`."""
+        whose result keeps `final_head`, the HEAD it left in `<P>`.
+        *from_review*: the review folder whose blockers it acts on; a fixer
+        that ends `FINDINGS:INGESTION_ERROR` leaves the child `failed` with
+        the ids (S9), not launched again in this run."""
         project = self._child_project(c)
         change = self.change(c.id)
         if not await self._fixer_gone(c, number):
@@ -1412,6 +1698,7 @@ class Coordinator:
             left,
             final=final,
             accept_unknown_spend=getattr(self.config, "accept_unknown_spend", False),
+            from_review=from_review,
         )
         attempt = records.start(
             self.epic_dir, "fix", c.id, argv, head_sha=head, pr_round=c.pr_round
@@ -1473,6 +1760,18 @@ class Coordinator:
                 c.id,
                 code,
             )
+            return False
+        ids = fix.ingestion_error(out) if code != 0 else None
+        if ids is not None:
+            why = f"the fixer left review findings with no decision: {', '.join(ids)}"
+            records.finish(
+                attempt,
+                code,
+                interrupted=False,
+                extra={"ingestion_error": ids, "failed": why},
+            )
+            c.status, c.reason, c.relaunched = "failed", why, True
+            log.warning("EPIC child %s: %s", c.id, why)
             return False
         why = fix.failed_reason(out) or f"the fixer exited {code}: {review.tail(out)}"
         records.finish(attempt, code, interrupted=False, extra={"parked": why})
@@ -1578,7 +1877,12 @@ class Coordinator:
                 return False
         rounds = self._rounds_for_fixer(c, self._child_project(c))
         return await self._run_fix(
-            c, head, number, rounds, final=rec.result.get("next") == "final_fix"
+            c,
+            head,
+            number,
+            rounds,
+            final=rec.result.get("next") == "final_fix",
+            from_review=rec.result.get("review_dir"),
         )
 
     async def _fix_pending(self, c: Child, number: int, head: str) -> bool | None:
@@ -1606,6 +1910,25 @@ class Coordinator:
                     return False
                 records.finish(a, None, interrupted=True)
         fixes = [a for a in tries if a.kind == "fix"]
+        if (
+            fixes
+            and (fixes[-1].result or {}).get("ingestion_error")
+            and not (
+                len(fixes) >= 2 and (fixes[-2].result or {}).get("ingestion_error")
+            )
+        ):  # S9: once more, with a fresh round
+            argv = fixes[-1].started.get("argv") or []
+            if self._over_budget():
+                c.status = "built"
+                return False
+            return await self._run_fix(
+                c,
+                head,
+                number,
+                self._rounds_for_fixer(c, self._child_project(c)),
+                final=fix.is_final(argv),
+                from_review=fix.saved_from_review(argv),
+            )
         if not fixes or (
             fixes[-1].result is not None and not fixes[-1].result.get("interrupted")
         ):
@@ -1633,7 +1956,14 @@ class Coordinator:
             c.status = "built"
             return False
         # R2: once more, as launched; recounted, a finished round would run again.
-        return await self._run_fix(c, head, number, fix.saved_rounds(argv), final=final)
+        return await self._run_fix(
+            c,
+            head,
+            number,
+            fix.saved_rounds(argv),
+            final=final,
+            from_review=fix.saved_from_review(argv),
+        )
 
     # -- merging a reviewed PR (PR E) ---------------------------------------------
 
@@ -2339,14 +2669,38 @@ class Coordinator:
         return spend.review_slugs(self.slug, [c.pr for c in self.children.values()])
 
     def spent(self) -> tuple[float, bool]:
-        """(USD, complete): every record's spend plus the child PRs' reviews (item 19)."""
+        """(USD, complete): every record's spend plus the child PRs' reviews
+        (item 19), plus what the children's checkpoints hold beyond their
+        build records (`spend.state_spend`, item 28)."""
         from multiplai_core.paths import get_paths
 
-        usd, complete = spend.attempts_spend(records.attempts(self.epic_dir))
+        tries = records.attempts(self.epic_dir)
+        usd, complete = spend.attempts_spend(tries)
         reviews, reviews_complete = spend.review_spend(
             Path(get_paths().data_dir) / spend.LEDGER, self._review_slugs()
         )
-        return round(usd + reviews, 6), complete and reviews_complete
+        builds, builds_complete = spend.state_spend(
+            self._state_files(), spend.build_spend(tries)
+        )
+        return (
+            round(usd + reviews + builds, 6),
+            complete and reviews_complete and builds_complete,
+        )
+
+    def _state_files(self) -> dict[str, list[Path]]:
+        """Each child's build checkpoints in its worktree (`_child_project`):
+        `.build-state.json` and the completed one (item 28)."""
+        from ..change_manager import change_path
+        from ..state import completed_state_path
+
+        out = {}
+        for cid, c in self.children.items():
+            state = (
+                change_path(self._child_project(c) / "specs", self.change(cid))
+                / Path(getattr(self.config, "state_file", ".build-state.json")).name
+            )
+            out[cid] = [state, completed_state_path(state)]
+        return out
 
     def _pr_reviews(self, c: Child) -> float:
         """The USD of *c*'s PR's reviews in the ledger, as `spent` counts them."""

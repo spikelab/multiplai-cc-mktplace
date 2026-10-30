@@ -170,7 +170,8 @@ STRICT_IMPACT = (
     "encoding or opt-out setting does not; (2) the harm follows from this defect alone, with no second failure "
     "needed (a model call failing, an agent breaking its prompt, a person's separate mistake); a crash or stop "
     "the code promises to survive counts as ordinary; (3) no other check in the code, CI or the documented "
-    "workflow stops the harm before it lands. Otherwise rate `correctness-only`."
+    "workflow stops the harm before it lands. Rate `depends-on-data` when (1) to (3) hold but the harm "
+    "happens only if production holds data you cannot read. Otherwise rate `correctness-only`."
 )
 
 

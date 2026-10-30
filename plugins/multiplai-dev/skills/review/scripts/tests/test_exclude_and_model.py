@@ -200,7 +200,9 @@ def test_the_review_names_what_exclude_left_out(canned_state):
     canned_state.target.excluded_files = [f"{SPEC}/implementation-plan.md"]
     text = render_review(canned_state)
     assert "- **Left out by --exclude (`specs/changes/**`):** 1 files" in text
-    assert f"  - `{SPEC}/implementation-plan.md`" in text
+    # The list itself is in `## Commits and files` at the end.
+    end = text.split("## Commits and files", 1)[1]
+    assert f"- `{SPEC}/implementation-plan.md`" in end
 
 
 def test_a_review_without_exclude_says_nothing_about_it(canned_state):

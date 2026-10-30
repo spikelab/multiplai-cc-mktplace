@@ -353,11 +353,11 @@ within seconds; the server is not restarted.
   finding is in the section the review names (multiplai-dev 0.71+), or, for
   an older review, the one its topic gives: `tests` and `docs` have their
   own, any other topic is under Code. A second badge shows the verifier's
-  `impact` (`breaks-users`, `breaks-business`, `correctness-only`,
-  `hygiene`; none for an older review).
+  `impact` (`breaks-users`, `breaks-business`, `depends-on-data`,
+  `correctness-only`, `hygiene`; none for an older review).
 - A review run with `--mode critical` (`mode` in `findings.json`) shows
   **Critical only** in the header, and the page shows and counts only its
-  `breaks-users` and `breaks-business` findings; the rest are in the review's
+  `breaks-users`, `breaks-business` and `depends-on-data` findings; the rest are in the review's
   markdown appendix and `findings.json`.
 - **GitHub** and **Slack** beside **Copy as markdown** send a finding. Each
   opens a dialog with the text that will go (the same markdown, editable)
