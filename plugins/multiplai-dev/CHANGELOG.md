@@ -15,6 +15,11 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.134.0] - 2026-10-29
+
+### Changed
+- **review**: a review stopped by the Claude usage limit or by a verifier that gave no usable answer is no longer started over by a plain `review` of the same target and head. That `review` now makes no model call, prints `interrupted run found; continue with: python -m review_pipeline resume <dir>` and exits 4, as it already did for a killed run, so the answers paid for before the stop are not paid for again. buildme's epic already runs that `resume` when it sees the line. `--restart` still starts over, a budget stop still lets a plain `review` start over, and a review of a head the stopped run was not on starts over as before.
+
 ## [0.133.0] - 2026-10-29
 
 ### Fixed

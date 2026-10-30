@@ -723,12 +723,15 @@ it starts, and a `finished` line when it ends (`generated_at`, `producer`,
 `usage-limit` or `failed: <error>`, and the whole `run` object). A resume and each target
 of a batch are runs too. The file is never rewritten. A `started` line with
 no later `finished` line for the same `target_dir` and `head_sha` is a run
-that was killed or stopped with Ctrl-C: a plain `review` of that target then makes no model call,
+that was killed or stopped with Ctrl-C. A `finished` line whose `stopped` is
+`usage-limit` or `verify-incomplete` is a run that can be continued too. After
+either, a plain `review` of that target and head makes no model call,
 prints `interrupted run found; continue with: python -m review_pipeline
 resume <target_dir>` and exits `4`. Run that `resume` (it continues from the
 last saved answer: every step that asks several agents saves after each answer), or pass `--restart` to start over on purpose. Until the
 target's directory has a saved state of its own, the same check covers the
-directory multiplai-dev 0.46 used for it, and the message names that one. When the
+directory multiplai-dev 0.46 used for it, and the message names that one. A
+`budget` stop is not offered this way: a plain `review` after it starts over. When the
 target directory no longer holds a readable `review-state.json` on that head
 (the directory or the file was deleted, or a later run on another head wrote
 over it), there is nothing to resume, and `review` starts over instead. A review
@@ -773,8 +776,9 @@ message gives the reset time when the CLI or the window gave one, and the
 `resume` command of each target it
 stopped, with the run's `--max-cost-usd` and `--no-deps`. Tell the user both,
 and **do not resume or start another review before the reset**: every call
-until then fails the same way. After the reset, run that `resume`: only
-`resume` continues the stopped run, and a plain `review` of the same target
+until then fails the same way. After the reset, run that `resume`: it
+continues the stopped run. A plain `review` of the same target and head prints
+the same `resume` command and exits `4` without a model call; only `--restart`
 starts over and pays again. A batch starts no further target after the limit
 and lists those as `not started`; they have no checkpoint, so review them
 after the reset. `assess-only` stops the same way and still writes its
