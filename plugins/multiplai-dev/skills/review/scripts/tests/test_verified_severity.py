@@ -190,6 +190,7 @@ async def test_a_confirmed_finding_whose_severity_stays_is_not_recorded(
 
 def test_a_raised_severity_says_raised_in_the_review():
     row = {
+        "id": "f1",
         "severity": "HIGH",
         "file": "a.py",
         "line_start": 1,

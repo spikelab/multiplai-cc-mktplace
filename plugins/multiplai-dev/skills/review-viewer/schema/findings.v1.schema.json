@@ -377,6 +377,18 @@
           "type": "array",
           "uniqueItems": true
         },
+        "pre_existing": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pre Existing"
+        },
         "section": {
           "anyOf": [
             {

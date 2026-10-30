@@ -140,6 +140,8 @@ def _finding(f: Finding, status: str, reason: str | None, expected: str | None) 
         **elsewhere,
         # (0.115+) only on a finding an incremental round copied from an earlier one.
         **({"carried_from": f.carried_from} if f.carried_from else {}),
+        # (0.138+) only on a finding whose defect was in the code before the change.
+        **({"pre_existing": True} if f.pre_existing else {}),
     }
 
 

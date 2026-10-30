@@ -232,6 +232,9 @@ class Finding(_Strict):
     # The `--earlier-decisions` entry this finding describes (multiplai-dev 0.137+). Absent when
     # it matches none, and in older files.
     earlier_decision: EarlierDecision | None = None
+    # The defect was in the code before the reviewed change (multiplai-dev 0.138+). Written only
+    # as true; absent otherwise, and in older files.
+    pre_existing: bool | None = None
 
     @field_validator("paths")
     @classmethod

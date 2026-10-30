@@ -138,6 +138,19 @@ class Finding(_Model):
     # An incremental round copies a finding an earlier round left open on a file whose
     # patch has not changed: the kept round's directory name (`rounds/<NN>-<head12>`).
     carried_from: str | None = None
+    # The defect was in the code before the reviewed change: the report marks it
+    # `Pre-existing: yes`, or a tree finder answers `dimension: "pre-existing"`.
+    # `dimension` stays the finder's kind.
+    pre_existing: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def _pre_existing_dimension(cls, data):
+        """`dimension: "pre-existing"` (a tree finder's answer, or a state saved before 0.138)
+        loads as `pre_existing` true, with the finder's kind as the dimension."""
+        if isinstance(data, dict) and data.get("dimension") == "pre-existing":
+            data = {**data, "pre_existing": True, "dimension": data.get("finder") or ""}
+        return data
 
     @field_validator("defect_class", mode="before")
     @classmethod
