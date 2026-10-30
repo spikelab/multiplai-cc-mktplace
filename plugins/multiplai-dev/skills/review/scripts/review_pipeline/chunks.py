@@ -8,7 +8,10 @@ pieces placed last and lockfile text left out. There is no cap on the number
 of pieces.
 
 `split_piece` halves a piece whose finder hit the turn limit: by files, or a
-one-file piece at the hunk boundary nearest its middle.
+one-file piece at the hunk boundary nearest its middle. `changed_symbols`
+names the definitions that existed before the change and that a piece's diff
+changes, which `stages/find.split_for_callers` counts to halve a piece for the
+callers finder before it runs.
 
 `head_changed_lines` gives the paths stage each file's added lines at head.
 """
@@ -529,3 +532,41 @@ def split_piece(piece: Piece, diff: str, next_id: int) -> tuple[Piece, Piece] | 
             [cut, len(hunks)],
         ),
     )
+
+
+# --- changed symbols -----------------------------------------------------------------------------
+
+# A definition line: Python `def`/`class`, JS/TS `function`/`class`, Go `func` (with a receiver), Rust
+# `fn`, Swift `func`, after any of the usual modifiers. The name is group 1.
+_DEFINITION = re.compile(
+    r"^\s*(?:(?:export|default|pub|public|private|protected|internal|static|async|override)\s+)*"
+    r"(?:def|class|function|func|fn)\s+(?:\([^)]*\)\s*)?([A-Za-z_$][\w$]*)"
+)
+# A hunk header and the text git prints after it: the nearest definition line above the hunk.
+_HUNK_CONTEXT = re.compile(r"^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@ ?(.*)$")
+
+
+def changed_symbols(diff: str) -> set[tuple[str, str]]:
+    """(path, name) of each definition that existed before the change and that *diff* changes.
+
+    Only files the change did not add count: their callers are in the rest of
+    the repository. A name counts when a removed line defines it (a signature
+    changed or a definition deleted) or when a hunk header names it (git puts
+    the definition above the hunk there, so a body changed). A definition the
+    change adds has its callers in the change itself and does not count.
+    """
+    out: set[tuple[str, str]] = set()
+    for change in diff_files(diff):
+        if change.status == "added":
+            continue
+        for line in _split_lines(change.text):
+            text = line.rstrip("\r\n")
+            if (header := _HUNK_CONTEXT.match(text)) is not None:
+                found = _DEFINITION.match(header.group(1))
+            elif text.startswith("-") and not text.startswith("--- "):
+                found = _DEFINITION.match(text[1:])
+            else:
+                continue
+            if found is not None:
+                out.add((change.path, found.group(1)))
+    return out

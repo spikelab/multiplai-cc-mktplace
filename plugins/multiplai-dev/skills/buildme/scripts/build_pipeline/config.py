@@ -577,7 +577,11 @@ class EpicSettings:
     a listed id does not block that child (`Coordinator._fields`).
     `accept_size`: every child launch adds `--accept-size`, and a child
     parked on `SPLIT:REQUIRED` is launched again. `max_child_attempts`:
-    launches of a failed child in one run."""
+    launches of a failed child in one run.
+    `review_dimensions` and `review_finder_model`: the dimension finders and
+    their model for each review of a child's PR, passed as the review's
+    `--dimensions` and `--finder-model` (`epic.review.review_argv`); None
+    leaves the review skill's own settings."""
 
     max_parallel: int = 2
     max_review_rounds: int = 3
@@ -587,6 +591,8 @@ class EpicSettings:
     accept_size: bool = False
     max_child_attempts: int = 2
     accepted_findings: dict[str, dict[str, str]] = field(default_factory=dict)
+    review_dimensions: list[str] | None = None
+    review_finder_model: str | None = None
 
 
 def _cfg_int(value, key: str, default: int) -> int:
@@ -597,6 +603,30 @@ def _cfg_int(value, key: str, default: int) -> int:
         )
         return default
     return value
+
+
+def _cfg_names(value, key: str) -> list[str] | None:
+    """A non-empty list of non-empty strings from config.yaml, or None (with a warning for anything else)."""
+    if value is None:
+        return None
+    if (
+        not isinstance(value, list)
+        or not value
+        or not all(isinstance(v, str) and v.strip() for v in value)
+    ):
+        log.warning("Invalid %s value %r in config.yaml — ignoring it", key, value)
+        return None
+    return [v.strip() for v in value]
+
+
+def _cfg_text(value, key: str) -> str | None:
+    """A non-empty string from config.yaml, or None (with a warning for anything else)."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        log.warning("Invalid %s value %r in config.yaml — ignoring it", key, value)
+        return None
+    return value.strip()
 
 
 def _accepted_findings(value) -> dict[str, dict[str, str]]:
@@ -1833,6 +1863,12 @@ class BuildConfig:
                 epic_cfg.get("max_child_attempts", 2), "epic.max_child_attempts", 2
             ),
             accepted_findings=_accepted_findings(epic_cfg.get("accepted_findings")),
+            review_dimensions=_cfg_names(
+                epic_cfg.get("review_dimensions"), "epic.review_dimensions"
+            ),
+            review_finder_model=_cfg_text(
+                epic_cfg.get("review_finder_model"), "epic.review_finder_model"
+            ),
         )
 
     def _discover_test_command(self) -> None:

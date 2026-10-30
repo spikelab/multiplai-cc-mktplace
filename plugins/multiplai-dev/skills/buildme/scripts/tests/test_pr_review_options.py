@@ -221,3 +221,49 @@ def test_the_epic_review_leaves_out_the_same_files(tmp_path, no_conf):
     assert _values(epic_review.review_argv(repo, 12, config), "--exclude") == (
         loop.review_excludes(config)
     )
+
+
+# --- epic.review_dimensions and epic.review_finder_model (plan-factory-merged-2026-10-29.md, item 46) ---
+
+EPIC_REVIEW = (
+    "epic:\n"
+    "  review_dimensions: [diff-bugs, callers]\n"
+    "  review_finder_model: claude-sonnet-4-6\n"
+)
+
+
+def test_the_epic_review_settings_reach_the_review_and_not_its_resume(
+    tmp_path, no_conf
+):
+    """A resumed review keeps the dimensions and finder model it saved (row S38), so
+    `resume_argv` passes neither; the findings loop's review is not the epic's."""
+    repo, _ = _repo(tmp_path / "proj", ["a.py"])
+    config = _config(repo, EPIC_REVIEW + "models:\n  review: sonnet\n")
+    argv = epic_review.review_argv(repo, 12, config)
+    assert _values(argv, "--dimensions") == ["diff-bugs,callers"]
+    assert _values(argv, "--finder-model") == ["claude-sonnet-4-6"]
+    assert _values(argv, "--model") == [CURRENT_MODEL["sonnet"]]
+    resume = epic_review.resume_argv("/out/r/pr-12", config)
+    assert "--dimensions" not in resume and "--finder-model" not in resume
+    assert "--dimensions" not in loop.review_argv(_run(config))
+
+
+@pytest.mark.parametrize(
+    "yaml_text",
+    [
+        "",
+        "epic:\n  review_dimensions: callers\n  review_finder_model: 7\n",
+        "epic:\n  review_dimensions: []\n  review_finder_model: ' '\n",
+        "epic:\n  review_dimensions: [callers, 3]\n",
+    ],
+    ids=["unset", "wrong_types", "empty", "not_all_names"],
+)
+def test_without_valid_epic_review_settings_the_review_skill_decides(
+    tmp_path, no_conf, yaml_text
+):
+    repo, _ = _repo(tmp_path / "proj", ["a.py"])
+    config = _config(repo, yaml_text)
+    assert config.epic.review_dimensions is None
+    assert config.epic.review_finder_model is None
+    argv = epic_review.review_argv(repo, 12, config)
+    assert "--dimensions" not in argv and "--finder-model" not in argv

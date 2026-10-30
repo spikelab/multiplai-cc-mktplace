@@ -97,10 +97,19 @@ def review_argv(
     findings whose scenario is a crash, an access or data problem, or lost
     data are verified and can rise. Then `--earlier-decisions` from the
     child's block reviews in *change_dir*
-    (`review_rounds.earlier_decisions_argv`), when there are some."""
+    (`review_rounds.earlier_decisions_argv`), when there are some. Then
+    `epic.review_dimensions` and `epic.review_finder_model` as `--dimensions`
+    and `--finder-model`, when set (item 46). `resume_argv` passes neither: a
+    resumed review keeps the ones it saved (row S38)."""
     from ..findings.loop import review_options
     from ..review_rounds import earlier_decisions_argv
 
+    epic = config.epic
+    settings = []
+    if epic.review_dimensions:
+        settings += ["--dimensions", ",".join(epic.review_dimensions)]
+    if epic.review_finder_model:
+        settings += ["--finder-model", epic.review_finder_model]
     return _skill(
         "review",
         "--repo",
@@ -111,6 +120,7 @@ def review_argv(
         "--fetch",
         *review_options(config, verify_low=EPIC_VERIFY_LOW),
         *earlier_decisions_argv(change_dir),
+        *settings,
     )
 
 

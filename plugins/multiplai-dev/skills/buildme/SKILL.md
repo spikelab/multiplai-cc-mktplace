@@ -861,7 +861,13 @@ a version, CHANGELOG or lockfile conflict there costs one agent call, with
 Read, Edit and Bash in the child's worktree, counted against `epic.max_usd`) and
 `epic.max_usd` (one ceiling for the whole epic, default none; each child keeps
 its own `budget.max_usd` too), `epic.accept_size` (default `false`) and
-`epic.max_child_attempts` (default `2`), both above. `build` and `findings` print
+`epic.max_child_attempts` (default `2`), both above. `epic.review_dimensions`
+(a list, for example `[diff-bugs, callers]`) and `epic.review_finder_model` (a
+model name) choose the dimension finders and their model for each review of a
+child's PR, passed as the review's `--dimensions` and `--finder-model`; unset,
+the review skill's own `review.yaml` decides, as before. A review resumed after
+a stop keeps the ones it started with; the next head's review uses the current
+ones. `build` and `findings` print
 `SPEND:<usd>:<tokens>` as their last line on every exit but a kill (SIGTERM
 and SIGHUP included): what that process spent, the PR body's model calls and a
 walkthrough regeneration included (the pr skill and the walkthrough print

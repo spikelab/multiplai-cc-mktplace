@@ -155,6 +155,21 @@ def _model_flag(p: argparse.ArgumentParser) -> None:
     )
 
 
+def _review_settings_flags(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--dimensions",
+        default=None,
+        help="The dimension finders a change review runs, comma-separated (e.g. "
+        "diff-bugs,callers), over review.yaml's dimensions; resume keeps the run's own",
+    )
+    p.add_argument(
+        "--finder-model",
+        default=None,
+        help="The finders' model for this run, over --model, review.yaml and multiplai.conf; "
+        "resume keeps the run's own",
+    )
+
+
 def _earlier_decisions_flag(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--earlier-decisions",
@@ -307,6 +322,7 @@ def build_parser() -> argparse.ArgumentParser:
     _mode_flag(rv)
     _deps_flag(rv)
     _model_flag(rv)
+    _review_settings_flags(rv)
     _verify_low_flag(rv)
     _earlier_decisions_flag(rv)
 
@@ -477,12 +493,14 @@ def main(argv: list[str] | None = None) -> int:
         os.environ["REVIEW_TRUST_REPO"] = "1"
 
     from . import orchestrator, render, rounds, sdk, target
-    from .config import ConfigError
+    from .config import ConfigError, set_dimensions
     from .config import load_config as read_config
 
     def load_config(root: Path, **kwargs):
         try:
             config = read_config(root, **kwargs)
+            if getattr(args, "dimensions", None) is not None:
+                set_dimensions(config, args.dimensions.split(","), "--dimensions")
         except ConfigError as e:
             raise orchestrator.ReviewError(str(e)) from e
         if getattr(args, "no_deps", False):
@@ -502,6 +520,8 @@ def main(argv: list[str] | None = None) -> int:
                 )
             except ValueError as e:
                 raise orchestrator.ReviewError(str(e)) from e
+        if getattr(args, "finder_model", None):
+            config.finder_model = args.finder_model
         return config
 
     from .post import PostError, post

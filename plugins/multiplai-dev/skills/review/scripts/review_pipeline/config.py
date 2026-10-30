@@ -4,7 +4,11 @@ Precedence, highest first (same order as buildme's config.py: the project's
 own file beats multiplai.conf, which beats the default):
 
 0. `--model` on `review` or `resume` sets the finder, verifier and merger
-   models for that run (`__main__.load_config`).
+   models for that run (`__main__.load_config`). On `review`,
+   `--finder-model` sets the finders' model over `--model`, and
+   `--dimensions` the dimension finders over `review.yaml`'s
+   (`set_dimensions`). `resume` keeps the finder model and the dimensions the
+   stopped run saved (`orchestrator.kept_finder_model`, `kept_dimensions`).
 1. `review.yaml` in the output directory (`<out>/review.yaml`; for the
    default output directory, the old default's when the new one has none):
    `concurrency`, `finder_model`, `verifier_model`, `merger_model`, `effort`,
@@ -152,6 +156,13 @@ def _dimensions(value, where) -> tuple[tuple[str, ...], bool]:
         )
     wanted = {n.strip() for n in names}
     return tuple(d for d in DIMENSIONS if d in wanted), TRIM_DIMENSION in wanted
+
+
+def set_dimensions(cfg: ReviewConfig, names: list[str], where: str) -> None:
+    """The dimensions *names* lists, over `review.yaml`'s: as `dimensions` there, except that no
+    `trim: false` can turn off a `trim` it names. Raises ConfigError for an unknown or missing name."""
+    cfg.dimensions, cfg.trim = _dimensions([n for n in names if n.strip()], where)
+    cfg.dimensions_listed = True
 
 
 def _yaml_path(out_dir: Path | None) -> Path | None:
