@@ -171,6 +171,11 @@ not waiting) or `SLACK:FAILED:<error>` (exit 1). If the process dies between
 posting and recording the post, the next `notify` posts a second message
 (row S11): one duplicate is accepted rather than a lock.
 
+buildme's `epic watch` posts through the same channel and outbox with
+`pv post --repo /abs/path/to/repo --change <name> --key <key>`, the message
+on stdin (or `--file`): one message per change and key, with `notify`'s
+`SLACK:` lines.
+
 ### 5. Handle each row
 
 Each row is one JSON line: `id`, `kind`, `change`, `stop`, `revision`,
