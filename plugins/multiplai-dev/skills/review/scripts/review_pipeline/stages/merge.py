@@ -180,9 +180,9 @@ def merge_set(members: list[Finding], state: ReviewState) -> Finding:
         for name in f.finders or [f.finder]:
             if name and name not in finders:
                 finders.append(name)
-    if survivor.id in state.original_severity:
-        # Every member is unverifiable (a confirmed one would have survived),
-        # so each was lowered; the merged finding was lowered from the highest.
+    if any(f.id in state.original_severity for f in members):
+        # verify changed a member's severity (or found it unverifiable): the
+        # merged finding's severity came from the highest of the finders'.
         state.original_severity[survivor.id] = min(
             (state.original_severity.get(f.id, f.severity) for f in members),
             key=rank.__getitem__,

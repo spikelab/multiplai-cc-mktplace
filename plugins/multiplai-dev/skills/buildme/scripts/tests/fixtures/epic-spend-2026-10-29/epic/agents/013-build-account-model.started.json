@@ -1,0 +1,15 @@
+{
+  "kind": "build",
+  "child": "account-model",
+  "argv": [
+    "python",
+    "-m",
+    "build_pipeline",
+    "build",
+    "--change",
+    "account-management/account-model"
+  ],
+  "pr_round": null,
+  "head_sha": "466c73bac604005655da7a5ad630bb208adcfff8",
+  "at": "2026-10-27T08:47:58.467775+00:00"
+}

@@ -181,13 +181,17 @@ TOPICS: tuple[str, ...] = (
 )
 # What goes wrong in production if the change is merged as it is, as the
 # verifier rates it. `--mode critical` lists only CRITICAL_IMPACTS.
+# DEPENDS_ON_DATA: default settings reach the path, and the harm happens only
+# when production holds data the verifier cannot read; its reason names that data.
+DEPENDS_ON_DATA = "depends-on-data"
 IMPACTS: tuple[str, ...] = (
     "breaks-users",
     "breaks-business",
+    DEPENDS_ON_DATA,
     "correctness-only",
     "hygiene",
 )
-CRITICAL_IMPACTS: tuple[str, ...] = ("breaks-users", "breaks-business")
+CRITICAL_IMPACTS: tuple[str, ...] = ("breaks-users", "breaks-business", DEPENDS_ON_DATA)
 MODES: tuple[str, ...] = ("full", "critical")
 # The section a finding is listed in. `trim` holds what only the trim finder
 # reported; otherwise by topic, and any other topic, or none, is "code".
@@ -314,6 +318,11 @@ class Verdict(_Model):
     # What breaks in production if merged as is, one of IMPACTS; "" for a
     # refuted finding and in checkpoints written before 0.32.
     impact: str = ""
+    # The severity the verifier gives the consequence it verified; None for a
+    # refuted finding, an answer without one, and checkpoints written before
+    # 0.132. The verify stage sets the finding's severity from it
+    # (`stages/verify.verified_severity`).
+    severity: Severity | None = None
 
     @field_validator("topic", mode="before")
     @classmethod
@@ -326,6 +335,12 @@ class Verdict(_Model):
     def _known_impact(cls, value) -> str:
         value = str(value or "").strip().lower()
         return value if value in IMPACTS else ""
+
+    @field_validator("severity", mode="before")
+    @classmethod
+    def _known_severity(cls, value) -> str | None:
+        value = str(value or "").strip().upper()
+        return value if value in SEVERITIES else None
 
 
 class VerifierAnswer(Verdict):

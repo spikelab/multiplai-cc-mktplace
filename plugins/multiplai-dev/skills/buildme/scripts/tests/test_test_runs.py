@@ -1,6 +1,6 @@
 """Item 32 of plan-factory-merged-2026-10-29.md: every test-command run logs
 its start and end, and only a run with no test results from a known runner is
-run again. The resume rows S29 and S30 are in test_epic_unattended_resume.py."""
+run again. The resume rows S29 and S30 are in test_test_runs_resume.py."""
 
 from __future__ import annotations
 

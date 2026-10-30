@@ -59,6 +59,10 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
     budget_mod.configure(
         max_tokens=config.budget_max_tokens, max_usd=config.budget_max_usd
     )
+    # A component of an epic built by hand builds as the epic's child (G34).
+    rc = _as_epic_child(config)
+    if rc is not None:
+        return rc
     # The change's feature branch, where pm-spec pushed its specs
     # (`feature_branch.py`): found before anything else reads the specs.
     rc = _find_feature_branch(config)
@@ -708,6 +712,47 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
                 log.warning(
                     "Could not write the spend summary to the progress file: %s", e
                 )
+
+
+def _as_epic_child(config: BuildConfig) -> int | None:
+    """`build --change <epic>/<child>` of an epic whose change dir records a
+    feature branch (its `.change.yaml` `branch`) builds as the epic's
+    coordinator launches it: `--epic-child --branch <feature branch>`, so its
+    PR targets the feature branch, not the default branch (G34). A different
+    `--branch` is refused, exit 2, with why; None otherwise."""
+    from multiplai_core.specs import change_root
+
+    from . import feature_branch
+    from .change_manager import split_component
+
+    parts = split_component(config.change_name or "")
+    if parts is None:
+        return None
+    epic_branch = feature_branch.recorded(change_root(config.change_dir))
+    if not epic_branch:
+        return None
+    if config.feature_branch and config.feature_branch != epic_branch:
+        why = (
+            f"--branch {config.feature_branch} is not the feature branch of the epic "
+            f"{parts[0]}: its component {parts[1]} builds from {epic_branch} and opens "
+            f"its PR into it. Drop --branch, or pass --branch {epic_branch}"
+        )
+        log.error(
+            "REFUSED change=%s reason=not-the-epic-branch branch=%s epic_branch=%s",
+            config.change_name,
+            config.feature_branch,
+            epic_branch,
+        )
+        print(f"ERROR:{why}", file=sys.stderr, flush=True)
+        return 2
+    if not config.feature_branch or not config.epic_child:
+        log.info(
+            "EPIC_CHILD change=%s branch=%s: a component of an epic builds as its child",
+            config.change_name,
+            epic_branch,
+        )
+    config.feature_branch, config.epic_child = epic_branch, True
+    return None
 
 
 def _find_feature_branch(config: BuildConfig) -> int | None:
