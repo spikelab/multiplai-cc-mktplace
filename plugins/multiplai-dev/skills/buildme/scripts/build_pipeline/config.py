@@ -1069,6 +1069,12 @@ class BuildConfig:
     # the plan (`spec_generator._plan_hashes`).
     planning_max_rewrites: int = 2
     planning_max_usd: float = 40.0
+    # `planning.analysis`: `full` puts the whole codebase analysis in the
+    # design prompt; `component` puts only the facts about the files the
+    # component's plan.md and specs name, every convention, and no "Not
+    # analysed" list (`code_analysis.component_facts`). `full` until a measured
+    # build shows `component` does not hurt the design.
+    planning_analysis: str = "full"
 
     # Runtime marker, not user-configurable: set to the branch name once the
     # pipeline has created its own worktree+branch (or re-bound to one on
@@ -1694,6 +1700,14 @@ class BuildConfig:
             )
             usd = 40.0
         self.planning_max_usd = float(usd)
+        analysis = planning_cfg.get("analysis", "full")
+        if analysis not in ("full", "component"):
+            log.warning(
+                "Invalid planning.analysis value %r in config.yaml — want full | component; using full",
+                analysis,
+            )
+            analysis = "full"
+        self.planning_analysis = analysis
 
         self._load_epic(_cfg_mapping(data.get("epic"), "epic"))
 
