@@ -43,6 +43,7 @@ from .change_manager import (
     PLAN_HASH_KEY,
     ChangeManager,
     plan_path,
+    requirement_texts,
 )
 from .dependencies import NewDependency, design_decisions_text, detect_new_dependencies
 from .gates import unknowns_gate
@@ -268,7 +269,7 @@ async def _generate_single_artifact(
             context,
             config,
             research=read_research(state),
-            codebase_analysis=read_codebase_analysis(state),
+            codebase_analysis=read_codebase_analysis(state, config),
             reference_docs=config.reference_docs_text(),
         )
 
@@ -311,7 +312,7 @@ def read_unknowns(change_dir: Path) -> str:
     return "(no unknowns document)"
 
 
-def read_codebase_analysis(state: BuildState) -> str:
+def read_codebase_analysis(state: BuildState, config=None) -> str:
     """The CODEBASE_ANALYSIS phase's report, as text for the design prompt.
 
     The checkpoint stores a *path* (`spec_gen.codebase_analysis_path`); the
@@ -319,15 +320,36 @@ def read_codebase_analysis(state: BuildState) -> str:
     the stored string rather than dropping it, and an absent one returns ""
     so the prompt says "(new project)" exactly as it did before the phase
     existed.
+
+    With `planning.analysis: component` in *config*, the report is cut to the
+    facts about the files the component's plan.md and specs name, plus every
+    convention, and its "Not analysed" list is dropped
+    (`code_analysis.component_facts`). The default, `full`, returns the whole
+    report.
     """
     raw = (state.spec_gen.codebase_analysis_path if state.spec_gen else "") or ""
     if not raw:
         return ""
     path = Path(raw)
     if path.is_file():
-        return path.read_text()
+        text = path.read_text()
+        if config is not None and getattr(config, "planning_analysis", "full") == (
+            "component"
+        ):
+            from .code_analysis import component_facts
+
+            return component_facts(text, _plan_and_specs_text(config.change_dir))
+        return text
     log.warning("Recorded codebase analysis is not a readable file: %s", raw)
     return raw
+
+
+def _plan_and_specs_text(change_dir: Path) -> str:
+    """The component's plan.md and its requirements, as one text to find file names in."""
+    plan = Path(change_dir) / "plan.md"
+    parts = [plan.read_text()] if plan.is_file() else []
+    parts += requirement_texts(Path(change_dir)).values()
+    return "\n".join(parts)
 
 
 def read_research(state: BuildState) -> str:

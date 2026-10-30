@@ -708,6 +708,56 @@ def render_markdown(a: Analysis, project_dir: Path, md_dir: Path) -> str:
     return "\n".join(out) + "\n"
 
 
+_CITED_PATH = re.compile(r"\[`([^`]+?):\d+(?:-\d+)?`\]")
+COMPONENT_FACTS_NOTE = (
+    "Only the facts about files this component's plan.md and specs name are listed "
+    "here ({kept} of {total}), with every convention (`planning.analysis: component`). "
+    "Open other files with your tools when the design needs them."
+)
+NO_COMPONENT_FACTS = (
+    "(no checked facts about the files this component's plan.md and specs name)"
+)
+
+
+def component_facts(report: str, named_text: str) -> str:
+    """*report* (`render_markdown`'s output) cut down to one component.
+
+    A bullet under Architecture, Patterns or Dependencies is kept when one of
+    its `path:line` links is a file *named_text* names (`_named_in`); every
+    Conventions bullet is kept; the "Not analysed" section is dropped. A report
+    without those headings (the no-commit report, a new project) is returned
+    unchanged.
+    """
+    lines = report.splitlines()
+    if not any(line == f"## {h}" for h in HEADINGS for line in lines):
+        return report
+    paths = sorted({p for line in lines for p in _CITED_PATH.findall(line)})
+    named = _named_in(named_text, paths)
+    preamble: list[str] = []
+    sections: dict[str, list[str]] = {}
+    current: str | None = None
+    total = kept = 0
+    for line in lines:
+        if line.startswith("## "):
+            current = line[3:].strip()
+            continue
+        if current is None:
+            preamble.append(line)
+            continue
+        if current not in HEADINGS or not line.startswith("- "):
+            continue
+        total += 1
+        if current == "Conventions" or named.intersection(_CITED_PATH.findall(line)):
+            kept += 1
+            sections.setdefault(current, []).append(line)
+    out = [*(line for line in preamble if line.strip())]
+    out.append(COMPONENT_FACTS_NOTE.format(kept=kept, total=total))
+    for h in HEADINGS:
+        out += ["", f"## {h}", ""]
+        out += sections.get(h) or [NO_COMPONENT_FACTS]
+    return "\n".join(out) + "\n"
+
+
 # --- facts.json --------------------------------------------------------------------------
 
 
