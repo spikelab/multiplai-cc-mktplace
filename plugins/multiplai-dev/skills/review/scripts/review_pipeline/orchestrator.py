@@ -25,7 +25,7 @@ from . import budget, deps, incremental, rounds, runlock, sdk, timings, window
 from . import ledger as review_ledger
 from . import target as target_mod
 from .chunks import split_pieces
-from .config import ReviewConfig, run_config
+from .config import SESSION_DEFAULT, ReviewConfig, run_config
 from .costs import cost_lines, estimate, kept_line
 from .export import (
     need_coverage,
@@ -59,6 +59,7 @@ from .stages.find import (
     file_groups,
     finder_dimensions,
     run_find,
+    split_for_callers,
 )
 from .stages.merge import run_merge
 from .stages.paths import PATH_CAP, run_paths
@@ -97,8 +98,9 @@ class ReviewError(Exception):
 
 
 class InterruptedRun(ReviewError):
-    """The ledger shows a run of this target and head that started and never ended, and its saved
-    state is still in the target directory, so `resume` can continue it. Exit code 4."""
+    """The ledger shows a run of this target and head that started and never ended, or that the
+    usage limit or the verifier stopped, and its saved state is still in the target directory, so
+    `resume` can continue it. Exit code 4."""
 
     def __init__(self, target_dir: Path):
         self.target_dir = target_dir
@@ -300,7 +302,7 @@ async def _run_stages(
     else:
         progress.line(f"RESUMED after {state.stage}")
 
-    snapshot = target_mod.snapshot_head(t, target_dir / "tree")
+    snapshot = target_mod.snapshot_head(t, target_dir / "tree", note=progress.line)
     _with_deps(state, snapshot, config)
     diff = Path(t.diff_path).read_text(encoding="utf-8") if t.diff_path else ""
     if incremental.is_incremental(state):
@@ -495,7 +497,8 @@ def prepare(
     and committed there (`import_dir`), then reviewed as a tree at that commit.
     With *check_interrupted* (a review, not `--plan-only`) and no
     `spec.restart`, a run of this directory and head that the ledger shows
-    started and never ended raises InterruptedRun before anything is
+    started and never ended, or stopped by the usage limit or the verifier,
+    raises InterruptedRun before anything is
     written, when `resume` can continue it (`_resumable`); otherwise this run
     starts over. While the chosen directory has no saved state yet, the
     directory multiplai-dev 0.46 used for this target (`<out>/<its slug>/`) is
@@ -717,8 +720,9 @@ def _choose_folder(
 
 
 def _resumable(target_dir: Path, head_sha: str) -> bool:
-    """True when the ledger shows a run of *target_dir* and *head_sha* that never ended and
-    the directory still holds a readable `review-state.json` on that head.
+    """True when the ledger shows a run of *target_dir* and *head_sha* that never ended, or
+    that ended stopped by the usage limit or the verifier (`ledger.resumable`), and the
+    directory still holds a readable `review-state.json` on that head.
 
     `run_state` saves the state before it writes the `started` line, so a run
     that left the line left its state too, unless the directory or the file
@@ -727,7 +731,7 @@ def _resumable(target_dir: Path, head_sha: str) -> bool:
     would ever close the line: this run starts over instead, and its own end
     line closes it.
     """
-    if not review_ledger.interrupted(target_dir, head_sha):
+    if not review_ledger.resumable(target_dir, head_sha):
         return False
     path = target_dir / STATE_FILE
     saved = load_state(path) if path.is_file() else None
@@ -806,6 +810,22 @@ def change_review_dimensions(state: ReviewState, config: ReviewConfig) -> None:
         state.dimensions = list(finder_dimensions(state.target, config))
 
 
+def callers_split(state: ReviewState) -> None:
+    """Before the first save: halve each piece that changes too many existing definitions for one callers
+    finder (`stages/find.split_for_callers`), over the diff the finders will read."""
+    if state.target.is_tree or not state.target.diff_path:
+        return
+    diff = Path(state.target.diff_path).read_text(encoding="utf-8")
+    if incremental.is_incremental(state):
+        diff = incremental.limit_diff(diff, state.scope.reviewed_files)
+    for piece in split_for_callers(state, diff):
+        log.info(
+            "piece %d split for callers before the finders: pieces %s",
+            piece.id,
+            " and ".join(str(i) for i in piece.split_into),
+        )
+
+
 DIMENSIONS_NOTICE = (
     "NOTICE: dimensions {saved} kept from the stopped run; review.yaml says {new}"
 )
@@ -829,6 +849,27 @@ def kept_dimensions(state: ReviewState, config: ReviewConfig) -> None:
         )
 
 
+FINDER_MODEL_NOTICE = "NOTICE: finder model {saved} kept from the stopped run; this run's settings say {new}"
+
+
+def kept_finder_model(state: ReviewState, config: ReviewConfig) -> None:
+    """On resume: the finder model the stopped run saved (`run_config`, `find`) wins over this run's
+    settings, `--model` included, with one NOTICE. A checkpoint that saved none keeps this run's."""
+    saved = ((state.run_config or {}).get("stages") or {}).get("find", {}).get("model")
+    if not saved:
+        return
+    model = None if saved == SESSION_DEFAULT else saved
+    if model != config.finder_model:
+        print(
+            FINDER_MODEL_NOTICE.format(
+                saved=saved, new=config.finder_model or SESSION_DEFAULT
+            ),
+            file=sys.stderr,
+            flush=True,
+        )
+        config.finder_model = model
+
+
 def plan_only(
     spec: TargetSpec, out_dir: Path, config: ReviewConfig
 ) -> tuple[str, Path]:
@@ -837,6 +878,7 @@ def plan_only(
     with contextlib.ExitStack() as lock:
         state, target_dir = prepare(spec, out_dir, lock=lock)
         change_review_dimensions(state, config)
+        callers_split(state)
         print_cost_lines(state, config, resuming=False)
         text = plan_text(state, config)
         path = target_dir / "plan.txt"
@@ -913,6 +955,7 @@ async def review(
             incremental_on=config.incremental,
         )
         change_review_dimensions(state, config)
+        callers_split(state)
         print_cost_lines(
             state, config, resuming=False
         )  # after the pieces, before the paths stage
@@ -938,6 +981,7 @@ async def resume(
             raise ReviewError(f"no readable review-state.json in {target_dir}")
         extra_finders_notice(config)
         kept_dimensions(state, config)
+        kept_finder_model(state, config)
         if not state.past("find"):
             print_cost_lines(state, config, resuming=True)
         return await run_state(state, target_dir, config, session_id=session_id)

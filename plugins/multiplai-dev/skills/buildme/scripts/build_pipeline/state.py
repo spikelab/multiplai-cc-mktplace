@@ -336,6 +336,14 @@ class FindingsRound(BaseModel):
     # the step starts again, so a step killed before it could record its
     # stop has none. Empty in checkpoints written before the field existed.
     stops: dict[str, StepStop] = Field(default_factory=dict)
+    # With `--from-review` (`findings/from_review.py`): the head of the review
+    # the round acts on and the ids of its blockers, saved when the round
+    # starts, and one decision per id, saved as the step that settles it
+    # finishes and never replaced. None and empty in other rounds and in
+    # older checkpoints.
+    review_head: str | None = None
+    expected: list[str] = Field(default_factory=list)
+    decisions: dict[str, dict[str, str]] = Field(default_factory=dict)
 
     @property
     def seen_ids(self) -> set[int]:

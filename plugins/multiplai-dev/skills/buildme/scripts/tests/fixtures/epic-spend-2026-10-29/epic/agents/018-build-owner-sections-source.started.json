@@ -1,0 +1,15 @@
+{
+  "kind": "build",
+  "child": "owner-sections-source",
+  "argv": [
+    "python",
+    "-m",
+    "build_pipeline",
+    "build",
+    "--change",
+    "account-management/owner-sections-source"
+  ],
+  "pr_round": null,
+  "head_sha": "371fbfe1aca436a026695545575ab034a605411d",
+  "at": "2026-10-28T03:34:58.685870+00:00"
+}

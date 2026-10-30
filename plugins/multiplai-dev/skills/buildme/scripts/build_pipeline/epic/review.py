@@ -70,15 +70,46 @@ def _skill(*args: str) -> list[str]:
     ]
 
 
-def review_argv(worktree: Path, number: int, config) -> list[str]:
+# What the epic's reviews pass as `--verify-low`: only the risky LOW findings are verified.
+EPIC_VERIFY_LOW = "risky"
+
+
+def child_change_dir(project: Path, change: str) -> Path | None:
+    """The child's change directory in its project *project* (`<P>`), as the fixer finds it
+    (`fix._state_rounds`); None when there is none."""
+    from ..findings.cli import ResolveError, change_dir_for, change_name_for
+
+    try:
+        return change_dir_for(Path(project) / "specs", change_name_for(change, ""))
+    except (ResolveError, ValueError):
+        return None
+
+
+def review_argv(
+    worktree: Path, number: int, config, change_dir: Path | None = None
+) -> list[str]:
     """`--fetch`: the review needs the PR's head and base commits in the clone.
     A sibling's merge moves the base, and a push from elsewhere moves the
     head, without any launch here fetching them (C.S8). Then
     `findings.loop.review_options` of the epic's *config*: the spec change
-    directories and buildme's runtime files left out, and the configured
-    review model."""
+    directories and buildme's runtime files left out, the configured
+    review model, and `--verify-low risky` (`EPIC_VERIFY_LOW`), so the LOW
+    findings whose scenario is a crash, an access or data problem, or lost
+    data are verified and can rise. Then `--earlier-decisions` from the
+    child's block reviews in *change_dir*
+    (`review_rounds.earlier_decisions_argv`), when there are some. Then
+    `epic.review_dimensions` and `epic.review_finder_model` as `--dimensions`
+    and `--finder-model`, when set (item 46). `resume_argv` passes neither: a
+    resumed review keeps the ones it saved (row S38)."""
     from ..findings.loop import review_options
+    from ..review_rounds import earlier_decisions_argv
 
+    epic = config.epic
+    settings = []
+    if epic.review_dimensions:
+        settings += ["--dimensions", ",".join(epic.review_dimensions)]
+    if epic.review_finder_model:
+        settings += ["--finder-model", epic.review_finder_model]
     return _skill(
         "review",
         "--repo",
@@ -87,15 +118,22 @@ def review_argv(worktree: Path, number: int, config) -> list[str]:
         str(number),
         "--trust-repo",
         "--fetch",
-        *review_options(config),
+        *review_options(config, verify_low=EPIC_VERIFY_LOW),
+        *earlier_decisions_argv(change_dir),
+        *settings,
     )
 
 
-def resume_argv(target_dir: str, config) -> list[str]:
+def resume_argv(target_dir: str, config, change_dir: Path | None = None) -> list[str]:
     from ..findings.loop import review_options
+    from ..review_rounds import earlier_decisions_argv
 
     return _skill(
-        "resume", target_dir, "--trust-repo", *review_options(config, exclude=False)
+        "resume",
+        target_dir,
+        "--trust-repo",
+        *review_options(config, exclude=False, verify_low=EPIC_VERIFY_LOW),
+        *earlier_decisions_argv(change_dir),
     )
 
 
@@ -247,35 +285,73 @@ def blocker_line(f: dict) -> str:
 def blockers(review_dir: Path | str) -> list[str] | None:
     """`blocking_findings`, one line each; None when the file cannot be read."""
     found = blocking_findings(review_dir)
+    return None if found is None else lines(found, review_dir)
+
+
+def lines(found: list[dict], review_dir: Path | str) -> list[str] | None:
+    """`blocker_line` of each of *found*, read from *review_dir*; None when
+    one cannot be read."""
     try:
-        return None if found is None else [blocker_line(f) for f in found]
+        return [blocker_line(f) for f in found]
     except (KeyError, TypeError, AttributeError) as e:
         log.warning("cannot read %s: %s", Path(review_dir) / "findings.json", e)
         return None
 
 
-# The impacts the verifier gives a defect that does not reach a user or the
-# business (`review_pipeline/prompts/verify.py`, `IMPACT_RULES`).
-HARMLESS_IMPACTS = ("correctness-only", "hygiene")
+# The impact the verifier gives a defect that does not reach a user or the
+# business (`review_pipeline/prompts/verify.py`, `IMPACT_RULES`). A
+# `correctness-only` defect is not harmless: #39 merged with two
+# (plan-factory-merged-2026-10-29.md, item 18).
+HARMLESS_IMPACTS = ("hygiene",)
 
 
-def decide(found: list[dict], pr_round: int, cap: int, worth: str) -> tuple[str, str]:
+def open_at_cap(found: list[dict], merge: str = "auto") -> list[str]:
+    """The ids that park a child at the round cap: every HIGH, and under
+    *merge* `auto` every confirmed MEDIUM not rated `hygiene` (item 18).
+    Under `manual` a person merges after reading them, so MEDIUMs go to the
+    final fix as before."""
+    return [
+        f["id"]
+        for f in found
+        if f.get("severity") == "HIGH"
+        or (
+            merge == "auto"
+            and f.get("status") == "confirmed"
+            and f.get("impact") not in HARMLESS_IMPACTS
+        )
+    ]
+
+
+def decide(
+    found: list[dict], pr_round: int, cap: int, worth: str, merge: str = "auto"
+) -> tuple[str, str]:
     """What follows a review that left the blockers *found* (not empty): `round`
     (another fix and review), `final_fix` (one fix with no review after it,
     then the merge step) or `park`, and why (plan-review-rounds-and-finders,
-    item 2). An open HIGH earns a round, and parks at the cap. A MEDIUM earns
-    a round under *worth* `any`, and under `breaks` unless the verifier rated
-    it `correctness-only` or `hygiene`: one it did not rate is not known to be
-    harmless. At the cap, MEDIUMs alone get the final fix. Reads only the
-    review's own fields; calls no model."""
+    item 2). An open HIGH earns a round. A MEDIUM earns a round under *worth*
+    `any`, and under `breaks` unless the verifier rated it `hygiene`: one it
+    did not rate is not known to be harmless. At the cap, `open_at_cap`
+    parks (an open confirmed finding never auto-merges,
+    plan-factory-merged-2026-10-29.md, item 18); the rest get the final fix.
+    Reads only the review's own fields; calls no model."""
     highs = [f["id"] for f in found if f.get("severity") == "HIGH"]
     if pr_round >= cap:
-        if highs:
+        parks = open_at_cap(found, merge)
+        if parks:
+            left = ", ".join(parks)
             return (
                 "park",
-                f"review round {pr_round} of {cap} left Code HIGH {', '.join(highs)}",
+                f"review round {pr_round} of {cap} left open Code findings {left}",
             )
-        return "final_fix", f"review round {pr_round} of {cap} left only Code MEDIUMs"
+        return (
+            "final_fix",
+            f"review round {pr_round} of {cap} left only Code MEDIUMs that "
+            + (
+                "a person merges after reading"
+                if merge == "manual"
+                else "are unconfirmed or rated hygiene"
+            ),
+        )
     if highs:
         return "round", f"Code HIGH {', '.join(highs)} is open"
     worthy = [
@@ -288,7 +364,7 @@ def decide(found: list[dict], pr_round: int, cap: int, worth: str) -> tuple[str,
             "round",
             f"Code MEDIUM {', '.join(worthy)} earns another round (epic.round_worth: {worth})",
         )
-    return "final_fix", "every Code MEDIUM left is rated correctness-only or hygiene"
+    return "final_fix", "every Code MEDIUM left is rated hygiene"
 
 
 def log_text(path: Path) -> str:
