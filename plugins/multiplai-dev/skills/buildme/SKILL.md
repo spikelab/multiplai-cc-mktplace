@@ -862,6 +862,38 @@ and `unknown`: each part no record holds a spend for), `board_unsent`,
 while the epic runs. Read it when the epic exits or the user asks, instead
 of tailing the logs. Exit `2` when the change has no epic yet.
 
+**Running the epic until it is done: `epic watch`.** To keep an epic going
+with nobody watching, run
+
+```bash
+uv run -q --directory "${CLAUDE_PLUGIN_ROOT}/skills/buildme/scripts" python -m build_pipeline \
+  epic watch --change <parent> --project-dir <project> --trust-repo [--viewer-repo <repo>]
+```
+
+It runs the epic (`build --change <parent> --auto`, in its own session, its
+output appended to `<epic dir>/watch-epic.log`) and reads its exit code, its
+output, the logs of the children's runs it started, and `epic status`. It runs
+the epic again after a network failure (`EAI_AGAIN`, `ECONNRESET`, `Could not
+resolve host` and the like), an agent timeout (exit 4 with no `SPEC:ISSUES:`)
+or a hit Claude usage limit: for the limit it waits until one minute past the
+reset time the error names; with none, and for the other two, it waits 5
+minutes, then twice as long each time in a row, up to 60. It stops when the
+epic exits 0 with every child merged (exit 0), when a person is needed (exit
+3: `EPIC:MERGE_WAITING`, `EPIC:BUDGET`, `FEATURE_BRANCH:CONFLICT`, a spec
+refusal or a split, or a child parked or waiting on its plan approval), or on
+any other failure (exit 1; it never runs the epic again for a failure it
+cannot name). On a stop it posts one Slack message through the
+pipeline-viewer's `post` command: `SLACK_TOKEN` from the environment and
+`pipeline_viewer.slack.channel` in `<viewer repo>/specs/config.yaml`, else the
+message goes to that box's `slack-outbox.md`. `--viewer-repo` is the `--repo`
+the page was served with (default: the project's repository). Before each run
+it waits while another process holds the epic's lock and while a child's
+build or fixer from an earlier run is alive (found by pid and command line),
+so it never starts a second epic. Each decision is a line in
+`<epic dir>/watch.log`; a loop stopped while it waits for a usage reset reads
+the time back from there when started again. Stopping the loop (Ctrl-C)
+leaves a running epic running.
+
 **Moving the Plane cards: `epic.board`.** With `epic.board: plane` in
 `specs/config.yaml` (default `off`, which sends nothing), each
 `BOARD:<change>:<Column>` line a child prints is saved to
