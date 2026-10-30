@@ -15,6 +15,30 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.147.0] - 2026-10-29
+
+### Added
+
+- **buildme: `epic status`.** `python -m build_pipeline epic status --change
+  <parent> --project-dir <project>` prints one JSON line per child of an
+  epic: its state, the head of its worktree, the branch its PR targets, its
+  PR, what blocks it, what the next epic run or a person does next, and its
+  spend, known and unknown. It reads only what is on disk (and `ps`), launches
+  nothing, writes nothing and never takes the epic's lock, so it is safe to
+  run while the epic runs. A child whose build is still running shows as
+  `running`; one whose process stopped with no result and that nothing runs
+  shows as `interrupted`. Read it instead of tailing the logs.
+- **buildme: the epic moves the children's Plane cards, through an outbox.**
+  With `epic.board: plane` in `specs/config.yaml`, each column a child's build
+  moves to (`BOARD:<change>:<Column>`) is saved to
+  `<epic dir>/board-outbox.jsonl` before it is sent through the plane skill to
+  the child's own ticket (`ticket_refs.epic`). A send that fails, or is cut
+  off, is sent again from the file by the next drain or the next epic run, in
+  order, and never rebuilds anything; a card already in that column is marked
+  sent without a second move. `epic.plane_script` points at the plane skill's
+  `plane.py` when multiplai-pm is not installed beside multiplai-dev. The
+  default, `epic.board: off`, sends nothing, as before.
+
 ## [0.129.0] - 2026-10-29
 
 ### Added
