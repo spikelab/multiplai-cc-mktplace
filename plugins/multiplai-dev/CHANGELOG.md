@@ -15,6 +15,11 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.145.0] - 2026-10-29
+
+### Added
+- **buildme**: `planning.analysis: component` in `specs/config.yaml` puts only part of the codebase analysis in the design prompt: the facts about the files the component's `plan.md` and specs name, and every convention. The "Not analysed" list is left out. The default, `full`, puts the whole analysis in the prompt as before, byte for byte. Measured offline on account-model's inputs (DFACCMGMT-1), the design prompt drops from 584,290 to 108,558 characters. Its plan and specs name no file, so it keeps only the 138 conventions of 1,393 facts. The writer can still open any file with its tools. Changing the setting does not regenerate a design already written.
+
 ## [0.129.0] - 2026-10-29
 
 ### Added
