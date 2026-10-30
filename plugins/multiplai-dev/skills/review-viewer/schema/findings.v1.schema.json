@@ -132,6 +132,36 @@
       "title": "Citation",
       "type": "object"
     },
+    "EarlierDecision": {
+      "additionalProperties": false,
+      "description": "The decision an earlier reviewer of the change made on the same defect (multiplai-dev\n0.137+): an entry of the review's `--earlier-decisions` file, which buildme writes from its\nblock reviews. The finding stays listed; this only records the decision beside it.",
+      "properties": {
+        "decision": {
+          "enum": [
+            "rejected",
+            "accepted-unfixed"
+          ],
+          "title": "Decision",
+          "type": "string"
+        },
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "reason": {
+          "default": "",
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "decision"
+      ],
+      "title": "EarlierDecision",
+      "type": "object"
+    },
     "EarlierStatus": {
       "additionalProperties": false,
       "description": "What became of a finding an earlier round listed and nobody rejected, at this round's head\n(multiplai-dev 0.94+).\n\n`round` is the head of the round that listed it (its citations are at that\ncommit); `citations` are at this round's head and back the status. A finding\nno agent could assess is `cannot_verify`, never `resolved`; `error` says why\nwhen every recheck call failed.",
@@ -237,6 +267,17 @@
           "minLength": 1,
           "title": "Defect Class",
           "type": "string"
+        },
+        "earlier_decision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EarlierDecision"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "expected_behaviour": {
           "anyOf": [

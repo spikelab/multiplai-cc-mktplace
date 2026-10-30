@@ -15,6 +15,26 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.137.0] - 2026-10-29
+
+### Added
+
+- **review**: `--earlier-decisions <file>` on `review` and `resume` takes a
+  JSON list of findings an earlier reviewer of the same change rejected or
+  accepted and left unfixed. A finding of this round that describes one of
+  them stays listed and blocking, is not labelled a repeat, and carries
+  `earlier_decision: {id, decision, reason}` in `findings.json` and an
+  **Earlier decision:** line in the review. A file of the wrong shape stops
+  the run with exit 2. A resumed review keeps the matches it already saved.
+- **buildme**: the review of a PR buildme opened, from the epic and from
+  `findings`, now gets `--earlier-decisions` with every finding its per-block
+  reviews rejected (with the judge's reason) and every accepted finding still
+  open, so the PR review shows which of its findings buildme already decided
+  on. The file is written under the multiplai data directory, never in the
+  repository, and is passed only when it has an entry.
+- **review-viewer**: `findings.json` v1 accepts the optional
+  `earlier_decision` object on a finding; the page does not show it yet.
+
 ## [0.136.0] - 2026-10-29
 
 ### Added

@@ -111,6 +111,16 @@ class Assessment(_Strict):
     earlier_note: str | None = None
 
 
+class EarlierDecision(_Strict):
+    """The decision an earlier reviewer of the change made on the same defect (multiplai-dev
+    0.137+): an entry of the review's `--earlier-decisions` file, which buildme writes from its
+    block reviews. The finding stays listed; this only records the decision beside it."""
+
+    id: str = Field(min_length=1)
+    decision: Literal["rejected", "accepted-unfixed"]
+    reason: str = ""
+
+
 class Absorbed(_Strict):
     """A finding the review merged into this one, at its merge or assess stage: its id and claim."""
 
@@ -219,6 +229,9 @@ class Finding(_Strict):
     # The kept round an incremental round copied this finding from, unchanged (multiplai-dev
     # 0.115+): `<NN>-<head12>`. Absent on a finding this round found.
     carried_from: str | None = None
+    # The `--earlier-decisions` entry this finding describes (multiplai-dev 0.137+). Absent when
+    # it matches none, and in older files.
+    earlier_decision: EarlierDecision | None = None
 
     @field_validator("paths")
     @classmethod

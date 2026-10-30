@@ -60,7 +60,7 @@ from pathlib import Path
 
 from build_pipeline.budget import BudgetExceededError
 
-from .. import budget, git_ops, readiness, stop_record
+from .. import budget, git_ops, readiness, review_rounds, stop_record
 from ..change_manager import normalize_change_name
 from ..config import BuildConfig
 from ..models import BlockStatus, BuildPhase
@@ -498,7 +498,11 @@ def review_argv(run: FindingsRun) -> list[str]:
     ]
     if run.trust_repo:
         argv.append("--trust-repo")
-    return argv + review_options(run.config)
+    return (
+        argv
+        + review_options(run.config)
+        + review_rounds.earlier_decisions_argv(run.change_dir)
+    )
 
 
 def resume_argv(run: FindingsRun, target_dir: str) -> list[str]:
@@ -515,7 +519,11 @@ def resume_argv(run: FindingsRun, target_dir: str) -> list[str]:
     ]
     if run.trust_repo:
         argv.append("--trust-repo")
-    return argv + review_options(run.config, exclude=False)
+    return (
+        argv
+        + review_options(run.config, exclude=False)
+        + review_rounds.earlier_decisions_argv(run.change_dir)
+    )
 
 
 # What `review` prints (exit 4) when the ledger shows a run of this target and

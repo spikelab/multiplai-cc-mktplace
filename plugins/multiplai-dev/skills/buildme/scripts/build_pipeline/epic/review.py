@@ -70,14 +70,29 @@ def _skill(*args: str) -> list[str]:
     ]
 
 
-def review_argv(worktree: Path, number: int, config) -> list[str]:
+def child_change_dir(project: Path, change: str) -> Path | None:
+    """The child's change directory in its project *project* (`<P>`), as the fixer finds it
+    (`fix._state_rounds`); None when there is none."""
+    from ..findings.cli import ResolveError, change_dir_for, change_name_for
+
+    try:
+        return change_dir_for(Path(project) / "specs", change_name_for(change, ""))
+    except (ResolveError, ValueError):
+        return None
+
+
+def review_argv(
+    worktree: Path, number: int, config, change_dir: Path | None = None
+) -> list[str]:
     """`--fetch`: the review needs the PR's head and base commits in the clone.
     A sibling's merge moves the base, and a push from elsewhere moves the
     head, without any launch here fetching them (C.S8). Then
     `findings.loop.review_options` of the epic's *config*: the spec change
     directories and buildme's runtime files left out, and the configured
-    review model."""
+    review model. Then `--earlier-decisions` from the child's block reviews in
+    *change_dir* (`review_rounds.earlier_decisions_argv`), when there are some."""
     from ..findings.loop import review_options
+    from ..review_rounds import earlier_decisions_argv
 
     return _skill(
         "review",
@@ -88,14 +103,20 @@ def review_argv(worktree: Path, number: int, config) -> list[str]:
         "--trust-repo",
         "--fetch",
         *review_options(config),
+        *earlier_decisions_argv(change_dir),
     )
 
 
-def resume_argv(target_dir: str, config) -> list[str]:
+def resume_argv(target_dir: str, config, change_dir: Path | None = None) -> list[str]:
     from ..findings.loop import review_options
+    from ..review_rounds import earlier_decisions_argv
 
     return _skill(
-        "resume", target_dir, "--trust-repo", *review_options(config, exclude=False)
+        "resume",
+        target_dir,
+        "--trust-repo",
+        *review_options(config, exclude=False),
+        *earlier_decisions_argv(change_dir),
     )
 
 

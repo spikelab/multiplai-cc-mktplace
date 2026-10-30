@@ -134,6 +134,15 @@ def assessment_line(fd: dict) -> str:
     return f"**Assessment:** {label} — {reason}".rstrip()
 
 
+def earlier_decision_line(fd: dict) -> str:
+    """One line naming the `--earlier-decisions` entry the finding describes, or "" for none."""
+    e = fd.get("earlier_decision") or {}
+    if not e:
+        return ""
+    reason = f": {_one_line(e['reason'])}" if e.get("reason") else ""
+    return f"**Earlier decision:** `{e['id']}` {e['decision']}{reason}"
+
+
 # --- earlier rounds: statuses, recurring lineages, the summary line ----------------
 
 # A lineage open in this many rounds or more is listed under `## Recurring`.
@@ -372,6 +381,8 @@ def finding_section(
         out += [class_line(fd), ""]
     if assessment_line(fd):
         out += [assessment_line(fd), ""]
+    if earlier_decision_line(fd):
+        out += [earlier_decision_line(fd), ""]
     if fd.get("impact"):
         out += [f"**Impact:** {fd['impact']}", ""]
 
