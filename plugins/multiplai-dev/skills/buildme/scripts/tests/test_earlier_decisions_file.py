@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 from build_pipeline import review_rounds
+from build_pipeline.config import EpicSettings
 from build_pipeline.epic import review as epic_review
 from build_pipeline.findings import loop
 from build_pipeline.models import BlockInfo, ReviewFinding, ReviewResult
@@ -137,9 +138,10 @@ def test_both_review_commands_pass_it(tmp_path, data_dir, monkeypatch):
     )
     assert loop.review_argv(run)[-2:] == expected
     assert loop.resume_argv(run, "/t")[-2:] == expected
-    assert epic_review.review_argv(tmp_path, 3, None, change)[-2:] == expected
-    assert epic_review.resume_argv("/t", None, change)[-2:] == expected
-    assert "--earlier-decisions" not in epic_review.review_argv(tmp_path, 3, None)
+    config = SimpleNamespace(epic=EpicSettings())
+    assert epic_review.review_argv(tmp_path, 3, config, change)[-2:] == expected
+    assert epic_review.resume_argv("/t", config, change)[-2:] == expected
+    assert "--earlier-decisions" not in epic_review.review_argv(tmp_path, 3, config)
 
 
 def test_the_epic_finds_the_childs_change_dir(tmp_path):
