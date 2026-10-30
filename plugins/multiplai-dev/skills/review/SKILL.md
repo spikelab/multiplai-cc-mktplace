@@ -160,6 +160,18 @@ finding to a verifier too. Without it, LOW findings cost no verifier call;
 on two Dolcebot reviews, verifying them was most of the verify spend. The
 viewer hides LOW findings until the reader presses **Show N low findings**.
 
+`--verify-low risky` (or `verify_low: risky`) verifies only the risky ones.
+One call with no tools, on the verifier's model, reads every LOW finding's
+claim and failure scenario and picks those whose scenario ends in a crash or
+an error response, an access or data-exposure problem, or lost or wrong
+data. Those go to a verifier like any other finding; the rest stay
+unverified. The choice is saved before any verifier runs, so `resume` does
+not ask again. An id the call returns that is not a LOW finding is dropped
+and listed in the review's errors; a failed call verifies no LOW finding and
+says so there. On `resume` and `batch`, put the positional argument before
+`--verify-low`, since the flag takes an optional value. buildme's epic
+reviews pass `--verify-low risky`.
+
 ## Re-pushed PRs and branches
 
 A second review of a PR or branch whose last round finished reviews only the
@@ -1099,7 +1111,8 @@ the session's model.
   snapshot (see "Dependency source"); `false` is what `--no-deps` does.
 - `deps_max_mb` (default `50`): skip a dependency whose source is larger.
 - `verify_low` (default `false`): verify LOW findings too; `true` is what
-  `--verify-low` does (see "LOW findings").
+  `--verify-low` does, `risky` what `--verify-low risky` does (see "LOW
+  findings").
 - `incremental` (default `true`): a re-pushed PR or branch reviews only the
   files whose patch changed; `false` reviews every file, as `--full` does for
   one run (see "Re-pushed PRs and branches").

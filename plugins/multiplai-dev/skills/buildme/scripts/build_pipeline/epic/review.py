@@ -70,6 +70,10 @@ def _skill(*args: str) -> list[str]:
     ]
 
 
+# What the epic's reviews pass as `--verify-low`: only the risky LOW findings are verified.
+EPIC_VERIFY_LOW = "risky"
+
+
 def child_change_dir(project: Path, change: str) -> Path | None:
     """The child's change directory in its project *project* (`<P>`), as the fixer finds it
     (`fix._state_rounds`); None when there is none."""
@@ -88,9 +92,12 @@ def review_argv(
     A sibling's merge moves the base, and a push from elsewhere moves the
     head, without any launch here fetching them (C.S8). Then
     `findings.loop.review_options` of the epic's *config*: the spec change
-    directories and buildme's runtime files left out, and the configured
-    review model. Then `--earlier-decisions` from the child's block reviews in
-    *change_dir* (`review_rounds.earlier_decisions_argv`), when there are some."""
+    directories and buildme's runtime files left out, the configured
+    review model, and `--verify-low risky` (`EPIC_VERIFY_LOW`), so the LOW
+    findings whose scenario is a crash, an access or data problem, or lost
+    data are verified and can rise. Then `--earlier-decisions` from the
+    child's block reviews in *change_dir*
+    (`review_rounds.earlier_decisions_argv`), when there are some."""
     from ..findings.loop import review_options
     from ..review_rounds import earlier_decisions_argv
 
@@ -102,7 +109,7 @@ def review_argv(
         str(number),
         "--trust-repo",
         "--fetch",
-        *review_options(config),
+        *review_options(config, verify_low=EPIC_VERIFY_LOW),
         *earlier_decisions_argv(change_dir),
     )
 
@@ -115,7 +122,7 @@ def resume_argv(target_dir: str, config, change_dir: Path | None = None) -> list
         "resume",
         target_dir,
         "--trust-repo",
-        *review_options(config, exclude=False),
+        *review_options(config, exclude=False, verify_low=EPIC_VERIFY_LOW),
         *earlier_decisions_argv(change_dir),
     )
 

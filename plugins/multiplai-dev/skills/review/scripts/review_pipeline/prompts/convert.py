@@ -43,7 +43,9 @@ def build_convert(key: str, report: str) -> str:
         "Emit exactly one item per defect or advice in the report, unverified hypotheses included. Do not drop, "
         "merge, re-rank or judge items: an item the report itself doubts is still an item, and a later stage "
         "judges them. Add nothing the report does not say.",
-        "For each item: `kind` is `advice` for a suggestion that is not a defect, else `defect`. `severity` is "
+        "For each item: `kind` is `advice` for a suggestion that is not a defect, else `defect`. A note in "
+        "which the report says it checked something and found no problem is not a defect: it is `advice`, "
+        "with `file`, `line_start` and `line_end` null. `severity` is "
         "the report's own (HIGH, MEDIUM or LOW), or null when it states none. `file`, `line_start` and "
         "`line_end` are the location the report names, or null when it names none. Open that file and copy "
         "exact quotes from it into `citations`, the item's own location first: text copied exactly from those "

@@ -15,6 +15,30 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.139.0] - 2026-10-29
+
+### Added
+
+- review: `--verify-low risky` (on `review`, `batch` and `resume`) or
+  `verify_low: risky` in `review.yaml` verifies only the LOW findings whose
+  failure scenario ends in a crash or an error response, an access or
+  data-exposure problem, or lost or wrong data. One call with no tools picks
+  them from each LOW finding's claim and scenario; the rest stay unverified.
+  The choice is saved before any verifier runs, so `resume` does not ask
+  again. `true` and `false` work as before.
+- buildme: the epic's PR reviews pass `--verify-low risky`, so a risky LOW
+  finding is checked by a verifier instead of being left unverified.
+
+### Changed
+
+- review: a finder note that says it checked something and found no problem
+  no longer becomes a finding. The convert step marks such a note as advice
+  with no location, and a defect whose claim says no problem was found is
+  dropped and listed in the review's errors.
+- review: the merge step gives one agent at most 40 findings. A larger group
+  of overlapping findings (one held 120) is split by file, then in line
+  order.
+
 ## [0.138.0] - 2026-10-29
 
 ### Changed

@@ -45,6 +45,9 @@ log = logging.getLogger(__name__)
 # Two ranges whose lines are at most this far apart are grouped as if they
 # overlapped: finders often cite a statement and the line after it.
 MERGE_LINE_GAP = 2
+# The most findings one merge agent is given. A larger group (one held 120) is split by file, then
+# by line order (`link_groups`).
+MERGE_GROUP_MAX = 40
 MERGED_STATUSES = ("confirmed", "unverifiable", "unverified")
 
 
@@ -83,12 +86,37 @@ def linked(a: Finding, b: Finding) -> bool:
     )
 
 
-def link_groups(findings: list[Finding], link=linked) -> list[list[Finding]]:
+def _capped(group: list[Finding], max_size: int) -> list[list[Finding]]:
+    """*group* (in file, then line order) as parts of at most *max_size*: one per file, and a file
+    with more cut in line order into the fewest parts of near-equal size. Parts of one are dropped."""
+    if len(group) <= max_size:
+        return [group]
+    by_file: dict[str, list[Finding]] = {}
+    for f in group:
+        by_file.setdefault(f.file, []).append(f)
+    parts = []
+    for members in by_file.values():
+        n = -(-len(members) // max_size)
+        size, extra = divmod(len(members), n)
+        start = 0
+        for k in range(n):
+            end = start + size + (1 if k < extra else 0)
+            parts.append(members[start:end])
+            start = end
+    return [p for p in parts if len(p) >= 2]
+
+
+def link_groups(
+    findings: list[Finding], link=linked, *, max_size: int | None = None
+) -> list[list[Finding]]:
     """Groups of 2+ of *findings*, chained by *link* (`linked` unless given).
 
     A group is every finding reachable from another by one link. Groups come
     in the order their first member appears in *findings*; members are in
-    file order of first appearance, then line order.
+    file order of first appearance, then line order. With *max_size*, a
+    larger group is split by file, then by line order (`_capped`); the parts
+    keep that order. The split is computed from the findings alone, so a
+    resume gets the same groups back.
     """
     parent = list(range(len(findings)))
 
@@ -112,23 +140,23 @@ def link_groups(findings: list[Finding], link=linked) -> list[list[Finding]]:
     for idx in sorted(members.values(), key=min):
         if len(idx) < 2:
             continue
-        groups.append(
-            sorted(
-                (findings[i] for i in idx),
-                key=lambda f: (file_order[f.file], f.line_start, f.line_end),
-            )
+        group = sorted(
+            (findings[i] for i in idx),
+            key=lambda f: (file_order[f.file], f.line_start, f.line_end),
         )
+        groups.extend(_capped(group, max_size) if max_size else [group])
     return groups
 
 
 def overlap_groups(state: ReviewState) -> list[list[Finding]]:
-    """Groups of 2+ shown (confirmed or unverifiable) findings that `linked` chains together."""
+    """Groups of 2+ shown (confirmed or unverifiable) findings that `linked` chains together, each of
+    at most `MERGE_GROUP_MAX`."""
     shown = [
         f
         for f in state.findings
         if getattr(state.verdicts.get(f.id), "status", "") in MERGED_STATUSES
     ]
-    return link_groups(shown)
+    return link_groups(shown, max_size=MERGE_GROUP_MAX)
 
 
 def group_key(group: list[Finding]) -> str:
