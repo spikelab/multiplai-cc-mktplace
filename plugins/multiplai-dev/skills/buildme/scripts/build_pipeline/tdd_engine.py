@@ -941,6 +941,66 @@ def prototype_section(config: BuildConfig) -> str:
     )
 
 
+def _names_in(name: str, text: str) -> bool:
+    """Whether *text* contains *name* as whole words, ignoring case."""
+    name = name.strip()
+    return bool(name) and bool(
+        re.search(rf"(?<!\w){re.escape(name)}(?!\w)", text, re.IGNORECASE)
+    )
+
+
+_DESIGN_SECTION_RE = re.compile(r"^## .*$", re.MULTILINE)
+_SUBHEADING_RE = re.compile(r"^#{2,6}[ \t]+(.+?)[ \t#]*$", re.MULTILINE)
+
+
+def _sliced_design(block: BlockInfo, design: str) -> str:
+    """With `tdd.context: sliced`: the design's text before its first `## `
+    section and the `## ` sections whose heading, or a heading inside them,
+    the block's name or tasks name; the whole design when they name none."""
+    cited_in = f"{block.name}\n{block.description}"
+    starts = [m.start() for m in _DESIGN_SECTION_RE.finditer(design)]
+    if not starts:
+        return design
+    bounds = list(zip(starts, starts[1:] + [len(design)]))
+    kept = [
+        design[start:end]
+        for start, end in bounds
+        if any(
+            _names_in(m.group(1), cited_in)
+            for m in _SUBHEADING_RE.finditer(design[start:end])
+        )
+    ]
+    if not kept:
+        return design
+    return design[: starts[0]] + "".join(kept)
+
+
+_REQUIREMENT_RE = re.compile(
+    r"^### Requirement:([^\n]*)(.*?)(?=^### Requirement:|^## |^# |\Z)",
+    re.MULTILINE | re.DOTALL,
+)
+
+
+def _sliced_requirements(block: BlockInfo, sources: dict[str, str]) -> dict[str, str]:
+    """With `tdd.context: sliced`: the capabilities the block's `Satisfies:`
+    line names, by capability or by requirement. Within one, only the named
+    requirements when it names any, else all of them. Every source when the
+    line names nothing."""
+    satisfies = "\n".join(block.satisfies)
+    kept: dict[str, str] = {}
+    for label, text in sources.items():
+        cap = label.split("#", 1)[1] if "#" in label else Path(label).stem
+        if any(
+            _names_in(m.group(1), satisfies) for m in _REQUIREMENT_RE.finditer(text)
+        ):
+            kept[label] = _REQUIREMENT_RE.sub(
+                lambda m: m.group(0) if _names_in(m.group(1), satisfies) else "", text
+            )
+        elif _names_in(cap, satisfies):
+            kept[label] = text
+    return kept or sources
+
+
 def assemble_context(
     block: BlockInfo,
     config: BuildConfig,
@@ -955,7 +1015,14 @@ def assemble_context(
     ("test_writer", "implementer", "refactorer") controls which files are
     included. ``blocks`` (the full block list) threads earlier blocks'
     Produces signatures into this block's context.
+
+    `tdd.context: sliced` (``config.tdd_context``) cuts the design to the
+    sections the block cites (`_sliced_design`) and the requirements to the
+    ones it satisfies (`_sliced_requirements`), gives the rubric to the
+    "reviewer" role only, and the memory files in `memory_files.tdd` only.
+    "full" (the default) gives everything.
     """
+    sliced = config.tdd_context == "sliced"
     parts: list[str] = []
 
     # Block info
@@ -1003,7 +1070,10 @@ def assemble_context(
 
     # Design document
     if config.design_path.exists():
-        parts.append(f"\n## Design Document\n{config.design_path.read_text()}")
+        design = config.design_path.read_text()
+        if sliced:
+            design = _sliced_design(block, design)
+        parts.append(f"\n## Design Document\n{design}")
 
     # Requirements (BDD scenarios — one section per capability, from
     # specs.md or requirements/<cap>.md).
@@ -1014,7 +1084,10 @@ def assemble_context(
     # prompt cache cannot dedupe. Implementer/refactorer/reviewer get them
     # only via this bundle, so keep them for every role except test_writer.
     if role != "test_writer":
-        for rel, text in requirement_sources(config.change_dir).items():
+        sources = requirement_sources(config.change_dir)
+        if sliced:
+            sources = _sliced_requirements(block, sources)
+        for rel, text in sources.items():
             parts.append(f"\n## Requirements: {rel}\n{text}")
 
     # The prototype pm-spec made (a component's: its change's): the agents
@@ -1061,8 +1134,9 @@ def assemble_context(
         if sigs:
             parts.append("\n" + sigs)
 
-    # Rubric (for reviewers — include for all so agents know quality bar)
-    if config.rubric_path.exists():
+    # Rubric (for reviewers — include for all so agents know quality bar;
+    # with `tdd.context: sliced`, for the reviewer role only)
+    if config.rubric_path.exists() and (not sliced or role == "reviewer"):
         parts.append(f"\n## Evaluation Rubric\n{config.rubric_path.read_text()}")
 
     # Project context
@@ -1072,7 +1146,9 @@ def assemble_context(
     # Memory files (technical preferences, etc.)
     memory_dir = config.config_dir / "memory"
     for mem_file in (
-        config.core_memory_files
+        config.tdd_memory_files
+        if sliced
+        else config.core_memory_files
         + config.stack_memory_files
         + config.additional_memory_files
     ):
