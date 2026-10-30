@@ -132,7 +132,7 @@ def finding_gate(target: TargetInfo, finding: Finding) -> GateResult:
             reason=f"unknown severity {finding.severity!r}",
             action="reject",
         )
-    if finding.dimension != "pre-existing" and finding.file not in target.files:
+    if not finding.pre_existing and finding.file not in target.files:
         return GateResult(
             passed=False,
             reason=f"{finding.file} is not a changed file",

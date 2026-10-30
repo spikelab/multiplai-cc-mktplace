@@ -11,6 +11,12 @@ Two users:
   (`multiplai_core.check_quote`), renders the facts to `codebase-analysis.md`
   with `path:line` links, and writes them to `facts.json` beside it, in the
   format review's explain stage writes (`review/schema/facts.v1.schema.json`).
+- An epic's shared analysis (`epic.shared_analysis`). `run_shared` runs the
+  analysis once, at the feature branch, into `<epic_dir>/codebase-analysis/`
+  and writes its completion marker last; `reuse_shared` builds a child's
+  analysis from it, re-checking only the facts whose cited files changed
+  since and analysing only the files the child's `plan.md` names that the
+  shared analysis did not read.
 - The TDD engine's context (`block_facts: true`). `block_facts_section` hands a
   block's test writer and implementer the facts about the files its tasks
   name, each citation re-checked at the worktree's current HEAD, because
@@ -30,6 +36,7 @@ import json
 import logging
 import os
 import re
+import shutil
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -38,12 +45,14 @@ from pathlib import Path, PurePosixPath
 from code_facts import (
     CallFn,
     Citation,
+    Dropped,
     ExploreOutput,
     Fact,
     Gated,
     Resolve,
     Scope,
     Span,
+    Term,
     Unit,
     citation_keeper,
     explore_unit,
@@ -522,24 +531,36 @@ async def analyse(
     max_units: int,
     name: str,
     change_dir: Path | None = None,
+    named_text: str | None = None,
+    only: set[str] | None = None,
 ) -> Analysis | None:
     """Explain the project's source files at HEAD. None when it is not a git repo with a commit.
 
     A unit whose call raises is recorded in `failed` and the rest go on, so a
-    partial picture still reaches the design.
+    partial picture still reaches the design. *named_text*, when given,
+    replaces the change's documents as the text whose named files go first.
+    *only*, when given, limits the source files to those paths and reads no
+    manifest or config file (a child's files the shared analysis did not read).
     """
     git = project_git(project_dir)
     if git is None:
         return None
     texts = source_files(project_dir, git)
+    if only is not None:
+        texts = {p: t for p, t in texts.items() if p in only}
     lines = {p: line_count(t) for p, t in texts.items()}
-    config_lines = {p: line_count(t) for p, t in config_files(project_dir, git).items()}
+    config_lines = (
+        {}
+        if only is not None
+        else {p: line_count(t) for p, t in config_files(project_dir, git).items()}
+    )
     # The dependency slice is one of the max_units; with only one, the source gets it.
     if max_units > 1:
         deps, config_not_analysed = dependency_slice(config_lines)
     else:
         deps, config_not_analysed = [], sorted(config_lines)
-    ranked = rank_files(texts, _named_in(spec_text(change_dir), list(texts)))
+    named = spec_text(change_dir) if named_text is None else named_text
+    ranked = rank_files(texts, _named_in(named, list(texts)))
     scope, not_analysed = limit_scope(
         lines, ranked, max_units - 1 if deps else max_units
     )
@@ -708,6 +729,56 @@ def render_markdown(a: Analysis, project_dir: Path, md_dir: Path) -> str:
     return "\n".join(out) + "\n"
 
 
+_CITED_PATH = re.compile(r"\[`([^`]+?):\d+(?:-\d+)?`\]")
+COMPONENT_FACTS_NOTE = (
+    "Only the facts about files this component's plan.md and specs name are listed "
+    "here ({kept} of {total}), with every convention (`planning.analysis: component`). "
+    "Open other files with your tools when the design needs them."
+)
+NO_COMPONENT_FACTS = (
+    "(no checked facts about the files this component's plan.md and specs name)"
+)
+
+
+def component_facts(report: str, named_text: str) -> str:
+    """*report* (`render_markdown`'s output) cut down to one component.
+
+    A bullet under Architecture, Patterns or Dependencies is kept when one of
+    its `path:line` links is a file *named_text* names (`_named_in`); every
+    Conventions bullet is kept; the "Not analysed" section is dropped. A report
+    without those headings (the no-commit report, a new project) is returned
+    unchanged.
+    """
+    lines = report.splitlines()
+    if not any(line == f"## {h}" for h in HEADINGS for line in lines):
+        return report
+    paths = sorted({p for line in lines for p in _CITED_PATH.findall(line)})
+    named = _named_in(named_text, paths)
+    preamble: list[str] = []
+    sections: dict[str, list[str]] = {}
+    current: str | None = None
+    total = kept = 0
+    for line in lines:
+        if line.startswith("## "):
+            current = line[3:].strip()
+            continue
+        if current is None:
+            preamble.append(line)
+            continue
+        if current not in HEADINGS or not line.startswith("- "):
+            continue
+        total += 1
+        if current == "Conventions" or named.intersection(_CITED_PATH.findall(line)):
+            kept += 1
+            sections.setdefault(current, []).append(line)
+    out = [*(line for line in preamble if line.strip())]
+    out.append(COMPONENT_FACTS_NOTE.format(kept=kept, total=total))
+    for h in HEADINGS:
+        out += ["", f"## {h}", ""]
+        out += sections.get(h) or [NO_COMPONENT_FACTS]
+    return "\n".join(out) + "\n"
+
+
 # --- facts.json --------------------------------------------------------------------------
 
 
@@ -761,6 +832,244 @@ def write_facts_file(a: Analysis, directory: Path) -> Path:
     )
     tmp.replace(path)
     return path
+
+
+# --- one analysis per epic (`epic.shared_analysis`) ------------------------------------
+
+SHARED_DIR = "codebase-analysis"  # under the epic's directory
+SHARED_REPORT = "codebase-analysis.md"
+# Written last, through a temp file: a directory without it is a partial run.
+SHARED_MARKER = "complete.json"
+
+
+def shared_settings(config) -> dict:
+    """The analysis settings an epic's shared analysis is keyed by, beside its commit."""
+    return {
+        "codebase_analysis_max_units": config.codebase_analysis_max_units,
+        "model": config.model_for("codebase_analysis"),
+        "effort": config.effort_for("codebase_analysis"),
+    }
+
+
+def shared_marker(directory: Path) -> dict | None:
+    """The completion marker of the shared analysis in *directory*; None when it never finished."""
+    try:
+        data = json.loads((Path(directory) / SHARED_MARKER).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("sha"), str):
+        return None
+    return data
+
+
+def epic_spec_text(change_dir: Path) -> str:
+    """The documents of an epic's change and of each of its components (`spec_text`)."""
+    parts = [spec_text(change_dir)]
+    components = change_dir / "components"
+    if components.is_dir():
+        parts += [spec_text(d) for d in sorted(components.iterdir()) if d.is_dir()]
+    return "\n".join(parts)
+
+
+async def run_shared(
+    directory: Path,
+    project_dir: Path,
+    *,
+    call: CallFn,
+    settings: dict,
+    name: str,
+    named_text: str,
+) -> dict | None:
+    """Run the analysis once for an epic into *directory* and return its marker.
+
+    Whatever an earlier run left there is deleted first, so a run killed
+    midway starts again from the start. `facts.json` and
+    `codebase-analysis.md` are written, then the marker: the commit, the
+    settings, the files read and what was left out. None, with nothing
+    written, when *project_dir* has no commit.
+    """
+    directory = Path(directory)
+    if directory.exists():
+        shutil.rmtree(directory)
+    analysis = await analyse(
+        project_dir,
+        call=call,
+        max_units=settings["codebase_analysis_max_units"],
+        name=name,
+        named_text=named_text,
+    )
+    if analysis is None:
+        return None
+    write_facts_file(analysis, directory)
+    (directory / SHARED_REPORT).write_text(
+        render_markdown(analysis, project_dir, directory), encoding="utf-8"
+    )
+    marker = {
+        "schema_version": 1,
+        "sha": analysis.git.sha,
+        "settings": settings,
+        "read": {s.path: s.lines for s in analysis.scope.spans},
+        "not_analysed": analysis.not_analysed,
+        "config_not_analysed": analysis.config_not_analysed,
+        "failed": [[files, error] for files, error in analysis.failed],
+    }
+    tmp = directory / (SHARED_MARKER + ".tmp")
+    tmp.write_text(json.dumps(marker, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(directory / SHARED_MARKER)
+    return marker
+
+
+def changed_since(git: ProjectGit, sha: str) -> set[str] | None:
+    """The project's files that differ between *sha* and *git*'s commit; None when git cannot tell."""
+    if sha == git.sha:
+        return set()
+    res = git_ops._run(
+        ["git", "diff", "--name-only", "--no-renames", sha, git.sha, "--"],
+        cwd=git.root,
+    )
+    if not res.ok:
+        return None
+    return {
+        line[len(git.prefix) :]
+        for line in res.stdout.splitlines()
+        if line.startswith(git.prefix)
+    }
+
+
+async def reuse_shared(
+    directory: Path,
+    marker: dict,
+    project_dir: Path,
+    *,
+    call: CallFn,
+    max_units: int,
+    name: str,
+    plan_text: str,
+) -> Analysis | None:
+    """A child's analysis from the epic's shared one in *directory*, at *project_dir*'s HEAD.
+
+    A fact or term citing a file that changed since the shared commit has
+    those citations re-checked with `check_quote` at HEAD; one with none left
+    is dropped. Facts about unchanged files are kept as they are. The source
+    files *plan_text* names that the shared analysis did not read are
+    analysed here (`analyse` with *only*). Nothing in *directory* is written.
+    None when *project_dir* has no commit.
+    """
+    git = project_git(project_dir)
+    if git is None:
+        return None
+    doc = json.loads((Path(directory) / FACTS_FILE).read_text(encoding="utf-8"))
+    old = marker["sha"]
+    changed = changed_since(git, old)
+
+    def holds(c: Citation) -> bool:
+        if changed is not None and c.path not in changed:
+            return True
+        return (
+            check_quote(
+                str(git.root),
+                git.sha,
+                git.prefix + c.path,
+                c.line_start,
+                c.line_end,
+                c.quote,
+            )
+            is None
+        )
+
+    reason = f"its quoted lines changed since the shared analysis at {old[:12]}"
+    dropped = [Dropped.model_validate(d) for d in doc.get("dropped", [])]
+    kind_of = {  # facts.json lists each as the whole fact
+        f["id"]: kind
+        for kind in ("interfaces", "gotchas", "conventions")
+        for f in doc.get(kind, [])
+    }
+    facts: list[Fact] = []
+    picked: dict[str, list[Fact]] = {
+        "interfaces": [],
+        "gotchas": [],
+        "conventions": [],
+    }
+    for raw in doc.get("facts", []):
+        f = Fact.model_validate(raw)
+        good = [c for c in f.citations if holds(c)]
+        if not good:
+            dropped.append(Dropped(stage="shared", what=f.claim[:300], reason=reason))
+            continue
+        kept = f.model_copy(update={"citations": good})
+        facts.append(kept)
+        if f.id in kind_of:
+            picked[kind_of[f.id]].append(kept)
+    terms: dict[str, Term] = {}
+    for raw in doc.get("terms", []):
+        t = Term.model_validate(raw)
+        if t.citation is not None and holds(t.citation):
+            terms.setdefault(t.term.lower(), t)
+        else:
+            dropped.append(
+                Dropped(stage="shared", what=f"term {t.term}", reason=reason)
+            )
+    with_file_fact = {f.citations[0].path for f in facts if f.source.endswith("/file")}
+    purposes = {
+        e["path"]: e["purpose"]
+        for e in doc.get("files", [])
+        if e.get("path") in with_file_fact
+    }
+
+    read = {p: int(n) for p, n in marker.get("read", {}).items()}
+    texts = source_files(project_dir, git)
+    extra = sorted(_named_in(plan_text, list(texts)) - set(read))
+    spans = [Span.whole(p, n) for p, n in read.items()]
+    failed = [(list(files), error) for files, error in marker.get("failed", [])]
+    not_analysed = [p for p in marker.get("not_analysed", []) if p not in extra]
+    if extra:
+        own = await analyse(
+            project_dir, call=call, max_units=max_units, name=name, only=set(extra)
+        )
+        g = own.gated
+        by_id = {f.id: f for f in g.facts}
+        for f in g.facts:
+            f.source = f"child:{f.source}"
+            facts.append(f)
+        for kind in ("interfaces", "gotchas", "conventions"):
+            picked[kind] += [by_id[i] for i in getattr(g, kind)]
+        for t in g.terms:
+            terms.setdefault(t.term.lower(), t)
+        for path, purpose in g.purposes.items():
+            purposes.setdefault(path, purpose)
+        dropped += g.dropped
+        spans += own.scope.spans
+        failed += own.failed
+        not_analysed += own.not_analysed
+        log.info(
+            "Shared codebase analysis: %d file(s) plan.md names analysed here",
+            len(extra),
+        )
+    n = 0
+    for i, f in enumerate(facts):
+        f.id = f"f{i + 1}"
+        for c in f.citations:
+            n += 1
+            c.id = f"c{n}"
+    gated = Gated(
+        facts=facts,
+        purposes=purposes,
+        interfaces=[f.id for f in picked["interfaces"]],
+        gotchas=[f.id for f in picked["gotchas"]],
+        conventions=[f.id for f in picked["conventions"]],
+        terms=list(terms.values()),
+        dropped=dropped,
+    )
+    scope = Scope(spans=spans)
+    return Analysis(
+        gated=gated,
+        git=git,
+        scope=scope,
+        not_analysed=not_analysed,
+        config_not_analysed=list(marker.get("config_not_analysed", [])),
+        failed=failed,
+        uncovered=uncovered(scope, facts),
+    )
 
 
 # --- facts for one block ----------------------------------------------------------------------

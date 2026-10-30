@@ -189,6 +189,13 @@ def build_parser() -> argparse.ArgumentParser:
         "no spec-extract",
     )
     build.add_argument(
+        "--shared-analysis",
+        default="",
+        help="An epic's finished shared codebase analysis directory (the "
+        "coordinator passes it under epic.shared_analysis): reuse its facts and "
+        "analyse only the files plan.md names that it did not read",
+    )
+    build.add_argument(
         "--base-ref",
         default="",
         help="The commit a new worktree branches from (default: the source "
@@ -283,6 +290,15 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Never run the last round's fix as the escalated fix (an epic's "
         "fixer, whose --max-rounds allows one round at a time)",
+    )
+    findings.add_argument(
+        "--from-review",
+        default=None,
+        metavar="REVIEW_DIR",
+        help="Act on the blockers in REVIEW_DIR/findings.json (as --auto posts "
+        "them, with --severities and --code-only) whoever posted them, and "
+        "record a decision for each; one left undecided ends "
+        "FINDINGS:INGESTION_ERROR:<ids>, exit 1 (an epic's fixer)",
     )
     _add_trust_repo_flag(findings)
 

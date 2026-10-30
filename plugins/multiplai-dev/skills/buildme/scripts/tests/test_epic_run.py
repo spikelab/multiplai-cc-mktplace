@@ -297,12 +297,16 @@ def test_children_never_build_in_place(tmp_path, monkeypatch, capsys, key):
     )
 
 
-def test_a_failure_is_relaunched_once_per_invocation(tmp_path, monkeypatch):
+def test_a_failure_is_launched_up_to_max_child_attempts_per_invocation(
+    tmp_path, monkeypatch
+):
+    """G22: `epic.max_child_attempts` (2) launches in a run. With no
+    checkpoint to say the plan is unchanged, the next run launches it again."""
     e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT, steps={"a": [{"exit": 1}]})
     assert e.run() == 1
     assert e.launches().count("a") == 2 and e.status()["a"] == "failed"
     assert e.run() == 1
-    assert e.launches().count("a") == 3
+    assert e.launches().count("a") == 4
 
 
 def test_a_relaunch_of_a_child_that_published_counts_it_built(tmp_path, monkeypatch):

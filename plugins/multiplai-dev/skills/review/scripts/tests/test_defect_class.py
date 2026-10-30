@@ -343,7 +343,8 @@ def test_defect_class_line_in_the_review_under_the_claim():
         head_sha="abc",
     )
     lines = text.splitlines()
-    assert lines[2] == f"class: {CLASS}; also at: {GOOD}, a.py:2-4"
+    # lines[0] is the anchor, lines[2] the heading.
+    assert lines[4] == f"class: {CLASS}; also at: {GOOD}, a.py:2-4"
     assert class_line(_row(other_locations=["a.py:2"])) == "also at: a.py:2"
     assert class_line(_row()) == ""
     assert "class:" not in finding_section(_row(), web_base=None, head_sha="abc")

@@ -695,6 +695,28 @@ class EndSuiteState(BaseModel):
     failure_file: str | None = None
 
 
+class ComponentReviewState(BaseModel):
+    """The component review (`code_review.component_review`) in flight:
+    what a resume needs. Saved before its fix round and after its fix commit
+    (rows S44 and S45 of plan-factory-merged-2026-10-29.md), cleared when the
+    review is done.
+    """
+
+    # `reviews/component-review.json`: the review a resume fixes from (S44).
+    review_path: str
+    # HEAD before the fix round, with the review record committed: a fix
+    # that is not kept is thrown away back to here.
+    checkpoint: str
+    # fix → suite: the last step started.
+    step: str = "fix"
+    # The fix round's commit (S45); None until the fix is committed.
+    fix_commit: str | None = None
+    fix_report: str = ""
+    # Every test file's hash at `checkpoint`; None when they could not be
+    # read, which keeps no fix ("not checked" never authorizes).
+    test_file_hashes: dict[str, str] | None = None
+
+
 class FixOnPassState(BaseModel):
     """A block's fix-on-pass, in flight: what a resume needs to undo it.
 

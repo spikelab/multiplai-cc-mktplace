@@ -208,6 +208,8 @@ async def run_code_review(
     spec_context: str = "",
     standards: str = "",
     implementer_report: str = "",
+    prompt_template: str = CODE_REVIEW_PROMPT,
+    budget_label: str = "review",
 ) -> ReviewResult:
     """Run the two-verdict code review (spec compliance + rubric scores).
 
@@ -232,12 +234,15 @@ async def run_code_review(
             context (empty → the prompt says "(no standards provided)")
         implementer_report: The implementer's own report + RED/GREEN evidence,
             presented to the reviewer as unverified claims
+        prompt_template: The prompt to fill; the component review passes
+            `COMPONENT_REVIEW_PROMPT`
+        budget_label: The label the spend is recorded under
 
     Returns:
         ReviewResult with scores, findings, issues, and the
         missing/extra/misunderstood spec verdict.
     """
-    prompt = CODE_REVIEW_PROMPT.format(
+    prompt = prompt_template.format(
         diff=diff or "(no diff captured)",
         rubric=rubric,
         spec_context=spec_context or "(no spec context provided)",
@@ -268,7 +273,7 @@ async def run_code_review(
                 max_retries=1,
                 max_turns=REVIEWER_MAX_TURNS,
                 cwd=str(config.project_dir),
-                budget_label="review",
+                budget_label=budget_label,
             )
             for m in models
         ],
