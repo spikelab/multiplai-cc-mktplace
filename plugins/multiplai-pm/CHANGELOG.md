@@ -21,6 +21,17 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-10-29
+
+### Changed
+- **pm-spec**: after its first full read, the consistency check reads in full only the `specs.md` files changed since the last check, the ones a changed file names, the ones whose plan changed and the ones an open finding cites. Every other `specs.md` goes in by its capability names and requirement titles. An edit to `proposal.md` or `use-cases.md`, or a check that stopped before its result was saved, makes a full check again. A run from an earlier version does a full check first.
+- **pm-spec**: on such a check, a new major finding that cites only unchanged files, and that no earlier check raised, is advisory instead of blocking. A new critical finding still blocks.
+- **pm-spec**: each rewrite, in the check and in `revise`, now reads in full only the file it rewrites and the specs its findings cite, and the rest by capability names and requirement titles. It closes a gap with the smallest change: a scenario added to the requirement that covers the behaviour, else that requirement extended, and a new requirement only when none covers it.
+
+### Added
+- **pm-spec**: a table in a `specs.md` whose header row matches a table in `ticket.md` must match it cell for cell, whitespace aside. A mismatch is a critical finding, raised in code with no model call.
+- **pm-spec**: the components split in `SKILL.md` now gives sizing guidance: the fixed planning and PR review cost per component measured on the DFACCMGMT-1 epic against TDD cost per block, and for `epic.merge: auto` epics, sizing by buildme's 10-block split trigger rather than its 5-package one.
+
 ## [0.14.0] - 2026-10-29
 
 ### Changed
