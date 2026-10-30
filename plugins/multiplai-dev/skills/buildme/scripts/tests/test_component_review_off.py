@@ -7,8 +7,8 @@ prompt the reviewer, the adjudicator and the fix agent are given (the fix
 agent's context bundle included), the round records and
 `unfixed-findings.md`. It compares them with
 `fixtures/component-review-off-golden.json`, which was captured from the
-code before the setting existed (main at 845ff594). Temporary paths, commit
-ids and timestamps are replaced before the comparison.
+code before the setting existed (main at 845ff594). Temporary paths, the
+Python path, commit ids and timestamps are replaced before the comparison.
 
 Regenerate the golden only on purpose: `REGEN_COMPONENT_REVIEW_GOLDEN=1`.
 """
@@ -186,6 +186,7 @@ async def _capture(base: Path, settings: dict | None = None) -> dict:
     }
     text = json.dumps(captured, indent=1, sort_keys=True, default=str)
     text = text.replace(str(base), "<TMP>")
+    text = text.replace(json.dumps(sys.executable)[1:-1], "<PYTHON>")
     text = re.sub(r"\b[0-9a-f]{40}\b", "<SHA>", text)
     text = re.sub(r"\b[0-9a-f]{7,12}\b", "<SHORT>", text)
     text = re.sub(r"\d{4}-\d\d-\d\dT[\d:.]+\+00:00", "<TIME>", text)
