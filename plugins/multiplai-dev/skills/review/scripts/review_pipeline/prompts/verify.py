@@ -14,6 +14,7 @@ from . import (
     settings_block,
     workspace_block,
 )
+from .find import SEVERITY_GUIDE
 
 SCHEMA = """\
 {"status": "confirmed" | "refuted" | "unverifiable",
@@ -21,7 +22,8 @@ SCHEMA = """\
  "citations": [{"path": "...", "line_start": 1, "line_end": 1, "quote": "exact text"}],
  "expected_behaviour": "one sentence: what correct behaviour would be",
  "topic": "code" | "tests" | "docs" | "config" | "infra" | "data" | "security" | "performance" | "process",
- "impact": "breaks-users" | "breaks-business" | "correctness-only" | "hygiene",
+ "impact": "breaks-users" | "breaks-business" | "depends-on-data" | "correctness-only" | "hygiene",
+ "severity": "HIGH" | "MEDIUM" | "LOW",
  "needs": [{"what": "one sentence naming the information you could not read",
             "cause": "no-access" | "unreachable",
             "command": "one read-only shell command that fetches it; empty only when none exists",
@@ -44,8 +46,13 @@ setting or workflow the plugin's or project's own docs present as normal use, re
 rare host, file encoding or opt-out setting does not; (2) the harm follows from this defect alone,
 with no second failure needed (a model call failing, an agent breaking its prompt, a person's
 separate mistake); a crash or stop the code promises to survive counts as ordinary; (3) no other
-check in the code, CI or the documented workflow stops the harm before it lands. Otherwise rate
-`correctness-only`.
+check in the code, CI or the documented workflow stops the harm before it lands. Rate
+`depends-on-data` when (1) to (3) hold but the harm happens only if production holds data you cannot
+read. Otherwise rate `correctness-only`.
+- `depends-on-data`: default settings reach the path, and the harm happens only when production
+  holds data you cannot read, such as duplicate names or a login with two roles. Name that data in
+  `reason`. Example: a login that holds both the cleaning role and the manager role crashes the
+  cleaning endpoints.
 - `correctness-only`: the code is wrong, but no path after merge reaches a user or the business: an
   edge case no caller reaches, a trap for the next change. A missing or weak test is always
   `correctness-only`; when the code it fails to cover is itself wrong now, the finding is about
@@ -53,6 +60,14 @@ check in the code, CI or the documented workflow stops the harm before it lands.
 - `hygiene`: nothing behaves wrongly: naming, dead code, a convention breached with no consequence,
   a stale comment or document that misleads nobody about production.
 `impact` is required on every answer but `refuted`; an answer without it is rejected."""
+
+SEVERITY_RULES = (
+    """\
+Unless you answer `refuted`, set `severity` from the consequence you verified, not from the severity
+the claim was given. Use this guide:
+"""
+    + SEVERITY_GUIDE
+)
 
 # Only for a finding of the trim finder (`models.is_trim`).
 TRIM_RULES = """\
@@ -140,6 +155,7 @@ def build(target: TargetInfo, finding: Finding, *, evidence: str = "") -> str:
             "exactly (`tests`, not `test`): `topic` is required on every answer but `refuted`, and an answer "
             "without one from this list is rejected.",
             IMPACT_RULES,
+            SEVERITY_RULES,
             TRIM_RULES if is_trim(finding) else "",
             NEEDS_RULES,
             CITATION_RULES,

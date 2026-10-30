@@ -138,6 +138,19 @@ class Finding(_Model):
     # An incremental round copies a finding an earlier round left open on a file whose
     # patch has not changed: the kept round's directory name (`rounds/<NN>-<head12>`).
     carried_from: str | None = None
+    # The defect was in the code before the reviewed change: the report marks it
+    # `Pre-existing: yes`, or a tree finder answers `dimension: "pre-existing"`.
+    # `dimension` stays the finder's kind.
+    pre_existing: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def _pre_existing_dimension(cls, data):
+        """`dimension: "pre-existing"` (a tree finder's answer, or a state saved before 0.138)
+        loads as `pre_existing` true, with the finder's kind as the dimension."""
+        if isinstance(data, dict) and data.get("dimension") == "pre-existing":
+            data = {**data, "pre_existing": True, "dimension": data.get("finder") or ""}
+        return data
 
     @field_validator("defect_class", mode="before")
     @classmethod
@@ -181,13 +194,17 @@ TOPICS: tuple[str, ...] = (
 )
 # What goes wrong in production if the change is merged as it is, as the
 # verifier rates it. `--mode critical` lists only CRITICAL_IMPACTS.
+# DEPENDS_ON_DATA: default settings reach the path, and the harm happens only
+# when production holds data the verifier cannot read; its reason names that data.
+DEPENDS_ON_DATA = "depends-on-data"
 IMPACTS: tuple[str, ...] = (
     "breaks-users",
     "breaks-business",
+    DEPENDS_ON_DATA,
     "correctness-only",
     "hygiene",
 )
-CRITICAL_IMPACTS: tuple[str, ...] = ("breaks-users", "breaks-business")
+CRITICAL_IMPACTS: tuple[str, ...] = ("breaks-users", "breaks-business", DEPENDS_ON_DATA)
 MODES: tuple[str, ...] = ("full", "critical")
 # The section a finding is listed in. `trim` holds what only the trim finder
 # reported; otherwise by topic, and any other topic, or none, is "code".
@@ -314,6 +331,11 @@ class Verdict(_Model):
     # What breaks in production if merged as is, one of IMPACTS; "" for a
     # refuted finding and in checkpoints written before 0.32.
     impact: str = ""
+    # The severity the verifier gives the consequence it verified; None for a
+    # refuted finding, an answer without one, and checkpoints written before
+    # 0.132. The verify stage sets the finding's severity from it
+    # (`stages/verify.verified_severity`).
+    severity: Severity | None = None
 
     @field_validator("topic", mode="before")
     @classmethod
@@ -326,6 +348,12 @@ class Verdict(_Model):
     def _known_impact(cls, value) -> str:
         value = str(value or "").strip().lower()
         return value if value in IMPACTS else ""
+
+    @field_validator("severity", mode="before")
+    @classmethod
+    def _known_severity(cls, value) -> str | None:
+        value = str(value or "").strip().upper()
+        return value if value in SEVERITIES else None
 
 
 class VerifierAnswer(Verdict):
@@ -487,6 +515,32 @@ class Repeat(BaseModel):
     by: Literal["id", "agent"] = (
         "agent"  # matched on the same id in Python, or by the repeats agent
     )
+
+
+class EarlierDecision(BaseModel):
+    """One entry of an `--earlier-decisions` file: a finding an earlier reviewer of the same
+    change (buildme's block review) rejected, or accepted and left unfixed, with its reason."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1)
+    file: str = ""
+    line_start: int | None = None
+    line_end: int | None = None
+    claim: str = Field(min_length=1)
+    decision: Literal["rejected", "accepted-unfixed"]
+    reason: str = ""
+
+
+class EarlierDecisionMatch(BaseModel):
+    """A shown finding that describes the same defect as an `EarlierDecision`: its id,
+    decision and reason, why the two are the same (`match_reason`), and how it was matched."""
+
+    id: str
+    decision: Literal["rejected", "accepted-unfixed"]
+    reason: str = ""
+    match_reason: str = ""
+    by: Literal["id", "agent"] = "agent"
 
 
 # `important` is not the assess agent's: the verify stage gives it to a
@@ -722,6 +776,12 @@ class ReviewState(BaseModel):
     # already sent to the repeats agent, so a resume does not ask again.
     repeats: dict[str, Repeat] = Field(default_factory=dict)
     repeats_checked: list[str] = Field(default_factory=list)
+    # Shown findings that describe the same defect as an entry of the `--earlier-decisions` file
+    # (a decision buildme's block review made), by finding id, stored by the repeats stage;
+    # `earlier_checked` lists the ids already sent to its match call, so a resume does not ask again.
+    # A match is not a repeat: the finding stays listed.
+    earlier_decisions: dict[str, EarlierDecisionMatch] = Field(default_factory=dict)
+    earlier_checked: list[str] = Field(default_factory=list)
     # The assess stage's label per shown finding, by id. `assess_answer` is the
     # agent's answer, stored as it arrives (empty when the call failed), so a
     # resume does not ask twice.
@@ -861,6 +921,16 @@ class RepeatMatch(_Model):
 
 class RepeatsOutput(_Model):
     matches: list[RepeatMatch] = Field(default_factory=list)
+
+
+class EarlierMatch(_Model):
+    id: str
+    decision_id: str
+    reason: str = ""
+
+
+class EarlierMatchesOutput(_Model):
+    matches: list[EarlierMatch] = Field(default_factory=list)
 
 
 def worst_status(*statuses: str) -> str:

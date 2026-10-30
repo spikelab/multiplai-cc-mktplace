@@ -22,6 +22,7 @@ from .export import to_checks_file, to_findings_file
 from .models import (
     CRITICAL_IMPACTS,
     DEPS_DIR,
+    IMPACTS,
     SECTIONS,
     SEVERITIES,
     CoverageRecord,
@@ -51,7 +52,8 @@ def assess_label(fd: dict) -> str:
 
 
 SECTION_TITLES = {"code": "Code", "tests": "Tests", "docs": "Docs", "trim": "Trim"}
-# The last section of the review: the LOW findings no verifier was asked about.
+# The LOW findings no verifier was asked about: the title of `review-<slug>-low.md`, which holds
+# them, and of the review's last section, which links to it.
 UNVERIFIED_TITLE = "Not verified (LOW)"
 # Said after a section's title in the review and the summary.
 SECTION_NOTES = {"trim": " (advisory: never blocks a merge)"}
@@ -60,7 +62,7 @@ SECTION_NOTES = {"trim": " (advisory: never blocks a merge)"}
 def listed(findings: list[dict], mode: str | None = None) -> list[dict]:
     """The findings the markdown lists and counts: confirmed or unverifiable,
     and not labelled low-value, repeat or important; in `critical` mode, also rated
-    `breaks-users` or `breaks-business`."""
+    one of `CRITICAL_IMPACTS` (`breaks-users`, `breaks-business`, `depends-on-data`)."""
     keep = [
         f
         for f in findings
@@ -75,6 +77,24 @@ def not_listed(findings: list[dict], mode: str | None = None) -> list[dict]:
     """Everything `listed` leaves out, for the review's appendix."""
     keep = {id(f) for f in listed(findings, mode)}
     return [f for f in findings if id(f) not in keep]
+
+
+def is_unverified_low(fd: dict) -> bool:
+    """A LOW finding no verifier was asked about: it goes to `review-<slug>-low.md`."""
+    return fd["status"] == "unverified" and fd["severity"] == "LOW"
+
+
+def review_name(slug: str) -> str:
+    return f"review-{slug}.md"
+
+
+def low_review_name(slug: str) -> str:
+    return f"review-{slug}-low.md"
+
+
+def anchor(fd: dict) -> str:
+    """The id of the HTML anchor `finding_section` puts above the finding's heading."""
+    return f"finding-{fd['id']}"
 
 
 def section(fd: dict) -> str:
@@ -132,6 +152,15 @@ def assessment_line(fd: dict) -> str:
         what = "repeats" if label == "repeat" else "still open from"
         return f"**Assessment:** {label} — {what} {earlier}, your decision {decision}{note}. {reason}".rstrip()
     return f"**Assessment:** {label} — {reason}".rstrip()
+
+
+def earlier_decision_line(fd: dict) -> str:
+    """One line naming the `--earlier-decisions` entry the finding describes, or "" for none."""
+    e = fd.get("earlier_decision") or {}
+    if not e:
+        return ""
+    reason = f": {_one_line(e['reason'])}" if e.get("reason") else ""
+    return f"**Earlier decision:** `{e['id']}` {e['decision']}{reason}"
 
 
 # --- earlier rounds: statuses, recurring lineages, the summary line ----------------
@@ -357,6 +386,8 @@ def finding_section(
         else f"{fd['line_start']}-{fd['line_end']}"
     )
     out = [
+        f'<a id="{anchor(fd)}"></a>',
+        "",
         f"### {fd['severity']} — {fd['file']}:{lines_} — {_one_line(fd.get('title') or fd['claim'])}",
         "",
     ]
@@ -372,12 +403,21 @@ def finding_section(
         out += [class_line(fd), ""]
     if assessment_line(fd):
         out += [assessment_line(fd), ""]
+    if earlier_decision_line(fd):
+        out += [earlier_decision_line(fd), ""]
     if fd.get("impact"):
         out += [f"**Impact:** {fd['impact']}", ""]
+    if fd.get("pre_existing"):
+        out += ["**Pre-existing:** the defect was in the code before this change.", ""]
 
     status = fd["status"]
     if original_severity and original_severity != fd["severity"]:
-        status += f" (lowered from {original_severity})"
+        moved = (
+            "raised"
+            if SEVERITIES.index(fd["severity"]) < SEVERITIES.index(original_severity)
+            else "lowered"
+        )
+        status += f" ({moved} from {original_severity})"
     out += [
         f"**Verdict:** {status}. {_one_line(fd.get('verdict_reason') or '')}".rstrip(),
         "",
@@ -392,7 +432,9 @@ def finding_section(
 
     out.append("**Evidence:**")
     out.append("")
-    for c in fd["citations"]:
+    for i, c in enumerate(fd["citations"]):
+        if nested_citation(fd["citations"], i):
+            continue
         if c["path"].lower().startswith(("http://", "https://")):
             out.append(f"- web source: <{c['path']}>")
         else:
@@ -406,6 +448,23 @@ def finding_section(
     if fd.get("expected_behaviour"):
         out += [f"**Expected behaviour:** {_one_line(fd['expected_behaviour'])}", ""]
     return "\n".join(out)
+
+
+def nested_citation(citations: list[dict], i: int) -> bool:
+    """Whether citation *i*'s lines sit inside another repository citation of the same file: one
+    with a wider range, or the same range listed earlier. The review does not print it;
+    findings.json keeps every citation."""
+    c = citations[i]
+    if c["path"].lower().startswith(("http://", "https://")):
+        return False
+    for j, d in enumerate(citations):
+        if j == i or d["path"] != c["path"]:
+            continue
+        if d["line_start"] <= c["line_start"] and c["line_end"] <= d["line_end"]:
+            same = (d["line_start"], d["line_end"]) == (c["line_start"], c["line_end"])
+            if not same or j < i:
+                return True
+    return False
 
 
 def need_lines(commands: list[dict], findings: list[dict] | None = None) -> list[str]:
@@ -666,6 +725,50 @@ def render_paths_section(
     return "\n".join(out)
 
 
+def impact_order(fd: dict) -> tuple[int, int, int]:
+    """The opening list's order: `CRITICAL_IMPACTS` first, then the other impacts in `IMPACTS`
+    order, unrated last; within one impact, by severity."""
+    impact = fd.get("impact")
+    return (
+        0 if impact in CRITICAL_IMPACTS else 1,
+        IMPACTS.index(impact) if impact in IMPACTS else len(IMPACTS),
+        SEVERITIES.index(fd["severity"]),
+    )
+
+
+def _link_text(text: str) -> str:
+    """*text* on one line with its square brackets escaped, for a markdown link's text."""
+    return _one_line(text).replace("[", "\\[").replace("]", "\\]")
+
+
+def reader_lines(shown: list[dict], slug: str, *, is_tree: bool) -> list[str]:
+    """The review's opening list: one line per listed finding, by `impact_order`, with its
+    severity, impact, whether the change introduced it (not for a tree review), its section when
+    not Code, any `earlier_decision`, and a link to the finding (in `review-<slug>-low.md` for an
+    unverified LOW)."""
+    out = []
+    for fd in sorted(shown, key=impact_order):
+        parts = [fd["severity"], fd.get("impact") or "impact not rated"]
+        if not is_tree:
+            parts.append("pre-existing" if fd.get("pre_existing") else "introduced")
+        if section(fd) != "code":
+            parts.append(f"{SECTION_TITLES[section(fd)]} section")
+        if is_unverified_low(fd):
+            parts.append("not verified")
+        target = (
+            low_review_name(slug) if is_unverified_low(fd) else ""
+        ) + f"#{anchor(fd)}"
+        line = (
+            f"- {', '.join(parts)} — [{_link_text(fd.get('title') or fd['claim'])}]({target}) "
+            f"`{fd['file']}:{fd['line_start']}`"
+        )
+        e = fd.get("earlier_decision") or {}
+        if e:
+            line += f"; earlier decision `{e.get('id')}`: {e.get('decision')}"
+        out.append(line)
+    return out
+
+
 def render_review(
     state: ReviewState,
     *,
@@ -705,18 +808,14 @@ def render_review(
     else:
         out.append(f"- **Base commit:** {commit_link(t.base_sha)}")
         out.append(f"- **Head commit:** {commit_link(head)}")
+        # The lists themselves are in `## Commits and files` at the end.
         out.append(f"- **Commits:** {len(t.commits)}")
-        out += [
-            f"  - {commit_link(sha)} {_one_line(subject)}" for sha, subject in t.commits
-        ]
         out.append(f"- **Files changed:** {len(t.files)}")
-        out += [f"  - `{f}`" for f in t.files]
         if t.excluded:
             globs = ", ".join(f"`{g}`" for g in t.excluded)
             out.append(
                 f"- **Left out by --exclude ({globs}):** {len(t.excluded_files)} files"
             )
-            out += [f"  - `{f}`" for f in t.excluded_files]
     if t.deployed_in:
         out.append(f"- **Deployed in {t.deployed_in}:** {deployed or 'unknown'}")
     hidden = not_listed(findings, mode)
@@ -736,6 +835,15 @@ def render_review(
         out.append(
             "- **Agent failures:** " + "; ".join(_one_line(e) for e in state.errors)
         )
+    shown = listed(findings, mode)
+    # The opening list: every listed finding, the most harmful first.
+    out += ["", "## Findings", ""]
+    if not shown:
+        out += [
+            "No findings to act on."
+            + (" The appendix lists what was left out." if hidden else ""),
+        ]
+    out += reader_lines(shown, t.slug, is_tree=t.is_tree)
     out += not_reviewed_section(state)
     if data.get("need_commands"):
         out += ["", "## Needs you", "", NEEDS_INTRO, ""]
@@ -749,23 +857,16 @@ def render_review(
             "",
         ]
         out += not_checked_lines(state)
-    out += ["", "## Findings", ""]
+    out.append("")
 
     finders = {f.id: f.finders for f in state.findings}
 
-    shown = listed(findings, mode)
-    if not shown:
-        out += [
-            "No findings to act on."
-            + (" The appendix lists what was left out." if hidden else ""),
-            "",
-        ]
     rank = {s: i for i, s in enumerate(SEVERITIES)}
-    # LOW findings no verifier was asked about go last, in their own section.
-    unverified = [f for f in shown if f["status"] == "unverified"]
+    # LOW findings no verifier was asked about are in `review-<slug>-low.md`.
+    unverified = [f for f in shown if is_unverified_low(f)]
     for name in SECTIONS:
         group = sorted(
-            (f for f in shown if section(f) == name and f["status"] != "unverified"),
+            (f for f in shown if section(f) == name and not is_unverified_low(f)),
             key=lambda f: rank[f["severity"]],
         )
         if not group:
@@ -837,25 +938,73 @@ def render_review(
         )
         out.append(f"  Merged into `{m.into}`: {_one_line(m.reason)}")
     out.append("")
+    if not t.is_tree:
+        out += ["## Commits and files", "", f"**Commits ({len(t.commits)}):**", ""]
+        out += [
+            f"- {commit_link(sha)} {_one_line(subject)}" for sha, subject in t.commits
+        ]
+        out += ["", f"**Files changed ({len(t.files)}):**", ""]
+        out += [f"- `{f}`" for f in t.files]
+        if t.excluded:
+            globs = ", ".join(f"`{g}`" for g in t.excluded)
+            out += [
+                "",
+                f"**Left out by --exclude ({globs}) ({len(t.excluded_files)}):**",
+                "",
+            ]
+            out += [f"- `{f}`" for f in t.excluded_files]
+        out.append("")
     if unverified:
+        name = low_review_name(t.slug)
         out += [
             f"## {UNVERIFIED_TITLE}",
             "",
-            "LOW findings as the finder reported them; no verifier checked them. Counted above in "
-            "their sections. Run with `--verify-low` to verify them.",
+            f"{_plural(len(unverified), 'LOW finding', 'LOW findings')} no verifier checked "
+            f"{'is' if len(unverified) == 1 else 'are'} in [{name}]({name}), counted in "
+            "their sections and named in the list at the top. Run with `--verify-low` to "
+            "verify them.",
             "",
         ]
-        for name in SECTIONS:
-            for fd in (f for f in unverified if section(f) == name):
-                out.append(
-                    finding_section(
-                        fd,
-                        web_base=web,
-                        head_sha=head,
-                        finders=finders.get(fd["id"]),
-                        commands=command_ids(data, fd["id"]),
-                    )
-                )
+    return "\n".join(out)
+
+
+def render_low_review(
+    state: ReviewState, *, findings_file: dict | None = None
+) -> str | None:
+    """`review-<slug>-low.md`: every listed LOW finding no verifier checked, as the finder reported
+    it, by section; None when there is none."""
+    data = findings_file or to_findings_file(state)
+    t = state.target
+    unverified = [
+        f for f in listed(data["findings"], data.get("mode")) if is_unverified_low(f)
+    ]
+    if not unverified:
+        return None
+    web = github_web_base(t.remote_url)
+    finders = {f.id: f.finders for f in state.findings}
+    main = review_name(t.slug)
+    out = [
+        f"# {UNVERIFIED_TITLE} — {t.label or t.slug}",
+        "",
+        "LOW findings as the finder reported them; no verifier checked them. They are counted in "
+        f"their sections of [{main}]({main}). Run with `--verify-low` to verify them.",
+        "",
+    ]
+    for name in SECTIONS:
+        group = [f for f in unverified if section(f) == name]
+        if not group:
+            continue
+        out += [f"## {SECTION_TITLES[name]}{SECTION_NOTES.get(name, '')}", ""]
+        out += [
+            finding_section(
+                fd,
+                web_base=web,
+                head_sha=t.head_sha,
+                finders=finders.get(fd["id"]),
+                commands=command_ids(data, fd["id"]),
+            )
+            for fd in group
+        ]
     return "\n".join(out)
 
 
@@ -869,8 +1018,10 @@ def _write(path: Path, text: str) -> None:
 def write_review(
     state: ReviewState, target_dir: Path, *, deployed: str | None = None
 ) -> Path:
-    """Write the full review, its short summary and the checks record; return the full review's path."""
-    path = target_dir / f"review-{state.target.slug}.md"
+    """Write the full review, then `review-<slug>-low.md` (removed when no LOW is unverified), its
+    short summary and the checks record; return the full review's path. A stop between the two
+    leaves the stage unsaved, so the next run writes both again."""
+    path = target_dir / review_name(state.target.slug)
     _write(
         path,
         render_review(
@@ -880,6 +1031,12 @@ def write_review(
             earlier_rounds=rounds.kept_findings_files(target_dir),
         ),
     )
+    low = render_low_review(state)
+    low_path = target_dir / low_review_name(state.target.slug)
+    if low is None:
+        low_path.unlink(missing_ok=True)
+    else:
+        _write(low_path, low)
     _write(summary_path(state, target_dir), render_summary(state))
     _write(target_dir / f"checks-{state.target.slug}.md", render_checks(state))
     return path

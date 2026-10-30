@@ -1,0 +1,11 @@
+{
+  "exit_code": 1,
+  "markers": [
+    "WORKTREE:{WORKTREES}/buildme-account-management-account-model",
+    "SPEND:0.000000:0"
+  ],
+  "pr": null,
+  "interrupted": false,
+  "spend": 0.0,
+  "at": "2026-10-27T07:09:01.045595+00:00"
+}

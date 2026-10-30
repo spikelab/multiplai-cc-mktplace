@@ -1,0 +1,12 @@
+{
+  "exit_code": 1,
+  "markers": [
+    "WORKTREE:{WORKTREES}/buildme-account-management-account-model",
+    "BRANCH:DFACCMGMT-2-account-management-account-model",
+    "SPEND:24.108406:8023625"
+  ],
+  "pr": null,
+  "interrupted": false,
+  "spend": 24.108406,
+  "at": "2026-10-27T05:49:10.775748+00:00"
+}

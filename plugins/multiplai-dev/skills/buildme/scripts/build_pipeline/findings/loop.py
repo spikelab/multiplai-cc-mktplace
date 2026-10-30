@@ -26,7 +26,11 @@ finished steps and restarts the first unfinished one:
   discarded back to where that block started, so the block runs again;
 - publish records each reply before sending the next;
 - under `--auto`, review writes `buildme-decisions.json` in the review's own
-  folder (`decisions.write_decisions`) and posts only what it accepts.
+  folder (`decisions.write_decisions`) and posts only what it accepts;
+- with `--from-review`, the fetch acts on the review's blockers whoever
+  posted them, and each blocker gets a decision as its step finishes
+  (`from_review.py`); one with none when the run ends prints
+  `FINDINGS:INGESTION_ERROR:<ids>`, exit 1.
 
 The loop stops when a fetch finds no new comment to act on
 (`FINDINGS:DONE:<rounds>`), after `findings.max_rounds` rounds
@@ -56,13 +60,13 @@ from pathlib import Path
 
 from build_pipeline.budget import BudgetExceededError
 
-from .. import budget, git_ops, readiness, stop_record
+from .. import budget, git_ops, readiness, review_rounds, stop_record
 from ..change_manager import normalize_change_name
 from ..config import BuildConfig
 from ..models import BlockStatus, BuildPhase
 from ..progress import ProgressWriter
 from ..state import BuildState, FindingsRound, FindingsState
-from . import code, fetch, history, publish, spec, triage
+from . import code, fetch, from_review, history, publish, spec, triage
 from .decisions import write_decisions
 from .models import PRComment, SpecIssue, TriageRecord
 
@@ -136,6 +140,9 @@ class FindingsRun:
     code_only: bool = False  # `--code-only`: `--auto` posts Code findings only
     review: bool = True  # False (`--no-review`): a round ends with no review
     escalate: bool = True  # False (`--no-escalation`): no round is escalated
+    # `--from-review <review_dir>`: act on that review's blockers whoever
+    # posted them, and decide each one (`from_review.py`)
+    from_review: Path | None = None
 
     @property
     def project_dir(self) -> Path:
@@ -496,7 +503,11 @@ def review_argv(run: FindingsRun) -> list[str]:
     ]
     if run.trust_repo:
         argv.append("--trust-repo")
-    return argv + review_options(run.config)
+    return (
+        argv
+        + review_options(run.config)
+        + review_rounds.earlier_decisions_argv(run.change_dir)
+    )
 
 
 def resume_argv(run: FindingsRun, target_dir: str) -> list[str]:
@@ -513,7 +524,11 @@ def resume_argv(run: FindingsRun, target_dir: str) -> list[str]:
     ]
     if run.trust_repo:
         argv.append("--trust-repo")
-    return argv + review_options(run.config, exclude=False)
+    return (
+        argv
+        + review_options(run.config, exclude=False)
+        + review_rounds.earlier_decisions_argv(run.change_dir)
+    )
 
 
 # What `review` prints (exit 4) when the ledger shows a run of this target and
@@ -832,6 +847,8 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
     for name, body in ((s, bodies[s]) for s in STEPS):
         try:
             await _step(run, st, rnd, name, body)
+            if rnd.review_head is not None and from_review.decide(rnd):
+                save()
         except _Waiting:
             run.emit(f"FINDINGS:REVIEW_READY:{rnd.review_run_dir}")
             return EXIT_WAITING
@@ -970,6 +987,29 @@ def deferred_retries(
     return out
 
 
+def review_changed(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int | None:
+    """Row S8: before an open round started from a review goes on, a newer
+    review in `--from-review`'s directory, one this round's own review step
+    did not write, replaces the ids it decides: the newer review's blockers.
+    A decision already saved stays, so an id fixed in this round is not fixed
+    again. Prints `FINDINGS:REVIEW_CHANGED:<old head>→<new head>`. The exit
+    code when the file cannot be read; else None."""
+    if rnd.review_head is None or "review" in rnd.started:
+        return None
+    try:
+        head, ids = from_review.blockers(run.from_review, run.severities, run.code_only)
+    except (FileNotFoundError, ValueError) as e:
+        run.emit(f"FINDINGS:FAILED:fetch:{' '.join(str(e).split())}")
+        return EXIT_FAILED
+    if head == rnd.review_head:
+        return None
+    run.emit(f"{from_review.REVIEW_CHANGED}:{rnd.review_head}\u2192{head}")
+    rnd.review_head, rnd.expected = head, ids
+    from_review.decide(rnd)
+    st.checkpoint(run.state_path)
+    return None
+
+
 async def _run_findings(run: FindingsRun) -> int:
     st = load_state(run)
     budget.reset()
@@ -997,6 +1037,10 @@ async def _run_findings(run: FindingsRun) -> int:
         if refusal:
             run.emit(f"FINDINGS:FAILED:{_next_step(rnd)}:{' '.join(refusal.split())}")
             return EXIT_FAILED
+        if rnd is not None and run.from_review is not None:
+            failed = review_changed(run, st, rnd)
+            if failed is not None:
+                return failed
         if rnd is not None and _next_step(rnd) == "code" and "code" in rnd.started:
             try:
                 keep_stopped_code_work(run, rnd)
@@ -1006,6 +1050,15 @@ async def _run_findings(run: FindingsRun) -> int:
         if rnd is None:
             done = len(fs.rounds)
             if done >= max_rounds:
+                last = fs.rounds[-1] if fs.rounds else None
+                if (
+                    run.from_review is not None
+                    and last is not None
+                    and last.review_head is not None
+                    and from_review.undecided(last)
+                ):
+                    run.emit(from_review.ingestion_error(from_review.undecided(last)))
+                    return EXIT_FAILED
                 run.emit(f"FINDINGS:MAX_ROUNDS:{done}")
                 for line in recurring_lines(run, fs):
                     run.emit(line)
@@ -1023,6 +1076,15 @@ async def _run_findings(run: FindingsRun) -> int:
             # already seen are dropped by id below.
             since = fs.rounds[-1].fetched_at if fs.rounds else None
             fetched_at = _now()
+            review_head, expected = None, []
+            if run.from_review is not None:
+                try:
+                    review_head, expected = from_review.blockers(
+                        run.from_review, run.severities, run.code_only
+                    )
+                except (FileNotFoundError, ValueError) as e:
+                    run.emit(f"FINDINGS:FAILED:fetch:{' '.join(str(e).split())}")
+                    return EXIT_FAILED
             try:
                 comments = fetch.fetch_comments(
                     fs.repo, fs.pr, since, cwd=run.project_dir
@@ -1033,13 +1095,21 @@ async def _run_findings(run: FindingsRun) -> int:
             fetch.prepare(
                 comments, run.config.findings, cache, repo=fs.repo, cwd=run.project_dir
             )
+            for c in comments:  # the review's own blockers, whoever posted them
+                if c.finding_id is not None and c.finding_id in expected:
+                    c.allowed = True
             seen = fs.seen_ids()
             # A fix deferred over a spec conflict is triaged again, once,
             # after `pm-spec revise` resolved it (rows S9-S12). Its
             # `retried_at_revision` is saved with this round's checkpoint.
             retries = deferred_retries(run, fs)
             again = {c.id for _, _, c in retries}
-            new = [c for c in comments if c.id not in seen - again]
+            # A blocker the review still lists is acted on again (item 16).
+            new = [
+                c
+                for c in comments
+                if c.id not in seen - again or c.finding_id in expected
+            ]
             for _, _, c in retries:  # a top-level comment older than `since`
                 if all(n.id != c.id for n in new):
                     new.append(c)
@@ -1060,6 +1130,16 @@ async def _run_findings(run: FindingsRun) -> int:
                         c.author,
                         triage.should_triage(c)[1],
                     )
+                decided = {
+                    fid
+                    for r in fs.rounds
+                    if r.review_head is not None and r.review_head == review_head
+                    for fid in r.decisions
+                }
+                missing = [fid for fid in expected if fid not in decided]
+                if missing:
+                    run.emit(from_review.ingestion_error(missing))
+                    return EXIT_FAILED
                 run.emit(f"FINDINGS:DONE:{done}")
                 return EXIT_OK
             # After the fetch, which calls no model: a PR left with nothing to
@@ -1086,6 +1166,8 @@ async def _run_findings(run: FindingsRun) -> int:
                 started=["fetch"],
                 finished=["fetch"],
                 escalated=run.escalate and done + 1 == max_rounds and done + 1 >= 2,
+                review_head=review_head,
+                expected=expected,
             )
             fs.rounds.append(rnd)
             st.checkpoint(run.state_path)

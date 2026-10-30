@@ -23,17 +23,29 @@ paths through the change from each entry point (see "The paths stage" below).
 2. **verify** — a fresh agent per HIGH or MEDIUM finding re-reads the code
    and answers `confirmed`, `refuted` or `unverifiable`, citing what it read.
    A finding the finder rated LOW gets no verifier: it reaches the review
-   `unverified`, with the finder's text, in a last section **Not verified
-   (LOW)** (a trim finding is verified at any severity). Unless it
+   `unverified`, with the finder's text, in `review-<slug>-low.md`, which the
+   review's last section **Not verified (LOW)** links to (a trim finding is
+   verified at any severity). Unless it
    refutes the finding, it also says in one sentence what correct behaviour
    would be (the finding's **expected behaviour**), without proposing a code
    change, and rates its **impact**: what goes wrong in production if the
    change is merged as it is — `breaks-users`, `breaks-business`,
-   `correctness-only` or `hygiene`. It rates `breaks-*` only when default
-   settings or documented normal use reach the path, the harm needs no
-   second failure, and no other check in the code, CI or the documented
-   workflow stops it first. A missing or weak test is always
-   `correctness-only`. An answer without an impact, or without a topic from
+   `depends-on-data`, `correctness-only` or `hygiene`. It rates `breaks-*`
+   only when default settings or documented normal use reach the path, the
+   harm needs no second failure, and no other check in the code, CI or the
+   documented workflow stops it first. It rates `depends-on-data` when the
+   same holds but the harm happens only if production holds data it cannot
+   read, such as duplicate names or a login with two roles, and names that
+   data in its reason. A missing or weak test is always
+   `correctness-only`. It also gives a **severity** (HIGH, MEDIUM or LOW)
+   for the consequence it checked, using the finders' severity guide. Once
+   every finding has a verdict, Python sets each confirmed or unverifiable
+   finding's severity from it: a `hygiene` finding is LOW, a `breaks-*` or
+   `depends-on-data` finding is at least MEDIUM, and an unverifiable one is
+   then lowered as below. No other limit applies and no verdict changes; a
+   verdict saved by an older version, with no severity, keeps the finder's.
+   The review shows the finder's severity beside a changed one ("raised
+   from" or "lowered from"). An answer without an impact, or without a topic from
    the list below, is re-asked; a verify call is tried up to three times, and
    a finding still without a verdict stops the run (exit `5`) instead of
    reaching the review unverified. A hit Claude usage limit is never tried
@@ -116,6 +128,17 @@ paths through the change from each entry point (see "The paths stage" below).
    its summary, the rollups or review-viewer; they are in the appendix of
    `review-<slug>.md` and in `findings.json`.
 
+`review-<slug>.md` opens, after its header lines, with `## Findings`: one
+line per listed finding, the ones rated `breaks-users` or `breaks-business`
+first, then by the other impacts and by severity. Each line gives the
+severity, the impact, whether the change introduced the defect or it was
+there before (`pre-existing`; not on a tree review), the section when it is
+not Code, any earlier decision, and a link to the finding in full. The
+commit and file lists are in `## Commits and files` near the end, and a
+citation whose lines sit inside another citation of the same file is not
+printed again (`findings.json` keeps every citation). A finding the finder
+marked `Pre-existing: yes` has `pre_existing: true` in `findings.json`.
+
 Findings are listed in three sections, **Code**, **Tests** and **Docs**, by
 the verifier's topic, with severity read within each section: a HIGH under
 Tests is a serious test gap, not a serious defect in the code. What only the
@@ -176,11 +199,36 @@ the finders see its whole patch.
   with `--full`; and with `incremental: false` in `review.yaml`.
   `review-state.json` `scope.reason` says which applied.
 
+## Decisions an earlier reviewer made: `--earlier-decisions`
+
+`--earlier-decisions <file>` (on `review` and `resume`) hands the review the
+findings an earlier reviewer of the same change already decided on. buildme
+passes it with the findings of its per-block reviews. The file is a JSON list:
+
+```json
+[{"id": "B03-R1-F1", "file": "backend/auth.py", "line_start": 709,
+  "line_end": 709, "claim": "a login can be tied to another company by name",
+  "decision": "accepted-unfixed", "reason": "accepted by the block 3 review"}]
+```
+
+`decision` is `rejected` or `accepted-unfixed`; `id` and `claim` must not be
+empty, ids are unique, `file`, the lines and `reason` may be left out, and no
+other key is allowed. A file that does not match this shape stops the run
+with exit 2 before anything else.
+
+After merge, the repeats stage matches this round's findings against the
+list: an equal id with no call, then one agent call for the rest. A finding
+that describes a decided defect stays listed and blocking and gets no
+`repeat` label. `findings.json` gives it `earlier_decision: {id, decision,
+reason}` and the review shows an **Earlier decision:** line under it. The
+finders never see the list. A `resume` keeps the matches it already saved,
+even when the file changed since; the next round reads the file again.
+
 ## Full or critical
 
 `--mode full` (the default) lists every finding to act on. `--mode critical`
-lists only the findings the verifier rates `breaks-users` or
-`breaks-business`; the rest go to the appendix of `review-<slug>.md`, and the
+lists only the findings the verifier rates `breaks-users`,
+`breaks-business` or `depends-on-data`; the rest go to the appendix of `review-<slug>.md`, and the
 viewer shows **Critical only** and hides them. Both modes run the same
 finders and verifiers and cost the same.
 
@@ -276,9 +324,9 @@ It holds the review's run lock and:
    commands that bear on the review as a whole to findings (ids it invents
    are dropped);
 3. runs the verifier again for each matched finding, given every saved output
-   that bears on it as evidence inside an `<untrusted-content>` fence. A
-   finding that becomes confirmed gets back the severity it had before it was
-   lowered; a refuted one goes to the appendix as refuted findings do;
+   that bears on it as evidence inside an `<untrusted-content>` fence. Its
+   severity is set again from the finder's severity and the new verdict, as
+   the verify stage sets it; a refuted one goes to the appendix as refuted findings do;
 4. asks the write stage again for each shown finding whose verdict changed;
 5. writes `findings.json`, `checks.json` and the markdown again. Merge,
    repeats and assess do not run, so finding ids, and the decisions in
@@ -415,7 +463,7 @@ A test is never suggested for removal when it matters. A confirmed or
 unverifiable trim finding about a test is left out of the list, labelled
 `important` and kept in the review's appendix with the reason, when the
 verifier rates what would break
-without it `breaks-users` or `breaks-business`, or when any of its citations is
+without it `breaks-users`, `breaks-business` or `depends-on-data`, or when any of its citations is
 under a critical path. A suggestion the merge stage folded another into counts
 the other's verdict and citations too. A finding the verifier labels `docs` is
 a comment and never `important`; under a topic other than `tests` or `docs`,
@@ -724,12 +772,15 @@ it starts, and a `finished` line when it ends (`generated_at`, `producer`,
 `usage-limit` or `failed: <error>`, and the whole `run` object). A resume and each target
 of a batch are runs too. The file is never rewritten. A `started` line with
 no later `finished` line for the same `target_dir` and `head_sha` is a run
-that was killed or stopped with Ctrl-C: a plain `review` of that target then makes no model call,
+that was killed or stopped with Ctrl-C. A `finished` line whose `stopped` is
+`usage-limit` or `verify-incomplete` is a run that can be continued too. After
+either, a plain `review` of that target and head makes no model call,
 prints `interrupted run found; continue with: python -m review_pipeline
 resume <target_dir>` and exits `4`. Run that `resume` (it continues from the
 last saved answer: every step that asks several agents saves after each answer), or pass `--restart` to start over on purpose. Until the
 target's directory has a saved state of its own, the same check covers the
-directory multiplai-dev 0.46 used for it, and the message names that one. When the
+directory multiplai-dev 0.46 used for it, and the message names that one. A
+`budget` stop is not offered this way: a plain `review` after it starts over. When the
 target directory no longer holds a readable `review-state.json` on that head
 (the directory or the file was deleted, or a later run on another head wrote
 over it), there is nothing to resume, and `review` starts over instead. A review
@@ -774,8 +825,9 @@ message gives the reset time when the CLI or the window gave one, and the
 `resume` command of each target it
 stopped, with the run's `--max-cost-usd` and `--no-deps`. Tell the user both,
 and **do not resume or start another review before the reset**: every call
-until then fails the same way. After the reset, run that `resume`: only
-`resume` continues the stopped run, and a plain `review` of the same target
+until then fails the same way. After the reset, run that `resume`: it
+continues the stopped run. A plain `review` of the same target and head prints
+the same `resume` command and exits `4` without a model call; only `--restart`
 starts over and pays again. A batch starts no further target after the limit
 and lists those as `not started`; they have no checkpoint, so review them
 after the reset. `assess-only` stops the same way and still writes its
@@ -1117,5 +1169,8 @@ the session's model.
   totals line gives the mean rounds per review with two or more, and both
   shares with their counts. `--repo` names a checkout to use for a round
   whose recorded repository (a deleted worktree) is gone, when its `origin`
-  is the same repository. It writes nothing, calls no model and needs no
+  is the same repository. `--counts` adds, per round, the confirmed
+  findings by severity, impact and topic, the number of finder reports
+  (`report-*.md`) and how many say a search returned nothing, and a totals
+  line. It writes nothing, calls no model and needs no
   `--trust-repo`. Reviews migrated into `legacy/` are not read.

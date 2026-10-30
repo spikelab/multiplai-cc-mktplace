@@ -14,7 +14,7 @@ of records each:
    second post is safe.
 2. `fix`: `python -m build_pipeline findings --pr <n> --change <epic>-<id>
    --project-dir <P> --auto --trust-repo --max-rounds <M> --severities
-   HIGH,MEDIUM --code-only [--max-usd <left>]`, cwd `<P>`, the child's worktree joined
+   HIGH,MEDIUM --code-only --from-review <review_dir> [--max-usd <left>]`, cwd `<P>`, the child's worktree joined
    with the project's offset. `<M>` is every round in the change's
    `.findings-state.json`, finished or not, plus one (`rounds_started`), so
    `findings`, which counts its own rounds from its state, runs one round and
@@ -34,7 +34,13 @@ of records each:
    found something to act on, exit 0 with `FINDINGS:BUDGET:<rounds>:<usd>`.
    The coordinator takes that as the epic's budget reached when the epic's
    spend is at `epic.max_usd`; under it, the fixer used up only its share,
-   and it runs again once the others end.
+   and it runs again once the others end. `--from-review` makes the fixer
+   act on the review's blockers though the review posts them as an app that
+   `findings.authors` does not allow, and record a decision for each
+   (plan-factory-merged-2026-10-29.md, items 16-17); one left undecided ends
+   `FINDINGS:INGESTION_ERROR:<ids>`, exit 1 (`ingestion_error`), which leaves
+   the child `failed`. The next run launches that fixer once more, with a
+   fresh round; a second such end leaves the child `failed`.
 
 Then the coordinator's review step reads the PR's head again and reuses the
 fixer's last review.
@@ -72,6 +78,10 @@ log = logging.getLogger(__name__)
 
 # What `findings` prints when a step fails or refuses (`findings/loop.py`).
 FAILED = re.compile(r"^FINDINGS:FAILED:([^:\n]*):(.*)$", re.MULTILINE)
+# What it prints, exit 1, when a blocker of `--from-review` got no decision
+# (`findings/from_review.py`).
+INGESTION = re.compile(r"^FINDINGS:INGESTION_ERROR:(.*)$", re.MULTILINE)
+FROM_REVIEW = "--from-review"
 
 
 def write_decisions(review_dir: str | Path) -> Path:
@@ -189,8 +199,10 @@ def fix_argv(
     *,
     final: bool = False,
     accept_unknown_spend: bool = False,
+    from_review: str | None = None,
 ) -> list[str]:
-    """*final*: the final fix (`--no-review`), whose round gets no review."""
+    """*final*: the final fix (`--no-review`), whose round gets no review.
+    *from_review*: the review folder whose blockers it acts on."""
     argv = [
         "python",
         "-m",
@@ -213,6 +225,8 @@ def fix_argv(
         "--code-only",
         ESCALATION_OFF,
     ]
+    if from_review:
+        argv += [FROM_REVIEW, str(from_review)]
     if accept_unknown_spend:
         argv.append("--accept-unknown-spend")
     if final:
@@ -241,6 +255,19 @@ def pr_of(attempt_argv: list[str]) -> str:
 def saved_rounds(attempt_argv: list[str]) -> int:
     """The `--max-rounds` a `fix` record was launched with."""
     return int(attempt_argv[attempt_argv.index("--max-rounds") + 1])
+
+
+def saved_from_review(attempt_argv: list[str]) -> str | None:
+    """The `--from-review` a `fix` record was launched with; None without one."""
+    if FROM_REVIEW in attempt_argv[:-1]:
+        return attempt_argv[attempt_argv.index(FROM_REVIEW) + 1]
+    return None
+
+
+def ingestion_error(text: str) -> list[str] | None:
+    """The ids on the last `FINDINGS:INGESTION_ERROR:` line; None without one."""
+    hits = INGESTION.findall(text)
+    return [i for i in hits[-1].strip().split(",") if i] if hits else None
 
 
 def failed_reason(text: str) -> str | None:

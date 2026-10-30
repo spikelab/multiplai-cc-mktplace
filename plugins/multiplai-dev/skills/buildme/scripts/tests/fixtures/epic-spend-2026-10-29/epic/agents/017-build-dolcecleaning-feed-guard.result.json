@@ -1,0 +1,12 @@
+{
+  "exit_code": 0,
+  "markers": [
+    "WORKTREE:{WORKTREES}/buildme-account-management-dolcecleaning-feed-guard",
+    "PR:https://github.com/DolceTech/Dolcebot/pull/39",
+    "SPEND:9.345540:10374284"
+  ],
+  "pr": "https://github.com/DolceTech/Dolcebot/pull/39",
+  "interrupted": false,
+  "spend": 9.34554,
+  "at": "2026-10-28T03:50:40.949664+00:00"
+}

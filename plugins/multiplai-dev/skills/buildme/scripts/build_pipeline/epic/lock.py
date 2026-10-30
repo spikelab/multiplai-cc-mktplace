@@ -87,6 +87,30 @@ def hold(epic_dir: Path, name: str) -> None:
     _held[epic_dir] = fd
 
 
+def holder_elsewhere(epic_dir: Path) -> str | None:
+    """Who holds the lock on *epic_dir* when another process does, else None
+    (free, held by this process, or no `.lock` yet). Tries the lock without
+    waiting and drops it at once, so it never blocks and writes nothing."""
+    epic_dir = Path(epic_dir)
+    if epic_dir in _held:
+        return None
+    try:
+        fd = os.open(epic_dir / LOCK_FILE, os.O_RDWR)
+    except OSError:
+        return None
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as e:
+        if e.errno in (errno.EWOULDBLOCK, errno.EAGAIN, errno.EACCES):
+            return _holder(fd)
+        return None
+    else:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return None
+    finally:
+        os.close(fd)
+
+
 def release_all() -> None:
     """Drop every lock this process holds. Tests only: a real run holds its
     lock until it exits."""

@@ -9,9 +9,19 @@
   verdict in code, with an empty reason, no impact, and the topic `tests`
   for a finding of the `tests` dimension (none otherwise). It stays in the
   review and goes on to merge, like a confirmed one, and has no `AgentCheck`.
-  Verify only ever lowers a severity, so leaving LOW findings unverified
-  hides no HIGH or MEDIUM one. A trim finding is verified at any severity:
-  its `important` label below needs the verifier's impact.
+  A trim finding is verified at any severity: its `important` label below
+  needs the verifier's impact.
+
+Every answer but `refuted` also gives a `severity`, rated from the consequence
+the verifier checked. After all verdicts, one pass sets each confirmed or
+unverifiable finding's severity with `verified_severity`: the verifier's
+severity (the finder's when the verdict has none, as in a checkpoint saved
+before verifiers gave one), then `hygiene` is LOW, an impact in
+`CRITICAL_IMPACTS` is at least MEDIUM, and an unverifiable verdict is lowered
+by `unverifiable_severity` as before. No other cap; no status changes. The
+finder's severity goes to `state.original_severity` first, for every
+unverifiable finding and for a confirmed one whose severity changes, and the
+pass skips a finding already there, so a resume never applies it twice.
 
 With `verify_low: risky` (`--verify-low risky`), one call with no tools, on
 the verifier's model, reads every LOW finding's claim and failure scenario
@@ -44,12 +54,13 @@ verifiers finish, keeps their verdicts, then raises `VerifyIncomplete`, and
 never tried again: it stops the stage at once (`sdk.UsageLimitError`), with
 the verdicts already returned kept. No HIGH or MEDIUM finding reaches the
 review unverified or with no impact or topic; with `verify_low` on, no finding does. A finding about `tests` never
-breaks users or the business: a `breaks-*` impact on one is lowered to
-`correctness-only`, with a line in `state.errors`.
+breaks users or the business: an impact in `CRITICAL_IMPACTS` on one is
+lowered to `correctness-only`, with a line in `state.errors`.
 
 A trim finding (`models.is_trim`) is a suggestion to remove, merge or shorten
 a test or comment: its impact rates what removing the test risks, so it is
-never lowered, and its severity is set to LOW once the stage ends.
+never lowered, the verifier's severity and the impact rules above are not
+applied to it, and its severity is set to LOW once the stage ends.
 `important_assessments` then labels `important` each shown (confirmed or
 unverifiable) trim finding whose test must stay (impact `breaks-*`, or a citation under a `## Critical
 paths` glob), which takes it out of the list. Both are recomputed from the
@@ -180,6 +191,51 @@ def unverifiable_severity(severity: str, *, has_need: bool) -> str:
     if has_need and SEVERITIES.index(lowered) > floor:
         return severity if SEVERITIES.index(severity) > floor else "MEDIUM"
     return lowered
+
+
+def verified_severity(finder: str, verdict: Verdict, *, has_need: bool) -> str:
+    """The severity of a confirmed or unverifiable finding, from its verdict.
+
+    The verifier's severity, or *finder* when the verdict has none. Then `hygiene` is LOW, and an
+    impact in `CRITICAL_IMPACTS` is at least MEDIUM. An unverifiable verdict is then lowered by
+    `unverifiable_severity`.
+    """
+    severity = verdict.severity or finder
+    floor = SEVERITIES.index("MEDIUM")
+    if verdict.impact == "hygiene":
+        severity = "LOW"
+    elif verdict.impact in CRITICAL_IMPACTS and SEVERITIES.index(severity) > floor:
+        severity = "MEDIUM"
+    if verdict.status == "unverifiable":
+        severity = unverifiable_severity(severity, has_need=has_need)
+    return severity
+
+
+def settle_severity(
+    state: ReviewState, index: int, finder: str, waiting: set[str]
+) -> None:
+    """Set `state.findings[index]`'s severity from its verdict, starting from the finder's *finder*.
+
+    Only a confirmed or unverifiable verdict changes anything. *finder* is recorded in
+    `state.original_severity` for an unverifiable finding and for one whose severity changes, and
+    removed otherwise. A trim finding keeps today's rule: only an unverifiable verdict lowers it.
+    """
+    finding = state.findings[index]
+    verdict = state.verdicts[finding.id]
+    if verdict.status not in ("confirmed", "unverifiable"):
+        return
+    has_need = finding.id in waiting
+    if not is_trim(finding):
+        severity = verified_severity(finder, verdict, has_need=has_need)
+    elif verdict.status == "unverifiable":
+        severity = unverifiable_severity(finder, has_need=has_need)
+    else:
+        severity = finder
+    if severity != finder or verdict.status == "unverifiable":
+        state.original_severity[finding.id] = finder
+    else:
+        state.original_severity.pop(finding.id, None)
+    state.findings[index] = finding.model_copy(update={"severity": severity})
 
 
 def unverified_verdict(finding: Finding) -> Verdict:
@@ -418,21 +474,10 @@ async def run_verify(state: ReviewState, ctx: RunContext) -> ReviewState:
     if failed:
         raise VerifyIncomplete(sorted(failed), next(iter(failed.values())))
 
-    lowered = []
     waiting = {n.blocks for n in state.needs}
     for i, finding in enumerate(state.findings):
-        verdict = state.verdicts.get(finding.id)
-        if (
-            verdict
-            and verdict.status == "unverifiable"
-            and finding.id not in state.original_severity
-        ):
-            state.original_severity[finding.id] = finding.severity
-            lowered.append(finding.id)
-            severity = unverifiable_severity(
-                finding.severity, has_need=finding.id in waiting
-            )
-            state.findings[i] = finding.model_copy(update={"severity": severity})
+        if finding.id in state.verdicts and finding.id not in state.original_severity:
+            settle_severity(state, i, finding.severity, waiting)
     for i, finding in enumerate(state.findings):
         if is_trim(finding) and finding.severity != "LOW":
             state.findings[i] = finding.model_copy(update={"severity": "LOW"})
