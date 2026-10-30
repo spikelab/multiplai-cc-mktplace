@@ -136,6 +136,11 @@ def main() -> int:
         return git_ops.GitResult(argv, 0, f"PR:{pr}\n", "")
 
     git_ops._run_pr_skill = pr_skill
+    # The test's origin is a local bare repo, not GitHub (conftest's
+    # `gh_can_open_prs` does the same in-process).
+    from build_pipeline import preflight
+
+    preflight._gh_permission = lambda repo: ("WRITE", "")
 
     project = Path(spec["project_dir"])
     config = BuildConfig(

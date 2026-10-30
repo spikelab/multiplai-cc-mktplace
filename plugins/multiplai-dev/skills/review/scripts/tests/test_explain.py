@@ -494,7 +494,8 @@ def test_a_long_base_path_list_is_archived_in_batches_that_fit_argv(
     assert all(
         len(batch) == 1 or sum(len(p) + 1 for p in batch) <= 12 for batch in archives
     )
-    assert sorted(p.name for p in dest.iterdir()) == paths
+    assert sorted(p.name for p in dest.iterdir() if p.name != ".git") == paths
+    assert (dest / ".git").is_dir()  # a git work tree, so search sees it
     assert (dest / "gone.py").read_text() == "\n".join(_lines(5, "gone")) + "\n"
 
 

@@ -544,7 +544,7 @@ CALL_SITES = {
         "config.model_for('implementer')",
         ("implementer",),
     ),
-    ("tdd_engine.py", "run_block_tdd", "run_refactorer"): (
+    ("tdd_engine.py", "_refactor_block", "run_refactorer"): (
         "config.model_for('refactor')",
         ("refactor",),
     ),
@@ -564,6 +564,14 @@ CALL_SITES = {
         "config.model_for('review_fix')",
         ("review_fix",),
     ),
+    ("tdd_engine.py", "_component_fix_round", "run_implementer"): (
+        "config.model_for('review_fix')",
+        ("review_fix",),
+    ),
+    ("tdd_engine.py", "_review_component", "run_code_review"): (
+        None,
+        ("review",),
+    ),  # run_code_review → _panel_models → config.model_for("review")
     ("tdd_engine.py", "_run_refactor_all", "run_refactor_all"): (
         "config.model_for('refactor_all')",
         ("refactor_all",),

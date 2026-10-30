@@ -4,7 +4,11 @@ Precedence, highest first (same order as buildme's config.py: the project's
 own file beats multiplai.conf, which beats the default):
 
 0. `--model` on `review` or `resume` sets the finder, verifier and merger
-   models for that run (`__main__.load_config`).
+   models for that run (`__main__.load_config`). On `review`,
+   `--finder-model` sets the finders' model over `--model`, and
+   `--dimensions` the dimension finders over `review.yaml`'s
+   (`set_dimensions`). `resume` keeps the finder model and the dimensions the
+   stopped run saved (`orchestrator.kept_finder_model`, `kept_dimensions`).
 1. `review.yaml` in the output directory (`<out>/review.yaml`; for the
    default output directory, the old default's when the new one has none):
    `concurrency`, `finder_model`, `verifier_model`, `merger_model`, `effort`,
@@ -47,7 +51,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from multiplai_core.env import load_multiplai_conf
 from multiplai_core.stage_config import (
@@ -59,6 +63,9 @@ from multiplai_core.stage_config import (
 
 from . import ledger
 from .budget import DEFAULT_MAX_USD
+
+if TYPE_CHECKING:
+    from .models import EarlierDecision
 
 log = logging.getLogger(__name__)
 
@@ -102,11 +109,15 @@ class ReviewConfig:
     deps: bool = True
     deps_max_mb: int = 50
     # Verify LOW findings too (`review.yaml` `verify_low`, `--verify-low`). Off by default: a LOW
-    # finding reaches the review `unverified`, with no verifier call (`stages/verify.py`).
-    verify_low: bool = False
+    # finding reaches the review `unverified`, with no verifier call (`stages/verify.py`). `risky`
+    # (`--verify-low risky`) verifies only the LOW findings one no-tools call chooses as risky.
+    verify_low: bool | Literal["risky"] = False
     # A re-pushed PR or branch reviews only the files whose patch changed (`incremental.py`);
     # `review.yaml` `incremental: false` or `--full` reviews every file.
     incremental: bool = True
+    # The `--earlier-decisions <file>` entries (`review` and `resume` only; no file key): decisions an
+    # earlier reviewer of the same change made, which the repeats stage matches the findings against.
+    earlier_decisions: list[EarlierDecision] = field(default_factory=list)
 
 
 _TRUE = ("1", "true", "yes", "on")
@@ -145,6 +156,13 @@ def _dimensions(value, where) -> tuple[tuple[str, ...], bool]:
         )
     wanted = {n.strip() for n in names}
     return tuple(d for d in DIMENSIONS if d in wanted), TRIM_DIMENSION in wanted
+
+
+def set_dimensions(cfg: ReviewConfig, names: list[str], where: str) -> None:
+    """The dimensions *names* lists, over `review.yaml`'s: as `dimensions` there, except that no
+    `trim: false` can turn off a `trim` it names. Raises ConfigError for an unknown or missing name."""
+    cfg.dimensions, cfg.trim = _dimensions([n for n in names if n.strip()], where)
+    cfg.dimensions_listed = True
 
 
 def _yaml_path(out_dir: Path | None) -> Path | None:
@@ -218,6 +236,9 @@ def load_config(
         "verify_low",
         "incremental",
     ):
+        if key == "verify_low" and str(data.get(key)).strip().lower() == "risky":
+            cfg.verify_low = "risky"
+            continue
         value = _flag(data.get(key), key, yaml_path)
         if value is not None:
             setattr(cfg, key, value)

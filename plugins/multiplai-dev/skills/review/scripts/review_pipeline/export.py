@@ -140,6 +140,8 @@ def _finding(f: Finding, status: str, reason: str | None, expected: str | None) 
         **elsewhere,
         # (0.115+) only on a finding an incremental round copied from an earlier one.
         **({"carried_from": f.carried_from} if f.carried_from else {}),
+        # (0.138+) only on a finding whose defect was in the code before the change.
+        **({"pre_existing": True} if f.pre_existing else {}),
     }
 
 
@@ -405,6 +407,14 @@ def to_findings_file(
         assessment = state.assessments.get(f.id)
         if assessment is not None and status in SHOWN:
             row["assessment"] = _assessment(assessment)
+        earlier = state.earlier_decisions.get(f.id)
+        if earlier is not None and status in SHOWN:
+            # (0.137+) the `--earlier-decisions` entry this finding describes.
+            row["earlier_decision"] = {
+                "id": earlier.id,
+                "decision": earlier.decision,
+                "reason": earlier.reason,
+            }
         rows.append(row)
     rank = {s: i for i, s in enumerate(SEVERITIES)}
     order = {"confirmed": 0, "unverifiable": 1, "unverified": 2, "refuted": 3}
