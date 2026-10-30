@@ -15,6 +15,20 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.135.0] - 2026-10-29
+
+### Added
+- **buildme** (G20): `epic.accept_size: true` in `specs/config.yaml` makes the epic pass `--accept-size` to every child it launches, and launches again a child that an earlier run left parked on `SPLIT:REQUIRED`. Off by default.
+- **buildme** (G22): `epic.max_child_attempts` (default `2`): a child whose build fails is launched again in the same run, up to that many launches, instead of once per run. A child whose planning check is blocked at its plan's current revision is not launched again until its plan changes, because its next build would refuse the same way. Any other failed child is launched again by the next run.
+
+### Changed
+- **buildme** (G35): before the epic parks or fails a child, it looks for an open PR from the child's branch into the feature branch, such as one a build run by hand opened. With one, the child counts as built with that PR and its dependants can start; its records are left as they were. A child parked by its review stays parked. When the lookup fails, the child waits, unlaunched, until a lookup works.
+- **buildme** (G34): `build --change <epic>/<component>` run by hand builds as the epic's child, on the epic's feature branch, so its PR targets the feature branch instead of the default branch. A different `--branch` is refused with exit 2 and says which branch to use.
+- **buildme**: the epic's spend, and so `epic.max_usd`, now also counts what each child's build checkpoint holds beyond the epic's own build records, such as builds run by hand. On the DFACCMGMT-1 state of 2026-10-29 it counts $551.65 where it counted $399.
+- **buildme** (G33): a build resumed after a block's test and implementation were committed goes on from the first step with no commit, the refactor or the review. It no longer runs the quality and RED gates again on code that is already implemented, which made the RED gate fail.
+- **buildme**: `facts.json`, `codebase-analysis.md` and `plan-edits-*.diff` in a change dir are no longer committed, so they stay off the PR's branch. They stay on disk for the build. A branch that already committed them keeps them as they are, with no delete commit.
+- **buildme** (G25): editing the `findings:`, `code_review:` or `test_quality:` sections of `specs/config.yaml` no longer changes the plan revision, so it does not make a planned build plan again. `memory_files:` still does, because its `stacks` picks the reference docs that planning reads. A build planned by an earlier version whose `config.yaml` has one of those three sections sees its plan revision change once; `plan-revision` re-binds it.
+
 ## [0.134.0] - 2026-10-29
 
 ### Changed

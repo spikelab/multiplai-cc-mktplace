@@ -1,0 +1,11 @@
+{
+  "exit_code": 1,
+  "markers": [
+    "WORKTREE:{WORKTREES}/buildme-account-management-dolcecleaning-feed-guard",
+    "SPEND:0.000000:0"
+  ],
+  "pr": null,
+  "interrupted": false,
+  "spend": 0.0,
+  "at": "2026-10-27T06:04:29.019161+00:00"
+}

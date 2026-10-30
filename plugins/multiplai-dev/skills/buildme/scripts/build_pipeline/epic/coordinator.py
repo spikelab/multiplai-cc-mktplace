@@ -124,6 +124,12 @@ WAITING_ON = "waiting on "  # a dependant of a child parked on its specs
 # (`orchestrator._plan_approval_gate`): `waiting` with the marker line, never
 # relaunched in the run; the next run launches it again.
 PLAN_WAITING = f"{intake.MARKER_PLAN_WAITING}:"
+# A child build stopped by the size gate (`orchestrator._run_size_gate`):
+# parked, and launched again with `--accept-size` under `epic.accept_size`.
+SPLIT_REQUIRED = f"{intake.MARKER_SPLIT_REQUIRED}:"
+PLAN_BLOCKED = (
+    "its planning check is blocked at this plan revision"  # G22: not relaunched
+)
 REVIEW_KINDS = ("review", "resume")
 FIX_KINDS = ("post", "fix")
 PR_FIELDS = "number,state,headRefOid,mergeable,mergeStateStatus"
@@ -435,7 +441,8 @@ class Child:
     argv: list[str] | None = None  # the command to relaunch with, when set
     proc: subprocess.Popen | None = None
     attempt: records.Attempt | None = None
-    relaunched: bool = False  # a failure was relaunched in this invocation
+    relaunched: bool = False  # no more launches of a failure in this invocation
+    launches: int = 0  # its builds this invocation started (`epic.max_child_attempts`)
     pr_round: int | None = None  # item 23, cached in epic.json
     conflicts: bool | None = None
     reviewed: bool = False  # its review step ran in this invocation
@@ -543,6 +550,8 @@ class Coordinator:
             argv.append("--skip-research")
         if getattr(self.config, "accept_unknown_spend", False):
             argv.append("--accept-unknown-spend")
+        if self.settings.accept_size:
+            argv.append("--accept-size")
         return argv
 
     # -- reading the records ----------------------------------------------------
@@ -556,9 +565,31 @@ class Coordinator:
         prs = records.marker(found, "PR")
         if prs:
             return prs[-1]
+        for branch in self._branches(found):
+            listed = _gh(
+                self.repo,
+                "pr",
+                "list",
+                "--head",
+                branch,
+                "--state",
+                "all",
+                "--json",
+                "url",
+            )
+            if not isinstance(listed, list):
+                raise ReadFailed(f"gh pr list --head {branch} failed")
+            if listed and isinstance(listed[0], dict) and listed[0].get("url"):
+                return listed[0]["url"]
+        return None
+
+    def _branches(self, found: list[str]) -> list[str]:
+        """The branches of the child's builds: each `BRANCH:` line, then the
+        branch `git worktree list` gives for each `WORKTREE:` path. None at
+        all without a `WORKTREE:` line. Raises ReadFailed when git fails."""
         worktrees = records.marker(found, "WORKTREE")
         if not worktrees:
-            return None
+            return []
         branches = list(dict.fromkeys(records.marker(found, "BRANCH")))
         porcelain = _git(self.repo, "worktree", "list", "--porcelain")
         if not porcelain.ok:
@@ -582,26 +613,101 @@ class Coordinator:
             )
             if path and Path(path).resolve() in wanted and ref and ref not in branches:
                 branches.append(ref)
-        for branch in branches:
+        return branches
+
+    def _open_pr(self, tries: list[records.Attempt]) -> str | None:
+        """An open PR from one of the child's branches (`_branches`) into the
+        feature branch, which a build outside the epic opened (G35): None
+        when an attempt printed a `PR:` line, whose PR the rules of
+        `_classify` already follow. Raises ReadFailed when `git` or `gh` fails."""
+        found = [m for a in tries for m in records.markers(a.log)]
+        if records.marker(found, "PR"):
+            return None
+        for branch in self._branches(found):
             listed = _gh(
                 self.repo,
                 "pr",
                 "list",
                 "--head",
                 branch,
+                "--base",
+                self.branch,
                 "--state",
-                "all",
+                "open",
                 "--json",
                 "url",
             )
             if not isinstance(listed, list):
-                raise ReadFailed(f"gh pr list --head {branch} failed")
+                raise ReadFailed(
+                    f"gh pr list --head {branch} --base {self.branch} failed"
+                )
             if listed and isinstance(listed[0], dict) and listed[0].get("url"):
                 return listed[0]["url"]
         return None
 
+    def _adopt(self, c: Child, tries: list[records.Attempt]) -> None:
+        """A child about to be parked or failed whose branch has an open PR
+        into the feature branch (`_open_pr`) is `built` with it (row S22);
+        its records stay as they are. A lookup that fails makes it `unknown`,
+        launched no more until a lookup answers (S23)."""
+        try:
+            url = self._open_pr(tries)
+        except ReadFailed as e:
+            c.status, c.reason, c.argv = (
+                "unknown",
+                f"cannot tell whether a PR is open from its branch: {e}",
+                None,
+            )
+            return
+        if url:
+            log.info(
+                "EPIC child %s: %s is open from its branch into %s; taking it as built (was %s: %s)",
+                c.id,
+                url,
+                self.branch,
+                c.status,
+                c.reason,
+            )
+            c.status, c.reason, c.pr, c.argv = "built", "", url, None
+
     def _classify(self, c: Child, tries: list[records.Attempt]) -> None:
-        """A child's status from its finished attempts (item 15)."""
+        """A child's status from its finished attempts (item 15). One that
+        would be parked or failed is `built` when a PR from its branch into
+        the feature branch is open (`_adopt`). A failed one whose planning
+        check a relaunch would refuse at this plan revision
+        (`spec_generator.refuses_blocked`) is launched no more in this run."""
+        self._classify_records(c, tries)
+        if c.status in ("parked", "failed"):
+            self._adopt(c, tries)
+        if c.status == "failed" and self._plan_blocked(c):
+            c.relaunched, c.argv = True, None
+            c.reason = f"{c.reason}: {PLAN_BLOCKED}"
+
+    def _child_config(self, c: Child):
+        """The child's build config, read in its worktree as its build reads it."""
+        import argparse
+
+        from ..config import BuildConfig
+
+        return BuildConfig.from_cli_args(
+            argparse.Namespace(
+                project_dir=str(self._child_project(c)), change=self.change(c.id)
+            )
+        )
+
+    def _plan_blocked(self, c: Child) -> bool:
+        """Its planning check is blocked at the plan revision its files have
+        now, so a launch would refuse it with no model call (G22)."""
+        from ..spec_generator import refuses_blocked
+
+        try:
+            return refuses_blocked(self._child_config(c))
+        except Exception as e:  # never decides a launch on a config it cannot read
+            log.warning("EPIC child %s: cannot read its plan check: %s", c.id, e)
+            return False
+
+    def _classify_records(self, c: Child, tries: list[records.Attempt]) -> None:
+        """`_classify` from the records alone."""
         last = tries[-1].result or {}
         c.argv = None
         if last.get("interrupted"):
@@ -708,6 +814,19 @@ class Coordinator:
                     # with no open issue before this run (B.S6, B.S7).
                     log.info(
                         "EPIC child %s: its specs are ready now; launching it again (was: %s)",
+                        cid,
+                        c.reason,
+                    )
+                    c.status, c.reason = "pending", ""
+                elif (
+                    self.settings.accept_size
+                    and c.status == "parked"
+                    and c.reason.startswith(SPLIT_REQUIRED)
+                ):
+                    # Parked by the size gate in a run without the key (S21):
+                    # launched again with `--accept-size`.
+                    log.info(
+                        "EPIC child %s: epic.accept_size is on; launching it again (was: %s)",
                         cid,
                         c.reason,
                     )
@@ -840,7 +959,9 @@ class Coordinator:
             if all(s == "merged" for s in deps):
                 if c.status == "waiting":
                     c.status = "pending"
-                if c.status == "pending" or not c.relaunched:
+                if c.status == "pending" or (
+                    not c.relaunched and c.launches < self.settings.max_child_attempts
+                ):
                     ready.append(c)
             elif c.status == "pending" and ("built" in deps or "reviewing" in deps):
                 c.status = "waiting"
@@ -898,8 +1019,6 @@ class Coordinator:
         branch's (B1.S22). The next run then fetches again."""
         if self.conflict is not None:
             return False
-        if c.status == "failed":
-            c.relaunched = True
         argv = c.argv
         if argv is not None and not _parses(argv):
             # Saved by buildme's own epic split (`--mode brief --plan-file ...`),
@@ -956,10 +1075,17 @@ class Coordinator:
             argv = self.new_argv(c.id)
         # A saved command must use this invocation's explicit acceptance, not
         # a stale flag from a previous epic run.
-        argv = [arg for arg in argv if arg != "--accept-unknown-spend"]
+        argv = [
+            arg
+            for arg in argv
+            if arg not in ("--accept-unknown-spend", "--accept-size")
+        ]
         if getattr(self.config, "accept_unknown_spend", False):
             argv.append("--accept-unknown-spend")
+        if self.settings.accept_size:
+            argv.append("--accept-size")
         c.attempt = records.start(self.epic_dir, "build", c.id, argv, head_sha=sha)
+        c.launches += 1
         c.status, c.argv, c.reason = "running", argv, ""
         self._save()
         c.proc = _spawn(argv, c.attempt.log)
@@ -2424,14 +2550,38 @@ class Coordinator:
         return spend.review_slugs(self.slug, [c.pr for c in self.children.values()])
 
     def spent(self) -> tuple[float, bool]:
-        """(USD, complete): every record's spend plus the child PRs' reviews (item 19)."""
+        """(USD, complete): every record's spend plus the child PRs' reviews
+        (item 19), plus what the children's checkpoints hold beyond their
+        build records (`spend.state_spend`, item 28)."""
         from multiplai_core.paths import get_paths
 
-        usd, complete = spend.attempts_spend(records.attempts(self.epic_dir))
+        tries = records.attempts(self.epic_dir)
+        usd, complete = spend.attempts_spend(tries)
         reviews, reviews_complete = spend.review_spend(
             Path(get_paths().data_dir) / spend.LEDGER, self._review_slugs()
         )
-        return round(usd + reviews, 6), complete and reviews_complete
+        builds, builds_complete = spend.state_spend(
+            self._state_files(), spend.build_spend(tries)
+        )
+        return (
+            round(usd + reviews + builds, 6),
+            complete and reviews_complete and builds_complete,
+        )
+
+    def _state_files(self) -> dict[str, list[Path]]:
+        """Each child's build checkpoints in its worktree (`_child_project`):
+        `.build-state.json` and the completed one (item 28)."""
+        from ..change_manager import change_path
+        from ..state import completed_state_path
+
+        out = {}
+        for cid, c in self.children.items():
+            state = (
+                change_path(self._child_project(c) / "specs", self.change(cid))
+                / Path(getattr(self.config, "state_file", ".build-state.json")).name
+            )
+            out[cid] = [state, completed_state_path(state)]
+        return out
 
     def _pr_reviews(self, c: Child) -> float:
         """The USD of *c*'s PR's reviews in the ledger, as `spent` counts them."""

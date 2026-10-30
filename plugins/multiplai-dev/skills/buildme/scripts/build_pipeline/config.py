@@ -574,13 +574,18 @@ class EpicSettings:
     another review round (`epic.review.decide`): `breaks`, one the verifier
     did not rate `hygiene`; `any`, every one. `accepted_findings`: per
     child id, the review finding ids a person accepted, each with its reason;
-    a listed id does not block that child (`Coordinator._fields`)."""
+    a listed id does not block that child (`Coordinator._fields`).
+    `accept_size`: every child launch adds `--accept-size`, and a child
+    parked on `SPLIT:REQUIRED` is launched again. `max_child_attempts`:
+    launches of a failed child in one run."""
 
     max_parallel: int = 2
     max_review_rounds: int = 3
     merge: Literal["auto", "manual"] | None = None
     max_usd: float | None = None
     round_worth: Literal["breaks", "any"] = "breaks"
+    accept_size: bool = False
+    max_child_attempts: int = 2
     accepted_findings: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
@@ -1794,6 +1799,13 @@ class BuildConfig:
                 worth,
             )
             worth = "breaks"
+        accept_size = epic_cfg.get("accept_size", False)
+        if not isinstance(accept_size, bool):
+            log.warning(
+                "Invalid epic.accept_size value %r in config.yaml — want true | false; using false",
+                accept_size,
+            )
+            accept_size = False
         self.epic = EpicSettings(
             max_parallel=_cfg_int(
                 epic_cfg.get("max_parallel", 2), "epic.max_parallel", 2
@@ -1804,6 +1816,10 @@ class BuildConfig:
             merge=merge,
             max_usd=max_usd,
             round_worth=worth,
+            accept_size=accept_size,
+            max_child_attempts=_cfg_int(
+                epic_cfg.get("max_child_attempts", 2), "epic.max_child_attempts", 2
+            ),
             accepted_findings=_accepted_findings(epic_cfg.get("accepted_findings")),
         )
 
