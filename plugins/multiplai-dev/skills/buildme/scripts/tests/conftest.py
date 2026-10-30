@@ -1,7 +1,7 @@
 """Shared test guards."""
 
 import pytest
-from build_pipeline import git_ops
+from build_pipeline import git_ops, preflight
 
 
 @pytest.fixture(autouse=True)
@@ -16,6 +16,14 @@ def no_real_pr_skill(monkeypatch):
         )
 
     monkeypatch.setattr(git_ops, "_run_pr_skill", refuse)
+
+
+@pytest.fixture(autouse=True)
+def gh_can_open_prs(monkeypatch):
+    """The check before the first paid call asks gh whether it can open a PR
+    on a build that publishes. A test's repo is not on GitHub, so every test
+    gets a gh that can; `tests/test_preflight.py` puts its own answer in."""
+    monkeypatch.setattr(preflight, "_gh_permission", lambda repo: ("WRITE", ""))
 
 
 @pytest.fixture(autouse=True)

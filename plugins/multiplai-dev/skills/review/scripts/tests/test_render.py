@@ -17,6 +17,7 @@ from review_pipeline.render import (
     answers_lines,
     finding_section,
     need_lines,
+    render_low_review,
     render_review,
     render_summary,
     write_review,
@@ -79,7 +80,7 @@ def test_header_and_sections(canned_state):
     assert "unverifiable (lowered from MEDIUM)" in text
 
 
-def test_unverified_low_findings_go_to_their_own_last_section(canned_state):
+def test_unverified_low_findings_go_to_their_own_file(canned_state):
     import jsonschema
     from conftest import SCHEMA, high_finding
     from review_pipeline.stages.verify import unverified_verdict
@@ -101,8 +102,16 @@ def test_unverified_low_findings_go_to_their_own_last_section(canned_state):
     assert heading in text
     tail = text[text.index(heading) :]
     assert "## Appendix" not in tail, "the section comes last"
-    assert f"### LOW — rateplan_service.py:1 — {low.claim}" in tail
-    assert text.count(low.claim) == 1, "listed once, not also under Code"
+    assert (
+        f"[review-{state.target.slug}-low.md](review-{state.target.slug}-low.md)"
+        in tail
+    )
+    assert f"### LOW — rateplan_service.py:1 — {low.claim}" not in text, (
+        "not shown in full in the main file"
+    )
+    low_text = render_low_review(state, findings_file=data)
+    assert f"### LOW — rateplan_service.py:1 — {low.claim}" in low_text
+    assert low_text.count(low.claim) == 1
 
 
 def test_citations_are_full_sha_github_links(canned_state):
@@ -386,11 +395,12 @@ def test_findings_are_listed_in_code_tests_and_docs_sections_with_their_impact(
         "- **Findings:** Code 1 HIGH, 0 MEDIUM, 0 LOW; Tests 0 HIGH, 0 MEDIUM, 1 LOW; Docs none"
         in text
     )
+    code = text.index("## Code")  # the opening list names both claims before it
     assert (
-        text.index("## Code")
-        < text.index(CLAIM_HIGH)
+        code
+        < text.index(CLAIM_HIGH, code)
         < text.index("## Tests")
-        < text.index(CLAIM_MEDIUM)
+        < text.index(CLAIM_MEDIUM, code)
     )
     assert "**Impact:** breaks-users" in text and "**Impact:** correctness-only" in text
     assert "Mode:" not in text
@@ -679,12 +689,18 @@ def test_a_failed_half_lists_only_its_files_under_its_dimension_at_the_top(
 
     state = _pieced(canned_state, failed="callers@4")
     line = "- **callers:** `direct_booking.py` (callers@4: turn limit)"
-    for text in (render_review(state), render_summary(state)):
+    review = render_review(state)
+    for text in (review, render_summary(state)):
         section = text.split("## Not reviewed", 1)[1].split("\n## ", 1)[0]
         assert [s for s in section.splitlines() if s.startswith("- ")] == [line]
-        # The first section after the header lines: before the findings and every other heading.
+        # Right after the header lines, and in the review after its opening list of findings.
         headings = [s for s in text.splitlines() if s.startswith("## ")]
-        assert headings[0] == "## Not reviewed"
+        first = (
+            ["## Not reviewed"]
+            if text is not review
+            else ["## Findings", "## Not reviewed"]
+        )
+        assert headings[: len(first)] == first
     assert not_reviewed_count(state) == 1
 
 
