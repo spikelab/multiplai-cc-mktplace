@@ -217,7 +217,10 @@ def write_ready_specs(change_dir: Path, cid: str) -> None:
 
 
 def approve(
-    config: BuildConfig, answer: EpicSplitAnswer, log: CallLog | None = None
+    config: BuildConfig,
+    answer: EpicSplitAnswer,
+    log: CallLog | None = None,
+    tickets: dict[str, str] | None = None,
 ) -> str:
     """Write the split pm-spec makes of *config*'s change as *answer* gives
     it: each child's change dir with ready specs, `parent`, `depends_on`
@@ -225,7 +228,8 @@ def approve(
     the answer's order); then commit the change dirs in the project and push
     that commit to origin's `ENG-40-<parent>`, as pm-spec does (with the real
     `git`, so no fake root logs it). Returns that commit's sha. *log* is
-    unused, kept so the callers stay as they were."""
+    unused, kept so the callers stay as they were. *tickets*: each child's
+    own `ticket_refs.epic`, by id, as pm-spec writes it."""
     parent = config.change_name
     branch = f"ENG-40-{parent}"
     changes = config.specs_dir / "changes"
@@ -242,6 +246,11 @@ def approve(
                 "parent": parent,
                 "depends_on": [f"{parent}-{dep}" for dep in c.depends_on],
                 "branch": branch,
+                **(
+                    {"ticket_refs": {"epic": tickets[c.id], "children": []}}
+                    if tickets and c.id in tickets
+                    else {}
+                ),
             },
         )
         write_ready_specs(d, c.id)
@@ -437,6 +446,8 @@ else:
         git("add", "--", *step["commit"], cwd=wt)
         git("-c", "commit.gpgsign=false", "commit", "-qm", f"child {{cid}}", cwd=wt)
         git("push", "-q", "-u", "origin", branch, cwd=wt)
+for column in step.get("board", []):     # the board columns a real build prints
+    print(f"BOARD:{{slug}}:{{column}}", flush=True)
 if step.get("grandchild"):      # a process in the build's group, as a real build's agents are
     kid = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
     (root / "grandchildren").mkdir(exist_ok=True)
@@ -953,7 +964,8 @@ def real_git() -> str:
 class Fakes:
     """The fake build and `gh` first on PATH, answering from `<root>/fakes.json`
     (per child, one step per attempt: `block`, `marker`, `exit`, `no_pr`,
-    `die_before_pr_line`, `grandchild`, `ignore_signals`, `spend`, `pr_number`, and
+    `die_before_pr_line`, `grandchild`, `ignore_signals`, `spend`, `pr_number`,
+    `board` (the columns it prints as `BOARD:` lines after `WORKTREE:`), and
     `pr`: fields the new PR starts with, such as `mergeable`) and `<root>/prs.json`; launches go to
     `<root>/calls.log`. `<root>/gh-fails` makes every `gh` call fail; `ps_fails`
     puts a `ps` that exits 1 first on PATH. The fake review (`uv`, PR C)

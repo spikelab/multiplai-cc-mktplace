@@ -572,13 +572,18 @@ class EpicSettings:
     feature branch, else `manual` (`Coordinator.__post_init__`). `max_usd`: one ceiling for
     the whole epic, None for none. `round_worth`: which Code MEDIUM earns
     another review round (`epic.review.decide`): `breaks`, one the verifier
-    did not rate `correctness-only` or `hygiene`; `any`, every one."""
+    did not rate `correctness-only` or `hygiene`; `any`, every one.
+    `board`: `off`, or `plane`, which saves each child's `BOARD:` line to the
+    board outbox and moves its Plane card (`epic.outbox`). `plane_script`:
+    the plane skill's `plane.py`, None to look for it beside this plugin."""
 
     max_parallel: int = 2
     max_review_rounds: int = 3
     merge: Literal["auto", "manual"] | None = None
     max_usd: float | None = None
     round_worth: Literal["breaks", "any"] = "breaks"
+    board: Literal["off", "plane"] = "off"
+    plane_script: str | None = None
 
 
 def _cfg_int(value, key: str, default: int) -> int:
@@ -1765,6 +1770,16 @@ class BuildConfig:
                 worth,
             )
             worth = "breaks"
+        board = epic_cfg.get("board", "off")
+        if board not in ("off", "plane"):
+            log.warning(
+                "Invalid epic.board value %r in config.yaml — using 'off'", board
+            )
+            board = "off"
+        script = epic_cfg.get("plane_script")
+        if script is not None and not (isinstance(script, str) and script.strip()):
+            log.warning("Invalid epic.plane_script=%r — ignoring", script)
+            script = None
         self.epic = EpicSettings(
             max_parallel=_cfg_int(
                 epic_cfg.get("max_parallel", 2), "epic.max_parallel", 2
@@ -1775,6 +1790,8 @@ class BuildConfig:
             merge=merge,
             max_usd=max_usd,
             round_worth=worth,
+            board=board,
+            plane_script=script.strip() if script else None,
         )
 
     def _discover_test_command(self) -> None:
