@@ -1,0 +1,12 @@
+{
+  "exit_code": 1,
+  "markers": [
+    "WORKTREE:{WORKTREES}/buildme-account-management-dolcecleaning-feed-guard",
+    "BRANCH:DFACCMGMT-11-account-management-dolcecleaning-feed-guard",
+    "SPEND:29.928906:8918434"
+  ],
+  "pr": null,
+  "interrupted": false,
+  "spend": 29.928906,
+  "at": "2026-10-27T06:04:25.410147+00:00"
+}

@@ -1,0 +1,12 @@
+{
+  "exit_code": 0,
+  "markers": [
+    "WORKTREE:{WORKTREES}/buildme-account-management-account-model",
+    "PR:https://github.com/DolceTech/Dolcebot/pull/37",
+    "SPEND:9.676743:8723582"
+  ],
+  "pr": "https://github.com/DolceTech/Dolcebot/pull/37",
+  "interrupted": false,
+  "spend": 9.676743,
+  "at": "2026-10-28T03:53:42.625685+00:00"
+}

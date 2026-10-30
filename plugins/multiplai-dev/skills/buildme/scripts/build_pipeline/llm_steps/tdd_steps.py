@@ -55,10 +55,12 @@ async def run_test_writer(
     effort: str | None = None,
     cwd: str | None = None,
     max_turns: int = TEST_WRITER_MAX_TURNS,
+    budget_label: str = "test_writer",
 ) -> AgentResult:
     """Spawn a test-writing agent for a block.
 
     The agent writes failing tests that define expected behavior per the specs.
+    *budget_label* names its spend: "spec_test_writer" for `tdd.spec_tests`.
     """
     prompt = TEST_WRITER_PROMPT.format(
         block_name=block_name,
@@ -78,7 +80,7 @@ async def run_test_writer(
         max_turns=max_turns,
         cwd=cwd,
         call_timeout=TEST_WRITER_TIMEOUT,
-        budget_label="test_writer",
+        budget_label=budget_label,
     )
 
 

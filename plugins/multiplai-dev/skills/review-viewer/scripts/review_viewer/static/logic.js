@@ -102,8 +102,9 @@
   }
 
   /* A review run with `--mode critical` lists only findings the verifier rated
-   * as breaking users or the business after merge. */
-  const CRITICAL_IMPACTS = new Set(["breaks-users", "breaks-business"]);
+   * as breaking users or the business after merge, or as harmful when
+   * production holds certain data (the review's models.CRITICAL_IMPACTS). */
+  const CRITICAL_IMPACTS = new Set(["breaks-users", "breaks-business", "depends-on-data"]);
 
   /* The sections the list is split into; severity is read within a section.
    * Trim is advisory and never blocks a merge. */
@@ -253,7 +254,7 @@
     const plural = (n, one, many) => n + " " + (n === 1 ? one : many);
     const parts = [];
     if (dropped) parts.push(plural(dropped, "was", "were") + " rejected by its checks or labelled low-value or repeat");
-    if (critical) parts.push(plural(critical, "is", "are") + " not rated breaks-users or breaks-business, " +
+    if (critical) parts.push(plural(critical, "is", "are") + " not rated breaks-users, breaks-business or depends-on-data, " +
       "which a critical review leaves out");
     return "Nothing to show: of the review's " + plural(all.length, "finding", "findings") + ", " +
       parts.join(", and ") + "; findings.json keeps them.";

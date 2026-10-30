@@ -59,6 +59,10 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
     budget_mod.configure(
         max_tokens=config.budget_max_tokens, max_usd=config.budget_max_usd
     )
+    # A component of an epic built by hand builds as the epic's child (G34).
+    rc = _as_epic_child(config)
+    if rc is not None:
+        return rc
     # The change's feature branch, where pm-spec pushed its specs
     # (`feature_branch.py`): found before anything else reads the specs.
     rc = _find_feature_branch(config)
@@ -233,6 +237,13 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             # First board record of the run: the card is being shaped.
             board.record(config, state, BuildPhase.BOOTSTRAP, progress=progress)
         start_progress()
+
+        # Nothing below this point has spent yet on a fresh run: check what a
+        # paid call needs first (item 33).
+        if not state.is_phase_complete(BuildPhase.TDD_BUILD):
+            rc = _preflight(config, state)
+            if rc is not None:
+                return rc
 
         # Phase: Research
         if not state.tdd and not state.is_phase_complete(BuildPhase.RESEARCH):
@@ -701,6 +712,47 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
                 log.warning(
                     "Could not write the spend summary to the progress file: %s", e
                 )
+
+
+def _as_epic_child(config: BuildConfig) -> int | None:
+    """`build --change <epic>/<child>` of an epic whose change dir records a
+    feature branch (its `.change.yaml` `branch`) builds as the epic's
+    coordinator launches it: `--epic-child --branch <feature branch>`, so its
+    PR targets the feature branch, not the default branch (G34). A different
+    `--branch` is refused, exit 2, with why; None otherwise."""
+    from multiplai_core.specs import change_root
+
+    from . import feature_branch
+    from .change_manager import split_component
+
+    parts = split_component(config.change_name or "")
+    if parts is None:
+        return None
+    epic_branch = feature_branch.recorded(change_root(config.change_dir))
+    if not epic_branch:
+        return None
+    if config.feature_branch and config.feature_branch != epic_branch:
+        why = (
+            f"--branch {config.feature_branch} is not the feature branch of the epic "
+            f"{parts[0]}: its component {parts[1]} builds from {epic_branch} and opens "
+            f"its PR into it. Drop --branch, or pass --branch {epic_branch}"
+        )
+        log.error(
+            "REFUSED change=%s reason=not-the-epic-branch branch=%s epic_branch=%s",
+            config.change_name,
+            config.feature_branch,
+            epic_branch,
+        )
+        print(f"ERROR:{why}", file=sys.stderr, flush=True)
+        return 2
+    if not config.feature_branch or not config.epic_child:
+        log.info(
+            "EPIC_CHILD change=%s branch=%s: a component of an epic builds as its child",
+            config.change_name,
+            epic_branch,
+        )
+    config.feature_branch, config.epic_child = epic_branch, True
+    return None
 
 
 def _find_feature_branch(config: BuildConfig) -> int | None:
@@ -2798,6 +2850,49 @@ def _worktree_section(state: BuildState, docs_dir: Path) -> Path | None:
         return None
 
 
+def _pr_target(config: BuildConfig, worktree: Path) -> tuple[str | None, str]:
+    """(the branch the build's PR targets, or None for origin's default
+    branch; origin's default branch). A single change on its feature branch
+    opens its PR to origin's default branch; an epic's child targets the
+    feature branch (the coordinator passes `--branch`); a child started
+    before that flag targets the default branch, as it did then."""
+    from . import feature_branch
+
+    default = feature_branch.default_name(worktree) or git_ops.default_branch(worktree)
+    if config.feature_branch and not _epic_child(config):
+        return default, default
+    return config.feature_branch or (
+        None if _epic_child(config) else _pr_base_branch(worktree, config.base_ref)
+    ), default
+
+
+def _preflight(config: BuildConfig, state: BuildState) -> int | None:
+    """The checks before the first paid call (`preflight.run`, item 33 of
+    plan-factory-merged-2026-10-29.md), on every run until TDD is done. Prints
+    one `PREFLIGHT:FAILED:<check>:<reason>` line per failed check and returns
+    1; None when every check passed. The checkpoint is left as it is, so a
+    re-run after the fix starts where this one stopped."""
+    from . import preflight
+
+    # It publishes when it pushes its own branch and opens a PR from it.
+    publishes = bool(
+        state.branch
+        and state.worktree_path
+        and config.git.push
+        and config.git.pr != "none"
+        and not config.spec_only
+    )
+    target = None
+    if publishes:
+        base, default = _pr_target(config, Path(state.worktree_path))
+        target = base or default
+    failed = preflight.run(config, publishes=publishes, target=target)
+    if not failed:
+        return None
+    preflight.report(failed)
+    return 1
+
+
 def _run_publish(
     config: BuildConfig,
     state: BuildState,
@@ -2822,22 +2917,10 @@ def _run_publish(
         log.info("SKIP phase=PUBLISH reason=no-pipeline-branch")
         return True
 
-    from . import feature_branch
-
     worktree = Path(state.worktree_path)
     draft = config.git.pr == "draft"
     docs_dir = docs_dir or config.change_dir
-    # A single change on its feature branch opens its PR to origin's default
-    # branch; an epic's child targets the feature branch (the coordinator
-    # passes `--branch`); a child started before that flag targets the
-    # default branch, as it did then.
-    default = feature_branch.default_name(worktree) or git_ops.default_branch(worktree)
-    if config.feature_branch and not _epic_child(config):
-        base = default
-    else:
-        base = config.feature_branch or (
-            None if _epic_child(config) else _pr_base_branch(worktree, config.base_ref)
-        )
+    base, default = _pr_target(config, worktree)
     title = pr_title(base or default, config.tickets, docs_dir, config.change_name)
 
     if not config.git.push:

@@ -1422,3 +1422,52 @@ async def test_one_model_check_per_planning_pass(tmp_path):
     labels = [c.kwargs.get("budget_label") for c in call.await_args_list]
     assert labels == ["plan_review"]
     assert state.spec_gen.step_passed("plan_review")
+
+
+class TestPlanReviewDependencySpecs:
+    """Plan item 48: the plan check reads the requirements of the components
+    this one depends on, as the design and tasks writers do."""
+
+    def _components(self, tmp_path, billing_deps: str) -> Path:
+        root = _change_dir(tmp_path)
+        for cid, deps in (("billing", billing_deps), ("users", "[]")):
+            comp = root / "components" / cid
+            comp.mkdir(parents=True)
+            (comp / "plan.md").write_text(f"# Plan: {cid}\n")
+            (comp / ".change.yaml").write_text(f"depends_on: {deps}\n")
+            for name in ("implementation-plan.md", "tasks.md", "rubric.md"):
+                (comp / name).write_text("x\n")
+        (root / "components" / "users" / "specs.md").write_text(
+            "# Capability: users\n\n## ADDED Requirements\n\n"
+            "### Requirement: Users\nUSERS-SPEC-MARKER\n"
+        )
+        return root / "components" / "billing"
+
+    @pytest.mark.asyncio
+    async def test_the_plan_check_gets_the_dependencies_specs(self, tmp_path):
+        from build_pipeline.llm_steps.spec_steps import DEPENDENCY_SPECS_HEADING
+
+        call = AsyncMock(return_value=PlanReviewResult(findings=[]))
+        with patch.object(plan_review_steps, "agent_call_structured", call):
+            await run_plan_review(
+                self._components(tmp_path, "[users]"), _stub_config(tmp_path)
+            )
+        prompt = call.await_args.args[0]
+        section = prompt.split(DEPENDENCY_SPECS_HEADING, 1)[1]
+        assert "USERS-SPEC-MARKER" in section
+
+    @pytest.mark.asyncio
+    async def test_no_dependency_leaves_the_plan_check_unchanged(self, tmp_path):
+        from build_pipeline.llm_steps.spec_steps import DEPENDENCY_SPECS_HEADING
+
+        call = AsyncMock(return_value=PlanReviewResult(findings=[]))
+        component = self._components(tmp_path, "[]")
+        with patch.object(plan_review_steps, "agent_call_structured", call):
+            await run_plan_review(component, _stub_config(tmp_path))
+            with patch.object(
+                plan_review_steps, "dependency_specs_section", return_value=""
+            ):
+                await run_plan_review(component, _stub_config(tmp_path))
+        first, second = (c.args[0] for c in call.await_args_list)
+        assert first == second
+        assert DEPENDENCY_SPECS_HEADING not in first
