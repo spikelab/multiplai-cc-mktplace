@@ -568,7 +568,11 @@ def test_the_tree_prompt_and_finding_gate_agree_on_which_file_a_finding_may_name
         info, on_skipped
     ).passed  # a skipped file is not under review
     assert gates.finding_gate(
-        info, on_skipped.model_copy(update={"dimension": "pre-existing"})
+        # The tree finder answers `dimension: "pre-existing"`; it parses as `pre_existing`.
+        info,
+        Finding.model_validate(
+            {**on_skipped.model_dump(), "dimension": "pre-existing"}
+        ),
     ).passed
 
 

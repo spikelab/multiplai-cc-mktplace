@@ -889,6 +889,7 @@ Gates are pure functions (no LLM calls) that return pass/fail decisions:
 | Test integrity | After GREEN, after every review-fix, and after the fix on pass | Fail the block (tests were edited after they gated it); during the fix on pass, roll the fix back instead |
 | Quality review (graded, panel-merged) | After implementer | Fix agent on the failing dimensions and every accepted finding, then review again (max 3 reviews). Every round is recorded in `reviews/` |
 | Fix on pass (`code_review.fix_on_pass`, on by default) | A block passed review with accepted Critical/Major/Minor findings | One fix pass on those findings, then suite + test integrity + one more review. Kept only if the suite is green and the block still passes; otherwise rolled back and listed in `unfixed-findings.md`. Never fails the block |
+| Component review (`code_review.component_review`, off by default) | After the last block and the whole-suite run | One review of the component's whole diff; one fix round on its accepted Critical/Major findings, kept only if the whole suite is green and the test files are unchanged; open findings go to `unfixed-findings.md`. With it on, the per-block review fails a block only on `block_gate_severities` or a spec-compliance miss, in at most 2 reviews, with no fix on pass |
 | Integration | After block done | Integration fix agent (max 2) |
 | Budget | Before each provider dispatch, inside the concurrency slot | Stop with persisted spend; unknown cancelled usage requires explicit acceptance before capped resume |
 | Entry point | Post-TDD | Warn (manual step needed) |
@@ -991,6 +992,42 @@ the pass rolls back to the checkpoint on resume and runs the pass again: a
 half-applied fix is never kept. With `fix_on_pass: false` a passing block stops
 its review loop at once, as before.
 
+#### The component review (`code_review.component_review`)
+
+Off by default. With it on, after the last block and the whole-suite run,
+buildme reviews the whole component once, before mutation testing:
+
+1. One reviewer (the `code_review` panel, when set) reads the component's diff
+   from its base, with every requirement, the implementation plan, the rubric
+   and the coding standards, and the findings the block reviews left open
+   below `block_gate_severities`. When a changed path or the specs name auth,
+   roles or tenants, it also gets a fixed checklist: who can read and write
+   each new field, how entities are matched, and what each migration does on
+   the historical schema.
+2. The judge accepts or rejects each finding. The review is written to
+   `specs/changes/<name>/reviews/component-review.json` (finding ids `C-F<n>`)
+   and committed.
+3. The accepted Critical and Major findings get one fix round. The fix is
+   committed, then kept only if the whole test command is green and the test
+   files are unchanged (a `TEST CHANGE REQUIRED:` declaration counts, as in a
+   review fix); otherwise the tree goes back to the review commit.
+4. Findings still open go to `unfixed-findings.md` (a PR-body section). When the
+   fix agent reports `SPEC_IMPACT: contradicts`, the findings also go to
+   `spec-issues.md` for `/multiplai-pm:pm-spec revise`.
+
+A build stopped after the review and before its fix round runs the fix round
+on the saved review on resume, with no new review. A build stopped after the
+fix commit runs the suite on resume: red throws the fix away, green keeps it.
+Either resume refuses, and changes nothing, when the tree holds a commit or an
+uncommitted change the stopped round did not leave. A findings round
+(`/multiplai-dev:buildme-findings`) never runs the component review.
+
+With it on, the per-block review is lighter: it fails a block only on an
+accepted finding rated one of `block_gate_severities` (default
+`[Critical, Major]`) or on a spec-compliance miss, in at most 2 reviews, and
+its fix agent gets only those findings. A passing block gets no fix on pass:
+its lower-rated findings go to the component review.
+
 Every review-fix brief, on the failing-score path and the fix on pass, asks the
 agent to check the other branches of the same function and the rest of the
 block's diff for the same mistake, re-read `git diff` of its own changes, and
@@ -1063,6 +1100,8 @@ code_review:
     - model: sonnet
   adjudicate: true         # default; false DROPS findings, never auto-applies
   fix_on_pass: true        # default; false leaves a passing block's findings unfixed
+  component_review: false  # default; true reviews the whole component once before the PR
+  block_gate_severities: [Critical, Major]  # default; read only with component_review on
   gate:
     min_weighted_average: 3.5
     critical_score: 1.0

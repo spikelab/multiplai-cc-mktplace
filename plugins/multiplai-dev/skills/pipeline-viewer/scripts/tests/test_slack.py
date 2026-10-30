@@ -85,3 +85,39 @@ def test_stop_text_mentions_and_links(shared_fx):
     text = stop_text(st, 3, people_map(), "https://x.example.org/")
     assert "<@U0PAT>, <@U0ELI>" in text
     assert "https://x.example.org/#change=dark-mode&stop=3" in text
+
+
+def _post(fx, capsys, monkeypatch, text, key="k1"):
+    import io
+
+    monkeypatch.setattr("sys.stdin", io.StringIO(text))
+    code = main(["post", "--repo", str(fx["repo"]), "--box", str(fx["box"]),
+                 "--change", "acct", "--key", key])  # fmt: skip
+    return code, capsys.readouterr()
+
+
+def test_post_sends_the_message_once_per_key(fx, capsys, monkeypatch):
+    """buildme's `epic watch` posts through `post`: the same key posts once."""
+    posts = slackstub.install(monkeypatch)
+    monkeypatch.setenv("SLACK_TOKEN", SECRET)
+    code, out = _post(fx, capsys, monkeypatch, "the epic is done")
+    assert code == 0 and out.out.startswith("SLACK:POSTED:")
+    assert posts[0]["channel"] == "C0TEST" and posts[0]["text"] == "the epic is done"
+    code, out = _post(fx, capsys, monkeypatch, "the epic is done")
+    assert out.out.startswith("SLACK:ALREADY:") and len(posts) == 1
+    _post(fx, capsys, monkeypatch, "a person is needed", key="k2")
+    assert len(posts) == 2
+    assert SECRET not in out.out + out.err
+
+
+def test_post_without_a_token_writes_the_outbox(fx, capsys, monkeypatch):
+    posts = slackstub.install(monkeypatch)
+    code, out = _post(fx, capsys, monkeypatch, "the epic is done")
+    assert code == 0 and out.out.strip() == "SLACK:SKIPPED:no token" and posts == []
+    assert "the epic is done" in (fx["box"] / "slack-outbox.md").read_text()
+
+
+def test_post_refuses_an_empty_message(fx, capsys, monkeypatch):
+    slackstub.install(monkeypatch)
+    code, _out = _post(fx, capsys, monkeypatch, "  \n")
+    assert code == 2

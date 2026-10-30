@@ -95,7 +95,11 @@ class Slack:
     ) -> tuple[str, str]:
         """Post the stop's message once per revision. Returns (outcome,
         detail): `posted`/ts, `already`/ts, `skipped`/reason, `failed`/error."""
-        k = key(change, stop, revision)
+        return self.post_once(key(change, stop, revision), text)
+
+    def post_once(self, k: str, text: str) -> tuple[str, str]:
+        """Post *text* once per key *k* (`notify`, and `post` for buildme's
+        `epic watch`), with `notify`'s outcomes."""
         with _LOCK:
             entry = self.notified().get(k)
             if entry:
