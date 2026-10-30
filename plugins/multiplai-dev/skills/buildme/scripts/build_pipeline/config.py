@@ -1137,6 +1137,18 @@ class BuildConfig:
     # its review loop at once, as before.
     fix_on_pass: bool = True
 
+    # One review of the whole component after the last block and the whole
+    # suite (`code_review.component_review`, item 61 of
+    # plan-factory-merged-2026-10-29.md). Off by default: the per-block review
+    # then runs exactly as before. On: that review's Critical and Major
+    # findings get one fix round, and the per-block review fails a block only
+    # on `block_gate_severities` (and the spec-compliance floor), in at most
+    # `COMPONENT_BLOCK_ROUNDS` rounds, with no fix on pass.
+    component_review: bool = False
+    # `code_review.block_gate_severities`, lower-case. Read only when
+    # `component_review` is on.
+    block_gate_severities: tuple[str, ...] = ("critical", "major")
+
     # Stop 4: an engineer approves the implementation plan before TDD starts
     # (`review.plan_approval`). The build stops after the plan check and the
     # size gate until the build's branch holds an approval commit for the
@@ -1446,6 +1458,8 @@ class BuildConfig:
         self._load_review_gate(code_review_cfg)
         self.adjudicate_findings = bool(code_review_cfg.get("adjudicate", True))
         self.fix_on_pass = bool(code_review_cfg.get("fix_on_pass", True))
+        self.component_review = bool(code_review_cfg.get("component_review", False))
+        self._load_block_gate_severities(code_review_cfg)
         self._load_budget(data.get("budget", {}) or {})
 
         # Gate toggles
@@ -1711,6 +1725,24 @@ class BuildConfig:
         self.review_panel = panel
         if panel:
             log.info("Review panel configured: %s", panel)
+
+    def _load_block_gate_severities(self, code_review_cfg: dict) -> None:
+        """`code_review.block_gate_severities`: a list of Critical, Major,
+        Minor and Note. Anything else logs a warning and keeps the default."""
+        value = code_review_cfg.get("block_gate_severities")
+        if value is None:
+            return
+        known = ("critical", "major", "minor", "note")
+        if not isinstance(value, list) or not all(
+            isinstance(v, str) and v.strip().lower() in known for v in value
+        ):
+            log.warning(
+                "code_review.block_gate_severities must be a list of Critical, "
+                "Major, Minor and Note; got %r — using [Critical, Major]",
+                value,
+            )
+            return
+        self.block_gate_severities = tuple(v.strip().lower() for v in value)
 
     def _load_review_gate(self, code_review_cfg: dict) -> None:
         """Load graded-gate thresholds, keeping the defaults on bad input."""

@@ -203,3 +203,13 @@ async def test_default_per_block_review_matches_the_golden(tmp_path):
     if os.environ.get("REGEN_COMPONENT_REVIEW_GOLDEN"):
         GOLDEN.write_text(json.dumps(captured, indent=1, sort_keys=True) + "\n")
     assert captured == json.loads(GOLDEN.read_text())
+
+
+@pytest.mark.asyncio
+async def test_off_ignores_block_gate_severities(tmp_path):
+    """`block_gate_severities` takes effect only with the component review on."""
+    captured = await _capture(
+        tmp_path,
+        {"component_review": False, "block_gate_severities": ("critical",)},
+    )
+    assert captured == json.loads(GOLDEN.read_text())

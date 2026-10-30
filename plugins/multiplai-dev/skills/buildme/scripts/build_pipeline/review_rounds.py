@@ -7,6 +7,11 @@ once that agent returns, its report, its commit and its ``SEARCHED:`` list.
 Round numbers continue across resumes: a new round takes the next free
 number and never replaces an earlier file.
 
+``reviews/component-review.json`` holds the component review
+(``code_review.component_review``): one review of every block at once, after
+the last block, with its accepted findings (ids ``C-F<n>``), the rejected
+ones, and its fix round.
+
 ``unfixed-findings.md`` lists the accepted findings a block that passed kept
 unfixed (the fix on pass was not kept, or not attempted). PUBLISH hands it to
 the pr skill as a PR-body section (``orchestrator.unfixed_findings_section``).
@@ -33,6 +38,7 @@ log = logging.getLogger(__name__)
 REVIEWS_DIR = "reviews"
 UNFIXED_FINDINGS_FILE = "unfixed-findings.md"
 UNFIXED_HEADING = "## Unfixed review findings"
+COMPONENT_REVIEW_FILE = "component-review.json"
 
 # The severities the fix on pass works on. `Note` is left out on purpose.
 FIX_ON_PASS_SEVERITIES = frozenset({"critical", "major", "minor"})
@@ -421,6 +427,72 @@ def recurring_ids(change_dir: Path, block_number: int) -> list[str]:
     return [fid for fid, n in counts.items() if fid and n >= 2]
 
 
+def with_component_ids(findings: list[ReviewFinding]) -> list[ReviewFinding]:
+    """*findings* with the component review's ids, ``C-F1`` on."""
+    return [
+        f.model_copy(update={"finding_id": f"C-F{i + 1}"})
+        for i, f in enumerate(findings)
+    ]
+
+
+def record_component(
+    change_dir: Path,
+    *,
+    head_sha: str | None,
+    review: ReviewResult,
+    weighted_average: float,
+) -> Path | None:
+    """Write ``reviews/component-review.json`` for the component review and
+    return its path, or None when it could not be written. Each accepted
+    finding gets the id ``C-F<n>``, each rejected one ``C-X<n>``. A file left
+    by an earlier attempt that never reached its fix round is replaced."""
+    directory = reviews_dir(change_dir)
+    accepted = with_component_ids(review.findings)
+    record = {
+        "generated_at": datetime.now(UTC).isoformat(),
+        "kind": "component_review",
+        "head_sha": head_sha,
+        "scores": [s.model_dump(mode="json") for s in review.scores],
+        "weighted_average": weighted_average,
+        "missing": list(review.missing),
+        "extra": list(review.extra),
+        "misunderstood": list(review.misunderstood),
+        "accepted": [f.model_dump(mode="json") for f in accepted],
+        "rejected": [
+            {
+                **f.model_dump(mode="json"),
+                "finding_id": f"C-X{i + 1}",
+                "judge_reason": _judge_reason(f),
+            }
+            for i, f in enumerate(review.rejected_findings)
+        ],
+        "prior_assessments": [
+            a.model_dump(mode="json") for a in review.prior_assessments
+        ],
+        "fix_brief": None,
+        "fix": None,
+    }
+    path = directory / COMPONENT_REVIEW_FILE
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        _write_json(path, record)
+        return path
+    except OSError as e:
+        log.warning("Could not write %s: %s — component review not recorded", path, e)
+        return None
+
+
+def component_findings(path: Path | str) -> list[ReviewFinding] | None:
+    """The accepted findings of the component review record at *path*, or
+    None when it cannot be read."""
+    try:
+        record = json.loads(Path(path).read_text())
+        return [ReviewFinding.model_validate(e) for e in record.get("accepted") or []]
+    except (OSError, ValueError, TypeError, AttributeError) as e:
+        log.warning("Could not read the component review record %s: %s", path, e)
+        return None
+
+
 def update_round(path: Path | str | None, **fields) -> None:
     """Merge *fields* into the round record at *path*. A previous ``fix``
     (from an attempt a resume rolled back) moves to ``earlier_fixes`` rather
@@ -484,10 +556,12 @@ def append_unfixed(
     block: BlockInfo,
     findings: list[ReviewFinding],
     status: str,
+    source: str | None = None,
 ) -> Path | None:
     """Append *findings* to ``unfixed-findings.md`` with *status* (why they
     are unfixed). The file starts with a Markdown heading, which the pr skill
-    requires of a ``--section`` file."""
+    requires of a ``--section`` file. Each line names *source*, or the block
+    when it is None."""
     if not findings:
         return None
     path = Path(change_dir) / UNFIXED_FINDINGS_FILE
@@ -499,10 +573,8 @@ def append_unfixed(
             else (f" (`{f.file_path}`)" if f.file_path else "")
         )
         claim = " ".join(f.claim.split())
-        lines.append(
-            f"- Block {block.number} ({block.name}): [{f.severity}] {claim}{where} "
-            f"— {status}\n"
-        )
+        origin = source or f"Block {block.number} ({block.name})"
+        lines.append(f"- {origin}: [{f.severity}] {claim}{where} — {status}\n")
     try:
         new = not path.exists()
         with path.open("a") as fh:
