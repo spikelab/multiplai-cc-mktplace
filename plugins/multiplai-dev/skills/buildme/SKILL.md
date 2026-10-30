@@ -801,7 +801,15 @@ waits for the PR's required checks, and merges it with `gh pr merge --merge`;
 a version, CHANGELOG or lockfile conflict there costs one agent call, with
 Read, Edit and Bash in the child's worktree, counted against `epic.max_usd`) and
 `epic.max_usd` (one ceiling for the whole epic, default none; each child keeps
-its own `budget.max_usd` too). `build` and `findings` print
+its own `budget.max_usd` too) and `epic.shared_analysis` (default `false`;
+when `true`, the epic runs the codebase analysis once at the feature branch,
+before the first child starts, into `codebase-analysis/` in the epic's
+directory, and counts its spend against `epic.max_usd`; each child reuses
+it, re-checks only the facts whose cited files changed since, and analyses
+only the files its `plan.md` names that the shared analysis did not read; a
+run stopped mid-analysis is analysed again from the start, and a failed one
+leaves each child to analyse for itself; off, each child runs its own
+analysis, as before). `build` and `findings` print
 `SPEND:<usd>:<tokens>` as their last line on every exit but a kill (SIGTERM
 and SIGHUP included): what that process spent, the PR body's model calls and a
 walkthrough regeneration included (the pr skill and the walkthrough print

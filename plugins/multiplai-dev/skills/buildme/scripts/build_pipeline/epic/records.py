@@ -22,7 +22,16 @@ from pathlib import Path
 from .store import _write_atomic
 
 AGENTS_DIR = "agents"
-KINDS = ("build", "review", "resume", "post", "fix", "merge", "merge-tests")
+KINDS = (
+    "build",
+    "review",
+    "resume",
+    "post",
+    "fix",
+    "merge",
+    "merge-tests",
+    "analysis",
+)
 NAMED_MARKERS = ("WORKTREE", "BRANCH", "PR", "SPEND")
 # The kind and child come from the started record, which the name must match:
 # the name alone is ambiguous (`merge-tests-api` is `merge-tests` of `api` or

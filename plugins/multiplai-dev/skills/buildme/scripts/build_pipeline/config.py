@@ -572,13 +572,17 @@ class EpicSettings:
     feature branch, else `manual` (`Coordinator.__post_init__`). `max_usd`: one ceiling for
     the whole epic, None for none. `round_worth`: which Code MEDIUM earns
     another review round (`epic.review.decide`): `breaks`, one the verifier
-    did not rate `correctness-only` or `hygiene`; `any`, every one."""
+    did not rate `correctness-only` or `hygiene`; `any`, every one.
+    `shared_analysis`: run the codebase analysis once for the epic, at the
+    feature branch, and have each child reuse it (`Coordinator._shared_analysis`);
+    off, each child runs its own, as before."""
 
     max_parallel: int = 2
     max_review_rounds: int = 3
     merge: Literal["auto", "manual"] | None = None
     max_usd: float | None = None
     round_worth: Literal["breaks", "any"] = "breaks"
+    shared_analysis: bool = False
 
 
 def _cfg_int(value, key: str, default: int) -> int:
@@ -944,6 +948,10 @@ class BuildConfig:
     # `build --epic-child`: an epic's coordinator started this build (or its
     # saved command was run again). `orchestrator._epic_child` reads it.
     epic_child: bool = False
+    # `build --shared-analysis <dir>`: the epic's shared codebase analysis
+    # (`epic.shared_analysis`), which the coordinator passes once it finished.
+    # `spec_steps.run_codebase_analysis` reuses it; None analyses here.
+    shared_analysis_dir: Path | None = None
     # `models:` from specs/config.yaml: step, stage or `default` → a model spec
     # as written. `model_for` resolves it.
     model_specs: dict[str, str] = field(default_factory=dict)
@@ -1676,6 +1684,8 @@ class BuildConfig:
         self.base_ref = getattr(args, "base_ref", "") or ""
         self.feature_branch = getattr(args, "branch", "") or ""
         self.epic_child = bool(getattr(args, "epic_child", False))
+        shared = getattr(args, "shared_analysis", "") or ""
+        self.shared_analysis_dir = Path(shared) if shared else None
 
     def rebind_project_dir(self, new_project_dir: Path) -> None:
         """Point the whole config at a different checkout of the same project.
@@ -1765,6 +1775,13 @@ class BuildConfig:
                 worth,
             )
             worth = "breaks"
+        shared = epic_cfg.get("shared_analysis", False)
+        if not isinstance(shared, bool):
+            log.warning(
+                "Invalid epic.shared_analysis value %r in config.yaml — using false",
+                shared,
+            )
+            shared = False
         self.epic = EpicSettings(
             max_parallel=_cfg_int(
                 epic_cfg.get("max_parallel", 2), "epic.max_parallel", 2
@@ -1775,6 +1792,7 @@ class BuildConfig:
             merge=merge,
             max_usd=max_usd,
             round_worth=worth,
+            shared_analysis=shared,
         )
 
     def _discover_test_command(self) -> None:

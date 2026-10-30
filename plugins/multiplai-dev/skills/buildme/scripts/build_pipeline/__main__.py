@@ -188,6 +188,13 @@ def build_parser() -> argparse.ArgumentParser:
         "no spec-extract",
     )
     build.add_argument(
+        "--shared-analysis",
+        default="",
+        help="An epic's finished shared codebase analysis directory (the "
+        "coordinator passes it under epic.shared_analysis): reuse its facts and "
+        "analyse only the files plan.md names that it did not read",
+    )
+    build.add_argument(
         "--base-ref",
         default="",
         help="The commit a new worktree branches from (default: the source "
