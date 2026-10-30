@@ -79,6 +79,59 @@ def test_a_missing_test_runner_fails_for_the_command_and_each_narrow_entry(repo)
     assert "./missing-script is not an executable file" in failed[1].reason
 
 
+# DolceBot's `tdd.test_command` (feature branch DFACCMGMT-1-account-management,
+# 2026-10-30), with its machine-specific script path replaced. Its script starts
+# with `set -e`, which the runner check looked up on PATH and failed.
+DOLCEBOT_TEST_COMMAND = (
+    'bash -c \'set -e; R="$PWD"; bash /opt/db2291/tools/local-mysql.sh; '
+    'cd "$R/backend"; DOLCE_TEST_DB_HOST=127.0.0.1 DOLCE_TEST_MYSQL_PORT=3306 '
+    'DOLCE_TEST_DB_NAME="bm_$(printf %s "$R" | md5sum | cut -c1-10)" '
+    '"$HOME/.local/dolce-test-venv/bin/python" -m pytest -q -p no:cacheprovider; '
+    'cd "$R/frontend"; [ -d node_modules ] || corepack pnpm install '
+    "--frozen-lockfile --prefer-offline; TZ=Europe/Rome corepack pnpm test:ci "
+    '--maxWorkers=50% --testPathIgnorePatterns "/node_modules/" '
+    '"/__tests__/helpers/" "dolcekey/__tests__/db2187-controls\\.test\\.tsx" '
+    '"channex/__tests__/bulk-edit-dialog\\.test\\.tsx"\''
+)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "bash -c 'set -e; true'",
+        DOLCEBOT_TEST_COMMAND,
+        "bash -c 'export X=1; true'",
+        "bash -c 'X=1 true'",
+        "bash -c 'if true; then true; fi'",
+    ],
+)
+def test_a_shell_script_that_starts_with_a_builtin_passes(repo, command):
+    config = _config(repo, test_command=command)
+    assert preflight.run(config, publishes=False, target=None) == []
+
+
+def test_a_narrow_entry_whose_script_starts_with_a_builtin_passes(repo):
+    (repo / "backend").mkdir()
+    config = _config(
+        repo, narrow_commands=[NarrowCommand("backend", "bash -c 'set -e; true'", None)]
+    )
+    assert preflight.run(config, publishes=False, target=None) == []
+
+
+def test_a_shell_script_whose_program_is_missing_still_fails(repo):
+    config = _config(repo, test_command="bash -c 'nosuchtool -q'")
+    (failed,) = preflight.run(config, publishes=False, target=None)
+    assert failed.check == "test-runner"
+    assert "nosuchtool is not on PATH" in failed.reason
+
+
+def test_only_sh_bash_and_zsh_are_unwrapped(repo):
+    config = _config(repo, test_command="nosuchshell -c 'set -e; true'")
+    (failed,) = preflight.run(config, publishes=False, target=None)
+    assert failed.check == "test-runner"
+    assert "nosuchshell is not on PATH" in failed.reason
+
+
 def test_a_runner_in_a_directory_that_does_not_exist_fails(repo):
     config = _config(repo, test_command=f"cd nowhere && {sys.executable} -V")
     (failed,) = preflight.run(config, publishes=False, target=None)
