@@ -127,7 +127,9 @@ def test_the_file_is_written_outside_the_repo_and_passed(tmp_path, data_dir):
 def test_both_review_commands_pass_it(tmp_path, data_dir, monkeypatch):
     change = tmp_path / "change"
     record(change, 1, rejected=[rejected_finding("x", evidence="REJECTED: no")])
-    monkeypatch.setattr(loop, "review_options", lambda config, exclude=True: [])
+    monkeypatch.setattr(
+        loop, "review_options", lambda config, exclude=True, verify_low="": []
+    )
     expected = review_rounds.earlier_decisions_argv(change)
 
     run = SimpleNamespace(
