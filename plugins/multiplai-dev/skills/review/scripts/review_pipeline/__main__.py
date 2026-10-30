@@ -36,7 +36,8 @@ Exit codes: 0 done; 1 a target failed; 2 bad input, unresolvable target,
 post refused, or another process is running a review of the target now
 (runlock.py); 3 repository not trusted; 4 the budget circuit breaker stopped
 the run (resume with a higher --max-cost-usd to continue), or `review` found
-an interrupted run of the same target and head in the ledger whose saved
+an interrupted run of the same target and head in the ledger, or one the
+usage limit or the verifier stopped, whose saved
 state is still in the target directory (resume it, or pass --restart); 5 the verifier gave no usable answer for some findings after
 three tries each (resume retries only those); 6 the Claude usage limit was hit:
 the checkpoint is saved, and the message names the reset time when the CLI
@@ -121,12 +122,27 @@ def _deps_flag(p: argparse.ArgumentParser) -> None:
     )
 
 
+def _low_mode(value: str) -> str:
+    if value != "risky":
+        raise argparse.ArgumentTypeError(
+            f"invalid value {value!r}: the only value is 'risky'; "
+            "put a positional argument before --verify-low"
+        )
+    return value
+
+
 def _verify_low_flag(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--verify-low",
-        action="store_true",
+        nargs="?",
+        const=True,
+        default=False,
+        type=_low_mode,
+        metavar="risky",
         help="Verify LOW findings too; without it they reach the review unverified, "
-        "with no verifier call (review.yaml: verify_low)",
+        "with no verifier call. `--verify-low risky` verifies only the LOW findings whose "
+        "scenario is a crash or error, an access or data-exposure problem, or lost or wrong "
+        "data, chosen by one no-tools call (review.yaml: verify_low)",
     )
 
 
@@ -151,6 +167,18 @@ def _review_settings_flags(p: argparse.ArgumentParser) -> None:
         default=None,
         help="The finders' model for this run, over --model, review.yaml and multiplai.conf; "
         "resume keeps the run's own",
+    )
+
+
+def _earlier_decisions_flag(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--earlier-decisions",
+        metavar="FILE",
+        default=None,
+        help="JSON list of {id, file, line_start, line_end, claim, decision, reason}, decision "
+        "rejected or accepted-unfixed: findings an earlier reviewer of the change decided on. "
+        "A finding of this round that describes one is marked with it in findings.json and the "
+        "review, and stays listed",
     )
 
 
@@ -285,8 +313,9 @@ def build_parser() -> argparse.ArgumentParser:
     rv.add_argument(
         "--restart",
         action="store_true",
-        help="Start over even when the ledger shows an interrupted run of this target and head "
-        "(without it, such a run exits 4 and names the resume command)",
+        help="Start over even when the ledger shows an interrupted run of this target and head, "
+        "or one the usage limit or the verifier stopped (without it, such a run exits 4 and "
+        "names the resume command)",
     )
     _trust_flag(rv)
     _budget_flag(rv)
@@ -295,6 +324,7 @@ def build_parser() -> argparse.ArgumentParser:
     _model_flag(rv)
     _review_settings_flags(rv)
     _verify_low_flag(rv)
+    _earlier_decisions_flag(rv)
 
     bt = sub.add_parser(
         "batch",
@@ -334,6 +364,7 @@ def build_parser() -> argparse.ArgumentParser:
     _deps_flag(rs)
     _model_flag(rs)
     _verify_low_flag(rs)
+    _earlier_decisions_flag(rs)
 
     an = sub.add_parser(
         "answers",
@@ -404,6 +435,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="A checkout to run git in for a round whose recorded repository is gone, "
         "when its origin is the round's remote (repeatable)",
     )
+    rm.add_argument(
+        "--counts",
+        action="store_true",
+        help="Also print, per round, the confirmed findings by severity, impact and topic, "
+        "and how many finder reports state that a search returned nothing",
+    )
     return parser
 
 
@@ -417,7 +454,11 @@ def _round_metrics(args: argparse.Namespace) -> int:
         print(f"ERROR: not a directory: {out}", file=sys.stderr)
         return 2
     sys.stdout.write(
-        render(measure(out, [Path(r).expanduser() for r in args.repo]), out)
+        render(
+            measure(out, [Path(r).expanduser() for r in args.repo]),
+            out,
+            counts=args.counts,
+        )
     )
     return 0
 
@@ -465,11 +506,20 @@ def main(argv: list[str] | None = None) -> int:
         if getattr(args, "no_deps", False):
             config.deps = False
         if getattr(args, "verify_low", False):
-            config.verify_low = True
+            config.verify_low = args.verify_low
         if getattr(args, "model", None):
             config.finder_model = config.verifier_model = config.merger_model = (
                 args.model
             )
+        if getattr(args, "earlier_decisions", None):
+            from .stages.repeats import load_earlier_decisions
+
+            try:
+                config.earlier_decisions = load_earlier_decisions(
+                    Path(args.earlier_decisions).expanduser()
+                )
+            except ValueError as e:
+                raise orchestrator.ReviewError(str(e)) from e
         if getattr(args, "finder_model", None):
             config.finder_model = args.finder_model
         return config
@@ -780,10 +830,18 @@ def main(argv: list[str] | None = None) -> int:
             getattr(e, "target_dir", None) or "<out>/<repo>/<object>"
         ]
         flags = (
-            f" --max-cost-usd {args.max_cost_usd:g}"
-            if getattr(args, "max_cost_usd", None) is not None
-            else ""
-        ) + (" --no-deps" if getattr(args, "no_deps", False) else "")
+            (
+                f" --max-cost-usd {args.max_cost_usd:g}"
+                if getattr(args, "max_cost_usd", None) is not None
+                else ""
+            )
+            + (" --no-deps" if getattr(args, "no_deps", False) else "")
+            + (
+                f" --earlier-decisions {args.earlier_decisions}"
+                if getattr(args, "earlier_decisions", None)
+                else ""
+            )
+        )
         commands = "\n".join(
             f"  python -m review_pipeline resume {d} --trust-repo{flags}" for d in dirs
         )
@@ -794,8 +852,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(
             f"STOPPED: {e}\nEvery answer that came back before the stop is kept. Do not retry before the "
-            f"limit resets; then continue with:\n{commands}\nOnly resume continues a stopped review: a plain "
-            f"review of the same target starts over.{not_started}",
+            f"limit resets; then continue with:\n{commands}\nA plain review of the same target and head prints "
+            f"this resume command and exits 4; --restart starts over.{not_started}",
             file=sys.stderr,
         )
         return 6

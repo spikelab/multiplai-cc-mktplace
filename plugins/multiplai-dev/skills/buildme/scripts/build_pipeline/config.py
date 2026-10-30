@@ -572,7 +572,12 @@ class EpicSettings:
     feature branch, else `manual` (`Coordinator.__post_init__`). `max_usd`: one ceiling for
     the whole epic, None for none. `round_worth`: which Code MEDIUM earns
     another review round (`epic.review.decide`): `breaks`, one the verifier
-    did not rate `correctness-only` or `hygiene`; `any`, every one.
+    did not rate `hygiene`; `any`, every one. `accepted_findings`: per
+    child id, the review finding ids a person accepted, each with its reason;
+    a listed id does not block that child (`Coordinator._fields`).
+    `accept_size`: every child launch adds `--accept-size`, and a child
+    parked on `SPLIT:REQUIRED` is launched again. `max_child_attempts`:
+    launches of a failed child in one run.
     `review_dimensions` and `review_finder_model`: the dimension finders and
     their model for each review of a child's PR, passed as the review's
     `--dimensions` and `--finder-model` (`epic.review.review_argv`); None
@@ -583,6 +588,9 @@ class EpicSettings:
     merge: Literal["auto", "manual"] | None = None
     max_usd: float | None = None
     round_worth: Literal["breaks", "any"] = "breaks"
+    accept_size: bool = False
+    max_child_attempts: int = 2
+    accepted_findings: dict[str, dict[str, str]] = field(default_factory=dict)
     review_dimensions: list[str] | None = None
     review_finder_model: str | None = None
 
@@ -619,6 +627,32 @@ def _cfg_text(value, key: str) -> str | None:
         log.warning("Invalid %s value %r in config.yaml — ignoring it", key, value)
         return None
     return value.strip()
+
+
+def _accepted_findings(value) -> dict[str, dict[str, str]]:
+    """`epic.accepted_findings`: `{<child id>: {<finding id>: <reason>}}`. A
+    child or finding entry of another shape, or a finding with no reason, is
+    left out with a warning, so it still blocks."""
+    out: dict[str, dict[str, str]] = {}
+    for child, ids in _cfg_mapping(value, "epic.accepted_findings").items():
+        if not isinstance(ids, dict):
+            log.warning(
+                "Invalid epic.accepted_findings.%s value %r in config.yaml — ignoring it",
+                child,
+                ids,
+            )
+            continue
+        for fid, reason in ids.items():
+            if not isinstance(reason, str) or not reason.strip():
+                log.warning(
+                    "epic.accepted_findings.%s.%s has no reason in config.yaml — "
+                    "it still blocks",
+                    child,
+                    fid,
+                )
+                continue
+            out.setdefault(str(child), {})[str(fid)] = reason.strip()
+    return out
 
 
 def _cfg_mapping(value, key: str) -> dict:
@@ -917,6 +951,10 @@ class BuildConfig:
     # integration gates, the final verification and the epic's merge tests)
     # before it counts as not run.
     test_timeout: int = 300
+    # tdd.db_check: a command run from the project before the first paid
+    # call (`preflight.py`); exit 0 means the test database answers. Empty:
+    # not checked.
+    db_check: str = ""
     # tdd.test_writer_max_turns / tdd.mutation_test_writer_max_turns: the turn
     # cap of the block test writer and of the mutation round's test writer.
     test_writer_max_turns: int = 30
@@ -1454,6 +1492,14 @@ class BuildConfig:
             )
         self.parallel_tests = parse_parallel(tdd.get("parallel", "auto"))
         self.test_timeout = parse_test_timeout(tdd.get("test_timeout"))
+        db_check = tdd.get("db_check")
+        if isinstance(db_check, str):
+            self.db_check = db_check.strip()
+        elif db_check is not None:
+            log.warning(
+                "tdd.db_check in config.yaml is not a command (%r) — ignoring it",
+                db_check,
+            )
         for key in ("test_writer_max_turns", "mutation_test_writer_max_turns"):
             if key in tdd:
                 setattr(self, key, _cfg_int(tdd[key], f"tdd.{key}", getattr(self, key)))
@@ -1795,6 +1841,13 @@ class BuildConfig:
                 worth,
             )
             worth = "breaks"
+        accept_size = epic_cfg.get("accept_size", False)
+        if not isinstance(accept_size, bool):
+            log.warning(
+                "Invalid epic.accept_size value %r in config.yaml — want true | false; using false",
+                accept_size,
+            )
+            accept_size = False
         self.epic = EpicSettings(
             max_parallel=_cfg_int(
                 epic_cfg.get("max_parallel", 2), "epic.max_parallel", 2
@@ -1805,6 +1858,11 @@ class BuildConfig:
             merge=merge,
             max_usd=max_usd,
             round_worth=worth,
+            accept_size=accept_size,
+            max_child_attempts=_cfg_int(
+                epic_cfg.get("max_child_attempts", 2), "epic.max_child_attempts", 2
+            ),
+            accepted_findings=_accepted_findings(epic_cfg.get("accepted_findings")),
             review_dimensions=_cfg_names(
                 epic_cfg.get("review_dimensions"), "epic.review_dimensions"
             ),

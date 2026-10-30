@@ -51,7 +51,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from multiplai_core.env import load_multiplai_conf
 from multiplai_core.stage_config import (
@@ -63,6 +63,9 @@ from multiplai_core.stage_config import (
 
 from . import ledger
 from .budget import DEFAULT_MAX_USD
+
+if TYPE_CHECKING:
+    from .models import EarlierDecision
 
 log = logging.getLogger(__name__)
 
@@ -106,11 +109,15 @@ class ReviewConfig:
     deps: bool = True
     deps_max_mb: int = 50
     # Verify LOW findings too (`review.yaml` `verify_low`, `--verify-low`). Off by default: a LOW
-    # finding reaches the review `unverified`, with no verifier call (`stages/verify.py`).
-    verify_low: bool = False
+    # finding reaches the review `unverified`, with no verifier call (`stages/verify.py`). `risky`
+    # (`--verify-low risky`) verifies only the LOW findings one no-tools call chooses as risky.
+    verify_low: bool | Literal["risky"] = False
     # A re-pushed PR or branch reviews only the files whose patch changed (`incremental.py`);
     # `review.yaml` `incremental: false` or `--full` reviews every file.
     incremental: bool = True
+    # The `--earlier-decisions <file>` entries (`review` and `resume` only; no file key): decisions an
+    # earlier reviewer of the same change made, which the repeats stage matches the findings against.
+    earlier_decisions: list[EarlierDecision] = field(default_factory=list)
 
 
 _TRUE = ("1", "true", "yes", "on")
@@ -229,6 +236,9 @@ def load_config(
         "verify_low",
         "incremental",
     ):
+        if key == "verify_low" and str(data.get(key)).strip().lower() == "risky":
+            cfg.verify_low = "risky"
+            continue
         value = _flag(data.get(key), key, yaml_path)
         if value is not None:
             setattr(cfg, key, value)

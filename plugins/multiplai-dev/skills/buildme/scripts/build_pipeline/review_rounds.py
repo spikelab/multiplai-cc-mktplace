@@ -268,6 +268,113 @@ def open_state(
     return _findings(entries, block_number, last["round"]), rejected, last
 
 
+# The file `earlier_decisions_argv` hands the review skill's `--earlier-decisions`.
+EARLIER_DECISIONS_FILE = "buildme-earlier-decisions.json"
+
+
+def block_numbers(change_dir: Path) -> list[int]:
+    """Every block with a round record on disk, ascending."""
+    directory = reviews_dir(change_dir)
+    if not directory.is_dir():
+        return []
+    found = {
+        int(m.group(1)) for p in directory.iterdir() if (m := _ROUND_RE.match(p.name))
+    }
+    return sorted(found)
+
+
+def earlier_decisions(change_dir: Path) -> list[dict]:
+    """The review skill's `--earlier-decisions` entries for the change: every finding a block
+    review rejected, with the judge's reason (`judge_reason`, else the ``REJECTED:`` text in
+    its evidence), and every accepted finding still open in its block's latest record
+    (`open_state`), as `accepted-unfixed`. A finding with no claim is left out."""
+    out: list[dict] = []
+    for block in block_numbers(change_dir):
+        open_, rejected, last = open_state(change_dir, block)
+        for entry in rejected:
+            reason = str(entry.get("judge_reason") or "").strip()
+            if not reason:
+                _, sep, tail = str(entry.get("evidence") or "").rpartition("REJECTED:")
+                reason = tail.strip() if sep else ""
+            out.append(
+                _decision(
+                    entry["finding_id"],
+                    entry.get("file_path"),
+                    entry.get("line"),
+                    entry.get("claim"),
+                    "rejected",
+                    reason,
+                )
+            )
+        rnd = last.get("round") if last else None
+        for f in open_:
+            out.append(
+                _decision(
+                    f.finding_id,
+                    f.file_path,
+                    f.line,
+                    f.claim,
+                    "accepted-unfixed",
+                    f"accepted by the block {block} review and still open after its round {rnd}",
+                )
+            )
+    return [d for d in out if d["claim"]]
+
+
+def _decision(fid, file, line, claim, decision: str, reason: str) -> dict:
+    line = line if isinstance(line, int) else None
+    return {
+        "id": str(fid),
+        "file": str(file or ""),
+        "line_start": line,
+        "line_end": line,
+        "claim": str(claim or "").strip(),
+        "decision": decision,
+        "reason": reason,
+    }
+
+
+def earlier_decisions_path(change_dir: Path) -> Path:
+    """`<data_dir>/buildme/earlier-decisions/<change dir name>-<hash>/buildme-earlier-decisions.json`:
+    outside the repository, so it is never committed, and one per change directory."""
+    import hashlib
+
+    from multiplai_core.paths import get_paths
+
+    resolved = Path(change_dir).resolve()
+    key = hashlib.sha256(str(resolved).encode()).hexdigest()[:8]
+    return (
+        Path(get_paths().data_dir)
+        / "buildme"
+        / "earlier-decisions"
+        / f"{resolved.name}-{key}"
+        / EARLIER_DECISIONS_FILE
+    )
+
+
+def earlier_decisions_argv(change_dir: Path | None) -> list[str]:
+    """`--earlier-decisions <file>` for the review of the change's PR, after writing the file
+    (`earlier_decisions`) atomically; nothing when the change has no entry or the file cannot
+    be written (logged)."""
+    if change_dir is None:
+        return []
+    entries = earlier_decisions(change_dir)
+    if not entries:
+        return []
+    path = earlier_decisions_path(change_dir)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(entries, indent=2) + "\n")
+        os.replace(tmp, path)
+    except OSError as e:
+        log.warning(
+            "Could not write %s: %s — the review gets no earlier decisions", path, e
+        )
+        return []
+    return ["--earlier-decisions", str(path)]
+
+
 @dataclass
 class RoundMemory:
     """What the adjudicator is given from round 2 of a block on: the open

@@ -1,0 +1,278 @@
+{
+  "name": "account-management",
+  "children": [
+    {
+      "id": "account-model",
+      "depends_on": []
+    },
+    {
+      "id": "dolcecleaning-feed-guard",
+      "depends_on": []
+    },
+    {
+      "id": "owner-sections-source",
+      "depends_on": []
+    },
+    {
+      "id": "account-attribution",
+      "depends_on": [
+        "account-model"
+      ]
+    },
+    {
+      "id": "account-billing",
+      "depends_on": [
+        "account-model"
+      ]
+    },
+    {
+      "id": "account-user-api",
+      "depends_on": [
+        "account-model"
+      ]
+    },
+    {
+      "id": "dolceops-account-list",
+      "depends_on": [
+        "account-model"
+      ]
+    },
+    {
+      "id": "om-account-identity",
+      "depends_on": [
+        "account-model"
+      ]
+    },
+    {
+      "id": "owner-sections-bookings",
+      "depends_on": [
+        "owner-sections-source"
+      ]
+    },
+    {
+      "id": "owner-sections-property-pages",
+      "depends_on": [
+        "owner-sections-source"
+      ]
+    },
+    {
+      "id": "dolcecleaning-users",
+      "depends_on": [
+        "account-user-api"
+      ]
+    },
+    {
+      "id": "dolceops-account-create",
+      "depends_on": [
+        "dolceops-account-list",
+        "account-user-api"
+      ]
+    },
+    {
+      "id": "dolceops-account-team",
+      "depends_on": [
+        "dolceops-account-list",
+        "account-user-api"
+      ]
+    },
+    {
+      "id": "owner-permissions-core",
+      "depends_on": [
+        "owner-sections-bookings",
+        "owner-sections-property-pages"
+      ]
+    },
+    {
+      "id": "dashboard-rendimenti",
+      "depends_on": [
+        "owner-permissions-core"
+      ]
+    },
+    {
+      "id": "geperman-permissions-editor",
+      "depends_on": [
+        "owner-permissions-core",
+        "om-account-identity"
+      ]
+    },
+    {
+      "id": "owner-permissions-finer-checks",
+      "depends_on": [
+        "owner-permissions-core"
+      ]
+    },
+    {
+      "id": "owner-permissions-frontend",
+      "depends_on": [
+        "owner-permissions-core"
+      ]
+    }
+  ],
+  "created_at": "2026-10-27T05:23:43.078406+00:00",
+  "child_status": {
+    "account-model": {
+      "status": "parked",
+      "pr": "https://github.com/DolceTech/Dolcebot/pull/37",
+      "reason": "",
+      "pr_round": 1,
+      "conflicts": true,
+      "merge_stop": null,
+      "merge_park": ""
+    },
+    "dolcecleaning-feed-guard": {
+      "status": "merged",
+      "pr": "https://github.com/DolceTech/Dolcebot/pull/39",
+      "reason": "",
+      "pr_round": 1,
+      "conflicts": false,
+      "merge_stop": null,
+      "merge_park": ""
+    },
+    "owner-sections-source": {
+      "status": "parked",
+      "pr": "https://github.com/DolceTech/Dolcebot/pull/38",
+      "reason": "",
+      "pr_round": 2,
+      "conflicts": true,
+      "merge_stop": null,
+      "merge_park": ""
+    },
+    "account-attribution": {
+      "status": "skipped",
+      "pr": null,
+      "reason": "",
+      "pr_round": null,
+      "conflicts": null,
+      "merge_stop": null,
+      "merge_park": ""
+    },
+    "account-billing": {
+      "status": "skipped",
+      "pr": null,
+      "reason": "",
+      "pr_round": null,
+      "conflicts": null,
+      "merge_stop": null,
+      "merge_park": ""
+    },
+    "account-user-api": {
+      "status": "skipped",
+      "pr": null,
+      "reason": "",
+      "pr_round": null,
+      "conflicts": null,
+      "merge_stop": null,
+      "merge_park": ""
+    },
+    "dolceops-account-list": {
+      "status": "skipped",
+      "pr": null,
+      "reason": "",
+      "pr_round": null,
+      "conflicts": null,
+      "merge_stop": null,
+      "merge_park": ""
+    },
+    "om-account-identity": {
+      "status": "skipped",
+      "pr": null,
+      "reason": "",
+      "pr_round": null,
+      "conflicts": null,
+      "merge_stop": null,
+      "merge_park": ""
+    },
+    "owner-sections-bookings": {
+      "status": "skipped",
+      "pr": null,
+      "reason": "",
+      "pr_round": null,
+      "conflicts": null,
+      "merge_stop": null,
+      "merge_park": ""
+    },
+    "owner-sections-property-pages": {
+      "status": "skipped",
+      "pr": null,
+      "reason": "",
+      "pr_round": null,
+      "conflicts": null,
+      "merge_stop": null,
+      "merge_park": ""
+    },
+    "dolcecleaning-users": {
+      "status": "skipped",
+      "pr": null,
+      "reason": "",
+      "pr_round": null,
+      "conflicts": null,
+      "merge_stop": null,
+      "merge_park": ""
+    },
+    "dolceops-account-create": {
+      "status": "skipped",
+      "pr": null,
+      "reason": "",
+      "pr_round": null,
+      "conflicts": null,
+      "merge_stop": null,
+      "merge_park": ""
+    },
+    "dolceops-account-team": {
+      "status": "skipped",
+      "pr": null,
+      "reason": "",
+      "pr_round": null,
+      "conflicts": null,
+      "merge_stop": null,
+      "merge_park": ""
+    },
+    "owner-permissions-core": {
+      "status": "skipped",
+      "pr": null,
+      "reason": "",
+      "pr_round": null,
+      "conflicts": null,
+      "merge_stop": null,
+      "merge_park": ""
+    },
+    "dashboard-rendimenti": {
+      "status": "skipped",
+      "pr": null,
+      "reason": "",
+      "pr_round": null,
+      "conflicts": null,
+      "merge_stop": null,
+      "merge_park": ""
+    },
+    "geperman-permissions-editor": {
+      "status": "skipped",
+      "pr": null,
+      "reason": "",
+      "pr_round": null,
+      "conflicts": null,
+      "merge_stop": null,
+      "merge_park": ""
+    },
+    "owner-permissions-finer-checks": {
+      "status": "skipped",
+      "pr": null,
+      "reason": "",
+      "pr_round": null,
+      "conflicts": null,
+      "merge_stop": null,
+      "merge_park": ""
+    },
+    "owner-permissions-frontend": {
+      "status": "skipped",
+      "pr": null,
+      "reason": "",
+      "pr_round": null,
+      "conflicts": null,
+      "merge_stop": null,
+      "merge_park": ""
+    }
+  },
+  "spent_usd": 399.359096,
+  "spend_complete": true
+}

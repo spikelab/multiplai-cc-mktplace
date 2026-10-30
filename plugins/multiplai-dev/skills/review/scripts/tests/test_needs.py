@@ -709,7 +709,10 @@ def test_review_lists_commands_before_the_findings_and_names_them_under_each(
         )
     )
     text = render_review(state)
-    assert text.index("## Needs you") < text.index("## Findings")
+    # The opening list of findings comes first, then Needs you, then each finding in full.
+    assert (
+        text.index("## Findings") < text.index("## Needs you") < text.index("## Code")
+    )
     assert "- **N2** `gh api repos/o/r` — Its title. Bears on `" in text
     assert "**Not checked:** The production channel title." in text
     assert "**Needs you:** N2 (under Needs you above)" in text

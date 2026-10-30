@@ -297,7 +297,7 @@ def _normalise(
         other_locations=[
             relative_path(loc, target, ctx.snapshot) for loc in finding.other_locations
         ],
-        dimension="pre-existing" if finding.dimension == "pre-existing" else dimension,
+        dimension=dimension,
         finder=dimension,
         finders=[dimension],
     )
@@ -349,14 +349,38 @@ def write_report_file(target_dir: Path, key: str, text: str) -> Path:
     return path
 
 
+# A converted defect whose claim says the reviewer found no problem: the convert prompt marks such a
+# note `advice` with no file, and `drop_no_problem` drops one that still comes back as a defect.
+NO_PROBLEM = re.compile(
+    r"\bfound no (?:problems?|issues?|defects?|bugs?|faults?)\b"
+    r"|\bno (?:problems?|issues?|defects?|bugs?|faults?) (?:was |were )?found\b"
+    r"|\bfound nothing wrong\b",
+    re.IGNORECASE,
+)
+
+
+def drop_no_problem(key: str, out: ConvertOutput) -> tuple[ConvertOutput, list[str]]:
+    """*out* without the defect items whose claim says no problem was found, and one
+    `state.errors` line per item dropped."""
+    kept, errors = [], []
+    for it in out.items:
+        if it.kind == "defect" and NO_PROBLEM.search(it.claim):
+            errors.append(
+                f"convert {key}: dropped a defect item that reports no problem: {it.claim[:200]}"
+            )
+        else:
+            kept.append(it)
+    return ConvertOutput(items=kept, needs=out.needs), errors
+
+
 def map_converted(
     key: str, out: ConvertOutput
 ) -> tuple[list[ConvertedItem], list[Finding]]:
     """Every converted item as a `ConvertedItem`, and a `Finding` for each one that has a location.
 
     A missing severity is LOW. A finding's finder is the key's kind (the
-    dimension, or `path`), and so is its dimension, except "pre-existing" for
-    an item the report marks so. An item with no file, line or citation, or one
+    dimension, or `path`), and so is its dimension; an item the report marks
+    pre-existing has `pre_existing` set. An item with no file, line or citation, or one
     whose location does not validate, stays an item with `finding_id` None.
     """
     kind = key.partition("@")[0]
@@ -370,7 +394,8 @@ def map_converted(
                 finding = Finding(
                     claim=it.claim,
                     severity=severity,
-                    dimension="pre-existing" if it.pre_existing else kind,
+                    dimension=kind,
+                    pre_existing=it.pre_existing,
                     file=it.file,
                     line_start=it.line_start,
                     line_end=it.line_end or it.line_start,
@@ -578,6 +603,8 @@ async def run_reported(
         save(state, ctx)
         return
     out = _relative(out, target, ctx.snapshot)
+    out, dropped = drop_no_problem(key, out)
+    state.errors.extend(dropped)
     rep.items, rep.findings = map_converted(key, out)
     rep.needs = [n for n in out.needs if n.what.strip()]
     rep.converted, rep.convert_error = True, None

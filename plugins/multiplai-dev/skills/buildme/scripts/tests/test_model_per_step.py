@@ -540,7 +540,7 @@ CALL_SITES = {
         "config.model_for('implementer')",
         ("implementer",),
     ),
-    ("tdd_engine.py", "run_block_tdd", "run_refactorer"): (
+    ("tdd_engine.py", "_refactor_block", "run_refactorer"): (
         "config.model_for('refactor')",
         ("refactor",),
     ),
