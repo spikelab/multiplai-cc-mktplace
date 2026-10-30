@@ -11,6 +11,8 @@ Subcommands for dev/debug use (only /buildme is user-facing):
   config-get    — Print one resolved specs/config.yaml value (e.g. git.pr)
   plan-revision — Print the planning values to re-bind a build after an upgrade
   epic status   — Print one JSON line per child of an epic; launches nothing
+  epic watch    — Run an epic again after a passing fault until it is done or
+                  a person is needed, then post once to Slack
 
 Exit codes: 0 done (an epic runs its children and prints EPIC:SUMMARY), 1 failure
 (for an epic: a child failed), 2 usage, or a refusal that wrote nothing
@@ -347,6 +349,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     status.add_argument("--change", required=True, help="The epic's change name")
     status.add_argument("--project-dir", default=".", help="Project directory")
+    watch = epic_sub.add_parser(
+        "watch",
+        help="Run the epic, and again after a network failure, an agent timeout "
+        "or a usage-limit stop, until it is done or a person is needed; then "
+        "post once to Slack through the pipeline-viewer",
+    )
+    watch.add_argument("--change", required=True, help="The epic's change name")
+    watch.add_argument("--project-dir", default=".", help="Project directory")
+    watch.add_argument(
+        "--viewer-repo",
+        help="The --repo the pipeline-viewer page was served with, for its "
+        "Slack channel and outbox (default: the project's repository)",
+    )
+    _add_trust_repo_flag(watch)
 
     for command in (build, spec, tdd, findings):
         command.add_argument(
@@ -459,6 +475,11 @@ def _main(args: argparse.Namespace) -> int:
         os.environ.get("MULTIPLAI_SESSION_MODEL") or "not found",
         os.environ.get("MULTIPLAI_SESSION_EFFORT") or "not found",
     )
+
+    if args.command == "epic" and args.epic_command == "watch":
+        from .epic.watch import run_cli as run_epic_watch
+
+        return run_epic_watch(args)
 
     if args.command == "epic":
         from .epic.status import run_cli as run_epic_status

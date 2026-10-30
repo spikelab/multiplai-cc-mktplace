@@ -13,7 +13,7 @@ cd plugins/multiplai-dev/skills/pipeline-viewer/scripts && \
 
 | Module | Does |
 |---|---|
-| `__main__.py` | CLI: `serve`, `invite`, `reply`, `pending`, `watch`, `notify`, `record decided`. The box is `--box`, else `<data_dir>/pipeline-viewer/<repo>-<hash>/`. No command prints a token. |
+| `__main__.py` | CLI: `serve`, `invite`, `reply`, `pending`, `watch`, `notify`, `post` (a message from stdin once per `--change` and `--key`, for buildme's `epic watch`), `record decided`. The box is `--box`, else `<data_dir>/pipeline-viewer/<repo>-<hash>/`. No command prints a token. |
 | `models.py` | `ChangeStatus` and its parts, the inbox and outbox rows. `API.md` restates them. |
 | `config.py` | `pipeline_viewer:` in `specs/config.yaml`: reviewers per role, reviewers and timeouts per stop, the Slack channel. |
 | `places.py` | A change's copies (repo, pm-spec's `pm-spec-<branch>` worktree, a build's worktree) and the write checkout. |
@@ -23,7 +23,7 @@ cd plugins/multiplai-dev/skills/pipeline-viewer/scripts && \
 | `fenced.py` | Inbox rows as the session reads them (`pending`, `watch`): person-typed fields inside one `multiplai_core.untrusted` fence, with the notice. |
 | `questions.py` | Pure: inbox `ask` rows + outbox rows → the questions and answers everyone sees, and which answers are not in git yet (S17). |
 | `deadlines.py` | Reminder and timeout row, once per `(change, stop, revision)` in `deadlines.json`. |
-| `slack.py` | One post per stop revision (`notified.json`), thread replies; `SLACK_TOKEN` only handed to `slack_sdk`. |
+| `slack.py` | One post per stop revision (`notified.json`), or per key (`post_once`), thread replies; `SLACK_TOKEN` only handed to `slack_sdk`. |
 | `buildme.py` | Imports `write_issues` and `epic_dir_for` from `../../buildme/scripts` (not a declared dependency: uv refuses a workspace member as a path source). |
 | `server.py` | `ThreadingHTTPServer`, the routes of `API.md`, people.json auth (re-read on change), the deadline thread. |
 | `static/` | The page, vanilla JS with no build step. `boot.js` takes the token out of `?t=` and keeps it for the origin, and applies the theme; `logic.js` holds the pure functions (tested by `tests/logic.test.js` under node); `app.js` the views (changes list, one change's stops and build, review mode); `tokens.css` is a copy of the neutral design system's tokens (`test_static.py` checks it matches), because the CSP allows no inline style. |
