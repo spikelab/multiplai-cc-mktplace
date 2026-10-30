@@ -73,6 +73,14 @@ def test_a_finding_in_the_trim_section_loads_and_an_unknown_section_does_not():
         FindingsFile.model_validate(data)
 
 
+def test_a_finding_rated_depends_on_data_loads():
+    """multiplai-dev 0.132: the review's new impact, in the model and the committed schema."""
+    data = fixture_data()
+    data["findings"][0]["impact"] = "depends-on-data"
+    assert FindingsFile.model_validate(data).findings[0].impact == "depends-on-data"
+    jsonschema.validate(data, json.loads(SCHEMA_PATH.read_text(encoding="utf-8")))
+
+
 def test_fixture_ids_are_stable_hashes():
     for f in load_findings(FIXTURE).findings:
         assert f.id == finding_id(f.file, f.line_start, f.claim)

@@ -101,6 +101,12 @@ defect in a few words) and `other_locations` (every other `path:line` or
 `locations_gate`). Both are absent when the finder named none, never null or
 empty. `models.py` and the schema accept them; the page does not show them yet.
 
+From multiplai-dev 0.137 a shown finding may carry `earlier_decision`
+(`{id, decision, reason}`, decision `rejected` or `accepted-unfixed`): the
+entry of the review's `--earlier-decisions` file it describes, a decision
+buildme's block review made on the same defect. Absent when it matches none.
+`models.py` and the schema accept it; the page does not show it yet.
+
 From multiplai-dev 0.113 a shown finding may carry `title` (at most 12
 words) and `what_happens` (2 to 4 sentences with an example), the review's
 write stage's plain-language text. Every heading and list row shows

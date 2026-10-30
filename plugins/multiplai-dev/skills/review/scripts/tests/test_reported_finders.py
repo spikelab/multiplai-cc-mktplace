@@ -1491,7 +1491,9 @@ def two_file_repo(tmp_path: Path) -> tuple[Path, str, str]:
 
 
 def not_reviewed_text(target_dir: Path) -> str:
-    (review_md,) = target_dir.glob("review-*.md")
+    (review_md,) = [
+        p for p in target_dir.glob("review-*.md") if not p.name.endswith("-low.md")
+    ]
     text = review_md.read_text()
     return (
         text.split("## Not reviewed", 1)[1].split("\n## ", 1)[0]

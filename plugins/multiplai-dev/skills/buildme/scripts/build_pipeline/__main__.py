@@ -10,6 +10,9 @@ Subcommands for dev/debug use (only /buildme is user-facing):
   setup         — Write or merge specs/config.yaml (the wrapper asks the questions)
   config-get    — Print one resolved specs/config.yaml value (e.g. git.pr)
   plan-revision — Print the planning values to re-bind a build after an upgrade
+  epic status   — Print one JSON line per child of an epic; launches nothing
+  epic watch    — Run an epic again after a passing fault until it is done or
+                  a person is needed, then post once to Slack
 
 Exit codes: 0 done (an epic runs its children and prints EPIC:SUMMARY), 1 failure
 (for an epic: a child failed), 2 usage, or a refusal that wrote nothing
@@ -188,6 +191,13 @@ def build_parser() -> argparse.ArgumentParser:
         "no spec-extract",
     )
     build.add_argument(
+        "--shared-analysis",
+        default="",
+        help="An epic's finished shared codebase analysis directory (the "
+        "coordinator passes it under epic.shared_analysis): reuse its facts and "
+        "analyse only the files plan.md names that it did not read",
+    )
+    build.add_argument(
         "--base-ref",
         default="",
         help="The commit a new worktree branches from (default: the source "
@@ -283,6 +293,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Never run the last round's fix as the escalated fix (an epic's "
         "fixer, whose --max-rounds allows one round at a time)",
     )
+    findings.add_argument(
+        "--from-review",
+        default=None,
+        metavar="REVIEW_DIR",
+        help="Act on the blockers in REVIEW_DIR/findings.json (as --auto posts "
+        "them, with --severities and --code-only) whoever posted them, and "
+        "record a decision for each; one left undecided ends "
+        "FINDINGS:INGESTION_ERROR:<ids>, exit 1 (an epic's fixer)",
+    )
     _add_trust_repo_flag(findings)
 
     # --- archive ---
@@ -319,6 +338,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
     prev.add_argument("--change", required=True, help="Change name")
     prev.add_argument("--project-dir", default=".", help="The build's worktree")
+
+    # --- epic ---
+    epic = sub.add_parser("epic", help="Read an epic's state")
+    epic_sub = epic.add_subparsers(dest="epic_command", required=True)
+    status = epic_sub.add_parser(
+        "status",
+        help="Print one JSON line per child: state, head, target, blocker, next "
+        "action and spend; launches and writes nothing",
+    )
+    status.add_argument("--change", required=True, help="The epic's change name")
+    status.add_argument("--project-dir", default=".", help="Project directory")
+    watch = epic_sub.add_parser(
+        "watch",
+        help="Run the epic, and again after a network failure, an agent timeout "
+        "or a usage-limit stop, until it is done or a person is needed; then "
+        "post once to Slack through the pipeline-viewer",
+    )
+    watch.add_argument("--change", required=True, help="The epic's change name")
+    watch.add_argument("--project-dir", default=".", help="Project directory")
+    watch.add_argument(
+        "--viewer-repo",
+        help="The --repo the pipeline-viewer page was served with, for its "
+        "Slack channel and outbox (default: the project's repository)",
+    )
+    _add_trust_repo_flag(watch)
 
     for command in (build, spec, tdd, findings):
         command.add_argument(
@@ -431,6 +475,16 @@ def _main(args: argparse.Namespace) -> int:
         os.environ.get("MULTIPLAI_SESSION_MODEL") or "not found",
         os.environ.get("MULTIPLAI_SESSION_EFFORT") or "not found",
     )
+
+    if args.command == "epic" and args.epic_command == "watch":
+        from .epic.watch import run_cli as run_epic_watch
+
+        return run_epic_watch(args)
+
+    if args.command == "epic":
+        from .epic.status import run_cli as run_epic_status
+
+        return run_epic_status(args)
 
     if args.command == "setup":
         from .setup import run_setup

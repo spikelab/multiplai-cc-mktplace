@@ -926,6 +926,17 @@ BOOKKEEPING_EXCLUDES = [
     ":(exclude,glob)**/pr-sections/**",
     # A failed whole test run's output (gates.write_failure_log).
     ":(exclude,glob)**/.buildme-test-runs/**",
+    # Planning's working files, only inside a change dir under specs/ (active,
+    # or archived): the codebase analysis and its facts, and each plan
+    # rewrite's diff. They stay on disk for the build that reads them and off
+    # the product branch (plan-factory-merged-2026-10-29.md, item 30). An
+    # application file of the same name elsewhere is committed as usual, and
+    # one a branch already tracks keeps its committed version.
+    *(
+        f":(exclude,glob)**/specs/{where}/**/{name}"
+        for where in ("changes", "archive")
+        for name in ("facts.json", "codebase-analysis.md", "plan-edits-*.diff")
+    ),
 ]
 
 

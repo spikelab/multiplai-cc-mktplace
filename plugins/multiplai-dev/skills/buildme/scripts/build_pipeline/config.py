@@ -572,13 +572,36 @@ class EpicSettings:
     feature branch, else `manual` (`Coordinator.__post_init__`). `max_usd`: one ceiling for
     the whole epic, None for none. `round_worth`: which Code MEDIUM earns
     another review round (`epic.review.decide`): `breaks`, one the verifier
-    did not rate `correctness-only` or `hygiene`; `any`, every one."""
+    did not rate `hygiene`; `any`, every one. `accepted_findings`: per
+    child id, the review finding ids a person accepted, each with its reason;
+    a listed id does not block that child (`Coordinator._fields`).
+    `accept_size`: every child launch adds `--accept-size`, and a child
+    parked on `SPLIT:REQUIRED` is launched again. `max_child_attempts`:
+    launches of a failed child in one run.
+    `review_dimensions` and `review_finder_model`: the dimension finders and
+    their model for each review of a child's PR, passed as the review's
+    `--dimensions` and `--finder-model` (`epic.review.review_argv`); None
+    leaves the review skill's own settings.
+    `shared_analysis`: run the codebase analysis once for the epic, at the
+    feature branch, and have each child reuse it (`Coordinator._shared_analysis`);
+    off, each child runs its own, as before.
+    `board`: `off`, or `plane`, which saves each child's `BOARD:` line to the
+    board outbox and moves its Plane card (`epic.outbox`). `plane_script`:
+    the plane skill's `plane.py`, None to look for it beside this plugin."""
 
     max_parallel: int = 2
     max_review_rounds: int = 3
     merge: Literal["auto", "manual"] | None = None
     max_usd: float | None = None
     round_worth: Literal["breaks", "any"] = "breaks"
+    accept_size: bool = False
+    max_child_attempts: int = 2
+    accepted_findings: dict[str, dict[str, str]] = field(default_factory=dict)
+    review_dimensions: list[str] | None = None
+    review_finder_model: str | None = None
+    shared_analysis: bool = False
+    board: Literal["off", "plane"] = "off"
+    plane_script: str | None = None
 
 
 def _cfg_int(value, key: str, default: int) -> int:
@@ -589,6 +612,56 @@ def _cfg_int(value, key: str, default: int) -> int:
         )
         return default
     return value
+
+
+def _cfg_names(value, key: str) -> list[str] | None:
+    """A non-empty list of non-empty strings from config.yaml, or None (with a warning for anything else)."""
+    if value is None:
+        return None
+    if (
+        not isinstance(value, list)
+        or not value
+        or not all(isinstance(v, str) and v.strip() for v in value)
+    ):
+        log.warning("Invalid %s value %r in config.yaml — ignoring it", key, value)
+        return None
+    return [v.strip() for v in value]
+
+
+def _cfg_text(value, key: str) -> str | None:
+    """A non-empty string from config.yaml, or None (with a warning for anything else)."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        log.warning("Invalid %s value %r in config.yaml — ignoring it", key, value)
+        return None
+    return value.strip()
+
+
+def _accepted_findings(value) -> dict[str, dict[str, str]]:
+    """`epic.accepted_findings`: `{<child id>: {<finding id>: <reason>}}`. A
+    child or finding entry of another shape, or a finding with no reason, is
+    left out with a warning, so it still blocks."""
+    out: dict[str, dict[str, str]] = {}
+    for child, ids in _cfg_mapping(value, "epic.accepted_findings").items():
+        if not isinstance(ids, dict):
+            log.warning(
+                "Invalid epic.accepted_findings.%s value %r in config.yaml — ignoring it",
+                child,
+                ids,
+            )
+            continue
+        for fid, reason in ids.items():
+            if not isinstance(reason, str) or not reason.strip():
+                log.warning(
+                    "epic.accepted_findings.%s.%s has no reason in config.yaml — "
+                    "it still blocks",
+                    child,
+                    fid,
+                )
+                continue
+            out.setdefault(str(child), {})[str(fid)] = reason.strip()
+    return out
 
 
 def _cfg_mapping(value, key: str) -> dict:
@@ -773,6 +846,16 @@ def parse_whole_suite(value: object) -> str:
     return "per_block"
 
 
+def parse_tdd_context(value: object) -> str:
+    """`tdd.context` from config.yaml as "full" or "sliced"; anything else
+    warns and is "full"."""
+    text = str(value).strip().lower()
+    if text in ("full", "sliced"):
+        return text
+    log.warning("Unrecognized tdd.context value %r in config.yaml — using full", value)
+    return "full"
+
+
 def parse_narrow_commands(value: object, project_dir: Path) -> list[NarrowCommand]:
     """`tdd.narrow_commands` from config.yaml: one entry per directory with a
     `dir` inside the project, a `command` with no `;`, `&` or `|`, and an
@@ -878,6 +961,10 @@ class BuildConfig:
     # loop narrows each one in its own directory (`narrow_tests.narrow_parts`).
     # Empty: `test_command` is narrowed as one command.
     narrow_commands: list[NarrowCommand] = field(default_factory=list)
+    # tdd.spec_tests: before each block's test writer, a second test writer
+    # gets the block's scenarios marked security or permission and its public
+    # interfaces, not the design (`spec_tests.py`). Off: no such step.
+    spec_tests: bool = False
     # tdd.parallel: "auto" lets the full-suite runs (`gates.baseline_test_gate`,
     # `gates.integration_gate`, the epic's merge tests) add `-n auto` when the
     # command runs pytest and pytest-xdist imports in its environment
@@ -887,15 +974,28 @@ class BuildConfig:
     # integration gates, the final verification and the epic's merge tests)
     # before it counts as not run.
     test_timeout: int = 300
+    # tdd.db_check: a command run from the project before the first paid
+    # call (`preflight.py`); exit 0 means the test database answers. Empty:
+    # not checked.
+    db_check: str = ""
     # tdd.test_writer_max_turns / tdd.mutation_test_writer_max_turns: the turn
     # cap of the block test writer and of the mutation round's test writer.
     test_writer_max_turns: int = 30
     mutation_test_writer_max_turns: int = 30
+    # tdd.context: what `tdd_engine.assemble_context` gives the TDD agents.
+    # "full": the whole design, every requirement, the rubric and the memory
+    # files below. "sliced": the design sections the block cites, the
+    # requirements it satisfies, the rubric for the reviewer role only, and
+    # only the memory files in `tdd_memory_files`.
+    tdd_context: str = "full"
 
     # Memory files
     core_memory_files: list[str] = field(default_factory=lambda: ["technical-pref.md"])
     stack_memory_files: list[str] = field(default_factory=list)
     additional_memory_files: list[str] = field(default_factory=list)
+    # memory_files.tdd: the memory files TDD agents get with `tdd.context:
+    # sliced`; unused with "full".
+    tdd_memory_files: list[str] = field(default_factory=list)
 
     # Reference docs: per-stack/framework overrides from specs/config.yaml's
     # `reference_docs:` key. Empty means "built-in defaults only"; a key
@@ -944,6 +1044,10 @@ class BuildConfig:
     # `build --epic-child`: an epic's coordinator started this build (or its
     # saved command was run again). `orchestrator._epic_child` reads it.
     epic_child: bool = False
+    # `build --shared-analysis <dir>`: the epic's shared codebase analysis
+    # (`epic.shared_analysis`), which the coordinator passes once it finished.
+    # `spec_steps.run_codebase_analysis` reuses it; None analyses here.
+    shared_analysis_dir: Path | None = None
     # `models:` from specs/config.yaml: step, stage or `default` → a model spec
     # as written. `model_for` resolves it.
     model_specs: dict[str, str] = field(default_factory=dict)
@@ -989,6 +1093,12 @@ class BuildConfig:
     # the plan (`spec_generator._plan_hashes`).
     planning_max_rewrites: int = 2
     planning_max_usd: float = 40.0
+    # `planning.analysis`: `full` puts the whole codebase analysis in the
+    # design prompt; `component` puts only the facts about the files the
+    # component's plan.md and specs name, every convention, and no "Not
+    # analysed" list (`code_analysis.component_facts`). `full` until a measured
+    # build shows `component` does not hurt the design.
+    planning_analysis: str = "full"
 
     # Runtime marker, not user-configurable: set to the branch name once the
     # pipeline has created its own worktree+branch (or re-bound to one on
@@ -1136,6 +1246,18 @@ class BuildConfig:
     # the findings go to `unfixed-findings.md`. False: a passing block stops
     # its review loop at once, as before.
     fix_on_pass: bool = True
+
+    # One review of the whole component after the last block and the whole
+    # suite (`code_review.component_review`, item 61 of
+    # plan-factory-merged-2026-10-29.md). Off by default: the per-block review
+    # then runs exactly as before. On: that review's Critical and Major
+    # findings get one fix round, and the per-block review fails a block only
+    # on `block_gate_severities` (and the spec-compliance floor), in at most
+    # `COMPONENT_BLOCK_ROUNDS` rounds, with no fix on pass.
+    component_review: bool = False
+    # `code_review.block_gate_severities`, lower-case. Read only when
+    # `component_review` is on.
+    block_gate_severities: tuple[str, ...] = ("critical", "major")
 
     # Stop 4: an engineer approves the implementation plan before TDD starts
     # (`review.plan_approval`). The build stops after the plan check and the
@@ -1391,6 +1513,7 @@ class BuildConfig:
             self.stack = next(iter(stacks))
             self.stack_memory_files = stacks[self.stack]
         self.additional_memory_files = mem.get("additional", [])
+        self.tdd_memory_files = self._doc_list(mem.get("tdd"), "memory_files.tdd")
 
         # Reference docs (per stack/framework key, overriding the built-ins)
         self._load_reference_docs(data.get("reference_docs"))
@@ -1422,8 +1545,27 @@ class BuildConfig:
                 "tdd.whole_suite is end but tdd.narrow_tests is false — every "
                 "block's test run falls back to the whole test command"
             )
+        spec_tests = tdd.get("spec_tests", False)
+        if isinstance(spec_tests, bool):
+            self.spec_tests = spec_tests
+        else:
+            log.warning(
+                "Invalid tdd.spec_tests value %r in config.yaml — want true | false; "
+                "using false",
+                spec_tests,
+            )
+            self.spec_tests = False
         self.parallel_tests = parse_parallel(tdd.get("parallel", "auto"))
         self.test_timeout = parse_test_timeout(tdd.get("test_timeout"))
+        self.tdd_context = parse_tdd_context(tdd.get("context", "full"))
+        db_check = tdd.get("db_check")
+        if isinstance(db_check, str):
+            self.db_check = db_check.strip()
+        elif db_check is not None:
+            log.warning(
+                "tdd.db_check in config.yaml is not a command (%r) — ignoring it",
+                db_check,
+            )
         for key in ("test_writer_max_turns", "mutation_test_writer_max_turns"):
             if key in tdd:
                 setattr(self, key, _cfg_int(tdd[key], f"tdd.{key}", getattr(self, key)))
@@ -1446,6 +1588,8 @@ class BuildConfig:
         self._load_review_gate(code_review_cfg)
         self.adjudicate_findings = bool(code_review_cfg.get("adjudicate", True))
         self.fix_on_pass = bool(code_review_cfg.get("fix_on_pass", True))
+        self.component_review = bool(code_review_cfg.get("component_review", False))
+        self._load_block_gate_severities(code_review_cfg)
         self._load_budget(data.get("budget", {}) or {})
 
         # Gate toggles
@@ -1582,6 +1726,14 @@ class BuildConfig:
             )
             usd = 40.0
         self.planning_max_usd = float(usd)
+        analysis = planning_cfg.get("analysis", "full")
+        if analysis not in ("full", "component"):
+            log.warning(
+                "Invalid planning.analysis value %r in config.yaml — want full | component; using full",
+                analysis,
+            )
+            analysis = "full"
+        self.planning_analysis = analysis
 
         self._load_epic(_cfg_mapping(data.get("epic"), "epic"))
 
@@ -1676,6 +1828,8 @@ class BuildConfig:
         self.base_ref = getattr(args, "base_ref", "") or ""
         self.feature_branch = getattr(args, "branch", "") or ""
         self.epic_child = bool(getattr(args, "epic_child", False))
+        shared = getattr(args, "shared_analysis", "") or ""
+        self.shared_analysis_dir = Path(shared) if shared else None
 
     def rebind_project_dir(self, new_project_dir: Path) -> None:
         """Point the whole config at a different checkout of the same project.
@@ -1711,6 +1865,24 @@ class BuildConfig:
         self.review_panel = panel
         if panel:
             log.info("Review panel configured: %s", panel)
+
+    def _load_block_gate_severities(self, code_review_cfg: dict) -> None:
+        """`code_review.block_gate_severities`: a list of Critical, Major,
+        Minor and Note. Anything else logs a warning and keeps the default."""
+        value = code_review_cfg.get("block_gate_severities")
+        if value is None:
+            return
+        known = ("critical", "major", "minor", "note")
+        if not isinstance(value, list) or not all(
+            isinstance(v, str) and v.strip().lower() in known for v in value
+        ):
+            log.warning(
+                "code_review.block_gate_severities must be a list of Critical, "
+                "Major, Minor and Note; got %r — using [Critical, Major]",
+                value,
+            )
+            return
+        self.block_gate_severities = tuple(v.strip().lower() for v in value)
 
     def _load_review_gate(self, code_review_cfg: dict) -> None:
         """Load graded-gate thresholds, keeping the defaults on bad input."""
@@ -1765,6 +1937,30 @@ class BuildConfig:
                 worth,
             )
             worth = "breaks"
+        shared = epic_cfg.get("shared_analysis", False)
+        if not isinstance(shared, bool):
+            log.warning(
+                "Invalid epic.shared_analysis value %r in config.yaml — using false",
+                shared,
+            )
+            shared = False
+        accept_size = epic_cfg.get("accept_size", False)
+        if not isinstance(accept_size, bool):
+            log.warning(
+                "Invalid epic.accept_size value %r in config.yaml — want true | false; using false",
+                accept_size,
+            )
+            accept_size = False
+        board = epic_cfg.get("board", "off")
+        if board not in ("off", "plane"):
+            log.warning(
+                "Invalid epic.board value %r in config.yaml — using 'off'", board
+            )
+            board = "off"
+        script = epic_cfg.get("plane_script")
+        if script is not None and not (isinstance(script, str) and script.strip()):
+            log.warning("Invalid epic.plane_script=%r — ignoring", script)
+            script = None
         self.epic = EpicSettings(
             max_parallel=_cfg_int(
                 epic_cfg.get("max_parallel", 2), "epic.max_parallel", 2
@@ -1775,6 +1971,20 @@ class BuildConfig:
             merge=merge,
             max_usd=max_usd,
             round_worth=worth,
+            accept_size=accept_size,
+            max_child_attempts=_cfg_int(
+                epic_cfg.get("max_child_attempts", 2), "epic.max_child_attempts", 2
+            ),
+            accepted_findings=_accepted_findings(epic_cfg.get("accepted_findings")),
+            review_dimensions=_cfg_names(
+                epic_cfg.get("review_dimensions"), "epic.review_dimensions"
+            ),
+            review_finder_model=_cfg_text(
+                epic_cfg.get("review_finder_model"), "epic.review_finder_model"
+            ),
+            shared_analysis=shared,
+            board=board,
+            plane_script=script.strip() if script else None,
         )
 
     def _discover_test_command(self) -> None:

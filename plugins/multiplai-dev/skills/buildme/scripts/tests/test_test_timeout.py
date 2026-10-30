@@ -23,11 +23,9 @@ def trusted(monkeypatch):
 
 @pytest.mark.parametrize("gate", ["baseline_test_gate", "integration_gate"])
 def test_the_gate_gives_the_test_process_its_timeout(tmp_path, trusted, gate):
-    with patch("build_pipeline.gates.subprocess.run") as run:
-        run.return_value.returncode = 0
-        run.return_value.stdout = run.return_value.stderr = ""
+    with patch("build_pipeline.gates._run_once", return_value=(0, "", False)) as run:
         getattr(gates, gate)("true", tmp_path, timeout=1800)
-    assert run.call_args.kwargs["timeout"] == 1800
+    assert run.call_args.args[3] == 1800
 
 
 def test_a_run_past_its_timeout_is_not_run(tmp_path, trusted):

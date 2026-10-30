@@ -31,6 +31,7 @@ from ..prompts.plan_review import (
 )
 from ..prompts.spec_generation import PLAN_EDIT_PROMPT
 from ..sdk import agent_call_structured
+from .spec_steps import dependency_specs_section
 
 log = logging.getLogger(__name__)
 
@@ -431,6 +432,7 @@ async def run_plan_review(
             block_trigger=getattr(config, "plan_split_block_trigger", 10),
             package_trigger=getattr(config, "plan_split_package_trigger", 5),
         )
+        + dependency_specs_section(change_dir, config.specs_dir)
         + prior_findings_section(prior)
         + changed_lines_section(changed_lines)
     )

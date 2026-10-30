@@ -8,6 +8,7 @@
     pending   print the inbox rows that have no final answer yet, fenced
     watch     print new inbox rows as they come, fenced (the session's Monitor)
     notify    post a stop's Slack message (once per docs revision)
+    post      post a message from stdin once per --key (buildme's epic watch)
     record    record decided: the agent's decision at a stop after the timeout
 
 Every command finds the box (the mailbox directory: inbox, outbox,
@@ -438,6 +439,33 @@ def cmd_notify(args) -> int:
     return 1 if outcome == "failed" else 0
 
 
+def cmd_post(args) -> int:
+    """Post the message on stdin (or `--file`) once per `--change` and
+    `--key`, to the channel and outbox `notify` uses: buildme's `epic watch`
+    posts through it when the epic stops."""
+    box = _box(args)
+    if box is None:
+        return EXIT_USAGE
+    repo = _repo_of(args, box)
+    try:
+        cfg = config_mod.load(repo) if repo is not None else None
+    except config_mod.ConfigError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return EXIT_USAGE
+    text = (
+        Path(args.file).read_text(encoding="utf-8") if args.file else sys.stdin.read()
+    )
+    if not text.strip():
+        print("ERROR: no message: give it on stdin or with --file", file=sys.stderr)
+        return EXIT_USAGE
+    box.create()
+    outcome, detail = Slack(box.dir, cfg.slack_channel if cfg else None).post_once(
+        f"{args.change}|post|{args.key}", text
+    )
+    print(f"SLACK:{outcome.upper()}:{detail}")
+    return 1 if outcome == "failed" else 0
+
+
 def cmd_record_decided(args) -> int:
     box = _box(args)
     if box is None:
@@ -550,6 +578,16 @@ def build_parser() -> argparse.ArgumentParser:
     n.add_argument("--change", required=True)
     n.add_argument("--stop", required=True, type=int, choices=[1, 2, 3, 4])
     n.set_defaults(func=cmd_notify)
+
+    po = sub.add_parser(
+        "post",
+        parents=[common, where],
+        help="post a message (stdin or --file) once per --change and --key",
+    )
+    po.add_argument("--change", required=True)
+    po.add_argument("--key", required=True, help="the same key never posts twice")
+    po.add_argument("--file", help="the message (default: stdin)")
+    po.set_defaults(func=cmd_post)
 
     rec = sub.add_parser("record", parents=[common], help="record a decision")
     rsub = rec.add_subparsers(dest="what", required=True, metavar="what")

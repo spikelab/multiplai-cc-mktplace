@@ -7,6 +7,11 @@ once that agent returns, its report, its commit and its ``SEARCHED:`` list.
 Round numbers continue across resumes: a new round takes the next free
 number and never replaces an earlier file.
 
+``reviews/component-review.json`` holds the component review
+(``code_review.component_review``): one review of every block at once, after
+the last block, with its accepted findings (ids ``C-F<n>``), the rejected
+ones, and its fix round.
+
 ``unfixed-findings.md`` lists the accepted findings a block that passed kept
 unfixed (the fix on pass was not kept, or not attempted). PUBLISH hands it to
 the pr skill as a PR-body section (``orchestrator.unfixed_findings_section``).
@@ -33,6 +38,7 @@ log = logging.getLogger(__name__)
 REVIEWS_DIR = "reviews"
 UNFIXED_FINDINGS_FILE = "unfixed-findings.md"
 UNFIXED_HEADING = "## Unfixed review findings"
+COMPONENT_REVIEW_FILE = "component-review.json"
 
 # The severities the fix on pass works on. `Note` is left out on purpose.
 FIX_ON_PASS_SEVERITIES = frozenset({"critical", "major", "minor"})
@@ -268,6 +274,113 @@ def open_state(
     return _findings(entries, block_number, last["round"]), rejected, last
 
 
+# The file `earlier_decisions_argv` hands the review skill's `--earlier-decisions`.
+EARLIER_DECISIONS_FILE = "buildme-earlier-decisions.json"
+
+
+def block_numbers(change_dir: Path) -> list[int]:
+    """Every block with a round record on disk, ascending."""
+    directory = reviews_dir(change_dir)
+    if not directory.is_dir():
+        return []
+    found = {
+        int(m.group(1)) for p in directory.iterdir() if (m := _ROUND_RE.match(p.name))
+    }
+    return sorted(found)
+
+
+def earlier_decisions(change_dir: Path) -> list[dict]:
+    """The review skill's `--earlier-decisions` entries for the change: every finding a block
+    review rejected, with the judge's reason (`judge_reason`, else the ``REJECTED:`` text in
+    its evidence), and every accepted finding still open in its block's latest record
+    (`open_state`), as `accepted-unfixed`. A finding with no claim is left out."""
+    out: list[dict] = []
+    for block in block_numbers(change_dir):
+        open_, rejected, last = open_state(change_dir, block)
+        for entry in rejected:
+            reason = str(entry.get("judge_reason") or "").strip()
+            if not reason:
+                _, sep, tail = str(entry.get("evidence") or "").rpartition("REJECTED:")
+                reason = tail.strip() if sep else ""
+            out.append(
+                _decision(
+                    entry["finding_id"],
+                    entry.get("file_path"),
+                    entry.get("line"),
+                    entry.get("claim"),
+                    "rejected",
+                    reason,
+                )
+            )
+        rnd = last.get("round") if last else None
+        for f in open_:
+            out.append(
+                _decision(
+                    f.finding_id,
+                    f.file_path,
+                    f.line,
+                    f.claim,
+                    "accepted-unfixed",
+                    f"accepted by the block {block} review and still open after its round {rnd}",
+                )
+            )
+    return [d for d in out if d["claim"]]
+
+
+def _decision(fid, file, line, claim, decision: str, reason: str) -> dict:
+    line = line if isinstance(line, int) else None
+    return {
+        "id": str(fid),
+        "file": str(file or ""),
+        "line_start": line,
+        "line_end": line,
+        "claim": str(claim or "").strip(),
+        "decision": decision,
+        "reason": reason,
+    }
+
+
+def earlier_decisions_path(change_dir: Path) -> Path:
+    """`<data_dir>/buildme/earlier-decisions/<change dir name>-<hash>/buildme-earlier-decisions.json`:
+    outside the repository, so it is never committed, and one per change directory."""
+    import hashlib
+
+    from multiplai_core.paths import get_paths
+
+    resolved = Path(change_dir).resolve()
+    key = hashlib.sha256(str(resolved).encode()).hexdigest()[:8]
+    return (
+        Path(get_paths().data_dir)
+        / "buildme"
+        / "earlier-decisions"
+        / f"{resolved.name}-{key}"
+        / EARLIER_DECISIONS_FILE
+    )
+
+
+def earlier_decisions_argv(change_dir: Path | None) -> list[str]:
+    """`--earlier-decisions <file>` for the review of the change's PR, after writing the file
+    (`earlier_decisions`) atomically; nothing when the change has no entry or the file cannot
+    be written (logged)."""
+    if change_dir is None:
+        return []
+    entries = earlier_decisions(change_dir)
+    if not entries:
+        return []
+    path = earlier_decisions_path(change_dir)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(entries, indent=2) + "\n")
+        os.replace(tmp, path)
+    except OSError as e:
+        log.warning(
+            "Could not write %s: %s — the review gets no earlier decisions", path, e
+        )
+        return []
+    return ["--earlier-decisions", str(path)]
+
+
 @dataclass
 class RoundMemory:
     """What the adjudicator is given from round 2 of a block on: the open
@@ -421,6 +534,72 @@ def recurring_ids(change_dir: Path, block_number: int) -> list[str]:
     return [fid for fid, n in counts.items() if fid and n >= 2]
 
 
+def with_component_ids(findings: list[ReviewFinding]) -> list[ReviewFinding]:
+    """*findings* with the component review's ids, ``C-F1`` on."""
+    return [
+        f.model_copy(update={"finding_id": f"C-F{i + 1}"})
+        for i, f in enumerate(findings)
+    ]
+
+
+def record_component(
+    change_dir: Path,
+    *,
+    head_sha: str | None,
+    review: ReviewResult,
+    weighted_average: float,
+) -> Path | None:
+    """Write ``reviews/component-review.json`` for the component review and
+    return its path, or None when it could not be written. Each accepted
+    finding gets the id ``C-F<n>``, each rejected one ``C-X<n>``. A file left
+    by an earlier attempt that never reached its fix round is replaced."""
+    directory = reviews_dir(change_dir)
+    accepted = with_component_ids(review.findings)
+    record = {
+        "generated_at": datetime.now(UTC).isoformat(),
+        "kind": "component_review",
+        "head_sha": head_sha,
+        "scores": [s.model_dump(mode="json") for s in review.scores],
+        "weighted_average": weighted_average,
+        "missing": list(review.missing),
+        "extra": list(review.extra),
+        "misunderstood": list(review.misunderstood),
+        "accepted": [f.model_dump(mode="json") for f in accepted],
+        "rejected": [
+            {
+                **f.model_dump(mode="json"),
+                "finding_id": f"C-X{i + 1}",
+                "judge_reason": _judge_reason(f),
+            }
+            for i, f in enumerate(review.rejected_findings)
+        ],
+        "prior_assessments": [
+            a.model_dump(mode="json") for a in review.prior_assessments
+        ],
+        "fix_brief": None,
+        "fix": None,
+    }
+    path = directory / COMPONENT_REVIEW_FILE
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        _write_json(path, record)
+        return path
+    except OSError as e:
+        log.warning("Could not write %s: %s — component review not recorded", path, e)
+        return None
+
+
+def component_findings(path: Path | str) -> list[ReviewFinding] | None:
+    """The accepted findings of the component review record at *path*, or
+    None when it cannot be read."""
+    try:
+        record = json.loads(Path(path).read_text())
+        return [ReviewFinding.model_validate(e) for e in record.get("accepted") or []]
+    except (OSError, ValueError, TypeError, AttributeError) as e:
+        log.warning("Could not read the component review record %s: %s", path, e)
+        return None
+
+
 def update_round(path: Path | str | None, **fields) -> None:
     """Merge *fields* into the round record at *path*. A previous ``fix``
     (from an attempt a resume rolled back) moves to ``earlier_fixes`` rather
@@ -484,10 +663,12 @@ def append_unfixed(
     block: BlockInfo,
     findings: list[ReviewFinding],
     status: str,
+    source: str | None = None,
 ) -> Path | None:
     """Append *findings* to ``unfixed-findings.md`` with *status* (why they
     are unfixed). The file starts with a Markdown heading, which the pr skill
-    requires of a ``--section`` file."""
+    requires of a ``--section`` file. Each line names *source*, or the block
+    when it is None."""
     if not findings:
         return None
     path = Path(change_dir) / UNFIXED_FINDINGS_FILE
@@ -499,10 +680,8 @@ def append_unfixed(
             else (f" (`{f.file_path}`)" if f.file_path else "")
         )
         claim = " ".join(f.claim.split())
-        lines.append(
-            f"- Block {block.number} ({block.name}): [{f.severity}] {claim}{where} "
-            f"— {status}\n"
-        )
+        origin = source or f"Block {block.number} ({block.name})"
+        lines.append(f"- {origin}: [{f.severity}] {claim}{where} — {status}\n")
     try:
         new = not path.exists()
         with path.open("a") as fh:

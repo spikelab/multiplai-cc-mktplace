@@ -216,6 +216,9 @@ def round_config(
     rc.change_dir = change_dir
     rc.tasks_file = tasks_file_name(round_n)
     rc.state_file = engine_state_name(round_n)
+    # A findings round fixes the PR's comments after the PR review: the
+    # component review (before the PR) does not run again.
+    rc.component_review = False
     if escalated:
         rc.step_aliases = {**config.step_aliases, "implementer": "review_fix_escalated"}
     return rc

@@ -19,7 +19,8 @@ the review.
 uv run --directory "${CLAUDE_PLUGIN_ROOT}/skills/buildme/scripts" \
   python -m build_pipeline findings --pr <number> --project-dir "<repo>" \
   [--change <name>] [--auto] [--max-rounds <n>] [--max-usd <usd>] \
-  [--severities <list>] [--code-only] [--no-review] [--no-escalation] [--trust-repo]
+  [--severities <list>] [--code-only] [--no-review] [--no-escalation] \
+  [--from-review <review dir>] [--trust-repo]
 ```
 
 - `--pr`: the PR number on the repository at `--project-dir`.
@@ -58,6 +59,20 @@ uv run --directory "${CLAUDE_PLUGIN_ROOT}/skills/buildme/scripts" \
 - `--no-escalation`: no round runs as the escalated last round, whatever
   `--max-rounds` says. An epic passes it to every fixer: it launches one
   round at a time, so each round would otherwise count as the last.
+- `--from-review <review dir>`: act on the blockers in `<review
+  dir>/findings.json`, chosen as `--auto` posts them (with `--severities` and
+  `--code-only`), whoever posted them on the PR: a comment whose review marker
+  names one is acted on, even when it was acted on in an earlier round. Other
+  comments are still allowed by `findings.authors` and `findings.allow_bots`
+  alone, and every reply still goes under its comment. Each blocker gets one
+  decision in `.findings-state.json` (`fixed` with its commit, `not a defect`
+  with the reason, `spec change` with the `spec-issues.md` heading, or `still
+  open` with why). A blocker left with none ends the run with
+  `FINDINGS:INGESTION_ERROR:<ids>`, exit 1; a review with no blockers still
+  ends `FINDINGS:DONE:0`. When a newer review replaced the folder while a
+  round was open, the resume prints `FINDINGS:REVIEW_CHANGED:<old head>→<new
+  head>` and decides the newer review's blockers, keeping the decisions
+  already saved. An epic passes it to every fixer.
 - `--trust-repo`: required. The triage, fix, self-check and review agents
   hold tools and run without asking; pass it only after the user says they trust the
   repository's specs and code.
