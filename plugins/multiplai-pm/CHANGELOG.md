@@ -21,6 +21,18 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-29
+
+### Changed
+- **pm-spec**: when two components change or rely on the same behaviour of existing code, such as one function or one endpoint's access rule, the components split now makes one of them its owner; the others depend on it and cite it.
+- **pm-spec**: the specs writer is told to state outcomes: each refusal's HTTP status (or the error the caller sees) and message, how and by whom an "as before" baseline is captured, who supplies any production data, and the file and function behind each statement about today's behaviour, with no line numbers or commits. Production row counts and ids go in the component's plan, and conventions the proposal already states are not repeated.
+- **pm-spec**: the consistency check now reads the function that a statement about today's behaviour names, and reports a contradiction when the code does something else.
+
+### Added
+- **pm-spec**: the consistency check now flags, before the agent's findings, each place where a component's `specs.md` names another component that it is not ordered with (neither depends on the other, even through others). Each is a major finding that names the two fixes: take the reliance out of the spec, or add the dependency to the component's `.change.yaml` and to `components.md`.
+- **pm-spec**: after a blocked check, an edit to a component's `depends_on` or to `components.md` alone now counts as an edit, so `resume` checks again instead of refusing. A run blocked by an earlier version keeps the old behaviour until its next block.
+- **pm-spec**: each consistency check appends one advisory line to `.pm-spec/progress.md` counting refusals with no status, "as before" THENs with no baseline, "as today" statements with no named function, and commit pins. Nothing blocks on these counts.
+
 ## [0.13.3] - 2026-10-28
 
 ### Changed

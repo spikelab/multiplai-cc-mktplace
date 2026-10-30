@@ -16,6 +16,7 @@ record does not cover its components' files, so each component gets its own.
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 from multiplai_core.specs import (
@@ -23,6 +24,7 @@ from multiplai_core.specs import (
     is_ready,
     mark_draft,
     mark_ready,
+    read_change_meta,
     spec_revision,
     split_capabilities,
     valid_requirement_text,
@@ -109,6 +111,27 @@ def revision(change_dir: Path) -> str:
     digest = hashlib.sha256(root.encode())
     for d in comps:
         digest.update(f"\0{rel(change_dir, d)}\0{spec_revision(d)}".encode())
+    return digest.hexdigest()
+
+
+def dependency_digest(change_dir: Path) -> str:
+    """A sha256 over each component's `depends_on` (by its path) and the change's
+    `components.md`, which `revision` does not hash: a block saves it, so an
+    edit that only orders the components reopens the step (row S58). A
+    `.change.yaml` that cannot be read is hashed as its text."""
+    change_dir = Path(change_dir)
+    digest = hashlib.sha256()
+    for d in component_dirs(change_dir):
+        try:
+            deps = json.dumps(
+                sorted(str(x) for x in read_change_meta(d).get("depends_on") or [])
+            )
+        except ValueError:
+            deps = (d / ".change.yaml").read_text(errors="replace")
+        digest.update(f"{rel(change_dir, d)}\0{deps}\0".encode())
+    components_md = change_dir / "components.md"
+    if components_md.is_file():
+        digest.update(b"components.md\0" + components_md.read_bytes())
     return digest.hexdigest()
 
 

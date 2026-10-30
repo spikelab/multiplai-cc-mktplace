@@ -12,10 +12,13 @@ Restated from buildme's plan recheck (`spec_generator.py`: `number_findings`,
   only when it is critical; every other new finding is advisory.
 - Every finding acted on is saved in the state, logged one line each, written
   to the progress file and printed.
-- A block on findings saves `blocked_revision`. A resume at that revision
-  refuses with no model call and prints the findings (`refuse_if_blocked`);
-  one at another revision means the user edited the files, and the step gets
-  its rewrite back (`reopen_if_edited`).
+- A block on findings saves `blocked_revision`, and `blocked_dependencies`
+  (`layout.dependency_digest`). A resume at that revision, with the same
+  dependencies, refuses with no model call and prints the findings
+  (`refuse_if_blocked`); one at another revision, or with another
+  `depends_on` or `components.md`, means the user edited the files, and the
+  step gets its rewrite back (`reopen_if_edited`). A state with no saved
+  digest (before 0.14.0) compares the revision alone.
 """
 
 from __future__ import annotations
@@ -25,6 +28,7 @@ from typing import Literal
 
 from pydantic import BaseModel, field_validator
 
+from . import layout
 from .run import EXIT_BLOCKED, MARKER_BLOCKED, MARKER_WARN, Run, Stop
 from .state import StepOutcome
 
@@ -264,6 +268,7 @@ def admit_repair(run: Run, name: str, revision: str, numbered: list[dict]) -> No
     step.repair_findings = saved_findings(numbered)
     step.rewrite_published = False
     step.blocked_revision = None
+    step.blocked_dependencies = None
     step.blocking_findings = []
     run.save()
     log_findings(name, "listed", numbered)
@@ -280,6 +285,7 @@ def record_passed(run: Run, name: str, revision: str, reason: str = "") -> None:
     step.revision = revision
     step.blocking_findings = []
     step.blocked_revision = None
+    step.blocked_dependencies = None
     run.save()
 
 
@@ -318,6 +324,7 @@ def block_on_findings(
     step.revision = revision
     step.blocking_findings = saved_findings(blocking)
     step.blocked_revision = revision
+    step.blocked_dependencies = layout.dependency_digest(run.config.change_dir)
     run.save()
     log_findings(name, "blocking", blocking)
     report = findings_report(blocking)
@@ -345,9 +352,15 @@ def refusal_text(name: str, step: StepOutcome, next_step: str = REOPEN_LINE) -> 
 def refuse_if_blocked(
     run: Run, name: str, revision: str, *, next_step: str = REOPEN_LINE
 ) -> None:
-    """Refuse, with no model call, a step findings blocked at *revision* (exit 4)."""
+    """Refuse, with no model call, a step findings blocked at *revision* (exit 4),
+    when its dependencies are unchanged too."""
     step = run.state.steps.get(name)
-    if step and step.outcome == "blocked" and step.blocked_revision == revision:
+    if (
+        step
+        and step.outcome == "blocked"
+        and step.blocked_revision == revision
+        and not dependencies_changed(run, step)
+    ):
         text = refusal_text(name, step, next_step)
         print(text, flush=True)
         print(f"{MARKER_BLOCKED}:{run.config.change_dir}", flush=True)
@@ -355,20 +368,31 @@ def refuse_if_blocked(
         raise Stop(EXIT_BLOCKED, f"{name} blocked")
 
 
+def dependencies_changed(run: Run, step: StepOutcome) -> bool:
+    """A component's `depends_on` or `components.md` changed since the block;
+    False for a state with no saved digest (before 0.14.0)."""
+    return bool(
+        step.blocked_dependencies
+        and step.blocked_dependencies != layout.dependency_digest(run.config.change_dir)
+    )
+
+
 def reopen_if_edited(run: Run, name: str, revision: str) -> None:
-    """A step findings blocked whose files changed since gets its one rewrite back."""
+    """A step findings blocked whose files (or dependencies) changed since gets
+    its one rewrite back."""
     step = run.state.steps.get(name)
     if not (
         step
         and step.outcome == "blocked"
         and step.blocked_revision
-        and step.blocked_revision != revision
+        and (step.blocked_revision != revision or dependencies_changed(run, step))
     ):
         return
     step.repair_attempts = 0
     step.repair_findings = []
     step.rewrite_published = False
     step.blocked_revision = None
+    step.blocked_dependencies = None
     log.warning(
         "%s: the files changed since it was blocked; one rewrite allowed again", name
     )

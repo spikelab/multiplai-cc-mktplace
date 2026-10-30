@@ -221,6 +221,16 @@ Rules:
 - Requirements should be atomic — one behavior per requirement
 - Include edge cases and error scenarios, not just happy path
 - The prototype shows what things look like; the behaviour is yours to state here
+- A refusal states its HTTP status, or the error the caller sees, and its message
+- A THEN that says a behaviour stays as before says how that baseline is
+  captured, and by whom
+- A requirement that needs production data names who supplies it
+- A statement about what the code does today names the file and the function
+  that do it, with no line number and no commit
+- Production row counts and ids do not go in specs.md; they belong in the
+  Context of the component's plan.md
+- Do not restate conventions the proposal already states (such as a shared
+  endpoint guard); rely on them
 
 Answer with the whole specs.md, with a line `{begin}` above it and a line
 `{end}` below it. Only the text between those two lines is written to the
