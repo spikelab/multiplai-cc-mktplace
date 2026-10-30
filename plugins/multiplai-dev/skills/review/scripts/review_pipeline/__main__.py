@@ -388,6 +388,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="A checkout to run git in for a round whose recorded repository is gone, "
         "when its origin is the round's remote (repeatable)",
     )
+    rm.add_argument(
+        "--counts",
+        action="store_true",
+        help="Also print, per round, the confirmed findings by severity, impact and topic, "
+        "and how many finder reports state that a search returned nothing",
+    )
     return parser
 
 
@@ -401,7 +407,11 @@ def _round_metrics(args: argparse.Namespace) -> int:
         print(f"ERROR: not a directory: {out}", file=sys.stderr)
         return 2
     sys.stdout.write(
-        render(measure(out, [Path(r).expanduser() for r in args.repo]), out)
+        render(
+            measure(out, [Path(r).expanduser() for r in args.repo]),
+            out,
+            counts=args.counts,
+        )
     )
     return 0
 

@@ -280,6 +280,7 @@
               "enum": [
                 "breaks-users",
                 "breaks-business",
+                "depends-on-data",
                 "correctness-only",
                 "hygiene"
               ],

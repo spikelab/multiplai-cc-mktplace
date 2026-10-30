@@ -13,8 +13,8 @@ The person saves each output as `answers/<id>.txt` in the review's directory and
   in `state.answer_matches` with each finding's verdict status before it, and those findings'
   verdicts are dropped in the same save. A saved match whose hash is unchanged is kept.
 - A3 runs the verifier again for each matched finding with no verdict, given every saved
-  output that bears on it as fenced evidence. A finding that becomes confirmed gets its
-  `original_severity` back; one that becomes unverifiable is lowered as the verify stage does.
+  output that bears on it as fenced evidence. Its severity is then set as the verify stage
+  sets it, from the finder's severity (`original_severity` when recorded) and the new verdict.
 - A4 asks the write stage again for each shown finding whose verdict status changed and that
   is not in `state.answers_rewritten`.
 - A5 writes `findings.json`, `checks.json` and the markdown again, then records the hashes in
@@ -63,9 +63,9 @@ from .stages.verify import (
     VerifyIncomplete,
     important_assessments,
     keep_verdict,
-    unverifiable_severity,
     verify_one,
 )
+from .stages.verify import settle_severity as settle_from_verdict
 from .stages.write import write_findings
 from .state import load_state, save_state
 
@@ -212,19 +212,18 @@ def evidence(outputs: list[Output], state: ReviewState, finding_id: str) -> str:
 
 
 def settle_severity(state: ReviewState, finding_id: str) -> None:
-    """The verify stage's severity rules for one finding with a new verdict."""
+    """The verify stage's severity rules for one finding with a new verdict, applied again from the
+    finder's severity (`state.original_severity` when the stage recorded one)."""
     i = next(n for n, f in enumerate(state.findings) if f.id == finding_id)
-    f, status = state.findings[i], state.verdicts[finding_id].status
-    severity = f.severity
-    if status == "confirmed" and finding_id in state.original_severity:
-        severity = state.original_severity.pop(finding_id)
-    elif status == "unverifiable" and finding_id not in state.original_severity:
-        state.original_severity[finding_id] = f.severity
-        waiting = {n.blocks for n in state.needs}
-        severity = unverifiable_severity(f.severity, has_need=finding_id in waiting)
+    f = state.findings[i]
+    waiting = {n.blocks for n in state.needs}
+    settle_from_verdict(
+        state, i, state.original_severity.get(finding_id, f.severity), waiting
+    )
     if is_trim(f):
-        severity = SEVERITIES[-1]
-    state.findings[i] = f.model_copy(update={"severity": severity})
+        state.findings[i] = state.findings[i].model_copy(
+            update={"severity": SEVERITIES[-1]}
+        )
 
 
 async def apply_answers(target_dir: Path, config) -> AnswersResult:

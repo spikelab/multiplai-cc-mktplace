@@ -173,20 +173,21 @@ test("a finding's section field wins over its topic, and Trim comes last", () =>
   assert.equal(L.findingSection({ topic: "docs", section: "nits" }), "docs", "an unknown section: the topic decides");
 });
 
-test("a critical review shows and counts only findings that break users or the business", () => {
+test("a critical review shows and counts only findings that break users or the business, or depend on data", () => {
   const ff = { mode: "critical", findings: [
     { id: "u", severity: "LOW", status: "confirmed", impact: "breaks-users" },
     { id: "b", severity: "MEDIUM", status: "unverifiable", impact: "breaks-business" },
+    { id: "d", severity: "MEDIUM", status: "confirmed", impact: "depends-on-data" },
     { id: "c", severity: "HIGH", status: "confirmed", impact: "correctness-only" },
     { id: "h", severity: "HIGH", status: "confirmed", impact: "hygiene" },
     { id: "n", severity: "HIGH", status: "confirmed" },
   ], needs: [{ what: "w", blocks: "c", cause: "no-access" }] };
   const shown = L.shownFile(ff);
-  assert.deepEqual(shown.findings.map((f) => f.id), ["u", "b"]);
+  assert.deepEqual(shown.findings.map((f) => f.id), ["u", "b", "d"]);
   assert.deepEqual(shown.needs, [], "a need of a finding the page hides goes with it");
-  assert.deepEqual(L.undecidedCount(shown.findings, {}), { open: 2, total: 2 });
-  assert.deepEqual(L.shownFile(Object.assign({}, ff, { mode: "full" })).findings.length, 5);
-  assert.deepEqual(L.shownFile(Object.assign({}, ff, { mode: undefined })).findings.length, 5, "no mode is full");
+  assert.deepEqual(L.undecidedCount(shown.findings, {}), { open: 3, total: 3 });
+  assert.deepEqual(L.shownFile(Object.assign({}, ff, { mode: "full" })).findings.length, 6);
+  assert.deepEqual(L.shownFile(Object.assign({}, ff, { mode: undefined })).findings.length, 6, "no mode is full");
 });
 
 test("needs that block a dropped finding are dropped with it", () => {
@@ -1226,7 +1227,7 @@ test("an empty list says which findings critical mode left out and which the che
     { id: "b", severity: "LOW", status: "confirmed", impact: "hygiene" },
     { id: "c", severity: "LOW", status: "confirmed", impact: "hygiene" }] };
   const text = L.emptyListText(critical);
-  assert.match(text, /of the review's 3 findings, 3 are not rated breaks-users or breaks-business/);
+  assert.match(text, /of the review's 3 findings, 3 are not rated breaks-users, breaks-business or depends-on-data/);
   assert.doesNotMatch(text, /rejected by its checks/, "critical mode alone hid them");
   const mixed = L.emptyListText({ mode: "critical", findings: critical.findings.concat([
     { id: "g", severity: "HIGH", status: "rejected", impact: "breaks-users" }]) });

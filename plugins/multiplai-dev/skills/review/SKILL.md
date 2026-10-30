@@ -29,11 +29,22 @@ paths through the change from each entry point (see "The paths stage" below).
    would be (the finding's **expected behaviour**), without proposing a code
    change, and rates its **impact**: what goes wrong in production if the
    change is merged as it is — `breaks-users`, `breaks-business`,
-   `correctness-only` or `hygiene`. It rates `breaks-*` only when default
-   settings or documented normal use reach the path, the harm needs no
-   second failure, and no other check in the code, CI or the documented
-   workflow stops it first. A missing or weak test is always
-   `correctness-only`. An answer without an impact, or without a topic from
+   `depends-on-data`, `correctness-only` or `hygiene`. It rates `breaks-*`
+   only when default settings or documented normal use reach the path, the
+   harm needs no second failure, and no other check in the code, CI or the
+   documented workflow stops it first. It rates `depends-on-data` when the
+   same holds but the harm happens only if production holds data it cannot
+   read, such as duplicate names or a login with two roles, and names that
+   data in its reason. A missing or weak test is always
+   `correctness-only`. It also gives a **severity** (HIGH, MEDIUM or LOW)
+   for the consequence it checked, using the finders' severity guide. Once
+   every finding has a verdict, Python sets each confirmed or unverifiable
+   finding's severity from it: a `hygiene` finding is LOW, a `breaks-*` or
+   `depends-on-data` finding is at least MEDIUM, and an unverifiable one is
+   then lowered as below. No other limit applies and no verdict changes; a
+   verdict saved by an older version, with no severity, keeps the finder's.
+   The review shows the finder's severity beside a changed one ("raised
+   from" or "lowered from"). An answer without an impact, or without a topic from
    the list below, is re-asked; a verify call is tried up to three times, and
    a finding still without a verdict stops the run (exit `5`) instead of
    reaching the review unverified. A hit Claude usage limit is never tried
@@ -167,8 +178,8 @@ the finders see its whole patch.
 ## Full or critical
 
 `--mode full` (the default) lists every finding to act on. `--mode critical`
-lists only the findings the verifier rates `breaks-users` or
-`breaks-business`; the rest go to the appendix of `review-<slug>.md`, and the
+lists only the findings the verifier rates `breaks-users`,
+`breaks-business` or `depends-on-data`; the rest go to the appendix of `review-<slug>.md`, and the
 viewer shows **Critical only** and hides them. Both modes run the same
 finders and verifiers and cost the same.
 
@@ -264,9 +275,9 @@ It holds the review's run lock and:
    commands that bear on the review as a whole to findings (ids it invents
    are dropped);
 3. runs the verifier again for each matched finding, given every saved output
-   that bears on it as evidence inside an `<untrusted-content>` fence. A
-   finding that becomes confirmed gets back the severity it had before it was
-   lowered; a refuted one goes to the appendix as refuted findings do;
+   that bears on it as evidence inside an `<untrusted-content>` fence. Its
+   severity is set again from the finder's severity and the new verdict, as
+   the verify stage sets it; a refuted one goes to the appendix as refuted findings do;
 4. asks the write stage again for each shown finding whose verdict changed;
 5. writes `findings.json`, `checks.json` and the markdown again. Merge,
    repeats and assess do not run, so finding ids, and the decisions in
@@ -403,7 +414,7 @@ A test is never suggested for removal when it matters. A confirmed or
 unverifiable trim finding about a test is left out of the list, labelled
 `important` and kept in the review's appendix with the reason, when the
 verifier rates what would break
-without it `breaks-users` or `breaks-business`, or when any of its citations is
+without it `breaks-users`, `breaks-business` or `depends-on-data`, or when any of its citations is
 under a critical path. A suggestion the merge stage folded another into counts
 the other's verdict and citations too. A finding the verifier labels `docs` is
 a comment and never `important`; under a topic other than `tests` or `docs`,
@@ -1104,5 +1115,8 @@ the session's model.
   totals line gives the mean rounds per review with two or more, and both
   shares with their counts. `--repo` names a checkout to use for a round
   whose recorded repository (a deleted worktree) is gone, when its `origin`
-  is the same repository. It writes nothing, calls no model and needs no
+  is the same repository. `--counts` adds, per round, the confirmed
+  findings by severity, impact and topic, the number of finder reports
+  (`report-*.md`) and how many say a search returned nothing, and a totals
+  line. It writes nothing, calls no model and needs no
   `--trust-repo`. Reviews migrated into `legacy/` are not read.
